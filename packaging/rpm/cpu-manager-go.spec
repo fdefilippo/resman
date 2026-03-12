@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.1.0
+Version: 1.5.0
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -49,14 +49,37 @@ Enterprise-grade CPU resource management tool with cgroups v2 support.
 Automatically limits CPU for non-system users based on configurable thresholds.
 
 Features:
-- Dynamic CPU limiting for non-system users
+- Dynamic CPU limiting for non-system users (UID >=1000)
 - Configurable activation/release thresholds
-- Prometheus metrics export
-- Systemd service integration
-- Automatic configuration reload on changes
-- Detailed process logging
+- Absolute CPU limits using cpu.max cgroup controller
+- Prometheus metrics export with comprehensive dashboard
+- Per-user metrics: CPU%, Memory (bytes), Process count
+- Systemd service integration with hardening
+- Automatic configuration reload on file changes
+- Detailed process logging with process name tracking
+- Load average awareness (optional)
+- Graceful shutdown with cleanup
 - Complete man page documentation
-- Per-user metrics: CPU%, Memory, Process count
+- Unit tests for core packages
+- MCP server for AI assistant integration (Model Context Protocol)
+- Comprehensive CPU and memory reporting
+- Server role identification for multi-server environments
+
+MCP Server Features (v1.3+):
+- 11 MCP tools for querying system status and generating reports
+- 6 MCP resources for URI-based data access
+- 3 pre-built prompts for common queries
+- HTTP and stdio transport support
+- Hostname and server role in all metric outputs
+- Comprehensive logging middleware
+
+Latest Changes (v1.5.0):
+- Renamed Prometheus variables for clarity (PROMETHEUS_METRICS_BIND_HOST/PORT)
+- Default Prometheus port changed to 1974
+- Default MCP port changed to 1969
+- All bind addresses default to 0.0.0.0 for remote access
+- Added SERVER_ROLE configuration for server identification
+- Enhanced documentation with log level descriptions
 
 %prep
 %setup -q
@@ -214,7 +237,44 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Sun Feb 22 2026 CPU Manager <francesco@defilippo.org> - 1.0.0-1
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.5.0-1
+- Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
+- Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
+- Default Prometheus port changed from 9101 to 1974
+- Default bind address changed to 0.0.0.0 (all interfaces)
+- Renamed MCP_HTTP_HOST and MCP_HTTP_PORT defaults to 0.0.0.0 and 1969
+- Added SERVER_ROLE configuration for server identification
+- Added server_role field to all MCP tool outputs
+- Enhanced documentation with log level descriptions
+- Backward compatibility maintained for old variable names
+- Updated man page to v1.5
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.4.0-1
+- Added SERVER_ROLE configuration variable
+- Added server_role to MCP tool outputs (get_system_status, get_active_users,
+  get_limits_status, get_configuration, get_cpu_report, get_mem_report)
+- Updated documentation for multi-server environment identification
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.3.0-1
+- Added get_cpu_report MCP tool for comprehensive CPU usage reports
+- Added get_mem_report MCP tool for comprehensive memory usage reports
+- Added hostname field to all MCP metric outputs
+- Implemented HTTP logging middleware for MCP requests
+- Fixed logger initialization to respect LOG_LEVEL from config
+- All metric tools now include hostname for multi-server environments
+
+* Tue Mar 10 2026 Francesco Defilippo <francesco@defilippo.org> - 1.2.0-1
+- Added MCP server for AI assistant integration (Model Context Protocol)
+- 11 MCP tools: get_system_status, get_user_metrics, get_active_users,
+  get_limits_status, get_cgroup_info, get_configuration, get_control_history,
+  activate_limits, deactivate_limits, get_cpu_report, get_mem_report
+- 6 MCP resources for URI-based data access
+- 3 pre-built prompts: system-health, user-analysis, troubleshooting
+- HTTP and stdio transport support
+- Comprehensive MCP documentation (MCP-README.md, MCP-BLUEPRINT.md)
+- Updated README.md and CHANGELOG.md with MCP information
+
+* Sun Feb 22 2026 Francesco Defilippo <francesco@defilippo.org> - 1.1.0-1
 - Added TLS/HTTPS support for Prometheus metrics
 - Added TLS certificate generation script (generate-tls-certs.sh)
 - Added Basic Authentication support for Prometheus
@@ -232,7 +292,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Systemd service integration
 - Comprehensive man page documentation
 
-* Thu Jan 22 2026 CPU Manager <francesco@defilippo.org> - 1.0.0-1
+* Thu Jan 22 2026 Francesco Defilippo <francesco@defilippo.org> - 1.0.0-1
 - Initial RPM release with man page support
 - Complete cgroups v2 CPU management
 - Prometheus metrics support
