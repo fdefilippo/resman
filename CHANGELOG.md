@@ -5,6 +5,55 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.14.1] - 2026-03-13
+
+### Corretto
+
+#### Fix Calcolo CPU Usage
+- **Fix critico**: `getProcessCPUUsageSimple()` ora calcola correttamente il delta CPU
+- Precedentemente usava `proc.CPUPercent()` che richiedeva due letture separate
+- Ora usa `proc.Times()` con cache interna per calcolare il delta correttamente
+- Aggiunta pulizia automatica della cache processi vecchi (> 5 minuti)
+- Risolto problema valori CPU usage errati o "fantasma" per utenti
+
+**Dettagli Tecnici:**
+- Prima lettura: salva tempi CPU (user, system) e timestamp
+- Letture successive: calcola delta e divide per tempo trascorso
+- Formula: `cpuPercent = ((user2-user1) + (system2-system1)) / elapsed_seconds * 100`
+- Cache cleanup: rimuove processi inesistenti da oltre 5 minuti
+
+---
+
+## [1.14.0] - 2026-03-13
+
+### Aggiunto
+
+#### Process Exclude List Configurabile
+- Rimossa lista hardcoded di processi di sistema da `config.go`
+- Nuova variabile `PROCESS_EXCLUDE_LIST` per specificare processi da escludere
+- Lista default ridotta ai processi essenziali (systemd, dbus, cron, rsyslog)
+- Lista completa disponibile come esempio commentato nel file di configurazione
+
+**Configurazione:**
+```bash
+# Default (processi essenziali)
+PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng
+
+# Lista estesa (esempio commentato)
+PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng,dockerd,containerd,kubelet,nginx,apache2,httpd,mysqld,mariadbd,postgres,mongod,redis-server,postfix,chronyd,firewalld,auditd,cupsd,avahi-daemon,bluetoothd,prometheus,node_exporter,grafana-server,telegraf
+
+# Nessun processo escluso
+PROCESS_EXCLUDE_LIST=
+```
+
+**Vantaggi:**
+- Maggiore flessibilità nella configurazione
+- Possibilità di adattare la lista alle proprie esigenze
+- File di configurazione più trasparente e comprensibile
+- Facile aggiungere/rimuovere processi senza ricompilare
+
+---
+
 ## [1.13.1] - 2026-03-13
 
 ### Corretto

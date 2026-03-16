@@ -745,6 +745,16 @@ func (c *Collector) cleanupCache() {
             delete(c.cacheTimestamps, key)
         }
     }
+    
+    // Pulisci anche la cache dei processi CPU (processi vecchi > 5 minuti)
+    c.procCPUMutex.Lock()
+    for pid, timestamp := range c.prevProcTime {
+        if now.Sub(timestamp) > 5*time.Minute {
+            delete(c.prevProcCPU, pid)
+            delete(c.prevProcTime, pid)
+        }
+    }
+    c.procCPUMutex.Unlock()
 }
 
 // ClearCache svuota la cache.
@@ -970,19 +980,49 @@ func (c *Collector) getProcessMemoryUsage(pid int) uint64 {
     return 0
 }
 
-// getProcessCPUUsageSimple calcola l'uso CPU di un processo usando gopsutil se disponibile.
+// getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
 func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
     proc, err := process.NewProcess(int32(pid))
     if err != nil {
         return 0
     }
 
-    cpuPercent, err := proc.CPUPercent()
+    // Ottieni tempi CPU attuali
+    times, err := proc.Times()
     if err != nil {
         return 0
     }
 
-    return cpuPercent
+    now := time.Now()
+    pid32 := int32(pid)
+
+    c.procCPUMutex.Lock()
+    defer c.procCPUMutex.Unlock()
+
+    // Controlla se abbiamo un campione precedente
+    if prevTimes, ok := c.prevProcCPU[pid32]; ok {
+        if prevTime, ok := c.prevProcTime[pid32]; ok {
+            // Calcola tempo trascorso in secondi
+            elapsed := now.Sub(prevTime).Seconds()
+            if elapsed > 0 {
+                // Calcola delta CPU (user + system)
+                delta := (times.User - prevTimes.User) + (times.System - prevTimes.System)
+                // Converti in percentuale
+                cpuPercent := (delta / elapsed) * 100.0
+                
+                // Aggiorna campione corrente
+                c.prevProcCPU[pid32] = *times
+                c.prevProcTime[pid32] = now
+                
+                return cpuPercent
+            }
+        }
+    }
+
+    // Primo campione: salva e ritorna 0
+    c.prevProcCPU[pid32] = *times
+    c.prevProcTime[pid32] = now
+    return 0
 }
 
 // GetUserProcessCount restituisce il numero di processi di un utente.

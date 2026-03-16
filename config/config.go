@@ -95,6 +95,9 @@ type Config struct {
     // User Exclude List (users to EXCLUDE from limits, regex support)
     UserExcludeList []string `config:"USER_EXCLUDE_LIST"`  // Comma-separated regex patterns
 
+    // Process Exclude List (process names to EXCLUDE from limits)
+    ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`  // Comma-separated process names
+
     // Blackout Timeframes (when CPU Manager should NOT apply limits)
     BlackoutTimeframes []Timeframe `config:"-"`  // Parsed from BLACKOUT_SPEC
 
@@ -176,6 +179,12 @@ func DefaultConfig() *Config {
         ServerRole:       "",  // Empty by default
         UserIncludeList:   nil, // nil = all users included (no filter)
         UserExcludeList:   nil, // nil = no users excluded (all users can be limited)
+        ProcessExcludeList: []string{  // Default system processes to exclude
+            "systemd", "dbus-daemon", "dbus-broker", "polkitd",
+            "NetworkManager", "wpa_supplicant",
+            "sshd", "cron", "crond",
+            "rsyslogd", "rsyslog", "syslog-ng",
+        },
         BlackoutSpec:      "",  // Empty = no blackout (always active)
         BlackoutTimeframes: nil,
 
@@ -485,6 +494,26 @@ func setConfigField(cfg *Config, key, value string) error {
             }
             if len(cfg.UserExcludeList) == 0 {
                 cfg.UserExcludeList = nil
+            }
+        }
+
+    // Process Exclude List
+    case "PROCESS_EXCLUDE_LIST":
+        // Parse comma-separated list of process names
+        value = strings.TrimSpace(value)
+        if value == "" {
+            cfg.ProcessExcludeList = nil // Empty = no processes excluded
+        } else {
+            processes := strings.Split(value, ",")
+            cfg.ProcessExcludeList = make([]string, 0, len(processes))
+            for _, proc := range processes {
+                proc = strings.TrimSpace(proc)
+                if proc != "" {
+                    cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, proc)
+                }
+            }
+            if len(cfg.ProcessExcludeList) == 0 {
+                cfg.ProcessExcludeList = nil
             }
         }
 
@@ -1034,35 +1063,15 @@ func (c *Config) GetNextBlackoutEnd() *time.Time {
 }
 
 // IsProcessExcluded verifica se un processo dovrebbe essere escluso dai limiti
-// Controlla il nome del comando (comm) contro la blacklist di processi di sistema
+// Controlla il nome del comando (comm) contro la lista di processi esclusi
 func (c *Config) IsProcessExcluded(processName string) bool {
-    // Processi di sistema che non dovrebbero mai essere limitati
-    excludedProcesses := []string{
-        "systemd", "dbus-daemon", "dbus-broker", "polkitd", "udisks2d",
-        "NetworkManager", "nm-dispatcher", "wpa_supplicant",
-        "sshd", "sshd-session", "cron", "crond", "anacron",
-        "rsyslogd", "rsyslog", "syslogd", "syslog-ng",
-        "dockerd", "docker", "containerd", "kubelet", "kube-proxy",
-        "nginx", "apache2", "httpd", "php-fpm",
-        "mysqld", "mariadbd", "postgres", "mongod", "redis-server",
-        "postfix", "master", "pickup", "qmgr",
-        "chronyd", "ntpd", "systemd-timesyncd",
-        "firewalld", "iptables", "nft",
-        "auditd", "audit",
-        "irqbalance", "mcelog", "smartd",
-        "cupsd", "avahi-daemon", "bluetoothd",
-        "gdm", "gdm-wayland-session", "gnome-shell",
-        "lightdm", "sddm", "xdm",
-        "vmtoolsd", "vmware-user", "VBoxService", "VBoxClient",
-        "qemu-ga", "qemu-system", "libvirtd",
-        "lxcfs", "lxc-monitord",
-        "zabbix_agentd", "zabbix_sender",
-        "prometheus", "node_exporter", "grafana-server",
-        "telegraf", "collectd", "datadog-agent",
+    // Se la lista è vuota, nessun processo è escluso
+    if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
+        return false
     }
-    
+
     processName = strings.ToLower(processName)
-    for _, excluded := range excludedProcesses {
+    for _, excluded := range c.ProcessExcludeList {
         if processName == excluded || strings.HasPrefix(processName, excluded+"-") {
             return true
         }
