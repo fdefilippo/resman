@@ -1274,6 +1274,7 @@ curl http://localhost:1974/metrics
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| 1.12.0 | Mar 2026 | **Blackout Timeframes**: `CPU_MANAGER_BLACKOUT` configuration. CPU Manager skips limit application during configured timeframes. Crontab-like format. System timezone support. |
 | 1.11.0 | Mar 2026 | **MCP User Filter Management**: `set_user_exclude_list`, `set_user_include_list`, `get_user_filters`, `validate_user_filter_pattern`. Automatic config backup with timestamp. Atomic save with rollback. |
 | 1.10.1 | Mar 2026 | Config watcher periodic check (30s) for reliable reload |
 | 1.10.0 | Mar 2026 | **USER_EXCLUDE_LIST regex support**: Pattern matching for user exclusion |

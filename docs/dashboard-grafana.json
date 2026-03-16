@@ -21,6 +21,7 @@
       }
     ]
   },
+  "description": "CPU Manager Go Dashboard - Monitor CPU usage, memory, and limits per user. Note: USER_INCLUDE_LIST and USER_EXCLUDE_LIST configuration options filter which users appear in metrics.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -117,8 +118,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_total_usage_percent",
-          "legendFormat": "Total CPU Usage",
+          "expr": "cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "Total CPU Usage - {{hostname}}",
           "range": true,
           "refId": "A"
         },
@@ -128,8 +129,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_user_usage_percent",
-          "legendFormat": "User CPU Usage",
+          "expr": "cpu_manager_cpu_user_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "User CPU Usage - {{hostname}}",
           "range": true,
           "refId": "B"
         }
@@ -227,7 +228,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_cpu_usage_percent",
+          "expr": "cpu_manager_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
           "legendFormat": "{{username}} (UID: {{uid}})",
           "range": true,
           "refId": "A"
@@ -330,7 +331,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_memory_usage_bytes",
+          "expr": "cpu_manager_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
           "legendFormat": "{{username}} (UID: {{uid}})",
           "range": true,
           "refId": "A"
@@ -403,8 +404,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_active_users_count",
-          "legendFormat": "Active Users",
+          "expr": "cpu_manager_active_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "Active Users - {{hostname}}",
           "range": true,
           "refId": "A"
         }
@@ -488,8 +489,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_limits_active",
-          "legendFormat": "Limits Status",
+          "expr": "cpu_manager_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "Limits Status - {{hostname}}",
           "range": true,
           "refId": "A"
         }
@@ -1284,6 +1285,75 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+        "includeAll": true,
+        "label": "Cluster",
+        "multi": true,
+        "name": "cluster",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+        "includeAll": true,
+        "label": "Server Role",
+        "multi": true,
+        "name": "server_role",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+        "includeAll": true,
+        "label": "Hostname",
+        "multi": true,
+        "name": "hostname",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
       },
       {
         "current": {

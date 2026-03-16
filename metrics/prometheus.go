@@ -45,24 +45,28 @@ type PrometheusExporter struct {
   registry *prometheus.Registry
   server   *http.Server
 
-  // Metriche base
+  // Label fisse per tutte le metriche (da configurazione)
+  hostname   string
+  serverRole string
+
+  // Metriche base (con label hostname e server_role)
   cpuTotalUsage     prometheus.Gauge
   cpuUserUsage      prometheus.Gauge
-  memoryUsage       prometheus.Gauge    // Memoria totale usata
+  memoryUsage       prometheus.Gauge
   activeUsers       prometheus.Gauge
   limitedUsers      prometheus.Gauge
   limitsActive      prometheus.Gauge
   systemLoad        prometheus.Gauge
   totalCores        prometheus.Gauge
 
-  // Metriche con label
+  // Metriche con label aggiuntive
   userCPUUsage      *prometheus.GaugeVec
-  userMemoryUsage   *prometheus.GaugeVec  // NUOVO: Memoria per utente
-  userProcessCount  *prometheus.GaugeVec  // NUOVO: Numero processi per utente
+  userMemoryUsage   *prometheus.GaugeVec
+  userProcessCount  *prometheus.GaugeVec
   userLimited       *prometheus.GaugeVec
   cgroupCPUQuota    *prometheus.GaugeVec
   cgroupCPUPeriod   *prometheus.GaugeVec
-  cgroupMemoryUsage *prometheus.GaugeVec  // NUOVO: Memoria cgroup per utente
+  cgroupMemoryUsage *prometheus.GaugeVec
 
   // Metriche counter (solo incremento)
   limitsActivatedTotal   prometheus.Counter
@@ -71,7 +75,7 @@ type PrometheusExporter struct {
   errorsTotal           *prometheus.CounterVec
 
   // Metriche histogram per tempi di esecuzione
-  controlCycleDuration   prometheus.Histogram
+  controlCycleDuration      prometheus.Histogram
   metricsCollectionDuration prometheus.Histogram
 
   // Cache per evitare aggiornamenti troppo frequenti
@@ -113,13 +117,30 @@ if cfg.PrometheusMetricsBindPort <= 0 || cfg.PrometheusMetricsBindPort > 65535 {
   return nil, fmt.Errorf("invalid Prometheus port: %d", cfg.PrometheusMetricsBindPort)
 }
 
+// Ottieni hostname e server_role
+hostname, _ := os.Hostname()
+if hostname == "" {
+  hostname = "unknown"
+}
+serverRole := cfg.ServerRole
+if serverRole == "" {
+  serverRole = "unspecified"
+}
+
 exp := &PrometheusExporter{
   cfg:            cfg,
   logger:         logger,
   registry:       prometheus.NewRegistry(),
+  hostname:       hostname,
+  serverRole:     serverRole,
   updateInterval: 15 * time.Second,
   stopChan:       make(chan struct{}, 1),
 }
+
+logger.Info("Prometheus exporter created",
+  "hostname", exp.hostname,
+  "server_role", exp.serverRole,
+)
 
 // Carica credenziali di autenticazione e certificati TLS
 if err := exp.loadCredentials(); err != nil {
@@ -214,63 +235,78 @@ func (exp *PrometheusExporter) registerMetrics() error {
   // Namespace per tutte le metriche
   namespace := "cpu_manager"
 
+  // Label fisse per tutte le metriche
+  staticLabels := prometheus.Labels{
+    "hostname":    exp.hostname,
+    "server_role": exp.serverRole,
+  }
+
   // === Metriche Gauge (valori correnti) ===
 
   exp.cpuTotalUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "cpu_total_usage_percent",
-    Help:      "Total CPU usage percentage across all cores",
+    Namespace:   namespace,
+    Name:        "cpu_total_usage_percent",
+    Help:        "Total CPU usage percentage across all cores",
+    ConstLabels: staticLabels,
   })
 
   exp.cpuUserUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "cpu_user_usage_percent",
-    Help:      "Total CPU usage percentage by non-system users",
+    Namespace:   namespace,
+    Name:        "cpu_user_usage_percent",
+    Help:        "Total CPU usage percentage by non-system users",
+    ConstLabels: staticLabels,
   })
 
   exp.memoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "memory_usage_megabytes",
-    Help:      "Total memory usage in megabytes",
+    Namespace:   namespace,
+    Name:        "memory_usage_megabytes",
+    Help:        "Total memory usage in megabytes",
+    ConstLabels: staticLabels,
   })
 
   exp.activeUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "active_users_count",
-    Help:      "Number of active non-system users",
+    Namespace:   namespace,
+    Name:        "active_users_count",
+    Help:        "Number of active non-system users",
+    ConstLabels: staticLabels,
   })
 
   exp.limitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "limited_users_count",
-    Help:      "Number of users with CPU limits currently applied",
+    Namespace:   namespace,
+    Name:        "limited_users_count",
+    Help:        "Number of users with CPU limits currently applied",
+    ConstLabels: staticLabels,
   })
 
   exp.limitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "limits_active",
-    Help:      "Whether CPU limits are currently active (1) or not (0)",
+    Namespace:   namespace,
+    Name:        "limits_active",
+    Help:        "Whether CPU limits are currently active (1) or not (0)",
+    ConstLabels: staticLabels,
   })
 
   exp.systemLoad = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "system_load_average",
-    Help:      "System load average (1 minute)",
+    Namespace:   namespace,
+    Name:        "system_load_average",
+    Help:        "System load average (1 minute)",
+    ConstLabels: staticLabels,
   })
 
   exp.totalCores = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-    Namespace: namespace,
-    Name:      "cpu_total_cores",
-    Help:      "Total number of CPU cores",
+    Namespace:   namespace,
+    Name:        "cpu_total_cores",
+    Help:        "Total number of CPU cores",
+    ConstLabels: staticLabels,
   })
 
   // === Metriche con label ===
 
   exp.userCPUUsage = promauto.With(exp.registry).NewGaugeVec(
     prometheus.GaugeOpts{
-      Namespace: namespace,
-      Name:      "user_cpu_usage_percent",
-      Help:      "CPU usage percentage per user",
+      Namespace:   namespace,
+      Name:        "user_cpu_usage_percent",
+      Help:        "CPU usage percentage per user",
+      ConstLabels: staticLabels,
     },
     []string{"uid", "username"},
   )
@@ -278,9 +314,10 @@ func (exp *PrometheusExporter) registerMetrics() error {
   // NUOVA METRICA: Memoria per utente
   exp.userMemoryUsage = promauto.With(exp.registry).NewGaugeVec(
     prometheus.GaugeOpts{
-      Namespace: namespace,
-      Name:      "user_memory_usage_bytes",
-      Help:      "Memory usage in bytes per user",
+      Namespace:   namespace,
+      Name:        "user_memory_usage_bytes",
+      Help:        "Memory usage in bytes per user",
+      ConstLabels: staticLabels,
     },
     []string{"uid", "username"},
   )
@@ -288,18 +325,20 @@ func (exp *PrometheusExporter) registerMetrics() error {
   // NUOVA METRICA: Numero processi per utente
   exp.userProcessCount = promauto.With(exp.registry).NewGaugeVec(
     prometheus.GaugeOpts{
-      Namespace: namespace,
-      Name:      "user_process_count",
-      Help:      "Number of processes per user",
+      Namespace:   namespace,
+      Name:        "user_process_count",
+      Help:        "Number of processes per user",
+      ConstLabels: staticLabels,
     },
     []string{"uid", "username"},
   )
 
   exp.userLimited = promauto.With(exp.registry).NewGaugeVec(
     prometheus.GaugeOpts{
-      Namespace: namespace,
-      Name:      "user_cpu_limited",
-      Help:      "Whether CPU limit is applied for user (1) or not (0)",
+      Namespace:   namespace,
+      Name:        "user_cpu_limited",
+      Help:        "Whether CPU limit is applied for user (1) or not (0)",
+      ConstLabels: staticLabels,
     },
     []string{"uid", "username"},
   )

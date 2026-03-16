@@ -5,6 +5,91 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.13.1] - 2026-03-13
+
+### Corretto
+
+#### LDAP/NIS Username Resolution
+- **Fix**: `getUsername()` ora usa `os/user.LookupId()` per risolvere gli UID
+- Supporto LDAP/NIS quando compilato con `CGO_ENABLED=1`
+- Fallback automatico su `/etc/passwd` se LDAP non disponibile
+- Fallback finale a UID numerico se username non trovato
+
+**Nota Importante:**
+Per il supporto LDAP/NIS, compilare **obbligatoriamente** con:
+```bash
+CGO_ENABLED=1 go build -o cpu-manager-go .
+```
+
+Senza CGO, solo gli utenti locali in `/etc/passwd` sono risolti.
+
+---
+
+## [1.13.0] - 2026-03-13
+
+### Aggiunto
+
+#### Grafana Dashboard Enhancement
+- Aggiunte label `hostname` e `server_role` a tutte le metriche Prometheus
+- Dashboard aggiornata con variabili: `cluster`, `server_role`, `hostname`
+- Selezione multi-cluster tramite label esterna Prometheus `cluster`
+- Filtri per server_role e hostname nella dashboard
+- Legenda aggiornata per mostrare hostname nei grafici
+
+**Metriche con label:**
+- `cpu_manager_cpu_total_usage_percent{hostname, server_role}`
+- `cpu_manager_cpu_user_usage_percent{hostname, server_role}`
+- `cpu_manager_user_cpu_usage_percent{uid, username, hostname, server_role}`
+- `cpu_manager_user_memory_usage_bytes{uid, username, hostname, server_role}`
+- Tutte le altre metriche includono hostname e server_role
+
+**Dashboard Variables:**
+- `cluster`: label_values(cpu_manager_cpu_total_usage_percent, cluster)
+- `server_role`: label_values(cpu_manager_cpu_total_usage_percent{cluster=~"$cluster"}, server_role)
+- `hostname`: label_values(cpu_manager_cpu_total_usage_percent{cluster=~"$cluster", server_role=~"$server_role"}, hostname)
+
+**Configurazione Prometheus richiesta:**
+```yaml
+# prometheus.yml
+global:
+  external_labels:
+    cluster: 'production'  # O il nome del tuo cluster
+```
+
+---
+
+## [1.12.0] - 2026-03-13
+
+### Aggiunto
+
+#### Blackout Timeframes
+- Nuova variabile `CPU_MANAGER_BLACKOUT` per specificare quando NON applicare limiti CPU
+- Formato crontab-like: "giorni ore" (es: "1-5 08-18" per Lun-Ven, 8-18)
+- Supporto multipli timeframe separati da punto e virgola
+- Timezone di sistema automaticamente rilevata
+- Logging ibrido: INFO per entrata/uscita blackout, DEBUG per skip cicli
+
+**Formato:**
+- Giorni: 0=Domenica, 1-6=Lun-Sab, * (tutti), 1-5 (lun-ven), 0,6 (weekend)
+- Ore: formato 24h (00-23)
+- Esempi:
+  - `1-5 08-18` - Disabilita orario lavorativo
+  - `0,6 00-23` - Disabilita weekend
+  - `1-5 08-18;0,6 00-23` - Disabilita orario lavorativo + weekend
+
+**Precedenza:**
+- Blackout prevale su USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+- Durante blackout, CPU Manager non applica MAI limiti
+
+**Logging:**
+```
+[INFO] Entering blackout timeframe - CPU limits suspended until 18:00
+[DEBUG] Skipping control cycle - blackout timeframe active
+[INFO] Exiting blackout timeframe - CPU limits re-enabled
+```
+
+---
+
 ## [1.11.0] - 2026-03-13
 
 ### Aggiunto

@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.11.0
+Version: 1.13.1
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -94,6 +94,7 @@ Latest Changes (v1.5.0):
 # Build del binario Go
 export GO111MODULE=on
 export GOPROXY=direct
+export CGO_ENABLED=1
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
 # Prepara man page
@@ -243,7 +244,17 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.5.0-1
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
+- Added CPU_MANAGER_BLACKOUT configuration for blackout timeframes
+- CPU Manager will not apply limits during configured blackout periods
+- Crontab-like format: "days hours" (e.g., "1-5 08-18" for Mon-Fri, 8-18)
+- Multiple timeframes supported (semicolon-separated)
+- System timezone automatically used
+- Hybrid logging: INFO for enter/exit blackout, DEBUG for cycle skips
+- Blackout takes precedence over USER_INCLUDE_LIST and USER_EXCLUDE_LIST
+- Updated man page with blackout documentation
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
 - Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
 - Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
 - Default Prometheus port changed from 9101 to 1974
@@ -254,6 +265,68 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Enhanced documentation with log level descriptions
 - Backward compatibility maintained for old variable names
 - Updated man page to v1.5
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+- Added MCP User Filter Management tools:
+  * get_user_filters: Get current user include/exclude filter configurations
+  * set_user_exclude_list: Set users to exclude from CPU limits (regex support)
+  * set_user_include_list: Set users to include in monitoring (regex support)
+  * validate_user_filter_pattern: Validate regex patterns with example matches
+- Automatic configuration backup with timestamp before modifications
+- Atomic configuration save with rollback on error
+- Automatic config reload trigger after filter changes
+- All write operations require MCP_ALLOW_WRITE_OPS=true
+- Updated MCP documentation with user filter examples
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
+- Added periodic configuration check (every 30 seconds)
+- Fixed config watcher not detecting changes from some text editors
+- Improved logging for configuration reload events
+
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.0-1
+- USER_EXCLUDE_LIST now supports regex patterns (like USER_INCLUDE_LIST)
+- Multiple patterns supported (comma-separated)
+- Pattern validation on configuration load
+- Backward compatibility: exact username matches still work
+- Updated documentation with regex examples
+
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.9.0-1
+- Added USER_INCLUDE_LIST with regex support
+- Filter users to include in monitoring using regex patterns
+- Multiple patterns supported (comma-separated)
+- Pattern validation on startup (error on invalid regex)
+- Empty list = all users included (default behavior)
+- Updated documentation and examples
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.8.0-1
+- Renamed USER_WHITELIST to USER_EXCLUDE_LIST (breaking change)
+- Behavior inverted: list now EXCLUDES users from limits
+- Backward compatibility: USER_WHITELIST still works but deprecated
+- Updated configuration examples and documentation
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.7.0-1
+- Added process exclusion blacklist (automatic)
+- System processes automatically excluded from CPU limits:
+  * systemd, dbus-daemon, polkitd, NetworkManager
+  * sshd, cron, rsyslogd, dockerd, containerd
+  * nginx, apache2, mysqld, postgres, redis-server
+  * And 40+ other infrastructure processes
+- Users with only excluded processes are not limited
+- Configurable via IsProcessExcluded() function
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.6.0-1
+- Fixed USER_WHITELIST parsing (was not working correctly)
+- USER_WHITELIST now correctly includes specified users
+- Empty or commented whitelist = all users included
+- Updated documentation with correct behavior
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.5.0-1
+- Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
+- Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
+- Default Prometheus port changed from 9101 to 1974
+- Default bind address changed to 0.0.0.0 (all interfaces)
+- Added inline comment support in configuration parser
+- Backward compatibility: old variable names still work
 
 * Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.4.0-1
 - Added SERVER_ROLE configuration variable

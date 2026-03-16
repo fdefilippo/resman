@@ -138,6 +138,22 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 
     m.logger.Debug("Starting control cycle", "cycle_id", cycleID)
 
+    // Controlla se siamo in un blackout timeframe
+    if m.cfg.IsInBlackout() {
+        nextEnd := m.cfg.GetNextBlackoutEnd()
+        if nextEnd != nil {
+            m.logger.Info("Skipping control cycle - blackout timeframe active",
+                "cycle_id", cycleID,
+                "next_check", nextEnd.Format("2006-01-02 15:04:05"),
+            )
+        } else {
+            m.logger.Debug("Skipping control cycle - blackout timeframe active",
+                "cycle_id", cycleID,
+            )
+        }
+        return nil
+    }
+
     // 1. Raccogli metriche del sistema
     metrics, err := m.collectSystemMetrics()
     if err != nil {

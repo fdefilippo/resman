@@ -22,7 +22,7 @@ import (
     "fmt"
 //    "io"
     "os"
-//    "os/user"  // Non necessario con implementazione pure-Go
+    "os/user"
     "path/filepath"
     "strconv"
     "strings"
@@ -500,14 +500,21 @@ func (c *Collector) GetActiveUsers() []int {
 }
 
 // getUsername ritorna la username dato un UID
-// Implementazione pure-Go che non richiede CGO
+// Usa os/user.LookupId() che supporta LDAP/NIS quando CGO è abilitato
 func (c *Collector) getUsername(uid int) string {
-    // Prova a leggere da /etc/passwd
+    // Metodo 1: Usa os/user.LookupId() (supporta LDAP/NIS con CGO)
+    // Questo funziona solo se compilato con CGO_ENABLED=1
+    u, err := user.LookupId(fmt.Sprintf("%d", uid))
+    if err == nil && u.Username != "" {
+        return u.Username
+    }
+    
+    // Metodo 2: Fallback su /etc/passwd (solo utenti locali)
     username, err := c.getUsernameFromPasswd(uid)
     if err == nil && username != "" {
         return username
     }
-    
+
     // Fallback finale: ritorna l'UID come stringa
     return fmt.Sprintf("%d", uid)
 }

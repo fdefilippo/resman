@@ -136,6 +136,31 @@ SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 # These users are excluded from CPU limits
 # USER_EXCLUDE_LIST=francesco,mysql     # Exclude specific users
 
+# BLACKOUT TIMEFRAMES (when CPU Manager should NOT apply limits)
+# Format: "days hours" (multiple timeframes separated by ;)
+# Days: 0=Sunday, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+#       Or: * (all), 1-5 (Mon-Fri), 0,6 (weekend)
+# Hours: 24h format (00-23)
+#
+# Examples:
+# # Disable during business hours (Mon-Fri, 8-18)
+# CPU_MANAGER_BLACKOUT=1-5 08-18
+#
+# # Disable only in the morning (Mon-Fri, 8-12)
+# CPU_MANAGER_BLACKOUT=1-5 08-12
+#
+# # Disable on weekend (Sat-Sun, all day)
+# CPU_MANAGER_BLACKOUT=0,6 00-23
+#
+# # Disable business hours + weekend
+# CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
+#
+# # Disable always (for testing)
+# CPU_MANAGER_BLACKOUT=* 00-23
+#
+# # No blackout (default - CPU Manager always active)
+CPU_MANAGER_BLACKOUT=
+
 # LOAD AVERAGE CHECKING
 IGNORE_SYSTEM_LOAD=false     # If true, ignores load average in decisions
 

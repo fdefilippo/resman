@@ -27,6 +27,13 @@ import (
     "time"
 )
 
+// Timeframe rappresenta un intervallo di tempo per i blackout
+type Timeframe struct {
+    DaysOfWeek []int // Giorni della settimana (0-6, 0=Domenica)
+    HourStart  int   // Ora inizio (0-23)
+    HourEnd    int   // Ora fine (0-23)
+}
+
 // Config contiene tutti i parametri configurabili dell'applicazione.
 type Config struct {
     // Paths
@@ -87,6 +94,12 @@ type Config struct {
 
     // User Exclude List (users to EXCLUDE from limits, regex support)
     UserExcludeList []string `config:"USER_EXCLUDE_LIST"`  // Comma-separated regex patterns
+
+    // Blackout Timeframes (when CPU Manager should NOT apply limits)
+    BlackoutTimeframes []Timeframe `config:"-"`  // Parsed from BLACKOUT_SPEC
+
+    // Blackout specification string (crontab-like format)
+    BlackoutSpec string `config:"CPU_MANAGER_BLACKOUT"`  // e.g., "1-5 08-18;0,6 00-23"
 
     // Load checking
     IgnoreSystemLoad bool `config:"IGNORE_SYSTEM_LOAD"`
@@ -163,6 +176,8 @@ func DefaultConfig() *Config {
         ServerRole:       "",  // Empty by default
         UserIncludeList:   nil, // nil = all users included (no filter)
         UserExcludeList:   nil, // nil = no users excluded (all users can be limited)
+        BlackoutSpec:      "",  // Empty = no blackout (always active)
+        BlackoutTimeframes: nil,
 
         // MCP Server
         MCPEnabled:       false,
@@ -471,6 +486,19 @@ func setConfigField(cfg *Config, key, value string) error {
             if len(cfg.UserExcludeList) == 0 {
                 cfg.UserExcludeList = nil
             }
+        }
+
+    // Blackout Timeframes
+    case "CPU_MANAGER_BLACKOUT":
+        cfg.BlackoutSpec = strings.TrimSpace(value)
+        if cfg.BlackoutSpec != "" {
+            timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
+            if err != nil {
+                return fmt.Errorf("invalid blackout specification '%s': %w", cfg.BlackoutSpec, err)
+            }
+            cfg.BlackoutTimeframes = timeframes
+        } else {
+            cfg.BlackoutTimeframes = nil
         }
 
     // Backward compatibility: old variable name
@@ -815,6 +843,194 @@ func (c *Config) generateConfigLines() []string {
         fmt.Sprintf("USER_EXCLUDE_LIST=%s", excludeList),
         "",
     }
+}
+
+// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-23"
+func ParseTimeframe(spec string) ([]Timeframe, error) {
+    var timeframes []Timeframe
+    
+    // Supporta multipli timeframe separati da ;
+    specs := strings.Split(spec, ";")
+    
+    for _, s := range specs {
+        s = strings.TrimSpace(s)
+        if s == "" {
+            continue
+        }
+        
+        parts := strings.Fields(s)
+        if len(parts) != 2 {
+            return nil, fmt.Errorf("invalid timeframe format: %s (expected: days hours)", s)
+        }
+        
+        // Parse giorni
+        days, err := parseDays(parts[0])
+        if err != nil {
+            return nil, fmt.Errorf("invalid days spec '%s': %w", parts[0], err)
+        }
+        
+        // Parse ore
+        hourStart, hourEnd, err := parseHours(parts[1])
+        if err != nil {
+            return nil, fmt.Errorf("invalid hours spec '%s': %w", parts[1], err)
+        }
+        
+        timeframes = append(timeframes, Timeframe{
+            DaysOfWeek: days,
+            HourStart:  hourStart,
+            HourEnd:    hourEnd,
+        })
+    }
+    
+    if len(timeframes) == 0 {
+        return nil, nil
+    }
+    
+    return timeframes, nil
+}
+
+// parseDays gestisce formati: 1-5, 0,6, *, 1
+func parseDays(spec string) ([]int, error) {
+    if spec == "*" {
+        return []int{0, 1, 2, 3, 4, 5, 6}, nil
+    }
+    
+    var days []int
+    parts := strings.Split(spec, ",")
+    
+    for _, part := range parts {
+        if strings.Contains(part, "-") {
+            // Range: 1-5
+            rangeParts := strings.Split(part, "-")
+            if len(rangeParts) != 2 {
+                return nil, fmt.Errorf("invalid day range: %s", part)
+            }
+            start, err := strconv.Atoi(rangeParts[0])
+            if err != nil {
+                return nil, err
+            }
+            end, err := strconv.Atoi(rangeParts[1])
+            if err != nil {
+                return nil, err
+            }
+            
+            if start < 0 || start > 6 || end < 0 || end > 6 {
+                return nil, fmt.Errorf("days must be 0-6 (0=Sunday)")
+            }
+            
+            for i := start; i <= end; i++ {
+                days = append(days, i)
+            }
+        } else {
+            // Singolo: 1
+            day, err := strconv.Atoi(part)
+            if err != nil {
+                return nil, err
+            }
+            if day < 0 || day > 6 {
+                return nil, fmt.Errorf("days must be 0-6 (0=Sunday)")
+            }
+            days = append(days, day)
+        }
+    }
+    
+    return days, nil
+}
+
+// parseHours gestisce formati: 08-18, 00-23
+func parseHours(spec string) (int, int, error) {
+    parts := strings.Split(spec, "-")
+    if len(parts) != 2 {
+        return 0, 0, fmt.Errorf("invalid hour format: %s (expected: start-end)", spec)
+    }
+    
+    start, err := strconv.Atoi(parts[0])
+    if err != nil {
+        return 0, 0, err
+    }
+    
+    end, err := strconv.Atoi(parts[1])
+    if err != nil {
+        return 0, 0, err
+    }
+    
+    if start < 0 || start > 23 || end < 0 || end > 23 {
+        return 0, 0, fmt.Errorf("hours must be 0-23")
+    }
+    
+    if start >= end {
+        return 0, 0, fmt.Errorf("start hour must be before end hour")
+    }
+    
+    return start, end, nil
+}
+
+// IsInBlackout verifica se l'orario corrente è in un blackout timeframe
+// Restituisce true se CPU Manager NON deve applicare limiti
+func (c *Config) IsInBlackout() bool {
+    if len(c.BlackoutTimeframes) == 0 {
+        return false
+    }
+    
+    now := time.Now()
+    currentDay := int(now.Weekday()) // 0=Domenica in Go
+    currentHour := now.Hour()
+    
+    for _, tf := range c.BlackoutTimeframes {
+        // Controlla giorno
+        dayMatch := false
+        for _, day := range tf.DaysOfWeek {
+            if day == currentDay {
+                dayMatch = true
+                break
+            }
+        }
+        
+        if !dayMatch {
+            continue
+        }
+        
+        // Controlla ora
+        if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
+            return true
+        }
+    }
+    
+    return false
+}
+
+// GetNextBlackoutEnd restituisce la prossima fine del blackout (se attivo)
+func (c *Config) GetNextBlackoutEnd() *time.Time {
+    if !c.IsInBlackout() {
+        return nil
+    }
+    
+    now := time.Now()
+    currentDay := int(now.Weekday())
+    currentHour := now.Hour()
+    
+    for _, tf := range c.BlackoutTimeframes {
+        // Controlla se siamo in questo timeframe
+        dayMatch := false
+        for _, day := range tf.DaysOfWeek {
+            if day == currentDay {
+                dayMatch = true
+                break
+            }
+        }
+        
+        if !dayMatch {
+            continue
+        }
+        
+        if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
+            // Siamo in questo blackout, calcola la fine
+            end := time.Date(now.Year(), now.Month(), now.Day(), tf.HourEnd, 0, 0, 0, now.Location())
+            return &end
+        }
+    }
+    
+    return nil
 }
 
 // IsProcessExcluded verifica se un processo dovrebbe essere escluso dai limiti

@@ -112,6 +112,36 @@ SYSTEM_UID_MIN=1000
 # USER_EXCLUDE_LIST=
 
 # ========================
+# BLACKOUT TIMEFRAMES
+# ========================
+# Specifica quando CPU Manager NON deve applicare limiti CPU.
+# Formato: "giorni ore" (multipli timeframe separati da ;)
+#
+# Giorni: 0=Domenica, 1=Lun, 2=Mar, 3=Mer, 4=Gio, 5=Ven, 6=Sab
+#         Oppure: * (tutti), 1-5 (lun-ven), 0,6 (weekend)
+# Ore: formato 24h (00-23)
+#
+# Esempi:
+#
+# # Disabilita durante orario lavorativo (Lun-Ven, 8-18)
+# CPU_MANAGER_BLACKOUT=1-5 08-18
+#
+# # Disabilita solo la mattina (Lun-Ven, 8-12)
+# CPU_MANAGER_BLACKOUT=1-5 08-12
+#
+# # Disabilita nel weekend (Sab-Dom, tutto il giorno)
+# CPU_MANAGER_BLACKOUT=0,6 00-23
+#
+# # Disabilita orario lavorativo + weekend
+# CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
+#
+# # Disabilita sempre (per testing)
+# CPU_MANAGER_BLACKOUT=* 00-23
+#
+# # Nessun blackout (default - CPU Manager sempre attivo)
+CPU_MANAGER_BLACKOUT=
+
+# ========================
 # PROCESS EXCLUSION (Automatic)
 # ========================
 # I seguenti processi di sistema sono AUTOMATICAMENTE esclusi dai limiti CPU:
