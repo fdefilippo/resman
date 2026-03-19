@@ -299,31 +299,18 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Blackout takes precedence over USER_INCLUDE_LIST and USER_EXCLUDE_LIST
 - Updated man page with blackout documentation
 
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
 - Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
 - Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
 - Default Prometheus port changed from 9101 to 1974
 - Default bind address changed to 0.0.0.0 (all interfaces)
-- Renamed MCP_HTTP_HOST and MCP_HTTP_PORT defaults to 0.0.0.0 and 1969
 - Added SERVER_ROLE configuration for server identification
 - Added server_role field to all MCP tool outputs
 - Enhanced documentation with log level descriptions
 - Backward compatibility maintained for old variable names
 - Updated man page to v1.5
 
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
-- Added MCP User Filter Management tools:
-  * get_user_filters: Get current user include/exclude filter configurations
-  * set_user_exclude_list: Set users to exclude from CPU limits (regex support)
-  * set_user_include_list: Set users to include in monitoring (regex support)
-  * validate_user_filter_pattern: Validate regex patterns with example matches
-- Automatic configuration backup with timestamp before modifications
-- Atomic configuration save with rollback on error
-- Automatic config reload trigger after filter changes
-- All write operations require MCP_ALLOW_WRITE_OPS=true
-- Updated MCP documentation with user filter examples
-
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
 - Added periodic configuration check (every 30 seconds)
 - Fixed config watcher not detecting changes from some text editors
 - Improved logging for configuration reload events
