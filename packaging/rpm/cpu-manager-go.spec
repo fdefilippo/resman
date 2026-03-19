@@ -244,6 +244,12 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.2-1
+- Critical bug fixes for shutdown and memory leaks
+- Added metricsCollector.Stop() to prevent goroutine leak
+- Added username cache cleanup to prevent memory leak
+- Ensures all background goroutines stop gracefully
+
 * Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.1-2
 - Made username cache TTL configurable via USERNAME_CACHE_TTL
 - Default TTL changed to 60 minutes (was 5 minutes)

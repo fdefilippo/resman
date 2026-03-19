@@ -5,6 +5,28 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.2] - 2026-03-19
+
+### Corretto
+
+#### Critical Bug Fixes
+- **FIX**: Added `metricsCollector.Stop()` to shutdown sequence
+  - Previene goroutine leak da `periodicCleanup()`
+  - Assicura shutdown ordinato di tutte le goroutine background
+  - Log di conferma aggiunto
+
+- **FIX**: Added username cache cleanup in `cleanupCache()`
+  - Rimuove entry scadute dalla cache username
+  - Previene memory leak in deployment long-running
+  - Usa TTL configurabile per expiration
+
+**Impact:**
+- ✅ Shutdown ora pulisce correttamente tutte le risorse
+- ✅ Nessuna goroutine orphan dopo lo shutdown
+- ✅ Memoria ottimizzata con cleanup completo di tutte le cache
+
+---
+
 ## [1.16.1] - 2026-03-19
 
 ### Aggiunto
