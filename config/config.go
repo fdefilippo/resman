@@ -126,6 +126,9 @@ type Config struct {
     MetricsDBPath          string `config:"METRICS_DB_PATH"`
     MetricsDBRetentionDays int    `config:"METRICS_DB_RETENTION_DAYS"`
     MetricsDBWriteInterval int    `config:"METRICS_DB_WRITE_INTERVAL"` // seconds
+
+    // Username Cache TTL (minutes)
+    UsernameCacheTTL       int    `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -211,6 +214,9 @@ func DefaultConfig() *Config {
         MetricsDBPath:          "/etc/cpu-manager/metrics.db",
         MetricsDBRetentionDays: 30,
         MetricsDBWriteInterval: 30, // Same as polling interval by default
+
+        // Username Cache TTL (minutes)
+        UsernameCacheTTL:       60, // Default 60 minutes
     }
 }
 
@@ -635,6 +641,10 @@ func setConfigField(cfg *Config, key, value string) error {
         if i, err := strconv.Atoi(value); err == nil && i > 0 {
             cfg.MetricsDBWriteInterval = i
         }
+    case "USERNAME_CACHE_TTL":
+        if i, err := strconv.Atoi(value); err == nil && i > 0 {
+            cfg.UsernameCacheTTL = i
+        }
 
     default:
         return nil
@@ -669,6 +679,9 @@ func validateConfig(cfg *Config) error {
     }
     if cfg.MetricsDBWriteInterval < 5 {
         errors = append(errors, "METRICS_DB_WRITE_INTERVAL must be at least 5 seconds")
+    }
+    if cfg.UsernameCacheTTL < 1 {
+        errors = append(errors, "USERNAME_CACHE_TTL must be at least 1 minute")
     }
 
     // Validate polling interval

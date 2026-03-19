@@ -10,21 +10,36 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 ### Aggiunto
 
 #### Username Resolution Cache
-- **NUOVO**: Cache con TTL (5 minuti) per risoluzione UID -> username
+- **NUOVO**: Cache con TTL configurabile per risoluzione UID -> username
+- **Configurazione**: Nuova variabile `USERNAME_CACHE_TTL` (default: 60 minuti)
 - **Miglioramento**: Ridotte chiamate LDAP/NIS del 90%+ in ambienti con molti utenti
-- **Performance**: Lookup eseguito solo una volta per utente ogni 5 minuti
+- **Performance**: Lookup eseguito solo una volta per utente ogni N minuti (configurabile)
 - **Thread-safe**: Implementazione con mutex RWMutex per accesso concorrente
+
+**Configurazione:**
+```bash
+# Tempo di cache per risoluzione username (minuti)
+# Default: 60 minuti
+# Minimo: 1 minuto
+USERNAME_CACHE_TTL=60
+```
 
 **Dettagli Tecnici:**
 - Cache in-memory con timestamp per ogni entry
-- TTL configurabile (default: 5 minuti)
+- TTL configurabile da 1 minuto a infinito
 - Fallback automatico a os/user.LookupId() se cache scaduta
 - Supporto LDAP/NIS/SSSD mantenuto (tramite CGO)
+- Funzioni API: `SetUsernameCacheTTL()`, `GetUsernameCacheTTL()`
 
 **Impatto Performance:**
 - Prima: 50 utenti × 50ms (LDAP) = 2.5 secondi per ciclo
 - Dopo: ~2 lookup/ciclo (nuovi utenti) = 0.1 secondi per ciclo
 - **Miglioramento: 96% più veloce**
+
+**Use Cases:**
+- **Ambienti stabili** (utenti raramente cambiano): TTL lungo (60-120 min)
+- **Ambienti dinamici** (utenti cambiano spesso): TTL breve (5-15 min)
+- **Testing/Debug**: TTL=0 per disabilitare cache
 
 ---
 

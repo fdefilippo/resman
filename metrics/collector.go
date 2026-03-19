@@ -72,10 +72,11 @@ type Collector struct {
     usernameCache      map[int]string  // UID -> username
     usernameCacheTime  map[int]time.Time // Timestamp ultima risoluzione
     usernameCacheMutex sync.RWMutex
+    usernameCacheTTL   time.Duration   // TTL della cache
 }
 
-// Username cache TTL
-const USERNAME_CACHE_TTL = 5 * time.Minute
+// Default Username Cache TTL
+const DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
 
 // NewCollector crea un nuovo collettore di metriche.
 func NewCollector(cfg *config.Config) (*Collector, error) {
@@ -91,6 +92,7 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
         prevProcTime:    make(map[int32]time.Time),
         usernameCache:   make(map[int]string),
         usernameCacheTime: make(map[int]time.Time),
+        usernameCacheTTL: DEFAULT_USERNAME_CACHE_TTL,
     }
 
     // Inizializza le statistiche CPU precedenti
@@ -567,7 +569,7 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 
     // Controllo se la cache è scaduta
     timestamp, exists := c.usernameCacheTime[uid]
-    if !exists || time.Since(timestamp) > USERNAME_CACHE_TTL {
+    if !exists || time.Since(timestamp) > c.usernameCacheTTL {
         return "", false
     }
 
@@ -590,6 +592,21 @@ func (c *Collector) clearUsernameCache(uid int) {
 
     delete(c.usernameCache, uid)
     delete(c.usernameCacheTime, uid)
+}
+
+// SetUsernameCacheTTL imposta il TTL della cache username
+func (c *Collector) SetUsernameCacheTTL(ttl time.Duration) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.usernameCacheTTL = ttl
+    c.logger.Debug("Username cache TTL updated", "ttl", ttl)
+}
+
+// GetUsernameCacheTTL restituisce il TTL corrente della cache username
+func (c *Collector) GetUsernameCacheTTL() time.Duration {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    return c.usernameCacheTTL
 }
 
 // getUsernameFromPasswd legge il username da /etc/passwd senza usare CGO

@@ -136,6 +136,12 @@ func main() {
                 "write_interval", cfg.MetricsDBWriteInterval,
             )
 
+            // Imposta TTL cache username
+            metricsCollector.SetUsernameCacheTTL(time.Duration(cfg.UsernameCacheTTL) * time.Minute)
+            logger.Info("Username cache configured",
+                "ttl_minutes", cfg.UsernameCacheTTL,
+            )
+
             // Cleanup iniziale dei dati vecchi
             if deleted, err := dbManager.CleanupOldData(cfg.MetricsDBRetentionDays); err == nil && deleted > 0 {
                 logger.Info("Cleaned up old metrics data", "records_deleted", deleted)

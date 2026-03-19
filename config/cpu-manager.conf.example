@@ -272,3 +272,26 @@ METRICS_DB_ENABLED=false
 METRICS_DB_PATH=/etc/cpu-manager/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
+
+# ========================
+# USERNAME CACHE TTL
+# ========================
+# Tempo di cache per la risoluzione UID -> username (in minuti)
+# Utile per ridurre le chiamate LDAP/NIS in ambienti con molti utenti
+#
+# USERNAME_CACHE_TTL: Quanti minuti mantenere in cache la risoluzione username
+# Default: 60 minuti
+# Minimo: 1 minuto
+#
+# Esempi:
+# # Cache breve (5 minuti) - per ambienti con utenti che cambiano spesso
+# USERNAME_CACHE_TTL=5
+#
+# # Cache media (30 minuti) - compromesso tra performance e freschezza
+# USERNAME_CACHE_TTL=30
+#
+# # Cache lunga (2 ore) - massima performance, utenti stabili
+# USERNAME_CACHE_TTL=120
+#
+# # Default: 60 minuti
+USERNAME_CACHE_TTL=60
