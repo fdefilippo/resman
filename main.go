@@ -38,7 +38,7 @@ import (
     "github.com/fdefilippo/cpu-manager-go/mcp"
 )
 
-var version = "1.15.2"
+var version = "1.16.0"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
