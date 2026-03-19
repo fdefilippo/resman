@@ -19,7 +19,7 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 - `get_user_history`: Storico CPU/RAM per utente con filtri temporali
 - `get_system_history`: Storico metriche di sistema
 - `get_user_summary`: Statistiche aggregate (avg, min, max) per utente
-- `get_database_info`: Informazioni sul database (size, record count, retention)
+- `get_metrics_database_info`: Informazioni sul database (size, record count, retention)
 
 **Configurazione:**
 ```bash

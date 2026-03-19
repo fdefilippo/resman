@@ -306,7 +306,7 @@ Ottiene statistiche aggregate (media, min, max) per un utente.
 
 ---
 
-### 4. `get_database_info`
+### 4. `get_metrics_database_info`
 
 Ottiene informazioni sul database.
 
@@ -315,7 +315,7 @@ Ottiene informazioni sul database.
 **Esempio:**
 ```json
 {
-  "tool": "get_database_info",
+  "tool": "get_metrics_database_info",
   "arguments": {}
 }
 ```
@@ -404,7 +404,7 @@ VACUUM;
 
 1. **Retention adeguata**: Imposta `METRICS_DB_RETENTION_DAYS` in base allo spazio disponibile
 2. **Intervallo di scrittura**: Non scendere sotto i 5 secondi per evitare sovraccarico
-3. **Monitoraggio dimensione**: Controlla periodicamente `get_database_info`
+3. **Monitoraggio dimensione**: Controlla periodicamente `get_metrics_database_info`
 4. **Backup**: Fai backup regolari del file `/etc/cpu-manager/metrics.db`
 
 ### Troubleshooting
@@ -458,6 +458,6 @@ Il cleanup dei dati vecchi viene eseguito:
 
 ### Versione 1.16.0
 - **Aggiunto**: Supporto database SQLite per metriche storiche
-- **Aggiunto**: 4 nuovi MCP tools (`get_user_history`, `get_system_history`, `get_user_summary`, `get_database_info`)
+- **Aggiunto**: 4 nuovi MCP tools (`get_user_history`, `get_system_history`, `get_user_summary`, `get_metrics_database_info`)
 - **Aggiunto**: Configurazione `METRICS_DB_*` per controllo persistenza
 - **Aggiunto**: Cleanup automatico dati vecchi
