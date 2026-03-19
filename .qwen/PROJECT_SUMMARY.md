@@ -16,7 +16,7 @@ The user wants me to create a comprehensive project summary based on the entire 
 - LDAP username resolution fix
 - Process exclude list made configurable
 
-4. Current version: 1.14.1
+4. Current version: 1.15.2
 
 Let me create a comprehensive summary.# CPU Manager Go - Project Summary
 
@@ -39,6 +39,7 @@ Implement a comprehensive MCP-enabled CPU resource management tool using Linux c
 - **Key Variables**:
   - `CPU_THRESHOLD=75` - Activation threshold (%)
   - `CPU_RELEASE_THRESHOLD=40` - Deactivation threshold (%)
+  - `CPU_THRESHOLD_DURATION=90` - Time window before activating limits (seconds, 0=immediate)
   - `USER_INCLUDE_LIST` - Regex patterns for users to monitor
   - `USER_EXCLUDE_LIST` - Regex patterns for users to exclude
   - `PROCESS_EXCLUDE_LIST` - Process names to never limit (default: systemd,dbus-daemon,cron,sshd,rsyslog)
@@ -100,7 +101,29 @@ All metrics include `hostname` and `server_role` labels:
 
 ## Recent Actions
 
-### Version 1.14.1 (Latest - CPU Usage Fix)
+### Version 1.15.2 (Latest - Prometheus Metrics Cleanup)
+- **[FIXED]** Critical Prometheus metrics cleanup for inactive users
+  - Automatic removal of stale metrics when processes terminate
+  - Internal tracking of active users via `activeUserMetrics`
+  - Prevents "ghost" users in Prometheus queries
+  - Log: "Removed metrics for inactive user"
+
+### Version 1.15.1 (Inactive User Release)
+- **[FIXED]** Release inactive users from limited cgroup
+  - Users with CPU < 0.1% automatically released
+  - Prevents unnecessary resource restrictions
+  - Accurate `cpu_manager_user_cpu_limited` metrics
+  - Log: "Releasing idle users from CPU limits"
+
+### Version 1.15.0 (Threshold Time Window)
+- **[ADDED]** CPU_THRESHOLD_DURATION for delayed activation
+  - Prevents limit activation for temporary CPU spikes
+  - Default: 90 seconds (3 control cycles)
+  - Configurable: 0=immediate, 90=default, 180=3min
+  - Progressive logging with countdown
+  - Backward compatible (CPU_THRESHOLD_DURATION=0)
+
+### Version 1.14.1 (CPU Usage Fix)
 - **[FIXED]** Critical CPU usage calculation bug
   - Changed from `proc.CPUPercent()` to manual delta calculation
   - Added per-process CPU time cache
@@ -152,10 +175,13 @@ All metrics include `hostname` and `server_role` labels:
 ## Current Plan
 
 ### Immediate Priorities
-1. **[DONE]** CPU usage calculation fix (v1.14.1)
-2. **[DONE]** Process exclude list configurable (v1.14.0)
-3. **[DONE]** LDAP username resolution (v1.13.1)
-4. **[DONE]** Grafana multi-cluster support (v1.13.0)
+1. **[DONE]** Prometheus metrics cleanup for inactive users (v1.15.2)
+2. **[DONE]** Release inactive users from limited cgroup (v1.15.1)
+3. **[DONE]** Threshold time window implementation (v1.15.0)
+4. **[DONE]** CPU usage calculation fix (v1.14.1)
+5. **[DONE]** Process exclude list configurable (v1.14.0)
+6. **[DONE]** LDAP username resolution (v1.13.1)
+7. **[DONE]** Grafana multi-cluster support (v1.13.0)
 
 ### Future Enhancements
 1. **[TODO]** Real-time notifications for limit activation/deactivation
@@ -164,12 +190,10 @@ All metrics include `hostname` and `server_role` labels:
 4. **[TODO]** Rate limiting for MCP endpoints
 5. **[TODO]** TLS support for MCP HTTP transport
 6. **[TODO]** MCP prompts for common troubleshooting scenarios
-
-### Testing Requirements
-1. **[TODO]** Unit tests for CPU delta calculation
-2. **[TODO]** Integration tests for LDAP username resolution
-3. **[TODO]** End-to-end tests for MCP tools
-4. **[TODO]** Performance tests with 1000+ concurrent processes
+7. **[TODO]** Unit tests for CPU delta calculation
+8. **[TODO]** Integration tests for LDAP username resolution
+9. **[TODO]** End-to-end tests for MCP tools
+10. **[TODO]** Performance tests with 1000+ concurrent processes
 
 ### Documentation Gaps
 1. **[TODO]** Migration guide from v1.x to v1.14.x
@@ -274,6 +298,9 @@ tail -f /var/log/cpu-manager.log | grep -i "blackout\|exclude"
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| 1.15.2 | Mar 2026 | Prometheus metrics cleanup for inactive users |
+| 1.15.1 | Mar 2026 | Release inactive users from limited cgroup |
+| 1.15.0 | Mar 2026 | Threshold time window (CPU_THRESHOLD_DURATION) |
 | 1.14.1 | Mar 2026 | CPU usage calculation fix (delta method) |
 | 1.14.0 | Mar 2026 | PROCESS_EXCLUDE_LIST configurable |
 | 1.13.1 | Mar 2026 | LDAP/NIS username resolution |
@@ -320,4 +347,4 @@ cpu-manager-go/
 ---
 
 ## Summary Metadata
-**Update time**: 2026-03-16T19:27:38.362Z 
+**Update time**: 2026-03-19T06:30:00.000Z 

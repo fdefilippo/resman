@@ -29,5 +29,6 @@ rpmbuild/
 /tmp/
 *.tmp
 
-# Qwen IDE
-.qwen/
+# Qwen IDE (except PROJECT_SUMMARY.md)
+.qwen/*
+!.qwen/PROJECT_SUMMARY.md
