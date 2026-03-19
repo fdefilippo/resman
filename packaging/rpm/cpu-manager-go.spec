@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.15.1
+Version: 1.16.0
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -244,7 +244,52 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.0-1
+- Added SQLite metrics database for historical data persistence
+- New MCP tools for historical queries:
+  * get_user_history: Historical CPU/RAM metrics per user with time filters
+  * get_system_history: Historical system-wide metrics
+  * get_user_summary: Aggregated statistics (avg/min/max) for users
+  * get_database_info: Database status, size, and retention info
+- Configurable data retention with automatic cleanup
+- Asynchronous non-blocking writes for minimal performance impact
+- New configuration variables:
+  * METRICS_DB_ENABLED: Enable/disable database (default: false)
+  * METRICS_DB_PATH: Database file path (default: /etc/cpu-manager/metrics.db)
+  * METRICS_DB_RETENTION_DAYS: Data retention period (default: 30 days)
+  * METRICS_DB_WRITE_INTERVAL: Write interval in seconds (default: 30)
+- Added GetUIDFromUsername() for username resolution in MCP tools
+- Updated documentation with METRICS-DATABASE.md guide
+- Build requires sqlite-devel for CGO SQLite support
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.15.2-1
+- Fixed Prometheus metrics cleanup for inactive users
+- Automatic removal of stale metrics to prevent 'ghost' users
+- Internal tracking of active users for accurate metric reporting
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.15.1-1
+- Fixed release of inactive users from limited cgroup
+- Users with CPU < 0.1% automatically released from limits
+- Accurate cpu_manager_user_cpu_limited metrics
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.15.0-1
+- Added CPU_THRESHOLD_DURATION for threshold time window
+- Prevents limit activation for temporary CPU spikes
+- Configurable delay (default 90s) before activating limits
+- Backward compatible with CPU_THRESHOLD_DURATION=0
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.14.1-1
+- Fixed CPU usage calculation with delta method
+- Added per-process CPU time cache with automatic cleanup
+- Resolved 'ghost' CPU usage values for non-existent users
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.14.0-1
+- Made PROCESS_EXCLUDE_LIST configurable
+- Removed hardcoded process list from config.go
+- Default list reduced to 11 essential processes
+- Full list available as commented example
+
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
 - Added CPU_MANAGER_BLACKOUT configuration for blackout timeframes
 - CPU Manager will not apply limits during configured blackout periods
 - Crontab-like format: "days hours" (e.g., "1-5 08-18" for Mon-Fri, 8-18)
@@ -254,7 +299,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Blackout takes precedence over USER_INCLUDE_LIST and USER_EXCLUDE_LIST
 - Updated man page with blackout documentation
 
-* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
 - Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
 - Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
 - Default Prometheus port changed from 9101 to 1974
@@ -266,7 +311,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Backward compatibility maintained for old variable names
 - Updated man page to v1.5
 
-* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
 - Added MCP User Filter Management tools:
   * get_user_filters: Get current user include/exclude filter configurations
   * set_user_exclude_list: Set users to exclude from CPU limits (regex support)
@@ -278,7 +323,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - All write operations require MCP_ALLOW_WRITE_OPS=true
 - Updated MCP documentation with user filter examples
 
-* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
 - Added periodic configuration check (every 30 seconds)
 - Fixed config watcher not detecting changes from some text editors
 - Improved logging for configuration reload events
