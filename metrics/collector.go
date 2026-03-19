@@ -874,6 +874,16 @@ func (c *Collector) cleanupCache() {
 		}
 	}
 	c.procCPUMutex.Unlock()
+
+	// Pulisci anche la cache username (utenti non risolti da > TTL)
+	c.usernameCacheMutex.Lock()
+	for uid, timestamp := range c.usernameCacheTime {
+		if now.Sub(timestamp) > c.usernameCacheTTL {
+			delete(c.usernameCache, uid)
+			delete(c.usernameCacheTime, uid)
+		}
+	}
+	c.usernameCacheMutex.Unlock()
 }
 
 // ClearCache svuota la cache.

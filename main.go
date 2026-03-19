@@ -305,6 +305,12 @@ func main() {
                 }
             }
 
+            // Stop metrics collector (stops background goroutines)
+            if metricsCollector != nil {
+                metricsCollector.Stop()
+                logger.Info("Metrics collector stopped")
+            }
+
             logger.Info("Shutdown completed")
             return
 
