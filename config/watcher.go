@@ -137,6 +137,10 @@ func (w *Watcher) watchLoop() {
     defer debounceTimer.Stop()
 
     var pendingReload bool
+    
+    // Timer per controllo periodico (ogni 30 secondi)
+    periodicCheck := time.NewTicker(30 * time.Second)
+    defer periodicCheck.Stop()
 
     for {
         select {
@@ -168,7 +172,7 @@ func (w *Watcher) watchLoop() {
             if !pendingReload {
                 pendingReload = true
                 debounceTimer.Reset(2 * time.Second)
-                w.logger.Debug("Config change detected, waiting for debounce period")
+                w.logger.Info("Config change detected via fsnotify, reloading in 2 seconds")
             }
 
         case err, ok := <-w.watcher.Errors:
@@ -177,12 +181,35 @@ func (w *Watcher) watchLoop() {
             }
             w.logger.Warn("File watcher error", "error", err)
 
+        case <-periodicCheck.C:
+            // Controllo periodico della configurazione
+            w.logger.Debug("Periodic config check")
+            w.checkConfigChange()
+
         case <-debounceTimer.C:
             if pendingReload {
                 pendingReload = false
                 w.handleConfigChange()
             }
         }
+    }
+}
+
+// checkConfigChange verifica se la configurazione è cambiata
+func (w *Watcher) checkConfigChange() {
+    fileInfo, err := os.Stat(w.configPath)
+    if err != nil {
+        return
+    }
+
+    w.mu.RLock()
+    sameModTime := fileInfo.ModTime().Equal(w.lastModTime)
+    sameSize := fileInfo.Size() == w.lastFileSize
+    w.mu.RUnlock()
+
+    if !sameModTime || !sameSize {
+        w.logger.Info("Config change detected via periodic check, reloading")
+        w.handleConfigChange()
     }
 }
 

@@ -461,6 +461,35 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 func (m *Manager) CreateSharedCgroup() (string, error) {
     sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
 
+    // Se il cgroup condiviso esiste già, RIMUOVLO COMPLETAMENTE e ricreo
+    if _, err := os.Stat(sharedPath); err == nil {
+        m.logger.Info("Shared cgroup already exists, removing and recreating", "path", sharedPath)
+        
+        // Sposta prima tutti i processi al cgroup root
+        cgroupProcsFile := filepath.Join(sharedPath, "cgroup.procs")
+        if pids, err := m.readPidsFromFile(cgroupProcsFile); err == nil && len(pids) > 0 {
+            m.logger.Info("Moving processes out of existing shared cgroup",
+                "path", sharedPath,
+                "count", len(pids),
+            )
+            rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+            for _, pid := range pids {
+                os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644)
+            }
+            time.Sleep(50 * time.Millisecond)
+        }
+        
+        // Rimuovi il cgroup esistente con tutto il contenuto
+        if err := os.RemoveAll(sharedPath); err != nil {
+            m.logger.Warn("Failed to remove existing shared cgroup, will try to reuse",
+                "path", sharedPath,
+                "error", err,
+            )
+        } else {
+            m.logger.Info("Existing shared cgroup removed", "path", sharedPath)
+        }
+    }
+
     // Crea la directory del cgroup condiviso
     if err := os.MkdirAll(sharedPath, 0755); err != nil {
         return "", fmt.Errorf("failed to create shared cgroup directory: %w", err)
@@ -471,8 +500,11 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
     if err := m.writeControllerIfMissing(subtreeControl, "+cpu"); err != nil {
         m.logger.Warn("Failed to enable cpu controller in shared cgroup", "error", err)
     }
+    if err := m.writeControllerIfMissing(subtreeControl, "+cpuset"); err != nil {
+        m.logger.Warn("Failed to enable cpuset controller in shared cgroup", "error", err)
+    }
 
-    m.logger.Debug("Shared cgroup created", "path", sharedPath)
+    m.logger.Info("Shared cgroup created and initialized", "path", sharedPath)
     return sharedPath, nil
 }
 
@@ -707,28 +739,107 @@ func (m *Manager) CleanupAll() error {
     m.mu.Lock()
     defer m.mu.Unlock()
 
-    m.logger.Info("Cleaning up all cgroups", "count", len(m.createdCgroups))
+    m.logger.Info("Starting cgroup cleanup", "tracked_count", len(m.createdCgroups))
 
     var errors []string
 
-    // Prima prova a pulire tutti i cgroups conosciuti
+    // Prima prova a pulire tutti i cgroups conosciuti dal tracciamento
     for uid := range m.createdCgroups {
         if err := m.CleanupUserCgroup(uid); err != nil {
             errors = append(errors, fmt.Sprintf("UID %d: %v", uid, err))
         }
     }
 
+    // Rimuovi il cgroup condiviso "limited" se esiste
+    sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
+    if _, err := os.Stat(sharedPath); err == nil {
+        m.logger.Info("Cleaning up shared cgroup", "path", sharedPath)
+        
+        // STEP 1: Leggi TUTTI i sottocgroup utente dalla directory (non solo dal tracciamento)
+        entries, err := os.ReadDir(sharedPath)
+        if err == nil {
+            for _, entry := range entries {
+                if entry.IsDir() && strings.HasPrefix(entry.Name(), "user_") {
+                    userPath := filepath.Join(sharedPath, entry.Name())
+                    m.logger.Info("Removing user sub-cgroup", "path", userPath)
+                    
+                    // Sposta i processi fuori prima di rimuovere
+                    userProcsFile := filepath.Join(userPath, "cgroup.procs")
+                    if pids, err := m.readPidsFromFile(userProcsFile); err == nil && len(pids) > 0 {
+                        m.logger.Info("Moving processes out of user cgroup",
+                            "path", userPath,
+                            "count", len(pids),
+                        )
+                        rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+                        for _, pid := range pids {
+                            os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644)
+                        }
+                    }
+                    
+                    if err := os.RemoveAll(userPath); err != nil {
+                        m.logger.Warn("Failed to remove user sub-cgroup",
+                            "path", userPath,
+                            "error", err,
+                        )
+                        errors = append(errors, fmt.Sprintf("user cgroup %s: %v", userPath, err))
+                    } else {
+                        m.logger.Info("User sub-cgroup removed", "path", userPath)
+                    }
+                }
+            }
+        }
+        
+        // STEP 2: Sposta TUTTI i processi fuori dal cgroup condiviso
+        cgroupProcsFile := filepath.Join(sharedPath, "cgroup.procs")
+        if pids, err := m.readPidsFromFile(cgroupProcsFile); err == nil && len(pids) > 0 {
+            m.logger.Info("Moving processes out of shared cgroup",
+                "path", sharedPath,
+                "count", len(pids),
+            )
+            rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+            for _, pid := range pids {
+                if err := os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+                    m.logger.Debug("Failed to move process", "pid", pid, "error", err)
+                }
+            }
+            // Aspetta che il kernel process lo spostamento
+            time.Sleep(200 * time.Millisecond)
+        }
+        
+        // STEP 3: Verifica che il cgroup sia vuoto
+        if pids, _ := m.readPidsFromFile(cgroupProcsFile); len(pids) > 0 {
+            m.logger.Warn("Shared cgroup still has processes after cleanup",
+                "path", sharedPath,
+                "remaining_count", len(pids),
+            )
+            errors = append(errors, fmt.Sprintf("shared cgroup still has %d processes", len(pids)))
+        }
+        
+        // STEP 4: Ora prova a rimuovere il cgroup condiviso
+        m.logger.Info("Removing shared cgroup directory", "path", sharedPath)
+        if err := os.RemoveAll(sharedPath); err != nil {
+            m.logger.Error("Failed to remove shared cgroup",
+                "path", sharedPath,
+                "error", err,
+            )
+            errors = append(errors, fmt.Sprintf("shared cgroup: %v", err))
+        } else {
+            m.logger.Info("Shared cgroup removed successfully", "path", sharedPath)
+        }
+    } else {
+        m.logger.Debug("Shared cgroup does not exist, skipping cleanup", "path", sharedPath)
+    }
+
     // Poi prova a rimuovere il cgroup base (se vuoto)
     baseCgroupPath := m.getBaseCgroupPath()
     if _, err := os.Stat(baseCgroupPath); err == nil {
-        // Prova a rimuovere il cgroup base
         if err := os.Remove(baseCgroupPath); err != nil {
             m.logger.Debug("Could not remove base cgroup (may not be empty)",
                 "path", baseCgroupPath,
                 "error", err,
             )
         } else {
-            m.logger.Debug("Base cgroup removed", "path", baseCgroupPath)
+            m.logger.Info("Base cgroup removed", "path", baseCgroupPath)
         }
     }
 
@@ -738,6 +849,7 @@ func (m *Manager) CleanupAll() error {
     }
 
     if len(errors) > 0 {
+        m.logger.Warn("Cleanup completed with errors", "error_count", len(errors))
         return fmt.Errorf("errors during cleanup: %s", strings.Join(errors, "; "))
     }
 

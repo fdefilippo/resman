@@ -34,6 +34,7 @@ import (
     "github.com/fdefilippo/cpu-manager-go/metrics"
     "github.com/fdefilippo/cpu-manager-go/state"
     "github.com/fdefilippo/cpu-manager-go/reloader"
+    "github.com/fdefilippo/cpu-manager-go/mcp"
 )
 
 var version = "dev"
@@ -63,22 +64,23 @@ func main() {
         return
     }
 
-    // Inizializzazione logger con valori di default
-    logging.InitLogger("INFO", "/var/log/cpu-manager.log", 10*1024*1024, false)
-    logger := logging.GetLogger()
-    logger.Info("Starting CPU Manager", "version", version)
-
     // Caricamento configurazione iniziale
     cfg, err := config.LoadAndValidate(*configPath)
     if err != nil {
-        logger.Error("Failed to load configuration", "error", err)
+        fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
         os.Exit(1)
     }
-    logger.Info("Configuration loaded successfully")
 
-    // Riconfigurazione logger con valori dalla config
+    // Inizializzazione logger con valori dalla configurazione
     logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.UseSyslog)
-    logger = logging.GetLogger()
+    logger := logging.GetLogger()
+    
+    logger.Info("Starting CPU Manager", "version", version)
+    logger.Info("Configuration loaded successfully",
+        "log_level", cfg.LogLevel,
+        "log_file", cfg.LogFile,
+        "use_syslog", cfg.UseSyslog,
+    )
 
     if cfg.UseSyslog {
         logger.Info("Syslog logging enabled")
@@ -117,10 +119,10 @@ func main() {
 
     if cfg.EnablePrometheus {
         // Verifica che la porta sia disponibile
-        if !checkPortAvailable(cfg.PrometheusHost, cfg.PrometheusPort) {
+        if !checkPortAvailable(cfg.PrometheusMetricsBindHost, cfg.PrometheusMetricsBindPort) {
             logger.Warn("Prometheus port already in use, disabling exporter",
-                "host", cfg.PrometheusHost,
-                "port", cfg.PrometheusPort,
+                "host", cfg.PrometheusMetricsBindHost,
+                "port", cfg.PrometheusMetricsBindPort,
             )
             cfg.EnablePrometheus = false
         } else {
@@ -134,8 +136,8 @@ func main() {
                     prometheusExporter = nil
                 } else {
                     logger.Info("Prometheus exporter started",
-                        "host", cfg.PrometheusHost,
-                        "port", cfg.PrometheusPort,
+                        "host", cfg.PrometheusMetricsBindHost,
+                        "port", cfg.PrometheusMetricsBindPort,
                     )
                 }
             }
@@ -169,6 +171,29 @@ func main() {
               logger.Info("Configuration auto-reload enabled", "file", *configPath)
           }
       }
+    }
+
+    // 6. MCP Server
+    var mcpServer *mcp.Server
+
+    if cfg.MCPEnabled {
+        mcpServer, err = mcp.NewServer(cfg, stateManager, metricsCollector, cgroupMgr)
+        if err != nil {
+            logger.Error("Failed to initialize MCP server", "error", err)
+            mcpServer = nil
+        } else {
+            if err := mcpServer.Start(ctx); err != nil {
+                logger.Error("Failed to start MCP server", "error", err)
+                mcpServer = nil
+            } else {
+                logger.Info("MCP server started",
+                    "transport", cfg.MCPTransport,
+                    "port", cfg.MCPHTTPPort,
+                )
+            }
+        }
+    } else {
+        logger.Info("MCP server disabled by configuration")
     }
 
     // Goroutine per gestione segnali
@@ -227,6 +252,13 @@ func main() {
 
             if err := stateManager.Cleanup(); err != nil {
                 logger.Error("Error during cleanup", "error", err)
+            }
+
+            // Stop MCP server
+            if mcpServer != nil {
+                if err := mcpServer.Stop(); err != nil {
+                    logger.Error("Error stopping MCP server", "error", err)
+                }
             }
 
             logger.Info("Shutdown completed")

@@ -26,9 +26,18 @@ CONF_DIR = /etc
 SYSTEMD_DIR = /usr/lib/systemd/system
 
 # Go parameters
+# CGO is required for user name resolution via NSS (LDAP, NIS, SSSD support)
+CGO_ENABLED = 1
+export CGO_ENABLED
+
 GO_FLAGS = -v
 GO_LDFLAGS = -ldflags="-s -w -X 'main.version=$(VERSION)-$(RELEASE)'"
 GO_TAGS =
+
+# CGO compiler settings
+export CC = gcc
+export CGO_CFLAGS = -O2
+export CGO_LDFLAGS = -lresolv
 
 # Architetture supportate
 ARCHES = amd64 arm64

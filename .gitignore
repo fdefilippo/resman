@@ -1,0 +1,33 @@
+# Build artifacts
+cpu-manager-go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# RPM build directory
+rpmbuild/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Qwen IDE
+.qwen/

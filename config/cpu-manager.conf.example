@@ -6,7 +6,6 @@
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
 SCRIPT_CGROUP_BASE=cpu_manager
-LOG_FILE=/var/log/cpu-manager.log
 CREATED_CGROUPS_FILE=/var/run/cpu-manager/cgroups.txt
 METRICS_CACHE_FILE=/var/run/cpu-manager/metrics.cache
 
@@ -20,8 +19,25 @@ METRICS_CACHE_TTL=15
 # ========================
 # THRESHOLDS (percentages)
 # ========================
-CPU_THRESHOLD=75
-CPU_RELEASE_THRESHOLD=40
+CPU_THRESHOLD=75             # Attiva limiti se CPU utenti >= 75%
+CPU_RELEASE_THRESHOLD=40     # Rilascia limiti se CPU utenti < 40%
+
+# THRESHOLD TIME WINDOW (seconds)
+# CPU_THRESHOLD_DURATION: Tempo di attesa prima di attivare i limiti dopo superamento soglia
+# Utile per evitare attivazione per picchi temporanei (es: deploy, backup)
+# Default: 90 secondi (3 cicli da 30s)
+# Imposta a 0 per attivazione immediata (comportamento legacy)
+#
+# Esempi:
+# # Attivazione immediata (comportamento pre-v1.15.0)
+# CPU_THRESHOLD_DURATION=0
+#
+# # Attendi 90 secondi (default)
+# CPU_THRESHOLD_DURATION=90
+#
+# # Attendi 3 minuti (ambienti critici)
+# CPU_THRESHOLD_DURATION=180
+CPU_THRESHOLD_DURATION=90
 
 # ========================
 # CPU LIMITS (cpu.max format: "quota period")
@@ -36,9 +52,10 @@ CPU_QUOTA_LIMITED="50000 100000"
 # ========================
 # PROMETHEUS
 # ========================
-ENABLE_PROMETHEUS=true
-PROMETHEUS_PORT=9100
-PROMETHEUS_HOST=192.168.1.7
+ENABLE_PROMETHEUS=false              # Enable metrics export
+# PROMETHEUS_METRICS_BIND_HOST=0.0.0.0  # Bind address (default: 0.0.0.0 - all interfaces)
+# PROMETHEUS_METRICS_BIND_PORT=1974     # Port for metrics endpoint (default: 1974)
+# Metrics available at: http://HOST:PORT/metrics
 
 # Prometheus TLS/HTTPS (optional)
 PROMETHEUS_TLS_ENABLED=false
@@ -60,9 +77,15 @@ PROMETHEUS_JWT_EXPIRY=3600
 # ========================
 # LOGGING
 # ========================
-LOG_LEVEL=DEBUG
-LOG_MAX_SIZE=10485760
-USE_SYSLOG=true
+# Livelli di log disponibili:
+#   DEBUG - Messaggi dettagliati per troubleshooting
+#   INFO  - Informazioni operative normali (default consigliato)
+#   WARN  - Solo avvisi ed errori
+#   ERROR - Solo errori
+LOG_LEVEL=INFO
+LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
+USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
+LOG_FILE=/var/log/cpu-manager.log
 
 # ========================
 # SYSTEM
@@ -72,8 +95,138 @@ SYSTEM_UID_MIN=1000
 # SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
 
 # ========================
+# USER INCLUDE LIST (Optional, Regex Support)
+# ========================
+# Se specificata, INCLUDE nel monitoraggio SOLO gli utenti che corrispondono
+# ai pattern regex elencati. Se vuota o non specificata, tutti gli utenti
+# non-system (UID >= SYSTEM_UID_MIN) sono inclusi.
+# Formato: lista di pattern regex separati da virgola, senza spazi
+# Esempi:
+#   USER_INCLUDE_LIST=francesco                    # Solo francesco
+#   USER_INCLUDE_LIST=^www.*,^apache.*             # Utenti web (regex)
+#   USER_INCLUDE_LIST=^svc-.*,^app-.*              # Utenti servizio (regex)
+#   USER_INCLUDE_LIST=francesco,www-data,mysql     # Utenti specifici
+#   USER_INCLUDE_LIST=                             # Vuoto = TUTTI gli utenti (default)
+#
+# NOTA: Se la riga è assente o commentata, tutti gli utenti non-system sono inclusi.
+# USER_INCLUDE_LIST=
+
+# ========================
+# USER EXCLUDE LIST (Optional, Regex Support)
+# ========================
+# Se specificata, ESCLUDE gli utenti elencati dal monitoraggio e dall'applicazione
+# dei limiti CPU. Se vuota o non specificata, tutti gli utenti non-system
+# (UID >= SYSTEM_UID_MIN) possono essere limitati.
+# Formato: lista di pattern regex separati da virgola, senza spazi
+# Esempi:
+#   USER_EXCLUDE_LIST=francesco                    # Francesco NON viene limitato
+#   USER_EXCLUDE_LIST=^www-.*,^test-.*             # Esclude utenti web e test (regex)
+#   USER_EXCLUDE_LIST=^svc-.*,^app-.*              # Esclude utenti servizio (regex)
+#   USER_EXCLUDE_LIST=francesco,www-data,mysql     # Utenti specifici esclusi
+#   USER_EXCLUDE_LIST=                             # Vuoto = NESSUN utente escluso (default)
+#
+# NOTA: Se la riga è assente o commentata, tutti gli utenti non-system possono essere limitati.
+USER_EXCLUDE_LIST=root
+
+# ========================
+# BLACKOUT TIMEFRAMES
+# ========================
+# Specifica quando CPU Manager NON deve applicare limiti CPU.
+# Formato: "giorni ore" (multipli timeframe separati da ;)
+#
+# Giorni: 0=Domenica, 1=Lun, 2=Mar, 3=Mer, 4=Gio, 5=Ven, 6=Sab
+#         Oppure: * (tutti), 1-5 (lun-ven), 0,6 (weekend)
+# Ore: formato 24h (00-23)
+#
+# Esempi:
+#
+# # Disabilita durante orario lavorativo (Lun-Ven, 8-18)
+# CPU_MANAGER_BLACKOUT=1-5 08-18
+#
+# # Disabilita solo la mattina (Lun-Ven, 8-12)
+# CPU_MANAGER_BLACKOUT=1-5 08-12
+#
+# # Disabilita nel weekend (Sab-Dom, tutto il giorno)
+# CPU_MANAGER_BLACKOUT=0,6 00-23
+#
+# # Disabilita orario lavorativo + weekend
+# CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
+#
+# # Disabilita sempre (per testing)
+# CPU_MANAGER_BLACKOUT=* 00-23
+#
+# # Nessun blackout (default - CPU Manager sempre attivo)
+CPU_MANAGER_BLACKOUT=
+
+# ========================
+# PROCESS EXCLUSION LIST
+# ========================
+# Lista di processi da escludere dai limiti CPU (separati da virgola)
+# Se vuota, nessun processo è escluso (tutti possono essere limitati)
+#
+# Default: processi di sistema essenziali
+# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng
+#
+# Esempi:
+#
+# # Solo processi essenziali
+# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,cron
+#
+# # Aggiungi database
+# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,cron,mysqld,postgres,redis-server
+#
+# # Nessun processo escluso (tutti possono essere limitati)
+# PROCESS_EXCLUDE_LIST=
+#
+# # Lista estesa con monitoring e virtualizzazione
+PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng,dockerd,containerd,kubelet,nginx,apache2,httpd,mysqld,mariadbd,postgres,mongod,redis-server,postfix,chronyd,firewalld,auditd,cupsd,avahi-daemon,bluetoothd
+
+# ========================
+# PROCESS EXCLUSION (Automatic)
+# ========================
+# I seguenti processi di sistema sono AUTOMATICAMENTE esclusi dai limiti CPU:
+# systemd, dbus-daemon, polkitd, NetworkManager, sshd, cron, rsyslogd,
+# dockerd, containerd, nginx, apache2, mysqld, postgres, redis-server,
+# e molti altri processi di infrastruttura.
+# La lista completa è definita nel codice (config/config.go - IsProcessExcluded)
+
 # LOAD AVERAGE HANDLING
 # ========================
 # false: non attiva limiti se il sistema è già sotto carico (default conservativo)
 # true: attiva limiti anche se il sistema è sotto carico (isolamento garantito)
 IGNORE_SYSTEM_LOAD=true
+
+# ========================
+# SERVER ROLE
+# ========================
+# Opzionale: descrive il ruolo di questo server per identificazione nei report MCP
+# Esempi: database, web-frontend, batch, application, cache, api-gateway, etc.
+# SERVER_ROLE=database
+
+# ========================
+# MCP SERVER (Model Context Protocol)
+# ========================
+# Enable MCP server for AI assistant integration
+MCP_ENABLED=false
+
+# Transport: stdio, http
+# stdio: Standard input/output (for local MCP clients like Claude Desktop)
+# http: HTTP POST endpoint (for AnythingLLM and other remote clients)
+MCP_TRANSPORT=stdio
+
+# HTTP transport settings (only for http transport)
+# MCP_HTTP_HOST=0.0.0.0      # Bind address (default: all interfaces)
+# MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
+# MCP endpoint available at: http://HOST:PORT/mcp
+
+# MCP log level
+# Livelli disponibili: DEBUG, INFO, WARN, ERROR
+# Se non specificato, usa lo stesso livello di LOG_LEVEL
+MCP_LOG_LEVEL=INFO
+
+# Allow write operations (activate/deactivate limits via MCP)
+# WARNING: Enable only if you trust all MCP clients
+MCP_ALLOW_WRITE_OPS=false
+
+# Optional authentication token for HTTP transport
+# MCP_AUTH_TOKEN=your-secret-token-here

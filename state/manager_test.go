@@ -92,10 +92,12 @@ func TestMakeDecision(t *testing.T) {
     cfg.CPUThreshold = 75
     cfg.CPUReleaseThreshold = 40
     cfg.MinActiveTime = 60
+    cfg.CPUThresholdDuration = 0  // Disable time window for immediate activation
 
     manager := &Manager{
-        cfg:          cfg,
-        limitsActive: false,
+        cfg:              cfg,
+        limitsActive:     false,
+        thresholdTracker: &ThresholdTracker{},
     }
 
     metrics := &SystemMetrics{
@@ -120,8 +122,9 @@ func TestMakeDecisionDeactivate(t *testing.T) {
     cfg.CPUReleaseThreshold = 40
 
     manager := &Manager{
-        cfg:          cfg,
-        limitsActive: true,
+        cfg:              cfg,
+        limitsActive:     true,
+        thresholdTracker: &ThresholdTracker{},
     }
 
     metrics := &SystemMetrics{
@@ -145,8 +148,9 @@ func TestMakeDecisionMaintain(t *testing.T) {
     cfg.CPUReleaseThreshold = 40
 
     manager := &Manager{
-        cfg:          cfg,
-        limitsActive: false,
+        cfg:              cfg,
+        limitsActive:     false,
+        thresholdTracker: &ThresholdTracker{},
     }
 
     metrics := &SystemMetrics{

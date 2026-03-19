@@ -20,10 +20,19 @@ package config
 import (
     "fmt"
     "os"
+    "regexp"
     "strconv"
     "strings"
     "reflect"
+    "time"
 )
+
+// Timeframe rappresenta un intervallo di tempo per i blackout
+type Timeframe struct {
+    DaysOfWeek []int // Giorni della settimana (0-6, 0=Domenica)
+    HourStart  int   // Ora inizio (0-23)
+    HourEnd    int   // Ora fine (0-23)
+}
 
 // Config contiene tutti i parametri configurabili dell'applicazione.
 type Config struct {
@@ -45,14 +54,17 @@ type Config struct {
     CPUThreshold       int `config:"CPU_THRESHOLD"`
     CPUReleaseThreshold int `config:"CPU_RELEASE_THRESHOLD"`
 
+    // Threshold Time Window (seconds)
+    CPUThresholdDuration int `config:"CPU_THRESHOLD_DURATION"`  // Seconds to wait before activating limits (0 = immediate)
+
     // CPU limits (cpu.max format: "quota period")
     CPUQuotaNormal   string `config:"CPU_QUOTA_NORMAL"`
     CPUQuotaLimited  string `config:"CPU_QUOTA_LIMITED"`
 
     // Prometheus
-    EnablePrometheus bool   `config:"ENABLE_PROMETHEUS"`
-    PrometheusPort   int    `config:"PROMETHEUS_PORT"`
-    PrometheusHost   string `config:"PROMETHEUS_HOST"`
+    EnablePrometheus        bool   `config:"ENABLE_PROMETHEUS"`
+    PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`
+    PrometheusMetricsBindPort int    `config:"PROMETHEUS_METRICS_BIND_PORT"`
 
     // Prometheus TLS/HTTPS (optional)
     PrometheusTLSEnabled     bool   `config:"PROMETHEUS_TLS_ENABLED"`
@@ -80,8 +92,34 @@ type Config struct {
     SystemUIDMin   int `config:"SYSTEM_UID_MIN"`
     SystemUIDMax   int `config:"SYSTEM_UID_MAX"`
 
+    // User Include List (users to INCLUDE in monitoring, regex support)
+    UserIncludeList []string `config:"USER_INCLUDE_LIST"`  // Comma-separated regex patterns
+
+    // User Exclude List (users to EXCLUDE from limits, regex support)
+    UserExcludeList []string `config:"USER_EXCLUDE_LIST"`  // Comma-separated regex patterns
+
+    // Process Exclude List (process names to EXCLUDE from limits)
+    ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`  // Comma-separated process names
+
+    // Blackout Timeframes (when CPU Manager should NOT apply limits)
+    BlackoutTimeframes []Timeframe `config:"-"`  // Parsed from BLACKOUT_SPEC
+
+    // Blackout specification string (crontab-like format)
+    BlackoutSpec string `config:"CPU_MANAGER_BLACKOUT"`  // e.g., "1-5 08-18;0,6 00-23"
+
     // Load checking
     IgnoreSystemLoad bool `config:"IGNORE_SYSTEM_LOAD"`
+
+    // Server Role
+    ServerRole string `config:"SERVER_ROLE"`  // e.g., database, web-frontend, batch, application, etc.
+
+    // MCP Server
+    MCPEnabled       bool   `config:"MCP_ENABLED"`
+    MCPTransport     string `config:"MCP_TRANSPORT"`
+    MCPHTTPPort      int    `config:"MCP_HTTP_PORT"`
+    MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
+    MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
+    MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -107,15 +145,16 @@ func DefaultConfig() *Config {
         MinActiveTime:    60,
         MetricsCacheTTL:  15,
 
-        CPUThreshold:       75,
+        CPUThreshold:        75,
         CPUReleaseThreshold: 40,
+        CPUThresholdDuration: 90,  // Default: wait 90 seconds before activating limits
 
         CPUQuotaNormal:  "max 100000",
         CPUQuotaLimited: "50000 100000", // 0.5 core
 
-        EnablePrometheus: false,
-        PrometheusPort:   9101,
-        PrometheusHost:   "127.0.0.1",
+        EnablePrometheus:        false,
+        PrometheusMetricsBindHost: "",  // Empty = use default 0.0.0.0
+        PrometheusMetricsBindPort: 1974,
 
         // Prometheus TLS (disabled by default)
         PrometheusTLSEnabled:     false,
@@ -141,6 +180,25 @@ func DefaultConfig() *Config {
         SystemUIDMin:   1000,
         SystemUIDMax:   pidMax,
         IgnoreSystemLoad: false,
+        ServerRole:       "",  // Empty by default
+        UserIncludeList:   nil, // nil = all users included (no filter)
+        UserExcludeList:   nil, // nil = no users excluded (all users can be limited)
+        ProcessExcludeList: []string{  // Default system processes to exclude
+            "systemd", "dbus-daemon", "dbus-broker", "polkitd",
+            "NetworkManager", "wpa_supplicant",
+            "sshd", "cron", "crond",
+            "rsyslogd", "rsyslog", "syslog-ng",
+        },
+        BlackoutSpec:      "",  // Empty = no blackout (always active)
+        BlackoutTimeframes: nil,
+
+        // MCP Server
+        MCPEnabled:       false,
+        MCPTransport:     "stdio",
+        MCPHTTPPort:      1969,
+        MCPHTTPHost:      "",  // Empty = use default 0.0.0.0
+        MCPLogLevel:      "INFO",
+        MCPAllowWriteOps: false,
     }
 }
 
@@ -191,8 +249,14 @@ func loadFromFile(path string, cfg *Config) error {
 
         key := strings.TrimSpace(parts[0])
         value := strings.TrimSpace(parts[1])
-        // Rimuovi eventuali virgolette
-        value = strings.Trim(value, `"'`)
+        
+        // Rimuovi commenti inline (tutto dopo #)
+        if commentIdx := strings.Index(value, "#"); commentIdx != -1 {
+            value = value[:commentIdx]
+        }
+        
+        // Rimuovi eventuali virgolette e spazi extra
+        value = strings.TrimSpace(strings.Trim(value, `"'`))
 
         if err := setConfigField(cfg, key, value); err != nil {
             return fmt.Errorf("setting key %s on line %d: %w", key, i+1, err)
@@ -290,6 +354,10 @@ func setConfigField(cfg *Config, key, value string) error {
         if i, err := strconv.Atoi(value); err == nil {
             cfg.CPUReleaseThreshold = i
         }
+    case "CPU_THRESHOLD_DURATION":
+        if i, err := strconv.Atoi(value); err == nil {
+            cfg.CPUThresholdDuration = i
+        }
 
     // CPU limits
     case "CPU_QUOTA_NORMAL":
@@ -307,12 +375,19 @@ func setConfigField(cfg *Config, key, value string) error {
         default:
             cfg.EnablePrometheus = false
         }
+    case "PROMETHEUS_METRICS_BIND_HOST":
+        cfg.PrometheusMetricsBindHost = value
+    case "PROMETHEUS_METRICS_BIND_PORT":
+        if i, err := strconv.Atoi(value); err == nil {
+            cfg.PrometheusMetricsBindPort = i
+        }
+    // Backward compatibility: old variable names
+    case "PROMETHEUS_HOST":
+        cfg.PrometheusMetricsBindHost = value
     case "PROMETHEUS_PORT":
         if i, err := strconv.Atoi(value); err == nil {
-            cfg.PrometheusPort = i
+            cfg.PrometheusMetricsBindPort = i
         }
-    case "PROMETHEUS_HOST":
-        cfg.PrometheusHost = value
 
     // Prometheus TLS
     case "PROMETHEUS_TLS_ENABLED":
@@ -381,6 +456,108 @@ func setConfigField(cfg *Config, key, value string) error {
         if i, err := strconv.Atoi(value); err == nil {
             cfg.SystemUIDMax = i
         }
+
+    // User Include List
+    case "USER_INCLUDE_LIST":
+        // Parse comma-separated list of regex patterns
+        value = strings.TrimSpace(value)
+        if value == "" {
+            cfg.UserIncludeList = nil // Empty = all users included
+        } else {
+            patterns := strings.Split(value, ",")
+            cfg.UserIncludeList = make([]string, 0, len(patterns))
+            for _, pattern := range patterns {
+                pattern = strings.TrimSpace(pattern)
+                if pattern != "" {
+                    // Validate regex pattern
+                    if _, err := regexp.Compile(pattern); err != nil {
+                        return fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+                    }
+                    cfg.UserIncludeList = append(cfg.UserIncludeList, pattern)
+                }
+            }
+            if len(cfg.UserIncludeList) == 0 {
+                cfg.UserIncludeList = nil
+            }
+        }
+
+    // User Exclude List
+    case "USER_EXCLUDE_LIST":
+        // Parse comma-separated list of regex patterns
+        value = strings.TrimSpace(value)
+        if value == "" {
+            cfg.UserExcludeList = nil // Empty = no users excluded
+        } else {
+            patterns := strings.Split(value, ",")
+            cfg.UserExcludeList = make([]string, 0, len(patterns))
+            for _, pattern := range patterns {
+                pattern = strings.TrimSpace(pattern)
+                if pattern != "" {
+                    // Validate regex pattern
+                    if _, err := regexp.Compile(pattern); err != nil {
+                        return fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+                    }
+                    cfg.UserExcludeList = append(cfg.UserExcludeList, pattern)
+                }
+            }
+            if len(cfg.UserExcludeList) == 0 {
+                cfg.UserExcludeList = nil
+            }
+        }
+
+    // Process Exclude List
+    case "PROCESS_EXCLUDE_LIST":
+        // Parse comma-separated list of process names
+        value = strings.TrimSpace(value)
+        if value == "" {
+            cfg.ProcessExcludeList = nil // Empty = no processes excluded
+        } else {
+            processes := strings.Split(value, ",")
+            cfg.ProcessExcludeList = make([]string, 0, len(processes))
+            for _, proc := range processes {
+                proc = strings.TrimSpace(proc)
+                if proc != "" {
+                    cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, proc)
+                }
+            }
+            if len(cfg.ProcessExcludeList) == 0 {
+                cfg.ProcessExcludeList = nil
+            }
+        }
+
+    // Blackout Timeframes
+    case "CPU_MANAGER_BLACKOUT":
+        cfg.BlackoutSpec = strings.TrimSpace(value)
+        if cfg.BlackoutSpec != "" {
+            timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
+            if err != nil {
+                return fmt.Errorf("invalid blackout specification '%s': %w", cfg.BlackoutSpec, err)
+            }
+            cfg.BlackoutTimeframes = timeframes
+        } else {
+            cfg.BlackoutTimeframes = nil
+        }
+
+    // Backward compatibility: old variable name
+    case "USER_WHITELIST":
+        // Treat old USER_WHITELIST as USER_EXCLUDE_LIST for compatibility
+        value = strings.TrimSpace(value)
+        if value == "" {
+            cfg.UserExcludeList = nil
+        } else {
+            usernames := strings.Split(value, ",")
+            cfg.UserExcludeList = make([]string, 0, len(usernames))
+            for _, username := range usernames {
+                username = strings.TrimSpace(username)
+                if username != "" {
+                    cfg.UserExcludeList = append(cfg.UserExcludeList, username)
+                }
+            }
+            if len(cfg.UserExcludeList) == 0 {
+                cfg.UserExcludeList = nil
+            }
+        }
+
     // Load checking
     case "IGNORE_SYSTEM_LOAD":
         switch strings.ToLower(value) {
@@ -391,6 +568,41 @@ func setConfigField(cfg *Config, key, value string) error {
         default:
             cfg.IgnoreSystemLoad = false
         }
+
+    // Server Role
+    case "SERVER_ROLE":
+        cfg.ServerRole = value
+
+    // MCP Server
+    case "MCP_ENABLED":
+        switch strings.ToLower(value) {
+        case "true", "1", "yes", "on":
+            cfg.MCPEnabled = true
+        case "false", "0", "no", "off":
+            cfg.MCPEnabled = false
+        default:
+            cfg.MCPEnabled = false
+        }
+    case "MCP_TRANSPORT":
+        cfg.MCPTransport = strings.ToLower(value)
+    case "MCP_HTTP_PORT":
+        if i, err := strconv.Atoi(value); err == nil {
+            cfg.MCPHTTPPort = i
+        }
+    case "MCP_HTTP_HOST":
+        cfg.MCPHTTPHost = value
+    case "MCP_LOG_LEVEL":
+        cfg.MCPLogLevel = strings.ToUpper(value)
+    case "MCP_ALLOW_WRITE_OPS":
+        switch strings.ToLower(value) {
+        case "true", "1", "yes", "on":
+            cfg.MCPAllowWriteOps = true
+        case "false", "0", "no", "off":
+            cfg.MCPAllowWriteOps = false
+        default:
+            cfg.MCPAllowWriteOps = false
+        }
+
     default:
         return nil
     }
@@ -411,6 +623,11 @@ func validateConfig(cfg *Config) error {
     }
     if cfg.CPUThreshold <= cfg.CPUReleaseThreshold {
         errors = append(errors, "CPU_THRESHOLD must be greater than CPU_RELEASE_THRESHOLD")
+    }
+    
+    // Validate threshold duration
+    if cfg.CPUThresholdDuration < 0 {
+        errors = append(errors, "CPU_THRESHOLD_DURATION cannot be negative")
     }
 
     // Validate polling interval
@@ -457,4 +674,420 @@ func isValidCPUQuota(quota string) bool {
     _, err1 := strconv.Atoi(parts[0])
     _, err2 := strconv.Atoi(parts[1])
     return err1 == nil && err2 == nil
+}
+
+// IsUserIncluded verifica se un username corrisponde ai pattern della include list
+// Se la include list è nil o vuota, tutti gli utenti sono inclusi
+func (c *Config) IsUserIncluded(username string) bool {
+    // Se la include list non è configurata o è vuota, tutti gli utenti sono inclusi
+    if c.UserIncludeList == nil || len(c.UserIncludeList) == 0 {
+        return true // No include list = all users included
+    }
+    
+    // Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
+    for _, pattern := range c.UserIncludeList {
+        if matched, _ := regexp.MatchString(pattern, username); matched {
+            return true // User matches include pattern
+        }
+    }
+    return false // User does not match any include pattern
+}
+
+// IsUserExcluded verifica se un username corrisponde ai pattern della exclude list
+// Se la exclude list è nil o vuota, nessun utente è escluso (tutti possono essere limitati)
+func (c *Config) IsUserExcluded(username string) bool {
+    // Se la exclude list non è configurata o è vuota, nessun utente è escluso
+    if c.UserExcludeList == nil || len(c.UserExcludeList) == 0 {
+        return false // No exclude list = no users excluded
+    }
+    
+    // Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
+    for _, pattern := range c.UserExcludeList {
+        if matched, _ := regexp.MatchString(pattern, username); matched {
+            return true // User matches exclude pattern
+        }
+    }
+    return false
+}
+
+// IsUserWhitelisted è un alias per IsUserExcluded per retrocompatibilità
+// Il nome è fuorviante ma mantenuto per compatibilità con il codice esistente
+func (c *Config) IsUserWhitelisted(username string) bool {
+    return !c.IsUserExcluded(username)
+}
+
+// SetUserExcludeList imposta la lista di utenti da escludere e salva su file
+func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload bool) ([]string, error) {
+    // Valida tutti i pattern regex
+    for _, pattern := range patterns {
+        if _, err := regexp.Compile(pattern); err != nil {
+            return nil, fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+        }
+    }
+    
+    // Salva valore precedente
+    previousValue := make([]string, len(c.UserExcludeList))
+    copy(previousValue, c.UserExcludeList)
+    
+    // Aggiorna configurazione in memoria
+    c.UserExcludeList = patterns
+    
+    // Salva su file
+    if err := c.SaveToFile(configPath); err != nil {
+        // Ripristina valore precedente se salvataggio fallisce
+        c.UserExcludeList = previousValue
+        return nil, err
+    }
+    
+    return previousValue, nil
+}
+
+// SetUserIncludeList imposta la lista di pattern include e salva su file
+func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload bool) ([]string, error) {
+    // Valida tutti i pattern regex
+    for _, pattern := range patterns {
+        if _, err := regexp.Compile(pattern); err != nil {
+            return nil, fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+        }
+    }
+    
+    // Salva valore precedente
+    previousValue := make([]string, len(c.UserIncludeList))
+    copy(previousValue, c.UserIncludeList)
+    
+    // Aggiorna configurazione in memoria
+    c.UserIncludeList = patterns
+    
+    // Salva su file
+    if err := c.SaveToFile(configPath); err != nil {
+        // Ripristina valore precedente se salvataggio fallisce
+        c.UserIncludeList = previousValue
+        return nil, err
+    }
+    
+    return previousValue, nil
+}
+
+// SaveToFile salva la configurazione su file, creando backup automatico
+func (c *Config) SaveToFile(path string) error {
+    // 1. Crea backup del file esistente
+    if _, err := os.Stat(path); err == nil {
+        timestamp := time.Now().Format("20060102_150405")
+        backupPath := fmt.Sprintf("%s.backup_%s", path, timestamp)
+        
+        // Leggi contenuto originale
+        content, err := os.ReadFile(path)
+        if err != nil {
+            return fmt.Errorf("failed to read config file for backup: %w", err)
+        }
+        
+        // Scrivi backup
+        if err := os.WriteFile(backupPath, content, 0644); err != nil {
+            return fmt.Errorf("failed to create backup: %w", err)
+        }
+    }
+    
+    // 2. Leggi il file esistente e aggiorna le righe
+    lines, err := c.updateConfigLines(path)
+    if err != nil {
+        return err
+    }
+    
+    // 3. Scrivi su file temporaneo
+    tmpPath := path + ".tmp"
+    content := strings.Join(lines, "\n")
+    if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+        return fmt.Errorf("failed to write temp config file: %w", err)
+    }
+    
+    // 4. Rinomina atomico
+    if err := os.Rename(tmpPath, path); err != nil {
+        os.Remove(tmpPath) // Cleanup se rename fallisce
+        return fmt.Errorf("failed to rename config file: %w", err)
+    }
+    
+    return nil
+}
+
+// updateConfigLines legge e aggiorna le righe della configurazione
+func (c *Config) updateConfigLines(path string) ([]string, error) {
+    // Leggi file esistente
+    content, err := os.ReadFile(path)
+    if err != nil {
+        if os.IsNotExist(err) {
+            // File non esiste, crea nuovo
+            return c.generateConfigLines(), nil
+        }
+        return nil, fmt.Errorf("failed to read config file: %w", err)
+    }
+    
+    lines := strings.Split(string(content), "\n")
+    updated := make([]string, 0, len(lines))
+    
+    includeListWritten := false
+    excludeListWritten := false
+    
+    for _, line := range lines {
+        trimmed := strings.TrimSpace(line)
+        
+        // Salta commenti e righe vuote
+        if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+            updated = append(updated, line)
+            continue
+        }
+        
+        // Controlla se è USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+        if strings.HasPrefix(trimmed, "USER_INCLUDE_LIST=") {
+            value := strings.Join(c.UserIncludeList, ",")
+            updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+            includeListWritten = true
+            continue
+        }
+        
+        if strings.HasPrefix(trimmed, "USER_EXCLUDE_LIST=") {
+            value := strings.Join(c.UserExcludeList, ",")
+            updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+            excludeListWritten = true
+            continue
+        }
+        
+        // Altre righe lasciate invariate
+        updated = append(updated, line)
+    }
+    
+    // Aggiungi righe mancanti
+    if !includeListWritten {
+        value := strings.Join(c.UserIncludeList, ",")
+        updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+    }
+    if !excludeListWritten {
+        value := strings.Join(c.UserExcludeList, ",")
+        updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+    }
+    
+    return updated, nil
+}
+
+// generateConfigLines genera linee di configurazione di base
+func (c *Config) generateConfigLines() []string {
+    includeList := ""
+    if len(c.UserIncludeList) > 0 {
+        includeList = strings.Join(c.UserIncludeList, ",")
+    }
+    excludeList := ""
+    if len(c.UserExcludeList) > 0 {
+        excludeList = strings.Join(c.UserExcludeList, ",")
+    }
+    
+    return []string{
+        "# CPU Manager Configuration",
+        fmt.Sprintf("USER_INCLUDE_LIST=%s", includeList),
+        fmt.Sprintf("USER_EXCLUDE_LIST=%s", excludeList),
+        "",
+    }
+}
+
+// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-23"
+func ParseTimeframe(spec string) ([]Timeframe, error) {
+    var timeframes []Timeframe
+    
+    // Supporta multipli timeframe separati da ;
+    specs := strings.Split(spec, ";")
+    
+    for _, s := range specs {
+        s = strings.TrimSpace(s)
+        if s == "" {
+            continue
+        }
+        
+        parts := strings.Fields(s)
+        if len(parts) != 2 {
+            return nil, fmt.Errorf("invalid timeframe format: %s (expected: days hours)", s)
+        }
+        
+        // Parse giorni
+        days, err := parseDays(parts[0])
+        if err != nil {
+            return nil, fmt.Errorf("invalid days spec '%s': %w", parts[0], err)
+        }
+        
+        // Parse ore
+        hourStart, hourEnd, err := parseHours(parts[1])
+        if err != nil {
+            return nil, fmt.Errorf("invalid hours spec '%s': %w", parts[1], err)
+        }
+        
+        timeframes = append(timeframes, Timeframe{
+            DaysOfWeek: days,
+            HourStart:  hourStart,
+            HourEnd:    hourEnd,
+        })
+    }
+    
+    if len(timeframes) == 0 {
+        return nil, nil
+    }
+    
+    return timeframes, nil
+}
+
+// parseDays gestisce formati: 1-5, 0,6, *, 1
+func parseDays(spec string) ([]int, error) {
+    if spec == "*" {
+        return []int{0, 1, 2, 3, 4, 5, 6}, nil
+    }
+    
+    var days []int
+    parts := strings.Split(spec, ",")
+    
+    for _, part := range parts {
+        if strings.Contains(part, "-") {
+            // Range: 1-5
+            rangeParts := strings.Split(part, "-")
+            if len(rangeParts) != 2 {
+                return nil, fmt.Errorf("invalid day range: %s", part)
+            }
+            start, err := strconv.Atoi(rangeParts[0])
+            if err != nil {
+                return nil, err
+            }
+            end, err := strconv.Atoi(rangeParts[1])
+            if err != nil {
+                return nil, err
+            }
+            
+            if start < 0 || start > 6 || end < 0 || end > 6 {
+                return nil, fmt.Errorf("days must be 0-6 (0=Sunday)")
+            }
+            
+            for i := start; i <= end; i++ {
+                days = append(days, i)
+            }
+        } else {
+            // Singolo: 1
+            day, err := strconv.Atoi(part)
+            if err != nil {
+                return nil, err
+            }
+            if day < 0 || day > 6 {
+                return nil, fmt.Errorf("days must be 0-6 (0=Sunday)")
+            }
+            days = append(days, day)
+        }
+    }
+    
+    return days, nil
+}
+
+// parseHours gestisce formati: 08-18, 00-23
+func parseHours(spec string) (int, int, error) {
+    parts := strings.Split(spec, "-")
+    if len(parts) != 2 {
+        return 0, 0, fmt.Errorf("invalid hour format: %s (expected: start-end)", spec)
+    }
+    
+    start, err := strconv.Atoi(parts[0])
+    if err != nil {
+        return 0, 0, err
+    }
+    
+    end, err := strconv.Atoi(parts[1])
+    if err != nil {
+        return 0, 0, err
+    }
+    
+    if start < 0 || start > 23 || end < 0 || end > 23 {
+        return 0, 0, fmt.Errorf("hours must be 0-23")
+    }
+    
+    if start >= end {
+        return 0, 0, fmt.Errorf("start hour must be before end hour")
+    }
+    
+    return start, end, nil
+}
+
+// IsInBlackout verifica se l'orario corrente è in un blackout timeframe
+// Restituisce true se CPU Manager NON deve applicare limiti
+func (c *Config) IsInBlackout() bool {
+    if len(c.BlackoutTimeframes) == 0 {
+        return false
+    }
+    
+    now := time.Now()
+    currentDay := int(now.Weekday()) // 0=Domenica in Go
+    currentHour := now.Hour()
+    
+    for _, tf := range c.BlackoutTimeframes {
+        // Controlla giorno
+        dayMatch := false
+        for _, day := range tf.DaysOfWeek {
+            if day == currentDay {
+                dayMatch = true
+                break
+            }
+        }
+        
+        if !dayMatch {
+            continue
+        }
+        
+        // Controlla ora
+        if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
+            return true
+        }
+    }
+    
+    return false
+}
+
+// GetNextBlackoutEnd restituisce la prossima fine del blackout (se attivo)
+func (c *Config) GetNextBlackoutEnd() *time.Time {
+    if !c.IsInBlackout() {
+        return nil
+    }
+    
+    now := time.Now()
+    currentDay := int(now.Weekday())
+    currentHour := now.Hour()
+    
+    for _, tf := range c.BlackoutTimeframes {
+        // Controlla se siamo in questo timeframe
+        dayMatch := false
+        for _, day := range tf.DaysOfWeek {
+            if day == currentDay {
+                dayMatch = true
+                break
+            }
+        }
+        
+        if !dayMatch {
+            continue
+        }
+        
+        if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
+            // Siamo in questo blackout, calcola la fine
+            end := time.Date(now.Year(), now.Month(), now.Day(), tf.HourEnd, 0, 0, 0, now.Location())
+            return &end
+        }
+    }
+    
+    return nil
+}
+
+// IsProcessExcluded verifica se un processo dovrebbe essere escluso dai limiti
+// Controlla il nome del comando (comm) contro la lista di processi esclusi
+func (c *Config) IsProcessExcluded(processName string) bool {
+    // Se la lista è vuota, nessun processo è escluso
+    if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
+        return false
+    }
+
+    processName = strings.ToLower(processName)
+    for _, excluded := range c.ProcessExcludeList {
+        if processName == excluded || strings.HasPrefix(processName, excluded+"-") {
+            return true
+        }
+    }
+    return false
 }

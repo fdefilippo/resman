@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.1.0
+Version: 1.15.1
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -36,7 +36,6 @@ BuildRequires:  systemd
 BuildRequires:  groff-base
 BuildRequires:  openssl
 Requires:       systemd
-Requires:       golang >= 1.21
 Requires:       openssl
 
 # Dipendenze cgroups
@@ -48,15 +47,45 @@ Requires(postun): systemd-units
 Enterprise-grade CPU resource management tool with cgroups v2 support.
 Automatically limits CPU for non-system users based on configurable thresholds.
 
+**IMPORTANT: CGO is required for this package**
+
+CGO is enabled by default in this RPM and is required for:
+- User name resolution via NSS (Name Service Switch)
+- Support for LDAP, NIS, SSSD authentication backends
+- Proper integration with system authentication services
+
 Features:
-- Dynamic CPU limiting for non-system users
+- Dynamic CPU limiting for non-system users (UID >=1000)
 - Configurable activation/release thresholds
-- Prometheus metrics export
-- Systemd service integration
-- Automatic configuration reload on changes
-- Detailed process logging
+- Absolute CPU limits using cpu.max cgroup controller
+- Prometheus metrics export with comprehensive dashboard
+- Per-user metrics: CPU%, Memory (bytes), Process count
+- Systemd service integration with hardening
+- Automatic configuration reload on file changes
+- Detailed process logging with process name tracking
+- Load average awareness (optional)
+- Graceful shutdown with cleanup
 - Complete man page documentation
-- Per-user metrics: CPU%, Memory, Process count
+- Unit tests for core packages
+- MCP server for AI assistant integration (Model Context Protocol)
+- Comprehensive CPU and memory reporting
+- Server role identification for multi-server environments
+
+MCP Server Features (v1.3+):
+- 11 MCP tools for querying system status and generating reports
+- 6 MCP resources for URI-based data access
+- 3 pre-built prompts for common queries
+- HTTP and stdio transport support
+- Hostname and server role in all metric outputs
+- Comprehensive logging middleware
+
+Latest Changes (v1.5.0):
+- Renamed Prometheus variables for clarity (PROMETHEUS_METRICS_BIND_HOST/PORT)
+- Default Prometheus port changed to 1974
+- Default MCP port changed to 1969
+- All bind addresses default to 0.0.0.0 for remote access
+- Added SERVER_ROLE configuration for server identification
+- Enhanced documentation with log level descriptions
 
 %prep
 %setup -q
@@ -65,6 +94,7 @@ Features:
 # Build del binario Go
 export GO111MODULE=on
 export GOPROXY=direct
+export CGO_ENABLED=1
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
 # Prepara man page
@@ -214,7 +244,116 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Sun Feb 22 2026 CPU Manager <francesco@defilippo.org> - 1.0.0-1
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
+- Added CPU_MANAGER_BLACKOUT configuration for blackout timeframes
+- CPU Manager will not apply limits during configured blackout periods
+- Crontab-like format: "days hours" (e.g., "1-5 08-18" for Mon-Fri, 8-18)
+- Multiple timeframes supported (semicolon-separated)
+- System timezone automatically used
+- Hybrid logging: INFO for enter/exit blackout, DEBUG for cycle skips
+- Blackout takes precedence over USER_INCLUDE_LIST and USER_EXCLUDE_LIST
+- Updated man page with blackout documentation
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+- Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
+- Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
+- Default Prometheus port changed from 9101 to 1974
+- Default bind address changed to 0.0.0.0 (all interfaces)
+- Renamed MCP_HTTP_HOST and MCP_HTTP_PORT defaults to 0.0.0.0 and 1969
+- Added SERVER_ROLE configuration for server identification
+- Added server_role field to all MCP tool outputs
+- Enhanced documentation with log level descriptions
+- Backward compatibility maintained for old variable names
+- Updated man page to v1.5
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+- Added MCP User Filter Management tools:
+  * get_user_filters: Get current user include/exclude filter configurations
+  * set_user_exclude_list: Set users to exclude from CPU limits (regex support)
+  * set_user_include_list: Set users to include in monitoring (regex support)
+  * validate_user_filter_pattern: Validate regex patterns with example matches
+- Automatic configuration backup with timestamp before modifications
+- Atomic configuration save with rollback on error
+- Automatic config reload trigger after filter changes
+- All write operations require MCP_ALLOW_WRITE_OPS=true
+- Updated MCP documentation with user filter examples
+
+* Thu Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
+- Added periodic configuration check (every 30 seconds)
+- Fixed config watcher not detecting changes from some text editors
+- Improved logging for configuration reload events
+
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.0-1
+- USER_EXCLUDE_LIST now supports regex patterns (like USER_INCLUDE_LIST)
+- Multiple patterns supported (comma-separated)
+- Pattern validation on configuration load
+- Backward compatibility: exact username matches still work
+- Updated documentation with regex examples
+
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.9.0-1
+- Added USER_INCLUDE_LIST with regex support
+- Filter users to include in monitoring using regex patterns
+- Multiple patterns supported (comma-separated)
+- Pattern validation on startup (error on invalid regex)
+- Empty list = all users included (default behavior)
+- Updated documentation and examples
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.8.0-1
+- Renamed USER_WHITELIST to USER_EXCLUDE_LIST (breaking change)
+- Behavior inverted: list now EXCLUDES users from limits
+- Backward compatibility: USER_WHITELIST still works but deprecated
+- Updated configuration examples and documentation
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.7.0-1
+- Added process exclusion blacklist (automatic)
+- System processes automatically excluded from CPU limits:
+  * systemd, dbus-daemon, polkitd, NetworkManager
+  * sshd, cron, rsyslogd, dockerd, containerd
+  * nginx, apache2, mysqld, postgres, redis-server
+  * And 40+ other infrastructure processes
+- Users with only excluded processes are not limited
+- Configurable via IsProcessExcluded() function
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.6.0-1
+- Fixed USER_WHITELIST parsing (was not working correctly)
+- USER_WHITELIST now correctly includes specified users
+- Empty or commented whitelist = all users included
+- Updated documentation with correct behavior
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.5.0-1
+- Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
+- Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
+- Default Prometheus port changed from 9101 to 1974
+- Default bind address changed to 0.0.0.0 (all interfaces)
+- Added inline comment support in configuration parser
+- Backward compatibility: old variable names still work
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.4.0-1
+- Added SERVER_ROLE configuration variable
+- Added server_role to MCP tool outputs (get_system_status, get_active_users,
+  get_limits_status, get_configuration, get_cpu_report, get_mem_report)
+- Updated documentation for multi-server environment identification
+
+* Wed Mar 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.3.0-1
+- Added get_cpu_report MCP tool for comprehensive CPU usage reports
+- Added get_mem_report MCP tool for comprehensive memory usage reports
+- Added hostname field to all MCP metric outputs
+- Implemented HTTP logging middleware for MCP requests
+- Fixed logger initialization to respect LOG_LEVEL from config
+- All metric tools now include hostname for multi-server environments
+
+* Tue Mar 10 2026 Francesco Defilippo <francesco@defilippo.org> - 1.2.0-1
+- Added MCP server for AI assistant integration (Model Context Protocol)
+- 11 MCP tools: get_system_status, get_user_metrics, get_active_users,
+  get_limits_status, get_cgroup_info, get_configuration, get_control_history,
+  activate_limits, deactivate_limits, get_cpu_report, get_mem_report
+- 6 MCP resources for URI-based data access
+- 3 pre-built prompts: system-health, user-analysis, troubleshooting
+- HTTP and stdio transport support
+- Comprehensive MCP documentation (MCP-README.md, MCP-BLUEPRINT.md)
+- Updated README.md and CHANGELOG.md with MCP information
+
+* Sun Feb 22 2026 Francesco Defilippo <francesco@defilippo.org> - 1.1.0-1
 - Added TLS/HTTPS support for Prometheus metrics
 - Added TLS certificate generation script (generate-tls-certs.sh)
 - Added Basic Authentication support for Prometheus
@@ -232,7 +371,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Systemd service integration
 - Comprehensive man page documentation
 
-* Thu Jan 22 2026 CPU Manager <francesco@defilippo.org> - 1.0.0-1
+* Thu Jan 22 2026 Francesco Defilippo <francesco@defilippo.org> - 1.0.0-1
 - Initial RPM release with man page support
 - Complete cgroups v2 CPU management
 - Prometheus metrics support

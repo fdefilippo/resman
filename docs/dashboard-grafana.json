@@ -21,10 +21,11 @@
       }
     ]
   },
+  "description": "CPU Manager Go Dashboard - Monitor CPU usage, memory, and limits per user. Note: USER_INCLUDE_LIST and USER_EXCLUDE_LIST configuration options filter which users appear in metrics.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 4,
+  "id": 0,
   "links": [],
   "panels": [
     {
@@ -35,7 +36,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "custom": {
             "axisBorderShow": false,
@@ -117,8 +118,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_total_usage_percent",
-          "legendFormat": "Total CPU Usage",
+          "expr": "cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "Total CPU Usage - {{hostname}}",
           "range": true,
           "refId": "A"
         },
@@ -128,8 +129,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_user_usage_percent",
-          "legendFormat": "User CPU Usage",
+          "expr": "cpu_manager_cpu_user_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "User CPU Usage - {{hostname}}",
           "range": true,
           "refId": "B"
         }
@@ -145,7 +146,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "continuous-GrYlRd"
+            "mode": "palette-classic"
           },
           "custom": {
             "axisBorderShow": false,
@@ -227,8 +228,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_cpu_usage_percent",
-          "legendFormat": "{{username}} (UID: {{uid}})",
+          "expr": "cpu_manager_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
         }
@@ -330,8 +331,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_memory_usage_bytes",
-          "legendFormat": "{{username}} (UID: {{uid}})",
+          "expr": "cpu_manager_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
         }
@@ -403,8 +404,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_active_users_count",
-          "legendFormat": "Active Users",
+          "expr": "cpu_manager_active_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}}",
           "range": true,
           "refId": "A"
         }
@@ -488,159 +489,13 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_limits_active",
-          "legendFormat": "Limits Status",
+          "expr": "cpu_manager_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "Limits Status - {{hostname}}",
           "range": true,
           "refId": "A"
         }
       ],
       "title": "CPU Limits Status",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus_datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 2
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 0,
-        "y": 13
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus_datasource}"
-          },
-          "editorMode": "code",
-          "expr": "cpu_manager_limited_users_count",
-          "legendFormat": "Limited Users",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Users with Limits",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus_datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 80
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
-            ]
-          },
-          "unit": "decbytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 13
-      },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus_datasource}"
-          },
-          "editorMode": "code",
-          "expr": "cpu_manager_memory_usage_megabytes * 1024 * 1024",
-          "legendFormat": "Memory Used",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Memory Usage",
       "type": "stat"
     },
     {
@@ -684,7 +539,7 @@
       "id": 13,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "percentChangeColorMode": "standard",
@@ -757,7 +612,7 @@
       "id": 14,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "percentChangeColorMode": "standard",
@@ -781,12 +636,243 @@
           },
           "editorMode": "code",
           "expr": "cpu_manager_user_process_count",
-          "legendFormat": "{{username}} (UID: {{uid}})",
+          "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
         }
       ],
       "title": "Processes Per User",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus_datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus_datasource}"
+          },
+          "editorMode": "code",
+          "expr": "cpu_manager_limited_users_count",
+          "legendFormat": "Limited Users",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Users with Limits",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus_datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus_datasource}"
+          },
+          "editorMode": "code",
+          "expr": "cpu_manager_memory_usage_megabytes * 1024 * 1024",
+          "legendFormat": "Memory Used",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus_datasource}"
+      },
+      "description": "Shows which users currently have CPU limits applied",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "No"
+                },
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "Yes"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus_datasource}"
+          },
+          "editorMode": "code",
+          "expr": "cpu_manager_user_cpu_limited",
+          "legendFormat": "{{username}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "User Limit Status (Current)",
       "type": "stat"
     },
     {
@@ -855,7 +941,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 21
       },
       "id": 7,
       "options": {
@@ -904,91 +990,6 @@
         "type": "prometheus",
         "uid": "${prometheus_datasource}"
       },
-      "description": "Shows which users currently have CPU limits applied",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "No Limit"
-                },
-                "1": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "Limited"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 0.5
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 18
-      },
-      "id": 8,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus_datasource}"
-          },
-          "editorMode": "code",
-          "expr": "cpu_manager_user_cpu_limited",
-          "legendFormat": "{{username}} (UID: {{uid}})",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "User Limit Status (Current)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus_datasource}"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1016,7 +1017,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 29
       },
       "id": 9,
       "options": {
@@ -1123,7 +1124,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 35
+        "y": 38
       },
       "id": 10,
       "options": {
@@ -1147,8 +1148,9 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
+          "exemplar": false,
           "expr": "rate(cpu_manager_control_cycle_duration_seconds_sum[5m]) / rate(cpu_manager_control_cycle_duration_seconds_count[5m])",
-          "legendFormat": "Avg Control Cycle Duration",
+          "legendFormat": "{{hostname}}",
           "range": true,
           "refId": "A"
         }
@@ -1226,7 +1228,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 38
       },
       "id": 11,
       "options": {
@@ -1284,6 +1286,75 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+        "includeAll": true,
+        "label": "Cluster",
+        "multi": true,
+        "name": "cluster",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+        "includeAll": true,
+        "label": "Server Role",
+        "multi": true,
+        "name": "server_role",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+        "includeAll": true,
+        "label": "Hostname",
+        "multi": true,
+        "name": "hostname",
+        "options": [],
+        "query": {
+          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
       },
       {
         "current": {
@@ -1367,12 +1438,12 @@
     ]
   },
   "time": {
-    "from": "now-15m",
-    "to": "now"
+    "from": "2026-03-17T14:32:33.107Z",
+    "to": "2026-03-18T07:27:46.134Z"
   },
   "timepicker": {},
   "timezone": "",
-  "title": "CPU Manager Dashboard",
-  "uid": "cpu-manager-dashboard",
-  "version": 2
+  "title": "CPU Manager Dashboard2",
+  "uid": "cpu-manager-dashboard2",
+  "version": 13
 }

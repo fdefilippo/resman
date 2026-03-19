@@ -77,7 +77,7 @@ func TestHandlePrometheusConfigChange(t *testing.T) {
 
     cfg := config.DefaultConfig()
     cfg.EnablePrometheus = true
-    cfg.PrometheusPort = 9101
+    cfg.PrometheusMetricsBindPort = 9101
 
     err := reloader.handlePrometheusConfigChange(cfg)
     if err != nil {

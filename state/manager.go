@@ -44,6 +44,9 @@ type Manager struct {
     activeUsers        map[int]bool  // UID -> se limitato
     sharedCgroupPath   string        // Percorso del cgroup condiviso
 
+    // Threshold monitoring
+    thresholdTracker   *ThresholdTracker
+
     // Dipendenze (saranno iniettate)
     metricsCollector MetricsCollector
     cgroupManager    CgroupManager
@@ -53,6 +56,14 @@ type Manager struct {
     metricsCache      map[string]interface{}
     metricsCacheTime  map[string]time.Time
     cacheMutex        sync.RWMutex
+}
+
+// ThresholdTracker monitora il superamento della soglia CPU nel tempo
+type ThresholdTracker struct {
+    firstOverThresholdTime time.Time  // Primo superamento soglia
+    overThresholdCycles    int        // Cicli sopra soglia
+    totalCycles            int        // Cicli totali
+    mu                     sync.RWMutex
 }
 
 // MetricsCollector è l'interfaccia per raccogliere metriche di sistema.
@@ -115,6 +126,7 @@ func NewManager(
         limitsAppliedTime: time.Time{},
         activeUsers:       make(map[int]bool),
         sharedCgroupPath:  "",
+        thresholdTracker:  &ThresholdTracker{},
         metricsCollector:  metrics,
         cgroupManager:     cgroups,
         prometheusExporter: prometheus,
@@ -126,6 +138,7 @@ func NewManager(
         "polling_interval", cfg.PollingInterval,
         "cpu_threshold", cfg.CPUThreshold,
         "cpu_release_threshold", cfg.CPUReleaseThreshold,
+        "cpu_threshold_duration", cfg.CPUThresholdDuration,
         "ignore_system_load", cfg.IgnoreSystemLoad,
     )
     return mgr, nil
@@ -137,6 +150,22 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
     cycleID := startTime.Unix()
 
     m.logger.Debug("Starting control cycle", "cycle_id", cycleID)
+
+    // Controlla se siamo in un blackout timeframe
+    if m.cfg.IsInBlackout() {
+        nextEnd := m.cfg.GetNextBlackoutEnd()
+        if nextEnd != nil {
+            m.logger.Info("Skipping control cycle - blackout timeframe active",
+                "cycle_id", cycleID,
+                "next_check", nextEnd.Format("2006-01-02 15:04:05"),
+            )
+        } else {
+            m.logger.Debug("Skipping control cycle - blackout timeframe active",
+                "cycle_id", cycleID,
+            )
+        }
+        return nil
+    }
 
     // 1. Raccogli metriche del sistema
     metrics, err := m.collectSystemMetrics()
@@ -162,8 +191,11 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
         return err
     }
 
-    // 5. Logga il risultato del ciclo
+    // 6. Registra lo storico del ciclo
     duration := time.Since(startTime)
+    m.recordControlCycle(decision, reason, metrics, duration)
+
+    // 5. Logga il risultato del ciclo
     m.logger.Info("Control cycle completed",
         "cycle_id", cycleID,
         "decision", decision,
@@ -245,6 +277,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
         if metrics.TotalUserCPUUsage < float64(m.cfg.CPUReleaseThreshold) {
             // Verifica anche che il sistema non sia sotto carico
             if !metrics.SystemUnderLoad {
+                // Reset tracker quando i limiti vengono rilasciati
+                m.thresholdTracker.Reset()
+                
                 return DecisionDeactivate, fmt.Sprintf(
                     "CPU usage below release threshold (%.1f%% < %d%%) and system not under load",
                     metrics.TotalUserCPUUsage, m.cfg.CPUReleaseThreshold,
@@ -259,26 +294,50 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
     // Se i limiti non sono attivi, controlliamo se dobbiamo attivarli
     // 1. Verifica soglia CPU
     if metrics.TotalUserCPUUsage >= float64(m.cfg.CPUThreshold) {
-      // 2. Verifica che ci siano abbastanza core per il sistema
-      if metrics.TotalCores <= m.cfg.MinSystemCores {
-          return DecisionMaintain, fmt.Sprintf(
-              "CPU usage high (%.1f%% >= %d%%) but insufficient cores (%d <= %d)",
-              metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
-              metrics.TotalCores, m.cfg.MinSystemCores,
-          )
-      }
+        // 2. Verifica che ci siano abbastanza core per il sistema
+        if metrics.TotalCores <= m.cfg.MinSystemCores {
+            m.thresholdTracker.Reset()
+            return DecisionMaintain, fmt.Sprintf(
+                "CPU usage high (%.1f%% >= %d%%) but insufficient cores (%d <= %d)",
+                metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+                metrics.TotalCores, m.cfg.MinSystemCores,
+            )
+        }
 
-      // 3. Verifica se dobbiamo ignorare il load average
-      if !m.cfg.IgnoreSystemLoad && metrics.SystemUnderLoad {
-          return DecisionMaintain, "CPU usage high but system already under load from other factors"
-      }
+        // 3. Verifica se dobbiamo ignorare il load average
+        if !m.cfg.IgnoreSystemLoad && metrics.SystemUnderLoad {
+            m.thresholdTracker.Reset()
+            return DecisionMaintain, "CPU usage high but system already under load from other factors"
+        }
 
-      return DecisionActivate, fmt.Sprintf(
-          "CPU usage exceeded threshold (%.1f%% >= %d%%)",
-          metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
-      )
-  }
-  return DecisionMaintain, "CPU usage within normal range"
+        // 4. Verifica time window (se configurata)
+        if m.cfg.CPUThresholdDuration > 0 {
+            shouldActivate := m.thresholdTracker.ShouldActivateLimits(
+                metrics.TotalUserCPUUsage,
+                float64(m.cfg.CPUThreshold),
+                time.Duration(m.cfg.CPUThresholdDuration)*time.Second,
+            )
+            
+            if !shouldActivate {
+                elapsed := m.thresholdTracker.GetElapsed()
+                remaining := time.Duration(m.cfg.CPUThresholdDuration)*time.Second - elapsed
+                return DecisionMaintain, fmt.Sprintf(
+                    "CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
+                    remaining.Round(time.Second),
+                    metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+                )
+            }
+        }
+
+        return DecisionActivate, fmt.Sprintf(
+            "CPU usage exceeded threshold (%.1f%% >= %d%%)",
+            metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+        )
+    }
+    
+    // CPU sotto soglia, reset tracker
+    m.thresholdTracker.Reset()
+    return DecisionMaintain, "CPU usage within normal range"
 }
 
 // executeDecision esegue l'azione corrispondente alla decisione presa.
@@ -289,11 +348,96 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
     case "DEACTIVATE_LIMITS":
         return m.deactivateLimits()
     case "MAINTAIN_CURRENT_STATE":
-        // Nessuna azione necessaria
-        return nil
+        // Controlla se ci sono utenti inattivi da rilasciare
+        return m.releaseIdleUsers(metrics)
     default:
         return fmt.Errorf("unknown decision: %s", decision)
     }
+}
+
+// releaseIdleUsers rilascia gli utenti che non stanno usando CPU mentre i limiti sono attivi
+func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
+    if !m.limitsActive {
+        return nil // Limiti non attivi, nessun rilascio necessario
+    }
+
+    // Soglia per considerare un utente "inattivo" (0.1% CPU)
+    const idleThreshold = 0.1
+
+    m.mu.Lock()
+    usersToRelease := make([]int, 0)
+    
+    for uid := range m.activeUsers {
+        // Controlla se l'utente è ancora attivo
+        userStillActive := false
+        for _, activeUID := range metrics.ActiveUsers {
+            if activeUID == uid {
+                userStillActive = true
+                break
+            }
+        }
+        
+        if !userStillActive {
+            // Utente non più nella lista attivi
+            usersToRelease = append(usersToRelease, uid)
+            continue
+        }
+        
+        // Controlla uso CPU dell'utente
+        if cpuUsage, ok := metrics.UserCPUUsage[uid]; ok {
+            if cpuUsage < idleThreshold {
+                // Utente inattivo (CPU < 0.1%)
+                usersToRelease = append(usersToRelease, uid)
+            }
+        }
+    }
+    
+    // Rimuovi utenti dalla mappa
+    for _, uid := range usersToRelease {
+        delete(m.activeUsers, uid)
+    }
+    
+    remainingLimited := len(m.activeUsers)
+    m.mu.Unlock()
+    
+    if len(usersToRelease) == 0 {
+        return nil // Nessun utente da rilasciare
+    }
+    
+    m.logger.Info("Releasing idle users from CPU limits",
+        "users_released", len(usersToRelease),
+        "users_still_limited", remainingLimited,
+        "idle_threshold", idleThreshold,
+    )
+    
+    var firstError error
+    releasedCount := 0
+    
+    // Rilascia ogni utente inattivo
+    for _, uid := range usersToRelease {
+        // Ripristina il limite normale
+        if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
+            m.logger.Error("Failed to restore normal CPU limit for idle user",
+                "uid", uid,
+                "error", err,
+            )
+            if firstError == nil {
+                firstError = err
+            }
+            continue
+        }
+        
+        releasedCount++
+        m.logger.Debug("CPU limit removed for idle user", "uid", uid)
+    }
+    
+    // Logga il risultato
+    m.logger.Info("Idle user release completed",
+        "released", releasedCount,
+        "remaining_limited", remainingLimited,
+    )
+    
+    return firstError
 }
 
 // activateLimits attiva i limiti di CPU per gli utenti attivi usando pesi proporzionali.
@@ -707,4 +851,140 @@ func (m *Manager) ForceActivateLimits() error {
 // ForceDeactivateLimits disattiva forzatamente i limiti (per testing/admin).
 func (m *Manager) ForceDeactivateLimits() error {
     return m.deactivateLimits()
+}
+
+// GetConfig returns the current configuration
+func (m *Manager) GetConfig() *config.Config {
+    return m.cfg
+}
+
+// ControlCycleEntry represents a single control cycle entry in history
+type ControlCycleEntry struct {
+    Timestamp      time.Time `json:"timestamp"`
+    Decision       string    `json:"decision"`
+    Reason         string    `json:"reason"`
+    TotalCPUUsage  float64   `json:"total_cpu_usage"`
+    UserCPUUsage   float64   `json:"user_cpu_usage"`
+    ActiveUsers    int       `json:"active_users"`
+    LimitsActive   bool      `json:"limits_active"`
+    DurationMs     int64     `json:"duration_ms"`
+}
+
+// controlHistory stores recent control cycle entries
+type controlHistory struct {
+    entries []ControlCycleEntry
+    mu      sync.RWMutex
+    maxSize int
+}
+
+var controlHist = &controlHistory{
+    entries: make([]ControlCycleEntry, 0),
+    maxSize: 100,
+}
+
+// addControlHistoryEntry adds an entry to the control history
+func (m *Manager) addControlHistoryEntry(entry ControlCycleEntry) {
+    controlHist.mu.Lock()
+    defer controlHist.mu.Unlock()
+
+    controlHist.entries = append(controlHist.entries, entry)
+
+    // Keep only the last maxSize entries
+    if len(controlHist.entries) > controlHist.maxSize {
+        controlHist.entries = controlHist.entries[len(controlHist.entries)-controlHist.maxSize:]
+    }
+}
+
+// GetControlHistory returns the recent control cycle history
+func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
+    controlHist.mu.RLock()
+    defer controlHist.mu.RUnlock()
+
+    if limit <= 0 || limit > len(controlHist.entries) {
+        limit = len(controlHist.entries)
+    }
+
+    // Return the most recent entries
+    start := len(controlHist.entries) - limit
+    if start < 0 {
+        start = 0
+    }
+
+    result := make([]ControlCycleEntry, limit)
+    copy(result, controlHist.entries[start:])
+    return result
+}
+
+// recordControlCycle records a control cycle in history
+func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMetrics, duration time.Duration) {
+    m.mu.RLock()
+    limitsActive := m.limitsActive
+    m.mu.RUnlock()
+
+    entry := ControlCycleEntry{
+        Timestamp:     time.Now(),
+        Decision:      decision,
+        Reason:        reason,
+        TotalCPUUsage: metrics.TotalCPUUsage,
+        UserCPUUsage:  metrics.TotalUserCPUUsage,
+        ActiveUsers:   len(metrics.ActiveUsers),
+        LimitsActive:  limitsActive,
+        DurationMs:    duration.Milliseconds(),
+    }
+
+    m.addControlHistoryEntry(entry)
+}
+
+// Reset resetta il tracker
+func (t *ThresholdTracker) Reset() {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    
+    t.firstOverThresholdTime = time.Time{}
+    t.overThresholdCycles = 0
+    t.totalCycles = 0
+}
+
+// ShouldActivateLimits verifica se i limiti devono essere attivati
+func (t *ThresholdTracker) ShouldActivateLimits(
+    currentCPU float64,
+    threshold float64,
+    requiredDuration time.Duration,
+) bool {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    
+    if currentCPU >= threshold {
+        t.overThresholdCycles++
+        
+        if t.firstOverThresholdTime.IsZero() {
+            t.firstOverThresholdTime = time.Now()
+        }
+        
+        elapsed := time.Since(t.firstOverThresholdTime)
+        t.totalCycles++
+        
+        // Attiva solo se il tempo trascorso >= durata richiesta
+        if elapsed >= requiredDuration {
+            return true
+        }
+    } else {
+        // CPU sotto soglia, reset
+        t.firstOverThresholdTime = time.Time{}
+        t.overThresholdCycles = 0
+    }
+    
+    t.totalCycles++
+    return false
+}
+
+// GetElapsed restituisce il tempo trascorso dal primo superamento
+func (t *ThresholdTracker) GetElapsed() time.Duration {
+    t.mu.RLock()
+    defer t.mu.RUnlock()
+    
+    if t.firstOverThresholdTime.IsZero() {
+        return 0
+    }
+    return time.Since(t.firstOverThresholdTime)
 }
