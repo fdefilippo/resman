@@ -67,7 +67,15 @@ type Collector struct {
 
     // Database writer (opzionale)
     dbWriter         *DBWriter
+
+    // Cache per risoluzione UID -> username
+    usernameCache      map[int]string  // UID -> username
+    usernameCacheTime  map[int]time.Time // Timestamp ultima risoluzione
+    usernameCacheMutex sync.RWMutex
 }
+
+// Username cache TTL
+const USERNAME_CACHE_TTL = 5 * time.Minute
 
 // NewCollector crea un nuovo collettore di metriche.
 func NewCollector(cfg *config.Config) (*Collector, error) {
@@ -81,6 +89,8 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
         prevCPUTime:     time.Now(),
         prevProcCPU:     make(map[int32]cpu.TimesStat),
         prevProcTime:    make(map[int32]time.Time),
+        usernameCache:   make(map[int]string),
+        usernameCacheTime: make(map[int]time.Time),
     }
 
     // Inizializza le statistiche CPU precedenti
@@ -519,22 +529,67 @@ func (c *Collector) GetActiveUsers() []int {
 
 // getUsername ritorna la username dato un UID
 // Usa os/user.LookupId() che supporta LDAP/NIS quando CGO è abilitato
+// Implementa cache con TTL per migliorare le performance
 func (c *Collector) getUsername(uid int) string {
+    // Controllo cache prima di tutto
+    if cachedUsername, valid := c.getCachedUsername(uid); valid {
+        return cachedUsername
+    }
+
     // Metodo 1: Usa os/user.LookupId() (supporta LDAP/NIS con CGO)
     // Questo funziona solo se compilato con CGO_ENABLED=1
     u, err := user.LookupId(fmt.Sprintf("%d", uid))
     if err == nil && u.Username != "" {
+        c.cacheUsername(uid, u.Username) // Cache il risultato
         return u.Username
     }
-    
+
     // Metodo 2: Fallback su /etc/passwd (solo utenti locali)
     username, err := c.getUsernameFromPasswd(uid)
     if err == nil && username != "" {
+        c.cacheUsername(uid, username) // Cache il risultato
         return username
     }
 
     // Fallback finale: ritorna l'UID come stringa
     return fmt.Sprintf("%d", uid)
+}
+
+// getCachedUsername restituisce lo username dalla cache se valido
+func (c *Collector) getCachedUsername(uid int) (string, bool) {
+    c.usernameCacheMutex.RLock()
+    defer c.usernameCacheMutex.RUnlock()
+
+    username, exists := c.usernameCache[uid]
+    if !exists {
+        return "", false
+    }
+
+    // Controllo se la cache è scaduta
+    timestamp, exists := c.usernameCacheTime[uid]
+    if !exists || time.Since(timestamp) > USERNAME_CACHE_TTL {
+        return "", false
+    }
+
+    return username, true
+}
+
+// cacheUsername memorizza lo username nella cache
+func (c *Collector) cacheUsername(uid int, username string) {
+    c.usernameCacheMutex.Lock()
+    defer c.usernameCacheMutex.Unlock()
+
+    c.usernameCache[uid] = username
+    c.usernameCacheTime[uid] = time.Now()
+}
+
+// clearUsernameCache rimuove un entry dalla cache (utile se l'utente cambia)
+func (c *Collector) clearUsernameCache(uid int) {
+    c.usernameCacheMutex.Lock()
+    defer c.usernameCacheMutex.Unlock()
+
+    delete(c.usernameCache, uid)
+    delete(c.usernameCacheTime, uid)
 }
 
 // getUsernameFromPasswd legge il username da /etc/passwd senza usare CGO

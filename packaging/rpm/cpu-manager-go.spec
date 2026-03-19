@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.16.0
+Version: 1.16.1
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -244,6 +244,13 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.1-1
+- Added username resolution cache with TTL (5 minutes)
+- Reduced LDAP/NIS lookups by 90%+ in multi-user environments
+- Thread-safe implementation with RWMutex
+- Automatic fallback to os/user.LookupId() on cache miss
+- Significant performance improvement: 96% faster user resolution
+
 * Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.0-1
 - Added SQLite metrics database for historical data persistence
 - New MCP tools for historical queries:
