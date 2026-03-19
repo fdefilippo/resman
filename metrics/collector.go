@@ -59,11 +59,14 @@ type Collector struct {
     // Stato precedente per calcolo delta CPU
     prevCPUStats     cpu.TimesStat
     prevCPUTime      time.Time
-    
+
     // Cache per CPU usage per processo (necessaria per calcolo delta)
     prevProcCPU      map[int32]cpu.TimesStat
     prevProcTime     map[int32]time.Time
     procCPUMutex     sync.RWMutex
+
+    // Database writer (opzionale)
+    dbWriter         *DBWriter
 }
 
 // NewCollector crea un nuovo collettore di metriche.
@@ -87,6 +90,21 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 
     logger.Info("Metrics collector initialized")
     return collector, nil
+}
+
+// SetDBWriter imposta il DBWriter per la persistenza delle metriche
+func (c *Collector) SetDBWriter(writer *DBWriter) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.dbWriter = writer
+    c.logger.Info("Database writer configured", "enabled", writer != nil)
+}
+
+// GetDBWriter restituisce il DBWriter corrente
+func (c *Collector) GetDBWriter() *DBWriter {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    return c.dbWriter
 }
 
 // GetTotalCores restituisce il numero totale di core CPU.
@@ -1063,4 +1081,34 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 
     c.setInCache(cacheKey, count)
     return count
+}
+
+// WriteMetricsToDatabase scrive le metriche nel database se il DBWriter è configurato
+func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
+    c.mu.RLock()
+    writer := c.dbWriter
+    c.mu.RUnlock()
+
+    if writer == nil {
+        return
+    }
+
+    // Scrivi metriche di sistema
+    writer.WriteSystemMetrics(totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount)
+
+    // Scrivi metriche per ogni utente
+    for uid, metrics := range userMetrics {
+        writer.WriteUserMetrics(
+            uid,
+            metrics.Username,
+            metrics.CPUUsage,
+            metrics.MemoryUsage,
+            metrics.ProcessCount,
+            false, // isLimited verrà impostato dallo state manager
+            "",    // cgroupPath
+            "",    // cpuQuota
+        )
+    }
+
+    writer.MarkWritten()
 }

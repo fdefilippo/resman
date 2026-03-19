@@ -230,3 +230,45 @@ MCP_ALLOW_WRITE_OPS=false
 
 # Optional authentication token for HTTP transport
 # MCP_AUTH_TOKEN=your-secret-token-here
+
+# ========================
+# METRICS DATABASE (SQLite)
+# ========================
+# Abilita la persistenza delle metriche in un database locale SQLite
+# per esporre lo storico delle metriche via MCP.
+#
+# METRICS_DB_ENABLED: Abilita (true) o disabilita (false) la scrittura su database
+# Default: false (disabilitato)
+#
+# METRICS_DB_PATH: Percorso del database SQLite
+# Default: /etc/cpu-manager/metrics.db
+# Assicurarsi che la directory esista e sia scrivibile
+#
+# METRICS_DB_RETENTION_DAYS: Quanti giorni mantenere i dati nel database
+# Default: 30 giorni
+# I dati più vecchi vengono eliminati automaticamente
+#
+# METRICS_DB_WRITE_INTERVAL: Ogni quanti secondi scrivere le metriche nel database
+# Default: 30 secondi (uguale al POLLING_INTERVAL)
+# Non impostare troppo basso per non sovraccaricare il database
+# Minimo: 5 secondi
+#
+# Esempi:
+# # Abilita database con retention di 30 giorni
+# METRICS_DB_ENABLED=true
+# METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+# METRICS_DB_RETENTION_DAYS=30
+# METRICS_DB_WRITE_INTERVAL=30
+#
+# # Database in RAM (più veloce, dati persi al riavvio)
+# METRICS_DB_ENABLED=true
+# METRICS_DB_PATH=:memory:
+#
+# # Retention estesa (90 giorni)
+# METRICS_DB_ENABLED=true
+# METRICS_DB_RETENTION_DAYS=90
+#
+METRICS_DB_ENABLED=false
+METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_RETENTION_DAYS=30
+METRICS_DB_WRITE_INTERVAL=30

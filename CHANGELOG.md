@@ -5,6 +5,68 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.0] - 2026-03-19
+
+### Aggiunto
+
+#### Metrics Database - Storico Metriche via MCP
+- **NUOVO**: Persistenza delle metriche in database SQLite locale
+- **NUOVO**: 4 nuovi MCP tools per interrogare lo storico delle metriche
+- **NUOVO**: Supporto per query temporali flessibili (periodi predefiniti e custom)
+- **NUOVO**: Cleanup automatico dei dati vecchi (retention configurabile)
+
+**Nuovi MCP Tools:**
+- `get_user_history`: Storico CPU/RAM per utente con filtri temporali
+- `get_system_history`: Storico metriche di sistema
+- `get_user_summary`: Statistiche aggregate (avg, min, max) per utente
+- `get_database_info`: Informazioni sul database (size, record count, retention)
+
+**Configurazione:**
+```bash
+# Abilita database metriche
+METRICS_DB_ENABLED=true
+METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_RETENTION_DAYS=30
+METRICS_DB_WRITE_INTERVAL=30
+```
+
+**Vantaggi:**
+- ✅ Storico delle metriche accessibile via MCP (prima solo Prometheus)
+- ✅ Query flessibili per periodo, utente, metriche
+- ✅ Integrazione con AI assistant per analisi temporali
+- ✅ Basso impatto sulle performance (scrittura asincrona)
+- ✅ Retention automatica configurabile
+
+**Documentazione:**
+- Guida completa: `docs/METRICS-DATABASE.md`
+- Esempi di query SQL dirette
+- Integrazione con Grafana
+
+### Modificato
+
+#### Aggiornamenti MCP Server
+- Aggiunto supporto per database manager nel server MCP
+- Migliorata gestione errori nei return values
+- Aggiunti nuovi tipi di risultato strutturati
+
+#### Aggiornamenti State Manager
+- Aggiunta funzione `GetUIDFromUsername()` per risoluzione username->UID
+- Integrazione scrittura database nel ciclo di controllo
+
+### Note Tecniche
+
+**Database Schema:**
+- Tabella `user_metrics`: Metriche per utente (CPU, RAM, processi)
+- Tabella `system_metrics`: Metriche di sistema (CPU totale, load, limits)
+- Indici ottimizzati per query temporali
+
+**Performance:**
+- Scrittura asincrona non bloccante
+- Intervallo configurabile (default: 30 secondi)
+- Dimensione stimata: ~10-20 MB per 30 giorni con 10 utenti
+
+---
+
 ## [1.15.2] - 2026-03-17
 
 ### Corretto

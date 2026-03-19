@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/fdefilippo/cpu-manager-go/database"
 )
 
 // getHostname returns the current hostname
@@ -91,6 +93,52 @@ type GetCgroupInfoResult struct {
 	Path    string `json:"path"`
 	CPUQuota string `json:"cpu_max"`
 	Weight  string `json:"cpu_weight"`
+}
+
+// Historical metrics tools structures
+
+type GetHistoryArgs struct {
+	UID       *int   `json:"uid,omitempty"`
+	Username  string `json:"username,omitempty"`
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+	Period    string `json:"period,omitempty"`
+	Hours     int    `json:"hours,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+type GetHistoryResult struct {
+	Records   []map[string]any `json:"records"`
+	Count     int              `json:"count"`
+	StartTime string           `json:"start_time"`
+	EndTime   string           `json:"end_time"`
+}
+
+type GetUserSummaryResult struct {
+	UID          int     `json:"uid"`
+	Username     string  `json:"username"`
+	PeriodStart  string  `json:"period_start"`
+	PeriodEnd    string  `json:"period_end"`
+	CPUAvg       float64 `json:"cpu_avg"`
+	CPUMin       float64 `json:"cpu_min"`
+	CPUMax       float64 `json:"cpu_max"`
+	MemoryAvg    float64 `json:"memory_avg"`
+	MemoryMin    float64 `json:"memory_min"`
+	MemoryMax    float64 `json:"memory_max"`
+	ProcessCountAvg float64 `json:"process_count_avg"`
+	LimitedTimePercent float64 `json:"limited_time_percent"`
+	Samples      int     `json:"samples"`
+}
+
+type GetDatabaseInfoResult struct {
+	Path               string  `json:"path"`
+	SizeMB             float64 `json:"size_mb"`
+	UserMetricsCount   int64   `json:"user_metrics_count"`
+	SystemMetricsCount int64   `json:"system_metrics_count"`
+	OldestRecord       string  `json:"oldest_record"`
+	NewestRecord       string  `json:"newest_record"`
+	RetentionDays      int     `json:"retention_days"`
+	UsersTracked       int64   `json:"users_tracked"`
 }
 
 type GetConfigurationArgs struct{}
@@ -890,6 +938,30 @@ Utenti limitati: %d su %d
 			},
 		}, nil
 	})
+
+	// get_user_history - Get historical metrics for a specific user
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "get_user_history",
+		Description: "Get historical CPU and memory metrics for a specific user. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter",
+	}, s.handleGetUserHistory)
+
+	// get_system_history - Get historical system metrics
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "get_system_history",
+		Description: "Get historical system-wide CPU and memory metrics. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter",
+	}, s.handleGetSystemHistory)
+
+	// get_user_summary - Get aggregated statistics for a user
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "get_user_summary",
+		Description: "Get aggregated statistics (avg, min, max) for a specific user over a time period",
+	}, s.handleGetUserSummary)
+
+	// get_database_info - Get information about the metrics database
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "get_database_info",
+		Description: "Get information about the metrics database including size, record counts, and retention",
+	}, s.handleGetDatabaseInfo)
 }
 
 // handleGetSystemStatus handles get_system_status tool requests
@@ -1087,6 +1159,276 @@ func (s *Server) handleDeactivateLimits(ctx context.Context, req *mcp.CallToolRe
 		Success: success,
 		Message: message,
 	}, nil
+}
+
+// handleGetUserHistory handles get_user_history tool requests
+func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, GetHistoryResult, error) {
+	if s.dbManager == nil {
+		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
+	}
+
+	// Determine time range
+	now := time.Now()
+	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
+	if err != nil && args.Period != "" {
+		return nil, GetHistoryResult{}, err
+	}
+
+	// Override with explicit startTime/endTime if provided
+	if args.StartTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
+			startTime = t
+		}
+	}
+	if args.EndTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
+			endTime = t
+		}
+	}
+
+	// Handle hours parameter
+	if args.Hours > 0 {
+		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
+	}
+
+	// Default limit
+	limit := args.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// Get UID from username if needed
+	uid := 0
+	if args.UID != nil {
+		uid = *args.UID
+	} else if args.Username != "" {
+		// Try to resolve username to UID
+		uid = s.stateManager.GetUIDFromUsername(args.Username)
+		if uid == 0 {
+			return nil, GetHistoryResult{}, fmt.Errorf("user not found: %s", args.Username)
+		}
+	}
+
+	if uid == 0 {
+		return nil, GetHistoryResult{}, fmt.Errorf("either uid or username must be provided")
+	}
+
+	// Query database
+	records, err := s.dbManager.GetUserHistory(uid, startTime, endTime, limit)
+	if err != nil {
+		return nil, GetHistoryResult{}, err
+	}
+
+	// Convert to map for JSON
+	resultRecords := make([]map[string]any, len(records))
+	for i, r := range records {
+		resultRecords[i] = map[string]any{
+			"timestamp":        r.Timestamp.Format(time.RFC3339),
+			"uid":              r.UID,
+			"username":         r.Username,
+			"cpu_usage":        r.CPUUsagePercent,
+			"memory_usage":     r.MemoryUsageBytes,
+			"process_count":    r.ProcessCount,
+			"cgroup_path":      r.CgroupPath,
+			"cpu_quota":        r.CPUQuota,
+			"is_limited":       r.IsLimited,
+		}
+	}
+
+	result := GetHistoryResult{
+		Records:   resultRecords,
+		Count:     len(resultRecords),
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: toJSON(result)},
+		},
+		StructuredContent: result,
+	}, result, nil
+}
+
+// handleGetSystemHistory handles get_system_history tool requests
+func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, GetHistoryResult, error) {
+	if s.dbManager == nil {
+		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
+	}
+
+	// Determine time range
+	now := time.Now()
+	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
+	if err != nil && args.Period != "" {
+		return nil, GetHistoryResult{}, err
+	}
+
+	// Override with explicit startTime/endTime if provided
+	if args.StartTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
+			startTime = t
+		}
+	}
+	if args.EndTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
+			endTime = t
+		}
+	}
+
+	// Handle hours parameter
+	if args.Hours > 0 {
+		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
+	}
+
+	// Default limit
+	limit := args.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// Query database
+	records, err := s.dbManager.GetSystemHistory(startTime, endTime, limit)
+	if err != nil {
+		return nil, GetHistoryResult{}, err
+	}
+
+	// Convert to map for JSON
+	resultRecords := make([]map[string]any, len(records))
+	for i, r := range records {
+		resultRecords[i] = map[string]any{
+			"timestamp":         r.Timestamp.Format(time.RFC3339),
+			"total_cpu_usage":   r.TotalCPUUsagePercent,
+			"total_cores":       r.TotalCores,
+			"system_load":       r.SystemLoad,
+			"limits_active":     r.LimitsActive,
+			"limited_users":     r.LimitedUsersCount,
+		}
+	}
+
+	result := GetHistoryResult{
+		Records:   resultRecords,
+		Count:     len(resultRecords),
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: toJSON(result)},
+		},
+		StructuredContent: result,
+	}, result, nil
+}
+
+// handleGetUserSummary handles get_user_summary tool requests
+func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, GetUserSummaryResult, error) {
+	if s.dbManager == nil {
+		return nil, GetUserSummaryResult{}, fmt.Errorf("metrics database is not enabled")
+	}
+
+	// Determine time range
+	now := time.Now()
+	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
+	if err != nil && args.Period != "" {
+		return &mcp.CallToolResult{}, GetUserSummaryResult{}, err
+	}
+
+	// Override with explicit startTime/endTime if provided
+	if args.StartTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
+			startTime = t
+		}
+	}
+	if args.EndTime != "" {
+		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
+			endTime = t
+		}
+	}
+
+	// Get UID from username if needed
+	uid := 0
+	if args.UID != nil {
+		uid = *args.UID
+	} else if args.Username != "" {
+		uid = s.stateManager.GetUIDFromUsername(args.Username)
+		if uid == 0 {
+			return &mcp.CallToolResult{}, GetUserSummaryResult{}, fmt.Errorf("user not found: %s", args.Username)
+		}
+	}
+
+	if uid == 0 {
+		return &mcp.CallToolResult{}, GetUserSummaryResult{}, fmt.Errorf("either uid or username must be provided")
+	}
+
+	// Query database
+	summary, err := s.dbManager.GetUserSummary(uid, startTime, endTime)
+	if err != nil {
+		return &mcp.CallToolResult{}, GetUserSummaryResult{}, err
+	}
+
+	if summary == nil {
+		return &mcp.CallToolResult{}, GetUserSummaryResult{}, fmt.Errorf("no data found for user %d in specified time range", uid)
+	}
+
+	result := GetUserSummaryResult{
+		UID:          summary.UID,
+		Username:     summary.Username,
+		PeriodStart:  summary.PeriodStart,
+		PeriodEnd:    summary.PeriodEnd,
+		CPUAvg:       summary.CPUAvg,
+		CPUMin:       summary.CPUMin,
+		CPUMax:       summary.CPUMax,
+		MemoryAvg:    summary.MemoryAvg,
+		MemoryMin:    summary.MemoryMin,
+		MemoryMax:    summary.MemoryMax,
+		ProcessCountAvg: summary.ProcessCountAvg,
+		LimitedTimePercent: summary.LimitedTimePercent,
+		Samples:      summary.Samples,
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: toJSON(result)},
+		},
+		StructuredContent: result,
+	}, result, nil
+}
+
+// handleGetDatabaseInfo handles get_database_info tool requests
+func (s *Server) handleGetDatabaseInfo(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, GetDatabaseInfoResult, error) {
+	if s.dbManager == nil {
+		return nil, GetDatabaseInfoResult{}, fmt.Errorf("metrics database is not enabled")
+	}
+
+	// Get retention from config
+	retention := 30
+	if s.parentCfg != nil && s.parentCfg.MetricsDBRetentionDays > 0 {
+		retention = s.parentCfg.MetricsDBRetentionDays
+	}
+
+	// Query database info
+	info, err := s.dbManager.GetDatabaseInfo(retention)
+	if err != nil {
+		return &mcp.CallToolResult{}, GetDatabaseInfoResult{}, err
+	}
+
+	result := GetDatabaseInfoResult{
+		Path:               info.Path,
+		SizeMB:             info.SizeMB,
+		UserMetricsCount:   info.UserMetricsCount,
+		SystemMetricsCount: info.SystemMetricsCount,
+		OldestRecord:       info.OldestRecord,
+		NewestRecord:       info.NewestRecord,
+		RetentionDays:      info.RetentionDays,
+		UsersTracked:       info.UsersTracked,
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: toJSON(result)},
+		},
+		StructuredContent: result,
+	}, result, nil
 }
 
 // Helper functions

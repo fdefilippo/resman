@@ -120,6 +120,12 @@ type Config struct {
     MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
     MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
     MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
+
+    // Metrics Database (SQLite)
+    MetricsDBEnabled       bool   `config:"METRICS_DB_ENABLED"`
+    MetricsDBPath          string `config:"METRICS_DB_PATH"`
+    MetricsDBRetentionDays int    `config:"METRICS_DB_RETENTION_DAYS"`
+    MetricsDBWriteInterval int    `config:"METRICS_DB_WRITE_INTERVAL"` // seconds
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -199,6 +205,12 @@ func DefaultConfig() *Config {
         MCPHTTPHost:      "",  // Empty = use default 0.0.0.0
         MCPLogLevel:      "INFO",
         MCPAllowWriteOps: false,
+
+        // Metrics Database (SQLite)
+        MetricsDBEnabled:       false,
+        MetricsDBPath:          "/etc/cpu-manager/metrics.db",
+        MetricsDBRetentionDays: 30,
+        MetricsDBWriteInterval: 30, // Same as polling interval by default
     }
 }
 
@@ -603,6 +615,27 @@ func setConfigField(cfg *Config, key, value string) error {
             cfg.MCPAllowWriteOps = false
         }
 
+    // Metrics Database
+    case "METRICS_DB_ENABLED":
+        switch strings.ToLower(value) {
+        case "true", "1", "yes", "on":
+            cfg.MetricsDBEnabled = true
+        case "false", "0", "no", "off":
+            cfg.MetricsDBEnabled = false
+        default:
+            cfg.MetricsDBEnabled = false
+        }
+    case "METRICS_DB_PATH":
+        cfg.MetricsDBPath = value
+    case "METRICS_DB_RETENTION_DAYS":
+        if i, err := strconv.Atoi(value); err == nil && i > 0 {
+            cfg.MetricsDBRetentionDays = i
+        }
+    case "METRICS_DB_WRITE_INTERVAL":
+        if i, err := strconv.Atoi(value); err == nil && i > 0 {
+            cfg.MetricsDBWriteInterval = i
+        }
+
     default:
         return nil
     }
@@ -628,6 +661,14 @@ func validateConfig(cfg *Config) error {
     // Validate threshold duration
     if cfg.CPUThresholdDuration < 0 {
         errors = append(errors, "CPU_THRESHOLD_DURATION cannot be negative")
+    }
+
+    // Validate metrics database configuration
+    if cfg.MetricsDBRetentionDays < 1 {
+        errors = append(errors, "METRICS_DB_RETENTION_DAYS must be at least 1")
+    }
+    if cfg.MetricsDBWriteInterval < 5 {
+        errors = append(errors, "METRICS_DB_WRITE_INTERVAL must be at least 5 seconds")
     }
 
     // Validate polling interval

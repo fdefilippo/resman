@@ -76,6 +76,8 @@ type MetricsCollector interface {
     GetMemoryUsage() float64
     IsSystemUnderLoad() bool
     GetAllUserMetrics() map[int]*metrics.UserMetrics
+    GetDBWriter() *metrics.DBWriter
+    WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
 }
 
 // CgroupManager è l'interfaccia per gestire i cgroups.
@@ -179,7 +181,10 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
         m.updatePrometheusMetrics(metrics)
     }
 
-    // 3. Prendi decisione basata sulle metriche
+    // 3. Scrivi le metriche nel database (se abilitato)
+    m.writeDatabaseMetrics(metrics)
+
+    // 4. Prendi decisione basata sulle metriche
     decision, reason := m.makeDecision(metrics)
 
     // 4. Esegui l'azione corrispondente
@@ -720,9 +725,60 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
     }
 }
 
+// writeDatabaseMetrics scrive le metriche nel database SQLite (se abilitato)
+func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
+    if m.metricsCollector == nil {
+        return
+    }
+
+    // Verifica se il DB writer è configurato
+    writer := m.metricsCollector.GetDBWriter()
+    if writer == nil {
+        return
+    }
+
+    // Verifica se è il momento di scrivere
+    if !writer.ShouldWrite() {
+        return
+    }
+
+    // Scrivi le metriche
+    m.metricsCollector.WriteMetricsToDatabase(
+        metrics.UserMetrics,
+        metrics.TotalCPUUsage,
+        metrics.TotalCores,
+        0.0, // systemLoad non sempre disponibile
+        m.limitsActive,
+        len(m.activeUsers),
+    )
+
+    m.logger.Debug("Metrics written to database",
+        "users", len(metrics.UserMetrics),
+        "limits_active", m.limitsActive,
+    )
+}
+
 // getUsername restituisce il nome utente dato l'UID
 func (m *Manager) getUsername(uid int) string {
     return strconv.Itoa(uid)
+}
+
+// GetUIDFromUsername risolve un username a UID scansionando /proc
+// Restituisce 0 se l'utente non è trovato
+func (m *Manager) GetUIDFromUsername(username string) int {
+    if username == "" {
+        return 0
+    }
+
+    // Usa metrics collector per ottenere tutti gli utenti attivi e i loro username
+    allMetrics := m.metricsCollector.GetAllUserMetrics()
+    for uid, metrics := range allMetrics {
+        if metrics.Username == username {
+            return uid
+        }
+    }
+
+    return 0
 }
 
 // isUserLimited verifica se un utente ha limiti attivi

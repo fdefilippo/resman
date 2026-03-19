@@ -1,0 +1,10 @@
+Attualmente le metriche vengono pubblicate via prometheus, l'interfaccia MCP
+riporta solo i valori istantanei al fine di avere lo storico anche via MCP 
+dovremmo scrivere i dati esposti via prometheus in un database locale sqlite
+che poi possa essere usato da un interfaccia esposta via MCP. quindi:
+
+1) scriviamo i dati in un database sqlite nella directory di default /etc/cpu-manager/metrics.db
+   modificabile da file di configurazione.
+2) aggiungiamo alle interfacce MCP quanto necessario per prelevare lo storico 
+   degli utenti e l'utilizzo della RAM e CPU
+

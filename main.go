@@ -30,6 +30,7 @@ import (
 
     "github.com/fdefilippo/cpu-manager-go/config"
     "github.com/fdefilippo/cpu-manager-go/cgroup"
+    "github.com/fdefilippo/cpu-manager-go/database"
     "github.com/fdefilippo/cpu-manager-go/logging"
     "github.com/fdefilippo/cpu-manager-go/metrics"
     "github.com/fdefilippo/cpu-manager-go/state"
@@ -114,6 +115,36 @@ func main() {
         os.Exit(1)
     }
 
+    // 2b. Database Manager (se abilitato)
+    var dbManager *database.DatabaseManager
+    var dbWriter *metrics.DBWriter
+
+    if cfg.MetricsDBEnabled {
+        dbManager, err = database.NewDatabaseManager(cfg.MetricsDBPath)
+        if err != nil {
+            logger.Warn("Failed to initialize metrics database, disabling database writing",
+                "path", cfg.MetricsDBPath,
+                "error", err,
+            )
+            cfg.MetricsDBEnabled = false
+        } else {
+            dbWriter = metrics.NewDBWriter(dbManager, cfg.MetricsDBWriteInterval)
+            metricsCollector.SetDBWriter(dbWriter)
+            logger.Info("Metrics database initialized",
+                "path", cfg.MetricsDBPath,
+                "retention_days", cfg.MetricsDBRetentionDays,
+                "write_interval", cfg.MetricsDBWriteInterval,
+            )
+
+            // Cleanup iniziale dei dati vecchi
+            if deleted, err := dbManager.CleanupOldData(cfg.MetricsDBRetentionDays); err == nil && deleted > 0 {
+                logger.Info("Cleaned up old metrics data", "records_deleted", deleted)
+            }
+        }
+    } else {
+        logger.Info("Metrics database disabled by configuration")
+    }
+
     // 3. Prometheus Exporter
     var prometheusExporter *metrics.PrometheusExporter
 
@@ -177,7 +208,7 @@ func main() {
     var mcpServer *mcp.Server
 
     if cfg.MCPEnabled {
-        mcpServer, err = mcp.NewServer(cfg, stateManager, metricsCollector, cgroupMgr)
+        mcpServer, err = mcp.NewServer(cfg, stateManager, metricsCollector, cgroupMgr, dbManager)
         if err != nil {
             logger.Error("Failed to initialize MCP server", "error", err)
             mcpServer = nil
@@ -258,6 +289,13 @@ func main() {
             if mcpServer != nil {
                 if err := mcpServer.Stop(); err != nil {
                     logger.Error("Error stopping MCP server", "error", err)
+                }
+            }
+
+            // Close database manager
+            if dbManager != nil {
+                if err := dbManager.Close(); err != nil {
+                    logger.Error("Error closing database manager", "error", err)
                 }
             }
 

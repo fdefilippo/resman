@@ -29,6 +29,7 @@ import (
 
 	"github.com/fdefilippo/cpu-manager-go/cgroup"
 	"github.com/fdefilippo/cpu-manager-go/config"
+	"github.com/fdefilippo/cpu-manager-go/database"
 	"github.com/fdefilippo/cpu-manager-go/logging"
 	"github.com/fdefilippo/cpu-manager-go/metrics"
 	"github.com/fdefilippo/cpu-manager-go/state"
@@ -42,6 +43,7 @@ type Server struct {
 	stateManager     *state.Manager
 	metricsCollector *metrics.Collector
 	cgroupManager    *cgroup.Manager
+	dbManager        *database.DatabaseManager
 	logger           *logging.Logger
 	httpServer       *http.Server
 	shutdownChan     chan struct{}
@@ -55,6 +57,7 @@ func NewServer(
 	sm *state.Manager,
 	mc *metrics.Collector,
 	cg *cgroup.Manager,
+	dbm *database.DatabaseManager,
 ) (*Server, error) {
 	logger := logging.GetLogger()
 
@@ -85,6 +88,7 @@ func NewServer(
 		stateManager:     sm,
 		metricsCollector: mc,
 		cgroupManager:    cg,
+		dbManager:        dbm,
 		logger:           logger,
 		shutdownChan:     make(chan struct{}),
 	}

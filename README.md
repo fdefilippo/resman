@@ -34,6 +34,36 @@ CPU Manager Go includes a built-in **Model Context Protocol (MCP)** server that 
 - **6 Resources**: REST-like URIs for system data (`cpu-manager://system/status`, `cpu-manager://users/{uid}/metrics`, etc.)
 - **3 Prompts**: Pre-built queries for system health, user analysis, and troubleshooting
 - **Multiple Transports**: stdio (for local AI clients), HTTP, and SSE
+- **SQLite Metrics Database** (v1.16.0+): Historical metrics storage with 4 additional MCP tools for temporal queries
+
+### Metrics Database (New in v1.16.0)
+
+CPU Manager now supports persistent storage of metrics in a local SQLite database, enabling historical queries via MCP:
+
+**New MCP Tools:**
+- `get_user_history`: Historical CPU/RAM metrics for a specific user
+- `get_system_history`: Historical system-wide metrics
+- `get_user_summary`: Aggregated statistics (avg, min, max) for a user
+- `get_database_info`: Database information (size, record counts, retention)
+
+**Configuration:**
+```bash
+# /etc/cpu-manager.conf
+METRICS_DB_ENABLED=true
+METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_RETENTION_DAYS=30
+METRICS_DB_WRITE_INTERVAL=30
+```
+
+**Benefits:**
+- ✅ Historical metrics accessible via MCP (previously only available via Prometheus)
+- ✅ Flexible temporal queries (predefined periods or custom ranges)
+- ✅ AI assistant integration for time-based analysis
+- ✅ Low performance impact (asynchronous writes)
+- ✅ Automatic data retention management
+
+For complete documentation, see:
+- **[docs/METRICS-DATABASE.md](docs/METRICS-DATABASE.md)** - Complete guide and SQL examples
 
 ### Quick Start
 ```bash
