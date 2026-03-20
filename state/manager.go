@@ -106,6 +106,8 @@ type PrometheusExporter interface {
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
+	IncrementLimitsActivated()
+	IncrementLimitsDeactivated()
 }
 
 // NewManager crea un nuovo Manager con le dipendenze configurate.
@@ -450,6 +452,11 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	m.logger.Info("Activating CPU limits with proportional weights")
 
+	// Incrementa il contatore di attivazioni
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.IncrementLimitsActivated()
+	}
+
 	// Ottieni gli utenti attualmente limitati
 	m.mu.RLock()
 	previouslyLimited := make([]int, 0, len(m.activeUsers))
@@ -599,6 +606,13 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 // deactivateLimits rimuove i limiti di CPU da tutti gli utenti.
 func (m *Manager) deactivateLimits() error {
+	m.logger.Info("Deactivating CPU limits")
+
+	// Incrementa il contatore di disattivazioni
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.IncrementLimitsDeactivated()
+	}
+
 	m.mu.Lock()
 	usersToCleanup := make([]int, 0, len(m.activeUsers))
 	for uid := range m.activeUsers {
