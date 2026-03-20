@@ -64,11 +64,11 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "invalid port",
 			cfg: &Config{
-				Enabled:    true,
-				Transport:  "http",
-				HTTPPort:   70000,
-				HTTPHost:   "127.0.0.1",
-				LogLevel:   "INFO",
+				Enabled:   true,
+				Transport: "http",
+				HTTPPort:  70000,
+				HTTPHost:  "127.0.0.1",
+				LogLevel:  "INFO",
 			},
 			wantErr: true,
 		},
@@ -201,7 +201,7 @@ func TestHelperFunctions(t *testing.T) {
 
 func TestGetBool(t *testing.T) {
 	m := map[string]any{
-		"active": true,
+		"active":   true,
 		"inactive": false,
 	}
 
@@ -248,7 +248,7 @@ func TestNewServer(t *testing.T) {
 
 	// Create mock dependencies (nil for this test)
 	// In a real test, you'd create proper mocks
-	server, err := NewServer(parentCfg, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestServerStartStop(t *testing.T) {
 	parentCfg := config.DefaultConfig()
 	parentCfg.MCPEnabled = false
 
-	server, err := NewServer(parentCfg, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

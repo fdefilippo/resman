@@ -130,7 +130,7 @@ type GetUserSummaryResult struct {
 	Samples      int     `json:"samples"`
 }
 
-type GetDatabaseInfoResult struct {
+type GetMetricsDatabaseInfoResult struct {
 	Path               string  `json:"path"`
 	SizeMB             float64 `json:"size_mb"`
 	UserMetricsCount   int64   `json:"user_metrics_count"`
@@ -957,11 +957,11 @@ Utenti limitati: %d su %d
 		Description: "Get aggregated statistics (avg, min, max) for a specific user over a time period",
 	}, s.handleGetUserSummary)
 
-	// get_database_info - Get information about the metrics database
+	// get_metrics_database_info - Get information about the metrics database
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
-		Name:        "get_database_info",
+		Name:        "get_metrics_database_info",
 		Description: "Get information about the metrics database including size, record counts, and retention",
-	}, s.handleGetDatabaseInfo)
+	}, s.handleGetMetricsDatabaseInfo)
 }
 
 // handleGetSystemStatus handles get_system_status tool requests
@@ -1394,10 +1394,10 @@ func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequ
 	}, result, nil
 }
 
-// handleGetDatabaseInfo handles get_database_info tool requests
-func (s *Server) handleGetDatabaseInfo(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, GetDatabaseInfoResult, error) {
+// handleGetMetricsDatabaseInfo handles get_metrics_database_info tool requests
+func (s *Server) handleGetMetricsDatabaseInfo(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, GetMetricsDatabaseInfoResult, error) {
 	if s.dbManager == nil {
-		return nil, GetDatabaseInfoResult{}, fmt.Errorf("metrics database is not enabled")
+		return nil, GetMetricsDatabaseInfoResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
 	// Get retention from config
@@ -1409,10 +1409,10 @@ func (s *Server) handleGetDatabaseInfo(ctx context.Context, req *mcp.CallToolReq
 	// Query database info
 	info, err := s.dbManager.GetDatabaseInfo(retention)
 	if err != nil {
-		return &mcp.CallToolResult{}, GetDatabaseInfoResult{}, err
+		return nil, GetMetricsDatabaseInfoResult{}, err
 	}
 
-	result := GetDatabaseInfoResult{
+	result := GetMetricsDatabaseInfoResult{
 		Path:               info.Path,
 		SizeMB:             info.SizeMB,
 		UserMetricsCount:   info.UserMetricsCount,

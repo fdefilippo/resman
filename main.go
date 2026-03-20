@@ -38,7 +38,7 @@ import (
     "github.com/fdefilippo/cpu-manager-go/mcp"
 )
 
-var version = "1.16.0"
+var version = "1.16.2"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -134,6 +134,12 @@ func main() {
                 "path", cfg.MetricsDBPath,
                 "retention_days", cfg.MetricsDBRetentionDays,
                 "write_interval", cfg.MetricsDBWriteInterval,
+            )
+
+            // Imposta TTL cache username
+            metricsCollector.SetUsernameCacheTTL(time.Duration(cfg.UsernameCacheTTL) * time.Minute)
+            logger.Info("Username cache configured",
+                "ttl_minutes", cfg.UsernameCacheTTL,
             )
 
             // Cleanup iniziale dei dati vecchi
@@ -297,6 +303,12 @@ func main() {
                 if err := dbManager.Close(); err != nil {
                     logger.Error("Error closing database manager", "error", err)
                 }
+            }
+
+            // Stop metrics collector (stops background goroutines)
+            if metricsCollector != nil {
+                metricsCollector.Stop()
+                logger.Info("Metrics collector stopped")
             }
 
             logger.Info("Shutdown completed")

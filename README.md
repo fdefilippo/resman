@@ -44,7 +44,7 @@ CPU Manager now supports persistent storage of metrics in a local SQLite databas
 - `get_user_history`: Historical CPU/RAM metrics for a specific user
 - `get_system_history`: Historical system-wide metrics
 - `get_user_summary`: Aggregated statistics (avg, min, max) for a user
-- `get_database_info`: Database information (size, record counts, retention)
+- `get_metrics_database_info`: Database information (size, record counts, retention)
 
 **Configuration:**
 ```bash

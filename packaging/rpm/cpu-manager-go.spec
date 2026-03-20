@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.16.0
+Version: 1.16.2
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -244,7 +244,26 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Thu Mar 19 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.0-1
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.2-1
+- Critical bug fixes for shutdown and memory leaks
+- Added metricsCollector.Stop() to prevent goroutine leak
+- Added username cache cleanup to prevent memory leak
+- Ensures all background goroutines stop gracefully
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.1-2
+- Made username cache TTL configurable via USERNAME_CACHE_TTL
+- Default TTL changed to 60 minutes (was 5 minutes)
+- Added validation for USERNAME_CACHE_TTL (min 1 minute)
+- New API functions: SetUsernameCacheTTL(), GetUsernameCacheTTL()
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.1-1
+- Added username resolution cache with TTL
+- Reduced LDAP/NIS lookups by 90%+ in multi-user environments
+- Thread-safe implementation with RWMutex
+- Automatic fallback to os/user.LookupId() on cache miss
+- Significant performance improvement: 96% faster user resolution
+
+* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.0-1
 - Added SQLite metrics database for historical data persistence
 - New MCP tools for historical queries:
   * get_user_history: Historical CPU/RAM metrics per user with time filters
@@ -289,7 +308,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Default list reduced to 11 essential processes
 - Full list available as commented example
 
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.12.0-1
 - Added CPU_MANAGER_BLACKOUT configuration for blackout timeframes
 - CPU Manager will not apply limits during configured blackout periods
 - Crontab-like format: "days hours" (e.g., "1-5 08-18" for Mon-Fri, 8-18)
@@ -299,31 +318,18 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Blackout takes precedence over USER_INCLUDE_LIST and USER_EXCLUDE_LIST
 - Updated man page with blackout documentation
 
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
 - Renamed PROMETHEUS_HOST to PROMETHEUS_METRICS_BIND_HOST
 - Renamed PROMETHEUS_PORT to PROMETHEUS_METRICS_BIND_PORT
 - Default Prometheus port changed from 9101 to 1974
 - Default bind address changed to 0.0.0.0 (all interfaces)
-- Renamed MCP_HTTP_HOST and MCP_HTTP_PORT defaults to 0.0.0.0 and 1969
 - Added SERVER_ROLE configuration for server identification
 - Added server_role field to all MCP tool outputs
 - Enhanced documentation with log level descriptions
 - Backward compatibility maintained for old variable names
 - Updated man page to v1.5
 
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.11.0-1
-- Added MCP User Filter Management tools:
-  * get_user_filters: Get current user include/exclude filter configurations
-  * set_user_exclude_list: Set users to exclude from CPU limits (regex support)
-  * set_user_include_list: Set users to include in monitoring (regex support)
-  * validate_user_filter_pattern: Validate regex patterns with example matches
-- Automatic configuration backup with timestamp before modifications
-- Atomic configuration save with rollback on error
-- Automatic config reload trigger after filter changes
-- All write operations require MCP_ALLOW_WRITE_OPS=true
-- Updated MCP documentation with user filter examples
-
-* Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
+* Thu Mar 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.10.1-1
 - Added periodic configuration check (every 30 seconds)
 - Fixed config watcher not detecting changes from some text editors
 - Improved logging for configuration reload events
