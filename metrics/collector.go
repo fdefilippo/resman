@@ -534,15 +534,63 @@ func (c *Collector) GetActiveUsers() []int {
 		users = append(users, uid)
 	}
 
-	c.logger.Info("Active users detected",
-		"users", c.formatActiveUsers(users),
-		"count", len(users),
-		"include_list", c.cfg.UserIncludeList,
-		"exclude_list", c.cfg.UserExcludeList,
-	)
+	// Log solo se la lista degli utenti è cambiata
+	if !c.areUsersEqual(users) {
+		c.logger.Info("Active users detected",
+			"users", c.formatActiveUsers(users),
+			"count", len(users),
+			"include_list", c.cfg.UserIncludeList,
+			"exclude_list", c.cfg.UserExcludeList,
+		)
+		c.setPreviousUsers(users)
+	} else {
+		c.logger.Debug("Active users unchanged",
+			"count", len(users),
+		)
+	}
 
 	c.setInCache(cacheKey, users)
 	return users
+}
+
+// previousUsers memorizza la lista precedente di utenti per il confronto
+var (
+	previousUsers      []int
+	previousUsersMutex sync.RWMutex
+)
+
+// areUsersEqual verifica se la lista degli utenti è cambiata rispetto al ciclo precedente
+func (c *Collector) areUsersEqual(current []int) bool {
+	previousUsersMutex.RLock()
+	defer previousUsersMutex.RUnlock()
+
+	if len(previousUsers) != len(current) {
+		return false
+	}
+
+	// Crea mappe per confronto veloce
+	currentMap := make(map[int]bool)
+	for _, uid := range current {
+		currentMap[uid] = true
+	}
+
+	for _, uid := range previousUsers {
+		if !currentMap[uid] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// setPreviousUsers memorizza la lista corrente per il prossimo confronto
+func (c *Collector) setPreviousUsers(users []int) {
+	previousUsersMutex.Lock()
+	defer previousUsersMutex.Unlock()
+
+	// Crea una copia per evitare race condition
+	previousUsers = make([]int, len(users))
+	copy(previousUsers, users)
 }
 
 // formatActiveUsers formatta una lista di UID come lista di "username(uid)"
