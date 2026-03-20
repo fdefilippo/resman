@@ -335,6 +335,7 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 
 	c.logger.Info("User CPU usage calculated",
 		"uid", uid,
+		"username", c.getUsername(uid),
 		"process_count", processCount,
 		"total_usage", totalUsage,
 	)
@@ -536,6 +537,7 @@ func (c *Collector) GetActiveUsers() []int {
 
 	c.logger.Info("Active users detected",
 		"uids", users,
+		"usernames", c.getActiveUsernames(users),
 		"count", len(users),
 		"include_list", c.cfg.UserIncludeList,
 		"exclude_list", c.cfg.UserExcludeList,
@@ -543,6 +545,15 @@ func (c *Collector) GetActiveUsers() []int {
 
 	c.setInCache(cacheKey, users)
 	return users
+}
+
+// getActiveUsernames restituisce una lista di username per una lista di UID
+func (c *Collector) getActiveUsernames(uids []int) []string {
+	usernames := make([]string, len(uids))
+	for i, uid := range uids {
+		usernames[i] = c.getUsername(uid)
+	}
+	return usernames
 }
 
 // getUsername ritorna la username dato un UID

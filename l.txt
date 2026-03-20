@@ -1,0 +1,3 @@
+[2026-03-20 11:14:42] [INFO] Active users detected uids=[39069 1001208 20997 6291 12236 7858 70101 9622 1004431 12194 9091 1003870 1003466 1003438 23831 1004058] count=16 include_list=[^dbs.*] exclude_list=[spa251]
+[2026-03-20 11:14:42] [INFO] User CPU usage calculated uid=39069 process_count=2 total_usage=0.001892963067485388
+

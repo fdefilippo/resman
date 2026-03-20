@@ -516,6 +516,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
 	for _, uid := range metrics.ActiveUsers {
+		username := m.getUsername(uid)
 		// Verifica se l'utente è già limitato
 		m.mu.RLock()
 		alreadyLimited := m.activeUsers[uid]
@@ -527,6 +528,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			if err != nil {
 				m.logger.Error("Failed to create user sub-cgroup",
 					"uid", uid,
+					"username", username,
 					"error", err,
 				)
 				if firstError == nil {
@@ -623,10 +625,12 @@ func (m *Manager) deactivateLimits() error {
 
 	// Per ogni utente, rimuovi i limiti
 	for _, uid := range usersToCleanup {
+		username := m.getUsername(uid)
 		// Ripristina il limite normale
 		if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for user",
 				"uid", uid,
+				"username", username,
 				"error", err,
 			)
 			if firstError == nil {
