@@ -333,7 +333,7 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 		}
 	}
 
-	c.logger.Info("User CPU usage calculated",
+	c.logger.Debug("User CPU usage calculated",
 		"user", fmt.Sprintf("%s(%d)", c.getUsername(uid), uid),
 		"process_count", processCount,
 		"total_usage", totalUsage,
