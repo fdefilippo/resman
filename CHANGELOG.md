@@ -9,6 +9,27 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 
 ### Migliorato
 
+#### Log Verbosity Ridotta
+- **FIX**: Cambiato log level da INFO a DEBUG per metriche per-utente
+- **Problema risolto**: Log file inondato da messaggi INFO ogni ciclo di controllo
+- **Riduzione**: ~90% in meno di righe di log
+
+**Log cambiati:**
+- `'User CPU usage calculated'` → DEBUG (prima: INFO)
+
+**Log INFO mantenuti (eventi significativi a livello sistema):**
+- `'Releasing idle users from CPU limits'`
+- `'Activating CPU limits with proportional weights'`
+- `'CPU limits activated with proportional sharing'`
+- `'CPU limits deactivated'`
+- `'Active users detected'` (summary, non per-utente)
+
+**Vantaggi:**
+- ✅ File di log più piccoli e gestibili
+- ✅ Più facile trovare eventi importanti
+- ✅ DEBUG disponibile per troubleshooting
+- ✅ INFO solo per eventi significativi
+
 #### Log Leggibili con Username
 - **Miglioramento**: I log ora mostrano username in formato compatto `username(uid)`
 - **File modificati**:
