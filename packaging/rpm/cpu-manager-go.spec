@@ -245,10 +245,10 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 
 %changelog
 * Fri Mar 20 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.3-1
-- Added username to log messages for better readability
-- Logs now show both UID and username (e.g., uid=1000 username=francesco)
-- New getActiveUsernames() helper function
-- Uses existing username cache (no performance impact)
+- Changed log format to compact username(uid)
+- Logs now show: user=dbuser1(39069) instead of uid=39069 username=dbuser1
+- New formatActiveUsers() helper function
+- More compact and easier to grep logs
 
 * Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.2-1
 - Critical bug fixes for shutdown and memory leaks

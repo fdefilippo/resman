@@ -10,27 +10,27 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 ### Migliorato
 
 #### Log Leggibili con Username
-- **Miglioramento**: I log ora mostrano username oltre all'UID
+- **Miglioramento**: I log ora mostrano username in formato compatto `username(uid)`
 - **File modificati**:
   - `metrics/collector.go`: Log 'User CPU usage calculated' e 'Active users detected'
   - `state/manager.go`: Log di errore per cgroup e CPU limits
-- **Nuova funzione**: `getActiveUsernames()` per convertire liste di UID in username
+- **Nuova funzione**: `formatActiveUsers()` per formattare liste come `[username(uid), ...]`
 
 **Vantaggi:**
-- ✅ Log più leggibili (es: 'francesco' invece di '1000')
-- ✅ Troubleshooting semplificato
-- ✅ UID mantenuto per riferimento tecnico
-- ✅ Usa cache username esistente (nessun impatto performance)
+- ✅ Log più compatti e leggibili
+- ✅ Singolo campo invece di due (uid + username)
+- ✅ Più facile da fare grep e parsing
+- ✅ UID preservato per riferimento tecnico
 
 **Esempio output log:**
 ```
-Prima: uid=39069
-Dopo:  uid=39069 username=dbuser1
+Prima: uid=39069 username=dbuser1
+Dopo:  user=dbuser1(39069)
 ```
 
 ```
-Prima: uids=[39069,1001208,20997]
-Dopo:  uids=[39069,1001208,20997] usernames=[dbuser1,admin,webuser]
+Prima: uids=[39069,1001208,20997] usernames=[dbuser1,admin,webuser]
+Dopo:  users=[dbuser1(39069), admin(1001208), webuser(20997)]
 ```
 
 ---
