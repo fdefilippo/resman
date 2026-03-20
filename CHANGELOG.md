@@ -5,6 +5,36 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.3] - 2026-03-20
+
+### Migliorato
+
+#### Log Leggibili con Username
+- **Miglioramento**: I log ora mostrano username oltre all'UID
+- **File modificati**:
+  - `metrics/collector.go`: Log 'User CPU usage calculated' e 'Active users detected'
+  - `state/manager.go`: Log di errore per cgroup e CPU limits
+- **Nuova funzione**: `getActiveUsernames()` per convertire liste di UID in username
+
+**Vantaggi:**
+- ✅ Log più leggibili (es: 'francesco' invece di '1000')
+- ✅ Troubleshooting semplificato
+- ✅ UID mantenuto per riferimento tecnico
+- ✅ Usa cache username esistente (nessun impatto performance)
+
+**Esempio output log:**
+```
+Prima: uid=39069
+Dopo:  uid=39069 username=dbuser1
+```
+
+```
+Prima: uids=[39069,1001208,20997]
+Dopo:  uids=[39069,1001208,20997] usernames=[dbuser1,admin,webuser]
+```
+
+---
+
 ## [1.16.2] - 2026-03-19
 
 ### Corretto

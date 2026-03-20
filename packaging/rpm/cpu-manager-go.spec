@@ -244,6 +244,12 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Mar 20 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.3-1
+- Added username to log messages for better readability
+- Logs now show both UID and username (e.g., uid=1000 username=francesco)
+- New getActiveUsernames() helper function
+- Uses existing username cache (no performance impact)
+
 * Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.2-1
 - Critical bug fixes for shutdown and memory leaks
 - Added metricsCollector.Stop() to prevent goroutine leak
