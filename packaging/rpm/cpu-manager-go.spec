@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.16.2
+Version: 1.16.3
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -245,6 +245,9 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 
 %changelog
 * Fri Mar 20 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.3-1
+- Fixed cpu_manager_limits_activated_total counter (was stuck at 0)
+- Fixed cpu_manager_limits_deactivated_total counter
+- Verified cpu_manager_system_load_average is working correctly
 - Log "Active users detected" only when user list changes (not every cycle)
 - Reduced log verbosity: per-user CPU metrics now DEBUG level (was INFO)
 - Log file size reduced by ~90-96%

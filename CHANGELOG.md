@@ -7,6 +7,33 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 
 ## [1.16.3] - 2026-03-20
 
+### Corretto
+
+#### Metriche Prometheus
+- **FIX**: `cpu_manager_limits_activated_total` non veniva incrementata (rimaneva a 0)
+- **FIX**: `cpu_manager_limits_deactivated_total` non veniva incrementata
+- **VERIFICATO**: `cpu_manager_system_load_average` già funzionante correttamente
+
+**Modifiche:**
+- Chiamata a `IncrementLimitsActivated()` in `activateLimits()`
+- Chiamata a `IncrementLimitsDeactivated()` in `deactivateLimits()`
+- Aggiunti metodi all'interfaccia `PrometheusExporter`
+
+**Esempio output:**
+```prometheus
+# Prima attivazione:
+cpu_manager_limits_activated_total 0
+cpu_manager_limits_active 0
+
+# Dopo attivazione:
+cpu_manager_limits_activated_total 1
+cpu_manager_limits_active 1
+
+# Dopo disattivazione:
+cpu_manager_limits_deactivated_total 1
+cpu_manager_limits_active 0
+```
+
 ### Migliorato
 
 #### Log Verbosity Ridotta - Active Users
