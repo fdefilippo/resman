@@ -1,4 +1,4 @@
-.TH CPU\-MANAGER\-GO 8 "March 2026" "v1.16.2" "System Administration"
+.TH CPU\-MANAGER\-GO 8 "March 2026" "v1.16.3" "System Administration"
 .SH NAME
 cpu\-manager\-go \- Dynamic CPU manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -14,6 +14,31 @@ CPU resource distribution efficiently and proportionally.
 The daemon operates in control cycles configured via
 .B POLLING_INTERVAL
 and makes decisions based on configurable thresholds to enable or disable CPU limits.
+.SH FEATURES
+.IP \(bu 2
+Dynamic CPU limiting based on configurable thresholds
+.IP \(bu
+Automatic user detection and cgroup management
+.IP \(bu
+Blackout timeframes support (CPU_MANAGER_BLACKOUT)
+.IP \(bu
+User filtering with regex support (USER_INCLUDE_LIST, USER_EXCLUDE_LIST)
+.IP \(bu
+Process exclusion list (PROCESS_EXCLUDE_LIST)
+.IP \(bu
+Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
+.IP \(bu
+Username resolution cache for improved performance (USERNAME_CACHE_TTL)
+.IP \(bu
+SQLite metrics database for historical data (METRICS_DB_*)
+.IP \(bu
+MCP server with 13 tools for AI assistant integration
+.IP \(bu
+Prometheus metrics export with hostname and server_role labels
+.IP \(bu
+LDAP/NIS username resolution support (requires CGO)
+.IP \(bu
+Graceful shutdown with proper resource cleanup
 .SH OPTIONS
 .TP
 \fB\-\-config\fR \fIFILE\fR
@@ -175,6 +200,25 @@ MCP_TRANSPORT="stdio"        # Transport: stdio, http
 # MCP endpoint: http://HOST:PORT/mcp
 MCP_LOG_LEVEL="INFO"         # MCP log level
 MCP_ALLOW_WRITE_OPS=false    # Allow write operations via MCP
+
+# USERNAME CACHE (improves performance with LDAP/NIS)
+# Cache TTL for UID to username resolution (minutes)
+# Default: 60 minutes, Minimum: 1 minute
+# Higher values reduce LDAP/NIS lookups but may delay username changes
+USERNAME_CACHE_TTL=60
+
+# METRICS DATABASE (SQLite for historical data via MCP)
+# Enable persistent storage of metrics for historical queries
+METRICS_DB_ENABLED=false
+METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_RETENTION_DAYS=30      # How many days to keep data
+METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
+
+# MCP TOOLS FOR HISTORICAL METRICS (when METRICS_DB_ENABLED=true):
+# - get_user_history: Historical CPU/RAM for a user
+# - get_system_history: Historical system metrics
+# - get_user_summary: Aggregated statistics (avg/min/max)
+# - get_metrics_database_info: Database status and info
 .sp
 .fi
 .SH ENVIRONMENT VARIABLES

@@ -8,7 +8,7 @@
 
 # Nome del progetto
 PROJECT_NAME = cpu-manager-go
-VERSION = 1.16.2
+VERSION = 1.16.3
 RELEASE = 1
 
 # Percorsi

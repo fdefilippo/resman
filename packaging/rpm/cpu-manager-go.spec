@@ -244,6 +244,14 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Mar 20 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.3-1
+- Reduced log verbosity: per-user CPU metrics now DEBUG level (was INFO)
+- Log file size reduced by ~90%
+- INFO level reserved for significant system events only
+- Changed log format to compact username(uid)
+- New formatActiveUsers() helper function
+- More compact and easier to grep logs
+
 * Fri Mar 13 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.2-1
 - Critical bug fixes for shutdown and memory leaks
 - Added metricsCollector.Stop() to prevent goroutine leak

@@ -333,8 +333,8 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 		}
 	}
 
-	c.logger.Info("User CPU usage calculated",
-		"uid", uid,
+	c.logger.Debug("User CPU usage calculated",
+		"user", fmt.Sprintf("%s(%d)", c.getUsername(uid), uid),
 		"process_count", processCount,
 		"total_usage", totalUsage,
 	)
@@ -535,7 +535,7 @@ func (c *Collector) GetActiveUsers() []int {
 	}
 
 	c.logger.Info("Active users detected",
-		"uids", users,
+		"users", c.formatActiveUsers(users),
 		"count", len(users),
 		"include_list", c.cfg.UserIncludeList,
 		"exclude_list", c.cfg.UserExcludeList,
@@ -543,6 +543,15 @@ func (c *Collector) GetActiveUsers() []int {
 
 	c.setInCache(cacheKey, users)
 	return users
+}
+
+// formatActiveUsers formatta una lista di UID come lista di "username(uid)"
+func (c *Collector) formatActiveUsers(uids []int) []string {
+	formatted := make([]string, len(uids))
+	for i, uid := range uids {
+		formatted[i] = fmt.Sprintf("%s(%d)", c.getUsername(uid), uid)
+	}
+	return formatted
 }
 
 // getUsername ritorna la username dato un UID

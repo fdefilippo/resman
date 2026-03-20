@@ -5,6 +5,57 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.3] - 2026-03-20
+
+### Migliorato
+
+#### Log Verbosity Ridotta
+- **FIX**: Cambiato log level da INFO a DEBUG per metriche per-utente
+- **Problema risolto**: Log file inondato da messaggi INFO ogni ciclo di controllo
+- **Riduzione**: ~90% in meno di righe di log
+
+**Log cambiati:**
+- `'User CPU usage calculated'` → DEBUG (prima: INFO)
+
+**Log INFO mantenuti (eventi significativi a livello sistema):**
+- `'Releasing idle users from CPU limits'`
+- `'Activating CPU limits with proportional weights'`
+- `'CPU limits activated with proportional sharing'`
+- `'CPU limits deactivated'`
+- `'Active users detected'` (summary, non per-utente)
+
+**Vantaggi:**
+- ✅ File di log più piccoli e gestibili
+- ✅ Più facile trovare eventi importanti
+- ✅ DEBUG disponibile per troubleshooting
+- ✅ INFO solo per eventi significativi
+
+#### Log Leggibili con Username
+- **Miglioramento**: I log ora mostrano username in formato compatto `username(uid)`
+- **File modificati**:
+  - `metrics/collector.go`: Log 'User CPU usage calculated' e 'Active users detected'
+  - `state/manager.go`: Log di errore per cgroup e CPU limits
+- **Nuova funzione**: `formatActiveUsers()` per formattare liste come `[username(uid), ...]`
+
+**Vantaggi:**
+- ✅ Log più compatti e leggibili
+- ✅ Singolo campo invece di due (uid + username)
+- ✅ Più facile da fare grep e parsing
+- ✅ UID preservato per riferimento tecnico
+
+**Esempio output log:**
+```
+Prima: uid=39069 username=dbuser1
+Dopo:  user=dbuser1(39069)
+```
+
+```
+Prima: uids=[39069,1001208,20997] usernames=[dbuser1,admin,webuser]
+Dopo:  users=[dbuser1(39069), admin(1001208), webuser(20997)]
+```
+
+---
+
 ## [1.16.2] - 2026-03-19
 
 ### Corretto
