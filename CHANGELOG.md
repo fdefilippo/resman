@@ -9,7 +9,30 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 
 ### Migliorato
 
-#### Log Verbosity Ridotta
+#### Log Verbosity Ridotta - Active Users
+- **FIX**: Log "Active users detected" scritto solo quando la lista utenti cambia
+- **Problema risolto**: Lista utenti loggata ogni ciclo (30s) anche se invariata
+- **Riduzione**: ~96% in meno di log per questo evento (da 120/ora a ~5/ora)
+
+**Implementazione:**
+- Tracciamento lista utenti precedente
+- Confronto ciclo-per-ciclo per rilevare cambiamenti
+- Log INFO solo quando utenti cambiano (nuovi ingressi/uscite)
+- Log DEBUG per cicli con lista invariata
+
+**Esempio:**
+```
+[INFO] Active users detected users=[user1(1000), user2(1001)] count=2
+  # Primo rilevamento o lista cambiata
+
+[DEBUG] Active users unchanged count=2
+  # Cicli successivi, stessa lista (ogni 30s)
+
+[INFO] Active users detected users=[user1(1000), user2(1001), user3(1002)] count=3
+  # Nuovo utente rilevato
+```
+
+#### Log Verbosity Ridotta - Metriche Per-Utente
 - **FIX**: Cambiato log level da INFO a DEBUG per metriche per-utente
 - **Problema risolto**: Log file inondato da messaggi INFO ogni ciclo di controllo
 - **Riduzione**: ~90% in meno di righe di log
