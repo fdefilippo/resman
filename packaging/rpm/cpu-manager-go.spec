@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    cpu-manager-go
-Version: 1.16.2
+Version: 1.16.4
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
@@ -244,6 +244,18 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Mar 21 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.4-1
+- Added RAM limits support (memory.max cgroups v2)
+- New configuration parameters:
+  * RAM_LIMIT_ENABLED, RAM_THRESHOLD, RAM_RELEASE_THRESHOLD
+  * RAM_QUOTA_LIMITED, RAM_QUOTA_PER_USER
+  * RAM_USER_INCLUDE_LIST, RAM_USER_EXCLUDE_LIST
+  * DISABLE_SWAP
+- New Prometheus metrics:
+  * cpu_manager_ram_total_usage_percent
+  * cpu_manager_user_ram_usage_bytes
+- RAM and CPU limits can be controlled independently
+
 * Fri Mar 20 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.3-1
 - Fixed cpu_manager_limits_activated_total counter (was stuck at 0)
 - Fixed cpu_manager_limits_deactivated_total counter
