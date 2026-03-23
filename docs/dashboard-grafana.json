@@ -21,7 +21,7 @@
       }
     ]
   },
-  "description": "CPU Manager Go Dashboard - Monitor CPU usage, memory, and limits per user. Note: USER_INCLUDE_LIST and USER_EXCLUDE_LIST configuration options filter which users appear in metrics.",
+  "description": "ResMan Dashboard - Monitor CPU/RAM usage, memory, and limits per user. Since v1.17.0: ALL non-system users are monitored, but only users passing filters (USER_INCLUDE_LIST/USER_EXCLUDE_LIST) have limits applied. Use is_limited label to distinguish.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -228,7 +228,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\", is_limited=~\"$is_limited\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -331,7 +331,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\", is_limited=~\"$is_limited\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -562,7 +562,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(resman_user_process_count)",
+          "expr": "sum(resman_user_process_count{is_limited=~\"$is_limited\"})",
           "legendFormat": "Total Processes",
           "range": true,
           "refId": "A"
@@ -635,7 +635,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_process_count",
+          "expr": "resman_user_process_count{is_limited=~\"$is_limited\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -866,7 +866,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_cpu_limited",
+          "expr": "resman_user_cpu_limited{is_limited=~\"$is_limited\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -1365,6 +1365,29 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
+        "definition": "label_values(resman_user_cpu_usage_percent, is_limited)",
+        "includeAll": true,
+        "label": "Is Limited",
+        "multi": true,
+        "name": "is_limited",
+        "options": [],
+        "query": {
+          "query": "label_values(resman_user_cpu_usage_percent, is_limited)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
         "definition": "label_values(resman_user_cpu_usage_percent, uid)",
         "includeAll": true,
         "label": "User UID",
@@ -1443,8 +1466,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "CPU Manager Dashboard2",
-  "uid": "cpu-manager-dashboard2",
+  "title": "ResMan Dashboard",
+  "uid": "resman-dashboard",
   "version": 13
 }
 
