@@ -489,7 +489,8 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 			if len(parts) >= 3 {
 				uid := parts[2]
 				username := exp.getUsernameFromUID(uid)
-				exp.userLimited.WithLabelValues(uid, username).Set(value)
+				isLimited := value == 1.0
+				exp.userLimited.WithLabelValues(uid, username, strconv.FormatBool(isLimited)).Set(value)
 			}
 		case strings.HasPrefix(key, "cgroup_cpu_quota_"):
 			// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/...
@@ -542,7 +543,7 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	if isLimited {
 		limitedValue = 1.0
 	}
-	exp.userLimited.WithLabelValues(uidStr, username).Set(limitedValue)
+	exp.userLimited.WithLabelValues(uidStr, username, strconv.FormatBool(isLimited)).Set(limitedValue)
 
 	// Se disponibile, aggiorna le metriche cgroup
 	if cgroupPath != "" {
@@ -575,18 +576,15 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	// Itera su tutti gli utenti tracciati
 	for userKey := range exp.activeUserMetrics {
 		// Controlla se l'utente è ancora attivo
-                parts := strings.SplitN(userKey, "_", 3)
-                if len(parts) != 3 {
-                        continue
-                }
-		if len(parts) != 2 {
+		parts := strings.SplitN(userKey, "_", 3)
+		if len(parts) != 3 {
 			continue
 		}
 
 		uidStr := parts[0]
 		username := parts[1]
-                isLimitedStr := parts[2]
-                isLimited := isLimitedStr == "true"
+		isLimitedStr := parts[2]
+		isLimited := isLimitedStr == "true"
 
 		uid, err := strconv.Atoi(uidStr)
 		if err != nil {
