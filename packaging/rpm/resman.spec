@@ -1,5 +1,5 @@
-# SPEC file per cpu-manager-go
-# Build con: rpmbuild -ba cpu-manager-go.spec
+# SPEC file per resman
+# Build con: rpmbuild -ba resman.spec
 #
 # Questo spec crea un UNICO pacchetto RPM contenente:
 # - Binario
@@ -9,13 +9,13 @@
 # - Documentazione
 # - Script generazione certificati TLS
 
-Name:    cpu-manager-go
+Name:    resman
 Version: 1.16.4
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
 License: GPLv3
-URL:     https://github.com/fdefilippo/cpu-manager-go
+URL:     https://github.com/fdefilippo/resman
 Source0: %{name}-%{version}.tar.gz
 
 ## Disable debug packages.
@@ -99,15 +99,15 @@ go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
 # Prepara man page
 mkdir -p %{_builddir}/%{name}-%{version}/man
-cp docs/cpu-manager.8 %{_builddir}/%{name}-%{version}/man/
-gzip -9 %{_builddir}/%{name}-%{version}/man/cpu-manager.8
+cp docs/resman.8 %{_builddir}/%{name}-%{version}/man/
+gzip -9 %{_builddir}/%{name}-%{version}/man/resman.8
 
 %install
 # Crea directory
 mkdir -p %{buildroot}/%{_bindir}
 mkdir -p %{buildroot}/%{_sysconfdir}
 mkdir -p %{buildroot}/%{_unitdir}
-mkdir -p %{buildroot}/%{_sharedstatedir}/cpu-manager
+mkdir -p %{buildroot}/%{_sharedstatedir}/resman
 mkdir -p %{buildroot}/%{_localstatedir}/log
 mkdir -p %{buildroot}/%{_mandir}/man8
 mkdir -p %{buildroot}/%{_docdir}/%{name}
@@ -116,18 +116,18 @@ mkdir -p %{buildroot}/%{_docdir}/%{name}
 install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 
 # Installa file di configurazione
-install -m 644 config/cpu-manager.conf.example %{buildroot}/%{_sysconfdir}/cpu-manager.conf
+install -m 644 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman.conf
 
 # Installa service systemd
-install -m 644 packaging/systemd/cpu-manager.service %{buildroot}/%{_unitdir}/
+install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
 
 # Installa man page
-install -m 644 %{_builddir}/%{name}-%{version}/man/cpu-manager.8.gz %{buildroot}/%{_mandir}/man8/
+install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_mandir}/man8/
 
 # Installa documentazione aggiuntiva
 install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
-install -m 644 config/cpu-manager.conf.example %{buildroot}/%{_docdir}/%{name}/
+install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 
 # Installa documentazione TLS
 install -m 644 docs/TLS-CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -144,18 +144,18 @@ install -m 644 CHANGELOG.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 
 # Installazione file di configurazione syslog
 install -d %{buildroot}%{_sysconfdir}/rsyslog.d
-install -p -m 0644 packaging/syslog/cpu-manager-go.conf %{buildroot}%{_sysconfdir}/rsyslog.d/cpu-manager-go.conf
+install -p -m 0644 packaging/syslog/resman.conf %{buildroot}%{_sysconfdir}/rsyslog.d/resman.conf
 
 # Installazione file di configurazione logrotate
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
-install -p -m 0644 packaging/syslog/cpu-manager-go %{buildroot}%{_sysconfdir}/logrotate.d/cpu-manager-go
+install -p -m 0644 packaging/syslog/resman %{buildroot}%{_sysconfdir}/logrotate.d/resman
 
 # Crea directory per runtime files (buildroot)
-install -d -m 755 %{buildroot}/%{_sharedstatedir}/cpu-manager
-install -d -m 755 %{buildroot}/var/run/cpu-manager
+install -d -m 755 %{buildroot}/%{_sharedstatedir}/resman
+install -d -m 755 %{buildroot}/var/run/resman
 
 # Crea directory per certificati TLS (vuota, verrà popolata dall'admin)
-install -d -m 700 %{buildroot}/%{_sysconfdir}/cpu-manager/tls
+install -d -m 700 %{buildroot}/%{_sysconfdir}/resman/tls
 
 %pre
 # Pre-install script
@@ -173,16 +173,16 @@ fi
 
 %post
 # Post-install script
-%systemd_post cpu-manager.service
+%systemd_post resman.service
 
 # Crea directory per i file di runtime
-mkdir -p /var/run/cpu-manager
-chmod 755 /var/run/cpu-manager
-chown root:root /var/run/cpu-manager
+mkdir -p /var/run/resman
+chmod 755 /var/run/resman
+chown root:root /var/run/resman
 
 # Crea file di log
-touch /var/log/cpu-manager.log
-chmod 644 /var/log/cpu-manager.log
+touch /var/log/resman.log
+chmod 644 /var/log/resman.log
 
 # Aggiorna database man page
 %{_bindir}/mandb -q 2>/dev/null || true
@@ -197,46 +197,46 @@ fi
 
 echo "CPU Manager installed successfully!"
 echo ""
-echo "Configuration file: /etc/cpu-manager.conf"
-echo "Log file: /var/log/cpu-manager.log"
-echo "Runtime directory: /var/run/cpu-manager"
-echo "Service: systemctl start cpu-manager"
-echo "Documentation: man cpu-manager"
+echo "Configuration file: /etc/resman.conf"
+echo "Log file: /var/log/resman.log"
+echo "Runtime directory: /var/run/resman"
+echo "Service: systemctl start resman"
+echo "Documentation: man resman"
 echo ""
-echo "Please review /etc/cpu-manager.conf before starting the service."
+echo "Please review /etc/resman.conf before starting the service."
 
 %preun
 # Pre-uninstall script
-%systemd_preun cpu-manager.service
+%systemd_preun resman.service
 
 %postun
 # Post-uninstall script
-%systemd_postun_with_restart cpu-manager.service
+%systemd_postun_with_restart resman.service
 
 # Aggiorna database man page
 %{_bindir}/mandb -q 2>/dev/null || true
 
 # Rimuove directory runtime (solo se vuota)
-rmdir /var/run/cpu-manager 2>/dev/null || true
+rmdir /var/run/resman 2>/dev/null || true
 
 %files
 %license LICENSE
 %doc README.md
 %doc CHANGELOG.md
 %{_bindir}/%{name}
-%config(noreplace) %{_sysconfdir}/cpu-manager.conf
-%{_unitdir}/cpu-manager.service
-%{_mandir}/man8/cpu-manager.8.gz
-%dir %{_sharedstatedir}/cpu-manager
-%dir /var/run/cpu-manager
-%dir %{_sysconfdir}/cpu-manager/tls
-%config(noreplace) %{_sysconfdir}/rsyslog.d/cpu-manager-go.conf
-%config %{_sysconfdir}/logrotate.d/cpu-manager-go
+%config(noreplace) %{_sysconfdir}/resman.conf
+%{_unitdir}/resman.service
+%{_mandir}/man8/resman.8.gz
+%dir %{_sharedstatedir}/resman
+%dir /var/run/resman
+%dir %{_sysconfdir}/resman/tls
+%config(noreplace) %{_sysconfdir}/rsyslog.d/resman.conf
+%config %{_sysconfdir}/logrotate.d/resman
 %dir %{_docdir}/%{name}
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/CHANGELOG.md
-%doc %{_docdir}/%{name}/cpu-manager.conf.example
+%doc %{_docdir}/%{name}/resman.conf.example
 %doc %{_docdir}/%{name}/TLS-CONFIGURATION.md
 %doc %{_docdir}/%{name}/MULTI-INSTANCE-MONITORING.md
 %doc %{_docdir}/%{name}/prometheus-queries.md
@@ -298,7 +298,7 @@ rmdir /var/run/cpu-manager 2>/dev/null || true
 - Asynchronous non-blocking writes for minimal performance impact
 - New configuration variables:
   * METRICS_DB_ENABLED: Enable/disable database (default: false)
-  * METRICS_DB_PATH: Database file path (default: /etc/cpu-manager/metrics.db)
+  * METRICS_DB_PATH: Database file path (default: /etc/resman/metrics.db)
   * METRICS_DB_RETENTION_DAYS: Data retention period (default: 30 days)
   * METRICS_DB_WRITE_INTERVAL: Write interval in seconds (default: 30)
 - Added GetUIDFromUsername() for username resolution in MCP tools

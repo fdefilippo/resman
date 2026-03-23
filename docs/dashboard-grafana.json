@@ -118,7 +118,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
           "legendFormat": "Total CPU Usage - {{hostname}}",
           "range": true,
           "refId": "A"
@@ -129,7 +129,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_user_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_cpu_user_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
           "legendFormat": "User CPU Usage - {{hostname}}",
           "range": true,
           "refId": "B"
@@ -228,7 +228,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -331,7 +331,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -404,7 +404,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_active_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_active_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
           "legendFormat": "{{hostname}}",
           "range": true,
           "refId": "A"
@@ -489,7 +489,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
           "legendFormat": "Limits Status - {{hostname}}",
           "range": true,
           "refId": "A"
@@ -562,7 +562,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(cpu_manager_user_process_count)",
+          "expr": "sum(resman_user_process_count)",
           "legendFormat": "Total Processes",
           "range": true,
           "refId": "A"
@@ -635,7 +635,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_process_count",
+          "expr": "resman_user_process_count",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -708,7 +708,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_limited_users_count",
+          "expr": "resman_limited_users_count",
           "legendFormat": "Limited Users",
           "range": true,
           "refId": "A"
@@ -781,7 +781,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_memory_usage_megabytes * 1024 * 1024",
+          "expr": "resman_memory_usage_megabytes * 1024 * 1024",
           "legendFormat": "Memory Used",
           "range": true,
           "refId": "A"
@@ -866,7 +866,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_user_cpu_limited",
+          "expr": "resman_user_cpu_limited",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -965,7 +965,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "increase(cpu_manager_limits_activated_total[1h])",
+          "expr": "increase(resman_limits_activated_total[1h])",
           "legendFormat": "Limits Activated (per hour)",
           "range": true,
           "refId": "A"
@@ -976,7 +976,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "increase(cpu_manager_limits_deactivated_total[1h])",
+          "expr": "increase(resman_limits_deactivated_total[1h])",
           "legendFormat": "Limits Deactivated (per hour)",
           "range": true,
           "refId": "B"
@@ -1044,7 +1044,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "cpu_manager_cpu_total_usage_percent",
+          "expr": "resman_cpu_total_usage_percent",
           "hide": false,
           "legendFormat": "CPU Usage",
           "range": true,
@@ -1149,7 +1149,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "rate(cpu_manager_control_cycle_duration_seconds_sum[5m]) / rate(cpu_manager_control_cycle_duration_seconds_count[5m])",
+          "expr": "rate(resman_control_cycle_duration_seconds_sum[5m]) / rate(resman_control_cycle_duration_seconds_count[5m])",
           "legendFormat": "{{hostname}}",
           "range": true,
           "refId": "A"
@@ -1252,7 +1252,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (component) (rate(cpu_manager_errors_total[5m]))",
+          "expr": "sum by (component) (rate(resman_errors_total[5m]))",
           "legendFormat": "{{component}} Errors",
           "range": true,
           "refId": "A"
@@ -1296,14 +1296,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+        "definition": "label_values(resman_cpu_total_usage_percent, cluster)",
         "includeAll": true,
         "label": "Cluster",
         "multi": true,
         "name": "cluster",
         "options": [],
         "query": {
-          "query": "label_values(cpu_manager_cpu_total_usage_percent, cluster)",
+          "query": "label_values(resman_cpu_total_usage_percent, cluster)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
@@ -1319,14 +1319,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
         "includeAll": true,
         "label": "Server Role",
         "multi": true,
         "name": "server_role",
         "options": [],
         "query": {
-          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
@@ -1342,14 +1342,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
         "includeAll": true,
         "label": "Hostname",
         "multi": true,
         "name": "hostname",
         "options": [],
         "query": {
-          "query": "label_values(cpu_manager_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
@@ -1365,14 +1365,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(cpu_manager_user_cpu_usage_percent, uid)",
+        "definition": "label_values(resman_user_cpu_usage_percent, uid)",
         "includeAll": true,
         "label": "User UID",
         "multi": true,
         "name": "uid",
         "options": [],
         "query": {
-          "query": "label_values(cpu_manager_user_cpu_usage_percent, uid)",
+          "query": "label_values(resman_user_cpu_usage_percent, uid)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
@@ -1388,14 +1388,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(cpu_manager_user_memory_usage_bytes, username)",
+        "definition": "label_values(resman_user_memory_usage_bytes, username)",
         "includeAll": true,
         "label": "Username",
         "multi": true,
         "name": "username",
         "options": [],
         "query": {
-          "query": "label_values(cpu_manager_user_memory_usage_bytes, username)",
+          "query": "label_values(resman_user_memory_usage_bytes, username)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

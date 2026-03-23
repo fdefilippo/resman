@@ -36,7 +36,7 @@ global:
 
 ### 2. CPU Manager Configuration
 
-Configura `SERVER_ROLE` in `/etc/cpu-manager.conf`:
+Configura `SERVER_ROLE` in `/etc/resman.conf`:
 
 ```bash
 # Ruoli predefiniti suggeriti:
@@ -149,7 +149,7 @@ Esempio di regole di alerting:
 
 ```yaml
 groups:
-  - name: cpu-manager-multi-cluster
+  - name: resman-multi-cluster
     rules:
       - alert: HighCPUUsageAllClusters
         expr: cpu_manager_cpu_total_usage_percent > 90
@@ -190,11 +190,11 @@ global:
 
 **Soluzione:**
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 SERVER_ROLE=database
 
 # Riavvia CPU Manager
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 ```
 
 ### Problema: hostname mostra "unknown"
@@ -258,7 +258,7 @@ global:
     region: 'eu-west-1'
 
 scrape_configs:
-  - job_name: 'cpu-manager'
+  - job_name: 'resman'
     static_configs:
       - targets: ['db-prod-01:1974']
         labels:
@@ -271,7 +271,7 @@ scrape_configs:
 ### CPU Manager (db-prod-01)
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 SERVER_ROLE=database
 CPU_THRESHOLD=75
 CPU_RELEASE_THRESHOLD=40
@@ -283,7 +283,7 @@ PROMETHEUS_METRICS_BIND_PORT=1974
 ### CPU Manager (web-prod-01)
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 SERVER_ROLE=web-frontend
 CPU_THRESHOLD=80
 CPU_RELEASE_THRESHOLD=45

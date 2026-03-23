@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/metrics"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/metrics"
 )
 
 // Mock implementations for testing
@@ -41,12 +41,16 @@ func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metri
 
 type mockCgroupManager struct{}
 
-func (m *mockCgroupManager) CreateUserCgroup(uid int) error             { return nil }
-func (m *mockCgroupManager) ApplyCPULimit(uid int, quota string) error  { return nil }
-func (m *mockCgroupManager) ApplyCPUWeight(uid int, weight int) error   { return nil }
-func (m *mockCgroupManager) RemoveCPULimit(uid int) error               { return nil }
-func (m *mockCgroupManager) CleanupUserCgroup(uid int) error            { return nil }
-func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return nil }
+func (m *mockCgroupManager) CreateUserCgroup(uid int) error                            { return nil }
+func (m *mockCgroupManager) ApplyCPULimit(uid int, quota string) error                 { return nil }
+func (m *mockCgroupManager) ApplyCPUWeight(uid int, weight int) error                  { return nil }
+func (m *mockCgroupManager) RemoveCPULimit(uid int) error                              { return nil }
+func (m *mockCgroupManager) ApplyRAMLimit(uid int, limit string) error                 { return nil }
+func (m *mockCgroupManager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error { return nil }
+func (m *mockCgroupManager) RemoveRAMLimit(uid int) error                              { return nil }
+func (m *mockCgroupManager) GetCgroupRAMUsage(uid int) (uint64, error)                 { return 0, nil }
+func (m *mockCgroupManager) CleanupUserCgroup(uid int) error                           { return nil }
+func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error                { return nil }
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
@@ -66,6 +70,8 @@ func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, load float64) {}
 func (m *mockPrometheusExporter) Start(ctx context.Context) error             { return nil }
 func (m *mockPrometheusExporter) Stop() error                                 { return nil }
 func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool)  {}
+func (m *mockPrometheusExporter) IncrementLimitsActivated()                   {}
+func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                 {}
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()

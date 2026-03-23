@@ -27,7 +27,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/fdefilippo/cpu-manager-go/database"
+	"github.com/fdefilippo/resman/database"
 )
 
 // getHostname returns the current hostname

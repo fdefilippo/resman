@@ -46,7 +46,7 @@ This document describes how to configure a centralized monitoring solution for C
 │                                                                  │
 │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
 │  │   Host 1     │     │   Host 2     │     │   Host N     │    │
-│  │  cpu-manager │     │  cpu-manager │     │  cpu-manager │    │
+│  │  resman │     │  resman │     │  resman │    │
 │  │  :9101       │     │  :9101       │     │  :9101       │    │
 │  └──────┬───────┘     └──────┬───────┘     └──────┬───────┘    │
 │         │                    │                    │             │
@@ -124,7 +124,7 @@ sudo ufw allow from <PROMETHEUS_IP> to any port 9101 proto tcp
 Enable Prometheus on each CPU Manager Go instance:
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 ENABLE_PROMETHEUS=true
 PROMETHEUS_HOST="0.0.0.0"    # Listen on all interfaces
 PROMETHEUS_PORT=9101
@@ -132,7 +132,7 @@ PROMETHEUS_PORT=9101
 
 Restart the service:
 ```bash
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 ```
 
 Verify metrics are exposed:
@@ -154,7 +154,7 @@ global:
   scrape_interval: 30s      # Match CPU Manager polling interval
   evaluation_interval: 30s
   external_labels:
-    monitor: 'cpu-manager-monitor'
+    monitor: 'resman-monitor'
 
 # Alertmanager configuration (optional)
 alerting:
@@ -170,7 +170,7 @@ rule_files:
 # Scrape configurations
 scrape_configs:
   # CPU Manager Go instances
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     static_configs:
       - targets:
         - 'host1.example.com:9101'
@@ -197,7 +197,7 @@ For medium deployments (50-200 hosts), use file-based service discovery:
 ```yaml
 # /etc/prometheus/prometheus.yml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     file_sd_configs:
       - files:
         - /etc/prometheus/targets/cpu_manager_*.json
@@ -241,10 +241,10 @@ For dynamic environments:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     dns_sd_configs:
       - names:
-        - '_cpu-manager._tcp.example.com'
+        - '_resman._tcp.example.com'
         type: 'SRV'
         port: 9101
         refresh_interval: 30s
@@ -256,17 +256,17 @@ For Kubernetes deployments:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     kubernetes_sd_configs:
       - role: pod
         selectors:
           - role: pod
-            label: app=cpu-manager-go
+            label: app=resman-go
     
     relabel_configs:
       - source_labels: [__meta_kubernetes_pod_label_app]
         action: keep
-        regex: cpu-manager-go
+        regex: resman-go
       - source_labels: [__meta_kubernetes_namespace]
         target_label: namespace
       - source_labels: [__meta_kubernetes_pod_name]
@@ -282,7 +282,7 @@ CPU Manager Go supports optional authentication for exposing metrics. You can co
 Enable authentication in the configuration file:
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 
 # Enable Prometheus metrics
 ENABLE_PROMETHEUS=true
@@ -294,12 +294,12 @@ PROMETHEUS_AUTH_TYPE="basic"
 
 # For Basic Authentication
 PROMETHEUS_AUTH_USERNAME="prometheus"
-PROMETHEUS_AUTH_PASSWORD_FILE="/etc/cpu-manager/prometheus_password"
+PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"
 
 # For JWT Authentication
 PROMETHEUS_AUTH_TYPE="jwt"
-PROMETHEUS_JWT_SECRET_FILE="/etc/cpu-manager/jwt_secret"
-PROMETHEUS_JWT_ISSUER="cpu-manager"
+PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
+PROMETHEUS_JWT_ISSUER="resman"
 PROMETHEUS_JWT_AUDIENCE="prometheus"
 PROMETHEUS_JWT_EXPIRY=3600
 ```
@@ -309,28 +309,28 @@ PROMETHEUS_JWT_EXPIRY=3600
 **Server-Side Configuration (CPU Manager Go):**
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_AUTH_TYPE="basic"
 PROMETHEUS_AUTH_USERNAME="prometheus"
-PROMETHEUS_AUTH_PASSWORD_FILE="/etc/cpu-manager/prometheus_password"
+PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"
 ```
 
 Create the password file:
 ```bash
 # Generate secure password
-openssl rand -base64 32 | sudo tee /etc/cpu-manager/prometheus_password
-sudo chmod 600 /etc/cpu-manager/prometheus_password
-sudo chown root:root /etc/cpu-manager/prometheus_password
+openssl rand -base64 32 | sudo tee /etc/resman/prometheus_password
+sudo chmod 600 /etc/resman/prometheus_password
+sudo chown root:root /etc/resman/prometheus_password
 
 # Restart CPU Manager
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 ```
 
 **Prometheus Configuration:**
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go-basic'
+  - job_name: 'resman-go-basic'
     scheme: https  # Recommended with basic auth
     
     # Basic authentication
@@ -363,10 +363,10 @@ scrape_configs:
 **Server-Side Configuration (CPU Manager Go):**
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_AUTH_TYPE="jwt"
-PROMETHEUS_JWT_SECRET_FILE="/etc/cpu-manager/jwt_secret"
-PROMETHEUS_JWT_ISSUER="cpu-manager"
+PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
+PROMETHEUS_JWT_ISSUER="resman"
 PROMETHEUS_JWT_AUDIENCE="prometheus"
 PROMETHEUS_JWT_EXPIRY=3600  # Token validity in seconds (1 hour)
 ```
@@ -374,12 +374,12 @@ PROMETHEUS_JWT_EXPIRY=3600  # Token validity in seconds (1 hour)
 Generate JWT secret:
 ```bash
 # Generate secure JWT secret (minimum 32 bytes)
-openssl rand -base64 64 | sudo tee /etc/cpu-manager/jwt_secret
-sudo chmod 600 /etc/cpu-manager/jwt_secret
-sudo chown root:root /etc/cpu-manager/jwt_secret
+openssl rand -base64 64 | sudo tee /etc/resman/jwt_secret
+sudo chmod 600 /etc/resman/jwt_secret
+sudo chown root:root /etc/resman/jwt_secret
 
 # Restart CPU Manager
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 ```
 
 **Generate JWT Token for Prometheus:**
@@ -388,10 +388,10 @@ Create a script to generate tokens:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/generate-cpu-manager-jwt.sh
+# /usr/local/bin/generate-resman-jwt.sh
 
-SECRET_FILE="/etc/cpu-manager/jwt_secret"
-ISSUER="cpu-manager"
+SECRET_FILE="/etc/resman/jwt_secret"
+ISSUER="resman"
 AUDIENCE="prometheus"
 EXPIRY=3600
 
@@ -424,14 +424,14 @@ EOF
 
 Make it executable:
 ```bash
-chmod +x /usr/local/bin/generate-cpu-manager-jwt.sh
+chmod +x /usr/local/bin/generate-resman-jwt.sh
 ```
 
 **Prometheus Configuration with JWT:**
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go-jwt'
+  - job_name: 'resman-go-jwt'
     scheme: https  # Required with JWT
     
     # Bearer token authentication
@@ -458,7 +458,7 @@ Create a script to automatically rotate JWT tokens:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/rotate-cpu-manager-jwt.sh
+# /usr/local/bin/rotate-resman-jwt.sh
 
 TOKEN_FILE="/etc/prometheus/credentials/cpu_manager_jwt_token"
 TOKEN_DIR=$(dirname $TOKEN_FILE)
@@ -468,7 +468,7 @@ mkdir -p $TOKEN_DIR
 chmod 700 $TOKEN_DIR
 
 # Generate new token
-NEW_TOKEN=$(/usr/local/bin/generate-cpu-manager-jwt.sh)
+NEW_TOKEN=$(/usr/local/bin/generate-resman-jwt.sh)
 
 # Write token with secure permissions
 echo "$NEW_TOKEN" > $TOKEN_FILE
@@ -484,9 +484,9 @@ echo "JWT token rotated successfully at $(date)"
 **Automate Token Rotation with Cron:**
 
 ```bash
-# /etc/cron.d/cpu-manager-jwt-rotation
+# /etc/cron.d/resman-jwt-rotation
 # Rotate JWT token every 30 minutes (token expires in 1 hour)
-*/30 * * * * prometheus /usr/local/bin/rotate-cpu-manager-jwt.sh >> /var/log/cpu-manager-jwt-rotation.log 2>&1
+*/30 * * * * prometheus /usr/local/bin/rotate-resman-jwt.sh >> /var/log/resman-jwt-rotation.log 2>&1
 ```
 
 **Security Considerations:**
@@ -505,12 +505,12 @@ echo "JWT token rotated successfully at $(date)"
 For maximum flexibility, you can support both authentication methods:
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_AUTH_TYPE="both"
 PROMETHEUS_AUTH_USERNAME="prometheus"
-PROMETHEUS_AUTH_PASSWORD_FILE="/etc/cpu-manager/prometheus_password"
-PROMETHEUS_JWT_SECRET_FILE="/etc/cpu-manager/jwt_secret"
-PROMETHEUS_JWT_ISSUER="cpu-manager"
+PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"
+PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
+PROMETHEUS_JWT_ISSUER="resman"
 PROMETHEUS_JWT_AUDIENCE="prometheus"
 ```
 
@@ -541,7 +541,7 @@ For internal networks where authentication is handled at the network level:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go-tls-only'
+  - job_name: 'resman-go-tls-only'
     scheme: https
     
     # TLS only (client certificate for mutual TLS)
@@ -565,7 +565,7 @@ For secure deployments with basic authentication:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     scheme: https
     tls_config:
       ca_file: /etc/prometheus/certs/ca.crt
@@ -604,7 +604,7 @@ scrape_configs:
 #### Option 2: Provisioning (Recommended)
 
 ```yaml
-# /etc/grafana/provisioning/datasources/cpu-manager.yml
+# /etc/grafana/provisioning/datasources/resman.yml
 apiVersion: 1
 
 datasources:
@@ -755,9 +755,9 @@ Management Network: 10.0.0.0/24
 └── Alertmanager:   10.0.0.12
 
 Production Network: 192.168.1.0/24
-├── Host 1:         192.168.1.10 (cpu-manager :9101)
-├── Host 2:         192.168.1.11 (cpu-manager :9101)
-└── Host N:         192.168.1.N  (cpu-manager :9101)
+├── Host 1:         192.168.1.10 (resman :9101)
+├── Host 2:         192.168.1.11 (resman :9101)
+└── Host N:         192.168.1.N  (resman :9101)
 
 Firewall Rules:
 - Allow 10.0.0.10 → 192.168.1.0/24:9101 (Prometheus scrape)
@@ -772,17 +772,17 @@ Currently, CPU Manager Go exposes metrics over HTTP. For production environments
 **Option 1: Reverse Proxy with TLS**
 
 ```nginx
-# /etc/nginx/conf.d/cpu-manager-prometheus.conf
+# /etc/nginx/conf.d/resman-prometheus.conf
 upstream cpu_manager {
     server 127.0.0.1:9101;
 }
 
 server {
     listen 443 ssl;
-    server_name cpu-manager.example.com;
+    server_name resman.example.com;
     
-    ssl_certificate /etc/ssl/certs/cpu-manager.crt;
-    ssl_certificate_key /etc/ssl/private/cpu-manager.key;
+    ssl_certificate /etc/ssl/certs/resman.crt;
+    ssl_certificate_key /etc/ssl/private/resman.key;
     ssl_protocols TLSv1.2 TLSv1.3;
     
     # Basic authentication
@@ -800,14 +800,14 @@ server {
 Update Prometheus configuration:
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     scheme: https
     basic_auth:
       username: prometheus
       password: secure_password
     static_configs:
       - targets:
-        - 'cpu-manager.example.com:443'
+        - 'resman.example.com:443'
 ```
 
 **Option 2: SSH Tunnel**
@@ -837,11 +837,11 @@ done
 ```yaml
 # Prometheus configuration
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     consul_sd_configs:
       - server: 'consul:8500'
         services:
-          - 'cpu-manager-go'
+          - 'resman-go'
         tags:
           - 'production'
     
@@ -856,7 +856,7 @@ Register CPU Manager Go service in Consul:
 ```json
 {
   "service": {
-    "name": "cpu-manager-go",
+    "name": "resman-go",
     "port": 9101,
     "tags": ["production", "monitoring"],
     "check": {
@@ -871,14 +871,14 @@ Register CPU Manager Go service in Consul:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     ec2_sd_configs:
       - region: us-east-1
         port: 9101
         filters:
           - name: tag:Monitoring
             values:
-              - cpu-manager
+              - resman
           - name: instance-state-name
             values:
               - running
@@ -894,7 +894,7 @@ scrape_configs:
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     azure_sd_configs:
       - subscription_id: <SUBSCRIPTION_ID>
         tenant_id: <TENANT_ID>
@@ -921,7 +921,7 @@ curl -v http://<target-host>:9101/metrics
 telnet <target-host> 9101
 
 # Check CPU Manager service
-systemctl status cpu-manager
+systemctl status resman
 ```
 
 **Solutions**:
@@ -1026,7 +1026,7 @@ groups:
     rules:
       # Host down
       - alert: CPUManagerHostDown
-        expr: up{job="cpu-manager-go"} == 0
+        expr: up{job="resman-go"} == 0
         for: 5m
         labels:
           severity: critical
@@ -1071,7 +1071,7 @@ systemctl restart prometheus
 ```bash
 # Export dashboards via API
 curl -H "Authorization: Bearer <API_KEY>" \
-  http://grafana:3000/api/dashboards/uid/cpu-manager-dashboard > dashboard-backup.json
+  http://grafana:3000/api/dashboards/uid/resman-dashboard > dashboard-backup.json
 
 # Backup provisioning files
 cp -r /etc/grafana/provisioning /backup/grafana-provisioning
@@ -1125,7 +1125,7 @@ global:
   evaluation_interval: 30s
   external_labels:
     cluster: 'production'
-    monitor: 'cpu-manager'
+    monitor: 'resman'
 
 alerting:
   alertmanagers:
@@ -1140,7 +1140,7 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
   
-  - job_name: 'cpu-manager-go'
+  - job_name: 'resman-go'
     file_sd_configs:
       - files:
         - /etc/prometheus/targets/cpu_manager_*.json
@@ -1184,7 +1184,7 @@ $(printf '      "%s:9101",\n' "${HOSTS[@]}" | sed '$ s/,$//')
     ],
     "labels": {
       "environment": "production",
-      "job": "cpu-manager-go"
+      "job": "resman-go"
     }
   }
 ]
@@ -1220,9 +1220,9 @@ echo "Grafana: http://$GRAFANA_SERVER:3000"
 - [CPU Manager Go README](../README.md)
 - [Prometheus Queries](prometheus-queries.md)
 - [Alerting Rules](alerting-rules.yml)
-- [CPU Manager Man Page](cpu-manager.8)
+- [CPU Manager Man Page](resman.8)
 
 ## Support
 
 For issues and feature requests, please open an issue at:
-https://github.com/fdefilippo/cpu-manager-go/issues
+https://github.com/fdefilippo/resman-go/issues

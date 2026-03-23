@@ -64,6 +64,20 @@ type Config struct {
 	CPUQuotaNormal  string `config:"CPU_QUOTA_NORMAL"`
 	CPUQuotaLimited string `config:"CPU_QUOTA_LIMITED"`
 
+	// RAM limits
+	RAMEnabled          bool   `config:"RAM_LIMIT_ENABLED"`
+	RAMThreshold        int    `config:"RAM_THRESHOLD"`
+	RAMReleaseThreshold int    `config:"RAM_RELEASE_THRESHOLD"`
+	RAMQuotaLimited     string `config:"RAM_QUOTA_LIMITED"`
+	RAMQuotaPerUser     string `config:"RAM_QUOTA_PER_USER"`
+	DisableSwap         bool   `config:"DISABLE_SWAP"`
+
+	// RAM User Include List (regex support)
+	RAMUserIncludeList []string `config:"RAM_USER_INCLUDE_LIST"`
+
+	// RAM User Exclude List (regex support)
+	RAMUserExcludeList []string `config:"RAM_USER_EXCLUDE_LIST"`
+
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
 	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`
@@ -146,12 +160,12 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		CgroupRoot:         "/sys/fs/cgroup",
-		ScriptCgroupBase:   "cpu_manager",
-		ConfigFile:         "/etc/cpu-manager.conf",
-		LogFile:            "/var/log/cpu-manager.log",
-		CreatedCgroupsFile: "/var/run/cpu-manager-cgroups.txt",
-		MetricsCacheFile:   "/var/run/cpu-manager-metrics.cache",
-		PrometheusFile:     "/var/run/cpu-manager-metrics.prom",
+		ScriptCgroupBase:   "resman",
+		ConfigFile:         "/etc/resman.conf",
+		LogFile:            "/var/log/resman.log",
+		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
+		MetricsCacheFile:   "/var/run/resman-metrics.cache",
+		PrometheusFile:     "/var/run/resman-metrics.prom",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -164,14 +178,23 @@ func DefaultConfig() *Config {
 		CPUQuotaNormal:  "max 100000",
 		CPUQuotaLimited: "50000 100000", // 0.5 core
 
+		RAMEnabled:          false,
+		RAMThreshold:        75,
+		RAMReleaseThreshold: 40,
+		RAMQuotaLimited:     "2G",
+		RAMQuotaPerUser:     "512M",
+		DisableSwap:         false,
+		RAMUserIncludeList:  nil,
+		RAMUserExcludeList:  nil,
+
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "", // Empty = use default 0.0.0.0
 		PrometheusMetricsBindPort: 1974,
 
 		// Prometheus TLS (disabled by default)
 		PrometheusTLSEnabled:    false,
-		PrometheusTLSCertFile:   "/etc/cpu-manager/tls/server.crt",
-		PrometheusTLSKeyFile:    "/etc/cpu-manager/tls/server.key",
+		PrometheusTLSCertFile:   "/etc/resman/tls/server.crt",
+		PrometheusTLSKeyFile:    "/etc/resman/tls/server.key",
 		PrometheusTLSCAFile:     "",
 		PrometheusTLSMinVersion: "1.2", // TLS 1.2 minimum recommended
 
@@ -180,7 +203,7 @@ func DefaultConfig() *Config {
 		PrometheusAuthUsername:     "",
 		PrometheusAuthPasswordFile: "",
 		PrometheusJWTSecretFile:    "",
-		PrometheusJWTIssuer:        "cpu-manager",
+		PrometheusJWTIssuer:        "resman",
 		PrometheusJWTAudience:      "prometheus",
 		PrometheusJWTExpiry:        3600,
 
@@ -214,7 +237,7 @@ func DefaultConfig() *Config {
 
 		// Metrics Database (SQLite)
 		MetricsDBEnabled:       false,
-		MetricsDBPath:          "/etc/cpu-manager/metrics.db",
+		MetricsDBPath:          "/etc/resman/metrics.db",
 		MetricsDBRetentionDays: 30,
 		MetricsDBWriteInterval: 30, // Same as polling interval by default
 
@@ -697,6 +720,25 @@ func validateConfig(cfg *Config) error {
 		errors = append(errors, "CPU_QUOTA_LIMITED must be in format 'quota period' or 'max period'")
 	}
 
+	// Validate RAM limits configuration
+	if cfg.RAMEnabled {
+		if cfg.RAMThreshold < 1 || cfg.RAMThreshold > 100 {
+			errors = append(errors, "RAM_THRESHOLD must be between 1 and 100")
+		}
+		if cfg.RAMReleaseThreshold < 1 || cfg.RAMReleaseThreshold > 100 {
+			errors = append(errors, "RAM_RELEASE_THRESHOLD must be between 1 and 100")
+		}
+		if cfg.RAMThreshold <= cfg.RAMReleaseThreshold {
+			errors = append(errors, "RAM_THRESHOLD must be greater than RAM_RELEASE_THRESHOLD")
+		}
+		if !isValidRAMQuota(cfg.RAMQuotaLimited) {
+			errors = append(errors, "RAM_QUOTA_LIMITED must be a valid byte value (e.g., '1073741824', '512M', '1G')")
+		}
+		if !isValidRAMQuota(cfg.RAMQuotaPerUser) {
+			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")
+		}
+	}
+
 	// Validate log level
 	validLogLevels := map[string]bool{"DEBUG": true, "INFO": true, "WARN": true, "ERROR": true}
 	if !validLogLevels[cfg.LogLevel] {
@@ -731,6 +773,50 @@ func isValidCPUQuota(quota string) bool {
 	_, err1 := strconv.Atoi(parts[0])
 	_, err2 := strconv.Atoi(parts[1])
 	return err1 == nil && err2 == nil
+}
+
+// isValidRAMQuota verifica il formato del limite RAM.
+// Formati validi: bytes (es. "1073741824"), K/M/G/T (es. "512M", "1G")
+func isValidRAMQuota(quota string) bool {
+	if quota == "" {
+		return false
+	}
+	_, err := ParseRAMQuota(quota)
+	return err == nil
+}
+
+// ParseRAMQuota converte una stringa di quota RAM in bytes.
+// Formati supportati: bytes, K, M, G, T (es. "1073741824", "512M", "1G")
+func ParseRAMQuota(quota string) (uint64, error) {
+	if quota == "" {
+		return 0, fmt.Errorf("empty RAM quota")
+	}
+
+	// Check for suffix
+	suffixes := map[string]uint64{
+		"K": 1024,
+		"M": 1024 * 1024,
+		"G": 1024 * 1024 * 1024,
+		"T": 1024 * 1024 * 1024 * 1024,
+	}
+
+	for suffix, multiplier := range suffixes {
+		if strings.HasSuffix(quota, suffix) {
+			numStr := strings.TrimSuffix(quota, suffix)
+			val, err := strconv.ParseUint(numStr, 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("invalid number: %s", numStr)
+			}
+			return val * multiplier, nil
+		}
+	}
+
+	// Plain bytes
+	val, err := strconv.ParseUint(quota, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid RAM quota format: %s", quota)
+	}
+	return val, nil
 }
 
 // IsUserIncluded verifica se un username corrisponde ai pattern della include list
@@ -771,6 +857,37 @@ func (c *Config) IsUserExcluded(username string) bool {
 // Il nome è fuorviante ma mantenuto per compatibilità con il codice esistente
 func (c *Config) IsUserWhitelisted(username string) bool {
 	return !c.IsUserExcluded(username)
+}
+
+// IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
+func (c *Config) IsUserIncludedForRAM(username string) bool {
+	if c.RAMUserIncludeList == nil || len(c.RAMUserIncludeList) == 0 {
+		return true
+	}
+	for _, pattern := range c.RAMUserIncludeList {
+		if matched, _ := regexp.MatchString(pattern, username); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUserExcludedForRAM verifica se un utente è escluso dai limiti RAM (regex support)
+func (c *Config) IsUserExcludedForRAM(username string) bool {
+	if c.RAMUserExcludeList == nil || len(c.RAMUserExcludeList) == 0 {
+		return false
+	}
+	for _, pattern := range c.RAMUserExcludeList {
+		if matched, _ := regexp.MatchString(pattern, username); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUserWhitelistedForRAM verifica se un utente può essere limitato per RAM
+func (c *Config) IsUserWhitelistedForRAM(username string) bool {
+	return !c.IsUserExcludedForRAM(username)
 }
 
 // SetUserExcludeList imposta la lista di utenti da escludere e salva su file

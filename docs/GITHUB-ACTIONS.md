@@ -68,12 +68,12 @@ The project uses GitHub Actions for continuous integration and deployment with a
 
 ## Overall Coverage
 ```
-ok    github.com/fdefilippo/cpu-manager-go/config    68.5%
-ok    github.com/fdefilippo/cpu-manager-go/logging   72.3%
-ok    github.com/fdefilippo/cpu-manager-go/metrics   45.8%
-ok    github.com/fdefilippo/cpu-manager-go/reloader  85.7%
-ok    github.com/fdefilippo/cpu-manager-go/state     42.1%
-ok    github.com/fdefilippo/cpu-manager-go/cgroup    15.2%
+ok    github.com/fdefilippo/resman-go/config    68.5%
+ok    github.com/fdefilippo/resman-go/logging   72.3%
+ok    github.com/fdefilippo/resman-go/metrics   45.8%
+ok    github.com/fdefilippo/resman-go/reloader  85.7%
+ok    github.com/fdefilippo/resman-go/state     42.1%
+ok    github.com/fdefilippo/resman-go/cgroup    15.2%
 ```
 ```
 
@@ -93,9 +93,9 @@ ok    github.com/fdefilippo/cpu-manager-go/cgroup    15.2%
 - ✅ Build cache optimization
 
 **Images Published**:
-- `ghcr.io/fdefilippo/cpu-manager-go:latest`
-- `ghcr.io/fdefilippo/cpu-manager-go:<version>`
-- `ghcr.io/fdefilippo/cpu-manager-go:<sha>`
+- `ghcr.io/fdefilippo/resman-go:latest`
+- `ghcr.io/fdefilippo/resman-go:<version>`
+- `ghcr.io/fdefilippo/resman-go:<sha>`
 
 ---
 
@@ -155,8 +155,8 @@ go test ./... -race
 Add these badges to your README:
 
 ```markdown
-[![CI](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/ci.yml)
-[![Test Coverage](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/test-coverage.yml)
+[![CI](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml)
+[![Test Coverage](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml)
 ```
 
 ---

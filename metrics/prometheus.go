@@ -30,8 +30,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -238,7 +238,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 // registerMetrics registra tutte le metriche Prometheus.
 func (exp *PrometheusExporter) registerMetrics() error {
 	// Namespace per tutte le metriche
-	namespace := "cpu_manager"
+	namespace := "resman"
 
 	// Label fisse per tutte le metriche
 	staticLabels := prometheus.Labels{
@@ -755,7 +755,7 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 
 // updateCgroupMetric aggiorna una metrica cgroup con parsing delle label.
 func (exp *PrometheusExporter) updateCgroupMetric(key string, value float64, metric *prometheus.GaugeVec) {
-	// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/cpu_manager/user_1000
+	// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/resman/user_1000
 	if !strings.Contains(key, ":") {
 		return
 	}

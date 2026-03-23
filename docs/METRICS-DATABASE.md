@@ -18,7 +18,7 @@ A partire dalla versione 1.16.0, CPU Manager supporta la persistenza delle metri
 
 ### Variabili di Configurazione
 
-Aggiungi al file `/etc/cpu-manager.conf`:
+Aggiungi al file `/etc/resman.conf`:
 
 ```bash
 # ========================
@@ -28,8 +28,8 @@ Aggiungi al file `/etc/cpu-manager.conf`:
 # Abilita la persistenza delle metriche (default: false)
 METRICS_DB_ENABLED=false
 
-# Percorso del database SQLite (default: /etc/cpu-manager/metrics.db)
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+# Percorso del database SQLite (default: /etc/resman/metrics.db)
+METRICS_DB_PATH=/etc/resman/metrics.db
 
 # Giorni di retention dei dati (default: 30)
 METRICS_DB_RETENTION_DAYS=30
@@ -43,7 +43,7 @@ METRICS_DB_WRITE_INTERVAL=30
 #### Configurazione Base (Consigliata)
 ```bash
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 ```
@@ -58,7 +58,7 @@ METRICS_DB_PATH=:memory:
 #### Retention Estesa (90 giorni)
 ```bash
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=90
 METRICS_DB_WRITE_INTERVAL=30
 ```
@@ -323,7 +323,7 @@ Ottiene informazioni sul database.
 **Risposta:**
 ```json
 {
-  "path": "/etc/cpu-manager/metrics.db",
+  "path": "/etc/resman/metrics.db",
   "size_mb": 10.5,
   "user_metrics_count": 86400,
   "system_metrics_count": 2880,
@@ -405,14 +405,14 @@ VACUUM;
 1. **Retention adeguata**: Imposta `METRICS_DB_RETENTION_DAYS` in base allo spazio disponibile
 2. **Intervallo di scrittura**: Non scendere sotto i 5 secondi per evitare sovraccarico
 3. **Monitoraggio dimensione**: Controlla periodicamente `get_metrics_database_info`
-4. **Backup**: Fai backup regolari del file `/etc/cpu-manager/metrics.db`
+4. **Backup**: Fai backup regolari del file `/etc/resman/metrics.db`
 
 ### Troubleshooting
 
 #### Il database non viene creato
 - Verifica che `METRICS_DB_ENABLED=true`
-- Controlla i permessi sulla directory `/etc/cpu-manager/`
-- Verifica i log: `tail -f /var/log/cpu-manager.log | grep -i database`
+- Controlla i permessi sulla directory `/etc/resman/`
+- Verifica i log: `tail -f /var/log/resman.log | grep -i database`
 
 #### Scrittura troppo lenta
 - Aumenta `METRICS_DB_WRITE_INTERVAL`
@@ -431,7 +431,7 @@ VACUUM;
 Puoi usare il database SQLite come fonte dati per Grafana:
 
 1. Installa il plugin SQLite per Grafana
-2. Configura il datasource puntando a `/etc/cpu-manager/metrics.db`
+2. Configura il datasource puntando a `/etc/resman/metrics.db`
 3. Crea dashboard con le query SQL sopra
 
 ---

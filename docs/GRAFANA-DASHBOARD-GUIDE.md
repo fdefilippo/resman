@@ -26,7 +26,7 @@ The CPU Manager Go Grafana dashboard provides real-time visualization of CPU usa
 ### 2. Via Grafana CLI
 
 ```bash
-grafana-cli --pluginUrl https://github.com/fdefilippo/cpu-manager-go/raw/main/docs/dashboard-grafana.json dashboards install cpu-manager-go
+grafana-cli --pluginUrl https://github.com/fdefilippo/resman-go/raw/main/docs/dashboard-grafana.json dashboards install resman-go
 ```
 
 ---
@@ -190,7 +190,7 @@ Example alerting rules are available in `docs/alerting-rules.yml`.
 **Example: High CPU Usage Alert**
 ```yaml
 groups:
-  - name: cpu-manager
+  - name: resman
     rules:
       - alert: HighUserCPUUsage
         expr: cpu_manager_user_cpu_usage_percent > 80
@@ -219,7 +219,7 @@ groups:
 **Solution:**
 ```bash
 # Check current filter configuration
-grep -E "USER_(INCLUDE|EXCLUDE)_LIST" /etc/cpu-manager.conf
+grep -E "USER_(INCLUDE|EXCLUDE)_LIST" /etc/resman.conf
 
 # Check if user has processes
 ps -u username
@@ -240,14 +240,14 @@ id username
 **Solution:**
 ```bash
 # Check CPU Manager status
-systemctl status cpu-manager
+systemctl status resman
 
 # Check Prometheus exporter
 curl http://localhost:1974/metrics
 
 # Check Prometheus scrape config
 # prometheus.yml should have:
-# - job_name: 'cpu-manager'
+# - job_name: 'resman'
 #   static_configs:
 #     - targets: ['localhost:1974']
 #   scrape_interval: 15s

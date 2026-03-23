@@ -20,7 +20,7 @@ import (
     "os"
     "testing"
 
-    "github.com/fdefilippo/cpu-manager-go/config"
+    "github.com/fdefilippo/resman/config"
 )
 
 func TestNewManager(t *testing.T) {
@@ -46,7 +46,7 @@ func TestNewManager(t *testing.T) {
 func TestGetUserCgroupPath(t *testing.T) {
     cfg := config.DefaultConfig()
     cfg.CgroupRoot = "/sys/fs/cgroup"
-    cfg.ScriptCgroupBase = "cpu_manager"
+    cfg.ScriptCgroupBase = "resman"
 
     // Create manager without calling verifyCgroupSetup
     manager := &Manager{
@@ -57,9 +57,9 @@ func TestGetUserCgroupPath(t *testing.T) {
         uid      int
         expected string
     }{
-        {1000, "/sys/fs/cgroup/cpu_manager/user_1000"},
-        {0, "/sys/fs/cgroup/cpu_manager/user_0"},
-        {65534, "/sys/fs/cgroup/cpu_manager/user_65534"},
+        {1000, "/sys/fs/cgroup/resman/user_1000"},
+        {0, "/sys/fs/cgroup/resman/user_0"},
+        {65534, "/sys/fs/cgroup/resman/user_65534"},
     }
 
     for _, tt := range tests {
@@ -73,13 +73,13 @@ func TestGetUserCgroupPath(t *testing.T) {
 func TestGetBaseCgroupPath(t *testing.T) {
     cfg := config.DefaultConfig()
     cfg.CgroupRoot = "/sys/fs/cgroup"
-    cfg.ScriptCgroupBase = "cpu_manager"
+    cfg.ScriptCgroupBase = "resman"
 
     manager := &Manager{
         cfg: cfg,
     }
 
-    expected := "/sys/fs/cgroup/cpu_manager"
+    expected := "/sys/fs/cgroup/resman"
     got := manager.getBaseCgroupPath()
 
     if got != expected {
@@ -175,7 +175,7 @@ func TestEnableCPUControllers(t *testing.T) {
 func TestManagerConcurrency(t *testing.T) {
     cfg := config.DefaultConfig()
     cfg.CgroupRoot = "/sys/fs/cgroup"
-    cfg.ScriptCgroupBase = "cpu_manager"
+    cfg.ScriptCgroupBase = "resman"
 
     manager := &Manager{
         cfg:            cfg,
@@ -235,7 +235,7 @@ func TestSaveCgroupToFile(t *testing.T) {
     }
 
     // Test save
-    err = manager.saveCgroupToFile(1000, "/sys/fs/cgroup/cpu_manager/user_1000")
+    err = manager.saveCgroupToFile(1000, "/sys/fs/cgroup/resman/user_1000")
     if err != nil {
         t.Errorf("saveCgroupToFile() error: %v", err)
     }
@@ -259,7 +259,7 @@ func TestRemoveCgroupFromFile(t *testing.T) {
     defer os.Remove(tmpFile.Name())
 
     // Write test data
-    if err := os.WriteFile(tmpFile.Name(), []byte("1000:/sys/fs/cgroup/cpu_manager/user_1000\n"), 0644); err != nil {
+    if err := os.WriteFile(tmpFile.Name(), []byte("1000:/sys/fs/cgroup/resman/user_1000\n"), 0644); err != nil {
         t.Fatalf("Failed to write test data: %v", err)
     }
 
@@ -300,8 +300,8 @@ func TestGetCreatedCgroups(t *testing.T) {
     manager := &Manager{
         cfg: cfg,
         createdCgroups: map[int]string{
-            1000: "/sys/fs/cgroup/cpu_manager/user_1000",
-            1001: "/sys/fs/cgroup/cpu_manager/user_1001",
+            1000: "/sys/fs/cgroup/resman/user_1000",
+            1001: "/sys/fs/cgroup/resman/user_1001",
         },
     }
 

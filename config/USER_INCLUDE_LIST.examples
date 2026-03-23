@@ -76,6 +76,6 @@ USER_INCLUDE_LIST=
 #    - Regex invalida: ^www.[* (ERRATO - parentesi non chiusa)
 #
 # 4. Debug:
-#    - Controllare i log: tail -f /var/log/cpu-manager.log | grep "Active users"
+#    - Controllare i log: tail -f /var/log/resman.log | grep "Active users"
 #    - I log mostrano include_list e exclude_list applicate
 #    - Verificare gli utenti attivi rilevati

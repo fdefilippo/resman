@@ -5,6 +5,40 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.4] - 2026-03-21
+
+### Aggiunto
+
+#### Limitazione RAM con cgroups v2
+Nuovo sistema di limitazione memoria compatibile con il sistema CPU esistente.
+
+**Parametri di configurazione:**
+- `RAM_LIMIT_ENABLED`: Abilita/disabilita limitazione RAM
+- `RAM_THRESHOLD`: % RAM per attivazione limiti (default: 75)
+- `RAM_RELEASE_THRESHOLD`: % RAM per rilascio limiti (default: 40)
+- `RAM_QUOTA_LIMITED`: Limite RAM totale in bytes (es. "2G")
+- `RAM_QUOTA_PER_USER`: Limite RAM per utente (default: 512M)
+- `DISABLE_SWAP`: Disabilita swap nei cgroups
+- `RAM_USER_INCLUDE_LIST`: Lista inclusione RAM (regex)
+- `RAM_USER_EXCLUDE_LIST`: Lista esclusione RAM (regex)
+
+**Metriche Prometheus:**
+- `cpu_manager_ram_total_usage_percent`: RAM totale sistema %
+- `cpu_manager_user_ram_usage_bytes`: RAM per utente in bytes
+
+**Funzioni cgroup manager:**
+- `ApplyRAMLimit(uid, limit)`: Applica limite RAM
+- `RemoveRAMLimit(uid)`: Rimuovi limite RAM
+- `ApplyRAMLimitWithSwapDisabled(uid, limit)`: Limite RAM + swap disabled
+- `GetCgroupRAMUsage(uid)`: Leggi uso RAM da cgroup
+
+**Logica di decisione:**
+- Decisioni CPU e RAM valutate separatamente
+- Attivazione se either CPU o RAM supera soglia
+- Rilascio solo se both CPU e RAM sotto soglia
+
+**Nota:** Richiede cgroups v2 con controller memory abilitato.
+
 ## [1.16.3] - 2026-03-20
 
 ### Corretto
@@ -186,7 +220,7 @@ USERNAME_CACHE_TTL=60
 ```bash
 # Abilita database metriche
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 ```
@@ -380,7 +414,7 @@ PROCESS_EXCLUDE_LIST=
 **Nota Importante:**
 Per il supporto LDAP/NIS, compilare **obbligatoriamente** con:
 ```bash
-CGO_ENABLED=1 go build -o cpu-manager-go .
+CGO_ENABLED=1 go build -o resman-go .
 ```
 
 Senza CGO, solo gli utenti locali in `/etc/passwd` sono risolti.
@@ -485,7 +519,7 @@ Nuovi tool MCP per gestire dinamicamente USER_INCLUDE_LIST e USER_EXCLUDE_LIST:
 
 #### Sicurezza
 - Tutti i tool di scrittura richiedono `MCP_ALLOW_WRITE_OPS=true`
-- Backup automatico prima di ogni modifica (formato: `cpu-manager.conf.backup_YYYYMMDD_HHMMSS`)
+- Backup automatico prima di ogni modifica (formato: `resman.conf.backup_YYYYMMDD_HHMMSS`)
 - Salvataggio atomico (write temp file + rename)
 - Rollback automatico in caso di errore
 
@@ -592,7 +626,7 @@ USER_EXCLUDE_LIST=^test-.*,^dev-.*,francesco
 ### Cambiato
 
 #### Documentazione Aggiornata
-- `config/cpu-manager.conf.example`: Documentato supporto regex per USER_EXCLUDE_LIST
+- `config/resman.conf.example`: Documentato supporto regex per USER_EXCLUDE_LIST
 - Esempi aggiornati con pattern regex
 
 ### Comportamento
@@ -688,7 +722,7 @@ USER_EXCLUDE_LIST=francesco  # → francesco NON viene limitato
 ### Esempio di Utilizzo
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 
 # Escludi francesco dai limiti (non verrà mai limitato)
 USER_EXCLUDE_LIST=francesco
@@ -742,13 +776,13 @@ USER_EXCLUDE_LIST=francesco,www-data,mysql
 - Logging migliorato per debug whitelist e process exclusion
 
 #### Configurazione
-- `config/cpu-manager.conf.example`: Documentata whitelist e process exclusion
+- `config/resman.conf.example`: Documentata whitelist e process exclusion
 - `config/config.go`: Aggiunta funzione `IsProcessExcluded()`
 
 ### Esempio di Utilizzo
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 
 # Whitelist vuota = tutti gli utenti (systemd, dbus-daemon etc. sono comunque esclusi)
 USER_WHITELIST=
@@ -798,7 +832,7 @@ USER_WHITELIST=francesco,www-data
 - `config/config.go`: Implementato parsing lista username da stringa CSV
 - `config/config.go`: Aggiunto metodo `IsUserWhitelisted()` per verifica
 - `config/config.go`: **Fix parsing commenti inline** - Ora gestisce correttamente commenti dopo i valori
-- `config/cpu-manager.conf.example`: Aggiunta sezione USER_WHITELIST con esempi
+- `config/resman.conf.example`: Aggiunta sezione USER_WHITELIST con esempi
 
 #### Metrics Collector
 - `metrics/collector.go`: `GetActiveUsers()` filtra per whitelist
@@ -809,7 +843,7 @@ USER_WHITELIST=francesco,www-data
 #### Build System
 - `Makefile`: Aggiunto `CGO_ENABLED=1` esplicito
 - `Makefile`: Aggiunti `CGO_CFLAGS` e `CGO_LDFLAGS`
-- `packaging/rpm/cpu-manager-go.spec`: Documentato requisito CGO
+- `packaging/rpm/resman-go.spec`: Documentato requisito CGO
 - `README.md`: Aggiunta sezione "Build Requirements" con dettagli CGO
 
 ### Fix
@@ -839,7 +873,7 @@ USER_WHITELIST=francesco,www-data
 ### Esempio di Utilizzo
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 
 # Monitora e limita solo utenti specifici
 USER_WHITELIST=francesco,www-data,mysql
@@ -883,7 +917,7 @@ I nuovi nomi e default riflettono correttamente il comportamento:
 ### Esempio di Configurazione
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 
 # Prometheus metrics (commentato = usa default)
 ENABLE_PROMETHEUS=true
@@ -912,7 +946,7 @@ http://<server-ip>:1969/mcp
 ```yaml
 # prometheus.yml
 scrape_configs:
-  - job_name: 'cpu-manager'
+  - job_name: 'resman'
     static_configs:
       - targets: ['192.168.1.2:1974']  # IP e porta di CPU Manager
 ```
@@ -948,7 +982,7 @@ I vecchi nomi `PROMETHEUS_HOST` e `PROMETHEUS_PORT` continuano a funzionare per 
 #### Configurazione
 - `config/config.go`: Aggiunto campo `ServerRole` alla struct Config
 - `config/config.go`: Aggiunta gestione `SERVER_ROLE` in `setConfigField`
-- `config/cpu-manager.conf.example`: Aggiunta sezione SERVER_ROLE con esempi
+- `config/resman.conf.example`: Aggiunta sezione SERVER_ROLE con esempi
 
 #### MCP Tools
 - `mcp/tools.go`: Tutti i tool che restituiscono metriche ora includono `server_role`
@@ -956,13 +990,13 @@ I vecchi nomi `PROMETHEUS_HOST` e `PROMETHEUS_PORT` continuano a funzionare per 
 
 #### Documentazione
 - `docs/MCP-README.md`: Documentato campo `server_role` negli output
-- `docs/cpu-manager.8`: Aggiunta configurazione SERVER_ROLE nel manuale
+- `docs/resman.8`: Aggiunta configurazione SERVER_ROLE nel manuale
 - `docs/MCP-BLUEPRINT.md`: Aggiornato con nuova funzionalità
 
 ### Esempio di Configurazione
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 SERVER_ROLE=database
 ```
 
@@ -1010,7 +1044,7 @@ Data: 2026-03-11 19:00:00
 - Implementato middleware HTTP per logging di tutte le richieste MCP
 - Log delle richieste in arrivo con metodo, path, remote address
 - Log delle risposte con status code e durata
-- Log visibili in `/var/log/cpu-manager.log` quando `LOG_LEVEL=DEBUG` o `INFO`
+- Log visibili in `/var/log/resman.log` quando `LOG_LEVEL=DEBUG` o `INFO`
 
 #### Fix Logger
 - Risolto problema di inizializzazione logger che bloccava il livello log su INFO
@@ -1088,12 +1122,12 @@ Questa versione è **retrocompatibile**:
   - `activate_limits` - Attivazione manuale limiti CPU (opzionale)
   - `deactivate_limits` - Disattivazione manuale limiti CPU (opzionale)
 - **6 risorse MCP**:
-  - `cpu-manager://system/status` - Stato sistema in tempo reale
-  - `cpu-manager://users/active` - Utenti attivi
-  - `cpu-manager://limits/status` - Stato limiti
-  - `cpu-manager://config` - Configurazione
-  - `cpu-manager://users/{uid}/metrics` - Metriche per utente
-  - `cpu-manager://cgroups/{uid}` - Informazioni cgroup
+  - `resman://system/status` - Stato sistema in tempo reale
+  - `resman://users/active` - Utenti attivi
+  - `resman://limits/status` - Stato limiti
+  - `resman://config` - Configurazione
+  - `resman://users/{uid}/metrics` - Metriche per utente
+  - `resman://cgroups/{uid}` - Informazioni cgroup
 - **3 prompt pre-costruiti**:
   - `system-health` - Controllo rapido stato sistema
   - `user-analysis` - Analisi utilizzo risorse per utente
@@ -1103,7 +1137,7 @@ Questa versione è **retrocompatibile**:
 - Health check endpoint per monitoraggio
 
 #### Configurazione MCP
-- Nuove opzioni in `/etc/cpu-manager.conf`:
+- Nuove opzioni in `/etc/resman.conf`:
   - `MCP_ENABLED` - Abilita server MCP
   - `MCP_TRANSPORT` - Tipo di trasporto (stdio, http, sse)
   - `MCP_HTTP_HOST` - Indirizzo bind per HTTP/SSE
@@ -1139,7 +1173,7 @@ Questa versione è **retrocompatibile**:
 
 #### Configurazione
 - `config/config.go`: Aggiunti campi configurazione MCP
-- `config/cpu-manager.conf.example`: Aggiunta sezione MCP
+- `config/resman.conf.example`: Aggiunta sezione MCP
 
 #### Main
 - `main.go`: Integrazione inizializzazione server MCP
@@ -1183,14 +1217,14 @@ Nessun cambiamento nei requisiti di sistema:
 
 ```bash
 # Abilita server MCP
-echo "MCP_ENABLED=true" >> /etc/cpu-manager.conf
-echo "MCP_TRANSPORT=stdio" >> /etc/cpu-manager.conf
+echo "MCP_ENABLED=true" >> /etc/resman.conf
+echo "MCP_TRANSPORT=stdio" >> /etc/resman.conf
 
 # Riavvia CPU Manager
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 
 # Verifica avvio
-journalctl -u cpu-manager | grep "MCP server"
+journalctl -u resman | grep "MCP server"
 ```
 
 ---
@@ -1215,7 +1249,7 @@ journalctl -u cpu-manager | grep "MCP server"
 - Riorganizzato layout del dashboard per migliore visualizzazione
 
 #### Documentazione
-- Aggiornato manuale `docs/cpu-manager.8` con tutte le nuove metriche
+- Aggiornato manuale `docs/resman.8` con tutte le nuove metriche
 - Aggiunti esempi di query Prometheus per utente
 - Aggiornato `docs/dashboard-grafana.json` con nuovi pannelli
 - Creato file `CHANGELOG.md` per tracciare i cambiamenti
@@ -1309,17 +1343,17 @@ Il formato delle versioni è `MAJOR.MINOR.PATCH`:
 
 ## Link
 
-- [1.11.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.10.1...v1.11.0
-- [1.10.1]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.10.0...v1.10.1
-- [1.10.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.9.0...v1.10.0
-- [1.9.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.8.0...v1.9.0
-- [1.8.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.7.0...v1.8.0
-- [1.7.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.6.0...v1.7.0
-- [1.6.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.5.0...v1.6.0
-- [1.5.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.4.0...v1.5.0
-- [1.4.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.3.0...v1.4.0
-- [1.3.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.2.0...v1.3.0
-- [1.2.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v1.0.0...v1.2.0
-- [1.0.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v0.9.0...v1.0.0
-- [0.9.0]: https://github.com/fdefilippo/cpu-manager-go/compare/v0.1.0...v0.9.0
-- [0.1.0]: https://github.com/fdefilippo/cpu-manager-go/releases/tag/v0.1.0
+- [1.11.0]: https://github.com/fdefilippo/resman-go/compare/v1.10.1...v1.11.0
+- [1.10.1]: https://github.com/fdefilippo/resman-go/compare/v1.10.0...v1.10.1
+- [1.10.0]: https://github.com/fdefilippo/resman-go/compare/v1.9.0...v1.10.0
+- [1.9.0]: https://github.com/fdefilippo/resman-go/compare/v1.8.0...v1.9.0
+- [1.8.0]: https://github.com/fdefilippo/resman-go/compare/v1.7.0...v1.8.0
+- [1.7.0]: https://github.com/fdefilippo/resman-go/compare/v1.6.0...v1.7.0
+- [1.6.0]: https://github.com/fdefilippo/resman-go/compare/v1.5.0...v1.6.0
+- [1.5.0]: https://github.com/fdefilippo/resman-go/compare/v1.4.0...v1.5.0
+- [1.4.0]: https://github.com/fdefilippo/resman-go/compare/v1.3.0...v1.4.0
+- [1.3.0]: https://github.com/fdefilippo/resman-go/compare/v1.2.0...v1.3.0
+- [1.2.0]: https://github.com/fdefilippo/resman-go/compare/v1.0.0...v1.2.0
+- [1.0.0]: https://github.com/fdefilippo/resman-go/compare/v0.9.0...v1.0.0
+- [0.9.0]: https://github.com/fdefilippo/resman-go/compare/v0.1.0...v0.9.0
+- [0.1.0]: https://github.com/fdefilippo/resman-go/releases/tag/v0.1.0

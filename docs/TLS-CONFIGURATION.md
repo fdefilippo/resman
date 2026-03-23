@@ -40,8 +40,8 @@ CPU Manager Go supports TLS/HTTPS encryption for securing metrics endpoints in p
 Use the provided script to generate all certificates:
 
 ```bash
-cd /path/to/cpu-manager-go
-sudo ./docs/generate-tls-certs.sh /etc/cpu-manager/tls
+cd /path/to/resman-go
+sudo ./docs/generate-tls-certs.sh /etc/resman/tls
 ```
 
 This creates:
@@ -54,8 +54,8 @@ This creates:
 #### 1. Generate CA
 
 ```bash
-mkdir -p /etc/cpu-manager/tls
-cd /etc/cpu-manager/tls
+mkdir -p /etc/resman/tls
+cd /etc/resman/tls
 
 # Generate CA private key
 openssl genrsa -out ca.key 4096
@@ -77,7 +77,7 @@ openssl genrsa -out server.key 2048
 openssl req -new -sha256 \
     -key server.key \
     -out server.csr \
-    -subj "/C=IT/ST=Italy/L=Rome/O=CPU Manager/OU=Monitoring/CN=cpu-manager.local"
+    -subj "/C=IT/ST=Italy/L=Rome/O=CPU Manager/OU=Monitoring/CN=resman.local"
 
 # Create SAN extension file
 cat > server_ext.cnf << EOF
@@ -87,7 +87,7 @@ keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = cpu-manager.local
+DNS.1 = resman.local
 DNS.2 = localhost
 IP.1 = 127.0.0.1
 EOF
@@ -143,7 +143,7 @@ rm -f client.csr client_ext.cnf
 ```bash
 chmod 644 ca.crt server.crt client.crt
 chmod 600 ca.key server.key client.key
-chown -R root:root /etc/cpu-manager/tls
+chown -R root:root /etc/resman/tls
 ```
 
 ---
@@ -152,16 +152,16 @@ chown -R root:root /etc/cpu-manager/tls
 
 ### Enable TLS in CPU Manager
 
-Edit `/etc/cpu-manager.conf`:
+Edit `/etc/resman.conf`:
 
 ```bash
 # Enable TLS/HTTPS
 PROMETHEUS_TLS_ENABLED=true
 
 # Certificate files
-PROMETHEUS_TLS_CERT_FILE=/etc/cpu-manager/tls/server.crt
-PROMETHEUS_TLS_KEY_FILE=/etc/cpu-manager/tls/server.key
-PROMETHEUS_TLS_CA_FILE=/etc/cpu-manager/tls/ca.crt
+PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
+PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
+PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 
 # Minimum TLS version (recommended: 1.2 or 1.3)
 PROMETHEUS_TLS_MIN_VERSION=1.2
@@ -174,23 +174,23 @@ For maximum security, combine TLS with authentication:
 ```bash
 # TLS Configuration
 PROMETHEUS_TLS_ENABLED=true
-PROMETHEUS_TLS_CERT_FILE=/etc/cpu-manager/tls/server.crt
-PROMETHEUS_TLS_KEY_FILE=/etc/cpu-manager/tls/server.key
+PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
+PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
 
 # Basic Authentication
 PROMETHEUS_AUTH_TYPE=basic
 PROMETHEUS_AUTH_USERNAME=prometheus
-PROMETHEUS_AUTH_PASSWORD_FILE=/etc/cpu-manager/prometheus_password
+PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
 
 # Or JWT Authentication
 # PROMETHEUS_AUTH_TYPE=jwt
-# PROMETHEUS_JWT_SECRET_FILE=/etc/cpu-manager/jwt_secret
+# PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
 ```
 
 ### Restart CPU Manager
 
 ```bash
-sudo systemctl restart cpu-manager
+sudo systemctl restart resman
 ```
 
 ---
@@ -201,17 +201,17 @@ sudo systemctl restart cpu-manager
 
 ```bash
 # With CA certificate
-curl --cacert /etc/cpu-manager/tls/ca.crt https://localhost:9101/metrics
+curl --cacert /etc/resman/tls/ca.crt https://localhost:9101/metrics
 
 # With Basic Auth
-curl --cacert /etc/cpu-manager/tls/ca.crt \
+curl --cacert /etc/resman/tls/ca.crt \
      -u prometheus:password \
      https://localhost:9101/metrics
 
 # With mTLS (client certificate)
-curl --cacert /etc/cpu-manager/tls/ca.crt \
-     --cert /etc/cpu-manager/tls/client.crt \
-     --key /etc/cpu-manager/tls/client.key \
+curl --cacert /etc/resman/tls/ca.crt \
+     --cert /etc/resman/tls/client.crt \
+     --key /etc/resman/tls/client.key \
      https://localhost:9101/metrics
 ```
 
@@ -219,17 +219,17 @@ curl --cacert /etc/cpu-manager/tls/ca.crt \
 
 ```bash
 # Check TLS version in use
-curl -v --cacert /etc/cpu-manager/tls/ca.crt https://localhost:9101/metrics 2>&1 | grep "TLS"
+curl -v --cacert /etc/resman/tls/ca.crt https://localhost:9101/metrics 2>&1 | grep "TLS"
 ```
 
 ### Check Logs
 
 ```bash
 # View CPU Manager logs
-sudo journalctl -u cpu-manager -f
+sudo journalctl -u resman -f
 
 # Look for TLS-related messages
-sudo journalctl -u cpu-manager | grep -i tls
+sudo journalctl -u resman | grep -i tls
 ```
 
 ---
@@ -241,35 +241,35 @@ sudo journalctl -u cpu-manager | grep -i tls
 ```yaml
 # /etc/prometheus/prometheus.yml
 scrape_configs:
-  - job_name: 'cpu-manager-https'
+  - job_name: 'resman-https'
     scheme: https
     
     tls_config:
-      ca_file: /etc/prometheus/certs/cpu-manager-ca.crt
+      ca_file: /etc/prometheus/certs/resman-ca.crt
     
     basic_auth:
       username: prometheus
       password_file: /etc/prometheus/credentials/cpu_manager_password
     
     static_configs:
-      - targets: ['cpu-manager.example.com:9101']
+      - targets: ['resman.example.com:9101']
 ```
 
 ### mTLS Configuration (Mutual TLS)
 
 ```yaml
 scrape_configs:
-  - job_name: 'cpu-manager-mtls'
+  - job_name: 'resman-mtls'
     scheme: https
     
     tls_config:
-      ca_file: /etc/prometheus/certs/cpu-manager-ca.crt
-      cert_file: /etc/prometheus/certs/cpu-manager-client.crt
-      key_file: /etc/prometheus/certs/cpu-manager-client.key
+      ca_file: /etc/prometheus/certs/resman-ca.crt
+      cert_file: /etc/prometheus/certs/resman-client.crt
+      key_file: /etc/prometheus/certs/resman-client.key
       insecure_skip_verify: false
     
     static_configs:
-      - targets: ['cpu-manager.example.com:9101']
+      - targets: ['resman.example.com:9101']
 ```
 
 ### Copy Certificates to Prometheus
@@ -279,11 +279,11 @@ scrape_configs:
 sudo mkdir -p /etc/prometheus/certs
 
 # Copy CA certificate
-sudo cp /etc/cpu-manager/tls/ca.crt /etc/prometheus/certs/cpu-manager-ca.crt
+sudo cp /etc/resman/tls/ca.crt /etc/prometheus/certs/resman-ca.crt
 
 # Copy client certificate (for mTLS)
-sudo cp /etc/cpu-manager/tls/client.crt /etc/prometheus/certs/cpu-manager-client.crt
-sudo cp /etc/cpu-manager/tls/client.key /etc/prometheus/certs/cpu-manager-client.key
+sudo cp /etc/resman/tls/client.crt /etc/prometheus/certs/resman-client.crt
+sudo cp /etc/resman/tls/client.key /etc/prometheus/certs/resman-client.key
 
 # Set permissions
 sudo chmod 644 /etc/prometheus/certs/*.crt
@@ -305,7 +305,7 @@ sudo systemctl reload prometheus
 **Solution**: Ensure CA certificate is correctly specified in Prometheus config:
 ```yaml
 tls_config:
-  ca_file: /etc/prometheus/certs/cpu-manager-ca.crt
+  ca_file: /etc/prometheus/certs/resman-ca.crt
 ```
 
 ### TLS Handshake Failed
@@ -322,16 +322,16 @@ tls_config:
 **Error**: `connection refused`
 
 **Solutions**:
-1. Verify CPU Manager is running: `systemctl status cpu-manager`
-2. Check if HTTPS is enabled: `grep PROMETHEUS_TLS_ENABLED /etc/cpu-manager.conf`
+1. Verify CPU Manager is running: `systemctl status resman`
+2. Check if HTTPS is enabled: `grep PROMETHEUS_TLS_ENABLED /etc/resman.conf`
 3. Verify port is listening: `netstat -tlnp | grep 9101`
 
 ### Certificate Expired
 
 **Solution**: Regenerate certificates:
 ```bash
-sudo ./docs/generate-tls-certs.sh /etc/cpu-manager/tls
-sudo systemctl restart cpu-manager
+sudo ./docs/generate-tls-certs.sh /etc/resman/tls
+sudo systemctl restart resman
 ```
 
 ---
@@ -356,7 +356,7 @@ chmod 600 *.key
 chmod 644 *.crt *.pem
 
 # Ownership: root only
-chown -R root:root /etc/cpu-manager/tls
+chown -R root:root /etc/resman/tls
 ```
 
 ### Network Security
@@ -386,20 +386,20 @@ Create a renewal script:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/renew-cpu-manager-certs.sh
+# /usr/local/bin/renew-resman-certs.sh
 
-CERT_DIR=/etc/cpu-manager/tls
-BACKUP_DIR=/var/backup/cpu-manager-certs
+CERT_DIR=/etc/resman/tls
+BACKUP_DIR=/var/backup/resman-certs
 
 # Create backup
 mkdir -p $BACKUP_DIR
 cp -r $CERT_DIR $BACKUP_DIR/certs-$(date +%Y%m%d)
 
 # Regenerate certificates
-/path/to/cpu-manager-go/docs/generate-tls-certs.sh $CERT_DIR
+/path/to/resman-go/docs/generate-tls-certs.sh $CERT_DIR
 
 # Restart CPU Manager
-systemctl restart cpu-manager
+systemctl restart resman
 
 echo "Certificates renewed at $(date)"
 ```
@@ -407,7 +407,7 @@ echo "Certificates renewed at $(date)"
 Add to crontab (run 30 days before expiration):
 ```bash
 # Renew certificates 330 days after generation (365 - 35 days buffer)
-0 0 1 11 * /usr/local/bin/renew-cpu-manager-certs.sh
+0 0 1 11 * /usr/local/bin/renew-resman-certs.sh
 ```
 
 ---

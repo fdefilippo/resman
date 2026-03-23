@@ -21,7 +21,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
+	"github.com/fdefilippo/resman/config"
 )
 
 func TestConfigValidate(t *testing.T) {

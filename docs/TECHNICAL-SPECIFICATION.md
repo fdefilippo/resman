@@ -3,7 +3,7 @@
 **Version:** 1.8.1  
 **Last Updated:** March 2026  
 **License:** GPLv3  
-**Repository:** https://github.com/fdefilippo/cpu-manager-go
+**Repository:** https://github.com/fdefilippo/resman-go
 
 ---
 
@@ -97,7 +97,7 @@ CPU Manager Go is an enterprise-grade dynamic CPU resource management tool for L
 ### 2.2 Package Structure
 
 ```
-cpu-manager-go/
+resman-go/
 ├── main.go                 # Entry point, signal handling
 ├── config/
 │   ├── config.go          # Configuration structure and parsing
@@ -427,12 +427,12 @@ The following processes are automatically excluded from CPU limits:
 *Requires `MCP_ALLOW_WRITE_OPS=true`
 
 **Resources (6 URIs):**
-- `cpu-manager://system/status` - Real-time system status
-- `cpu-manager://users/active` - Active users list
-- `cpu-manager://limits/status` - Limits status
-- `cpu-manager://config` - Configuration
-- `cpu-manager://users/{uid}/metrics` - Per-user metrics
-- `cpu-manager://cgroups/{uid}` - Cgroup information
+- `resman://system/status` - Real-time system status
+- `resman://users/active` - Active users list
+- `resman://limits/status` - Limits status
+- `resman://config` - Configuration
+- `resman://users/{uid}/metrics` - Per-user metrics
+- `resman://cgroups/{uid}` - Cgroup information
 
 **Prompts (3 pre-built):**
 - `system-health` - Quick health check with assessment
@@ -475,7 +475,7 @@ The following processes are automatically excluded from CPU limits:
 
 **Log Rotation:**
 - Triggered when file exceeds `LogMaxSize`
-- Creates backup: `cpu-manager.log.1`
+- Creates backup: `resman.log.1`
 - Maximum one rotation per second
 
 ### 3.8 Configuration Reloader (reloader/reloader.go)
@@ -511,7 +511,7 @@ The following processes are automatically excluded from CPU limits:
 
 ### 4.1 Configuration File Format
 
-**Location:** `/etc/cpu-manager.conf`
+**Location:** `/etc/resman.conf`
 
 **Format:**
 ```ini
@@ -529,10 +529,10 @@ KEY='single quoted'
 # ========================
 CGROUP_ROOT="/sys/fs/cgroup"
 SCRIPT_CGROUP_BASE="cpu_manager"
-CONFIG_FILE="/etc/cpu-manager.conf"
-LOG_FILE="/var/log/cpu-manager.log"
-CREATED_CGROUPS_FILE="/var/run/cpu-manager/cgroups.txt"
-METRICS_CACHE_FILE="/var/run/cpu-manager/metrics.cache"
+CONFIG_FILE="/etc/resman.conf"
+LOG_FILE="/var/log/resman.log"
+CREATED_CGROUPS_FILE="/var/run/resman/cgroups.txt"
+METRICS_CACHE_FILE="/var/run/resman/metrics.cache"
 
 # ========================
 # TIMING (seconds)
@@ -614,7 +614,7 @@ SERVER_ROLE=                 # For identification in reports
 All configuration options can be overridden by environment variables:
 
 ```bash
-LOG_LEVEL=DEBUG CPU_THRESHOLD=80 cpu-manager-go --config /etc/cpu-manager.conf
+LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman-go --config /etc/resman.conf
 ```
 
 ---
@@ -1173,64 +1173,64 @@ require (
 
 **Standard Build:**
 ```bash
-cd /path/to/cpu-manager-go
+cd /path/to/resman-go
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.8.1'" -o cpu-manager-go .
+go build -v -ldflags="-s -w -X 'main.version=1.8.1'" -o resman-go .
 ```
 
 **Build RPM:**
 ```bash
 make rpm
-# Creates: ~/rpmbuild/RPMS/*/cpu-manager-go-*.rpm
+# Creates: ~/rpmbuild/RPMS/*/resman-go-*.rpm
 ```
 
 **Build Debian:**
 ```bash
 make deb
-# Creates: build/deb/cpu-manager-go_*.deb
+# Creates: build/deb/resman-go_*.deb
 ```
 
 ### 15.3 Installation
 
 **RPM:**
 ```bash
-sudo rpm -ivh cpu-manager-go-*.rpm
-sudo systemctl enable cpu-manager
+sudo rpm -ivh resman-go-*.rpm
+sudo systemctl enable resman
 ```
 
 **Debian:**
 ```bash
-sudo dpkg -i cpu-manager-go_*.deb
-sudo systemctl enable cpu-manager
+sudo dpkg -i resman-go_*.deb
+sudo systemctl enable resman
 ```
 
 **Manual:**
 ```bash
-sudo cp cpu-manager-go /usr/bin/
-sudo cp packaging/systemd/cpu-manager.service /usr/lib/systemd/system/
+sudo cp resman-go /usr/bin/
+sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable cpu-manager
+sudo systemctl enable resman
 ```
 
 ### 15.4 Configuration
 
-**Default Location:** `/etc/cpu-manager.conf`
+**Default Location:** `/etc/resman.conf`
 
 **Initial Setup:**
 ```bash
-sudo cp config/cpu-manager.conf.example /etc/cpu-manager.conf
-sudo vi /etc/cpu-manager.conf  # Edit as needed
-sudo systemctl start cpu-manager
+sudo cp config/resman.conf.example /etc/resman.conf
+sudo vi /etc/resman.conf  # Edit as needed
+sudo systemctl start resman
 ```
 
 ### 15.5 Monitoring
 
 **Check Status:**
 ```bash
-systemctl status cpu-manager
-journalctl -u cpu-manager -f
-tail -f /var/log/cpu-manager.log
+systemctl status resman
+journalctl -u resman -f
+tail -f /var/log/resman.log
 ```
 
 **Prometheus Metrics:**
@@ -1250,12 +1250,12 @@ curl http://localhost:1974/metrics
 
 | File | Purpose |
 |------|---------|
-| `/usr/bin/cpu-manager-go` | Binary |
-| `/etc/cpu-manager.conf` | Configuration |
-| `/var/log/cpu-manager.log` | Log file |
-| `/var/run/cpu-manager/cgroups.txt` | Cgroup tracking |
-| `/var/run/cpu-manager/metrics.cache` | Metrics cache |
-| `/usr/lib/systemd/system/cpu-manager.service` | Systemd unit |
+| `/usr/bin/resman-go` | Binary |
+| `/etc/resman.conf` | Configuration |
+| `/var/log/resman.log` | Log file |
+| `/var/run/resman/cgroups.txt` | Cgroup tracking |
+| `/var/run/resman/metrics.cache` | Metrics cache |
+| `/usr/lib/systemd/system/resman.service` | Systemd unit |
 
 ---
 

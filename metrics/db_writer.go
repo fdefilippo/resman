@@ -21,8 +21,8 @@ import (
     "sync"
     "time"
 
-    "github.com/fdefilippo/cpu-manager-go/database"
-    "github.com/fdefilippo/cpu-manager-go/logging"
+    "github.com/fdefilippo/resman/database"
+    "github.com/fdefilippo/resman/logging"
 )
 
 // DBWriter gestisce la scrittura delle metriche nel database

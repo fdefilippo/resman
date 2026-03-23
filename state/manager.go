@@ -27,9 +27,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
-	"github.com/fdefilippo/cpu-manager-go/metrics"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
+	"github.com/fdefilippo/resman/metrics"
 )
 
 // Manager coordina tutta la logica di gestione della CPU.
@@ -87,6 +87,10 @@ type CgroupManager interface {
 	ApplyCPULimit(uid int, quota string) error
 	ApplyCPUWeight(uid int, weight int) error
 	RemoveCPULimit(uid int) error
+	ApplyRAMLimit(uid int, limit string) error
+	ApplyRAMLimitWithSwapDisabled(uid int, limit string) error
+	RemoveRAMLimit(uid int) error
+	GetCgroupRAMUsage(uid int) (uint64, error)
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
@@ -568,6 +572,35 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 						"error", err,
 					)
 				}
+
+				// Applica limite RAM se abilitato e l'utente è soggetto a RAM limits
+				if m.shouldApplyRAMLimits(uid) {
+					quotaBytes, err := config.ParseRAMQuota(m.cfg.RAMQuotaPerUser)
+					if err != nil || quotaBytes == 0 {
+						m.logger.Debug("RAM quota per user is 0 or invalid, skipping",
+							"uid", uid,
+							"quota", m.cfg.RAMQuotaPerUser,
+						)
+					} else {
+						if m.cfg.DisableSwap {
+							if err := m.cgroupManager.ApplyRAMLimitWithSwapDisabled(uid, m.cfg.RAMQuotaPerUser); err != nil {
+								m.logger.Warn("Failed to apply RAM limit for user",
+									"uid", uid,
+									"limit", m.cfg.RAMQuotaPerUser,
+									"error", err,
+								)
+							}
+						} else {
+							if err := m.cgroupManager.ApplyRAMLimit(uid, m.cfg.RAMQuotaPerUser); err != nil {
+								m.logger.Warn("Failed to apply RAM limit for user",
+									"uid", uid,
+									"limit", m.cfg.RAMQuotaPerUser,
+									"error", err,
+								)
+							}
+						}
+					}
+				}
 			}(uid, weight)
 
 			// Segna l'utente come limitato
@@ -655,6 +688,18 @@ func (m *Manager) deactivateLimits() error {
 
 		deactivatedCount++
 		m.logger.Debug("CPU limit removed for user", "uid", uid)
+
+		// Rimuovi limite RAM se abilitato e l'utente era soggetto a RAM limits
+		if m.shouldApplyRAMLimits(uid) {
+			if err := m.cgroupManager.RemoveRAMLimit(uid); err != nil {
+				m.logger.Warn("Failed to remove RAM limit for user",
+					"user", userStr,
+					"error", err,
+				)
+			} else {
+				m.logger.Debug("RAM limit removed for user", "uid", uid)
+			}
+		}
 	}
 
 	// Rimuovi il cgroup condiviso se esiste
@@ -782,6 +827,15 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 // getUsername restituisce il nome utente dato l'UID
 func (m *Manager) getUsername(uid int) string {
 	return strconv.Itoa(uid)
+}
+
+// shouldApplyRAMLimits verifica se i limiti RAM dovrebbero essere applicati a un utente.
+func (m *Manager) shouldApplyRAMLimits(uid int) bool {
+	if !m.cfg.RAMEnabled {
+		return false
+	}
+	username := m.getUsername(uid)
+	return m.cfg.IsUserWhitelistedForRAM(username)
 }
 
 // GetUIDFromUsername risolve un username a UID scansionando /proc

@@ -1,4 +1,0 @@
-curl -s localhost:1974/metrics|grep -E '^(cpu_manager_limits_activated_total|cpu_manager_limits_active)'
-cpu_manager_limits_activated_total 0
-cpu_manager_limits_active{hostname="vmgclalte1450",server_role="layerbatch"} 1
-

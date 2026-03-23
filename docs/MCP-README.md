@@ -39,12 +39,12 @@ The MCP server exposes CPU Manager Go functionality to AI assistants and MCP-com
 
 ### Resources (6 URIs)
 
-- `cpu-manager://system/status` - Real-time system status
-- `cpu-manager://users/active` - List of active users
-- `cpu-manager://limits/status` - Current limits status
-- `cpu-manager://config` - Current configuration
-- `cpu-manager://users/{uid}/metrics` - Per-user metrics
-- `cpu-manager://cgroups/{uid}` - Cgroup information
+- `resman://system/status` - Real-time system status
+- `resman://users/active` - List of active users
+- `resman://limits/status` - Current limits status
+- `resman://config` - Current configuration
+- `resman://users/{uid}/metrics` - Per-user metrics
+- `resman://cgroups/{uid}` - Cgroup information
 
 ### Prompts (3 pre-built queries)
 
@@ -54,7 +54,7 @@ The MCP server exposes CPU Manager Go functionality to AI assistants and MCP-com
 
 ## Configuration
 
-Add to `/etc/cpu-manager.conf`:
+Add to `/etc/resman.conf`:
 
 ```bash
 # Enable MCP server
@@ -91,10 +91,10 @@ MCP_TRANSPORT=stdio
 
 2. Start CPU Manager:
 ```bash
-sudo systemctl start cpu-manager
+sudo systemctl start resman
 ```
 
-3. Configure your MCP client (e.g., Claude Desktop) to use the cpu-manager binary as an MCP server.
+3. Configure your MCP client (e.g., Claude Desktop) to use the resman binary as an MCP server.
 
 ### With HTTP transport
 
@@ -117,9 +117,9 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "cpu-manager": {
-      "command": "/usr/bin/cpu-manager",
-      "args": ["--config", "/etc/cpu-manager.conf"],
+    "resman": {
+      "command": "/usr/bin/resman",
+      "args": ["--config", "/etc/resman.conf"],
       "env": {
         "MCP_ENABLED": "true",
         "MCP_TRANSPORT": "stdio"
@@ -272,7 +272,7 @@ go test ./mcp/... -v
 
 ### MCP server not starting
 
-1. Check logs: `journalctl -u cpu-manager -f`
+1. Check logs: `journalctl -u resman -f`
 2. Verify configuration: `MCP_ENABLED=true`
 3. Check port availability (for HTTP transport): `netstat -tlnp | grep 8080`
 
@@ -306,8 +306,8 @@ The MCP server runs with the same permissions as CPU Manager. Ensure:
 │  └─────────────────────────────────┘    │
 │  ┌─────────────────────────────────┐    │
 │  │  Resources Handler              │    │
-│  │  - cpu-manager://system/status  │    │
-│  │  - cpu-manager://users/{uid}    │    │
+│  │  - resman://system/status  │    │
+│  │  - resman://users/{uid}    │    │
 │  └─────────────────────────────────┘    │
 └────────────┬────────────────────────────┘
              │
@@ -438,7 +438,7 @@ Ottiene le configurazioni correnti dei filtri utente.
 {
   "user_include_list": ["^www.*", "^app-.*"],
   "user_exclude_list": ["^test-.*", "francesco"],
-  "config_file": "/etc/cpu-manager.conf"
+  "config_file": "/etc/resman.conf"
 }
 ```
 
@@ -470,7 +470,7 @@ Imposta la lista di utenti da escludere dai limiti CPU (supporta regex).
 ```
 
 **Backup Automatico:**
-- Prima di ogni modifica, viene creato un backup: `/etc/cpu-manager.conf.backup_YYYYMMDD_HHMMSS`
+- Prima di ogni modifica, viene creato un backup: `/etc/resman.conf.backup_YYYYMMDD_HHMMSS`
 - In caso di errore, la configurazione viene ripristinata automaticamente
 
 ### Tool: set_user_include_list

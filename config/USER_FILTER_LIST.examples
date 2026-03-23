@@ -107,7 +107,7 @@ USER_EXCLUDE_LIST=
 # =====
 #
 # 1. Controllare i log:
-#    tail -f /var/log/cpu-manager.log | grep "Active users"
+#    tail -f /var/log/resman.log | grep "Active users"
 #
 # 2. I log mostrano include_list e exclude_list applicate:
 #    [INFO] Active users detected uids=[1000 1001] count=2 \

@@ -21,7 +21,7 @@ import (
     "testing"
     "time"
 
-    "github.com/fdefilippo/cpu-manager-go/config"
+    "github.com/fdefilippo/resman/config"
 )
 
 func TestUserMetricsStruct(t *testing.T) {

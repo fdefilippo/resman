@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 )
 
 const (
@@ -1158,4 +1158,82 @@ func (m *Manager) ListProcessesInCgroup(uid int) ([]string, error) {
 	}
 
 	return processes, nil
+}
+
+// ApplyRAMLimit applica un limite di RAM a un cgroup utente.
+// limit: bytes (es. "536870912") o suffissi (es. "512M", "1G", "2T")
+func (m *Manager) ApplyRAMLimit(uid int, limit string) error {
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		if err := m.CreateUserCgroup(uid); err != nil {
+			return fmt.Errorf("failed to create cgroup before applying RAM limit: %w", err)
+		}
+		cgroupPath, _ = m.getCgroupPath(uid)
+	}
+
+	memoryMaxFile := filepath.Join(cgroupPath, "memory.max")
+
+	limitValue := limit
+	if limit == "" || limit == "0" {
+		limitValue = "max"
+	}
+
+	if err := os.WriteFile(memoryMaxFile, []byte(limitValue), defaultFilePerm); err != nil {
+		return fmt.Errorf("failed to apply RAM limit for UID %d: %w", uid, err)
+	}
+
+	m.logger.Debug("RAM limit applied",
+		"uid", uid,
+		"limit", limitValue,
+		"path", memoryMaxFile,
+	)
+
+	return nil
+}
+
+// ApplyRAMLimitWithSwapDisabled applica un limite di RAM con swap disabilitato.
+func (m *Manager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error {
+	if err := m.ApplyRAMLimit(uid, limit); err != nil {
+		return err
+	}
+
+	cgroupPath, _ := m.getCgroupPath(uid)
+	swapMaxFile := filepath.Join(cgroupPath, "memory.swap.max")
+
+	if err := os.WriteFile(swapMaxFile, []byte("0"), defaultFilePerm); err != nil {
+		return fmt.Errorf("failed to disable swap for UID %d: %w", uid, err)
+	}
+
+	m.logger.Debug("Swap disabled for UID",
+		"uid", uid,
+		"path", swapMaxFile,
+	)
+
+	return nil
+}
+
+// RemoveRAMLimit rimuove il limite di RAM (imposta a "max").
+func (m *Manager) RemoveRAMLimit(uid int) error {
+	return m.ApplyRAMLimit(uid, "max")
+}
+
+// GetCgroupRAMUsage restituisce l'uso corrente di RAM del cgroup utente in bytes.
+func (m *Manager) GetCgroupRAMUsage(uid int) (uint64, error) {
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return 0, fmt.Errorf("cgroup for UID %d not found", uid)
+	}
+
+	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
+	data, err := os.ReadFile(memoryCurrentFile)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read RAM usage for UID %d: %w", uid, err)
+	}
+
+	usage, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse RAM usage for UID %d: %w", uid, err)
+	}
+
+	return usage, nil
 }

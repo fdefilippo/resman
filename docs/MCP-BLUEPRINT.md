@@ -71,12 +71,12 @@ mcp/
 
 | Resource URI | Description |
 |--------------|-------------|
-| `cpu-manager://system/status` | Real-time system status |
-| `cpu-manager://users/{uid}/metrics` | Per-user metrics |
-| `cpu-manager://users/active` | List of active users |
-| `cpu-manager://limits/status` | Current limits status |
-| `cpu-manager://config` | Current configuration |
-| `cpu-manager://cgroups/{uid}` | Cgroup info for user |
+| `resman://system/status` | Real-time system status |
+| `resman://users/{uid}/metrics` | Per-user metrics |
+| `resman://users/active` | List of active users |
+| `resman://limits/status` | Current limits status |
+| `resman://config` | Current configuration |
+| `resman://cgroups/{uid}` | Cgroup info for user |
 
 ### 3. Prompts (Pre-built queries for AI)
 
@@ -97,7 +97,7 @@ github.com/modelcontextprotocol/go-sdk v0.1.0  // or latest
 
 ### Server Configuration
 
-Add to `/etc/cpu-manager.conf`:
+Add to `/etc/resman.conf`:
 ```bash
 # MCP Server Configuration
 MCP_ENABLED=true
@@ -117,10 +117,10 @@ package mcp
 import (
     "context"
     "github.com/modelcontextprotocol/go-sdk/mcp"
-    "github.com/fdefilippo/cpu-manager-go/state"
-    "github.com/fdefilippo/cpu-manager-go/metrics"
-    "github.com/fdefilippo/cpu-manager-go/cgroup"
-    "github.com/fdefilippo/cpu-manager-go/config"
+    "github.com/fdefilippo/resman-go/state"
+    "github.com/fdefilippo/resman-go/metrics"
+    "github.com/fdefilippo/resman-go/cgroup"
+    "github.com/fdefilippo/resman-go/config"
 )
 
 type Server struct {
@@ -182,7 +182,7 @@ Define resources:
 ```go
 func (s *Server) registerResources() {
     s.mcpServer.AddResource(mcp.Resource{
-        URI:         "cpu-manager://system/status",
+        URI:         "resman://system/status",
         Name:        "System Status",
         Description: "Real-time system CPU and memory status",
         MimeType:    "application/json",
@@ -257,11 +257,11 @@ Configure `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "cpu-manager": {
-      "command": "/usr/bin/cpu-manager-mcp",
+    "resman": {
+      "command": "/usr/bin/resman-mcp",
       "args": ["--transport", "stdio"],
       "env": {
-        "CONFIG_FILE": "/etc/cpu-manager.conf"
+        "CONFIG_FILE": "/etc/resman.conf"
       }
     }
   }
@@ -333,7 +333,7 @@ AI (via MCP):
 | `mcp/config.go` | ✅ Created | MCP configuration |
 | `mcp/server_test.go` | ✅ Created | Unit tests |
 | `config/config.go` | ✅ Modified | Added MCP config fields, UserFilter methods, SaveToFile(), backup mechanism |
-| `config/cpu-manager.conf.example` | ✅ Modified | Added MCP example config, USER_INCLUDE_LIST, USER_EXCLUDE_LIST |
+| `config/resman.conf.example` | ✅ Modified | Added MCP example config, USER_INCLUDE_LIST, USER_EXCLUDE_LIST |
 | `state/manager.go` | ✅ Modified | Added GetConfig, GetControlHistory methods |
 | `main.go` | ✅ Modified | Initialize MCP server, fixed logger initialization |
 | `go.mod` | ✅ Modified | Added MCP SDK dependency |

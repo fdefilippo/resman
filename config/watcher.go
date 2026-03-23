@@ -24,7 +24,7 @@ import (
     "time"
 
     "github.com/fsnotify/fsnotify"
-    "github.com/fdefilippo/cpu-manager-go/logging"
+    "github.com/fdefilippo/resman/logging"
 )
 
 // ConfigChangeHandler è l'interfaccia per gestire cambiamenti di configurazione.

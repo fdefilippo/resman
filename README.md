@@ -1,11 +1,11 @@
 # CPU Manager Go
 
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue.svg)](https://golang.org/)
-[![RPM Package](https://img.shields.io/badge/RPM-Package-red.svg)](https://github.com/fdefilippo/cpu-manager-go/releases)
+[![RPM Package](https://img.shields.io/badge/RPM-Package-red.svg)](https://github.com/fdefilippo/resman-go/releases)
 [![Prometheus](https://img.shields.io/badge/Metrics-Prometheus-orange.svg)](https://prometheus.io/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/ci.yml)
-[![Test Coverage](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/cpu-manager-go/actions/workflows/test-coverage.yml)
+[![CI](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml)
+[![Test Coverage](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml)
 
 Enterprise-grade dynamic CPU resource management tool using Linux cgroups v2. Automatically limits CPU for non-system users based on configurable thresholds.
 
@@ -31,7 +31,7 @@ CPU Manager Go includes a built-in **Model Context Protocol (MCP)** server that 
 
 ### Features
 - **9 MCP Tools**: Query system status, user metrics, limits status, and manage CPU limits
-- **6 Resources**: REST-like URIs for system data (`cpu-manager://system/status`, `cpu-manager://users/{uid}/metrics`, etc.)
+- **6 Resources**: REST-like URIs for system data (`resman://system/status`, `resman://users/{uid}/metrics`, etc.)
 - **3 Prompts**: Pre-built queries for system health, user analysis, and troubleshooting
 - **Multiple Transports**: stdio (for local AI clients), HTTP, and SSE
 - **SQLite Metrics Database** (v1.16.0+): Historical metrics storage with 4 additional MCP tools for temporal queries
@@ -48,9 +48,9 @@ CPU Manager now supports persistent storage of metrics in a local SQLite databas
 
 **Configuration:**
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 ```
@@ -67,7 +67,7 @@ For complete documentation, see:
 
 ### Quick Start
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 MCP_ENABLED=true
 MCP_TRANSPORT=stdio        # or http, sse
 MCP_ALLOW_WRITE_OPS=false  # Enable write operations with caution
@@ -129,18 +129,18 @@ CPU Manager Go supports optional authentication for securing metrics endpoints:
 
 ### Basic Authentication
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_AUTH_TYPE=basic
 PROMETHEUS_AUTH_USERNAME=prometheus
-PROMETHEUS_AUTH_PASSWORD_FILE=/etc/cpu-manager/prometheus_password
+PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
 ```
 
 ### JWT (Bearer Token) Authentication
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_AUTH_TYPE=jwt
-PROMETHEUS_JWT_SECRET_FILE=/etc/cpu-manager/jwt_secret
-PROMETHEUS_JWT_ISSUER=cpu-manager
+PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
+PROMETHEUS_JWT_ISSUER=resman
 PROMETHEUS_JWT_AUDIENCE=prometheus
 PROMETHEUS_JWT_EXPIRY=3600
 ```
@@ -156,11 +156,11 @@ PROMETHEUS_AUTH_TYPE=both
 Enable HTTPS encryption for metrics endpoints:
 
 ```bash
-# /etc/cpu-manager.conf
+# /etc/resman.conf
 PROMETHEUS_TLS_ENABLED=true
-PROMETHEUS_TLS_CERT_FILE=/etc/cpu-manager/tls/server.crt
-PROMETHEUS_TLS_KEY_FILE=/etc/cpu-manager/tls/server.key
-PROMETHEUS_TLS_CA_FILE=/etc/cpu-manager/tls/ca.crt
+PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
+PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
+PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 PROMETHEUS_TLS_MIN_VERSION=1.2
 ```
 
@@ -168,7 +168,7 @@ PROMETHEUS_TLS_MIN_VERSION=1.2
 
 ```bash
 # Use the provided script
-sudo ./docs/generate-tls-certs.sh /etc/cpu-manager/tls
+sudo ./docs/generate-tls-certs.sh /etc/resman/tls
 ```
 
 See [docs/TLS-CONFIGURATION.md](docs/TLS-CONFIGURATION.md) for detailed TLS setup.
@@ -202,20 +202,20 @@ make deb
 ### Install
 ```bash
 # RPM
-rpm -ivh ~/rpmbuild/RPMS/*/cpu-manager-go-*.rpm
+rpm -ivh ~/rpmbuild/RPMS/*/resman-go-*.rpm
 
 # Debian
-dpkg -i build/deb/cpu-manager-go_*.deb
+dpkg -i build/deb/resman-go_*.deb
 ```
 
 ### Configure
 ```bash
-vi /etc/cpu-manager.conf
+vi /etc/resman.conf
 ```
 
 ### Start service
 ```bash
-systemctl enable --now cpu-manager
+systemctl enable --now resman
 ```
 
 ## Prerequisites: Enabling cgroups v2 on Enterprise Linux ≥ 8
@@ -242,7 +242,7 @@ Create /etc/systemd/system/cgroup-tweaks.service:
 [Unit]
 Description=Configure cgroup subtree controls
 Before=systemd-user-sessions.service
-Before=cpu-manager.service
+Before=resman.service
 
 [Service]
 Type=oneshot
@@ -268,14 +268,14 @@ make test-cover
 
 ## 📖 Documentation
 
-- [Man page](docs/cpu-manager.8) - Full command reference
+- [Man page](docs/resman.8) - Full command reference
 - [Prometheus Queries](docs/prometheus-queries.md) - Example queries
 - [Alerting Rules](docs/alerting-rules.yml) - Prometheus alerting
 - [Grafana Dashboard](docs/dashboard-grafana.json) - Pre-built dashboard
 
 ## Configuration
 
-See [config/cpu-manager.conf.example](config/cpu-manager.conf.example) for all available options.
+See [config/resman.conf.example](config/resman.conf.example) for all available options.
 
 Key settings:
 - `CPU_THRESHOLD` - Activation threshold (default: 75%)
@@ -313,7 +313,7 @@ To build CPU Manager Go from source:
 # Standard build with CGO enabled
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.6.0'" -o cpu-manager-go .
+go build -v -ldflags="-s -w -X 'main.version=1.6.0'" -o resman-go .
 
 # Build RPM package (CGO automatically enabled)
 make rpm

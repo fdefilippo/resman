@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"

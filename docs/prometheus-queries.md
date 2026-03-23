@@ -434,5 +434,5 @@ groups:
 
 - [Prometheus Documentation](https://prometheus.io/docs/prometheus/latest/querying/basics/)
 - [Grafana Documentation](https://grafana.com/docs/)
-- [CPU Manager Man Page](cpu-manager.8)
+- [CPU Manager Man Page](resman.8)
 - [Alerting Rules](alerting-rules.yml)

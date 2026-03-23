@@ -1,4 +1,4 @@
-module github.com/fdefilippo/cpu-manager-go
+module github.com/fdefilippo/resman
 
 go 1.25.7
 

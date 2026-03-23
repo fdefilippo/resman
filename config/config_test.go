@@ -36,7 +36,7 @@ func TestDefaultConfig(t *testing.T) {
 		expected interface{}
 	}{
 		{"CgroupRoot", cfg.CgroupRoot, "/sys/fs/cgroup"},
-		{"LogFile", cfg.LogFile, "/var/log/cpu-manager.log"},
+		{"LogFile", cfg.LogFile, "/var/log/resman.log"},
 		{"PollingInterval", cfg.PollingInterval, 30},
 		{"MinActiveTime", cfg.MinActiveTime, 60},
 		{"CPUThreshold", cfg.CPUThreshold, 75},

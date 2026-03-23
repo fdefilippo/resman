@@ -19,7 +19,7 @@ package reloader
 import (
     "testing"
 
-    "github.com/fdefilippo/cpu-manager-go/config"
+    "github.com/fdefilippo/resman/config"
 )
 
 func TestNewReloader(t *testing.T) {

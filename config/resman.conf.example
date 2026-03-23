@@ -1,13 +1,13 @@
 # CPU Manager Configuration File
-# Location: /etc/cpu-manager.conf
+# Location: /etc/resman.conf
 
 # ========================
 # PATHS
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
 SCRIPT_CGROUP_BASE=cpu_manager
-CREATED_CGROUPS_FILE=/var/run/cpu-manager/cgroups.txt
-METRICS_CACHE_FILE=/var/run/cpu-manager/metrics.cache
+CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
+METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 
 # ========================
 # TIMING
@@ -50,6 +50,75 @@ CPU_QUOTA_NORMAL="max 100000"
 CPU_QUOTA_LIMITED="50000 100000"
 
 # ========================
+# RAM LIMITS
+# ========================
+# Abilita/disabilita limitazione RAM tramite cgroups v2
+# Quando abilitato, vengono applicati limiti memory.max ai cgroup utenti
+# RAM_LIMIT_ENABLED: true = abilita limiti RAM, false = disabilita
+#
+# RAM_THRESHOLD: Percentuale di RAM utenti totali per attivare i limiti
+# RAM_RELEASE_THRESHOLD: Percentuale per rilasciare i limiti
+# Formato: percentuali 1-100
+#
+# RAM_QUOTA_LIMITED: Limite RAM totale in bytes o con suffix (K/M/G/T)
+# Esempi: "2147483648" (2GB in bytes), "2G", "512M"
+#
+# RAM_QUOTA_PER_USER: Limite RAM per singolo utente (quando limiti attivi)
+# Esempi: "536870912" (512MB), "512M", "1G"
+#
+# DISABLE_SWAP: Imposta memory.swap.max=0 per impedire l'uso dello swap
+# WARNING: Potrebbe causare OOM kills se un processo supera il limite RAM
+#
+# Esempi:
+# # Limiti RAM disabilitati (default)
+# RAM_LIMIT_ENABLED=false
+#
+# # Abilita limiti RAM con soglie e quote
+# RAM_LIMIT_ENABLED=true
+# RAM_THRESHOLD=75
+# RAM_RELEASE_THRESHOLD=40
+# RAM_QUOTA_LIMITED=2G
+# RAM_QUOTA_PER_USER=512M
+# DISABLE_SWAP=false
+#
+# # Modalità strict (nessuno swap)
+# RAM_LIMIT_ENABLED=true
+# RAM_THRESHOLD=80
+# RAM_RELEASE_THRESHOLD=50
+# RAM_QUOTA_LIMITED=4G
+# RAM_QUOTA_PER_USER=1G
+# DISABLE_SWAP=true
+#
+RAM_LIMIT_ENABLED=false
+RAM_THRESHOLD=75
+RAM_RELEASE_THRESHOLD=40
+RAM_QUOTA_LIMITED=2G
+RAM_QUOTA_PER_USER=512M
+DISABLE_SWAP=false
+
+# ========================
+# RAM USER INCLUDE/EXCLUDE LISTS (Optional, Regex Support)
+# Separate lists for RAM limits (if different from CPU limits)
+# ========================
+# RAM_USER_INCLUDE_LIST: Se specificata, include SOLO gli utenti che corrispondono
+# RAM_USER_EXCLUDE_LIST: Se specificata, ESCLUDE gli utenti dai limiti RAM
+# Formato: lista di pattern regex separati da virgola
+#
+# Esempi:
+# # Solo utenti specifici per RAM
+# RAM_USER_INCLUDE_LIST=^www.*,^app-.*
+#
+# # Escludi utenti di sistema dai limiti RAM
+# RAM_USER_EXCLUDE_LIST=^mysql,^postgres,^redis
+#
+# # Vuoto = usa comportamento di default (include tutti, escludi root)
+# RAM_USER_INCLUDE_LIST=
+# RAM_USER_EXCLUDE_LIST=root
+#
+# RAM_USER_INCLUDE_LIST=
+# RAM_USER_EXCLUDE_LIST=root
+
+# ========================
 # PROMETHEUS
 # ========================
 ENABLE_PROMETHEUS=false              # Enable metrics export
@@ -59,18 +128,18 @@ ENABLE_PROMETHEUS=false              # Enable metrics export
 
 # Prometheus TLS/HTTPS (optional)
 PROMETHEUS_TLS_ENABLED=false
-PROMETHEUS_TLS_CERT_FILE=/etc/cpu-manager/tls/server.crt
-PROMETHEUS_TLS_KEY_FILE=/etc/cpu-manager/tls/server.key
-PROMETHEUS_TLS_CA_FILE=/etc/cpu-manager/tls/ca.crt
+PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
+PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
+PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 PROMETHEUS_TLS_MIN_VERSION=1.2
 
 # Prometheus Authentication (optional)
 # Options: none, basic, jwt, both
 PROMETHEUS_AUTH_TYPE=none
 PROMETHEUS_AUTH_USERNAME=prometheus
-PROMETHEUS_AUTH_PASSWORD_FILE=/etc/cpu-manager/prometheus_password
-PROMETHEUS_JWT_SECRET_FILE=/etc/cpu-manager/jwt_secret
-PROMETHEUS_JWT_ISSUER=cpu-manager
+PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
+PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
+PROMETHEUS_JWT_ISSUER=resman
 PROMETHEUS_JWT_AUDIENCE=prometheus
 PROMETHEUS_JWT_EXPIRY=3600
 
@@ -85,7 +154,7 @@ PROMETHEUS_JWT_EXPIRY=3600
 LOG_LEVEL=INFO
 LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
 USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
-LOG_FILE=/var/log/cpu-manager.log
+LOG_FILE=/var/log/resman.log
 
 # ========================
 # SYSTEM
@@ -241,7 +310,7 @@ MCP_ALLOW_WRITE_OPS=false
 # Default: false (disabilitato)
 #
 # METRICS_DB_PATH: Percorso del database SQLite
-# Default: /etc/cpu-manager/metrics.db
+# Default: /etc/resman/metrics.db
 # Assicurarsi che la directory esista e sia scrivibile
 #
 # METRICS_DB_RETENTION_DAYS: Quanti giorni mantenere i dati nel database
@@ -256,7 +325,7 @@ MCP_ALLOW_WRITE_OPS=false
 # Esempi:
 # # Abilita database con retention di 30 giorni
 # METRICS_DB_ENABLED=true
-# METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+# METRICS_DB_PATH=/etc/resman/metrics.db
 # METRICS_DB_RETENTION_DAYS=30
 # METRICS_DB_WRITE_INTERVAL=30
 #
@@ -269,7 +338,7 @@ MCP_ALLOW_WRITE_OPS=false
 # METRICS_DB_RETENTION_DAYS=90
 #
 METRICS_DB_ENABLED=false
-METRICS_DB_PATH=/etc/cpu-manager/metrics.db
+METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 
