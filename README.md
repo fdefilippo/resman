@@ -1,11 +1,11 @@
-# CPU Manager Go
+# ResMan
 
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue.svg)](https://golang.org/)
-[![RPM Package](https://img.shields.io/badge/RPM-Package-red.svg)](https://github.com/fdefilippo/resman-go/releases)
+[![RPM Package](https://img.shields.io/badge/RPM-Package-red.svg)](https://github.com/fdefilippo/resman/releases)
 [![Prometheus](https://img.shields.io/badge/Metrics-Prometheus-orange.svg)](https://prometheus.io/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/ci.yml)
-[![Test Coverage](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/resman-go/actions/workflows/test-coverage.yml)
+[![CI](https://github.com/fdefilippo/resman/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman/actions/workflows/ci.yml)
+[![Test Coverage](https://github.com/fdefilippo/resman/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/fdefilippo/resman/actions/workflows/test-coverage.yml)
 
 Enterprise-grade dynamic CPU resource management tool using Linux cgroups v2. Automatically limits CPU for non-system users based on configurable thresholds.
 
@@ -27,7 +27,7 @@ Enterprise-grade dynamic CPU resource management tool using Linux cgroups v2. Au
 
 ## 🤖 MCP Server (AI Integration)
 
-CPU Manager Go includes a built-in **Model Context Protocol (MCP)** server that exposes system metrics and control capabilities to AI assistants.
+ResMan includes a built-in **Model Context Protocol (MCP)** server that exposes system metrics and control capabilities to AI assistants.
 
 ### Features
 - **9 MCP Tools**: Query system status, user metrics, limits status, and manage CPU limits
@@ -38,7 +38,7 @@ CPU Manager Go includes a built-in **Model Context Protocol (MCP)** server that 
 
 ### Metrics Database (New in v1.16.0)
 
-CPU Manager now supports persistent storage of metrics in a local SQLite database, enabling historical queries via MCP:
+ResMan now supports persistent storage of metrics in a local SQLite database, enabling historical queries via MCP:
 
 **New MCP Tools:**
 - `get_user_history`: Historical CPU/RAM metrics for a specific user
@@ -85,7 +85,7 @@ For complete documentation, see:
 
 ## 📊 Prometheus Metrics
 
-CPU Manager Go exports detailed metrics for monitoring and alerting:
+ResMan exports detailed metrics for monitoring and alerting:
 
 ### System Metrics
 | Metric | Type | Description |
@@ -125,7 +125,7 @@ See [docs/prometheus-queries.md](docs/prometheus-queries.md) for more examples.
 
 ## 🔐 Prometheus Authentication
 
-CPU Manager Go supports optional authentication for securing metrics endpoints:
+ResMan supports optional authentication for securing metrics endpoints:
 
 ### Basic Authentication
 ```bash
@@ -219,7 +219,7 @@ systemctl enable --now resman
 ```
 
 ## Prerequisites: Enabling cgroups v2 on Enterprise Linux ≥ 8
-CPU Manager requires cgroups v2 with CPU and cpuset controllers enabled.
+ResMan requires cgroups v2 with CPU and cpuset controllers enabled.
 Here's how to enable them on RHEL/CentOS/Rocky/AlmaLinux ≥ 8:
 ```
 # Enable unified cgroup hierarchy
@@ -295,13 +295,13 @@ Key settings:
 
 ### Build Requirements
 
-To build CPU Manager Go from source:
+To build ResMan from source:
 
 - Go 1.21 or later
 - GCC (for CGO support)
 - CGO enabled (`CGO_ENABLED=1`)
 
-**Important:** CGO is required for proper user name resolution via NSS (Name Service Switch). This allows CPU Manager to work with:
+**Important:** CGO is required for proper user name resolution via NSS (Name Service Switch). This allows ResMan to work with:
 - Local users (`/etc/passwd`)
 - LDAP/Active Directory users
 - NIS users

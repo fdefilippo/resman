@@ -10,13 +10,17 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.16.4
+Version: 1.16.5
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 
 License: GPLv3
 URL:     https://github.com/fdefilippo/resman
 Source0: %{name}-%{version}.tar.gz
+
+## Upgrade from cpu-manager-go
+Obsoletes: cpu-manager-go < 1.16.5
+Provides:  cpu-manager-go = %{version}
 
 ## Disable debug packages.
 %define debug_package %{nil}
@@ -244,6 +248,12 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Mar 23 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.5-1
+- Renamed project from cpu-manager-go to resman
+- RPM package now replaces cpu-manager-go (Obsoletes)
+- Updated man page to v1.16.5
+- Updated all documentation references
+
 * Sat Mar 21 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.4-1
 - Added RAM limits support (memory.max cgroups v2)
 - New configuration parameters:

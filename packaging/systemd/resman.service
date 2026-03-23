@@ -1,6 +1,6 @@
 [Unit]
-Description=CPU Manager - Dynamic CPU Resource Management
-Documentation=https://github.com/fdefilippo/resman-go
+Description=ResMan - Dynamic CPU/RAM Resource Management
+Documentation=https://github.com/fdefilippo/resman
 After=network.target
 Wants=cgroup-tweaks.service
 ConditionPathExists=/sys/fs/cgroup
@@ -9,7 +9,7 @@ ConditionDirectoryNotEmpty=/sys/fs/cgroup
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/resman-go --config /etc/resman.conf
+ExecStart=/usr/bin/resman --config /etc/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10

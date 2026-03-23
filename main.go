@@ -38,7 +38,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.16.4"
+var version = "1.16.5"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -56,12 +56,12 @@ func checkPortAvailable(host string, port int) bool {
 
 func main() {
 	// Parsing dei flag
-	configPath := flag.String("config", "/etc/cpu-manager.conf", "Path to configuration file")
+	configPath := flag.String("config", "/etc/resman.conf", "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("CPU Manager (Go) %s\n", version)
+		fmt.Printf("resman %s\n", version)
 		return
 	}
 

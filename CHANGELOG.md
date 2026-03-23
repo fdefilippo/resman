@@ -5,6 +5,15 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.16.5] - 2026-03-23
+
+### Modificato
+
+- Rinominato il progetto da `cpu-manager-go` a `resman`
+- Aggiornati tutti i riferimenti nel codice e nella documentazione
+- Il pacchetto RPM ora sostituisce il vecchio pacchetto `cpu-manager-go` (Obsoletes)
+- Aggiornata la versione del manuale a v1.16.5
+
 ## [1.16.4] - 2026-03-21
 
 ### Aggiunto

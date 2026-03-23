@@ -1,13 +1,13 @@
-.TH CPU\-MANAGER\-GO 8 "March 2026" "v1.16.4" "System Administration"
+.TH RESMAN 8 "March 2026" "v1.16.5" "System Administration"
 .SH NAME
-cpu\-manager\-go \- Dynamic CPU manager for Linux using cgroups v2
+resman \- Dynamic CPU/RAM resource manager for Linux using cgroups v2
 .SH SYNOPSIS
-.B cpu\-manager\-go
+.B resman
 [\fB\-\-config\fR \fIFILE\fR]
 [\fB\-\-version\fR]
 .SH DESCRIPTION
-.B cpu\-manager\-go
-is a daemon that monitors system CPU usage and dynamically applies limits to users
+.B resman
+is a daemon that monitors system CPU and RAM usage and dynamically applies limits to users
 when the load exceeds configured thresholds. It uses Linux cgroups v2 to manage
 CPU resource distribution efficiently and proportionally.
 .PP

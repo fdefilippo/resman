@@ -30,8 +30,8 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} CPU usage critical"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) CPU usage is {{ $value | printf \"%.1f\" }}% for more than 5 minutes."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/cpu-critical.md"
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/cpu-critical.md"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
       # -------------------------------------------------------------------------
       # User Memory Critical
@@ -45,8 +45,8 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} memory usage critical"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) is using {{ $value | humanize1024 }} of memory for more than 10 minutes."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/memory-critical.md"
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/memory-critical.md"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
       # -------------------------------------------------------------------------
       # System Overload
@@ -60,7 +60,7 @@ groups:
         annotations:
           summary: "System load critical"
           description: "System load per CPU core is {{ $value | printf \"%.2f\" }} (load: {{ $value | printf \"%.2f\" }}, cores: {{ $labels.instance }}) for more than 5 minutes."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/system-overload.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/system-overload.md"
 
       # -------------------------------------------------------------------------
       # Too Many Processes
@@ -74,7 +74,7 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} has too many processes"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) has {{ $value }} processes running for more than 5 minutes."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/too-many-processes.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/too-many-processes.md"
 
   # ============================================================================
   # WARNING ALERTS - Should be investigated soon
@@ -95,7 +95,7 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} CPU usage high"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) CPU usage is {{ $value | printf \"%.1f\" }}% for more than 10 minutes."
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
       # -------------------------------------------------------------------------
       # User Memory High
@@ -109,7 +109,7 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} memory usage high"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) is using {{ $value | humanize1024 }} of memory for more than 15 minutes."
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
       # -------------------------------------------------------------------------
       # Memory Growth Rate
@@ -123,7 +123,7 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} memory growing rapidly"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) memory is growing at {{ $value | humanize1024 }}/min. Possible memory leak."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/memory-leak.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/memory-leak.md"
 
       # -------------------------------------------------------------------------
       # Process Count High
@@ -137,7 +137,7 @@ groups:
         annotations:
           summary: "User {{ $labels.username }} process count high"
           description: "User {{ $labels.username }} (UID: {{ $labels.uid }}) has {{ $value }} processes running."
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
       # -------------------------------------------------------------------------
       # System Load High
@@ -151,7 +151,7 @@ groups:
         annotations:
           summary: "System load high"
           description: "System load per CPU core is {{ $value | printf \"%.2f\" }} for more than 10 minutes."
-          dashboard: "https://grafana.example.com/d/cpu-manager-dashboard"
+          dashboard: "https://grafana.example.com/d/resman-dashboard"
 
   # ============================================================================
   # OPERATIONAL ALERTS - Service health monitoring
@@ -172,7 +172,7 @@ groups:
         annotations:
           summary: "CPU limits not activating despite high usage"
           description: "User CPU usage is {{ $value | printf \"%.1f\" }}% but CPU limits are not active. Check configuration."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/limits-not-activating.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/limits-not-activating.md"
 
       # -------------------------------------------------------------------------
       # Frequent Limit Toggling
@@ -186,7 +186,7 @@ groups:
         annotations:
           summary: "CPU limits toggling frequently"
           description: "CPU limits have been activated {{ $value }} times in the last 10 minutes. Check threshold configuration."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/frequent-toggling.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/frequent-toggling.md"
 
       # -------------------------------------------------------------------------
       # Control Cycle Too Slow
@@ -200,7 +200,7 @@ groups:
         annotations:
           summary: "CPU Manager control cycle too slow"
           description: "Average control cycle duration is {{ $value | printf \"%.1f\" }} seconds. Expected < 10 seconds."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/slow-control-cycle.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/slow-control-cycle.md"
 
       # -------------------------------------------------------------------------
       # High Error Rate
@@ -214,7 +214,7 @@ groups:
         annotations:
           summary: "CPU Manager error rate high"
           description: "{{ $value }} errors in the last 5 minutes. Check logs for details."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/high-error-rate.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/high-error-rate.md"
 
       # -------------------------------------------------------------------------
       # Service Down
@@ -228,7 +228,7 @@ groups:
         annotations:
           summary: "CPU Manager service is down"
           description: "CPU Manager service has been down for more than 1 minute."
-          runbook_url: "https://github.com/fdefilippo/cpu-manager-go/blob/main/docs/runbooks/service-down.md"
+          runbook_url: "https://github.com/fdefilippo/resman/blob/main/docs/runbooks/service-down.md"
 
   # ============================================================================
   # INFO ALERTS - Informational notifications
