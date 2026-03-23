@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.16.5
+Version: 1.17.0
 Release: 1%{?dist}
 Summary: Dynamic CPU resource management tool using cgroups v2
 

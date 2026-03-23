@@ -234,30 +234,6 @@ CPU_MANAGER_BLACKOUT=
 # Se vuota, nessun processo è escluso (tutti possono essere limitati)
 #
 # Default: processi di sistema essenziali
-# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng
-#
-# Esempi:
-#
-# # Solo processi essenziali
-# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,cron
-#
-# # Aggiungi database
-# PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,cron,mysqld,postgres,redis-server
-#
-# # Nessun processo escluso (tutti possono essere limitati)
-# PROCESS_EXCLUDE_LIST=
-#
-# # Lista estesa con monitoring e virtualizzazione
-PROCESS_EXCLUDE_LIST=systemd,dbus-daemon,dbus-broker,polkitd,NetworkManager,wpa_supplicant,sshd,cron,crond,rsyslogd,rsyslog,syslog-ng,dockerd,containerd,kubelet,nginx,apache2,httpd,mysqld,mariadbd,postgres,mongod,redis-server,postfix,chronyd,firewalld,auditd,cupsd,avahi-daemon,bluetoothd
-
-# ========================
-# PROCESS EXCLUSION (Automatic)
-# ========================
-# I seguenti processi di sistema sono AUTOMATICAMENTE esclusi dai limiti CPU:
-# systemd, dbus-daemon, polkitd, NetworkManager, sshd, cron, rsyslogd,
-# dockerd, containerd, nginx, apache2, mysqld, postgres, redis-server,
-# e molti altri processi di infrastruttura.
-# La lista completa è definita nel codice (config/config.go - IsProcessExcluded)
 
 # LOAD AVERAGE HANDLING
 # ========================

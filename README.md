@@ -25,6 +25,66 @@ Enterprise-grade dynamic CPU resource management tool using Linux cgroups v2. Au
 - **Unit tests** for core packages
 - **MCP server** for AI assistant integration (Model Context Protocol)
 
+
+## 👥 User Monitoring vs CPU Limiting
+
+**Since v1.17.0**, ResMan separates **monitoring** from **CPU limiting**:
+
+### Monitoring (All Non-System Users)
+ResMan now **monitors ALL non-system users** (UID >= 1000) and exposes metrics for everyone via Prometheus and MCP tools.
+
+**Monitored users include:**
+- All users with UID >= 1000 (configurable via `SYSTEM_UID_MIN`)
+- Regardless of USER_INCLUDE_LIST or USER_EXCLUDE_LIST settings
+
+### CPU Limiting (Filtered Users)
+CPU limits are applied **only** to users who pass the configured filters:
+
+**Filtering pipeline:**
+1. `USER_INCLUDE_LIST` (if configured) → Only matching users can be limited
+2. `USER_EXCLUDE_LIST` → Matching users are NEVER limited
+3. `BLACKOUT` timeframes → No limits applied during blackout periods
+
+### Prometheus Metrics
+
+All metrics now include the `is_limited` label to distinguish between monitored and limited users:
+
+```prometheus
+# User with CPU limits applied
+resman_user_cpu_usage_percent{username="testuser",is_limited="true"} 45.2
+
+# User monitored but NOT limited (e.g., in USER_EXCLUDE_LIST)
+resman_user_cpu_usage_percent{username="admin",is_limited="false"} 28.5
+```
+
+**Metrics with `is_limited` label:**
+- `resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}`
+- `resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}`
+- `resman_user_process_count{uid, username, hostname, server_role, is_limited}`
+
+### Example Configuration
+
+```bash
+# Monitor ALL users, but limit only specific ones
+USER_INCLUDE_LIST=^test.*     # Only users matching ^test.* can be limited
+USER_EXCLUDE_LIST=admin       # But never limit 'admin' user
+
+# Result:
+# - testuser1 (UID 1001) → Monitored + Limited (is_limited="true")
+# - testuser2 (UID 1002) → Monitored + Limited (is_limited="true")
+# - admin (UID 1003)      → Monitored + NOT Limited (is_limited="false")
+# - normaluser (UID 1004) → Monitored + NOT Limited (is_limited="false")
+```
+
+### MCP Tools
+
+All MCP tools that return user data now include the `is_limited` field:
+
+- `get_user_metrics` → Returns `is_limited` for each user
+- `get_active_users` → Returns `is_limited` for each active user
+- `get_user_history` → Returns `is_limited` in historical records
+- `get_user_summary` → Returns `limited_time_percent` (percentage of time limits were active)
+
 ## 🤖 MCP Server (AI Integration)
 
 ResMan includes a built-in **Model Context Protocol (MCP)** server that exposes system metrics and control capabilities to AI assistants.

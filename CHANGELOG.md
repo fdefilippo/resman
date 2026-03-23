@@ -4,6 +4,96 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
+## [1.17.0] - 2026-03-23
+
+### ⚠️ BREAKING CHANGES
+
+#### Removed PROCESS_EXCLUDE_LIST
+- **REMOVED**: `PROCESS_EXCLUDE_LIST` configuration variable
+- **REMOVED**: `IsProcessExcluded()` function
+- **Rationale**: Feature didn't work correctly with per-user cgroups (all processes of a limited user were limited regardless)
+- **Migration**: Use `USER_EXCLUDE_LIST` to exclude users who run specific processes
+
+Example migration:
+```bash
+# BEFORE (didn't work as expected)
+PROCESS_EXCLUDE_LIST=mysqld,postgres
+
+# AFTER (correct approach)
+USER_EXCLUDE_LIST=mysql,postgres  # Exclude users who run these processes
+```
+
+### 🎯 Major Changes
+
+#### Separate Monitoring from Limiting
+- **NEW**: ResMan now monitors ALL non-system users (UID >= 1000)
+- **NEW**: CPU limits applied only to users passing filters (USER_INCLUDE_LIST, USER_EXCLUDE_LIST, BLACKOUT)
+- **NEW**: `is_limited` label in all per-user Prometheus metrics
+- **NEW**: `IsLimited` field in UserMetrics struct
+
+**Before v1.17.0:**
+- Only users passing filters were monitored
+- Metrics exposed only for limited users
+
+**Since v1.17.0:**
+- ALL non-system users are monitored
+- Metrics exposed for everyone with `is_limited` label
+- Clear distinction between "monitored" and "limited" users
+
+### 📊 Prometheus Metrics Changes
+
+**All per-user metrics now include `is_limited` label:**
+```prometheus
+resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}
+resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}
+resman_user_process_count{uid, username, hostname, server_role, is_limited}
+```
+
+**Example queries:**
+```promql
+# All monitored users
+resman_user_cpu_usage_percent
+
+# Only limited users
+resman_user_cpu_usage_percent{is_limited="true"}
+
+# Monitored but not limited
+resman_user_cpu_usage_percent{is_limited="false"}
+```
+
+### 🔧 MCP Tools Changes
+
+**Updated tools to include `is_limited` field:**
+- `get_user_metrics` → Returns `is_limited` for each user
+- `get_active_users` → Returns `is_limited` for each active user
+- `get_user_history` → Returns `is_limited` in historical records
+- `get_user_summary` → Returns `limited_time_percent` (already existed)
+
+### 📝 Configuration Changes
+
+**Removed variables:**
+- `PROCESS_EXCLUDE_LIST` (no effect, use USER_EXCLUDE_LIST instead)
+
+**Unchanged variables:**
+- `USER_INCLUDE_LIST` → Controls who CAN be limited
+- `USER_EXCLUDE_LIST` → Controls who is NEVER limited
+- `SYSTEM_UID_MIN` → Minimum UID to monitor (default: 1000)
+
+### 📈 Benefits
+
+- ✅ Complete visibility of all system users
+- ✅ Clear distinction between monitored and limited users
+- ✅ Better auditing and troubleshooting
+- ✅ More accurate capacity planning
+- ✅ Simpler mental model (monitoring ≠ limiting)
+
+### 📚 Documentation
+
+- Updated README.md with "User Monitoring vs CPU Limiting" section
+- Updated examples with `is_limited` label
+- Removed PROCESS_EXCLUDE_LIST references
+
+---
 
 ## [1.16.5] - 2026-03-23
 

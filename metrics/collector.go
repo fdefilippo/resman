@@ -50,6 +50,7 @@ type UserMetrics struct {
 	CPUUsage     float64 // Percentuale CPU
 	MemoryUsage  uint64  // Memoria in bytes (VmRSS)
 	ProcessCount int     // Numero di processi
+        IsLimited    bool    // Se l'''utente è sottoposto a limiti CPU
 }
 
 // Collector raccoglie metriche di sistema.
@@ -312,9 +313,6 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 				if int(uids[0]) == uid { // UID reale
 					// Escludi processi di sistema
 					pname, _ := p.Name()
-					if c.cfg.IsProcessExcluded(pname) {
-						continue
-					}
 
 					processCount++
 					// CPUPercent() fa due letture internamente
@@ -514,10 +512,7 @@ func (c *Collector) GetActiveUsers() []int {
 						// Check se l'utente è escluso dalla exclude list
 						if !c.cfg.IsUserExcluded(username) {
 							// Controlla se il processo è escluso (processi di sistema)
-							pname, _ := p.Name()
-							if !c.cfg.IsProcessExcluded(pname) {
-								uidMap[uid] = true
-							}
+							uidMap[uid] = true
 						}
 					}
 				}
@@ -1057,11 +1052,6 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			continue
 		}
 
-		// Check whitelist if configured
-		username := c.getUsername(uid)
-		if !c.cfg.IsUserWhitelisted(username) {
-			continue // Skip users not in whitelist
-		}
 
 		// Inizializza struttura se non esiste
 		if tempData[uid] == nil {
@@ -1088,6 +1078,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			CPUUsage:     data.cpuUsage,
 			MemoryUsage:  data.memoryUsage,
 			ProcessCount: data.processCount,
+                        IsLimited:    c.cfg.IsUserWhitelisted(c.getUsernameFromUID(uid)),
 		}
 	}
 

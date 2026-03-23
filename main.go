@@ -38,7 +38,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.16.5"
+var version = "1.17.0"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
