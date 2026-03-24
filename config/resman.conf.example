@@ -167,17 +167,21 @@ SYSTEM_UID_MIN=1000
 # USER INCLUDE LIST (Optional, Regex Support)
 # ========================
 # Se specificata, INCLUDE nel monitoraggio SOLO gli utenti che corrispondono
-# ai pattern regex elencati. Se vuota o non specificata, tutti gli utenti
-# non-system (UID >= SYSTEM_UID_MIN) sono inclusi.
+# ai pattern regex elencati. Se vuota o non specificata, NESSUN utente verrà
+# limitato (monitoraggio attivo ma senza limiti).
 # Formato: lista di pattern regex separati da virgola, senza spazi
 # Esempi:
-#   USER_INCLUDE_LIST=francesco                    # Solo francesco
+#   USER_INCLUDE_LIST=francesco                    # Solo francesco può essere limitato
 #   USER_INCLUDE_LIST=^www.*,^apache.*             # Utenti web (regex)
 #   USER_INCLUDE_LIST=^svc-.*,^app-.*              # Utenti servizio (regex)
 #   USER_INCLUDE_LIST=francesco,www-data,mysql     # Utenti specifici
-#   USER_INCLUDE_LIST=                             # Vuoto = TUTTI gli utenti (default)
+#   USER_INCLUDE_LIST=.*                           # TUTTI gli utenti possono essere limitati
+#   USER_INCLUDE_LIST=                             # Vuoto = NESSUN utente limitato (default)
 #
-# NOTA: Se la riga è assente o commentata, tutti gli utenti non-system sono inclusi.
+# NOTA IMPORTANTE: Se USER_INCLUDE_LIST è vuota, resman monitora tutti gli utenti
+# ma NON applica limiti a nessuno. Per limitare tutti gli utenti, impostare
+# USER_INCLUDE_LIST=.*
+#
 # USER_INCLUDE_LIST=
 
 # ========================
@@ -196,6 +200,39 @@ SYSTEM_UID_MIN=1000
 #
 # NOTA: Se la riga è assente o commentata, tutti gli utenti non-system possono essere limitati.
 USER_EXCLUDE_LIST=root
+
+# ========================
+# PROCESS EXCLUDE LIST
+# ========================
+# Lista di processi da escludere dai limiti CPU (separati da virgola)
+# Questi processi non vengono MAI limitati, anche se l'utente è nella INCLUDE_LIST
+# Utile per proteggere processi critici che potrebbero causare instabilità
+# Supporta espressioni regolari (regex) per pattern matching avanzato
+#
+# Default: ^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$ (processi essenziali)
+#
+# Esempi:
+# # Solo processi essenziali (default, match esatto)
+# PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
+#
+# # Match esatto per processi specifici
+# PROCESS_EXCLUDE_LIST=^sshd$,^cron$,^systemd-journald$
+#
+# # Pattern per tutti i processi che iniziano con "systemd-"
+# PROCESS_EXCLUDE_LIST=^systemd-.*
+#
+# # Pattern per processi database (match parziale)
+# PROCESS_EXCLUDE_LIST=mysqld,postgres,redis,mongod
+#
+# # Lista estesa con pattern misti
+# PROCESS_EXCLUDE_LIST=^systemd-.*,^dbus-.*,sshd,cron,rsyslogd
+#
+# # Nessun processo escluso (NON raccomandato)
+# PROCESS_EXCLUDE_LIST=
+#
+# WARNING: Escludere processi critici come systemd dall'utente può causare
+# instabilità del sistema. Usare con cautela e testare in ambiente non produttivo.
+PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 
 # ========================
 # BLACKOUT TIMEFRAMES

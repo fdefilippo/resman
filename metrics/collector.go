@@ -1052,6 +1052,20 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			continue
 		}
 
+		// Leggi nome del processo
+		nameFile := filepath.Join(procDir, entry.Name(), "comm")
+		procNameBytes, _ := os.ReadFile(nameFile)
+		procName := strings.TrimSpace(string(procNameBytes))
+
+		// Salta i processi esclusi
+		if c.cfg.IsProcessExcluded(procName) {
+			c.logger.Debug("Process excluded from monitoring",
+				"pid", pid,
+				"uid", uid,
+				"name", procName,
+			)
+			continue
+		}
 
 		// Inizializza struttura se non esiste
 		if tempData[uid] == nil {

@@ -109,13 +109,15 @@ type Config struct {
 	SystemUIDMin   int `config:"SYSTEM_UID_MIN"`
 	SystemUIDMax   int `config:"SYSTEM_UID_MAX"`
 
-	// User Include List (users to INCLUDE in monitoring, regex support)
+	// User Include List (users to INCLUDE in limiting, regex support)
 	UserIncludeList []string `config:"USER_INCLUDE_LIST"` // Comma-separated regex patterns
 
 	// User Exclude List (users to EXCLUDE from limits, regex support)
 	UserExcludeList []string `config:"USER_EXCLUDE_LIST"` // Comma-separated regex patterns
 
-	// Process Exclude List (process names to EXCLUDE from limits)
+	// Process Exclude List (process names to EXCLUDE from limits, comma-separated)
+	// These processes are never limited, even if the user is in the include list
+	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`
 
 	// Blackout Timeframes (when CPU Manager should NOT apply limits)
 	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
@@ -217,6 +219,9 @@ func DefaultConfig() *Config {
 		ServerRole:       "",  // Empty by default
 		UserIncludeList:  nil, // nil = all users included (no filter)
 		UserExcludeList:  nil, // nil = no users excluded (all users can be limited)
+		ProcessExcludeList: []string{ // Default processes to never limit (regex patterns)
+			"^systemd$", "^dbus-daemon$", "^dbus-broker$", "^polkitd$",
+		},
 		BlackoutSpec:       "", // Empty = no blackout (always active)
 		BlackoutTimeframes: nil,
 
@@ -255,6 +260,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	// 3. Valida
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// 4. Warning se USER_INCLUDE_LIST è vuota (nessun utente sarà limitato)
+	if cfg.UserIncludeList == nil || len(cfg.UserIncludeList) == 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. "+
+			"Set USER_INCLUDE_LIST=.* to limit all users, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
 	}
 
 	return cfg, nil
@@ -542,6 +553,29 @@ func setConfigField(cfg *Config, key, value string) error {
 			}
 		}
 
+	// Process Exclude List
+	case "PROCESS_EXCLUDE_LIST":
+		// Parse comma-separated list of process names (regex support)
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.ProcessExcludeList = nil // Empty = no processes excluded
+		} else {
+			patterns := strings.Split(value, ",")
+			cfg.ProcessExcludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					// Validate regex pattern
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in PROCESS_EXCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, pattern)
+				}
+			}
+			if len(cfg.ProcessExcludeList) == 0 {
+				cfg.ProcessExcludeList = nil
+			}
+		}
 
 	// Blackout Timeframes
 	case "CPU_MANAGER_BLACKOUT":
@@ -827,10 +861,26 @@ func (c *Config) IsUserExcluded(username string) bool {
 	return false
 }
 
-// IsUserWhitelisted è un alias per IsUserExcluded per retrocompatibilità
-// Il nome è fuorviante ma mantenuto per compatibilità con il codice esistente
+// IsUserWhitelisted verifica se un utente può essere limitato
+// Un utente può essere limitato se:
+// 1. È incluso nella include list (se configurata)
+// 2. NON è escluso dalla exclude list
 func (c *Config) IsUserWhitelisted(username string) bool {
-	return !c.IsUserExcluded(username)
+	return c.IsUserIncluded(username) && !c.IsUserExcluded(username)
+}
+
+// IsProcessExcluded verifica se un processo deve essere escluso dai limiti
+// I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
+func (c *Config) IsProcessExcluded(processName string) bool {
+	if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
+		return false // No processes excluded
+	}
+	for _, pattern := range c.ProcessExcludeList {
+		if matched, _ := regexp.MatchString(pattern, processName); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
