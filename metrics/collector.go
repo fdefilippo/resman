@@ -468,12 +468,6 @@ func (c *Collector) getProcessCPUUsage(pid int) (float64, error) {
 	return cpuSeconds * 0.1, nil // Stima molto approssimativa
 }
 
-// GetTotalUserCPUUsage restituisce l'uso CPU totale di tutti gli utenti non di sistema.
-// DEPRECATED: usare GetAllUsersCPUUsage() o GetLimitedUsersCPUUsage()
-func (c *Collector) GetTotalUserCPUUsage() float64 {
-	return c.GetAllUsersCPUUsage()
-}
-
 // GetAllUsersCPUUsage restituisce l'uso CPU totale di TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
 // NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
 func (c *Collector) GetAllUsersCPUUsage() float64 {
@@ -593,13 +587,6 @@ func (c *Collector) GetLimitedUsers() []int {
 
 	c.setInCache(cacheKey, users)
 	return users
-}
-
-// GetActiveUsers restituisce la lista degli UID attivi (non di sistema).
-// DEPRECATED: usare GetAllUsers() o GetLimitedUsers()
-// Mantiene compatibilità con il codice esistente
-func (c *Collector) GetActiveUsers() []int {
-	return c.GetLimitedUsers()
 }
 
 // previousUsers memorizza la lista precedente di utenti per il confronto
@@ -1032,10 +1019,6 @@ func (c *Collector) GetDetailedMetrics() map[string]interface{} {
 	metrics["limited_users_memory_usage"] = c.GetLimitedUsersMemoryUsage()
 	limitedUsers := c.GetLimitedUsers()
 	metrics["limited_users_count"] = len(limitedUsers)
-
-	// DEPRECATED (backward compatibility)
-	metrics["total_user_cpu_usage"] = c.GetTotalUserCPUUsage()
-	metrics["active_users_count"] = len(c.GetActiveUsers())
 
 	metrics["memory_usage_mb"] = c.GetMemoryUsage()
 	metrics["system_under_load"] = c.IsSystemUnderLoad()

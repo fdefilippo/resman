@@ -245,7 +245,7 @@ func (s *Server) registerTools() {
 			"properties": map[string]any{},
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		activeUsers := s.metricsCollector.GetActiveUsers()
+		activeUsers := s.metricsCollector.GetAllUsers()
 		allMetrics := s.metricsCollector.GetAllUserMetrics()
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole

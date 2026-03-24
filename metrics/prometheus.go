@@ -51,17 +51,15 @@ type PrometheusExporter struct {
 
 	// Metriche base (con label hostname e server_role)
 	cpuTotalUsage prometheus.Gauge
-	cpuUserUsage  prometheus.Gauge // DEPRECATED: usare allUsersCPUUsage
 	memoryUsage   prometheus.Gauge
-	activeUsers   prometheus.Gauge // DEPRECATED: usare allUsersCount
 	limitedUsers  prometheus.Gauge
 
-	// Metriche ALL USERS (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
 	allUsersCPUUsage    prometheus.Gauge
 	allUsersMemoryUsage prometheus.Gauge
 	allUsersCount       prometheus.Gauge
 
-	// Metriche LIMITED USERS (solo utenti che passano i filtri)
+	// LIMITED USERS metrics (solo utenti che passano i filtri)
 	limitedUsersCPUUsage    prometheus.Gauge
 	limitedUsersMemoryUsage prometheus.Gauge
 	limitedUsersCount       prometheus.Gauge
@@ -266,24 +264,10 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	exp.cpuUserUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-		Namespace:   namespace,
-		Name:        "cpu_user_usage_percent",
-		Help:        "DEPRECATED: Total CPU usage percentage by non-system users (filtered). Use resman_all_users_cpu_usage_percent instead",
-		ConstLabels: staticLabels,
-	})
-
 	exp.memoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "memory_usage_megabytes",
 		Help:        "Total memory usage in megabytes",
-		ConstLabels: staticLabels,
-	})
-
-	exp.activeUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-		Namespace:   namespace,
-		Name:        "active_users_count",
-		Help:        "DEPRECATED: Number of active non-system users (filtered). Use resman_all_users_count instead",
 		ConstLabels: staticLabels,
 	})
 
@@ -506,19 +490,13 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 		case key == "cpu_total_usage":
 			exp.cpuTotalUsage.Set(value)
 
-		// DEPRECATED metrics (backward compatibility)
-		case key == "cpu_user_usage":
-			exp.cpuUserUsage.Set(value)
-		case key == "active_users":
-			exp.activeUsers.Set(value)
-
-		// ALL USERS metrics (new)
+		// ALL USERS metrics
 		case key == "all_users_cpu_usage":
 			exp.allUsersCPUUsage.Set(value)
 		case key == "all_users_count":
 			exp.allUsersCount.Set(value)
 
-		// LIMITED USERS metrics (new)
+		// LIMITED USERS metrics
 		case key == "limited_users":
 			exp.limitedUsers.Set(value)
 		case key == "limited_users_cpu_usage":

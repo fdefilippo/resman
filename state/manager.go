@@ -72,8 +72,6 @@ type MetricsCollector interface {
 	GetTotalCores() int
 	GetTotalCPUUsage() float64
 	GetUserCPUUsage(uid int) float64
-	GetTotalUserCPUUsage() float64 // DEPRECATED: usare GetAllUsersCPUUsage
-	GetActiveUsers() []int          // DEPRECATED: usare GetLimitedUsers
 
 	// ALL USERS metrics (tutti gli utenti non-system)
 	GetAllUsers() []int
@@ -224,8 +222,8 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 		"decision", decision,
 		"reason", reason,
 		"total_cpu_usage", metrics.TotalCPUUsage,
-		"user_cpu_usage", metrics.TotalUserCPUUsage,
-		"active_users", len(metrics.ActiveUsers),
+		"limited_users_cpu_usage", metrics.LimitedUsersCPUUsage,
+		"limited_users", metrics.LimitedUsersCount,
 		"system_under_load", metrics.SystemUnderLoad,
 		"ignore_system_load", m.cfg.IgnoreSystemLoad,
 		"duration_ms", duration.Milliseconds(),
@@ -250,12 +248,8 @@ type SystemMetrics struct {
 	LimitedUsersMemoryUsage uint64
 	LimitedUsersCount       int
 
-	// DEPRECATED (backward compatibility)
-	TotalUserCPUUsage float64 // Usare AllUsersCPUUsage
-
 	MemoryUsage     float64 // MB
 	SystemUnderLoad bool
-	ActiveUsers     []int // DEPRECATED: usare LimitedUsers
 	UserCPUUsage    map[int]float64              // UID -> percentuale
 	UserMetrics     map[int]*metrics.UserMetrics // Metriche dettagliate per utente
 }
@@ -281,10 +275,6 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	metrics.LimitedUsersCPUUsage = m.metricsCollector.GetLimitedUsersCPUUsage()
 	metrics.LimitedUsersMemoryUsage = m.metricsCollector.GetLimitedUsersMemoryUsage()
 	metrics.LimitedUsersCount = len(m.metricsCollector.GetLimitedUsers())
-
-	// DEPRECATED (backward compatibility)
-	metrics.TotalUserCPUUsage = metrics.AllUsersCPUUsage
-	metrics.ActiveUsers = m.metricsCollector.GetActiveUsers()
 
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
 	metrics.SystemUnderLoad = m.metricsCollector.IsSystemUnderLoad()
@@ -323,7 +313,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		}
 
 		// Verifica se l'uso della CPU è sceso sotto la soglia di rilascio
-		if metrics.TotalUserCPUUsage < float64(m.cfg.CPUReleaseThreshold) {
+		if metrics.LimitedUsersCPUUsage < float64(m.cfg.CPUReleaseThreshold) {
 			// Verifica anche che il sistema non sia sotto carico
 			if !metrics.SystemUnderLoad {
 				// Reset tracker quando i limiti vengono rilasciati
@@ -331,7 +321,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 				return DecisionDeactivate, fmt.Sprintf(
 					"CPU usage below release threshold (%.1f%% < %d%%) and system not under load",
-					metrics.TotalUserCPUUsage, m.cfg.CPUReleaseThreshold,
+					metrics.LimitedUsersCPUUsage, m.cfg.CPUReleaseThreshold,
 				)
 			}
 			return DecisionMaintain, "CPU usage below threshold but system still under load"
@@ -342,13 +332,13 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// Se i limiti non sono attivi, controlliamo se dobbiamo attivarli
 	// 1. Verifica soglia CPU
-	if metrics.TotalUserCPUUsage >= float64(m.cfg.CPUThreshold) {
+	if metrics.LimitedUsersCPUUsage >= float64(m.cfg.CPUThreshold) {
 		// 2. Verifica che ci siano abbastanza core per il sistema
 		if metrics.TotalCores <= m.cfg.MinSystemCores {
 			m.thresholdTracker.Reset()
 			return DecisionMaintain, fmt.Sprintf(
 				"CPU usage high (%.1f%% >= %d%%) but insufficient cores (%d <= %d)",
-				metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+				metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
 				metrics.TotalCores, m.cfg.MinSystemCores,
 			)
 		}
@@ -362,7 +352,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// 4. Verifica time window (se configurata)
 		if m.cfg.CPUThresholdDuration > 0 {
 			shouldActivate := m.thresholdTracker.ShouldActivateLimits(
-				metrics.TotalUserCPUUsage,
+				metrics.LimitedUsersCPUUsage,
 				float64(m.cfg.CPUThreshold),
 				time.Duration(m.cfg.CPUThresholdDuration)*time.Second,
 			)
@@ -373,14 +363,14 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				return DecisionMaintain, fmt.Sprintf(
 					"CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
 					remaining.Round(time.Second),
-					metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+					metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
 				)
 			}
 		}
 
 		return DecisionActivate, fmt.Sprintf(
 			"CPU usage exceeded threshold (%.1f%% >= %d%%)",
-			metrics.TotalUserCPUUsage, m.cfg.CPUThreshold,
+			metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
 		)
 	}
 
@@ -417,9 +407,9 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	usersToRelease := make([]int, 0)
 
 	for uid := range m.activeUsers {
-		// Controlla se l'utente è ancora attivo
+		// Controlla se l'utente è ancora attivo (ha processi in esecuzione)
 		userStillActive := false
-		for _, activeUID := range metrics.ActiveUsers {
+		for activeUID := range metrics.UserCPUUsage {
 			if activeUID == uid {
 				userStillActive = true
 				break
@@ -508,7 +498,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 	// Crea un set per gli utenti attuali per un controllo efficiente
 	currentActiveSet := make(map[int]bool)
-	for _, uid := range metrics.ActiveUsers {
+	for uid := range metrics.UserCPUUsage {
 		currentActiveSet[uid] = true
 	}
 
@@ -563,7 +553,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
-	for _, uid := range metrics.ActiveUsers {
+	for uid := range metrics.UserCPUUsage {
 		username := m.getUsername(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Verifica se l'utente è già limitato
@@ -664,7 +654,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 		m.logger.Info("CPU limits activated with proportional sharing",
 			"users_limited", limitedCount,
 			"users_freed", removedCount,
-			"total_active_users", len(metrics.ActiveUsers),
+			"total_active_users", len(metrics.UserCPUUsage),
 			"shared_cgroup", m.sharedCgroupPath,
 			"sharing_logic", "Proportional weights (cpu.weight)",
 			"description", "Users share total quota proportionally; idle users don't consume resources",
@@ -772,21 +762,19 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		"cpu_total_usage": metrics.TotalCPUUsage,
 		"total_cores":     float64(metrics.TotalCores),
 
-		// ALL USERS metrics (new)
+		// ALL USERS metrics
 		"all_users_cpu_usage":    metrics.AllUsersCPUUsage,
 		"all_users_count":        float64(metrics.AllUsersCount),
 		"all_users_memory_usage": float64(metrics.AllUsersMemoryUsage),
 
-		// LIMITED USERS metrics (new)
+		// LIMITED USERS metrics
 		"limited_users_cpu_usage":    metrics.LimitedUsersCPUUsage,
 		"limited_users_count":        float64(metrics.LimitedUsersCount),
 		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
 
-		// DEPRECATED metrics (backward compatibility)
-		"cpu_user_usage":  metrics.TotalUserCPUUsage,
-		"active_users":    float64(len(metrics.ActiveUsers)),
-		"limited_users":   float64(len(m.activeUsers)),
+		// Other metrics
 		"memory_usage_mb": metrics.MemoryUsage,
+		"limited_users":   float64(len(m.activeUsers)),
 		"limits_active":   boolToFloat(m.limitsActive),
 	}
 
@@ -1110,8 +1098,8 @@ func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMet
 		Decision:      decision,
 		Reason:        reason,
 		TotalCPUUsage: metrics.TotalCPUUsage,
-		UserCPUUsage:  metrics.TotalUserCPUUsage,
-		ActiveUsers:   len(metrics.ActiveUsers),
+		UserCPUUsage:  metrics.LimitedUsersCPUUsage,
+		ActiveUsers:   len(metrics.UserCPUUsage),
 		LimitsActive:  limitsActive,
 		DurationMs:    duration.Milliseconds(),
 	}

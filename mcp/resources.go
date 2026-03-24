@@ -101,7 +101,7 @@ func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadRe
 
 // handleActiveUsersResource handles cpu-manager://users/active
 func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	activeUsers := s.metricsCollector.GetActiveUsers()
+	activeUsers := s.metricsCollector.GetAllUsers()
 	result := make([]map[string]any, 0, len(activeUsers))
 
 	for _, uid := range activeUsers {

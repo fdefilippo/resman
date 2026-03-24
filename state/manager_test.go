@@ -30,8 +30,6 @@ type mockMetricsCollector struct{}
 func (m *mockMetricsCollector) GetTotalCores() int                              { return 4 }
 func (m *mockMetricsCollector) GetTotalCPUUsage() float64                       { return 50.0 }
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64                 { return 10.0 }
-func (m *mockMetricsCollector) GetTotalUserCPUUsage() float64                   { return 30.0 }
-func (m *mockMetricsCollector) GetActiveUsers() []int                           { return []int{1000, 1001} }
 func (m *mockMetricsCollector) GetMemoryUsage() float64                         { return 1024.0 }
 func (m *mockMetricsCollector) IsSystemUnderLoad() bool                         { return false }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics { return nil }
@@ -122,7 +120,7 @@ func TestMakeDecision(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 80.0, // Above threshold
+		LimitedUsersCPUUsage: 80.0, // Above threshold
 		TotalCores:        4,
 		SystemUnderLoad:   false,
 	}
@@ -149,7 +147,7 @@ func TestMakeDecisionDeactivate(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 30.0, // Below release threshold
+		LimitedUsersCPUUsage: 30.0, // Below release threshold
 		SystemUnderLoad:   false,
 	}
 
@@ -175,7 +173,7 @@ func TestMakeDecisionMaintain(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 50.0, // Between thresholds
+		LimitedUsersCPUUsage: 50.0, // Between thresholds
 		SystemUnderLoad:   false,
 	}
 
