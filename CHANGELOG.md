@@ -5,6 +5,94 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.18.1] - 2026-03-24
+
+### 🔒 Security Improvements
+
+#### Default Prometheus Bind to Localhost
+- **CHANGED**: `PROMETHEUS_METRICS_BIND_HOST` default from `0.0.0.0` to `127.0.0.1`
+- **Impact**: Metrics no longer exposed to network by default
+- **Migration**: Set `PROMETHEUS_METRICS_BIND_HOST=0.0.0.0` to expose remotely (not recommended without auth/TLS)
+
+#### MCP HTTP Authentication
+- **ADDED**: Bearer token authentication for MCP HTTP endpoint
+- **Configuration**: `MCP_AUTH_TOKEN` environment variable
+- **Validation**: Authorization header format: `Bearer <token>`
+- **Response**: 401 Unauthorized for missing/invalid tokens
+- **Backward Compatible**: If token not set, auth is disabled
+
+#### Root (UID 0) Protection
+- **ADDED**: Explicit exclusion of UID 0 from cgroup operations
+- **Functions**: `MoveProcessToCgroup()`, `MoveAllUserProcesses()`
+- **Impact**: Prevents accidental root process containment
+- **Logging**: Warning logged when UID 0 is detected
+
+#### Input Validation
+- **ADDED**: Path traversal prevention for `SCRIPT_CGROUP_BASE`
+  - Rejects paths containing `..`
+  - Rejects absolute paths (starting with `/`)
+- **ADDED**: Port range validation (1-65535) for:
+  - `PROMETHEUS_METRICS_BIND_PORT`
+  - `PROMETHEUS_PORT` (backward compatibility)
+  - `MCP_HTTP_PORT`
+
+### ⚡ Performance Improvements
+
+#### Cache Size Limits
+- **ADDED**: Maximum cache sizes to prevent memory exhaustion
+  - `MAX_CACHE_SIZE`: 10000 entries (general metrics)
+  - `MAX_PROC_CACHE_SIZE`: 5000 entries (process CPU times)
+  - `MAX_USERNAME_CACHE_SIZE`: 10000 entries (username resolution)
+- **ADDED**: LRU (Least Recently Used) eviction policy
+- **Impact**: Bounded memory usage under high process churn
+
+#### Race Condition Fix
+- **FIXED**: Async process movement in `ApplyCPULimit()`
+- **CHANGED**: Now synchronous with 5 second timeout
+- **Implementation**: Context-based cancellation
+- **Impact**: Prevents inconsistent cgroup state
+
+#### Backpressure for Control Cycles
+- **ADDED**: Skip cycle if previous is still running
+- **Mechanism**: `cycleComplete` channel signaling
+- **Logging**: Warning when cycle skipped
+- **Impact**: Prevents resource exhaustion under slow cycles
+
+#### /proc Scanning Optimization
+- **IMPROVED**: Pre-allocation with estimated capacity
+- **Formula**: `len(entries) / 50` UIDs estimated
+- **Impact**: Reduced dynamic map allocations
+- **Optimization**: Single pass for all user metrics
+
+### 📝 Code Quality
+
+#### English Comments Standardization
+- **CHANGED**: All comments in `metrics/collector.go` to English
+- **Structs**: `UserMetrics`, `userData`, `Collector`
+- **Functions**: `GetAllUserMetrics()`, `GetUserMemoryUsage()`
+- **Impact**: Improved maintainability for international contributors
+
+### 📊 Metrics Changes
+
+#### New Metrics (from v1.18.0)
+**ALL USERS** (no filters):
+- `resman_all_users_cpu_usage_percent`
+- `resman_all_users_memory_usage_bytes`
+- `resman_all_users_count`
+
+**LIMITED USERS** (pass filters):
+- `resman_limited_users_cpu_usage_percent`
+- `resman_limited_users_memory_usage_bytes`
+- `resman_limited_users_count_filtered`
+
+### 🐛 Bug Fixes
+
+- Fixed cache eviction when size limits reached
+- Fixed timeout handling in cgroup process movement
+- Fixed port validation error messages
+
+---
+
 ## [1.18.0] - 2026-03-24
 
 #### Metrics Separation: ALL USERS vs LIMITED USERS
