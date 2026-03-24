@@ -97,6 +97,29 @@ USER_EXCLUDE_LIST=^mysql,^postgres,^backup
 **Unchanged variables:**
 - `USER_EXCLUDE_LIST` → Controls who is NEVER limited
 - `SYSTEM_UID_MIN` → Minimum UID to monitor (default: 1000)
+  - **Note**: Set `SYSTEM_UID_MIN=0` to monitor ALL users including root
+  - **Note**: `SYSTEM_UID_MAX` is auto-detected from `/proc/sys/kernel/pid_max`
+
+### 💡 Usage Notes
+
+**Monitor all users (including root):**
+```bash
+SYSTEM_UID_MIN=0           # Include UID 0 (root) and all system users
+USER_INCLUDE_LIST=.*       # All users can be limited
+USER_EXCLUDE_LIST=root     # But exclude root from limiting
+```
+
+**Monitor only regular users (default):**
+```bash
+SYSTEM_UID_MIN=1000        # Exclude system users (UID 0-999)
+USER_INCLUDE_LIST=.*       # All regular users can be limited
+```
+
+**Monitor but don't limit anyone (read-only mode):**
+```bash
+SYSTEM_UID_MIN=1000
+USER_INCLUDE_LIST=         # Empty = no users limited (monitoring only)
+```
 
 ---
 

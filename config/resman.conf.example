@@ -160,7 +160,16 @@ LOG_FILE=/var/log/resman.log
 # SYSTEM
 # ========================
 MIN_SYSTEM_CORES=1
+
+# SYSTEM_UID_MIN: UID minimo da monitorare
+# Default: 1000 (esclude utenti di sistema: root, daemon, systemd, ecc.)
+# Impostare a 0 per monitorare TUTTI gli utenti (incluso root)
+# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio
 SYSTEM_UID_MIN=1000
+
+# SYSTEM_UID_MAX: UID massimo da monitorare
+# Default: letto automaticamente da /proc/sys/kernel/pid_max
+# Tipicamente: 32768, 65536, o 4194304 su sistemi moderni
 # SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
 
 # ========================
