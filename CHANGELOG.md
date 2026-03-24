@@ -4,6 +4,102 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
+
+## [1.17.1] - 2026-03-23
+
+### ⚠️ BREAKING CHANGES
+
+#### USER_INCLUDE_LIST Behavior Change
+- **CHANGED**: Empty `USER_INCLUDE_LIST` now means NO users are limited (monitoring only)
+- **CHANGED**: To limit ALL users (previous default), set `USER_INCLUDE_LIST=.*`
+- **Added**: Warning message at startup when `USER_INCLUDE_LIST` is empty
+- **Rationale**: Clear separation between monitoring (all users) and limiting (filtered users)
+
+**Migration:**
+```bash
+# BEFORE (v1.17.0): Empty = all users limited
+USER_INCLUDE_LIST=
+
+# AFTER (v1.17.1): Empty = no users limited (monitoring only)
+# To limit all users:
+USER_INCLUDE_LIST=.*
+
+# To limit specific users:
+USER_INCLUDE_LIST=^www.*,^app-.*,francesco
+```
+
+### 🔄 Reversed Changes
+
+#### Reintroduced PROCESS_EXCLUDE_LIST
+- **REINTRODUCED**: `PROCESS_EXCLUDE_LIST` configuration variable (v1.17.0 removed it)
+- **ADDED**: `IsProcessExcluded()` function
+- **NEW**: Full regex support for process name patterns
+- **Default**: `^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$`
+- **Rationale**: Protect critical processes from CPU limits even if user is in include list
+
+**Example:**
+```bash
+# Exclude critical system processes (default)
+PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
+
+# Exclude all systemd services
+PROCESS_EXCLUDE_LIST=^systemd-.*
+
+# Exclude database processes
+PROCESS_EXCLUDE_LIST=mysqld,postgres,redis,mongod
+
+# Mixed patterns
+PROCESS_EXCLUDE_LIST=^systemd-.*,^dbus-.*,sshd,cron
+```
+
+### 🔧 Bug Fixes
+
+#### Fixed User Filtering Logic
+- **FIX**: `IsUserWhitelisted()` now considers both `USER_INCLUDE_LIST` and `USER_EXCLUDE_LIST`
+  - **Before**: Only checked `!IsUserExcluded()` (ignored include list)
+  - **After**: Checks `IsUserIncluded() && !IsUserExcluded()`
+- **Impact**: Users are now limited only if they pass BOTH include and exclude filters
+
+### 📊 Monitoring vs Limiting
+
+**Clarified behavior:**
+- **Monitoring**: ALL non-system users (UID >= 1000) are monitored
+- **Limiting**: Only users passing filters (USER_INCLUDE_LIST && !USER_EXCLUDE_LIST && !BLACKOUT)
+- **Process Protection**: Processes in PROCESS_EXCLUDE_LIST are never limited
+
+**Example scenarios:**
+```bash
+# Scenario 1: Monitor all, limit none (default)
+USER_INCLUDE_LIST=          # Empty = no users limited
+USER_EXCLUDE_LIST=root
+
+# Scenario 2: Monitor all, limit all
+USER_INCLUDE_LIST=.*        # Regex = all users can be limited
+USER_EXCLUDE_LIST=root
+
+# Scenario 3: Monitor all, limit only web users
+USER_INCLUDE_LIST=^www.*,^apache.*,^nginx.*
+USER_EXCLUDE_LIST=
+
+# Scenario 4: Monitor all, limit all except specific users
+USER_INCLUDE_LIST=.*
+USER_EXCLUDE_LIST=^mysql,^postgres,^backup
+```
+
+### 📝 Configuration Changes
+
+**New variables:**
+- `PROCESS_EXCLUDE_LIST` - Process names (regex) to never limit
+
+**Changed behavior:**
+- `USER_INCLUDE_LIST` - Empty value now means "no users limited" (was "all users limited")
+
+**Unchanged variables:**
+- `USER_EXCLUDE_LIST` → Controls who is NEVER limited
+- `SYSTEM_UID_MIN` → Minimum UID to monitor (default: 1000)
+
+---
+
 ## [1.17.0] - 2026-03-23
 
 ### ⚠️ BREAKING CHANGES
