@@ -51,13 +51,24 @@ type PrometheusExporter struct {
 
 	// Metriche base (con label hostname e server_role)
 	cpuTotalUsage prometheus.Gauge
-	cpuUserUsage  prometheus.Gauge
+	cpuUserUsage  prometheus.Gauge // DEPRECATED: usare allUsersCPUUsage
 	memoryUsage   prometheus.Gauge
-	activeUsers   prometheus.Gauge
+	activeUsers   prometheus.Gauge // DEPRECATED: usare allUsersCount
 	limitedUsers  prometheus.Gauge
-	limitsActive  prometheus.Gauge
-	systemLoad    prometheus.Gauge
-	totalCores    prometheus.Gauge
+
+	// Metriche ALL USERS (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	allUsersCPUUsage    prometheus.Gauge
+	allUsersMemoryUsage prometheus.Gauge
+	allUsersCount       prometheus.Gauge
+
+	// Metriche LIMITED USERS (solo utenti che passano i filtri)
+	limitedUsersCPUUsage    prometheus.Gauge
+	limitedUsersMemoryUsage prometheus.Gauge
+	limitedUsersCount       prometheus.Gauge
+
+	limitsActive prometheus.Gauge
+	systemLoad   prometheus.Gauge
+	totalCores   prometheus.Gauge
 
 	// Metriche con label aggiuntive
 	userCPUUsage      *prometheus.GaugeVec
@@ -258,7 +269,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	exp.cpuUserUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "cpu_user_usage_percent",
-		Help:        "Total CPU usage percentage by non-system users",
+		Help:        "DEPRECATED: Total CPU usage percentage by non-system users (filtered). Use resman_all_users_cpu_usage_percent instead",
 		ConstLabels: staticLabels,
 	})
 
@@ -272,7 +283,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	exp.activeUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "active_users_count",
-		Help:        "Number of active non-system users",
+		Help:        "DEPRECATED: Number of active non-system users (filtered). Use resman_all_users_count instead",
 		ConstLabels: staticLabels,
 	})
 
@@ -280,6 +291,52 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Namespace:   namespace,
 		Name:        "limited_users_count",
 		Help:        "Number of users with CPU limits currently applied",
+		ConstLabels: staticLabels,
+	})
+
+	// === ALL USERS metrics (all non-system users, UID >= SYSTEM_UID_MIN) ===
+
+	exp.allUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "all_users_cpu_usage_percent",
+		Help:        "Total CPU usage percentage by ALL non-system users (UID >= SYSTEM_UID_MIN), regardless of filters",
+		ConstLabels: staticLabels,
+	})
+
+	exp.allUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "all_users_memory_usage_bytes",
+		Help:        "Total memory usage in bytes by ALL non-system users (UID >= SYSTEM_UID_MIN)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.allUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "all_users_count",
+		Help:        "Number of ALL active non-system users (UID >= SYSTEM_UID_MIN), regardless of filters",
+		ConstLabels: staticLabels,
+	})
+
+	// === LIMITED USERS metrics (only users passing filters) ===
+
+	exp.limitedUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limited_users_cpu_usage_percent",
+		Help:        "Total CPU usage percentage by users passing filters (USER_INCLUDE_LIST && !USER_EXCLUDE_LIST)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.limitedUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limited_users_memory_usage_bytes",
+		Help:        "Total memory usage in bytes by users passing filters",
+		ConstLabels: staticLabels,
+	})
+
+	exp.limitedUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limited_users_count_filtered",
+		Help:        "Number of users passing filters (can be limited)",
 		ConstLabels: staticLabels,
 	})
 
@@ -448,14 +505,33 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 		switch {
 		case key == "cpu_total_usage":
 			exp.cpuTotalUsage.Set(value)
+
+		// DEPRECATED metrics (backward compatibility)
 		case key == "cpu_user_usage":
 			exp.cpuUserUsage.Set(value)
-		case key == "memory_usage_mb":
-			exp.memoryUsage.Set(value)
 		case key == "active_users":
 			exp.activeUsers.Set(value)
+
+		// ALL USERS metrics (new)
+		case key == "all_users_cpu_usage":
+			exp.allUsersCPUUsage.Set(value)
+		case key == "all_users_count":
+			exp.allUsersCount.Set(value)
+
+		// LIMITED USERS metrics (new)
 		case key == "limited_users":
 			exp.limitedUsers.Set(value)
+		case key == "limited_users_cpu_usage":
+			exp.limitedUsersCPUUsage.Set(value)
+		case key == "limited_users_count":
+			exp.limitedUsersCount.Set(value)
+
+		case key == "memory_usage_mb":
+			exp.memoryUsage.Set(value)
+		case key == "all_users_memory_usage":
+			exp.allUsersMemoryUsage.Set(value)
+		case key == "limited_users_memory_usage":
+			exp.limitedUsersMemoryUsage.Set(value)
 		case key == "limits_active":
 			exp.limitsActive.Set(value)
 		case key == "system_load":

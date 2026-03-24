@@ -72,8 +72,19 @@ type MetricsCollector interface {
 	GetTotalCores() int
 	GetTotalCPUUsage() float64
 	GetUserCPUUsage(uid int) float64
-	GetTotalUserCPUUsage() float64
-	GetActiveUsers() []int
+	GetTotalUserCPUUsage() float64 // DEPRECATED: usare GetAllUsersCPUUsage
+	GetActiveUsers() []int          // DEPRECATED: usare GetLimitedUsers
+
+	// ALL USERS metrics (tutti gli utenti non-system)
+	GetAllUsers() []int
+	GetAllUsersCPUUsage() float64
+	GetAllUsersMemoryUsage() uint64
+
+	// LIMITED USERS metrics (solo utenti che passano i filtri)
+	GetLimitedUsers() []int
+	GetLimitedUsersCPUUsage() float64
+	GetLimitedUsersMemoryUsage() uint64
+
 	GetMemoryUsage() float64
 	IsSystemUnderLoad() bool
 	GetAllUserMetrics() map[int]*metrics.UserMetrics
@@ -228,12 +239,25 @@ type SystemMetrics struct {
 	Timestamp         time.Time
 	TotalCores        int
 	TotalCPUUsage     float64 // Percentuale
-	TotalUserCPUUsage float64 // Percentuale
-	MemoryUsage       float64 // MB
-	SystemUnderLoad   bool
-	ActiveUsers       []int
-	UserCPUUsage      map[int]float64              // UID -> percentuale
-	UserMetrics       map[int]*metrics.UserMetrics // Metriche dettagliate per utente
+
+	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	AllUsersCPUUsage    float64
+	AllUsersMemoryUsage uint64
+	AllUsersCount       int
+
+	// LIMITED USERS metrics (solo utenti che passano i filtri)
+	LimitedUsersCPUUsage    float64
+	LimitedUsersMemoryUsage uint64
+	LimitedUsersCount       int
+
+	// DEPRECATED (backward compatibility)
+	TotalUserCPUUsage float64 // Usare AllUsersCPUUsage
+
+	MemoryUsage     float64 // MB
+	SystemUnderLoad bool
+	ActiveUsers     []int // DEPRECATED: usare LimitedUsers
+	UserCPUUsage    map[int]float64              // UID -> percentuale
+	UserMetrics     map[int]*metrics.UserMetrics // Metriche dettagliate per utente
 }
 
 // collectSystemMetrics raccoglie tutte le metriche di sistema necessarie.
@@ -247,10 +271,23 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	// Raccogli metriche di base
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
 	metrics.TotalCPUUsage = m.metricsCollector.GetTotalCPUUsage()
-	metrics.TotalUserCPUUsage = m.metricsCollector.GetTotalUserCPUUsage()
+
+	// ALL USERS metrics
+	metrics.AllUsersCPUUsage = m.metricsCollector.GetAllUsersCPUUsage()
+	metrics.AllUsersMemoryUsage = m.metricsCollector.GetAllUsersMemoryUsage()
+	metrics.AllUsersCount = len(m.metricsCollector.GetAllUsers())
+
+	// LIMITED USERS metrics
+	metrics.LimitedUsersCPUUsage = m.metricsCollector.GetLimitedUsersCPUUsage()
+	metrics.LimitedUsersMemoryUsage = m.metricsCollector.GetLimitedUsersMemoryUsage()
+	metrics.LimitedUsersCount = len(m.metricsCollector.GetLimitedUsers())
+
+	// DEPRECATED (backward compatibility)
+	metrics.TotalUserCPUUsage = metrics.AllUsersCPUUsage
+	metrics.ActiveUsers = m.metricsCollector.GetActiveUsers()
+
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
 	metrics.SystemUnderLoad = m.metricsCollector.IsSystemUnderLoad()
-	metrics.ActiveUsers = m.metricsCollector.GetActiveUsers()
 
 	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
@@ -731,13 +768,26 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 	// Metriche base per il metodo UpdateMetrics
 	promMetrics := map[string]float64{
+		// System metrics
 		"cpu_total_usage": metrics.TotalCPUUsage,
+		"total_cores":     float64(metrics.TotalCores),
+
+		// ALL USERS metrics (new)
+		"all_users_cpu_usage":    metrics.AllUsersCPUUsage,
+		"all_users_count":        float64(metrics.AllUsersCount),
+		"all_users_memory_usage": float64(metrics.AllUsersMemoryUsage),
+
+		// LIMITED USERS metrics (new)
+		"limited_users_cpu_usage":    metrics.LimitedUsersCPUUsage,
+		"limited_users_count":        float64(metrics.LimitedUsersCount),
+		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
+
+		// DEPRECATED metrics (backward compatibility)
 		"cpu_user_usage":  metrics.TotalUserCPUUsage,
-		"memory_usage_mb": metrics.MemoryUsage,
 		"active_users":    float64(len(metrics.ActiveUsers)),
 		"limited_users":   float64(len(m.activeUsers)),
+		"memory_usage_mb": metrics.MemoryUsage,
 		"limits_active":   boolToFloat(m.limitsActive),
-		"total_cores":     float64(metrics.TotalCores),
 	}
 
 	// Aggiungi load average se disponibile

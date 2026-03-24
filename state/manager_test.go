@@ -39,6 +39,16 @@ func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter                  
 func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
 }
 
+// ALL USERS metrics
+func (m *mockMetricsCollector) GetAllUsers() []int                  { return []int{1000, 1001, 1002} }
+func (m *mockMetricsCollector) GetAllUsersCPUUsage() float64        { return 40.0 }
+func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64      { return 2000000000 }
+
+// LIMITED USERS metrics
+func (m *mockMetricsCollector) GetLimitedUsers() []int              { return []int{1000, 1001} }
+func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64    { return 30.0 }
+func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64  { return 1500000000 }
+
 type mockCgroupManager struct{}
 
 func (m *mockCgroupManager) CreateUserCgroup(uid int) error                            { return nil }
