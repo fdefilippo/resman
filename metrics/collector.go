@@ -88,7 +88,12 @@ type Collector struct {
 }
 
 // Default Username Cache TTL
-const DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
+const (
+	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
+	MAX_CACHE_SIZE            = 10000  // Maximum number of entries in general cache
+	MAX_PROC_CACHE_SIZE       = 5000   // Maximum number of entries in process CPU cache
+	MAX_USERNAME_CACHE_SIZE   = 10000  // Maximum number of entries in username cache
+)
 
 // NewCollector crea un nuovo collettore di metriche.
 func NewCollector(cfg *config.Config) (*Collector, error) {
@@ -685,10 +690,31 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	return username, true
 }
 
-// cacheUsername memorizza lo username nella cache
+// cacheUsername memorizza lo username nella cache con LRU eviction.
 func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheMutex.Lock()
 	defer c.usernameCacheMutex.Unlock()
+
+	// If cache is full, remove oldest entry (LRU eviction)
+	if len(c.usernameCache) >= MAX_USERNAME_CACHE_SIZE {
+		oldestUID := 0
+		oldestTime := time.Now()
+		
+		for uid, ts := range c.usernameCacheTime {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestUID = uid
+			}
+		}
+		
+		if oldestUID != 0 {
+			delete(c.usernameCache, oldestUID)
+			delete(c.usernameCacheTime, oldestUID)
+			c.logger.Debug("Username cache full - evicted oldest entry",
+				"evicted_uid", oldestUID,
+				"cache_size", len(c.usernameCache))
+		}
+	}
 
 	c.usernameCache[uid] = username
 	c.usernameCacheTime[uid] = time.Now()
@@ -919,10 +945,31 @@ func (c *Collector) getFromCache(key string, ttl time.Duration) (interface{}, bo
 	return val, true
 }
 
-// setInCache memorizza un valore nella cache.
+// setInCache memorizza un valore nella cache con LRU eviction.
 func (c *Collector) setInCache(key string, value interface{}) {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
+
+	// If cache is full, remove oldest entries (LRU eviction)
+	if len(c.cache) >= MAX_CACHE_SIZE {
+		oldestKey := ""
+		oldestTime := time.Now()
+		
+		for k, ts := range c.cacheTimestamps {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestKey = k
+			}
+		}
+		
+		if oldestKey != "" {
+			delete(c.cache, oldestKey)
+			delete(c.cacheTimestamps, oldestKey)
+			c.logger.Debug("Cache full - evicted oldest entry",
+				"evicted_key", oldestKey,
+				"cache_size", len(c.cache))
+		}
+	}
 
 	c.cache[key] = value
 	c.cacheTimestamps[key] = time.Now()
@@ -1284,6 +1331,24 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	}
 
 	// Primo campione: salva e ritorna 0
+	// Se cache è piena, rimuovi entry più vecchia (LRU)
+	if len(c.prevProcCPU) >= MAX_PROC_CACHE_SIZE {
+		oldestPID := int32(0)
+		oldestTime := time.Now()
+		
+		for pid, ts := range c.prevProcTime {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestPID = pid
+			}
+		}
+		
+		if oldestPID != 0 {
+			delete(c.prevProcCPU, oldestPID)
+			delete(c.prevProcTime, oldestPID)
+		}
+	}
+	
 	c.prevProcCPU[pid32] = *times
 	c.prevProcTime[pid32] = now
 	return 0
