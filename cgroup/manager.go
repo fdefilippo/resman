@@ -363,6 +363,13 @@ func (m *Manager) RemoveCPULimit(uid int) error {
 
 // MoveProcessToCgroup sposta un processo nel cgroup dell'utente.
 func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
+	// SECURITY: Never move any process to UID 0 cgroup
+	if uid == 0 {
+		m.logger.Warn("Refusing to move process to root (UID 0) cgroup - security boundary",
+			"pid", pid)
+		return fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
+	}
+
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
 		return fmt.Errorf("cgroup for UID %d does not exist", uid)
@@ -396,6 +403,12 @@ func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
 // MoveAllUserProcesses sposta tutti i processi di un utente nel suo cgroup.
 func (m *Manager) MoveAllUserProcesses(uid int) error {
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
+
+	// SECURITY: Never move UID 0 (root) processes to user cgroups
+	if uid == 0 {
+		m.logger.Warn("Refusing to move root (UID 0) processes to cgroup - security boundary")
+		return fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
+	}
 
 	// Leggi tutti i PIDs dell'utente da /proc
 	procDir := "/proc"
