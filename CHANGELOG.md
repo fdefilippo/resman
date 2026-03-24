@@ -7,11 +7,7 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 
 ## [1.18.0] - 2026-03-24
 
-### ⚠️ BREAKING CHANGES
-
 #### Metrics Separation: ALL USERS vs LIMITED USERS
-
-**NEW Metrics (clear separation):**
 
 **ALL USERS** (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN, SENZA filtri):
 - `resman_all_users_cpu_usage_percent` → CPU totale di TUTTI gli utenti
@@ -22,30 +18,6 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/)
 - `resman_limited_users_cpu_usage_percent` → CPU solo utenti limitabili
 - `resman_limited_users_memory_usage_bytes` → RAM solo utenti limitabili
 - `resman_limited_users_count_filtered` → Numero utenti limitabili
-
-**DEPRECATED Metrics (backward compatible, saranno rimosse in v2.0):**
-- `resman_cpu_user_usage_percent` → Usare `resman_all_users_cpu_usage_percent`
-- `resman_active_users_count` → Usare `resman_all_users_count`
-
-**Per-User Metrics (inalterate, già chiare):**
-- `resman_user_cpu_usage_percent{uid,username,is_limited}` → CPU per utente con label is_limited
-- `resman_user_memory_usage_bytes{uid,username,is_limited}` → RAM per utente con label is_limited
-- `resman_user_process_count{uid,username,is_limited}` → Processi per utente con label is_limited
-
-**Migration Dashboard:**
-```promql
-# BEFORE (ambiguous):
-resman_cpu_user_usage_percent
-
-# AFTER (clear):
-resman_all_users_cpu_usage_percent     # Tutti gli utenti
-resman_limited_users_cpu_usage_percent # Solo utenti che passano filtri
-```
-
-**Rationale:**
-- Prima: `resman_cpu_user_usage_percent` includeva solo utenti filtrati (confusing!)
-- Ora: Distinzione chiara tra "tutti gli utenti monitorati" e "sottoinsieme limitabile"
-- Dashboard Grafana: due sezioni separate "ALL USERS" e "LIMITED USERS"
 
 ---
 
@@ -1605,17 +1577,3 @@ Il formato delle versioni è `MAJOR.MINOR.PATCH`:
 
 ## Link
 
-- [1.11.0]: https://github.com/fdefilippo/resman-go/compare/v1.10.1...v1.11.0
-- [1.10.1]: https://github.com/fdefilippo/resman-go/compare/v1.10.0...v1.10.1
-- [1.10.0]: https://github.com/fdefilippo/resman-go/compare/v1.9.0...v1.10.0
-- [1.9.0]: https://github.com/fdefilippo/resman-go/compare/v1.8.0...v1.9.0
-- [1.8.0]: https://github.com/fdefilippo/resman-go/compare/v1.7.0...v1.8.0
-- [1.7.0]: https://github.com/fdefilippo/resman-go/compare/v1.6.0...v1.7.0
-- [1.6.0]: https://github.com/fdefilippo/resman-go/compare/v1.5.0...v1.6.0
-- [1.5.0]: https://github.com/fdefilippo/resman-go/compare/v1.4.0...v1.5.0
-- [1.4.0]: https://github.com/fdefilippo/resman-go/compare/v1.3.0...v1.4.0
-- [1.3.0]: https://github.com/fdefilippo/resman-go/compare/v1.2.0...v1.3.0
-- [1.2.0]: https://github.com/fdefilippo/resman-go/compare/v1.0.0...v1.2.0
-- [1.0.0]: https://github.com/fdefilippo/resman-go/compare/v0.9.0...v1.0.0
-- [0.9.0]: https://github.com/fdefilippo/resman-go/compare/v0.1.0...v0.9.0
-- [0.1.0]: https://github.com/fdefilippo/resman-go/releases/tag/v0.1.0

@@ -182,8 +182,9 @@ RAM_QUOTA_PER_USER=512M
 SYSTEM_UID_MIN=1000           # Monitor users with UID >= 1000
 POLLING_INTERVAL=30           # Check every 30 seconds
 
-# Prometheus metrics
+# Prometheus metrics (SECURE DEFAULT: localhost only)
 ENABLE_PROMETHEUS=true
+PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
 PROMETHEUS_METRICS_BIND_PORT=1974
 SERVER_ROLE=database          # Optional: server role label
 

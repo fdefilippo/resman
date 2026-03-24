@@ -122,8 +122,10 @@ DISABLE_SWAP=false
 # PROMETHEUS
 # ========================
 ENABLE_PROMETHEUS=false              # Enable metrics export
-# PROMETHEUS_METRICS_BIND_HOST=0.0.0.0  # Bind address (default: 0.0.0.0 - all interfaces)
-# PROMETHEUS_METRICS_BIND_PORT=1974     # Port for metrics endpoint (default: 1974)
+# SECURITY: Default bind is 127.0.0.1 (localhost only)
+# Set to 0.0.0.0 to expose to all interfaces (NOT recommended without auth/TLS)
+# PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
+# PROMETHEUS_METRICS_BIND_PORT=1974     # Port for metrics endpoint
 # Metrics available at: http://HOST:PORT/metrics
 
 # Prometheus TLS/HTTPS (optional)

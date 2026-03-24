@@ -80,7 +80,7 @@ type Config struct {
 
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
-	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`
+	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`  // Default: 127.0.0.1 (secure)
 	PrometheusMetricsBindPort int    `config:"PROMETHEUS_METRICS_BIND_PORT"`
 
 	// Prometheus TLS/HTTPS (optional)
@@ -189,7 +189,7 @@ func DefaultConfig() *Config {
 		RAMUserExcludeList:  nil,
 
 		EnablePrometheus:          false,
-		PrometheusMetricsBindHost: "", // Empty = use default 0.0.0.0
+		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
 		PrometheusMetricsBindPort: 1974,
 
 		// Prometheus TLS (disabled by default)
