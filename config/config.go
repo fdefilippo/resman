@@ -367,6 +367,10 @@ func setConfigField(cfg *Config, key, value string) error {
 	case "CGROUP_ROOT":
 		cfg.CgroupRoot = value
 	case "SCRIPT_CGROUP_BASE":
+		// SECURITY: Validate path does not contain traversal sequences
+		if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
+			return fmt.Errorf("invalid SCRIPT_CGROUP_BASE: must be a relative path without '..'")
+		}
 		cfg.ScriptCgroupBase = value
 	case "CONFIG_FILE":
 		cfg.ConfigFile = value
@@ -427,6 +431,9 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.PrometheusMetricsBindHost = value
 	case "PROMETHEUS_METRICS_BIND_PORT":
 		if i, err := strconv.Atoi(value); err == nil {
+			if i < 1 || i > 65535 {
+				return fmt.Errorf("invalid PROMETHEUS_METRICS_BIND_PORT: %d (must be 1-65535)", i)
+			}
 			cfg.PrometheusMetricsBindPort = i
 		}
 	// Backward compatibility: old variable names
@@ -434,6 +441,9 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.PrometheusMetricsBindHost = value
 	case "PROMETHEUS_PORT":
 		if i, err := strconv.Atoi(value); err == nil {
+			if i < 1 || i > 65535 {
+				return fmt.Errorf("invalid PROMETHEUS_PORT: %d (must be 1-65535)", i)
+			}
 			cfg.PrometheusMetricsBindPort = i
 		}
 

@@ -19,6 +19,7 @@ package cgroup
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -304,17 +305,33 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 		}
 	}
 
-	m.wg.Add(1)
+	// Sposta processi in modo sincrono con timeout per evitare race condition
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	done := make(chan error, 1)
 	go func() {
-		defer m.wg.Done()
-		time.Sleep(500 * time.Millisecond)
-		if err := m.MoveAllUserProcesses(uid); err != nil {
+		defer close(done)
+		time.Sleep(100 * time.Millisecond)  // Breve delay per stabilizzazione
+		done <- m.MoveAllUserProcesses(uid)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
 			m.logger.Warn("Failed to move user processes to cgroup",
 				"uid", uid,
 				"error", err,
 			)
+			return err
 		}
-	}()
+	case <-ctx.Done():
+		m.logger.Warn("Timeout moving user processes to cgroup",
+			"uid", uid,
+			"timeout", "5s",
+		)
+		return fmt.Errorf("timeout moving processes to cgroup for UID %d", uid)
+	}
 
 	return nil
 }
