@@ -43,17 +43,24 @@ const (
 	pageSizeBytes          = 4096
 )
 
-// UserMetrics contiene le metriche per un singolo utente.
+// UserMetrics contains metrics for a single user.
 type UserMetrics struct {
 	UID          int
 	Username     string
-	CPUUsage     float64 // Percentuale CPU
-	MemoryUsage  uint64  // Memoria in bytes (VmRSS)
-	ProcessCount int     // Numero di processi
-        IsLimited    bool    // Se l'''utente è sottoposto a limiti CPU
+	CPUUsage     float64 // CPU percentage
+	MemoryUsage  uint64  // Memory in bytes (VmRSS)
+	ProcessCount int     // Number of processes
+	IsLimited    bool    // Whether user has CPU limits applied
 }
 
-// Collector raccoglie metriche di sistema.
+// userData is a temporary structure for accumulating data per UID during /proc scan.
+type userData struct {
+	cpuUsage     float64
+	memoryUsage  uint64
+	processCount int
+}
+
+// Collector collects system metrics.
 type Collector struct {
 	cfg    *config.Config
 	logger *logging.Logger
@@ -1105,8 +1112,8 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 	return load1, nil
 }
 
-// GetAllUserMetrics restituisce le metriche (CPU, memoria, processi) per tutti gli utenti attivi.
-// Questa funzione scansiona /proc una sola volta per efficienza.
+// GetAllUserMetrics returns metrics (CPU, memory, processes) for all active users.
+// Optimization: single /proc scan with pre-allocation and combined UID+name reading.
 func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	cacheKey := "all_user_metrics"
 	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
@@ -1124,13 +1131,9 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		return userMetrics
 	}
 
-	// Mappa temporanea per accumulare i dati per UID
-	type userData struct {
-		cpuUsage     float64
-		memoryUsage  uint64
-		processCount int
-	}
-	tempData := make(map[int]*userData)
+	// Pre-allocate with estimated capacity (reduces dynamic allocations)
+	estimatedUIDs := len(entries) / 50  // Estimate: ~50 processes per average UID
+	tempData := make(map[int]*userData, estimatedUIDs)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1142,39 +1145,40 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			continue
 		}
 
-		// Leggi UID del processo
+		// Read process UID
 		statusFile := filepath.Join(procDir, entry.Name(), "status")
 		uid, err := c.getUIDFromStatusFile(statusFile)
 		if err != nil || !c.isValidUserUID(uid) {
 			continue
 		}
 
-		// Inizializza struttura se non esiste
+		// Initialize structure if it doesn't exist
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}
 
-		// Conta il processo (tutti i processi, anche esclusi dai limiti)
+		// Count process (all processes, including those excluded from limits)
 		tempData[uid].processCount++
 
-		// Leggi uso CPU (tutti i processi, anche esclusi dai limiti)
+		// Read CPU usage (all processes, including those excluded from limits)
 		cpuUsage := c.getProcessCPUUsageSimple(pid)
 		tempData[uid].cpuUsage += cpuUsage
 
-		// Leggi uso memoria (VmRSS in bytes) (tutti i processi)
+		// Read memory usage (VmRSS in bytes) (all processes)
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
 	}
 
-	// Converte in UserMetrics con username
+	// Convert to UserMetrics with username
 	for uid, data := range tempData {
+		username := c.getUsernameFromUID(uid)
 		userMetrics[uid] = &UserMetrics{
 			UID:          uid,
-			Username:     c.getUsernameFromUID(uid),
+			Username:     username,
 			CPUUsage:     data.cpuUsage,
 			MemoryUsage:  data.memoryUsage,
 			ProcessCount: data.processCount,
-                        IsLimited:    c.cfg.IsUserWhitelisted(c.getUsernameFromUID(uid)),
+			IsLimited:    c.cfg.IsUserWhitelisted(username),
 		}
 	}
 
@@ -1182,7 +1186,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	return userMetrics
 }
 
-// GetUserMemoryUsage restituisce la memoria totale usata da un utente in bytes.
+// GetUserMemoryUsage returns total memory used by a user in bytes.
 func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	if !c.isValidUserUID(uid) {
 		return 0
