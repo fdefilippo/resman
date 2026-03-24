@@ -1052,34 +1052,19 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			continue
 		}
 
-		// Leggi nome del processo
-		nameFile := filepath.Join(procDir, entry.Name(), "comm")
-		procNameBytes, _ := os.ReadFile(nameFile)
-		procName := strings.TrimSpace(string(procNameBytes))
-
-		// Salta i processi esclusi
-		if c.cfg.IsProcessExcluded(procName) {
-			c.logger.Debug("Process excluded from monitoring",
-				"pid", pid,
-				"uid", uid,
-				"name", procName,
-			)
-			continue
-		}
-
 		// Inizializza struttura se non esiste
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}
 
-		// Conta il processo
+		// Conta il processo (tutti i processi, anche esclusi dai limiti)
 		tempData[uid].processCount++
 
-		// Leggi uso CPU
+		// Leggi uso CPU (tutti i processi, anche esclusi dai limiti)
 		cpuUsage := c.getProcessCPUUsageSimple(pid)
 		tempData[uid].cpuUsage += cpuUsage
 
-		// Leggi uso memoria (VmRSS in bytes)
+		// Leggi uso memoria (VmRSS in bytes) (tutti i processi)
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
 	}
