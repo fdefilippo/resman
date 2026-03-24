@@ -277,6 +277,10 @@ func main() {
 		logger.Error("Error in initial control cycle", "error", err)
 	}
 
+	// Backpressure channel - signals when control cycle completes
+	cycleComplete := make(chan struct{})
+	close(cycleComplete)  // Initially complete so first cycle runs
+
 	// Main loop
 	for {
 		select {
@@ -316,11 +320,29 @@ func main() {
 
 		case <-ticker.C:
 			startTime := time.Now()
+			
+			// Backpressure: Skip cycle if previous is still running
+			select {
+			case <-cycleComplete:
+				// Previous cycle completed, start new one
+			default:
+				// Previous cycle still running - skip this cycle
+				logger.Warn("Skipping control cycle - previous cycle still running",
+					"reason", "backpressure",
+					"polling_interval_ms", cfg.PollingInterval*1000,
+				)
+				continue
+			}
+			
+			cycleComplete = make(chan struct{})
+			
 			if err := stateManager.RunControlCycle(ctx); err != nil {
 				logger.Error("Error in control cycle", "error", err)
 			}
 
 			duration := time.Since(startTime)
+			close(cycleComplete)  // Signal cycle completion
+			
 			if duration > time.Duration(cfg.PollingInterval/2)*time.Second {
 				logger.Warn("Control cycle took longer than expected",
 					"duration_ms", duration.Milliseconds(),
