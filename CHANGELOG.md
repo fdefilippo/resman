@@ -5,6 +5,50 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.18.0] - 2026-03-24
+
+### ⚠️ BREAKING CHANGES
+
+#### Metrics Separation: ALL USERS vs LIMITED USERS
+
+**NEW Metrics (clear separation):**
+
+**ALL USERS** (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN, SENZA filtri):
+- `resman_all_users_cpu_usage_percent` → CPU totale di TUTTI gli utenti
+- `resman_all_users_memory_usage_bytes` → RAM totale di TUTTI gli utenti
+- `resman_all_users_count` → Numero di TUTTI gli utenti
+
+**LIMITED USERS** (solo utenti che passano USER_INCLUDE_LIST && !USER_EXCLUDE_LIST):
+- `resman_limited_users_cpu_usage_percent` → CPU solo utenti limitabili
+- `resman_limited_users_memory_usage_bytes` → RAM solo utenti limitabili
+- `resman_limited_users_count_filtered` → Numero utenti limitabili
+
+**DEPRECATED Metrics (backward compatible, saranno rimosse in v2.0):**
+- `resman_cpu_user_usage_percent` → Usare `resman_all_users_cpu_usage_percent`
+- `resman_active_users_count` → Usare `resman_all_users_count`
+
+**Per-User Metrics (inalterate, già chiare):**
+- `resman_user_cpu_usage_percent{uid,username,is_limited}` → CPU per utente con label is_limited
+- `resman_user_memory_usage_bytes{uid,username,is_limited}` → RAM per utente con label is_limited
+- `resman_user_process_count{uid,username,is_limited}` → Processi per utente con label is_limited
+
+**Migration Dashboard:**
+```promql
+# BEFORE (ambiguous):
+resman_cpu_user_usage_percent
+
+# AFTER (clear):
+resman_all_users_cpu_usage_percent     # Tutti gli utenti
+resman_limited_users_cpu_usage_percent # Solo utenti che passano filtri
+```
+
+**Rationale:**
+- Prima: `resman_cpu_user_usage_percent` includeva solo utenti filtrati (confusing!)
+- Ora: Distinzione chiara tra "tutti gli utenti monitorati" e "sottoinsieme limitabile"
+- Dashboard Grafana: due sezioni separate "ALL USERS" e "LIMITED USERS"
+
+---
+
 ## [1.17.1] - 2026-03-23
 
 ### ⚠️ BREAKING CHANGES
