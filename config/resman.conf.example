@@ -1,0 +1,390 @@
+# CPU Manager Configuration File
+# Location: /etc/resman.conf
+
+# ========================
+# PATHS
+# ========================
+CGROUP_ROOT=/sys/fs/cgroup
+SCRIPT_CGROUP_BASE=cpu_manager
+CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
+METRICS_CACHE_FILE=/var/run/resman/metrics.cache
+
+# ========================
+# TIMING
+# ========================
+POLLING_INTERVAL=30
+MIN_ACTIVE_TIME=60
+METRICS_CACHE_TTL=15
+
+# ========================
+# THRESHOLDS (percentages)
+# ========================
+CPU_THRESHOLD=75             # Attiva limiti se CPU utenti >= 75%
+CPU_RELEASE_THRESHOLD=40     # Rilascia limiti se CPU utenti < 40%
+
+# THRESHOLD TIME WINDOW (seconds)
+# CPU_THRESHOLD_DURATION: Tempo di attesa prima di attivare i limiti dopo superamento soglia
+# Utile per evitare attivazione per picchi temporanei (es: deploy, backup)
+# Default: 90 secondi (3 cicli da 30s)
+# Imposta a 0 per attivazione immediata (comportamento legacy)
+#
+# Esempi:
+# # Attivazione immediata (comportamento pre-v1.15.0)
+# CPU_THRESHOLD_DURATION=0
+#
+# # Attendi 90 secondi (default)
+# CPU_THRESHOLD_DURATION=90
+#
+# # Attendi 3 minuti (ambienti critici)
+# CPU_THRESHOLD_DURATION=180
+CPU_THRESHOLD_DURATION=90
+
+# ========================
+# CPU LIMITS (cpu.max format: "quota period")
+# core_totali=Quota/Period
+# Esempio:  50000 100000 -> 1/2 core
+# Esempio: 300000 100000 -> 3 core
+# Esempio: 200000 100000 -> 2 core completi
+# ========================
+CPU_QUOTA_NORMAL="max 100000"
+CPU_QUOTA_LIMITED="50000 100000"
+
+# ========================
+# RAM LIMITS
+# ========================
+# Abilita/disabilita limitazione RAM tramite cgroups v2
+# Quando abilitato, vengono applicati limiti memory.max ai cgroup utenti
+# RAM_LIMIT_ENABLED: true = abilita limiti RAM, false = disabilita
+#
+# RAM_THRESHOLD: Percentuale di RAM utenti totali per attivare i limiti
+# RAM_RELEASE_THRESHOLD: Percentuale per rilasciare i limiti
+# Formato: percentuali 1-100
+#
+# RAM_QUOTA_LIMITED: Limite RAM totale in bytes o con suffix (K/M/G/T)
+# Esempi: "2147483648" (2GB in bytes), "2G", "512M"
+#
+# RAM_QUOTA_PER_USER: Limite RAM per singolo utente (quando limiti attivi)
+# Esempi: "536870912" (512MB), "512M", "1G"
+#
+# DISABLE_SWAP: Imposta memory.swap.max=0 per impedire l'uso dello swap
+# WARNING: Potrebbe causare OOM kills se un processo supera il limite RAM
+#
+# Esempi:
+# # Limiti RAM disabilitati (default)
+# RAM_LIMIT_ENABLED=false
+#
+# # Abilita limiti RAM con soglie e quote
+# RAM_LIMIT_ENABLED=true
+# RAM_THRESHOLD=75
+# RAM_RELEASE_THRESHOLD=40
+# RAM_QUOTA_LIMITED=2G
+# RAM_QUOTA_PER_USER=512M
+# DISABLE_SWAP=false
+#
+# # Modalità strict (nessuno swap)
+# RAM_LIMIT_ENABLED=true
+# RAM_THRESHOLD=80
+# RAM_RELEASE_THRESHOLD=50
+# RAM_QUOTA_LIMITED=4G
+# RAM_QUOTA_PER_USER=1G
+# DISABLE_SWAP=true
+#
+RAM_LIMIT_ENABLED=false
+RAM_THRESHOLD=75
+RAM_RELEASE_THRESHOLD=40
+RAM_QUOTA_LIMITED=2G
+RAM_QUOTA_PER_USER=512M
+DISABLE_SWAP=false
+
+# ========================
+# RAM USER INCLUDE/EXCLUDE LISTS (Optional, Regex Support)
+# Separate lists for RAM limits (if different from CPU limits)
+# ========================
+# RAM_USER_INCLUDE_LIST: Se specificata, include SOLO gli utenti che corrispondono
+# RAM_USER_EXCLUDE_LIST: Se specificata, ESCLUDE gli utenti dai limiti RAM
+# Formato: lista di pattern regex separati da virgola
+#
+# Esempi:
+# # Solo utenti specifici per RAM
+# RAM_USER_INCLUDE_LIST=^www.*,^app-.*
+#
+# # Escludi utenti di sistema dai limiti RAM
+# RAM_USER_EXCLUDE_LIST=^mysql,^postgres,^redis
+#
+# # Vuoto = usa comportamento di default (include tutti, escludi root)
+# RAM_USER_INCLUDE_LIST=
+# RAM_USER_EXCLUDE_LIST=root
+#
+# RAM_USER_INCLUDE_LIST=
+# RAM_USER_EXCLUDE_LIST=root
+
+# ========================
+# PROMETHEUS
+# ========================
+ENABLE_PROMETHEUS=false              # Enable metrics export
+# SECURITY: Default bind is 127.0.0.1 (localhost only)
+# Set to 0.0.0.0 to expose to all interfaces (NOT recommended without auth/TLS)
+# PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
+# PROMETHEUS_METRICS_BIND_PORT=1974     # Port for metrics endpoint
+# Metrics available at: http://HOST:PORT/metrics
+
+# Prometheus TLS/HTTPS (optional)
+PROMETHEUS_TLS_ENABLED=false
+PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
+PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
+PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
+PROMETHEUS_TLS_MIN_VERSION=1.2
+
+# Prometheus Authentication (optional)
+# Options: none, basic, jwt, both
+PROMETHEUS_AUTH_TYPE=none
+PROMETHEUS_AUTH_USERNAME=prometheus
+PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
+PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
+PROMETHEUS_JWT_ISSUER=resman
+PROMETHEUS_JWT_AUDIENCE=prometheus
+PROMETHEUS_JWT_EXPIRY=3600
+
+# ========================
+# LOGGING
+# ========================
+# Livelli di log disponibili:
+#   DEBUG - Messaggi dettagliati per troubleshooting
+#   INFO  - Informazioni operative normali (default consigliato)
+#   WARN  - Solo avvisi ed errori
+#   ERROR - Solo errori
+LOG_LEVEL=INFO
+LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
+USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
+LOG_FILE=/var/log/resman.log
+
+# ========================
+# SYSTEM
+# ========================
+MIN_SYSTEM_CORES=1
+
+# SYSTEM_UID_MIN: UID minimo da monitorare
+# Default: 1000 (esclude utenti di sistema: root, daemon, systemd, ecc.)
+# Impostare a 0 per monitorare TUTTI gli utenti (incluso root)
+# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio
+SYSTEM_UID_MIN=1000
+
+# SYSTEM_UID_MAX: UID massimo da monitorare
+# Default: letto automaticamente da /proc/sys/kernel/pid_max
+# Tipicamente: 32768, 65536, o 4194304 su sistemi moderni
+# SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
+
+# ========================
+# USER INCLUDE LIST (Optional, Regex Support)
+# ========================
+# Se specificata, INCLUDE nel monitoraggio SOLO gli utenti che corrispondono
+# ai pattern regex elencati. Se vuota o non specificata, NESSUN utente verrà
+# limitato (monitoraggio attivo ma senza limiti).
+# Formato: lista di pattern regex separati da virgola, senza spazi
+# Esempi:
+#   USER_INCLUDE_LIST=francesco                    # Solo francesco può essere limitato
+#   USER_INCLUDE_LIST=^www.*,^apache.*             # Utenti web (regex)
+#   USER_INCLUDE_LIST=^svc-.*,^app-.*              # Utenti servizio (regex)
+#   USER_INCLUDE_LIST=francesco,www-data,mysql     # Utenti specifici
+#   USER_INCLUDE_LIST=.*                           # TUTTI gli utenti possono essere limitati
+#   USER_INCLUDE_LIST=                             # Vuoto = NESSUN utente limitato (default)
+#
+# NOTA IMPORTANTE: Se USER_INCLUDE_LIST è vuota, resman monitora tutti gli utenti
+# ma NON applica limiti a nessuno. Per limitare tutti gli utenti, impostare
+# USER_INCLUDE_LIST=.*
+#
+# USER_INCLUDE_LIST=
+
+# ========================
+# USER EXCLUDE LIST (Optional, Regex Support)
+# ========================
+# Se specificata, ESCLUDE gli utenti elencati dal monitoraggio e dall'applicazione
+# dei limiti CPU. Se vuota o non specificata, tutti gli utenti non-system
+# (UID >= SYSTEM_UID_MIN) possono essere limitati.
+# Formato: lista di pattern regex separati da virgola, senza spazi
+# Esempi:
+#   USER_EXCLUDE_LIST=francesco                    # Francesco NON viene limitato
+#   USER_EXCLUDE_LIST=^www-.*,^test-.*             # Esclude utenti web e test (regex)
+#   USER_EXCLUDE_LIST=^svc-.*,^app-.*              # Esclude utenti servizio (regex)
+#   USER_EXCLUDE_LIST=francesco,www-data,mysql     # Utenti specifici esclusi
+#   USER_EXCLUDE_LIST=                             # Vuoto = NESSUN utente escluso (default)
+#
+# NOTA: Se la riga è assente o commentata, tutti gli utenti non-system possono essere limitati.
+USER_EXCLUDE_LIST=root
+
+# ========================
+# PROCESS EXCLUDE LIST
+# ========================
+# Lista di processi da escludere dai limiti CPU (separati da virgola)
+# Questi processi non vengono MAI limitati, anche se l'utente è nella INCLUDE_LIST
+# Utile per proteggere processi critici che potrebbero causare instabilità
+# Supporta espressioni regolari (regex) per pattern matching avanzato
+#
+# Default: ^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$ (processi essenziali)
+#
+# Esempi:
+# # Solo processi essenziali (default, match esatto)
+# PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
+#
+# # Match esatto per processi specifici
+# PROCESS_EXCLUDE_LIST=^sshd$,^cron$,^systemd-journald$
+#
+# # Pattern per tutti i processi che iniziano con "systemd-"
+# PROCESS_EXCLUDE_LIST=^systemd-.*
+#
+# # Pattern per processi database (match parziale)
+# PROCESS_EXCLUDE_LIST=mysqld,postgres,redis,mongod
+#
+# # Lista estesa con pattern misti
+# PROCESS_EXCLUDE_LIST=^systemd-.*,^dbus-.*,sshd,cron,rsyslogd
+#
+# # Nessun processo escluso (NON raccomandato)
+# PROCESS_EXCLUDE_LIST=
+#
+# WARNING: Escludere processi critici come systemd dall'utente può causare
+# instabilità del sistema. Usare con cautela e testare in ambiente non produttivo.
+PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
+
+# ========================
+# BLACKOUT TIMEFRAMES
+# ========================
+# Specifica quando CPU Manager NON deve applicare limiti CPU.
+# Formato: "giorni ore" (multipli timeframe separati da ;)
+#
+# Giorni: 0=Domenica, 1=Lun, 2=Mar, 3=Mer, 4=Gio, 5=Ven, 6=Sab
+#         Oppure: * (tutti), 1-5 (lun-ven), 0,6 (weekend)
+# Ore: formato 24h (00-23)
+#
+# Esempi:
+#
+# # Disabilita durante orario lavorativo (Lun-Ven, 8-18)
+# BLACKOUT=1-5 08-18
+#
+# # Disabilita solo la mattina (Lun-Ven, 8-12)
+# BLACKOUT=1-5 08-12
+#
+# # Disabilita nel weekend (Sab-Dom, tutto il giorno)
+# BLACKOUT=0,6 00-23
+#
+# # Disabilita orario lavorativo + weekend
+# BLACKOUT=1-5 08-18;0,6 00-23
+#
+# # Disabilita sempre (per testing)
+# BLACKOUT=* 00-23
+#
+# # Nessun blackout (default - CPU Manager sempre attivo)
+BLACKOUT=
+
+# ========================
+# PROCESS EXCLUSION LIST
+# ========================
+# Lista di processi da escludere dai limiti CPU (separati da virgola)
+# Se vuota, nessun processo è escluso (tutti possono essere limitati)
+#
+# Default: processi di sistema essenziali
+
+# LOAD AVERAGE HANDLING
+# ========================
+# false: non attiva limiti se il sistema è già sotto carico (default conservativo)
+# true: attiva limiti anche se il sistema è sotto carico (isolamento garantito)
+IGNORE_SYSTEM_LOAD=true
+
+# ========================
+# SERVER ROLE
+# ========================
+# Opzionale: descrive il ruolo di questo server per identificazione nei report MCP
+# Esempi: database, web-frontend, batch, application, cache, api-gateway, etc.
+# SERVER_ROLE=database
+
+# ========================
+# MCP SERVER (Model Context Protocol)
+# ========================
+# Enable MCP server for AI assistant integration
+MCP_ENABLED=false
+
+# Transport: stdio, http
+# stdio: Standard input/output (for local MCP clients like Claude Desktop)
+# http: HTTP POST endpoint (for AnythingLLM and other remote clients)
+MCP_TRANSPORT=stdio
+
+# HTTP transport settings (only for http transport)
+# MCP_HTTP_HOST=0.0.0.0      # Bind address (default: all interfaces)
+# MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
+# MCP endpoint available at: http://HOST:PORT/mcp
+
+# MCP log level
+# Livelli disponibili: DEBUG, INFO, WARN, ERROR
+# Se non specificato, usa lo stesso livello di LOG_LEVEL
+MCP_LOG_LEVEL=INFO
+
+# Allow write operations (activate/deactivate limits via MCP)
+# WARNING: Enable only if you trust all MCP clients
+MCP_ALLOW_WRITE_OPS=false
+
+# Optional authentication token for HTTP transport
+# MCP_AUTH_TOKEN=your-secret-token-here
+
+# ========================
+# METRICS DATABASE (SQLite)
+# ========================
+# Abilita la persistenza delle metriche in un database locale SQLite
+# per esporre lo storico delle metriche via MCP.
+#
+# METRICS_DB_ENABLED: Abilita (true) o disabilita (false) la scrittura su database
+# Default: false (disabilitato)
+#
+# METRICS_DB_PATH: Percorso del database SQLite
+# Default: /etc/resman/metrics.db
+# Assicurarsi che la directory esista e sia scrivibile
+#
+# METRICS_DB_RETENTION_DAYS: Quanti giorni mantenere i dati nel database
+# Default: 30 giorni
+# I dati più vecchi vengono eliminati automaticamente
+#
+# METRICS_DB_WRITE_INTERVAL: Ogni quanti secondi scrivere le metriche nel database
+# Default: 30 secondi (uguale al POLLING_INTERVAL)
+# Non impostare troppo basso per non sovraccaricare il database
+# Minimo: 5 secondi
+#
+# Esempi:
+# # Abilita database con retention di 30 giorni
+# METRICS_DB_ENABLED=true
+# METRICS_DB_PATH=/etc/resman/metrics.db
+# METRICS_DB_RETENTION_DAYS=30
+# METRICS_DB_WRITE_INTERVAL=30
+#
+# # Database in RAM (più veloce, dati persi al riavvio)
+# METRICS_DB_ENABLED=true
+# METRICS_DB_PATH=:memory:
+#
+# # Retention estesa (90 giorni)
+# METRICS_DB_ENABLED=true
+# METRICS_DB_RETENTION_DAYS=90
+#
+METRICS_DB_ENABLED=false
+METRICS_DB_PATH=/etc/resman/metrics.db
+METRICS_DB_RETENTION_DAYS=30
+METRICS_DB_WRITE_INTERVAL=30
+
+# ========================
+# USERNAME CACHE TTL
+# ========================
+# Tempo di cache per la risoluzione UID -> username (in minuti)
+# Utile per ridurre le chiamate LDAP/NIS in ambienti con molti utenti
+#
+# USERNAME_CACHE_TTL: Quanti minuti mantenere in cache la risoluzione username
+# Default: 60 minuti
+# Minimo: 1 minuto
+#
+# Esempi:
+# # Cache breve (5 minuti) - per ambienti con utenti che cambiano spesso
+# USERNAME_CACHE_TTL=5
+#
+# # Cache media (30 minuti) - compromesso tra performance e freschezza
+# USERNAME_CACHE_TTL=30
+#
+# # Cache lunga (2 ore) - massima performance, utenti stabili
+# USERNAME_CACHE_TTL=120
+#
+# # Default: 60 minuti
+USERNAME_CACHE_TTL=60

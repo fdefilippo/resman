@@ -1,0 +1,51 @@
+[Unit]
+Description=ResMan - Dynamic CPU/RAM Resource Management
+Documentation=https://github.com/fdefilippo/resman
+After=network.target
+Wants=cgroup-tweaks.service
+ConditionPathExists=/sys/fs/cgroup
+ConditionDirectoryNotEmpty=/sys/fs/cgroup
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/resman --config /etc/resman.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Priorità CPU (da -20 a 19, dove -20 è la più alta)
+Nice=-10
+
+# Limiti di sicurezza
+LimitNOFILE=65536
+LimitNPROC=65536
+
+# Hardening
+#NoNewPrivileges=true
+#PrivateTmp=true
+#ProtectSystem=strict
+#ProtectHome=true
+#ProtectKernelTunables=true
+#ProtectKernelModules=true
+#ProtectControlGroups=true
+#RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+#RestrictNamespaces=true
+#RestrictRealtime=true
+#MemoryDenyWriteExecute=true
+#LockPersonality=true
+
+# Cgroups
+#Delegate=cpu cpuset
+#CPUAccounting=true
+#MemoryAccounting=true
+
+# Permessi di directory
+ReadWritePaths=/sys/fs/cgroup
+ReadWritePaths=/var/log
+ReadWritePaths=/var/run
+ReadWritePaths=/run
+
+[Install]
+WantedBy=multi-user.target
