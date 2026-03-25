@@ -15,7 +15,7 @@
 - **RAM limiting** with cgroups v2 memory controller
 - **Per-user resource tracking**: CPU%, Memory (bytes), Process count
 - **Threshold time window** to prevent false activations (CPU_THRESHOLD_DURATION)
-- **Blackout timeframes** support (CPU_MANAGER_BLACKOUT)
+- **Blackout timeframes** support (BLACKOUT)
 
 ### User Filtering (v1.18.0+)
 Clear separation between **ALL USERS** (monitoring) and **LIMITED USERS** (subset passing filters):
@@ -301,18 +301,18 @@ resman_errors_total{component, error_type, hostname, server_role}  # Errors
 ### Blackout Timeframes
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CPU_MANAGER_BLACKOUT` | Empty | When NOT to apply limits (format: "days hours") |
+| `BLACKOUT` | Empty | When NOT to apply limits (format: "days hours") |
 
 **Examples:**
 ```bash
 # Business hours (Mon-Fri, 8-18)
-CPU_MANAGER_BLACKOUT=1-5 08-18
+BLACKOUT=1-5 08-18
 
 # Weekends
-CPU_MANAGER_BLACKOUT=0,6 00-23
+BLACKOUT=0,6 00-23
 
 # Business hours + weekends
-CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
+BLACKOUT=1-5 08-18;0,6 00-23
 ```
 
 ### Database
