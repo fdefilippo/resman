@@ -97,8 +97,10 @@ Latest Changes (v1.5.0):
 %build
 # Build del binario Go
 export GO111MODULE=on
-export GOPROXY=direct
+export GOFLAGS="-mod=mod"  # Use go.mod, don't try to update it
 export CGO_ENABLED=1
+
+# Build binario principale
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
 # Prepara man page
