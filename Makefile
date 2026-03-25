@@ -1,5 +1,5 @@
 # Makefile per resman
-# Author: CPU Manager Project
+# Author: Francesco Defilippo <francesco@defilippo.org>
 # License: GPLv3
 
 # ============================================================================
@@ -47,7 +47,7 @@ OSES = linux
 DEB_ARCH_amd64 = amd64
 DEB_ARCH_arm64 = arm64
 DEB_MAINTAINER = Francesco Defilippo <francesco@defilippo.org>
-DEB_DESCRIPTION = CPU Manager - Sistema di gestione delle risorse CPU
+DEB_DESCRIPTION = Resource Manager - Sistema di gestione delle risorse
 
 # ============================================================================
 # TARGET PRINCIPALI
@@ -161,7 +161,7 @@ rpm-source: build rpm-dirs
 	@echo "Creating source tarball for RPM..."
 	mkdir -p $(PROJECT_NAME)-$(VERSION)
 	cp -r *.go go.mod go.sum \
-		config/ cgroup/ metrics/ state/ logging/ reloader/ \
+		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ \
 		README.md LICENSE CHANGELOG.md \
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
@@ -231,14 +231,14 @@ deb-prepare: deb-dirs deb-binary
 	echo "Architecture: $$DEB_ARCH" >> $$PKG_DIR/DEBIAN/control; \
 	echo "Maintainer: $(DEB_MAINTAINER)" >> $$PKG_DIR/DEBIAN/control; \
 	echo "Description: $(DEB_DESCRIPTION)" >> $$PKG_DIR/DEBIAN/control; \
-	echo "  CPU Manager è un sistema avanzato per la gestione delle risorse CPU." >> $$PKG_DIR/DEBIAN/control; \
-	echo "  Fornisce isolamento, limitazione e monitoraggio delle risorse CPU per container." >> $$PKG_DIR/DEBIAN/control; \
+	echo "  Resource Manager è un sistema avanzato per la gestione delle risorse ." >> $$PKG_DIR/DEBIAN/control; \
+	echo "  Fornisce isolamento, limitazione e monitoraggio delle risorse per container." >> $$PKG_DIR/DEBIAN/control; \
 	echo "  Supporta TLS/HTTPS, Basic Auth e JWT authentication." >> $$PKG_DIR/DEBIAN/control; \
 	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/postinst; \
 	echo 'set -e' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo 'if [ "$$1" = "configure" ]; then' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo '    systemctl daemon-reload 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "CPU Manager $(VERSION) installed successfully"' >> $$PKG_DIR/DEBIAN/postinst; \
+	echo '    echo "Resource Manager $(VERSION) installed successfully"' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo '    echo "TLS certificates: /etc/resman/tls/"' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo '    echo "Generate certs: /usr/share/doc/resman/scripts/generate-tls-certs.sh"' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo 'fi' >> $$PKG_DIR/DEBIAN/postinst; \
@@ -393,7 +393,7 @@ all-with-packages: clean deps test lint build rpm deb docs
 # ============================================================================
 
 help:
-	@echo "CPU Manager Go - Makefile"
+	@echo "Resource Manager Go - Makefile"
 	@echo ""
 	@echo "Targets disponibili:"
 	@echo "  DEVELOPMENT:"
