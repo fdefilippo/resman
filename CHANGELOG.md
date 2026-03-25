@@ -5,6 +5,66 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.18.2] - 2026-03-24
+
+### 🐛 Critical Bug Fixes
+
+#### Race Condition in CleanupAll() FIXED
+- **FIXED**: Concurrent map iteration and write panic in `CleanupAll()`
+- **Problem**: Lock was released before iterating over `createdCgroups` map
+- **Solution**: Make atomic copy of UIDs before releasing lock
+- **Impact**: Prevents potential crash during shutdown
+- **File**: `cgroup/manager.go`
+
+#### Double Increment in ThresholdTracker FIXED
+- **FIXED**: `totalCycles` was incremented twice when CPU >= threshold
+- **Problem**: One increment inside `if` block, one at end of function
+- **Solution**: Removed duplicate increment at end of function
+- **Impact**: Accurate cycle counting for threshold duration
+- **File**: `state/manager.go`
+
+### 📝 Code Quality Improvements
+
+#### English Comments Standardization (Continued)
+- **CHANGED**: `CleanupAll()` comments to English
+- **CHANGED**: `ShouldActivateLimits()` comments to English
+- **CHANGED**: Inline comments in critical sections to English
+- **Impact**: Improved maintainability for international contributors
+
+### 🔧 Technical Details
+
+**Race Condition Fix Details:**
+```go
+// BEFORE (unsafe):
+m.mu.Unlock()
+for uid := range m.createdCgroups {  // PANIC RISK!
+
+// AFTER (safe):
+uids := make([]int, 0, len(m.createdCgroups))
+for uid := range m.createdCgroups {
+    uids = append(uids, uid)
+}
+m.mu.Unlock()
+for _, uid := range uids {  // Safe iteration
+```
+
+**Double Increment Fix Details:**
+```go
+// BEFORE (double increment):
+if currentCPU >= threshold {
+    t.totalCycles++  // First increment
+}
+t.totalCycles++  // Second increment (BUG!)
+
+// AFTER (single increment):
+if currentCPU >= threshold {
+    t.totalCycles++  // Only increment once
+}
+// No increment here
+```
+
+---
+
 ## [1.18.1] - 2026-03-24
 
 ### 🔒 Security Improvements

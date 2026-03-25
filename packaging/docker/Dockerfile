@@ -13,7 +13,7 @@ RUN go mod download
 COPY . .
 
 # Build del binario
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.version=docker'" -o cpu-manager-go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.version=docker'" -o resman
 
 # ============================================================================
 FROM alpine:3.18
@@ -25,13 +25,13 @@ RUN apk add --no-cache ca-certificates tzdata
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 # Copia binario e configurazione
-COPY --from=builder /app/cpu-manager-go /usr/local/bin/cpu-manager-go
-COPY --from=builder /app/config/cpu-manager.conf.example /etc/cpu-manager.conf
+COPY --from=builder /app/resman /usr/local/bin/resman
+COPY --from=builder /app/config/resman.conf.example /etc/resman.conf
 
 # Configura permessi
-RUN mkdir -p /var/log /var/run/cpu-manager \
-    && chown -R appuser:appgroup /var/log /var/run/cpu-manager \
-    && chmod 755 /usr/local/bin/cpu-manager-go
+RUN mkdir -p /var/log /var/run/resman \
+    && chown -R appuser:appgroup /var/log /var/run/resman \
+    && chmod 755 /usr/local/bin/resman
 
 USER appuser
 WORKDIR /home/appuser
@@ -40,7 +40,7 @@ WORKDIR /home/appuser
 EXPOSE 9101
 
 # Volume per configurazione esterna
-VOLUME ["/etc/cpu-manager.conf"]
+VOLUME ["/etc/resman.conf"]
 
-ENTRYPOINT ["cpu-manager-go"]
-CMD ["--config", "/etc/cpu-manager.conf"]
+ENTRYPOINT ["resman"]
+CMD ["--config", "/etc/resman.conf"]

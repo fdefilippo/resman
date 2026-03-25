@@ -38,7 +38,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.18.1"
+var version = "1.18.2"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -76,7 +76,7 @@ func main() {
 	logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.UseSyslog)
 	logger := logging.GetLogger()
 
-	logger.Info("Starting CPU Manager", "version", version)
+	logger.Info("Starting Resource Manager", "version", version)
 	logger.Info("Configuration loaded successfully",
 		"log_level", cfg.LogLevel,
 		"log_file", cfg.LogFile,

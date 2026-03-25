@@ -1117,7 +1117,7 @@ func (t *ThresholdTracker) Reset() {
 	t.totalCycles = 0
 }
 
-// ShouldActivateLimits verifica se i limiti devono essere attivati
+// ShouldActivateLimits checks if limits should be activated based on threshold duration.
 func (t *ThresholdTracker) ShouldActivateLimits(
 	currentCPU float64,
 	threshold float64,
@@ -1136,17 +1136,16 @@ func (t *ThresholdTracker) ShouldActivateLimits(
 		elapsed := time.Since(t.firstOverThresholdTime)
 		t.totalCycles++
 
-		// Attiva solo se il tempo trascorso >= durata richiesta
+		// Activate only if elapsed time >= required duration
 		if elapsed >= requiredDuration {
 			return true
 		}
 	} else {
-		// CPU sotto soglia, reset
+		// CPU below threshold, reset tracker
 		t.firstOverThresholdTime = time.Time{}
 		t.overThresholdCycles = 0
 	}
 
-	t.totalCycles++
 	return false
 }
 

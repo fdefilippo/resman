@@ -36,7 +36,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-// Server wraps the MCP server and CPU Manager dependencies
+// Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer        *mcp.Server
 	cfg              *Config
@@ -78,7 +78,7 @@ func NewServer(
 
 	// Create MCP server
 	mcpServer := mcp.NewServer(&mcp.Implementation{
-		Name:    "cpu-manager",
+		Name:    "resman",
 		Version: getVersion(),
 	}, nil)
 
@@ -436,7 +436,7 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	status := s.stateManager.GetStatus()
 	metrics := s.metricsCollector.GetDetailedMetrics()
 
-	text := `# CPU Manager Troubleshooting
+	text := `# Resource Manager Troubleshooting
 
 ## Current Status
 `

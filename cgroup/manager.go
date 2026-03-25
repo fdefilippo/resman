@@ -794,19 +794,26 @@ func (m *Manager) CleanupUserCgroup(uid int) error {
 	return nil
 }
 
-// CleanupAll rimuove tutti i cgroups creati (usato durante lo shutdown).
+// CleanupAll removes all created cgroups (used during shutdown).
 func (m *Manager) CleanupAll() error {
 	m.mu.Lock()
 	m.logger.Info("Starting cgroup cleanup", "tracked_count", len(m.createdCgroups))
 
 	// Wait for any pending goroutines
 	m.wg.Wait()
+
+	// CRITICAL FIX: Make atomic copy of createdCgroups before releasing lock
+	// This prevents concurrent map iteration and write panic
+	uids := make([]int, 0, len(m.createdCgroups))
+	for uid := range m.createdCgroups {
+		uids = append(uids, uid)
+	}
 	m.mu.Unlock()
 
 	var errors []string
 
-	// Prima prova a pulire tutti i cgroups conosciuti dal tracciamento
-	for uid := range m.createdCgroups {
+	// Clean up all known cgroups from the atomic copy
+	for _, uid := range uids {
 		if err := m.CleanupUserCgroup(uid); err != nil {
 			errors = append(errors, fmt.Sprintf("UID %d: %v", uid, err))
 		}

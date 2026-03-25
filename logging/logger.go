@@ -142,7 +142,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 func GetLogger() *Logger {
     if currentLogger == nil {
         // Se non inizializzato, crea un logger di default su stdout
-        InitLogger("INFO", "/var/log/cpu-manager.log", 10*1024*1024, false)
+        InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, false)
     }
     return currentLogger
 }

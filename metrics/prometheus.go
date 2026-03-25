@@ -906,7 +906,7 @@ func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 				"remote_addr", r.RemoteAddr,
 				"path", r.URL.Path,
 			)
-			w.Header().Set("WWW-Authenticate", `Basic realm="CPU Manager Metrics", Bearer`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Resource Manager Metrics", Bearer`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -1010,7 +1010,7 @@ func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Reques
 	if exp.cfg.PrometheusAuthType != "none" && exp.cfg.PrometheusAuthType != "" {
 		authInfo = " (Authentication: " + exp.cfg.PrometheusAuthType + ")"
 	}
-	fmt.Fprintf(w, `<html><body><h1>CPU Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
+	fmt.Fprintf(w, `<html><body><h1>Resource Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
 }
 
 // Start avvia il server HTTP per Prometheus.

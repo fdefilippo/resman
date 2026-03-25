@@ -8,7 +8,7 @@
 
 # Nome del progetto
 PROJECT_NAME = resman
-VERSION = 1.18.1
+VERSION = 1.18.2
 RELEASE = 1
 
 # Percorsi
@@ -218,9 +218,6 @@ deb-prepare: deb-dirs deb-binary
 	install -m 644 README.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 LICENSE $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 CHANGELOG.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 docs/TLS-CONFIGURATION.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 docs/MULTI-INSTANCE-MONITORING.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 docs/prometheus-queries.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 docs/alerting-rules.yml $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts; \
 	install -m 755 docs/generate-tls-certs.sh $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts/; \

@@ -123,7 +123,7 @@ type Config struct {
 	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
 
 	// Blackout specification string (crontab-like format)
-	BlackoutSpec string `config:"CPU_MANAGER_BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"
+	BlackoutSpec string `config:"BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"
 
 	// Load checking
 	IgnoreSystemLoad bool `config:"IGNORE_SYSTEM_LOAD"`
@@ -588,7 +588,7 @@ func setConfigField(cfg *Config, key, value string) error {
 		}
 
 	// Blackout Timeframes
-	case "CPU_MANAGER_BLACKOUT":
+	case "BLACKOUT":
 		cfg.BlackoutSpec = strings.TrimSpace(value)
 		if cfg.BlackoutSpec != "" {
 			timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
