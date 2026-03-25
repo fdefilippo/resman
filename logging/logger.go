@@ -72,7 +72,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 
         // Se syslog è abilitato, crea logger syslog
         if useSyslog {
-            syslogWriter, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "cpu-manager-go")
+            syslogWriter, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "resman")
             if err != nil {
                 log.Printf("ERROR: Failed to initialize syslog: %v", err)
                 // Fallback a stdout
@@ -142,7 +142,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 func GetLogger() *Logger {
     if currentLogger == nil {
         // Se non inizializzato, crea un logger di default su stdout
-        InitLogger("INFO", "/var/log/cpu-manager.log", 10*1024*1024, false)
+        InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, false)
     }
     return currentLogger
 }

@@ -21,11 +21,11 @@ import (
     "fmt"        // AGGIUNTO
     "sync"       // AGGIUNTO
 
-    "github.com/fdefilippo/cpu-manager-go/cgroup"
-    "github.com/fdefilippo/cpu-manager-go/config"  // AGGIUNTO
-    "github.com/fdefilippo/cpu-manager-go/logging"
-    "github.com/fdefilippo/cpu-manager-go/metrics"
-    "github.com/fdefilippo/cpu-manager-go/state"
+    "github.com/fdefilippo/resman/cgroup"
+    "github.com/fdefilippo/resman/config"  // AGGIUNTO
+    "github.com/fdefilippo/resman/logging"
+    "github.com/fdefilippo/resman/metrics"
+    "github.com/fdefilippo/resman/state"
 )
 
 // Reloader gestisce il ricaricamento dinamico della configurazione per tutti i componenti.

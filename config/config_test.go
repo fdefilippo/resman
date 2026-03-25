@@ -36,7 +36,7 @@ func TestDefaultConfig(t *testing.T) {
 		expected interface{}
 	}{
 		{"CgroupRoot", cfg.CgroupRoot, "/sys/fs/cgroup"},
-		{"LogFile", cfg.LogFile, "/var/log/cpu-manager.log"},
+		{"LogFile", cfg.LogFile, "/var/log/resman.log"},
 		{"PollingInterval", cfg.PollingInterval, 30},
 		{"MinActiveTime", cfg.MinActiveTime, 60},
 		{"CPUThreshold", cfg.CPUThreshold, 75},
@@ -45,7 +45,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"CPUQuotaLimited", cfg.CPUQuotaLimited, "50000 100000"},
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
-		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, ""},
+		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"},  // Secure default
 		{"LogLevel", cfg.LogLevel, "INFO"},
 		{"SystemUIDMin", cfg.SystemUIDMin, 1000},
 		{"IgnoreSystemLoad", cfg.IgnoreSystemLoad, false},

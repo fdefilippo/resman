@@ -21,7 +21,7 @@ import (
     "testing"
     "time"
 
-    "github.com/fdefilippo/cpu-manager-go/config"
+    "github.com/fdefilippo/resman/config"
 )
 
 func TestUserMetricsStruct(t *testing.T) {
@@ -111,23 +111,23 @@ func TestGetMemoryUsage(t *testing.T) {
     }
 }
 
-func TestGetActiveUsers(t *testing.T) {
+func TestGetAllUsers(t *testing.T) {
     cfg := config.DefaultConfig()
     collector, err := NewCollector(cfg)
     if err != nil {
         t.Fatalf("NewCollector() error: %v", err)
     }
 
-    users := collector.GetActiveUsers()
+    users := collector.GetAllUsers()
     // Should return at least root user
     if len(users) < 1 {
-        t.Errorf("GetActiveUsers() returned %d users, expected >= 1", len(users))
+        t.Errorf("GetAllUsers() returned %d users, expected >= 1", len(users))
     }
 
     // Verify all users are in valid range
     for _, uid := range users {
         if uid < cfg.SystemUIDMin || uid > cfg.SystemUIDMax {
-            t.Errorf("GetActiveUsers() returned invalid UID %d", uid)
+            t.Errorf("GetAllUsers() returned invalid UID %d", uid)
         }
     }
 }
@@ -322,10 +322,14 @@ func TestGetDetailedMetrics(t *testing.T) {
     expectedKeys := []string{
         "total_cores",
         "total_cpu_usage",
-        "total_user_cpu_usage",
-        "memory_usage_mb",
+        "all_users_cpu_usage",
+        "all_users_memory_usage",
+		"limited_users_cpu_usage",
+		"limited_users_memory_usage",
+		"limited_users_count",
+		"memory_usage_mb",
         "system_under_load",
-        "active_users_count",
+        "all_users_count",
         "user_cpu_usage",
         "cache_size",
     }

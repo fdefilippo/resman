@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/metrics"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/metrics"
 )
 
 // Mock implementations for testing
@@ -30,14 +30,22 @@ type mockMetricsCollector struct{}
 func (m *mockMetricsCollector) GetTotalCores() int                              { return 4 }
 func (m *mockMetricsCollector) GetTotalCPUUsage() float64                       { return 50.0 }
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64                 { return 10.0 }
-func (m *mockMetricsCollector) GetTotalUserCPUUsage() float64                   { return 30.0 }
-func (m *mockMetricsCollector) GetActiveUsers() []int                           { return []int{1000, 1001} }
 func (m *mockMetricsCollector) GetMemoryUsage() float64                         { return 1024.0 }
 func (m *mockMetricsCollector) IsSystemUnderLoad() bool                         { return false }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics { return nil }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter                  { return nil }
 func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
 }
+
+// ALL USERS metrics
+func (m *mockMetricsCollector) GetAllUsers() []int                  { return []int{1000, 1001, 1002} }
+func (m *mockMetricsCollector) GetAllUsersCPUUsage() float64        { return 40.0 }
+func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64      { return 2000000000 }
+
+// LIMITED USERS metrics
+func (m *mockMetricsCollector) GetLimitedUsers() []int              { return []int{1000, 1001} }
+func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64    { return 30.0 }
+func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64  { return 1500000000 }
 
 type mockCgroupManager struct{}
 
@@ -112,7 +120,7 @@ func TestMakeDecision(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 80.0, // Above threshold
+		LimitedUsersCPUUsage: 80.0, // Above threshold
 		TotalCores:        4,
 		SystemUnderLoad:   false,
 	}
@@ -139,7 +147,7 @@ func TestMakeDecisionDeactivate(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 30.0, // Below release threshold
+		LimitedUsersCPUUsage: 30.0, // Below release threshold
 		SystemUnderLoad:   false,
 	}
 
@@ -165,7 +173,7 @@ func TestMakeDecisionMaintain(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		TotalUserCPUUsage: 50.0, // Between thresholds
+		LimitedUsersCPUUsage: 50.0, // Between thresholds
 		SystemUnderLoad:   false,
 	}
 

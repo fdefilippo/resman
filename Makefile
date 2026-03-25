@@ -1,5 +1,5 @@
-# Makefile per cpu-manager-go
-# Author: CPU Manager Project
+# Makefile per resman
+# Author: Francesco Defilippo <francesco@defilippo.org>
 # License: GPLv3
 
 # ============================================================================
@@ -7,8 +7,8 @@
 # ============================================================================
 
 # Nome del progetto
-PROJECT_NAME = cpu-manager-go
-VERSION = 1.16.4
+PROJECT_NAME = resman
+VERSION = 1.18.1
 RELEASE = 1
 
 # Percorsi
@@ -47,7 +47,7 @@ OSES = linux
 DEB_ARCH_amd64 = amd64
 DEB_ARCH_arm64 = arm64
 DEB_MAINTAINER = Francesco Defilippo <francesco@defilippo.org>
-DEB_DESCRIPTION = CPU Manager - Sistema di gestione delle risorse CPU
+DEB_DESCRIPTION = Resource Manager - Sistema di gestione delle risorse
 
 # ============================================================================
 # TARGET PRINCIPALI
@@ -131,19 +131,19 @@ deps:
 install: build
 	@echo "Installing $(PROJECT_NAME) to $(BIN_DIR)..."
 	sudo install -m 755 $(PROJECT_NAME) $(BIN_DIR)/
-	sudo install -m 644 config/cpu-manager.conf.example $(CONF_DIR)/cpu-manager.conf
-	sudo install -m 644 packaging/systemd/cpu-manager.service $(SYSTEMD_DIR)/
+	sudo install -m 644 config/resman.conf.example $(CONF_DIR)/resman.conf
+	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo systemctl daemon-reload
 	@echo "Installazione completata!"
-	@echo "Configurazione: $(CONF_DIR)/cpu-manager.conf"
-	@echo "Service: $(SYSTEMD_DIR)/cpu-manager.service"
+	@echo "Configurazione: $(CONF_DIR)/resman.conf"
+	@echo "Service: $(SYSTEMD_DIR)/resman.service"
 
 # Disinstalla
 uninstall:
 	@echo "Uninstalling $(PROJECT_NAME)..."
 	sudo rm -f $(BIN_DIR)/$(PROJECT_NAME)
-	sudo rm -f $(CONF_DIR)/cpu-manager.conf
-	sudo rm -f $(SYSTEMD_DIR)/cpu-manager.service
+	sudo rm -f $(CONF_DIR)/resman.conf
+	sudo rm -f $(SYSTEMD_DIR)/resman.service
 	sudo systemctl daemon-reload
 	@echo "Disinstallazione completata!"
 
@@ -166,8 +166,8 @@ rpm-source: build rpm-dirs
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/packaging/syslog
-	cp packaging/syslog/cpu-manager-go.conf $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
-	cp packaging/syslog/cpu-manager-go $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
+	cp packaging/syslog/resman.conf $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
+	cp packaging/syslog/resman $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
 	tar czf $(RPMBUILD_DIR)/SOURCES/$(PROJECT_NAME)-$(VERSION).tar.gz $(PROJECT_NAME)-$(VERSION)
 	rm -rf $(PROJECT_NAME)-$(VERSION)
 	@echo "Source tarball creato: $(RPMBUILD_DIR)/SOURCES/$(PROJECT_NAME)-$(VERSION).tar.gz"
@@ -211,10 +211,10 @@ deb-prepare: deb-dirs deb-binary
 	mkdir -p $$PKG_DIR$(CONF_DIR); \
 	mkdir -p $$PKG_DIR$(SYSTEMD_DIR); \
 	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME); \
-	mkdir -p $$PKG_DIR$(CONF_DIR)/cpu-manager/tls; \
+	mkdir -p $$PKG_DIR$(CONF_DIR)/resman/tls; \
 	install -m 755 $(DEB_BUILD_DIR)/$(PROJECT_NAME)-amd64 $$PKG_DIR$(BIN_DIR)/$(PROJECT_NAME); \
-	install -m 644 config/cpu-manager.conf.example $$PKG_DIR$(CONF_DIR)/cpu-manager.conf; \
-	install -m 644 packaging/systemd/cpu-manager.service $$PKG_DIR$(SYSTEMD_DIR)/; \
+	install -m 644 config/resman.conf.example $$PKG_DIR$(CONF_DIR)/resman.conf; \
+	install -m 644 packaging/systemd/resman.service $$PKG_DIR$(SYSTEMD_DIR)/; \
 	install -m 644 README.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 LICENSE $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 CHANGELOG.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
@@ -231,24 +231,24 @@ deb-prepare: deb-dirs deb-binary
 	echo "Architecture: $$DEB_ARCH" >> $$PKG_DIR/DEBIAN/control; \
 	echo "Maintainer: $(DEB_MAINTAINER)" >> $$PKG_DIR/DEBIAN/control; \
 	echo "Description: $(DEB_DESCRIPTION)" >> $$PKG_DIR/DEBIAN/control; \
-	echo "  CPU Manager è un sistema avanzato per la gestione delle risorse CPU." >> $$PKG_DIR/DEBIAN/control; \
-	echo "  Fornisce isolamento, limitazione e monitoraggio delle risorse CPU per container." >> $$PKG_DIR/DEBIAN/control; \
+	echo "  Resource Manager è un sistema avanzato per la gestione delle risorse ." >> $$PKG_DIR/DEBIAN/control; \
+	echo "  Fornisce isolamento, limitazione e monitoraggio delle risorse per container." >> $$PKG_DIR/DEBIAN/control; \
 	echo "  Supporta TLS/HTTPS, Basic Auth e JWT authentication." >> $$PKG_DIR/DEBIAN/control; \
 	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/postinst; \
 	echo 'set -e' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo 'if [ "$$1" = "configure" ]; then' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo '    systemctl daemon-reload 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "CPU Manager $(VERSION) installed successfully"' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "TLS certificates: /etc/cpu-manager/tls/"' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "Generate certs: /usr/share/doc/cpu-manager/scripts/generate-tls-certs.sh"' >> $$PKG_DIR/DEBIAN/postinst; \
+	echo '    echo "Resource Manager $(VERSION) installed successfully"' >> $$PKG_DIR/DEBIAN/postinst; \
+	echo '    echo "TLS certificates: /etc/resman/tls/"' >> $$PKG_DIR/DEBIAN/postinst; \
+	echo '    echo "Generate certs: /usr/share/doc/resman/scripts/generate-tls-certs.sh"' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo 'fi' >> $$PKG_DIR/DEBIAN/postinst; \
 	echo 'exit 0' >> $$PKG_DIR/DEBIAN/postinst; \
 	chmod 755 $$PKG_DIR/DEBIAN/postinst; \
 	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/prerm; \
 	echo 'set -e' >> $$PKG_DIR/DEBIAN/prerm; \
 	echo 'if [ "$$1" = "remove" ] || [ "$$1" = "upgrade" ]; then' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo '    systemctl stop cpu-manager 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo '    systemctl disable cpu-manager 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
+	echo '    systemctl stop resman 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
+	echo '    systemctl disable resman 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
 	echo 'fi' >> $$PKG_DIR/DEBIAN/prerm; \
 	echo 'exit 0' >> $$PKG_DIR/DEBIAN/prerm; \
 	chmod 755 $$PKG_DIR/DEBIAN/prerm; \
@@ -298,7 +298,7 @@ docker-run:
 	docker run --rm -it \
                 --privileged \
                 -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-                -v /etc/cpu-manager.conf:/etc/cpu-manager.conf:ro \
+                -v /etc/resman.conf:/etc/resman.conf:ro \
                 $(PROJECT_NAME):latest
 
 # ============================================================================
@@ -320,9 +320,9 @@ clean:
 # Directory per man page
 MAN_SRC_DIR = docs
 MAN_BUILD_DIR = $(BUILD_DIR)/man
-MAN_SOURCE = $(MAN_SRC_DIR)/cpu-manager-go.8
-MAN_GZIPPED = $(MAN_BUILD_DIR)/cpu-manager-go.8.gz
-MAN_HTML = $(MAN_BUILD_DIR)/cpu-manager-go.html
+MAN_SOURCE = $(MAN_SRC_DIR)/resman.8
+MAN_GZIPPED = $(MAN_BUILD_DIR)/resman.8.gz
+MAN_HTML = $(MAN_BUILD_DIR)/resman.html
 
 # Directory di installazione man page
 MAN_INSTALL_DIR = /usr/share/man/man8
@@ -365,7 +365,7 @@ install-man: man
 # Disinstalla man page
 uninstall-man:
 	@echo "Uninstalling man page..."
-	@sudo rm -f $(MAN_INSTALL_DIR)/cpu-manager-go.8.gz
+	@sudo rm -f $(MAN_INSTALL_DIR)/resman.8.gz
 	@if command -v mandb >/dev/null 2>&1; then \
                 sudo mandb -q; \
                 echo "Man database updated"; \
@@ -393,7 +393,7 @@ all-with-packages: clean deps test lint build rpm deb docs
 # ============================================================================
 
 help:
-	@echo "CPU Manager Go - Makefile"
+	@echo "Resource Manager Go - Makefile"
 	@echo ""
 	@echo "Targets disponibili:"
 	@echo "  DEVELOPMENT:"

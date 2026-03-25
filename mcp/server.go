@@ -22,20 +22,21 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/fdefilippo/cpu-manager-go/cgroup"
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/database"
-	"github.com/fdefilippo/cpu-manager-go/logging"
-	"github.com/fdefilippo/cpu-manager-go/metrics"
-	"github.com/fdefilippo/cpu-manager-go/state"
+	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/logging"
+	"github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
-// Server wraps the MCP server and CPU Manager dependencies
+// Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer        *mcp.Server
 	cfg              *Config
@@ -77,7 +78,7 @@ func NewServer(
 
 	// Create MCP server
 	mcpServer := mcp.NewServer(&mcp.Implementation{
-		Name:    "cpu-manager",
+		Name:    "resman",
 		Version: getVersion(),
 	}, nil)
 
@@ -193,8 +194,9 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 		return s.mcpServer
 	}, nil)
 
-	// Wrap MCP handler with logging middleware
-	mux.HandleFunc("/mcp", s.loggingMiddleware(mcpHandler.ServeHTTP))
+	// Wrap MCP handler with authentication and logging middleware
+	handler := s.authMiddleware(s.loggingMiddleware(mcpHandler.ServeHTTP))
+	mux.HandleFunc("/mcp", handler)
 
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
@@ -251,6 +253,51 @@ func (s *Server) loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			"status", wrapped.statusCode,
 			"duration_ms", duration.Milliseconds(),
 		)
+	}
+}
+
+// authMiddleware validates authentication token if configured
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth if no token configured
+		if s.cfg.AuthToken == "" {
+			next(w, r)
+			return
+		}
+
+		// Check Authorization header (Bearer token)
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, `{"error": "Missing Authorization header"}`, http.StatusUnauthorized)
+			s.logger.Warn("MCP request rejected: missing Authorization header",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+			)
+			return
+		}
+
+		// Validate Bearer token
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error": "Invalid Authorization header format. Use: Bearer <token>"}`, http.StatusUnauthorized)
+			s.logger.Warn("MCP request rejected: invalid Authorization format",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+			)
+			return
+		}
+
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token != s.cfg.AuthToken {
+			http.Error(w, `{"error": "Invalid authentication token"}`, http.StatusUnauthorized)
+			s.logger.Warn("MCP request rejected: invalid token",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+			)
+			return
+		}
+
+		// Token valid, proceed
+		next(w, r)
 	}
 }
 
@@ -389,7 +436,7 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	status := s.stateManager.GetStatus()
 	metrics := s.metricsCollector.GetDetailedMetrics()
 
-	text := `# CPU Manager Troubleshooting
+	text := `# Resource Manager Troubleshooting
 
 ## Current Status
 `

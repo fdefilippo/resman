@@ -79,6 +79,9 @@ func (c *Config) LoadFromEnv() error {
 		if err != nil {
 			return fmt.Errorf("invalid MCP_HTTP_PORT: %s", val)
 		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("invalid MCP_HTTP_PORT: %d (must be 1-65535)", port)
+		}
 		c.HTTPPort = port
 	}
 

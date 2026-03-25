@@ -19,6 +19,7 @@ package cgroup
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 )
 
 const (
@@ -304,17 +305,33 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 		}
 	}
 
-	m.wg.Add(1)
+	// Sposta processi in modo sincrono con timeout per evitare race condition
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	done := make(chan error, 1)
 	go func() {
-		defer m.wg.Done()
-		time.Sleep(500 * time.Millisecond)
-		if err := m.MoveAllUserProcesses(uid); err != nil {
+		defer close(done)
+		time.Sleep(100 * time.Millisecond)  // Breve delay per stabilizzazione
+		done <- m.MoveAllUserProcesses(uid)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
 			m.logger.Warn("Failed to move user processes to cgroup",
 				"uid", uid,
 				"error", err,
 			)
+			return err
 		}
-	}()
+	case <-ctx.Done():
+		m.logger.Warn("Timeout moving user processes to cgroup",
+			"uid", uid,
+			"timeout", "5s",
+		)
+		return fmt.Errorf("timeout moving processes to cgroup for UID %d", uid)
+	}
 
 	return nil
 }
@@ -363,6 +380,13 @@ func (m *Manager) RemoveCPULimit(uid int) error {
 
 // MoveProcessToCgroup sposta un processo nel cgroup dell'utente.
 func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
+	// SECURITY: Never move any process to UID 0 cgroup
+	if uid == 0 {
+		m.logger.Warn("Refusing to move process to root (UID 0) cgroup - security boundary",
+			"pid", pid)
+		return fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
+	}
+
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
 		return fmt.Errorf("cgroup for UID %d does not exist", uid)
@@ -396,6 +420,12 @@ func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
 // MoveAllUserProcesses sposta tutti i processi di un utente nel suo cgroup.
 func (m *Manager) MoveAllUserProcesses(uid int) error {
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
+
+	// SECURITY: Never move UID 0 (root) processes to user cgroups
+	if uid == 0 {
+		m.logger.Warn("Refusing to move root (UID 0) processes to cgroup - security boundary")
+		return fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
+	}
 
 	// Leggi tutti i PIDs dell'utente da /proc
 	procDir := "/proc"

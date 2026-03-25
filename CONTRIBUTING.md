@@ -1,6 +1,6 @@
-# Contributing to CPU Manager Go
+# Contributing to ResMan
 
-Thank you for your interest in contributing to CPU Manager Go! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Resource Manager! This document provides guidelines and instructions for contributing.
 
 ## Table of Contents
 
@@ -28,8 +28,8 @@ Thank you for your interest in contributing to CPU Manager Go! This document pro
 
 ### Where to Start
 
-- Look for issues labeled [`good first issue`](https://github.com/fdefilippo/cpu-manager-go/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-- Check issues labeled [`help wanted`](https://github.com/fdefilippo/cpu-manager-go/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+- Look for issues labeled [`good first issue`](https://github.com/fdefilippo/resman/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+- Check issues labeled [`help wanted`](https://github.com/fdefilippo/resman/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
 - Read existing documentation to understand the codebase
 
 ### Questions?
@@ -55,11 +55,11 @@ Thank you for your interest in contributing to CPU Manager Go! This document pro
 # Fork the repository on GitHub
 
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/cpu-manager-go.git
-cd cpu-manager-go
+git clone https://github.com/YOUR_USERNAME/resman.git
+cd resman
 
 # Add upstream remote
-git remote add upstream https://github.com/fdefilippo/cpu-manager-go.git
+git remote add upstream https://github.com/fdefilippo/resman.git
 ```
 
 ### Install Dependencies
@@ -175,17 +175,17 @@ sudo make test-integration
 
 1. Build the binary:
    ```bash
-   go build -o cpu-manager-go
+   go build -o resman
    ```
 
 2. Create a test configuration:
    ```bash
-   cp config/cpu-manager.conf.example /etc/cpu-manager.conf
+   cp config/resman.conf.example /etc/resman.conf
    ```
 
 3. Run in debug mode:
    ```bash
-   sudo ./cpu-manager-go --config /etc/cpu-manager.conf --log-level DEBUG
+   sudo ./resman --config /etc/resman.conf --log-level DEBUG
    ```
 
 4. Check metrics:
@@ -330,7 +330,7 @@ When adding features or fixing bugs:
 
 1. **Code comments** - Explain complex logic
 2. **README.md** - Update features list
-3. **Man page** - Update `docs/cpu-manager.8`
+3. **Man page** - Update `docs/resman.8`
 4. **Prometheus docs** - Update `docs/prometheus-queries.md`
 5. **Grafana** - Update `docs/dashboard-grafana.json`
 
@@ -361,4 +361,4 @@ Contributors will be:
 - Mentioned in release notes
 - Recognized in the community
 
-Thank you for contributing to CPU Manager Go! 🎉
+Thank you for contributing to Resource Manager! 🎉

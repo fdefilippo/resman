@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/logging"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
@@ -43,16 +43,24 @@ const (
 	pageSizeBytes          = 4096
 )
 
-// UserMetrics contiene le metriche per un singolo utente.
+// UserMetrics contains metrics for a single user.
 type UserMetrics struct {
 	UID          int
 	Username     string
-	CPUUsage     float64 // Percentuale CPU
-	MemoryUsage  uint64  // Memoria in bytes (VmRSS)
-	ProcessCount int     // Numero di processi
+	CPUUsage     float64 // CPU percentage
+	MemoryUsage  uint64  // Memory in bytes (VmRSS)
+	ProcessCount int     // Number of processes
+	IsLimited    bool    // Whether user has CPU limits applied
 }
 
-// Collector raccoglie metriche di sistema.
+// userData is a temporary structure for accumulating data per UID during /proc scan.
+type userData struct {
+	cpuUsage     float64
+	memoryUsage  uint64
+	processCount int
+}
+
+// Collector collects system metrics.
 type Collector struct {
 	cfg    *config.Config
 	logger *logging.Logger
@@ -87,7 +95,12 @@ type Collector struct {
 }
 
 // Default Username Cache TTL
-const DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
+const (
+	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
+	MAX_CACHE_SIZE            = 10000  // Maximum number of entries in general cache
+	MAX_PROC_CACHE_SIZE       = 5000   // Maximum number of entries in process CPU cache
+	MAX_USERNAME_CACHE_SIZE   = 10000  // Maximum number of entries in username cache
+)
 
 // NewCollector crea un nuovo collettore di metriche.
 func NewCollector(cfg *config.Config) (*Collector, error) {
@@ -312,9 +325,6 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 				if int(uids[0]) == uid { // UID reale
 					// Escludi processi di sistema
 					pname, _ := p.Name()
-					if c.cfg.IsProcessExcluded(pname) {
-						continue
-					}
 
 					processCount++
 					// CPUPercent() fa due letture internamente
@@ -470,18 +480,19 @@ func (c *Collector) getProcessCPUUsage(pid int) (float64, error) {
 	return cpuSeconds * 0.1, nil // Stima molto approssimativa
 }
 
-// GetTotalUserCPUUsage restituisce l'uso CPU totale di tutti gli utenti non di sistema.
-func (c *Collector) GetTotalUserCPUUsage() float64 {
-	cacheKey := "total_user_cpu_usage"
+// GetAllUsersCPUUsage restituisce l'uso CPU totale di TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
+// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+func (c *Collector) GetAllUsersCPUUsage() float64 {
+	cacheKey := "all_users_cpu_usage"
 	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
 		return val.(float64)
 	}
 
 	var totalUsage float64
 
-	// Ottieni tutti gli utenti attivi
-	activeUsers := c.GetActiveUsers()
-	for _, uid := range activeUsers {
+	// Ottieni TUTTI gli utenti (senza filtri)
+	allUsers := c.GetAllUsers()
+	for _, uid := range allUsers {
 		totalUsage += c.GetUserCPUUsage(uid)
 	}
 
@@ -489,12 +500,68 @@ func (c *Collector) GetTotalUserCPUUsage() float64 {
 	return totalUsage
 }
 
-// GetActiveUsers restituisce la lista degli UID attivi (non di sistema).
-// Esclude gli utenti che hanno solo processi di sistema esclusi
-// Esclude anche gli utenti nella USER_EXCLUDE_LIST
-// Include solo gli utenti nella USER_INCLUDE_LIST (se specificata)
-func (c *Collector) GetActiveUsers() []int {
-	cacheKey := "active_users"
+// GetLimitedUsersCPUUsage restituisce l'uso CPU totale solo degli utenti che passano i filtri.
+// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+func (c *Collector) GetLimitedUsersCPUUsage() float64 {
+	cacheKey := "limited_users_cpu_usage"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.(float64)
+	}
+
+	var totalUsage float64
+
+	// Ottieni solo utenti che passano i filtri
+	limitedUsers := c.GetLimitedUsers()
+	for _, uid := range limitedUsers {
+		totalUsage += c.GetUserCPUUsage(uid)
+	}
+
+	c.setInCache(cacheKey, totalUsage)
+	return totalUsage
+}
+
+// GetAllUsers restituisce la lista di TUTTI gli UID attivi non di sistema (UID >= SYSTEM_UID_MIN).
+// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+// Usato per metriche "all_users" (monitoraggio completo)
+func (c *Collector) GetAllUsers() []int {
+	cacheKey := "all_users"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.([]int)
+	}
+
+	uidMap := make(map[int]bool)
+
+	// Metodo 1: Usa gopsutil
+	processes, err := process.Processes()
+	if err == nil {
+		for _, p := range processes {
+			if uids, err := p.Uids(); err == nil && len(uids) > 0 {
+				uid := int(uids[0])
+				if c.isValidUserUID(uid) {
+					uidMap[uid] = true
+				}
+			}
+		}
+	} else {
+		// Fallback: legge da /proc
+		uidMap = c.getActiveUsersFromProc()
+	}
+
+	// Converti la mappa in slice
+	users := make([]int, 0, len(uidMap))
+	for uid := range uidMap {
+		users = append(users, uid)
+	}
+
+	c.setInCache(cacheKey, users)
+	return users
+}
+
+// GetLimitedUsers restituisce la lista degli UID che passano i filtri per i limiti CPU.
+// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+// Usato per metriche "limited_users" (sottoinsieme limitabile)
+func (c *Collector) GetLimitedUsers() []int {
+	cacheKey := "limited_users"
 	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
 		return val.([]int)
 	}
@@ -513,11 +580,7 @@ func (c *Collector) GetActiveUsers() []int {
 					if c.cfg.IsUserIncluded(username) {
 						// Check se l'utente è escluso dalla exclude list
 						if !c.cfg.IsUserExcluded(username) {
-							// Controlla se il processo è escluso (processi di sistema)
-							pname, _ := p.Name()
-							if !c.cfg.IsProcessExcluded(pname) {
-								uidMap[uid] = true
-							}
+							uidMap[uid] = true
 						}
 					}
 				}
@@ -532,21 +595,6 @@ func (c *Collector) GetActiveUsers() []int {
 	users := make([]int, 0, len(uidMap))
 	for uid := range uidMap {
 		users = append(users, uid)
-	}
-
-	// Log solo se la lista degli utenti è cambiata
-	if !c.areUsersEqual(users) {
-		c.logger.Info("Active users detected",
-			"users", c.formatActiveUsers(users),
-			"count", len(users),
-			"include_list", c.cfg.UserIncludeList,
-			"exclude_list", c.cfg.UserExcludeList,
-		)
-		c.setPreviousUsers(users)
-	} else {
-		c.logger.Debug("Active users unchanged",
-			"count", len(users),
-		)
 	}
 
 	c.setInCache(cacheKey, users)
@@ -649,10 +697,31 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	return username, true
 }
 
-// cacheUsername memorizza lo username nella cache
+// cacheUsername memorizza lo username nella cache con LRU eviction.
 func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheMutex.Lock()
 	defer c.usernameCacheMutex.Unlock()
+
+	// If cache is full, remove oldest entry (LRU eviction)
+	if len(c.usernameCache) >= MAX_USERNAME_CACHE_SIZE {
+		oldestUID := 0
+		oldestTime := time.Now()
+		
+		for uid, ts := range c.usernameCacheTime {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestUID = uid
+			}
+		}
+		
+		if oldestUID != 0 {
+			delete(c.usernameCache, oldestUID)
+			delete(c.usernameCacheTime, oldestUID)
+			c.logger.Debug("Username cache full - evicted oldest entry",
+				"evicted_uid", oldestUID,
+				"cache_size", len(c.usernameCache))
+		}
+	}
 
 	c.usernameCache[uid] = username
 	c.usernameCacheTime[uid] = time.Now()
@@ -883,10 +952,31 @@ func (c *Collector) getFromCache(key string, ttl time.Duration) (interface{}, bo
 	return val, true
 }
 
-// setInCache memorizza un valore nella cache.
+// setInCache memorizza un valore nella cache con LRU eviction.
 func (c *Collector) setInCache(key string, value interface{}) {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
+
+	// If cache is full, remove oldest entries (LRU eviction)
+	if len(c.cache) >= MAX_CACHE_SIZE {
+		oldestKey := ""
+		oldestTime := time.Now()
+		
+		for k, ts := range c.cacheTimestamps {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestKey = k
+			}
+		}
+		
+		if oldestKey != "" {
+			delete(c.cache, oldestKey)
+			delete(c.cacheTimestamps, oldestKey)
+			c.logger.Debug("Cache full - evicted oldest entry",
+				"evicted_key", oldestKey,
+				"cache_size", len(c.cache))
+		}
+	}
 
 	c.cache[key] = value
 	c.cacheTimestamps[key] = time.Now()
@@ -971,16 +1061,25 @@ func (c *Collector) GetDetailedMetrics() map[string]interface{} {
 
 	metrics["total_cores"] = c.GetTotalCores()
 	metrics["total_cpu_usage"] = c.GetTotalCPUUsage()
-	metrics["total_user_cpu_usage"] = c.GetTotalUserCPUUsage()
+
+	// ALL USERS metrics
+	metrics["all_users_cpu_usage"] = c.GetAllUsersCPUUsage()
+	metrics["all_users_memory_usage"] = c.GetAllUsersMemoryUsage()
+	allUsers := c.GetAllUsers()
+	metrics["all_users_count"] = len(allUsers)
+
+	// LIMITED USERS metrics
+	metrics["limited_users_cpu_usage"] = c.GetLimitedUsersCPUUsage()
+	metrics["limited_users_memory_usage"] = c.GetLimitedUsersMemoryUsage()
+	limitedUsers := c.GetLimitedUsers()
+	metrics["limited_users_count"] = len(limitedUsers)
+
 	metrics["memory_usage_mb"] = c.GetMemoryUsage()
 	metrics["system_under_load"] = c.IsSystemUnderLoad()
 
-	activeUsers := c.GetActiveUsers()
-	metrics["active_users_count"] = len(activeUsers)
-
-	// Uso CPU per utente
+	// Uso CPU per utente (per ALL users)
 	userCPU := make(map[int]float64)
-	for _, uid := range activeUsers {
+	for _, uid := range allUsers {
 		userCPU[uid] = c.GetUserCPUUsage(uid)
 	}
 	metrics["user_cpu_usage"] = userCPU
@@ -1013,8 +1112,8 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 	return load1, nil
 }
 
-// GetAllUserMetrics restituisce le metriche (CPU, memoria, processi) per tutti gli utenti attivi.
-// Questa funzione scansiona /proc una sola volta per efficienza.
+// GetAllUserMetrics returns metrics (CPU, memory, processes) for all active users.
+// Optimization: single /proc scan with pre-allocation and combined UID+name reading.
 func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	cacheKey := "all_user_metrics"
 	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
@@ -1032,13 +1131,9 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		return userMetrics
 	}
 
-	// Mappa temporanea per accumulare i dati per UID
-	type userData struct {
-		cpuUsage     float64
-		memoryUsage  uint64
-		processCount int
-	}
-	tempData := make(map[int]*userData)
+	// Pre-allocate with estimated capacity (reduces dynamic allocations)
+	estimatedUIDs := len(entries) / 50  // Estimate: ~50 processes per average UID
+	tempData := make(map[int]*userData, estimatedUIDs)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1050,44 +1145,40 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			continue
 		}
 
-		// Leggi UID del processo
+		// Read process UID
 		statusFile := filepath.Join(procDir, entry.Name(), "status")
 		uid, err := c.getUIDFromStatusFile(statusFile)
 		if err != nil || !c.isValidUserUID(uid) {
 			continue
 		}
 
-		// Check whitelist if configured
-		username := c.getUsername(uid)
-		if !c.cfg.IsUserWhitelisted(username) {
-			continue // Skip users not in whitelist
-		}
-
-		// Inizializza struttura se non esiste
+		// Initialize structure if it doesn't exist
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}
 
-		// Conta il processo
+		// Count process (all processes, including those excluded from limits)
 		tempData[uid].processCount++
 
-		// Leggi uso CPU
+		// Read CPU usage (all processes, including those excluded from limits)
 		cpuUsage := c.getProcessCPUUsageSimple(pid)
 		tempData[uid].cpuUsage += cpuUsage
 
-		// Leggi uso memoria (VmRSS in bytes)
+		// Read memory usage (VmRSS in bytes) (all processes)
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
 	}
 
-	// Converte in UserMetrics con username
+	// Convert to UserMetrics with username
 	for uid, data := range tempData {
+		username := c.getUsernameFromUID(uid)
 		userMetrics[uid] = &UserMetrics{
 			UID:          uid,
-			Username:     c.getUsernameFromUID(uid),
+			Username:     username,
 			CPUUsage:     data.cpuUsage,
 			MemoryUsage:  data.memoryUsage,
 			ProcessCount: data.processCount,
+			IsLimited:    c.cfg.IsUserWhitelisted(username),
 		}
 	}
 
@@ -1095,7 +1186,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	return userMetrics
 }
 
-// GetUserMemoryUsage restituisce la memoria totale usata da un utente in bytes.
+// GetUserMemoryUsage returns total memory used by a user in bytes.
 func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	if !c.isValidUserUID(uid) {
 		return 0
@@ -1133,6 +1224,44 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		totalMemory += memoryUsage
+	}
+
+	c.setInCache(cacheKey, totalMemory)
+	return totalMemory
+}
+
+// GetAllUsersMemoryUsage restituisce la memoria totale usata da TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
+// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+func (c *Collector) GetAllUsersMemoryUsage() uint64 {
+	cacheKey := "all_users_memory_usage"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.(uint64)
+	}
+
+	var totalMemory uint64
+
+	allUsers := c.GetAllUsers()
+	for _, uid := range allUsers {
+		totalMemory += c.GetUserMemoryUsage(uid)
+	}
+
+	c.setInCache(cacheKey, totalMemory)
+	return totalMemory
+}
+
+// GetLimitedUsersMemoryUsage restituisce la memoria totale usata solo dagli utenti che passano i filtri.
+// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
+	cacheKey := "limited_users_memory_usage"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.(uint64)
+	}
+
+	var totalMemory uint64
+
+	limitedUsers := c.GetLimitedUsers()
+	for _, uid := range limitedUsers {
+		totalMemory += c.GetUserMemoryUsage(uid)
 	}
 
 	c.setInCache(cacheKey, totalMemory)
@@ -1206,6 +1335,24 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	}
 
 	// Primo campione: salva e ritorna 0
+	// Se cache è piena, rimuovi entry più vecchia (LRU)
+	if len(c.prevProcCPU) >= MAX_PROC_CACHE_SIZE {
+		oldestPID := int32(0)
+		oldestTime := time.Now()
+		
+		for pid, ts := range c.prevProcTime {
+			if ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestPID = pid
+			}
+		}
+		
+		if oldestPID != 0 {
+			delete(c.prevProcCPU, oldestPID)
+			delete(c.prevProcTime, oldestPID)
+		}
+	}
+	
 	c.prevProcCPU[pid32] = *times
 	c.prevProcTime[pid32] = now
 	return 0

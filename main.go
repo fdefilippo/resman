@@ -28,17 +28,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fdefilippo/cpu-manager-go/cgroup"
-	"github.com/fdefilippo/cpu-manager-go/config"
-	"github.com/fdefilippo/cpu-manager-go/database"
-	"github.com/fdefilippo/cpu-manager-go/logging"
-	"github.com/fdefilippo/cpu-manager-go/mcp"
-	"github.com/fdefilippo/cpu-manager-go/metrics"
-	"github.com/fdefilippo/cpu-manager-go/reloader"
-	"github.com/fdefilippo/cpu-manager-go/state"
+	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/logging"
+	"github.com/fdefilippo/resman/mcp"
+	"github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/reloader"
+	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.16.4"
+var version = "1.18.1"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -56,12 +56,12 @@ func checkPortAvailable(host string, port int) bool {
 
 func main() {
 	// Parsing dei flag
-	configPath := flag.String("config", "/etc/cpu-manager.conf", "Path to configuration file")
+	configPath := flag.String("config", "/etc/resman.conf", "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("CPU Manager (Go) %s\n", version)
+		fmt.Printf("resman %s\n", version)
 		return
 	}
 
@@ -76,7 +76,7 @@ func main() {
 	logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.UseSyslog)
 	logger := logging.GetLogger()
 
-	logger.Info("Starting CPU Manager", "version", version)
+	logger.Info("Starting Resource Manager", "version", version)
 	logger.Info("Configuration loaded successfully",
 		"log_level", cfg.LogLevel,
 		"log_file", cfg.LogFile,
@@ -277,6 +277,10 @@ func main() {
 		logger.Error("Error in initial control cycle", "error", err)
 	}
 
+	// Backpressure channel - signals when control cycle completes
+	cycleComplete := make(chan struct{})
+	close(cycleComplete)  // Initially complete so first cycle runs
+
 	// Main loop
 	for {
 		select {
@@ -316,11 +320,29 @@ func main() {
 
 		case <-ticker.C:
 			startTime := time.Now()
+			
+			// Backpressure: Skip cycle if previous is still running
+			select {
+			case <-cycleComplete:
+				// Previous cycle completed, start new one
+			default:
+				// Previous cycle still running - skip this cycle
+				logger.Warn("Skipping control cycle - previous cycle still running",
+					"reason", "backpressure",
+					"polling_interval_ms", cfg.PollingInterval*1000,
+				)
+				continue
+			}
+			
+			cycleComplete = make(chan struct{})
+			
 			if err := stateManager.RunControlCycle(ctx); err != nil {
 				logger.Error("Error in control cycle", "error", err)
 			}
 
 			duration := time.Since(startTime)
+			close(cycleComplete)  // Signal cycle completion
+			
 			if duration > time.Duration(cfg.PollingInterval/2)*time.Second {
 				logger.Warn("Control cycle took longer than expected",
 					"duration_ms", duration.Milliseconds(),

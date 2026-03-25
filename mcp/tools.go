@@ -27,7 +27,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/fdefilippo/cpu-manager-go/database"
+	"github.com/fdefilippo/resman/database"
 )
 
 // getHostname returns the current hostname
@@ -66,6 +66,7 @@ type UserMetric struct {
 	CPUUsage     float64 `json:"cpu_usage"`
 	MemoryUsage  uint64  `json:"memory_usage"`
 	ProcessCount int     `json:"process_count"`
+        IsLimited    bool   `json:"is_limited"`
 }
 
 type GetUserMetricsResult struct {
@@ -244,7 +245,7 @@ func (s *Server) registerTools() {
 			"properties": map[string]any{},
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		activeUsers := s.metricsCollector.GetActiveUsers()
+		activeUsers := s.metricsCollector.GetAllUsers()
 		allMetrics := s.metricsCollector.GetAllUserMetrics()
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole
@@ -1017,6 +1018,7 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 			CPUUsage:     metrics.CPUUsage,
 			MemoryUsage:  metrics.MemoryUsage,
 			ProcessCount: metrics.ProcessCount,
+                        IsLimited:    metrics.IsLimited,
 		})
 	}
 

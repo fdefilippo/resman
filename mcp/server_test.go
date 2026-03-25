@@ -21,7 +21,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fdefilippo/cpu-manager-go/config"
+	"github.com/fdefilippo/resman/config"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -269,25 +269,25 @@ func TestExtractUIDFromURI(t *testing.T) {
 	}{
 		{
 			name:    "valid users URI",
-			uri:     "cpu-manager://users/1000/metrics",
+			uri:     "resman://users/1000/metrics",
 			want:    1000,
 			wantErr: false,
 		},
 		{
 			name:    "valid cgroups URI",
-			uri:     "cpu-manager://cgroups/999",
+			uri:     "resman://cgroups/999",
 			want:    999,
 			wantErr: false,
 		},
 		{
 			name:    "invalid URI",
-			uri:     "cpu-manager://invalid",
+			uri:     "resman://invalid",
 			want:    0,
 			wantErr: true,
 		},
 		{
 			name:    "malformed UID",
-			uri:     "cpu-manager://users/abc/metrics",
+			uri:     "resman://users/abc/metrics",
 			want:    0,
 			wantErr: true,
 		},

@@ -80,7 +80,7 @@ type Config struct {
 
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
-	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`
+	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`  // Default: 127.0.0.1 (secure)
 	PrometheusMetricsBindPort int    `config:"PROMETHEUS_METRICS_BIND_PORT"`
 
 	// Prometheus TLS/HTTPS (optional)
@@ -109,20 +109,21 @@ type Config struct {
 	SystemUIDMin   int `config:"SYSTEM_UID_MIN"`
 	SystemUIDMax   int `config:"SYSTEM_UID_MAX"`
 
-	// User Include List (users to INCLUDE in monitoring, regex support)
+	// User Include List (users to INCLUDE in limiting, regex support)
 	UserIncludeList []string `config:"USER_INCLUDE_LIST"` // Comma-separated regex patterns
 
 	// User Exclude List (users to EXCLUDE from limits, regex support)
 	UserExcludeList []string `config:"USER_EXCLUDE_LIST"` // Comma-separated regex patterns
 
-	// Process Exclude List (process names to EXCLUDE from limits)
-	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"` // Comma-separated process names
+	// Process Exclude List (process names to EXCLUDE from limits, comma-separated)
+	// These processes are never limited, even if the user is in the include list
+	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`
 
 	// Blackout Timeframes (when CPU Manager should NOT apply limits)
 	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
 
 	// Blackout specification string (crontab-like format)
-	BlackoutSpec string `config:"CPU_MANAGER_BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"
+	BlackoutSpec string `config:"BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"
 
 	// Load checking
 	IgnoreSystemLoad bool `config:"IGNORE_SYSTEM_LOAD"`
@@ -160,12 +161,12 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		CgroupRoot:         "/sys/fs/cgroup",
-		ScriptCgroupBase:   "cpu_manager",
-		ConfigFile:         "/etc/cpu-manager.conf",
-		LogFile:            "/var/log/cpu-manager.log",
-		CreatedCgroupsFile: "/var/run/cpu-manager-cgroups.txt",
-		MetricsCacheFile:   "/var/run/cpu-manager-metrics.cache",
-		PrometheusFile:     "/var/run/cpu-manager-metrics.prom",
+		ScriptCgroupBase:   "resman",
+		ConfigFile:         "/etc/resman.conf",
+		LogFile:            "/var/log/resman.log",
+		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
+		MetricsCacheFile:   "/var/run/resman-metrics.cache",
+		PrometheusFile:     "/var/run/resman-metrics.prom",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -188,13 +189,13 @@ func DefaultConfig() *Config {
 		RAMUserExcludeList:  nil,
 
 		EnablePrometheus:          false,
-		PrometheusMetricsBindHost: "", // Empty = use default 0.0.0.0
+		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
 		PrometheusMetricsBindPort: 1974,
 
 		// Prometheus TLS (disabled by default)
 		PrometheusTLSEnabled:    false,
-		PrometheusTLSCertFile:   "/etc/cpu-manager/tls/server.crt",
-		PrometheusTLSKeyFile:    "/etc/cpu-manager/tls/server.key",
+		PrometheusTLSCertFile:   "/etc/resman/tls/server.crt",
+		PrometheusTLSKeyFile:    "/etc/resman/tls/server.key",
 		PrometheusTLSCAFile:     "",
 		PrometheusTLSMinVersion: "1.2", // TLS 1.2 minimum recommended
 
@@ -203,7 +204,7 @@ func DefaultConfig() *Config {
 		PrometheusAuthUsername:     "",
 		PrometheusAuthPasswordFile: "",
 		PrometheusJWTSecretFile:    "",
-		PrometheusJWTIssuer:        "cpu-manager",
+		PrometheusJWTIssuer:        "resman",
 		PrometheusJWTAudience:      "prometheus",
 		PrometheusJWTExpiry:        3600,
 
@@ -218,11 +219,8 @@ func DefaultConfig() *Config {
 		ServerRole:       "",  // Empty by default
 		UserIncludeList:  nil, // nil = all users included (no filter)
 		UserExcludeList:  nil, // nil = no users excluded (all users can be limited)
-		ProcessExcludeList: []string{ // Default system processes to exclude
-			"systemd", "dbus-daemon", "dbus-broker", "polkitd",
-			"NetworkManager", "wpa_supplicant",
-			"sshd", "cron", "crond",
-			"rsyslogd", "rsyslog", "syslog-ng",
+		ProcessExcludeList: []string{ // Default processes to never limit (regex patterns)
+			"^systemd$", "^dbus-daemon$", "^dbus-broker$", "^polkitd$",
 		},
 		BlackoutSpec:       "", // Empty = no blackout (always active)
 		BlackoutTimeframes: nil,
@@ -237,7 +235,7 @@ func DefaultConfig() *Config {
 
 		// Metrics Database (SQLite)
 		MetricsDBEnabled:       false,
-		MetricsDBPath:          "/etc/cpu-manager/metrics.db",
+		MetricsDBPath:          "/etc/resman/metrics.db",
 		MetricsDBRetentionDays: 30,
 		MetricsDBWriteInterval: 30, // Same as polling interval by default
 
@@ -262,6 +260,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	// 3. Valida
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// 4. Warning se USER_INCLUDE_LIST è vuota (nessun utente sarà limitato)
+	if cfg.UserIncludeList == nil || len(cfg.UserIncludeList) == 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. "+
+			"Set USER_INCLUDE_LIST=.* to limit all users, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
 	}
 
 	return cfg, nil
@@ -363,6 +367,10 @@ func setConfigField(cfg *Config, key, value string) error {
 	case "CGROUP_ROOT":
 		cfg.CgroupRoot = value
 	case "SCRIPT_CGROUP_BASE":
+		// SECURITY: Validate path does not contain traversal sequences
+		if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
+			return fmt.Errorf("invalid SCRIPT_CGROUP_BASE: must be a relative path without '..'")
+		}
 		cfg.ScriptCgroupBase = value
 	case "CONFIG_FILE":
 		cfg.ConfigFile = value
@@ -423,6 +431,9 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.PrometheusMetricsBindHost = value
 	case "PROMETHEUS_METRICS_BIND_PORT":
 		if i, err := strconv.Atoi(value); err == nil {
+			if i < 1 || i > 65535 {
+				return fmt.Errorf("invalid PROMETHEUS_METRICS_BIND_PORT: %d (must be 1-65535)", i)
+			}
 			cfg.PrometheusMetricsBindPort = i
 		}
 	// Backward compatibility: old variable names
@@ -430,6 +441,9 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.PrometheusMetricsBindHost = value
 	case "PROMETHEUS_PORT":
 		if i, err := strconv.Atoi(value); err == nil {
+			if i < 1 || i > 65535 {
+				return fmt.Errorf("invalid PROMETHEUS_PORT: %d (must be 1-65535)", i)
+			}
 			cfg.PrometheusMetricsBindPort = i
 		}
 
@@ -551,17 +565,21 @@ func setConfigField(cfg *Config, key, value string) error {
 
 	// Process Exclude List
 	case "PROCESS_EXCLUDE_LIST":
-		// Parse comma-separated list of process names
+		// Parse comma-separated list of process names (regex support)
 		value = strings.TrimSpace(value)
 		if value == "" {
 			cfg.ProcessExcludeList = nil // Empty = no processes excluded
 		} else {
-			processes := strings.Split(value, ",")
-			cfg.ProcessExcludeList = make([]string, 0, len(processes))
-			for _, proc := range processes {
-				proc = strings.TrimSpace(proc)
-				if proc != "" {
-					cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, proc)
+			patterns := strings.Split(value, ",")
+			cfg.ProcessExcludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					// Validate regex pattern
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in PROCESS_EXCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, pattern)
 				}
 			}
 			if len(cfg.ProcessExcludeList) == 0 {
@@ -570,7 +588,7 @@ func setConfigField(cfg *Config, key, value string) error {
 		}
 
 	// Blackout Timeframes
-	case "CPU_MANAGER_BLACKOUT":
+	case "BLACKOUT":
 		cfg.BlackoutSpec = strings.TrimSpace(value)
 		if cfg.BlackoutSpec != "" {
 			timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
@@ -853,10 +871,26 @@ func (c *Config) IsUserExcluded(username string) bool {
 	return false
 }
 
-// IsUserWhitelisted è un alias per IsUserExcluded per retrocompatibilità
-// Il nome è fuorviante ma mantenuto per compatibilità con il codice esistente
+// IsUserWhitelisted verifica se un utente può essere limitato
+// Un utente può essere limitato se:
+// 1. È incluso nella include list (se configurata)
+// 2. NON è escluso dalla exclude list
 func (c *Config) IsUserWhitelisted(username string) bool {
-	return !c.IsUserExcluded(username)
+	return c.IsUserIncluded(username) && !c.IsUserExcluded(username)
+}
+
+// IsProcessExcluded verifica se un processo deve essere escluso dai limiti
+// I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
+func (c *Config) IsProcessExcluded(processName string) bool {
+	if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
+		return false // No processes excluded
+	}
+	for _, pattern := range c.ProcessExcludeList {
+		if matched, _ := regexp.MatchString(pattern, processName); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
@@ -1255,19 +1289,3 @@ func (c *Config) GetNextBlackoutEnd() *time.Time {
 	return nil
 }
 
-// IsProcessExcluded verifica se un processo dovrebbe essere escluso dai limiti
-// Controlla il nome del comando (comm) contro la lista di processi esclusi
-func (c *Config) IsProcessExcluded(processName string) bool {
-	// Se la lista è vuota, nessun processo è escluso
-	if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
-		return false
-	}
-
-	processName = strings.ToLower(processName)
-	for _, excluded := range c.ProcessExcludeList {
-		if processName == excluded || strings.HasPrefix(processName, excluded+"-") {
-			return true
-		}
-	}
-	return false
-}

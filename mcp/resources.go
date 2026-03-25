@@ -29,50 +29,50 @@ import (
 // registerResources registers all MCP resources
 func (s *Server) registerResources() {
 	s.mcpServer.AddResource(&mcp.Resource{
-		URI:         "cpu-manager://system/status",
+		URI:         "resman://system/status",
 		Name:        "System Status",
-		Description: "Real-time system CPU and memory status",
+		Description: "Real-time system CPU and Memory status",
 		MIMEType:    "application/json",
 	}, s.handleSystemStatusResource)
 
 	s.mcpServer.AddResource(&mcp.Resource{
-		URI:         "cpu-manager://users/active",
+		URI:         "resman://users/active",
 		Name:        "Active Users",
 		Description: "List of active non-system users",
 		MIMEType:    "application/json",
 	}, s.handleActiveUsersResource)
 
 	s.mcpServer.AddResource(&mcp.Resource{
-		URI:         "cpu-manager://limits/status",
+		URI:         "resman://limits/status",
 		Name:        "Limits Status",
 		Description: "Current CPU limits status",
 		MIMEType:    "application/json",
 	}, s.handleLimitsStatusResource)
 
 	s.mcpServer.AddResource(&mcp.Resource{
-		URI:         "cpu-manager://config",
+		URI:         "resman://config",
 		Name:        "Configuration",
-		Description: "Current CPU Manager configuration",
+		Description: "Current Resource Manager configuration",
 		MIMEType:    "application/json",
 	}, s.handleConfigResource)
 
 	// Template for per-user resources
 	s.mcpServer.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate: "cpu-manager://users/{uid}/metrics",
+		URITemplate: "resman://users/{uid}/metrics",
 		Name:        "User Metrics",
 		Description: "Metrics for a specific user",
 		MIMEType:    "application/json",
 	}, s.handleUserMetricsResource)
 
 	s.mcpServer.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate: "cpu-manager://cgroups/{uid}",
+		URITemplate: "resman://cgroups/{uid}",
 		Name:        "Cgroup Info",
 		Description: "Cgroup information for a specific user",
 		MIMEType:    "application/json",
 	}, s.handleCgroupResource)
 }
 
-// handleSystemStatusResource handles cpu-manager://system/status
+// handleSystemStatusResource handles resman://system/status
 func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
 	metrics := s.metricsCollector.GetDetailedMetrics()
@@ -99,9 +99,9 @@ func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadRe
 	}, nil
 }
 
-// handleActiveUsersResource handles cpu-manager://users/active
+// handleActiveUsersResource handles resman://users/active
 func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	activeUsers := s.metricsCollector.GetActiveUsers()
+	activeUsers := s.metricsCollector.GetAllUsers()
 	result := make([]map[string]any, 0, len(activeUsers))
 
 	for _, uid := range activeUsers {
@@ -121,7 +121,7 @@ func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadRes
 	}, nil
 }
 
-// handleLimitsStatusResource handles cpu-manager://limits/status
+// handleLimitsStatusResource handles resman://limits/status
 func (s *Server) handleLimitsStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
 
@@ -145,7 +145,7 @@ func (s *Server) handleLimitsStatusResource(ctx context.Context, req *mcp.ReadRe
 	}, nil
 }
 
-// handleConfigResource handles cpu-manager://config
+// handleConfigResource handles resman://config
 func (s *Server) handleConfigResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	cfg := s.stateManager.GetConfig()
 
@@ -174,7 +174,7 @@ func (s *Server) handleConfigResource(ctx context.Context, req *mcp.ReadResource
 	}, nil
 }
 
-// handleUserMetricsResource handles cpu-manager://users/{uid}/metrics
+// handleUserMetricsResource handles resman://users/{uid}/metrics
 func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	// Extract UID from URI
 	uid, err := extractUIDFromURI(req.Params.URI)
@@ -207,7 +207,7 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 	}, nil
 }
 
-// handleCgroupResource handles cpu-manager://cgroups/{uid}
+// handleCgroupResource handles resman://cgroups/{uid}
 func (s *Server) handleCgroupResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	// Extract UID from URI
 	uid, err := extractUIDFromURI(req.Params.URI)
@@ -233,9 +233,9 @@ func (s *Server) handleCgroupResource(ctx context.Context, req *mcp.ReadResource
 
 // extractUIDFromURI extracts the UID from a resource URI
 func extractUIDFromURI(uri string) (int, error) {
-	// Parse cpu-manager://users/{uid}/metrics or cpu-manager://cgroups/{uid}
+	// Parse resman://users/{uid}/metrics or resman://cgroups/{uid}
 	if strings.Contains(uri, "/users/") {
-		// Format: cpu-manager://users/{uid}/metrics
+		// Format: resman://users/{uid}/metrics
 		parts := strings.Split(uri, "/")
 		for i, part := range parts {
 			if part == "users" && i+1 < len(parts) {
@@ -247,7 +247,7 @@ func extractUIDFromURI(uri string) (int, error) {
 			}
 		}
 	} else if strings.Contains(uri, "/cgroups/") {
-		// Format: cpu-manager://cgroups/{uid}
+		// Format: resman://cgroups/{uid}
 		parts := strings.Split(uri, "/")
 		for i, part := range parts {
 			if part == "cgroups" && i+1 < len(parts) {
