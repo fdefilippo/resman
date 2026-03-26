@@ -1,4 +1,4 @@
-<!-- Thank you for contributing to CPU Manager Go! -->
+<!-- Thank you for contributing to Resource Manager -->
 <!-- Please fill out the sections below to help us review your PR efficiently. -->
 
 ## Description
@@ -43,9 +43,9 @@ Fixes #____
 <!-- Describe the tests you ran to verify your changes -->
 
 **Test environment:**
-- OS: 
-- Go version: 
-- cgroups version: 
+- OS:
+- Go version:
+- cgroups version:
 
 **Tests performed:**
 - [ ] Unit tests
