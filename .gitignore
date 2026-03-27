@@ -32,3 +32,6 @@ rpmbuild/
 # Qwen IDE (except PROJECT_SUMMARY.md)
 .qwen/*
 !.qwen/PROJECT_SUMMARY.md
+
+.qwen/
+gha-creds-*.json

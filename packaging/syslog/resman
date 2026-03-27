@@ -1,5 +1,5 @@
-# Logrotate configuration for cpu-manager-go
-/var/log/cpu-manager.log {
+# Logrotate configuration for resman
+/var/log/resman.log {
     missingok
     notifempty
     compress
@@ -11,6 +11,5 @@
     postrotate
         # Ricarica rsyslog dopo la rotazione
         systemctl reload rsyslog 2>/dev/null || \
-        /etc/init.d/rsyslog reload >/dev/null 2>&1 || true
     endscript
 }

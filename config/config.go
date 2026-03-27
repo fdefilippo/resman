@@ -41,7 +41,7 @@ type Config struct {
 
 	// Paths
 	CgroupRoot         string `config:"CGROUP_ROOT"`
-	ScriptCgroupBase   string `config:"SCRIPT_CGROUP_BASE"`
+	CgroupBase         string `config:"CGROUP_BASE"`
 	ConfigFile         string `config:"CONFIG_FILE"` // Ricorsivo, usato all'avvio
 	LogFile            string `config:"LOG_FILE"`
 	CreatedCgroupsFile string `config:"CREATED_CGROUPS_FILE"`
@@ -80,7 +80,7 @@ type Config struct {
 
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
-	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"`  // Default: 127.0.0.1 (secure)
+	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"` // Default: 127.0.0.1 (secure)
 	PrometheusMetricsBindPort int    `config:"PROMETHEUS_METRICS_BIND_PORT"`
 
 	// Prometheus TLS/HTTPS (optional)
@@ -161,7 +161,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		CgroupRoot:         "/sys/fs/cgroup",
-		ScriptCgroupBase:   "resman",
+		CgroupBase:         "resman",
 		ConfigFile:         "/etc/resman.conf",
 		LogFile:            "/var/log/resman.log",
 		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
@@ -366,12 +366,12 @@ func setConfigField(cfg *Config, key, value string) error {
 	// Paths
 	case "CGROUP_ROOT":
 		cfg.CgroupRoot = value
-	case "SCRIPT_CGROUP_BASE":
+	case "CGROUP_BASE":
 		// SECURITY: Validate path does not contain traversal sequences
 		if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
-			return fmt.Errorf("invalid SCRIPT_CGROUP_BASE: must be a relative path without '..'")
+			return fmt.Errorf("invalid CGROUP_BASE: must be a relative path without '..'")
 		}
-		cfg.ScriptCgroupBase = value
+		cfg.CgroupBase = value
 	case "CONFIG_FILE":
 		cfg.ConfigFile = value
 	case "LOG_FILE":
@@ -1288,4 +1288,3 @@ func (c *Config) GetNextBlackoutEnd() *time.Time {
 
 	return nil
 }
-

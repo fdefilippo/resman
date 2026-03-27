@@ -18,142 +18,142 @@
 package reloader
 
 import (
-    "fmt"        // AGGIUNTO
-    "sync"       // AGGIUNTO
+	"fmt"  // AGGIUNTO
+	"sync" // AGGIUNTO
 
-    "github.com/fdefilippo/resman/cgroup"
-    "github.com/fdefilippo/resman/config"  // AGGIUNTO
-    "github.com/fdefilippo/resman/logging"
-    "github.com/fdefilippo/resman/metrics"
-    "github.com/fdefilippo/resman/state"
+	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/config" // AGGIUNTO
+	"github.com/fdefilippo/resman/logging"
+	"github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
 // Reloader gestisce il ricaricamento dinamico della configurazione per tutti i componenti.
 type Reloader struct {
-    stateManager      *state.Manager
-    cgroupManager     *cgroup.Manager
-    metricsCollector  *metrics.Collector
-    prometheusExporter *metrics.PrometheusExporter
-    logger            *logging.Logger
+	stateManager       *state.Manager
+	cgroupManager      *cgroup.Manager
+	metricsCollector   *metrics.Collector
+	prometheusExporter *metrics.PrometheusExporter
+	logger             *logging.Logger
 
-    mu                sync.RWMutex
+	mu sync.RWMutex
 }
 
 // NewReloader crea un nuovo reloader.
 func NewReloader(
-    stateMgr *state.Manager,
-    cgroupMgr *cgroup.Manager,
-    metricsCol *metrics.Collector,
-    promExp *metrics.PrometheusExporter,
+	stateMgr *state.Manager,
+	cgroupMgr *cgroup.Manager,
+	metricsCol *metrics.Collector,
+	promExp *metrics.PrometheusExporter,
 ) *Reloader {
 
-    logger := logging.GetLogger()
+	logger := logging.GetLogger()
 
-    return &Reloader{
-        stateManager:      stateMgr,
-        cgroupManager:     cgroupMgr,
-        metricsCollector:  metricsCol,
-        prometheusExporter: promExp,
-        logger:            logger,
-    }
+	return &Reloader{
+		stateManager:       stateMgr,
+		cgroupManager:      cgroupMgr,
+		metricsCollector:   metricsCol,
+		prometheusExporter: promExp,
+		logger:             logger,
+	}
 }
 
 // OnConfigChange gestisce il cambio di configurazione.
 func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
-    r.logger.Info("Applying new configuration dynamically")
+	r.logger.Info("Applying new configuration dynamically")
 
-    // Applica i cambiamenti in ordine sicuro
-    var errors []string
+	// Applica i cambiamenti in ordine sicuro
+	var errors []string
 
-    // 1. Logging (immediato, per tracciare il resto)
-    if newConfig.LogLevel != "" {
-        // Il logging è globale, gestito separatamente
-        r.logger.Info("Log level change will be applied on next log message")
-    }
+	// 1. Logging (immediato, per tracciare il resto)
+	if newConfig.LogLevel != "" {
+		// Il logging è globale, gestito separatamente
+		r.logger.Info("Log level change will be applied on next log message")
+	}
 
-    // 2. Prometheus exporter (potrebbe richiedere restart)
-    if r.prometheusExporter != nil {
-        if err := r.handlePrometheusConfigChange(newConfig); err != nil {
-            errors = append(errors, fmt.Sprintf("Prometheus: %v", err))
-        }
-    }
+	// 2. Prometheus exporter (potrebbe richiedere restart)
+	if r.prometheusExporter != nil {
+		if err := r.handlePrometheusConfigChange(newConfig); err != nil {
+			errors = append(errors, fmt.Sprintf("Prometheus: %v", err))
+		}
+	}
 
-    // 3. State manager (aggiorna parametri)
-    if r.stateManager != nil {
-        // Il state manager avrà bisogno di un metodo per aggiornare la config
-        // Per ora, logghiamo solo
-        r.logger.Info("State manager configuration updated",
-            "polling_interval", newConfig.PollingInterval,
-            "cpu_threshold", newConfig.CPUThreshold,
-            "cpu_release_threshold", newConfig.CPUReleaseThreshold,
-        )
-    }
+	// 3. State manager (aggiorna parametri)
+	if r.stateManager != nil {
+		// Il state manager avrà bisogno di un metodo per aggiornare la config
+		// Per ora, logghiamo solo
+		r.logger.Info("State manager configuration updated",
+			"polling_interval", newConfig.PollingInterval,
+			"cpu_threshold", newConfig.CPUThreshold,
+			"cpu_release_threshold", newConfig.CPUReleaseThreshold,
+		)
+	}
 
-    // 4. Cgroup manager (aggiorna percorsi)
-    if r.cgroupManager != nil {
-        r.logger.Info("Cgroup manager notified of config change",
-            "cgroup_root", newConfig.CgroupRoot,
-            "base_cgroup", newConfig.ScriptCgroupBase,
-        )
-    }
+	// 4. Cgroup manager (aggiorna percorsi)
+	if r.cgroupManager != nil {
+		r.logger.Info("Cgroup manager notified of config change",
+			"cgroup_root", newConfig.CgroupRoot,
+			"base_cgroup", newConfig.CgroupBase,
+		)
+	}
 
-    // 5. Metrics collector (aggiorna cache TTL e exclude list)
-    if r.metricsCollector != nil {
-        r.metricsCollector.UpdateConfig(newConfig)  // Aggiorna la configurazione
-        r.logger.Info("Metrics collector configuration updated",
-            "cache_ttl", newConfig.MetricsCacheTTL,
-            "exclude_list", newConfig.UserExcludeList,
-        )
-    }
+	// 5. Metrics collector (aggiorna cache TTL e exclude list)
+	if r.metricsCollector != nil {
+		r.metricsCollector.UpdateConfig(newConfig) // Aggiorna la configurazione
+		r.logger.Info("Metrics collector configuration updated",
+			"cache_ttl", newConfig.MetricsCacheTTL,
+			"exclude_list", newConfig.UserExcludeList,
+		)
+	}
 
-    if len(errors) > 0 {
-        return fmt.Errorf("errors applying new config: %v", errors)
-    }
+	if len(errors) > 0 {
+		return fmt.Errorf("errors applying new config: %v", errors)
+	}
 
-    return nil
+	return nil
 }
 
 // handlePrometheusConfigChange gestisce i cambiamenti alla configurazione Prometheus.
 func (r *Reloader) handlePrometheusConfigChange(newConfig *config.Config) error {
-    r.mu.Lock()
-    defer r.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-    // Se Prometheus era disabilitato e ora è abilitato
-    if !r.prometheusExporter.IsRunning() && newConfig.EnablePrometheus {
-        r.logger.Info("Prometheus was disabled, now enabling...")
-        // Dovremmo riavviare l'exporter - per semplicità, logghiamo
-        r.logger.Warn("Prometheus enable/disable requires restart")
-        return nil
-    }
+	// Se Prometheus era disabilitato e ora è abilitato
+	if !r.prometheusExporter.IsRunning() && newConfig.EnablePrometheus {
+		r.logger.Info("Prometheus was disabled, now enabling...")
+		// Dovremmo riavviare l'exporter - per semplicità, logghiamo
+		r.logger.Warn("Prometheus enable/disable requires restart")
+		return nil
+	}
 
-    // Se Prometheus era abilitato e ora è disabilitato
-    if r.prometheusExporter.IsRunning() && !newConfig.EnablePrometheus {
-        r.logger.Info("Prometheus was enabled, now disabling...")
-        // Dovremmo fermare l'exporter
-        r.logger.Warn("Prometheus enable/disable requires restart")
-        return nil
-    }
+	// Se Prometheus era abilitato e ora è disabilitato
+	if r.prometheusExporter.IsRunning() && !newConfig.EnablePrometheus {
+		r.logger.Info("Prometheus was enabled, now disabling...")
+		// Dovremmo fermare l'exporter
+		r.logger.Warn("Prometheus enable/disable requires restart")
+		return nil
+	}
 
-    // Se la porta o host sono cambiati
-    // Nota: cambiare porta/host richiede restart del server HTTP
-    // Per ora logghiamo solo il cambiamento
-    r.logger.Info("Prometheus configuration changed",
-        "host", newConfig.PrometheusMetricsBindHost,
-        "port", newConfig.PrometheusMetricsBindPort,
-        "enabled", newConfig.EnablePrometheus,
-    )
+	// Se la porta o host sono cambiati
+	// Nota: cambiare porta/host richiede restart del server HTTP
+	// Per ora logghiamo solo il cambiamento
+	r.logger.Info("Prometheus configuration changed",
+		"host", newConfig.PrometheusMetricsBindHost,
+		"port", newConfig.PrometheusMetricsBindPort,
+		"enabled", newConfig.EnablePrometheus,
+	)
 
-    return nil
+	return nil
 }
 
 // SafeConfigUpdate applica i cambiamenti di configurazione in modo thread-safe.
 func (r *Reloader) SafeConfigUpdate(updateFunc func(*config.Config) *config.Config) error {
-    r.mu.Lock()
-    defer r.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-    // Questa funzione permette aggiornamenti atomici alla configurazione
-    // Utile per API REST o comandi amministrativi
+	// Questa funzione permette aggiornamenti atomici alla configurazione
+	// Utile per API REST o comandi amministrativi
 
-    r.logger.Debug("Safe configuration update requested")
-    return nil
+	r.logger.Debug("Safe configuration update requested")
+	return nil
 }

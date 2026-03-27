@@ -95,17 +95,17 @@ format:
 .nf
 .sp
 # =============================================
-# CPU\-MANAGER\-GO CONFIGURATION
+# RESMAN CONFIGURATION
 # =============================================
 
 # PATHS
 CGROUP_ROOT="/sys/fs/cgroup"
-SCRIPT_CGROUP_BASE="cpu_manager"
-CONFIG_FILE="/etc/cpu\-manager.conf"
-LOG_FILE="/var/log/cpu\-manager.log"
-CREATED_CGROUPS_FILE="/var/run/cpu\-manager\-cgroups.txt"
-METRICS_CACHE_FILE="/var/run/cpu\-manager\-metrics.cache"
-PROMETHEUS_FILE="/var/run/cpu\-manager\-metrics.prom"
+CGROUP_BASE="resman"
+CONFIG_FILE="/etc/resman.conf"
+LOG_FILE="/var/log/resman.log"
+CREATED_CGROUPS_FILE="/var/run/resman-cgroups.txt"
+METRICS_CACHE_FILE="/var/run/resman-metrics.cache"
+PROMETHEUS_FILE="/var/run/resman-metrics.prom"
 
 # TIMING (seconds)
 POLLING_INTERVAL=30          # Control cycle interval
@@ -161,7 +161,7 @@ SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 # These users are excluded from CPU limits
 # USER_EXCLUDE_LIST=francesco,mysql     # Exclude specific users
 
-# BLACKOUT TIMEFRAMES (when CPU Manager should NOT apply limits)
+# BLACKOUT TIMEFRAMES (when ResMan should NOT apply limits)
 # Format: "days hours" (multiple timeframes separated by ;)
 # Days: 0=Sunday, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
 #       Or: * (all), 1-5 (Mon-Fri), 0,6 (weekend)
@@ -236,59 +236,65 @@ configured in
 .B LOG_MAX_SIZE.
 Rotation creates a backup file with .1 extension.
 .SH STATE FILES
-.I /var/run/cpu\-manager\-cgroups.txt
+.I /var/run/resman-cgroups.txt
 .br
 Tracks created cgroups to enable cleanup after restart.
 .SH PROMETHEUS METRICS
 When enabled, the daemon exposes metrics at http://HOST:PORT/metrics
 .IP \(bu 2
-cpu_manager_cpu_total_usage_percent \- Total CPU usage
+resman_cpu_total_usage_percent \- Total CPU usage
 .IP \(bu
-cpu_manager_cpu_user_usage_percent \- Non\-system user CPU usage
+resman_cpu_user_usage_percent \- Non\-system user CPU usage
 .IP \(bu
-cpu_manager_memory_usage_megabytes \- Total system memory usage
+resman_memory_usage_megabytes \- Total system memory usage
 .IP \(bu
-cpu_manager_active_users_count \- Number of active non\-system users
+resman_active_users_count \- Number of active non\-system users
 .IP \(bu
-cpu_manager_limited_users_count \- Users with active limits
+resman_limited_users_count \- Users with active limits
 .IP \(bu
-cpu_manager_limits_active \- Limits status (1=active, 0=inactive)
+resman_limits_active \- Limits status (1=active, 0=inactive)
 .IP \(bu
-cpu_manager_system_load_average \- System load average (1 minute)
+resman_system_load_average \- System load average (1 minute)
 .IP \(bu
-cpu_manager_user_cpu_usage_percent{uid, username} \- CPU usage per user
+resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
 .IP \(bu
-cpu_manager_user_memory_usage_bytes{uid, username} \- Memory usage per user (bytes)
+resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (bytes)
 .IP \(bu
-cpu_manager_user_process_count{uid, username} \- Number of processes per user
+resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
-cpu_manager_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
+resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
 .IP \(bu
-cpu_manager_limits_activated_total \- Total limit activations (counter)
+resman_limits_activated_total \- Total limit activations (counter)
 .IP \(bu
-cpu_manager_limits_deactivated_total \- Total limit deactivations (counter)
+resman_limits_deactivated_total \- Total limit deactivations (counter)
 .IP \(bu
-cpu_manager_control_cycle_duration_seconds \- Control cycle duration (histogram)
+resman_control_cycle_duration_seconds \- Control cycle duration (histogram)
 .IP \(bu
-cpu_manager_errors_total{component, error_type} \- Errors by component (counter)
+resman_errors_total{component, error_type} \- Errors by component (counter)
 .PP
 All user-specific metrics include
 .B uid
 and
 .B username
 labels for easy filtering and aggregation in Grafana dashboards.
+Since v1.17.0, per-user metrics also include
+.B is_limited
+label to distinguish monitored vs limited users.
 .PP
 Example queries:
 .RS
 .IP \(bu 2
 Sum of all user memory:
-.I sum(cpu_manager_user_memory_usage_bytes)
+.I sum(resman_user_memory_usage_bytes)
 .IP \(bu
 Top 5 users by CPU:
-.I topk(5, cpu_manager_user_cpu_usage_percent)
+.I topk(5, resman_user_cpu_usage_percent)
 .IP \(bu
 Processes per user:
-.I cpu_manager_user_process_count{username="francesco"}
+.I resman_user_process_count{username="francesco"}
+.IP \(bu
+Only limited users:
+.I resman_user_cpu_usage_percent{is_limited="true"}
 .RE
 .SH MCP SERVER (MODEL CONTEXT PROTOCOL)
 When enabled, the daemon exposes an MCP server for AI assistant integration.

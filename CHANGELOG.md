@@ -88,7 +88,7 @@ if currentCPU >= threshold {
 - **Logging**: Warning logged when UID 0 is detected
 
 #### Input Validation
-- **ADDED**: Path traversal prevention for `SCRIPT_CGROUP_BASE`
+- **ADDED**: Path traversal prevention for `CGROUP_BASE`
   - Rejects paths containing `..`
   - Rejects absolute paths (starting with `/`)
 - **ADDED**: Port range validation (1-65535) for:

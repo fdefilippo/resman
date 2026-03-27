@@ -1,11 +1,11 @@
-# CPU Manager Configuration File
+# ResMan Configuration File
 # Location: /etc/resman.conf
 
 # ========================
 # PATHS
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
-SCRIPT_CGROUP_BASE=cpu_manager
+CGROUP_BASE=resman
 CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
 METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 

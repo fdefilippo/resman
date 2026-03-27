@@ -47,7 +47,7 @@ func TestNewManager(t *testing.T) {
 func TestGetUserCgroupPath(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.CgroupRoot = "/sys/fs/cgroup"
-	cfg.ScriptCgroupBase = "resman"
+	cfg.CgroupBase = "resman"
 
 	// Create manager without calling verifyCgroupSetup
 	manager := &Manager{
@@ -74,7 +74,7 @@ func TestGetUserCgroupPath(t *testing.T) {
 func TestGetBaseCgroupPath(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.CgroupRoot = "/sys/fs/cgroup"
-	cfg.ScriptCgroupBase = "resman"
+	cfg.CgroupBase = "resman"
 
 	manager := &Manager{
 		cfg: cfg,

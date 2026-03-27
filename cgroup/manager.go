@@ -82,7 +82,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 
 	logger.Info("Cgroup manager initialized",
 		"cgroup_root", cfg.CgroupRoot,
-		"base_cgroup", cfg.ScriptCgroupBase,
+		"base_cgroup", cfg.CgroupBase,
 	)
 
 	return mgr, nil
@@ -194,7 +194,7 @@ func (m *Manager) writeControllerIfMissing(filePath, controller string) error {
 
 // getBaseCgroupPath restituisce il percorso del cgroup base.
 func (m *Manager) getBaseCgroupPath() string {
-	return filepath.Join(m.cfg.CgroupRoot, m.cfg.ScriptCgroupBase)
+	return filepath.Join(m.cfg.CgroupRoot, m.cfg.CgroupBase)
 }
 
 // getUserCgroupPath restituisce il percorso del cgroup per un utente specifico.
@@ -308,11 +308,11 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	// Sposta processi in modo sincrono con timeout per evitare race condition
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		time.Sleep(100 * time.Millisecond)  // Breve delay per stabilizzazione
+		time.Sleep(100 * time.Millisecond) // Breve delay per stabilizzazione
 		done <- m.MoveAllUserProcesses(uid)
 	}()
 
