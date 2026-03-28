@@ -156,7 +156,9 @@ func (c *Collector) GetTotalCores() int {
 
 	cores, err := cpu.Counts(true)
 	if err != nil {
-		c.logger.Warn("Failed to get CPU core count, using fallback", "error", err)
+		c.logger.Warn("Failed to get CPU core count via gopsutil, using /proc/cpuinfo fallback",
+			"error", err,
+		)
 		// Fallback: leggi da /proc/cpuinfo
 		cores = c.getTotalCoresFallback()
 	}
@@ -169,7 +171,10 @@ func (c *Collector) GetTotalCores() int {
 func (c *Collector) getTotalCoresFallback() int {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
-		c.logger.Error("Failed to open /proc/cpuinfo", "error", err)
+		c.logger.Error("Failed to open /proc/cpuinfo to read CPU cores",
+			"error", err,
+			"fallback", "returning 1 core",
+		)
 		return 1
 	}
 	defer file.Close()
@@ -184,6 +189,7 @@ func (c *Collector) getTotalCoresFallback() int {
 	}
 
 	if cores == 0 {
+		c.logger.Warn("/proc/cpuinfo returned 0 cores, using fallback of 1")
 		cores = 1
 	}
 
@@ -200,7 +206,10 @@ func (c *Collector) GetTotalCPUUsage() float64 {
 	// Usa gopsutil per ottenere l'uso CPU con un intervallo breve
 	percentages, err := cpu.Percent(100*time.Millisecond, false)
 	if err != nil || len(percentages) == 0 {
-		c.logger.Warn("Failed to get CPU usage via gopsutil, using fallback", "error", err)
+		c.logger.Warn("Failed to get CPU usage via gopsutil, using /proc/stat fallback",
+			"error", err,
+			"percentages_empty", len(percentages) == 0,
+		)
 		// Fallback al metodo manuale
 		return c.getTotalCPUUsageFallback()
 	}
@@ -214,7 +223,10 @@ func (c *Collector) GetTotalCPUUsage() float64 {
 func (c *Collector) getTotalCPUUsageFallback() float64 {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
-		c.logger.Error("Failed to open /proc/stat", "error", err)
+		c.logger.Error("Failed to open /proc/stat for CPU usage calculation",
+			"error", err,
+			"fallback", "returning 0.0",
+		)
 		return 0.0
 	}
 	defer file.Close()
@@ -827,7 +839,9 @@ func (c *Collector) GetMemoryUsage() float64 {
 
 	vm, err := mem.VirtualMemory()
 	if err != nil {
-		c.logger.Warn("Failed to get memory info via gopsutil, using fallback", "error", err)
+		c.logger.Warn("Failed to get memory info via gopsutil, using /proc/meminfo fallback",
+			"error", err,
+		)
 		return c.getMemoryUsageFallback()
 	}
 
@@ -841,7 +855,10 @@ func (c *Collector) GetMemoryUsage() float64 {
 func (c *Collector) getMemoryUsageFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
-		c.logger.Error("Failed to open /proc/meminfo", "error", err)
+		c.logger.Error("Failed to open /proc/meminfo for memory calculation",
+			"error", err,
+			"fallback", "returning 0.0",
+		)
 		return 0.0
 	}
 	defer file.Close()
@@ -893,7 +910,9 @@ func (c *Collector) IsSystemUnderLoad() bool {
 	// Calcola load average
 	load, cores, err := c.getLoadAverage()
 	if err != nil {
-		c.logger.Warn("Failed to get load average", "error", err)
+		c.logger.Warn("Failed to get load average, assuming system not under load",
+			"error", err,
+		)
 		return false
 	}
 
@@ -908,17 +927,17 @@ func (c *Collector) IsSystemUnderLoad() bool {
 func (c *Collector) getLoadAverage() (float64, int, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
-		return 0.0, 0, err
+		return 0.0, 0, fmt.Errorf("failed to read /proc/loadavg: %w", err)
 	}
 
 	fields := strings.Fields(string(data))
 	if len(fields) == 0 {
-		return 0.0, 0, fmt.Errorf("invalid loadavg format")
+		return 0.0, 0, fmt.Errorf("invalid loadavg format (empty file)")
 	}
 
 	load1, err := strconv.ParseFloat(fields[0], 64)
 	if err != nil {
-		return 0.0, 0, err
+		return 0.0, 0, fmt.Errorf("failed to parse load average value '%s': %w", fields[0], err)
 	}
 
 	cores := c.GetTotalCores()
@@ -1127,7 +1146,10 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
-		c.logger.Warn("Failed to read /proc directory for user metrics", "error", err)
+		c.logger.Warn("Failed to read /proc directory for user metrics",
+			"error", err,
+			"fallback", "returning empty metrics",
+		)
 		return userMetrics
 	}
 
@@ -1202,7 +1224,11 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	procDir := "/proc"
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
-		c.logger.Warn("Failed to read /proc for memory stats", "error", err)
+		c.logger.Warn("Failed to read /proc directory for user memory stats",
+			"uid", uid,
+			"error", err,
+			"fallback", "returning 0 bytes",
+		)
 		return 0
 	}
 
