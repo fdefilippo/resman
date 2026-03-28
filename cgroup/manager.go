@@ -88,28 +88,30 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 func (m *Manager) verifyCgroupSetup() error {
 	// 1. Verifica che la root dei cgroups esista
 	if _, err := os.Stat(m.cfg.CgroupRoot); os.IsNotExist(err) {
-		return fmt.Errorf("cgroup root does not exist: %s", m.cfg.CgroupRoot)
+		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1')", m.cfg.CgroupRoot)
 	}
 
 	// 2. Verifica che sia cgroups v2 (controlla cgroup.controllers)
 	controllersFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.controllers")
 	controllersData, err := os.ReadFile(controllersFile)
 	if err != nil {
-		return fmt.Errorf("cannot read cgroup.controllers: %w", err)
+		return fmt.Errorf("cannot read cgroup.controllers at %s: %w", controllersFile, err)
 	}
 	m.logger.Info("Available cgroup controllers",
 		"controllers", strings.TrimSpace(string(controllersData)),
 	)
 	if !strings.Contains(string(controllersData), "cpu") {
-		m.logger.Error("CPU controller not available in cgroup.controllers")
-		return fmt.Errorf("cpu controller not available")
+		m.logger.Error("CPU controller not available in cgroup.controllers",
+			"available_controllers", strings.TrimSpace(string(controllersData)),
+		)
+		return fmt.Errorf("cpu controller not available (available: %s)", strings.TrimSpace(string(controllersData)))
 	}
 
 	// 3. Verifica che i controller CPU siano abilitati
 	subtreeControlFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.subtree_control")
 	data, err := os.ReadFile(subtreeControlFile)
 	if err != nil {
-		return fmt.Errorf("failed to read cgroup.subtree_control: %w", err)
+		return fmt.Errorf("failed to read cgroup.subtree_control at %s: %w", subtreeControlFile, err)
 	}
 
 	controllers := string(data)
@@ -122,7 +124,7 @@ func (m *Manager) verifyCgroupSetup() error {
 		)
 		// Tentativo di abilitarli automaticamente
 		if err := m.enableCPUControllers(); err != nil {
-			return fmt.Errorf("failed to enable CPU controllers: %w", err)
+			return fmt.Errorf("failed to enable CPU controllers (%s): %w", subtreeControlFile, err)
 		}
 		m.controllersAvailable = true
 	}
@@ -131,7 +133,7 @@ func (m *Manager) verifyCgroupSetup() error {
 	testFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
 	if err := os.WriteFile(testFile, []byte("0"), 0644); err != nil {
 		if os.IsPermission(err) {
-			return fmt.Errorf("no write permission to cgroup root: %w", err)
+			return fmt.Errorf("no write permission to cgroup root %s: %w", m.cfg.CgroupRoot, err)
 		}
 	}
 	m.cgroupRootWritable = true
@@ -139,16 +141,16 @@ func (m *Manager) verifyCgroupSetup() error {
 	// 5. Crea il cgroup base se non esiste
 	baseCgroupPath := m.getBaseCgroupPath()
 	if err := os.MkdirAll(baseCgroupPath, 0755); err != nil {
-		return fmt.Errorf("failed to create base cgroup: %w", err)
+		return fmt.Errorf("failed to create base cgroup directory %s: %w", baseCgroupPath, err)
 	}
 
 	// Abilita i controller nel nostro cgroup base
 	baseSubtreeControl := filepath.Join(baseCgroupPath, "cgroup.subtree_control")
 	if err := m.writeControllerIfMissing(baseSubtreeControl, "+cpu"); err != nil {
-		return fmt.Errorf("failed to enable cpu controller in base cgroup: %w", err)
+		return fmt.Errorf("failed to enable cpu controller in base cgroup %s: %w", baseCgroupPath, err)
 	}
 	if err := m.writeControllerIfMissing(baseSubtreeControl, "+cpuset"); err != nil {
-		return fmt.Errorf("failed to enable cpuset controller in base cgroup: %w", err)
+		return fmt.Errorf("failed to enable cpuset controller in base cgroup %s: %w", baseCgroupPath, err)
 	}
 
 	m.logger.Debug("Cgroup setup verified successfully")
@@ -213,7 +215,7 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 
 	// Crea la directory del cgroup
 	if err := os.MkdirAll(cgroupPath, 0755); err != nil {
-		return fmt.Errorf("failed to create cgroup directory for UID %d: %w", uid, err)
+		return fmt.Errorf("failed to create cgroup directory %s for UID %d: %w", cgroupPath, uid, err)
 	}
 
 	// Traccia il cgroup creato
@@ -241,7 +243,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
 		// Crea il cgroup se non esiste
 		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup before applying limit: %w", err)
+			return fmt.Errorf("failed to create cgroup %s before applying limit for UID %d: %w", cgroupPath, uid, err)
 		}
 	}
 
@@ -249,7 +251,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 
 	// Valida il formato della quota
 	if !isValidCPUQuotaFormat(quota) {
-		return fmt.Errorf("invalid CPU quota format: %s", quota)
+		return fmt.Errorf("invalid CPU quota format '%s': expected 'quota period' (e.g., '50000 100000') or 'max period'", quota)
 	}
 
 	// DEBUG: Log prima di applicare
@@ -273,7 +275,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 			err = os.WriteFile(cpuMaxFile, []byte(quota), 0644)
 		}
 		if err != nil {
-			return fmt.Errorf("failed to apply CPU limit for UID %d: %w", uid, err)
+			return fmt.Errorf("failed to apply CPU limit %s to %s for UID %d: %w", quota, cpuMaxFile, uid, err)
 		}
 	}
 
@@ -328,7 +330,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 			"uid", uid,
 			"timeout", timeout,
 		)
-		return fmt.Errorf("timeout moving processes to cgroup for UID %d", uid)
+		return fmt.Errorf("timeout (%v) moving processes to cgroup for UID %d", timeout, uid)
 	}
 
 	return nil
