@@ -96,13 +96,13 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
     dir := filepath.Dir(dbPath)
     if dir != ":" { // Skip per :memory:
         if err := os.MkdirAll(dir, 0755); err != nil {
-            return nil, fmt.Errorf("failed to create database directory: %w", err)
+            return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
         }
     }
 
     db, err := sql.Open("sqlite3", dbPath)
     if err != nil {
-        return nil, fmt.Errorf("failed to open database: %w", err)
+        return nil, fmt.Errorf("failed to open SQLite database at %s: %w", dbPath, err)
     }
 
     // Configura il database per performance migliori
@@ -118,7 +118,7 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
     // Inizializza lo schema
     if err := manager.InitSchema(); err != nil {
         db.Close()
-        return nil, fmt.Errorf("failed to initialize schema: %w", err)
+        return nil, fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
     }
 
     return manager, nil
@@ -221,7 +221,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
     defer m.mu.RUnlock()
 
     query := `
-    SELECT timestamp, uid, username, cpu_usage_percent, memory_usage_bytes, 
+    SELECT timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
            process_count, cgroup_path, cpu_quota, is_limited
     FROM user_metrics
     WHERE uid = ? AND timestamp BETWEEN ? AND ?
@@ -231,7 +231,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 
     rows, err := m.db.Query(query, uid, startTime, endTime, limit)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to query user history for UID %d (time range %s to %s): %w", uid, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
     }
     defer rows.Close()
 
@@ -242,7 +242,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
                         &r.MemoryUsageBytes, &r.ProcessCount, &r.CgroupPath,
                         &r.CPUQuota, &r.IsLimited)
         if err != nil {
-            return nil, err
+            return nil, fmt.Errorf("failed to scan user history record for UID %d: %w", uid, err)
         }
         records = append(records, r)
     }
@@ -256,7 +256,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
     defer m.mu.RUnlock()
 
     query := `
-    SELECT timestamp, total_cpu_usage_percent, total_cores, system_load, 
+    SELECT timestamp, total_cpu_usage_percent, total_cores, system_load,
            limits_active, limited_users_count
     FROM system_metrics
     WHERE timestamp BETWEEN ? AND ?
@@ -266,7 +266,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 
     rows, err := m.db.Query(query, startTime, endTime, limit)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to query system history (time range %s to %s): %w", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
     }
     defer rows.Close()
 
@@ -276,7 +276,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
         err := rows.Scan(&r.Timestamp, &r.TotalCPUUsagePercent, &r.TotalCores,
                         &r.SystemLoad, &r.LimitsActive, &r.LimitedUsersCount)
         if err != nil {
-            return nil, err
+            return nil, fmt.Errorf("failed to scan system history record: %w", err)
         }
         records = append(records, r)
     }
@@ -290,7 +290,7 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
     defer m.mu.RUnlock()
 
     query := `
-    SELECT 
+    SELECT
         uid,
         username,
         MIN(timestamp) as period_start,
@@ -321,7 +321,11 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
     )
 
     if err == sql.ErrNoRows {
-        return nil, nil
+        return nil, nil  // No data for this user in the time range
+    }
+
+    if err != nil {
+        return nil, fmt.Errorf("failed to query user summary for UID %d (time range %s to %s): %w", uid, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
     }
 
     return &summary, err
@@ -340,22 +344,23 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
     // Dimensione del file
     if m.dbPath != ":memory:" {
         fileInfo, err := os.Stat(m.dbPath)
-        if err == nil {
-            info.SizeBytes = fileInfo.Size()
-            info.SizeMB = float64(info.SizeBytes) / 1024 / 1024
+        if err != nil {
+            return nil, fmt.Errorf("failed to stat database file at %s: %w", m.dbPath, err)
         }
+        info.SizeBytes = fileInfo.Size()
+        info.SizeMB = float64(info.SizeBytes) / 1024 / 1024
     }
 
     // Count user metrics
     err := m.db.QueryRow("SELECT COUNT(*) FROM user_metrics").Scan(&info.UserMetricsCount)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to count user metrics: %w", err)
     }
 
     // Count system metrics
     err = m.db.QueryRow("SELECT COUNT(*) FROM system_metrics").Scan(&info.SystemMetricsCount)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to count system metrics: %w", err)
     }
 
     // Oldest record
@@ -375,7 +380,7 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
     // Unique users tracked
     err = m.db.QueryRow("SELECT COUNT(DISTINCT uid) FROM user_metrics").Scan(&info.UsersTracked)
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to count unique users: %w", err)
     }
 
     return info, nil
@@ -391,7 +396,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
     // Rimuovi user metrics vecchi
     result, err := m.db.Exec("DELETE FROM user_metrics WHERE timestamp < ?", cutoff)
     if err != nil {
-        return 0, err
+        return 0, fmt.Errorf("failed to delete user metrics older than %s (retention %d days): %w", cutoff.Format(time.RFC3339), retentionDays, err)
     }
 
     userDeleted, _ := result.RowsAffected()
@@ -399,13 +404,13 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
     // Rimuovi system metrics vecchi
     _, err = m.db.Exec("DELETE FROM system_metrics WHERE timestamp < ?", cutoff)
     if err != nil {
-        return userDeleted, err
+        return userDeleted, fmt.Errorf("failed to delete system metrics older than %s (retention %d days): %w", cutoff.Format(time.RFC3339), retentionDays, err)
     }
 
     // Vacuum per recuperare spazio
     _, err = m.db.Exec("VACUUM")
     if err != nil {
-        return userDeleted, err
+        return userDeleted, fmt.Errorf("failed to vacuum database after cleanup: %w", err)
     }
 
     return userDeleted, nil
@@ -417,7 +422,10 @@ func (m *DatabaseManager) Close() error {
     defer m.mu.Unlock()
 
     if m.db != nil {
-        return m.db.Close()
+        if err := m.db.Close(); err != nil {
+            return fmt.Errorf("failed to close database connection at %s: %w", m.dbPath, err)
+        }
+        return nil
     }
     return nil
 }
@@ -427,5 +435,8 @@ func (m *DatabaseManager) HealthCheck() error {
     m.mu.RLock()
     defer m.mu.RUnlock()
 
-    return m.db.Ping()
+    if err := m.db.Ping(); err != nil {
+        return fmt.Errorf("database health check failed at %s: %w", m.dbPath, err)
+    }
+    return nil
 }
