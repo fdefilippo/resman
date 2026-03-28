@@ -54,9 +54,9 @@ type Config struct {
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
 
 	// Timeout (seconds/milliseconds)
-	CgroupOperationTimeout  int `config:"CGROUP_OPERATION_TIMEOUT"`   // Timeout for cgroup operations (seconds)
-	CgroupRetryDelayMs      int `config:"CGROUP_RETRY_DELAY_MS"`      // Delay between cgroup retry attempts (milliseconds)
-	MCPShutdownTimeout      int `config:"MCP_SHUTDOWN_TIMEOUT"`       // Timeout for MCP server shutdown (seconds)
+	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
+	CgroupRetryDelayMs     int `config:"CGROUP_RETRY_DELAY_MS"`    // Delay between cgroup retry attempts (milliseconds)
+	MCPShutdownTimeout     int `config:"MCP_SHUTDOWN_TIMEOUT"`     // Timeout for MCP server shutdown (seconds)
 
 	// Thresholds (percentages)
 	CPUThreshold        int `config:"CPU_THRESHOLD"`
@@ -931,7 +931,7 @@ func (c *Config) IsUserExcludedForRAM(username string) bool {
 
 // IsUserWhitelistedForRAM verifica se un utente può essere limitato per RAM
 func (c *Config) IsUserWhitelistedForRAM(username string) bool {
-	return !c.IsUserExcludedForRAM(username)
+	return c.IsUserIncludedForRAM(username) && !c.IsUserExcludedForRAM(username)
 }
 
 // SetUserExcludeList imposta la lista di utenti da escludere e salva su file
