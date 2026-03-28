@@ -571,8 +571,22 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
+	// CORREZIONE: Itera solo sugli utenti che possono essere limitati
 	for uid := range metrics.UserCPUUsage {
 		username := m.getUsername(uid)
+		
+		// Salta utenti che non possono essere limitati
+		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
+		if !m.cfg.IsUserIncluded(username) || m.cfg.IsUserExcluded(username) {
+			m.logger.Debug("Skipping user - not in include list or in exclude list",
+				"uid", uid,
+				"username", username,
+				"is_included", m.cfg.IsUserIncluded(username),
+				"is_excluded", m.cfg.IsUserExcluded(username),
+			)
+			continue
+		}
+		
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Verifica se l'utente è già limitato
 		m.mu.RLock()
