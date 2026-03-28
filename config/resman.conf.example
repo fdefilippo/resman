@@ -1,8 +1,10 @@
 # ResMan Configuration File
 # Location: /etc/resman.conf
+#
+# Legenda: [D] = Dinamico (hot reload) | [S] = Statico (richiede restart)
 
 # ========================
-# PATHS
+# PATHS [S]
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=resman
@@ -10,14 +12,14 @@ CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
 METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 
 # ========================
-# TIMING
+# TIMING [D]
 # ========================
 POLLING_INTERVAL=30
 MIN_ACTIVE_TIME=60
 METRICS_CACHE_TTL=15
 
 # ========================
-# TIMEOUT CONFIGURATION
+# TIMEOUT CONFIGURATION [S]
 # ========================
 # Timeout per operazioni critiche (v1.18.3+)
 #
@@ -35,12 +37,12 @@ METRICS_CACHE_TTL=15
 # MCP_SHUTDOWN_TIMEOUT=10
 
 # ========================
-# THRESHOLDS (percentages)
+# THRESHOLDS (percentages) [D]
 # ========================
 CPU_THRESHOLD=75             # Attiva limiti se CPU utenti >= 75%
 CPU_RELEASE_THRESHOLD=40     # Rilascia limiti se CPU utenti < 40%
 
-# THRESHOLD TIME WINDOW (seconds)
+# THRESHOLD TIME WINDOW (seconds) [D]
 # CPU_THRESHOLD_DURATION: Tempo di attesa prima di attivare i limiti dopo superamento soglia
 # Utile per evitare attivazione per picchi temporanei (es: deploy, backup)
 # Default: 90 secondi (3 cicli da 30s)
@@ -58,17 +60,18 @@ CPU_RELEASE_THRESHOLD=40     # Rilascia limiti se CPU utenti < 40%
 CPU_THRESHOLD_DURATION=90
 
 # ========================
-# CPU LIMITS (cpu.max format: "quota period")
+# CPU LIMITS [D]
+# ========================
+# cpu.max format: "quota period"
 # core_totali=Quota/Period
 # Esempio:  50000 100000 -> 1/2 core
 # Esempio: 300000 100000 -> 3 core
 # Esempio: 200000 100000 -> 2 core completi
-# ========================
 CPU_QUOTA_NORMAL="max 100000"
 CPU_QUOTA_LIMITED="50000 100000"
 
 # ========================
-# RAM LIMITS
+# RAM LIMITS [D]
 # ========================
 # Abilita/disabilita limitazione RAM tramite cgroups v2
 # Quando abilitato, vengono applicati limiti memory.max ai cgroup utenti
@@ -115,9 +118,9 @@ RAM_QUOTA_PER_USER=512M
 DISABLE_SWAP=false
 
 # ========================
-# RAM USER INCLUDE/EXCLUDE LISTS (Optional, Regex Support)
-# Separate lists for RAM limits (if different from CPU limits)
+# RAM USER INCLUDE/EXCLUDE LISTS [D]
 # ========================
+# Separate lists for RAM limits (if different from CPU limits)
 # RAM_USER_INCLUDE_LIST: Se specificata, include SOLO gli utenti che corrispondono
 # RAM_USER_EXCLUDE_LIST: Se specificata, ESCLUDE gli utenti dai limiti RAM
 # Formato: lista di pattern regex separati da virgola
@@ -137,8 +140,10 @@ DISABLE_SWAP=false
 # RAM_USER_EXCLUDE_LIST=root
 
 # ========================
-# PROMETHEUS
+# PROMETHEUS [S]
 # ========================
+# Richiede restart per: enable/disable, porta, host, TLS, auth
+# Le metriche vengono aggiornate dinamicamente, ma la configurazione del server no
 ENABLE_PROMETHEUS=false              # Enable metrics export
 # SECURITY: Default bind is 127.0.0.1 (localhost only)
 # Set to 0.0.0.0 to expose to all interfaces (NOT recommended without auth/TLS)
@@ -164,7 +169,7 @@ PROMETHEUS_JWT_AUDIENCE=prometheus
 PROMETHEUS_JWT_EXPIRY=3600
 
 # ========================
-# LOGGING
+# LOGGING [D]
 # ========================
 # Livelli di log disponibili:
 #   DEBUG - Messaggi dettagliati per troubleshooting
@@ -177,14 +182,27 @@ USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
 LOG_FILE=/var/log/resman.log
 
 # ========================
-# SYSTEM
+# SYSTEM [S]
 # ========================
 MIN_SYSTEM_CORES=1
 
-# SYSTEM_UID_MIN: UID minimo da monitorare
-# Default: 1000 (esclude utenti di sistema: root, daemon, systemd, ecc.)
-# Impostare a 0 per monitorare TUTTI gli utenti (incluso root)
-# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio
+# SYSTEM_UID_MIN: UID minimo da monitorare e includere nelle metriche
+# Default: 1000
+#
+# IMPATTO SUL MONITORAGGIO:
+# Con SYSTEM_UID_MIN=1000 (default), solo gli utenti con UID >= 1000 appaiono
+# nelle metriche Prometheus. Utenti con UID < 1000 (mysql, avahi, www-data,
+# postfix, etc.) NON sono visibili nelle metriche.
+#
+# Esempio su sistema con 20 utenti attivi:
+#   - 15 utenti con UID < 1000 (mysql, avahi, www-data, ecc.) → NON nelle metriche
+#   - 5 utenti con UID >= 1000 (francesco, openclaw, ecc.) → presenti nelle metriche
+#
+# Per monitorare TUTTI gli utenti (incluso root, mysql, avahi, ecc.):
+#   SYSTEM_UID_MIN=0
+#
+# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio.
+# Puoi comunque usare USER_EXCLUDE_LIST=root per evitare di limitare root.
 SYSTEM_UID_MIN=1000
 
 # SYSTEM_UID_MAX: UID massimo da monitorare
@@ -193,7 +211,7 @@ SYSTEM_UID_MIN=1000
 # SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
 
 # ========================
-# USER INCLUDE LIST (Optional, Regex Support)
+# USER INCLUDE LIST [D]
 # ========================
 # Se specificata, INCLUDE nel monitoraggio SOLO gli utenti che corrispondono
 # ai pattern regex elencati. Se vuota o non specificata, NESSUN utente verrà
@@ -214,7 +232,7 @@ SYSTEM_UID_MIN=1000
 # USER_INCLUDE_LIST=
 
 # ========================
-# USER EXCLUDE LIST (Optional, Regex Support)
+# USER EXCLUDE LIST [D]
 # ========================
 # Se specificata, ESCLUDE gli utenti elencati dal monitoraggio e dall'applicazione
 # dei limiti CPU. Se vuota o non specificata, tutti gli utenti non-system
@@ -231,7 +249,7 @@ SYSTEM_UID_MIN=1000
 USER_EXCLUDE_LIST=root
 
 # ========================
-# PROCESS EXCLUDE LIST
+# PROCESS EXCLUDE LIST [D]
 # ========================
 # Lista di processi da escludere dai limiti CPU (separati da virgola)
 # Questi processi non vengono MAI limitati, anche se l'utente è nella INCLUDE_LIST
@@ -264,9 +282,9 @@ USER_EXCLUDE_LIST=root
 PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 
 # ========================
-# BLACKOUT TIMEFRAMES
+# BLACKOUT TIMEFRAMES [D]
 # ========================
-# Specifica quando CPU Manager NON deve applicare limiti CPU.
+# Specifica quando ResMan NON deve applicare limiti CPU.
 # Formato: "giorni ore" (multipli timeframe separati da ;)
 #
 # Giorni: 0=Domenica, 1=Lun, 2=Mar, 3=Mer, 4=Gio, 5=Ven, 6=Sab
@@ -290,32 +308,27 @@ PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 # # Disabilita sempre (per testing)
 # BLACKOUT=* 00-23
 #
-# # Nessun blackout (default - CPU Manager sempre attivo)
+# # Nessun blackout (default - ResMan sempre attivo)
 BLACKOUT=
 
 # ========================
-# PROCESS EXCLUSION LIST
-# ========================
-# Lista di processi da escludere dai limiti CPU (separati da virgola)
-# Se vuota, nessun processo è escluso (tutti possono essere limitati)
-#
-# Default: processi di sistema essenziali
-
-# LOAD AVERAGE HANDLING
+# LOAD AVERAGE HANDLING [D]
 # ========================
 # false: non attiva limiti se il sistema è già sotto carico (default conservativo)
 # true: attiva limiti anche se il sistema è sotto carico (isolamento garantito)
 IGNORE_SYSTEM_LOAD=true
 
 # ========================
-# SERVER ROLE
+# SERVER ROLE [S]
 # ========================
 # Opzionale: descrive il ruolo di questo server per identificazione nei report MCP
+# e nelle etichette Prometheus (server_role).
+# Richiede restart per essere applicato alle metriche Prometheus.
 # Esempi: database, web-frontend, batch, application, cache, api-gateway, etc.
 # SERVER_ROLE=database
 
 # ========================
-# MCP SERVER (Model Context Protocol)
+# MCP SERVER (Model Context Protocol) [S]
 # ========================
 # Enable MCP server for AI assistant integration
 MCP_ENABLED=false
@@ -330,7 +343,7 @@ MCP_TRANSPORT=stdio
 # MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
 # MCP endpoint available at: http://HOST:PORT/mcp
 
-# MCP log level
+# MCP log level [D]
 # Livelli disponibili: DEBUG, INFO, WARN, ERROR
 # Se non specificato, usa lo stesso livello di LOG_LEVEL
 MCP_LOG_LEVEL=INFO
@@ -343,7 +356,7 @@ MCP_ALLOW_WRITE_OPS=false
 # MCP_AUTH_TOKEN=your-secret-token-here
 
 # ========================
-# METRICS DATABASE (SQLite)
+# METRICS DATABASE (SQLite) [S]
 # ========================
 # Abilita la persistenza delle metriche in un database locale SQLite
 # per esporre lo storico delle metriche via MCP.
@@ -385,7 +398,7 @@ METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 
 # ========================
-# USERNAME CACHE TTL
+# USERNAME CACHE TTL [D]
 # ========================
 # Tempo di cache per la risoluzione UID -> username (in minuti)
 # Utile per ridurre le chiamate LDAP/NIS in ambienti con molti utenti
