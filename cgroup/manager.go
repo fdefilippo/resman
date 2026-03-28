@@ -34,8 +34,8 @@ import (
 )
 
 const (
-	defaultFilePerm       = 0644
-	sharedCgroupQuota     = 100000
+	defaultFilePerm   = 0644
+	sharedCgroupQuota = 100000
 	// Note: cleanupRetryDelay, processMoveDelay, etc. are now configurable via config
 )
 
@@ -312,7 +312,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	go func() {
 		defer close(done)
 		delay := time.Duration(m.cfg.GetCgroupRetryDelayMs()) * time.Millisecond
-		time.Sleep(delay)  // Breve delay per stabilizzazione
+		time.Sleep(delay) // Breve delay per stabilizzazione
 		done <- m.MoveAllUserProcesses(uid)
 	}()
 
@@ -457,6 +457,11 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 
 			// Ottieni nome processo
 			processName := m.getProcessName(pid)
+
+			// Salta processi esclusi da PROCESS_EXCLUDE_LIST
+			if m.cfg.IsProcessExcluded(processName) {
+				continue
+			}
 
 			// Sposta il processo
 			if err := m.MoveProcessToCgroup(pid, uid); err != nil {
@@ -673,6 +678,14 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		// Leggi il UID del processo
 		statusFile := filepath.Join(procDir, entry.Name(), "status")
 		if procUID, err := m.getUIDFromStatusFile(statusFile); err == nil && procUID == uid {
+			// Ottieni nome processo
+			processName := m.getProcessName(pid)
+
+			// Salta processi esclusi da PROCESS_EXCLUDE_LIST
+			if m.cfg.IsProcessExcluded(processName) {
+				continue
+			}
+
 			// Sposta il processo
 			if err := m.MoveProcessToSharedCgroup(pid, sharedPath, uid); err != nil {
 				errors = append(errors, fmt.Sprintf("PID %d: %v", pid, err))
