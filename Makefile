@@ -8,7 +8,7 @@
 
 # Nome del progetto
 PROJECT_NAME = resman
-VERSION = 1.18.2
+VERSION = 1.18.4
 RELEASE = 1
 
 # Percorsi
