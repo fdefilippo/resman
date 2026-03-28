@@ -17,6 +17,24 @@ MIN_ACTIVE_TIME=60
 METRICS_CACHE_TTL=15
 
 # ========================
+# TIMEOUT CONFIGURATION
+# ========================
+# Timeout per operazioni critiche (v1.18.3+)
+#
+# CGROUP_OPERATION_TIMEOUT: Timeout per operazioni cgroup (spostamento processi)
+# Default: 5 secondi
+# Aumentare su sistemi lenti o con molti processi
+# CGROUP_OPERATION_TIMEOUT=5
+#
+# CGROUP_RETRY_DELAY_MS: Ritardo tra tentativi di operazione cgroup
+# Default: 100 millisecondi
+# CGROUP_RETRY_DELAY_MS=100
+#
+# MCP_SHUTDOWN_TIMEOUT: Timeout per shutdown MCP server
+# Default: 10 secondi
+# MCP_SHUTDOWN_TIMEOUT=10
+
+# ========================
 # THRESHOLDS (percentages)
 # ========================
 CPU_THRESHOLD=75             # Attiva limiti se CPU utenti >= 75%
