@@ -298,6 +298,14 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	limitsAppliedTime := m.limitsAppliedTime
 	m.mu.RUnlock()
 
+	// Get configuration values atomically to prevent inconsistency during reload
+	minActiveTime := m.cfg.GetMinActiveTime()
+	cpuReleaseThreshold := m.cfg.GetCPUReleaseThreshold()
+	cpuThreshold := m.cfg.GetCPUThreshold()
+	minSystemCores := m.cfg.GetMinSystemCores()
+	ignoreSystemLoad := m.cfg.GetIgnoreSystemLoad()
+	cpuThresholdDuration := m.cfg.GetCPUThresholdDuration()
+
 	// Decisioni possibili
 	const (
 		DecisionActivate   = "ACTIVATE_LIMITS"
@@ -308,12 +316,12 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	// Se i limiti sono attivi, controlliamo se possiamo disattivarli
 	if limitsActive {
 		// Verifica il tempo minimo di attivazione
-		if time.Since(limitsAppliedTime) < time.Duration(m.cfg.MinActiveTime)*time.Second {
+		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
 			return DecisionMaintain, "Limits active, waiting for minimum activation time"
 		}
 
 		// Verifica se l'uso della CPU è sceso sotto la soglia di rilascio
-		if metrics.LimitedUsersCPUUsage < float64(m.cfg.CPUReleaseThreshold) {
+		if metrics.LimitedUsersCPUUsage < float64(cpuReleaseThreshold) {
 			// Verifica anche che il sistema non sia sotto carico
 			if !metrics.SystemUnderLoad {
 				// Reset tracker quando i limiti vengono rilasciati
@@ -321,7 +329,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 				return DecisionDeactivate, fmt.Sprintf(
 					"CPU usage below release threshold (%.1f%% < %d%%) and system not under load",
-					metrics.LimitedUsersCPUUsage, m.cfg.CPUReleaseThreshold,
+					metrics.LimitedUsersCPUUsage, cpuReleaseThreshold,
 				)
 			}
 			return DecisionMaintain, "CPU usage below threshold but system still under load"
@@ -332,45 +340,45 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// Se i limiti non sono attivi, controlliamo se dobbiamo attivarli
 	// 1. Verifica soglia CPU
-	if metrics.LimitedUsersCPUUsage >= float64(m.cfg.CPUThreshold) {
+	if metrics.LimitedUsersCPUUsage >= float64(cpuThreshold) {
 		// 2. Verifica che ci siano abbastanza core per il sistema
-		if metrics.TotalCores <= m.cfg.MinSystemCores {
+		if metrics.TotalCores <= minSystemCores {
 			m.thresholdTracker.Reset()
 			return DecisionMaintain, fmt.Sprintf(
 				"CPU usage high (%.1f%% >= %d%%) but insufficient cores (%d <= %d)",
-				metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
-				metrics.TotalCores, m.cfg.MinSystemCores,
+				metrics.LimitedUsersCPUUsage, cpuThreshold,
+				metrics.TotalCores, minSystemCores,
 			)
 		}
 
 		// 3. Verifica se dobbiamo ignorare il load average
-		if !m.cfg.IgnoreSystemLoad && metrics.SystemUnderLoad {
+		if !ignoreSystemLoad && metrics.SystemUnderLoad {
 			m.thresholdTracker.Reset()
 			return DecisionMaintain, "CPU usage high but system already under load from other factors"
 		}
 
 		// 4. Verifica time window (se configurata)
-		if m.cfg.CPUThresholdDuration > 0 {
+		if cpuThresholdDuration > 0 {
 			shouldActivate := m.thresholdTracker.ShouldActivateLimits(
 				metrics.LimitedUsersCPUUsage,
-				float64(m.cfg.CPUThreshold),
-				time.Duration(m.cfg.CPUThresholdDuration)*time.Second,
+				float64(cpuThreshold),
+				time.Duration(cpuThresholdDuration)*time.Second,
 			)
 
 			if !shouldActivate {
 				elapsed := m.thresholdTracker.GetElapsed()
-				remaining := time.Duration(m.cfg.CPUThresholdDuration)*time.Second - elapsed
+				remaining := time.Duration(cpuThresholdDuration)*time.Second - elapsed
 				return DecisionMaintain, fmt.Sprintf(
 					"CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
 					remaining.Round(time.Second),
-					metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
+					metrics.LimitedUsersCPUUsage, cpuThreshold,
 				)
 			}
 		}
 
 		return DecisionActivate, fmt.Sprintf(
 			"CPU usage exceeded threshold (%.1f%% >= %d%%)",
-			metrics.LimitedUsersCPUUsage, m.cfg.CPUThreshold,
+			metrics.LimitedUsersCPUUsage, cpuThreshold,
 		)
 	}
 
