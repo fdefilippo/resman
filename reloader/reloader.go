@@ -68,13 +68,15 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 	// 1. Logging (immediato, per tracciare il resto)
 	if newConfig.LogLevel != "" {
 		// Il logging è globale, gestito separatamente
-		r.logger.Info("Log level change will be applied on next log message")
+		r.logger.Info("Log level change will be applied on next log message",
+			"new_level", newConfig.LogLevel,
+		)
 	}
 
 	// 2. Prometheus exporter (potrebbe richiedere restart)
 	if r.prometheusExporter != nil {
 		if err := r.handlePrometheusConfigChange(newConfig); err != nil {
-			errors = append(errors, fmt.Sprintf("Prometheus: %v", err))
+			errors = append(errors, fmt.Sprintf("Prometheus exporter: %v", err))
 		}
 	}
 
@@ -86,6 +88,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 			"polling_interval", newConfig.PollingInterval,
 			"cpu_threshold", newConfig.CPUThreshold,
 			"cpu_release_threshold", newConfig.CPUReleaseThreshold,
+			"cpu_threshold_duration", newConfig.CPUThresholdDuration,
 		)
 	}
 

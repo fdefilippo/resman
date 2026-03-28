@@ -64,14 +64,14 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
     // Crea il watcher di fsnotify
     fswatcher, err := fsnotify.NewWatcher()
     if err != nil {
-        return nil, fmt.Errorf("failed to create file watcher: %w", err)
+        return nil, fmt.Errorf("failed to create fsnotify file watcher: %w", err)
     }
 
     // Ottieni info sul file corrente
     fileInfo, err := os.Stat(configPath)
     if err != nil {
         fswatcher.Close()
-        return nil, fmt.Errorf("cannot stat config file: %w", err)
+        return nil, fmt.Errorf("cannot stat config file at %s: %w", configPath, err)
     }
 
     watcher := &Watcher{
@@ -88,7 +88,7 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
     // Aggiungi il file al watcher
     if err := fswatcher.Add(configPath); err != nil {
         fswatcher.Close()
-        return nil, fmt.Errorf("failed to watch config file: %w", err)
+        return nil, fmt.Errorf("failed to add config file %s to watcher: %w", configPath, err)
     }
 
     logger.Info("Configuration watcher initialized", "file", configPath)

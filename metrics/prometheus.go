@@ -127,7 +127,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 
 	// Verifica che la porta sia valida
 	if cfg.PrometheusMetricsBindPort <= 0 || cfg.PrometheusMetricsBindPort > 65535 {
-		return nil, fmt.Errorf("invalid Prometheus port: %d", cfg.PrometheusMetricsBindPort)
+		return nil, fmt.Errorf("invalid Prometheus metrics bind port %d (must be 1-65535)", cfg.PrometheusMetricsBindPort)
 	}
 
 	// Ottieni hostname e server_role
