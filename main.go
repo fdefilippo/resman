@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,7 +69,11 @@ func main() {
 	// Caricamento configurazione iniziale
 	cfg, err := config.LoadAndValidate(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load configuration from %s: %v\n\n", *configPath, err)
+		fmt.Fprintf(os.Stderr, "Common issues:\n")
+		fmt.Fprintf(os.Stderr, "  - File does not exist: create /etc/resman.conf from example\n")
+		fmt.Fprintf(os.Stderr, "  - Invalid syntax: check key=value format\n")
+		fmt.Fprintf(os.Stderr, "  - Invalid values: verify thresholds, ports, and paths\n")
 		os.Exit(1)
 	}
 
@@ -103,15 +108,29 @@ func main() {
 	// 1. Cgroup Manager
 	cgroupMgr, err := cgroup.NewManager(cfg)
 	if err != nil {
-		logger.Error("Failed to initialize cgroup manager", "error", err)
+		logger.Error("Failed to initialize cgroup manager",
+			"cgroup_root", cfg.CgroupRoot,
+			"cgroup_base", cfg.CgroupBase,
+			"error", err,
+		)
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize cgroup manager: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\nTroubleshooting:\n")
+		fmt.Fprintf(os.Stderr, "  1. Verify cgroups v2 is enabled: mount | grep cgroup\n")
+		fmt.Fprintf(os.Stderr, "  2. Enable cgroups v2: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1'\n")
+		fmt.Fprintf(os.Stderr, "  3. Reboot and verify: cat /sys/fs/cgroup/cgroup.controllers\n")
+		fmt.Fprintf(os.Stderr, "  4. Check permissions on %s\n", cfg.CgroupRoot)
 		os.Exit(1)
 	}
-	logger.Info("Cgroup manager initialized")
+	logger.Info("Cgroup manager initialized",
+		"cgroup_root", cfg.CgroupRoot,
+		"cgroup_base", cfg.CgroupBase,
+	)
 
 	// 2. Metrics Collector
 	metricsCollector, err := metrics.NewCollector(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize metrics collector", "error", err)
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize metrics collector: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -126,6 +145,11 @@ func main() {
 				"path", cfg.MetricsDBPath,
 				"error", err,
 			)
+			fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize metrics database at %s: %v\n", cfg.MetricsDBPath, err)
+			fmt.Fprintf(os.Stderr, "Database features disabled. To fix:\n")
+			fmt.Fprintf(os.Stderr, "  1. Ensure directory exists: mkdir -p %s\n", cfg.MetricsDBPath[:strings.LastIndex(cfg.MetricsDBPath, "/")])
+			fmt.Fprintf(os.Stderr, "  2. Check write permissions\n")
+			fmt.Fprintf(os.Stderr, "  3. Or disable with METRICS_DB_ENABLED=false\n")
 			cfg.MetricsDBEnabled = false
 		} else {
 			dbWriter = metrics.NewDBWriter(dbManager, cfg.MetricsDBWriteInterval)
@@ -161,15 +185,25 @@ func main() {
 				"host", cfg.PrometheusMetricsBindHost,
 				"port", cfg.PrometheusMetricsBindPort,
 			)
+			fmt.Fprintf(os.Stderr, "\nWarning: Prometheus metrics port %s:%d already in use, disabling exporter\n", cfg.PrometheusMetricsBindHost, cfg.PrometheusMetricsBindPort)
+			fmt.Fprintf(os.Stderr, "To fix:\n")
+			fmt.Fprintf(os.Stderr, "  1. Check what's using the port: lsof -i :%d or netstat -tlnp | grep %d\n", cfg.PrometheusMetricsBindPort, cfg.PrometheusMetricsBindPort)
+			fmt.Fprintf(os.Stderr, "  2. Change port: PROMETHEUS_METRICS_BIND_PORT=%d\n", cfg.PrometheusMetricsBindPort+1)
+			fmt.Fprintf(os.Stderr, "  3. Or disable: ENABLE_PROMETHEUS=false\n")
 			cfg.EnablePrometheus = false
 		} else {
 			prometheusExporter, err = metrics.NewPrometheusExporter(cfg)
 			if err != nil {
-				logger.Error("Failed to initialize Prometheus exporter", "error", err)
+				logger.Error("Failed to create Prometheus exporter", "error", err)
+				fmt.Fprintf(os.Stderr, "\nWarning: Failed to create Prometheus exporter: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Metrics will not be exposed. To fix:\n")
+				fmt.Fprintf(os.Stderr, "  1. Check configuration\n")
+				fmt.Fprintf(os.Stderr, "  2. Or disable: ENABLE_PROMETHEUS=false\n")
 				prometheusExporter = nil
 			} else if prometheusExporter != nil {
 				if err := prometheusExporter.Start(ctx); err != nil {
 					logger.Error("Failed to start Prometheus exporter", "error", err)
+					fmt.Fprintf(os.Stderr, "\nWarning: Failed to start Prometheus exporter: %v\n", err)
 					prometheusExporter = nil
 				} else {
 					logger.Info("Prometheus exporter started",
@@ -187,6 +221,7 @@ func main() {
 	stateManager, err := state.NewManager(cfg, metricsCollector, cgroupMgr, prometheusExporter)
 	if err != nil {
 		logger.Error("Failed to initialize state manager", "error", err)
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -201,9 +236,14 @@ func main() {
 			logger.Warn("Failed to create config watcher, continuing without auto-reload",
 				"error", err,
 			)
+			fmt.Fprintf(os.Stderr, "\nWarning: Failed to create config watcher: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Configuration auto-reload disabled. To fix:\n")
+			fmt.Fprintf(os.Stderr, "  1. Check file permissions: ls -la %s\n", *configPath)
+			fmt.Fprintf(os.Stderr, "  2. Verify inotify limits: cat /proc/sys/fs/inotify/max_user_watches\n")
 		} else {
 			if err := configWatcher.Start(); err != nil {
 				logger.Warn("Failed to start config watcher", "error", err)
+				fmt.Fprintf(os.Stderr, "\nWarning: Failed to start config watcher: %v\n", err)
 			} else {
 				logger.Info("Configuration auto-reload enabled", "file", *configPath)
 			}
@@ -217,10 +257,20 @@ func main() {
 		mcpServer, err = mcp.NewServer(cfg, stateManager, metricsCollector, cgroupMgr, dbManager)
 		if err != nil {
 			logger.Error("Failed to initialize MCP server", "error", err)
+			fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize MCP server: %v\n", err)
+			fmt.Fprintf(os.Stderr, "MCP features disabled. To fix:\n")
+			fmt.Fprintf(os.Stderr, "  1. Check configuration\n")
+			fmt.Fprintf(os.Stderr, "  2. Or disable: MCP_ENABLED=false\n")
 			mcpServer = nil
 		} else {
 			if err := mcpServer.Start(ctx); err != nil {
 				logger.Error("Failed to start MCP server", "error", err)
+				fmt.Fprintf(os.Stderr, "\nWarning: Failed to start MCP server: %v\n", err)
+				fmt.Fprintf(os.Stderr, "MCP server unavailable. Check:\n")
+				fmt.Fprintf(os.Stderr, "  1. Transport type: %s\n", cfg.MCPTransport)
+				if cfg.MCPTransport == "http" {
+					fmt.Fprintf(os.Stderr, "  2. Port availability: %d\n", cfg.MCPHTTPPort)
+				}
 				mcpServer = nil
 			} else {
 				logger.Info("MCP server started",
@@ -276,7 +326,16 @@ func main() {
 
 	// Esecuzione immediata del primo controllo
 	if err := stateManager.RunControlCycle(ctx); err != nil {
-		logger.Error("Error in initial control cycle", "error", err)
+		logger.Error("Error in initial control cycle",
+			"cycle_id", "initial",
+			"error", err,
+		)
+		fmt.Fprintf(os.Stderr, "\nWarning: Error in initial control cycle: %v\n", err)
+		fmt.Fprintf(os.Stderr, "This may indicate:\n")
+		fmt.Fprintf(os.Stderr, "  1. Cgroup setup issues\n")
+		fmt.Fprintf(os.Stderr, "  2. Permission problems\n")
+		fmt.Fprintf(os.Stderr, "  3. Invalid configuration\n")
+		fmt.Fprintf(os.Stderr, "Check logs for details: tail -f %s\n", cfg.LogFile)
 	}
 
 	// Backpressure channel - signals when control cycle completes
@@ -294,7 +353,8 @@ func main() {
 			}
 
 			if err := stateManager.Cleanup(); err != nil {
-				logger.Error("Error during cleanup", "error", err)
+				logger.Error("Error during state manager cleanup", "error", err)
+				fmt.Fprintf(os.Stderr, "\nWarning: Error during cleanup: %v\n", err)
 			}
 
 			// Stop MCP server
