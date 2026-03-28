@@ -257,9 +257,11 @@ func main() {
 					)
 					cancel()
 
+					// Forced shutdown after configurable timeout
 					go func() {
-						time.Sleep(10 * time.Second)
-						logger.Warn("Forced shutdown after timeout")
+						timeout := time.Duration(cfg.GetMCPShutdownTimeout()) * time.Second
+						time.Sleep(timeout)
+						logger.Warn("Forced shutdown after timeout", "timeout_seconds", cfg.GetMCPShutdownTimeout())
 						os.Exit(1)
 					}()
 				}

@@ -53,6 +53,11 @@ type Config struct {
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
 
+	// Timeout (seconds/milliseconds)
+	CgroupOperationTimeout  int `config:"CGROUP_OPERATION_TIMEOUT"`   // Timeout for cgroup operations (seconds)
+	CgroupRetryDelayMs      int `config:"CGROUP_RETRY_DELAY_MS"`      // Delay between cgroup retry attempts (milliseconds)
+	MCPShutdownTimeout      int `config:"MCP_SHUTDOWN_TIMEOUT"`       // Timeout for MCP server shutdown (seconds)
+
 	// Thresholds (percentages)
 	CPUThreshold        int `config:"CPU_THRESHOLD"`
 	CPUReleaseThreshold int `config:"CPU_RELEASE_THRESHOLD"`
@@ -171,6 +176,11 @@ func DefaultConfig() *Config {
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
+
+		// Timeout defaults
+		CgroupOperationTimeout: 5,   // 5 seconds for cgroup operations
+		CgroupRetryDelayMs:     100, // 100ms between retries
+		MCPShutdownTimeout:     10,  // 10 seconds for MCP shutdown
 
 		CPUThreshold:         75,
 		CPUReleaseThreshold:  40,
@@ -1350,6 +1360,27 @@ func (c *Config) GetPollingInterval() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.PollingInterval
+}
+
+// GetCgroupOperationTimeout returns the cgroup operation timeout in seconds.
+func (c *Config) GetCgroupOperationTimeout() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.CgroupOperationTimeout
+}
+
+// GetCgroupRetryDelayMs returns the cgroup retry delay in milliseconds.
+func (c *Config) GetCgroupRetryDelayMs() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.CgroupRetryDelayMs
+}
+
+// GetMCPShutdownTimeout returns the MCP shutdown timeout in seconds.
+func (c *Config) GetMCPShutdownTimeout() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.MCPShutdownTimeout
 }
 
 // GetMinSystemCores returns the minimum system cores to keep available.

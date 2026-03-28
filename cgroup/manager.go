@@ -36,11 +36,7 @@ import (
 const (
 	defaultFilePerm       = 0644
 	sharedCgroupQuota     = 100000
-	cleanupRetryDelay     = 100 * time.Millisecond
-	processMoveDelay      = 500 * time.Millisecond
-	processMoveDelayShort = 300 * time.Millisecond
-	verificationDelay     = 50 * time.Millisecond
-	kernelProcessDelay    = 200 * time.Millisecond
+	// Note: cleanupRetryDelay, processMoveDelay, etc. are now configurable via config
 )
 
 // Manager gestisce tutte le operazioni sui cgroups v2.
@@ -305,14 +301,16 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 		}
 	}
 
-	// Sposta processi in modo sincrono con timeout per evitare race condition
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Sposta processi in modo sincrono con timeout configurabile
+	timeout := time.Duration(m.cfg.GetCgroupOperationTimeout()) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		time.Sleep(100 * time.Millisecond) // Breve delay per stabilizzazione
+		delay := time.Duration(m.cfg.GetCgroupRetryDelayMs()) * time.Millisecond
+		time.Sleep(delay)  // Breve delay per stabilizzazione
 		done <- m.MoveAllUserProcesses(uid)
 	}()
 
@@ -328,7 +326,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	case <-ctx.Done():
 		m.logger.Warn("Timeout moving user processes to cgroup",
 			"uid", uid,
-			"timeout", "5s",
+			"timeout", timeout,
 		)
 		return fmt.Errorf("timeout moving processes to cgroup for UID %d", uid)
 	}
