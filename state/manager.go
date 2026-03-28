@@ -132,7 +132,7 @@ func NewManager(
 ) (*Manager, error) {
 
 	if cfg == nil {
-		return nil, fmt.Errorf("config cannot be nil")
+		return nil, fmt.Errorf("config cannot be nil: required for state manager initialization")
 	}
 
 	logger := logging.GetLogger()
@@ -188,8 +188,11 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	// 1. Raccogli metriche del sistema
 	metrics, err := m.collectSystemMetrics()
 	if err != nil {
-		m.logger.Error("Failed to collect system metrics", "error", err)
-		return err
+		m.logger.Error("Failed to collect system metrics",
+			"cycle_id", cycleID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", cycleID, err)
 	}
 
 	// 2. Aggiorna le metriche Prometheus (se abilitato)
@@ -207,9 +210,11 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	if err := m.executeDecision(decision, metrics); err != nil {
 		m.logger.Error("Failed to execute decision",
 			"decision", decision,
+			"reason", reason,
+			"cycle_id", cycleID,
 			"error", err,
 		)
-		return err
+		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", decision, cycleID, err)
 	}
 
 	// 6. Registra lo storico del ciclo
@@ -398,7 +403,7 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 		// Controlla se ci sono utenti inattivi da rilasciare
 		return m.releaseIdleUsers(metrics)
 	default:
-		return fmt.Errorf("unknown decision: %s", decision)
+		return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
 	}
 }
 
@@ -466,6 +471,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for idle user",
 				"uid", uid,
+				"quota", m.cfg.CPUQuotaNormal,
 				"error", err,
 			)
 			if firstError == nil {
@@ -475,13 +481,17 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 
 		releasedCount++
-		m.logger.Debug("CPU limit removed for idle user", "uid", uid)
+		m.logger.Debug("CPU limit removed for idle user",
+			"uid", uid,
+			"quota", m.cfg.CPUQuotaNormal,
+		)
 	}
 
 	// Logga il risultato
 	m.logger.Info("Idle user release completed",
 		"released", releasedCount,
 		"remaining_limited", remainingLimited,
+		"quota_restored", m.cfg.CPUQuotaNormal,
 	)
 
 	return firstError
@@ -532,7 +542,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 		// Crea il cgroup condiviso
 		sharedPath, err := m.cgroupManager.CreateSharedCgroup()
 		if err != nil {
-			return fmt.Errorf("failed to create shared cgroup: %w", err)
+			return fmt.Errorf("failed to create shared cgroup (min_system_cores=%d, total_cores=%d): %w", m.cfg.MinSystemCores, metrics.TotalCores, err)
 		}
 		m.sharedCgroupPath = sharedPath
 
@@ -548,7 +558,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 		// Applica la quota al cgroup condiviso
 		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, sharedQuota); err != nil {
-			return fmt.Errorf("failed to apply shared CPU limit: %w", err)
+			return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
 		}
 
 		m.logger.Info("Shared cgroup configured",
@@ -575,6 +585,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			if err != nil {
 				m.logger.Error("Failed to create user sub-cgroup",
 					"user", userStr,
+					"shared_cgroup", m.sharedCgroupPath,
 					"error", err,
 				)
 				if firstError == nil {
@@ -596,6 +607,8 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, m.sharedCgroupPath); err != nil {
 					m.logger.Warn("Failed to move some processes to shared cgroup",
 						"uid", uid,
+						"username", username,
+						"shared_cgroup", m.sharedCgroupPath,
 						"error", err,
 					)
 				}
@@ -604,6 +617,8 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				if err := m.cgroupManager.ApplyCPUWeight(uid, weight); err != nil {
 					m.logger.Warn("Failed to set CPU weight for user, using default",
 						"uid", uid,
+						"username", username,
+						"weight", weight,
 						"error", err,
 					)
 				}
