@@ -67,6 +67,7 @@ type PrometheusExporter struct {
 	limitsActive prometheus.Gauge
 	systemLoad   prometheus.Gauge
 	totalCores   prometheus.Gauge
+	actionCores  prometheus.Gauge
 
 	// Metriche con label aggiuntive
 	userCPUUsage      *prometheus.GaugeVec
@@ -342,6 +343,13 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Namespace:   namespace,
 		Name:        "cpu_total_cores",
 		Help:        "Total number of CPU cores",
+		ConstLabels: staticLabels,
+	})
+
+	exp.actionCores = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "cpu_action_cores",
+		Help:        "Number of CPU cores resman uses for actions (total - min_system_cores)",
 		ConstLabels: staticLabels,
 	})
 
@@ -722,7 +730,7 @@ func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
 }
 
 // UpdateSystemMetrics aggiorna le metriche di sistema.
-func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, systemLoad float64) {
+func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64) {
 	if exp == nil {
 		return
 	}
@@ -731,6 +739,7 @@ func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, systemLoad fl
 	defer exp.mu.Unlock()
 
 	exp.totalCores.Set(float64(totalCores))
+	exp.actionCores.Set(float64(actionCores))
 	exp.systemLoad.Set(systemLoad)
 }
 

@@ -115,7 +115,7 @@ type CgroupManager interface {
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
 	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string)
-	UpdateSystemMetrics(totalCores int, systemLoad float64)
+	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
@@ -239,9 +239,9 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 
 // SystemMetrics contiene tutte le metriche raccolte in un ciclo.
 type SystemMetrics struct {
-	Timestamp         time.Time
-	TotalCores        int
-	TotalCPUUsage     float64 // Percentuale
+	Timestamp     time.Time
+	TotalCores    int
+	TotalCPUUsage float64 // Percentuale
 
 	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
 	AllUsersCPUUsage    float64
@@ -574,7 +574,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	// CORREZIONE: Itera solo sugli utenti che possono essere limitati
 	for uid := range metrics.UserCPUUsage {
 		username := m.getUsername(uid)
-		
+
 		// Salta utenti che non possono essere limitati
 		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
 		if !m.cfg.IsUserIncluded(username) || m.cfg.IsUserExcluded(username) {
@@ -586,7 +586,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			)
 			continue
 		}
-		
+
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Verifica se l'utente è già limitato
 		m.mu.RLock()
@@ -862,7 +862,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 	// Aggiorna metriche di sistema
 	if load, err := m.getLoadAverage(); err == nil {
-		m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, load)
+		actionCores := metrics.TotalCores - m.cfg.GetMinSystemCores()
+		if actionCores < 1 {
+			actionCores = 1
+		}
+		m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, load)
 	}
 }
 
