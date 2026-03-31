@@ -50,9 +50,11 @@ type PrometheusExporter struct {
 	serverRole string
 
 	// Metriche base (con label hostname e server_role)
-	cpuTotalUsage prometheus.Gauge
-	memoryUsage   prometheus.Gauge
-	limitedUsers  prometheus.Gauge
+	cpuTotalUsage  prometheus.Gauge
+	memoryUsage    prometheus.Gauge
+	totalMemoryMB  prometheus.Gauge
+	cachedMemoryMB prometheus.Gauge
+	limitedUsers   prometheus.Gauge
 
 	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
 	allUsersCPUUsage    prometheus.Gauge
@@ -269,6 +271,20 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Namespace:   namespace,
 		Name:        "memory_usage_megabytes",
 		Help:        "Total memory usage in megabytes",
+		ConstLabels: staticLabels,
+	})
+
+	exp.totalMemoryMB = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "memory_total_megabytes",
+		Help:        "Total physical memory in megabytes",
+		ConstLabels: staticLabels,
+	})
+
+	exp.cachedMemoryMB = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "memory_cached_megabytes",
+		Help:        "Cached memory in megabytes (reclaimable by kernel)",
 		ConstLabels: staticLabels,
 	})
 
@@ -514,6 +530,10 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 
 		case key == "memory_usage_mb":
 			exp.memoryUsage.Set(value)
+		case key == "total_memory_mb":
+			exp.totalMemoryMB.Set(value)
+		case key == "cached_memory_mb":
+			exp.cachedMemoryMB.Set(value)
 		case key == "all_users_memory_usage":
 			exp.allUsersMemoryUsage.Set(value)
 		case key == "limited_users_memory_usage":
