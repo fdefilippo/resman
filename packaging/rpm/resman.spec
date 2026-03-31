@@ -187,9 +187,6 @@ chown root:root /var/run/resman
 touch /var/log/resman.log
 chmod 644 /var/log/resman.log
 
-# Aggiorna database man page
-%{_bindir}/mandb -q 2>/dev/null || true
-
 # Abilita cgroup controllers se non già abilitati
 if ! grep -q "+cpu" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
     echo "+cpu" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
