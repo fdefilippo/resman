@@ -31,6 +31,8 @@ func (m *mockMetricsCollector) GetTotalCores() int                              
 func (m *mockMetricsCollector) GetTotalCPUUsage() float64                       { return 50.0 }
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64                 { return 10.0 }
 func (m *mockMetricsCollector) GetMemoryUsage() float64                         { return 1024.0 }
+func (m *mockMetricsCollector) GetTotalMemoryMB() float64                       { return 16384.0 }
+func (m *mockMetricsCollector) GetCachedMemoryMB() float64                      { return 4096.0 }
 func (m *mockMetricsCollector) IsSystemUnderLoad() bool                         { return false }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics { return nil }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter                  { return nil }

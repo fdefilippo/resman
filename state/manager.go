@@ -84,6 +84,8 @@ type MetricsCollector interface {
 	GetLimitedUsersMemoryUsage() uint64
 
 	GetMemoryUsage() float64
+	GetTotalMemoryMB() float64
+	GetCachedMemoryMB() float64
 	IsSystemUnderLoad() bool
 	GetAllUserMetrics() map[int]*metrics.UserMetrics
 	GetDBWriter() *metrics.DBWriter
@@ -254,6 +256,8 @@ type SystemMetrics struct {
 	LimitedUsersCount       int
 
 	MemoryUsage     float64 // MB
+	TotalMemoryMB   float64 // MB
+	CachedMemoryMB  float64 // MB
 	SystemUnderLoad bool
 	UserCPUUsage    map[int]float64              // UID -> percentuale
 	UserMetrics     map[int]*metrics.UserMetrics // Metriche dettagliate per utente
@@ -282,6 +286,8 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	metrics.LimitedUsersCount = len(m.metricsCollector.GetLimitedUsers())
 
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
+	metrics.TotalMemoryMB = m.metricsCollector.GetTotalMemoryMB()
+	metrics.CachedMemoryMB = m.metricsCollector.GetCachedMemoryMB()
 	metrics.SystemUnderLoad = m.metricsCollector.IsSystemUnderLoad()
 
 	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
@@ -810,9 +816,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
 
 		// Other metrics
-		"memory_usage_mb": metrics.MemoryUsage,
-		"limited_users":   float64(len(m.activeUsers)),
-		"limits_active":   boolToFloat(m.limitsActive),
+		"memory_usage_mb":  metrics.MemoryUsage,
+		"total_memory_mb":  metrics.TotalMemoryMB,
+		"cached_memory_mb": metrics.CachedMemoryMB,
+		"limited_users":    float64(len(m.activeUsers)),
+		"limits_active":    boolToFloat(m.limitsActive),
 	}
 
 	// Aggiungi load average se disponibile
