@@ -52,6 +52,10 @@ type UserMetrics struct {
 	ProcessCount     int     // Number of processes
 	IsLimited        bool    // Whether user has CPU limits applied
 	MemoryHighEvents uint64  // Number of times memory.high was exceeded
+	IOReadBytes      uint64  // Total bytes read from disk
+	IOWriteBytes     uint64  // Total bytes written to disk
+	IOReadOps        uint64  // Total read operations
+	IOWriteOps       uint64  // Total write operations
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.

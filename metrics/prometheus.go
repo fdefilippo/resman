@@ -38,6 +38,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// ioStatsSnapshot tiene traccia dei valori precedenti per calcolare i delta dei counter IO.
+type ioStatsSnapshot struct {
+	ReadBytes  uint64
+	WriteBytes uint64
+	ReadOps    uint64
+	WriteOps   uint64
+}
+
 // PrometheusExporter esporta metriche in formato Prometheus.
 type PrometheusExporter struct {
 	cfg      *config.Config
@@ -77,6 +85,10 @@ type PrometheusExporter struct {
 	userProcessCount     *prometheus.GaugeVec
 	userLimited          *prometheus.GaugeVec
 	userMemoryHighEvents *prometheus.CounterVec // NEW: memory.high breach events
+	userIOReadBytes      *prometheus.CounterVec
+	userIOWriteBytes     *prometheus.CounterVec
+	userIOReadOps        *prometheus.CounterVec
+	userIOWriteOps       *prometheus.CounterVec
 	cgroupCPUQuota       *prometheus.GaugeVec
 	cgroupCPUPeriod      *prometheus.GaugeVec
 	cgroupMemoryUsage    *prometheus.GaugeVec
@@ -84,6 +96,7 @@ type PrometheusExporter struct {
 	// Track utenti attivi per cleanup metriche
 	activeUserMetrics    map[string]bool   // "uid_username_is_limited" -> true
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
+	prevIOStats          map[string]ioStatsSnapshot
 	metricsMu            sync.RWMutex
 
 	// Metriche counter (solo incremento)
@@ -155,6 +168,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		stopChan:             make(chan struct{}, 1),
 		activeUserMetrics:    make(map[string]bool),
 		prevMemoryHighEvents: make(map[string]uint64),
+		prevIOStats:          make(map[string]ioStatsSnapshot),
 	}
 
 	logger.Info("Prometheus exporter created",
@@ -426,6 +440,46 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
+	exp.userIOReadBytes = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "user_io_read_bytes_total",
+			Help:        "Total bytes read from block devices by user",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
+	exp.userIOWriteBytes = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "user_io_write_bytes_total",
+			Help:        "Total bytes written to block devices by user",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
+	exp.userIOReadOps = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "user_io_read_ops_total",
+			Help:        "Total read operations on block devices by user",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
+	exp.userIOWriteOps = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "user_io_write_ops_total",
+			Help:        "Total write operations on block devices by user",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
 	exp.cgroupCPUQuota = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -605,7 +659,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 }
 
 // UpdateUserMetrics aggiorna le metriche specifiche per utente.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64) {
+func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 	if exp == nil {
 		return
 	}
@@ -648,6 +702,28 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 		exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Add(float64(delta))
 	}
 	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
+
+	// Aggiorna statistiche IO (counters con delta)
+	ioKey := fmt.Sprintf("%s_%s", uidStr, username)
+	prevIO := exp.prevIOStats[ioKey]
+	if ioReadBytes >= prevIO.ReadBytes {
+		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(ioReadBytes - prevIO.ReadBytes))
+	}
+	if ioWriteBytes >= prevIO.WriteBytes {
+		exp.userIOWriteBytes.WithLabelValues(uidStr, username).Add(float64(ioWriteBytes - prevIO.WriteBytes))
+	}
+	if ioReadOps >= prevIO.ReadOps {
+		exp.userIOReadOps.WithLabelValues(uidStr, username).Add(float64(ioReadOps - prevIO.ReadOps))
+	}
+	if ioWriteOps >= prevIO.WriteOps {
+		exp.userIOWriteOps.WithLabelValues(uidStr, username).Add(float64(ioWriteOps - prevIO.WriteOps))
+	}
+	exp.prevIOStats[ioKey] = ioStatsSnapshot{
+		ReadBytes:  ioReadBytes,
+		WriteBytes: ioWriteBytes,
+		ReadOps:    ioReadOps,
+		WriteOps:   ioWriteOps,
+	}
 
 	// Se disponibile, aggiorna le metriche cgroup
 	if cgroupPath != "" {
@@ -703,10 +779,15 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			exp.userProcessCount.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userLimited.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userMemoryHighEvents.DeleteLabelValues(uidStr, username)
+			exp.userIOReadBytes.DeleteLabelValues(uidStr, username)
+			exp.userIOWriteBytes.DeleteLabelValues(uidStr, username)
+			exp.userIOReadOps.DeleteLabelValues(uidStr, username)
+			exp.userIOWriteOps.DeleteLabelValues(uidStr, username)
 
 			// Rimuovi dalla mappa dei valori precedenti
 			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 			delete(exp.prevMemoryHighEvents, memoryHighKey)
+			delete(exp.prevIOStats, memoryHighKey)
 
 			// Rimuovi dal tracking
 			delete(exp.activeUserMetrics, userKey)

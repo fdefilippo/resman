@@ -84,6 +84,20 @@ type Config struct {
 	// RAM User Exclude List (regex support)
 	RAMUserExcludeList []string `config:"RAM_USER_EXCLUDE_LIST"`
 
+	// IO limits (block I/O via cgroups v2 io controller)
+	IOEnabled          bool   `config:"IO_LIMIT_ENABLED"`
+	IOThreshold        int    `config:"IO_THRESHOLD"`
+	IOReleaseThreshold int    `config:"IO_RELEASE_THRESHOLD"`
+	IOReadBPS          string `config:"IO_READ_BPS"`      // Read bandwidth limit (e.g., "100M", "1G")
+	IOWriteBPS         string `config:"IO_WRITE_BPS"`     // Write bandwidth limit (e.g., "50M", "500M")
+	IOReadIOPS         int    `config:"IO_READ_IOPS"`     // Read IOPS limit (0 = unlimited)
+	IOWriteIOPS        int    `config:"IO_WRITE_IOPS"`    // Write IOPS limit (0 = unlimited)
+	IODeviceFilter     string `config:"IO_DEVICE_FILTER"` // "all" or "major:minor" (default "all")
+
+	// IO User Include/Exclude Lists (regex support)
+	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
+	IOUserExcludeList []string `config:"IO_USER_EXCLUDE_LIST"`
+
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
 	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"` // Default: 127.0.0.1 (secure)
@@ -199,6 +213,18 @@ func DefaultConfig() *Config {
 		RAMHighRatio:        0.8, // Default: memory.high = 80% of memory.max
 		RAMUserIncludeList:  nil,
 		RAMUserExcludeList:  nil,
+
+		// IO limits
+		IOEnabled:          false,
+		IOThreshold:        75,
+		IOReleaseThreshold: 40,
+		IOReadBPS:          "100M", // 100 MB/s
+		IOWriteBPS:         "50M",  // 50 MB/s
+		IOReadIOPS:         1000,
+		IOWriteIOPS:        500,
+		IODeviceFilter:     "all",
+		IOUserIncludeList:  nil,
+		IOUserExcludeList:  nil,
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -769,6 +795,35 @@ func validateConfig(cfg *Config) error {
 		}
 		if cfg.RAMHighRatio < 0 || cfg.RAMHighRatio > 1 {
 			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%, 0 to disable)")
+		}
+	}
+
+	// Validate IO limits
+	if cfg.IOEnabled {
+		if cfg.IOThreshold < 1 || cfg.IOThreshold > 100 {
+			errors = append(errors, "IO_THRESHOLD must be between 1 and 100")
+		}
+		if cfg.IOReleaseThreshold < 1 || cfg.IOReleaseThreshold > 100 {
+			errors = append(errors, "IO_RELEASE_THRESHOLD must be between 1 and 100")
+		}
+		if cfg.IOThreshold <= cfg.IOReleaseThreshold {
+			errors = append(errors, "IO_THRESHOLD must be greater than IO_RELEASE_THRESHOLD")
+		}
+		if cfg.IOReadBPS != "" && cfg.IOReadBPS != "max" {
+			if !isValidRAMQuota(cfg.IOReadBPS) {
+				errors = append(errors, "IO_READ_BPS must be a valid byte value (e.g., '104857600', '100M', '1G')")
+			}
+		}
+		if cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
+			if !isValidRAMQuota(cfg.IOWriteBPS) {
+				errors = append(errors, "IO_WRITE_BPS must be a valid byte value (e.g., '52428800', '50M', '500M')")
+			}
+		}
+		if cfg.IOReadIOPS < 0 {
+			errors = append(errors, "IO_READ_IOPS must be >= 0 (0 = unlimited)")
+		}
+		if cfg.IOWriteIOPS < 0 {
+			errors = append(errors, "IO_WRITE_IOPS must be >= 0 (0 = unlimited)")
 		}
 	}
 
@@ -1404,6 +1459,48 @@ func (c *Config) GetRAMHighRatio() float64 {
 		return 0.8
 	}
 	return c.RAMHighRatio
+}
+
+// GetIOEnabled returns whether IO limits are enabled.
+func (c *Config) GetIOEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOEnabled
+}
+
+// GetIOReadBPS returns the read bandwidth limit.
+func (c *Config) GetIOReadBPS() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOReadBPS
+}
+
+// GetIOWriteBPS returns the write bandwidth limit.
+func (c *Config) GetIOWriteBPS() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOWriteBPS
+}
+
+// GetIOReadIOPS returns the read IOPS limit.
+func (c *Config) GetIOReadIOPS() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOReadIOPS
+}
+
+// GetIOWriteIOPS returns the write IOPS limit.
+func (c *Config) GetIOWriteIOPS() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOWriteIOPS
+}
+
+// GetIODeviceFilter returns the device filter for IO limits.
+func (c *Config) GetIODeviceFilter() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IODeviceFilter
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.

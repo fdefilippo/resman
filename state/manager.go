@@ -107,6 +107,9 @@ type CgroupManager interface {
 	RemoveRAMHigh(uid int) error
 	GetCgroupRAMUsage(uid int) (uint64, error)
 	GetMemoryHighEvents(uid int) (uint64, error)
+	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
+	RemoveIOLimit(uid int) error
+	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
@@ -121,7 +124,7 @@ type CgroupManager interface {
 // PrometheusExporter è l'interfaccia per esportare metriche Prometheus.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64)
+	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	Start(ctx context.Context) error
 	Stop() error
@@ -683,6 +686,29 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 						}
 					}
 				}
+				// Applica limiti IO se abilitati
+				if m.shouldApplyIOLimits(uid) {
+					readBPS := m.cfg.GetIOReadBPS()
+					writeBPS := m.cfg.GetIOWriteBPS()
+					readIOPS := m.cfg.GetIOReadIOPS()
+					writeIOPS := m.cfg.GetIOWriteIOPS()
+					deviceFilter := m.cfg.GetIODeviceFilter()
+
+					if err := m.cgroupManager.ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter); err != nil {
+						m.logger.Warn("Failed to apply IO limit for user",
+							"uid", uid,
+							"readBPS", readBPS,
+							"writeBPS", writeBPS,
+							"error", err,
+						)
+					} else {
+						m.logger.Debug("IO limit applied for user",
+							"uid", uid,
+							"readBPS", readBPS,
+							"writeBPS", writeBPS,
+						)
+					}
+				}
 			}(uid, weight)
 
 			// Segna l'utente come limitato
@@ -790,6 +816,18 @@ func (m *Manager) deactivateLimits() error {
 				m.logger.Debug("RAM limits removed for user", "uid", uid)
 			}
 		}
+
+		// Rimuovi limiti IO se abilitati e l'utente era soggetto a IO limits
+		if m.shouldApplyIOLimits(uid) {
+			if err := m.cgroupManager.RemoveIOLimit(uid); err != nil {
+				m.logger.Warn("Failed to remove IO limit for user",
+					"user", userStr,
+					"error", err,
+				)
+			} else {
+				m.logger.Debug("IO limit removed for user", "uid", uid)
+			}
+		}
 	}
 
 	// Rimuovi il cgroup condiviso se esiste
@@ -862,6 +900,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		// Ottieni info cgroup se disponibile
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
+		var ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64
 		if m.cgroupManager != nil {
 			if info, err := m.cgroupManager.GetCgroupInfo(uid); err == nil {
 				cgroupPath = info["path"]
@@ -869,9 +908,12 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			}
 			// Ottieni eventi memory.high (se il cgroup esiste)
 			memoryHighEvents, _ = m.cgroupManager.GetMemoryHighEvents(uid)
+
+			// Ottieni statistiche IO (se il cgroup esiste)
+			ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.cgroupManager.GetIOStats(uid)
 		}
 
-		// Usa UpdateUserMetrics con tutti i parametri (CPU, memoria, processi, memory.high)
+		// Usa UpdateUserMetrics con tutti i parametri
 		m.prometheusExporter.UpdateUserMetrics(
 			uid,
 			username,
@@ -882,6 +924,10 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			cgroupPath,
 			cpuQuota,
 			memoryHighEvents,
+			ioReadBytes,
+			ioWriteBytes,
+			ioReadOps,
+			ioWriteOps,
 		)
 	}
 
@@ -947,6 +993,15 @@ func (m *Manager) shouldApplyRAMLimits(uid int) bool {
 	}
 	username := m.getUsername(uid)
 	return m.cfg.IsUserWhitelistedForRAM(username)
+}
+
+// shouldApplyIOLimits verifica se i limiti IO devono essere applicati per l'utente.
+func (m *Manager) shouldApplyIOLimits(uid int) bool {
+	if !m.cfg.IOEnabled {
+		return false
+	}
+	username := m.getUsername(uid)
+	return m.cfg.IsUserIncluded(username)
 }
 
 // GetUIDFromUsername risolve un username a UID scansionando /proc

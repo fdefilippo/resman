@@ -8,7 +8,7 @@
 
 # Nome del progetto
 PROJECT_NAME = resman
-VERSION = 1.19.0
+VERSION = 1.20.0
 RELEASE = 1
 
 # Percorsi
@@ -162,7 +162,7 @@ rpm-source: build rpm-dirs
 	mkdir -p $(PROJECT_NAME)-$(VERSION)
 	cp -r *.go go.mod go.sum \
 		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ \
-		README.md LICENSE CHANGELOG.md \
+		README.md LICENSE \
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/packaging/syslog
@@ -217,7 +217,6 @@ deb-prepare: deb-dirs deb-binary
 	install -m 644 packaging/systemd/resman.service $$PKG_DIR$(SYSTEMD_DIR)/; \
 	install -m 644 README.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 LICENSE $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 CHANGELOG.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 docs/alerting-rules.yml $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts; \
 	install -m 755 docs/generate-tls-certs.sh $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts/; \
