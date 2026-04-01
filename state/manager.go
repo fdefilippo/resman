@@ -876,7 +876,7 @@ func (m *Manager) deactivateLimits() error {
 		if m.shouldApplyRAMLimits(uid) {
 			// Rimuovi prima memory.high
 			if err := m.cgroupManager.RemoveRAMHigh(uid); err != nil {
-				m.logger.Debug("Failed to remove RAM high limit for user",
+				m.logger.Warn("Failed to remove RAM high limit for user",
 					"user", userStr,
 					"error", err,
 				)

@@ -787,10 +787,10 @@ func validateConfig(cfg *Config) error {
 		if cfg.RAMThreshold <= cfg.RAMReleaseThreshold {
 			errors = append(errors, "RAM_THRESHOLD must be greater than RAM_RELEASE_THRESHOLD")
 		}
-		if !isValidRAMQuota(cfg.RAMQuotaLimited) {
+		if !isValidByteQuota(cfg.RAMQuotaLimited) {
 			errors = append(errors, "RAM_QUOTA_LIMITED must be a valid byte value (e.g., '1073741824', '512M', '1G')")
 		}
-		if !isValidRAMQuota(cfg.RAMQuotaPerUser) {
+		if !isValidByteQuota(cfg.RAMQuotaPerUser) {
 			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")
 		}
 		if cfg.RAMHighRatio < 0 || cfg.RAMHighRatio > 1 {
@@ -810,12 +810,12 @@ func validateConfig(cfg *Config) error {
 			errors = append(errors, "IO_THRESHOLD must be greater than IO_RELEASE_THRESHOLD")
 		}
 		if cfg.IOReadBPS != "" && cfg.IOReadBPS != "max" {
-			if !isValidRAMQuota(cfg.IOReadBPS) {
+			if !isValidByteQuota(cfg.IOReadBPS) {
 				errors = append(errors, "IO_READ_BPS must be a valid byte value (e.g., '104857600', '100M', '1G')")
 			}
 		}
 		if cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
-			if !isValidRAMQuota(cfg.IOWriteBPS) {
+			if !isValidByteQuota(cfg.IOWriteBPS) {
 				errors = append(errors, "IO_WRITE_BPS must be a valid byte value (e.g., '52428800', '50M', '500M')")
 			}
 		}
@@ -863,9 +863,9 @@ func isValidCPUQuota(quota string) bool {
 	return err1 == nil && err2 == nil
 }
 
-// isValidRAMQuota verifica il formato del limite RAM.
+// isValidByteQuota verifica il formato di una quota in byte.
 // Formati validi: bytes (es. "1073741824"), K/M/G/T (es. "512M", "1G")
-func isValidRAMQuota(quota string) bool {
+func isValidByteQuota(quota string) bool {
 	if quota == "" {
 		return false
 	}
