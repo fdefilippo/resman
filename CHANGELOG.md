@@ -5,6 +5,43 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.20.1] - 2026-04-01
+
+### 🔧 Fixes
+
+#### IO Filtering Now Uses IO-Specific User Lists
+
+**FIX:** `shouldApplyIOLimits()` was using `IsUserIncluded` (CPU list) instead of IO-specific lists.
+
+- Added `IsUserIncludedForIO`, `IsUserExcludedForIO`, `IsUserWhitelistedForIO`
+- `IOUserIncludeList` and `IOUserExcludeList` are now properly used
+
+#### RAM/IO Thresholds Now Participate in Decisions
+
+**FIX:** `RAMThreshold`, `IOThreshold`, `RAMReleaseThreshold`, `IOReleaseThreshold` were configured but never consulted.
+
+- `makeDecision()` now activates when **any** resource exceeds its threshold (CPU OR RAM OR IO)
+- Deactivates only when **all** resources are below release thresholds
+
+#### Removed Unused UserMetrics Fields
+
+**FIX:** `MemoryHighEvents`, `IOReadBytes`, `IOWriteBytes`, `IOReadOps`, `IOWriteOps` in `UserMetrics` were never populated by the collector.
+
+- Removed placeholder fields from `UserMetrics` struct
+
+### 🔄 Refactoring
+
+- Renamed `isValidRAMQuota` to `isValidByteQuota` (used for both RAM and IO quotas)
+- Standardized error handling: all limit errors log at `Warn` level
+- Removed `is_limited` label from per-user Prometheus metrics
+  - All metrics now use 2 labels: `uid`, `username`
+  - Use `resman_user_cpu_limited{uid, username} == 1` to identify limited users
+
+### 📚 Documentation
+
+- Added `docs/ARCHITECTURE.md` — architecture overview with controller behavior, filtering, metrics, cgroup hierarchy, error handling
+- Updated `docs/dashboard-grafana.json` for new metric labels
+
 ## [1.20.0] - 2026-04-01
 
 ### 🎉 Major Features

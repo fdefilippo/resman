@@ -61,12 +61,13 @@ resman_limited_users_count_filtered         # Number of limitable users
 ```
 
 ### Per-User Metrics
-Detailed metrics for each user with `is_limited` label:
+Detailed metrics for each user (all use 2 labels: `uid`, `username`):
 
 ```prometheus
-resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}
-resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}
-resman_user_process_count{uid, username, hostname, server_role, is_limited}
+resman_user_cpu_usage_percent{uid, username, hostname, server_role}
+resman_user_memory_usage_bytes{uid, username, hostname, server_role}
+resman_user_process_count{uid, username, hostname, server_role}
+resman_user_cpu_limited{uid, username, hostname, server_role}    # 0 or 1
 resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
 resman_user_io_read_bytes_total{uid, username, hostname, server_role}
 resman_user_io_write_bytes_total{uid, username, hostname, server_role}
@@ -251,10 +252,10 @@ resman_limited_users_count_filtered{hostname, server_role}         # Limited use
 
 ### Per-User Metrics
 ```prometheus
-resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}
-resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}
-resman_user_process_count{uid, username, hostname, server_role, is_limited}
-resman_user_cpu_limited{uid, username, hostname, server_role, is_limited}
+resman_user_cpu_usage_percent{uid, username, hostname, server_role}
+resman_user_memory_usage_bytes{uid, username, hostname, server_role}
+resman_user_process_count{uid, username, hostname, server_role}
+resman_user_cpu_limited{uid, username, hostname, server_role}
 resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
 resman_user_io_read_bytes_total{uid, username, hostname, server_role}
 resman_user_io_write_bytes_total{uid, username, hostname, server_role}
@@ -359,6 +360,7 @@ CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
 - **Grafana dashboard**: `docs/dashboard-grafana.json`
 - **Multi-cluster guide**: `docs/GRAFANA-MULTI-CLUSTER-GUIDE.md`
 - **IO limits guide**: `docs/IO-LIMITS.md`
+- **Architecture**: `docs/ARCHITECTURE.md`
 - **MCP documentation**: `docs/MCP-README.md`
 - **TLS configuration**: `docs/TLS-CONFIGURATION.md`
 - **Prometheus queries**: `docs/prometheus-queries.md`

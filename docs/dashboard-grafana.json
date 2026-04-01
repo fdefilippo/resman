@@ -655,8 +655,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\", is_limited=~\"$is_limited\"}",
-          "legendFormat": "{{username}} (UID {{uid}}) - Limited: {{is_limited}}",
+          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "legendFormat": "{{username}} (UID {{uid}})",
           "range": true,
           "refId": "A"
         }
@@ -861,8 +861,8 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\", is_limited=~\"$is_limited\"}",
-          "legendFormat": "{{username}} (UID {{uid}}) - Limited: {{is_limited}}",
+          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "legendFormat": "{{username}} (UID {{uid}})",
           "range": true,
           "refId": "A"
         }
@@ -1406,7 +1406,7 @@
         "type": "prometheus",
         "uid": "${prometheus_datasource}"
       },
-      "description": "Shows which users currently have CPU limits applied (is_limited=true)",
+      "description": "Shows which users currently have CPU limits applied (value = 1)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1474,7 +1474,7 @@
             "uid": "${prometheus_datasource}"
           },
           "editorMode": "code",
-          "expr": "resman_user_cpu_limited{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", is_limited=\"true\"}",
+          "expr": "resman_user_cpu_limited{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
           "legendFormat": "{{username}}",
           "range": true,
           "refId": "A"
@@ -1636,27 +1636,6 @@
         "current": {
           "text": "All",
           "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${prometheus_datasource}"
-        },
-        "definition": "label_values(resman_cpu_total_usage_percent, cluster)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Cluster",
-        "multi": true,
-        "name": "cluster",
-        "options": [],
-        "query": {
-          "query": "label_values(resman_cpu_total_usage_percent, cluster)",
-          "refId": "StandardVariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 0,
-        "type": "query"
       },
       {
         "allValue": ".*",

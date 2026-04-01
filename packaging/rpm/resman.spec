@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.20.0
+Version: 1.20.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -50,7 +50,8 @@ Requires(postun): systemd-units
 %description
 Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 support.
 Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
-NEW in v1.20.0: IO limits via cgroups v2 io controller.
+v1.20.0: IO limits via cgroups v2 io controller.
+v1.20.1: Architectural consistency across controllers, aligned Prometheus labels.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -245,6 +246,16 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.1-1
+- FIX: IO filtering now uses IOUserIncludeList/IOUserExcludeList (was using CPU lists)
+- FIX: RAM and IO thresholds now participate in activate/deactivate decisions
+- FIX: Removed unused UserMetrics fields (MemoryHighEvents, IO*)
+- Refactor: Renamed isValidRAMQuota to isValidByteQuota
+- Refactor: Standardized error handling (all at Warn level)
+- Refactor: Removed is_limited label from per-user metrics (use resman_user_cpu_limited instead)
+- Docs: Added docs/ARCHITECTURE.md
+- Updated Grafana dashboard for new metric labels
+
 * Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.0-1
 - NEW: IO limits via cgroups v2 io controller
 - New configuration parameters: IO_LIMIT_ENABLED, IO_READ_BPS, IO_WRITE_BPS, IO_READ_IOPS, IO_WRITE_IOPS
