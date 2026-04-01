@@ -5,6 +5,61 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.20.0] - 2026-04-01
+
+### 🎉 Major Features
+
+#### IO Limits via cgroups v2 `io` Controller
+
+**NEW**: Introduced block I/O limiting via cgroups v2 `io` controller.
+
+**How it works:**
+- `io.max` limits read/write bandwidth (bytes/s) and IOPS per user
+- When exceeded: kernel throttles I/O operations (no process killing)
+- Configurable via `IO_READ_BPS`, `IO_WRITE_BPS`, `IO_READ_IOPS`, `IO_WRITE_IOPS`
+
+**Benefits:**
+- Prevents single users from monopolizing disk I/O
+- Graceful throttling (no OOM kills)
+- Per-user visibility via Prometheus metrics
+
+**New Configuration:**
+```bash
+IO_LIMIT_ENABLED=false    # Enable/disable
+IO_READ_BPS=100M          # Read bandwidth limit
+IO_WRITE_BPS=50M          # Write bandwidth limit
+IO_READ_IOPS=1000         # Read IOPS limit
+IO_WRITE_IOPS=500         # Write IOPS limit
+IO_DEVICE_FILTER=all      # Device filter
+```
+
+**New Prometheus Metrics:**
+```
+resman_user_io_read_bytes_total{uid, username}
+resman_user_io_write_bytes_total{uid, username}
+resman_user_io_read_ops_total{uid, username}
+resman_user_io_write_ops_total{uid, username}
+```
+
+### 🔧 Technical Changes
+
+#### New Cgroup Manager Functions
+- `ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter)` - Apply IO limits via `io.max`
+- `RemoveIOLimit(uid)` - Remove IO limits (set to "max")
+- `GetIOStats(uid)` - Read aggregate IO statistics from `io.stat`
+
+#### Updated Interfaces
+- `CgroupManager`: Extended with IO methods
+- `PrometheusExporter.UpdateUserMetrics()`: Added IO stats parameters
+
+#### Configuration
+- New fields: `IOEnabled`, `IOThreshold`, `IOReleaseThreshold`, `IOReadBPS`, `IOWriteBPS`, `IOReadIOPS`, `IOWriteIOPS`, `IODeviceFilter`
+- New validation for IO configuration
+
+### 📚 Documentation
+
+- NEW: `docs/IO-LIMITS.md` - Comprehensive IO limits guide
+
 ## [1.19.0] - 2026-03-31
 
 ### 🎉 Major Features

@@ -64,16 +64,23 @@ func (m *mockCgroupManager) ApplyRAMLimitWithHigh(uid int, maxLimit, highLimit s
 func (m *mockCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit, highLimit string) error {
 	return nil
 }
-func (m *mockCgroupManager) RemoveRAMLimit(uid int) error       { return nil }
-func (m *mockCgroupManager) RemoveRAMHigh(uid int) error        { return nil }
+func (m *mockCgroupManager) RemoveRAMLimit(uid int) error { return nil }
+func (m *mockCgroupManager) RemoveRAMHigh(uid int) error  { return nil }
 func (m *mockCgroupManager) GetCgroupRAMUsage(uid int) (uint64, error) {
 	return 0, nil
 }
 func (m *mockCgroupManager) GetMemoryHighEvents(uid int) (uint64, error) {
 	return 0, nil
 }
-func (m *mockCgroupManager) CleanupUserCgroup(uid int) error                           { return nil }
-func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error                { return nil }
+func (m *mockCgroupManager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
+	return nil
+}
+func (m *mockCgroupManager) RemoveIOLimit(uid int) error { return nil }
+func (m *mockCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
+	return 0, 0, 0, 0, nil
+}
+func (m *mockCgroupManager) CleanupUserCgroup(uid int) error            { return nil }
+func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return nil }
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
@@ -87,7 +94,7 @@ func (m *mockCgroupManager) GetCreatedCgroups() []int                           
 type mockPrometheusExporter struct{}
 
 func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
-func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64) {
+func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 }
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
 func (m *mockPrometheusExporter) Start(ctx context.Context) error                              { return nil }

@@ -150,6 +150,54 @@ RAM_HIGH_RATIO=0.8
 # RAM_USER_EXCLUDE_LIST=root
 
 # ========================
+# IO LIMITS [D]
+# ========================
+# Abilita/disabilita limitazione IO tramite cgroups v2 io controller
+# IO_LIMIT_ENABLED: true = abilita limiti IO, false = disabilita
+#
+# IO_THRESHOLD: Percentuale di IO utenti totali per attivare i limiti
+# IO_RELEASE_THRESHOLD: Percentuale per rilasciare i limiti
+#
+# IO_READ_BPS: Limite banda lettura per utente (bytes/s con suffix K/M/G/T)
+# IO_WRITE_BPS: Limite banda scrittura per utente
+# IO_READ_IOPS: Limite IOPS lettura per utente (0 = illimitato)
+# IO_WRITE_IOPS: Limite IOPS scrittura per utente (0 = illimitato)
+#
+# IO_DEVICE_FILTER: "all" = applica a tutti i dispositivi, oppure "8:0" per device specifico
+#
+# Esempi:
+# # Limiti IO disabilitati (default)
+# IO_LIMIT_ENABLED=false
+#
+# # Abilita limiti IO con soglie e quote
+# IO_LIMIT_ENABLED=true
+# IO_THRESHOLD=75
+# IO_RELEASE_THRESHOLD=40
+# IO_READ_BPS=100M
+# IO_WRITE_BPS=50M
+# IO_READ_IOPS=1000
+# IO_WRITE_IOPS=500
+# IO_DEVICE_FILTER=all
+#
+# # Modalità strict (limiti più bassi)
+# IO_LIMIT_ENABLED=true
+# IO_THRESHOLD=80
+# IO_RELEASE_THRESHOLD=50
+# IO_READ_BPS=50M
+# IO_WRITE_BPS=25M
+# IO_READ_IOPS=500
+# IO_WRITE_IOPS=250
+#
+IO_LIMIT_ENABLED=false
+IO_THRESHOLD=75
+IO_RELEASE_THRESHOLD=40
+IO_READ_BPS=100M
+IO_WRITE_BPS=50M
+IO_READ_IOPS=1000
+IO_WRITE_IOPS=500
+IO_DEVICE_FILTER=all
+
+# ========================
 # PROMETHEUS [S]
 # ========================
 # Richiede restart per: enable/disable, porta, host, TLS, auth
