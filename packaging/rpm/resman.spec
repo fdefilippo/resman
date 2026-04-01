@@ -10,9 +10,9 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.18.5
+Version: 1.19.0
 Release: 1%{?dist}
-Summary: Dynamic CPU resource management tool using cgroups v2
+Summary: Dynamic CPU and RAM resource management tool using cgroups v2 with memory.high support
 
 License: GPLv3
 URL:     https://github.com/fdefilippo/resman
@@ -48,8 +48,9 @@ Requires(preun): systemd-units
 Requires(postun): systemd-units
 
 %description
-Enterprise-grade CPU resource management tool with cgroups v2 support.
-Automatically limits CPU for non-system users based on configurable thresholds.
+Enterprise-grade CPU and RAM resource management tool with cgroups v2 support.
+Automatically limits CPU and memory for non-system users based on configurable thresholds.
+NEW in v1.19.0: memory.high soft limits for graceful memory management.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -62,8 +63,10 @@ Features:
 - Dynamic CPU limiting for non-system users (UID >=1000)
 - Configurable activation/release thresholds
 - Absolute CPU limits using cpu.max cgroup controller
+- RAM limiting with memory.high (soft) and memory.max (hard) limits
+- Graceful memory throttling before OOM killer (v1.19.0+)
 - Prometheus metrics export with comprehensive dashboard
-- Per-user metrics: CPU%, Memory (bytes), Process count
+- Per-user metrics: CPU%, Memory (bytes), Process count, memory.high breaches
 - Systemd service integration with hardening
 - Automatic configuration reload on file changes
 - Detailed process logging with process name tracking
@@ -187,9 +190,6 @@ chown root:root /var/run/resman
 touch /var/log/resman.log
 chmod 644 /var/log/resman.log
 
-# Aggiorna database man page
-%{_bindir}/mandb -q 2>/dev/null || true
-
 # Abilita cgroup controllers se non già abilitati
 if ! grep -q "+cpu" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
     echo "+cpu" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
@@ -244,6 +244,25 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Mar 31 2026 Francesco Defilippo <francesco@defilippo.org> - 1.19.0-1
+- NEW: memory.high soft limits for graceful memory management
+- New configuration parameter RAM_HIGH_RATIO (default 0.8 = 80% of memory.max)
+- When memory.high is exceeded: throttling + reclaim (no OOM killer)
+- When memory.max is exceeded: OOM killer (hard limit)
+- New Prometheus metric: resman_user_memory_high_breaches_total
+- New cgroup manager functions:
+  * ApplyRAMHigh() - Apply soft memory limit
+  * ApplyRAMLimitWithHigh() - Apply both high and max limits
+  * ApplyRAMLimitWithHighAndSwapDisabled() - Apply limits with swap disabled
+  * RemoveRAMHigh() - Remove soft limit
+  * GetMemoryHighEvents() - Count memory.high breaches
+- Updated UserMetrics struct with MemoryHighEvents field
+- Updated documentation:
+  * CGROUP-V2-TECHNICAL.md with memory.high implementation details
+  * resman.conf.example with RAM_HIGH_RATIO examples
+  * Man page updated to v1.19.0
+- All tests passing, build verified with CGO_ENABLED=1
+
 * Mon Mar 23 2026 Francesco Defilippo <francesco@defilippo.org> - 1.16.5-1
 - Renamed project from cpu-manager-go to resman
 - RPM package now replaces cpu-manager-go (Obsoletes)

@@ -45,12 +45,13 @@ const (
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID          int
-	Username     string
-	CPUUsage     float64 // CPU percentage
-	MemoryUsage  uint64  // Memory in bytes (VmRSS)
-	ProcessCount int     // Number of processes
-	IsLimited    bool    // Whether user has CPU limits applied
+	UID              int
+	Username         string
+	CPUUsage         float64 // CPU percentage
+	MemoryUsage      uint64  // Memory in bytes (VmRSS)
+	ProcessCount     int     // Number of processes
+	IsLimited        bool    // Whether user has CPU limits applied
+	MemoryHighEvents uint64  // Number of times memory.high was exceeded
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
@@ -97,9 +98,9 @@ type Collector struct {
 // Default Username Cache TTL
 const (
 	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
-	MAX_CACHE_SIZE            = 10000  // Maximum number of entries in general cache
-	MAX_PROC_CACHE_SIZE       = 5000   // Maximum number of entries in process CPU cache
-	MAX_USERNAME_CACHE_SIZE   = 10000  // Maximum number of entries in username cache
+	MAX_CACHE_SIZE             = 10000 // Maximum number of entries in general cache
+	MAX_PROC_CACHE_SIZE        = 5000  // Maximum number of entries in process CPU cache
+	MAX_USERNAME_CACHE_SIZE    = 10000 // Maximum number of entries in username cache
 )
 
 // NewCollector crea un nuovo collettore di metriche.
@@ -718,14 +719,14 @@ func (c *Collector) cacheUsername(uid int, username string) {
 	if len(c.usernameCache) >= MAX_USERNAME_CACHE_SIZE {
 		oldestUID := 0
 		oldestTime := time.Now()
-		
+
 		for uid, ts := range c.usernameCacheTime {
 			if ts.Before(oldestTime) {
 				oldestTime = ts
 				oldestUID = uid
 			}
 		}
-		
+
 		if oldestUID != 0 {
 			delete(c.usernameCache, oldestUID)
 			delete(c.usernameCacheTime, oldestUID)
@@ -900,6 +901,98 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 	return usageMB
 }
 
+// GetTotalMemoryMB restituisce la RAM fisica totale del sistema in MB.
+func (c *Collector) GetTotalMemoryMB() float64 {
+	cacheKey := "total_memory"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.(float64)
+	}
+
+	vm, err := mem.VirtualMemory()
+	if err != nil {
+		c.logger.Warn("Failed to get total memory via gopsutil, using /proc/meminfo fallback",
+			"error", err,
+		)
+		return c.getTotalMemoryFallback()
+	}
+
+	totalMB := float64(vm.Total) / 1024 / 1024
+	c.setInCache(cacheKey, totalMB)
+	return totalMB
+}
+
+// getTotalMemoryFallback legge MemTotal da /proc/meminfo.
+func (c *Collector) getTotalMemoryFallback() float64 {
+	file, err := os.Open("/proc/meminfo")
+	if err != nil {
+		c.logger.Error("Failed to open /proc/meminfo for total memory",
+			"error", err,
+			"fallback", "returning 0.0",
+		)
+		return 0.0
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, _ := strconv.ParseFloat(fields[1], 64)
+				return kb / 1024
+			}
+		}
+	}
+	return 0.0
+}
+
+// GetCachedMemoryMB restituisce la memoria cache del sistema in MB.
+func (c *Collector) GetCachedMemoryMB() float64 {
+	cacheKey := "cached_memory"
+	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+		return val.(float64)
+	}
+
+	vm, err := mem.VirtualMemory()
+	if err != nil {
+		c.logger.Warn("Failed to get cached memory via gopsutil, using /proc/meminfo fallback",
+			"error", err,
+		)
+		return c.getCachedMemoryFallback()
+	}
+
+	cachedMB := float64(vm.Cached) / 1024 / 1024
+	c.setInCache(cacheKey, cachedMB)
+	return cachedMB
+}
+
+// getCachedMemoryFallback legge Cached da /proc/meminfo.
+func (c *Collector) getCachedMemoryFallback() float64 {
+	file, err := os.Open("/proc/meminfo")
+	if err != nil {
+		c.logger.Error("Failed to open /proc/meminfo for cached memory",
+			"error", err,
+			"fallback", "returning 0.0",
+		)
+		return 0.0
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "Cached:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, _ := strconv.ParseFloat(fields[1], 64)
+				return kb / 1024
+			}
+		}
+	}
+	return 0.0
+}
+
 // IsSystemUnderLoad determina se il sistema è sotto carico.
 func (c *Collector) IsSystemUnderLoad() bool {
 	cacheKey := "system_under_load"
@@ -980,14 +1073,14 @@ func (c *Collector) setInCache(key string, value interface{}) {
 	if len(c.cache) >= MAX_CACHE_SIZE {
 		oldestKey := ""
 		oldestTime := time.Now()
-		
+
 		for k, ts := range c.cacheTimestamps {
 			if ts.Before(oldestTime) {
 				oldestTime = ts
 				oldestKey = k
 			}
 		}
-		
+
 		if oldestKey != "" {
 			delete(c.cache, oldestKey)
 			delete(c.cacheTimestamps, oldestKey)
@@ -1094,6 +1187,8 @@ func (c *Collector) GetDetailedMetrics() map[string]interface{} {
 	metrics["limited_users_count"] = len(limitedUsers)
 
 	metrics["memory_usage_mb"] = c.GetMemoryUsage()
+	metrics["total_memory_mb"] = c.GetTotalMemoryMB()
+	metrics["cached_memory_mb"] = c.GetCachedMemoryMB()
 	metrics["system_under_load"] = c.IsSystemUnderLoad()
 
 	// Uso CPU per utente (per ALL users)
@@ -1154,7 +1249,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	}
 
 	// Pre-allocate with estimated capacity (reduces dynamic allocations)
-	estimatedUIDs := len(entries) / 50  // Estimate: ~50 processes per average UID
+	estimatedUIDs := len(entries) / 50 // Estimate: ~50 processes per average UID
 	tempData := make(map[int]*userData, estimatedUIDs)
 
 	for _, entry := range entries {
@@ -1365,20 +1460,20 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	if len(c.prevProcCPU) >= MAX_PROC_CACHE_SIZE {
 		oldestPID := int32(0)
 		oldestTime := time.Now()
-		
+
 		for pid, ts := range c.prevProcTime {
 			if ts.Before(oldestTime) {
 				oldestTime = ts
 				oldestPID = pid
 			}
 		}
-		
+
 		if oldestPID != 0 {
 			delete(c.prevProcCPU, oldestPID)
 			delete(c.prevProcTime, oldestPID)
 		}
 	}
-	
+
 	c.prevProcCPU[pid32] = *times
 	c.prevProcTime[pid32] = now
 	return 0

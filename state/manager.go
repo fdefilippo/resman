@@ -84,6 +84,8 @@ type MetricsCollector interface {
 	GetLimitedUsersMemoryUsage() uint64
 
 	GetMemoryUsage() float64
+	GetTotalMemoryMB() float64
+	GetCachedMemoryMB() float64
 	IsSystemUnderLoad() bool
 	GetAllUserMetrics() map[int]*metrics.UserMetrics
 	GetDBWriter() *metrics.DBWriter
@@ -98,8 +100,13 @@ type CgroupManager interface {
 	RemoveCPULimit(uid int) error
 	ApplyRAMLimit(uid int, limit string) error
 	ApplyRAMLimitWithSwapDisabled(uid int, limit string) error
+	ApplyRAMHigh(uid int, limit string) error
+	ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit string) error
+	ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string, highLimit string) error
 	RemoveRAMLimit(uid int) error
+	RemoveRAMHigh(uid int) error
 	GetCgroupRAMUsage(uid int) (uint64, error)
+	GetMemoryHighEvents(uid int) (uint64, error)
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
@@ -114,8 +121,8 @@ type CgroupManager interface {
 // PrometheusExporter è l'interfaccia per esportare metriche Prometheus.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string)
-	UpdateSystemMetrics(totalCores int, systemLoad float64)
+	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64)
+	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
@@ -239,9 +246,9 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 
 // SystemMetrics contiene tutte le metriche raccolte in un ciclo.
 type SystemMetrics struct {
-	Timestamp         time.Time
-	TotalCores        int
-	TotalCPUUsage     float64 // Percentuale
+	Timestamp     time.Time
+	TotalCores    int
+	TotalCPUUsage float64 // Percentuale
 
 	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
 	AllUsersCPUUsage    float64
@@ -254,6 +261,8 @@ type SystemMetrics struct {
 	LimitedUsersCount       int
 
 	MemoryUsage     float64 // MB
+	TotalMemoryMB   float64 // MB
+	CachedMemoryMB  float64 // MB
 	SystemUnderLoad bool
 	UserCPUUsage    map[int]float64              // UID -> percentuale
 	UserMetrics     map[int]*metrics.UserMetrics // Metriche dettagliate per utente
@@ -282,6 +291,8 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	metrics.LimitedUsersCount = len(m.metricsCollector.GetLimitedUsers())
 
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
+	metrics.TotalMemoryMB = m.metricsCollector.GetTotalMemoryMB()
+	metrics.CachedMemoryMB = m.metricsCollector.GetCachedMemoryMB()
 	metrics.SystemUnderLoad = m.metricsCollector.IsSystemUnderLoad()
 
 	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
@@ -574,7 +585,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	// CORREZIONE: Itera solo sugli utenti che possono essere limitati
 	for uid := range metrics.UserCPUUsage {
 		username := m.getUsername(uid)
-		
+
 		// Salta utenti che non possono essere limitati
 		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
 		if !m.cfg.IsUserIncluded(username) || m.cfg.IsUserExcluded(username) {
@@ -586,7 +597,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			)
 			continue
 		}
-		
+
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Verifica se l'utente è già limitato
 		m.mu.RLock()
@@ -646,19 +657,26 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 							"quota", m.cfg.RAMQuotaPerUser,
 						)
 					} else {
+						// Calcola memory.high come percentuale di memory.max
+						highBytes := uint64(float64(quotaBytes) * m.cfg.GetRAMHighRatio())
+						highStr := strconv.FormatUint(highBytes, 10)
+						maxStr := m.cfg.RAMQuotaPerUser
+
 						if m.cfg.DisableSwap {
-							if err := m.cgroupManager.ApplyRAMLimitWithSwapDisabled(uid, m.cfg.RAMQuotaPerUser); err != nil {
-								m.logger.Warn("Failed to apply RAM limit for user",
+							if err := m.cgroupManager.ApplyRAMLimitWithHighAndSwapDisabled(uid, maxStr, highStr); err != nil {
+								m.logger.Warn("Failed to apply RAM high+max limits with swap disabled for user",
 									"uid", uid,
-									"limit", m.cfg.RAMQuotaPerUser,
+									"high", highStr,
+									"max", maxStr,
 									"error", err,
 								)
 							}
 						} else {
-							if err := m.cgroupManager.ApplyRAMLimit(uid, m.cfg.RAMQuotaPerUser); err != nil {
-								m.logger.Warn("Failed to apply RAM limit for user",
+							if err := m.cgroupManager.ApplyRAMLimitWithHigh(uid, maxStr, highStr); err != nil {
+								m.logger.Warn("Failed to apply RAM high+max limits for user",
 									"uid", uid,
-									"limit", m.cfg.RAMQuotaPerUser,
+									"high", highStr,
+									"max", maxStr,
 									"error", err,
 								)
 							}
@@ -755,13 +773,21 @@ func (m *Manager) deactivateLimits() error {
 
 		// Rimuovi limite RAM se abilitato e l'utente era soggetto a RAM limits
 		if m.shouldApplyRAMLimits(uid) {
+			// Rimuovi prima memory.high
+			if err := m.cgroupManager.RemoveRAMHigh(uid); err != nil {
+				m.logger.Debug("Failed to remove RAM high limit for user",
+					"user", userStr,
+					"error", err,
+				)
+			}
+			// Poi rimuovi memory.max
 			if err := m.cgroupManager.RemoveRAMLimit(uid); err != nil {
 				m.logger.Warn("Failed to remove RAM limit for user",
 					"user", userStr,
 					"error", err,
 				)
 			} else {
-				m.logger.Debug("RAM limit removed for user", "uid", uid)
+				m.logger.Debug("RAM limits removed for user", "uid", uid)
 			}
 		}
 	}
@@ -810,9 +836,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
 
 		// Other metrics
-		"memory_usage_mb": metrics.MemoryUsage,
-		"limited_users":   float64(len(m.activeUsers)),
-		"limits_active":   boolToFloat(m.limitsActive),
+		"memory_usage_mb":  metrics.MemoryUsage,
+		"total_memory_mb":  metrics.TotalMemoryMB,
+		"cached_memory_mb": metrics.CachedMemoryMB,
+		"limited_users":    float64(len(m.activeUsers)),
+		"limits_active":    boolToFloat(m.limitsActive),
 	}
 
 	// Aggiungi load average se disponibile
@@ -833,14 +861,17 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 		// Ottieni info cgroup se disponibile
 		var cgroupPath, cpuQuota string
+		var memoryHighEvents uint64
 		if m.cgroupManager != nil {
 			if info, err := m.cgroupManager.GetCgroupInfo(uid); err == nil {
 				cgroupPath = info["path"]
 				cpuQuota = info["cpu.max"]
 			}
+			// Ottieni eventi memory.high (se il cgroup esiste)
+			memoryHighEvents, _ = m.cgroupManager.GetMemoryHighEvents(uid)
 		}
 
-		// Usa UpdateUserMetrics con tutti i parametri (CPU, memoria, processi)
+		// Usa UpdateUserMetrics con tutti i parametri (CPU, memoria, processi, memory.high)
 		m.prometheusExporter.UpdateUserMetrics(
 			uid,
 			username,
@@ -850,6 +881,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			isLimited,
 			cgroupPath,
 			cpuQuota,
+			memoryHighEvents,
 		)
 	}
 
@@ -862,7 +894,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 	// Aggiorna metriche di sistema
 	if load, err := m.getLoadAverage(); err == nil {
-		m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, load)
+		actionCores := metrics.TotalCores - m.cfg.GetMinSystemCores()
+		if actionCores < 1 {
+			actionCores = 1
+		}
+		m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, load)
 	}
 }
 

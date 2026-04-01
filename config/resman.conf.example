@@ -19,49 +19,6 @@ MIN_ACTIVE_TIME=60
 METRICS_CACHE_TTL=15
 
 # ========================
-# LOGGING [D]
-# ========================
-# Livelli di log disponibili:
-#   DEBUG - Messaggi dettagliati per troubleshooting
-#   INFO  - Informazioni operative normali (default consigliato)
-#   WARN  - Solo avvisi ed errori
-#   ERROR - Solo errori
-LOG_LEVEL=INFO
-LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
-USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
-LOG_FILE=/var/log/resman.log
-
-# ========================
-# SYSTEM [S]
-# ========================
-MIN_SYSTEM_CORES=1
-
-# SYSTEM_UID_MIN: UID minimo da monitorare e includere nelle metriche
-# Default: 1000
-#
-# IMPATTO SUL MONITORAGGIO:
-# Con SYSTEM_UID_MIN=1000 (default), solo gli utenti con UID >= 1000 appaiono
-# nelle metriche Prometheus. Utenti con UID < 1000 (mysql, avahi, www-data,
-# postfix, etc.) NON sono visibili nelle metriche.
-#
-# Esempio su sistema con 20 utenti attivi:
-#   - 15 utenti con UID < 1000 (mysql, avahi, www-data, ecc.) → NON nelle metriche
-#   - 5 utenti con UID >= 1000 (francesco, openclaw, ecc.) → presenti nelle metriche
-#
-# Per monitorare TUTTI gli utenti (incluso root, mysql, avahi, ecc.):
-#   SYSTEM_UID_MIN=0
-#
-# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio.
-# Puoi comunque usare USER_EXCLUDE_LIST=root per evitare di limitare root.
-SYSTEM_UID_MIN=1000
-
-# SYSTEM_UID_MAX: UID massimo da monitorare
-# Default: letto automaticamente da /proc/sys/kernel/pid_max
-# Tipicamente: 32768, 65536, o 4194304 su sistemi moderni
-# SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
-
-
-# ========================
 # TIMEOUT CONFIGURATION [S]
 # ========================
 # Timeout per operazioni critiche (v1.18.3+)
@@ -133,6 +90,13 @@ CPU_QUOTA_LIMITED="50000 100000"
 # DISABLE_SWAP: Imposta memory.swap.max=0 per impedire l'uso dello swap
 # WARNING: Potrebbe causare OOM kills se un processo supera il limite RAM
 #
+# RAM_HIGH_RATIO: Rapporto tra memory.high e memory.max (0.0-1.0)
+# memory.high è un limite "soft": quando superato, il kernel applica
+# throttling e reclaim aggressivo, ma NON uccide i processi (a differenza di memory.max)
+# Esempi: 0.8 = memory.high è l'80% di memory.max
+#         0.9 = memory.high è il 90% di memory.max
+#         0 = disabilitato (solo memory.max, comportamento legacy)
+#
 # Esempi:
 # # Limiti RAM disabilitati (default)
 # RAM_LIMIT_ENABLED=false
@@ -144,14 +108,16 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_QUOTA_LIMITED=2G
 # RAM_QUOTA_PER_USER=512M
 # DISABLE_SWAP=false
+# RAM_HIGH_RATIO=0.8
 #
-# # Modalità strict (nessuno swap)
+# # Modalità strict (nessuno swap, high al 90%)
 # RAM_LIMIT_ENABLED=true
 # RAM_THRESHOLD=80
 # RAM_RELEASE_THRESHOLD=50
 # RAM_QUOTA_LIMITED=4G
 # RAM_QUOTA_PER_USER=1G
 # DISABLE_SWAP=true
+# RAM_HIGH_RATIO=0.9
 #
 RAM_LIMIT_ENABLED=false
 RAM_THRESHOLD=75
@@ -159,6 +125,7 @@ RAM_RELEASE_THRESHOLD=40
 RAM_QUOTA_LIMITED=2G
 RAM_QUOTA_PER_USER=512M
 DISABLE_SWAP=false
+RAM_HIGH_RATIO=0.8
 
 # ========================
 # RAM USER INCLUDE/EXCLUDE LISTS [D]
@@ -210,6 +177,48 @@ PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
 PROMETHEUS_JWT_ISSUER=resman
 PROMETHEUS_JWT_AUDIENCE=prometheus
 PROMETHEUS_JWT_EXPIRY=3600
+
+# ========================
+# LOGGING [D]
+# ========================
+# Livelli di log disponibili:
+#   DEBUG - Messaggi dettagliati per troubleshooting
+#   INFO  - Informazioni operative normali (default consigliato)
+#   WARN  - Solo avvisi ed errori
+#   ERROR - Solo errori
+LOG_LEVEL=INFO
+LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
+USE_SYSLOG=false             # true: usa syslog di sistema, false: usa file
+LOG_FILE=/var/log/resman.log
+
+# ========================
+# SYSTEM [S]
+# ========================
+MIN_SYSTEM_CORES=1
+
+# SYSTEM_UID_MIN: UID minimo da monitorare e includere nelle metriche
+# Default: 1000
+#
+# IMPATTO SUL MONITORAGGIO:
+# Con SYSTEM_UID_MIN=1000 (default), solo gli utenti con UID >= 1000 appaiono
+# nelle metriche Prometheus. Utenti con UID < 1000 (mysql, avahi, www-data,
+# postfix, etc.) NON sono visibili nelle metriche.
+#
+# Esempio su sistema con 20 utenti attivi:
+#   - 15 utenti con UID < 1000 (mysql, avahi, www-data, ecc.) → NON nelle metriche
+#   - 5 utenti con UID >= 1000 (francesco, openclaw, ecc.) → presenti nelle metriche
+#
+# Per monitorare TUTTI gli utenti (incluso root, mysql, avahi, ecc.):
+#   SYSTEM_UID_MIN=0
+#
+# WARNING: SYSTEM_UID_MIN=0 include root e utenti di sistema nel monitoraggio.
+# Puoi comunque usare USER_EXCLUDE_LIST=root per evitare di limitare root.
+SYSTEM_UID_MIN=1000
+
+# SYSTEM_UID_MAX: UID massimo da monitorare
+# Default: letto automaticamente da /proc/sys/kernel/pid_max
+# Tipicamente: 32768, 65536, o 4194304 su sistemi moderni
+# SYSTEM_UID_MAX viene letto automaticamente da /proc/sys/kernel/pid_max
 
 # ========================
 # USER INCLUDE LIST [D]

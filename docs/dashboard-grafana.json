@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "ResMan v1.18.0 Dashboard - Monitor CPU/RAM usage for ALL users vs LIMITED users (subset passing filters). ALL USERS: UID >= SYSTEM_UID_MIN (no filters). LIMITED USERS: pass USER_INCLUDE_LIST && !USER_EXCLUDE_LIST.",
+  "description": "ResMan v1.19.0 Dashboard - Monitor CPU/RAM usage for ALL users vs LIMITED users. NEW: Memory High Breaches panel shows soft limit violations before OOM kills. ALL USERS: UID >= SYSTEM_UID_MIN (no filters). LIMITED USERS: pass USER_INCLUDE_LIST && !USER_EXCLUDE_LIST.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -75,26 +75,30 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
           "unit": "percent"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -128,6 +132,31 @@
           "legendFormat": "Total System CPU - {{hostname}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus_datasource}"
+          },
+          "editorMode": "code",
+          "expr": "resman_cpu_total_cores{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} * 1.5",
+          "legendFormat": "Totale Cores - {{hostname}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "configFromData",
+          "options": {
+            "configRefId": "B",
+            "mappings": [
+              {
+                "fieldName": "Value",
+                "handlerKey": "threshold1"
+              }
+            ]
+          }
         }
       ],
       "title": "Total System CPU Usage",
@@ -839,6 +868,113 @@
         }
       ],
       "title": "All Users - Memory Usage Per User",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus_datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 206,
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus_datasource}"
+          },
+          "editorMode": "code",
+          "expr": "resman_user_memory_high_breaches_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", uid=~\"$uid\", username=~\"$username\"}",
+          "legendFormat": "{{username}} (UID {{uid}}) - High Breaches",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Memory High Breaches (NEW v1.19.0)",
+      "description": "Number of times users exceeded memory.high soft limit. High values indicate memory pressure before OOM kills.",
       "type": "timeseries"
     },
     {
@@ -1650,8 +1786,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "ResMan - CPU & Memory Manager",
+  "title": "ResMan v1.19.0 - CPU & Memory Manager",
   "uid": "resman-dashboard",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -70,12 +70,13 @@ type Config struct {
 	CPUQuotaLimited string `config:"CPU_QUOTA_LIMITED"`
 
 	// RAM limits
-	RAMEnabled          bool   `config:"RAM_LIMIT_ENABLED"`
-	RAMThreshold        int    `config:"RAM_THRESHOLD"`
-	RAMReleaseThreshold int    `config:"RAM_RELEASE_THRESHOLD"`
-	RAMQuotaLimited     string `config:"RAM_QUOTA_LIMITED"`
-	RAMQuotaPerUser     string `config:"RAM_QUOTA_PER_USER"`
-	DisableSwap         bool   `config:"DISABLE_SWAP"`
+	RAMEnabled          bool    `config:"RAM_LIMIT_ENABLED"`
+	RAMThreshold        int     `config:"RAM_THRESHOLD"`
+	RAMReleaseThreshold int     `config:"RAM_RELEASE_THRESHOLD"`
+	RAMQuotaLimited     string  `config:"RAM_QUOTA_LIMITED"`
+	RAMQuotaPerUser     string  `config:"RAM_QUOTA_PER_USER"`
+	DisableSwap         bool    `config:"DISABLE_SWAP"`
+	RAMHighRatio        float64 `config:"RAM_HIGH_RATIO"` // Ratio for memory.high (0.0-1.0, default 0.8)
 
 	// RAM User Include List (regex support)
 	RAMUserIncludeList []string `config:"RAM_USER_INCLUDE_LIST"`
@@ -195,6 +196,7 @@ func DefaultConfig() *Config {
 		RAMQuotaLimited:     "2G",
 		RAMQuotaPerUser:     "512M",
 		DisableSwap:         false,
+		RAMHighRatio:        0.8, // Default: memory.high = 80% of memory.max
 		RAMUserIncludeList:  nil,
 		RAMUserExcludeList:  nil,
 
@@ -764,6 +766,9 @@ func validateConfig(cfg *Config) error {
 		}
 		if !isValidRAMQuota(cfg.RAMQuotaPerUser) {
 			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")
+		}
+		if cfg.RAMHighRatio < 0 || cfg.RAMHighRatio > 1 {
+			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%, 0 to disable)")
 		}
 	}
 
@@ -1388,6 +1393,17 @@ func (c *Config) GetMinSystemCores() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.MinSystemCores
+}
+
+// GetRAMHighRatio returns the ratio for memory.high (0.0-1.0).
+// Default is 0.8 (80% of memory.max). Invalid values are clamped to 0.8.
+func (c *Config) GetRAMHighRatio() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.RAMHighRatio <= 0 || c.RAMHighRatio > 1 {
+		return 0.8
+	}
+	return c.RAMHighRatio
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.

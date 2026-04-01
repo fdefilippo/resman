@@ -31,6 +31,8 @@ func (m *mockMetricsCollector) GetTotalCores() int                              
 func (m *mockMetricsCollector) GetTotalCPUUsage() float64                       { return 50.0 }
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64                 { return 10.0 }
 func (m *mockMetricsCollector) GetMemoryUsage() float64                         { return 1024.0 }
+func (m *mockMetricsCollector) GetTotalMemoryMB() float64                       { return 16384.0 }
+func (m *mockMetricsCollector) GetCachedMemoryMB() float64                      { return 4096.0 }
 func (m *mockMetricsCollector) IsSystemUnderLoad() bool                         { return false }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics { return nil }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter                  { return nil }
@@ -38,14 +40,14 @@ func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metri
 }
 
 // ALL USERS metrics
-func (m *mockMetricsCollector) GetAllUsers() []int                  { return []int{1000, 1001, 1002} }
-func (m *mockMetricsCollector) GetAllUsersCPUUsage() float64        { return 40.0 }
-func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64      { return 2000000000 }
+func (m *mockMetricsCollector) GetAllUsers() []int             { return []int{1000, 1001, 1002} }
+func (m *mockMetricsCollector) GetAllUsersCPUUsage() float64   { return 40.0 }
+func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64 { return 2000000000 }
 
 // LIMITED USERS metrics
-func (m *mockMetricsCollector) GetLimitedUsers() []int              { return []int{1000, 1001} }
-func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64    { return 30.0 }
-func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64  { return 1500000000 }
+func (m *mockMetricsCollector) GetLimitedUsers() []int             { return []int{1000, 1001} }
+func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64   { return 30.0 }
+func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64 { return 1500000000 }
 
 type mockCgroupManager struct{}
 
@@ -55,8 +57,21 @@ func (m *mockCgroupManager) ApplyCPUWeight(uid int, weight int) error           
 func (m *mockCgroupManager) RemoveCPULimit(uid int) error                              { return nil }
 func (m *mockCgroupManager) ApplyRAMLimit(uid int, limit string) error                 { return nil }
 func (m *mockCgroupManager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error { return nil }
-func (m *mockCgroupManager) RemoveRAMLimit(uid int) error                              { return nil }
-func (m *mockCgroupManager) GetCgroupRAMUsage(uid int) (uint64, error)                 { return 0, nil }
+func (m *mockCgroupManager) ApplyRAMHigh(uid int, limit string) error                  { return nil }
+func (m *mockCgroupManager) ApplyRAMLimitWithHigh(uid int, maxLimit, highLimit string) error {
+	return nil
+}
+func (m *mockCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit, highLimit string) error {
+	return nil
+}
+func (m *mockCgroupManager) RemoveRAMLimit(uid int) error       { return nil }
+func (m *mockCgroupManager) RemoveRAMHigh(uid int) error        { return nil }
+func (m *mockCgroupManager) GetCgroupRAMUsage(uid int) (uint64, error) {
+	return 0, nil
+}
+func (m *mockCgroupManager) GetMemoryHighEvents(uid int) (uint64, error) {
+	return 0, nil
+}
 func (m *mockCgroupManager) CleanupUserCgroup(uid int) error                           { return nil }
 func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error                { return nil }
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
@@ -72,14 +87,14 @@ func (m *mockCgroupManager) GetCreatedCgroups() []int                           
 type mockPrometheusExporter struct{}
 
 func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
-func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, mem uint64, proc int, limited bool, path, quota string) {
+func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64) {
 }
-func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, load float64) {}
-func (m *mockPrometheusExporter) Start(ctx context.Context) error             { return nil }
-func (m *mockPrometheusExporter) Stop() error                                 { return nil }
-func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool)  {}
-func (m *mockPrometheusExporter) IncrementLimitsActivated()                   {}
-func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                 {}
+func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
+func (m *mockPrometheusExporter) Start(ctx context.Context) error                              { return nil }
+func (m *mockPrometheusExporter) Stop() error                                                  { return nil }
+func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool)                   {}
+func (m *mockPrometheusExporter) IncrementLimitsActivated()                                    {}
+func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                                  {}
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -121,8 +136,8 @@ func TestMakeDecision(t *testing.T) {
 
 	metrics := &SystemMetrics{
 		LimitedUsersCPUUsage: 80.0, // Above threshold
-		TotalCores:        4,
-		SystemUnderLoad:   false,
+		TotalCores:           4,
+		SystemUnderLoad:      false,
 	}
 
 	decision, reason := manager.makeDecision(metrics)
@@ -148,7 +163,7 @@ func TestMakeDecisionDeactivate(t *testing.T) {
 
 	metrics := &SystemMetrics{
 		LimitedUsersCPUUsage: 30.0, // Below release threshold
-		SystemUnderLoad:   false,
+		SystemUnderLoad:      false,
 	}
 
 	decision, reason := manager.makeDecision(metrics)
@@ -174,7 +189,7 @@ func TestMakeDecisionMaintain(t *testing.T) {
 
 	metrics := &SystemMetrics{
 		LimitedUsersCPUUsage: 50.0, // Between thresholds
-		SystemUnderLoad:   false,
+		SystemUnderLoad:      false,
 	}
 
 	decision, _ := manager.makeDecision(metrics)
