@@ -5,6 +5,107 @@ Tutti i cambiamenti significativi a questo progetto sono documentati in questo f
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
 e questo progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
 
+## [1.19.0] - 2026-03-31
+
+### 🎉 Major Features
+
+#### memory.high Soft Limits for Graceful Memory Management
+
+**NEW**: Introduced `memory.high` soft limits to provide early warning before OOM kills.
+
+**How it works:**
+- `memory.high` = `RAM_QUOTA_PER_USER * RAM_HIGH_RATIO` (default: 80%)
+- `memory.max` = `RAM_QUOTA_PER_USER` (100%, hard limit)
+- When `memory.high` is exceeded: kernel applies throttling + aggressive reclaim (NO OOM killer)
+- When `memory.max` is exceeded: OOM killer terminates processes (hard limit)
+
+**Benefits:**
+- Graceful degradation before hitting hard limits
+- External monitoring via new Prometheus metric
+- Reduced unexpected process kills
+- Configurable warning threshold via `RAM_HIGH_RATIO`
+
+**New Configuration:**
+```bash
+RAM_HIGH_RATIO=0.8  # memory.high = 80% of memory.max (default)
+```
+
+**New Prometheus Metric:**
+```
+resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
+```
+Tracks the number of times each user exceeded their `memory.high` soft limit.
+
+### 🔧 Technical Changes
+
+#### New Cgroup Manager Functions
+- `ApplyRAMHigh(uid, limit)` - Apply soft memory limit via `memory.high`
+- `ApplyRAMLimitWithHigh(uid, maxLimit, highLimit)` - Apply both limits
+- `ApplyRAMLimitWithHighAndSwapDisabled(uid, maxLimit, highLimit)` - Apply limits with swap disabled
+- `RemoveRAMHigh(uid)` - Remove soft limit (set to "max")
+- `GetMemoryHighEvents(uid)` - Count memory.high breaches from `memory.events`
+
+#### Updated Data Structures
+- `UserMetrics` struct: Added `MemoryHighEvents uint64` field
+- `CgroupManager` interface: Extended with new memory.high methods
+- `PrometheusExporter.UpdateUserMetrics()`: Added `memoryHighEvents` parameter
+
+#### State Manager Changes
+- `activateLimits()`: Now calculates and applies `memory.high` based on `RAM_HIGH_RATIO`
+- `deactivateLimits()`: Removes both `memory.high` and `memory.max`
+- Memory.high events collection in control cycle
+
+#### Configuration Validation
+- New validation: `RAM_HIGH_RATIO` must be between 0.0 and 1.0
+- Default value: 0.8 (80% of memory.max)
+
+### 📚 Documentation
+
+#### New Files
+- `docs/CGROUP-V2-TECHNICAL.md` - Comprehensive cgroup v2 technical reference
+  - CPU vs memory controller behavior
+  - memory.high vs memory.max comparison
+  - Production implications and recommendations
+
+#### Updated Files
+- `config/resman.conf.example` - Added RAM_HIGH_RATIO documentation with examples
+- `docs/resman.8` - Man page updated to v1.19.0
+- `packaging/rpm/resman.spec` - Updated description and changelog
+
+### 🧪 Testing
+
+- All existing tests passing
+- Mock implementations updated for new interfaces
+- Build verified with `CGO_ENABLED=1`
+
+### 📦 Packaging
+
+- RPM spec updated to v1.19.0
+- Makefile VERSION updated to 1.19.0
+- Main binary version string updated
+
+### ⚠️ Migration Notes
+
+**Default Behavior Change:**
+- If `RAM_LIMIT_ENABLED=true`, memory.high is now automatically applied
+- Default ratio is 0.8 (80% of memory.max)
+- To disable memory.high and use legacy behavior: set `RAM_HIGH_RATIO=0`
+
+**Recommended Configuration:**
+```bash
+# Balanced approach (default)
+RAM_HIGH_RATIO=0.8
+
+# More conservative (earlier warning)
+RAM_HIGH_RATIO=0.7
+
+# More aggressive (later warning)
+RAM_HIGH_RATIO=0.9
+
+# Legacy behavior (no soft limit)
+RAM_HIGH_RATIO=0
+```
+
 ## [1.18.2] - 2026-03-24
 
 ### 🐛 Critical Bug Fixes

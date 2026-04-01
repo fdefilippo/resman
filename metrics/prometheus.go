@@ -72,13 +72,14 @@ type PrometheusExporter struct {
 	actionCores  prometheus.Gauge
 
 	// Metriche con label aggiuntive
-	userCPUUsage      *prometheus.GaugeVec
-	userMemoryUsage   *prometheus.GaugeVec
-	userProcessCount  *prometheus.GaugeVec
-	userLimited       *prometheus.GaugeVec
-	cgroupCPUQuota    *prometheus.GaugeVec
-	cgroupCPUPeriod   *prometheus.GaugeVec
-	cgroupMemoryUsage *prometheus.GaugeVec
+	userCPUUsage         *prometheus.GaugeVec
+	userMemoryUsage      *prometheus.GaugeVec
+	userProcessCount     *prometheus.GaugeVec
+	userLimited          *prometheus.GaugeVec
+	userMemoryHighEvents *prometheus.GaugeVec // NEW: memory.high breach events
+	cgroupCPUQuota       *prometheus.GaugeVec
+	cgroupCPUPeriod      *prometheus.GaugeVec
+	cgroupMemoryUsage    *prometheus.GaugeVec
 
 	// Track utenti attivi per cleanup metriche
 	activeUserMetrics map[string]bool // "uid_username_is_limited" -> true
@@ -413,6 +414,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username", "is_limited"},
 	)
 
+	exp.userMemoryHighEvents = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "user_memory_high_breaches_total",
+			Help:        "Total number of times user exceeded memory.high soft limit",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
 	exp.cgroupCPUQuota = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -592,7 +603,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 }
 
 // UpdateUserMetrics aggiorna le metriche specifiche per utente.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string) {
+func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64) {
 	if exp == nil {
 		return
 	}
@@ -626,6 +637,9 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 		limitedValue = 1.0
 	}
 	exp.userLimited.WithLabelValues(uidStr, username, strconv.FormatBool(isLimited)).Set(limitedValue)
+
+	// Aggiorna eventi memory.high breach
+	exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Set(float64(memoryHighEvents))
 
 	// Se disponibile, aggiorna le metriche cgroup
 	if cgroupPath != "" {
@@ -680,6 +694,7 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			exp.userMemoryUsage.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userProcessCount.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userLimited.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
+			exp.userMemoryHighEvents.DeleteLabelValues(uidStr, username)
 
 			// Rimuovi dal tracking
 			delete(exp.activeUserMetrics, userKey)
