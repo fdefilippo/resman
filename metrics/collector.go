@@ -45,17 +45,12 @@ const (
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID              int
-	Username         string
-	CPUUsage         float64 // CPU percentage
-	MemoryUsage      uint64  // Memory in bytes (VmRSS)
-	ProcessCount     int     // Number of processes
-	IsLimited        bool    // Whether user has CPU limits applied
-	MemoryHighEvents uint64  // Number of times memory.high was exceeded
-	IOReadBytes      uint64  // Total bytes read from disk
-	IOWriteBytes     uint64  // Total bytes written to disk
-	IOReadOps        uint64  // Total read operations
-	IOWriteOps       uint64  // Total write operations
+	UID          int
+	Username     string
+	CPUUsage     float64 // CPU percentage
+	MemoryUsage  uint64  // Memory in bytes (VmRSS)
+	ProcessCount int     // Number of processes
+	IsLimited    bool    // Whether user has CPU limits applied
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.

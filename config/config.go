@@ -994,6 +994,39 @@ func (c *Config) IsUserWhitelistedForRAM(username string) bool {
 	return c.IsUserIncludedForRAM(username) && !c.IsUserExcludedForRAM(username)
 }
 
+// IsUserIncludedForIO verifica se l'utente è nella IO include list.
+// Se la lista è vuota/nil, tutti sono inclusi.
+func (c *Config) IsUserIncludedForIO(username string) bool {
+	if c.IOUserIncludeList == nil || len(c.IOUserIncludeList) == 0 {
+		return true
+	}
+	for _, pattern := range c.IOUserIncludeList {
+		if matched, _ := regexp.MatchString(pattern, username); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUserExcludedForIO verifica se l'utente è nella IO exclude list.
+// Se la lista è vuota/nil, nessuno è escluso.
+func (c *Config) IsUserExcludedForIO(username string) bool {
+	if c.IOUserExcludeList == nil || len(c.IOUserExcludeList) == 0 {
+		return false
+	}
+	for _, pattern := range c.IOUserExcludeList {
+		if matched, _ := regexp.MatchString(pattern, username); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUserWhitelistedForIO verifica se un utente può essere limitato per IO
+func (c *Config) IsUserWhitelistedForIO(username string) bool {
+	return c.IsUserIncludedForIO(username) && !c.IsUserExcludedForIO(username)
+}
+
 // SetUserExcludeList imposta la lista di utenti da escludere e salva su file
 func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload bool) ([]string, error) {
 	// Valida tutti i pattern regex
