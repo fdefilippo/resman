@@ -35,3 +35,6 @@ rpmbuild/
 
 .qwen/
 gha-creds-*.json
+
+# Git worktrees
+.worktrees/
