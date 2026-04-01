@@ -6,14 +6,15 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CI](https://github.com/fdefilippo/resman/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman/actions/workflows/ci.yml)
 
-**ResMan** is an enterprise-grade dynamic CPU and RAM resource management tool for Linux using cgroups v2. It automatically monitors system resources and applies limits to users when load exceeds configurable thresholds.
+**ResMan** is an enterprise-grade dynamic CPU, RAM and IO resource management tool for Linux using cgroups v2. It automatically monitors system resources and applies limits to users when load exceeds configurable thresholds.
 
 ## ✨ Key Features
 
 ### Resource Management
 - **Dynamic CPU limiting** based on configurable thresholds
 - **RAM limiting** with cgroups v2 memory controller
-- **Per-user resource tracking**: CPU%, Memory (bytes), Process count
+- **IO limiting** with cgroups v2 io controller (bandwidth and IOPS)
+- **Per-user resource tracking**: CPU%, Memory (bytes), Process count, IO bytes/ops
 - **Threshold time window** to prevent false activations (CPU_THRESHOLD_DURATION)
 - **Blackout timeframes** support (CPU_MANAGER_BLACKOUT)
 
@@ -66,6 +67,11 @@ Detailed metrics for each user with `is_limited` label:
 resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}
 resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}
 resman_user_process_count{uid, username, hostname, server_role, is_limited}
+resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
+resman_user_io_read_bytes_total{uid, username, hostname, server_role}
+resman_user_io_write_bytes_total{uid, username, hostname, server_role}
+resman_user_io_read_ops_total{uid, username, hostname, server_role}
+resman_user_io_write_ops_total{uid, username, hostname, server_role}
 ```
 
 ### Example Configuration
@@ -178,6 +184,13 @@ RAM_RELEASE_THRESHOLD=40
 RAM_QUOTA_LIMITED=2G
 RAM_QUOTA_PER_USER=512M
 
+# IO limits (optional)
+IO_LIMIT_ENABLED=false
+IO_READ_BPS=100M
+IO_WRITE_BPS=50M
+IO_READ_IOPS=1000
+IO_WRITE_IOPS=500
+
 # Monitoring
 SYSTEM_UID_MIN=1000           # Monitor users with UID >= 1000
 POLLING_INTERVAL=30           # Check every 30 seconds
@@ -242,6 +255,11 @@ resman_user_cpu_usage_percent{uid, username, hostname, server_role, is_limited}
 resman_user_memory_usage_bytes{uid, username, hostname, server_role, is_limited}
 resman_user_process_count{uid, username, hostname, server_role, is_limited}
 resman_user_cpu_limited{uid, username, hostname, server_role, is_limited}
+resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
+resman_user_io_read_bytes_total{uid, username, hostname, server_role}
+resman_user_io_write_bytes_total{uid, username, hostname, server_role}
+resman_user_io_read_ops_total{uid, username, hostname, server_role}
+resman_user_io_write_ops_total{uid, username, hostname, server_role}
 ```
 
 ### Counter Metrics
@@ -288,6 +306,19 @@ resman_errors_total{component, error_type, hostname, server_role}  # Errors
 | `RAM_QUOTA_LIMITED` | `2G` | Total RAM quota for limited users |
 | `RAM_QUOTA_PER_USER` | `512M` | Per-user RAM quota |
 | `DISABLE_SWAP` | `false` | Disable swap in cgroups |
+| `RAM_HIGH_RATIO` | `0.8` | memory.high ratio (0.0-1.0, 0 to disable) |
+
+### IO Thresholds (v1.20.0+)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IO_LIMIT_ENABLED` | `false` | Enable IO limiting |
+| `IO_THRESHOLD` | `75` | Activate IO limits when ≥ X% |
+| `IO_RELEASE_THRESHOLD` | `40` | Release IO limits when < X% |
+| `IO_READ_BPS` | `100M` | Per-user read bandwidth limit |
+| `IO_WRITE_BPS` | `50M` | Per-user write bandwidth limit |
+| `IO_READ_IOPS` | `1000` | Per-user read IOPS limit (0=unlimited) |
+| `IO_WRITE_IOPS` | `500` | Per-user write IOPS limit (0=unlimited) |
+| `IO_DEVICE_FILTER` | `all` | Device filter ("all" or "major:minor") |
 
 ### User Filtering
 | Variable | Default | Description |
@@ -327,6 +358,7 @@ CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
 - **Man page**: `man resman` or `docs/resman.8`
 - **Grafana dashboard**: `docs/dashboard-grafana.json`
 - **Multi-cluster guide**: `docs/GRAFANA-MULTI-CLUSTER-GUIDE.md`
+- **IO limits guide**: `docs/IO-LIMITS.md`
 - **MCP documentation**: `docs/MCP-README.md`
 - **TLS configuration**: `docs/TLS-CONFIGURATION.md`
 - **Prometheus queries**: `docs/prometheus-queries.md`
@@ -336,7 +368,8 @@ CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
 
 ResMan uses Linux cgroups v2 with the following controllers:
 - **cpu** - CPU bandwidth control (cpu.max, cpu.weight)
-- **memory** - RAM limiting (memory.max)
+- **memory** - RAM limiting (memory.max, memory.high)
+- **io** - Block I/O limiting (io.max for bandwidth and IOPS)
 
 ### Control Flow
 ```
@@ -359,7 +392,7 @@ ResMan uses Linux cgroups v2 with the following controllers:
 
 4. Apply limits
    ├─ Create cgroups
-   ├─ Apply cpu.max / memory.max
+   ├─ Apply cpu.max / memory.max / io.max
    └─ Move user processes
 ```
 
