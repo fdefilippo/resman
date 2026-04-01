@@ -767,8 +767,8 @@ func validateConfig(cfg *Config) error {
 		if !isValidRAMQuota(cfg.RAMQuotaPerUser) {
 			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")
 		}
-		if cfg.RAMHighRatio <= 0 || cfg.RAMHighRatio > 1 {
-			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%)")
+		if cfg.RAMHighRatio < 0 || cfg.RAMHighRatio > 1 {
+			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%, 0 to disable)")
 		}
 	}
 

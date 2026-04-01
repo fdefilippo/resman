@@ -76,14 +76,15 @@ type PrometheusExporter struct {
 	userMemoryUsage      *prometheus.GaugeVec
 	userProcessCount     *prometheus.GaugeVec
 	userLimited          *prometheus.GaugeVec
-	userMemoryHighEvents *prometheus.GaugeVec // NEW: memory.high breach events
+	userMemoryHighEvents *prometheus.CounterVec // NEW: memory.high breach events
 	cgroupCPUQuota       *prometheus.GaugeVec
 	cgroupCPUPeriod      *prometheus.GaugeVec
 	cgroupMemoryUsage    *prometheus.GaugeVec
 
 	// Track utenti attivi per cleanup metriche
-	activeUserMetrics map[string]bool // "uid_username_is_limited" -> true
-	metricsMu         sync.RWMutex
+	activeUserMetrics    map[string]bool   // "uid_username_is_limited" -> true
+	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
+	metricsMu            sync.RWMutex
 
 	// Metriche counter (solo incremento)
 	limitsActivatedTotal   prometheus.Counter
@@ -145,14 +146,15 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	}
 
 	exp := &PrometheusExporter{
-		cfg:               cfg,
-		logger:            logger,
-		registry:          prometheus.NewRegistry(),
-		hostname:          hostname,
-		serverRole:        serverRole,
-		updateInterval:    15 * time.Second,
-		stopChan:          make(chan struct{}, 1),
-		activeUserMetrics: make(map[string]bool),
+		cfg:                  cfg,
+		logger:               logger,
+		registry:             prometheus.NewRegistry(),
+		hostname:             hostname,
+		serverRole:           serverRole,
+		updateInterval:       15 * time.Second,
+		stopChan:             make(chan struct{}, 1),
+		activeUserMetrics:    make(map[string]bool),
+		prevMemoryHighEvents: make(map[string]uint64),
 	}
 
 	logger.Info("Prometheus exporter created",
@@ -414,8 +416,8 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username", "is_limited"},
 	)
 
-	exp.userMemoryHighEvents = promauto.With(exp.registry).NewGaugeVec(
-		prometheus.GaugeOpts{
+	exp.userMemoryHighEvents = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Name:        "user_memory_high_breaches_total",
 			Help:        "Total number of times user exceeded memory.high soft limit",
@@ -638,8 +640,14 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	}
 	exp.userLimited.WithLabelValues(uidStr, username, strconv.FormatBool(isLimited)).Set(limitedValue)
 
-	// Aggiorna eventi memory.high breach
-	exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Set(float64(memoryHighEvents))
+	// Aggiorna eventi memory.high breach (counter con delta)
+	memoryHighKey := fmt.Sprintf("%s_%s", strconv.Itoa(uid), username)
+	prev := exp.prevMemoryHighEvents[memoryHighKey]
+	if memoryHighEvents > prev {
+		delta := memoryHighEvents - prev
+		exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Add(float64(delta))
+	}
+	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
 
 	// Se disponibile, aggiorna le metriche cgroup
 	if cgroupPath != "" {
@@ -695,6 +703,10 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			exp.userProcessCount.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userLimited.DeleteLabelValues(uidStr, username, strconv.FormatBool(isLimited))
 			exp.userMemoryHighEvents.DeleteLabelValues(uidStr, username)
+
+			// Rimuovi dalla mappa dei valori precedenti
+			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
+			delete(exp.prevMemoryHighEvents, memoryHighKey)
 
 			// Rimuovi dal tracking
 			delete(exp.activeUserMetrics, userKey)
