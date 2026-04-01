@@ -164,6 +164,8 @@ RAM_HIGH_RATIO=0.8
 # IO_WRITE_IOPS: Limite IOPS scrittura per utente (0 = illimitato)
 #
 # IO_DEVICE_FILTER: "all" = applica a tutti i dispositivi, oppure "8:0" per device specifico
+# IO_THRESHOLD_DURATION: Secondi da attendere prima di attivare limiti IO (0 = immediato)
+#   Utile per evitare throttling su spike IO brevi (es. backup, build, copia file)
 #
 # Esempi:
 # # Limiti IO disabilitati (default)
@@ -196,6 +198,7 @@ IO_WRITE_BPS=50M
 IO_READ_IOPS=1000
 IO_WRITE_IOPS=500
 IO_DEVICE_FILTER=all
+IO_THRESHOLD_DURATION=0
 
 # ========================
 # PROMETHEUS [S]

@@ -46,7 +46,8 @@ type Manager struct {
 	sharedCgroupPath  string       // Percorso del cgroup condiviso
 
 	// Threshold monitoring
-	thresholdTracker *ThresholdTracker
+	thresholdTracker   *ThresholdTracker
+	ioThresholdTracker *ThresholdTracker
 
 	// Dipendenze (saranno iniettate)
 	metricsCollector   MetricsCollector
@@ -155,6 +156,7 @@ func NewManager(
 		activeUsers:        make(map[int]bool),
 		sharedCgroupPath:   "",
 		thresholdTracker:   &ThresholdTracker{},
+		ioThresholdTracker: &ThresholdTracker{},
 		metricsCollector:   metrics,
 		cgroupManager:      cgroups,
 		prometheusExporter: prometheus,
@@ -359,15 +361,33 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	ioExceeded := false
+	ioPercent := 0.0
+	ioThresholdDuration := m.cfg.GetIOThresholdDuration()
 	if m.cfg.IOEnabled && m.cfg.IOThreshold > 0 && m.cfg.IOWriteBPS != "" && m.cfg.IOWriteBPS != "max" {
 		writeLimit, err := config.ParseRAMQuota(m.cfg.IOWriteBPS)
 		if err == nil && writeLimit > 0 {
 			totalWriteLimit := writeLimit * uint64(metrics.LimitedUsersCount)
 			if totalWriteLimit > 0 {
-				ioPercent := float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
+				ioPercent = float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
 				ioExceeded = ioPercent >= float64(m.cfg.IOThreshold)
 			}
 		}
+	}
+
+	// Applica IO threshold duration se configurata
+	if ioThresholdDuration > 0 && ioExceeded {
+		ioTrackerReady := m.ioThresholdTracker.ShouldActivateLimits(
+			ioPercent,
+			float64(m.cfg.IOThreshold),
+			time.Duration(ioThresholdDuration)*time.Second,
+		)
+		if !ioTrackerReady {
+			// IO sopra soglia ma non ancora per abbastanza tempo
+			ioExceeded = false
+		}
+	} else if !ioExceeded {
+		// IO sotto soglia, reset tracker
+		m.ioThresholdTracker.Reset()
 	}
 
 	anyExceeded := cpuExceeded || ramExceeded || ioExceeded
@@ -407,6 +427,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		if allBelow {
 			if !metrics.SystemUnderLoad {
 				m.thresholdTracker.Reset()
+				m.ioThresholdTracker.Reset()
 				return DecisionDeactivate, m.buildDeactivateReason(cpuBelow, ramBelow, ioBelow, metrics, cpuReleaseThreshold)
 			}
 			return DecisionMaintain, "Resources below thresholds but system still under load"
@@ -420,6 +441,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// Verifica che ci siano abbastanza core per il sistema
 		if metrics.TotalCores <= minSystemCores {
 			m.thresholdTracker.Reset()
+			m.ioThresholdTracker.Reset()
 			return DecisionMaintain, fmt.Sprintf(
 				"Threshold exceeded but insufficient cores (%d <= %d)",
 				metrics.TotalCores, minSystemCores,
@@ -429,6 +451,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// Verifica se dobbiamo ignorare il load average
 		if !ignoreSystemLoad && metrics.SystemUnderLoad {
 			m.thresholdTracker.Reset()
+			m.ioThresholdTracker.Reset()
 			return DecisionMaintain, "Threshold exceeded but system already under load from other factors"
 		}
 
@@ -455,6 +478,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// Nessuna risorsa supera la soglia, reset tracker
 	m.thresholdTracker.Reset()
+	m.ioThresholdTracker.Reset()
 	return DecisionMaintain, "All resources within normal range"
 }
 

@@ -85,14 +85,15 @@ type Config struct {
 	RAMUserExcludeList []string `config:"RAM_USER_EXCLUDE_LIST"`
 
 	// IO limits (block I/O via cgroups v2 io controller)
-	IOEnabled          bool   `config:"IO_LIMIT_ENABLED"`
-	IOThreshold        int    `config:"IO_THRESHOLD"`
-	IOReleaseThreshold int    `config:"IO_RELEASE_THRESHOLD"`
-	IOReadBPS          string `config:"IO_READ_BPS"`      // Read bandwidth limit (e.g., "100M", "1G")
-	IOWriteBPS         string `config:"IO_WRITE_BPS"`     // Write bandwidth limit (e.g., "50M", "500M")
-	IOReadIOPS         int    `config:"IO_READ_IOPS"`     // Read IOPS limit (0 = unlimited)
-	IOWriteIOPS        int    `config:"IO_WRITE_IOPS"`    // Write IOPS limit (0 = unlimited)
-	IODeviceFilter     string `config:"IO_DEVICE_FILTER"` // "all" or "major:minor" (default "all")
+	IOEnabled           bool   `config:"IO_LIMIT_ENABLED"`
+	IOThreshold         int    `config:"IO_THRESHOLD"`
+	IOReleaseThreshold  int    `config:"IO_RELEASE_THRESHOLD"`
+	IOReadBPS           string `config:"IO_READ_BPS"`           // Read bandwidth limit (e.g., "100M", "1G")
+	IOWriteBPS          string `config:"IO_WRITE_BPS"`          // Write bandwidth limit (e.g., "50M", "500M")
+	IOReadIOPS          int    `config:"IO_READ_IOPS"`          // Read IOPS limit (0 = unlimited)
+	IOWriteIOPS         int    `config:"IO_WRITE_IOPS"`         // Write IOPS limit (0 = unlimited)
+	IODeviceFilter      string `config:"IO_DEVICE_FILTER"`      // "all" or "major:minor" (default "all")
+	IOThresholdDuration int    `config:"IO_THRESHOLD_DURATION"` // Seconds to wait before activating IO limits (0 = immediate)
 
 	// IO User Include/Exclude Lists (regex support)
 	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
@@ -215,16 +216,17 @@ func DefaultConfig() *Config {
 		RAMUserExcludeList:  nil,
 
 		// IO limits
-		IOEnabled:          false,
-		IOThreshold:        75,
-		IOReleaseThreshold: 40,
-		IOReadBPS:          "100M", // 100 MB/s
-		IOWriteBPS:         "50M",  // 50 MB/s
-		IOReadIOPS:         1000,
-		IOWriteIOPS:        500,
-		IODeviceFilter:     "all",
-		IOUserIncludeList:  nil,
-		IOUserExcludeList:  nil,
+		IOEnabled:           false,
+		IOThreshold:         75,
+		IOReleaseThreshold:  40,
+		IOReadBPS:           "100M", // 100 MB/s
+		IOWriteBPS:          "50M",  // 50 MB/s
+		IOReadIOPS:          1000,
+		IOWriteIOPS:         500,
+		IODeviceFilter:      "all",
+		IOThresholdDuration: 0, // 0 = immediate (no duration check)
+		IOUserIncludeList:   nil,
+		IOUserExcludeList:   nil,
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -1534,6 +1536,13 @@ func (c *Config) GetIODeviceFilter() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IODeviceFilter
+}
+
+// GetIOThresholdDuration returns the IO threshold duration in seconds.
+func (c *Config) GetIOThresholdDuration() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOThresholdDuration
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.
