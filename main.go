@@ -39,7 +39,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.19.0"
+var version = "1.20.0"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -340,7 +340,7 @@ func main() {
 
 	// Backpressure channel - signals when control cycle completes
 	cycleComplete := make(chan struct{})
-	close(cycleComplete)  // Initially complete so first cycle runs
+	close(cycleComplete) // Initially complete so first cycle runs
 
 	// Main loop
 	for {
@@ -382,7 +382,7 @@ func main() {
 
 		case <-ticker.C:
 			startTime := time.Now()
-			
+
 			// Backpressure: Skip cycle if previous is still running
 			select {
 			case <-cycleComplete:
@@ -395,16 +395,16 @@ func main() {
 				)
 				continue
 			}
-			
+
 			cycleComplete = make(chan struct{})
-			
+
 			if err := stateManager.RunControlCycle(ctx); err != nil {
 				logger.Error("Error in control cycle", "error", err)
 			}
 
 			duration := time.Since(startTime)
-			close(cycleComplete)  // Signal cycle completion
-			
+			close(cycleComplete) // Signal cycle completion
+
 			if duration > time.Duration(cfg.PollingInterval/2)*time.Second {
 				logger.Warn("Control cycle took longer than expected",
 					"duration_ms", duration.Milliseconds(),

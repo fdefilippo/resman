@@ -10,9 +10,9 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.19.0
+Version: 1.20.0
 Release: 1%{?dist}
-Summary: Dynamic CPU and RAM resource management tool using cgroups v2 with memory.high support
+Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
 URL:     https://github.com/fdefilippo/resman
@@ -48,9 +48,9 @@ Requires(preun): systemd-units
 Requires(postun): systemd-units
 
 %description
-Enterprise-grade CPU and RAM resource management tool with cgroups v2 support.
-Automatically limits CPU and memory for non-system users based on configurable thresholds.
-NEW in v1.19.0: memory.high soft limits for graceful memory management.
+Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 support.
+Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
+NEW in v1.20.0: IO limits via cgroups v2 io controller.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -65,8 +65,9 @@ Features:
 - Absolute CPU limits using cpu.max cgroup controller
 - RAM limiting with memory.high (soft) and memory.max (hard) limits
 - Graceful memory throttling before OOM killer (v1.19.0+)
+- Block I/O limiting with io.max (bandwidth and IOPS) (v1.20.0+)
 - Prometheus metrics export with comprehensive dashboard
-- Per-user metrics: CPU%, Memory (bytes), Process count, memory.high breaches
+- Per-user metrics: CPU%, Memory (bytes), Process count, memory.high breaches, IO read/write bytes and ops
 - Systemd service integration with hardening
 - Automatic configuration reload on file changes
 - Detailed process logging with process name tracking
@@ -244,6 +245,18 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.0-1
+- NEW: IO limits via cgroups v2 io controller
+- New configuration parameters: IO_LIMIT_ENABLED, IO_READ_BPS, IO_WRITE_BPS, IO_READ_IOPS, IO_WRITE_IOPS
+- IO limits apply throttling when exceeded (no process killing)
+- New Prometheus metrics: resman_user_io_read/write_bytes/ops_total
+- New cgroup manager functions:
+  * ApplyIOLimit() - Apply IO bandwidth and IOPS limits
+  * RemoveIOLimit() - Remove IO limits
+  * GetIOStats() - Read aggregate IO statistics
+- Updated documentation: docs/IO-LIMITS.md
+- All tests passing, build verified with CGO_ENABLED=1
+
 * Tue Mar 31 2026 Francesco Defilippo <francesco@defilippo.org> - 1.19.0-1
 - NEW: memory.high soft limits for graceful memory management
 - New configuration parameter RAM_HIGH_RATIO (default 0.8 = 80% of memory.max)
