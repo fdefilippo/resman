@@ -98,11 +98,11 @@ ResMan includes a built-in **Model Context Protocol (MCP)** server for AI assist
 
 **Read-only (13 tools):**
 - `get_system_status` - Overall system health
-- `get_user_metrics` - Per-user CPU/RAM/process metrics
+- `get_user_metrics` - Per-user CPU/RAM/IO metrics (includes memory.max, memory.high, io.max)
 - `get_active_users` - List of currently active users
-- `get_limits_status` - Current limits state
-- `get_cgroup_info` - Cgroup details
-- `get_configuration` - Current configuration
+- `get_limits_status` - Current CPU/RAM/IO limits state
+- `get_cgroup_info` - Cgroup details (CPU, RAM, IO limits per user)
+- `get_configuration` - Current configuration (CPU, RAM, IO settings)
 - `get_control_history` - Historical control decisions
 - `get_cpu_report` - CPU usage report
 - `get_mem_report` - Memory usage report
@@ -118,12 +118,13 @@ ResMan includes a built-in **Model Context Protocol (MCP)** server for AI assist
 - `deactivate_limits` - Manually deactivate CPU limits
 
 ### MCP Resources (6 endpoints)
-- `resman://system/status` - System overview
+- `resman://system/status` - System overview (CPU, memory, limits state)
 - `resman://system/metrics` - Detailed metrics
 - `resman://users/active` - Active users list
-- `resman://users/{uid}/metrics` - Per-user metrics
+- `resman://users/{uid}/metrics` - Per-user metrics (CPU, RAM, IO cgroup stats)
 - `resman://limits/status` - Limits state
-- `resman://configuration` - Current config
+- `resman://configuration` - Current config (CPU, RAM, IO settings)
+- `resman://cgroups/{uid}` - Cgroup information for a specific user
 
 ### MCP Prompts (3 templates)
 - `system_health_check` - Quick health assessment
