@@ -200,6 +200,27 @@ IO_WRITE_IOPS=500
 IO_DEVICE_FILTER=all
 IO_THRESHOLD_DURATION=0
 
+# IO Starvation Auto-Remediation
+# Rileva quando un utente e' IO-throttled per troppo tempo e aumenta
+# temporaneamente i limiti per prevenire degradazione prolungata.
+# Richiede kernel >= 4.20 con CONFIG_PSI=y per il rilevamento PSI.
+# IO_REMEDIATION_ENABLED: true = abilita auto-remediation
+# IO_STARVATION_THRESHOLD: Secondi di throttling continuo prima di agire
+# IO_STARVATION_CHECK_INTERVAL: Frequenza del check (secondi)
+# IO_BOOST_MULTIPLIER: Moltiplicatore per limiti temporanei (2.0 = 2x)
+# IO_BOOST_DURATION: Durata del boost in secondi
+# IO_BOOST_MAX_PER_HOUR: Max boost per utente per ora
+# IO_PSI_THRESHOLD: PSI some avg10 % sopra cui considerare starvation
+# IO_REVERT_ON_NORMAL: true = revert limiti quando IO torna normale
+IO_REMEDIATION_ENABLED=false
+IO_STARVATION_THRESHOLD=300
+IO_STARVATION_CHECK_INTERVAL=30
+IO_BOOST_MULTIPLIER=2.0
+IO_BOOST_DURATION=600
+IO_BOOST_MAX_PER_HOUR=3
+IO_PSI_THRESHOLD=50
+IO_REVERT_ON_NORMAL=true
+
 # ========================
 # PROMETHEUS [S]
 # ========================
