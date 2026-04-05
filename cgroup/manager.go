@@ -22,7 +22,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1173,10 +1173,25 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 		}
 	}
 
-	// Username da getent
-	cmd := exec.Command("ps", "-o", "user=", "-p", strconv.Itoa(pid))
-	if output, err := cmd.Output(); err == nil {
-		info["username"] = strings.TrimSpace(string(output))
+	// Username da /proc/[pid]/status (campo Uid:) + cache lookup
+	// Evita exec.Command("ps") che è costoso (fork+exec per ogni processo)
+	statusFile := fmt.Sprintf("/proc/%d/status", pid)
+	if data, err := os.ReadFile(statusFile); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "Uid:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					uidStr := fields[1]
+					// Usa os/user.LookupId per supportare LDAP/NIS con CGO
+					if u, lookupErr := user.LookupId(uidStr); lookupErr == nil {
+						info["username"] = u.Username
+					} else {
+						info["username"] = uidStr
+					}
+				}
+				break
+			}
+		}
 	}
 
 	// CPU usage corrente
