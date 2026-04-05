@@ -78,14 +78,14 @@ func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadRe
 	metrics := s.metricsCollector.GetDetailedMetrics()
 
 	result := map[string]any{
-		"total_cpu_usage":      getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		"user_cpu_usage":       getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		"memory_usage_mb":      getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		"active_users_count":   getIntMetric(metrics, "active_users_count", 0),
-		"total_cores":          getIntMetric(metrics, "total_cores", 0),
-		"system_under_load":    getBoolMetric(metrics, "system_under_load", false),
-		"limits_active":        getBool(status, "limits_active", false),
-		"limits_applied_time":  getString(status, "limits_applied_time", ""),
+		"total_cpu_usage":     getFloatMetric(metrics, "total_cpu_usage", 0.0),
+		"user_cpu_usage":      getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
+		"memory_usage_mb":     getFloatMetric(metrics, "memory_usage_mb", 0.0),
+		"active_users_count":  getIntMetric(metrics, "active_users_count", 0),
+		"total_cores":         getIntMetric(metrics, "total_cores", 0),
+		"system_under_load":   getBoolMetric(metrics, "system_under_load", false),
+		"limits_active":       getBool(status, "limits_active", false),
+		"limits_applied_time": getString(status, "limits_applied_time", ""),
 	}
 
 	return &mcp.ReadResourceResult{
@@ -150,17 +150,36 @@ func (s *Server) handleConfigResource(ctx context.Context, req *mcp.ReadResource
 	cfg := s.stateManager.GetConfig()
 
 	result := map[string]any{
-		"cpu_threshold":         cfg.CPUThreshold,
-		"cpu_release_threshold": cfg.CPUReleaseThreshold,
-		"polling_interval":      cfg.PollingInterval,
-		"min_system_cores":      cfg.MinSystemCores,
-		"cpu_quota_normal":      cfg.CPUQuotaNormal,
-		"cpu_quota_limited":     cfg.CPUQuotaLimited,
-		"enable_prometheus":     cfg.EnablePrometheus,
-		"prometheus_port":       cfg.PrometheusMetricsBindPort,
-		"ignore_system_load":    cfg.IgnoreSystemLoad,
-		"system_uid_min":        cfg.SystemUIDMin,
-		"system_uid_max":        cfg.SystemUIDMax,
+		"cpu_threshold":          cfg.CPUThreshold,
+		"cpu_release_threshold":  cfg.CPUReleaseThreshold,
+		"cpu_threshold_duration": cfg.CPUThresholdDuration,
+		"polling_interval":       cfg.PollingInterval,
+		"min_system_cores":       cfg.MinSystemCores,
+		"cpu_quota_normal":       cfg.CPUQuotaNormal,
+		"cpu_quota_limited":      cfg.CPUQuotaLimited,
+		"enable_prometheus":      cfg.EnablePrometheus,
+		"prometheus_port":        cfg.PrometheusMetricsBindPort,
+		"ignore_system_load":     cfg.IgnoreSystemLoad,
+		"system_uid_min":         cfg.SystemUIDMin,
+		"system_uid_max":         cfg.SystemUIDMax,
+		// RAM limits
+		"ram_enabled":           cfg.RAMEnabled,
+		"ram_threshold":         cfg.RAMThreshold,
+		"ram_release_threshold": cfg.RAMReleaseThreshold,
+		"ram_quota_limited":     cfg.RAMQuotaLimited,
+		"ram_quota_per_user":    cfg.RAMQuotaPerUser,
+		"disable_swap":          cfg.DisableSwap,
+		"ram_high_ratio":        cfg.RAMHighRatio,
+		// IO limits
+		"io_enabled":            cfg.IOEnabled,
+		"io_threshold":          cfg.IOThreshold,
+		"io_release_threshold":  cfg.IOReleaseThreshold,
+		"io_threshold_duration": cfg.IOThresholdDuration,
+		"io_read_bps":           cfg.IOReadBPS,
+		"io_write_bps":          cfg.IOWriteBPS,
+		"io_read_iops":          cfg.IOReadIOPS,
+		"io_write_iops":         cfg.IOWriteIOPS,
+		"io_device_filter":      cfg.IODeviceFilter,
 	}
 
 	return &mcp.ReadResourceResult{
@@ -194,6 +213,23 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 		"cpu_usage":     metrics.CPUUsage,
 		"memory_usage":  metrics.MemoryUsage,
 		"process_count": metrics.ProcessCount,
+		"is_limited":    metrics.IsLimited,
+	}
+
+	// Add RAM cgroup metrics
+	if ramUsage, err := s.cgroupManager.GetCgroupRAMUsage(uid); err == nil {
+		result["ram_usage_bytes"] = ramUsage
+	}
+	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
+		result["memory_high_events"] = highEvents
+	}
+
+	// Add IO cgroup metrics
+	if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
+		result["io_read_bytes"] = ioRead
+		result["io_write_bytes"] = ioWrite
+		result["io_read_ops"] = ioROps
+		result["io_write_ops"] = ioWOps
 	}
 
 	return &mcp.ReadResourceResult{
