@@ -15,7 +15,7 @@
 - **RAM limiting** with cgroups v2 memory controller
 - **IO limiting** with cgroups v2 io controller (bandwidth and IOPS)
 - **Per-user resource tracking**: CPU%, Memory (bytes), Process count, IO bytes/ops
-- **Threshold time window** to prevent false activations (CPU_THRESHOLD_DURATION)
+- **Threshold time window** to prevent false activations (CPU_THRESHOLD_DURATION, IO_THRESHOLD_DURATION)
 - **Blackout timeframes** support (CPU_MANAGER_BLACKOUT)
 
 ### User Filtering (v1.18.0+)
@@ -84,10 +84,10 @@ USER_EXCLUDE_LIST=admin       # But never limit 'admin' user
 PROCESS_EXCLUDE_LIST=^systemd$,^dbus-.*  # Never limit these processes
 
 # Result:
-# - testuser1 (UID 1001) → Monitored + Limited (is_limited="true")
-# - testuser2 (UID 1002) → Monitored + Limited (is_limited="true")
-# - admin (UID 1003)      → Monitored + NOT Limited (is_limited="false")
-# - normaluser (UID 1004) → Monitored + NOT Limited (is_limited="false")
+# - testuser1 (UID 1001) → Monitored + Limited (resman_user_cpu_limited=1)
+# - testuser2 (UID 1002) → Monitored + Limited (resman_user_cpu_limited=1)
+# - admin (UID 1003)      → Monitored + NOT Limited (resman_user_cpu_limited=0)
+# - normaluser (UID 1004) → Monitored + NOT Limited (resman_user_cpu_limited=0)
 ```
 
 ## 🤖 MCP Server (AI Integration)
@@ -154,10 +154,10 @@ sudo systemctl enable --now resman
 #### From RPM
 ```bash
 # Download latest RPM
-wget https://github.com/fdefilippo/resman/releases/latest/download/resman-1.18.0-1.x86_64.rpm
+wget https://github.com/fdefilippo/resman/releases/latest/download/resman-1.20.1-1.x86_64.rpm
 
 # Install
-sudo rpm -ivh resman-1.18.0-1.x86_64.rpm
+sudo rpm -ivh resman-1.20.1-1.x86_64.rpm
 sudo systemctl enable --now resman
 ```
 
@@ -187,10 +187,14 @@ RAM_QUOTA_PER_USER=512M
 
 # IO limits (optional)
 IO_LIMIT_ENABLED=false
+IO_THRESHOLD=75
+IO_RELEASE_THRESHOLD=40
 IO_READ_BPS=100M
 IO_WRITE_BPS=50M
 IO_READ_IOPS=1000
 IO_WRITE_IOPS=500
+IO_DEVICE_FILTER=all
+IO_THRESHOLD_DURATION=0
 
 # Monitoring
 SYSTEM_UID_MIN=1000           # Monitor users with UID >= 1000
@@ -315,6 +319,7 @@ resman_errors_total{component, error_type, hostname, server_role}  # Errors
 | `IO_LIMIT_ENABLED` | `false` | Enable IO limiting |
 | `IO_THRESHOLD` | `75` | Activate IO limits when ≥ X% |
 | `IO_RELEASE_THRESHOLD` | `40` | Release IO limits when < X% |
+| `IO_THRESHOLD_DURATION` | `0` | Wait time before activating IO limits (seconds, 0 = immediate) |
 | `IO_READ_BPS` | `100M` | Per-user read bandwidth limit |
 | `IO_WRITE_BPS` | `50M` | Per-user write bandwidth limit |
 | `IO_READ_IOPS` | `1000` | Per-user read IOPS limit (0=unlimited) |
@@ -322,12 +327,18 @@ resman_errors_total{component, error_type, hostname, server_role}  # Errors
 | `IO_DEVICE_FILTER` | `all` | Device filter ("all" or "major:minor") |
 
 ### User Filtering
+Each controller has independent user filter lists:
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SYSTEM_UID_MIN` | `1000` | Minimum UID to monitor |
 | `SYSTEM_UID_MAX` | Auto | Maximum UID (from /proc/sys/kernel/pid_max) |
-| `USER_INCLUDE_LIST` | Empty | Regex patterns for users to limit |
-| `USER_EXCLUDE_LIST` | Empty | Regex patterns for users to exclude |
+| `USER_INCLUDE_LIST` | Empty | Regex patterns for CPU users to limit |
+| `USER_EXCLUDE_LIST` | Empty | Regex patterns for CPU users to exclude |
+| `RAM_USER_INCLUDE_LIST` | Empty | Regex patterns for RAM users to limit |
+| `RAM_USER_EXCLUDE_LIST` | Empty | Regex patterns for RAM users to exclude |
+| `IO_USER_INCLUDE_LIST` | Empty | Regex patterns for IO users to limit |
+| `IO_USER_EXCLUDE_LIST` | Empty | Regex patterns for IO users to exclude |
 | `PROCESS_EXCLUDE_LIST` | `^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$` | Processes to never limit |
 
 ### Blackout Timeframes
@@ -387,9 +398,9 @@ ResMan uses Linux cgroups v2 with the following controllers:
    └─ BLACKOUT timeframes
 
 3. Make decision
-   ├─ CPU_THRESHOLD_DURATION check
-   ├─ Activate if CPU >= CPU_THRESHOLD
-   ├─ Release if CPU < CPU_RELEASE_THRESHOLD
+   ├─ Activate if ANY resource exceeds threshold (CPU OR RAM OR IO)
+   ├─ CPU_THRESHOLD_DURATION / IO_THRESHOLD_DURATION checks
+   ├─ Deactivate if ALL resources below release thresholds
    └─ Respect MIN_ACTIVE_TIME
 
 4. Apply limits
