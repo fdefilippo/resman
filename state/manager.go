@@ -385,8 +385,8 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			// IO sopra soglia ma non ancora per abbastanza tempo
 			ioExceeded = false
 		}
-	} else if !ioExceeded {
-		// IO sotto soglia, reset tracker
+	} else {
+		// IO sotto soglia o duration disabilitata: reset tracker
 		m.ioThresholdTracker.Reset()
 	}
 
@@ -456,13 +456,15 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		}
 
 		// Verifica time window (solo per CPU, se configurata)
+		// Blocca l'attivazione solo se CPU è l'unica risorsa sopra soglia
 		if cpuExceeded && cpuThresholdDuration > 0 {
 			shouldActivate := m.thresholdTracker.ShouldActivateLimits(
 				metrics.LimitedUsersCPUUsage,
 				float64(cpuThreshold),
 				time.Duration(cpuThresholdDuration)*time.Second,
 			)
-			if !shouldActivate {
+			if !shouldActivate && !ramExceeded && !ioExceeded {
+				// Solo CPU sopra soglia e non ancora per abbastanza tempo
 				elapsed := m.thresholdTracker.GetElapsed()
 				remaining := time.Duration(cpuThresholdDuration)*time.Second - elapsed
 				return DecisionMaintain, fmt.Sprintf(
