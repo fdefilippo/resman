@@ -91,6 +91,7 @@ type MetricsCollector interface {
 	GetAllUserMetrics() map[int]*metrics.UserMetrics
 	GetDBWriter() *metrics.DBWriter
 	WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
+	GetUsernameFromUID(uid int) string
 }
 
 // CgroupManager è l'interfaccia per gestire i cgroups.
@@ -111,6 +112,7 @@ type CgroupManager interface {
 	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
 	RemoveIOLimit(uid int) error
 	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
+	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
@@ -688,7 +690,8 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
 	// CORREZIONE: Itera solo sugli utenti che possono essere limitati
 	for uid := range metrics.UserCPUUsage {
-		username := m.getUsername(uid)
+		// Use real username from collector (supports LDAP/NIS with CGO)
+		username := m.metricsCollector.GetUsernameFromUID(uid)
 
 		// Salta utenti che non possono essere limitati
 		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
@@ -881,7 +884,7 @@ func (m *Manager) deactivateLimits() error {
 
 	// Per ogni utente, rimuovi i limiti
 	for _, uid := range usersToCleanup {
-		username := m.getUsername(uid)
+		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Ripristina il limite normale
 		if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
@@ -998,20 +1001,12 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 		isLimited := m.isUserLimited(uid)
 
-		// Ottieni info cgroup se disponibile
+		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
 		var ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64
 		if m.cgroupManager != nil {
-			if info, err := m.cgroupManager.GetCgroupInfo(uid); err == nil {
-				cgroupPath = info["path"]
-				cpuQuota = info["cpu.max"]
-			}
-			// Ottieni eventi memory.high (se il cgroup esiste)
-			memoryHighEvents, _ = m.cgroupManager.GetMemoryHighEvents(uid)
-
-			// Ottieni statistiche IO (se il cgroup esiste)
-			ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.cgroupManager.GetIOStats(uid)
+			cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
 		}
 
 		// Usa UpdateUserMetrics con tutti i parametri

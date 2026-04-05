@@ -1125,13 +1125,30 @@ func (m *Manager) GetCgroupInfo(uid int) (map[string]string, error) {
 		info["cpu.weight"] = strings.TrimSpace(string(data))
 	}
 
-	// Conta i processi nel cgroup
-	procsFile := filepath.Join(cgroupPath, "cgroup.procs")
-	if pids, err := m.readPidsFromFile(procsFile); err == nil {
-		info["process_count"] = strconv.Itoa(len(pids))
+	return info, nil
+}
+
+// GetUserCgroupMetrics legge tutte le metriche cgroup per un utente in una sola chiamata.
+// Evita letture multiple di file cgroup separati.
+func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error) {
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return "", "", 0, 0, 0, 0, 0, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
-	return info, nil
+	// Leggi cpu.max
+	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
+	if data, readErr := os.ReadFile(cpuMaxFile); readErr == nil {
+		cpuQuota = strings.TrimSpace(string(data))
+	}
+
+	// Leggi memory.high events
+	memoryHighEvents, _ = m.GetMemoryHighEvents(uid)
+
+	// Leggi io.stat
+	ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.GetIOStats(uid)
+
+	return cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, nil
 }
 
 // getProcessInfo restituisce informazioni dettagliate su un processo

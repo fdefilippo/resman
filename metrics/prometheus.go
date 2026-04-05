@@ -97,7 +97,6 @@ type PrometheusExporter struct {
 	activeUserMetrics    map[string]bool   // "uid_username" -> true
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
-	metricsMu            sync.RWMutex
 
 	// Metriche counter (solo incremento)
 	limitsActivatedTotal   prometheus.Counter
@@ -659,19 +658,25 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 
 // UpdateUserMetrics aggiorna le metriche specifiche per utente.
 func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
-	if exp == nil {
+	if exp == nil || exp.registry == nil {
 		return
+	}
+
+	uidStr := strconv.Itoa(uid)
+
+	// Se username è vuoto, cerca di ottenerlo (before lock to minimize hold time)
+	if username == "" || username == uidStr {
+		username = exp.getUsernameFromUID(uidStr)
+	}
+
+	// Read cgroup memory before acquiring lock (fix #4: avoid file I/O under lock)
+	cgroupMemory := uint64(0)
+	if cgroupPath != "" {
+		cgroupMemory = uint64(exp.getCgroupMemoryUsage(cgroupPath))
 	}
 
 	exp.mu.Lock()
 	defer exp.mu.Unlock()
-
-	uidStr := strconv.Itoa(uid)
-
-	// Se username è vuoto, cerca di ottenerlo
-	if username == "" || username == uidStr {
-		username = exp.getUsernameFromUID(uidStr)
-	}
 
 	// Marca utente come attivo
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
@@ -694,7 +699,7 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	exp.userLimited.WithLabelValues(uidStr, username).Set(limitedValue)
 
 	// Aggiorna eventi memory.high breach (counter con delta)
-	memoryHighKey := fmt.Sprintf("%s_%s", strconv.Itoa(uid), username)
+	memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 	prev := exp.prevMemoryHighEvents[memoryHighKey]
 	if memoryHighEvents > prev {
 		delta := memoryHighEvents - prev
@@ -737,8 +742,7 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 			}
 		}
 
-		// Aggiorna uso memoria del cgroup
-		cgroupMemory := exp.getCgroupMemoryUsage(cgroupPath)
+		// Aggiorna uso memoria del cgroup (fix #6: use pre-read value, no redundant file read)
 		exp.cgroupMemoryUsage.WithLabelValues(uidStr, cgroupPath).Set(float64(cgroupMemory))
 	}
 }
@@ -749,8 +753,8 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 		return
 	}
 
-	exp.metricsMu.Lock()
-	defer exp.metricsMu.Unlock()
+	exp.mu.Lock()
+	defer exp.mu.Unlock()
 
 	// Itera su tutti gli utenti tracciati
 	for userKey := range exp.activeUserMetrics {

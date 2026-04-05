@@ -792,8 +792,8 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	return "", fmt.Errorf("UID %d not found in /etc/passwd", uid)
 }
 
-// getUsernameFromUID è un alias per coerenza con il resto del codice
-func (c *Collector) getUsernameFromUID(uid int) string {
+// GetUsernameFromUID ritorna la username dato un UID (public alias)
+func (c *Collector) GetUsernameFromUID(uid int) string {
 	return c.getUsername(uid)
 }
 
@@ -1287,7 +1287,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
-		username := c.getUsernameFromUID(uid)
+		username := c.GetUsernameFromUID(uid)
 		userMetrics[uid] = &UserMetrics{
 			UID:          uid,
 			Username:     username,

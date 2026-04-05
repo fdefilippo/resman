@@ -18,6 +18,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
@@ -48,6 +49,7 @@ func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64 { return 20000000
 func (m *mockMetricsCollector) GetLimitedUsers() []int             { return []int{1000, 1001} }
 func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64   { return 30.0 }
 func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64 { return 1500000000 }
+func (m *mockMetricsCollector) GetUsernameFromUID(uid int) string  { return fmt.Sprintf("user%d", uid) }
 
 type mockCgroupManager struct{}
 
@@ -89,7 +91,10 @@ func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error
 func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
 func (m *mockCgroupManager) CleanupAll() error                                        { return nil }
 func (m *mockCgroupManager) GetCgroupInfo(uid int) (map[string]string, error)         { return nil, nil }
-func (m *mockCgroupManager) GetCreatedCgroups() []int                                 { return nil }
+func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
+	return "", "", 0, 0, 0, 0, 0, nil
+}
+func (m *mockCgroupManager) GetCreatedCgroups() []int { return nil }
 
 type mockPrometheusExporter struct{}
 
