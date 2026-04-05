@@ -109,6 +109,17 @@ type Config struct {
 	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
 	IOUserExcludeList []string `config:"IO_USER_EXCLUDE_LIST"`
 
+	// Workload Pattern Detection (auto-detect user patterns)
+	AutodetectPatterns         bool    `config:"AUTODETECT_PATTERNS"`
+	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // Finestra storica (ore)
+	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimo campioni per decidere
+	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Soglia confidenza (0.0-1.0)
+	// Policy per pattern
+	BatchNightCPUQuota  int    `config:"BATCH_NIGHT_CPU_QUOTA"` // CPU quota per batch (microseconds)
+	BatchNightRAMQuota  string `config:"BATCH_NIGHT_RAM_QUOTA"` // RAM quota per batch
+	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota per interattivo
+	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota per interattivo
+
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
 	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"` // Default: 127.0.0.1 (secure)
@@ -248,6 +259,16 @@ func DefaultConfig() *Config {
 
 		IOUserIncludeList: nil,
 		IOUserExcludeList: nil,
+
+		// Workload Pattern Detection
+		AutodetectPatterns:         false,
+		PatternHistoryHours:        168, // 7 days
+		PatternMinSamples:          24,  // 24 hours minimum
+		PatternConfidenceThreshold: 0.7,
+		BatchNightCPUQuota:         200000, // 200% (2 cores)
+		BatchNightRAMQuota:         "4G",
+		InteractiveCPUQuota:        50000, // 50%
+		InteractiveRAMQuota:        "1G",
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -1620,6 +1641,62 @@ func (c *Config) GetIORevertOnNormal() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IORevertOnNormal
+}
+
+// GetAutodetectPatterns returns whether workload pattern detection is enabled.
+func (c *Config) GetAutodetectPatterns() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.AutodetectPatterns
+}
+
+// GetPatternHistoryHours returns the pattern history window in hours.
+func (c *Config) GetPatternHistoryHours() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PatternHistoryHours
+}
+
+// GetPatternMinSamples returns the minimum samples required for pattern detection.
+func (c *Config) GetPatternMinSamples() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PatternMinSamples
+}
+
+// GetPatternConfidenceThreshold returns the confidence threshold for pattern detection.
+func (c *Config) GetPatternConfidenceThreshold() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PatternConfidenceThreshold
+}
+
+// GetBatchNightCPUQuota returns the CPU quota for batch night pattern.
+func (c *Config) GetBatchNightCPUQuota() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.BatchNightCPUQuota
+}
+
+// GetBatchNightRAMQuota returns the RAM quota for batch night pattern.
+func (c *Config) GetBatchNightRAMQuota() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.BatchNightRAMQuota
+}
+
+// GetInteractiveCPUQuota returns the CPU quota for interactive pattern.
+func (c *Config) GetInteractiveCPUQuota() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.InteractiveCPUQuota
+}
+
+// GetInteractiveRAMQuota returns the RAM quota for interactive pattern.
+func (c *Config) GetInteractiveRAMQuota() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.InteractiveRAMQuota
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.

@@ -47,14 +47,17 @@ type Manager struct {
 	sharedCgroupPath  string       // Percorso del cgroup condiviso
 
 	// Threshold monitoring
-	thresholdTracker   *ThresholdTracker
-	ioThresholdTracker *ThresholdTracker
+	thresholdTracker    *ThresholdTracker
+	ioThresholdTracker  *ThresholdTracker
+	lastPatternAnalysis time.Time
 
 	// Dipendenze (saranno iniettate)
 	metricsCollector   MetricsCollector
 	cgroupManager      CgroupManager
 	prometheusExporter PrometheusExporter
 	ioRemediation      *IORemediation
+	patternDetector    *PatternDetector
+	policyEngine       *PolicyEngine
 
 	// Cache per le metriche (per performance)
 	metricsCache     map[string]interface{}
@@ -167,6 +170,8 @@ func NewManager(
 		cgroupManager:      cgroups,
 		prometheusExporter: prometheus,
 		ioRemediation:      NewIORemediation(logger),
+		patternDetector:    NewPatternDetector(logger),
+		policyEngine:       NewPolicyEngine(logger),
 		metricsCache:       make(map[string]interface{}),
 		metricsCacheTime:   make(map[string]time.Time),
 	}
@@ -248,7 +253,43 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 		m.ioRemediation.Cleanup(24 * time.Hour)
 	}
 
-	// 8. Logga il risultato del ciclo
+	// 8. Workload Pattern Detection
+	if m.cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
+		// Aggiorna statistiche per tutti gli utenti
+		allMetrics := m.metricsCollector.GetAllUserMetrics()
+		for uid, um := range allMetrics {
+			m.patternDetector.Update(uid, um.CPUUsage)
+		}
+
+		// Analizza pattern ogni ora
+		if time.Since(m.lastPatternAnalysis) > time.Hour {
+			m.lastPatternAnalysis = time.Now()
+			patterns := m.patternDetector.Analyze(m.cfg)
+			for uid, result := range patterns {
+				if result.Pattern != PatternUnknown {
+					if m.policyEngine.ApplyPolicy(uid, result.Pattern, m.cfg) {
+						// Policy cambiata, applica limiti
+						policy, _ := m.policyEngine.GetPolicy(uid)
+						if policy != nil && policy.CPUQuota > 0 {
+							quotaStr := strconv.Itoa(policy.CPUQuota) + " 100000"
+							if err := m.cgroupManager.ApplyCPULimit(uid, quotaStr); err != nil {
+								m.logger.Warn("Failed to apply pattern-based CPU limit",
+									"uid", uid,
+									"pattern", result.Pattern,
+									"error", err,
+								)
+							}
+						}
+					}
+				}
+			}
+			// Cleanup pattern detector
+			m.patternDetector.Cleanup(time.Duration(m.cfg.GetPatternHistoryHours()) * time.Hour)
+			m.policyEngine.Cleanup(24 * time.Hour)
+		}
+	}
+
+	// 9. Logga il risultato del ciclo
 	m.logger.Info("Control cycle completed",
 		"cycle_id", cycleID,
 		"decision", decision,
