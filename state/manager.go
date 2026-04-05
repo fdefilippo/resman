@@ -538,16 +538,8 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 
 	for uid := range m.activeUsers {
 		// Controlla se l'utente è ancora attivo (ha processi in esecuzione)
-		userStillActive := false
-		for activeUID := range metrics.UserCPUUsage {
-			if activeUID == uid {
-				userStillActive = true
-				break
-			}
-		}
-
-		if !userStillActive {
-			// Utente non più nella lista attivi
+		// O(1) lookup instead of O(N*M) linear search
+		if _, userStillActive := metrics.UserCPUUsage[uid]; !userStillActive {
 			usersToRelease = append(usersToRelease, uid)
 			continue
 		}
