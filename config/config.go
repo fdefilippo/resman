@@ -95,6 +95,16 @@ type Config struct {
 	IODeviceFilter      string `config:"IO_DEVICE_FILTER"`      // "all" or "major:minor" (default "all")
 	IOThresholdDuration int    `config:"IO_THRESHOLD_DURATION"` // Seconds to wait before activating IO limits (0 = immediate)
 
+	// IO Starvation Auto-Remediation
+	IORemediationEnabled      bool    `config:"IO_REMEDIATION_ENABLED"`
+	IOStarvationThreshold     int     `config:"IO_STARVATION_THRESHOLD"`      // Seconds of continuous throttling before remediation
+	IOStarvationCheckInterval int     `config:"IO_STARVATION_CHECK_INTERVAL"` // Check frequency in seconds
+	IOBoostMultiplier         float64 `config:"IO_BOOST_MULTIPLIER"`          // Multiplier for temporary limits
+	IOBoostDuration           int     `config:"IO_BOOST_DURATION"`            // Duration of boost in seconds
+	IOBoostMaxPerHour         int     `config:"IO_BOOST_MAX_PER_HOUR"`        // Max boosts per user per hour
+	IOPSIThreshold            float64 `config:"IO_PSI_THRESHOLD"`             // PSI some avg10 % threshold
+	IORevertOnNormal          bool    `config:"IO_REVERT_ON_NORMAL"`          // Revert limits when IO returns to normal
+
 	// IO User Include/Exclude Lists (regex support)
 	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
 	IOUserExcludeList []string `config:"IO_USER_EXCLUDE_LIST"`
@@ -225,8 +235,19 @@ func DefaultConfig() *Config {
 		IOWriteIOPS:         500,
 		IODeviceFilter:      "all",
 		IOThresholdDuration: 0, // 0 = immediate (no duration check)
-		IOUserIncludeList:   nil,
-		IOUserExcludeList:   nil,
+
+		// IO Starvation Auto-Remediation
+		IORemediationEnabled:      false,
+		IOStarvationThreshold:     300, // 5 minutes
+		IOStarvationCheckInterval: 30,  // 30 seconds
+		IOBoostMultiplier:         2.0, // 2x limits
+		IOBoostDuration:           600, // 10 minutes
+		IOBoostMaxPerHour:         3,
+		IOPSIThreshold:            50.0, // 50%
+		IORevertOnNormal:          true,
+
+		IOUserIncludeList: nil,
+		IOUserExcludeList: nil,
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -1543,6 +1564,62 @@ func (c *Config) GetIOThresholdDuration() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IOThresholdDuration
+}
+
+// GetIORemediationEnabled returns whether IO starvation remediation is enabled.
+func (c *Config) GetIORemediationEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IORemediationEnabled
+}
+
+// GetIOStarvationThreshold returns the starvation threshold in seconds.
+func (c *Config) GetIOStarvationThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOStarvationThreshold
+}
+
+// GetIOStarvationCheckInterval returns the check interval in seconds.
+func (c *Config) GetIOStarvationCheckInterval() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOStarvationCheckInterval
+}
+
+// GetIOBoostMultiplier returns the boost multiplier.
+func (c *Config) GetIOBoostMultiplier() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOBoostMultiplier
+}
+
+// GetIOBoostDuration returns the boost duration in seconds.
+func (c *Config) GetIOBoostDuration() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOBoostDuration
+}
+
+// GetIOBoostMaxPerHour returns the max boosts per user per hour.
+func (c *Config) GetIOBoostMaxPerHour() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOBoostMaxPerHour
+}
+
+// GetIOPSIThreshold returns the PSI threshold percentage.
+func (c *Config) GetIOPSIThreshold() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOPSIThreshold
+}
+
+// GetIORevertOnNormal returns whether to revert limits when IO returns to normal.
+func (c *Config) GetIORevertOnNormal() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IORevertOnNormal
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/metrics"
 )
@@ -81,6 +82,15 @@ func (m *mockCgroupManager) RemoveIOLimit(uid int) error { return nil }
 func (m *mockCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
 	return 0, 0, 0, 0, nil
 }
+func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
+	return "", "", 0, 0, 0, 0, 0, nil
+}
+func (m *mockCgroupManager) GetPSIStats(uid int) (cgroup.PSIStats, error) {
+	return cgroup.PSIStats{}, nil
+}
+func (m *mockCgroupManager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
+	return nil
+}
 func (m *mockCgroupManager) CleanupUserCgroup(uid int) error            { return nil }
 func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return nil }
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
@@ -91,10 +101,7 @@ func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error
 func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
 func (m *mockCgroupManager) CleanupAll() error                                        { return nil }
 func (m *mockCgroupManager) GetCgroupInfo(uid int) (map[string]string, error)         { return nil, nil }
-func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
-	return "", "", 0, 0, 0, 0, 0, nil
-}
-func (m *mockCgroupManager) GetCreatedCgroups() []int { return nil }
+func (m *mockCgroupManager) GetCreatedCgroups() []int                                 { return nil }
 
 type mockPrometheusExporter struct{}
 

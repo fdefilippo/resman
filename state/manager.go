@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
@@ -53,6 +54,7 @@ type Manager struct {
 	metricsCollector   MetricsCollector
 	cgroupManager      CgroupManager
 	prometheusExporter PrometheusExporter
+	ioRemediation      *IORemediation
 
 	// Cache per le metriche (per performance)
 	metricsCache     map[string]interface{}
@@ -113,6 +115,8 @@ type CgroupManager interface {
 	RemoveIOLimit(uid int) error
 	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
 	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
+	GetPSIStats(uid int) (cgroup.PSIStats, error)
+	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
@@ -162,6 +166,7 @@ func NewManager(
 		metricsCollector:   metrics,
 		cgroupManager:      cgroups,
 		prometheusExporter: prometheus,
+		ioRemediation:      NewIORemediation(logger),
 		metricsCache:       make(map[string]interface{}),
 		metricsCacheTime:   make(map[string]time.Time),
 	}
@@ -235,7 +240,15 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	duration := time.Since(startTime)
 	m.recordControlCycle(decision, reason, metrics, duration)
 
-	// 5. Logga il risultato del ciclo
+	// 7. IO Starvation Auto-Remediation
+	if m.ioRemediation != nil {
+		limitedUsers := m.metricsCollector.GetLimitedUsers()
+		m.ioRemediation.CheckAndRemediate(m.cgroupManager, m.cfg, limitedUsers)
+		// Cleanup periodico stati vecchi
+		m.ioRemediation.Cleanup(24 * time.Hour)
+	}
+
+	// 8. Logga il risultato del ciclo
 	m.logger.Info("Control cycle completed",
 		"cycle_id", cycleID,
 		"decision", decision,

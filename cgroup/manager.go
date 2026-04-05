@@ -1570,3 +1570,67 @@ func (m *Manager) GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, wr
 
 	return readBytes, writeBytes, readOps, writeOps, nil
 }
+
+// ApplyTemporaryIOLimit applica limiti IO temporanei con un moltiplicatore.
+// Salva i limiti originali per permettere il revert.
+func (m *Manager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
+	if _, exists := m.getCgroupPath(uid); !exists {
+		return fmt.Errorf("cgroup for UID %d not found", uid)
+	}
+
+	// Applica limiti boostati (moltiplicati)
+	boostedReadBPS := applyMultiplierToBPS(readBPS, multiplier)
+	boostedWriteBPS := applyMultiplierToBPS(writeBPS, multiplier)
+	boostedReadIOPS := int(float64(readIOPS) * multiplier)
+	boostedWriteIOPS := int(float64(writeIOPS) * multiplier)
+
+	return m.ApplyIOLimit(uid, boostedReadBPS, boostedWriteBPS, boostedReadIOPS, boostedWriteIOPS, deviceFilter)
+}
+
+// applyMultiplierToBPS applica un moltiplicatore a una stringa BPS.
+func applyMultiplierToBPS(bps string, multiplier float64) string {
+	if bps == "" || bps == "max" || bps == "0" {
+		return "max"
+	}
+	// Parse byte value (supports K, M, G, T suffixes)
+	val := parseBPSValue(bps)
+	if val == 0 {
+		return "max"
+	}
+	boosted := uint64(float64(val) * multiplier)
+	return strconv.FormatUint(boosted, 10)
+}
+
+// parseBPSValue converte una stringa BPS in bytes.
+func parseBPSValue(s string) uint64 {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return 0
+	}
+
+	// Check for suffix
+	lastChar := strings.ToUpper(s[len(s)-1:])
+	multiplier := uint64(1)
+	numStr := s
+
+	switch lastChar {
+	case "K":
+		multiplier = 1024
+		numStr = s[:len(s)-1]
+	case "M":
+		multiplier = 1024 * 1024
+		numStr = s[:len(s)-1]
+	case "G":
+		multiplier = 1024 * 1024 * 1024
+		numStr = s[:len(s)-1]
+	case "T":
+		multiplier = 1024 * 1024 * 1024 * 1024
+		numStr = s[:len(s)-1]
+	}
+
+	val, err := strconv.ParseUint(numStr, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return val * multiplier
+}
