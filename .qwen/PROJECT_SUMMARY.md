@@ -1,11 +1,11 @@
 # ResMan - Project Summary
 
 ## Overall Goal
-Implement a comprehensive MCP-enabled CPU and RAM resource management tool using Linux cgroups v2 with dynamic limiting, multi-cluster monitoring support, and AI assistant integration.
+Implement a comprehensive MCP-enabled CPU, RAM, and IO resource management tool using Linux cgroups v2 with dynamic limiting, multi-cluster monitoring support, workload pattern detection, auto-policy engine, IO auto-remediation, and AI assistant integration.
 
-**Project Name:** ResMan (Resource Manager) - formerly cpu-manager-go  
-**Current Version:** 1.18.2  
-**Last Updated:** 2026-03-24
+**Project Name:** ResMan (Resource Manager) - formerly cpu-manager-go
+**Current Version:** 1.20.1
+**Last Updated:** 2026-04-05
 
 ---
 
@@ -38,7 +38,26 @@ Implement a comprehensive MCP-enabled CPU and RAM resource management tool using
 - `RAM_RELEASE_THRESHOLD=40` - RAM deactivation threshold (%)
 - `RAM_QUOTA_LIMITED=2G` - Total RAM quota for limited users
 - `RAM_QUOTA_PER_USER=512M` - Per-user RAM quota
+- `RAM_HIGH_RATIO=0.8` - memory.high ratio (0.0-1.0, default 80% of memory.max)
 - `DISABLE_SWAP=false` - Disable swap in cgroups
+
+#### IO Management (v1.20.0+)
+- `IO_LIMIT_ENABLED=false` - Enable IO limiting
+- `IO_THRESHOLD=75` - IO activation threshold (%)
+- `IO_RELEASE_THRESHOLD=40` - IO deactivation threshold (%)
+- `IO_READ_BPS=100M` - Read bandwidth limit
+- `IO_WRITE_BPS=50M` - Write bandwidth limit
+- `IO_READ_IOPS=1000` - Read IOPS limit (0 = unlimited)
+- `IO_WRITE_IOPS=500` - Write IOPS limit (0 = unlimited)
+- `IO_DEVICE_FILTER=all` - Device filter ("all" or "major:minor")
+- `IO_THRESHOLD_DURATION=0` - Time window before activating IO limits (seconds)
+- `IO_REMEDIATION_ENABLED=false` - Enable IO starvation auto-remediation
+- `IO_STARVATION_THRESHOLD=60` - Seconds of continuous throttling before remediation
+- `IO_BOOST_MULTIPLIER=2.0` - Multiplier for temporary IO boost
+- `IO_BOOST_DURATION=300` - Duration of boost in seconds
+- `IO_PSI_THRESHOLD=30.0` - PSI some avg10 % threshold
+- `IO_USER_INCLUDE_LIST` - Regex patterns for users who CAN be IO limited
+- `IO_USER_EXCLUDE_LIST` - Regex patterns for users who are NEVER IO limited
 
 #### User Filtering
 - `SYSTEM_UID_MIN=1000` - Minimum UID to monitor
@@ -205,7 +224,114 @@ Implement a comprehensive MCP-enabled CPU and RAM resource management tool using
 
 ## Version History (Complete)
 
-### Version 1.18.2 (Latest - Critical Bug Fixes)
+### Version 1.20.1 (Latest - Architectural Consistency & Pattern Detection)
+**Date:** 2026-04-05
+
+#### 🎉 Major Features
+
+**Workload Pattern Detection Engine:**
+- NEW: `WorkloadPattern` classifier (batch_night, interactive_day, mixed, always_on, sporadic)
+- NEW: `UserHourlyStats` aggregates CPU usage by hour (0-23)
+- NEW: Pattern detection based on historical CPU samples
+- Files: `state/pattern_detector.go`
+
+**Auto-Policy Engine:**
+- NEW: `PolicyEngine` applies quotas based on detected patterns
+- NEW: `UserPolicy` tracks CPU/RAM quotas per user
+- NEW: Automatic policy changes when patterns shift
+- Files: `state/policy_engine.go`
+
+**IO Starvation Auto-Remediation:**
+- NEW: PSI (Pressure Stall Information) monitoring
+- NEW: Automatic IO boost when starvation detected
+- NEW: `IO_BOOST_MULTIPLIER` for temporary limits increase
+- NEW: `IO_BOOST_DURATION` for boost timeframe
+- NEW: `IO_PSI_THRESHOLD` for triggering remediation
+- Files: `cgroup/psi.go`, `state/io_remediation.go`
+
+#### ⚡ Performance Improvements
+
+1. **Replace exec.Command(ps) with /proc/[pid]/status parsing**
+   - Faster process UID detection
+   - Reduced external process spawning
+   - File: `cgroup/manager.go`
+
+2. **Fix O(N*M) linear search in releaseIdleUsers**
+   - Optimized idle user release logic
+   - File: `state/manager.go`
+
+3. **Optimize cgroup reads, unify locks, fix username resolution**
+   - Better cgroup file reading performance
+   - Lock unification across CPU/RAM/IO
+   - File: `cgroup/manager.go`, `metrics/collector.go`, `metrics/prometheus.go`
+
+#### 📝 Documentation
+
+- README updated with IO limits and pattern detection
+- Grafana dashboard updated with Block I/O panels (v1.20.1)
+- IO remediation config example added
+- resman.conf.example comments translated from Italian to English
+- RAM limits disable examples added
+
+#### 🔄 Architectural Changes
+
+- CPU/RAM/IO controllers aligned for consistent behavior
+- Threshold duration no longer blocks IO/RAM activation
+- IO tracker reset on duration=0
+- CHANGELOG.md removed (consolidated into git history)
+- Example config files consolidated into resman.conf.example
+
+**Files Changed:** 20+ files across all packages
+**New Files:** `cgroup/psi.go`, `state/pattern_detector.go`, `state/policy_engine.go`, `state/io_remediation.go`
+**Removed Files:** `CHANGELOG.md`, `config/BLACKOUT_EXAMPLES.conf`, `config/USER_FILTER_LIST.examples`, `config/USER_INCLUDE_LIST.examples`
+
+---
+
+### Version 1.20.0 - IO Limits via Cgroups v2
+**Date:** 2026-04-01 (approx)
+
+#### 🎉 Major Features
+
+**IO Limits via Cgroups v2 io.controller:**
+- NEW: `IO_LIMIT_ENABLED` configuration
+- NEW: Bandwidth limits (`IO_READ_BPS`, `IO_WRITE_BPS`)
+- NEW: IOPS limits (`IO_READ_IOPS`, `IO_WRITE_IOPS`)
+- NEW: Device filter (`IO_DEVICE_FILTER`)
+- NEW: IO threshold duration (`IO_THRESHOLD_DURATION`)
+- NEW: IO user include/exclude lists
+- Prometheus metrics for IO usage
+- MCP tools updated with IO support
+- Grafana dashboard with Block I/O panels
+
+**Files:** `cgroup/manager.go`, `config/config.go`, `state/manager.go`, `metrics/collector.go`, `metrics/prometheus.go`
+**Documentation:** `docs/IO-LIMITS.md`
+
+---
+
+### Version 1.19.0 - memory.high Soft Limits
+**Date:** 2026-03-31
+
+#### 🎉 Major Features
+
+**memory.high Soft Limits:**
+- NEW: `RAM_HIGH_RATIO` configuration (default 0.8)
+- NEW: Graceful memory throttling before OOM killer
+- NEW: `memory.high` = `RAM_QUOTA_PER_USER * RAM_HIGH_RATIO`
+- NEW: Prometheus metric `resman_user_memory_high_breaches_total`
+- NEW: Cgroup functions: `ApplyRAMHigh()`, `ApplyRAMLimitWithHigh()`, `GetMemoryHighEvents()`
+- Updated Grafana dashboard with memory.high breaches panel
+
+**Documentation:**
+- NEW: `docs/CGROUP-V2-TECHNICAL.md`
+- NEW: `docs/WIKI-MEMORY-HIGH.md`
+- Updated: `docs/resman.8`, `config/resman.conf.example`
+
+**Files Changed:** 16 files
+**Build:** CGO_ENABLED=1 verified, all tests passing
+
+---
+
+### Version 1.18.2 (Critical Bug Fixes)
 **Date:** 2026-03-24
 
 #### 🐛 Critical Bug Fixes
@@ -706,7 +832,7 @@ resman/
 
 ## Future Enhancements (Proposal)
 
-### Long Activity Detection (v1.19.0+)
+### Long Activity Detection (v1.21.0+)
 See `docs/MCP-LONG-ACTIVITY-PROPOSAL.md` for complete specification.
 
 **Proposed Features:**
@@ -726,17 +852,46 @@ MONITOR_LONG_ACTIVITY_THRESHOLD=604800  # Alert if active for > N seconds (7 day
 MONITOR_LONG_ACTIVITY_CPU_THRESHOLD=50  # Alert only if avg CPU > N%
 ```
 
+### Enhanced Pattern Detection (v1.21.0+)
+- ML-based workload classification
+- Automatic policy tuning based on historical data
+- Anomaly detection for unusual resource usage
+- Integration with external monitoring systems
+
 ---
 
 ## Summary Metadata
 
-**Current Version:** 1.18.2  
-**Last Updated:** 2026-03-24  
-**Total Commits:** 15+ since v1.15.2  
-**Security Fixes:** 5 (v1.18.1)  
-**Performance Improvements:** 5 (v1.18.1)  
-**Critical Bug Fixes:** 2 (v1.18.2)  
+**Current Version:** 1.20.1
+**Last Updated:** 2026-04-05
+**Total Commits:** 50+ since v1.18.2
+**Major Features Added:**
+- memory.high soft limits (v1.19.0)
+- IO limits via cgroups v2 io.controller (v1.20.0)
+- IO starvation auto-remediation (v1.20.1)
+- Workload pattern detection engine (v1.20.1)
+- Auto-policy engine based on patterns (v1.20.1)
+
+**Security Fixes:** 5 (v1.18.1)
+**Performance Improvements:** 8 (v1.18.1-v1.20.1)
+**Critical Bug Fixes:** 4 (v1.18.2, v1.19.0, v1.20.1)
 **Breaking Changes:** 3 (v1.17.0, v1.17.1, v1.18.0)
+
+**New Documentation:**
+- docs/CGROUP-V2-TECHNICAL.md - Cgroup v2 technical reference
+- docs/WIKI-MEMORY-HIGH.md - memory.high implementation guide
+- docs/IO-LIMITS.md - IO limits configuration and usage
+- docs/ARCHITECTURE.md - System architecture overview
+- docs/GRAFANA-DASHBOARD-GUIDE.md - Grafana dashboard usage guide
+- docs/MULTI-INSTANCE-MONITORING.md - Multi-instance monitoring setup
+- docs/TECHNICAL-SPECIFICATION.md - Technical specifications
+- docs/prometheus-queries.md - Prometheus query examples
+
+**Removed:**
+- CHANGELOG.md (removed in v1.20.1)
+- config/BLACKOUT_EXAMPLES.conf (consolidated into resman.conf.example)
+- config/USER_FILTER_LIST.examples (consolidated into resman.conf.example)
+- config/USER_INCLUDE_LIST.examples (consolidated into resman.conf.example)
 
 ---
 

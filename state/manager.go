@@ -270,14 +270,28 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 					if m.policyEngine.ApplyPolicy(uid, result.Pattern, m.cfg) {
 						// Policy cambiata, applica limiti
 						policy, _ := m.policyEngine.GetPolicy(uid)
-						if policy != nil && policy.CPUQuota > 0 {
-							quotaStr := strconv.Itoa(policy.CPUQuota) + " 100000"
-							if err := m.cgroupManager.ApplyCPULimit(uid, quotaStr); err != nil {
-								m.logger.Warn("Failed to apply pattern-based CPU limit",
-									"uid", uid,
-									"pattern", result.Pattern,
-									"error", err,
-								)
+						if policy != nil {
+							// Applica CPU quota
+							if policy.CPUQuota > 0 {
+								quotaStr := strconv.Itoa(policy.CPUQuota) + " 100000"
+								if err := m.cgroupManager.ApplyCPULimit(uid, quotaStr); err != nil {
+									m.logger.Warn("Failed to apply pattern-based CPU limit",
+										"uid", uid,
+										"pattern", result.Pattern,
+										"error", err,
+									)
+								}
+							}
+							// Applica RAM quota
+							if policy.RAMQuota != "" {
+								if err := m.cgroupManager.ApplyRAMLimit(uid, policy.RAMQuota); err != nil {
+									m.logger.Warn("Failed to apply pattern-based RAM limit",
+										"uid", uid,
+										"pattern", result.Pattern,
+										"ram_quota", policy.RAMQuota,
+										"error", err,
+									)
+								}
 							}
 						}
 					}
