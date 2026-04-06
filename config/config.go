@@ -40,8 +40,7 @@ type Config struct {
 	mu sync.RWMutex
 
 	// Regex cache for pre-compiled patterns (performance optimization)
-	regexCache   map[string]*regexp.Regexp
-	regexCacheMu sync.RWMutex
+	regexCache sync.Map // map[string]*regexp.Regexp
 
 	// Paths
 	CgroupRoot         string `config:"CGROUP_ROOT"`
@@ -213,7 +212,6 @@ func DefaultConfig() *Config {
 		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
 		MetricsCacheFile:   "/var/run/resman-metrics.cache",
 		PrometheusFile:     "/var/run/resman-metrics.prom",
-		regexCache:         make(map[string]*regexp.Regexp),
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -970,23 +968,22 @@ func ParseRAMQuota(quota string) (uint64, error) {
 // matchPattern checks if a string matches a regex pattern, using a cache
 // to avoid recompiling the same pattern repeatedly.
 func (c *Config) matchPattern(pattern, s string) bool {
-	// Check cache first
-	c.regexCacheMu.RLock()
-	re, cached := c.regexCache[pattern]
-	c.regexCacheMu.RUnlock()
-
-	if !cached {
-		var err error
-		re, err = regexp.Compile(pattern)
-		if err != nil {
-			return false // Invalid pattern, no match
+	// Try to load from cache
+	if val, ok := c.regexCache.Load(pattern); ok {
+		if re, ok := val.(*regexp.Regexp); ok {
+			return re.MatchString(s)
 		}
-		c.regexCacheMu.Lock()
-		c.regexCache[pattern] = re
-		c.regexCacheMu.Unlock()
 	}
 
-	return re.MatchString(s)
+	// Not in cache or invalid type, compile regex
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false // Invalid pattern, no match
+	}
+
+	// Store in cache (if another goroutine stored concurrently, LoadOrStore returns existing)
+	stored, _ := c.regexCache.LoadOrStore(pattern, re)
+	return stored.(*regexp.Regexp).MatchString(s)
 }
 
 // IsUserIncluded verifica se un username corrisponde ai pattern della include list

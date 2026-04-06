@@ -951,14 +951,11 @@ func (m *Manager) CleanupAll() error {
 							"count", len(pids),
 						)
 						rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
-						for _, pid := range pids {
-							if err := os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
-								m.logger.Debug("Failed to move process out of user cgroup",
-									"pid", pid,
-									"from", userPath,
-									"error", err,
-								)
-							}
+						if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
+							m.logger.Debug("Failed to move some processes out of user cgroup",
+								"from", userPath,
+								"error", err,
+							)
 						}
 					}
 
@@ -983,10 +980,10 @@ func (m *Manager) CleanupAll() error {
 				"count", len(pids),
 			)
 			rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
-			for _, pid := range pids {
-				if err := os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
-					m.logger.Debug("Failed to move process", "pid", pid, "error", err)
-				}
+			if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
+				m.logger.Debug("Failed to move some processes out of shared cgroup",
+					"error", err,
+				)
 			}
 			// Aspetta che il kernel process lo spostamento
 			time.Sleep(200 * time.Millisecond)
@@ -1167,6 +1164,24 @@ func (m *Manager) readPidsFromFile(filePath string) ([]int, error) {
 	}
 
 	return pids, nil
+}
+
+// writePidsBatch scrive una slice di PIDs in un file cgroup.procs in batch.
+func (m *Manager) writePidsBatch(filePath string, pids []int) error {
+	if len(pids) == 0 {
+		return nil
+	}
+
+	// Converti i PID in stringhe separate da newline
+	var sb strings.Builder
+	for i, pid := range pids {
+		sb.WriteString(strconv.Itoa(pid))
+		if i < len(pids)-1 {
+			sb.WriteByte('\n')
+		}
+	}
+
+	return os.WriteFile(filePath, []byte(sb.String()), 0644)
 }
 
 // isValidCPUQuotaFormat valida il formato della quota CPU.
