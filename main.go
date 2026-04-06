@@ -307,12 +307,17 @@ func main() {
 					)
 					cancel()
 
-					// Forced shutdown after configurable timeout
+					// Monitor shutdown and force kill only if resman cleanup hangs
+					// This ensures cleanup() deferred functions always run
 					go func() {
-						timeout := time.Duration(cfg.GetMCPShutdownTimeout()) * time.Second
+						// Wait 2x the MCP shutdown timeout to give cleanup a chance
+						timeout := time.Duration(cfg.GetMCPShutdownTimeout()*2) * time.Second
 						time.Sleep(timeout)
-						logger.Warn("Forced shutdown after timeout", "timeout_seconds", cfg.GetMCPShutdownTimeout())
-						os.Exit(1)
+						logger.Warn("Shutdown timeout exceeded — cleanup did not complete. Forcing exit.",
+							"timeout_seconds", cfg.GetMCPShutdownTimeout()*2,
+						)
+						// Use SIGKILL to force exit (bypasses everything)
+						syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
 					}()
 				}
 			}

@@ -801,50 +801,6 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	}
 }
 
-// getUserMemoryUsage calcola l'uso memoria di un utente in bytes
-func (exp *PrometheusExporter) getUserMemoryUsage(uid int) int64 {
-	var totalMemory int64
-
-	// Itera su tutti i processi in /proc
-	procDir := "/proc"
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		exp.logger.Warn("Failed to read /proc directory for memory stats", "error", err)
-		return 0
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		// Verifica se è una directory PID
-		_, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		// Leggi l'UID del processo
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		if procUID, err := exp.getUIDFromStatusFile(statusFile); err == nil && procUID == uid {
-			// Leggi l'uso memoria del processo
-			statmFile := filepath.Join(procDir, entry.Name(), "statm")
-			if data, err := os.ReadFile(statmFile); err == nil {
-				fields := strings.Fields(string(data))
-				if len(fields) >= 2 {
-					// Campo 1 è la dimensione residente in pagine
-					pages, err := strconv.ParseInt(fields[1], 10, 64)
-					if err == nil {
-						totalMemory += pages * pageSizeBytes
-					}
-				}
-			}
-		}
-	}
-
-	return totalMemory
-}
-
 // getCgroupMemoryUsage legge l'uso memoria da un cgroup specifico
 func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
 	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
@@ -870,32 +826,6 @@ func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores i
 	exp.totalCores.Set(float64(totalCores))
 	exp.actionCores.Set(float64(actionCores))
 	exp.systemLoad.Set(systemLoad)
-}
-
-// Helper per leggere UID da file status
-func (exp *PrometheusExporter) getUIDFromStatusFile(statusFile string) (int, error) {
-	file, err := os.Open(statusFile)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "Uid:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				uid, err := strconv.Atoi(fields[1])
-				if err != nil {
-					return 0, err
-				}
-				return uid, nil
-			}
-		}
-	}
-
-	return 0, fmt.Errorf("UID not found in status file")
 }
 
 // parseCPUQuota estrae quota e period da una stringa "quota period".

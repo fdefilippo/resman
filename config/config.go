@@ -39,6 +39,10 @@ type Timeframe struct {
 type Config struct {
 	mu sync.RWMutex
 
+	// Regex cache for pre-compiled patterns (performance optimization)
+	regexCache   map[string]*regexp.Regexp
+	regexCacheMu sync.RWMutex
+
 	// Paths
 	CgroupRoot         string `config:"CGROUP_ROOT"`
 	CgroupBase         string `config:"CGROUP_BASE"`
@@ -209,6 +213,7 @@ func DefaultConfig() *Config {
 		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
 		MetricsCacheFile:   "/var/run/resman-metrics.cache",
 		PrometheusFile:     "/var/run/resman-metrics.prom",
+		regexCache:         make(map[string]*regexp.Regexp),
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -337,7 +342,10 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	}
 
 	// 2. Sovrascrivi con le variabili d'ambiente
-	loadFromEnvironment(cfg)
+	warnings := loadFromEnvironment(cfg)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
 
 	// 3. Valida
 	if err := validateConfig(cfg); err != nil {
@@ -396,9 +404,11 @@ func loadFromFile(path string, cfg *Config) error {
 }
 
 // loadFromEnvironment sovrascrive i valori con le variabili d'ambiente.
-func loadFromEnvironment(cfg *Config) {
-	cfgType := reflect.TypeOf(*cfg)
+// Restituisce una lista di warning per valori non parsabili.
+func loadFromEnvironment(cfg *Config) []string {
+	cfgType := reflect.TypeOf(cfg).Elem()
 	cfgValue := reflect.ValueOf(cfg).Elem()
+	var warnings []string
 
 	for i := 0; i < cfgType.NumField(); i++ {
 		field := cfgType.Field(i)
@@ -427,6 +437,8 @@ func loadFromEnvironment(cfg *Config) {
 		case reflect.Int:
 			if intVal, err := strconv.Atoi(envValue); err == nil {
 				fieldValue.SetInt(int64(intVal))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Invalid integer for %s=%q, using default value %d", envKey, envValue, fieldValue.Int()))
 			}
 		case reflect.Bool:
 			lowerVal := strings.ToLower(envValue)
@@ -436,10 +448,14 @@ func loadFromEnvironment(cfg *Config) {
 				boolVal = true
 			case "false", "0", "no", "off":
 				boolVal = false
+			default:
+				warnings = append(warnings, fmt.Sprintf("Invalid boolean for %s=%q, using default value %v", envKey, envValue, fieldValue.Bool()))
 			}
 			fieldValue.SetBool(boolVal)
 		}
 	}
+
+	return warnings
 }
 
 // setConfigField imposta il valore di un campo nella struct Config basandosi sul tag `config`.
@@ -951,6 +967,28 @@ func ParseRAMQuota(quota string) (uint64, error) {
 	return val, nil
 }
 
+// matchPattern checks if a string matches a regex pattern, using a cache
+// to avoid recompiling the same pattern repeatedly.
+func (c *Config) matchPattern(pattern, s string) bool {
+	// Check cache first
+	c.regexCacheMu.RLock()
+	re, cached := c.regexCache[pattern]
+	c.regexCacheMu.RUnlock()
+
+	if !cached {
+		var err error
+		re, err = regexp.Compile(pattern)
+		if err != nil {
+			return false // Invalid pattern, no match
+		}
+		c.regexCacheMu.Lock()
+		c.regexCache[pattern] = re
+		c.regexCacheMu.Unlock()
+	}
+
+	return re.MatchString(s)
+}
+
 // IsUserIncluded verifica se un username corrisponde ai pattern della include list
 // Se la include list è nil o vuota, tutti gli utenti sono inclusi
 func (c *Config) IsUserIncluded(username string) bool {
@@ -961,7 +999,7 @@ func (c *Config) IsUserIncluded(username string) bool {
 
 	// Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
 	for _, pattern := range c.UserIncludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true // User matches include pattern
 		}
 	}
@@ -978,7 +1016,7 @@ func (c *Config) IsUserExcluded(username string) bool {
 
 	// Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
 	for _, pattern := range c.UserExcludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true // User matches exclude pattern
 		}
 	}
@@ -1000,7 +1038,7 @@ func (c *Config) IsProcessExcluded(processName string) bool {
 		return false // No processes excluded
 	}
 	for _, pattern := range c.ProcessExcludeList {
-		if matched, _ := regexp.MatchString(pattern, processName); matched {
+		if c.matchPattern(pattern, processName) {
 			return true
 		}
 	}
@@ -1013,7 +1051,7 @@ func (c *Config) IsUserIncludedForRAM(username string) bool {
 		return true
 	}
 	for _, pattern := range c.RAMUserIncludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true
 		}
 	}
@@ -1026,7 +1064,7 @@ func (c *Config) IsUserExcludedForRAM(username string) bool {
 		return false
 	}
 	for _, pattern := range c.RAMUserExcludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true
 		}
 	}
@@ -1045,7 +1083,7 @@ func (c *Config) IsUserIncludedForIO(username string) bool {
 		return true
 	}
 	for _, pattern := range c.IOUserIncludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true
 		}
 	}
@@ -1059,7 +1097,7 @@ func (c *Config) IsUserExcludedForIO(username string) bool {
 		return false
 	}
 	for _, pattern := range c.IOUserExcludeList {
-		if matched, _ := regexp.MatchString(pattern, username); matched {
+		if c.matchPattern(pattern, username) {
 			return true
 		}
 	}
