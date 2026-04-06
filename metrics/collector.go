@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
@@ -41,6 +42,7 @@ const (
 	jiffiesPerSecond       = 100.0
 	cpuUsageEstimateFactor = 0.1
 	pageSizeBytes          = 4096
+	procCacheShardCount    = 64 // Number of shards for process CPU cache
 )
 
 // UserMetrics contains metrics for a single user.
@@ -51,6 +53,63 @@ type UserMetrics struct {
 	MemoryUsage  uint64  // Memory in bytes (VmRSS)
 	ProcessCount int     // Number of processes
 	IsLimited    bool    // Whether user has CPU limits applied
+}
+
+// procCacheShard holds CPU timing data for a subset of PIDs.
+type procCacheShard struct {
+	mu           sync.RWMutex
+	prevProcCPU  map[int32]cpu.TimesStat
+	prevProcTime map[int32]time.Time
+}
+
+// getShard returns the shard index for a given PID.
+func getShard(pid int32) int {
+	return int(pid) % procCacheShardCount
+}
+
+// findAndRemoveOldestPID finds and removes the oldest entry across all shards.
+// Must be called when a new entry needs to be added but cache is full.
+// Returns true if an entry was removed.
+func (c *Collector) findAndRemoveOldestPID() bool {
+	// Lock all shards in consistent order
+	for i := 0; i < procCacheShardCount; i++ {
+		c.procCacheShards[i].mu.Lock()
+	}
+	defer func() {
+		for i := 0; i < procCacheShardCount; i++ {
+			c.procCacheShards[i].mu.Unlock()
+		}
+	}()
+
+	var oldestPID int32
+	var oldestTime time.Time
+	first := true
+
+	// Find oldest entry across all shards
+	for i := 0; i < procCacheShardCount; i++ {
+		shard := c.procCacheShards[i]
+		for pid, ts := range shard.prevProcTime {
+			if first || ts.Before(oldestTime) {
+				oldestTime = ts
+				oldestPID = pid
+				first = false
+			}
+		}
+	}
+
+	if first {
+		// No entries found
+		return false
+	}
+
+	// Remove the oldest entry
+	shardIdx := getShard(oldestPID)
+	shard := c.procCacheShards[shardIdx]
+	// We already hold this shard's lock (since we locked all shards)
+	delete(shard.prevProcCPU, oldestPID)
+	delete(shard.prevProcTime, oldestPID)
+	atomic.AddInt32(&c.procCacheSize, -1)
+	return true
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
@@ -76,9 +135,8 @@ type Collector struct {
 	prevCPUTime  time.Time
 
 	// Cache per CPU usage per processo (necessaria per calcolo delta)
-	prevProcCPU  map[int32]cpu.TimesStat
-	prevProcTime map[int32]time.Time
-	procCPUMutex sync.RWMutex
+	procCacheShards [procCacheShardCount]*procCacheShard
+	procCacheSize   int32 // Total entries across all shards (atomic)
 
 	// Database writer (opzionale)
 	dbWriter *DBWriter
@@ -112,13 +170,19 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		cache:             make(map[string]interface{}),
 		cacheTimestamps:   make(map[string]time.Time),
 		prevCPUTime:       time.Now(),
-		prevProcCPU:       make(map[int32]cpu.TimesStat),
-		prevProcTime:      make(map[int32]time.Time),
 		usernameCache:     make(map[int]string),
 		usernameCacheTime: make(map[int]time.Time),
 		usernameCacheTTL:  DEFAULT_USERNAME_CACHE_TTL,
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
+	}
+
+	// Inizializza shard per cache CPU processi
+	for i := 0; i < procCacheShardCount; i++ {
+		collector.procCacheShards[i] = &procCacheShard{
+			prevProcCPU:  make(map[int32]cpu.TimesStat),
+			prevProcTime: make(map[int32]time.Time),
+		}
 	}
 
 	go collector.periodicCleanup()
@@ -1018,14 +1082,18 @@ func (c *Collector) cleanupCache() {
 	}
 
 	// Pulisci anche la cache dei processi CPU (processi vecchi > 5 minuti)
-	c.procCPUMutex.Lock()
-	for pid, timestamp := range c.prevProcTime {
-		if now.Sub(timestamp) > 5*time.Minute {
-			delete(c.prevProcCPU, pid)
-			delete(c.prevProcTime, pid)
+	for i := 0; i < procCacheShardCount; i++ {
+		shard := c.procCacheShards[i]
+		shard.mu.Lock()
+		for pid, timestamp := range shard.prevProcTime {
+			if now.Sub(timestamp) > 5*time.Minute {
+				delete(shard.prevProcCPU, pid)
+				delete(shard.prevProcTime, pid)
+				atomic.AddInt32(&c.procCacheSize, -1)
+			}
 		}
+		shard.mu.Unlock()
 	}
-	c.procCPUMutex.Unlock()
 
 	// Pulisci anche la cache username (utenti non risolti da > TTL)
 	c.usernameCacheMutex.Lock()
@@ -1388,6 +1456,8 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 // Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid
+	shardIdx := getShard(pid32)
+	shard := c.procCacheShards[shardIdx]
 
 	// Ottieni tempi CPU attuali
 	times, err := proc.Times()
@@ -1397,12 +1467,12 @@ func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) fl
 
 	now := time.Now()
 
-	c.procCPUMutex.Lock()
-	defer c.procCPUMutex.Unlock()
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
 	// Controlla se abbiamo un campione precedente
-	if prevTimes, ok := c.prevProcCPU[pid32]; ok {
-		if prevTime, ok := c.prevProcTime[pid32]; ok {
+	if prevTimes, ok := shard.prevProcCPU[pid32]; ok {
+		if prevTime, ok := shard.prevProcTime[pid32]; ok {
 			// Calcola tempo trascorso in secondi
 			elapsed := now.Sub(prevTime).Seconds()
 			if elapsed > 0 {
@@ -1412,8 +1482,8 @@ func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) fl
 				cpuPercent := (delta / elapsed) * cpuPercentMultiplier
 
 				// Aggiorna campione corrente
-				c.prevProcCPU[pid32] = *times
-				c.prevProcTime[pid32] = now
+				shard.prevProcCPU[pid32] = *times
+				shard.prevProcTime[pid32] = now
 
 				return cpuPercent
 			}
@@ -1422,25 +1492,22 @@ func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) fl
 
 	// Primo campione: salva e ritorna 0
 	// Se cache è piena, rimuovi entry più vecchia (LRU)
-	if len(c.prevProcCPU) >= MAX_PROC_CACHE_SIZE {
-		oldestPID := int32(0)
-		oldestTime := time.Now()
-
-		for pid, ts := range c.prevProcTime {
-			if ts.Before(oldestTime) {
-				oldestTime = ts
-				oldestPID = pid
-			}
-		}
-
-		if oldestPID != 0 {
-			delete(c.prevProcCPU, oldestPID)
-			delete(c.prevProcTime, oldestPID)
+	if atomic.LoadInt32(&c.procCacheSize) >= MAX_PROC_CACHE_SIZE {
+		// Cache full, need to remove oldest entry
+		// Release shard lock to avoid deadlock with findAndRemoveOldestPID
+		shard.mu.Unlock()
+		removed := c.findAndRemoveOldestPID()
+		shard.mu.Lock()
+		if !removed {
+			// Should not happen, but if no entry was removed, we can't add new one
+			return 0
 		}
 	}
 
-	c.prevProcCPU[pid32] = *times
-	c.prevProcTime[pid32] = now
+	// Aggiungi nuova entry
+	shard.prevProcCPU[pid32] = *times
+	shard.prevProcTime[pid32] = now
+	atomic.AddInt32(&c.procCacheSize, 1)
 	return 0
 }
 

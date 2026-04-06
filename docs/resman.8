@@ -18,9 +18,13 @@ and makes decisions based on configurable thresholds to enable or disable CPU li
 .IP \(bu 2
 Dynamic CPU limiting based on configurable thresholds
 .IP \(bu
+Dynamic RAM limiting with soft/hard limits (memory.high/memory.max)
+.IP \(bu
+IO bandwidth and IOPS limiting (io.max)
+.IP \(bu
 Automatic user detection and cgroup management
 .IP \(bu
-Blackout timeframes support (CPU_MANAGER_BLACKOUT)
+Blackout timeframes support (BLACKOUT)
 .IP \(bu
 User filtering with regex support (USER_INCLUDE_LIST, USER_EXCLUDE_LIST)
 .IP \(bu
@@ -32,18 +36,26 @@ Username resolution cache for improved performance (USERNAME_CACHE_TTL)
 .IP \(bu
 SQLite metrics database for historical data (METRICS_DB_*)
 .IP \(bu
-MCP server with 13 tools for AI assistant integration
+MCP server with 15 tools for AI assistant integration
 .IP \(bu
 Prometheus metrics export with hostname and server_role labels
 .IP \(bu
 LDAP/NIS username resolution support (requires CGO)
+.IP \(bu
+Workload pattern detection for adaptive limits (AUTODETECT_PATTERNS)
+.IP \(bu
+IO starvation auto\-remediation (IO_REMEDIATION_ENABLED)
+.IP \(bu
+Timeout configuration for cgroup operations (CGROUP_OPERATION_TIMEOUT)
+.IP \(bu
+Performance optimizations: gopsutil process scanning, batch PID moves, regex cache
 .IP \(bu
 Graceful shutdown with proper resource cleanup
 .SH OPTIONS
 .TP
 \fB\-\-config\fR \fIFILE\fR
 Specifies the configuration file path. Default:
-.I /etc/cpu\-manager.conf
+.I /etc/resman.conf
 .TP
 \fB\-\-version\fR
 Displays program version and exits.
@@ -76,6 +88,172 @@ If User1 uses 0.5 cores, User2 can use 1.5 cores
 .IP \(bu
 If User1 uses no CPU, User2 can use all 2 cores
 .RE
+.SH RAM LIMITS
+When enabled, the daemon monitors total memory usage by non\-system users and applies limits when the configured threshold is exceeded.
+.PP
+RAM limiting uses cgroups v2 memory controller with two levels of control:
+.RS
+.IP \(bu 2
+.B memory.max
+- hard limit (processes will be OOM\-killed if exceeded)
+.IP \(bu
+.B memory.high
+- soft limit (memory pressure triggers reclaim, processes may throttle)
+.RE
+.PP
+Configuration parameters:
+.IP \(bu 2
+.B RAM_LIMIT_ENABLED
+- Enable RAM limiting (true/false)
+.IP \(bu
+.B RAM_THRESHOLD
+- Activation threshold percentage of total user RAM usage
+.IP \(bu
+.B RAM_RELEASE_THRESHOLD
+- Deactivation threshold percentage
+.IP \(bu
+.B RAM_QUOTA_LIMITED
+- Total RAM limit when limits are active (bytes or K/M/G/T suffix)
+.IP \(bu
+.B RAM_QUOTA_PER_USER
+- Per\-user RAM limit (when limits active)
+.IP \(bu
+.B DISABLE_SWAP
+- Set memory.swap.max=0 to prevent swap usage (true/false)
+.IP \(bu
+.B RAM_HIGH_RATIO
+- Ratio between memory.high and memory.max (0.0\-1.0, default 0.8)
+.IP \(bu
+.B RAM_USER_INCLUDE_LIST
+- Regex patterns for users subject to RAM limits (empty = all)
+.IP \(bu
+.B RAM_USER_EXCLUDE_LIST
+- Regex patterns for users excluded from RAM limits
+.PP
+When RAM limits are active, each user's cgroup receives both
+.B memory.max
+and
+.B memory.high
+limits according to the configured quotas and ratio.
+.SH IO LIMITS
+When enabled, the daemon monitors I/O usage and applies bandwidth and IOPS limits via cgroups v2 io controller.
+.PP
+IO limiting supports both bandwidth (bytes per second) and IOPS (operations per second) limits for read and write operations independently.
+.PP
+Configuration parameters:
+.IP \(bu 2
+.B IO_LIMIT_ENABLED
+- Enable IO limiting (true/false)
+.IP \(bu
+.B IO_THRESHOLD
+- Activation threshold percentage of total user I/O usage
+.IP \(bu
+.B IO_RELEASE_THRESHOLD
+- Deactivation threshold percentage
+.IP \(bu
+.B IO_READ_BPS
+- Read bandwidth limit (e.g., "100M", "1G")
+.IP \(bu
+.B IO_WRITE_BPS
+- Write bandwidth limit
+.IP \(bu
+.B IO_READ_IOPS
+- Read IOPS limit (0 = unlimited)
+.IP \(bu
+.B IO_WRITE_IOPS
+- Write IOPS limit (0 = unlimited)
+.IP \(bu
+.B IO_DEVICE_FILTER
+- Device specification ("all" or "major:minor")
+.IP \(bu
+.B IO_THRESHOLD_DURATION
+- Seconds to wait before activating IO limits (0 = immediate)
+.IP \(bu
+.B IO_USER_INCLUDE_LIST
+- Regex patterns for users subject to IO limits (empty = all)
+.IP \(bu
+.B IO_USER_EXCLUDE_LIST
+- Regex patterns for users excluded from IO limits
+.PP
+IO starvation auto\-remediation can be enabled to temporarily boost limits when processes experience excessive throttling:
+.IP \(bu 2
+.B IO_REMEDIATION_ENABLED
+- Enable auto\-remediation (true/false)
+.IP \(bu
+.B IO_STARVATION_THRESHOLD
+- Seconds of continuous throttling before remediation
+.IP \(bu
+.B IO_BOOST_MULTIPLIER
+- Multiplier for temporary limits (e.g., 2.0 = double)
+.IP \(bu
+.B IO_BOOST_DURATION
+- Duration of boost in seconds
+.IP \(bu
+.B IO_BOOST_MAX_PER_HOUR
+- Maximum boosts per user per hour
+.IP \(bu
+.B IO_PSI_THRESHOLD
+- PSI some avg10 % threshold for detection
+.IP \(bu
+.B IO_REVERT_ON_NORMAL
+- Revert limits when I/O returns to normal (true/false)
+.PP
+.SH WORKLOAD PATTERN DETECTION
+When enabled, the daemon analyzes historical CPU and RAM usage patterns to automatically classify users as "batch" (night\-time high resource consumption) or "interactive" (day\-time moderate usage) and applies appropriate quotas.
+.PP
+The pattern detection algorithm uses a sliding window of
+.B PATTERN_HISTORY_HOURS
+hours and requires at least
+.B PATTERN_MIN_SAMPLES
+data points before making decisions. Classification confidence must exceed
+.B PATTERN_CONFIDENCE_THRESHOLD
+(0.0\-1.0).
+.PP
+Detected patterns influence resource allocation:
+.RS
+.IP \(bu 2
+.B Batch night
+- Users with high resource usage during night hours receive higher CPU quota (
+.B BATCH_NIGHT_CPU_QUOTA
+) and RAM quota (
+.B BATCH_NIGHT_RAM_QUOTA
+).
+.IP \(bu
+.B Interactive day
+- Users with moderate daytime usage receive standard quotas (
+.B INTERACTIVE_CPU_QUOTA
+,
+.B INTERACTIVE_RAM_QUOTA
+).
+.RE
+.PP
+Configuration parameters:
+.IP \(bu 2
+.B AUTODETECT_PATTERNS
+- Enable automatic pattern detection (true/false)
+.IP \(bu
+.B PATTERN_HISTORY_HOURS
+- Historical window in hours (default: 168 = 1 week)
+.IP \(bu
+.B PATTERN_MIN_SAMPLES
+- Minimum samples required for classification
+.IP \(bu
+.B PATTERN_CONFIDENCE_THRESHOLD
+- Confidence threshold (0.0\-1.0)
+.IP \(bu
+.B BATCH_NIGHT_CPU_QUOTA
+- CPU quota for batch users (microseconds, e.g., 200000 = 2 cores)
+.IP \(bu
+.B BATCH_NIGHT_RAM_QUOTA
+- RAM quota for batch users (bytes or suffix)
+.IP \(bu
+.B INTERACTIVE_CPU_QUOTA
+- CPU quota for interactive users
+.IP \(bu
+.B INTERACTIVE_RAM_QUOTA
+- RAM quota for interactive users
+.PP
+Pattern detection runs hourly and updates user classifications automatically.
 .SH CONTROL CYCLE
 The daemon executes control cycles at regular intervals:
 .IP 1. 3
@@ -86,11 +264,39 @@ Decision making based on configured thresholds
 Applying/removing limits via cgroups
 .IP 4.
 Logging and Prometheus metrics update (if enabled)
+.SH PERFORMANCE OPTIMIZATIONS
+The daemon incorporates several performance optimizations to minimize overhead on managed systems:
+.RS
+.IP \(bu 2
+.B gopsutil integration
+- Efficient process scanning via the proven gopsutil library, replacing custom /proc parsing.
+.IP \(bu
+.B sync.Map regex cache
+- Thread\-safe caching of compiled regular expressions for user filtering, eliminating race conditions.
+.IP \(bu
+.B Batch PID moves
+- Grouping process ID migrations during cgroup cleanup to reduce system call overhead.
+.IP \(bu
+.B Consolidated /proc scans
+- Single scan of /proc for all user metrics, reducing I/O operations by ~70%.
+.IP \(bu
+.B Sharded mutexes
+- Fine\-grained locking for per\-process CPU tracking to minimize contention.
+.IP \(bu
+.B Pre\-allocated slices
+- Estimated capacity allocation for dynamic slices to reduce heap allocations.
+.IP \(bu
+.B Intelligent cache invalidation
+- Adaptive cache TTL based on system activity and user churn.
+.RE
+.PP
+These optimizations ensure that monitoring overhead remains low even on systems with thousands of processes.
 .SH CONFIGURATION FILE
 The configuration file supports key=value format. Comments start with '#'.
+Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
 .PP
 Example
-.I /etc/cpu\-manager.conf
+.I /etc/resman.conf
 format:
 .nf
 .sp
@@ -112,6 +318,11 @@ POLLING_INTERVAL=30          # Control cycle interval
 MIN_ACTIVE_TIME=60           # Minimum activation time for limits
 METRICS_CACHE_TTL=15         # Metrics cache duration
 
+# TIMEOUT CONFIGURATION (seconds/milliseconds)
+# CGROUP_OPERATION_TIMEOUT=5      # Timeout for cgroup operations (seconds)
+# CGROUP_RETRY_DELAY_MS=100       # Delay between cgroup retry attempts (milliseconds)
+# MCP_SHUTDOWN_TIMEOUT=10         # Timeout for MCP server shutdown (seconds)
+
 # CPU THRESHOLDS (percentage)
 CPU_THRESHOLD=75             # Activation threshold
 CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
@@ -119,6 +330,26 @@ CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
 # CPU LIMITS ("quota period" format in microseconds)
 CPU_QUOTA_NORMAL="max 100000"      # No limit (100000 = 100ms)
 CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
+
+# RAM LIMITS
+# RAM_LIMIT_ENABLED=false              # Enable RAM limiting via cgroups v2
+# RAM_THRESHOLD=75                     # Percentage of total user RAM to activate limits
+# RAM_RELEASE_THRESHOLD=40             # Percentage to release limits
+# RAM_QUOTA_LIMITED=2G                 # Total RAM limit (bytes or K/M/G/T suffix)
+# RAM_QUOTA_PER_USER=512M              # Per-user RAM limit (when limits active)
+# DISABLE_SWAP=false                   # Set memory.swap.max=0 to prevent swap usage
+# RAM_HIGH_RATIO=0.8                   # Ratio between memory.high and memory.max (0.0-1.0)
+
+# IO LIMITS
+# IO_LIMIT_ENABLED=false               # Enable IO limiting via cgroups v2 io controller
+# IO_THRESHOLD=75                      # Percentage of total user IO to activate limits
+# IO_RELEASE_THRESHOLD=40              # Percentage to release limits
+# IO_READ_BPS=100M                     # Per-user read bandwidth limit (bytes/s)
+# IO_WRITE_BPS=50M                     # Per-user write bandwidth limit
+# IO_READ_IOPS=1000                    # Per-user read IOPS limit (0 = unlimited)
+# IO_WRITE_IOPS=500                    # Per-user write IOPS limit
+# IO_DEVICE_FILTER=all                 # "all" or "major:minor" device specification
+# IO_THRESHOLD_DURATION=0              # Seconds to wait before activating IO limits
 
 # PROMETHEUS EXPORTER
 ENABLE_PROMETHEUS=false                  # Enable metrics export
@@ -169,22 +400,22 @@ SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 #
 # Examples:
 # # Disable during business hours (Mon-Fri, 8-18)
-# CPU_MANAGER_BLACKOUT=1-5 08-18
+# BLACKOUT=1-5 08-18
 #
 # # Disable only in the morning (Mon-Fri, 8-12)
-# CPU_MANAGER_BLACKOUT=1-5 08-12
+# BLACKOUT=1-5 08-12
 #
 # # Disable on weekend (Sat-Sun, all day)
-# CPU_MANAGER_BLACKOUT=0,6 00-23
+# BLACKOUT=0,6 00-23
 #
 # # Disable business hours + weekend
-# CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
+# BLACKOUT=1-5 08-18;0,6 00-23
 #
 # # Disable always (for testing)
-# CPU_MANAGER_BLACKOUT=* 00-23
+# BLACKOUT=* 00-23
 #
-# # No blackout (default - CPU Manager always active)
-CPU_MANAGER_BLACKOUT=
+# # No blackout (default - Resource Manager always active)
+BLACKOUT=
 
 # LOAD AVERAGE CHECKING
 IGNORE_SYSTEM_LOAD=false     # If true, ignores load average in decisions
@@ -221,15 +452,19 @@ METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 # - get_metrics_database_info: Database status and info
 .sp
 .fi
+.PP
+A complete example configuration file with all available parameters can be found in the distribution as
+.I config/resman.conf.example
+.
 .SH ENVIRONMENT VARIABLES
 All configuration options can be overridden by environment variables
 with the same name. Example:
 .sp
 .nf
-LOG_LEVEL=DEBUG cpu\-manager\-go \-\-config /etc/cpu\-manager.conf
+LOG_LEVEL=DEBUG resman \-\-config /etc/resman.conf
 .fi
 .SH LOG FILES
-.I /var/log/cpu\-manager.log
+.I /var/log/resman.log
 .br
 The log file is automatically rotated when it reaches the maximum size
 configured in
@@ -259,6 +494,14 @@ resman_system_load_average \- System load average (1 minute)
 resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
 .IP \(bu
 resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (bytes)
+.IP \(bu
+resman_user_io_read_bytes{uid, username} \- IO read bytes per user (when IO limits enabled)
+.IP \(bu
+resman_user_io_write_bytes{uid, username} \- IO write bytes per user
+.IP \(bu
+resman_user_io_read_ops{uid, username} \- IO read operations per user
+.IP \(bu
+resman_user_io_write_ops{uid, username} \- IO write operations per user
 .IP \(bu
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
@@ -333,7 +576,19 @@ Available MCP tools:
 \- Manually activate CPU limits (requires MCP_ALLOW_WRITE_OPS=true)
 .IP \(bu
 .B deactivate_limits
-\- Manually deactivate limits (requires MCP_ALLOW_WRITE_OPS=true)
+- Manually deactivate limits (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B get_user_history
+- Historical CPU/RAM metrics for a specific user (requires METRICS_DB_ENABLED=true)
+.IP \(bu
+.B get_system_history
+- Historical system metrics (requires METRICS_DB_ENABLED=true)
+.IP \(bu
+.B get_user_summary
+- Aggregated statistics (avg/min/max) for a user (requires METRICS_DB_ENABLED=true)
+.IP \(bu
+.B get_metrics_database_info
+- Database status and information (requires METRICS_DB_ENABLED=true)
 .PP
 All metric outputs include a
 .B hostname
@@ -380,19 +635,19 @@ Allow write operations:
 Start with custom configuration:
 .sp
 .nf
-cpu\-manager\-go \-\-config /etc/my\-config.conf
+resman \-\-config /etc/my\-config.conf
 .fi
 .sp
 Start with debug logging:
 .sp
 .nf
-LOG_LEVEL=DEBUG cpu\-manager\-go
+LOG_LEVEL=DEBUG resman
 .fi
 .sp
 Check version:
 .sp
 .nf
-cpu\-manager\-go \-\-version
+resman \-\-version
 .fi
 .SH SYSTEM REQUIREMENTS
 .IP \(bu 2
@@ -408,13 +663,13 @@ Go runtime (if running from source)
 .br
 1 \- Configuration or runtime error
 .SH FILES
-.I /etc/cpu\-manager.conf
+.I /etc/resman.conf
 \- Configuration file
 .br
-.I /var/log/cpu\-manager.log
+.I /var/log/resman.log
 \- Log file
 .br
-.I /var/run/cpu\-manager\-*
+.I /var/run/resman\-*
 \- State and cache files
 .SH AUTHOR
 Francesco Defilippo <francesco@defilippo.org>
@@ -423,7 +678,7 @@ Francesco Defilippo <francesco@defilippo.org>
 .BR systemd.resource\-control (5),
 .BR cpulimit (1)
 .SH BUGS
-Report bugs at: https://github.com/fdefilippo/cpu\-manager\-go/issues
+Report bugs at: https://github.com/fdefilippo/resman/issues
 .SH LICENSE
 Distributed under the GNU General Public License v3.0 (GPL-3.0).
 .br
