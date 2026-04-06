@@ -119,6 +119,18 @@ CPU_QUOTA_LIMITED="50000 100000"
 # DISABLE_SWAP=true
 # RAM_HIGH_RATIO=0.9
 #
+# # Disabilita completamente i limiti RAM (monitoraggio solo)
+# # Le metriche RAM continuano a funzionare, ma nessun limite viene applicato
+# RAM_LIMIT_ENABLED=false
+#
+# # Disabilita limiti RAM ma mantieni Workload Pattern Detection per CPU
+# # Se AUTODETECT_PATTERNS=true, svuota le quote RAM per evitare limiti RAM
+# RAM_LIMIT_ENABLED=false
+# AUTODETECT_PATTERNS=true
+# BATCH_NIGHT_RAM_QUOTA=
+# INTERACTIVE_RAM_QUOTA=
+#
+#
 RAM_LIMIT_ENABLED=false
 RAM_THRESHOLD=75
 RAM_RELEASE_THRESHOLD=40
