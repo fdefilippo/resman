@@ -344,58 +344,8 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	return totalUsage
 }
 
-// getUserCPUUsageFallback usa ps per ottenere l'uso CPU (simile allo script Bash).
-func (c *Collector) getUserCPUUsageFallback(uid int) float64 {
-	// Costruisci il comando ps
-	// cmd := fmt.Sprintf("ps -U %d -o pcpu=", uid)
-
-	// Esegui il comando e parsa l'output
-	// Nota: In produzione, useremmo os/exec invece di eseguire shell commands
-	// Per ora implementiamo una versione semplificata
-	return c.getUserCPUUsageFromProc(uid)
-}
-
-// getUserCPUUsageFromProc calcola l'uso CPU leggendo da /proc.
-func (c *Collector) getUserCPUUsageFromProc(uid int) float64 {
-	var totalUsage float64
-
-	// Itera su tutte le directory in /proc
-	procDir := "/proc"
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		c.logger.Warn("Failed to read /proc directory", "error", err)
-		return 0.0
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		// Verifica se è una directory PID
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		// Leggi l'UID del processo
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		procUID, err := c.getUIDFromStatusFile(statusFile)
-		if err != nil || procUID != uid {
-			continue
-		}
-
-		// Leggi l'uso CPU del processo
-		cpuUsage, err := c.getProcessCPUUsage(pid)
-		if err == nil {
-			totalUsage += cpuUsage
-		}
-	}
-
-	return totalUsage
-}
-
 // getUIDFromStatusFile legge l'UID da /proc/[pid]/status.
+// Used by fallback functions when gopsutil is unavailable.
 func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	file, err := os.Open(statusFile)
 	if err != nil {
@@ -419,56 +369,6 @@ func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	}
 
 	return 0, fmt.Errorf("UID not found")
-}
-
-// getProcessCPUUsage calcola l'uso CPU di un singolo processo.
-func (c *Collector) getProcessCPUUsage(pid int) (float64, error) {
-	statFile := fmt.Sprintf("/proc/%d/stat", pid)
-
-	// Leggi il file stat del processo
-	content, err := os.ReadFile(statFile)
-	if err != nil {
-		return 0.0, err
-	}
-
-	// Parse dei dati del processo per calcolare l'uso CPU
-	// Il formato di /proc/[pid]/stat è complesso
-	// Per una implementazione semplifica, leggiamo il tempo CPU
-	stats := strings.Fields(string(content))
-	if len(stats) < 15 {
-		return 0.0, fmt.Errorf("invalid stat format for PID %d", pid)
-	}
-
-	// Tempo CPU speso in user mode (jiffies) - campo 13
-	// Tempo CPU speso in kernel mode (jiffies) - campo 14
-	utime, err1 := strconv.ParseUint(stats[13], 10, 64)
-	stime, err2 := strconv.ParseUint(stats[14], 10, 64)
-
-	if err1 != nil || err2 != nil {
-		return 0.0, fmt.Errorf("failed to parse CPU times for PID %d", pid)
-	}
-
-	// Per calcolare la percentuale CPU, dovremmo:
-	// 1. Salvare i valori precedenti
-	// 2. Calcolare la differenza tra due letture
-	// 3. Dividere per il tempo trascorso
-
-	// Per ora, restituiamo una stima molto semplificata
-	// In una implementazione completa, dovremmo implementare la cache
-	// e il calcolo delle differenze
-
-	// Stima semplificata: (utime + stime) in jiffies
-	// 1 jiffy = tipicamente 10ms = 0.01s
-	totalJiffies := float64(utime + stime)
-
-	// Converti in secondi (assumendo 100 jiffies/secondo)
-	cpuSeconds := totalJiffies / 100.0
-
-	// Per ottenere una percentuale, dovremmo dividere per il tempo di esecuzione
-	// del processo. Per semplicità, restituiamo un valore basso.
-	// In produzione, implementeremmo la logica completa.
-
-	return cpuSeconds * 0.1, nil // Stima molto approssimativa
 }
 
 // GetAllUsersCPUUsage restituisce l'uso CPU totale di TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
@@ -697,39 +597,6 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 // GetUsernameFromUID ritorna la username dato un UID (public alias)
 func (c *Collector) GetUsernameFromUID(uid int) string {
 	return c.getUsername(uid)
-}
-
-// getActiveUsersFromProc legge gli utenti attivi da /proc.
-func (c *Collector) getActiveUsersFromProc() map[int]bool {
-	uidMap := make(map[int]bool)
-
-	procDir := "/proc"
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		c.logger.Warn("Failed to read /proc directory", "error", err)
-		return uidMap
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		// Verifica se è una directory PID
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
-			continue
-		}
-
-		// Leggi l'UID
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		if uid, err := c.getUIDFromStatusFile(statusFile); err == nil {
-			if c.isValidUserUID(uid) {
-				uidMap[uid] = true
-			}
-		}
-	}
-
-	return uidMap
 }
 
 // GetMemoryUsage restituisce l'uso della memoria in MB.
@@ -1039,13 +906,22 @@ func (c *Collector) cleanupCache() {
 
 	// Pulisci anche la cache username (utenti non risolti da > TTL)
 	c.usernameCacheMutex.Lock()
+	cleanedCount := 0
 	for uid, timestamp := range c.usernameCacheTime {
 		if now.Sub(timestamp) > c.usernameCacheTTL {
 			delete(c.usernameCache, uid)
 			delete(c.usernameCacheTime, uid)
+			cleanedCount++
 		}
 	}
 	c.usernameCacheMutex.Unlock()
+
+	if cleanedCount > 0 {
+		c.logger.Debug("Username cache cleanup completed",
+			"cleaned_entries", cleanedCount,
+			"remaining", len(c.usernameCache),
+		)
+	}
 }
 
 // ClearCache svuota la cache.

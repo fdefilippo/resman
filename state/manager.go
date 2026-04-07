@@ -30,7 +30,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
-	"github.com/fdefilippo/resman/metrics"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
 // Manager coordina tutta la logica di gestione della CPU.
@@ -93,9 +93,9 @@ type MetricsCollector interface {
 	GetTotalMemoryMB() float64
 	GetCachedMemoryMB() float64
 	IsSystemUnderLoad() bool
-	GetAllUserMetrics() map[int]*metrics.UserMetrics
-	GetDBWriter() *metrics.DBWriter
-	WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
+	GetAllUserMetrics() map[int]*resmanmetrics.UserMetrics
+	GetDBWriter() *resmanmetrics.DBWriter
+	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
 	GetUsernameFromUID(uid int) string
 }
 
@@ -344,7 +344,7 @@ type SystemMetrics struct {
 	CachedMemoryMB  float64 // MB
 	SystemUnderLoad bool
 	UserCPUUsage    map[int]float64              // UID -> percentuale
-	UserMetrics     map[int]*metrics.UserMetrics // Metriche dettagliate per utente
+	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
 }
 
 // collectSystemMetrics raccoglie tutte le metriche di sistema necessarie.
@@ -352,7 +352,7 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	metrics := &SystemMetrics{
 		Timestamp:    time.Now(),
 		UserCPUUsage: make(map[int]float64),
-		UserMetrics:  make(map[int]*metrics.UserMetrics),
+		UserMetrics:  make(map[int]*resmanmetrics.UserMetrics),
 	}
 
 	// Raccogli metriche di base
@@ -378,9 +378,23 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
 
 	// Popola UserMetrics e UserCPUUsage
-	for uid, userMetrics := range allUserMetrics {
-		metrics.UserMetrics[uid] = userMetrics
-		metrics.UserCPUUsage[uid] = userMetrics.CPUUsage
+	for uid, um := range allUserMetrics {
+		// FIX M2: Override IsLimited based on actual runtime state, not config
+		m.mu.RLock()
+		actuallyLimited := m.activeUsers[uid]
+		m.mu.RUnlock()
+
+		// Create a copy with corrected IsLimited
+		corrected := &resmanmetrics.UserMetrics{
+			UID:          um.UID,
+			Username:     um.Username,
+			CPUUsage:     um.CPUUsage,
+			MemoryUsage:  um.MemoryUsage,
+			ProcessCount: um.ProcessCount,
+			IsLimited:    actuallyLimited,
+		}
+		metrics.UserMetrics[uid] = corrected
+		metrics.UserCPUUsage[uid] = um.CPUUsage
 	}
 
 	// Calcola aggregate RAM e IO per limited users (per soglie in makeDecision)
