@@ -1078,9 +1078,22 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
-		var ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64
+		var cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps uint64
 		if m.cgroupManager != nil {
-			cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
+			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
+		}
+
+		// FIX: Use per-user IO from GetAllUserMetrics (reads /proc/[pid]/io for ALL users)
+		// Fallback to cgroup IO if per-user IO is not available (counter-intuitive: cgroup only exists for limited users)
+		ioReadBytes := userMetrics.IOReadBytes
+		ioWriteBytes := userMetrics.IOWriteBytes
+		ioReadOps := userMetrics.IOReadOps
+		ioWriteOps := userMetrics.IOWriteOps
+		if ioReadBytes == 0 && ioWriteBytes == 0 && cgroupIOReadBytes > 0 {
+			ioReadBytes = cgroupIOReadBytes
+			ioWriteBytes = cgroupIOWriteBytes
+			ioReadOps = cgroupIOReadOps
+			ioWriteOps = cgroupIOWriteOps
 		}
 
 		// Usa UpdateUserMetrics con tutti i parametri

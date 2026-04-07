@@ -51,6 +51,10 @@ type UserMetrics struct {
 	MemoryUsage  uint64  // Memory in bytes (VmRSS)
 	ProcessCount int     // Number of processes
 	IsLimited    bool    // Whether user has CPU limits applied
+	IOReadBytes  uint64  // Total bytes read from block devices
+	IOWriteBytes uint64  // Total bytes written to block devices
+	IOReadOps    uint64  // Total read operations
+	IOWriteOps   uint64  // Total write operations
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -66,6 +70,10 @@ type userData struct {
 	cpuUsage     float64
 	memoryUsage  uint64
 	processCount int
+	ioReadBytes  uint64
+	ioWriteBytes uint64
+	ioReadOps    uint64
+	ioWriteOps   uint64
 }
 
 // Collector collects system metrics.
@@ -1058,6 +1066,13 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		if err == nil && memInfo != nil {
 			tempData[uid].memoryUsage += memInfo.RSS
 		}
+
+		// Read IO stats from /proc/[pid]/io
+		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
+		tempData[uid].ioReadBytes += rB
+		tempData[uid].ioWriteBytes += wB
+		tempData[uid].ioReadOps += rO
+		tempData[uid].ioWriteOps += wO
 	}
 
 	// Convert to UserMetrics with username
@@ -1070,6 +1085,10 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			MemoryUsage:  data.memoryUsage,
 			ProcessCount: data.processCount,
 			IsLimited:    c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:  data.ioReadBytes,
+			IOWriteBytes: data.ioWriteBytes,
+			IOReadOps:    data.ioReadOps,
+			IOWriteOps:   data.ioWriteOps,
 		}
 	}
 
@@ -1119,6 +1138,13 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		tempData[uid].cpuUsage += cpuUsage
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
+
+		// Read IO stats from /proc/[pid]/io
+		rB, wB, rO, wO := c.getProcessIO(pid)
+		tempData[uid].ioReadBytes += rB
+		tempData[uid].ioWriteBytes += wB
+		tempData[uid].ioReadOps += rO
+		tempData[uid].ioWriteOps += wO
 	}
 
 	for uid, data := range tempData {
@@ -1130,6 +1156,10 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 			MemoryUsage:  data.memoryUsage,
 			ProcessCount: data.processCount,
 			IsLimited:    c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:  data.ioReadBytes,
+			IOWriteBytes: data.ioWriteBytes,
+			IOReadOps:    data.ioReadOps,
+			IOWriteOps:   data.ioWriteOps,
 		}
 	}
 
@@ -1259,6 +1289,47 @@ func (c *Collector) getProcessMemoryUsage(pid int) uint64 {
 	}
 
 	return 0
+}
+
+// getProcessIO reads /proc/[pid]/io and returns readBytes, writeBytes, readOps, writeOps.
+// Returns 0 for all values if the file doesn't exist or can't be read.
+func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, writeOps uint64) {
+	ioFile := fmt.Sprintf("/proc/%d/io", pid)
+	data, err := os.ReadFile(ioFile)
+	if err != nil {
+		return 0, 0, 0, 0
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSuffix(parts[0], ":")
+		val, parseErr := strconv.ParseUint(parts[1], 10, 64)
+		if parseErr != nil {
+			continue
+		}
+
+		switch key {
+		case "read_bytes":
+			readBytes = val
+		case "write_bytes":
+			writeBytes = val
+		case "syscr":
+			readOps = val
+		case "syscw":
+			writeOps = val
+		}
+	}
+
+	return readBytes, writeBytes, readOps, writeOps
 }
 
 // getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
