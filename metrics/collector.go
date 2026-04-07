@@ -1069,6 +1069,14 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 		// Read IO stats from /proc/[pid]/io
 		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
+		if rB > 0 || wB > 0 {
+			c.logger.Debug("Process IO collected",
+				"pid", p.Pid,
+				"uid", uid,
+				"read_bytes", rB,
+				"write_bytes", wB,
+			)
+		}
 		tempData[uid].ioReadBytes += rB
 		tempData[uid].ioWriteBytes += wB
 		tempData[uid].ioReadOps += rO
@@ -1138,13 +1146,6 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		tempData[uid].cpuUsage += cpuUsage
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
-
-		// Read IO stats from /proc/[pid]/io
-		rB, wB, rO, wO := c.getProcessIO(pid)
-		tempData[uid].ioReadBytes += rB
-		tempData[uid].ioWriteBytes += wB
-		tempData[uid].ioReadOps += rO
-		tempData[uid].ioWriteOps += wO
 	}
 
 	for uid, data := range tempData {
@@ -1297,6 +1298,8 @@ func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, write
 	ioFile := fmt.Sprintf("/proc/%d/io", pid)
 	data, err := os.ReadFile(ioFile)
 	if err != nil {
+		// Common errors: EACCES (ptrace restriction), ENOENT (process exited)
+		// Silently ignore - process may have exited or ptrace restriction applies
 		return 0, 0, 0, 0
 	}
 
