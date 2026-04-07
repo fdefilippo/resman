@@ -1,5 +1,5 @@
 [Unit]
-Description=ResMan - Dynamic CPU/RAM Resource Management
+Description=ResMan - Dynamic CPU/RAM/IO Resource Management
 Documentation=https://github.com/fdefilippo/resman
 After=network.target
 Wants=cgroup-tweaks.service
