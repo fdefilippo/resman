@@ -707,8 +707,8 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	}
 	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
 
-	// Aggiorna statistiche IO (counters con delta)
-	ioKey := fmt.Sprintf("%s_%s", uidStr, username)
+	// Update IO statistics (counters with delta)
+	ioKey := fmt.Sprintf("%d_%s", uid, username)
 	prevIO := exp.prevIOStats[ioKey]
 	if ioReadBytes >= prevIO.ReadBytes {
 		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(ioReadBytes - prevIO.ReadBytes))

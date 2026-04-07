@@ -384,7 +384,7 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 		actuallyLimited := m.activeUsers[uid]
 		m.mu.RUnlock()
 
-		// Create a copy with corrected IsLimited
+		// Create a copy with corrected IsLimited AND preserved IO fields
 		corrected := &resmanmetrics.UserMetrics{
 			UID:          um.UID,
 			Username:     um.Username,
@@ -392,6 +392,10 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 			MemoryUsage:  um.MemoryUsage,
 			ProcessCount: um.ProcessCount,
 			IsLimited:    actuallyLimited,
+			IOReadBytes:  um.IOReadBytes,
+			IOWriteBytes: um.IOWriteBytes,
+			IOReadOps:    um.IOReadOps,
+			IOWriteOps:   um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
 		metrics.UserCPUUsage[uid] = um.CPUUsage
@@ -1075,6 +1079,16 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 		isLimited := m.isUserLimited(uid)
 
+		// DEBUG: Log system users with IO
+		if uid < m.cfg.SystemUIDMin && (userMetrics.IOReadBytes > 0 || userMetrics.IOWriteBytes > 0) {
+			m.logger.Info("State: Exporting IO for system user",
+				"uid", uid,
+				"username", username,
+				"ioReadBytes", userMetrics.IOReadBytes,
+				"ioWriteBytes", userMetrics.IOWriteBytes,
+			)
+		}
+
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
@@ -1083,8 +1097,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
 		}
 
-		// FIX: Use per-user IO from GetAllUserMetrics (reads /proc/[pid]/io for ALL users)
-		// Fallback to cgroup IO if per-user IO is not available (counter-intuitive: cgroup only exists for limited users)
+		// Use per-user IO from GetAllUserMetrics
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
 		ioReadOps := userMetrics.IOReadOps

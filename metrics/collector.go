@@ -1034,8 +1034,15 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		return c.getAllUserMetricsFallback()
 	}
 
+	c.logger.Debug("GetAllUserMetrics: using gopsutil path",
+		"process_count", len(procs),
+	)
+
 	// Pre-allocate with estimated capacity
 	tempData := make(map[int]*userData, len(procs)/50)
+
+	// Second pass for IO: collect for ALL visible PIDs (including system users like mysql)
+	ioData := make(map[int]*userData)
 
 	for _, p := range procs {
 		// Get process UID
@@ -1066,21 +1073,37 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		if err == nil && memInfo != nil {
 			tempData[uid].memoryUsage += memInfo.RSS
 		}
+	}
 
-		// Read IO stats from /proc/[pid]/io
-		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
-		if rB > 0 || wB > 0 {
-			c.logger.Debug("Process IO collected",
-				"pid", p.Pid,
-				"uid", uid,
-				"read_bytes", rB,
-				"write_bytes", wB,
-			)
+	// Collect IO for ALL visible processes (including system users like mysql, root, etc.)
+	// IO is useful for all processes, not just non-system users
+	for _, p := range procs {
+		uids, err := p.Uids()
+		if err != nil || len(uids) == 0 {
+			continue
 		}
-		tempData[uid].ioReadBytes += rB
-		tempData[uid].ioWriteBytes += wB
-		tempData[uid].ioReadOps += rO
-		tempData[uid].ioWriteOps += wO
+		uid := int(uids[0])
+
+		if ioData[uid] == nil {
+			ioData[uid] = &userData{}
+		}
+
+		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
+		ioData[uid].ioReadBytes += rB
+		ioData[uid].ioWriteBytes += wB
+		ioData[uid].ioReadOps += rO
+		ioData[uid].ioWriteOps += wO
+	}
+
+	// Merge IO data into main tempData
+	for uid, ioD := range ioData {
+		if tempData[uid] == nil {
+			tempData[uid] = &userData{}
+		}
+		tempData[uid].ioReadBytes += ioD.ioReadBytes
+		tempData[uid].ioWriteBytes += ioD.ioWriteBytes
+		tempData[uid].ioReadOps += ioD.ioReadOps
+		tempData[uid].ioWriteOps += ioD.ioWriteOps
 	}
 
 	// Convert to UserMetrics with username
@@ -1097,6 +1120,16 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			IOWriteBytes: data.ioWriteBytes,
 			IOReadOps:    data.ioReadOps,
 			IOWriteOps:   data.ioWriteOps,
+		}
+		
+		// DEBUG: Log UserMetrics creation for system users
+		if uid < c.cfg.SystemUIDMin && data.ioReadBytes > 0 {
+			c.logger.Info("UserMetrics created with IO",
+				"uid", uid,
+				"username", username,
+				"read_bytes", data.ioReadBytes,
+				"write_bytes", data.ioWriteBytes,
+			)
 		}
 	}
 
