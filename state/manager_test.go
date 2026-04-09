@@ -106,7 +106,7 @@ func (m *mockCgroupManager) GetCreatedCgroups() []int                           
 type mockPrometheusExporter struct{}
 
 func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
-func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 }
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
 func (m *mockPrometheusExporter) Start(ctx context.Context) error                              { return nil }

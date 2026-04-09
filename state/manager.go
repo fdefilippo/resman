@@ -134,7 +134,7 @@ type CgroupManager interface {
 // PrometheusExporter è l'interfaccia per esportare metriche Prometheus.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
+	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	Start(ctx context.Context) error
 	Stop() error
@@ -1114,6 +1114,8 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			uid,
 			username,
 			userMetrics.CPUUsage,
+			userMetrics.CPUUsageAverage,
+			userMetrics.CPUUsageEMA,
 			userMetrics.MemoryUsage,
 			userMetrics.ProcessCount,
 			isLimited,
