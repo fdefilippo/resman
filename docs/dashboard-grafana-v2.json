@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "ResMan v2.0 - SysAdmin Operations Dashboard. Shows system health, top consumers, limit effectiveness, and capacity trends. Designed for operational use, not just metric visualization.",
+  "description": "ResMan v2.1 - SysAdmin Operations Dashboard. Shows system health, top consumers, limit effectiveness, CPU trends (instant/avg/EMA), IO throughput, and capacity planning. Designed for operational use.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -613,7 +613,60 @@
           "refId": "A"
         }
       ],
-      "title": "Top 5 Users by CPU",
+      "title": "Top 5 Users by CPU (Instantaneous)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }] },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 16,
+      "options": {
+        "legend": { "calcs": ["max", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "hideZeros": false, "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+          "expr": "topk(5, resman_user_cpu_usage_average_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "legendFormat": "{{username}} (avg since start)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top 5 Users by CPU (Average Since Start)",
       "type": "timeseries"
     },
     {
@@ -1056,6 +1109,77 @@
         }
       ],
       "title": "System vs Users CPU Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }] },
+          "unit": "percent"
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*Instantaneous.*" }, "properties": [{ "id": "lineWidth", "value": 3 }] },
+          { "matcher": { "id": "byRegexp", "options": ".*Average.*" }, "properties": [{ "id": "lineWidth", "value": 2 }, { "id": "custom.lineStyle", "value": { "dash": [5, 5], "fill": "dash" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*EMA.*" }, "properties": [{ "id": "lineWidth", "value": 2 }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 17,
+      "options": {
+        "legend": { "calcs": ["mean", "max", "lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "hideZeros": false, "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+          "expr": "topk(3, resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "legendFormat": "{{username}} (Instantaneous)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+          "expr": "topk(3, resman_user_cpu_usage_average_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "legendFormat": "{{username}} (Average)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${prometheus_datasource}" },
+          "expr": "topk(3, resman_user_cpu_usage_ema_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "legendFormat": "{{username}} (EMA)",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "CPU Comparison: Instant vs Average vs EMA (Top 3)",
       "type": "timeseries"
     },
     {
@@ -1602,8 +1726,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "ResMan v2.0 - SysAdmin Operations Dashboard",
+  "title": "ResMan v2.1 - SysAdmin Operations Dashboard",
   "uid": "resman-sysadmin-v2",
-  "version": 9,
+  "version": 10,
   "weekStart": ""
 }
