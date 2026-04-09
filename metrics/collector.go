@@ -1150,6 +1150,15 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			IOReadOps:        data.ioReadOps,
 			IOWriteOps:       data.ioWriteOps,
 		}
+		
+		// DEBUG: Log for UID 1000
+		if uid == 1000 {
+			c.logger.Info("DEBUG: UserMetrics for UID 1000",
+				"cpuUsage", data.cpuUsage,
+				"cpuUsageAvg", data.cpuUsageAvg,
+				"ema", ema,
+			)
+		}
 	}
 
 	c.setInCache(cacheKey, userMetrics)
@@ -1478,6 +1487,20 @@ func (c *Collector) getProcessCPUAverage(p *process.Process, systemUptimeSeconds
 	if avgCPU > 100 {
 		return 100
 	}
+	
+	// DEBUG: Log for UID 1000
+	if uid, _ := p.Uids(); len(uid) > 0 && uid[0] == 1000 {
+		c.logger.Info("DEBUG: CPU avg calculation",
+			"pid", p.Pid,
+			"totalCPUSeconds", totalCPUSeconds,
+			"processAgeSeconds", processAgeSeconds,
+			"avgCPU", avgCPU,
+			"systemUptime", systemUptimeSeconds,
+			"bootTime", bootTime,
+			"createTime", createTime,
+		)
+	}
+	
 	return avgCPU
 }
 
@@ -1493,11 +1516,19 @@ func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
 	if !exists {
 		// First value: EMA = currentValue
 		c.emaCache.values[uid] = currentValue
+		if uid == 1000 {
+			c.logger.Info("DEBUG: EMA first value", "uid", uid, "current", currentValue, "ema", currentValue)
+		}
 		return currentValue
 	}
 
 	ema := alpha*currentValue + (1-alpha)*prevEMA
 	c.emaCache.values[uid] = ema
+	
+	if uid == 1000 {
+		c.logger.Info("DEBUG: EMA updated", "uid", uid, "current", currentValue, "prev", prevEMA, "ema", ema)
+	}
+	
 	return ema
 }
 

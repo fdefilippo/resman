@@ -386,16 +386,18 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 
 		// Create a copy with corrected IsLimited AND preserved IO fields
 		corrected := &resmanmetrics.UserMetrics{
-			UID:          um.UID,
-			Username:     um.Username,
-			CPUUsage:     um.CPUUsage,
-			MemoryUsage:  um.MemoryUsage,
-			ProcessCount: um.ProcessCount,
-			IsLimited:    actuallyLimited,
-			IOReadBytes:  um.IOReadBytes,
-			IOWriteBytes: um.IOWriteBytes,
-			IOReadOps:    um.IOReadOps,
-			IOWriteOps:   um.IOWriteOps,
+			UID:              um.UID,
+			Username:         um.Username,
+			CPUUsage:         um.CPUUsage,
+			CPUUsageAverage:  um.CPUUsageAverage,
+			CPUUsageEMA:      um.CPUUsageEMA,
+			MemoryUsage:      um.MemoryUsage,
+			ProcessCount:     um.ProcessCount,
+			IsLimited:        actuallyLimited,
+			IOReadBytes:      um.IOReadBytes,
+			IOWriteBytes:     um.IOWriteBytes,
+			IOReadOps:        um.IOReadOps,
+			IOWriteOps:       um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
 		metrics.UserCPUUsage[uid] = um.CPUUsage
@@ -1110,6 +1112,13 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		}
 
 		// Usa UpdateUserMetrics con tutti i parametri
+		if uid == 1000 {
+			m.logger.Info("DEBUG: State Manager calling UpdateUserMetrics for UID 1000",
+				"cpuUsage", userMetrics.CPUUsage,
+				"cpuUsageAverage", userMetrics.CPUUsageAverage,
+				"cpuUsageEMA", userMetrics.CPUUsageEMA,
+			)
+		}
 		m.prometheusExporter.UpdateUserMetrics(
 			uid,
 			username,
