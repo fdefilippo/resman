@@ -81,6 +81,8 @@ type PrometheusExporter struct {
 
 	// Metriche con label aggiuntive
 	userCPUUsage         *prometheus.GaugeVec
+	userCPUUsageAverage  *prometheus.GaugeVec
+	userCPUUsageEMA      *prometheus.GaugeVec
 	userMemoryUsage      *prometheus.GaugeVec
 	userProcessCount     *prometheus.GaugeVec
 	userLimited          *prometheus.GaugeVec
@@ -391,7 +393,27 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "user_cpu_usage_percent",
-			Help:        "CPU usage percentage per user",
+			Help:        "CPU usage percentage per user (instantaneous, last cycle)",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
+	exp.userCPUUsageAverage = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "user_cpu_usage_average_percent",
+			Help:        "CPU usage percentage per user (average since process start)",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username"},
+	)
+
+	exp.userCPUUsageEMA = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "user_cpu_usage_ema_percent",
+			Help:        "CPU usage percentage per user (exponential moving average, α=0.3)",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "username"},
@@ -657,7 +679,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 }
 
 // UpdateUserMetrics aggiorna le metriche specifiche per utente.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 	if exp == nil || exp.registry == nil {
 		return
 	}
@@ -684,6 +706,8 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 
 	// Aggiorna uso CPU dell'utente
 	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(cpuUsage)
+	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(cpuUsageAverage)
+	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(cpuUsageEMA)
 
 	// Aggiorna uso memoria dell'utente (in bytes)
 	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(memoryUsage))
@@ -707,8 +731,8 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	}
 	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
 
-	// Aggiorna statistiche IO (counters con delta)
-	ioKey := fmt.Sprintf("%s_%s", uidStr, username)
+	// Update IO statistics (counters with delta)
+	ioKey := fmt.Sprintf("%d_%s", uid, username)
 	prevIO := exp.prevIOStats[ioKey]
 	if ioReadBytes >= prevIO.ReadBytes {
 		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(ioReadBytes - prevIO.ReadBytes))

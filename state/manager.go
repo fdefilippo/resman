@@ -134,7 +134,7 @@ type CgroupManager interface {
 // PrometheusExporter è l'interfaccia per esportare metriche Prometheus.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
+	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	Start(ctx context.Context) error
 	Stop() error
@@ -384,14 +384,20 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 		actuallyLimited := m.activeUsers[uid]
 		m.mu.RUnlock()
 
-		// Create a copy with corrected IsLimited
+		// Create a copy with corrected IsLimited AND preserved IO fields
 		corrected := &resmanmetrics.UserMetrics{
-			UID:          um.UID,
-			Username:     um.Username,
-			CPUUsage:     um.CPUUsage,
-			MemoryUsage:  um.MemoryUsage,
-			ProcessCount: um.ProcessCount,
-			IsLimited:    actuallyLimited,
+			UID:              um.UID,
+			Username:         um.Username,
+			CPUUsage:         um.CPUUsage,
+			CPUUsageAverage:  um.CPUUsageAverage,
+			CPUUsageEMA:      um.CPUUsageEMA,
+			MemoryUsage:      um.MemoryUsage,
+			ProcessCount:     um.ProcessCount,
+			IsLimited:        actuallyLimited,
+			IOReadBytes:      um.IOReadBytes,
+			IOWriteBytes:     um.IOWriteBytes,
+			IOReadOps:        um.IOReadOps,
+			IOWriteOps:       um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
 		metrics.UserCPUUsage[uid] = um.CPUUsage
@@ -1075,12 +1081,34 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 		isLimited := m.isUserLimited(uid)
 
+		// DEBUG: Log system users with IO
+		if uid < m.cfg.SystemUIDMin && (userMetrics.IOReadBytes > 0 || userMetrics.IOWriteBytes > 0) {
+			m.logger.Info("State: Exporting IO for system user",
+				"uid", uid,
+				"username", username,
+				"ioReadBytes", userMetrics.IOReadBytes,
+				"ioWriteBytes", userMetrics.IOWriteBytes,
+			)
+		}
+
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
-		var ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64
+		var cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps uint64
 		if m.cgroupManager != nil {
-			cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
+			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
+		}
+
+		// Use per-user IO from GetAllUserMetrics
+		ioReadBytes := userMetrics.IOReadBytes
+		ioWriteBytes := userMetrics.IOWriteBytes
+		ioReadOps := userMetrics.IOReadOps
+		ioWriteOps := userMetrics.IOWriteOps
+		if ioReadBytes == 0 && ioWriteBytes == 0 && cgroupIOReadBytes > 0 {
+			ioReadBytes = cgroupIOReadBytes
+			ioWriteBytes = cgroupIOWriteBytes
+			ioReadOps = cgroupIOReadOps
+			ioWriteOps = cgroupIOWriteOps
 		}
 
 		// Usa UpdateUserMetrics con tutti i parametri
@@ -1088,6 +1116,8 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			uid,
 			username,
 			userMetrics.CPUUsage,
+			userMetrics.CPUUsageAverage,
+			userMetrics.CPUUsageEMA,
 			userMetrics.MemoryUsage,
 			userMetrics.ProcessCount,
 			isLimited,

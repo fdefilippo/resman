@@ -32,6 +32,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
 )
@@ -45,12 +46,18 @@ const (
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID          int
-	Username     string
-	CPUUsage     float64 // CPU percentage
-	MemoryUsage  uint64  // Memory in bytes (VmRSS)
-	ProcessCount int     // Number of processes
-	IsLimited    bool    // Whether user has CPU limits applied
+	UID              int
+	Username         string
+	CPUUsage         float64 // CPU percentage (instantaneous, last cycle)
+	CPUUsageAverage  float64 // CPU percentage average since process start
+	CPUUsageEMA      float64 // CPU percentage exponential moving average (α=0.3)
+	MemoryUsage      uint64  // Memory in bytes (VmRSS)
+	ProcessCount     int     // Number of processes
+	IsLimited        bool    // Whether user has CPU limits applied
+	IOReadBytes      uint64  // Total bytes read from block devices
+	IOWriteBytes     uint64  // Total bytes written to block devices
+	IOReadOps        uint64  // Total read operations
+	IOWriteOps       uint64  // Total write operations
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -63,9 +70,20 @@ type procCache struct {
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
 type userData struct {
-	cpuUsage     float64
-	memoryUsage  uint64
-	processCount int
+	cpuUsage       float64
+	cpuUsageAvg    float64
+	processCount   int
+	memoryUsage    uint64
+	ioReadBytes    uint64
+	ioWriteBytes   uint64
+	ioReadOps      uint64
+	ioWriteOps     uint64
+}
+
+// emaCache stores EMA values per UID between cycles.
+type emaCache struct {
+	mu     sync.RWMutex
+	values map[int]float64 // uid -> EMA value
 }
 
 // Collector collects system metrics.
@@ -85,6 +103,9 @@ type Collector struct {
 
 	// Cache per CPU usage per processo (necessaria per calcolo delta)
 	procCache *procCache // Single cache instead of sharding
+
+	// EMA cache for CPU usage smoothing between cycles
+	emaCache *emaCache
 
 	// Database writer (opzionale)
 	dbWriter *DBWriter
@@ -126,6 +147,9 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		procCache: &procCache{
 			prevProcCPU:  make(map[int32]cpu.TimesStat),
 			prevProcTime: make(map[int32]time.Time),
+		},
+		emaCache: &emaCache{
+			values: make(map[int]float64),
 		},
 	}
 
@@ -1026,8 +1050,18 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		return c.getAllUserMetricsFallback()
 	}
 
+	c.logger.Debug("GetAllUserMetrics: using gopsutil path",
+		"process_count", len(procs),
+	)
+
 	// Pre-allocate with estimated capacity
 	tempData := make(map[int]*userData, len(procs)/50)
+
+	// Read system uptime once (needed for CPU average calculation)
+	systemUptimeSeconds := c.getSystemUptimeSeconds()
+
+	// Second pass for IO: collect for ALL visible PIDs (including system users like mysql)
+	ioData := make(map[int]*userData)
 
 	for _, p := range procs {
 		// Get process UID
@@ -1058,18 +1092,70 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		if err == nil && memInfo != nil {
 			tempData[uid].memoryUsage += memInfo.RSS
 		}
+
+		// Calculate CPU average since process start
+		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
+		tempData[uid].cpuUsageAvg += cpuAvg
+	}
+
+	// Collect IO for ALL visible processes (including system users like mysql, root, etc.)
+	// IO is useful for all processes, not just non-system users
+	for _, p := range procs {
+		uids, err := p.Uids()
+		if err != nil || len(uids) == 0 {
+			continue
+		}
+		uid := int(uids[0])
+
+		if ioData[uid] == nil {
+			ioData[uid] = &userData{}
+		}
+
+		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
+		ioData[uid].ioReadBytes += rB
+		ioData[uid].ioWriteBytes += wB
+		ioData[uid].ioReadOps += rO
+		ioData[uid].ioWriteOps += wO
+	}
+
+	// Merge IO data into main tempData
+	for uid, ioD := range ioData {
+		if tempData[uid] == nil {
+			tempData[uid] = &userData{}
+		}
+		tempData[uid].ioReadBytes += ioD.ioReadBytes
+		tempData[uid].ioWriteBytes += ioD.ioWriteBytes
+		tempData[uid].ioReadOps += ioD.ioReadOps
+		tempData[uid].ioWriteOps += ioD.ioWriteOps
 	}
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
+
+		// Apply 1% floor at USER level, not per-process
+		// This prevents skewing metrics when all processes for a user are transient
+		cpuUsage := data.cpuUsage
+		if cpuUsage == 0 {
+			cpuUsage = 1.0 // Minimum 1% for users with only transient processes
+		}
+
+		// Calculate EMA for this user
+		ema := c.calculateEMA(uid, cpuUsage)
+
 		userMetrics[uid] = &UserMetrics{
-			UID:          uid,
-			Username:     username,
-			CPUUsage:     data.cpuUsage,
-			MemoryUsage:  data.memoryUsage,
-			ProcessCount: data.processCount,
-			IsLimited:    c.cfg.IsUserWhitelisted(username),
+			UID:              uid,
+			Username:         username,
+			CPUUsage:         cpuUsage,
+			CPUUsageAverage:  data.cpuUsageAvg,
+			CPUUsageEMA:      ema,
+			MemoryUsage:      data.memoryUsage,
+			ProcessCount:     data.processCount,
+			IsLimited:        c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:      data.ioReadBytes,
+			IOWriteBytes:     data.ioWriteBytes,
+			IOReadOps:        data.ioReadOps,
+			IOWriteOps:       data.ioWriteOps,
 		}
 	}
 
@@ -1093,6 +1179,10 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
+	ioData := make(map[int]*userData)
+
+	// Read system uptime once
+	systemUptimeSeconds := c.getSystemUptimeSeconds()
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1119,17 +1209,52 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		tempData[uid].cpuUsage += cpuUsage
 		memoryUsage := c.getProcessMemoryUsage(pid)
 		tempData[uid].memoryUsage += memoryUsage
+
+		// CPU average
+		proc, err := process.NewProcess(int32(pid))
+		if err == nil {
+			cpuAvg := c.getProcessCPUAverage(proc, systemUptimeSeconds)
+			tempData[uid].cpuUsageAvg += cpuAvg
+		}
+
+		// IO
+		if ioData[uid] == nil {
+			ioData[uid] = &userData{}
+		}
+		rB, wB, rO, wO := c.getProcessIO(pid)
+		ioData[uid].ioReadBytes += rB
+		ioData[uid].ioWriteBytes += wB
+		ioData[uid].ioReadOps += rO
+		ioData[uid].ioWriteOps += wO
+	}
+
+	// Merge IO
+	for uid, ioD := range ioData {
+		if tempData[uid] == nil {
+			tempData[uid] = &userData{}
+		}
+		tempData[uid].ioReadBytes += ioD.ioReadBytes
+		tempData[uid].ioWriteBytes += ioD.ioWriteBytes
+		tempData[uid].ioReadOps += ioD.ioReadOps
+		tempData[uid].ioWriteOps += ioD.ioWriteOps
 	}
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
+		ema := c.calculateEMA(uid, data.cpuUsage)
 		userMetrics[uid] = &UserMetrics{
-			UID:          uid,
-			Username:     username,
-			CPUUsage:     data.cpuUsage,
-			MemoryUsage:  data.memoryUsage,
-			ProcessCount: data.processCount,
-			IsLimited:    c.cfg.IsUserWhitelisted(username),
+			UID:              uid,
+			Username:         username,
+			CPUUsage:         data.cpuUsage,
+			CPUUsageAverage:  data.cpuUsageAvg,
+			CPUUsageEMA:      ema,
+			MemoryUsage:      data.memoryUsage,
+			ProcessCount:     data.processCount,
+			IsLimited:        c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:      data.ioReadBytes,
+			IOWriteBytes:     data.ioWriteBytes,
+			IOReadOps:        data.ioReadOps,
+			IOWriteOps:       data.ioWriteOps,
 		}
 	}
 
@@ -1261,6 +1386,129 @@ func (c *Collector) getProcessMemoryUsage(pid int) uint64 {
 	return 0
 }
 
+// getProcessIO reads /proc/[pid]/io and returns readBytes, writeBytes, readOps, writeOps.
+// Returns 0 for all values if the file doesn't exist or can't be read.
+func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, writeOps uint64) {
+	ioFile := fmt.Sprintf("/proc/%d/io", pid)
+	data, err := os.ReadFile(ioFile)
+	if err != nil {
+		// Common errors: EACCES (ptrace restriction), ENOENT (process exited)
+		// Silently ignore - process may have exited or ptrace restriction applies
+		return 0, 0, 0, 0
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSuffix(parts[0], ":")
+		val, parseErr := strconv.ParseUint(parts[1], 10, 64)
+		if parseErr != nil {
+			continue
+		}
+
+		switch key {
+		case "read_bytes":
+			readBytes = val
+		case "write_bytes":
+			writeBytes = val
+		case "syscr":
+			readOps = val
+		case "syscw":
+			writeOps = val
+		}
+	}
+
+	return readBytes, writeBytes, readOps, writeOps
+}
+
+// getSystemUptimeSeconds reads /proc/uptime and returns system uptime in seconds.
+// Returns 0 on error.
+func (c *Collector) getSystemUptimeSeconds() float64 {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		c.logger.Debug("Failed to read /proc/uptime", "error", err)
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 1 {
+		return 0
+	}
+	uptime, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	return uptime
+}
+
+// getProcessCPUAverage calculates the average CPU usage of a process since its start.
+// Uses total CPU time (user + system) divided by process lifetime.
+func (c *Collector) getProcessCPUAverage(p *process.Process, systemUptimeSeconds float64) float64 {
+	// Get CPU times (total user + system time in seconds)
+	times, err := p.Times()
+	if err != nil || times == nil {
+		return 0
+	}
+	totalCPUSeconds := times.User + times.System
+
+	// Get process creation time (milliseconds since epoch)
+	createTime, err := p.CreateTime()
+	if err != nil || createTime == 0 {
+		return 0
+	}
+
+	// Get system boot time (seconds since epoch)
+	bootTime, err := host.BootTime()
+	if err != nil || bootTime == 0 {
+		return 0
+	}
+
+	// Process age in seconds = current uptime - (createTime/1000 - bootTime)
+	processAgeSeconds := systemUptimeSeconds - (float64(createTime)/1000.0 - float64(bootTime))
+
+	if processAgeSeconds <= 0 {
+		return 0
+	}
+
+	// Average CPU% = (total CPU seconds / process age seconds) * 100
+	avgCPU := (totalCPUSeconds / processAgeSeconds) * 100.0
+	if avgCPU < 0 {
+		return 0
+	}
+	if avgCPU > 100 {
+		return 100
+	}
+
+	return avgCPU
+}
+
+// calculateEMA calculates exponential moving average for CPU usage.
+// alpha = 0.3 (weight for new value, rest for previous EMA)
+func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
+	const alpha = 0.3
+
+	c.emaCache.mu.Lock()
+	defer c.emaCache.mu.Unlock()
+
+	prevEMA, exists := c.emaCache.values[uid]
+	if !exists {
+		// First value: EMA = currentValue
+		c.emaCache.values[uid] = currentValue
+		return currentValue
+	}
+
+	ema := alpha*currentValue + (1-alpha)*prevEMA
+	c.emaCache.values[uid] = ema
+	return ema
+}
+
 // getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
 func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	proc, err := process.NewProcess(int32(pid))
@@ -1270,10 +1518,54 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	return c.getProcessCPUUsageSimpleWithHandle(proc)
 }
 
+// isProcessRunningLongEnough checks if a process is in "running" state (R)
+// for at least 60 seconds. Returns true if stable, false if transient.
+// For transient processes, returns 1% to avoid skewing metrics.
+func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
+	// Check process state
+	statuses, err := proc.Status()
+	if err != nil || len(statuses) == 0 {
+		return false // Can't determine state, skip
+	}
+
+	// Check if process is in running state (R)
+	isRunning := false
+	for _, s := range statuses {
+		if s == "R" || s == "running" {
+			isRunning = true
+			break
+		}
+	}
+
+	if !isRunning {
+		return false // Not in running state
+	}
+
+	// Check how long the process has been alive
+	createTime, err := proc.CreateTime()
+	if err != nil || createTime == 0 {
+		return false // Can't determine age
+	}
+
+	// createTime is milliseconds since epoch
+	processAgeSeconds := (float64(time.Now().UnixMilli()) - float64(createTime)) / 1000.0
+
+	return processAgeSeconds >= 60
+}
+
 // getProcessCPUUsageSimpleWithHandle calcola l'uso CPU usando un handle gopsutil esistente.
 // Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
+// Se il processo non è in stato "running" da almeno 60 secondi, ritorna 0% per evitare
+// di sfalsare le metriche con letture instabili (es. processi multithread appena avviati).
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid
+
+	// Check if process is stable (running for at least 60 seconds)
+	if !c.isProcessRunningLongEnough(proc) {
+		// Process is transient or not running - return 0% to avoid skewing metrics
+		// The 1% floor will be applied at the user level, not per-process
+		return 0
+	}
 
 	// Ottieni tempi CPU attuali
 	times, err := proc.Times()

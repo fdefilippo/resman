@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.20.1
+Version: 1.21.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -246,6 +246,16 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Apr 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.21.0-1
+- NEW: CPU average metrics (resman_user_cpu_usage_average_percent)
+- NEW: CPU EMA metrics (resman_user_cpu_usage_ema_percent, α=0.3)
+- FIX: CPU filtering now excludes processes not running for >= 60 seconds
+- FIX: CPU floor (1%) applied at user level, not per-process
+- FIX: IO metrics now work for ALL users including system users (mysql, www-data, etc.)
+- FIX: State manager now correctly copies CPUUsageAverage and CPUUsageEMA fields
+- Dashboard: Updated Grafana dashboard v2.1 with CPU average/EMA panels
+- Updated man page to v1.21.0
+
 * Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.1-1
 - FIX: IO filtering now uses IOUserIncludeList/IOUserExcludeList (was using CPU lists)
 - FIX: RAM and IO thresholds now participate in activate/deactivate decisions
