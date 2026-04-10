@@ -49,6 +49,7 @@ type Manager struct {
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
 	ioThresholdTracker  *ThresholdTracker
+		stabilityTracker    *UserStabilityTracker
 	lastPatternAnalysis time.Time
 
 	// Dipendenze (saranno iniettate)
@@ -71,6 +72,12 @@ type ThresholdTracker struct {
 	overThresholdCycles    int       // Cicli sopra soglia
 	totalCycles            int       // Cicli totali
 	mu                     sync.RWMutex
+}
+
+// UserStabilityTracker monitora la stabilità dell'utente sotto soglia per il rilascio
+type UserStabilityTracker struct {
+	mu             sync.RWMutex
+	underThreshold map[int]int // uid -> campioni consecutivi sotto soglia
 }
 
 // MetricsCollector è l'interfaccia per raccogliere metriche di sistema.
@@ -165,6 +172,7 @@ func NewManager(
 		activeUsers:        make(map[int]bool),
 		sharedCgroupPath:   "",
 		thresholdTracker:   &ThresholdTracker{},
+			stabilityTracker:   &UserStabilityTracker{underThreshold: make(map[int]int)},
 		ioThresholdTracker: &ThresholdTracker{},
 		metricsCollector:   metrics,
 		cgroupManager:      cgroups,
@@ -515,10 +523,46 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 		// Disattiva solo quando TUTTE le risorse sono sotto le soglie di rilascio
 		if allBelow {
-			if !metrics.SystemUnderLoad {
+			// Verifica stabilità per CPU (evita rilasci nervosi per singoli campioni a 0%)
+			// Richiediamo 3 campionamenti consecutivi sotto soglia (~90 secondi)
+			m.stabilityTracker.mu.Lock()
+
+			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
+			maxUserEMA := 0.0
+			limitedUsers := m.metricsCollector.GetLimitedUsers()
+			allUserMetrics := m.metricsCollector.GetAllUserMetrics()
+
+			for _, uid := range limitedUsers {
+				if um, ok := allUserMetrics[uid]; ok {
+					if um.CPUUsageEMA > maxUserEMA {
+						maxUserEMA = um.CPUUsageEMA
+					}
+
+					if um.CPUUsageEMA < float64(cpuReleaseThreshold) {
+						m.stabilityTracker.underThreshold[uid]++
+					} else {
+						m.stabilityTracker.underThreshold[uid] = 0
+					}
+				}
+			}
+
+			// Se tutti gli utenti limitati sono stabili sotto soglia per almeno 3 cicli
+			stable := true
+			for _, uid := range limitedUsers {
+				if m.stabilityTracker.underThreshold[uid] < 3 {
+					stable = false
+					break
+				}
+			}
+			m.stabilityTracker.mu.Unlock()
+
+			if !metrics.SystemUnderLoad && stable {
 				m.thresholdTracker.Reset()
 				m.ioThresholdTracker.Reset()
 				return DecisionDeactivate, m.buildDeactivateReason(cpuBelow, ramBelow, ioBelow, metrics, cpuReleaseThreshold)
+			}
+			if !stable {
+				return DecisionMaintain, "Resources below thresholds but waiting for stability (cool-down period)"
 			}
 			return DecisionMaintain, "Resources below thresholds but system still under load"
 		}
