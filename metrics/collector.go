@@ -1541,10 +1541,53 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	return c.getProcessCPUUsageSimpleWithHandle(proc)
 }
 
+// isProcessRunningLongEnough checks if a process is in "running" state (R)
+// for at least 60 seconds. Returns true if stable, false if transient.
+// For transient processes, returns 1% to avoid skewing metrics.
+func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
+	// Check process state
+	statuses, err := proc.Status()
+	if err != nil || len(statuses) == 0 {
+		return false // Can't determine state, skip
+	}
+
+	// Check if process is in running state (R)
+	isRunning := false
+	for _, s := range statuses {
+		if s == "R" || s == "running" {
+			isRunning = true
+			break
+		}
+	}
+
+	if !isRunning {
+		return false // Not in running state
+	}
+
+	// Check how long the process has been alive
+	createTime, err := proc.CreateTime()
+	if err != nil || createTime == 0 {
+		return false // Can't determine age
+	}
+
+	// createTime is milliseconds since epoch
+	processAgeSeconds := (float64(time.Now().UnixMilli()) - float64(createTime)) / 1000.0
+
+	return processAgeSeconds >= 60
+}
+
 // getProcessCPUUsageSimpleWithHandle calcola l'uso CPU usando un handle gopsutil esistente.
 // Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
+// Se il processo non è in stato "running" da almeno 60 secondi, ritorna 1% per evitare
+// di sfalsare le metriche con letture instabili (es. processi multithread appena avviati).
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid
+
+	// Check if process is stable (running for at least 60 seconds)
+	if !c.isProcessRunningLongEnough(proc) {
+		// Process is transient or not running - return 1% to avoid skewing metrics
+		return 1.0
+	}
 
 	// Ottieni tempi CPU attuali
 	times, err := proc.Times()
