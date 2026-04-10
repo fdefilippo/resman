@@ -526,6 +526,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			// Verifica stabilità per CPU (evita rilasci nervosi per singoli campioni a 0%)
 			// Richiediamo 3 campionamenti consecutivi sotto soglia (~90 secondi)
 			m.stabilityTracker.mu.Lock()
+			defer m.stabilityTracker.mu.Unlock()
 
 			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
 			maxUserEMA := 0.0
@@ -554,7 +555,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 					break
 				}
 			}
-			m.stabilityTracker.mu.Unlock()
 
 			if !metrics.SystemUnderLoad && stable {
 				m.thresholdTracker.Reset()
@@ -1003,6 +1003,13 @@ func (m *Manager) deactivateLimits() error {
 	m.sharedCgroupPath = ""
 	m.mu.Unlock()
 
+	// FIX A1: Cleanup stability tracker to prevent memory leak
+	m.stabilityTracker.mu.Lock()
+	for _, uid := range usersToCleanup {
+		delete(m.stabilityTracker.underThreshold, uid)
+	}
+	m.stabilityTracker.mu.Unlock()
+
 	var firstError error
 	deactivatedCount := 0
 
@@ -1394,7 +1401,12 @@ func (m *Manager) ForceActivateLimits() error {
 
 // ForceDeactivateLimits disattiva forzatamente i limiti (per testing/admin).
 func (m *Manager) ForceDeactivateLimits() error {
-	return m.deactivateLimits()
+	err := m.deactivateLimits()
+	// FIX A4: Reset stability tracker on forced deactivation to avoid stale state
+	m.stabilityTracker.mu.Lock()
+	m.stabilityTracker.underThreshold = make(map[int]int)
+	m.stabilityTracker.mu.Unlock()
+	return err
 }
 
 // GetConfig returns the current configuration

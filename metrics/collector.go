@@ -1133,7 +1133,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
 
-			cpuUsage := data.cpuUsage
+		cpuUsage := data.cpuUsage
 
 		// Calculate EMA for this user
 		ema := c.calculateEMA(uid, cpuUsage)
