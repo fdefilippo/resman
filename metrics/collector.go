@@ -1133,12 +1133,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
 
-		// Apply 1% floor at USER level, not per-process
-		// This prevents skewing metrics when all processes for a user are transient
 		cpuUsage := data.cpuUsage
-		if cpuUsage == 0 {
-			cpuUsage = 1.0 // Minimum 1% for users with only transient processes
-		}
 
 		// Calculate EMA for this user
 		ema := c.calculateEMA(uid, cpuUsage)
