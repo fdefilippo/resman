@@ -1132,14 +1132,21 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
-		
+
+		// Apply 1% floor at USER level, not per-process
+		// This prevents skewing metrics when all processes for a user are transient
+		cpuUsage := data.cpuUsage
+		if cpuUsage == 0 {
+			cpuUsage = 1.0 // Minimum 1% for users with only transient processes
+		}
+
 		// Calculate EMA for this user
-		ema := c.calculateEMA(uid, data.cpuUsage)
-		
+		ema := c.calculateEMA(uid, cpuUsage)
+
 		userMetrics[uid] = &UserMetrics{
 			UID:              uid,
 			Username:         username,
-			CPUUsage:         data.cpuUsage,
+			CPUUsage:         cpuUsage,
 			CPUUsageAverage:  data.cpuUsageAvg,
 			CPUUsageEMA:      ema,
 			MemoryUsage:      data.memoryUsage,
@@ -1149,15 +1156,6 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			IOWriteBytes:     data.ioWriteBytes,
 			IOReadOps:        data.ioReadOps,
 			IOWriteOps:       data.ioWriteOps,
-		}
-		
-		// DEBUG: Log for UID 1000
-		if uid == 1000 {
-			c.logger.Info("DEBUG: UserMetrics for UID 1000",
-				"cpuUsage", data.cpuUsage,
-				"cpuUsageAvg", data.cpuUsageAvg,
-				"ema", ema,
-			)
 		}
 	}
 
@@ -1487,20 +1485,7 @@ func (c *Collector) getProcessCPUAverage(p *process.Process, systemUptimeSeconds
 	if avgCPU > 100 {
 		return 100
 	}
-	
-	// DEBUG: Log for UID 1000
-	if uid, _ := p.Uids(); len(uid) > 0 && uid[0] == 1000 {
-		c.logger.Info("DEBUG: CPU avg calculation",
-			"pid", p.Pid,
-			"totalCPUSeconds", totalCPUSeconds,
-			"processAgeSeconds", processAgeSeconds,
-			"avgCPU", avgCPU,
-			"systemUptime", systemUptimeSeconds,
-			"bootTime", bootTime,
-			"createTime", createTime,
-		)
-	}
-	
+
 	return avgCPU
 }
 
@@ -1516,19 +1501,11 @@ func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
 	if !exists {
 		// First value: EMA = currentValue
 		c.emaCache.values[uid] = currentValue
-		if uid == 1000 {
-			c.logger.Info("DEBUG: EMA first value", "uid", uid, "current", currentValue, "ema", currentValue)
-		}
 		return currentValue
 	}
 
 	ema := alpha*currentValue + (1-alpha)*prevEMA
 	c.emaCache.values[uid] = ema
-	
-	if uid == 1000 {
-		c.logger.Info("DEBUG: EMA updated", "uid", uid, "current", currentValue, "prev", prevEMA, "ema", ema)
-	}
-	
 	return ema
 }
 
@@ -1578,15 +1555,16 @@ func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
 
 // getProcessCPUUsageSimpleWithHandle calcola l'uso CPU usando un handle gopsutil esistente.
 // Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
-// Se il processo non è in stato "running" da almeno 60 secondi, ritorna 1% per evitare
+// Se il processo non è in stato "running" da almeno 60 secondi, ritorna 0% per evitare
 // di sfalsare le metriche con letture instabili (es. processi multithread appena avviati).
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid
 
 	// Check if process is stable (running for at least 60 seconds)
 	if !c.isProcessRunningLongEnough(proc) {
-		// Process is transient or not running - return 1% to avoid skewing metrics
-		return 1.0
+		// Process is transient or not running - return 0% to avoid skewing metrics
+		// The 1% floor will be applied at the user level, not per-process
+		return 0
 	}
 
 	// Ottieni tempi CPU attuali

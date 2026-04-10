@@ -1112,13 +1112,6 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		}
 
 		// Usa UpdateUserMetrics con tutti i parametri
-		if uid == 1000 {
-			m.logger.Info("DEBUG: State Manager calling UpdateUserMetrics for UID 1000",
-				"cpuUsage", userMetrics.CPUUsage,
-				"cpuUsageAverage", userMetrics.CPUUsageAverage,
-				"cpuUsageEMA", userMetrics.CPUUsageEMA,
-			)
-		}
 		m.prometheusExporter.UpdateUserMetrics(
 			uid,
 			username,
