@@ -188,34 +188,6 @@ func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBo
 	)
 }
 
-// GetBoostState restituisce lo stato di boost per un utente.
-func (r *IORemediation) GetBoostState(uid int) (*IOBoostState, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	state, exists := r.boostStates[uid]
-	return state, exists
-}
-
-// ResetBoostState resetta lo stato di boost per un utente.
-func (r *IORemediation) ResetBoostState(uid int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.boostStates, uid)
-}
-
-// GetActiveBoosts restituisce il numero di utenti attualmente in boost.
-func (r *IORemediation) GetActiveBoosts() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	count := 0
-	for _, state := range r.boostStates {
-		if state.IsActive {
-			count++
-		}
-	}
-	return count
-}
-
 // Cleanup rimuove stati di boost scaduti o non piu' attivi.
 func (r *IORemediation) Cleanup(maxAge time.Duration) {
 	r.mu.Lock()

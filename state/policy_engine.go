@@ -128,37 +128,6 @@ func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config
 	}
 }
 
-// RevertPolicy ripristina la policy precedente per un utente.
-func (pe *PolicyEngine) RevertPolicy(uid int) bool {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	policy, exists := pe.userPolicies[uid]
-	if !exists {
-		return false
-	}
-
-	if policy.PreviousCPUQuota == 0 && policy.PreviousRAMQuota == "" {
-		// Nessuna policy precedente, rimuovi
-		delete(pe.userPolicies, uid)
-		return true
-	}
-
-	policy.CPUQuota = policy.PreviousCPUQuota
-	policy.RAMQuota = policy.PreviousRAMQuota
-	policy.PreviousCPUQuota = 0
-	policy.PreviousRAMQuota = ""
-	policy.LastChanged = time.Now()
-
-	pe.logger.Info("Workload pattern policy reverted",
-		"uid", uid,
-		"cpu_quota", policy.CPUQuota,
-		"ram_quota", policy.RAMQuota,
-	)
-
-	return true
-}
-
 // Cleanup rimuove policy non piu' attive.
 func (pe *PolicyEngine) Cleanup(maxAge time.Duration) {
 	pe.mu.Lock()
