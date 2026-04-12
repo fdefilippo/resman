@@ -92,14 +92,6 @@ Restart the service after configuration changes:
 sudo systemctl restart resman
 ```
 
-Monitor the service:
-
-```bash
-sudo systemctl status resman
-journalctl -u resman -f
-curl -s http://localhost:1974/metrics | grep resman
-```
-
 ## Documentation
 
 - Man page: `man resman`
