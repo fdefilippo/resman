@@ -37,8 +37,7 @@ import (
 )
 
 const (
-	defaultFilePerm   = 0644
-	sharedCgroupQuota = 100000
+	defaultFilePerm = 0644
 	// Note: cleanupRetryDelay, processMoveDelay, etc. are now configurable via config
 )
 
@@ -269,13 +268,6 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 		return fmt.Errorf("invalid CPU quota format '%s': expected 'quota period' (e.g., '50000 100000') or 'max period'", quota)
 	}
 
-	// DEBUG: Log prima di applicare
-	m.logger.Debug("Applying CPU limit",
-		"uid", uid,
-		"quota", quota,
-		"path", cpuMaxFile,
-	)
-
 	// Applica il limite
 	if err := os.WriteFile(cpuMaxFile, []byte(quota), 0644); err != nil {
 		// Prova con permessi diversi
@@ -411,7 +403,10 @@ func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
 
 	// Ottieni info sul processo PRIMA di spostarlo
 	processName := m.getProcessName(pid)
-	processInfo, _ := m.getProcessInfo(pid)
+	processInfo, err := m.getProcessInfo(pid)
+	if err != nil {
+		m.logger.Warn("Failed to get process info", "pid", pid, "error", err)
+	}
 
 	// Scrivi il PID nel file cgroup.procs
 	pidStr := strconv.Itoa(pid)
@@ -990,7 +985,10 @@ func (m *Manager) CleanupAll() error {
 		}
 
 		// STEP 3: Verifica che il cgroup sia vuoto
-		if pids, _ := m.readPidsFromFile(cgroupProcsFile); len(pids) > 0 {
+		pids, err := m.readPidsFromFile(cgroupProcsFile)
+		if err != nil {
+			m.logger.Warn("Failed to read pids from cgroup", "path", cgroupProcsFile, "error", err)
+		} else if len(pids) > 0 {
 			m.logger.Warn("Shared cgroup still has processes after cleanup",
 				"path", sharedPath,
 				"remaining_count", len(pids),
@@ -1255,10 +1253,10 @@ func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, me
 	}
 
 	// Leggi memory.high events
-	memoryHighEvents, _ = m.GetMemoryHighEvents(uid)
+	memoryHighEvents, _ = m.GetMemoryHighEvents(uid) // Ignora errore, è opzionale
 
 	// Leggi io.stat
-	ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.GetIOStats(uid)
+	ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.GetIOStats(uid) // Ignora errore, è opzionale
 
 	return cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, nil
 }

@@ -49,7 +49,7 @@ type Manager struct {
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
 	ioThresholdTracker  *ThresholdTracker
-		stabilityTracker    *UserStabilityTracker
+	stabilityTracker    *UserStabilityTracker
 	lastPatternAnalysis time.Time
 
 	// Dipendenze (saranno iniettate)
@@ -172,7 +172,7 @@ func NewManager(
 		activeUsers:        make(map[int]bool),
 		sharedCgroupPath:   "",
 		thresholdTracker:   &ThresholdTracker{},
-			stabilityTracker:   &UserStabilityTracker{underThreshold: make(map[int]int)},
+		stabilityTracker:   &UserStabilityTracker{underThreshold: make(map[int]int)},
 		ioThresholdTracker: &ThresholdTracker{},
 		metricsCollector:   metrics,
 		cgroupManager:      cgroups,
@@ -351,7 +351,7 @@ type SystemMetrics struct {
 	TotalMemoryMB   float64 // MB
 	CachedMemoryMB  float64 // MB
 	SystemUnderLoad bool
-	UserCPUUsage    map[int]float64              // UID -> percentuale
+	UserCPUUsage    map[int]float64                    // UID -> percentuale
 	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
 }
 
@@ -394,18 +394,18 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 
 		// Create a copy with corrected IsLimited AND preserved IO fields
 		corrected := &resmanmetrics.UserMetrics{
-			UID:              um.UID,
-			Username:         um.Username,
-			CPUUsage:         um.CPUUsage,
-			CPUUsageAverage:  um.CPUUsageAverage,
-			CPUUsageEMA:      um.CPUUsageEMA,
-			MemoryUsage:      um.MemoryUsage,
-			ProcessCount:     um.ProcessCount,
-			IsLimited:        actuallyLimited,
-			IOReadBytes:      um.IOReadBytes,
-			IOWriteBytes:     um.IOWriteBytes,
-			IOReadOps:        um.IOReadOps,
-			IOWriteOps:       um.IOWriteOps,
+			UID:             um.UID,
+			Username:        um.Username,
+			CPUUsage:        um.CPUUsage,
+			CPUUsageAverage: um.CPUUsageAverage,
+			CPUUsageEMA:     um.CPUUsageEMA,
+			MemoryUsage:     um.MemoryUsage,
+			ProcessCount:    um.ProcessCount,
+			IsLimited:       actuallyLimited,
+			IOReadBytes:     um.IOReadBytes,
+			IOWriteBytes:    um.IOWriteBytes,
+			IOReadOps:       um.IOReadOps,
+			IOWriteOps:      um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
 		metrics.UserCPUUsage[uid] = um.CPUUsage
@@ -418,8 +418,12 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
 		}
 		if m.cgroupManager != nil {
-			_, wBytes, _, _, _ := m.cgroupManager.GetIOStats(uid)
-			metrics.LimitedUsersIOWriteBytes += wBytes
+			_, wBytes, _, _, err := m.cgroupManager.GetIOStats(uid)
+			if err != nil {
+				m.logger.Warn("Failed to get IO stats for user", "uid", uid, "error", err)
+			} else {
+				metrics.LimitedUsersIOWriteBytes += wBytes
+			}
 		}
 	}
 
@@ -1132,22 +1136,16 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 		isLimited := m.isUserLimited(uid)
 
-		// DEBUG: Log system users with IO
-		if uid < m.cfg.SystemUIDMin && (userMetrics.IOReadBytes > 0 || userMetrics.IOWriteBytes > 0) {
-			m.logger.Info("State: Exporting IO for system user",
-				"uid", uid,
-				"username", username,
-				"ioReadBytes", userMetrics.IOReadBytes,
-				"ioWriteBytes", userMetrics.IOWriteBytes,
-			)
-		}
-
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
 		var cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps uint64
 		if m.cgroupManager != nil {
-			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, _ = m.cgroupManager.GetUserCgroupMetrics(uid)
+			var err error
+			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, err = m.cgroupManager.GetUserCgroupMetrics(uid)
+			if err != nil {
+				m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
+			}
 		}
 
 		// Use per-user IO from GetAllUserMetrics

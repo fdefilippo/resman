@@ -225,14 +225,6 @@ func calculateVariance(values []float64, counts []int) float64 {
 	return sumSquaredDiff / float64(totalWeight)
 }
 
-// GetStats restituisce le statistiche per un utente.
-func (pd *PatternDetector) GetStats(uid int) (*UserHourlyStats, bool) {
-	pd.mu.RLock()
-	defer pd.mu.RUnlock()
-	stats, exists := pd.userStats[uid]
-	return stats, exists
-}
-
 // Cleanup rimuove statistiche vecchie oltre la finestra storica.
 func (pd *PatternDetector) Cleanup(maxAge time.Duration) {
 	pd.mu.Lock()

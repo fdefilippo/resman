@@ -1,442 +1,33 @@
 # ResMan
 
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue.svg)](https://golang.org/)
-[![RPM Package](https://img.shields.io/badge/RPM-Package-red.svg)](https://github.com/fdefilippo/resman/releases)
-[![Prometheus](https://img.shields.io/badge/Metrics-Prometheus-orange.svg)](https://prometheus.io/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI](https://github.com/fdefilippo/resman/actions/workflows/ci.yml/badge.svg)](https://github.com/fdefilippo/resman/actions/workflows/ci.yml)
+Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
-**ResMan** is an enterprise-grade dynamic CPU, RAM and IO resource management tool for Linux using cgroups v2. It automatically monitors system resources and applies limits to users when load exceeds configurable thresholds.
+ResMan monitors system resources and automatically applies limits to users when load exceeds configurable thresholds. It exposes Prometheus metrics, supports hot-reload configuration, and includes an MCP server for AI assistant integration.
 
-## ✨ Key Features
+## Features
 
-### Resource Management
-- **Dynamic CPU limiting** based on configurable thresholds
-- **RAM limiting** with cgroups v2 memory controller
-- **IO limiting** with cgroups v2 io controller (bandwidth and IOPS)
-- **Per-user resource tracking**: CPU%, Memory (bytes), Process count, IO bytes/ops
-- **Threshold time window** to prevent false activations (CPU_THRESHOLD_DURATION, IO_THRESHOLD_DURATION)
-- **Blackout timeframes** support (CPU_MANAGER_BLACKOUT)
+- Dynamic CPU, RAM, and IO limiting via cgroups v2
+- Per-user resource tracking with Prometheus metrics
+- Configurable thresholds with time-window delay to prevent false activations
+- User filtering via include/exclude regex lists
+- Blackout timeframes to avoid applying limits during business hours
+- Automatic configuration reload on file changes
+- MCP server for AI assistant integration (17 tools)
+- SQLite metrics database for historical data
+- LDAP/NIS username resolution support (CGO)
+- Grafana dashboard included
 
-### User Filtering (v1.18.0+)
-Clear separation between **ALL USERS** (monitoring) and **LIMITED USERS** (subset passing filters):
+## Requirements
 
-| Category | Description | Metrics |
-|----------|-------------|---------|
-| **ALL USERS** | All non-system users (UID ≥ SYSTEM_UID_MIN), NO filters applied | `resman_all_users_*` |
-| **LIMITED USERS** | Users passing `USER_INCLUDE_LIST` && !`USER_EXCLUDE_LIST` | `resman_limited_users_*` |
+- Linux with cgroups v2 support
+- Go 1.21+
+- CGO enabled (for LDAP/NIS username resolution)
 
-### Monitoring & Integration
-- **Prometheus metrics** export with comprehensive dashboard
-- **MCP server** for AI assistant integration (Model Context Protocol)
-- **SQLite metrics database** for historical data (METRICS_DB_*)
-- **LDAP/NIS** username resolution support (requires CGO)
-- **Username cache** for improved performance (USERNAME_CACHE_TTL)
-
-### Operations
-- **Automatic configuration reload** on file changes
-- **Systemd service** integration with hardening
-- **Graceful shutdown** with proper resource cleanup
-- **Complete man page** documentation
-- **Unit tests** for core packages
-
-## 📊 Metrics Architecture (v1.18.0)
-
-### ALL USERS Metrics
-Monitor **all** non-system users without any filters:
-
-```prometheus
-resman_all_users_cpu_usage_percent      # Total CPU usage of ALL users
-resman_all_users_memory_usage_bytes     # Total RAM usage of ALL users
-resman_all_users_count                  # Number of ALL users
-```
-
-### LIMITED USERS Metrics
-Track only users who **pass filters** (can be limited):
-
-```prometheus
-resman_limited_users_cpu_usage_percent      # CPU usage of limitable users
-resman_limited_users_memory_usage_bytes     # RAM usage of limitable users
-resman_limited_users_count_filtered         # Number of limitable users
-```
-
-### Per-User Metrics
-Detailed metrics for each user (all use 2 labels: `uid`, `username`):
-
-```prometheus
-resman_user_cpu_usage_percent{uid, username, hostname, server_role}
-resman_user_memory_usage_bytes{uid, username, hostname, server_role}
-resman_user_process_count{uid, username, hostname, server_role}
-resman_user_cpu_limited{uid, username, hostname, server_role}    # 0 or 1
-resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
-resman_user_io_read_bytes_total{uid, username, hostname, server_role}
-resman_user_io_write_bytes_total{uid, username, hostname, server_role}
-resman_user_io_read_ops_total{uid, username, hostname, server_role}
-resman_user_io_write_ops_total{uid, username, hostname, server_role}
-```
-
-### Example Configuration
-
-```bash
-# Monitor ALL users (UID >= 1000), limit only specific ones
-USER_INCLUDE_LIST=^test.*     # Only users matching ^test.* can be limited
-USER_EXCLUDE_LIST=admin       # But never limit 'admin' user
-PROCESS_EXCLUDE_LIST=^systemd$,^dbus-.*  # Never limit these processes
-
-# Result:
-# - testuser1 (UID 1001) → Monitored + Limited (resman_user_cpu_limited=1)
-# - testuser2 (UID 1002) → Monitored + Limited (resman_user_cpu_limited=1)
-# - admin (UID 1003)      → Monitored + NOT Limited (resman_user_cpu_limited=0)
-# - normaluser (UID 1004) → Monitored + NOT Limited (resman_user_cpu_limited=0)
-```
-
-## 🤖 MCP Server (AI Integration)
-
-ResMan includes a built-in **Model Context Protocol (MCP)** server for AI assistant integration.
-
-### MCP Tools (17 total)
-
-**Read-only (13 tools):**
-- `get_system_status` - Overall system health
-- `get_user_metrics` - Per-user CPU/RAM/IO metrics (includes memory.max, memory.high, io.max)
-- `get_active_users` - List of currently active users
-- `get_limits_status` - Current CPU/RAM/IO limits state
-- `get_cgroup_info` - Cgroup details (CPU, RAM, IO limits per user)
-- `get_configuration` - Current configuration (CPU, RAM, IO settings)
-- `get_control_history` - Historical control decisions
-- `get_cpu_report` - CPU usage report
-- `get_mem_report` - Memory usage report
-- `get_user_filters` - Current filter configuration
-- `validate_user_filter_pattern` - Validate regex patterns
-- `get_user_history` - Historical user metrics (SQLite)
-- `get_system_history` - Historical system metrics (SQLite)
-
-**Write Operations (4 tools, require MCP_ALLOW_WRITE_OPS=true):**
-- `set_user_exclude_list` - Update USER_EXCLUDE_LIST
-- `set_user_include_list` - Update USER_INCLUDE_LIST
-- `activate_limits` - Manually activate CPU limits
-- `deactivate_limits` - Manually deactivate CPU limits
-
-### MCP Resources (6 endpoints)
-- `resman://system/status` - System overview (CPU, memory, limits state)
-- `resman://system/metrics` - Detailed metrics
-- `resman://users/active` - Active users list
-- `resman://users/{uid}/metrics` - Per-user metrics (CPU, RAM, IO cgroup stats)
-- `resman://limits/status` - Limits state
-- `resman://configuration` - Current config (CPU, RAM, IO settings)
-- `resman://cgroups/{uid}` - Cgroup information for a specific user
-
-### MCP Prompts (3 templates)
-- `system_health_check` - Quick health assessment
-- `user_cpu_analysis` - User CPU usage analysis
-- `troubleshoot_limits` - Debug limit activations
-
-## 🚀 Quick Start
-
-### Installation
-
-#### From Source
-```bash
-# Clone repository
-git clone https://github.com/fdefilippo/resman.git
-cd resman
-
-# Build (CGO required for LDAP/NIS support)
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
-
-# Install
-sudo cp resman /usr/bin/
-sudo cp config/resman.conf.example /etc/resman.conf
-sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now resman
-```
-
-#### From RPM
-```bash
-# Download latest RPM
-wget https://github.com/fdefilippo/resman/releases/latest/download/resman-1.20.1-1.x86_64.rpm
-
-# Install
-sudo rpm -ivh resman-1.20.1-1.x86_64.rpm
-sudo systemctl enable --now resman
-```
-
-### Configuration
-
-Edit `/etc/resman.conf`:
-
-```bash
-# CPU thresholds (percentage)
-CPU_THRESHOLD=75              # Activate limits when user CPU >= 75%
-CPU_RELEASE_THRESHOLD=40      # Release limits when user CPU < 40%
-CPU_THRESHOLD_DURATION=90     # Wait 90s before activating (prevent false positives)
-
-# User filtering
-USER_INCLUDE_LIST=.*          # All users can be limited
-USER_EXCLUDE_LIST=root,admin  # Never limit root and admin
-
-# Process exclusion (regex support)
-PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
-
-# RAM limits (optional)
-RAM_LIMIT_ENABLED=false
-RAM_THRESHOLD=75
-RAM_RELEASE_THRESHOLD=40
-RAM_QUOTA_LIMITED=2G
-RAM_QUOTA_PER_USER=512M
-
-# IO limits (optional)
-IO_LIMIT_ENABLED=false
-IO_THRESHOLD=75
-IO_RELEASE_THRESHOLD=40
-IO_READ_BPS=100M
-IO_WRITE_BPS=50M
-IO_READ_IOPS=1000
-IO_WRITE_IOPS=500
-IO_DEVICE_FILTER=all
-IO_THRESHOLD_DURATION=0
-
-# Monitoring
-SYSTEM_UID_MIN=1000           # Monitor users with UID >= 1000
-POLLING_INTERVAL=30           # Check every 30 seconds
-
-# Prometheus metrics (SECURE DEFAULT: localhost only)
-ENABLE_PROMETHEUS=true
-PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
-PROMETHEUS_METRICS_BIND_PORT=1974
-SERVER_ROLE=database          # Optional: server role label
-
-# MCP server
-MCP_ENABLED=true
-MCP_TRANSPORT=stdio           # or 'http'
-MCP_ALLOW_WRITE_OPS=false     # Enable write operations
-```
-
-### Verify Installation
-
-```bash
-# Check service status
-systemctl status resman
-
-# View logs
-journalctl -u resman -f
-
-# Test Prometheus metrics endpoint
-curl -s http://localhost:1974/metrics | grep resman
-
-# Check man page
-man resman
-```
-
-## 📈 Prometheus Metrics
-
-### System Metrics
-```prometheus
-resman_cpu_total_usage_percent{hostname, server_role}          # Total system CPU
-resman_memory_usage_megabytes{hostname, server_role}           # System memory
-resman_system_load_average{hostname, server_role}              # Load average (1m)
-resman_cpu_total_cores{hostname, server_role}                  # Total CPU cores
-resman_limits_active{hostname, server_role}                    # Limits active (1/0)
-resman_limited_users_count{hostname, server_role}              # Users with limits
-```
-
-### User Metrics (ALL)
-```prometheus
-resman_all_users_cpu_usage_percent{hostname, server_role}      # All users CPU
-resman_all_users_memory_usage_bytes{hostname, server_role}     # All users RAM
-resman_all_users_count{hostname, server_role}                  # All users count
-```
-
-### User Metrics (LIMITED)
-```prometheus
-resman_limited_users_cpu_usage_percent{hostname, server_role}      # Limited users CPU
-resman_limited_users_memory_usage_bytes{hostname, server_role}     # Limited users RAM
-resman_limited_users_count_filtered{hostname, server_role}         # Limited users count
-```
-
-### Per-User Metrics
-```prometheus
-resman_user_cpu_usage_percent{uid, username, hostname, server_role}
-resman_user_memory_usage_bytes{uid, username, hostname, server_role}
-resman_user_process_count{uid, username, hostname, server_role}
-resman_user_cpu_limited{uid, username, hostname, server_role}
-resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
-resman_user_io_read_bytes_total{uid, username, hostname, server_role}
-resman_user_io_write_bytes_total{uid, username, hostname, server_role}
-resman_user_io_read_ops_total{uid, username, hostname, server_role}
-resman_user_io_write_ops_total{uid, username, hostname, server_role}
-```
-
-### Counter Metrics
-```prometheus
-resman_limits_activated_total{hostname, server_role}           # Total activations
-resman_limits_deactivated_total{hostname, server_role}         # Total deactivations
-resman_control_cycles_total{hostname, server_role}             # Control cycles
-resman_errors_total{component, error_type, hostname, server_role}  # Errors
-```
-
-## 🔧 Configuration Variables
-
-### Paths
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CGROUP_ROOT` | `/sys/fs/cgroup` | Cgroup filesystem root |
-| `CONFIG_FILE` | `/etc/resman.conf` | Configuration file path |
-| `LOG_FILE` | `/var/log/resman.log` | Log file path |
-| `METRICS_DB_PATH` | `/etc/resman/metrics.db` | SQLite database path |
-
-### Timing
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POLLING_INTERVAL` | `30` | Control cycle interval (seconds) |
-| `MIN_ACTIVE_TIME` | `60` | Minimum time limits stay active (seconds) |
-| `METRICS_CACHE_TTL` | `15` | Metrics cache TTL (seconds) |
-| `USERNAME_CACHE_TTL` | `60` | Username cache TTL (minutes) |
-
-### CPU Thresholds
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CPU_THRESHOLD` | `75` | Activate limits when user CPU ≥ X% |
-| `CPU_RELEASE_THRESHOLD` | `40` | Release limits when user CPU < X% |
-| `CPU_THRESHOLD_DURATION` | `90` | Wait time before activating limits (seconds) |
-| `CPU_QUOTA_NORMAL` | `max 100000` | Normal CPU quota (cpu.max format) |
-| `CPU_QUOTA_LIMITED` | `50000 100000` | Limited CPU quota (0.5 core) |
-
-### RAM Thresholds
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RAM_LIMIT_ENABLED` | `false` | Enable RAM limiting |
-| `RAM_THRESHOLD` | `75` | Activate RAM limits when ≥ X% |
-| `RAM_RELEASE_THRESHOLD` | `40` | Release RAM limits when < X% |
-| `RAM_QUOTA_LIMITED` | `2G` | Total RAM quota for limited users |
-| `RAM_QUOTA_PER_USER` | `512M` | Per-user RAM quota |
-| `DISABLE_SWAP` | `false` | Disable swap in cgroups |
-| `RAM_HIGH_RATIO` | `0.8` | memory.high ratio (0.0-1.0, 0 to disable) |
-
-### IO Thresholds (v1.20.0+)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `IO_LIMIT_ENABLED` | `false` | Enable IO limiting |
-| `IO_THRESHOLD` | `75` | Activate IO limits when ≥ X% |
-| `IO_RELEASE_THRESHOLD` | `40` | Release IO limits when < X% |
-| `IO_THRESHOLD_DURATION` | `0` | Wait time before activating IO limits (seconds, 0 = immediate) |
-| `IO_READ_BPS` | `100M` | Per-user read bandwidth limit |
-| `IO_WRITE_BPS` | `50M` | Per-user write bandwidth limit |
-| `IO_READ_IOPS` | `1000` | Per-user read IOPS limit (0=unlimited) |
-| `IO_WRITE_IOPS` | `500` | Per-user write IOPS limit (0=unlimited) |
-| `IO_DEVICE_FILTER` | `all` | Device filter ("all" or "major:minor") |
-
-### User Filtering
-Each controller has independent user filter lists:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SYSTEM_UID_MIN` | `1000` | Minimum UID to monitor |
-| `SYSTEM_UID_MAX` | Auto | Maximum UID (from /proc/sys/kernel/pid_max) |
-| `USER_INCLUDE_LIST` | Empty | Regex patterns for CPU users to limit |
-| `USER_EXCLUDE_LIST` | Empty | Regex patterns for CPU users to exclude |
-| `RAM_USER_INCLUDE_LIST` | Empty | Regex patterns for RAM users to limit |
-| `RAM_USER_EXCLUDE_LIST` | Empty | Regex patterns for RAM users to exclude |
-| `IO_USER_INCLUDE_LIST` | Empty | Regex patterns for IO users to limit |
-| `IO_USER_EXCLUDE_LIST` | Empty | Regex patterns for IO users to exclude |
-| `PROCESS_EXCLUDE_LIST` | `^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$` | Processes to never limit |
-
-### Blackout Timeframes
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CPU_MANAGER_BLACKOUT` | Empty | When NOT to apply limits (format: "days hours") |
-
-**Examples:**
-```bash
-# Business hours (Mon-Fri, 8-18)
-CPU_MANAGER_BLACKOUT=1-5 08-18
-
-# Weekends
-CPU_MANAGER_BLACKOUT=0,6 00-23
-
-# Business hours + weekends
-CPU_MANAGER_BLACKOUT=1-5 08-18;0,6 00-23
-```
-
-### Database
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `METRICS_DB_ENABLED` | `false` | Enable SQLite metrics database |
-| `METRICS_DB_RETENTION_DAYS` | `30` | How long to keep historical data |
-| `METRICS_DB_WRITE_INTERVAL` | `30` | Database write interval (seconds) |
-
-## 📚 Documentation
-
-- **Man page**: `man resman` or `docs/resman.8`
-- **Grafana dashboard**: `docs/dashboard-grafana.json`
-- **Multi-cluster guide**: `docs/GRAFANA-MULTI-CLUSTER-GUIDE.md`
-- **IO limits guide**: `docs/IO-LIMITS.md`
-- **Architecture**: `docs/ARCHITECTURE.md`
-- **MCP documentation**: `docs/MCP-README.md`
-- **TLS configuration**: `docs/TLS-CONFIGURATION.md`
-- **Prometheus queries**: `docs/prometheus-queries.md`
-- **Alerting rules**: `docs/alerting-rules.yml`
-
-## 🏗️ Architecture
-
-ResMan uses Linux cgroups v2 with the following controllers:
-- **cpu** - CPU bandwidth control (cpu.max, cpu.weight)
-- **memory** - RAM limiting (memory.max, memory.high)
-- **io** - Block I/O limiting (io.max for bandwidth and IOPS)
-
-### Control Flow
-```
-1. Collect metrics (every POLLING_INTERVAL seconds)
-   ├─ All users (UID >= SYSTEM_UID_MIN)
-   ├─ CPU%, Memory, Process count
-   └─ System load, Total CPU
-
-2. Apply filters
-   ├─ USER_INCLUDE_LIST (if configured)
-   ├─ USER_EXCLUDE_LIST
-   ├─ PROCESS_EXCLUDE_LIST
-   └─ BLACKOUT timeframes
-
-3. Make decision
-   ├─ Activate if ANY resource exceeds threshold (CPU OR RAM OR IO)
-   ├─ CPU_THRESHOLD_DURATION / IO_THRESHOLD_DURATION checks
-   ├─ Deactivate if ALL resources below release thresholds
-   └─ Respect MIN_ACTIVE_TIME
-
-4. Apply limits
-   ├─ Create cgroups
-   ├─ Apply cpu.max / memory.max / io.max
-   └─ Move user processes
-```
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-make test
-
-# Test with coverage
-make test-cover
-
-# Run linters
-make lint
-
-# Format code
-make fmt
-```
-
-## 📦 Building
+## Build
 
 ```bash
 # Development build
 make build
-
-# Release build (multi-architecture)
-make release
-
-# Static binary
-make static
 
 # RPM package
 make rpm
@@ -444,25 +35,79 @@ make rpm
 # Debian package
 make deb
 
-# All-inclusive
+# All packages
 make all-with-packages
 ```
 
-## 🤝 Contributing
+CGO must be enabled for LDAP/NIS support:
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
+```bash
+CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
+```
 
-## 📄 License
+## Install
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+```bash
+# From packages
+sudo rpm -ivh resman-*.rpm
+# or
+sudo dpkg -i resman-*.deb
 
-## 👥 Authors
+# From source
+sudo cp resman /usr/bin/
+sudo cp config/resman.conf.example /etc/resman.conf
+sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
+sudo systemctl enable --now resman
+```
 
-- **Francesco Defilippo** - *Initial work and maintenance*
+## Usage
 
-## 🙏 Acknowledgments
+Edit `/etc/resman.conf` to configure thresholds and filters:
 
-- Linux cgroups v2 documentation
-- Prometheus community
-- Model Context Protocol specification
-- Go programming language community
+```bash
+# CPU thresholds
+CPU_THRESHOLD=75
+CPU_RELEASE_THRESHOLD=40
+CPU_THRESHOLD_DURATION=90
+
+# User filtering (empty = no users limited, .* = all users)
+USER_INCLUDE_LIST=.*
+USER_EXCLUDE_LIST=root,admin
+
+# Enable RAM and IO limits
+RAM_LIMIT_ENABLED=false
+IO_LIMIT_ENABLED=false
+
+# Prometheus metrics (default: localhost:1974)
+ENABLE_PROMETHEUS=true
+
+# MCP server
+MCP_ENABLED=true
+MCP_TRANSPORT=stdio
+```
+
+Restart the service after configuration changes:
+
+```bash
+sudo systemctl restart resman
+```
+
+Monitor the service:
+
+```bash
+sudo systemctl status resman
+journalctl -u resman -f
+curl -s http://localhost:1974/metrics | grep resman
+```
+
+## Documentation
+
+- Man page: `man resman`
+- Grafana dashboard: `docs/dashboard-grafana-v2.json`
+- Architecture: `docs/ARCHITECTURE.md`
+- IO limits: `docs/IO-LIMITS.md`
+- Full configuration reference: `/etc/resman.conf.example`
+
+## License
+
+GNU General Public License v3.0 - see LICENSE file.

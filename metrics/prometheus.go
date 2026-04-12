@@ -131,7 +131,6 @@ type PrometheusExporter struct {
 
 // NewPrometheusExporter crea un nuovo esportatore Prometheus.
 func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
-	// DEBUG: Log per verificare la configurazione
 	logger := logging.GetLogger()
 
 	if !cfg.EnablePrometheus {

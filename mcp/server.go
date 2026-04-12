@@ -64,12 +64,12 @@ func NewServer(
 
 	// Load MCP configuration
 	mcpCfg := &Config{
-		Enabled:        parentCfg.MCPEnabled,
-		Transport:      parentCfg.MCPTransport,
-		HTTPPort:       parentCfg.MCPHTTPPort,
-		HTTPHost:       parentCfg.MCPHTTPHost,
-		LogLevel:       parentCfg.MCPLogLevel,
-		AllowWriteOps:  parentCfg.MCPAllowWriteOps,
+		Enabled:       parentCfg.MCPEnabled,
+		Transport:     parentCfg.MCPTransport,
+		HTTPPort:      parentCfg.MCPHTTPPort,
+		HTTPHost:      parentCfg.MCPHTTPHost,
+		LogLevel:      parentCfg.MCPLogLevel,
+		AllowWriteOps: parentCfg.MCPAllowWriteOps,
 	}
 
 	if err := mcpCfg.Validate(); err != nil {

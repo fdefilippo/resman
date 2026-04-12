@@ -38,26 +38,23 @@ import (
 )
 
 const (
-	cpuPercentMultiplier   = 100.0
-	jiffiesPerSecond       = 100.0
-	cpuUsageEstimateFactor = 0.1
-	pageSizeBytes          = 4096
+	cpuPercentMultiplier = 100.0
 )
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID              int
-	Username         string
-	CPUUsage         float64 // CPU percentage (instantaneous, last cycle)
-	CPUUsageAverage  float64 // CPU percentage average since process start
-	CPUUsageEMA      float64 // CPU percentage exponential moving average (α=0.3)
-	MemoryUsage      uint64  // Memory in bytes (VmRSS)
-	ProcessCount     int     // Number of processes
-	IsLimited        bool    // Whether user has CPU limits applied
-	IOReadBytes      uint64  // Total bytes read from block devices
-	IOWriteBytes     uint64  // Total bytes written to block devices
-	IOReadOps        uint64  // Total read operations
-	IOWriteOps       uint64  // Total write operations
+	UID             int
+	Username        string
+	CPUUsage        float64 // CPU percentage (instantaneous, last cycle)
+	CPUUsageAverage float64 // CPU percentage average since process start
+	CPUUsageEMA     float64 // CPU percentage exponential moving average (α=0.3)
+	MemoryUsage     uint64  // Memory in bytes (VmRSS)
+	ProcessCount    int     // Number of processes
+	IsLimited       bool    // Whether user has CPU limits applied
+	IOReadBytes     uint64  // Total bytes read from block devices
+	IOWriteBytes    uint64  // Total bytes written to block devices
+	IOReadOps       uint64  // Total read operations
+	IOWriteOps      uint64  // Total write operations
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -70,14 +67,14 @@ type procCache struct {
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
 type userData struct {
-	cpuUsage       float64
-	cpuUsageAvg    float64
-	processCount   int
-	memoryUsage    uint64
-	ioReadBytes    uint64
-	ioWriteBytes   uint64
-	ioReadOps      uint64
-	ioWriteOps     uint64
+	cpuUsage     float64
+	cpuUsageAvg  float64
+	processCount int
+	memoryUsage  uint64
+	ioReadBytes  uint64
+	ioWriteBytes uint64
+	ioReadOps    uint64
+	ioWriteOps   uint64
 }
 
 // emaCache stores EMA values per UID between cycles.
@@ -479,15 +476,6 @@ func (c *Collector) GetLimitedUsers() []int {
 	return users
 }
 
-// formatActiveUsers formatta una lista di UID come lista di "username(uid)"
-func (c *Collector) formatActiveUsers(uids []int) []string {
-	formatted := make([]string, len(uids))
-	for i, uid := range uids {
-		formatted[i] = fmt.Sprintf("%s(%d)", c.getUsername(uid), uid)
-	}
-	return formatted
-}
-
 // getUsername ritorna la username dato un UID
 // Usa os/user.LookupId() che supporta LDAP/NIS quando CGO è abilitato
 // Implementa cache con TTL per migliorare le performance
@@ -563,15 +551,6 @@ func (c *Collector) cacheUsername(uid int, username string) {
 
 	c.usernameCache[uid] = username
 	c.usernameCacheTime[uid] = time.Now()
-}
-
-// clearUsernameCache rimuove un entry dalla cache (utile se l'utente cambia)
-func (c *Collector) clearUsernameCache(uid int) {
-	c.usernameCacheMutex.Lock()
-	defer c.usernameCacheMutex.Unlock()
-
-	delete(c.usernameCache, uid)
-	delete(c.usernameCacheTime, uid)
 }
 
 // SetUsernameCacheTTL imposta il TTL della cache username
@@ -1139,18 +1118,18 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		ema := c.calculateEMA(uid, cpuUsage)
 
 		userMetrics[uid] = &UserMetrics{
-			UID:              uid,
-			Username:         username,
-			CPUUsage:         cpuUsage,
-			CPUUsageAverage:  data.cpuUsageAvg,
-			CPUUsageEMA:      ema,
-			MemoryUsage:      data.memoryUsage,
-			ProcessCount:     data.processCount,
-			IsLimited:        c.cfg.IsUserWhitelisted(username),
-			IOReadBytes:      data.ioReadBytes,
-			IOWriteBytes:     data.ioWriteBytes,
-			IOReadOps:        data.ioReadOps,
-			IOWriteOps:       data.ioWriteOps,
+			UID:             uid,
+			Username:        username,
+			CPUUsage:        cpuUsage,
+			CPUUsageAverage: data.cpuUsageAvg,
+			CPUUsageEMA:     ema,
+			MemoryUsage:     data.memoryUsage,
+			ProcessCount:    data.processCount,
+			IsLimited:       c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:     data.ioReadBytes,
+			IOWriteBytes:    data.ioWriteBytes,
+			IOReadOps:       data.ioReadOps,
+			IOWriteOps:      data.ioWriteOps,
 		}
 	}
 
@@ -1238,18 +1217,18 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		username := c.GetUsernameFromUID(uid)
 		ema := c.calculateEMA(uid, data.cpuUsage)
 		userMetrics[uid] = &UserMetrics{
-			UID:              uid,
-			Username:         username,
-			CPUUsage:         data.cpuUsage,
-			CPUUsageAverage:  data.cpuUsageAvg,
-			CPUUsageEMA:      ema,
-			MemoryUsage:      data.memoryUsage,
-			ProcessCount:     data.processCount,
-			IsLimited:        c.cfg.IsUserWhitelisted(username),
-			IOReadBytes:      data.ioReadBytes,
-			IOWriteBytes:     data.ioWriteBytes,
-			IOReadOps:        data.ioReadOps,
-			IOWriteOps:       data.ioWriteOps,
+			UID:             uid,
+			Username:        username,
+			CPUUsage:        data.cpuUsage,
+			CPUUsageAverage: data.cpuUsageAvg,
+			CPUUsageEMA:     ema,
+			MemoryUsage:     data.memoryUsage,
+			ProcessCount:    data.processCount,
+			IsLimited:       c.cfg.IsUserWhitelisted(username),
+			IOReadBytes:     data.ioReadBytes,
+			IOWriteBytes:    data.ioWriteBytes,
+			IOReadOps:       data.ioReadOps,
+			IOWriteOps:      data.ioWriteOps,
 		}
 	}
 
