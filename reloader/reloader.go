@@ -155,9 +155,17 @@ func (r *Reloader) SafeConfigUpdate(updateFunc func(*config.Config) *config.Conf
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Questa funzione permette aggiornamenti atomici alla configurazione
-	// Utile per API REST o comandi amministrativi
-
 	r.logger.Debug("Safe configuration update requested")
-	return nil
+
+	// Ottieni la configurazione corrente dal state manager
+	currentCfg := r.stateManager.GetConfig()
+
+	// Applica la funzione di update
+	newCfg := updateFunc(currentCfg)
+	if newCfg == nil {
+		return fmt.Errorf("updateFunc returned nil config")
+	}
+
+	// Applica la nuova configurazione a tutti i componenti
+	return r.OnConfigChange(newCfg)
 }

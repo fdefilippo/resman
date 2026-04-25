@@ -22,6 +22,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/fdefilippo/resman/config"
 )
 
 // Config contains MCP server configuration
@@ -49,16 +51,20 @@ func DefaultConfig() *Config {
 }
 
 // LoadFromParentConfig loads MCP config from parent config
-func LoadFromParentConfig(cfg interface{}) *Config {
-	mcpCfg := DefaultConfig()
-
-	// Use reflection or type assertion to extract MCP-related fields
-	// This is a simplified version - in production you'd use reflection
-	if config, ok := cfg.(*Config); ok {
-		return config
+func LoadFromParentConfig(cfg *config.Config) *Config {
+	if cfg == nil {
+		return DefaultConfig()
 	}
 
-	return mcpCfg
+	return &Config{
+		Enabled:       cfg.MCPEnabled,
+		Transport:     cfg.MCPTransport,
+		HTTPPort:      cfg.MCPHTTPPort,
+		HTTPHost:      cfg.MCPHTTPHost,
+		LogLevel:      cfg.MCPLogLevel,
+		AuthToken:     cfg.MCPAuthToken,
+		AllowWriteOps: cfg.MCPAllowWriteOps,
+	}
 }
 
 // LoadFromEnv loads MCP configuration from environment variables

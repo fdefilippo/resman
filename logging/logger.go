@@ -62,6 +62,7 @@ type Logger struct {
 	lastRotation time.Time
 	UseSyslog    bool
 	syslogWriter *syslog.Writer
+	fields       map[string]interface{} // Campi contestuali per WithField
 }
 
 // InitLogger inizializza il logger globale con i parametri specificati.
@@ -89,6 +90,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 				logger:       log.New(syslogWriter, "", 0),
 				UseSyslog:    true,
 				syslogWriter: syslogWriter,
+				fields:       make(map[string]interface{}),
 			}
 
 			// Logga il primo messaggio via syslog
@@ -127,6 +129,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			lastRotation: time.Now(),
 			UseSyslog:    false,
 			syslogWriter: nil,
+			fields:       make(map[string]interface{}),
 		}
 
 		// Logga il primo messaggio
@@ -168,6 +171,7 @@ func createStdoutLogger(level LogLevel) *Logger {
 		file:      nil,
 		logger:    log.New(os.Stdout, "", 0),
 		UseSyslog: false,
+		fields:    make(map[string]interface{}),
 	}
 }
 
@@ -188,6 +192,11 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 	// Formatta il messaggio con timestamp e livello
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], msg)
+
+	// Aggiungi i campi contestuali di WithField
+	for k, v := range l.fields {
+		logMsg += fmt.Sprintf(" %v=%v", k, v)
+	}
 
 	// Aggiungi coppie chiave-valore se presenti
 	if len(keyvals) > 0 {
@@ -307,7 +316,29 @@ func (l *Logger) Error(msg string, keyvals ...interface{}) {
 
 // WithField crea un nuovo logger con un campo aggiuntivo.
 func (l *Logger) WithField(key string, value interface{}) *Logger {
-	return l
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	newLogger := &Logger{
+		level:        l.level,
+		file:         l.file,
+		filePath:     l.filePath,
+		maxSize:      l.maxSize,
+		logger:       l.logger,
+		lastRotation: l.lastRotation,
+		UseSyslog:    l.UseSyslog,
+		syslogWriter: l.syslogWriter,
+		fields:       make(map[string]interface{}),
+	}
+
+	// Copia i campi esistenti
+	for k, v := range l.fields {
+		newLogger.fields[k] = v
+	}
+	// Aggiungi il nuovo campo
+	newLogger.fields[key] = value
+
+	return newLogger
 }
 
 // SetLevel cambia il livello di log a runtime.
