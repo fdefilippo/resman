@@ -69,6 +69,7 @@ func NewServer(
 		HTTPPort:      parentCfg.MCPHTTPPort,
 		HTTPHost:      parentCfg.MCPHTTPHost,
 		LogLevel:      parentCfg.MCPLogLevel,
+		AuthToken:     parentCfg.MCPAuthToken,
 		AllowWriteOps: parentCfg.MCPAllowWriteOps,
 	}
 

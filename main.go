@@ -329,8 +329,9 @@ func main() {
 	}()
 
 	// Loop principale di controllo
-	logger.Info("Entering main control loop", "polling_interval_seconds", cfg.PollingInterval)
-	ticker := time.NewTicker(time.Duration(cfg.PollingInterval) * time.Second)
+	pollingInterval := stateManager.GetConfig().GetPollingInterval()
+	logger.Info("Entering main control loop", "polling_interval_seconds", pollingInterval)
+	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
 	defer ticker.Stop()
 
 	// Esecuzione immediata del primo controllo
@@ -390,6 +391,14 @@ func main() {
 			return
 
 		case <-ticker.C:
+			currentPollingInterval := stateManager.GetConfig().GetPollingInterval()
+			if currentPollingInterval != pollingInterval {
+				ticker.Stop()
+				pollingInterval = currentPollingInterval
+				ticker = time.NewTicker(time.Duration(pollingInterval) * time.Second)
+				logger.Info("Polling interval updated", "polling_interval_seconds", pollingInterval)
+			}
+
 			startTime := time.Now()
 
 			// Backpressure: Skip cycle if previous is still running
@@ -400,7 +409,7 @@ func main() {
 				// Previous cycle still running - skip this cycle
 				logger.Warn("Skipping control cycle - previous cycle still running",
 					"reason", "backpressure",
-					"polling_interval_ms", cfg.PollingInterval*1000,
+					"polling_interval_ms", pollingInterval*1000,
 				)
 				continue
 			}
@@ -414,10 +423,10 @@ func main() {
 			duration := time.Since(startTime)
 			close(cycleComplete) // Signal cycle completion
 
-			if duration > time.Duration(cfg.PollingInterval/2)*time.Second {
+			if duration > time.Duration(pollingInterval/2)*time.Second {
 				logger.Warn("Control cycle took longer than expected",
 					"duration_ms", duration.Milliseconds(),
-					"polling_interval_ms", cfg.PollingInterval*1000,
+					"polling_interval_ms", pollingInterval*1000,
 				)
 			} else {
 				logger.Debug("Control cycle completed",

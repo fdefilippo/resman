@@ -19,6 +19,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -123,6 +124,12 @@ type Config struct {
 	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota per interattivo
 	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota per interattivo
 
+	// Hooks
+	LimitHookEnabled bool   `config:"LIMIT_HOOK_ENABLED"`
+	LimitHookScript  string `config:"LIMIT_HOOK_SCRIPT"`
+	LimitHookURL     string `config:"LIMIT_HOOK_URL"`
+	LimitHookTimeout int    `config:"LIMIT_HOOK_TIMEOUT"` // seconds
+
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
 	PrometheusMetricsBindHost string `config:"PROMETHEUS_METRICS_BIND_HOST"` // Default: 127.0.0.1 (secure)
@@ -182,6 +189,7 @@ type Config struct {
 	MCPHTTPPort      int    `config:"MCP_HTTP_PORT"`
 	MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
 	MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
+	MCPAuthToken     string `config:"MCP_AUTH_TOKEN"`
 	MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
 
 	// Metrics Database (SQLite)
@@ -273,6 +281,12 @@ func DefaultConfig() *Config {
 		InteractiveCPUQuota:        50000, // 50%
 		InteractiveRAMQuota:        "1G",
 
+		// Limit hook
+		LimitHookEnabled: false,
+		LimitHookScript:  "",
+		LimitHookURL:     "",
+		LimitHookTimeout: 10,
+
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
 		PrometheusMetricsBindPort: 1974,
@@ -316,6 +330,7 @@ func DefaultConfig() *Config {
 		MCPHTTPPort:      1969,
 		MCPHTTPHost:      "", // Empty = use default 0.0.0.0
 		MCPLogLevel:      "INFO",
+		MCPAuthToken:     "",
 		MCPAllowWriteOps: false,
 
 		// Metrics Database (SQLite)
@@ -512,6 +527,25 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.CPUQuotaNormal = value
 	case "CPU_QUOTA_LIMITED":
 		cfg.CPUQuotaLimited = value
+
+	// Limit hook
+	case "LIMIT_HOOK_ENABLED":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.LimitHookEnabled = true
+		case "false", "0", "no", "off":
+			cfg.LimitHookEnabled = false
+		default:
+			cfg.LimitHookEnabled = false
+		}
+	case "LIMIT_HOOK_SCRIPT":
+		cfg.LimitHookScript = value
+	case "LIMIT_HOOK_URL":
+		cfg.LimitHookURL = value
+	case "LIMIT_HOOK_TIMEOUT":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.LimitHookTimeout = i
+		}
 
 	// Prometheus
 	case "ENABLE_PROMETHEUS":
@@ -751,6 +785,8 @@ func setConfigField(cfg *Config, key, value string) error {
 		cfg.MCPHTTPHost = value
 	case "MCP_LOG_LEVEL":
 		cfg.MCPLogLevel = strings.ToUpper(value)
+	case "MCP_AUTH_TOKEN":
+		cfg.MCPAuthToken = value
 	case "MCP_ALLOW_WRITE_OPS":
 		switch strings.ToLower(value) {
 		case "true", "1", "yes", "on":
@@ -827,6 +863,22 @@ func validateConfig(cfg *Config) error {
 	// Validate polling interval
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
+	}
+
+	// Validate limit hook configuration
+	if cfg.LimitHookEnabled {
+		if cfg.LimitHookTimeout < 1 {
+			errors = append(errors, "LIMIT_HOOK_TIMEOUT must be at least 1 second")
+		}
+		if cfg.LimitHookScript == "" && cfg.LimitHookURL == "" {
+			errors = append(errors, "LIMIT_HOOK_SCRIPT or LIMIT_HOOK_URL must be set when LIMIT_HOOK_ENABLED=true")
+		}
+		if cfg.LimitHookURL != "" {
+			parsedURL, err := url.Parse(cfg.LimitHookURL)
+			if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+				errors = append(errors, "LIMIT_HOOK_URL must be a valid http or https URL")
+			}
+		}
 	}
 
 	// Validate CPU quota format

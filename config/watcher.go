@@ -255,7 +255,7 @@ func (w *Watcher) handleConfigChange() {
 
 	// Chiama il callback per applicare la nuova configurazione
 	if w.onChange != nil {
-		if err := w.onChange.OnConfigChange(newConfig); err != nil { // CORRETTO: OnConfigChange()
+		if err := w.onChange.OnConfigChange(newConfig); err != nil {
 			w.logger.Error("Failed to apply new configuration",
 				"error", err,
 			)

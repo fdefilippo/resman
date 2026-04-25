@@ -234,6 +234,17 @@ IO_PSI_THRESHOLD=50
 IO_REVERT_ON_NORMAL=true
 
 # ========================
+# LIMIT HOOK [D]
+# ========================
+# Optional notification/action when a user is newly limited.
+# Script receives RESMAN_LIMIT_* environment variables.
+# URL receives a JSON POST with uid, username, cpu_usage, shared_cgroup, timestamp.
+LIMIT_HOOK_ENABLED=false
+# LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
+# LIMIT_HOOK_URL=https://example.internal/resman/user-limited
+LIMIT_HOOK_TIMEOUT=10
+
+# ========================
 # PROMETHEUS [S]
 # ========================
 # Requires restart for: enable/disable, port, host, TLS, auth
