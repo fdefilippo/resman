@@ -121,10 +121,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  4. Check permissions on %s\n", cfg.CgroupRoot)
 		os.Exit(1)
 	}
-	logger.Info("Cgroup manager initialized",
-		"cgroup_root", cfg.CgroupRoot,
-		"cgroup_base", cfg.CgroupBase,
-	)
 
 	// 2. Metrics Collector
 	metricsCollector, err := metrics.NewCollector(cfg)
