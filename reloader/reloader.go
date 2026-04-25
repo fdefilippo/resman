@@ -18,11 +18,11 @@
 package reloader
 
 import (
-	"fmt"  // AGGIUNTO
-	"sync" // AGGIUNTO
+	"fmt"
+	"sync"
 
 	"github.com/fdefilippo/resman/cgroup"
-	"github.com/fdefilippo/resman/config" // AGGIUNTO
+	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
@@ -82,14 +82,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 
 	// 3. State manager (aggiorna parametri)
 	if r.stateManager != nil {
-		// Il state manager avrà bisogno di un metodo per aggiornare la config
-		// Per ora, logghiamo solo
-		r.logger.Info("State manager configuration updated",
-			"polling_interval", newConfig.PollingInterval,
-			"cpu_threshold", newConfig.CPUThreshold,
-			"cpu_release_threshold", newConfig.CPUReleaseThreshold,
-			"cpu_threshold_duration", newConfig.CPUThresholdDuration,
-		)
+		r.stateManager.UpdateConfig(newConfig)
 	}
 
 	// 4. Cgroup manager (aggiorna percorsi)
@@ -124,22 +117,30 @@ func (r *Reloader) handlePrometheusConfigChange(newConfig *config.Config) error 
 	// Se Prometheus era disabilitato e ora è abilitato
 	if !r.prometheusExporter.IsRunning() && newConfig.EnablePrometheus {
 		r.logger.Info("Prometheus was disabled, now enabling...")
-		// Dovremmo riavviare l'exporter - per semplicità, logghiamo
 		r.logger.Warn("Prometheus enable/disable requires restart")
-		return nil
+		return fmt.Errorf("enabling Prometheus requires restart")
 	}
 
 	// Se Prometheus era abilitato e ora è disabilitato
 	if r.prometheusExporter.IsRunning() && !newConfig.EnablePrometheus {
 		r.logger.Info("Prometheus was enabled, now disabling...")
-		// Dovremmo fermare l'exporter
-		r.logger.Warn("Prometheus enable/disable requires restart")
+		if err := r.prometheusExporter.Stop(); err != nil {
+			return fmt.Errorf("failed to stop Prometheus exporter: %w", err)
+		}
 		return nil
 	}
 
 	// Se la porta o host sono cambiati
 	// Nota: cambiare porta/host richiede restart del server HTTP
-	// Per ora logghiamo solo il cambiamento
+	expectedEndpoint := fmt.Sprintf("http://%s:%d/metrics", newConfig.PrometheusMetricsBindHost, newConfig.PrometheusMetricsBindPort)
+	if r.prometheusExporter.GetMetricsEndpoint() != expectedEndpoint {
+		r.logger.Warn("Prometheus bind address change requires restart",
+			"current_endpoint", r.prometheusExporter.GetMetricsEndpoint(),
+			"requested_endpoint", expectedEndpoint,
+		)
+		return fmt.Errorf("changing Prometheus bind address requires restart")
+	}
+
 	r.logger.Info("Prometheus configuration changed",
 		"host", newConfig.PrometheusMetricsBindHost,
 		"port", newConfig.PrometheusMetricsBindPort,

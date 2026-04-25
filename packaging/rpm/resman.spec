@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.21.0
+Version: 1.23.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -51,7 +51,7 @@ Requires(postun): systemd-units
 Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 support.
 Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
 v1.20.0: IO limits via cgroups v2 io controller.
-v1.20.1: Architectural consistency across controllers, aligned Prometheus labels.
+v1.23.0: Limit hook notifications and config reload hardening.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -246,6 +246,14 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Apr 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.23.0-1
+- NEW: Limit hook notifications on newly limited users
+- NEW: Optional script execution via LIMIT_HOOK_SCRIPT
+- NEW: Optional JSON webhook via LIMIT_HOOK_URL
+- NEW: MCP_AUTH_TOKEN is available from the main configuration
+- FIX: Polling interval reload now updates the main loop ticker
+- FIX: Hardened config access during hot reload
+
 * Wed Apr 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.21.0-1
 - NEW: CPU average metrics (resman_user_cpu_usage_average_percent)
 - NEW: CPU EMA metrics (resman_user_cpu_usage_ema_percent, α=0.3)

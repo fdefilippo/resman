@@ -176,6 +176,16 @@ func (c *Collector) GetDBWriter() *DBWriter {
 	return c.dbWriter
 }
 
+func (c *Collector) getConfig() *config.Config {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg
+}
+
+func (c *Collector) metricsCacheTTL() time.Duration {
+	return time.Duration(c.getConfig().GetMetricsCacheTTL()) * time.Second
+}
+
 // GetTotalCores restituisce il numero totale di core CPU.
 func (c *Collector) GetTotalCores() int {
 	cacheKey := "total_cores"
@@ -228,7 +238,7 @@ func (c *Collector) getTotalCoresFallback() int {
 // GetTotalCPUUsage restituisce l'uso totale della CPU in percentuale.
 func (c *Collector) GetTotalCPUUsage() float64 {
 	cacheKey := "total_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -350,7 +360,7 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	}
 
 	cacheKey := fmt.Sprintf("cpu_usage_uid_%d", uid)
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -396,7 +406,7 @@ func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 // NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
 func (c *Collector) GetAllUsersCPUUsage() float64 {
 	cacheKey := "all_users_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -416,7 +426,7 @@ func (c *Collector) GetAllUsersCPUUsage() float64 {
 // Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
 func (c *Collector) GetLimitedUsersCPUUsage() float64 {
 	cacheKey := "limited_users_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -439,7 +449,7 @@ func (c *Collector) GetLimitedUsersCPUUsage() float64 {
 // Usato per metriche "all_users" (monitoraggio completo)
 func (c *Collector) GetAllUsers() []int {
 	cacheKey := "all_users"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.([]int)
 	}
 
@@ -459,7 +469,7 @@ func (c *Collector) GetAllUsers() []int {
 // Usato per metriche "limited_users" (sottoinsieme limitabile)
 func (c *Collector) GetLimitedUsers() []int {
 	cacheKey := "limited_users"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.([]int)
 	}
 
@@ -605,7 +615,7 @@ func (c *Collector) GetUsernameFromUID(uid int) string {
 // GetMemoryUsage restituisce l'uso della memoria in MB.
 func (c *Collector) GetMemoryUsage() float64 {
 	cacheKey := "memory_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -675,7 +685,7 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 // GetTotalMemoryMB restituisce la RAM fisica totale del sistema in MB.
 func (c *Collector) GetTotalMemoryMB() float64 {
 	cacheKey := "total_memory"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -721,7 +731,7 @@ func (c *Collector) getTotalMemoryFallback() float64 {
 // GetCachedMemoryMB restituisce la memoria cache del sistema in MB.
 func (c *Collector) GetCachedMemoryMB() float64 {
 	cacheKey := "cached_memory"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(float64)
 	}
 
@@ -810,7 +820,8 @@ func (c *Collector) getLoadAverage() (float64, int, error) {
 
 // isValidUserUID verifica se un UID è un utente non di sistema.
 func (c *Collector) isValidUserUID(uid int) bool {
-	return uid >= c.cfg.SystemUIDMin && uid <= c.cfg.SystemUIDMax
+	cfg := c.getConfig()
+	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax()
 }
 
 // getFromCache recupera un valore dalla cache se non è scaduto.
@@ -938,7 +949,9 @@ func (c *Collector) ClearCache() {
 
 // UpdateConfig aggiorna la configurazione del collector
 func (c *Collector) UpdateConfig(newConfig *config.Config) {
+	c.mu.Lock()
 	c.cfg = newConfig
+	c.mu.Unlock()
 	c.logger.Info("Metrics collector configuration updated",
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
 		"system_uid_min", newConfig.SystemUIDMin,
@@ -1012,7 +1025,7 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 // Uses gopsutil for efficient process discovery with single-pass aggregation.
 func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 	cacheKey := "all_user_metrics"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
 		}
@@ -1099,6 +1112,9 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 	// Merge IO data into main tempData
 	for uid, ioD := range ioData {
+		if !c.isValidUserUID(uid) {
+			continue
+		}
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}
@@ -1125,7 +1141,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 			CPUUsageEMA:     ema,
 			MemoryUsage:     data.memoryUsage,
 			ProcessCount:    data.processCount,
-			IsLimited:       c.cfg.IsUserWhitelisted(username),
+			IsLimited:       c.getConfig().IsUserWhitelisted(username),
 			IOReadBytes:     data.ioReadBytes,
 			IOWriteBytes:    data.ioWriteBytes,
 			IOReadOps:       data.ioReadOps,
@@ -1224,7 +1240,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 			CPUUsageEMA:     ema,
 			MemoryUsage:     data.memoryUsage,
 			ProcessCount:    data.processCount,
-			IsLimited:       c.cfg.IsUserWhitelisted(username),
+			IsLimited:       c.getConfig().IsUserWhitelisted(username),
 			IOReadBytes:     data.ioReadBytes,
 			IOWriteBytes:    data.ioWriteBytes,
 			IOReadOps:       data.ioReadOps,
@@ -1243,7 +1259,7 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	}
 
 	cacheKey := fmt.Sprintf("memory_usage_uid_%d", uid)
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(uint64)
 	}
 
@@ -1295,7 +1311,7 @@ func (c *Collector) getUserMemoryUsageFallback(uid int) uint64 {
 // NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
 func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 	cacheKey := "all_users_memory_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(uint64)
 	}
 
@@ -1315,7 +1331,7 @@ func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 // Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
 func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
 	cacheKey := "limited_users_memory_usage"
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(uint64)
 	}
 
@@ -1606,7 +1622,7 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 	}
 
 	cacheKey := fmt.Sprintf("process_count_uid_%d", uid)
-	if val, valid := c.getFromCache(cacheKey, time.Duration(c.cfg.MetricsCacheTTL)*time.Second); valid {
+	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		return val.(int)
 	}
 

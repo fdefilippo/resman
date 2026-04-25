@@ -14,6 +14,7 @@ ResMan monitors system resources and automatically applies limits to users when 
 - Automatic configuration reload on file changes
 - MCP server for AI assistant integration (17 tools)
 - SQLite metrics database for historical data
+- Optional script/webhook notification when a user is limited
 - LDAP/NIS username resolution support (CGO)
 - Grafana dashboard included
 
@@ -81,10 +82,21 @@ IO_LIMIT_ENABLED=false
 # Prometheus metrics (default: localhost:1974)
 ENABLE_PROMETHEUS=true
 
+# Notify when a user is newly limited
+LIMIT_HOOK_ENABLED=false
+# LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
+# LIMIT_HOOK_URL=https://example.internal/resman/user-limited
+LIMIT_HOOK_TIMEOUT=10
+
 # MCP server
 MCP_ENABLED=true
 MCP_TRANSPORT=stdio
+# MCP_AUTH_TOKEN=change-me-for-http-transport
 ```
+
+Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
+a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,
+`shared_cgroup`, `timestamp`, and `server_role`.
 
 Restart the service after configuration changes:
 

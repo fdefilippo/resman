@@ -178,7 +178,7 @@ func (r *IORemediation) applyBoost(deps IORemediationDeps, uid int, state *IOBoo
 // revertBoost ripristina i limiti IO originali dopo un boost.
 func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBoostState, deviceFilter string) {
 	// In una implementazione completa, ripristineremmo i limiti originali salvati
-	// Per ora, rimuoviamo semplicemente il boost (i limiti verranno riapplicati dal control cycle)
+	// Rimuove il boost; i limiti correnti verranno riconciliati dal control cycle.
 
 	state.IsActive = false
 	state.StarvationStart = time.Time{}

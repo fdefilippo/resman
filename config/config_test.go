@@ -49,6 +49,8 @@ func TestDefaultConfig(t *testing.T) {
 		{"LogLevel", cfg.LogLevel, "INFO"},
 		{"SystemUIDMin", cfg.SystemUIDMin, 1000},
 		{"IgnoreSystemLoad", cfg.IgnoreSystemLoad, false},
+		{"LimitHookEnabled", cfg.LimitHookEnabled, false},
+		{"LimitHookTimeout", cfg.LimitHookTimeout, 10},
 	}
 
 	for _, tt := range tests {

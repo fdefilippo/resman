@@ -1,4 +1,4 @@
-.TH RESMAN 8 "April 2026" "v1.21.0" "System Administration"
+.TH RESMAN 8 "April 2026" "v1.23.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -351,6 +351,12 @@ CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
 # IO_DEVICE_FILTER=all                 # "all" or "major:minor" device specification
 # IO_THRESHOLD_DURATION=0              # Seconds to wait before activating IO limits
 
+# LIMIT HOOK
+LIMIT_HOOK_ENABLED=false               # Enable notification/action on newly limited users
+# LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
+# LIMIT_HOOK_URL=https://example.internal/resman/user-limited
+LIMIT_HOOK_TIMEOUT=10                  # Hook timeout in seconds
+
 # PROMETHEUS EXPORTER
 ENABLE_PROMETHEUS=false                  # Enable metrics export
 # PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"   # Bind address (default: all interfaces)
@@ -430,6 +436,7 @@ MCP_TRANSPORT="stdio"        # Transport: stdio, http
 # MCP_HTTP_PORT=1969         # HTTP port (default: 1969)
 # MCP endpoint: http://HOST:PORT/mcp
 MCP_LOG_LEVEL="INFO"         # MCP log level
+MCP_AUTH_TOKEN="change-me"    # Optional Bearer token for HTTP transport
 MCP_ALLOW_WRITE_OPS=false    # Allow write operations via MCP
 
 # USERNAME CACHE (improves performance with LDAP/NIS)
@@ -625,6 +632,40 @@ HTTP port (for http transport):
 Allow write operations:
 .I MCP_ALLOW_WRITE_OPS=false
 .RE
+.SH LIMIT HOOKS
+When
+.B LIMIT_HOOK_ENABLED
+is true, ResMan can run an external script, call a webservice, or both whenever
+a user is newly limited.
+.PP
+Script hooks are configured with
+.B LIMIT_HOOK_SCRIPT
+and receive the following environment variables:
+.RS
+.IP \(bu 2
+RESMAN_LIMIT_UID
+.IP \(bu
+RESMAN_LIMIT_USERNAME
+.IP \(bu
+RESMAN_LIMIT_CPU_USAGE
+.IP \(bu
+RESMAN_LIMIT_LIMITED_USERS
+.IP \(bu
+RESMAN_LIMIT_SHARED_CGROUP
+.IP \(bu
+RESMAN_LIMIT_TIMESTAMP
+.IP \(bu
+RESMAN_LIMIT_SERVER_ROLE
+.RE
+.PP
+Webservice hooks are configured with
+.B LIMIT_HOOK_URL
+and receive an HTTP POST with a JSON payload containing uid, username,
+cpu_usage, limited_users, shared_cgroup, timestamp, source, and server_role.
+.PP
+Hook execution is asynchronous and bounded by
+.B LIMIT_HOOK_TIMEOUT
+seconds.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration

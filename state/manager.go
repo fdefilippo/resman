@@ -200,10 +200,11 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	cycleID := startTime.Unix()
 
 	m.logger.Debug("Starting control cycle", "cycle_id", cycleID)
+	cfg := m.GetConfig()
 
 	// Controlla se siamo in un blackout timeframe
-	if m.cfg.IsInBlackout() {
-		nextEnd := m.cfg.GetNextBlackoutEnd()
+	if cfg.IsInBlackout() {
+		nextEnd := cfg.GetNextBlackoutEnd()
 		if nextEnd != nil {
 			m.logger.Info("Skipping control cycle - blackout timeframe active",
 				"cycle_id", cycleID,
@@ -256,13 +257,13 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	// 7. IO Starvation Auto-Remediation
 	if m.ioRemediation != nil {
 		limitedUsers := m.metricsCollector.GetLimitedUsers()
-		m.ioRemediation.CheckAndRemediate(m.cgroupManager, m.cfg, limitedUsers)
+		m.ioRemediation.CheckAndRemediate(m.cgroupManager, cfg, limitedUsers)
 		// Cleanup periodico stati vecchi
 		m.ioRemediation.Cleanup(24 * time.Hour)
 	}
 
 	// 8. Workload Pattern Detection
-	if m.cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
+	if cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
 		// Aggiorna statistiche per tutti gli utenti
 		allMetrics := m.metricsCollector.GetAllUserMetrics()
 		for uid, um := range allMetrics {
@@ -272,10 +273,10 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 		// Analizza pattern ogni ora
 		if time.Since(m.lastPatternAnalysis) > time.Hour {
 			m.lastPatternAnalysis = time.Now()
-			patterns := m.patternDetector.Analyze(m.cfg)
+			patterns := m.patternDetector.Analyze(cfg)
 			for uid, result := range patterns {
 				if result.Pattern != PatternUnknown {
-					if m.policyEngine.ApplyPolicy(uid, result.Pattern, m.cfg) {
+					if m.policyEngine.ApplyPolicy(uid, result.Pattern, cfg) {
 						// Policy cambiata, applica limiti
 						policy, _ := m.policyEngine.GetPolicy(uid)
 						if policy != nil {
@@ -306,7 +307,7 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 				}
 			}
 			// Cleanup pattern detector
-			m.patternDetector.Cleanup(time.Duration(m.cfg.GetPatternHistoryHours()) * time.Hour)
+			m.patternDetector.Cleanup(time.Duration(cfg.GetPatternHistoryHours()) * time.Hour)
 			m.policyEngine.Cleanup(24 * time.Hour)
 		}
 	}
@@ -320,7 +321,7 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 		"limited_users_cpu_usage", metrics.LimitedUsersCPUUsage,
 		"limited_users", metrics.LimitedUsersCount,
 		"system_under_load", metrics.SystemUnderLoad,
-		"ignore_system_load", m.cfg.IgnoreSystemLoad,
+		"ignore_system_load", cfg.GetIgnoreSystemLoad(),
 		"duration_ms", duration.Milliseconds(),
 	)
 
@@ -432,18 +433,19 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 
 // makeDecision prende la decisione se attivare, mantenere o disattivare i limiti.
 func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
+	cfg := m.GetConfig()
 	m.mu.RLock()
 	limitsActive := m.limitsActive
 	limitsAppliedTime := m.limitsAppliedTime
 	m.mu.RUnlock()
 
 	// Get configuration values atomically to prevent inconsistency during reload
-	minActiveTime := m.cfg.GetMinActiveTime()
-	cpuReleaseThreshold := m.cfg.GetCPUReleaseThreshold()
-	cpuThreshold := m.cfg.GetCPUThreshold()
-	minSystemCores := m.cfg.GetMinSystemCores()
-	ignoreSystemLoad := m.cfg.GetIgnoreSystemLoad()
-	cpuThresholdDuration := m.cfg.GetCPUThresholdDuration()
+	minActiveTime := cfg.GetMinActiveTime()
+	cpuReleaseThreshold := cfg.GetCPUReleaseThreshold()
+	cpuThreshold := cfg.GetCPUThreshold()
+	minSystemCores := cfg.GetMinSystemCores()
+	ignoreSystemLoad := cfg.GetIgnoreSystemLoad()
+	cpuThresholdDuration := cfg.GetCPUThresholdDuration()
 
 	// Decisioni possibili
 	const (
@@ -456,22 +458,22 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	cpuExceeded := metrics.LimitedUsersCPUUsage >= float64(cpuThreshold)
 
 	ramExceeded := false
-	if m.cfg.RAMEnabled && m.cfg.RAMThreshold > 0 && metrics.TotalMemoryMB > 0 {
+	if cfg.RAMEnabled && cfg.RAMThreshold > 0 && metrics.TotalMemoryMB > 0 {
 		limitedRAMMB := float64(metrics.LimitedUsersRAMUsageBytes) / (1024 * 1024)
 		ramPercent := (limitedRAMMB / metrics.TotalMemoryMB) * 100
-		ramExceeded = ramPercent >= float64(m.cfg.RAMThreshold)
+		ramExceeded = ramPercent >= float64(cfg.RAMThreshold)
 	}
 
 	ioExceeded := false
 	ioPercent := 0.0
-	ioThresholdDuration := m.cfg.GetIOThresholdDuration()
-	if m.cfg.IOEnabled && m.cfg.IOThreshold > 0 && m.cfg.IOWriteBPS != "" && m.cfg.IOWriteBPS != "max" {
-		writeLimit, err := config.ParseRAMQuota(m.cfg.IOWriteBPS)
+	ioThresholdDuration := cfg.GetIOThresholdDuration()
+	if cfg.IOEnabled && cfg.IOThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
+		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
 		if err == nil && writeLimit > 0 {
 			totalWriteLimit := writeLimit * uint64(metrics.LimitedUsersCount)
 			if totalWriteLimit > 0 {
 				ioPercent = float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
-				ioExceeded = ioPercent >= float64(m.cfg.IOThreshold)
+				ioExceeded = ioPercent >= float64(cfg.IOThreshold)
 			}
 		}
 	}
@@ -480,7 +482,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if ioThresholdDuration > 0 && ioExceeded {
 		ioTrackerReady := m.ioThresholdTracker.ShouldActivateLimits(
 			ioPercent,
-			float64(m.cfg.IOThreshold),
+			float64(cfg.IOThreshold),
 			time.Duration(ioThresholdDuration)*time.Second,
 		)
 		if !ioTrackerReady {
@@ -498,20 +500,20 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	cpuBelow := metrics.LimitedUsersCPUUsage < float64(cpuReleaseThreshold)
 
 	ramBelow := true
-	if m.cfg.RAMEnabled && m.cfg.RAMReleaseThreshold > 0 && metrics.TotalMemoryMB > 0 {
+	if cfg.RAMEnabled && cfg.RAMReleaseThreshold > 0 && metrics.TotalMemoryMB > 0 {
 		limitedRAMMB := float64(metrics.LimitedUsersRAMUsageBytes) / (1024 * 1024)
 		ramPercent := (limitedRAMMB / metrics.TotalMemoryMB) * 100
-		ramBelow = ramPercent < float64(m.cfg.RAMReleaseThreshold)
+		ramBelow = ramPercent < float64(cfg.RAMReleaseThreshold)
 	}
 
 	ioBelow := true
-	if m.cfg.IOEnabled && m.cfg.IOReleaseThreshold > 0 && m.cfg.IOWriteBPS != "" && m.cfg.IOWriteBPS != "max" {
-		writeLimit, err := config.ParseRAMQuota(m.cfg.IOWriteBPS)
+	if cfg.IOEnabled && cfg.IOReleaseThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
+		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
 		if err == nil && writeLimit > 0 {
 			totalWriteLimit := writeLimit * uint64(metrics.LimitedUsersCount)
 			if totalWriteLimit > 0 {
 				ioPercent := float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
-				ioBelow = ioPercent < float64(m.cfg.IOReleaseThreshold)
+				ioBelow = ioPercent < float64(cfg.IOReleaseThreshold)
 			}
 		}
 	}
@@ -527,6 +529,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 		// Disattiva solo quando TUTTE le risorse sono sotto le soglie di rilascio
 		if allBelow {
+			if m.stabilityTracker == nil {
+				m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+			}
+
 			// Verifica stabilità per CPU (evita rilasci nervosi per singoli campioni a 0%)
 			// Richiediamo 3 campionamenti consecutivi sotto soglia (~90 secondi)
 			m.stabilityTracker.mu.Lock()
@@ -534,8 +540,12 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
 			maxUserEMA := 0.0
-			limitedUsers := m.metricsCollector.GetLimitedUsers()
-			allUserMetrics := m.metricsCollector.GetAllUserMetrics()
+			var limitedUsers []int
+			allUserMetrics := make(map[int]*resmanmetrics.UserMetrics)
+			if m.metricsCollector != nil {
+				limitedUsers = m.metricsCollector.GetLimitedUsers()
+				allUserMetrics = m.metricsCollector.GetAllUserMetrics()
+			}
 
 			for _, uid := range limitedUsers {
 				if um, ok := allUserMetrics[uid]; ok {
@@ -624,15 +634,16 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 // buildActivateReason costruisce la ragione di attivazione basata sulle risorse che superano la soglia.
 func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool, metrics *SystemMetrics, cpuThreshold int) string {
+	cfg := m.GetConfig()
 	reasons := []string{}
 	if cpuExceeded {
 		reasons = append(reasons, fmt.Sprintf("CPU %.1f%% >= %d%%", metrics.LimitedUsersCPUUsage, cpuThreshold))
 	}
 	if ramExceeded {
-		reasons = append(reasons, fmt.Sprintf("RAM >= %d%%", m.cfg.RAMThreshold))
+		reasons = append(reasons, fmt.Sprintf("RAM >= %d%%", cfg.RAMThreshold))
 	}
 	if ioExceeded {
-		reasons = append(reasons, fmt.Sprintf("IO >= %d%%", m.cfg.IOThreshold))
+		reasons = append(reasons, fmt.Sprintf("IO >= %d%%", cfg.IOThreshold))
 	}
 	return fmt.Sprintf("Threshold exceeded: %s", strings.Join(reasons, ", "))
 }
@@ -662,6 +673,7 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 
 // releaseIdleUsers rilascia gli utenti che non stanno usando CPU mentre i limiti sono attivi
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
+	cfg := m.GetConfig()
 	if !m.limitsActive {
 		return nil // Limiti non attivi, nessun rilascio necessario
 	}
@@ -713,10 +725,10 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	// Rilascia ogni utente inattivo
 	for _, uid := range usersToRelease {
 		// Ripristina il limite normale
-		if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
+		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for idle user",
 				"uid", uid,
-				"quota", m.cfg.CPUQuotaNormal,
+				"quota", cfg.CPUQuotaNormal,
 				"error", err,
 			)
 			if firstError == nil {
@@ -728,7 +740,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		releasedCount++
 		m.logger.Debug("CPU limit removed for idle user",
 			"uid", uid,
-			"quota", m.cfg.CPUQuotaNormal,
+			"quota", cfg.CPUQuotaNormal,
 		)
 	}
 
@@ -736,7 +748,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	m.logger.Info("Idle user release completed",
 		"released", releasedCount,
 		"remaining_limited", remainingLimited,
-		"quota_restored", m.cfg.CPUQuotaNormal,
+		"quota_restored", cfg.CPUQuotaNormal,
 	)
 
 	return firstError
@@ -744,6 +756,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 
 // activateLimits attiva i limiti di CPU per gli utenti attivi usando pesi proporzionali.
 func (m *Manager) activateLimits(metrics *SystemMetrics) error {
+	cfg := m.GetConfig()
 	m.logger.Info("Activating CPU limits with proportional weights")
 
 	// Incrementa il contatore di attivazioni
@@ -787,12 +800,12 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 		// Crea il cgroup condiviso
 		sharedPath, err := m.cgroupManager.CreateSharedCgroup()
 		if err != nil {
-			return fmt.Errorf("failed to create shared cgroup (min_system_cores=%d, total_cores=%d): %w", m.cfg.MinSystemCores, metrics.TotalCores, err)
+			return fmt.Errorf("failed to create shared cgroup (min_system_cores=%d, total_cores=%d): %w", cfg.GetMinSystemCores(), metrics.TotalCores, err)
 		}
 		m.sharedCgroupPath = sharedPath
 
 		// Calcola la quota TOTALE per tutti gli utenti
-		availableCores := metrics.TotalCores - m.cfg.MinSystemCores
+		availableCores := metrics.TotalCores - cfg.GetMinSystemCores()
 		if availableCores < 1 {
 			availableCores = 1
 		}
@@ -810,7 +823,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			"path", sharedPath,
 			"total_quota", sharedQuota,
 			"available_cores", availableCores,
-			"min_system_cores", m.cfg.MinSystemCores,
+			"min_system_cores", cfg.GetMinSystemCores(),
 			"total_cores", metrics.TotalCores,
 		)
 	}
@@ -823,12 +836,12 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 		// Salta utenti che non possono essere limitati
 		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
-		if !m.cfg.IsUserIncluded(username) || m.cfg.IsUserExcluded(username) {
+		if !cfg.IsUserIncluded(username) || cfg.IsUserExcluded(username) {
 			m.logger.Debug("Skipping user - not in include list or in exclude list",
 				"uid", uid,
 				"username", username,
-				"is_included", m.cfg.IsUserIncluded(username),
-				"is_excluded", m.cfg.IsUserExcluded(username),
+				"is_included", cfg.IsUserIncluded(username),
+				"is_excluded", cfg.IsUserExcluded(username),
 			)
 			continue
 		}
@@ -885,19 +898,19 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 				// Applica limite RAM se abilitato e l'utente è soggetto a RAM limits
 				if m.shouldApplyRAMLimits(uid) {
-					quotaBytes, err := config.ParseRAMQuota(m.cfg.RAMQuotaPerUser)
+					quotaBytes, err := config.ParseRAMQuota(cfg.RAMQuotaPerUser)
 					if err != nil || quotaBytes == 0 {
 						m.logger.Debug("RAM quota per user is 0 or invalid, skipping",
 							"uid", uid,
-							"quota", m.cfg.RAMQuotaPerUser,
+							"quota", cfg.RAMQuotaPerUser,
 						)
 					} else {
 						// Calcola memory.high come percentuale di memory.max
-						highBytes := uint64(float64(quotaBytes) * m.cfg.GetRAMHighRatio())
+						highBytes := uint64(float64(quotaBytes) * cfg.GetRAMHighRatio())
 						highStr := strconv.FormatUint(highBytes, 10)
-						maxStr := m.cfg.RAMQuotaPerUser
+						maxStr := cfg.RAMQuotaPerUser
 
-						if m.cfg.DisableSwap {
+						if cfg.DisableSwap {
 							if err := m.cgroupManager.ApplyRAMLimitWithHighAndSwapDisabled(uid, maxStr, highStr); err != nil {
 								m.logger.Warn("Failed to apply RAM high+max limits with swap disabled for user",
 									"uid", uid,
@@ -920,11 +933,11 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				}
 				// Applica limiti IO se abilitati
 				if m.shouldApplyIOLimits(uid) {
-					readBPS := m.cfg.GetIOReadBPS()
-					writeBPS := m.cfg.GetIOWriteBPS()
-					readIOPS := m.cfg.GetIOReadIOPS()
-					writeIOPS := m.cfg.GetIOWriteIOPS()
-					deviceFilter := m.cfg.GetIODeviceFilter()
+					readBPS := cfg.GetIOReadBPS()
+					writeBPS := cfg.GetIOWriteBPS()
+					readIOPS := cfg.GetIOReadIOPS()
+					writeIOPS := cfg.GetIOWriteIOPS()
+					deviceFilter := cfg.GetIODeviceFilter()
 
 					if err := m.cgroupManager.ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter); err != nil {
 						m.logger.Warn("Failed to apply IO limit for user",
@@ -949,6 +962,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			m.mu.Unlock()
 
 			limitedCount++
+			m.notifyUserLimited(cfg, uid, username, metrics)
 
 			m.logger.Debug("User configured in shared cgroup",
 				"uid", uid,
@@ -979,6 +993,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 // deactivateLimits rimuove i limiti di CPU da tutti gli utenti.
 func (m *Manager) deactivateLimits() error {
+	cfg := m.GetConfig()
 	m.logger.Info("Deactivating CPU limits")
 
 	// Incrementa il contatore di disattivazioni
@@ -1022,7 +1037,7 @@ func (m *Manager) deactivateLimits() error {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Ripristina il limite normale
-		if err := m.cgroupManager.ApplyCPULimit(uid, m.cfg.CPUQuotaNormal); err != nil {
+		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for user",
 				"user", userStr,
 				"error", err,
@@ -1189,7 +1204,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 	// Aggiorna metriche di sistema
 	if load, err := m.getLoadAverage(); err == nil {
-		actionCores := metrics.TotalCores - m.cfg.GetMinSystemCores()
+		actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
 		if actionCores < 1 {
 			actionCores = 1
 		}
@@ -1237,20 +1252,22 @@ func (m *Manager) getUsername(uid int) string {
 
 // shouldApplyRAMLimits verifica se i limiti RAM dovrebbero essere applicati a un utente.
 func (m *Manager) shouldApplyRAMLimits(uid int) bool {
-	if !m.cfg.RAMEnabled {
+	cfg := m.GetConfig()
+	if !cfg.RAMEnabled {
 		return false
 	}
 	username := m.getUsername(uid)
-	return m.cfg.IsUserWhitelistedForRAM(username)
+	return cfg.IsUserWhitelistedForRAM(username)
 }
 
 // shouldApplyIOLimits verifica se i limiti IO devono essere applicati per l'utente.
 func (m *Manager) shouldApplyIOLimits(uid int) bool {
-	if !m.cfg.IOEnabled {
+	cfg := m.GetConfig()
+	if !cfg.IOEnabled {
 		return false
 	}
 	username := m.getUsername(uid)
-	return m.cfg.IsUserWhitelistedForIO(username)
+	return cfg.IsUserWhitelistedForIO(username)
 }
 
 // GetUIDFromUsername risolve un username a UID scansionando /proc
@@ -1401,14 +1418,36 @@ func (m *Manager) ForceActivateLimits() error {
 func (m *Manager) ForceDeactivateLimits() error {
 	err := m.deactivateLimits()
 	// FIX A4: Reset stability tracker on forced deactivation to avoid stale state
+	if m.stabilityTracker == nil {
+		m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+	}
 	m.stabilityTracker.mu.Lock()
 	m.stabilityTracker.underThreshold = make(map[int]int)
 	m.stabilityTracker.mu.Unlock()
 	return err
 }
 
+// UpdateConfig aggiorna la configurazione del manager.
+func (m *Manager) UpdateConfig(newConfig *config.Config) {
+	if newConfig == nil {
+		return
+	}
+	m.mu.Lock()
+	m.cfg = newConfig
+	m.mu.Unlock()
+
+	m.logger.Info("State manager configuration updated",
+		"polling_interval", newConfig.PollingInterval,
+		"cpu_threshold", newConfig.CPUThreshold,
+		"cpu_release_threshold", newConfig.CPUReleaseThreshold,
+		"cpu_threshold_duration", newConfig.CPUThresholdDuration,
+	)
+}
+
 // GetConfig returns the current configuration
 func (m *Manager) GetConfig() *config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.cfg
 }
 
