@@ -527,6 +527,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 		// Disattiva solo quando TUTTE le risorse sono sotto le soglie di rilascio
 		if allBelow {
+			if m.stabilityTracker == nil {
+				m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+			}
+
 			// Verifica stabilità per CPU (evita rilasci nervosi per singoli campioni a 0%)
 			// Richiediamo 3 campionamenti consecutivi sotto soglia (~90 secondi)
 			m.stabilityTracker.mu.Lock()
@@ -534,8 +538,12 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
 			maxUserEMA := 0.0
-			limitedUsers := m.metricsCollector.GetLimitedUsers()
-			allUserMetrics := m.metricsCollector.GetAllUserMetrics()
+			var limitedUsers []int
+			allUserMetrics := make(map[int]*resmanmetrics.UserMetrics)
+			if m.metricsCollector != nil {
+				limitedUsers = m.metricsCollector.GetLimitedUsers()
+				allUserMetrics = m.metricsCollector.GetAllUserMetrics()
+			}
 
 			for _, uid := range limitedUsers {
 				if um, ok := allUserMetrics[uid]; ok {
@@ -1401,14 +1409,36 @@ func (m *Manager) ForceActivateLimits() error {
 func (m *Manager) ForceDeactivateLimits() error {
 	err := m.deactivateLimits()
 	// FIX A4: Reset stability tracker on forced deactivation to avoid stale state
+	if m.stabilityTracker == nil {
+		m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+	}
 	m.stabilityTracker.mu.Lock()
 	m.stabilityTracker.underThreshold = make(map[int]int)
 	m.stabilityTracker.mu.Unlock()
 	return err
 }
 
+// UpdateConfig aggiorna la configurazione del manager.
+func (m *Manager) UpdateConfig(newConfig *config.Config) {
+	if newConfig == nil {
+		return
+	}
+	m.mu.Lock()
+	m.cfg = newConfig
+	m.mu.Unlock()
+
+	m.logger.Info("State manager configuration updated",
+		"polling_interval", newConfig.PollingInterval,
+		"cpu_threshold", newConfig.CPUThreshold,
+		"cpu_release_threshold", newConfig.CPUReleaseThreshold,
+		"cpu_threshold_duration", newConfig.CPUThresholdDuration,
+	)
+}
+
 // GetConfig returns the current configuration
 func (m *Manager) GetConfig() *config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.cfg
 }
 

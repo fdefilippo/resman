@@ -82,14 +82,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 
 	// 3. State manager (aggiorna parametri)
 	if r.stateManager != nil {
-		// Il state manager avrà bisogno di un metodo per aggiornare la config
-		// Per ora, logghiamo solo
-		r.logger.Info("State manager configuration updated",
-			"polling_interval", newConfig.PollingInterval,
-			"cpu_threshold", newConfig.CPUThreshold,
-			"cpu_release_threshold", newConfig.CPUReleaseThreshold,
-			"cpu_threshold_duration", newConfig.CPUThresholdDuration,
-		)
+		r.stateManager.UpdateConfig(newConfig)
 	}
 
 	// 4. Cgroup manager (aggiorna percorsi)

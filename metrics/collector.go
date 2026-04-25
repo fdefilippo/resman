@@ -1099,6 +1099,9 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 	// Merge IO data into main tempData
 	for uid, ioD := range ioData {
+		if !c.isValidUserUID(uid) {
+			continue
+		}
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}

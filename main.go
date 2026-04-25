@@ -147,7 +147,11 @@ func main() {
 			)
 			fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize metrics database at %s: %v\n", cfg.MetricsDBPath, err)
 			fmt.Fprintf(os.Stderr, "Database features disabled. To fix:\n")
-			fmt.Fprintf(os.Stderr, "  1. Ensure directory exists: mkdir -p %s\n", cfg.MetricsDBPath[:strings.LastIndex(cfg.MetricsDBPath, "/")])
+			dbDir := "."
+			if idx := strings.LastIndex(cfg.MetricsDBPath, "/"); idx > 0 {
+				dbDir = cfg.MetricsDBPath[:idx]
+			}
+			fmt.Fprintf(os.Stderr, "  1. Ensure directory exists: mkdir -p %s\n", dbDir)
 			fmt.Fprintf(os.Stderr, "  2. Check write permissions\n")
 			fmt.Fprintf(os.Stderr, "  3. Or disable with METRICS_DB_ENABLED=false\n")
 			cfg.MetricsDBEnabled = false
