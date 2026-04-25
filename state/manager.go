@@ -417,14 +417,7 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	for _, uid := range limitedUsers {
 		if um, ok := allUserMetrics[uid]; ok {
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
-		}
-		if m.cgroupManager != nil {
-			_, wBytes, _, _, err := m.cgroupManager.GetIOStats(uid)
-			if err != nil {
-				m.logger.Warn("Failed to get IO stats for user", "uid", uid, "error", err)
-			} else {
-				metrics.LimitedUsersIOWriteBytes += wBytes
-			}
+			metrics.LimitedUsersIOWriteBytes += um.IOWriteBytes
 		}
 	}
 
@@ -1159,7 +1152,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			var err error
 			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, err = m.cgroupManager.GetUserCgroupMetrics(uid)
 			if err != nil {
-				m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
+				if isMissingUserCgroupError(err) {
+					m.logger.Debug("Cgroup metrics unavailable for user without cgroup", "uid", uid)
+				} else {
+					m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
+				}
 			}
 		}
 
@@ -1449,6 +1446,10 @@ func (m *Manager) GetConfig() *config.Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cfg
+}
+
+func isMissingUserCgroupError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "cgroup for UID") && strings.Contains(err.Error(), "not found")
 }
 
 // ControlCycleEntry represents a single control cycle entry in history
