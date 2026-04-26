@@ -200,6 +200,13 @@ type Config struct {
 
 	// Username Cache TTL (minutes)
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
+
+	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
+	PSIEventDriven       bool   `config:"PSI_EVENT_DRIVEN"`       // Enable PSI event-driven control cycles
+	PSICPUStallThreshold int    `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
+	PSIOStallThreshold   int    `config:"PSI_IO_STALL_THRESHOLD"` // IO stall threshold in microseconds (default 50000)
+	PSIWindowUs          int    `config:"PSI_WINDOW_US"`          // PSI tracking window in microseconds (default 1000000 = 1s)
+	PSIFallbackInterval  int    `config:"PSI_FALLBACK_INTERVAL"`  // Fallback polling interval in seconds when event-driven (default 300 = 5min)
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -341,6 +348,13 @@ func DefaultConfig() *Config {
 
 		// Username Cache TTL (minutes)
 		UsernameCacheTTL: 60, // Default 60 minutes
+
+		// PSI Event-Driven mode defaults
+		PSIEventDriven:       false,
+		PSICPUStallThreshold: 50000,
+		PSIOStallThreshold:   50000,
+		PSIWindowUs:          1000000,
+		PSIFallbackInterval:  300,
 	}
 }
 
@@ -1087,6 +1101,33 @@ func setConfigField(cfg *Config, key, value string) error {
 		}
 	case "INTERACTIVE_RAM_QUOTA":
 		cfg.InteractiveRAMQuota = value
+
+	// PSI Event-Driven mode
+	case "PSI_EVENT_DRIVEN":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.PSIEventDriven = true
+		case "false", "0", "no", "off":
+			cfg.PSIEventDriven = false
+		default:
+			cfg.PSIEventDriven = false
+		}
+	case "PSI_CPU_STALL_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSICPUStallThreshold = i
+		}
+	case "PSI_IO_STALL_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIOStallThreshold = i
+		}
+	case "PSI_WINDOW_US":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIWindowUs = i
+		}
+	case "PSI_FALLBACK_INTERVAL":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIFallbackInterval = i
+		}
 
 	default:
 		return nil
@@ -2099,4 +2140,39 @@ func (c *Config) GetProcessExcludeList() []string {
 		copy[i] = v
 	}
 	return copy
+}
+
+// GetPSIEventDriven returns whether PSI event-driven mode is enabled.
+func (c *Config) GetPSIEventDriven() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIEventDriven
+}
+
+// GetPSICPUStallThreshold returns the CPU stall threshold in microseconds.
+func (c *Config) GetPSICPUStallThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSICPUStallThreshold
+}
+
+// GetPSIOStallThreshold returns the IO stall threshold in microseconds.
+func (c *Config) GetPSIOStallThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIOStallThreshold
+}
+
+// GetPSIWindowUs returns the PSI tracking window in microseconds.
+func (c *Config) GetPSIWindowUs() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIWindowUs
+}
+
+// GetPSIFallbackInterval returns the fallback polling interval when event-driven.
+func (c *Config) GetPSIFallbackInterval() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIFallbackInterval
 }
