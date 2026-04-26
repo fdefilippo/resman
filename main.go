@@ -39,7 +39,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-var version = "1.23.0"
+var version = "1.24.0"
 
 // checkPortAvailable verifica se una porta TCP è disponibile
 func checkPortAvailable(host string, port int) bool {
@@ -121,10 +121,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  4. Check permissions on %s\n", cfg.CgroupRoot)
 		os.Exit(1)
 	}
-	logger.Info("Cgroup manager initialized",
-		"cgroup_root", cfg.CgroupRoot,
-		"cgroup_base", cfg.CgroupBase,
-	)
 
 	// 2. Metrics Collector
 	metricsCollector, err := metrics.NewCollector(cfg)
@@ -331,6 +327,33 @@ func main() {
 	// Loop principale di controllo
 	pollingInterval := stateManager.GetConfig().GetPollingInterval()
 	logger.Info("Entering main control loop", "polling_interval_seconds", pollingInterval)
+
+	// PSI Event-Driven mode
+	var psiWatcher *cgroup.PSIWatcher
+	var psiEvents <-chan cgroup.PSIEvent
+	if cfg.GetPSIEventDriven() {
+		psiWatcher = cgroup.NewPSIWatcher(cfg.CgroupRoot, uint64(cfg.GetPSIWindowUs()))
+		psiWatcher.SetThreshold("cpu", uint64(cfg.GetPSICPUStallThreshold()))
+		psiWatcher.SetThreshold("io", uint64(cfg.GetPSIOStallThreshold()))
+		if err := psiWatcher.Start(); err != nil {
+			logger.Warn("Failed to start PSI watcher, falling back to polling", "error", err)
+			psiWatcher = nil
+		} else {
+			psiEvents = psiWatcher.Events()
+			psiFallback := cfg.GetPSIFallbackInterval()
+			logger.Info("PSI event-driven mode enabled",
+				"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
+				"io_threshold_us", cfg.GetPSIOStallThreshold(),
+				"window_us", cfg.GetPSIWindowUs(),
+				"fallback_interval_s", psiFallback,
+			)
+			// In event-driven mode il ticker serve come heartbeat di fallback
+			if psiFallback > 0 {
+				pollingInterval = psiFallback
+			}
+		}
+	}
+
 	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
 	defer ticker.Stop()
 
@@ -387,10 +410,22 @@ func main() {
 				logger.Info("Metrics collector stopped")
 			}
 
+			// Stop PSI watcher
+			if psiWatcher != nil {
+				psiWatcher.Stop()
+				logger.Info("PSI watcher stopped")
+			}
+
 			logger.Info("Shutdown completed")
 			return
 
 		case <-ticker.C:
+			// In event-driven mode il ticker serve solo come heartbeat
+			if psiWatcher != nil {
+				logger.Debug("PSI heartbeat tick")
+				continue
+			}
+
 			currentPollingInterval := stateManager.GetConfig().GetPollingInterval()
 			if currentPollingInterval != pollingInterval {
 				ticker.Stop()
@@ -433,6 +468,31 @@ func main() {
 					"duration_ms", duration.Milliseconds(),
 				)
 			}
+
+		case psiEvent, ok := <-psiEvents:
+			if !ok {
+				continue
+			}
+			logger.Debug("PSI event received, triggering control cycle",
+				"type", psiEvent.Type,
+				"some_avg10", psiEvent.SomeAvg10,
+			)
+
+			// Backpressure: Skip if previous cycle still running
+			select {
+			case <-cycleComplete:
+			default:
+				logger.Debug("Skipping PSI-triggered cycle - previous still running")
+				continue
+			}
+
+			cycleComplete = make(chan struct{})
+
+			if err := stateManager.RunControlCycle(ctx); err != nil {
+				logger.Error("Error in control cycle (PSI-triggered)", "error", err)
+			}
+
+			close(cycleComplete)
 		}
 	}
 }

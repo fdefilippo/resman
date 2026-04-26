@@ -123,13 +123,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # # RAM metrics continue to work, but no limits are applied
 # RAM_LIMIT_ENABLED=false
 #
-# # Disable RAM limits but keep Workload Pattern Detection for CPU
-# # If AUTODETECT_PATTERNS=true, empty RAM quotas to prevent RAM limits
-# RAM_LIMIT_ENABLED=false
-# AUTODETECT_PATTERNS=true
-# BATCH_NIGHT_RAM_QUOTA=
-# INTERACTIVE_RAM_QUOTA=
-#
 #
 RAM_LIMIT_ENABLED=false
 RAM_THRESHOLD=75
@@ -179,6 +172,10 @@ RAM_USER_EXCLUDE_LIST=root
 # IO_THRESHOLD_DURATION: Seconds to wait before activating IO limits (0 = immediate)
 #   Useful to avoid throttling on brief IO spikes (e.g., backups, builds, file copies)
 #
+# IO_USER_INCLUDE_LIST: If specified, include ONLY matching users for IO limits
+# IO_USER_EXCLUDE_LIST: If specified, EXCLUDE users from IO limits
+# Format: comma-separated regex patterns
+#
 # Examples:
 # # IO limits disabled (default)
 # IO_LIMIT_ENABLED=false
@@ -211,6 +208,8 @@ IO_READ_IOPS=1000
 IO_WRITE_IOPS=500
 IO_DEVICE_FILTER=all
 IO_THRESHOLD_DURATION=0
+IO_USER_INCLUDE_LIST=
+IO_USER_EXCLUDE_LIST=root
 
 # IO Starvation Auto-Remediation
 # Detects when a user is IO-throttled for too long and temporarily
@@ -232,6 +231,63 @@ IO_BOOST_DURATION=600
 IO_BOOST_MAX_PER_HOUR=3
 IO_PSI_THRESHOLD=50
 IO_REVERT_ON_NORMAL=true
+
+# ========================
+# WORKLOAD PATTERN DETECTION [D]
+# ========================
+# Auto-detect user workload patterns (batch/interactive/mixed) and apply
+# appropriate CPU and RAM quotas based on historical usage.
+# Uses a sliding window of PATTERN_HISTORY_HOURS with hourly analysis.
+#
+# AUTODETECT_PATTERNS: Enable pattern detection (true/false)
+# Default: false
+#
+# PATTERN_HISTORY_HOURS: Historical analysis window in hours
+# Default: 168 (7 days)
+# Longer windows provide better classification but take longer to converge
+#
+# PATTERN_MIN_SAMPLES: Minimum samples before making a classification
+# Default: 24 (24 hours of data)
+#
+# PATTERN_CONFIDENCE_THRESHOLD: Minimum confidence for classification (0.0-1.0)
+# Default: 0.7
+# Higher values reduce false classifications but may leave users unclassified
+#
+# BATCH_NIGHT_CPU_QUOTA: CPU quota for batch night pattern (microseconds)
+# Default: 200000 (2 cores, used with 100000 period)
+# BATCH_NIGHT_RAM_QUOTA: RAM quota for batch night pattern
+# Default: 4G
+#
+# INTERACTIVE_CPU_QUOTA: CPU quota for interactive day pattern (microseconds)
+# Default: 50000 (0.5 core)
+# INTERACTIVE_RAM_QUOTA: RAM quota for interactive day pattern
+# Default: 1G
+#
+# Examples:
+# # Enable pattern detection with defaults
+# AUTODETECT_PATTERNS=true
+#
+# # Aggressive pattern detection (faster convergence)
+# AUTODETECT_PATTERNS=true
+# PATTERN_HISTORY_HOURS=48       # 2 day window
+# PATTERN_MIN_SAMPLES=12         # 12 hours minimum
+# PATTERN_CONFIDENCE_THRESHOLD=0.5  # Lower confidence requirement
+#
+# # Batch-optimized: high quotas for batch users
+# AUTODETECT_PATTERNS=true
+# BATCH_NIGHT_CPU_QUOTA=400000   # 4 cores
+# BATCH_NIGHT_RAM_QUOTA=8G
+# INTERACTIVE_CPU_QUOTA=25000    # 0.25 core
+# INTERACTIVE_RAM_QUOTA=512M
+#
+AUTODETECT_PATTERNS=false
+PATTERN_HISTORY_HOURS=168
+PATTERN_MIN_SAMPLES=24
+PATTERN_CONFIDENCE_THRESHOLD=0.7
+BATCH_NIGHT_CPU_QUOTA=200000
+BATCH_NIGHT_RAM_QUOTA=4G
+INTERACTIVE_CPU_QUOTA=50000
+INTERACTIVE_RAM_QUOTA=1G
 
 # ========================
 # LIMIT HOOK [D]
@@ -313,7 +369,8 @@ SYSTEM_UID_MIN=1000
 # SYSTEM_UID_MAX: Maximum UID to monitor
 # Default: read automatically from /proc/sys/kernel/pid_max
 # Typically: 32768, 65536, or 4194304 on modern systems
-# SYSTEM_UID_MAX is read automatically from /proc/sys/kernel/pid_max
+# Uncomment to override:
+# SYSTEM_UID_MAX=60000
 
 # ========================
 # USER INCLUDE LIST [D]
@@ -524,3 +581,57 @@ METRICS_DB_WRITE_INTERVAL=30
 #
 # # Default: 60 minutes
 USERNAME_CACHE_TTL=60
+
+# ========================
+# PSI EVENT-DRIVEN MODE [S]
+# ========================
+# Uses poll() on cpu.pressure and io.pressure to trigger control cycles
+# only when system pressure exceeds configured thresholds, instead of
+# running at fixed intervals. Requires Linux >= 4.20 with CONFIG_PSI=y.
+#
+# PSI_EVENT_DRIVEN: Enable event-driven mode (true/false)
+# Default: false (use traditional polling)
+#
+# PSI_CPU_STALL_THRESHOLD: CPU stall threshold in microseconds
+# Default: 50000 (5% on 1s window)
+# Formula: pressure = threshold / window * 100
+# Example: 50000 us / 1000000 us = 5% CPU pressure
+#
+# PSI_IO_STALL_THRESHOLD: IO stall threshold in microseconds
+# Default: 50000 (5% on 1s window)
+#
+# PSI_WINDOW_US: PSI tracking window in microseconds
+# Default: 1000000 (1 second)
+# The kernel tracks stall time within this rolling window.
+#
+# PSI_FALLBACK_INTERVAL: Fallback polling interval in seconds
+# Default: 300 (5 minutes)
+# Heartbeat to ensure control cycles still run if no PSI events fire
+# (e.g., system idle). Set to 0 to disable fallback (not recommended).
+#
+# Examples:
+# # Enable event-driven mode with default thresholds
+# PSI_EVENT_DRIVEN=true
+#
+# # Sensitive to CPU pressure (2.5% threshold)
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=25000
+# PSI_WINDOW_US=1000000
+#
+# # Only IO-sensitive
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=100000  # 10% - less sensitive to CPU
+# PSI_IO_STALL_THRESHOLD=25000    # 2.5% - more sensitive to IO
+# PSI_FALLBACK_INTERVAL=600       # 10 minute heartbeat
+#
+# # Aggressive event mode (frequent cycles)
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=10000   # 1% threshold
+# PSI_IO_STALL_THRESHOLD=10000    # 1% threshold
+# PSI_FALLBACK_INTERVAL=60        # 1 minute heartbeat
+#
+PSI_EVENT_DRIVEN=false
+# PSI_CPU_STALL_THRESHOLD=50000
+# PSI_IO_STALL_THRESHOLD=50000
+# PSI_WINDOW_US=1000000
+# PSI_FALLBACK_INTERVAL=300

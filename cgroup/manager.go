@@ -1253,10 +1253,18 @@ func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, me
 	}
 
 	// Leggi memory.high events
-	memoryHighEvents, _ = m.GetMemoryHighEvents(uid) // Ignora errore, è opzionale
+	if memEvents, memErr := m.GetMemoryHighEvents(uid); memErr == nil {
+		memoryHighEvents = memEvents
+	} else {
+		m.logger.Debug("Failed to read memory high events (optional metric)", "uid", uid, "error", memErr)
+	}
 
 	// Leggi io.stat
-	ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, _ = m.GetIOStats(uid) // Ignora errore, è opzionale
+	if rBytes, wBytes, rOps, wOps, ioErr := m.GetIOStats(uid); ioErr == nil {
+		ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps = rBytes, wBytes, rOps, wOps
+	} else {
+		m.logger.Debug("Failed to read IO stats (optional metric)", "uid", uid, "error", ioErr)
+	}
 
 	return cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, nil
 }

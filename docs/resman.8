@@ -1,4 +1,4 @@
-.TH RESMAN 8 "April 2026" "v1.23.0" "System Administration"
+.TH RESMAN 8 "April 2026" "v1.24.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -47,6 +47,8 @@ Workload pattern detection for adaptive limits (AUTODETECT_PATTERNS)
 IO starvation auto\-remediation (IO_REMEDIATION_ENABLED)
 .IP \(bu
 Timeout configuration for cgroup operations (CGROUP_OPERATION_TIMEOUT)
+.IP \(bu
+PSI event-driven control cycles for reduced polling overhead (PSI_EVENT_DRIVEN)
 .IP \(bu
 Performance optimizations: gopsutil process scanning, batch PID moves, regex cache
 .IP \(bu
@@ -195,9 +197,64 @@ IO starvation auto\-remediation can be enabled to temporarily boost limits when 
 .B IO_PSI_THRESHOLD
 - PSI some avg10 % threshold for detection
 .IP \(bu
-.B IO_REVERT_ON_NORMAL
+. B IO_REVERT_ON_NORMAL
 - Revert limits when I/O returns to normal (true/false)
 .PP
+.SH PSI EVENT-DRIVEN MODE
+When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
+trigger control cycles only when system pressure exceeds configured thresholds,
+instead of running at fixed intervals.
+.PP
+The daemon opens
+.B cpu.pressure
+and
+.B io.pressure
+files from the cgroup root and uses the
+.B poll()
+syscall with
+.B POLLPRI
+to block until the kernel signals that pressure has exceeded the stall threshold.
+When a PSI event fires, the daemon immediately runs a control cycle.
+.PP
+A fallback polling interval (heartbeat) ensures control cycles still run if PSI
+events are not generated for an extended period (e.g., when the system is idle).
+.PP
+Configuration parameters:
+.IP \(bu 2
+.B PSI_EVENT_DRIVEN
+- Enable PSI event-driven mode (true/false, default: false)
+.IP \(bu
+.B PSI_CPU_STALL_THRESHOLD
+- CPU stall threshold in microseconds (default: 50000 = 5% on 1s window)
+.IP \(bu
+.B PSI_IO_STALL_THRESHOLD
+- IO stall threshold in microseconds (default: 50000)
+.IP \(bu
+.B PSI_WINDOW_US
+- PSI tracking window in microseconds (default: 1000000 = 1 second)
+.IP \(bu
+.B PSI_FALLBACK_INTERVAL
+- Fallback polling interval in seconds when event-driven (default: 300 = 5min)
+.PP
+Requirements:
+.IP \(bu 2
+Linux kernel >= 4.20 with CONFIG_PSI=y
+.IP \(bu
+cgroups v2 with cpu.pressure and io.pressure files available
+.IP \(bu
+.B golang.org/x/sys
+package (included as direct dependency)
+.PP
+Example configuration:
+.sp
+.nf
+PSI_EVENT_DRIVEN=true
+PSI_CPU_STALL_THRESHOLD=50000    # 5% CPU pressure
+PSI_IO_STALL_THRESHOLD=50000     # 5% IO pressure
+PSI_WINDOW_US=1000000            # 1 second window
+PSI_FALLBACK_INTERVAL=300        # 5 minute heartbeat
+.fi
+.sp
 .SH WORKLOAD PATTERN DETECTION
 When enabled, the daemon analyzes historical CPU and RAM usage patterns to automatically classify users as "batch" (night\-time high resource consumption) or "interactive" (day\-time moderate usage) and applies appropriate quotas.
 .PP
@@ -451,6 +508,16 @@ METRICS_DB_ENABLED=false
 METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30      # How many days to keep data
 METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
+
+# PSI EVENT-DRIVEN MODE (Linux >= 4.20, CONFIG_PSI=y)
+# Uses poll() on cpu.pressure/io.pressure to trigger control cycles
+# only when system pressure exceeds thresholds. Reduces overhead
+# when the system is idle by using a longer fallback interval.
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=50000    # Stall threshold in microseconds
+# PSI_IO_STALL_THRESHOLD=50000     # IO stall threshold in microseconds
+# PSI_WINDOW_US=1000000            # Tracking window (1 second)
+# PSI_FALLBACK_INTERVAL=300        # Heartbeat interval (5 minutes)
 
 # MCP TOOLS FOR HISTORICAL METRICS (when METRICS_DB_ENABLED=true):
 # - get_user_history: Historical CPU/RAM for a user

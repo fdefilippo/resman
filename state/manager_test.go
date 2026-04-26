@@ -307,9 +307,9 @@ func TestGetUsername(t *testing.T) {
 
 	username := manager.getUsername(1000)
 
-	// Should return UID as string if username lookup fails
-	if username != "1000" {
-		t.Errorf("getUsername(): got %s, expected 1000", username)
+	// Should now return the username from the metrics collector (mock returns "user1000")
+	if username != "user1000" {
+		t.Errorf("getUsername(): got %s, expected user1000", username)
 	}
 }
 

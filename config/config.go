@@ -200,6 +200,13 @@ type Config struct {
 
 	// Username Cache TTL (minutes)
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
+
+	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
+	PSIEventDriven       bool   `config:"PSI_EVENT_DRIVEN"`       // Enable PSI event-driven control cycles
+	PSICPUStallThreshold int    `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
+	PSIOStallThreshold   int    `config:"PSI_IO_STALL_THRESHOLD"` // IO stall threshold in microseconds (default 50000)
+	PSIWindowUs          int    `config:"PSI_WINDOW_US"`          // PSI tracking window in microseconds (default 1000000 = 1s)
+	PSIFallbackInterval  int    `config:"PSI_FALLBACK_INTERVAL"`  // Fallback polling interval in seconds when event-driven (default 300 = 5min)
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -341,6 +348,13 @@ func DefaultConfig() *Config {
 
 		// Username Cache TTL (minutes)
 		UsernameCacheTTL: 60, // Default 60 minutes
+
+		// PSI Event-Driven mode defaults
+		PSIEventDriven:       false,
+		PSICPUStallThreshold: 50000,
+		PSIOStallThreshold:   50000,
+		PSIWindowUs:          1000000,
+		PSIFallbackInterval:  300,
 	}
 }
 
@@ -465,6 +479,26 @@ func loadFromEnvironment(cfg *Config) []string {
 				warnings = append(warnings, fmt.Sprintf("Invalid boolean for %s=%q, using default value %v", envKey, envValue, fieldValue.Bool()))
 			}
 			fieldValue.SetBool(boolVal)
+		case reflect.Slice:
+			if field.Type.Elem().Kind() == reflect.String {
+				parts := strings.Split(envValue, ",")
+				sliceVal := reflect.MakeSlice(field.Type, 0, len(parts))
+				for _, part := range parts {
+					part = strings.TrimSpace(part)
+					if part != "" {
+						sliceVal = reflect.Append(sliceVal, reflect.ValueOf(part))
+					}
+				}
+				fieldValue.Set(sliceVal)
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Unsupported slice type for %s=%q", envKey, envValue))
+			}
+		case reflect.Float64:
+			if fVal, err := strconv.ParseFloat(envValue, 64); err == nil {
+				fieldValue.SetFloat(fVal)
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Invalid float for %s=%q, using default value %f", envKey, envValue, fieldValue.Float()))
+			}
 		}
 	}
 
@@ -820,6 +854,279 @@ func setConfigField(cfg *Config, key, value string) error {
 	case "USERNAME_CACHE_TTL":
 		if i, err := strconv.Atoi(value); err == nil && i > 0 {
 			cfg.UsernameCacheTTL = i
+		}
+
+	// Timeouts
+	case "CGROUP_OPERATION_TIMEOUT":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.CgroupOperationTimeout = i
+		}
+	case "CGROUP_RETRY_DELAY_MS":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.CgroupRetryDelayMs = i
+		}
+	case "MCP_SHUTDOWN_TIMEOUT":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.MCPShutdownTimeout = i
+		}
+
+	// RAM limits
+	case "RAM_LIMIT_ENABLED":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.RAMEnabled = true
+		case "false", "0", "no", "off":
+			cfg.RAMEnabled = false
+		default:
+			cfg.RAMEnabled = false
+		}
+	case "RAM_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.RAMThreshold = i
+		}
+	case "RAM_RELEASE_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.RAMReleaseThreshold = i
+		}
+	case "RAM_QUOTA_LIMITED":
+		cfg.RAMQuotaLimited = value
+	case "RAM_QUOTA_PER_USER":
+		cfg.RAMQuotaPerUser = value
+	case "DISABLE_SWAP":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.DisableSwap = true
+		case "false", "0", "no", "off":
+			cfg.DisableSwap = false
+		default:
+			cfg.DisableSwap = false
+		}
+	case "RAM_HIGH_RATIO":
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.RAMHighRatio = f
+		}
+	case "RAM_USER_INCLUDE_LIST":
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.RAMUserIncludeList = nil
+		} else {
+			patterns := strings.Split(value, ",")
+			cfg.RAMUserIncludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in RAM_USER_INCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.RAMUserIncludeList = append(cfg.RAMUserIncludeList, pattern)
+				}
+			}
+			if len(cfg.RAMUserIncludeList) == 0 {
+				cfg.RAMUserIncludeList = nil
+			}
+		}
+	case "RAM_USER_EXCLUDE_LIST":
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.RAMUserExcludeList = nil
+		} else {
+			patterns := strings.Split(value, ",")
+			cfg.RAMUserExcludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in RAM_USER_EXCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.RAMUserExcludeList = append(cfg.RAMUserExcludeList, pattern)
+				}
+			}
+			if len(cfg.RAMUserExcludeList) == 0 {
+				cfg.RAMUserExcludeList = nil
+			}
+		}
+
+	// IO limits
+	case "IO_LIMIT_ENABLED":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.IOEnabled = true
+		case "false", "0", "no", "off":
+			cfg.IOEnabled = false
+		default:
+			cfg.IOEnabled = false
+		}
+	case "IO_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOThreshold = i
+		}
+	case "IO_RELEASE_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOReleaseThreshold = i
+		}
+	case "IO_READ_BPS":
+		cfg.IOReadBPS = value
+	case "IO_WRITE_BPS":
+		cfg.IOWriteBPS = value
+	case "IO_READ_IOPS":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOReadIOPS = i
+		}
+	case "IO_WRITE_IOPS":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOWriteIOPS = i
+		}
+	case "IO_DEVICE_FILTER":
+		cfg.IODeviceFilter = value
+	case "IO_THRESHOLD_DURATION":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOThresholdDuration = i
+		}
+	case "IO_USER_INCLUDE_LIST":
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.IOUserIncludeList = nil
+		} else {
+			patterns := strings.Split(value, ",")
+			cfg.IOUserIncludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in IO_USER_INCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.IOUserIncludeList = append(cfg.IOUserIncludeList, pattern)
+				}
+			}
+			if len(cfg.IOUserIncludeList) == 0 {
+				cfg.IOUserIncludeList = nil
+			}
+		}
+	case "IO_USER_EXCLUDE_LIST":
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.IOUserExcludeList = nil
+		} else {
+			patterns := strings.Split(value, ",")
+			cfg.IOUserExcludeList = make([]string, 0, len(patterns))
+			for _, pattern := range patterns {
+				pattern = strings.TrimSpace(pattern)
+				if pattern != "" {
+					if _, err := regexp.Compile(pattern); err != nil {
+						return fmt.Errorf("invalid regex pattern '%s' in IO_USER_EXCLUDE_LIST: %w", pattern, err)
+					}
+					cfg.IOUserExcludeList = append(cfg.IOUserExcludeList, pattern)
+				}
+			}
+			if len(cfg.IOUserExcludeList) == 0 {
+				cfg.IOUserExcludeList = nil
+			}
+		}
+
+	// IO Starvation Auto-Remediation
+	case "IO_REMEDIATION_ENABLED":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.IORemediationEnabled = true
+		case "false", "0", "no", "off":
+			cfg.IORemediationEnabled = false
+		default:
+			cfg.IORemediationEnabled = false
+		}
+	case "IO_STARVATION_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOStarvationThreshold = i
+		}
+	case "IO_STARVATION_CHECK_INTERVAL":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOStarvationCheckInterval = i
+		}
+	case "IO_BOOST_MULTIPLIER":
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.IOBoostMultiplier = f
+		}
+	case "IO_BOOST_DURATION":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOBoostDuration = i
+		}
+	case "IO_BOOST_MAX_PER_HOUR":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.IOBoostMaxPerHour = i
+		}
+	case "IO_PSI_THRESHOLD":
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.IOPSIThreshold = f
+		}
+	case "IO_REVERT_ON_NORMAL":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.IORevertOnNormal = true
+		case "false", "0", "no", "off":
+			cfg.IORevertOnNormal = false
+		default:
+			cfg.IORevertOnNormal = true
+		}
+
+	// Workload Pattern Detection
+	case "AUTODETECT_PATTERNS":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.AutodetectPatterns = true
+		case "false", "0", "no", "off":
+			cfg.AutodetectPatterns = false
+		default:
+			cfg.AutodetectPatterns = false
+		}
+	case "PATTERN_HISTORY_HOURS":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PatternHistoryHours = i
+		}
+	case "PATTERN_MIN_SAMPLES":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PatternMinSamples = i
+		}
+	case "PATTERN_CONFIDENCE_THRESHOLD":
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.PatternConfidenceThreshold = f
+		}
+	case "BATCH_NIGHT_CPU_QUOTA":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.BatchNightCPUQuota = i
+		}
+	case "BATCH_NIGHT_RAM_QUOTA":
+		cfg.BatchNightRAMQuota = value
+	case "INTERACTIVE_CPU_QUOTA":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.InteractiveCPUQuota = i
+		}
+	case "INTERACTIVE_RAM_QUOTA":
+		cfg.InteractiveRAMQuota = value
+
+	// PSI Event-Driven mode
+	case "PSI_EVENT_DRIVEN":
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			cfg.PSIEventDriven = true
+		case "false", "0", "no", "off":
+			cfg.PSIEventDriven = false
+		default:
+			cfg.PSIEventDriven = false
+		}
+	case "PSI_CPU_STALL_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSICPUStallThreshold = i
+		}
+	case "PSI_IO_STALL_THRESHOLD":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIOStallThreshold = i
+		}
+	case "PSI_WINDOW_US":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIWindowUs = i
+		}
+	case "PSI_FALLBACK_INTERVAL":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIFallbackInterval = i
 		}
 
 	default:
@@ -1833,4 +2140,39 @@ func (c *Config) GetProcessExcludeList() []string {
 		copy[i] = v
 	}
 	return copy
+}
+
+// GetPSIEventDriven returns whether PSI event-driven mode is enabled.
+func (c *Config) GetPSIEventDriven() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIEventDriven
+}
+
+// GetPSICPUStallThreshold returns the CPU stall threshold in microseconds.
+func (c *Config) GetPSICPUStallThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSICPUStallThreshold
+}
+
+// GetPSIOStallThreshold returns the IO stall threshold in microseconds.
+func (c *Config) GetPSIOStallThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIOStallThreshold
+}
+
+// GetPSIWindowUs returns the PSI tracking window in microseconds.
+func (c *Config) GetPSIWindowUs() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIWindowUs
+}
+
+// GetPSIFallbackInterval returns the fallback polling interval when event-driven.
+func (c *Config) GetPSIFallbackInterval() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIFallbackInterval
 }

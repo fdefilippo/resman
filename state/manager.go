@@ -64,6 +64,9 @@ type Manager struct {
 	metricsCache     map[string]interface{}
 	metricsCacheTime map[string]time.Time
 	cacheMutex       sync.RWMutex
+
+	// Control cycle history (inizializzato in NewManager)
+	controlHist *controlHistory
 }
 
 // ThresholdTracker monitora il superamento della soglia CPU nel tempo
@@ -182,6 +185,10 @@ func NewManager(
 		policyEngine:       NewPolicyEngine(logger),
 		metricsCache:       make(map[string]interface{}),
 		metricsCacheTime:   make(map[string]time.Time),
+		controlHist: &controlHistory{
+			entries: make([]ControlCycleEntry, 0),
+			maxSize: 100,
+		},
 	}
 
 	logger.Info("State manager initialized",
@@ -417,14 +424,7 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	for _, uid := range limitedUsers {
 		if um, ok := allUserMetrics[uid]; ok {
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
-		}
-		if m.cgroupManager != nil {
-			_, wBytes, _, _, err := m.cgroupManager.GetIOStats(uid)
-			if err != nil {
-				m.logger.Warn("Failed to get IO stats for user", "uid", uid, "error", err)
-			} else {
-				metrics.LimitedUsersIOWriteBytes += wBytes
-			}
+			metrics.LimitedUsersIOWriteBytes += um.IOWriteBytes
 		}
 	}
 
@@ -539,7 +539,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			defer m.stabilityTracker.mu.Unlock()
 
 			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
-			maxUserEMA := 0.0
 			var limitedUsers []int
 			allUserMetrics := make(map[int]*resmanmetrics.UserMetrics)
 			if m.metricsCollector != nil {
@@ -549,10 +548,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 			for _, uid := range limitedUsers {
 				if um, ok := allUserMetrics[uid]; ok {
-					if um.CPUUsageEMA > maxUserEMA {
-						maxUserEMA = um.CPUUsageEMA
-					}
-
 					if um.CPUUsageEMA < float64(cpuReleaseThreshold) {
 						m.stabilityTracker.underThreshold[uid]++
 					} else {
@@ -1159,7 +1154,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			var err error
 			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, err = m.cgroupManager.GetUserCgroupMetrics(uid)
 			if err != nil {
-				m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
+				if isMissingUserCgroupError(err) {
+					m.logger.Debug("Cgroup metrics unavailable for user without cgroup", "uid", uid)
+				} else {
+					m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
+				}
 			}
 		}
 
@@ -1247,6 +1246,9 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 
 // getUsername restituisce il nome utente dato l'UID
 func (m *Manager) getUsername(uid int) string {
+	if m.metricsCollector != nil {
+		return m.metricsCollector.GetUsernameFromUID(uid)
+	}
 	return strconv.Itoa(uid)
 }
 
@@ -1451,6 +1453,10 @@ func (m *Manager) GetConfig() *config.Config {
 	return m.cfg
 }
 
+func isMissingUserCgroupError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "cgroup for UID") && strings.Contains(err.Error(), "not found")
+}
+
 // ControlCycleEntry represents a single control cycle entry in history
 type ControlCycleEntry struct {
 	Timestamp     time.Time `json:"timestamp"`
@@ -1470,41 +1476,36 @@ type controlHistory struct {
 	maxSize int
 }
 
-var controlHist = &controlHistory{
-	entries: make([]ControlCycleEntry, 0),
-	maxSize: 100,
-}
-
 // addControlHistoryEntry adds an entry to the control history
 func (m *Manager) addControlHistoryEntry(entry ControlCycleEntry) {
-	controlHist.mu.Lock()
-	defer controlHist.mu.Unlock()
+	m.controlHist.mu.Lock()
+	defer m.controlHist.mu.Unlock()
 
-	controlHist.entries = append(controlHist.entries, entry)
+	m.controlHist.entries = append(m.controlHist.entries, entry)
 
 	// Keep only the last maxSize entries
-	if len(controlHist.entries) > controlHist.maxSize {
-		controlHist.entries = controlHist.entries[len(controlHist.entries)-controlHist.maxSize:]
+	if len(m.controlHist.entries) > m.controlHist.maxSize {
+		m.controlHist.entries = m.controlHist.entries[len(m.controlHist.entries)-m.controlHist.maxSize:]
 	}
 }
 
 // GetControlHistory returns the recent control cycle history
 func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
-	controlHist.mu.RLock()
-	defer controlHist.mu.RUnlock()
+	m.controlHist.mu.RLock()
+	defer m.controlHist.mu.RUnlock()
 
-	if limit <= 0 || limit > len(controlHist.entries) {
-		limit = len(controlHist.entries)
+	if limit <= 0 || limit > len(m.controlHist.entries) {
+		limit = len(m.controlHist.entries)
 	}
 
 	// Return the most recent entries
-	start := len(controlHist.entries) - limit
+	start := len(m.controlHist.entries) - limit
 	if start < 0 {
 		start = 0
 	}
 
 	result := make([]ControlCycleEntry, limit)
-	copy(result, controlHist.entries[start:])
+	copy(result, m.controlHist.entries[start:])
 	return result
 }
 
