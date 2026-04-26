@@ -524,3 +524,57 @@ METRICS_DB_WRITE_INTERVAL=30
 #
 # # Default: 60 minutes
 USERNAME_CACHE_TTL=60
+
+# ========================
+# PSI EVENT-DRIVEN MODE [S]
+# ========================
+# Uses poll() on cpu.pressure and io.pressure to trigger control cycles
+# only when system pressure exceeds configured thresholds, instead of
+# running at fixed intervals. Requires Linux >= 4.20 with CONFIG_PSI=y.
+#
+# PSI_EVENT_DRIVEN: Enable event-driven mode (true/false)
+# Default: false (use traditional polling)
+#
+# PSI_CPU_STALL_THRESHOLD: CPU stall threshold in microseconds
+# Default: 50000 (5% on 1s window)
+# Formula: pressure = threshold / window * 100
+# Example: 50000 us / 1000000 us = 5% CPU pressure
+#
+# PSI_IO_STALL_THRESHOLD: IO stall threshold in microseconds
+# Default: 50000 (5% on 1s window)
+#
+# PSI_WINDOW_US: PSI tracking window in microseconds
+# Default: 1000000 (1 second)
+# The kernel tracks stall time within this rolling window.
+#
+# PSI_FALLBACK_INTERVAL: Fallback polling interval in seconds
+# Default: 300 (5 minutes)
+# Heartbeat to ensure control cycles still run if no PSI events fire
+# (e.g., system idle). Set to 0 to disable fallback (not recommended).
+#
+# Examples:
+# # Enable event-driven mode with default thresholds
+# PSI_EVENT_DRIVEN=true
+#
+# # Sensitive to CPU pressure (2.5% threshold)
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=25000
+# PSI_WINDOW_US=1000000
+#
+# # Only IO-sensitive
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=100000  # 10% - less sensitive to CPU
+# PSI_IO_STALL_THRESHOLD=25000    # 2.5% - more sensitive to IO
+# PSI_FALLBACK_INTERVAL=600       # 10 minute heartbeat
+#
+# # Aggressive event mode (frequent cycles)
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=10000   # 1% threshold
+# PSI_IO_STALL_THRESHOLD=10000    # 1% threshold
+# PSI_FALLBACK_INTERVAL=60        # 1 minute heartbeat
+#
+PSI_EVENT_DRIVEN=false
+# PSI_CPU_STALL_THRESHOLD=50000
+# PSI_IO_STALL_THRESHOLD=50000
+# PSI_WINDOW_US=1000000
+# PSI_FALLBACK_INTERVAL=300

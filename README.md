@@ -7,6 +7,7 @@ ResMan monitors system resources and automatically applies limits to users when 
 ## Features
 
 - Dynamic CPU, RAM, and IO limiting via cgroups v2
+- PSI event-driven mode: uses poll() on cpu.pressure/io.pressure to trigger control cycles only when system pressure exceeds thresholds, reducing polling overhead when idle
 - Per-user resource tracking with Prometheus metrics
 - Configurable thresholds with time-window delay to prevent false activations
 - User filtering via include/exclude regex lists
@@ -92,6 +93,11 @@ LIMIT_HOOK_TIMEOUT=10
 MCP_ENABLED=true
 MCP_TRANSPORT=stdio
 # MCP_AUTH_TOKEN=change-me-for-http-transport
+
+# PSI event-driven mode (optional, Linux >= 4.20 with CONFIG_PSI=y)
+# PSI_EVENT_DRIVEN=true
+# PSI_CPU_STALL_THRESHOLD=50000
+# PSI_FALLBACK_INTERVAL=300
 ```
 
 Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive

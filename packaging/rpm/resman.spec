@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.23.0
+Version: 1.24.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -51,7 +51,7 @@ Requires(postun): systemd-units
 Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 support.
 Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
 v1.20.0: IO limits via cgroups v2 io controller.
-v1.23.0: Limit hook notifications and config reload hardening.
+v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -246,6 +246,19 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sun Apr 26 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.0-1
+- NEW: PSI event-driven control cycles via poll() on cpu.pressure/io.pressure
+- NEW: Event-driven mode reduces polling overhead when system is idle
+- NEW: Config keys: PSI_EVENT_DRIVEN, PSI_CPU_STALL_THRESHOLD, PSI_IO_STALL_THRESHOLD
+- NEW: Config keys: PSI_WINDOW_US, PSI_FALLBACK_INTERVAL
+- FIX: Missing setConfigField cases for RAM, IO, pattern detection, timeout keys
+- FIX: Env var loader now supports []string and float64 types
+- FIX: getUsername() in state manager now delegates to metrics collector
+- FIX: controlHist moved from package global to Manager struct field
+- FIX: SafeConfigUpdate() now actually calls the update function
+- FIX: WithField() now creates a new logger with context fields
+- FIX: GetUserCgroupMetrics() logs errors instead of swallowing them
+
 * Sat Apr 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.23.0-1
 - NEW: Limit hook notifications on newly limited users
 - NEW: Optional script execution via LIMIT_HOOK_SCRIPT
