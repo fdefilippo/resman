@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "resman",
+  "project_id": "7592d87b-0873-456a-b02e-2cccaf91c234"
+}

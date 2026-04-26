@@ -1,0 +1,4 @@
+#!/bin/bash
+COMMIT_ID=$(git rev-parse HEAD)
+SHORT_ID=$(git rev-parse --short HEAD)
+git archive --format=tar.gz --output="/tmp/repo-resman-${SHORT_ID}.tar.gz" "$COMMIT_ID"
