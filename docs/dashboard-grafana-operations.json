@@ -76,7 +76,7 @@
       "targets": [
         {
           "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
-          "legendFormat": "",
+          "legendFormat": "{{hostname}}",
           "refId": "A"
         }
       ]
@@ -137,7 +137,7 @@
       "targets": [
         {
           "expr": "resman_memory_usage_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} * 100",
-          "legendFormat": "",
+          "legendFormat": "{{hostname}}",
           "refId": "A"
         }
       ]
@@ -198,7 +198,7 @@
       "targets": [
         {
           "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
-          "legendFormat": "",
+          "legendFormat": "{{hostname}}",
           "refId": "A"
         }
       ]
@@ -259,7 +259,7 @@
       "targets": [
         {
           "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
-          "legendFormat": "",
+          "legendFormat": "{{hostname}}",
           "refId": "A"
         }
       ]
