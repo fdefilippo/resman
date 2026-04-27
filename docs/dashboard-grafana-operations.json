@@ -205,7 +205,7 @@
     },
     {
       "type": "stat",
-      "title": "Limited Users",
+      "title": "Monitored Users",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -235,7 +235,26 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "green",
+                  "text": "No (monitored only)"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "color": "red",
+                  "text": "YES (limited)"
+                }
+              }
+            }
+          ],
           "color": {
             "mode": "thresholds"
           }
@@ -262,7 +281,8 @@
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "All active users (UID >= SYSTEM_UID_MIN). Only users matching USER_INCLUDE_LIST patterns are eligible for CPU limits."
     },
     {
       "type": "row",
@@ -488,7 +508,7 @@
     },
     {
       "type": "table",
-      "title": "Limited Users",
+      "title": "Monitored Users",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -541,7 +561,7 @@
               "options": {
                 "0": {
                   "color": "green",
-                  "text": "No"
+                  "text": "No (monitored only)"
                 }
               }
             },
@@ -550,7 +570,7 @@
               "options": {
                 "1": {
                   "color": "red",
-                  "text": "YES"
+                  "text": "YES (limited)"
                 }
               }
             }
@@ -592,7 +612,8 @@
           "legendFormat": "{{username}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "All active users (UID >= SYSTEM_UID_MIN). Only users matching USER_INCLUDE_LIST patterns are eligible for CPU limits."
     },
     {
       "type": "row",
