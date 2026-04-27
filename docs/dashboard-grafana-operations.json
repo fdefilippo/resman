@@ -75,7 +75,7 @@
       },
       "targets": [
         {
-          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -136,7 +136,7 @@
       },
       "targets": [
         {
-          "expr": "resman_memory_usage_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"} * 100",
+          "expr": "resman_memory_usage_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} * 100",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -197,7 +197,7 @@
       },
       "targets": [
         {
-          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -277,7 +277,7 @@
       },
       "targets": [
         {
-          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -395,7 +395,7 @@
       },
       "targets": [
         {
-          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{username}}",
@@ -498,7 +498,7 @@
       },
       "targets": [
         {
-          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{username}}",
@@ -606,7 +606,7 @@
       },
       "targets": [
         {
-          "expr": "resman_user_cpu_limited{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_user_cpu_limited{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{username}}",
@@ -711,7 +711,7 @@
       },
       "targets": [
         {
-          "expr": "resman_user_process_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_user_process_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{username}}",
@@ -787,7 +787,7 @@
       },
       "targets": [
         {
-          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -838,12 +838,12 @@
       },
       "targets": [
         {
-          "expr": "resman_all_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_all_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Users {{hostname}}",
           "refId": "A"
         },
         {
-          "expr": "resman_limited_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limited_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Limited {{hostname}}",
           "refId": "B"
         }
@@ -894,12 +894,12 @@
       },
       "targets": [
         {
-          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Active {{hostname}}",
           "refId": "A"
         },
         {
-          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Limited {{hostname}}",
           "refId": "B"
         }
@@ -969,7 +969,7 @@
       },
       "targets": [
         {
-          "expr": "resman_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -1020,12 +1020,12 @@
       },
       "targets": [
         {
-          "expr": "resman_limits_activated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limits_activated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Activated {{hostname}}",
           "refId": "A"
         },
         {
-          "expr": "resman_limits_deactivated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_limits_deactivated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "Deactivated {{hostname}}",
           "refId": "B"
         }
@@ -1076,7 +1076,7 @@
       },
       "targets": [
         {
-          "expr": "resman_system_load_average{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "expr": "resman_system_load_average{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
           "legendFormat": "{{hostname}}",
           "refId": "A"
         }
@@ -1130,7 +1130,7 @@
       },
       "targets": [
         {
-          "expr": "rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])",
+          "expr": "rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m])",
           "legendFormat": "read {{username}}",
           "refId": "A"
         }
@@ -1172,7 +1172,7 @@
       },
       "targets": [
         {
-          "expr": "rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])",
+          "expr": "rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m])",
           "legendFormat": "write {{username}}",
           "refId": "A"
         }
@@ -1277,6 +1277,27 @@
         "regex": "",
         "regexApplyTo": "value",
         "type": "query"
+      },
+      {
+        "allValue": null,
+        "current": {},
+        "datasource": "${prometheus_datasource}",
+        "definition": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Username",
+        "multi": true,
+        "name": "username",
+        "options": [],
+        "query": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
       }
     ]
   },
