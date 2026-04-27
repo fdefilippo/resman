@@ -848,6 +848,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
 	// Usa EligibleUsers dal SystemMetrics (già filtrati da config al momento della raccolta)
+	// Filter chain: EligibleUsers = USER_INCLUDE_LIST + USER_EXCLUDE_LIST (gatekeeper)
+	//   → shouldApplyRAMLimits = RAM_USER_INCLUDE_LIST + RAM_USER_EXCLUDE_LIST (sub-filter)
+	//   → shouldApplyIOLimits  = IO_USER_INCLUDE_LIST  + IO_USER_EXCLUDE_LIST  (sub-filter)
 	for _, uid := range metrics.EligibleUsers {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
