@@ -340,17 +340,12 @@ func main() {
 			psiWatcher = nil
 		} else {
 			psiEvents = psiWatcher.Events()
-			psiFallback := cfg.GetPSIFallbackInterval()
 			logger.Info("PSI event-driven mode enabled",
 				"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
 				"io_threshold_us", cfg.GetPSIOStallThreshold(),
 				"window_us", cfg.GetPSIWindowUs(),
-				"fallback_interval_s", psiFallback,
+				"note", "PSI events trigger extra cycles between regular polling intervals",
 			)
-			// In event-driven mode il ticker serve come heartbeat di fallback
-			if psiFallback > 0 {
-				pollingInterval = psiFallback
-			}
 		}
 	}
 
@@ -420,12 +415,6 @@ func main() {
 			return
 
 		case <-ticker.C:
-			// In event-driven mode il ticker serve solo come heartbeat
-			if psiWatcher != nil {
-				logger.Debug("PSI heartbeat tick")
-				continue
-			}
-
 			currentPollingInterval := stateManager.GetConfig().GetPollingInterval()
 			if currentPollingInterval != pollingInterval {
 				ticker.Stop()
