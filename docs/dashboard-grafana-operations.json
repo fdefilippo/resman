@@ -207,10 +207,10 @@
       "type": "stat",
       "title": "Monitored Users",
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 5
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -616,13 +616,117 @@
       "description": "All active users (UID >= SYSTEM_UID_MIN). Only users matching USER_INCLUDE_LIST patterns are eligible for CPU limits."
     },
     {
+      "type": "table",
+      "title": "Process Count",
+      "description": "Number of processes per active user",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": null,
+      "datasource": "${prometheus_datasource}",
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "uid": true,
+              "__name__": true,
+              "cluster": true,
+              "server_role": true,
+              "instance": true,
+              "job": true,
+              "hostname": false
+            },
+            "indexByName": {
+              "hostname": 0,
+              "username": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "Value": "Processes",
+              "username": "User",
+              "hostname": "Host"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Processes"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "resman_user_process_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "Resource Usage Over Time",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 21
       },
       "id": null,
       "collapsed": false
@@ -634,7 +738,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 14
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -696,7 +800,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 14
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -752,7 +856,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 14
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -808,7 +912,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 21
       },
       "id": null,
       "collapsed": false
@@ -820,7 +924,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -878,7 +982,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 23
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -934,7 +1038,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -985,7 +1089,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 21
       },
       "id": null,
       "collapsed": false
@@ -997,7 +1101,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
@@ -1039,7 +1143,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 21
       },
       "id": null,
       "datasource": "${prometheus_datasource}",
