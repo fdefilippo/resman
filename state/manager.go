@@ -67,6 +67,10 @@ type Manager struct {
 
 	// Control cycle history (inizializzato in NewManager)
 	controlHist *controlHistory
+
+	// IO rate tracking: cumulative bytes from /proc/[pid]/io -> per-second rate
+	prevIOBytes map[int]uint64 // uid -> previous cycle cumulative write bytes
+	prevIOTime  time.Time
 }
 
 // ThresholdTracker monitora il superamento della soglia CPU nel tempo
@@ -189,6 +193,7 @@ func NewManager(
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
 		},
+		prevIOBytes: make(map[int]uint64),
 	}
 
 	logger.Info("State manager initialized",
@@ -361,6 +366,7 @@ type SystemMetrics struct {
 	SystemUnderLoad bool
 	UserCPUUsage    map[int]float64                    // UID -> percentuale
 	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
+	EligibleUsers   []int                              // Users passing USER_INCLUDE/USER_EXCLUDE filters
 }
 
 // collectSystemMetrics raccoglie tutte le metriche di sistema necessarie.
@@ -375,16 +381,6 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
 	metrics.TotalCPUUsage = m.metricsCollector.GetTotalCPUUsage()
 
-	// ALL USERS metrics
-	metrics.AllUsersCPUUsage = m.metricsCollector.GetAllUsersCPUUsage()
-	metrics.AllUsersMemoryUsage = m.metricsCollector.GetAllUsersMemoryUsage()
-	metrics.AllUsersCount = len(m.metricsCollector.GetAllUsers())
-
-	// LIMITED USERS metrics
-	metrics.LimitedUsersCPUUsage = m.metricsCollector.GetLimitedUsersCPUUsage()
-	metrics.LimitedUsersMemoryUsage = m.metricsCollector.GetLimitedUsersMemoryUsage()
-	metrics.LimitedUsersCount = len(m.metricsCollector.GetLimitedUsers())
-
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
 	metrics.TotalMemoryMB = m.metricsCollector.GetTotalMemoryMB()
 	metrics.CachedMemoryMB = m.metricsCollector.GetCachedMemoryMB()
@@ -393,14 +389,23 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
 
-	// Popola UserMetrics e UserCPUUsage
+	// Singola passata per calcolare tutti gli aggregati:
+	// - AllUsers (CPU, memory, count)
+	// - EligibleUsers (IsLimited == true dal collector)
+	// - LimitedUsers (runtime active)
+	// - UserMetrics e UserCPUUsage sovrascrivendo IsLimited con stato runtime
 	for uid, um := range allUserMetrics {
+		metrics.AllUsersCPUUsage += um.CPUUsage
+		metrics.AllUsersMemoryUsage += um.MemoryUsage
+		metrics.AllUsersCount++
+
+		metrics.UserCPUUsage[uid] = um.CPUUsage
+
 		// FIX M2: Override IsLimited based on actual runtime state, not config
 		m.mu.RLock()
 		actuallyLimited := m.activeUsers[uid]
 		m.mu.RUnlock()
 
-		// Create a copy with corrected IsLimited AND preserved IO fields
 		corrected := &resmanmetrics.UserMetrics{
 			UID:             um.UID,
 			Username:        um.Username,
@@ -416,15 +421,33 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 			IOWriteOps:      um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
-		metrics.UserCPUUsage[uid] = um.CPUUsage
-	}
 
-	// Calcola aggregate RAM e IO per limited users (per soglie in makeDecision)
-	limitedUsers := m.metricsCollector.GetLimitedUsers()
-	for _, uid := range limitedUsers {
-		if um, ok := allUserMetrics[uid]; ok {
+		// Eligible users: quelli che superano i filtri di configurazione
+		if um.IsLimited {
+			metrics.EligibleUsers = append(metrics.EligibleUsers, uid)
+			metrics.LimitedUsersCPUUsage += um.CPUUsage
+			metrics.LimitedUsersMemoryUsage += um.MemoryUsage
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
-			metrics.LimitedUsersIOWriteBytes += um.IOWriteBytes
+
+			// Calcola IO rate (bytes/sec) dal delta rispetto al ciclo precedente
+			ioDelta := um.IOWriteBytes
+			if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
+				elapsed := time.Since(m.prevIOTime).Seconds()
+				if elapsed > 0 && ioDelta >= prev {
+					ioRate := float64(ioDelta-prev) / elapsed
+					metrics.LimitedUsersIOWriteBytes += uint64(ioRate)
+				}
+			}
+			m.prevIOBytes[uid] = ioDelta
+		}
+	}
+	metrics.LimitedUsersCount = len(metrics.EligibleUsers)
+	m.prevIOTime = time.Now()
+
+	// Pulisci prevIOBytes per utenti non più attivi
+	for uid := range m.prevIOBytes {
+		if _, exists := allUserMetrics[uid]; !exists {
+			delete(m.prevIOBytes, uid)
 		}
 	}
 
@@ -824,23 +847,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
-	// CORREZIONE: Itera solo sugli utenti che possono essere limitati
-	for uid := range metrics.UserCPUUsage {
-		// Use real username from collector (supports LDAP/NIS with CGO)
+	// Usa EligibleUsers dal SystemMetrics (già filtrati da config al momento della raccolta)
+	for _, uid := range metrics.EligibleUsers {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
-
-		// Salta utenti che non possono essere limitati
-		// Un utente può essere limitato se: è incluso (se include list configurata) E non è escluso
-		if !cfg.IsUserIncluded(username) || cfg.IsUserExcluded(username) {
-			m.logger.Debug("Skipping user - not in include list or in exclude list",
-				"uid", uid,
-				"username", username,
-				"is_included", cfg.IsUserIncluded(username),
-				"is_excluded", cfg.IsUserExcluded(username),
-			)
-			continue
-		}
-
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		// Verifica se l'utente è già limitato
 		m.mu.RLock()

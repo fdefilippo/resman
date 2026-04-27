@@ -355,7 +355,7 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 // GetUserCPUUsage restituisce l'uso CPU per un utente specifico.
 // Esclude i processi di sistema dalla blacklist
 func (c *Collector) GetUserCPUUsage(uid int) float64 {
-	if !c.isValidUserUID(uid) {
+	if !c.isMonitoredUserUID(uid) {
 		return 0.0
 	}
 
@@ -818,8 +818,8 @@ func (c *Collector) getLoadAverage() (float64, int, error) {
 	return load1, cores, nil
 }
 
-// isValidUserUID verifica se un UID è un utente non di sistema.
-func (c *Collector) isValidUserUID(uid int) bool {
+// isMonitoredUserUID checks if a UID falls within the monitored range.
+func (c *Collector) isMonitoredUserUID(uid int) bool {
 	cfg := c.getConfig()
 	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax()
 }
@@ -1063,7 +1063,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		}
 		uid := int(uids[0])
 
-		if !c.isValidUserUID(uid) {
+		if !c.isMonitoredUserUID(uid) {
 			continue
 		}
 
@@ -1112,7 +1112,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 
 	// Merge IO data into main tempData
 	for uid, ioD := range ioData {
-		if !c.isValidUserUID(uid) {
+		if !c.isMonitoredUserUID(uid) {
 			continue
 		}
 		if tempData[uid] == nil {
@@ -1186,7 +1186,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 
 		statusFile := filepath.Join(procDir, entry.Name(), "status")
 		uid, err := c.getUIDFromStatusFile(statusFile)
-		if err != nil || !c.isValidUserUID(uid) {
+		if err != nil || !c.isMonitoredUserUID(uid) {
 			continue
 		}
 
@@ -1254,7 +1254,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 // GetUserMemoryUsage returns total memory used by a user in bytes.
 // Uses gopsutil for efficient process discovery and memory reading.
 func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
-	if !c.isValidUserUID(uid) {
+	if !c.isMonitoredUserUID(uid) {
 		return 0
 	}
 
@@ -1617,7 +1617,7 @@ func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) fl
 // GetUserProcessCount returns the number of processes for a user.
 // Uses gopsutil for efficient process discovery.
 func (c *Collector) GetUserProcessCount(uid int) int {
-	if !c.isValidUserUID(uid) {
+	if !c.isMonitoredUserUID(uid) {
 		return 0
 	}
 
