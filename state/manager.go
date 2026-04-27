@@ -700,6 +700,7 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 }
 
 // releaseIdleUsers rilascia gli utenti che non stanno usando CPU mentre i limiti sono attivi
+// e riaggiunge utenti che hanno superato la soglia di idle dopo essere stati rilasciati.
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	cfg := m.GetConfig()
 	if !m.limitsActive {
@@ -711,6 +712,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 
 	m.mu.Lock()
 	usersToRelease := make([]int, 0)
+	usersToAdd := make([]int, 0) // utenti da riaggiungere (erano stati rilasciati ma sono tornati attivi)
 
 	for uid := range m.activeUsers {
 		// Controlla se l'utente è ancora attivo (ha processi in esecuzione)
@@ -729,57 +731,100 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 	}
 
+	// Controlla se ci sono utenti eligible (passano i filtri config) che sono
+	// sopra la soglia di idle ma non sono in activeUsers (erano stati rilasciati
+	// in precedenza da releaseIdleUsers). Devono essere riaggiunti.
+	for _, uid := range metrics.EligibleUsers {
+		if _, active := m.activeUsers[uid]; active {
+			continue
+		}
+		if cpuUsage, ok := metrics.UserCPUUsage[uid]; ok && cpuUsage >= idleThreshold {
+			usersToAdd = append(usersToAdd, uid)
+		}
+	}
+
 	// Rimuovi utenti dalla mappa
 	for _, uid := range usersToRelease {
 		delete(m.activeUsers, uid)
+		// Ripristina il limite normale nel cgroup
+		go func(uid int) {
+			if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
+				m.logger.Warn("Failed to restore normal CPU limit for idle user",
+					"uid", uid, "error", err)
+			}
+		}(uid)
+	}
+
+	// Aggiungi utenti che sono tornati attivi
+	for _, uid := range usersToAdd {
+		m.activeUsers[uid] = true
 	}
 
 	remainingLimited := len(m.activeUsers)
 	m.mu.Unlock()
 
-	if len(usersToRelease) == 0 {
-		return nil // Nessun utente da rilasciare
-	}
-
-	m.logger.Info("Releasing idle users from CPU limits",
-		"users_released", len(usersToRelease),
-		"users_still_limited", remainingLimited,
-		"idle_threshold", idleThreshold,
-	)
-
-	var firstError error
-	releasedCount := 0
-
-	// Rilascia ogni utente inattivo
-	for _, uid := range usersToRelease {
-		// Ripristina il limite normale
-		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
-			m.logger.Error("Failed to restore normal CPU limit for idle user",
-				"uid", uid,
-				"quota", cfg.CPUQuotaNormal,
-				"error", err,
-			)
-			if firstError == nil {
-				firstError = err
-			}
-			continue
-		}
-
-		releasedCount++
-		m.logger.Debug("CPU limit removed for idle user",
-			"uid", uid,
-			"quota", cfg.CPUQuotaNormal,
+	// Log rilascio
+	if len(usersToRelease) > 0 {
+		m.logger.Info("Releasing idle users from CPU limits",
+			"users_released", len(usersToRelease),
+			"users_still_limited", remainingLimited,
+			"idle_threshold", idleThreshold,
 		)
 	}
 
-	// Logga il risultato
-	m.logger.Info("Idle user release completed",
-		"released", releasedCount,
-		"remaining_limited", remainingLimited,
-		"quota_restored", cfg.CPUQuotaNormal,
-	)
+	// Applica i limiti per gli utenti riaggiunti
+	if len(usersToAdd) > 0 && m.sharedCgroupPath != "" {
+		for _, uid := range usersToAdd {
+			username := m.metricsCollector.GetUsernameFromUID(uid)
+			m.logger.Info("Re-adding user to shared cgroup (CPU usage recovered)",
+				"uid", uid, "username", username,
+				"cpu", metrics.UserCPUUsage[uid],
+			)
 
-	return firstError
+			// Crea sottocgroup e sposta processi in background
+			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, m.sharedCgroupPath)
+			if err != nil {
+				m.logger.Warn("Failed to re-create user sub-cgroup",
+					"uid", uid, "error", err)
+				continue
+			}
+
+			m.wg.Add(1)
+			go func(uid int, weight int) {
+				defer m.wg.Done()
+				time.Sleep(300 * time.Millisecond)
+				if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, m.sharedCgroupPath); err != nil {
+					m.logger.Warn("Failed to move processes for re-added user",
+						"uid", uid, "error", err)
+				}
+				if err := m.cgroupManager.ApplyCPUWeight(uid, weight); err != nil {
+					m.logger.Warn("Failed to set CPU weight for re-added user",
+						"uid", uid, "weight", weight, "error", err)
+				}
+			}(uid, 100)
+
+			// Avvia monitoraggio PSI
+			if m.psiWatcher != nil {
+				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
+				ioPressurePath := filepath.Join(userCgroupPath, "io.pressure")
+				m.psiWatcher.AddMonitor(uid, "cpu", cpuPressurePath)
+				m.psiWatcher.AddMonitor(uid, "io", ioPressurePath)
+			}
+		}
+	}
+
+	if len(usersToRelease) == 0 && len(usersToAdd) == 0 {
+		return nil // Nessuna modifica
+	}
+
+	// Aggiorna il timestamp di attivazione se abbiamo aggiunto utenti
+	if len(usersToAdd) > 0 {
+		m.mu.Lock()
+		m.limitsAppliedTime = time.Now()
+		m.mu.Unlock()
+	}
+
+	return nil
 }
 
 // activateLimits attiva i limiti di CPU per gli utenti attivi usando pesi proporzionali.
