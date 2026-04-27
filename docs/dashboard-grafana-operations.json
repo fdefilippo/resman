@@ -308,17 +308,19 @@
               "__name__": true,
               "cluster": true,
               "server_role": true,
-              "hostname": true,
+              "hostname": false,
               "instance": true,
               "job": true
             },
             "indexByName": {
-              "username": 0,
-              "Value": 1
+              "hostname": 0,
+              "username": 1,
+              "Value": 2
             },
             "renameByName": {
               "Value": "CPU %",
-              "username": "User"
+              "username": "User",
+              "hostname": "Host"
             }
           }
         }
@@ -413,17 +415,19 @@
               "__name__": true,
               "cluster": true,
               "server_role": true,
-              "hostname": true,
+              "hostname": false,
               "instance": true,
               "job": true
             },
             "indexByName": {
-              "username": 0,
-              "Value": 1
+              "hostname": 0,
+              "username": 1,
+              "Value": 2
             },
             "renameByName": {
               "Value": "Memory",
-              "username": "User"
+              "username": "User",
+              "hostname": "Host"
             }
           }
         }
@@ -503,17 +507,19 @@
               "__name__": true,
               "cluster": true,
               "server_role": true,
-              "hostname": true,
+              "hostname": false,
               "instance": true,
               "job": true
             },
             "indexByName": {
-              "username": 0,
-              "Value": 1
+              "hostname": 0,
+              "username": 1,
+              "Value": 2
             },
             "renameByName": {
               "Value": "Limited",
-              "username": "User"
+              "username": "User",
+              "hostname": "Host"
             }
           }
         }
