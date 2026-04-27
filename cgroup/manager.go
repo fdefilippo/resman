@@ -146,6 +146,22 @@ func (m *Manager) verifyCgroupSetup() error {
 		return fmt.Errorf("failed to create base cgroup directory %s: %w", baseCgroupPath, err)
 	}
 
+	// Verify the directory is a valid cgroup (kernel populates control files)
+	// If cgroup.subtree_control is missing, the directory is stale (not a cgroup).
+	// Remove and recreate with plain Mkdir to trigger kernel cgroup creation.
+	subtreeCheck := filepath.Join(baseCgroupPath, "cgroup.subtree_control")
+	if _, err := os.Stat(subtreeCheck); os.IsNotExist(err) {
+		m.logger.Warn("Base cgroup directory exists but is not a valid cgroup, recreating",
+			"path", baseCgroupPath,
+		)
+		if err := os.Remove(baseCgroupPath); err != nil {
+			return fmt.Errorf("failed to remove stale cgroup directory %s: %w", baseCgroupPath, err)
+		}
+		if err := os.Mkdir(baseCgroupPath, 0755); err != nil {
+			return fmt.Errorf("failed to recreate base cgroup %s: %w", baseCgroupPath, err)
+		}
+	}
+
 	// Abilita i controller nel nostro cgroup base
 	baseSubtreeControl := filepath.Join(baseCgroupPath, "cgroup.subtree_control")
 	if err := m.writeControllerIfMissing(baseSubtreeControl, "+cpu"); err != nil {
@@ -155,10 +171,17 @@ func (m *Manager) verifyCgroupSetup() error {
 		return fmt.Errorf("failed to enable cpuset controller in base cgroup %s: %w", baseCgroupPath, err)
 	}
 	// Enable io controller for block I/O limits (best-effort, non-fatal)
-	if err := m.writeControllerIfMissing(baseSubtreeControl, "+io"); err != nil {
-		m.logger.Warn("Failed to enable io controller in base cgroup (IO limits will not work)",
-			"path", baseCgroupPath,
-			"error", err,
+	// Only attempt if the io controller is available in the cgroup root
+	if strings.Contains(string(controllersData), "io") {
+		if err := m.writeControllerIfMissing(baseSubtreeControl, "+io"); err != nil {
+			m.logger.Warn("Failed to enable io controller in base cgroup (IO limits will not work)",
+				"path", baseCgroupPath,
+				"error", err,
+			)
+		}
+	} else {
+		m.logger.Debug("io controller not available in cgroup.controllers, skipping",
+			"available_controllers", strings.TrimSpace(string(controllersData)),
 		)
 	}
 
