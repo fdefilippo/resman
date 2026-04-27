@@ -86,8 +86,7 @@ import (
 
 ### Comments
 
-Comments are in Italian for domain/business logic, English for technical details.
-Use godoc style: start with the function/type name.
+Comments must be in English. Use godoc style: start with the function/type name.
 
 ```go
 // GetMemoryUsage restituisce l'uso della memoria in MB.

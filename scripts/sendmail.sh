@@ -1,30 +1,30 @@
 #!/bin/bash
-# sendmail.sh — Invia email via SMTP con curl
+# sendmail.sh — Send email via SMTP using curl
 #
-# Uso:
-#   ./sendmail.sh [opzioni] -a allegato.pdf destinatario@example.com
+# Usage:
+#   ./sendmail.sh [options] -a attachment.pdf recipient@example.com
 #
-# Opzioni:
-#   -f <email>       Mittente (From)
-#   -t <email>       Destinatario (To)
-#   -c <email>       CC (può essere ripetuto)
-#   -s <oggetto>     Oggetto (Subject)
-#   -S <server>      Server SMTP (default: localhost)
-#   -P <porta>       Porta SMTP (default: 25)
-#   -u <user>        Utente per autenticazione
-#   -w <password>    Password per autenticazione
-#   -A <type>        Tipo autenticazione: plain|login (default: plain)
-#   -T               Usa TLS/STARTTLS
-#   -a <file>        Allega un file (può essere ripetuto)
-#   -b <file>        Corpo del messaggio da file (default: stdin)
-#   -h               Mostra questo aiuto
+# Options:
+#   -f <email>       From address
+#   -t <email>       To address
+#   -c <email>       CC address (can be repeated)
+#   -s <subject>     Email subject
+#   -S <server>      SMTP server (default: localhost)
+#   -P <port>        SMTP port (default: 25)
+#   -u <user>        SMTP auth username
+#   -w <password>    SMTP auth password
+#   -A <type>        Auth type: plain|login (default: plain)
+#   -T               Enable TLS/STARTTLS
+#   -a <file>        Attachment (can be repeated)
+#   -b <file>        Message body from file (default: stdin)
+#   -h               Show this help
 #
-# Esempi:
-#   echo "test" | ./sendmail.sh -f me@ex.com -t you@ex.com -s "ciao"
-#   ./sendmail.sh -f me@ex.com -t you@ex.com -c cc@ex.com -s "oggetto" \
-#                 -S smtp.ex.com -P 587 -u user -w pass -T < corpo.txt
+# Examples:
+#   echo "test" | ./sendmail.sh -f me@ex.com -t you@ex.com -s "hello"
+#   ./sendmail.sh -f me@ex.com -t you@ex.com -c cc@ex.com -s "subject" \
+#                 -S smtp.ex.com -P 587 -u user -w pass -T < body.txt
 #
-# Dipende da: curl (con supporto SMTP), base64
+# Requires: curl (with SMTP support), base64
 
 set -euo pipefail
 
@@ -42,7 +42,7 @@ ATTACHMENTS=()
 BODY_FILE=""
 
 usage() {
-    sed -n '/^# sendmail.sh/,/^Dipende/p; /^$/q' "$0" | sed 's/^# //; s/^#$//'
+    sed -n '/^# sendmail.sh/,/^Requires/p; /^$/q' "$0" | sed 's/^# //; s/^#$//'
     exit 0
 }
 
@@ -65,18 +65,18 @@ while getopts "f:t:c:s:S:P:u:w:A:Ta:b:h" opt; do
     esac
 done
 
-[[ -z "$FROM" ]] && { echo "ERRORE: -f (mittente) obbligatorio" >&2; exit 1; }
-[[ -z "$TO" ]] && { echo "ERRORE: -t (destinatario) obbligatorio" >&2; exit 1; }
+[[ -z "$FROM" ]] && { echo "ERROR: -f (from) is required" >&2; exit 1; }
+[[ -z "$TO" ]] && { echo "ERROR: -t (to) is required" >&2; exit 1; }
 [[ "$AUTH_TYPE" != "plain" && "$AUTH_TYPE" != "login" ]] && {
-    echo "ERRORE: tipo autenticazione '$AUTH_TYPE' non valido (plain|login)" >&2
+    echo "ERROR: invalid auth type '$AUTH_TYPE' (use plain|login)" >&2
     exit 1
 }
 
 for a in "${ATTACHMENTS[@]}"; do
-    [[ ! -f "$a" ]] && { echo "ERRORE: allegato non trovato: $a" >&2; exit 1; }
+    [[ ! -f "$a" ]] && { echo "ERROR: attachment not found: $a" >&2; exit 1; }
 done
 
-# Costruisce l'email
+# Build the email MIME structure
 build_email() {
     local boundary="==BOUNDARY_$(date +%s)_$$=="
     local has_attach=$(( ${#ATTACHMENTS[@]} > 0 ? 1 : 0 ))
@@ -103,14 +103,14 @@ build_email() {
         echo ""
     fi
 
-    # Corpo
+    # Body
     if [[ -n "$BODY_FILE" ]]; then
         cat "$BODY_FILE"
     else
         cat
     fi
 
-    # Allegati
+    # Attachments
     for a in "${ATTACHMENTS[@]}"; do
         echo ""
         echo "--$boundary"
@@ -127,13 +127,13 @@ build_email() {
     fi
 }
 
-# Destinatari per curl (--mail-rcpt può essere usato più volte)
+# Build recipient list for curl (--mail-rcpt can be repeated)
 rcpt_args=()
 for c in "${CC[@]}"; do
     rcpt_args+=(--mail-rcpt "$c")
 done
 
-# Costruisce l'URL
+# Build the SMTP URL
 if [[ "$USE_TLS" == true ]]; then
     url="smtp://${SERVER}:${PORT}"
 else
@@ -160,5 +160,5 @@ if [[ -n "$AUTH_USER" ]]; then
     fi
 fi
 
-# Invia
+# Send the email
 build_email | curl "${curl_args[@]}" --upload-file "-"
