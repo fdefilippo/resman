@@ -9,82 +9,138 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// PSIEvent rappresenta un evento di pressure stall.
+// PSIEvent represents a pressure stall event from a monitored cgroup.
 type PSIEvent struct {
-	Type      string    // "cpu", "io", "memory"
-	SomeAvg10 float64   // % media 10s
+	UID       int       // 0 for system-level, >0 for per-user cgroups
+	Type      string    // "cpu", "io"
+	SomeAvg10 float64   // avg10 percentage
 	Timestamp time.Time
 }
 
-// PSIWatcher monitora i file pressure tramite poll().
-// Quando la pressione supera la soglia, invia un evento sul canale.
-type PSIWatcher struct {
-	mu       sync.Mutex
-	events   chan PSIEvent
-	done     chan struct{}
-	wg       sync.WaitGroup
-
-	cgroupRoot string
-	thresholds map[string]uint64 // tipo -> soglia in microsec
-	windowUs   uint64
+type psiMonitor struct {
+	uid    int
+	typ    string
+	path   string
+	fd     *os.File
+	active bool
 }
 
-// NewPSIWatcher crea un watcher per i pressure file.
-// threshold è in microsecondi di stall per window.
-// Ad esempio 50000 us su window 1000000 us = 5% di pressure.
-func NewPSIWatcher(cgroupRoot string, windowUs uint64) *PSIWatcher {
+// PSIWatcher monitors pressure files via poll() with dynamic per-user cgroup support.
+// Uses a single poll loop to monitor all registered pressure files efficiently.
+type PSIWatcher struct {
+	mu        sync.Mutex
+	monitors  []*psiMonitor
+	events    chan PSIEvent
+	update    chan struct{}
+	done      chan struct{}
+	wg        sync.WaitGroup
+	threshold uint64
+	windowUs  uint64
+}
+
+// NewPSIWatcher creates a watcher for pressure files.
+// thresholdUs is the stall threshold in microseconds per windowUs window.
+// e.g., 50000us on 1000000us window = 5% pressure.
+func NewPSIWatcher(thresholdUs, windowUs uint64) *PSIWatcher {
 	return &PSIWatcher{
-		events:     make(chan PSIEvent, 32),
-		done:       make(chan struct{}),
-		cgroupRoot: cgroupRoot,
-		thresholds: make(map[string]uint64),
-		windowUs:   windowUs,
+		events:    make(chan PSIEvent, 64),
+		update:    make(chan struct{}, 1),
+		done:      make(chan struct{}),
+		threshold: thresholdUs,
+		windowUs:  windowUs,
 	}
 }
 
-// SetThreshold imposta la soglia per un tipo di pressure.
-func (w *PSIWatcher) SetThreshold(typ string, stallUs uint64) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.thresholds[typ] = stallUs
-}
-
-// Events restituisce il canale degli eventi.
+// Events returns the event channel.
 func (w *PSIWatcher) Events() <-chan PSIEvent {
 	return w.events
 }
 
-// Start avvia il monitoraggio dei pressure file.
-func (w *PSIWatcher) Start() error {
+// AddMonitor registers a pressure file to monitor.
+// uid: 0 for system-level, >0 for per-user cgroup
+// typ: "cpu" or "io"
+// pressurePath: full path to the pressure file (e.g., /sys/fs/cgroup/resman/user_1000/cpu.pressure)
+func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error {
 	w.mu.Lock()
-	types := make([]string, 0, len(w.thresholds))
-	for t := range w.thresholds {
-		types = append(types, t)
-	}
-	w.mu.Unlock()
+	defer w.mu.Unlock()
 
-	if len(types) == 0 {
-		return fmt.Errorf("no pressure thresholds configured")
+	// Check if already registered
+	for _, m := range w.monitors {
+		if m.uid == uid && m.typ == typ && m.active {
+			return nil
+		}
 	}
 
-	for _, typ := range types {
-		w.wg.Add(1)
-		go w.watch(typ)
+	fd, err := os.OpenFile(pressurePath, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", pressurePath, err)
+	}
+
+	thresholdLine := fmt.Sprintf("some %d %d", w.threshold, w.windowUs)
+	if _, err := fd.WriteString(thresholdLine); err != nil {
+		fd.Close()
+		return fmt.Errorf("write threshold to %s: %w", pressurePath, err)
+	}
+
+	w.monitors = append(w.monitors, &psiMonitor{
+		uid:    uid,
+		typ:    typ,
+		path:   pressurePath,
+		fd:     fd,
+		active: true,
+	})
+
+	// Signal poll loop to refresh its fd list
+	select {
+	case w.update <- struct{}{}:
+	default:
 	}
 
 	return nil
 }
 
-// Stop ferma il monitoraggio.
+// RemoveMonitor unregisters a pressure file.
+func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, m := range w.monitors {
+		if m.uid == uid && m.typ == typ && m.active {
+			m.active = false
+			m.fd.Close()
+		}
+	}
+
+	select {
+	case w.update <- struct{}{}:
+	default:
+	}
+}
+
+// Start launches the poll loop goroutine.
+func (w *PSIWatcher) Start() {
+	w.wg.Add(1)
+	go w.pollLoop()
+}
+
+// Stop terminates the poll loop and all monitoring.
 func (w *PSIWatcher) Stop() {
 	close(w.done)
 	w.wg.Wait()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, m := range w.monitors {
+		if m.active {
+			m.fd.Close()
+			m.active = false
+		}
+	}
+	w.monitors = nil
 }
 
-func (w *PSIWatcher) watch(typ string) {
+func (w *PSIWatcher) pollLoop() {
 	defer w.wg.Done()
-
-	path := w.cgroupRoot + "/" + typ + ".pressure"
 
 	for {
 		select {
@@ -93,79 +149,84 @@ func (w *PSIWatcher) watch(typ string) {
 		default:
 		}
 
-		fd, err := os.OpenFile(path, os.O_RDONLY, 0)
+		w.mu.Lock()
+		pollFds := make([]unix.PollFd, 0, len(w.monitors))
+		fdIndex := make(map[int32]int) // fd -> index in monitors
+		for i, m := range w.monitors {
+			if !m.active {
+				continue
+			}
+			fd := int32(m.fd.Fd())
+			pollFds = append(pollFds, unix.PollFd{Fd: fd, Events: unix.POLLPRI})
+			fdIndex[fd] = i
+		}
+		w.mu.Unlock()
+
+		if len(pollFds) == 0 {
+			select {
+			case <-w.done:
+				return
+			case <-w.update:
+				continue
+			case <-time.After(10 * time.Second):
+				continue
+			}
+		}
+
+		_, err := unix.Poll(pollFds, -1)
 		if err != nil {
 			select {
 			case <-w.done:
 				return
-			case <-time.After(10 * time.Second):
+			default:
 			}
 			continue
 		}
 
-		w.mu.Lock()
-		threshold := w.thresholds[typ]
-		w.mu.Unlock()
+		for _, pfd := range pollFds {
+			if pfd.Revents&unix.POLLPRI == 0 && pfd.Revents&unix.POLLERR == 0 {
+				continue
+			}
 
-		thresholdLine := fmt.Sprintf("some %d %d", threshold, w.windowUs)
-		if _, err := fd.WriteString(thresholdLine); err != nil {
-			fd.Close()
+			w.mu.Lock()
+			idx, ok := fdIndex[pfd.Fd]
+			if !ok || idx >= len(w.monitors) || !w.monitors[idx].active {
+				w.mu.Unlock()
+				continue
+			}
+			mon := w.monitors[idx]
+			w.mu.Unlock()
+
+			data := make([]byte, 4096)
+			n, err := mon.fd.ReadAt(data, 0)
+			if err != nil {
+				continue
+			}
+
+			stats, err := parsePSI(string(data[:n]))
+			if err != nil {
+				continue
+			}
+
 			select {
+			case w.events <- PSIEvent{
+				UID:       mon.uid,
+				Type:      mon.typ,
+				SomeAvg10: stats.SomeAvg10,
+				Timestamp: time.Now(),
+			}:
 			case <-w.done:
 				return
-			case <-time.After(10 * time.Second):
-			}
-			continue
-		}
-
-		pollFds := []unix.PollFd{
-			{Fd: int32(fd.Fd()), Events: unix.POLLPRI},
-		}
-
-		for {
-			_, err := unix.Poll(pollFds, -1)
-			if err != nil {
-				select {
-				case <-w.done:
-					fd.Close()
-					return
-				default:
-				}
-				break
-			}
-
-			if pollFds[0].Revents&unix.POLLPRI != 0 || pollFds[0].Revents&unix.POLLERR != 0 {
-				data := make([]byte, 4096)
-				n, err := fd.ReadAt(data, 0)
-				if err != nil {
-					break
-				}
-
-				stats, err := parsePSI(string(data[:n]))
-				if err != nil {
-					break
-				}
-
-				select {
-				case w.events <- PSIEvent{
-					Type:      typ,
-					SomeAvg10: stats.SomeAvg10,
-					Timestamp: time.Now(),
-				}:
-				case <-w.done:
-					fd.Close()
-					return
-				default:
-				}
+			default:
 			}
 		}
 
-		fd.Close()
-
+		// Short yield to allow updates to be processed on the next iteration
 		select {
 		case <-w.done:
 			return
-		case <-time.After(5 * time.Second):
+		case <-w.update:
+		default:
 		}
 	}
 }

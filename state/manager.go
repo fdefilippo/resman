@@ -71,6 +71,10 @@ type Manager struct {
 	// IO rate tracking: cumulative bytes from /proc/[pid]/io -> per-second rate
 	prevIOBytes map[int]uint64 // uid -> previous cycle cumulative write bytes
 	prevIOTime  time.Time
+
+	// PSI watcher for per-user adaptive CPU weight boosting
+	psiWatcher  *cgroup.PSIWatcher
+	psiBoostedAt map[int]time.Time // uid -> when last boosted
 }
 
 // ThresholdTracker monitora il superamento della soglia CPU nel tempo
@@ -194,6 +198,7 @@ func NewManager(
 			maxSize: 100,
 		},
 		prevIOBytes: make(map[int]uint64),
+		psiBoostedAt: make(map[int]time.Time),
 	}
 
 	logger.Info("State manager initialized",
@@ -322,6 +327,11 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 			m.patternDetector.Cleanup(time.Duration(cfg.GetPatternHistoryHours()) * time.Hour)
 			m.policyEngine.Cleanup(24 * time.Hour)
 		}
+	}
+
+	// 9a. Revert PSI weight boosts that have expired
+	if m.psiWatcher != nil {
+		m.revertPSIBoosts()
 	}
 
 	// 9. Logga il risultato del ciclo
@@ -861,7 +871,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 		if !alreadyLimited {
 			// Crea il sottocgroup per l'utente dentro il cgroup condiviso
-			_, err := m.cgroupManager.CreateUserSubCgroup(uid, m.sharedCgroupPath)
+			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, m.sharedCgroupPath)
 			if err != nil {
 				m.logger.Error("Failed to create user sub-cgroup",
 					"user", userStr,
@@ -872,6 +882,20 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 					firstError = err
 				}
 				continue
+			}
+
+			// Avvia monitoraggio PSI per questo utente (adaptive boosting)
+			if m.psiWatcher != nil {
+				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
+				ioPressurePath := filepath.Join(userCgroupPath, "io.pressure")
+				if err := m.psiWatcher.AddMonitor(uid, "cpu", cpuPressurePath); err != nil {
+					m.logger.Warn("Failed to monitor user cpu.pressure",
+						"uid", uid, "path", cpuPressurePath, "error", err)
+				}
+				if err := m.psiWatcher.AddMonitor(uid, "io", ioPressurePath); err != nil {
+					m.logger.Warn("Failed to monitor user io.pressure",
+						"uid", uid, "path", ioPressurePath, "error", err)
+				}
 			}
 
 			// Imposta il peso per l'utente (uguale per tutti)
@@ -1029,12 +1053,27 @@ func (m *Manager) deactivateLimits() error {
 	m.sharedCgroupPath = ""
 	m.mu.Unlock()
 
+	// Rimuovi monitoraggi PSI per questi utenti
+	if m.psiWatcher != nil {
+		for _, uid := range usersToCleanup {
+			m.psiWatcher.RemoveMonitor(uid, "cpu")
+			m.psiWatcher.RemoveMonitor(uid, "io")
+		}
+	}
+
 	// FIX A1: Cleanup stability tracker to prevent memory leak
 	m.stabilityTracker.mu.Lock()
 	for _, uid := range usersToCleanup {
 		delete(m.stabilityTracker.underThreshold, uid)
 	}
 	m.stabilityTracker.mu.Unlock()
+
+	// Pulisci PSI boost tracker
+	m.mu.Lock()
+	for _, uid := range usersToCleanup {
+		delete(m.psiBoostedAt, uid)
+	}
+	m.mu.Unlock()
 
 	var firstError error
 	deactivatedCount := 0
@@ -1456,6 +1495,60 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 		"cpu_release_threshold", newConfig.CPUReleaseThreshold,
 		"cpu_threshold_duration", newConfig.CPUThresholdDuration,
 	)
+}
+
+// RegisterPSIWatcher sets the PSI watcher for per-user cgroup monitoring.
+func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
+	m.psiWatcher = w
+}
+
+// OnUserPSIEvent handles a per-user PSI pressure event by boosting CPU weight.
+func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
+	if event.UID <= 0 {
+		return
+	}
+	cfg := m.GetConfig()
+	boostWeight := cfg.GetPSIBoostWeight()
+
+	if err := m.cgroupManager.ApplyCPUWeight(event.UID, boostWeight); err != nil {
+		m.logger.Warn("Failed to boost CPU weight on PSI event",
+			"uid", event.UID, "type", event.Type,
+			"weight", boostWeight, "error", err)
+		return
+	}
+
+	m.mu.Lock()
+	m.psiBoostedAt[event.UID] = time.Now()
+	m.mu.Unlock()
+
+	m.logger.Info("CPU weight boosted for user due to PSI pressure",
+		"uid", event.UID, "type", event.Type,
+		"psi_avg10", event.SomeAvg10, "weight", boostWeight)
+}
+
+// revertPSIBoosts reverts CPU weight for users whose boost duration has expired.
+func (m *Manager) revertPSIBoosts() {
+	cfg := m.GetConfig()
+	duration := time.Duration(cfg.GetPSIBoostDuration()) * time.Second
+	now := time.Now()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for uid, boostedAt := range m.psiBoostedAt {
+		if now.Sub(boostedAt) < duration {
+			continue
+		}
+		// Revert to default weight
+		if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
+			m.logger.Warn("Failed to revert CPU weight after PSI boost",
+				"uid", uid, "error", err)
+			continue
+		}
+		delete(m.psiBoostedAt, uid)
+		m.logger.Debug("CPU weight reverted to normal after PSI boost expired",
+			"uid", uid, "boost_duration_s", cfg.GetPSIBoostDuration())
+	}
 }
 
 // GetConfig returns the current configuration

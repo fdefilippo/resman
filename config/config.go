@@ -207,6 +207,8 @@ type Config struct {
 	PSIOStallThreshold   int    `config:"PSI_IO_STALL_THRESHOLD"` // IO stall threshold in microseconds (default 50000)
 	PSIWindowUs          int    `config:"PSI_WINDOW_US"`          // PSI tracking window in microseconds (default 1000000 = 1s)
 	PSIFallbackInterval  int    `config:"PSI_FALLBACK_INTERVAL"`  // Fallback polling interval in seconds when event-driven (default 300 = 5min)
+	PSIBoostWeight       int    `config:"PSI_BOOST_WEIGHT"`       // CPU weight boost on PSI event (default 300, normal weight is 100)
+	PSIBoostDuration     int    `config:"PSI_BOOST_DURATION"`     // Seconds before reverting PSI boost (default 120)
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -355,6 +357,8 @@ func DefaultConfig() *Config {
 		PSIOStallThreshold:   50000,
 		PSIWindowUs:          1000000,
 		PSIFallbackInterval:  300,
+		PSIBoostWeight:       300,
+		PSIBoostDuration:     120,
 	}
 }
 
@@ -1127,6 +1131,14 @@ func setConfigField(cfg *Config, key, value string) error {
 	case "PSI_FALLBACK_INTERVAL":
 		if i, err := strconv.Atoi(value); err == nil && i > 0 {
 			cfg.PSIFallbackInterval = i
+		}
+	case "PSI_BOOST_WEIGHT":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIBoostWeight = i
+		}
+	case "PSI_BOOST_DURATION":
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			cfg.PSIBoostDuration = i
 		}
 
 	default:
@@ -2175,4 +2187,18 @@ func (c *Config) GetPSIFallbackInterval() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.PSIFallbackInterval
+}
+
+// GetPSIBoostWeight returns the CPU weight boost on PSI event.
+func (c *Config) GetPSIBoostWeight() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIBoostWeight
+}
+
+// GetPSIBoostDuration returns the seconds before reverting a PSI boost.
+func (c *Config) GetPSIBoostDuration() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIBoostDuration
 }
