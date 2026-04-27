@@ -219,6 +219,11 @@ When a PSI event fires, the daemon immediately runs a control cycle.
 A fallback polling interval (heartbeat) ensures control cycles still run if PSI
 events are not generated for an extended period (e.g., when the system is idle).
 .PP
+When a limited user experiences CPU throttling (pressure exceeds threshold in their
+per-user cgroup), the daemon temporarily boosts their cpu.weight to grant more CPU
+time within the shared quota (adaptive fairness). The boost reverts automatically
+after the configured duration.
+.PP
 Configuration parameters:
 .IP \(bu 2
 .B PSI_EVENT_DRIVEN
@@ -235,6 +240,15 @@ Configuration parameters:
 .IP \(bu
 .B PSI_FALLBACK_INTERVAL
 - Fallback polling interval in seconds when event-driven (default: 300 = 5min)
+.IP \(bu
+.B PSI_BOOST_WEIGHT
+- CPU weight applied when a limited user experiences PSI pressure (default: 300, normal is 100)
+When a user's cgroup is throttled by cpu.max, the adaptive fairness mechanism boosts
+their cpu.weight to grant more CPU time within the shared quota. Range: 1-10000.
+.IP \(bu
+.B PSI_BOOST_DURATION
+- Seconds before reverting the PSI boost if no further pressure events occur (default: 120)
+If the user is still under pressure after reversion, the next PSI event re-applies the boost.
 .PP
 Requirements:
 .IP \(bu 2
@@ -253,6 +267,8 @@ PSI_CPU_STALL_THRESHOLD=50000    # 5% CPU pressure
 PSI_IO_STALL_THRESHOLD=50000     # 5% IO pressure
 PSI_WINDOW_US=1000000            # 1 second window
 PSI_FALLBACK_INTERVAL=300        # 5 minute heartbeat
+PSI_BOOST_WEIGHT=300             # CPU weight on throttling (normal: 100)
+PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 .fi
 .sp
 .SH WORKLOAD PATTERN DETECTION
@@ -518,6 +534,8 @@ METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 # PSI_IO_STALL_THRESHOLD=50000     # IO stall threshold in microseconds
 # PSI_WINDOW_US=1000000            # Tracking window (1 second)
 # PSI_FALLBACK_INTERVAL=300        # Heartbeat interval (5 minutes)
+# PSI_BOOST_WEIGHT=300             # CPU weight boost on throttling
+# PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 
 # MCP TOOLS FOR HISTORICAL METRICS (when METRICS_DB_ENABLED=true):
 # - get_user_history: Historical CPU/RAM for a user

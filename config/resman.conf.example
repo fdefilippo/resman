@@ -609,6 +609,18 @@ USERNAME_CACHE_TTL=60
 # Heartbeat to ensure control cycles still run if no PSI events fire
 # (e.g., system idle). Set to 0 to disable fallback (not recommended).
 #
+# PSI_BOOST_WEIGHT: CPU weight to apply when a limited user experiences
+# PSI pressure. When a user's cgroup is throttled by cpu.max, their
+# cpu.pressure rises. The adaptive fairness mechanism boosts their
+# cpu.weight (default 300) to grant more CPU time within the shared quota.
+# Normal weight is 100. Higher values = more CPU priority.
+# Range: 1-10000. Default: 300.
+#
+# PSI_BOOST_DURATION: Seconds before reverting the PSI boost if no
+# further pressure events occur. Default: 120 (2 minutes).
+# If the user is still under pressure after reversion, the next PSI
+# event will re-apply the boost.
+#
 # Examples:
 # # Enable event-driven mode with default thresholds
 # PSI_EVENT_DRIVEN=true
@@ -635,3 +647,5 @@ PSI_EVENT_DRIVEN=false
 # PSI_IO_STALL_THRESHOLD=50000
 # PSI_WINDOW_US=1000000
 # PSI_FALLBACK_INTERVAL=300
+# PSI_BOOST_WEIGHT=300
+# PSI_BOOST_DURATION=120
