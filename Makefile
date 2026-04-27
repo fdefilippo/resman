@@ -218,6 +218,7 @@ deb-prepare: deb-dirs deb-binary
 	install -m 644 README.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 LICENSE $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	install -m 644 docs/alerting-rules.yml $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
+	install -m 644 docs/dashboard-grafana-operations.json $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
 	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts; \
 	install -m 755 docs/generate-tls-certs.sh $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts/; \
 	echo "Package: $(PROJECT_NAME)" > $$PKG_DIR/DEBIAN/control; \

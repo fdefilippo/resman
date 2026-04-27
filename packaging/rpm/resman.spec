@@ -142,6 +142,7 @@ install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 
 # Installa documentazione TLS
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
+install -m 644 docs/dashboard-grafana-operations.json %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 
 # Installa script generazione certificati TLS
 install -d %{buildroot}/%{_docdir}/%{name}/scripts
@@ -238,6 +239,7 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
 %doc %{_docdir}/%{name}/alerting-rules.yml
+%doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
