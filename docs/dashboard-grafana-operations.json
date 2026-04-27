@@ -1213,14 +1213,14 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(resman_cpu_total_usage_percent, server_role)",
+        "definition": "label_values(resman_cpu_total_usage_percent, cluster)",
         "includeAll": true,
-        "label": "Server Role",
+        "label": "Cluster",
         "multi": true,
-        "name": "server_role",
+        "name": "cluster",
         "options": [],
         "query": {
-          "query": "label_values(resman_cpu_total_usage_percent, server_role)",
+          "query": "label_values(resman_cpu_total_usage_percent, cluster)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
@@ -1238,14 +1238,39 @@
           "type": "prometheus",
           "uid": "${prometheus_datasource}"
         },
-        "definition": "label_values(resman_cpu_total_usage_percent{server_role=~\"$server_role\"}, hostname)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+        "includeAll": true,
+        "label": "Server Role",
+        "multi": true,
+        "name": "server_role",
+        "options": [],
+        "query": {
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "regexApplyTo": "value",
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus_datasource}"
+        },
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
         "includeAll": true,
         "label": "Hostname",
         "multi": true,
         "name": "hostname",
         "options": [],
         "query": {
-          "query": "label_values(resman_cpu_total_usage_percent{server_role=~\"$server_role\"}, hostname)",
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
