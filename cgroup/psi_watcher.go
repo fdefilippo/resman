@@ -71,7 +71,7 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 		}
 	}
 
-	fd, err := os.OpenFile(pressurePath, os.O_RDONLY, 0)
+	fd, err := os.OpenFile(pressurePath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", pressurePath, err)
 	}
