@@ -18,8 +18,11 @@ func (a *App) Run() error {
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {
-	pollingInterval := a.stateManager.GetConfig().GetPollingInterval()
-	a.logger.Info("Entering main control loop", "polling_interval_seconds", pollingInterval)
+	pollingInterval := a.controlCycleInterval()
+	a.logger.Info("Entering main control loop",
+		"polling_interval_seconds", pollingInterval,
+		"psi_event_driven", a.cfg.GetPSIEventDriven(),
+	)
 
 	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
 	defer func() {
@@ -58,12 +61,15 @@ func (a *App) runControlLoop() error {
 }
 
 func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycleComplete *chan struct{}) *time.Ticker {
-	currentPollingInterval := a.stateManager.GetConfig().GetPollingInterval()
+	currentPollingInterval := a.controlCycleInterval()
 	if currentPollingInterval != *pollingInterval {
 		ticker.Stop()
 		*pollingInterval = currentPollingInterval
 		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
-		a.logger.Info("Polling interval updated", "polling_interval_seconds", *pollingInterval)
+		a.logger.Info("Control loop interval updated",
+			"polling_interval_seconds", *pollingInterval,
+			"psi_event_driven", a.cfg.GetPSIEventDriven(),
+		)
 	}
 
 	startTime := time.Now()
@@ -92,6 +98,15 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 
 	return ticker
 }
+
+func (a *App) controlCycleInterval() int {
+	cfg := a.stateManager.GetConfig()
+	if cfg.GetPSIEventDriven() {
+		return cfg.GetPSIFallbackInterval()
+	}
+	return cfg.GetPollingInterval()
+}
+
 func (a *App) acquireCycleSlot(cycleComplete chan struct{}, source string, pollingInterval int) bool {
 	select {
 	case <-cycleComplete:
