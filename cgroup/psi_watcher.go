@@ -11,9 +11,9 @@ import (
 
 // PSIEvent represents a pressure stall event from a monitored cgroup.
 type PSIEvent struct {
-	UID       int       // 0 for system-level, >0 for per-user cgroups
-	Type      string    // "cpu", "io"
-	SomeAvg10 float64   // avg10 percentage
+	UID       int     // 0 for system-level, >0 for per-user cgroups
+	Type      string  // "cpu", "io"
+	SomeAvg10 float64 // avg10 percentage
 	Timestamp time.Time
 }
 
@@ -140,6 +140,11 @@ func (w *PSIWatcher) Start() error {
 // Stop terminates the poll loop and all monitoring.
 func (w *PSIWatcher) Stop() {
 	close(w.done)
+
+	w.mu.Lock()
+	w.wake()
+	w.mu.Unlock()
+
 	w.wg.Wait()
 
 	w.mu.Lock()
@@ -151,7 +156,10 @@ func (w *PSIWatcher) Stop() {
 		}
 	}
 	w.monitors = nil
-	w.wakeW.Close()
+	if w.wakeW != nil {
+		w.wakeW.Close()
+		w.wakeW = nil
+	}
 }
 
 // wake writes a byte to the wake pipe to interrupt poll().

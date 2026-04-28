@@ -7,7 +7,7 @@ ResMan monitors system resources and automatically applies limits to users when 
 ## Features
 
 - Dynamic CPU, RAM, and IO limiting via cgroups v2
-- PSI event-driven mode: uses poll() on cpu.pressure/io.pressure to trigger control cycles only when system pressure exceeds thresholds, reducing polling overhead when idle
+- PSI event-driven mode: uses poll() on cpu.pressure/io.pressure to trigger control cycles when the kernel reports real pressure/stall, while keeping polling as a heartbeat
 - Per-user resource tracking with Prometheus metrics
 - Configurable thresholds with time-window delay to prevent false activations
 - User filtering via include/exclude regex lists
@@ -71,6 +71,7 @@ Edit `/etc/resman.conf` to configure thresholds and filters:
 CPU_THRESHOLD=75
 CPU_RELEASE_THRESHOLD=40
 CPU_THRESHOLD_DURATION=90
+PROCESS_MIN_AGE_SECONDS=60
 
 # User filtering (empty = no users limited, .* = all users)
 USER_INCLUDE_LIST=.*
@@ -99,6 +100,26 @@ MCP_TRANSPORT=stdio
 # PSI_CPU_STALL_THRESHOLD=50000
 # PSI_FALLBACK_INTERVAL=300
 ```
+
+Activation timing for a new CPU-bound process is not only
+`CPU_THRESHOLD_DURATION`. resman first waits until the process is old enough to
+produce stable CPU deltas (`PROCESS_MIN_AGE_SECONDS`, default 60), then needs a
+second CPU sample, then applies `CPU_THRESHOLD_DURATION`. With
+`POLLING_INTERVAL=30`, `PROCESS_MIN_AGE_SECONDS=60`, and
+`CPU_THRESHOLD_DURATION=90`, limits can be applied after about 180 seconds.
+
+`total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
+activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
+process CPU and can exceed 100 on multi-core systems.
+
+`PSI_EVENT_DRIVEN` is a pressure trigger, not another CPU usage threshold. PSI
+events mean that runnable tasks or IO operations spent time waiting for resources.
+For example, on a 4-core host, 4 CPU-bound threads can show 100% CPU with little
+PSI if there is no meaningful queue; 8 runnable CPU-bound threads are more likely
+to generate CPU PSI because work is waiting. resman records the cycle trigger
+(`initial`, `ticker`, `psi_system_cpu`, `psi_system_io`, `psi_user_cpu`,
+`psi_user_io`) and exports PSI event counters so dashboards can separate usage
+from pressure.
 
 Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
 a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,

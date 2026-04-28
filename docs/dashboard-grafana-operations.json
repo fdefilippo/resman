@@ -1,101 +1,49 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
   },
-  "description": "ResMan v2.1 - SysAdmin Operations Dashboard. Shows system health, top consumers, limit effectiveness, CPU trends (instant/avg/EMA), IO throughput, and capacity planning. Designed for operational use.",
+  "description": "Operational resman dashboard for multi-host CPU/RAM/IO and per-user limiting.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
+  "id": null,
   "links": [],
+  "liveNow": false,
   "panels": [
     {
-      "type": "row",
-      "title": "Current Status",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
       },
-      "id": null,
-      "collapsed": false
-    },
-    {
-      "type": "stat",
-      "title": "CPU Usage",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 0
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 80.0
-              },
-              {
-                "color": "red",
-                "value": 90.0
-              }
-            ]
+          "color": {
+            "mode": "thresholds"
           },
           "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Memory Usage",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 0
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "decimals": 1,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -105,647 +53,68 @@
               },
               {
                 "color": "orange",
-                "value": 75.0
-              },
-              {
-                "color": "red",
-                "value": 90.0
-              }
-            ]
-          },
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "expr": "resman_memory_usage_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} * 100",
-          "legendFormat": "{{hostname}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Active Users",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 0
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 50.0
-              },
-              {
-                "color": "red",
-                "value": 100.0
-              }
-            ]
-          },
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Users Limited",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1.0
-              },
-              {
-                "color": "red",
-                "value": 5.0
-              }
-            ]
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "color": "green",
-                  "text": "No (monitored only)"
-                }
-              }
-            },
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "color": "red",
-                  "text": "YES (limited)"
-                }
-              }
-            }
-          ],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
-          "refId": "A"
-        }
-      ],
-      "description": "All active users (UID >= SYSTEM_UID_MIN). Only users matching USER_INCLUDE_LIST patterns are eligible for CPU limits."
-    },
-    {
-      "type": "row",
-      "title": "Who is Using Resources",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 5
-      },
-      "id": null,
-      "collapsed": false
-    },
-    {
-      "type": "table",
-      "title": "Top CPU Consumers",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 6
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "transformations": [
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Value",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "uid": true,
-              "__name__": true,
-              "cluster": true,
-              "server_role": true,
-              "hostname": false,
-              "instance": true,
-              "job": true
-            },
-            "indexByName": {
-              "hostname": 0,
-              "username": 1,
-              "Value": 2
-            },
-            "renameByName": {
-              "Value": "CPU %",
-              "username": "User",
-              "hostname": "Host"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 1,
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 50
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "CPU %"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "expr": "resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "{{username}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Top Memory Consumers",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 6
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "transformations": [
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Value",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "uid": true,
-              "__name__": true,
-              "cluster": true,
-              "server_role": true,
-              "hostname": false,
-              "instance": true,
-              "job": true
-            },
-            "indexByName": {
-              "hostname": 0,
-              "username": 1,
-              "Value": 2
-            },
-            "renameByName": {
-              "Value": "Memory",
-              "username": "User",
-              "hostname": "Host"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1073741824
-              },
-              {
-                "color": "red",
-                "value": 4294967296
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Memory"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "expr": "resman_user_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "{{username}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Monitored Users",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 6
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "uid": true,
-              "__name__": true,
-              "cluster": true,
-              "server_role": true,
-              "hostname": false,
-              "instance": true,
-              "job": true
-            },
-            "indexByName": {
-              "hostname": 0,
-              "username": 1,
-              "Value": 2
-            },
-            "renameByName": {
-              "Value": "Limited",
-              "username": "User",
-              "hostname": "Host"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "color": "green",
-                  "text": "No (monitored only)"
-                }
-              }
-            },
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "color": "red",
-                  "text": "YES (limited)"
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
                 "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Limited"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "expr": "resman_user_cpu_limited{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "{{username}}",
-          "refId": "A"
-        }
-      ],
-      "description": "All active users (UID >= SYSTEM_UID_MIN). Only users matching USER_INCLUDE_LIST patterns are eligible for CPU limits."
-    },
-    {
-      "type": "table",
-      "title": "Process Count",
-      "description": "Number of processes per active user",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "transformations": [
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "Value",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "uid": true,
-              "__name__": true,
-              "cluster": true,
-              "server_role": true,
-              "instance": true,
-              "job": true,
-              "hostname": false
-            },
-            "indexByName": {
-              "hostname": 0,
-              "username": 1,
-              "Value": 2
-            },
-            "renameByName": {
-              "Value": "Processes",
-              "username": "User",
-              "hostname": "Host"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 50
               },
               {
                 "color": "red",
-                "value": 200
+                "value": 5
               }
             ]
-          }
+          },
+          "unit": "short"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Processes"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "resman_user_process_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "format": "table",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "count(count by (cluster, environment, hostname) (resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}))",
           "instant": true,
-          "legendFormat": "{{username}}",
+          "legendFormat": "systems",
           "refId": "A"
         }
-      ]
+      ],
+      "title": "Sistemi",
+      "type": "stat"
     },
     {
-      "type": "row",
-      "title": "Resource Usage Over Time",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 23
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
       },
-      "id": null,
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "CPU Usage",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 24
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -755,7 +124,78 @@
               },
               {
                 "color": "orange",
-                "value": 80
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "avg(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "instant": true,
+          "legendFormat": "avg cpu",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU media host (100% = tutti i core)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
               },
               {
                 "color": "red",
@@ -763,51 +203,534 @@
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "displayMode": "auto"
-          }
+          "unit": "percent"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "avg((resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}) * 100)",
+          "instant": true,
+          "legendFormat": "avg ram",
+          "refId": "A"
+        }
+      ],
+      "title": "RAM media",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "instant": true,
+          "legendFormat": "limited users",
+          "refId": "A"
+        }
+      ],
+      "title": "Utenti limitati",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 12
+      },
+      "id": 5,
       "options": {
         "legend": {
           "calcs": [
-            "mean",
-            "max"
+            "lastNotNull"
           ],
           "displayMode": "table",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
         {
-          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "resman_system_load_average{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
           "refId": "A"
         }
-      ]
+      ],
+      "title": "Load average per sistema",
+      "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "refId": "A"
+        }
+      ],
+      "title": "% CPU host per sistema (100% = tutti i core)",
       "type": "timeseries",
-      "title": "Memory Usage",
+      "description": "Percentuale CPU host normalizzata 0-100. Su un sistema a 4 core, 100% significa 4 core saturi."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}) * 100",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "refId": "A"
+        }
+      ],
+      "title": "% RAM per sistema",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 24
+        "y": 12
       },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}} read",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}} write",
+          "refId": "B"
+        }
+      ],
+      "title": "IO throughput per sistema",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -817,53 +740,64 @@
               }
             ]
           },
-          "color": {
-            "mode": "palette-classic"
-          }
+          "unit": "percent"
         },
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "resman_all_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Users {{hostname}}",
-          "refId": "A"
-        },
-        {
-          "expr": "resman_limited_users_memory_usage_bytes{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Limited {{hostname}}",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Active vs Limited Users",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 24
+        "w": 12,
+        "x": 0,
+        "y": 20
       },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
+      "id": 9,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top utenti per CPU",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -873,65 +807,223 @@
               }
             ]
           },
-          "color": {
-            "mode": "palette-classic"
-          }
+          "unit": "bytes"
         },
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
       },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "resman_all_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Active {{hostname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
           "refId": "A"
-        },
-        {
-          "expr": "resman_limited_users_count{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Limited {{hostname}}",
-          "refId": "B"
         }
-      ]
+      ],
+      "title": "Top utenti per RAM",
+      "type": "table"
     },
     {
-      "type": "row",
-      "title": "Limits Activity",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 33
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
       },
-      "id": null,
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "Limits Active Status",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 0,
-        "y": 34
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 11,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "topk(20, sum by (cluster, environment, hostname, username) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m]) + rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m])))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top utenti per IO",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "mode": "gradient",
+              "type": "color-background"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "id": 12,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_process_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top utenti per process count",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "no"
+                },
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "yes"
+                }
+              },
+              "type": "value"
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -945,51 +1037,281 @@
               }
             ]
           },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 13,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname, username, uid) (resman_user_cpu_limited{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Utenti limitati",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 12
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname) (rate(resman_user_io_read_ops_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m]) + rate(resman_user_io_write_ops_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "refId": "A"
+        }
+      ],
+      "title": "IO operations per sistema",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Incrementi del counter resman_limits_activated_total. Ogni barra indica quante attivazioni dei limiti sono avvenute nel bucket temporale selezionato.",
+      "fieldConfig": {
+        "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "custom": {
-            "displayMode": "auto"
-          }
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": []
       },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 12
+      },
+      "id": 15,
       "options": {
         "legend": {
           "calcs": [
-            "mean",
-            "max"
+            "sum",
+            "lastNotNull"
           ],
           "displayMode": "table",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
         {
-          "expr": "resman_limits_active{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname) (increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__interval]))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
           "refId": "A"
         }
-      ]
+      ],
+      "title": "Attivazioni limiti nel tempo",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "title": "Limit Activations (cumulative)",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 34
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
       },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
+      "description": "Eventi PSI ricevuti dal kernel. PSI misura pressure/stall, non semplice CPU alta: un host puo essere al 100% CPU senza generare PSI se non ci sono task in attesa significativa.",
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -999,221 +1321,223 @@
               }
             ]
           },
-          "color": {
-            "mode": "palette-classic"
-          }
+          "unit": "short"
         },
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "resman_limits_activated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Activated {{hostname}}",
-          "refId": "A"
-        },
-        {
-          "expr": "resman_limits_deactivated_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "Deactivated {{hostname}}",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "System Load Average",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 34
-      },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "resman_system_load_average{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}",
-          "legendFormat": "{{hostname}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "IO Throughput",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 41
-      },
-      "id": null,
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "IO Read (by user, 5m rate)",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 36
       },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps",
-          "decimals": 1,
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
+      "id": 17,
       "options": {
         "legend": {
           "calcs": [
-            "mean",
-            "max"
+            "sum",
+            "lastNotNull"
           ],
           "displayMode": "table",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
         {
-          "expr": "rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m])",
-          "legendFormat": "read {{username}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, hostname, type, scope) (increase(resman_psi_events_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__interval]))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}} {{scope}} {{type}}",
           "refId": "A"
         }
-      ]
+      ],
+      "title": "Eventi PSI kernel",
+      "type": "timeseries"
     },
     {
-      "type": "timeseries",
-      "title": "IO Write (by user, 5m rate)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Ultimo evento PSI ricevuto per host, tipo e scope. Serve a capire quando il control loop e stato risvegliato da pressure reale invece che dal ticker.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 36
       },
-      "id": null,
-      "datasource": "${prometheus_datasource}",
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (cluster, environment, hostname, type, scope) (resman_psi_last_event_timestamp_seconds{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}) * 1000",
+          "instant": true,
+          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}} {{scope}} {{type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Ultimo evento PSI",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Classificazioni prodotte da AUTODETECT_PATTERNS. Il valore indica la confidenza percentuale dell ultimo pattern rilevato per utente; il detector aggiorna questi dati durante l analisi oraria.",
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps",
-          "decimals": 1,
           "color": {
-            "mode": "palette-classic"
-          }
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 70
+              }
+            ]
+          },
+          "unit": "percent"
         },
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 44
       },
+      "id": 16,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m])",
-          "legendFormat": "write {{username}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "resman_user_workload_pattern_confidence{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"} * 100",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{username}} {{pattern}}",
           "refId": "A"
         }
-      ]
+      ],
+      "title": "AUTODETECT_PATTERNS - utenti classificati",
+      "type": "table"
     }
   ],
-  "preload": false,
-  "refresh": "",
-  "schemaVersion": 36,
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
   "tags": [
     "resman",
-    "sysadmin",
-    "operations"
+    "operations",
+    "cgroup"
   ],
   "templating": {
     "list": [
       {
-        "current": {
-          "text": "default",
-          "value": "default"
-        },
+        "current": {},
+        "hide": 0,
         "includeAll": false,
-        "label": "Prometheus",
-        "name": "prometheus_datasource",
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
         "options": [],
         "query": "prometheus",
+        "queryValue": "",
         "refresh": 1,
         "regex": "",
+        "skipUrlSync": false,
         "type": "datasource"
       },
       {
         "allValue": ".*",
         "current": {
+          "selected": true,
           "text": "All",
           "value": "$__all"
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "${prometheus_datasource}"
+          "uid": "${DS_PROMETHEUS}"
         },
         "definition": "label_values(resman_cpu_total_usage_percent, cluster)",
+        "hide": 0,
         "includeAll": true,
         "label": "Cluster",
         "multi": true,
@@ -1221,83 +1545,97 @@
         "options": [],
         "query": {
           "query": "label_values(resman_cpu_total_usage_percent, cluster)",
-          "refId": "StandardVariableQuery"
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
         "regex": "",
-        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 1,
         "type": "query"
       },
       {
         "allValue": ".*",
         "current": {
+          "selected": true,
           "text": "All",
           "value": "$__all"
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "${prometheus_datasource}"
+          "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, environment)",
+        "hide": 0,
         "includeAll": true,
-        "label": "Server Role",
+        "label": "Environment",
         "multi": true,
-        "name": "server_role",
+        "name": "environment",
         "options": [],
         "query": {
-          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, server_role)",
-          "refId": "StandardVariableQuery"
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, environment)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
         "regex": "",
-        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 1,
         "type": "query"
       },
       {
         "allValue": ".*",
         "current": {
+          "selected": true,
           "text": "All",
           "value": "$__all"
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "${prometheus_datasource}"
+          "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, hostname)",
+        "hide": 0,
         "includeAll": true,
         "label": "Hostname",
         "multi": true,
         "name": "hostname",
         "options": [],
         "query": {
-          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\"}, hostname)",
-          "refId": "StandardVariableQuery"
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, hostname)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
         "regex": "",
-        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 1,
         "type": "query"
       },
       {
-        "allValue": null,
-        "current": {},
-        "datasource": "${prometheus_datasource}",
-        "definition": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}, username)",
         "hide": 0,
         "includeAll": true,
         "label": "Username",
         "multi": true,
         "name": "username",
         "options": [],
-        "query": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
-        "refresh": 2,
+        "query": {
+          "query": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}, username)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
-        "tagValuesQuery": "",
-        "tags": [],
-        "tagsQuery": "",
-        "type": "query",
-        "useTags": false
+        "type": "query"
       }
     ]
   },
@@ -1305,21 +1643,10 @@
     "from": "now-6h",
     "to": "now"
   },
-  "timepicker": {
-    "refresh_intervals": [
-      "5s",
-      "10s",
-      "30s",
-      "1m",
-      "5m",
-      "15m",
-      "30m",
-      "1h"
-    ]
-  },
+  "timepicker": {},
   "timezone": "browser",
-  "title": "ResMan - Operational Overview",
-  "uid": "resman-sysadmin-v2",
+  "title": "resman - Operations",
+  "uid": "resman-operations",
   "version": 1,
   "weekStart": ""
 }

@@ -766,6 +766,40 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	return nil
 }
 
+// ReleaseUserFromSharedCgroup sposta i processi fuori dal sottocgroup condiviso e lo rimuove.
+func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error {
+	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
+	userProcsFile := filepath.Join(userPath, "cgroup.procs")
+
+	if _, err := os.Stat(userPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	pids, err := m.readPidsFromFile(userProcsFile)
+	if err != nil {
+		return fmt.Errorf("failed to read user shared cgroup processes for UID %d: %w", uid, err)
+	}
+
+	if len(pids) > 0 {
+		rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+		if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
+			return fmt.Errorf("failed to move processes out of shared cgroup for UID %d: %w", uid, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if err := os.Remove(userPath); err != nil {
+		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
+	}
+
+	m.logger.Debug("User released from shared cgroup",
+		"uid", uid,
+		"path", userPath,
+		"processes_moved", len(pids),
+	)
+	return nil
+}
+
 // moveAllUserProcessesToSharedCgroupFallback scans /proc manually if gopsutil fails.
 func (m *Manager) moveAllUserProcessesToSharedCgroupFallback(uid int, sharedPath string) error {
 	procDir := "/proc"

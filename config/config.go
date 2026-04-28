@@ -56,6 +56,8 @@ type Config struct {
 	PollingInterval int `config:"POLLING_INTERVAL"`
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
+	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
+	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
 	// Timeout (seconds/milliseconds)
 	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
@@ -202,13 +204,13 @@ type Config struct {
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 
 	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
-	PSIEventDriven       bool   `config:"PSI_EVENT_DRIVEN"`       // Enable PSI event-driven control cycles
-	PSICPUStallThreshold int    `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
-	PSIOStallThreshold   int    `config:"PSI_IO_STALL_THRESHOLD"` // IO stall threshold in microseconds (default 50000)
-	PSIWindowUs          int    `config:"PSI_WINDOW_US"`          // PSI tracking window in microseconds (default 1000000 = 1s)
-	PSIFallbackInterval  int    `config:"PSI_FALLBACK_INTERVAL"`  // Fallback polling interval in seconds when event-driven (default 300 = 5min)
-	PSIBoostWeight       int    `config:"PSI_BOOST_WEIGHT"`       // CPU weight boost on PSI event (default 300, normal weight is 100)
-	PSIBoostDuration     int    `config:"PSI_BOOST_DURATION"`     // Seconds before reverting PSI boost (default 120)
+	PSIEventDriven       bool `config:"PSI_EVENT_DRIVEN"`        // Enable PSI event-driven control cycles
+	PSICPUStallThreshold int  `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
+	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
+	PSIWindowUs          int  `config:"PSI_WINDOW_US"`           // PSI tracking window in microseconds (default 1000000 = 1s)
+	PSIFallbackInterval  int  `config:"PSI_FALLBACK_INTERVAL"`   // Fallback polling interval in seconds when event-driven (default 300 = 5min)
+	PSIBoostWeight       int  `config:"PSI_BOOST_WEIGHT"`        // CPU weight boost on PSI event (default 300, normal weight is 100)
+	PSIBoostDuration     int  `config:"PSI_BOOST_DURATION"`      // Seconds before reverting PSI boost (default 120)
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -233,6 +235,8 @@ func DefaultConfig() *Config {
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
+		// Processi piu' giovani non contribuiscono alla CPU utente.
+		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
 		CgroupOperationTimeout: 5,   // 5 seconds for cgroup operations
@@ -544,6 +548,10 @@ func setConfigField(cfg *Config, key, value string) error {
 	case "METRICS_CACHE_TTL":
 		if i, err := strconv.Atoi(value); err == nil {
 			cfg.MetricsCacheTTL = i
+		}
+	case "PROCESS_MIN_AGE_SECONDS":
+		if i, err := strconv.Atoi(value); err == nil {
+			cfg.ProcessMinAgeSeconds = i
 		}
 
 	// Thresholds
@@ -1182,6 +1190,29 @@ func validateConfig(cfg *Config) error {
 	// Validate polling interval
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
+	}
+	if cfg.ProcessMinAgeSeconds < 0 {
+		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
+	}
+
+	// Validate PSI event-driven configuration
+	if cfg.PSICPUStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSICPUStallThreshold == 0) {
+		errors = append(errors, "PSI_CPU_STALL_THRESHOLD must be greater than 0")
+	}
+	if cfg.PSIOStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSIOStallThreshold == 0) {
+		errors = append(errors, "PSI_IO_STALL_THRESHOLD must be greater than 0")
+	}
+	if cfg.PSIWindowUs < 0 || (cfg.PSIEventDriven && cfg.PSIWindowUs == 0) {
+		errors = append(errors, "PSI_WINDOW_US must be greater than 0")
+	}
+	if cfg.PSIFallbackInterval < 0 || (cfg.PSIEventDriven && cfg.PSIFallbackInterval == 0) {
+		errors = append(errors, "PSI_FALLBACK_INTERVAL must be greater than 0")
+	}
+	if cfg.PSIBoostWeight < 0 || cfg.PSIBoostWeight > 10000 || (cfg.PSIEventDriven && cfg.PSIBoostWeight == 0) {
+		errors = append(errors, "PSI_BOOST_WEIGHT must be between 1 and 10000")
+	}
+	if cfg.PSIBoostDuration < 0 || (cfg.PSIEventDriven && cfg.PSIBoostDuration == 0) {
+		errors = append(errors, "PSI_BOOST_DURATION must be greater than 0")
 	}
 
 	// Validate limit hook configuration
@@ -1854,6 +1885,13 @@ func (c *Config) GetMetricsCacheTTL() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.MetricsCacheTTL
+}
+
+// GetProcessMinAgeSeconds returns the minimum process age before CPU accounting.
+func (c *Config) GetProcessMinAgeSeconds() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ProcessMinAgeSeconds
 }
 
 // GetSystemUIDMin returns the minimum UID to monitor.

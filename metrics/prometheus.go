@@ -91,6 +91,7 @@ type PrometheusExporter struct {
 	userIOWriteBytes     *prometheus.CounterVec
 	userIOReadOps        *prometheus.CounterVec
 	userIOWriteOps       *prometheus.CounterVec
+	userWorkloadPattern  *prometheus.GaugeVec
 	cgroupCPUQuota       *prometheus.GaugeVec
 	cgroupCPUPeriod      *prometheus.GaugeVec
 	cgroupMemoryUsage    *prometheus.GaugeVec
@@ -99,11 +100,15 @@ type PrometheusExporter struct {
 	activeUserMetrics    map[string]bool   // "uid_username" -> true
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
+	prevUserPatterns     map[string]string // "uid_username" -> previous pattern label
 
 	// Metriche counter (solo incremento)
 	limitsActivatedTotal   prometheus.Counter
 	limitsDeactivatedTotal prometheus.Counter
 	controlCyclesTotal     prometheus.Counter
+	controlCycleTriggers   *prometheus.CounterVec
+	psiEventsTotal         *prometheus.CounterVec
+	psiLastEventTimestamp  *prometheus.GaugeVec
 	errorsTotal            *prometheus.CounterVec
 
 	// Metriche histogram per tempi di esecuzione
@@ -169,6 +174,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		activeUserMetrics:    make(map[string]bool),
 		prevMemoryHighEvents: make(map[string]uint64),
 		prevIOStats:          make(map[string]ioStatsSnapshot),
+		prevUserPatterns:     make(map[string]string),
 	}
 
 	logger.Info("Prometheus exporter created",
@@ -500,6 +506,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
+	exp.userWorkloadPattern = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "user_workload_pattern_confidence",
+			Help:        "Detected workload pattern confidence per user (AUTODETECT_PATTERNS)",
+			ConstLabels: staticLabels,
+		},
+		[]string{"uid", "username", "pattern"},
+	)
+
 	exp.cgroupCPUQuota = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -547,6 +563,36 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Name:      "control_cycles_total",
 		Help:      "Total number of control cycles executed",
 	})
+
+	exp.controlCycleTriggers = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "control_cycle_triggers_total",
+			Help:        "Total number of control cycles by trigger source",
+			ConstLabels: staticLabels,
+		},
+		[]string{"trigger"},
+	)
+
+	exp.psiEventsTotal = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "psi_events_total",
+			Help:        "Total number of PSI pressure events received from the kernel",
+			ConstLabels: staticLabels,
+		},
+		[]string{"type", "scope"},
+	)
+
+	exp.psiLastEventTimestamp = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "psi_last_event_timestamp_seconds",
+			Help:        "Unix timestamp of the last PSI pressure event received from the kernel",
+			ConstLabels: staticLabels,
+		},
+		[]string{"type", "scope"},
+	)
 
 	exp.errorsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
@@ -807,11 +853,15 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			exp.userIOWriteBytes.DeleteLabelValues(uidStr, username)
 			exp.userIOReadOps.DeleteLabelValues(uidStr, username)
 			exp.userIOWriteOps.DeleteLabelValues(uidStr, username)
+			if prevPattern, ok := exp.prevUserPatterns[userKey]; ok {
+				exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
+			}
 
 			// Rimuovi dalla mappa dei valori precedenti
 			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 			delete(exp.prevMemoryHighEvents, memoryHighKey)
 			delete(exp.prevIOStats, memoryHighKey)
+			delete(exp.prevUserPatterns, userKey)
 
 			// Rimuovi dal tracking
 			delete(exp.activeUserMetrics, userKey)
@@ -849,6 +899,29 @@ func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores i
 	exp.totalCores.Set(float64(totalCores))
 	exp.actionCores.Set(float64(actionCores))
 	exp.systemLoad.Set(systemLoad)
+}
+
+// UpdateUserWorkloadPattern aggiorna il pattern rilevato per un utente.
+func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
+	if exp == nil || exp.registry == nil || exp.userWorkloadPattern == nil {
+		return
+	}
+
+	uidStr := strconv.Itoa(uid)
+	if username == "" || username == uidStr {
+		username = exp.getUsernameFromUID(uidStr)
+	}
+	userKey := fmt.Sprintf("%s_%s", uidStr, username)
+
+	exp.mu.Lock()
+	defer exp.mu.Unlock()
+
+	if prevPattern, ok := exp.prevUserPatterns[userKey]; ok && prevPattern != pattern {
+		exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
+	}
+
+	exp.userWorkloadPattern.WithLabelValues(uidStr, username, pattern).Set(confidence)
+	exp.prevUserPatterns[userKey] = pattern
 }
 
 // parseCPUQuota estrae quota e period da una stringa "quota period".
@@ -941,6 +1014,35 @@ func (exp *PrometheusExporter) IncrementLimitsDeactivated() {
 		return
 	}
 	exp.limitsDeactivatedTotal.Inc()
+}
+
+// RecordControlCycleTrigger registra la causa che ha avviato un ciclo di controllo.
+func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
+	if exp == nil || exp.controlCycleTriggers == nil {
+		return
+	}
+	if trigger == "" {
+		trigger = "unknown"
+	}
+	exp.controlCycleTriggers.WithLabelValues(trigger).Inc()
+}
+
+// RecordPSIEvent registra un evento PSI ricevuto dal kernel.
+func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.Time) {
+	if exp == nil || exp.psiEventsTotal == nil || exp.psiLastEventTimestamp == nil {
+		return
+	}
+	if typ == "" {
+		typ = "unknown"
+	}
+	if scope == "" {
+		scope = "unknown"
+	}
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+	exp.psiEventsTotal.WithLabelValues(typ, scope).Inc()
+	exp.psiLastEventTimestamp.WithLabelValues(typ, scope).Set(float64(timestamp.Unix()))
 }
 
 // RecordControlCycleDuration registra la durata di un ciclo di controllo.

@@ -363,7 +363,7 @@ func main() {
 	defer ticker.Stop()
 
 	// Esecuzione immediata del primo controllo
-	if err := stateManager.RunControlCycle(ctx); err != nil {
+	if err := stateManager.RunControlCycleWithTrigger(ctx, state.ControlCycleTriggerInitial); err != nil {
 		logger.Error("Error in initial control cycle",
 			"cycle_id", "initial",
 			"error", err,
@@ -450,7 +450,7 @@ func main() {
 
 			cycleComplete = make(chan struct{})
 
-			if err := stateManager.RunControlCycle(ctx); err != nil {
+			if err := stateManager.RunControlCycleWithTrigger(ctx, state.ControlCycleTriggerTicker); err != nil {
 				logger.Error("Error in control cycle", "error", err)
 			}
 
@@ -483,6 +483,14 @@ func main() {
 				stateManager.OnUserPSIEvent(psiEvent)
 			}
 
+			psiScope := "system"
+			if psiEvent.UID > 0 {
+				psiScope = "user"
+			}
+			if prometheusExporter != nil {
+				prometheusExporter.RecordPSIEvent(psiEvent.Type, psiScope, psiEvent.Timestamp)
+			}
+
 			// Backpressure: Skip if previous cycle still running
 			select {
 			case <-cycleComplete:
@@ -493,7 +501,8 @@ func main() {
 
 			cycleComplete = make(chan struct{})
 
-			if err := stateManager.RunControlCycle(ctx); err != nil {
+			trigger := "psi_" + psiScope + "_" + psiEvent.Type
+			if err := stateManager.RunControlCycleWithTrigger(ctx, trigger); err != nil {
 				logger.Error("Error in control cycle (PSI-triggered)", "error", err)
 			}
 
