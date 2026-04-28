@@ -26,6 +26,7 @@ import (
 	"syscall"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/app"
 	"github.com/fdefilippo/resman/logging"
 )
 
@@ -81,7 +82,7 @@ func main() {
 	// Inizializzazione componenti
 	logger.Info("Initializing components:")
 
-	err = NewApp(cfg, *configPath, ctx, cancel, sigChan, logger).
+	err = app.NewApp(cfg, *configPath, ctx, cancel, sigChan, logger).
 		WithCgroupManager().
 		WithMetricsCollector().
 		WithDatabase().
