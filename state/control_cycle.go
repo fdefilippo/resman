@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -15,6 +16,36 @@ const (
 	ControlCycleTriggerTicker  = "ticker"
 	ControlCycleTriggerManual  = "manual"
 )
+
+type controlCycleContext struct {
+	ctx                context.Context
+	cfg                *config.Config
+	trigger            string
+	startTime          time.Time
+	cycleID            int64
+	metrics            *SystemMetrics
+	decision           string
+	reason             string
+	duration           time.Duration
+	activeLimitedUsers int
+	stopWithoutError   bool
+}
+
+type controlCycleStage func(*Manager, *controlCycleContext) error
+
+var defaultControlCyclePipeline = []controlCycleStage{
+	(*Manager).stageCheckBlackout,
+	(*Manager).stageCollectMetrics,
+	(*Manager).stageUpdatePrometheus,
+	(*Manager).stageWriteDatabase,
+	(*Manager).stageMakeDecision,
+	(*Manager).stageExecuteDecision,
+	(*Manager).stageRecordHistory,
+	(*Manager).stageIORemediation,
+	(*Manager).stageWorkloadPatternDetection,
+	(*Manager).stageRevertPSIBoosts,
+	(*Manager).stageLogCompletion,
+}
 
 func (m *Manager) RunControlCycle(ctx context.Context) error {
 	return m.RunControlCycleWithTrigger(ctx, ControlCycleTriggerManual)
@@ -29,82 +60,124 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		trigger = ControlCycleTriggerManual
 	}
 
-	startTime := time.Now()
-	cycleID := startTime.Unix()
+	run := &controlCycleContext{
+		ctx:       ctx,
+		cfg:       m.GetConfig(),
+		trigger:   trigger,
+		startTime: time.Now(),
+	}
+	run.cycleID = run.startTime.Unix()
 
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.RecordControlCycleTrigger(trigger)
 	}
 
-	m.logger.Debug("Starting control cycle", "cycle_id", cycleID, "trigger", trigger)
-	cfg := m.GetConfig()
+	m.logger.Debug("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger)
 
+	for _, stage := range defaultControlCyclePipeline {
+		if err := stage(m, run); err != nil {
+			return err
+		}
+		if run.stopWithoutError {
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	// Controlla se siamo in un blackout timeframe
-	if cfg.IsInBlackout() {
-		nextEnd := cfg.GetNextBlackoutEnd()
+	if run.cfg.IsInBlackout() {
+		nextEnd := run.cfg.GetNextBlackoutEnd()
 		if nextEnd != nil {
 			m.logger.Info("Skipping control cycle - blackout timeframe active",
-				"cycle_id", cycleID,
-				"trigger", trigger,
+				"cycle_id", run.cycleID,
+				"trigger", run.trigger,
 				"next_check", nextEnd.Format("2006-01-02 15:04:05"),
 			)
 		} else {
 			m.logger.Debug("Skipping control cycle - blackout timeframe active",
-				"cycle_id", cycleID,
-				"trigger", trigger,
+				"cycle_id", run.cycleID,
+				"trigger", run.trigger,
 			)
 		}
-		return nil
+		run.stopWithoutError = true
 	}
+	return nil
+}
 
+func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 	// 1. Raccogli metriche del sistema
 	metrics, err := m.collectSystemMetrics()
 	if err != nil {
 		m.logger.Error("Failed to collect system metrics",
-			"cycle_id", cycleID,
-			"trigger", trigger,
+			"cycle_id", run.cycleID,
+			"trigger", run.trigger,
 			"error", err,
 		)
-		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", cycleID, err)
+		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", run.cycleID, err)
 	}
+	run.metrics = metrics
+	return nil
+}
 
+func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
 	// 2. Aggiorna le metriche Prometheus (se abilitato)
 	if m.prometheusExporter != nil {
-		m.updatePrometheusMetrics(metrics)
+		m.updatePrometheusMetrics(run.metrics)
 	}
+	return nil
+}
 
+func (m *Manager) stageWriteDatabase(run *controlCycleContext) error {
 	// 3. Scrivi le metriche nel database (se abilitato)
-	m.writeDatabaseMetrics(metrics)
+	m.writeDatabaseMetrics(run.metrics)
+	return nil
+}
 
+func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
 	// 4. Prendi decisione basata sulle metriche
-	decision, reason := m.makeDecision(metrics)
+	run.decision, run.reason = m.makeDecision(run.metrics)
+	return nil
+}
 
+func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 	// 4. Esegui l'azione corrispondente
-	if err := m.executeDecision(decision, metrics); err != nil {
+	if err := m.executeDecision(run.decision, run.metrics); err != nil {
 		m.logger.Error("Failed to execute decision",
-			"decision", decision,
-			"reason", reason,
-			"cycle_id", cycleID,
-			"trigger", trigger,
+			"decision", run.decision,
+			"reason", run.reason,
+			"cycle_id", run.cycleID,
+			"trigger", run.trigger,
 			"error", err,
 		)
-		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", decision, cycleID, err)
+		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
 	}
+	return nil
+}
 
+func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
 	// 6. Registra lo storico del ciclo
-	duration := time.Since(startTime)
-	m.recordControlCycle(decision, reason, metrics, duration)
+	run.duration = time.Since(run.startTime)
+	m.recordControlCycle(run.decision, run.reason, run.metrics, run.duration)
+	return nil
+}
 
+func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 	// 7. IO Starvation Auto-Remediation
 	if m.ioRemediation != nil {
 		limitedUsers := m.metricsCollector.GetLimitedUsers()
-		m.ioRemediation.CheckAndRemediate(m.cgroupManager, cfg, limitedUsers)
+		m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
 		// Cleanup periodico stati vecchi
 		m.ioRemediation.Cleanup(24 * time.Hour)
 	}
+	return nil
+}
 
+func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error {
 	// 8. Workload Pattern Detection
-	if cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
+	if run.cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
 		// Aggiorna statistiche per tutti gli utenti
 		allMetrics := m.metricsCollector.GetAllUserMetrics()
 		for uid, um := range allMetrics {
@@ -114,14 +187,14 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		// Analizza pattern ogni ora
 		if time.Since(m.lastPatternAnalysis) > time.Hour {
 			m.lastPatternAnalysis = time.Now()
-			patterns := m.patternDetector.Analyze(cfg)
+			patterns := m.patternDetector.Analyze(run.cfg)
 			for uid, result := range patterns {
 				if m.prometheusExporter != nil {
 					username := m.metricsCollector.GetUsernameFromUID(uid)
 					m.prometheusExporter.UpdateUserWorkloadPattern(uid, username, string(result.Pattern), result.Confidence)
 				}
 				if result.Pattern != PatternUnknown {
-					if m.policyEngine.ApplyPolicy(uid, result.Pattern, cfg) {
+					if m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg) {
 						// Policy cambiata, applica limiti
 						policy, _ := m.policyEngine.GetPolicy(uid)
 						if policy != nil {
@@ -152,33 +225,39 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 				}
 			}
 			// Cleanup pattern detector
-			m.patternDetector.Cleanup(time.Duration(cfg.GetPatternHistoryHours()) * time.Hour)
+			m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour)
 			m.policyEngine.Cleanup(24 * time.Hour)
 		}
 	}
+	return nil
+}
 
+func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {
 	// 9a. Revert PSI weight boosts that have expired
 	if m.psiWatcher != nil {
 		m.revertPSIBoosts()
 	}
+	return nil
+}
 
+func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	m.mu.RLock()
-	activeLimitedUsers := len(m.activeUsers)
+	run.activeLimitedUsers = len(m.activeUsers)
 	m.mu.RUnlock()
 
 	// 9. Logga il risultato del ciclo
 	m.logger.Info("Control cycle completed",
-		"cycle_id", cycleID,
-		"trigger", trigger,
-		"decision", decision,
-		"reason", reason,
-		"total_cpu_usage", metrics.TotalCPUUsage,
-		"limited_users_cpu_usage", metrics.LimitedUsersCPUUsage,
-		"eligible_users", metrics.LimitedUsersCount,
-		"active_limited_users", activeLimitedUsers,
-		"system_under_load", metrics.SystemUnderLoad,
-		"ignore_system_load", cfg.GetIgnoreSystemLoad(),
-		"duration_ms", duration.Milliseconds(),
+		"cycle_id", run.cycleID,
+		"trigger", run.trigger,
+		"decision", run.decision,
+		"reason", run.reason,
+		"total_cpu_usage", run.metrics.TotalCPUUsage,
+		"limited_users_cpu_usage", run.metrics.LimitedUsersCPUUsage,
+		"eligible_users", run.metrics.LimitedUsersCount,
+		"active_limited_users", run.activeLimitedUsers,
+		"system_under_load", run.metrics.SystemUnderLoad,
+		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
+		"duration_ms", run.duration.Milliseconds(),
 	)
 
 	return nil
