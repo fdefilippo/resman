@@ -271,9 +271,9 @@ func TestIsValidUserUID(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := collector.isValidUserUID(tt.uid)
+		got := collector.isMonitoredUserUID(tt.uid)
 		if got != tt.expected {
-			t.Errorf("isValidUserUID(%d): got %v, expected %v (SystemUIDMax=%d)", tt.uid, got, tt.expected, cfg.SystemUIDMax)
+			t.Errorf("isMonitoredUserUID(%d): got %v, expected %v (SystemUIDMax=%d)", tt.uid, got, tt.expected, cfg.SystemUIDMax)
 		}
 	}
 }

@@ -743,9 +743,14 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 	}
 
-	// Rimuovi utenti dalla mappa
+	// Rimuovi utenti dalla mappa e pulisci PSI/boost
 	for _, uid := range usersToRelease {
 		delete(m.activeUsers, uid)
+		delete(m.psiBoostedAt, uid)
+		if m.psiWatcher != nil {
+			m.psiWatcher.RemoveMonitor(uid, "cpu")
+			m.psiWatcher.RemoveMonitor(uid, "io")
+		}
 		// Ripristina il limite normale nel cgroup
 		go func(uid int) {
 			if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
@@ -753,11 +758,6 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 					"uid", uid, "error", err)
 			}
 		}(uid)
-	}
-
-	// Aggiungi utenti che sono tornati attivi
-	for _, uid := range usersToAdd {
-		m.activeUsers[uid] = true
 	}
 
 	remainingLimited := len(m.activeUsers)
@@ -772,8 +772,10 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		)
 	}
 
-	// Applica i limiti per gli utenti riaggiunti
+	// Applica i limiti per gli utenti riaggiunti (dopo aver rilasciato il lock)
+	// activeUsers[uid] viene marcato solo dopo che CreateUserSubCgroup ha successo
 	if len(usersToAdd) > 0 && m.sharedCgroupPath != "" {
+		var added []int
 		for _, uid := range usersToAdd {
 			username := m.metricsCollector.GetUsernameFromUID(uid)
 			m.logger.Info("Re-adding user to shared cgroup (CPU usage recovered)",
@@ -781,7 +783,6 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				"cpu", metrics.UserCPUUsage[uid],
 			)
 
-			// Crea sottocgroup e sposta processi in background
 			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, m.sharedCgroupPath)
 			if err != nil {
 				m.logger.Warn("Failed to re-create user sub-cgroup",
@@ -790,38 +791,43 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 			}
 
 			m.wg.Add(1)
-			go func(uid int, weight int) {
+			go func(uid int) {
 				defer m.wg.Done()
 				time.Sleep(300 * time.Millisecond)
 				if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, m.sharedCgroupPath); err != nil {
 					m.logger.Warn("Failed to move processes for re-added user",
 						"uid", uid, "error", err)
 				}
-				if err := m.cgroupManager.ApplyCPUWeight(uid, weight); err != nil {
+				if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
 					m.logger.Warn("Failed to set CPU weight for re-added user",
-						"uid", uid, "weight", weight, "error", err)
+						"uid", uid, "weight", 100, "error", err)
 				}
-			}(uid, 100)
+			}(uid)
 
-			// Avvia monitoraggio PSI
 			if m.psiWatcher != nil {
 				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
 				ioPressurePath := filepath.Join(userCgroupPath, "io.pressure")
 				m.psiWatcher.AddMonitor(uid, "cpu", cpuPressurePath)
 				m.psiWatcher.AddMonitor(uid, "io", ioPressurePath)
 			}
+
+			added = append(added, uid)
+		}
+
+		// Only mark users as active after successful cgroup creation
+		if len(added) > 0 {
+			m.mu.Lock()
+			for _, uid := range added {
+				m.activeUsers[uid] = true
+			}
+			m.limitsAppliedTime = time.Now()
+			remainingLimited = len(m.activeUsers)
+			m.mu.Unlock()
 		}
 	}
 
 	if len(usersToRelease) == 0 && len(usersToAdd) == 0 {
-		return nil // Nessuna modifica
-	}
-
-	// Aggiorna il timestamp di attivazione se abbiamo aggiunto utenti
-	if len(usersToAdd) > 0 {
-		m.mu.Lock()
-		m.limitsAppliedTime = time.Now()
-		m.mu.Unlock()
+		return nil
 	}
 
 	return nil
@@ -1577,23 +1583,36 @@ func (m *Manager) revertPSIBoosts() {
 	duration := time.Duration(cfg.GetPSIBoostDuration()) * time.Second
 	now := time.Now()
 
+	// Collect expired UIDs under lock, do cgroup IO outside lock
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var expired []int
 	for uid, boostedAt := range m.psiBoostedAt {
-		if now.Sub(boostedAt) < duration {
-			continue
+		if now.Sub(boostedAt) >= duration {
+			expired = append(expired, uid)
 		}
-		// Revert to default weight
+	}
+	m.mu.Unlock()
+
+	if len(expired) == 0 {
+		return
+	}
+
+	for _, uid := range expired {
 		if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
 			m.logger.Warn("Failed to revert CPU weight after PSI boost",
 				"uid", uid, "error", err)
 			continue
 		}
-		delete(m.psiBoostedAt, uid)
 		m.logger.Debug("CPU weight reverted to normal after PSI boost expired",
 			"uid", uid, "boost_duration_s", cfg.GetPSIBoostDuration())
 	}
+
+	// Clean up expired entries
+	m.mu.Lock()
+	for _, uid := range expired {
+		delete(m.psiBoostedAt, uid)
+	}
+	m.mu.Unlock()
 }
 
 // GetConfig returns the current configuration

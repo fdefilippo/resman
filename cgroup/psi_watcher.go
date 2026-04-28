@@ -27,28 +27,36 @@ type psiMonitor struct {
 
 // PSIWatcher monitors pressure files via poll() with dynamic per-user cgroup support.
 // Uses a single poll loop to monitor all registered pressure files efficiently.
+// A wake pipe is included in the poll set so that AddMonitor/RemoveMonitor
+// can interrupt a blocking poll() immediately.
 type PSIWatcher struct {
-	mu        sync.Mutex
-	monitors  []*psiMonitor
-	events    chan PSIEvent
-	update    chan struct{}
-	done      chan struct{}
-	wg        sync.WaitGroup
-	threshold uint64
-	windowUs  uint64
+	mu         sync.Mutex
+	monitors   []*psiMonitor
+	events     chan PSIEvent
+	thresholds map[string]uint64 // typ -> stall threshold in microseconds
+	windowUs   uint64
+	wakeR      *os.File // read end of wake pipe (added to pollFds)
+	wakeW      *os.File // write end (written to on AddMonitor/RemoveMonitor)
+	done       chan struct{}
+	wg         sync.WaitGroup
 }
 
 // NewPSIWatcher creates a watcher for pressure files.
-// thresholdUs is the stall threshold in microseconds per windowUs window.
-// e.g., 50000us on 1000000us window = 5% pressure.
-func NewPSIWatcher(thresholdUs, windowUs uint64) *PSIWatcher {
+// windowUs is the PSI tracking window in microseconds (e.g., 1000000 = 1s).
+func NewPSIWatcher(windowUs uint64) *PSIWatcher {
 	return &PSIWatcher{
-		events:    make(chan PSIEvent, 64),
-		update:    make(chan struct{}, 1),
-		done:      make(chan struct{}),
-		threshold: thresholdUs,
-		windowUs:  windowUs,
+		events:     make(chan PSIEvent, 64),
+		thresholds: make(map[string]uint64),
+		windowUs:   windowUs,
+		done:       make(chan struct{}),
 	}
+}
+
+// SetThreshold sets the stall threshold (microseconds) for a pressure type.
+func (w *PSIWatcher) SetThreshold(typ string, stallUs uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.thresholds[typ] = stallUs
 }
 
 // Events returns the event channel.
@@ -59,16 +67,20 @@ func (w *PSIWatcher) Events() <-chan PSIEvent {
 // AddMonitor registers a pressure file to monitor.
 // uid: 0 for system-level, >0 for per-user cgroup
 // typ: "cpu" or "io"
-// pressurePath: full path to the pressure file (e.g., /sys/fs/cgroup/resman/user_1000/cpu.pressure)
+// pressurePath: full path to the pressure file
 func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Check if already registered
 	for _, m := range w.monitors {
 		if m.uid == uid && m.typ == typ && m.active {
 			return nil
 		}
+	}
+
+	threshold, ok := w.thresholds[typ]
+	if !ok {
+		return fmt.Errorf("no threshold configured for type %q", typ)
 	}
 
 	fd, err := os.OpenFile(pressurePath, os.O_RDWR, 0)
@@ -76,7 +88,7 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 		return fmt.Errorf("open %s: %w", pressurePath, err)
 	}
 
-	thresholdLine := fmt.Sprintf("some %d %d", w.threshold, w.windowUs)
+	thresholdLine := fmt.Sprintf("some %d %d", threshold, w.windowUs)
 	if _, err := fd.WriteString(thresholdLine); err != nil {
 		fd.Close()
 		return fmt.Errorf("write threshold to %s: %w", pressurePath, err)
@@ -90,11 +102,8 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 		active: true,
 	})
 
-	// Signal poll loop to refresh its fd list
-	select {
-	case w.update <- struct{}{}:
-	default:
-	}
+	// Wake the poll loop so it picks up the new fd
+	w.wake()
 
 	return nil
 }
@@ -111,16 +120,21 @@ func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
 		}
 	}
 
-	select {
-	case w.update <- struct{}{}:
-	default:
-	}
+	w.wake()
 }
 
 // Start launches the poll loop goroutine.
-func (w *PSIWatcher) Start() {
+func (w *PSIWatcher) Start() error {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("create wake pipe: %w", err)
+	}
+	w.wakeR = pr
+	w.wakeW = pw
+
 	w.wg.Add(1)
 	go w.pollLoop()
+	return nil
 }
 
 // Stop terminates the poll loop and all monitoring.
@@ -137,10 +151,27 @@ func (w *PSIWatcher) Stop() {
 		}
 	}
 	w.monitors = nil
+	w.wakeW.Close()
+}
+
+// wake writes a byte to the wake pipe to interrupt poll().
+// Must be called with w.mu held.
+func (w *PSIWatcher) wake() {
+	if w.wakeW == nil {
+		return
+	}
+	w.wakeW.Write([]byte{0})
 }
 
 func (w *PSIWatcher) pollLoop() {
 	defer w.wg.Done()
+
+	// Drain wake pipe on exit
+	defer func() {
+		if w.wakeR != nil {
+			w.wakeR.Close()
+		}
+	}()
 
 	for {
 		select {
@@ -150,8 +181,15 @@ func (w *PSIWatcher) pollLoop() {
 		}
 
 		w.mu.Lock()
-		pollFds := make([]unix.PollFd, 0, len(w.monitors))
-		fdIndex := make(map[int32]int) // fd -> index in monitors
+		pollFds := make([]unix.PollFd, 0, len(w.monitors)+1)
+		fdIndex := make(map[int32]int) // monitor fd -> index in monitors
+
+		// Wake pipe is always first in the list
+		pollFds = append(pollFds, unix.PollFd{
+			Fd:     int32(w.wakeR.Fd()),
+			Events: unix.POLLIN,
+		})
+
 		for i, m := range w.monitors {
 			if !m.active {
 				continue
@@ -161,17 +199,6 @@ func (w *PSIWatcher) pollLoop() {
 			fdIndex[fd] = i
 		}
 		w.mu.Unlock()
-
-		if len(pollFds) == 0 {
-			select {
-			case <-w.done:
-				return
-			case <-w.update:
-				continue
-			case <-time.After(10 * time.Second):
-				continue
-			}
-		}
 
 		_, err := unix.Poll(pollFds, -1)
 		if err != nil {
@@ -183,7 +210,22 @@ func (w *PSIWatcher) pollLoop() {
 			continue
 		}
 
-		for _, pfd := range pollFds {
+		// Check wake pipe first
+		if pollFds[0].Revents&unix.POLLIN != 0 {
+			var buf [8]byte
+			w.wakeR.Read(buf[:])
+			// After consuming the wake signal, re-enter the loop to rebuild pollFds
+			select {
+			case <-w.done:
+				return
+			default:
+			}
+			// Check if there are also PSI events to process before looping
+		}
+
+		// Process pressure events from remaining fds
+		for i := 1; i < len(pollFds); i++ {
+			pfd := pollFds[i]
 			if pfd.Revents&unix.POLLPRI == 0 && pfd.Revents&unix.POLLERR == 0 {
 				continue
 			}
@@ -219,14 +261,6 @@ func (w *PSIWatcher) pollLoop() {
 				return
 			default:
 			}
-		}
-
-		// Short yield to allow updates to be processed on the next iteration
-		select {
-		case <-w.done:
-			return
-		case <-w.update:
-		default:
 		}
 	}
 }

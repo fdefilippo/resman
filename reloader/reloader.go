@@ -157,6 +157,10 @@ func (r *Reloader) SafeConfigUpdate(updateFunc func(*config.Config) *config.Conf
 
 	r.logger.Debug("Safe configuration update requested")
 
+	if r.stateManager == nil {
+		return fmt.Errorf("state manager not initialized")
+	}
+
 	// Ottieni la configurazione corrente dal state manager
 	currentCfg := r.stateManager.GetConfig()
 

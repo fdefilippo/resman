@@ -332,27 +332,31 @@ func main() {
 	var psiWatcher *cgroup.PSIWatcher
 	var psiEvents <-chan cgroup.PSIEvent
 	if cfg.GetPSIEventDriven() {
-		psiWatcher = cgroup.NewPSIWatcher(uint64(cfg.GetPSICPUStallThreshold()), uint64(cfg.GetPSIWindowUs()))
-		psiWatcher.Start()
-
-		// Monitor system-level pressure files
-		sysCPUPressure := cfg.CgroupRoot + "/cpu.pressure"
-		sysIOPressure := cfg.CgroupRoot + "/io.pressure"
-		if err := psiWatcher.AddMonitor(0, "cpu", sysCPUPressure); err != nil {
-			logger.Warn("Failed to monitor system cpu.pressure", "error", err)
+		psiWatcher = cgroup.NewPSIWatcher(uint64(cfg.GetPSIWindowUs()))
+		psiWatcher.SetThreshold("cpu", uint64(cfg.GetPSICPUStallThreshold()))
+		psiWatcher.SetThreshold("io", uint64(cfg.GetPSIOStallThreshold()))
+		if err := psiWatcher.Start(); err != nil {
+			logger.Warn("Failed to start PSI watcher, falling back to polling", "error", err)
+			psiWatcher = nil
+		} else {
+			// Monitor system-level pressure files
+			sysCPUPressure := cfg.CgroupRoot + "/cpu.pressure"
+			sysIOPressure := cfg.CgroupRoot + "/io.pressure"
+			if err := psiWatcher.AddMonitor(0, "cpu", sysCPUPressure); err != nil {
+				logger.Warn("Failed to monitor system cpu.pressure", "error", err)
+			}
+			if err := psiWatcher.AddMonitor(0, "io", sysIOPressure); err != nil {
+				logger.Warn("Failed to monitor system io.pressure", "error", err)
+			}
+			psiEvents = psiWatcher.Events()
+			stateManager.RegisterPSIWatcher(psiWatcher)
+			logger.Info("PSI event-driven mode enabled",
+				"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
+				"io_threshold_us", cfg.GetPSIOStallThreshold(),
+				"window_us", cfg.GetPSIWindowUs(),
+				"note", "PSI events trigger user CPU weight boosts and extra control cycles",
+			)
 		}
-		if err := psiWatcher.AddMonitor(0, "io", sysIOPressure); err != nil {
-			logger.Warn("Failed to monitor system io.pressure", "error", err)
-		}
-
-		psiEvents = psiWatcher.Events()
-		stateManager.RegisterPSIWatcher(psiWatcher)
-		logger.Info("PSI event-driven mode enabled",
-			"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
-			"io_threshold_us", cfg.GetPSIOStallThreshold(),
-			"window_us", cfg.GetPSIWindowUs(),
-			"note", "PSI events trigger user CPU weight boosts and extra control cycles",
-		)
 	}
 
 	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
