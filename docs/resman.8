@@ -202,8 +202,14 @@ IO starvation auto\-remediation can be enabled to temporarily boost limits when 
 .PP
 .SH PSI EVENT-DRIVEN MODE
 When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
-trigger control cycles only when system pressure exceeds configured thresholds,
-instead of running at fixed intervals.
+trigger control cycles when system pressure exceeds configured thresholds. The
+fixed polling interval remains a fallback heartbeat.
+.PP
+PSI is not another CPU usage percentage. It measures stall/pressure: time in
+which runnable tasks or IO operations are waiting because resources are
+contended. For example, on a 4-core host, 4 CPU-bound threads can show 100% CPU
+with little PSI if there is no meaningful run queue; more runnable threads than
+available cores are more likely to generate CPU PSI.
 .PP
 The daemon opens
 .B cpu.pressure
@@ -215,9 +221,21 @@ syscall with
 .B POLLPRI
 to block until the kernel signals that pressure has exceeded the stall threshold.
 When a PSI event fires, the daemon immediately runs a control cycle.
+Control-cycle logs and Prometheus metrics include the trigger source, such as
+.B initial ,
+.B ticker ,
+.B psi_system_cpu ,
+.B psi_system_io ,
+.B psi_user_cpu ,
+or
+.B psi_user_io .
 .PP
 A fallback polling interval (heartbeat) ensures control cycles still run if PSI
 events are not generated for an extended period (e.g., when the system is idle).
+This heartbeat is for the decision loop only. Prometheus/Grafana metrics are
+refreshed separately using
+.B METRICS_REFRESH_INTERVAL
+so dashboards remain current even when no PSI event fires.
 .PP
 When a limited user experiences CPU throttling (pressure exceeds threshold in their
 per-user cgroup), the daemon temporarily boosts their cpu.weight to grant more CPU
@@ -240,6 +258,9 @@ Configuration parameters:
 .IP \(bu
 .B PSI_FALLBACK_INTERVAL
 - Fallback polling interval in seconds when event-driven (default: 300 = 5min)
+.IP \(bu
+.B METRICS_REFRESH_INTERVAL
+- Prometheus/Grafana refresh interval in seconds when event-driven (default: 30)
 .IP \(bu
 .B PSI_BOOST_WEIGHT
 - CPU weight applied when a limited user experiences PSI pressure (default: 300, normal is 100)
@@ -267,6 +288,7 @@ PSI_CPU_STALL_THRESHOLD=50000    # 5% CPU pressure
 PSI_IO_STALL_THRESHOLD=50000     # 5% IO pressure
 PSI_WINDOW_US=1000000            # 1 second window
 PSI_FALLBACK_INTERVAL=300        # 5 minute heartbeat
+METRICS_REFRESH_INTERVAL=30      # Dashboard refresh interval
 PSI_BOOST_WEIGHT=300             # CPU weight on throttling (normal: 100)
 PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 .fi
@@ -390,6 +412,8 @@ PROMETHEUS_FILE="/var/run/resman-metrics.prom"
 POLLING_INTERVAL=30          # Control cycle interval
 MIN_ACTIVE_TIME=60           # Minimum activation time for limits
 METRICS_CACHE_TTL=15         # Metrics cache duration
+METRICS_REFRESH_INTERVAL=30  # Prometheus/Grafana refresh interval
+PROCESS_MIN_AGE_SECONDS=60   # Minimum process age for CPU accounting
 
 # TIMEOUT CONFIGURATION (seconds/milliseconds)
 # CGROUP_OPERATION_TIMEOUT=5      # Timeout for cgroup operations (seconds)
@@ -399,6 +423,7 @@ METRICS_CACHE_TTL=15         # Metrics cache duration
 # CPU THRESHOLDS (percentage)
 CPU_THRESHOLD=75             # Activation threshold
 CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
+CPU_THRESHOLD_DURATION=90    # Wait after threshold breach before activation
 
 # CPU LIMITS ("quota period" format in microseconds)
 CPU_QUOTA_NORMAL="max 100000"      # No limit (100000 = 100ms)
@@ -534,6 +559,7 @@ METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 # PSI_IO_STALL_THRESHOLD=50000     # IO stall threshold in microseconds
 # PSI_WINDOW_US=1000000            # Tracking window (1 second)
 # PSI_FALLBACK_INTERVAL=300        # Heartbeat interval (5 minutes)
+# METRICS_REFRESH_INTERVAL=30      # Dashboard refresh interval
 # PSI_BOOST_WEIGHT=300             # CPU weight boost on throttling
 # PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 
@@ -548,6 +574,33 @@ METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 A complete example configuration file with all available parameters can be found in the distribution as
 .I config/resman.conf.example
 .
+.SS Activation Timing
+.B CPU_THRESHOLD_DURATION
+is not measured from process start. resman starts that timer only after a
+control cycle measures per-user CPU above
+.B CPU_THRESHOLD.
+For a newly started CPU-bound process, the effective activation time is approximately:
+.PP
+.RS
+.nf
+PROCESS_MIN_AGE_SECONDS + one CPU delta sample + CPU_THRESHOLD_DURATION
+.fi
+.RE
+.PP
+With
+.B POLLING_INTERVAL=30,
+.B PROCESS_MIN_AGE_SECONDS=60,
+and
+.B CPU_THRESHOLD_DURATION=90,
+limits can be applied after about 180 seconds. Set
+.B PROCESS_MIN_AGE_SECONDS=0
+to account newly started processes immediately.
+.PP
+.B total_cpu_usage
+is the host-wide normalized CPU percentage (0-100). Activation decisions use
+per-user CPU usage
+.RB ( limited_users_cpu_usage ),
+which is the sum of process CPU and can exceed 100 on multi-core systems.
 .SH ENVIRONMENT VARIABLES
 All configuration options can be overridden by environment variables
 with the same name. Example:
@@ -602,6 +655,12 @@ resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimi
 resman_limits_activated_total \- Total limit activations (counter)
 .IP \(bu
 resman_limits_deactivated_total \- Total limit deactivations (counter)
+.IP \(bu
+resman_control_cycle_triggers_total{trigger} \- Control cycles by trigger source
+.IP \(bu
+resman_psi_events_total{type, scope} \- PSI pressure events received from the kernel
+.IP \(bu
+resman_psi_last_event_timestamp_seconds{type, scope} \- Unix timestamp of last PSI event
 .IP \(bu
 resman_control_cycle_duration_seconds \- Control cycle duration (histogram)
 .IP \(bu

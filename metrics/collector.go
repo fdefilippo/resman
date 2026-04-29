@@ -1531,6 +1531,11 @@ func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
 		return false // Not in running state
 	}
 
+	minAgeSeconds := c.getConfig().GetProcessMinAgeSeconds()
+	if minAgeSeconds <= 0 {
+		return true
+	}
+
 	// Check how long the process has been alive
 	createTime, err := proc.CreateTime()
 	if err != nil || createTime == 0 {
@@ -1540,12 +1545,12 @@ func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
 	// createTime is milliseconds since epoch
 	processAgeSeconds := (float64(time.Now().UnixMilli()) - float64(createTime)) / 1000.0
 
-	return processAgeSeconds >= 60
+	return processAgeSeconds >= float64(minAgeSeconds)
 }
 
 // getProcessCPUUsageSimpleWithHandle calcola l'uso CPU usando un handle gopsutil esistente.
 // Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
-// Se il processo non è in stato "running" da almeno 60 secondi, ritorna 0% per evitare
+// Se il processo non è in stato "running" da almeno PROCESS_MIN_AGE_SECONDS, ritorna 0% per evitare
 // di sfalsare le metriche con letture instabili (es. processi multithread appena avviati).
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid

@@ -96,6 +96,7 @@ func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
+func (m *mockCgroupManager) ReleaseUserFromSharedCgroup(uid int, path string) error   { return nil }
 func (m *mockCgroupManager) CreateSharedCgroup() (string, error)                      { return "", nil }
 func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error      { return nil }
 func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
@@ -109,11 +110,14 @@ func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
 func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 }
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
-func (m *mockPrometheusExporter) Start(ctx context.Context) error                              { return nil }
-func (m *mockPrometheusExporter) Stop() error                                                  { return nil }
-func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool)                   {}
-func (m *mockPrometheusExporter) IncrementLimitsActivated()                                    {}
-func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                                  {}
+func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
+}
+func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string)   {}
+func (m *mockPrometheusExporter) Start(ctx context.Context) error            { return nil }
+func (m *mockPrometheusExporter) Stop() error                                { return nil }
+func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {}
+func (m *mockPrometheusExporter) IncrementLimitsActivated()                  {}
+func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                {}
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()

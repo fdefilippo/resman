@@ -56,6 +56,10 @@ type Config struct {
 	PollingInterval int `config:"POLLING_INTERVAL"`
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
+	// MetricsRefreshInterval aggiorna Prometheus/Grafana senza eseguire decisioni.
+	MetricsRefreshInterval int `config:"METRICS_REFRESH_INTERVAL"`
+	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
+	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
 	// Timeout (seconds/milliseconds)
 	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
@@ -202,13 +206,13 @@ type Config struct {
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 
 	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
-	PSIEventDriven       bool   `config:"PSI_EVENT_DRIVEN"`       // Enable PSI event-driven control cycles
-	PSICPUStallThreshold int    `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
-	PSIOStallThreshold   int    `config:"PSI_IO_STALL_THRESHOLD"` // IO stall threshold in microseconds (default 50000)
-	PSIWindowUs          int    `config:"PSI_WINDOW_US"`          // PSI tracking window in microseconds (default 1000000 = 1s)
-	PSIFallbackInterval  int    `config:"PSI_FALLBACK_INTERVAL"`  // Fallback polling interval in seconds when event-driven (default 300 = 5min)
-	PSIBoostWeight       int    `config:"PSI_BOOST_WEIGHT"`       // CPU weight boost on PSI event (default 300, normal weight is 100)
-	PSIBoostDuration     int    `config:"PSI_BOOST_DURATION"`     // Seconds before reverting PSI boost (default 120)
+	PSIEventDriven       bool `config:"PSI_EVENT_DRIVEN"`        // Enable PSI event-driven control cycles
+	PSICPUStallThreshold int  `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
+	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
+	PSIWindowUs          int  `config:"PSI_WINDOW_US"`           // PSI tracking window in microseconds (default 1000000 = 1s)
+	PSIFallbackInterval  int  `config:"PSI_FALLBACK_INTERVAL"`   // Fallback polling interval in seconds when event-driven (default 300 = 5min)
+	PSIBoostWeight       int  `config:"PSI_BOOST_WEIGHT"`        // CPU weight boost on PSI event (default 300, normal weight is 100)
+	PSIBoostDuration     int  `config:"PSI_BOOST_DURATION"`      // Seconds before reverting PSI boost (default 120)
 }
 
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
@@ -233,6 +237,10 @@ func DefaultConfig() *Config {
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
+		// Refresh Prometheus/Grafana separato dal control loop decisionale.
+		MetricsRefreshInterval: 30,
+		// Processi piu' giovani non contribuiscono alla CPU utente.
+		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
 		CgroupOperationTimeout: 5,   // 5 seconds for cgroup operations
@@ -511,641 +519,292 @@ func loadFromEnvironment(cfg *Config) []string {
 
 // setConfigField imposta il valore di un campo nella struct Config basandosi sul tag `config`.
 func setConfigField(cfg *Config, key, value string) error {
-	switch key {
-	// Paths
-	case "CGROUP_ROOT":
-		cfg.CgroupRoot = value
-	case "CGROUP_BASE":
-		// SECURITY: Validate path does not contain traversal sequences
-		if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
-			return fmt.Errorf("invalid CGROUP_BASE: must be a relative path without '..'")
-		}
-		cfg.CgroupBase = value
-	case "CONFIG_FILE":
-		cfg.ConfigFile = value
-	case "LOG_FILE":
-		cfg.LogFile = value
-	case "CREATED_CGROUPS_FILE":
-		cfg.CreatedCgroupsFile = value
-	case "METRICS_CACHE_FILE":
-		cfg.MetricsCacheFile = value
-	case "PROMETHEUS_FILE":
-		cfg.PrometheusFile = value
+	handler, ok := configFieldHandlers[key]
+	if !ok {
+		return nil
+	}
+	return handler(cfg, value)
+}
 
-	// Timing
-	case "POLLING_INTERVAL":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.PollingInterval = i
-		}
-	case "MIN_ACTIVE_TIME":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.MinActiveTime = i
-		}
-	case "METRICS_CACHE_TTL":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.MetricsCacheTTL = i
-		}
+type configFieldHandler func(*Config, string) error
 
-	// Thresholds
-	case "CPU_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.CPUThreshold = i
-		}
-	case "CPU_RELEASE_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.CPUReleaseThreshold = i
-		}
-	case "CPU_THRESHOLD_DURATION":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.CPUThresholdDuration = i
-		}
-
-	// CPU limits
-	case "CPU_QUOTA_NORMAL":
-		cfg.CPUQuotaNormal = value
-	case "CPU_QUOTA_LIMITED":
-		cfg.CPUQuotaLimited = value
-
-	// Limit hook
-	case "LIMIT_HOOK_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.LimitHookEnabled = true
-		case "false", "0", "no", "off":
-			cfg.LimitHookEnabled = false
-		default:
-			cfg.LimitHookEnabled = false
-		}
-	case "LIMIT_HOOK_SCRIPT":
-		cfg.LimitHookScript = value
-	case "LIMIT_HOOK_URL":
-		cfg.LimitHookURL = value
-	case "LIMIT_HOOK_TIMEOUT":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.LimitHookTimeout = i
-		}
-
-	// Prometheus
-	case "ENABLE_PROMETHEUS":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.EnablePrometheus = true
-		case "false", "0", "no", "off":
-			cfg.EnablePrometheus = false
-		default:
-			cfg.EnablePrometheus = false
-		}
-	case "PROMETHEUS_METRICS_BIND_HOST":
+var configFieldHandlers = map[string]configFieldHandler{
+	"CGROUP_ROOT":          setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
+	"CGROUP_BASE":          setCgroupBase,
+	"CONFIG_FILE":          setString(func(cfg *Config, value string) { cfg.ConfigFile = value }),
+	"LOG_FILE":             setString(func(cfg *Config, value string) { cfg.LogFile = value }),
+	"CREATED_CGROUPS_FILE": setString(func(cfg *Config, value string) { cfg.CreatedCgroupsFile = value }),
+	"METRICS_CACHE_FILE":   setString(func(cfg *Config, value string) { cfg.MetricsCacheFile = value }),
+	"PROMETHEUS_FILE":      setString(func(cfg *Config, value string) { cfg.PrometheusFile = value }),
+	"POLLING_INTERVAL":     setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
+	"MIN_ACTIVE_TIME":      setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
+	"METRICS_CACHE_TTL":    setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
+	"METRICS_REFRESH_INTERVAL": setPositiveInt(func(cfg *Config, value int) {
+		cfg.MetricsRefreshInterval = value
+	}),
+	"PROCESS_MIN_AGE_SECONDS": setInt(func(cfg *Config, value int) {
+		cfg.ProcessMinAgeSeconds = value
+	}),
+	"CPU_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.CPUThreshold = value }),
+	"CPU_RELEASE_THRESHOLD":  setInt(func(cfg *Config, value int) { cfg.CPUReleaseThreshold = value }),
+	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
+	"CPU_QUOTA_NORMAL":       setString(func(cfg *Config, value string) { cfg.CPUQuotaNormal = value }),
+	"CPU_QUOTA_LIMITED":      setString(func(cfg *Config, value string) { cfg.CPUQuotaLimited = value }),
+	"LIMIT_HOOK_ENABLED":     setBool(false, func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
+	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
+	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
+	"LIMIT_HOOK_TIMEOUT":     setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
+	"ENABLE_PROMETHEUS":      setBool(false, func(cfg *Config, value bool) { cfg.EnablePrometheus = value }),
+	"PROMETHEUS_METRICS_BIND_HOST": setString(func(cfg *Config, value string) {
 		cfg.PrometheusMetricsBindHost = value
-	case "PROMETHEUS_METRICS_BIND_PORT":
+	}),
+	"PROMETHEUS_METRICS_BIND_PORT": setPort("PROMETHEUS_METRICS_BIND_PORT", func(cfg *Config, value int) {
+		cfg.PrometheusMetricsBindPort = value
+	}),
+	"PROMETHEUS_HOST": setString(func(cfg *Config, value string) {
+		cfg.PrometheusMetricsBindHost = value
+	}),
+	"PROMETHEUS_PORT": setPort("PROMETHEUS_PORT", func(cfg *Config, value int) {
+		cfg.PrometheusMetricsBindPort = value
+	}),
+	"PROMETHEUS_TLS_ENABLED":   setBool(false, func(cfg *Config, value bool) { cfg.PrometheusTLSEnabled = value }),
+	"PROMETHEUS_TLS_CERT_FILE": setString(func(cfg *Config, value string) { cfg.PrometheusTLSCertFile = value }),
+	"PROMETHEUS_TLS_KEY_FILE":  setString(func(cfg *Config, value string) { cfg.PrometheusTLSKeyFile = value }),
+	"PROMETHEUS_TLS_CA_FILE":   setString(func(cfg *Config, value string) { cfg.PrometheusTLSCAFile = value }),
+	"PROMETHEUS_TLS_MIN_VERSION": setStringTransform(strings.ToUpper, func(cfg *Config, value string) {
+		cfg.PrometheusTLSMinVersion = value
+	}),
+	"PROMETHEUS_AUTH_TYPE": setStringTransform(strings.ToLower, func(cfg *Config, value string) {
+		cfg.PrometheusAuthType = value
+	}),
+	"PROMETHEUS_AUTH_USERNAME":      setString(func(cfg *Config, value string) { cfg.PrometheusAuthUsername = value }),
+	"PROMETHEUS_AUTH_PASSWORD_FILE": setString(func(cfg *Config, value string) { cfg.PrometheusAuthPasswordFile = value }),
+	"PROMETHEUS_JWT_SECRET_FILE":    setString(func(cfg *Config, value string) { cfg.PrometheusJWTSecretFile = value }),
+	"PROMETHEUS_JWT_ISSUER":         setString(func(cfg *Config, value string) { cfg.PrometheusJWTIssuer = value }),
+	"PROMETHEUS_JWT_AUDIENCE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
+	"PROMETHEUS_JWT_EXPIRY":         setInt(func(cfg *Config, value int) { cfg.PrometheusJWTExpiry = value }),
+	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
+	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
+	"USE_SYSLOG":                    setBool(false, func(cfg *Config, value bool) { cfg.UseSyslog = value }),
+	"MIN_SYSTEM_CORES":              setInt(func(cfg *Config, value int) { cfg.MinSystemCores = value }),
+	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
+	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
+	"USER_INCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
+	"USER_EXCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
+	"PROCESS_EXCLUDE_LIST":          setRegexList(" in PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
+	"BLACKOUT":                      setBlackout,
+	"USER_WHITELIST":                setPlainList(func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
+	"IGNORE_SYSTEM_LOAD":            setBool(false, func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
+	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
+	"MCP_ENABLED":                   setBool(false, func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
+	"MCP_TRANSPORT":                 setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
+	"MCP_HTTP_PORT":                 setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
+	"MCP_HTTP_HOST":                 setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
+	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
+	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
+	"MCP_ALLOW_WRITE_OPS":           setBool(false, func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
+	"METRICS_DB_ENABLED":            setBool(false, func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
+	"METRICS_DB_PATH":               setString(func(cfg *Config, value string) { cfg.MetricsDBPath = value }),
+	"METRICS_DB_RETENTION_DAYS":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRetentionDays = value }),
+	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
+	"USERNAME_CACHE_TTL":            setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
+	"CGROUP_OPERATION_TIMEOUT":      setInt(func(cfg *Config, value int) { cfg.CgroupOperationTimeout = value }),
+	"CGROUP_RETRY_DELAY_MS":         setInt(func(cfg *Config, value int) { cfg.CgroupRetryDelayMs = value }),
+	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
+	"RAM_LIMIT_ENABLED":             setBool(false, func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
+	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
+	"RAM_RELEASE_THRESHOLD":         setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
+	"RAM_QUOTA_LIMITED":             setString(func(cfg *Config, value string) { cfg.RAMQuotaLimited = value }),
+	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
+	"DISABLE_SWAP":                  setBool(false, func(cfg *Config, value bool) { cfg.DisableSwap = value }),
+	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
+	"RAM_USER_INCLUDE_LIST":         setRegexList(" in RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
+	"RAM_USER_EXCLUDE_LIST":         setRegexList(" in RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
+	"IO_LIMIT_ENABLED":              setBool(false, func(cfg *Config, value bool) { cfg.IOEnabled = value }),
+	"IO_THRESHOLD":                  setInt(func(cfg *Config, value int) { cfg.IOThreshold = value }),
+	"IO_RELEASE_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.IOReleaseThreshold = value }),
+	"IO_READ_BPS":                   setString(func(cfg *Config, value string) { cfg.IOReadBPS = value }),
+	"IO_WRITE_BPS":                  setString(func(cfg *Config, value string) { cfg.IOWriteBPS = value }),
+	"IO_READ_IOPS":                  setInt(func(cfg *Config, value int) { cfg.IOReadIOPS = value }),
+	"IO_WRITE_IOPS":                 setInt(func(cfg *Config, value int) { cfg.IOWriteIOPS = value }),
+	"IO_DEVICE_FILTER":              setString(func(cfg *Config, value string) { cfg.IODeviceFilter = value }),
+	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
+	"IO_USER_INCLUDE_LIST":          setRegexList(" in IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
+	"IO_USER_EXCLUDE_LIST":          setRegexList(" in IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
+	"IO_REMEDIATION_ENABLED":        setBool(false, func(cfg *Config, value bool) { cfg.IORemediationEnabled = value }),
+	"IO_STARVATION_THRESHOLD":       setInt(func(cfg *Config, value int) { cfg.IOStarvationThreshold = value }),
+	"IO_STARVATION_CHECK_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.IOStarvationCheckInterval = value }),
+	"IO_BOOST_MULTIPLIER":           setFloat(func(cfg *Config, value float64) { cfg.IOBoostMultiplier = value }),
+	"IO_BOOST_DURATION":             setInt(func(cfg *Config, value int) { cfg.IOBoostDuration = value }),
+	"IO_BOOST_MAX_PER_HOUR":         setInt(func(cfg *Config, value int) { cfg.IOBoostMaxPerHour = value }),
+	"IO_PSI_THRESHOLD":              setFloat(func(cfg *Config, value float64) { cfg.IOPSIThreshold = value }),
+	"IO_REVERT_ON_NORMAL":           setBool(true, func(cfg *Config, value bool) { cfg.IORevertOnNormal = value }),
+	"AUTODETECT_PATTERNS":           setBool(false, func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
+	"PATTERN_HISTORY_HOURS":         setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
+	"PATTERN_MIN_SAMPLES":           setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
+	"PATTERN_CONFIDENCE_THRESHOLD":  setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
+	"BATCH_NIGHT_CPU_QUOTA":         setInt(func(cfg *Config, value int) { cfg.BatchNightCPUQuota = value }),
+	"BATCH_NIGHT_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.BatchNightRAMQuota = value }),
+	"INTERACTIVE_CPU_QUOTA":         setInt(func(cfg *Config, value int) { cfg.InteractiveCPUQuota = value }),
+	"INTERACTIVE_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.InteractiveRAMQuota = value }),
+	"PSI_EVENT_DRIVEN":              setBool(false, func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
+	"PSI_CPU_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
+	"PSI_IO_STALL_THRESHOLD":        setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
+	"PSI_WINDOW_US":                 setPositiveInt(func(cfg *Config, value int) { cfg.PSIWindowUs = value }),
+	"PSI_FALLBACK_INTERVAL":         setPositiveInt(func(cfg *Config, value int) { cfg.PSIFallbackInterval = value }),
+	"PSI_BOOST_WEIGHT":              setPositiveInt(func(cfg *Config, value int) { cfg.PSIBoostWeight = value }),
+	"PSI_BOOST_DURATION":            setPositiveInt(func(cfg *Config, value int) { cfg.PSIBoostDuration = value }),
+}
+
+func setString(assign func(*Config, string)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		assign(cfg, value)
+		return nil
+	}
+}
+
+func setStringTransform(transform func(string) string, assign func(*Config, string)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		assign(cfg, transform(value))
+		return nil
+	}
+}
+
+func setInt(assign func(*Config, int)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		if i, err := strconv.Atoi(value); err == nil {
+			assign(cfg, i)
+		}
+		return nil
+	}
+}
+
+func setPositiveInt(assign func(*Config, int)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		if i, err := strconv.Atoi(value); err == nil && i > 0 {
+			assign(cfg, i)
+		}
+		return nil
+	}
+}
+
+func setFloat(assign func(*Config, float64)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			assign(cfg, f)
+		}
+		return nil
+	}
+}
+
+func setBool(defaultValue bool, assign func(*Config, bool)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		switch strings.ToLower(value) {
+		case "true", "1", "yes", "on":
+			assign(cfg, true)
+		case "false", "0", "no", "off":
+			assign(cfg, false)
+		default:
+			assign(cfg, defaultValue)
+		}
+		return nil
+	}
+}
+
+func setPort(key string, assign func(*Config, int)) configFieldHandler {
+	return func(cfg *Config, value string) error {
 		if i, err := strconv.Atoi(value); err == nil {
 			if i < 1 || i > 65535 {
-				return fmt.Errorf("invalid PROMETHEUS_METRICS_BIND_PORT: %d (must be 1-65535)", i)
+				return fmt.Errorf("invalid %s: %d (must be 1-65535)", key, i)
 			}
-			cfg.PrometheusMetricsBindPort = i
+			assign(cfg, i)
 		}
-	// Backward compatibility: old variable names
-	case "PROMETHEUS_HOST":
-		cfg.PrometheusMetricsBindHost = value
-	case "PROMETHEUS_PORT":
-		if i, err := strconv.Atoi(value); err == nil {
-			if i < 1 || i > 65535 {
-				return fmt.Errorf("invalid PROMETHEUS_PORT: %d (must be 1-65535)", i)
-			}
-			cfg.PrometheusMetricsBindPort = i
-		}
+		return nil
+	}
+}
 
-	// Prometheus TLS
-	case "PROMETHEUS_TLS_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.PrometheusTLSEnabled = true
-		case "false", "0", "no", "off":
-			cfg.PrometheusTLSEnabled = false
-		default:
-			cfg.PrometheusTLSEnabled = false
-		}
-	case "PROMETHEUS_TLS_CERT_FILE":
-		cfg.PrometheusTLSCertFile = value
-	case "PROMETHEUS_TLS_KEY_FILE":
-		cfg.PrometheusTLSKeyFile = value
-	case "PROMETHEUS_TLS_CA_FILE":
-		cfg.PrometheusTLSCAFile = value
-	case "PROMETHEUS_TLS_MIN_VERSION":
-		cfg.PrometheusTLSMinVersion = strings.ToUpper(value)
+func setCgroupBase(cfg *Config, value string) error {
+	if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
+		return fmt.Errorf("invalid CGROUP_BASE: must be a relative path without '..'")
+	}
+	cfg.CgroupBase = value
+	return nil
+}
 
-	// Prometheus Authentication
-	case "PROMETHEUS_AUTH_TYPE":
-		cfg.PrometheusAuthType = strings.ToLower(value)
-	case "PROMETHEUS_AUTH_USERNAME":
-		cfg.PrometheusAuthUsername = value
-	case "PROMETHEUS_AUTH_PASSWORD_FILE":
-		cfg.PrometheusAuthPasswordFile = value
-	case "PROMETHEUS_JWT_SECRET_FILE":
-		cfg.PrometheusJWTSecretFile = value
-	case "PROMETHEUS_JWT_ISSUER":
-		cfg.PrometheusJWTIssuer = value
-	case "PROMETHEUS_JWT_AUDIENCE":
-		cfg.PrometheusJWTAudience = value
-	case "PROMETHEUS_JWT_EXPIRY":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.PrometheusJWTExpiry = i
-		}
+func setBlackout(cfg *Config, value string) error {
+	cfg.BlackoutSpec = strings.TrimSpace(value)
+	if cfg.BlackoutSpec == "" {
+		cfg.BlackoutTimeframes = nil
+		return nil
+	}
+	timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
+	if err != nil {
+		return fmt.Errorf("invalid blackout specification '%s': %w", cfg.BlackoutSpec, err)
+	}
+	cfg.BlackoutTimeframes = timeframes
+	return nil
+}
 
-	// Logging
-	case "LOG_LEVEL":
-		cfg.LogLevel = strings.ToUpper(value)
-	case "LOG_MAX_SIZE":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.LogMaxSize = i
+func setRegexList(errorContext string, assign func(*Config, []string)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		patterns, err := parseRegexList(value, errorContext)
+		if err != nil {
+			return err
 		}
-	case "USE_SYSLOG":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.UseSyslog = true
-		case "false", "0", "no", "off":
-			cfg.UseSyslog = false
-		default:
-			cfg.UseSyslog = false
-		}
+		assign(cfg, patterns)
+		return nil
+	}
+}
 
-	// System
-	case "MIN_SYSTEM_CORES":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.MinSystemCores = i
-		}
-	case "SYSTEM_UID_MIN":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.SystemUIDMin = i
-		}
-	case "SYSTEM_UID_MAX":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.SystemUIDMax = i
-		}
+func parseRegexList(value, errorContext string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
 
-	// User Include List
-	case "USER_INCLUDE_LIST":
-		// Parse comma-separated list of regex patterns
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.UserIncludeList = nil // Empty = all users included
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.UserIncludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					// Validate regex pattern
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
-					}
-					cfg.UserIncludeList = append(cfg.UserIncludeList, pattern)
-				}
-			}
-			if len(cfg.UserIncludeList) == 0 {
-				cfg.UserIncludeList = nil
-			}
+	rawPatterns := strings.Split(value, ",")
+	patterns := make([]string, 0, len(rawPatterns))
+	for _, pattern := range rawPatterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
 		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("invalid regex pattern '%s'%s: %w", pattern, errorContext, err)
+		}
+		patterns = append(patterns, pattern)
+	}
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	return patterns, nil
+}
 
-	// User Exclude List
-	case "USER_EXCLUDE_LIST":
-		// Parse comma-separated list of regex patterns
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.UserExcludeList = nil // Empty = no users excluded
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.UserExcludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					// Validate regex pattern
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
-					}
-					cfg.UserExcludeList = append(cfg.UserExcludeList, pattern)
-				}
-			}
-			if len(cfg.UserExcludeList) == 0 {
-				cfg.UserExcludeList = nil
-			}
-		}
+func setPlainList(assign func(*Config, []string)) configFieldHandler {
+	return func(cfg *Config, value string) error {
+		assign(cfg, parsePlainList(value))
+		return nil
+	}
+}
 
-	// Process Exclude List
-	case "PROCESS_EXCLUDE_LIST":
-		// Parse comma-separated list of process names (regex support)
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.ProcessExcludeList = nil // Empty = no processes excluded
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.ProcessExcludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					// Validate regex pattern
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s' in PROCESS_EXCLUDE_LIST: %w", pattern, err)
-					}
-					cfg.ProcessExcludeList = append(cfg.ProcessExcludeList, pattern)
-				}
-			}
-			if len(cfg.ProcessExcludeList) == 0 {
-				cfg.ProcessExcludeList = nil
-			}
-		}
-
-	// Blackout Timeframes
-	case "BLACKOUT":
-		cfg.BlackoutSpec = strings.TrimSpace(value)
-		if cfg.BlackoutSpec != "" {
-			timeframes, err := ParseTimeframe(cfg.BlackoutSpec)
-			if err != nil {
-				return fmt.Errorf("invalid blackout specification '%s': %w", cfg.BlackoutSpec, err)
-			}
-			cfg.BlackoutTimeframes = timeframes
-		} else {
-			cfg.BlackoutTimeframes = nil
-		}
-
-	// Backward compatibility: old variable name
-	case "USER_WHITELIST":
-		// Treat old USER_WHITELIST as USER_EXCLUDE_LIST for compatibility
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.UserExcludeList = nil
-		} else {
-			usernames := strings.Split(value, ",")
-			cfg.UserExcludeList = make([]string, 0, len(usernames))
-			for _, username := range usernames {
-				username = strings.TrimSpace(username)
-				if username != "" {
-					cfg.UserExcludeList = append(cfg.UserExcludeList, username)
-				}
-			}
-			if len(cfg.UserExcludeList) == 0 {
-				cfg.UserExcludeList = nil
-			}
-		}
-
-	// Load checking
-	case "IGNORE_SYSTEM_LOAD":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.IgnoreSystemLoad = true
-		case "false", "0", "no", "off":
-			cfg.IgnoreSystemLoad = false
-		default:
-			cfg.IgnoreSystemLoad = false
-		}
-
-	// Server Role
-	case "SERVER_ROLE":
-		cfg.ServerRole = value
-
-	// MCP Server
-	case "MCP_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.MCPEnabled = true
-		case "false", "0", "no", "off":
-			cfg.MCPEnabled = false
-		default:
-			cfg.MCPEnabled = false
-		}
-	case "MCP_TRANSPORT":
-		cfg.MCPTransport = strings.ToLower(value)
-	case "MCP_HTTP_PORT":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.MCPHTTPPort = i
-		}
-	case "MCP_HTTP_HOST":
-		cfg.MCPHTTPHost = value
-	case "MCP_LOG_LEVEL":
-		cfg.MCPLogLevel = strings.ToUpper(value)
-	case "MCP_AUTH_TOKEN":
-		cfg.MCPAuthToken = value
-	case "MCP_ALLOW_WRITE_OPS":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.MCPAllowWriteOps = true
-		case "false", "0", "no", "off":
-			cfg.MCPAllowWriteOps = false
-		default:
-			cfg.MCPAllowWriteOps = false
-		}
-
-	// Metrics Database
-	case "METRICS_DB_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.MetricsDBEnabled = true
-		case "false", "0", "no", "off":
-			cfg.MetricsDBEnabled = false
-		default:
-			cfg.MetricsDBEnabled = false
-		}
-	case "METRICS_DB_PATH":
-		cfg.MetricsDBPath = value
-	case "METRICS_DB_RETENTION_DAYS":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.MetricsDBRetentionDays = i
-		}
-	case "METRICS_DB_WRITE_INTERVAL":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.MetricsDBWriteInterval = i
-		}
-	case "USERNAME_CACHE_TTL":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.UsernameCacheTTL = i
-		}
-
-	// Timeouts
-	case "CGROUP_OPERATION_TIMEOUT":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.CgroupOperationTimeout = i
-		}
-	case "CGROUP_RETRY_DELAY_MS":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.CgroupRetryDelayMs = i
-		}
-	case "MCP_SHUTDOWN_TIMEOUT":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.MCPShutdownTimeout = i
-		}
-
-	// RAM limits
-	case "RAM_LIMIT_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.RAMEnabled = true
-		case "false", "0", "no", "off":
-			cfg.RAMEnabled = false
-		default:
-			cfg.RAMEnabled = false
-		}
-	case "RAM_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.RAMThreshold = i
-		}
-	case "RAM_RELEASE_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.RAMReleaseThreshold = i
-		}
-	case "RAM_QUOTA_LIMITED":
-		cfg.RAMQuotaLimited = value
-	case "RAM_QUOTA_PER_USER":
-		cfg.RAMQuotaPerUser = value
-	case "DISABLE_SWAP":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.DisableSwap = true
-		case "false", "0", "no", "off":
-			cfg.DisableSwap = false
-		default:
-			cfg.DisableSwap = false
-		}
-	case "RAM_HIGH_RATIO":
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			cfg.RAMHighRatio = f
-		}
-	case "RAM_USER_INCLUDE_LIST":
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.RAMUserIncludeList = nil
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.RAMUserIncludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s' in RAM_USER_INCLUDE_LIST: %w", pattern, err)
-					}
-					cfg.RAMUserIncludeList = append(cfg.RAMUserIncludeList, pattern)
-				}
-			}
-			if len(cfg.RAMUserIncludeList) == 0 {
-				cfg.RAMUserIncludeList = nil
-			}
-		}
-	case "RAM_USER_EXCLUDE_LIST":
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.RAMUserExcludeList = nil
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.RAMUserExcludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s' in RAM_USER_EXCLUDE_LIST: %w", pattern, err)
-					}
-					cfg.RAMUserExcludeList = append(cfg.RAMUserExcludeList, pattern)
-				}
-			}
-			if len(cfg.RAMUserExcludeList) == 0 {
-				cfg.RAMUserExcludeList = nil
-			}
-		}
-
-	// IO limits
-	case "IO_LIMIT_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.IOEnabled = true
-		case "false", "0", "no", "off":
-			cfg.IOEnabled = false
-		default:
-			cfg.IOEnabled = false
-		}
-	case "IO_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOThreshold = i
-		}
-	case "IO_RELEASE_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOReleaseThreshold = i
-		}
-	case "IO_READ_BPS":
-		cfg.IOReadBPS = value
-	case "IO_WRITE_BPS":
-		cfg.IOWriteBPS = value
-	case "IO_READ_IOPS":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOReadIOPS = i
-		}
-	case "IO_WRITE_IOPS":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOWriteIOPS = i
-		}
-	case "IO_DEVICE_FILTER":
-		cfg.IODeviceFilter = value
-	case "IO_THRESHOLD_DURATION":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOThresholdDuration = i
-		}
-	case "IO_USER_INCLUDE_LIST":
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.IOUserIncludeList = nil
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.IOUserIncludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s' in IO_USER_INCLUDE_LIST: %w", pattern, err)
-					}
-					cfg.IOUserIncludeList = append(cfg.IOUserIncludeList, pattern)
-				}
-			}
-			if len(cfg.IOUserIncludeList) == 0 {
-				cfg.IOUserIncludeList = nil
-			}
-		}
-	case "IO_USER_EXCLUDE_LIST":
-		value = strings.TrimSpace(value)
-		if value == "" {
-			cfg.IOUserExcludeList = nil
-		} else {
-			patterns := strings.Split(value, ",")
-			cfg.IOUserExcludeList = make([]string, 0, len(patterns))
-			for _, pattern := range patterns {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" {
-					if _, err := regexp.Compile(pattern); err != nil {
-						return fmt.Errorf("invalid regex pattern '%s' in IO_USER_EXCLUDE_LIST: %w", pattern, err)
-					}
-					cfg.IOUserExcludeList = append(cfg.IOUserExcludeList, pattern)
-				}
-			}
-			if len(cfg.IOUserExcludeList) == 0 {
-				cfg.IOUserExcludeList = nil
-			}
-		}
-
-	// IO Starvation Auto-Remediation
-	case "IO_REMEDIATION_ENABLED":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.IORemediationEnabled = true
-		case "false", "0", "no", "off":
-			cfg.IORemediationEnabled = false
-		default:
-			cfg.IORemediationEnabled = false
-		}
-	case "IO_STARVATION_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOStarvationThreshold = i
-		}
-	case "IO_STARVATION_CHECK_INTERVAL":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOStarvationCheckInterval = i
-		}
-	case "IO_BOOST_MULTIPLIER":
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			cfg.IOBoostMultiplier = f
-		}
-	case "IO_BOOST_DURATION":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOBoostDuration = i
-		}
-	case "IO_BOOST_MAX_PER_HOUR":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.IOBoostMaxPerHour = i
-		}
-	case "IO_PSI_THRESHOLD":
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			cfg.IOPSIThreshold = f
-		}
-	case "IO_REVERT_ON_NORMAL":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.IORevertOnNormal = true
-		case "false", "0", "no", "off":
-			cfg.IORevertOnNormal = false
-		default:
-			cfg.IORevertOnNormal = true
-		}
-
-	// Workload Pattern Detection
-	case "AUTODETECT_PATTERNS":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.AutodetectPatterns = true
-		case "false", "0", "no", "off":
-			cfg.AutodetectPatterns = false
-		default:
-			cfg.AutodetectPatterns = false
-		}
-	case "PATTERN_HISTORY_HOURS":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PatternHistoryHours = i
-		}
-	case "PATTERN_MIN_SAMPLES":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PatternMinSamples = i
-		}
-	case "PATTERN_CONFIDENCE_THRESHOLD":
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			cfg.PatternConfidenceThreshold = f
-		}
-	case "BATCH_NIGHT_CPU_QUOTA":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.BatchNightCPUQuota = i
-		}
-	case "BATCH_NIGHT_RAM_QUOTA":
-		cfg.BatchNightRAMQuota = value
-	case "INTERACTIVE_CPU_QUOTA":
-		if i, err := strconv.Atoi(value); err == nil {
-			cfg.InteractiveCPUQuota = i
-		}
-	case "INTERACTIVE_RAM_QUOTA":
-		cfg.InteractiveRAMQuota = value
-
-	// PSI Event-Driven mode
-	case "PSI_EVENT_DRIVEN":
-		switch strings.ToLower(value) {
-		case "true", "1", "yes", "on":
-			cfg.PSIEventDriven = true
-		case "false", "0", "no", "off":
-			cfg.PSIEventDriven = false
-		default:
-			cfg.PSIEventDriven = false
-		}
-	case "PSI_CPU_STALL_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSICPUStallThreshold = i
-		}
-	case "PSI_IO_STALL_THRESHOLD":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSIOStallThreshold = i
-		}
-	case "PSI_WINDOW_US":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSIWindowUs = i
-		}
-	case "PSI_FALLBACK_INTERVAL":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSIFallbackInterval = i
-		}
-	case "PSI_BOOST_WEIGHT":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSIBoostWeight = i
-		}
-	case "PSI_BOOST_DURATION":
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			cfg.PSIBoostDuration = i
-		}
-
-	default:
+func parsePlainList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil
 	}
 
-	return nil
+	rawValues := strings.Split(value, ",")
+	values := make([]string, 0, len(rawValues))
+	for _, item := range rawValues {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			values = append(values, item)
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 // validateConfig esegue tutte le validazioni come nello script Bash.
@@ -1182,6 +841,32 @@ func validateConfig(cfg *Config) error {
 	// Validate polling interval
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
+	}
+	if cfg.MetricsRefreshInterval < 5 {
+		errors = append(errors, "METRICS_REFRESH_INTERVAL must be at least 5 seconds")
+	}
+	if cfg.ProcessMinAgeSeconds < 0 {
+		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
+	}
+
+	// Validate PSI event-driven configuration
+	if cfg.PSICPUStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSICPUStallThreshold == 0) {
+		errors = append(errors, "PSI_CPU_STALL_THRESHOLD must be greater than 0")
+	}
+	if cfg.PSIOStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSIOStallThreshold == 0) {
+		errors = append(errors, "PSI_IO_STALL_THRESHOLD must be greater than 0")
+	}
+	if cfg.PSIWindowUs < 0 || (cfg.PSIEventDriven && cfg.PSIWindowUs == 0) {
+		errors = append(errors, "PSI_WINDOW_US must be greater than 0")
+	}
+	if cfg.PSIFallbackInterval < 0 || (cfg.PSIEventDriven && cfg.PSIFallbackInterval == 0) {
+		errors = append(errors, "PSI_FALLBACK_INTERVAL must be greater than 0")
+	}
+	if cfg.PSIBoostWeight < 0 || cfg.PSIBoostWeight > 10000 || (cfg.PSIEventDriven && cfg.PSIBoostWeight == 0) {
+		errors = append(errors, "PSI_BOOST_WEIGHT must be between 1 and 10000")
+	}
+	if cfg.PSIBoostDuration < 0 || (cfg.PSIEventDriven && cfg.PSIBoostDuration == 0) {
+		errors = append(errors, "PSI_BOOST_DURATION must be greater than 0")
 	}
 
 	// Validate limit hook configuration
@@ -1854,6 +1539,20 @@ func (c *Config) GetMetricsCacheTTL() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.MetricsCacheTTL
+}
+
+// GetMetricsRefreshInterval returns the Prometheus/Grafana refresh interval in seconds.
+func (c *Config) GetMetricsRefreshInterval() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.MetricsRefreshInterval
+}
+
+// GetProcessMinAgeSeconds returns the minimum process age before CPU accounting.
+func (c *Config) GetProcessMinAgeSeconds() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ProcessMinAgeSeconds
 }
 
 // GetSystemUIDMin returns the minimum UID to monitor.

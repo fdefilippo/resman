@@ -17,6 +17,8 @@ METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 POLLING_INTERVAL=30
 MIN_ACTIVE_TIME=60
 METRICS_CACHE_TTL=15
+METRICS_REFRESH_INTERVAL=30
+PROCESS_MIN_AGE_SECONDS=60
 
 # ========================
 # TIMEOUT CONFIGURATION [S]
@@ -47,6 +49,15 @@ CPU_RELEASE_THRESHOLD=40     # Release limits if user CPU < 40%
 # Useful to avoid activation for temporary spikes (e.g., deployments, backups)
 # Default: 90 seconds (3 cycles of 30s)
 # Set to 0 for immediate activation (legacy behavior)
+#
+# PROCESS_MIN_AGE_SECONDS: minimum process age before process CPU contributes to
+# user CPU usage. This avoids unstable deltas for newly started processes.
+# Default: 60 seconds. Set to 0 to account new processes immediately.
+#
+# Effective activation time for a new CPU-bound process is approximately:
+# PROCESS_MIN_AGE_SECONDS + one CPU delta sample + CPU_THRESHOLD_DURATION.
+# With POLLING_INTERVAL=30, PROCESS_MIN_AGE_SECONDS=60 and
+# CPU_THRESHOLD_DURATION=90, activation can happen after about 180 seconds.
 #
 # Examples:
 # # Immediate activation (pre-v1.15.0 behavior)
@@ -609,6 +620,11 @@ USERNAME_CACHE_TTL=60
 # Heartbeat to ensure control cycles still run if no PSI events fire
 # (e.g., system idle). Set to 0 to disable fallback (not recommended).
 #
+# METRICS_REFRESH_INTERVAL: Prometheus/Grafana refresh interval in seconds
+# when PSI_EVENT_DRIVEN=true. This keeps operational dashboards fresh even
+# when no PSI pressure event wakes the decision loop. It does not apply or
+# remove limits. Default: 30 seconds.
+#
 # PSI_BOOST_WEIGHT: CPU weight to apply when a limited user experiences
 # PSI pressure. When a user's cgroup is throttled by cpu.max, their
 # cpu.pressure rises. The adaptive fairness mechanism boosts their
@@ -647,5 +663,6 @@ PSI_EVENT_DRIVEN=false
 # PSI_IO_STALL_THRESHOLD=50000
 # PSI_WINDOW_US=1000000
 # PSI_FALLBACK_INTERVAL=300
+# METRICS_REFRESH_INTERVAL=30
 # PSI_BOOST_WEIGHT=300
 # PSI_BOOST_DURATION=120

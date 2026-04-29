@@ -67,8 +67,8 @@ func TestSafeConfigUpdate(t *testing.T) {
 		return c
 	})
 
-	if err != nil {
-		t.Errorf("SafeConfigUpdate() error: %v", err)
+	if err == nil {
+		t.Fatal("SafeConfigUpdate() expected error with nil state manager")
 	}
 }
 
