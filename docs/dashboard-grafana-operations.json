@@ -308,7 +308,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}) or vector(0)",
           "instant": true,
           "legendFormat": "limited users",
           "refId": "A"

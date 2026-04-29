@@ -122,6 +122,18 @@ to generate CPU PSI because work is waiting. resman records the cycle trigger
 `psi_user_io`) and exports PSI event counters so dashboards can separate usage
 from pressure.
 
+On Red Hat Enterprise Linux 8 and later, PSI may be compiled in but disabled at
+boot. Enable it with:
+
+```bash
+sudo grubby --update-kernel=ALL --args="psi=1"
+sudo reboot
+```
+
+Red Hat documents the performance impact of enabling PSI as slight (<1%).
+After reboot, verify that PSI is active with `ls /proc/pressure`. If PSI files
+are still unavailable, resman falls back to the normal polling loop.
+
 When `PSI_EVENT_DRIVEN=true`, `PSI_FALLBACK_INTERVAL` is only the decision-loop
 heartbeat. Prometheus/Grafana metrics are refreshed separately every
 `METRICS_REFRESH_INTERVAL` seconds so dashboards remain current even without PSI

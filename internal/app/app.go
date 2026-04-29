@@ -32,6 +32,7 @@ type App struct {
 	mcpServer          *mcp.Server
 	psiWatcher         *cgroup.PSIWatcher
 	psiEvents          <-chan cgroup.PSIEvent
+	psiEventDriven     bool
 }
 
 // NewApp crea il builder dell'applicazione.

@@ -23,7 +23,8 @@ func (a *App) runControlLoop() error {
 	a.logger.Info("Entering main control loop",
 		"polling_interval_seconds", pollingInterval,
 		"metrics_refresh_interval_seconds", metricsRefreshInterval,
-		"psi_event_driven", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_active", a.isPSIEventDrivenActive(),
 	)
 
 	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
@@ -81,7 +82,8 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
 		a.logger.Info("Control loop interval updated",
 			"polling_interval_seconds", *pollingInterval,
-			"psi_event_driven", a.cfg.GetPSIEventDriven(),
+			"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+			"psi_event_driven_active", a.isPSIEventDrivenActive(),
 		)
 	}
 
@@ -120,7 +122,7 @@ func (a *App) handleMetricsRefreshCycle() {
 
 func (a *App) controlCycleInterval() int {
 	cfg := a.stateManager.GetConfig()
-	if cfg.GetPSIEventDriven() {
+	if a.isPSIEventDrivenActive() {
 		return cfg.GetPSIFallbackInterval()
 	}
 	return cfg.GetPollingInterval()
@@ -128,7 +130,7 @@ func (a *App) controlCycleInterval() int {
 
 func (a *App) metricsRefreshInterval() int {
 	cfg := a.stateManager.GetConfig()
-	if !cfg.GetPSIEventDriven() || a.prometheusExporter == nil {
+	if !a.isPSIEventDrivenActive() || a.prometheusExporter == nil {
 		return 0
 	}
 	return cfg.GetMetricsRefreshInterval()
@@ -155,14 +157,16 @@ func (a *App) refreshMetricsTicker(current *time.Ticker, currentC <-chan time.Ti
 
 	if nextInterval <= 0 {
 		a.logger.Info("Metrics refresh loop disabled",
-			"psi_event_driven", a.cfg.GetPSIEventDriven(),
+			"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+			"psi_event_driven_active", a.isPSIEventDrivenActive(),
 		)
 		return nil, nil
 	}
 
 	a.logger.Info("Metrics refresh interval updated",
 		"metrics_refresh_interval_seconds", nextInterval,
-		"psi_event_driven", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_active", a.isPSIEventDrivenActive(),
 	)
 	return newOptionalTicker(nextInterval)
 }
