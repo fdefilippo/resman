@@ -51,6 +51,37 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	return m.RunControlCycleWithTrigger(ctx, ControlCycleTriggerManual)
 }
 
+// RunMetricsRefresh aggiorna solo le metriche Prometheus/Grafana senza decisioni.
+func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	if trigger == "" {
+		trigger = "metrics_refresh"
+	}
+
+	startTime := time.Now()
+	metrics, err := m.collectSystemMetricsForRefresh()
+	if err != nil {
+		m.logger.Error("Failed to collect metrics for refresh",
+			"trigger", trigger,
+			"error", err,
+		)
+		return fmt.Errorf("failed to collect metrics for refresh: %w", err)
+	}
+
+	if m.prometheusExporter != nil {
+		m.updatePrometheusMetrics(metrics)
+	}
+
+	m.logger.Debug("Metrics refresh completed",
+		"trigger", trigger,
+		"duration_ms", time.Since(startTime).Milliseconds(),
+	)
+
+	return nil
+}
+
 // RunControlCycleWithTrigger esegue un ciclo indicando il motivo che lo ha avviato.
 func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string) error {
 	m.opMu.Lock()
@@ -292,6 +323,14 @@ type SystemMetrics struct {
 }
 
 func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
+	return m.collectSystemMetricsWithIOState(true)
+}
+
+func (m *Manager) collectSystemMetricsForRefresh() (*SystemMetrics, error) {
+	return m.collectSystemMetricsWithIOState(false)
+}
+
+func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMetrics, error) {
 	metrics := &SystemMetrics{
 		Timestamp:    time.Now(),
 		UserCPUUsage: make(map[int]float64),
@@ -350,25 +389,30 @@ func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 			metrics.LimitedUsersMemoryUsage += um.MemoryUsage
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
 
-			// Calcola IO rate (bytes/sec) dal delta rispetto al ciclo precedente
-			ioDelta := um.IOWriteBytes
-			if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
-				elapsed := time.Since(m.prevIOTime).Seconds()
-				if elapsed > 0 && ioDelta >= prev {
-					ioRate := float64(ioDelta-prev) / elapsed
-					metrics.LimitedUsersIOWriteBytes += uint64(ioRate)
+			if updateIOState {
+				// Calcola IO rate (bytes/sec) dal delta rispetto al ciclo decisionale precedente.
+				ioDelta := um.IOWriteBytes
+				if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
+					elapsed := time.Since(m.prevIOTime).Seconds()
+					if elapsed > 0 && ioDelta >= prev {
+						ioRate := float64(ioDelta-prev) / elapsed
+						metrics.LimitedUsersIOWriteBytes += uint64(ioRate)
+					}
 				}
+				m.prevIOBytes[uid] = ioDelta
 			}
-			m.prevIOBytes[uid] = ioDelta
 		}
 	}
 	metrics.LimitedUsersCount = len(metrics.EligibleUsers)
-	m.prevIOTime = time.Now()
 
-	// Pulisci prevIOBytes per utenti non più attivi
-	for uid := range m.prevIOBytes {
-		if _, exists := allUserMetrics[uid]; !exists {
-			delete(m.prevIOBytes, uid)
+	if updateIOState {
+		m.prevIOTime = time.Now()
+
+		// Pulisci prevIOBytes per utenti non più attivi
+		for uid := range m.prevIOBytes {
+			if _, exists := allUserMetrics[uid]; !exists {
+				delete(m.prevIOBytes, uid)
+			}
 		}
 	}
 

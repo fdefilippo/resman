@@ -56,6 +56,8 @@ type Config struct {
 	PollingInterval int `config:"POLLING_INTERVAL"`
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
+	// MetricsRefreshInterval aggiorna Prometheus/Grafana senza eseguire decisioni.
+	MetricsRefreshInterval int `config:"METRICS_REFRESH_INTERVAL"`
 	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
 	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
@@ -235,6 +237,8 @@ func DefaultConfig() *Config {
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
+		// Refresh Prometheus/Grafana separato dal control loop decisionale.
+		MetricsRefreshInterval: 30,
 		// Processi piu' giovani non contribuiscono alla CPU utente.
 		ProcessMinAgeSeconds: 60,
 
@@ -535,6 +539,9 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"POLLING_INTERVAL":     setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
 	"MIN_ACTIVE_TIME":      setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
 	"METRICS_CACHE_TTL":    setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
+	"METRICS_REFRESH_INTERVAL": setPositiveInt(func(cfg *Config, value int) {
+		cfg.MetricsRefreshInterval = value
+	}),
 	"PROCESS_MIN_AGE_SECONDS": setInt(func(cfg *Config, value int) {
 		cfg.ProcessMinAgeSeconds = value
 	}),
@@ -834,6 +841,9 @@ func validateConfig(cfg *Config) error {
 	// Validate polling interval
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
+	}
+	if cfg.MetricsRefreshInterval < 5 {
+		errors = append(errors, "METRICS_REFRESH_INTERVAL must be at least 5 seconds")
 	}
 	if cfg.ProcessMinAgeSeconds < 0 {
 		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
@@ -1529,6 +1539,13 @@ func (c *Config) GetMetricsCacheTTL() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.MetricsCacheTTL
+}
+
+// GetMetricsRefreshInterval returns the Prometheus/Grafana refresh interval in seconds.
+func (c *Config) GetMetricsRefreshInterval() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.MetricsRefreshInterval
 }
 
 // GetProcessMinAgeSeconds returns the minimum process age before CPU accounting.

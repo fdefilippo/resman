@@ -72,6 +72,7 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:           75,
 				CPUReleaseThreshold:    40,
 				PollingInterval:        30,
+				MetricsRefreshInterval: 30,
 				CPUQuotaLimited:        "50000 100000",
 				LogLevel:               "INFO",
 				SystemUIDMin:           1000,

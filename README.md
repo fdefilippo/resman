@@ -99,6 +99,7 @@ MCP_TRANSPORT=stdio
 # PSI_EVENT_DRIVEN=true
 # PSI_CPU_STALL_THRESHOLD=50000
 # PSI_FALLBACK_INTERVAL=300
+# METRICS_REFRESH_INTERVAL=30
 ```
 
 Activation timing for a new CPU-bound process is not only
@@ -120,6 +121,11 @@ to generate CPU PSI because work is waiting. resman records the cycle trigger
 (`initial`, `ticker`, `psi_system_cpu`, `psi_system_io`, `psi_user_cpu`,
 `psi_user_io`) and exports PSI event counters so dashboards can separate usage
 from pressure.
+
+When `PSI_EVENT_DRIVEN=true`, `PSI_FALLBACK_INTERVAL` is only the decision-loop
+heartbeat. Prometheus/Grafana metrics are refreshed separately every
+`METRICS_REFRESH_INTERVAL` seconds so dashboards remain current even without PSI
+events. That refresh does not apply or remove limits.
 
 Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
 a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,

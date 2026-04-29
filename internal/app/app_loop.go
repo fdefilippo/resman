@@ -19,14 +19,23 @@ func (a *App) Run() error {
 }
 func (a *App) runControlLoop() error {
 	pollingInterval := a.controlCycleInterval()
+	metricsRefreshInterval := a.metricsRefreshInterval()
 	a.logger.Info("Entering main control loop",
 		"polling_interval_seconds", pollingInterval,
+		"metrics_refresh_interval_seconds", metricsRefreshInterval,
 		"psi_event_driven", a.cfg.GetPSIEventDriven(),
 	)
 
 	ticker := time.NewTicker(time.Duration(pollingInterval) * time.Second)
 	defer func() {
 		ticker.Stop()
+	}()
+
+	metricsTicker, metricsRefreshC := newOptionalTicker(metricsRefreshInterval)
+	defer func() {
+		if metricsTicker != nil {
+			metricsTicker.Stop()
+		}
 	}()
 
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil {
@@ -52,6 +61,10 @@ func (a *App) runControlLoop() error {
 			return nil
 		case <-ticker.C:
 			ticker = a.handleTickerCycle(ticker, &pollingInterval, &cycleComplete)
+			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
+		case <-metricsRefreshC:
+			a.handleMetricsRefreshCycle()
+			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
 		case psiEvent, ok := <-a.psiEvents:
 			if ok {
 				a.handlePSIEvent(psiEvent, &cycleComplete)
@@ -99,12 +112,59 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 	return ticker
 }
 
+func (a *App) handleMetricsRefreshCycle() {
+	if err := a.stateManager.RunMetricsRefresh(a.ctx, "metrics_refresh"); err != nil {
+		a.logger.Warn("Error in metrics refresh", "error", err)
+	}
+}
+
 func (a *App) controlCycleInterval() int {
 	cfg := a.stateManager.GetConfig()
 	if cfg.GetPSIEventDriven() {
 		return cfg.GetPSIFallbackInterval()
 	}
 	return cfg.GetPollingInterval()
+}
+
+func (a *App) metricsRefreshInterval() int {
+	cfg := a.stateManager.GetConfig()
+	if !cfg.GetPSIEventDriven() || a.prometheusExporter == nil {
+		return 0
+	}
+	return cfg.GetMetricsRefreshInterval()
+}
+
+func newOptionalTicker(interval int) (*time.Ticker, <-chan time.Time) {
+	if interval <= 0 {
+		return nil, nil
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	return ticker, ticker.C
+}
+
+func (a *App) refreshMetricsTicker(current *time.Ticker, currentC <-chan time.Time, currentInterval *int) (*time.Ticker, <-chan time.Time) {
+	nextInterval := a.metricsRefreshInterval()
+	if nextInterval == *currentInterval {
+		return current, currentC
+	}
+
+	if current != nil {
+		current.Stop()
+	}
+	*currentInterval = nextInterval
+
+	if nextInterval <= 0 {
+		a.logger.Info("Metrics refresh loop disabled",
+			"psi_event_driven", a.cfg.GetPSIEventDriven(),
+		)
+		return nil, nil
+	}
+
+	a.logger.Info("Metrics refresh interval updated",
+		"metrics_refresh_interval_seconds", nextInterval,
+		"psi_event_driven", a.cfg.GetPSIEventDriven(),
+	)
+	return newOptionalTicker(nextInterval)
 }
 
 func (a *App) acquireCycleSlot(cycleComplete chan struct{}, source string, pollingInterval int) bool {
