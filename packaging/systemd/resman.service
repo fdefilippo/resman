@@ -3,7 +3,6 @@ Description=ResMan - Dynamic CPU/RAM/IO Resource Management
 Documentation=https://github.com/fdefilippo/resman
 After=network.target
 Wants=cgroup-tweaks.service
-ConditionPathExists=/sys/fs/cgroup
 ConditionDirectoryNotEmpty=/sys/fs/cgroup
 
 [Service]

@@ -1,0 +1,16 @@
+[Unit]
+Description=Configure cgroup subtree controls
+After=sysinit.target
+Before=cpu-manager.service vcs.service systemd-user-sessions.service
+RequiresMountsFor=/sys/fs/cgroup
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "+cpu" >> /sys/fs/cgroup/cgroup.subtree_control'
+ExecStart=/bin/sh -c 'echo "+cpuset" >> /sys/fs/cgroup/cgroup.subtree_control'
+ExecStart=/bin/sh -c 'echo "+io" >> /sys/fs/cgroup/cgroup.subtree_control || true'
+ExecStart=/bin/sh -c 'echo "+memory" >> /sys/fs/cgroup/cgroup.subtree_control || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

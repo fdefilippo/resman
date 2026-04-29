@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/process"
@@ -54,11 +55,22 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 
 	// Abilita i controller nel cgroup condiviso
 	subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
+	controllersData, controllersErr := os.ReadFile(filepath.Join(sharedPath, "cgroup.controllers"))
 	if err := m.writeControllerIfMissing(subtreeControl, "+cpu"); err != nil {
 		m.logger.Warn("Failed to enable cpu controller in shared cgroup", "error", err)
 	}
 	if err := m.writeControllerIfMissing(subtreeControl, "+cpuset"); err != nil {
 		m.logger.Warn("Failed to enable cpuset controller in shared cgroup", "error", err)
+	}
+	if controllersErr == nil && strings.Contains(string(controllersData), "io") {
+		if err := m.writeControllerIfMissing(subtreeControl, "+io"); err != nil {
+			m.logger.Warn("Failed to enable io controller in shared cgroup", "error", err)
+		}
+	}
+	if controllersErr == nil && strings.Contains(string(controllersData), "memory") {
+		if err := m.writeControllerIfMissing(subtreeControl, "+memory"); err != nil {
+			m.logger.Warn("Failed to enable memory controller in shared cgroup", "error", err)
+		}
 	}
 
 	m.logger.Info("Shared cgroup created and initialized", "path", sharedPath)

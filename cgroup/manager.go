@@ -159,6 +159,18 @@ func (m *Manager) verifyCgroupSetup() error {
 			"available_controllers", strings.TrimSpace(string(controllersData)),
 		)
 	}
+	if strings.Contains(string(controllersData), "memory") {
+		if err := m.writeControllerIfMissing(baseSubtreeControl, "+memory"); err != nil {
+			m.logger.Warn("Failed to enable memory controller in base cgroup (RAM limits will not work)",
+				"path", baseCgroupPath,
+				"error", err,
+			)
+		}
+	} else {
+		m.logger.Debug("memory controller not available in cgroup.controllers, skipping",
+			"available_controllers", strings.TrimSpace(string(controllersData)),
+		)
+	}
 
 	m.logger.Debug("Cgroup setup verified successfully")
 	return nil
@@ -182,6 +194,9 @@ func (m *Manager) enableCPUControllers() error {
 	// Prova ad abilitare io (best-effort)
 	if err := os.WriteFile(subtreeControlFile, []byte("+io"), 0644); err != nil {
 		m.logger.Warn("Failed to enable io controller", "error", err)
+	}
+	if err := os.WriteFile(subtreeControlFile, []byte("+memory"), 0644); err != nil {
+		m.logger.Warn("Failed to enable memory controller", "error", err)
 	}
 
 	m.logger.Info("CPU controllers enabled in cgroup subtree_control")
