@@ -65,7 +65,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 func (m *Manager) verifyCgroupSetup() error {
 	// 1. Verifica che la root dei cgroups esista
 	if _, err := os.Stat(m.cfg.CgroupRoot); os.IsNotExist(err) {
-		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1')", m.cfg.CgroupRoot)
+		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2 and PSI on Enterprise Linux compatible systems: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1')", m.cfg.CgroupRoot)
 	}
 
 	// 2. Verifica che sia cgroups v2 (controlla cgroup.controllers)

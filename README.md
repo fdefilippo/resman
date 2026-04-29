@@ -126,7 +126,7 @@ On Red Hat Enterprise Linux 8 and later, PSI may be compiled in but disabled at
 boot. Enable it with:
 
 ```bash
-sudo grubby --update-kernel=ALL --args="psi=1"
+sudo grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1 psi=1"
 sudo reboot
 ```
 

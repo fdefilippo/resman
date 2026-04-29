@@ -32,9 +32,10 @@ func (a *App) WithCgroupManager() *App {
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize cgroup manager: %v\n", err)
 		fmt.Fprintf(os.Stderr, "\nTroubleshooting:\n")
 		fmt.Fprintf(os.Stderr, "  1. Verify cgroups v2 is enabled: mount | grep cgroup\n")
-		fmt.Fprintf(os.Stderr, "  2. Enable cgroups v2: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1'\n")
+		fmt.Fprintf(os.Stderr, "  2. On Enterprise Linux compatible systems, enable cgroups v2 and PSI: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1'\n")
 		fmt.Fprintf(os.Stderr, "  3. Reboot and verify: cat /sys/fs/cgroup/cgroup.controllers\n")
-		fmt.Fprintf(os.Stderr, "  4. Check permissions on %s\n", a.cfg.CgroupRoot)
+		fmt.Fprintf(os.Stderr, "  4. Verify PSI if PSI_EVENT_DRIVEN=true: ls /proc/pressure\n")
+		fmt.Fprintf(os.Stderr, "  5. Check permissions on %s\n", a.cfg.CgroupRoot)
 		a.err = err
 		return a
 	}

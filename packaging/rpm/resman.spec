@@ -172,7 +172,7 @@ if [ $1 -eq 1 ]; then
     # Verifica cgroups v2
     if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
         echo "WARNING: cgroups v2 not detected. Please enable with:"
-        echo "  grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1'"
+        echo "  grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1'"
         echo "  reboot"
     fi
 fi
