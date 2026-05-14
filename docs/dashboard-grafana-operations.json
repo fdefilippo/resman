@@ -775,7 +775,7 @@
     {
       "type": "timeseries",
       "title": "IO per sistema",
-      "description": "Throughput aggregato read/write dagli utenti filtrati, calcolato su una finestra stabile di 5 minuti.",
+      "description": "Throughput read/write per server_role e host. Le metriche IO native espongono hostname, server_role e username; cluster/environment possono essere applicati solo se presenti sulle serie dopo lo scraping Prometheus.",
       "gridPos": {
         "x": 12,
         "y": 14,
@@ -855,8 +855,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
-          "legendFormat": "read {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
+          "expr": "sum by (server_role, hostname) (rate(resman_user_io_read_bytes_total{server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]) or (resman_user_io_read_bytes_total{server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} * 0))",
+          "legendFormat": "read {{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -868,8 +868,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
-          "legendFormat": "write {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
+          "expr": "sum by (server_role, hostname) (rate(resman_user_io_write_bytes_total{server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]) or (resman_user_io_write_bytes_total{server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} * 0))",
+          "legendFormat": "write {{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",
           "instant": false,
