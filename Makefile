@@ -161,7 +161,7 @@ rpm-source: build rpm-dirs
 	@echo "Creating source tarball for RPM..."
 	mkdir -p $(PROJECT_NAME)-$(VERSION)
 	cp -r *.go go.mod go.sum \
-		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ \
+		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ internal/ \
 		README.md LICENSE \
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
