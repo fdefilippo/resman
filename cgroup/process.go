@@ -85,7 +85,7 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 		processName := m.getProcessName(pid)
 
 		// Salta processi esclusi
-		if m.cfg.IsProcessExcluded(processName) {
+		if m.getConfig().IsProcessExcluded(processName) {
 			continue
 		}
 
@@ -132,7 +132,7 @@ func (m *Manager) moveAllUserProcessesFallback(uid int) error {
 			totalProcesses++
 			processName := m.getProcessName(pid)
 
-			if m.cfg.IsProcessExcluded(processName) {
+			if m.getConfig().IsProcessExcluded(processName) {
 				continue
 			}
 

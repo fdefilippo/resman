@@ -106,14 +106,15 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	}
 
 	// Sposta processi in modo sincrono con timeout configurabile
-	timeout := time.Duration(m.cfg.GetCgroupOperationTimeout()) * time.Second
+	cfg := m.getConfig()
+	timeout := time.Duration(cfg.GetCgroupOperationTimeout()) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		delay := time.Duration(m.cfg.GetCgroupRetryDelayMs()) * time.Millisecond
+		delay := time.Duration(cfg.GetCgroupRetryDelayMs()) * time.Millisecond
 		time.Sleep(delay) // Breve delay per stabilizzazione
 		done <- m.MoveAllUserProcesses(uid)
 	}()

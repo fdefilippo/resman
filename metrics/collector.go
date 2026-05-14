@@ -928,12 +928,13 @@ func (c *Collector) cleanupCache() {
 			cleanedCount++
 		}
 	}
+	remainingUsernames := len(c.usernameCache)
 	c.usernameCacheMutex.Unlock()
 
 	if cleanedCount > 0 {
 		c.logger.Debug("Username cache cleanup completed",
 			"cleaned_entries", cleanedCount,
-			"remaining", len(c.usernameCache),
+			"remaining", remainingUsernames,
 		)
 	}
 }

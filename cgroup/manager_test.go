@@ -115,21 +115,8 @@ func TestIsValidCPUQuotaFormat(t *testing.T) {
 }
 
 func TestWriteControllerIfMissing(t *testing.T) {
-	// This test requires write access to cgroup filesystem
-	if os.Getuid() != 0 {
-		t.Skipf("Test requires root privileges")
-	}
-
-	// Skip if cgroups not available
-	if _, err := os.Stat("/sys/fs/cgroup"); os.IsNotExist(err) {
-		t.Skipf("Cgroups not available")
-	}
-
 	cfg := config.DefaultConfig()
-	manager, err := NewManager(cfg)
-	if err != nil {
-		t.Skipf("Cannot create manager: %v", err)
-	}
+	manager := &Manager{cfg: cfg}
 
 	// Test with a temporary file
 	tmpFile, err := os.CreateTemp("", "cgroup-test-*")
@@ -147,6 +134,32 @@ func TestWriteControllerIfMissing(t *testing.T) {
 	err = manager.writeControllerIfMissing(tmpFile.Name(), "+cpu")
 	if err != nil {
 		t.Errorf("writeControllerIfMissing() error: %v", err)
+	}
+}
+
+func TestWriteControllerIfMissingUsesExactTokenMatch(t *testing.T) {
+	manager := &Manager{cfg: config.DefaultConfig()}
+
+	tmpFile, err := os.CreateTemp("", "cgroup-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if err := os.WriteFile(tmpFile.Name(), []byte("cpuset"), 0644); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+
+	if err := manager.writeControllerIfMissing(tmpFile.Name(), "+cpu"); err != nil {
+		t.Fatalf("writeControllerIfMissing() error: %v", err)
+	}
+
+	data, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to read temp file: %v", err)
+	}
+	if string(data) != "+cpu" {
+		t.Fatalf("writeControllerIfMissing() should write +cpu when only cpuset is present, got %q", string(data))
 	}
 }
 

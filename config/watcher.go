@@ -55,7 +55,7 @@ type Watcher struct {
 // Può essere chiamato esternamente (es. da SIGHUP handler).
 func (w *Watcher) HandleConfigChange() {
 	w.logger.Info("Manual configuration reload triggered")
-	w.handleConfigChange()
+	w.handleConfigChange(true)
 }
 
 // NewWatcher crea un nuovo watcher per il file di configurazione.
@@ -191,7 +191,7 @@ func (w *Watcher) watchLoop() {
 		case <-debounceTimer.C:
 			if pendingReload {
 				pendingReload = false
-				w.handleConfigChange()
+				w.handleConfigChange(false)
 			}
 		}
 	}
@@ -211,12 +211,12 @@ func (w *Watcher) checkConfigChange() {
 
 	if !sameModTime || !sameSize {
 		w.logger.Info("Config change detected via periodic check, reloading")
-		w.handleConfigChange()
+		w.handleConfigChange(false)
 	}
 }
 
 // handleConfigChange gestisce il cambio di configurazione.
-func (w *Watcher) handleConfigChange() {
+func (w *Watcher) handleConfigChange(force bool) {
 	w.logger.Info("Configuration file changed, attempting to reload")
 
 	// Verifica se il file esiste ancora
@@ -236,7 +236,7 @@ func (w *Watcher) handleConfigChange() {
 	sameSize := fileInfo.Size() == w.lastFileSize
 	w.mu.RUnlock()
 
-	if sameModTime && sameSize {
+	if !force && sameModTime && sameSize {
 		w.logger.Debug("Config file not actually changed (same mod time and size)")
 		return
 	}

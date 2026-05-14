@@ -135,16 +135,13 @@ func (m *Manager) writePidsBatch(filePath string, pids []int) error {
 		return nil
 	}
 
-	// Converti i PID in stringhe separate da newline
-	var sb strings.Builder
-	for i, pid := range pids {
-		sb.WriteString(strconv.Itoa(pid))
-		if i < len(pids)-1 {
-			sb.WriteByte('\n')
+	// cgroup.procs accetta un PID per write.
+	for _, pid := range pids {
+		if err := os.WriteFile(filePath, []byte(strconv.Itoa(pid)), 0644); err != nil {
+			return fmt.Errorf("failed to write PID %d to %s: %w", pid, filePath, err)
 		}
 	}
-
-	return os.WriteFile(filePath, []byte(sb.String()), 0644)
+	return nil
 }
 
 // isValidCPUQuotaFormat valida il formato della quota CPU.

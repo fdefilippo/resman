@@ -80,17 +80,25 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 		}
 	}
 
-	// 3. State manager (aggiorna parametri)
-	if r.stateManager != nil {
-		r.stateManager.UpdateConfig(newConfig)
+	// 3. Cgroup manager (aggiorna parametri runtime, rifiuta path che richiedono restart)
+	if r.cgroupManager != nil {
+		if err := r.cgroupManager.UpdateConfig(newConfig); err != nil {
+			errors = append(errors, fmt.Sprintf("Cgroup manager: %v", err))
+		} else {
+			r.logger.Info("Cgroup manager configuration updated",
+				"cgroup_root", newConfig.CgroupRoot,
+				"base_cgroup", newConfig.CgroupBase,
+			)
+		}
 	}
 
-	// 4. Cgroup manager (aggiorna percorsi)
-	if r.cgroupManager != nil {
-		r.logger.Info("Cgroup manager notified of config change",
-			"cgroup_root", newConfig.CgroupRoot,
-			"base_cgroup", newConfig.CgroupBase,
-		)
+	if len(errors) > 0 {
+		return fmt.Errorf("errors applying new config: %v", errors)
+	}
+
+	// 4. State manager (aggiorna parametri)
+	if r.stateManager != nil {
+		r.stateManager.UpdateConfig(newConfig)
 	}
 
 	// 5. Metrics collector (aggiorna cache TTL e exclude list)

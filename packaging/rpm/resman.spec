@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.24.0
+Version: 1.24.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -52,6 +52,7 @@ Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 suppor
 Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
 v1.20.0: IO limits via cgroups v2 io controller.
 v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
+v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -251,6 +252,14 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu May 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.1-1
+- FIX: cgroup controller checks now use exact token matching
+- FIX: users are marked limited only after process movement succeeds
+- FIX: cgroup cleanup moves processes out before removing cgroups
+- FIX: cgroup manager rejects hot reloads that require restart
+- FIX: SIGHUP forces config reload
+- FIX: username cache cleanup logging race
+
 * Sun Apr 26 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.0-1
 - NEW: PSI event-driven control cycles via poll() on cpu.pressure/io.pressure
 - NEW: Event-driven mode reduces polling overhead when system is idle
