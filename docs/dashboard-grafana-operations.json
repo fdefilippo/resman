@@ -775,7 +775,7 @@
     {
       "type": "timeseries",
       "title": "IO per sistema",
-      "description": "Throughput aggregato read/write dagli utenti filtrati.",
+      "description": "Throughput aggregato read/write dagli utenti filtrati, calcolato su una finestra stabile di 5 minuti.",
       "gridPos": {
         "x": 12,
         "y": 14,
@@ -855,7 +855,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
           "legendFormat": "read {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
@@ -868,7 +868,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[5m]))",
           "legendFormat": "write {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",
