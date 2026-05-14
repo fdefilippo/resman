@@ -41,7 +41,7 @@
     {
       "type": "stat",
       "title": "Host monitorati",
-      "description": "Numero di host resman visibili nel perimetro filtrato.",
+      "description": "Numero di host resman visibili nel perimetro filtrato per cluster, ambiente e ruolo.",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -91,7 +91,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "count(count by (cluster, environment, hostname) (resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}))",
+          "expr": "count(count by (cluster, environment, server_role, hostname) (resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}))",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -158,7 +158,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}) or vector(0)",
+          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -175,7 +175,7 @@
     {
       "type": "stat",
       "title": "CPU media",
-      "description": "Media della percentuale CPU per host. 100% indica tutta la CPU logica dell host.",
+      "description": "Media della percentuale CPU per ruolo e host. 100% indica tutta la CPU logica dell host.",
       "gridPos": {
         "x": 8,
         "y": 1,
@@ -233,7 +233,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "avg(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "expr": "avg(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -250,7 +250,7 @@
     {
       "type": "stat",
       "title": "RAM media",
-      "description": "Media della RAM usata rispetto alla RAM totale degli host filtrati.",
+      "description": "Media della RAM usata rispetto alla RAM totale dei ruoli e host filtrati.",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -308,7 +308,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "avg(100 * resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "expr": "avg(100 * resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -375,7 +375,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[1h])) or vector(0)",
+          "expr": "sum(increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -450,7 +450,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(resman_errors_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[1h])) or vector(0)",
+          "expr": "sum(increase(resman_errors_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -484,7 +484,7 @@
     {
       "type": "timeseries",
       "title": "Load average per sistema",
-      "description": "Load average esposto da resman per ogni host.",
+      "description": "Load average esposto da resman per ogni server_role e host.",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -564,8 +564,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "resman_system_load_average{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}",
-          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "resman_system_load_average{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -581,7 +581,7 @@
     {
       "type": "timeseries",
       "title": "CPU per sistema",
-      "description": "Percentuale CPU totale per host. Il 100% rappresenta tutti i core logici disponibili sull host.",
+      "description": "Percentuale CPU totale per ruolo e host. Il 100% rappresenta tutti i core logici disponibili sull host.",
       "gridPos": {
         "x": 12,
         "y": 6,
@@ -661,8 +661,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}",
-          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -678,7 +678,7 @@
     {
       "type": "timeseries",
       "title": "RAM per sistema",
-      "description": "Percentuale RAM usata per host.",
+      "description": "Percentuale RAM usata per ruolo e host.",
       "gridPos": {
         "x": 0,
         "y": 14,
@@ -758,8 +758,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "100 * resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}",
-          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "100 * resman_memory_usage_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} / resman_memory_total_megabytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -855,8 +855,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
-          "legendFormat": "read {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
+          "legendFormat": "read {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -868,8 +868,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
-          "legendFormat": "write {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
+          "legendFormat": "write {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",
           "instant": false,
@@ -965,7 +965,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname, username) (resman_user_cpu_limited{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
+          "expr": "sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_limited{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1049,7 +1049,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "expr": "topk(20, sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1133,7 +1133,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "expr": "topk(20, sum by (cluster, environment, server_role, hostname, username) (resman_user_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1217,7 +1217,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(20, sum by (cluster, environment, hostname, username) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) + rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval])))",
+          "expr": "topk(20, sum by (cluster, environment, server_role, hostname, username) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) + rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval])))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1301,7 +1301,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(20, sum by (cluster, environment, hostname, username) (resman_user_process_count{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "expr": "topk(20, sum by (cluster, environment, server_role, hostname, username) (resman_user_process_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1385,7 +1385,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(30, max by (cluster, environment, hostname, username, pattern) (resman_user_workload_pattern_confidence{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\", username=~\"$username\"} * 100))",
+          "expr": "topk(30, max by (cluster, environment, server_role, hostname, username, pattern) (resman_user_workload_pattern_confidence{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} * 100))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1499,8 +1499,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname) (increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__rate_interval]))",
-          "legendFormat": "activate {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "legendFormat": "activate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -1512,8 +1512,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname) (increase(resman_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__rate_interval]))",
-          "legendFormat": "deactivate {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "legendFormat": "deactivate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",
           "instant": false,
@@ -1609,8 +1609,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname, trigger) (increase(resman_control_cycle_triggers_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__rate_interval]))",
-          "legendFormat": "{{trigger}} {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname, trigger) (increase(resman_control_cycle_triggers_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "legendFormat": "{{trigger}} {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -1706,8 +1706,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname, type, scope) (increase(resman_psi_events_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__rate_interval]))",
-          "legendFormat": "{{type}}/{{scope}} {{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname, type, scope) (increase(resman_psi_events_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "legendFormat": "{{type}}/{{scope}} {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -1782,7 +1782,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "max by (cluster, environment, hostname, type, scope) (resman_psi_last_event_timestamp_seconds{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"})",
+          "expr": "max by (cluster, environment, server_role, hostname, type, scope) (resman_psi_last_event_timestamp_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1896,8 +1896,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, hostname) (rate(resman_control_cycle_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[5m])))",
-          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, server_role, hostname) (rate(resman_control_cycle_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -1993,8 +1993,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, hostname) (rate(resman_metrics_collection_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[5m])))",
-          "legendFormat": "{{cluster}}/{{environment}}/{{hostname}}",
+          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, server_role, hostname) (rate(resman_metrics_collection_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])))",
+          "legendFormat": "{{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
           "instant": false,
@@ -2090,7 +2090,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, hostname, component, error_type) (increase(resman_errors_total{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname, component, error_type) (increase(resman_errors_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
           "legendFormat": "{{component}}/{{error_type}}",
           "range": true,
           "refId": "A",
@@ -2197,15 +2197,15 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, hostname)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, server_role)",
         "hide": 0,
         "includeAll": true,
-        "label": "Hostname",
+        "label": "Server role",
         "multi": true,
-        "name": "hostname",
+        "name": "server_role",
         "options": [],
         "query": {
-          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, hostname)",
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\"}, server_role)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -2224,7 +2224,34 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}, username)",
+        "definition": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\"}, hostname)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Hostname",
+        "multi": true,
+        "name": "hostname",
+        "options": [],
+        "query": {
+          "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\"}, hostname)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
         "hide": 0,
         "includeAll": true,
         "label": "Username",
@@ -2232,7 +2259,7 @@
         "name": "username",
         "options": [],
         "query": {
-          "query": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", hostname=~\"$hostname\"}, username)",
+          "query": "label_values(resman_user_cpu_usage_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}, username)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
