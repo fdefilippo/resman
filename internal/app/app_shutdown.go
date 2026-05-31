@@ -37,7 +37,8 @@ func (a *App) startSignalHandler() {
 						a.logger.Warn("Shutdown timeout exceeded — cleanup did not complete. Forcing exit.",
 							"timeout_seconds", a.cfg.GetMCPShutdownTimeout()*2,
 						)
-						syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
+						// Last-resort force exit; nothing actionable if it fails.
+						_ = syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
 					}()
 				}
 			}
@@ -48,7 +49,9 @@ func (a *App) shutdown() {
 	a.logger.Info("Shutting down main control loop")
 
 	if a.configWatcher != nil {
-		a.configWatcher.Stop()
+		if err := a.configWatcher.Stop(); err != nil {
+			a.logger.Error("Error stopping config watcher", "error", err)
+		}
 	}
 
 	if err := a.stateManager.Cleanup(); err != nil {

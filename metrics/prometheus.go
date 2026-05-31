@@ -34,6 +34,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -194,8 +195,8 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 
 	// Registra metriche standard di Go
 	exp.registry.MustRegister(
-		prometheus.NewGoCollector(),
-		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
 	logger.Info("Prometheus exporter created successfully",
@@ -958,7 +959,7 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	if err != nil {
 		return uidStr
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -1186,7 +1187,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 func (exp *PrometheusExporter) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status": "healthy", "timestamp": "%s", "auth_enabled": "%s"}`,
+	_, _ = fmt.Fprintf(w, `{"status": "healthy", "timestamp": "%s", "auth_enabled": "%s"}`,
 		time.Now().Format(time.RFC3339),
 		exp.cfg.PrometheusAuthType,
 	)
@@ -1203,7 +1204,7 @@ func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Reques
 	if exp.cfg.PrometheusAuthType != "none" && exp.cfg.PrometheusAuthType != "" {
 		authInfo = " (Authentication: " + exp.cfg.PrometheusAuthType + ")"
 	}
-	fmt.Fprintf(w, `<html><body><h1>Resource Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
+	_, _ = fmt.Fprintf(w, `<html><body><h1>Resource Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
 }
 
 // Start avvia il server HTTP per Prometheus.
@@ -1286,7 +1287,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		resp, err := http.Get(fmt.Sprintf("http://%s/health", addr))
 		if err == nil && resp.StatusCode == 200 {
 			exp.logger.Info("Prometheus server verified as running")
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		} else {
 			exp.logger.Warn("Could not verify Prometheus server", "error", err)
 		}
@@ -1326,7 +1327,7 @@ func (exp *PrometheusExporter) shutdown() {
 	if err := exp.server.Shutdown(shutdownCtx); err != nil {
 		exp.logger.Error("Error during Prometheus server shutdown", "error", err)
 		// Forza la chiusura se lo shutdown graceful fallisce
-		exp.server.Close()
+		_ = exp.server.Close()
 	}
 
 	exp.isRunning = false

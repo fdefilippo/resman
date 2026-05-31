@@ -117,7 +117,7 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 
 	// Inizializza lo schema
 	if err := manager.InitSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
 	}
 
@@ -233,7 +233,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user history for UID %d (time range %s to %s): %w", uid, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []UserMetricsRecord
 	for rows.Next() {
@@ -268,7 +268,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	if err != nil {
 		return nil, fmt.Errorf("failed to query system history (time range %s to %s): %w", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []SystemMetricsRecord
 	for rows.Next() {

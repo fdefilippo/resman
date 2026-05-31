@@ -90,7 +90,7 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 
 	thresholdLine := fmt.Sprintf("some %d %d", threshold, w.windowUs)
 	if _, err := fd.WriteString(thresholdLine); err != nil {
-		fd.Close()
+		_ = fd.Close()
 		return fmt.Errorf("write threshold to %s: %w", pressurePath, err)
 	}
 
@@ -116,7 +116,7 @@ func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
 	for _, m := range w.monitors {
 		if m.uid == uid && m.typ == typ && m.active {
 			m.active = false
-			m.fd.Close()
+			_ = m.fd.Close()
 		}
 	}
 
@@ -151,13 +151,13 @@ func (w *PSIWatcher) Stop() {
 	defer w.mu.Unlock()
 	for _, m := range w.monitors {
 		if m.active {
-			m.fd.Close()
+			_ = m.fd.Close()
 			m.active = false
 		}
 	}
 	w.monitors = nil
 	if w.wakeW != nil {
-		w.wakeW.Close()
+		_ = w.wakeW.Close()
 		w.wakeW = nil
 	}
 }
@@ -168,7 +168,7 @@ func (w *PSIWatcher) wake() {
 	if w.wakeW == nil {
 		return
 	}
-	w.wakeW.Write([]byte{0})
+	_, _ = w.wakeW.Write([]byte{0})
 }
 
 func (w *PSIWatcher) pollLoop() {
@@ -177,7 +177,7 @@ func (w *PSIWatcher) pollLoop() {
 	// Drain wake pipe on exit
 	defer func() {
 		if w.wakeR != nil {
-			w.wakeR.Close()
+			_ = w.wakeR.Close()
 		}
 	}()
 
@@ -221,7 +221,7 @@ func (w *PSIWatcher) pollLoop() {
 		// Check wake pipe first
 		if pollFds[0].Revents&unix.POLLIN != 0 {
 			var buf [8]byte
-			w.wakeR.Read(buf[:])
+			_, _ = w.wakeR.Read(buf[:])
 			// After consuming the wake signal, re-enter the loop to rebuild pollFds
 			select {
 			case <-w.done:

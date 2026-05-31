@@ -118,8 +118,14 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 			if m.psiWatcher != nil {
 				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
 				ioPressurePath := filepath.Join(userCgroupPath, "io.pressure")
-				m.psiWatcher.AddMonitor(uid, "cpu", cpuPressurePath)
-				m.psiWatcher.AddMonitor(uid, "io", ioPressurePath)
+				if err := m.psiWatcher.AddMonitor(uid, "cpu", cpuPressurePath); err != nil {
+					m.logger.Warn("Failed to add CPU pressure monitor for re-added user",
+						"uid", uid, "path", cpuPressurePath, "error", err)
+				}
+				if err := m.psiWatcher.AddMonitor(uid, "io", ioPressurePath); err != nil {
+					m.logger.Warn("Failed to add IO pressure monitor for re-added user",
+						"uid", uid, "path", ioPressurePath, "error", err)
+				}
 			}
 
 			added = append(added, uid)
@@ -132,7 +138,6 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				m.activeUsers[uid] = true
 			}
 			m.limitsAppliedTime = time.Now()
-			remainingLimited = len(m.activeUsers)
 			m.mu.Unlock()
 		}
 	}

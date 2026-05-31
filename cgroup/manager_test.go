@@ -123,7 +123,7 @@ func TestWriteControllerIfMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	// Write initial content
 	if err := os.WriteFile(tmpFile.Name(), []byte("cpu"), 0644); err != nil {
@@ -144,7 +144,7 @@ func TestWriteControllerIfMissingUsesExactTokenMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	if err := os.WriteFile(tmpFile.Name(), []byte("cpuset"), 0644); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
@@ -235,7 +235,7 @@ func TestSaveCgroupToFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	cfg := config.DefaultConfig()
 	cfg.CreatedCgroupsFile = tmpFile.Name()
@@ -268,7 +268,7 @@ func TestRemoveCgroupFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	// Write test data
 	if err := os.WriteFile(tmpFile.Name(), []byte("1000:/sys/fs/cgroup/resman/user_1000\n"), 0644); err != nil {

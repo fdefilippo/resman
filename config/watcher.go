@@ -71,7 +71,7 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 	// Ottieni info sul file corrente
 	fileInfo, err := os.Stat(configPath)
 	if err != nil {
-		fswatcher.Close()
+		_ = fswatcher.Close()
 		return nil, fmt.Errorf("cannot stat config file at %s: %w", configPath, err)
 	}
 
@@ -88,7 +88,7 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 
 	// Aggiungi il file al watcher
 	if err := fswatcher.Add(configPath); err != nil {
-		fswatcher.Close()
+		_ = fswatcher.Close()
 		return nil, fmt.Errorf("failed to add config file %s to watcher: %w", configPath, err)
 	}
 
@@ -124,8 +124,11 @@ func (w *Watcher) Stop() error {
 
 	w.logger.Info("Stopping configuration watcher")
 	close(w.stopChan)
-	w.watcher.Close()
+	err := w.watcher.Close()
 	w.isRunning = false
+	if err != nil {
+		return fmt.Errorf("failed to close config watcher: %w", err)
+	}
 
 	return nil
 }

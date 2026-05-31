@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.24.1
+Version: 1.24.2
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -53,6 +53,7 @@ Automatically limits CPU, memory and block I/O for non-system users based on con
 v1.20.0: IO limits via cgroups v2 io controller.
 v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
 v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
+v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint gate.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -252,6 +253,14 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sun May 31 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.2-1
+- CLEANUP: resolved all golangci-lint findings (errcheck, staticcheck, ineffassign, unused)
+- FIX: error returns now handled or explicitly ignored on resource cleanup paths
+- FIX: config watcher Stop, PSI AddMonitor and Prometheus exporter Stop now log errors
+- CHANGE: migrated to collectors.NewGoCollector/NewProcessCollector (deprecated APIs removed)
+- REMOVE: dead MCP handlers superseded by richer inline tool handlers
+- BUILD: 'make lint' is now a full regression gate (uncapped golangci-lint); added 'make lint-install'
+
 * Thu May 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.1-1
 - FIX: cgroup controller checks now use exact token matching
 - FIX: users are marked limited only after process movement succeeds

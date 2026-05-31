@@ -64,7 +64,6 @@ type Manager struct {
 	// Cache per le metriche (per performance)
 	metricsCache     map[string]interface{}
 	metricsCacheTime map[string]time.Time
-	cacheMutex       sync.RWMutex
 
 	// Control cycle history (inizializzato in NewManager)
 	controlHist *controlHistory
@@ -352,7 +351,9 @@ func (m *Manager) Cleanup() error {
 
 	// Ferma l'esportatore Prometheus
 	if m.prometheusExporter != nil {
-		m.prometheusExporter.Stop()
+		if err := m.prometheusExporter.Stop(); err != nil {
+			m.logger.Error("Error stopping Prometheus exporter", "error", err)
+		}
 	}
 
 	m.logger.Info("State manager cleanup completed")

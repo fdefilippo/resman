@@ -112,7 +112,7 @@ func postLimitHook(ctx context.Context, endpoint string, event limitHookEvent) e
 	if err != nil {
 		return fmt.Errorf("post hook request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("hook endpoint returned HTTP %d", resp.StatusCode)

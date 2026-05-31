@@ -324,23 +324,13 @@ CPU_RELEASE_THRESHOLD=50
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
-	// Imposta variabili d'ambiente
-	os.Setenv("CPU_THRESHOLD", "85")
-	os.Setenv("CPU_RELEASE_THRESHOLD", "55")
-	os.Setenv("POLLING_INTERVAL", "45")
-	os.Setenv("LOG_LEVEL", "DEBUG")
-	os.Setenv("ENABLE_PROMETHEUS", "true")
-	os.Setenv("PROMETHEUS_METRICS_BIND_PORT", "1974")
-
-	// Pulisci dopo il test
-	defer func() {
-		os.Unsetenv("CPU_THRESHOLD")
-		os.Unsetenv("CPU_RELEASE_THRESHOLD")
-		os.Unsetenv("POLLING_INTERVAL")
-		os.Unsetenv("LOG_LEVEL")
-		os.Unsetenv("ENABLE_PROMETHEUS")
-		os.Unsetenv("PROMETHEUS_METRICS_BIND_PORT")
-	}()
+	// Imposta variabili d'ambiente (t.Setenv ripristina automaticamente a fine test)
+	t.Setenv("CPU_THRESHOLD", "85")
+	t.Setenv("CPU_RELEASE_THRESHOLD", "55")
+	t.Setenv("POLLING_INTERVAL", "45")
+	t.Setenv("LOG_LEVEL", "DEBUG")
+	t.Setenv("ENABLE_PROMETHEUS", "true")
+	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "1974")
 
 	cfg := DefaultConfig()
 	loadFromEnvironment(cfg)

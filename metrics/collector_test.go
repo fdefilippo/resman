@@ -172,12 +172,10 @@ func TestGetUserMemoryUsage(t *testing.T) {
 	// Test with a valid UID (root = 0, might not be in range)
 	// Test with current user if available
 	currentUID := os.Getuid()
-	memory := collector.GetUserMemoryUsage(currentUID)
 
-	// Memory should be non-negative
-	if memory < 0 {
-		t.Errorf("GetUserMemoryUsage() returned %d, expected >= 0", memory)
-	}
+	// GetUserMemoryUsage returns a uint64, so the result is non-negative by
+	// construction; exercise the call path and ensure it does not panic.
+	_ = collector.GetUserMemoryUsage(currentUID)
 }
 
 func TestGetUserProcessCount(t *testing.T) {
@@ -219,11 +217,17 @@ func TestCacheFunctions(t *testing.T) {
 	if valid {
 		t.Error("getFromCache() should return invalid for expired key")
 	}
+	if val != nil {
+		t.Errorf("getFromCache() returned %v for expired key, expected nil", val)
+	}
 
 	// Test non-existent key
 	val, valid = collector.getFromCache("nonexistent_key", 1*time.Second)
 	if valid {
 		t.Error("getFromCache() should return invalid for non-existent key")
+	}
+	if val != nil {
+		t.Errorf("getFromCache() returned %v for non-existent key, expected nil", val)
 	}
 }
 

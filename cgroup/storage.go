@@ -14,9 +14,9 @@ func (m *Manager) saveCgroupToFile(uid int, cgroupPath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
-	_, err = file.WriteString(fmt.Sprintf("%d:%s\n", uid, cgroupPath))
+	_, err = fmt.Fprintf(file, "%d:%s\n", uid, cgroupPath)
 	return err
 }
 
@@ -62,7 +62,7 @@ func (m *Manager) loadExistingCgroups() error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
