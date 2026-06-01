@@ -26,13 +26,13 @@ import (
 func TestNewDatabaseManager(t *testing.T) {
 	// Crea un database temporaneo
 	tmpFile := "/tmp/test_metrics.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Verifica health check
 	if err := manager.HealthCheck(); err != nil {
@@ -42,13 +42,13 @@ func TestNewDatabaseManager(t *testing.T) {
 
 func TestWriteAndReadUserMetrics(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_write.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Scrivi metriche
 	now := time.Now()
@@ -88,13 +88,13 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 
 func TestWriteAndReadSystemMetrics(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_system.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Scrivi metriche di sistema
 	now := time.Now()
@@ -131,13 +131,13 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 
 func TestGetUserSummary(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_summary.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Scrivi multiple metriche
 	now := time.Now()
@@ -151,7 +151,9 @@ func TestGetUserSummary(t *testing.T) {
 			IsLimited:        i%2 == 0,
 			Timestamp:        now.Add(time.Duration(i) * time.Minute),
 		}
-		manager.WriteUserMetrics(record)
+		if err := manager.WriteUserMetrics(record); err != nil {
+			t.Fatalf("Failed to write user metrics: %v", err)
+		}
 	}
 
 	// Ottieni summary
@@ -183,13 +185,13 @@ func TestGetUserSummary(t *testing.T) {
 
 func TestCleanupOldData(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_cleanup.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Scrivi metriche vecchie e nuove
 	now := time.Now()
@@ -203,7 +205,9 @@ func TestCleanupOldData(t *testing.T) {
 		ProcessCount:     10,
 		Timestamp:        now.AddDate(0, 0, -35),
 	}
-	manager.WriteUserMetrics(oldRecord)
+	if err := manager.WriteUserMetrics(oldRecord); err != nil {
+		t.Fatalf("Failed to write old user metrics: %v", err)
+	}
 
 	// Metrica nuova (oggi)
 	newRecord := &UserMetricsRecord{
@@ -214,7 +218,9 @@ func TestCleanupOldData(t *testing.T) {
 		ProcessCount:     12,
 		Timestamp:        now,
 	}
-	manager.WriteUserMetrics(newRecord)
+	if err := manager.WriteUserMetrics(newRecord); err != nil {
+		t.Fatalf("Failed to write new user metrics: %v", err)
+	}
 
 	// Cleanup con retention di 30 giorni
 	deleted, err := manager.CleanupOldData(30)
@@ -237,13 +243,13 @@ func TestCleanupOldData(t *testing.T) {
 
 func TestGetDatabaseInfo(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_info.db"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create database manager: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Scrivi alcune metriche
 	now := time.Now()
@@ -256,7 +262,9 @@ func TestGetDatabaseInfo(t *testing.T) {
 			ProcessCount:     10,
 			Timestamp:        now,
 		}
-		manager.WriteUserMetrics(record)
+		if err := manager.WriteUserMetrics(record); err != nil {
+			t.Fatalf("Failed to write user metrics: %v", err)
+		}
 	}
 
 	// Ottieni info
@@ -279,7 +287,7 @@ func TestInMemoryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create in-memory database: %v", err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 
 	// Verifica che funzioni
 	err = manager.WriteUserMetrics(&UserMetricsRecord{

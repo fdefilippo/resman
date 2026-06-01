@@ -55,10 +55,9 @@ type PatternResult struct {
 
 // PatternDetector rileva i pattern di utilizzo per ogni utente.
 type PatternDetector struct {
-	mu           sync.RWMutex
-	logger       *logging.Logger
-	userStats    map[int]*UserHourlyStats // uid -> statistiche orarie
-	lastAnalysis time.Time
+	mu        sync.RWMutex
+	logger    *logging.Logger
+	userStats map[int]*UserHourlyStats // uid -> statistiche orarie
 }
 
 // NewPatternDetector crea un nuovo PatternDetector.

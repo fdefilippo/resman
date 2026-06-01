@@ -211,17 +211,18 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 
 	// Se usiamo syslog, gestiamo i livelli appropriati
 	if l.UseSyslog && l.syslogWriter != nil {
+		// Best-effort syslog write; errors are ignored to avoid logger recursion.
 		switch level {
 		case DEBUG:
-			l.syslogWriter.Debug(logMsg)
+			_ = l.syslogWriter.Debug(logMsg)
 		case INFO:
-			l.syslogWriter.Info(logMsg)
+			_ = l.syslogWriter.Info(logMsg)
 		case WARN:
-			l.syslogWriter.Warning(logMsg)
+			_ = l.syslogWriter.Warning(logMsg)
 		case ERROR:
-			l.syslogWriter.Err(logMsg)
+			_ = l.syslogWriter.Err(logMsg)
 		default:
-			l.syslogWriter.Info(logMsg)
+			_ = l.syslogWriter.Info(logMsg)
 		}
 	} else {
 		// Scrivi sul logger sottostante (file/stdout)
@@ -259,14 +260,14 @@ func (l *Logger) checkAndRotate() {
 // rotateLog esegue la rotazione del file di log.
 func (l *Logger) rotateLog() {
 	// Chiudi il file corrente
-	l.file.Close()
+	_ = l.file.Close()
 
 	// Rinomina il file corrente (es. .log -> .log.1)
 	backupPath := l.filePath + ".1"
 
 	// Rimuovi il backup precedente se esiste
 	if _, err := os.Stat(backupPath); err == nil {
-		os.Remove(backupPath)
+		_ = os.Remove(backupPath)
 	}
 
 	// Rinomina il file corrente

@@ -20,6 +20,7 @@ const (
 type Manager struct {
 	cfg    *config.Config
 	logger *logging.Logger
+	cfgMu  sync.RWMutex
 	mu     sync.RWMutex
 	wg     sync.WaitGroup
 
@@ -63,13 +64,15 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 
 // verifyCgroupSetup verifica che i cgroups v2 siano configurati correttamente.
 func (m *Manager) verifyCgroupSetup() error {
+	cfg := m.getConfig()
+
 	// 1. Verifica che la root dei cgroups esista
-	if _, err := os.Stat(m.cfg.CgroupRoot); os.IsNotExist(err) {
-		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2 and PSI on Enterprise Linux compatible systems: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1')", m.cfg.CgroupRoot)
+	if _, err := os.Stat(cfg.CgroupRoot); os.IsNotExist(err) {
+		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2 and PSI on Enterprise Linux compatible systems: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1')", cfg.CgroupRoot)
 	}
 
 	// 2. Verifica che sia cgroups v2 (controlla cgroup.controllers)
-	controllersFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.controllers")
+	controllersFile := filepath.Join(cfg.CgroupRoot, "cgroup.controllers")
 	controllersData, err := os.ReadFile(controllersFile)
 	if err != nil {
 		return fmt.Errorf("cannot read cgroup.controllers at %s: %w", controllersFile, err)
@@ -85,7 +88,7 @@ func (m *Manager) verifyCgroupSetup() error {
 	}
 
 	// 3. Verifica che i controller CPU siano abilitati
-	subtreeControlFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.subtree_control")
+	subtreeControlFile := filepath.Join(cfg.CgroupRoot, "cgroup.subtree_control")
 	data, err := os.ReadFile(subtreeControlFile)
 	if err != nil {
 		return fmt.Errorf("failed to read cgroup.subtree_control at %s: %w", subtreeControlFile, err)
@@ -107,10 +110,10 @@ func (m *Manager) verifyCgroupSetup() error {
 	}
 
 	// 4. Verifica scrivibilità
-	testFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+	testFile := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
 	if err := os.WriteFile(testFile, []byte("0"), 0644); err != nil {
 		if os.IsPermission(err) {
-			return fmt.Errorf("no write permission to cgroup root %s: %w", m.cfg.CgroupRoot, err)
+			return fmt.Errorf("no write permission to cgroup root %s: %w", cfg.CgroupRoot, err)
 		}
 	}
 	m.cgroupRootWritable = true
@@ -178,7 +181,8 @@ func (m *Manager) verifyCgroupSetup() error {
 
 // enableCPUControllers tenta di abilitare i controller CPU a livello di root.
 func (m *Manager) enableCPUControllers() error {
-	subtreeControlFile := filepath.Join(m.cfg.CgroupRoot, "cgroup.subtree_control")
+	cfg := m.getConfig()
+	subtreeControlFile := filepath.Join(cfg.CgroupRoot, "cgroup.subtree_control")
 
 	// Prova ad abilitare cpu
 	if err := os.WriteFile(subtreeControlFile, []byte("+cpu"), 0644); err != nil {
@@ -203,23 +207,56 @@ func (m *Manager) enableCPUControllers() error {
 	return nil
 }
 
-// writeControllerIfMissing aggiunge un controller solo se non è già presente.
+// writeControllerIfMissing aggiunge un controller solo se non e' gia' presente.
 func (m *Manager) writeControllerIfMissing(filePath, controller string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return err
 	}
 
-	if strings.Contains(string(data), controller[1:]) { // controller[1:] rimuove il "+" o "-"
-		return nil // Già presente
+	if controller == "" || len(controller) < 2 {
+		return fmt.Errorf("invalid controller %q", controller)
+	}
+	controllerName := controller[1:]
+	for _, enabled := range strings.Fields(string(data)) {
+		if enabled == controllerName {
+			return nil
+		}
 	}
 
 	return os.WriteFile(filePath, []byte(controller), 0644)
 }
 
+func (m *Manager) getConfig() *config.Config {
+	m.cfgMu.RLock()
+	defer m.cfgMu.RUnlock()
+	return m.cfg
+}
+
+// UpdateConfig aggiorna i parametri runtime del manager cgroup.
+func (m *Manager) UpdateConfig(newConfig *config.Config) error {
+	if newConfig == nil {
+		return nil
+	}
+
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
+	if m.cfg != nil {
+		if newConfig.CgroupRoot != m.cfg.CgroupRoot {
+			return fmt.Errorf("CGROUP_ROOT change requires restart: current=%s requested=%s", m.cfg.CgroupRoot, newConfig.CgroupRoot)
+		}
+		if newConfig.CgroupBase != m.cfg.CgroupBase {
+			return fmt.Errorf("CGROUP_BASE change requires restart: current=%s requested=%s", m.cfg.CgroupBase, newConfig.CgroupBase)
+		}
+	}
+	m.cfg = newConfig
+	return nil
+}
+
 // getBaseCgroupPath restituisce il percorso del cgroup base.
 func (m *Manager) getBaseCgroupPath() string {
-	return filepath.Join(m.cfg.CgroupRoot, m.cfg.CgroupBase)
+	cfg := m.getConfig()
+	return filepath.Join(cfg.CgroupRoot, cfg.CgroupBase)
 }
 
 // getUserCgroupPath restituisce il percorso del cgroup per un utente specifico.

@@ -13,6 +13,7 @@ import (
 
 func (m *Manager) CreateSharedCgroup() (string, error) {
 	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
+	cfg := m.getConfig()
 
 	// Se il cgroup condiviso esiste già, RIMUOVLO COMPLETAMENTE e ricreo
 	if _, err := os.Stat(sharedPath); err == nil {
@@ -25,7 +26,7 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 				"path", sharedPath,
 				"count", len(pids),
 			)
-			rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+			rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
 			for _, pid := range pids {
 				if writeErr := os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644); writeErr != nil {
 					m.logger.Warn("Failed to move process to root cgroup",
@@ -178,7 +179,7 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		pid := int(p.Pid)
 		processName := m.getProcessName(pid)
 
-		if m.cfg.IsProcessExcluded(processName) {
+		if m.getConfig().IsProcessExcluded(processName) {
 			continue
 		}
 
@@ -212,7 +213,8 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error 
 	}
 
 	if len(pids) > 0 {
-		rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+		cfg := m.getConfig()
+		rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
 		if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
 			return fmt.Errorf("failed to move processes out of shared cgroup for UID %d: %w", uid, err)
 		}
@@ -256,7 +258,7 @@ func (m *Manager) moveAllUserProcessesToSharedCgroupFallback(uid int, sharedPath
 		if procUID, err := m.getUIDFromStatusFile(statusFile); err == nil && procUID == uid {
 			processName := m.getProcessName(pid)
 
-			if m.cfg.IsProcessExcluded(processName) {
+			if m.getConfig().IsProcessExcluded(processName) {
 				continue
 			}
 

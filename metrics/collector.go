@@ -216,7 +216,7 @@ func (c *Collector) getTotalCoresFallback() int {
 		)
 		return 1
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	cores := 0
 	scanner := bufio.NewScanner(file)
@@ -268,7 +268,7 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 		)
 		return 0.0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	if !scanner.Scan() {
@@ -382,7 +382,7 @@ func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -584,7 +584,7 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -643,7 +643,7 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 		)
 		return 0.0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var memTotal, memAvailable float64
 	scanner := bufio.NewScanner(file)
@@ -712,7 +712,7 @@ func (c *Collector) getTotalMemoryFallback() float64 {
 		)
 		return 0.0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -758,7 +758,7 @@ func (c *Collector) getCachedMemoryFallback() float64 {
 		)
 		return 0.0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -928,12 +928,13 @@ func (c *Collector) cleanupCache() {
 			cleanedCount++
 		}
 	}
+	remainingUsernames := len(c.usernameCache)
 	c.usernameCacheMutex.Unlock()
 
 	if cleanedCount > 0 {
 		c.logger.Debug("Username cache cleanup completed",
 			"cleaned_entries", cleanedCount,
-			"remaining", len(c.usernameCache),
+			"remaining", remainingUsernames,
 		)
 	}
 }
@@ -1274,39 +1275,6 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	return totalMemory
 }
 
-// getUserMemoryUsageFallback scans /proc manually if gopsutil fails.
-func (c *Collector) getUserMemoryUsageFallback(uid int) uint64 {
-	var totalMemory uint64
-
-	procDir := "/proc"
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		return 0
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		procUID, err := c.getUIDFromStatusFile(statusFile)
-		if err != nil || procUID != uid {
-			continue
-		}
-
-		memoryUsage := c.getProcessMemoryUsage(pid)
-		totalMemory += memoryUsage
-	}
-
-	return totalMemory
-}
-
 // GetAllUsersMemoryUsage restituisce la memoria totale usata da TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
 // NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
 func (c *Collector) GetAllUsersMemoryUsage() uint64 {
@@ -1639,36 +1607,6 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 	}
 
 	c.setInCache(cacheKey, count)
-	return count
-}
-
-// getUserProcessCountFallback scans /proc manually if gopsutil fails.
-func (c *Collector) getUserProcessCountFallback(uid int) int {
-	count := 0
-	procDir := "/proc"
-
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		return 0
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		_, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		procUID, err := c.getUIDFromStatusFile(statusFile)
-		if err == nil && procUID == uid {
-			count++
-		}
-	}
-
 	return count
 }
 

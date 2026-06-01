@@ -259,7 +259,7 @@ func checkPortAvailable(host string, port int) bool {
 		return true
 	}
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 		return false
 	}
 	return true

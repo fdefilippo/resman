@@ -392,7 +392,7 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	}
 
 	// 4. Warning se USER_INCLUDE_LIST è vuota (nessun utente sarà limitato)
-	if cfg.UserIncludeList == nil || len(cfg.UserIncludeList) == 0 {
+	if len(cfg.UserIncludeList) == 0 {
 		fmt.Fprintf(os.Stderr, "WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. "+
 			"Set USER_INCLUDE_LIST=.* to limit all users, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
 	}
@@ -1046,7 +1046,7 @@ func (c *Config) matchPattern(pattern, s string) bool {
 // Se la include list è nil o vuota, tutti gli utenti sono inclusi
 func (c *Config) IsUserIncluded(username string) bool {
 	// Se la include list non è configurata o è vuota, tutti gli utenti sono inclusi
-	if c.UserIncludeList == nil || len(c.UserIncludeList) == 0 {
+	if len(c.UserIncludeList) == 0 {
 		return true // No include list = all users included
 	}
 
@@ -1063,7 +1063,7 @@ func (c *Config) IsUserIncluded(username string) bool {
 // Se la exclude list è nil o vuota, nessun utente è escluso (tutti possono essere limitati)
 func (c *Config) IsUserExcluded(username string) bool {
 	// Se la exclude list non è configurata o è vuota, nessun utente è escluso
-	if c.UserExcludeList == nil || len(c.UserExcludeList) == 0 {
+	if len(c.UserExcludeList) == 0 {
 		return false // No exclude list = no users excluded
 	}
 
@@ -1087,7 +1087,7 @@ func (c *Config) IsUserWhitelisted(username string) bool {
 // IsProcessExcluded verifica se un processo deve essere escluso dai limiti
 // I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
 func (c *Config) IsProcessExcluded(processName string) bool {
-	if c.ProcessExcludeList == nil || len(c.ProcessExcludeList) == 0 {
+	if len(c.ProcessExcludeList) == 0 {
 		return false // No processes excluded
 	}
 	for _, pattern := range c.ProcessExcludeList {
@@ -1100,7 +1100,7 @@ func (c *Config) IsProcessExcluded(processName string) bool {
 
 // IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
 func (c *Config) IsUserIncludedForRAM(username string) bool {
-	if c.RAMUserIncludeList == nil || len(c.RAMUserIncludeList) == 0 {
+	if len(c.RAMUserIncludeList) == 0 {
 		return true
 	}
 	for _, pattern := range c.RAMUserIncludeList {
@@ -1113,7 +1113,7 @@ func (c *Config) IsUserIncludedForRAM(username string) bool {
 
 // IsUserExcludedForRAM verifica se un utente è escluso dai limiti RAM (regex support)
 func (c *Config) IsUserExcludedForRAM(username string) bool {
-	if c.RAMUserExcludeList == nil || len(c.RAMUserExcludeList) == 0 {
+	if len(c.RAMUserExcludeList) == 0 {
 		return false
 	}
 	for _, pattern := range c.RAMUserExcludeList {
@@ -1132,7 +1132,7 @@ func (c *Config) IsUserWhitelistedForRAM(username string) bool {
 // IsUserIncludedForIO verifica se l'utente è nella IO include list.
 // Se la lista è vuota/nil, tutti sono inclusi.
 func (c *Config) IsUserIncludedForIO(username string) bool {
-	if c.IOUserIncludeList == nil || len(c.IOUserIncludeList) == 0 {
+	if len(c.IOUserIncludeList) == 0 {
 		return true
 	}
 	for _, pattern := range c.IOUserIncludeList {
@@ -1146,7 +1146,7 @@ func (c *Config) IsUserIncludedForIO(username string) bool {
 // IsUserExcludedForIO verifica se l'utente è nella IO exclude list.
 // Se la lista è vuota/nil, nessuno è escluso.
 func (c *Config) IsUserExcludedForIO(username string) bool {
-	if c.IOUserExcludeList == nil || len(c.IOUserExcludeList) == 0 {
+	if len(c.IOUserExcludeList) == 0 {
 		return false
 	}
 	for _, pattern := range c.IOUserExcludeList {
@@ -1254,7 +1254,7 @@ func (c *Config) SaveToFile(path string) error {
 
 	// 4. Rinomina atomico
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath) // Cleanup se rename fallisce
+		_ = os.Remove(tmpPath) // Cleanup se rename fallisce
 		return fmt.Errorf("failed to rename config file: %w", err)
 	}
 

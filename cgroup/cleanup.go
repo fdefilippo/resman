@@ -36,6 +36,12 @@ func (m *Manager) CleanupUserCgroup(uid int) error {
 			"process_count", len(pids),
 			"processes", strings.Join(processNames, ", "),
 		)
+		cfg := m.getConfig()
+		rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
+		if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
+			return fmt.Errorf("failed to move processes out of cgroup for UID %d: %w", uid, err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	// 2. Rimuovi la directory del cgroup
 	if err := os.Remove(cgroupPath); err != nil {
@@ -114,7 +120,8 @@ func (m *Manager) CleanupAll() error {
 							"path", userPath,
 							"count", len(pids),
 						)
-						rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+						cfg := m.getConfig()
+						rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
 						if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
 							m.logger.Debug("Failed to move some processes out of user cgroup",
 								"from", userPath,
@@ -143,7 +150,8 @@ func (m *Manager) CleanupAll() error {
 				"path", sharedPath,
 				"count", len(pids),
 			)
-			rootCgroupProcs := filepath.Join(m.cfg.CgroupRoot, "cgroup.procs")
+			cfg := m.getConfig()
+			rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
 			if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
 				m.logger.Debug("Failed to move some processes out of shared cgroup",
 					"error", err,

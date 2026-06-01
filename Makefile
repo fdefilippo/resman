@@ -8,12 +8,13 @@
 
 # Nome del progetto
 PROJECT_NAME = resman
-VERSION = 1.24.0
+VERSION = 1.24.2
 RELEASE = 1
 
 # Percorsi
 GO = go
 GOLANGCI_LINT = golangci-lint
+GOLANGCI_LINT_VERSION = v2.12.2
 GORELEASER = goreleaser
 
 # Build directories
@@ -53,7 +54,7 @@ DEB_DESCRIPTION = Resource Manager - Sistema di gestione delle risorse
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test lint install uninstall rpm deb docker help
+.PHONY: all build clean test lint lint-install install uninstall rpm deb docker help
 
 all: clean test lint build
 
@@ -102,15 +103,24 @@ test-cover: deps
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generato: coverage.html"
 
-# Linting del codice
+# Linting del codice.
+# Gate anti-regressione: --max-same-issues=0 e --max-issues-per-linter=0
+# disabilitano la deduplica di default di golangci-lint, che altrimenti
+# nasconde i finding ripetuti (es. errcheck su Close) oltre i primi 3.
 lint: deps
 	@echo "Running linters..."
 	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
-		$(GOLANGCI_LINT) run; \
+		$(GOLANGCI_LINT) run --max-same-issues=0 --max-issues-per-linter=0 ./...; \
 	else \
-		echo "golangci-lint non installato, eseguendo go vet..."; \
+		echo "golangci-lint non installato (usa 'make lint-install'), eseguendo go vet..."; \
 		$(GO) vet ./...; \
 	fi
+
+# Installa la versione pinnata di golangci-lint in $(GOPATH)/bin
+lint-install:
+	@echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@echo "golangci-lint installato in $$($(GO) env GOPATH)/bin"
 
 # Formatta il codice
 fmt:
@@ -161,7 +171,7 @@ rpm-source: build rpm-dirs
 	@echo "Creating source tarball for RPM..."
 	mkdir -p $(PROJECT_NAME)-$(VERSION)
 	cp -r *.go go.mod go.sum \
-		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ \
+		config/ cgroup/ metrics/ state/ logging/ reloader/ mcp/ database/ internal/ \
 		README.md LICENSE \
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
@@ -399,7 +409,8 @@ help:
 	@echo "    static       - Build binario statico"
 	@echo "    test         - Esegui test unitari"
 	@echo "    test-cover   - Test con report coverage"
-	@echo "    lint         - Esegui linting del codice"
+	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
+	@echo "    lint-install - Installa la versione pinnata di golangci-lint"
 	@echo "    fmt          - Formatta il codice"
 	@echo ""
 	@echo "  INSTALLATION:"

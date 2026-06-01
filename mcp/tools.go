@@ -42,20 +42,6 @@ func getHostname() string {
 
 // Tool input/output structures
 
-type GetSystemStatusArgs struct{}
-
-type GetSystemStatusResult struct {
-	TotalCPUUsage      float64 `json:"total_cpu_usage"`
-	UserCPUUsage       float64 `json:"user_cpu_usage"`
-	MemoryUsageMB      float64 `json:"memory_usage_mb"`
-	ActiveUsersCount   int     `json:"active_users_count"`
-	TotalCores         int     `json:"total_cores"`
-	SystemUnderLoad    bool    `json:"system_under_load"`
-	LimitsActive       bool    `json:"limits_active"`
-	LimitsAppliedTime  string  `json:"limits_applied_time"`
-	SharedCgroupActive bool    `json:"shared_cgroup_active"`
-}
-
 type GetUserMetricsArgs struct {
 	UIDs     []int  `json:"uids,omitempty"`
 	Username string `json:"username,omitempty"`
@@ -81,29 +67,6 @@ type UserMetric struct {
 
 type GetUserMetricsResult struct {
 	Users []UserMetric `json:"users"`
-}
-
-type GetLimitsStatusArgs struct{}
-
-type GetLimitsStatusResult struct {
-	LimitsActive          bool   `json:"limits_active"`
-	LimitsAppliedTime     string `json:"limits_applied_time"`
-	ActiveUsersCount      int    `json:"active_users_count"`
-	ActiveUsers           []int  `json:"active_users"`
-	SharedCgroupPath      string `json:"shared_cgroup_path"`
-	SharedCgroupActive    bool   `json:"shared_cgroup_active"`
-	SharedCgroupQuota     string `json:"shared_cgroup_quota"`
-	SharedCgroupUserCount int    `json:"shared_cgroup_user_count"`
-	// RAM limits status
-	RAMLimitsActive bool   `json:"ram_limits_active"`
-	RAMQuotaPerUser string `json:"ram_quota_per_user"`
-	RAMHighRatio    string `json:"ram_high_ratio"`
-	// IO limits status
-	IOLimitsActive bool   `json:"io_limits_active"`
-	IOReadBPS      string `json:"io_read_bps"`
-	IOWriteBPS     string `json:"io_write_bps"`
-	IOReadIOPS     int    `json:"io_read_iops"`
-	IOWriteIOPS    int    `json:"io_write_iops"`
 }
 
 type GetCgroupInfoArgs struct {
@@ -168,22 +131,6 @@ type GetMetricsDatabaseInfoResult struct {
 	UsersTracked       int64   `json:"users_tracked"`
 }
 
-type GetConfigurationArgs struct{}
-
-type GetConfigurationResult struct {
-	CPUThreshold              int    `json:"cpu_threshold"`
-	CPUReleaseThreshold       int    `json:"cpu_release_threshold"`
-	PollingInterval           int    `json:"polling_interval"`
-	MinSystemCores            int    `json:"min_system_cores"`
-	CPUQuotaNormal            string `json:"cpu_quota_normal"`
-	CPUQuotaLimited           string `json:"cpu_quota_limited"`
-	EnablePrometheus          bool   `json:"enable_prometheus"`
-	PrometheusMetricsBindPort int    `json:"prometheus_port"`
-	IgnoreSystemLoad          bool   `json:"ignore_system_load"`
-	SystemUIDMin              int    `json:"system_uid_min"`
-	SystemUIDMax              int    `json:"system_uid_max"`
-}
-
 type GetControlHistoryArgs struct {
 	Limit int `json:"limit"`
 }
@@ -208,13 +155,6 @@ type ActivateLimitsArgs struct {
 }
 
 type ActivateLimitsResult struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
-type DeactivateLimitsArgs struct{}
-
-type DeactivateLimitsResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
@@ -991,26 +931,6 @@ Utenti limitati: %d su %d
 	}, s.handleGetMetricsDatabaseInfo)
 }
 
-// handleGetSystemStatus handles get_system_status tool requests
-func (s *Server) handleGetSystemStatus(ctx context.Context, req *mcp.CallToolRequest, args GetSystemStatusArgs) (*mcp.CallToolResult, GetSystemStatusResult, error) {
-	status := s.stateManager.GetStatus()
-	metrics := s.metricsCollector.GetDetailedMetrics()
-
-	result := GetSystemStatusResult{
-		TotalCPUUsage:      getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		UserCPUUsage:       getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		MemoryUsageMB:      getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		ActiveUsersCount:   getIntMetric(metrics, "active_users_count", 0),
-		TotalCores:         getIntMetric(metrics, "total_cores", 0),
-		SystemUnderLoad:    getBoolMetric(metrics, "system_under_load", false),
-		LimitsActive:       getBool(status, "limits_active", false),
-		LimitsAppliedTime:  getString(status, "limits_applied_time", ""),
-		SharedCgroupActive: getBool(status, "shared_cgroup_active", false),
-	}
-
-	return &mcp.CallToolResult{}, result, nil
-}
-
 // handleGetUserMetrics handles get_user_metrics tool requests
 func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequest, args GetUserMetricsArgs) (*mcp.CallToolResult, GetUserMetricsResult, error) {
 	allMetrics := s.metricsCollector.GetAllUserMetrics()
@@ -1069,35 +989,6 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 	return &mcp.CallToolResult{}, result, nil
 }
 
-// handleGetLimitsStatus handles get_limits_status tool requests
-func (s *Server) handleGetLimitsStatus(ctx context.Context, req *mcp.CallToolRequest, args GetLimitsStatusArgs) (*mcp.CallToolResult, GetLimitsStatusResult, error) {
-	status := s.stateManager.GetStatus()
-	cfg := s.stateManager.GetConfig()
-
-	result := GetLimitsStatusResult{
-		LimitsActive:          getBool(status, "limits_active", false),
-		LimitsAppliedTime:     getString(status, "limits_applied_time", ""),
-		ActiveUsersCount:      getInt(status, "active_users_count", 0),
-		ActiveUsers:           getIntSlice(status, "active_users", []int{}),
-		SharedCgroupPath:      getString(status, "shared_cgroup_path", ""),
-		SharedCgroupActive:    getBool(status, "shared_cgroup_active", false),
-		SharedCgroupQuota:     getString(status, "shared_cgroup_quota", ""),
-		SharedCgroupUserCount: getInt(status, "shared_cgroup_user_count", 0),
-		// RAM limits status
-		RAMLimitsActive: cfg.RAMEnabled,
-		RAMQuotaPerUser: cfg.RAMQuotaPerUser,
-		RAMHighRatio:    fmt.Sprintf("%.1f", cfg.RAMHighRatio),
-		// IO limits status
-		IOLimitsActive: cfg.IOEnabled,
-		IOReadBPS:      cfg.IOReadBPS,
-		IOWriteBPS:     cfg.IOWriteBPS,
-		IOReadIOPS:     cfg.IOReadIOPS,
-		IOWriteIOPS:    cfg.IOWriteIOPS,
-	}
-
-	return &mcp.CallToolResult{}, result, nil
-}
-
 // handleGetCgroupInfo handles get_cgroup_info tool requests
 func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolRequest, args GetCgroupInfoArgs) (*mcp.CallToolResult, GetCgroupInfoResult, error) {
 	if args.UID == 0 {
@@ -1144,27 +1035,6 @@ func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolReque
 				}
 			}
 		}
-	}
-
-	return &mcp.CallToolResult{}, result, nil
-}
-
-// handleGetConfiguration handles get_configuration tool requests
-func (s *Server) handleGetConfiguration(ctx context.Context, req *mcp.CallToolRequest, args GetConfigurationArgs) (*mcp.CallToolResult, GetConfigurationResult, error) {
-	cfg := s.stateManager.GetConfig()
-
-	result := GetConfigurationResult{
-		CPUThreshold:              cfg.CPUThreshold,
-		CPUReleaseThreshold:       cfg.CPUReleaseThreshold,
-		PollingInterval:           cfg.PollingInterval,
-		MinSystemCores:            cfg.MinSystemCores,
-		CPUQuotaNormal:            cfg.CPUQuotaNormal,
-		CPUQuotaLimited:           cfg.CPUQuotaLimited,
-		EnablePrometheus:          cfg.EnablePrometheus,
-		PrometheusMetricsBindPort: cfg.PrometheusMetricsBindPort,
-		IgnoreSystemLoad:          cfg.IgnoreSystemLoad,
-		SystemUIDMin:              cfg.SystemUIDMin,
-		SystemUIDMax:              cfg.SystemUIDMax,
 	}
 
 	return &mcp.CallToolResult{}, result, nil
@@ -1224,26 +1094,6 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	return &mcp.CallToolResult{}, ActivateLimitsResult{
-		Success: success,
-		Message: message,
-	}, nil
-}
-
-// handleDeactivateLimits handles deactivate_limits tool requests
-func (s *Server) handleDeactivateLimits(ctx context.Context, req *mcp.CallToolRequest, args DeactivateLimitsArgs) (*mcp.CallToolResult, DeactivateLimitsResult, error) {
-	if !s.cfg.AllowWriteOps {
-		return &mcp.CallToolResult{}, DeactivateLimitsResult{Success: false, Message: "write operations are not allowed"}, nil
-	}
-
-	err := s.stateManager.ForceDeactivateLimits()
-
-	success := err == nil
-	message := "Limits deactivated successfully"
-	if err != nil {
-		message = "Failed to deactivate limits: " + err.Error()
-	}
-
-	return &mcp.CallToolResult{}, DeactivateLimitsResult{
 		Success: success,
 		Message: message,
 	}, nil
