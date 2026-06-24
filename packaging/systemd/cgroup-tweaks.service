@@ -1,7 +1,7 @@
 [Unit]
 Description=Configure cgroup subtree controls
 After=sysinit.target
-Before=cpu-manager.service vcs.service systemd-user-sessions.service
+Before=resman.service vcs.service systemd-user-sessions.service
 RequiresMountsFor=/sys/fs/cgroup
 
 [Service]
