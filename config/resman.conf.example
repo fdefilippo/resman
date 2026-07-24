@@ -547,7 +547,8 @@ MCP_ALLOW_WRITE_OPS=false
 #
 # METRICS_DB_RETENTION_DAYS: How many days to keep data in the database
 # Default: 30 days
-# Older data is automatically deleted
+# Older data is deleted at startup and every 24 hours. Space is reclaimed
+# incrementally to avoid a blocking full-database VACUUM.
 #
 # METRICS_DB_WRITE_INTERVAL: How often (in seconds) to write metrics to the database
 # Default: 30 seconds (same as POLLING_INTERVAL)

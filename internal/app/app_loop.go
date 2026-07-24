@@ -8,6 +8,8 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
+const databaseRetentionInterval = 24 * time.Hour
+
 func (a *App) Run() error {
 	if a.err != nil {
 		return a.err
@@ -39,6 +41,13 @@ func (a *App) runControlLoop() error {
 		}
 	}()
 
+	retentionTicker, retentionC := newDatabaseRetentionTicker(a.dbManager != nil)
+	defer func() {
+		if retentionTicker != nil {
+			retentionTicker.Stop()
+		}
+	}()
+
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil {
 		a.logger.Error("Error in initial control cycle",
 			"cycle_id", "initial",
@@ -66,12 +75,41 @@ func (a *App) runControlLoop() error {
 		case <-metricsRefreshC:
 			a.handleMetricsRefreshCycle()
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
+		case <-retentionC:
+			a.handleDatabaseRetention()
 		case psiEvent, ok := <-a.psiEvents:
 			if ok {
 				a.handlePSIEvent(psiEvent, &cycleComplete)
 			}
 		}
 	}
+}
+
+func newDatabaseRetentionTicker(enabled bool) (*time.Ticker, <-chan time.Time) {
+	if !enabled {
+		return nil, nil
+	}
+	ticker := time.NewTicker(databaseRetentionInterval)
+	return ticker, ticker.C
+}
+
+func (a *App) handleDatabaseRetention() {
+	if a.dbManager == nil {
+		return
+	}
+	cfg := a.stateManager.GetConfig()
+	deleted, err := a.dbManager.CleanupOldData(cfg.MetricsDBRetentionDays)
+	if err != nil {
+		a.logger.Warn("Periodic metrics database retention failed",
+			"retention_days", cfg.MetricsDBRetentionDays,
+			"error", err,
+		)
+		return
+	}
+	a.logger.Info("Periodic metrics database retention completed",
+		"retention_days", cfg.MetricsDBRetentionDays,
+		"records_deleted", deleted,
+	)
 }
 
 func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycleComplete *chan struct{}) *time.Ticker {

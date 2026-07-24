@@ -567,6 +567,12 @@ METRICS_DB_ENABLED=false
 METRICS_DB_PATH=/etc/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30      # How many days to keep data
 METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
+.fi
+.PP
+Database retention runs at startup and every 24 hours. New databases use
+incremental auto-vacuum so periodic cleanup does not run a blocking full
+database vacuum.
+.nf
 
 # PSI EVENT-DRIVEN MODE (Linux >= 4.20, CONFIG_PSI=y)
 # Uses poll() on cpu.pressure/io.pressure to trigger control cycles

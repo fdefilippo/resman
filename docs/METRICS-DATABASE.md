@@ -387,7 +387,7 @@ ORDER BY timestamp DESC;
 ```sql
 DELETE FROM user_metrics WHERE timestamp < datetime('now', '-90 days');
 DELETE FROM system_metrics WHERE timestamp < datetime('now', '-90 days');
-VACUUM;
+PRAGMA incremental_vacuum(1000);
 ```
 
 ---
@@ -417,7 +417,7 @@ VACUUM;
 #### Scrittura troppo lenta
 - Aumenta `METRICS_DB_WRITE_INTERVAL`
 - Riduci `METRICS_DB_RETENTION_DAYS`
-- Esegui `VACUUM` periodicamente
+- Verifica la latenza e lo spazio disponibile sul filesystem
 
 #### Database troppo grande
 - Riduci `METRICS_DB_RETENTION_DAYS`
@@ -450,7 +450,10 @@ Le query SQL usano `datetime('now', 'localtime')` per convertire in timezone loc
 
 Il cleanup dei dati vecchi viene eseguito:
 - All'avvio del servizio
-- Periodicamente durante l'esecuzione (ogni ciclo di scrittura)
+- Ogni 24 ore durante l'esecuzione
+
+I nuovi database usano `auto_vacuum=INCREMENTAL`; dopo ogni cleanup resman
+recupera un numero limitato di pagine senza eseguire un `VACUUM` completo.
 
 ---
 

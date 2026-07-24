@@ -112,6 +112,29 @@ func TestUpdateProcessCPUSampleResetsReusedPID(t *testing.T) {
 	}
 }
 
+func TestUpdateProcessCPUSampleRetainsBaselinesAboveLegacyLimit(t *testing.T) {
+	collector := &Collector{
+		procCache: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+	}
+	now := time.Now()
+	const processCount = 6000
+	for pid := int32(1); pid <= processCount; pid++ {
+		collector.updateProcessCPUSample(pid, int64(pid), cpu.TimesStat{User: 1}, now)
+	}
+
+	if got := len(collector.procCache.prevProcCPU); got != processCount {
+		t.Fatalf("process cache size = %d, want %d", got, processCount)
+	}
+	got := collector.updateProcessCPUSample(1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second))
+	if got != 100 {
+		t.Fatalf("CPU delta after cache growth = %f, want 100", got)
+	}
+}
+
 func TestGetTotalCores(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector, err := NewCollector(cfg)

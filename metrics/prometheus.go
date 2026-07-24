@@ -185,7 +185,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 
 	// Carica credenziali di autenticazione e certificati TLS
 	if err := exp.loadCredentials(); err != nil {
-		logger.Warn("Failed to load authentication credentials", "error", err)
+		return nil, fmt.Errorf("failed to load Prometheus security credentials: %w", err)
 	}
 
 	// Registra metriche
@@ -207,32 +207,50 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 
 // loadAuthCredentials carica le credenziali di autenticazione e i certificati TLS
 func (exp *PrometheusExporter) loadCredentials() error {
+	authType := exp.cfg.PrometheusAuthType
+	switch authType {
+	case "", "none", "basic", "jwt", "both":
+	default:
+		return fmt.Errorf("unsupported Prometheus authentication type %q", authType)
+	}
+
 	// Carica password per Basic Auth
-	if exp.cfg.PrometheusAuthType == "basic" || exp.cfg.PrometheusAuthType == "both" {
-		if exp.cfg.PrometheusAuthPasswordFile != "" {
-			password, err := os.ReadFile(exp.cfg.PrometheusAuthPasswordFile)
-			if err != nil {
-				return fmt.Errorf("failed to read password file: %w", err)
-			}
-			exp.basicAuthPassword = strings.TrimSpace(string(password))
-			exp.logger.Info("Basic authentication password loaded")
+	if authType == "basic" || authType == "both" {
+		if strings.TrimSpace(exp.cfg.PrometheusAuthUsername) == "" {
+			return fmt.Errorf("Prometheus basic authentication username is empty")
 		}
+		if exp.cfg.PrometheusAuthPasswordFile == "" {
+			return fmt.Errorf("Prometheus basic authentication password file is not configured")
+		}
+		password, err := os.ReadFile(exp.cfg.PrometheusAuthPasswordFile)
+		if err != nil {
+			return fmt.Errorf("failed to read password file: %w", err)
+		}
+		exp.basicAuthPassword = strings.TrimSpace(string(password))
+		if exp.basicAuthPassword == "" {
+			return fmt.Errorf("Prometheus basic authentication password is empty")
+		}
+		exp.logger.Info("Basic authentication password loaded")
 	}
 
 	// Carica secret per JWT
-	if exp.cfg.PrometheusAuthType == "jwt" || exp.cfg.PrometheusAuthType == "both" {
-		if exp.cfg.PrometheusJWTSecretFile != "" {
-			secret, err := os.ReadFile(exp.cfg.PrometheusJWTSecretFile)
-			if err != nil {
-				return fmt.Errorf("failed to read JWT secret file: %w", err)
-			}
-			exp.jwtSecret = []byte(strings.TrimSpace(string(secret)))
-			exp.logger.Info("JWT secret loaded",
-				"issuer", exp.cfg.PrometheusJWTIssuer,
-				"audience", exp.cfg.PrometheusJWTAudience,
-				"expiry_seconds", exp.cfg.PrometheusJWTExpiry,
-			)
+	if authType == "jwt" || authType == "both" {
+		if exp.cfg.PrometheusJWTSecretFile == "" {
+			return fmt.Errorf("Prometheus JWT secret file is not configured")
 		}
+		secret, err := os.ReadFile(exp.cfg.PrometheusJWTSecretFile)
+		if err != nil {
+			return fmt.Errorf("failed to read JWT secret file: %w", err)
+		}
+		exp.jwtSecret = []byte(strings.TrimSpace(string(secret)))
+		if len(exp.jwtSecret) == 0 {
+			return fmt.Errorf("Prometheus JWT secret is empty")
+		}
+		exp.logger.Info("JWT secret loaded",
+			"issuer", exp.cfg.PrometheusJWTIssuer,
+			"audience", exp.cfg.PrometheusJWTAudience,
+			"expiry_seconds", exp.cfg.PrometheusJWTExpiry,
+		)
 	}
 
 	// Carica certificati TLS
@@ -1115,6 +1133,9 @@ func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 
 // checkBasicAuth verifica le credenziali Basic Auth
 func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
+	if exp.cfg.PrometheusAuthUsername == "" || exp.basicAuthPassword == "" {
+		return false
+	}
 	username, password, ok := r.BasicAuth()
 	if !ok {
 		return false
@@ -1135,6 +1156,9 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 
 // checkJWTAuth verifica il token JWT
 func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
+	if len(exp.jwtSecret) == 0 {
+		return false
+	}
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return false
@@ -1155,7 +1179,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return exp.jwtSecret, nil
-	})
+	}, jwt.WithExpirationRequired())
 
 	if err != nil {
 		exp.logger.Debug("JWT parse error", "error", err)

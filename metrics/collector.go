@@ -123,7 +123,6 @@ type Collector struct {
 const (
 	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
 	MAX_CACHE_SIZE             = 10000 // Maximum number of entries in general cache
-	MAX_PROC_CACHE_SIZE        = 5000  // Maximum number of entries in process CPU cache
 	MAX_USERNAME_CACHE_SIZE    = 10000 // Maximum number of entries in username cache
 )
 
@@ -1530,28 +1529,7 @@ func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu
 		}
 	}
 
-	// Primo campione: salva e ritorna 0
-	// Se cache è piena, rimuovi entry più vecchia (LRU)
-	if len(c.procCache.prevProcCPU) >= MAX_PROC_CACHE_SIZE {
-		// Find and remove oldest entry
-		var oldestPID int32
-		var oldestTime time.Time
-		first := true
-		for pid, ts := range c.procCache.prevProcTime {
-			if first || ts.Before(oldestTime) {
-				oldestTime = ts
-				oldestPID = pid
-				first = false
-			}
-		}
-		if !first {
-			delete(c.procCache.prevProcCPU, oldestPID)
-			delete(c.procCache.prevProcTime, oldestPID)
-			delete(c.procCache.procStartTime, oldestPID)
-		}
-	}
-
-	// Aggiungi nuova entry
+	// Keep every recently observed process baseline. cleanupCache removes stale PIDs.
 	c.procCache.prevProcCPU[pid] = times
 	c.procCache.prevProcTime[pid] = now
 	c.procCache.procStartTime[pid] = startTime

@@ -129,6 +129,10 @@ func (m *DatabaseManager) InitSchema() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if _, err := m.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		return fmt.Errorf("failed to enable incremental auto-vacuum: %w", err)
+	}
+
 	schema := `
     -- Tabella per le metriche degli utenti
     CREATE TABLE IF NOT EXISTS user_metrics (
@@ -392,31 +396,50 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 	defer m.mu.Unlock()
 
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to start retention transaction: %w", err)
+	}
+	rollback := func() {
+		_ = tx.Rollback()
+	}
 
 	// Rimuovi user metrics vecchi
-	result, err := m.db.Exec("DELETE FROM user_metrics WHERE timestamp < ?", cutoff)
+	result, err := tx.Exec("DELETE FROM user_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
+		rollback()
 		return 0, fmt.Errorf("failed to delete user metrics older than %s (retention %d days): %w", cutoff.Format(time.RFC3339), retentionDays, err)
 	}
 
 	userDeleted, err := result.RowsAffected()
 	if err != nil {
+		rollback()
 		return 0, fmt.Errorf("failed to get rows affected for user metrics deletion: %w", err)
 	}
 
 	// Rimuovi system metrics vecchi
-	_, err = m.db.Exec("DELETE FROM system_metrics WHERE timestamp < ?", cutoff)
+	result, err = tx.Exec("DELETE FROM system_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
-		return userDeleted, fmt.Errorf("failed to delete system metrics older than %s (retention %d days): %w", cutoff.Format(time.RFC3339), retentionDays, err)
+		rollback()
+		return 0, fmt.Errorf("failed to delete system metrics older than %s (retention %d days): %w", cutoff.Format(time.RFC3339), retentionDays, err)
+	}
+	systemDeleted, err := result.RowsAffected()
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("failed to get rows affected for system metrics deletion: %w", err)
 	}
 
-	// Vacuum per recuperare spazio
-	_, err = m.db.Exec("VACUUM")
-	if err != nil {
-		return userDeleted, fmt.Errorf("failed to vacuum database after cleanup: %w", err)
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit retention cleanup: %w", err)
 	}
 
-	return userDeleted, nil
+	totalDeleted := userDeleted + systemDeleted
+	if totalDeleted > 0 {
+		if _, err := m.db.Exec("PRAGMA incremental_vacuum(1000)"); err != nil {
+			return totalDeleted, fmt.Errorf("failed to reclaim database pages after deleting %d records: %w", totalDeleted, err)
+		}
+	}
+	return totalDeleted, nil
 }
 
 // Close chiude la connessione al database

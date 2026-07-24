@@ -113,7 +113,12 @@ func (a *App) WithDatabase() *App {
 		"ttl_minutes", a.cfg.UsernameCacheTTL,
 	)
 
-	if deleted, err := dbManager.CleanupOldData(a.cfg.MetricsDBRetentionDays); err == nil && deleted > 0 {
+	if deleted, err := dbManager.CleanupOldData(a.cfg.MetricsDBRetentionDays); err != nil {
+		a.logger.Warn("Failed to apply metrics database retention at startup",
+			"retention_days", a.cfg.MetricsDBRetentionDays,
+			"error", err,
+		)
+	} else if deleted > 0 {
 		a.logger.Info("Cleaned up old metrics data", "records_deleted", deleted)
 	}
 

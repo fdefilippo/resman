@@ -19,6 +19,7 @@ package database
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -37,6 +38,22 @@ func TestNewDatabaseManager(t *testing.T) {
 	// Verifica health check
 	if err := manager.HealthCheck(); err != nil {
 		t.Errorf("Health check failed: %v", err)
+	}
+}
+
+func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	var mode int
+	if err := manager.db.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		t.Fatalf("failed to read auto_vacuum mode: %v", err)
+	}
+	if mode != 2 {
+		t.Fatalf("auto_vacuum mode = %d, want 2 (INCREMENTAL)", mode)
 	}
 }
 
@@ -221,6 +238,13 @@ func TestCleanupOldData(t *testing.T) {
 	if err := manager.WriteUserMetrics(newRecord); err != nil {
 		t.Fatalf("Failed to write new user metrics: %v", err)
 	}
+	if err := manager.WriteSystemMetrics(&SystemMetricsRecord{
+		TotalCPUUsagePercent: 80,
+		TotalCores:           4,
+		Timestamp:            now.AddDate(0, 0, -35),
+	}); err != nil {
+		t.Fatalf("Failed to write old system metrics: %v", err)
+	}
 
 	// Cleanup con retention di 30 giorni
 	deleted, err := manager.CleanupOldData(30)
@@ -228,8 +252,8 @@ func TestCleanupOldData(t *testing.T) {
 		t.Errorf("Cleanup failed: %v", err)
 	}
 
-	if deleted != 1 {
-		t.Errorf("Expected to delete 1 record, got %d", deleted)
+	if deleted != 2 {
+		t.Errorf("Expected to delete 2 records, got %d", deleted)
 	}
 
 	// Verifica che rimanga solo la metrica nuova
