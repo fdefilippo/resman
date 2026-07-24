@@ -39,6 +39,14 @@ func (a *App) WithCgroupManager() *App {
 		a.err = err
 		return a
 	}
+	if err := cgroupMgr.RecoverExistingCgroups(); err != nil {
+		a.logger.Error("Failed to recover cgroups left by a previous daemon instance",
+			"error", err,
+		)
+		fmt.Fprintf(os.Stderr, "\nFailed to recover existing resman cgroups: %v\n", err)
+		a.err = err
+		return a
+	}
 	a.cgroupMgr = cgroupMgr
 	return a
 }

@@ -18,15 +18,20 @@ const (
 
 // Manager gestisce tutte le operazioni sui cgroups v2.
 type Manager struct {
-	cfg    *config.Config
-	logger *logging.Logger
-	cfgMu  sync.RWMutex
-	mu     sync.RWMutex
-	wg     sync.WaitGroup
+	cfg      *config.Config
+	logger   *logging.Logger
+	cfgMu    sync.RWMutex
+	mu       sync.RWMutex
+	wg       sync.WaitGroup
+	originMu sync.Mutex
 
 	// Tracciamento dei cgroups creati
 	createdCgroups     map[int]string // UID -> cgroup path
 	createdCgroupsFile string
+	processOrigins     map[int]processOrigin
+	processOriginsFile string
+	procRoot           string
+	writePID           func(string, int) error
 
 	// Cache per le verifiche
 	controllersAvailable bool
@@ -42,6 +47,9 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		logger:             logger,
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: cfg.CreatedCgroupsFile,
+		processOrigins:     make(map[int]processOrigin),
+		processOriginsFile: processOriginsPath(cfg.CreatedCgroupsFile),
+		procRoot:           "/proc",
 	}
 
 	// Verifica che i cgroups v2 siano disponibili e configurati correttamente
@@ -52,6 +60,18 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	// Carica i cgroups già creati (se presenti) dal file di tracciamento
 	if err := mgr.loadExistingCgroups(); err != nil {
 		logger.Warn("Could not load existing cgroups tracking file", "error", err)
+	}
+	if err := mgr.loadProcessOrigins(); err != nil {
+		return nil, fmt.Errorf("failed to load process origin state: %w", err)
+	}
+	if err := mgr.pruneInactiveProcessOrigins(-1); err != nil {
+		return nil, fmt.Errorf("failed to reconcile process origin state: %w", err)
+	}
+	if isFiniteCPUQuota(cfg.CPUQuotaNormal) {
+		logger.Warn("Finite CPU_QUOTA_NORMAL applies only to resman recovery cgroups",
+			"quota", cfg.CPUQuotaNormal,
+			"recovery_path", mgr.getRecoveryRootPath(),
+		)
 	}
 
 	logger.Info("Cgroup manager initialized",

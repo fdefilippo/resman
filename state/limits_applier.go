@@ -17,6 +17,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 
 	// Soglia per considerare un utente "inattivo" (0.1% CPU)
 	const idleThreshold = 0.1
+	normalQuota := m.GetConfig().CPUQuotaNormal
 
 	m.mu.Lock()
 	sharedPath := m.sharedCgroupPath
@@ -62,16 +63,16 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 		// Sposta l'utente fuori dal cgroup condiviso e rimuovi il sottocgroup.
 		m.wg.Add(1)
-		go func(uid int, sharedPath string) {
+		go func(uid int, sharedPath, normalQuota string) {
 			defer m.wg.Done()
 			if sharedPath == "" {
 				return
 			}
-			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath); err != nil {
+			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota); err != nil {
 				m.logger.Warn("Failed to release idle user from shared cgroup",
 					"uid", uid, "shared_path", sharedPath, "error", err)
 			}
-		}(uid, sharedPath)
+		}(uid, sharedPath, normalQuota)
 	}
 
 	remainingLimited := len(m.activeUsers)
@@ -459,7 +460,7 @@ func (m *Manager) deactivateLimits() error {
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 
 		if sharedPath != "" {
-			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath); err != nil {
+			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal); err != nil {
 				m.logger.Error("Failed to release user from shared cgroup",
 					"user", userStr,
 					"shared_cgroup", sharedPath,
@@ -532,7 +533,7 @@ func (m *Manager) deactivateLimits() error {
 	// Rimuovi il cgroup condiviso se esiste
 	sharedRemoved := sharedPath == ""
 	if sharedPath != "" {
-		if err := os.RemoveAll(sharedPath); err != nil {
+		if err := os.Remove(sharedPath); err != nil {
 			m.logger.Warn("Failed to remove shared cgroup",
 				"path", sharedPath,
 				"error", err,

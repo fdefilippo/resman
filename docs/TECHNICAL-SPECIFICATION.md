@@ -262,9 +262,17 @@ type Config struct {
     │   ├── user_1000/        # Per-user sub-cgroup
     │   ├── user_1001/
     │   └── ...
-    ├── user_1000/            # Legacy individual cgroups
-    └── ...
+    └── recovery/             # Processes whose original cgroup disappeared
+        ├── user_1000/
+        └── ...
 ```
+
+Before migration, resman atomically persists PID, process start time, parent,
+session ID, and original cgroup. Release restores the exact original cgroup.
+PID reuse is detected through the start time. Descendants inherit an
+unambiguous parent or session origin; otherwise they enter the resman-owned
+recovery hierarchy. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is
+never written into systemd-managed cgroups.
 
 **Key Functions:**
 - `NewManager(cfg)`: Creates cgroup manager
@@ -550,7 +558,7 @@ CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
 # ========================
 # CPU LIMITS (cpu.max format)
 # ========================
-CPU_QUOTA_NORMAL="max 100000"      # No limit
+CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
 CPU_QUOTA_LIMITED="50000 100000"   # 0.5 cores
 
 # ========================

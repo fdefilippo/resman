@@ -78,6 +78,9 @@ CPU_THRESHOLD_DURATION=90
 # Example:  50000 100000 -> 1/2 core
 # Example: 300000 100000 -> 3 cores
 # Example: 200000 100000 -> 2 full cores
+# In shared mode this quota is applied only to resman/recovery/user_UID when
+# the process original cgroup no longer exists. resman does not modify
+# cpu.max in cgroups managed by systemd.
 CPU_QUOTA_NORMAL="max 100000"
 CPU_QUOTA_LIMITED="50000 100000"
 

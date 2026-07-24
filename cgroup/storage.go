@@ -39,6 +39,19 @@ func (m *Manager) untrackCgroupPath(uid int) error {
 	return m.removeCgroupFromFile(uid)
 }
 
+func (m *Manager) untrackCgroupPathIf(uid int, expectedPath string) error {
+	m.mu.Lock()
+	currentPath, exists := m.createdCgroups[uid]
+	if !exists || filepath.Clean(currentPath) != filepath.Clean(expectedPath) {
+		m.mu.Unlock()
+		return nil
+	}
+	delete(m.createdCgroups, uid)
+	m.mu.Unlock()
+
+	return m.removeCgroupFromFile(uid)
+}
+
 // removeCgroupFromFile rimuove un cgroup dal file di tracciamento.
 func (m *Manager) removeCgroupFromFile(uid int) error {
 	// Leggi tutto il file, filtra e riscrivi
@@ -175,22 +188,7 @@ func (m *Manager) readPidsFromFile(filePath string) ([]int, error) {
 	return pids, nil
 }
 
-// writePidsBatch scrive una slice di PIDs in un file cgroup.procs in batch.
-func (m *Manager) writePidsBatch(filePath string, pids []int) error {
-	if len(pids) == 0 {
-		return nil
-	}
-
-	// cgroup.procs accetta un PID per write.
-	for _, pid := range pids {
-		if err := os.WriteFile(filePath, []byte(strconv.Itoa(pid)), 0644); err != nil {
-			return fmt.Errorf("failed to write PID %d to %s: %w", pid, filePath, err)
-		}
-	}
-	return nil
-}
-
-// isValidCPUQuotaFormat valida il formato della quota CPU.
+// GetCreatedCgroups returns the UIDs tracked by the cgroup manager.
 func (m *Manager) GetCreatedCgroups() []int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -113,6 +113,14 @@ second CPU sample, then applies `CPU_THRESHOLD_DURATION`. With
 activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
 
+Before moving a process into the shared limited cgroup, resman persistently
+records its original cgroup together with its PID start time. On release, the
+process is restored to that exact cgroup. Processes whose original systemd
+scope no longer exists, including descendants born while limits were active,
+are moved to the dedicated `resman/recovery/user_UID` cgroup instead of the
+cgroup v2 root. A finite `CPU_QUOTA_NORMAL` is applied only to these resman-owned
+recovery cgroups; resman never writes it into cgroups managed by systemd.
+
 `PSI_EVENT_DRIVEN` is a pressure trigger, not another CPU usage threshold. PSI
 events mean that runnable tasks or IO operations spent time waiting for resources.
 For example, on a 4-core host, 4 CPU-bound threads can show 100% CPU with little

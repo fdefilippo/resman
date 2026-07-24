@@ -18,6 +18,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,7 +101,9 @@ func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
-func (m *mockCgroupManager) ReleaseUserFromSharedCgroup(uid int, path string) error   { return nil }
+func (m *mockCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
+	return nil
+}
 func (m *mockCgroupManager) CreateSharedCgroup() (string, error)                      { return "", nil }
 func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error      { return nil }
 func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
@@ -372,6 +375,7 @@ type deactivateCgroupManager struct {
 	applyCPULimitCalls       []int
 	applySharedCPULimitCalls []string
 	releasedUsers            []int
+	releaseErrors            map[int]error
 }
 
 func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
@@ -384,9 +388,9 @@ func (m *deactivateCgroupManager) ApplySharedCPULimit(path string, quota string)
 	return nil
 }
 
-func (m *deactivateCgroupManager) ReleaseUserFromSharedCgroup(uid int, path string) error {
+func (m *deactivateCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
 	m.releasedUsers = append(m.releasedUsers, uid)
-	return nil
+	return m.releaseErrors[uid]
 }
 
 func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
@@ -433,6 +437,44 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	}
 	if len(manager.activeUsers) != 0 {
 		t.Fatalf("activeUsers = %v, want empty", manager.activeUsers)
+	}
+}
+
+func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &deactivateCgroupManager{
+		releaseErrors: map[int]error{
+			1001: errors.New("restore failed"),
+		},
+	}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("failed to create shared cgroup test path: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	manager.activeUsers[1000] = true
+	manager.activeUsers[1001] = true
+
+	if err := manager.deactivateLimits(); err == nil {
+		t.Fatal("deactivateLimits() should report the failed user release")
+	}
+	if manager.activeUsers[1000] {
+		t.Fatal("successfully restored user 1000 should be removed from activeUsers")
+	}
+	if !manager.activeUsers[1001] {
+		t.Fatal("failed user 1001 should remain in activeUsers")
+	}
+	if !manager.limitsActive {
+		t.Fatal("limitsActive should remain true while a user still needs release")
+	}
+	if manager.sharedCgroupPath != sharedPath {
+		t.Fatalf("sharedCgroupPath = %q, want %q", manager.sharedCgroupPath, sharedPath)
 	}
 }
 

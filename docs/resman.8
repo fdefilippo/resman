@@ -200,6 +200,24 @@ IO starvation auto\-remediation can be enabled to temporarily boost limits when 
 . B IO_REVERT_ON_NORMAL
 - Revert limits when I/O returns to normal (true/false)
 .PP
+.SH PROCESS CGROUP RESTORATION
+Before moving a process into the shared limited cgroup, resman persistently
+records its original cgroup together with the process start time. At release,
+the process is returned to that exact cgroup so systemd session and service
+membership are preserved.
+.PP
+Processes whose original cgroup no longer exists, and descendants for which no
+unambiguous original destination can be resolved, are moved to
+.I CGROUP_BASE/recovery/user_UID
+instead of the cgroup v2 root. This recovery hierarchy is owned by resman and is
+preserved while it contains live processes.
+.PP
+.B CPU_QUOTA_NORMAL
+is never written into cgroups managed by systemd. In shared mode, a finite
+normal quota applies only to resman recovery cgroups. The default
+.B "max 100000"
+leaves recovered processes unlimited.
+.PP
 .SH PSI EVENT-DRIVEN MODE
 When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
 trigger control cycles when system pressure exceeds configured thresholds. The
@@ -426,7 +444,7 @@ CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
 CPU_THRESHOLD_DURATION=90    # Wait after threshold breach before activation
 
 # CPU LIMITS ("quota period" format in microseconds)
-CPU_QUOTA_NORMAL="max 100000"      # No limit (100000 = 100ms)
+CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
 CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
 
 # RAM LIMITS
@@ -619,6 +637,12 @@ Rotation creates a backup file with .1 extension.
 .I /var/run/resman-cgroups.txt
 .br
 Tracks created cgroups to enable cleanup after restart.
+.br
+.I /var/run/resman-cgroups-origins.json
+.br
+Stores the original cgroup, process start time, parent, and session identity
+needed to restore processes safely after limits are removed or the daemon
+restarts. The file is replaced atomically and is readable only by its owner.
 .SH PROMETHEUS METRICS
 When enabled, the daemon exposes metrics at http://HOST:PORT/metrics
 .IP \(bu 2

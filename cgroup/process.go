@@ -2,12 +2,14 @@ package cgroup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/shirou/gopsutil/v3/process"
 )
@@ -26,6 +28,12 @@ func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
 	}
 
 	cgroupProcsFile := filepath.Join(cgroupPath, "cgroup.procs")
+	if err := m.captureProcessOrigin(pid, uid, cgroupPath); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
+	}
 
 	// Ottieni info sul processo PRIMA di spostarlo
 	processName := m.getProcessName(pid)
@@ -35,8 +43,11 @@ func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
 	}
 
 	// Scrivi il PID nel file cgroup.procs
-	pidStr := strconv.Itoa(pid)
-	if err := os.WriteFile(cgroupProcsFile, []byte(pidStr), 0644); err != nil {
+	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			_ = m.removeProcessOrigins(map[int]bool{pid: true})
+			return nil
+		}
 		return fmt.Errorf("failed to move PID %d to cgroup for UID %d: %w", pid, uid, err)
 	}
 

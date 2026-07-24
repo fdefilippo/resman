@@ -1,11 +1,13 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/process"
@@ -13,40 +15,16 @@ import (
 
 func (m *Manager) CreateSharedCgroup() (string, error) {
 	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
-	cfg := m.getConfig()
 
-	// Se il cgroup condiviso esiste già, RIMUOVLO COMPLETAMENTE e ricreo
 	if _, err := os.Stat(sharedPath); err == nil {
-		m.logger.Info("Shared cgroup already exists, removing and recreating", "path", sharedPath)
-
-		// Sposta prima tutti i processi al cgroup root
-		cgroupProcsFile := filepath.Join(sharedPath, "cgroup.procs")
-		if pids, err := m.readPidsFromFile(cgroupProcsFile); err == nil && len(pids) > 0 {
-			m.logger.Info("Moving processes out of existing shared cgroup",
-				"path", sharedPath,
-				"count", len(pids),
-			)
-			rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
-			for _, pid := range pids {
-				if writeErr := os.WriteFile(rootCgroupProcs, []byte(fmt.Sprintf("%d", pid)), 0644); writeErr != nil {
-					m.logger.Warn("Failed to move process to root cgroup",
-						"pid", pid,
-						"error", writeErr,
-					)
-				}
-			}
-			time.Sleep(50 * time.Millisecond)
+		m.logger.Info("Shared cgroup already exists, restoring contained processes before recreation",
+			"path", sharedPath,
+		)
+		if err := m.recoverSharedCgroup(sharedPath); err != nil {
+			return "", fmt.Errorf("failed to recover existing shared cgroup %s: %w", sharedPath, err)
 		}
-
-		// Rimuovi il cgroup esistente con tutto il contenuto
-		if err := os.RemoveAll(sharedPath); err != nil {
-			m.logger.Warn("Failed to remove existing shared cgroup, will try to reuse",
-				"path", sharedPath,
-				"error", err,
-			)
-		} else {
-			m.logger.Info("Existing shared cgroup removed", "path", sharedPath)
-		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to inspect shared cgroup %s: %w", sharedPath, err)
 	}
 
 	// Crea la directory del cgroup condiviso
@@ -150,10 +128,18 @@ func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int)
 	}
 
 	cgroupProcsFile := filepath.Join(userPath, "cgroup.procs")
+	if err := m.captureProcessOrigin(pid, uid, userPath); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
+	}
 
-	// Scrivi il PID nel file cgroup.procs
-	pidStr := strconv.Itoa(pid)
-	if err := os.WriteFile(cgroupProcsFile, []byte(pidStr), 0644); err != nil {
+	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			_ = m.removeProcessOrigins(map[int]bool{pid: true})
+			return nil
+		}
 		return fmt.Errorf("failed to move PID %d to shared cgroup for UID %d: %w", pid, uid, err)
 	}
 
@@ -207,12 +193,12 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 }
 
 // ReleaseUserFromSharedCgroup sposta i processi fuori dal sottocgroup condiviso e lo rimuove.
-func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error {
+func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	userProcsFile := filepath.Join(userPath, "cgroup.procs")
 
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
-		return nil
+		return m.untrackCgroupPathIf(uid, userPath)
 	}
 
 	pids, err := m.readPidsFromFile(userProcsFile)
@@ -220,12 +206,11 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error 
 		return fmt.Errorf("failed to read user shared cgroup processes for UID %d: %w", uid, err)
 	}
 
+	usedRecovery, err := m.restoreProcesses(uid, pids, normalQuota)
+	if err != nil {
+		return fmt.Errorf("failed to restore processes from shared cgroup for UID %d: %w", uid, err)
+	}
 	if len(pids) > 0 {
-		cfg := m.getConfig()
-		rootCgroupProcs := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
-		if err := m.writePidsBatch(rootCgroupProcs, pids); err != nil {
-			return fmt.Errorf("failed to move processes out of shared cgroup for UID %d: %w", uid, err)
-		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
@@ -233,11 +218,22 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error 
 		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
 	}
 
-	if err := m.untrackCgroupPath(uid); err != nil {
+	if err := m.untrackCgroupPathIf(uid, userPath); err != nil {
 		m.logger.Warn("Failed to untrack user shared cgroup",
 			"uid", uid,
 			"path", userPath,
 			"error", err,
+		)
+	}
+	if usedRecovery {
+		recoveryPath := m.getRecoveryCgroupPath(uid)
+		if err := m.trackCgroupPath(uid, recoveryPath); err != nil {
+			return fmt.Errorf("failed to track recovery cgroup for UID %d: %w", uid, err)
+		}
+		m.logger.Warn("Processes restored to resman recovery cgroup because their original cgroup was unavailable",
+			"uid", uid,
+			"path", recoveryPath,
+			"normal_quota", normalQuota,
 		)
 	}
 

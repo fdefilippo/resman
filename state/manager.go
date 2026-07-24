@@ -129,7 +129,7 @@ type CgroupManager interface {
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
-	ReleaseUserFromSharedCgroup(uid int, sharedPath string) error
+	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
 	CreateSharedCgroup() (string, error)
 	ApplySharedCPULimit(sharedPath string, quota string) error
 	CreateUserSubCgroup(uid int, sharedPath string) (string, error)
