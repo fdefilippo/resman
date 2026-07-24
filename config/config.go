@@ -1548,7 +1548,7 @@ func (c *Config) GetMetricsRefreshInterval() int {
 	return c.MetricsRefreshInterval
 }
 
-// GetProcessMinAgeSeconds returns the minimum process age before CPU accounting.
+// GetProcessMinAgeSeconds returns the minimum age for lifetime-average CPU metrics.
 func (c *Config) GetProcessMinAgeSeconds() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

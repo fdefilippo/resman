@@ -126,6 +126,78 @@ func TestMoveProcessPersistsOriginBeforeMigration(t *testing.T) {
 	}
 }
 
+func TestMoveProcessBatchPersistsAllOriginsOnceBeforeMigration(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	pids := []int{111, 112, 113}
+	for i, pid := range pids {
+		origin := fmt.Sprintf("/user.slice/user-1000.slice/session-%d.scope", pid)
+		writeFakeProcess(t, manager, pid, 1, pid, uint64(5100+i), 1000, origin)
+		createFakeCgroup(t, root, origin)
+	}
+
+	persistCalls := 0
+	persisted := false
+	manager.persistOrigins = func() error {
+		persistCalls++
+		persisted = true
+		return nil
+	}
+	writeCalls := 0
+	manager.writePID = func(path string, pid int) error {
+		if !persisted {
+			return fmt.Errorf("PID %d moved before origins were persisted", pid)
+		}
+		if path != filepath.Join(destination, "cgroup.procs") {
+			return fmt.Errorf("unexpected migration target %s", path)
+		}
+		writeCalls++
+		return nil
+	}
+
+	moved, moveErrors, err := manager.moveProcessBatch(pids, 1000, destination)
+	if err != nil {
+		t.Fatalf("moveProcessBatch() error: %v", err)
+	}
+	if len(moveErrors) != 0 {
+		t.Fatalf("moveProcessBatch() move errors: %v", moveErrors)
+	}
+	if len(moved) != len(pids) || writeCalls != len(pids) {
+		t.Fatalf("moved=%v writeCalls=%d, want %d processes", moved, writeCalls, len(pids))
+	}
+	if persistCalls != 1 {
+		t.Fatalf("origin persist calls = %d, want 1", persistCalls)
+	}
+	if len(manager.snapshotProcessOrigins()) != len(pids) {
+		t.Fatalf("persisted origins = %d, want %d", len(manager.snapshotProcessOrigins()), len(pids))
+	}
+}
+
+func TestMoveProcessBatchRollsBackBeforeAnyMigration(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	writeFakeProcess(t, manager, 121, 1, 121, 5200, 1000, "/user.slice/session-121.scope")
+
+	manager.persistOrigins = func() error {
+		return fmt.Errorf("disk unavailable")
+	}
+	writeCalled := false
+	manager.writePID = func(string, int) error {
+		writeCalled = true
+		return nil
+	}
+
+	if _, _, err := manager.moveProcessBatch([]int{121}, 1000, destination); err == nil {
+		t.Fatal("moveProcessBatch() should fail when origin persistence fails")
+	}
+	if writeCalled {
+		t.Fatal("process migration started before the origin transaction committed")
+	}
+	if len(manager.snapshotProcessOrigins()) != 0 {
+		t.Fatal("failed origin transaction was not rolled back")
+	}
+}
+
 func TestBuildRestorePlanInheritsParentOrigin(t *testing.T) {
 	manager, root := newOriginTestManager(t)
 	originalPath := "/user.slice/user-1000.slice/session-8.scope"

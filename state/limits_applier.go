@@ -11,16 +11,25 @@ import (
 )
 
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
-	if !m.limitsActive {
+	cfg := m.GetConfig()
+	m.mu.RLock()
+	limitsActive := m.limitsActive
+	sharedPath := m.sharedCgroupPath
+	m.mu.RUnlock()
+	if !limitsActive {
 		return nil // Limiti non attivi, nessun rilascio necessario
+	}
+	if sharedPath != "" {
+		if _, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg); err != nil {
+			return fmt.Errorf("failed to reconcile shared CPU quota: %w", err)
+		}
 	}
 
 	// Soglia per considerare un utente "inattivo" (0.1% CPU)
 	const idleThreshold = 0.1
-	normalQuota := m.GetConfig().CPUQuotaNormal
+	normalQuota := cfg.CPUQuotaNormal
 
 	m.mu.Lock()
-	sharedPath := m.sharedCgroupPath
 	usersToRelease := make([]int, 0)
 	usersToAdd := make([]int, 0) // utenti da riaggiungere (erano stati rilasciati ma sono tornati attivi)
 
@@ -205,28 +214,10 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 		m.sharedCgroupPath = sharedPath
 		m.mu.Unlock()
 
-		// Calcola la quota TOTALE per tutti gli utenti
-		availableCores := metrics.TotalCores - cfg.GetMinSystemCores()
-		if availableCores < 1 {
-			availableCores = 1
-		}
-
-		// Converti in quota cgroup
-		totalQuota := availableCores * 100000
-		sharedQuota := fmt.Sprintf("%d 100000", totalQuota)
-
-		// Applica la quota al cgroup condiviso
-		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, sharedQuota); err != nil {
-			return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
-		}
-
-		m.logger.Info("Shared cgroup configured",
-			"path", sharedPath,
-			"total_quota", sharedQuota,
-			"available_cores", availableCores,
-			"min_system_cores", cfg.GetMinSystemCores(),
-			"total_cores", metrics.TotalCores,
-		)
+	}
+	sharedQuota, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
 	}
 
 	// Fase 3: Configura i sottocgroup per gli utenti attuali
@@ -399,6 +390,25 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	return firstError
+}
+
+func (m *Manager) applySharedCPUQuota(sharedPath string, totalCores int, cfg *config.Config) (string, error) {
+	availableCores := totalCores - cfg.GetMinSystemCores()
+	if availableCores < 1 {
+		availableCores = 1
+	}
+	sharedQuota := fmt.Sprintf("%d 100000", availableCores*100000)
+	if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, sharedQuota); err != nil {
+		return sharedQuota, err
+	}
+	m.logger.Debug("Shared cgroup CPU quota reconciled",
+		"path", sharedPath,
+		"total_quota", sharedQuota,
+		"available_cores", availableCores,
+		"min_system_cores", cfg.GetMinSystemCores(),
+		"total_cores", totalCores,
+	)
+	return sharedQuota, nil
 }
 
 func (m *Manager) deactivateLimits() error {

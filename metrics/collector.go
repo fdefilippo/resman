@@ -60,9 +60,10 @@ type UserMetrics struct {
 // procCache holds CPU timing data for all PIDs.
 // Uses single mutex instead of sharding for simplicity and deadlock safety.
 type procCache struct {
-	mu           sync.RWMutex
-	prevProcCPU  map[int32]cpu.TimesStat
-	prevProcTime map[int32]time.Time
+	mu            sync.RWMutex
+	prevProcCPU   map[int32]cpu.TimesStat
+	prevProcTime  map[int32]time.Time
+	procStartTime map[int32]int64
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
@@ -142,8 +143,9 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
 		procCache: &procCache{
-			prevProcCPU:  make(map[int32]cpu.TimesStat),
-			prevProcTime: make(map[int32]time.Time),
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
 		},
 		emaCache: &emaCache{
 			values: make(map[int]float64),
@@ -913,6 +915,7 @@ func (c *Collector) cleanupCache() {
 			if now.Sub(timestamp) > 5*time.Minute {
 				delete(c.procCache.prevProcCPU, pid)
 				delete(c.procCache.prevProcTime, pid)
+				delete(c.procCache.procStartTime, pid)
 			}
 		}
 		c.procCache.mu.Unlock()
@@ -1434,6 +1437,10 @@ func (c *Collector) getProcessCPUAverage(p *process.Process, systemUptimeSeconds
 	if processAgeSeconds <= 0 {
 		return 0
 	}
+	minAgeSeconds := c.getConfig().GetProcessMinAgeSeconds()
+	if minAgeSeconds > 0 && processAgeSeconds < float64(minAgeSeconds) {
+		return 0
+	}
 
 	// Average CPU% = (total CPU seconds / process age seconds) * 100
 	avgCPU := (totalCPUSeconds / processAgeSeconds) * 100.0
@@ -1476,87 +1483,49 @@ func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	return c.getProcessCPUUsageSimpleWithHandle(proc)
 }
 
-// isProcessRunningLongEnough checks if a process is in "running" state (R)
-// for at least 60 seconds. Returns true if stable, false if transient.
-// For transient processes, returns 1% to avoid skewing metrics.
-func (c *Collector) isProcessRunningLongEnough(proc *process.Process) bool {
-	// Check process state
-	statuses, err := proc.Status()
-	if err != nil || len(statuses) == 0 {
-		return false // Can't determine state, skip
-	}
-
-	// Check if process is in running state (R)
-	isRunning := false
-	for _, s := range statuses {
-		if s == "R" || s == "running" {
-			isRunning = true
-			break
-		}
-	}
-
-	if !isRunning {
-		return false // Not in running state
-	}
-
-	minAgeSeconds := c.getConfig().GetProcessMinAgeSeconds()
-	if minAgeSeconds <= 0 {
-		return true
-	}
-
-	// Check how long the process has been alive
-	createTime, err := proc.CreateTime()
-	if err != nil || createTime == 0 {
-		return false // Can't determine age
-	}
-
-	// createTime is milliseconds since epoch
-	processAgeSeconds := (float64(time.Now().UnixMilli()) - float64(createTime)) / 1000.0
-
-	return processAgeSeconds >= float64(minAgeSeconds)
-}
-
-// getProcessCPUUsageSimpleWithHandle calcola l'uso CPU usando un handle gopsutil esistente.
-// Più efficiente quando l'handle è già disponibile (evita chiamata a process.NewProcess).
-// Se il processo non è in stato "running" da almeno PROCESS_MIN_AGE_SECONDS, ritorna 0% per evitare
-// di sfalsare le metriche con letture instabili (es. processi multithread appena avviati).
+// getProcessCPUUsageSimpleWithHandle calculates CPU usage from consecutive samples.
+// Every process state contributes after the initial baseline sample.
 func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
 	pid32 := proc.Pid
-
-	// Check if process is stable (running for at least 60 seconds)
-	if !c.isProcessRunningLongEnough(proc) {
-		// Process is transient or not running - return 0% to avoid skewing metrics
-		// The 1% floor will be applied at the user level, not per-process
-		return 0
-	}
 
 	// Ottieni tempi CPU attuali
 	times, err := proc.Times()
 	if err != nil || c.procCache == nil {
 		return 0
 	}
+	startTime, _ := proc.CreateTime()
+	return c.updateProcessCPUSample(pid32, startTime, *times, time.Now())
+}
 
-	now := time.Now()
-
+func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu.TimesStat, now time.Time) float64 {
 	c.procCache.mu.Lock()
 	defer c.procCache.mu.Unlock()
 
+	if previousStart := c.procCache.procStartTime[pid]; previousStart != 0 && startTime != 0 && previousStart != startTime {
+		delete(c.procCache.prevProcCPU, pid)
+		delete(c.procCache.prevProcTime, pid)
+	}
+
 	// Controlla se abbiamo un campione precedente
-	if prevTimes, ok := c.procCache.prevProcCPU[pid32]; ok {
-		if prevTime, ok := c.procCache.prevProcTime[pid32]; ok {
+	if prevTimes, ok := c.procCache.prevProcCPU[pid]; ok {
+		if prevTime, ok := c.procCache.prevProcTime[pid]; ok {
 			// Calcola tempo trascorso in secondi
 			elapsed := now.Sub(prevTime).Seconds()
 			if elapsed > 0 {
 				// Calcola delta CPU (user + system)
 				delta := (times.User - prevTimes.User) + (times.System - prevTimes.System)
-				// Converti in percentuale
-				cpuPercent := (delta / elapsed) * cpuPercentMultiplier
 
 				// Aggiorna campione corrente
-				c.procCache.prevProcCPU[pid32] = *times
-				c.procCache.prevProcTime[pid32] = now
+				c.procCache.prevProcCPU[pid] = times
+				c.procCache.prevProcTime[pid] = now
+				if startTime != 0 {
+					c.procCache.procStartTime[pid] = startTime
+				}
 
-				return cpuPercent
+				if delta <= 0 {
+					return 0
+				}
+				return (delta / elapsed) * cpuPercentMultiplier
 			}
 		}
 	}
@@ -1578,12 +1547,14 @@ func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) fl
 		if !first {
 			delete(c.procCache.prevProcCPU, oldestPID)
 			delete(c.procCache.prevProcTime, oldestPID)
+			delete(c.procCache.procStartTime, oldestPID)
 		}
 	}
 
 	// Aggiungi nuova entry
-	c.procCache.prevProcCPU[pid32] = *times
-	c.procCache.prevProcTime[pid32] = now
+	c.procCache.prevProcCPU[pid] = times
+	c.procCache.prevProcTime[pid] = now
+	c.procCache.procStartTime[pid] = startTime
 	return 0
 }
 

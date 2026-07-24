@@ -43,6 +43,11 @@ type processRestore struct {
 	Recovery    bool
 }
 
+type previousProcessOrigin struct {
+	Origin processOrigin
+	Exists bool
+}
+
 func processOriginsPath(createdCgroupsFile string) string {
 	ext := filepath.Ext(createdCgroupsFile)
 	base := strings.TrimSuffix(createdCgroupsFile, ext)
@@ -171,24 +176,11 @@ func (m *Manager) persistProcessOriginsLocked() error {
 	return nil
 }
 
-func (m *Manager) rememberProcessOrigin(origin processOrigin) error {
-	m.originMu.Lock()
-	defer m.originMu.Unlock()
-
-	if m.processOrigins == nil {
-		m.processOrigins = make(map[int]processOrigin)
+func (m *Manager) flushProcessOriginsLocked() error {
+	if m.persistOrigins != nil {
+		return m.persistOrigins()
 	}
-	previous, existed := m.processOrigins[origin.PID]
-	m.processOrigins[origin.PID] = origin
-	if err := m.persistProcessOriginsLocked(); err != nil {
-		if existed {
-			m.processOrigins[origin.PID] = previous
-		} else {
-			delete(m.processOrigins, origin.PID)
-		}
-		return err
-	}
-	return nil
+	return m.persistProcessOriginsLocked()
 }
 
 func (m *Manager) removeProcessOrigins(pids map[int]bool) error {
@@ -206,7 +198,7 @@ func (m *Manager) removeProcessOrigins(pids map[int]bool) error {
 			delete(m.processOrigins, pid)
 		}
 	}
-	if err := m.persistProcessOriginsLocked(); err != nil {
+	if err := m.flushProcessOriginsLocked(); err != nil {
 		for pid, origin := range removed {
 			m.processOrigins[pid] = origin
 		}
@@ -402,53 +394,143 @@ func (m *Manager) resolveInheritedOrigin(identity processIdentity, uid int, orig
 }
 
 func (m *Manager) captureProcessOrigin(pid, uid int, destination string) error {
-	identity, err := m.readProcessIdentity(pid)
-	if os.IsNotExist(err) {
-		return syscall.ESRCH
-	}
+	pids, err := m.captureProcessOrigins([]int{pid}, uid, destination)
 	if err != nil {
 		return err
 	}
-	currentPath, err := m.readUnifiedCgroupPath(pid)
-	if os.IsNotExist(err) {
+	if len(pids) == 0 {
 		return syscall.ESRCH
 	}
-	if err != nil {
-		return err
-	}
-	currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
-	if filepath.Clean(currentFilesystemPath) == filepath.Clean(destination) {
-		return nil
-	}
+	return nil
+}
 
-	origins := m.snapshotProcessOrigins()
-	if existing, ok := origins[pid]; ok && existing.StartTime == identity.StartTime {
-		return nil
-	}
-
-	originPath := currentPath
+func (m *Manager) newProcessOrigin(identity processIdentity, uid int, cgroupPath string) processOrigin {
 	var sessionStartTime uint64
 	if sessionIdentity, err := m.readProcessIdentity(identity.SessionID); err == nil {
 		sessionStartTime = sessionIdentity.StartTime
 	}
-	basePath := m.getBaseCgroupPath()
-	if pathWithin(currentFilesystemPath, basePath) && !m.isRecoveryPath(currentFilesystemPath) {
-		inheritedPath, ok := m.resolveInheritedOrigin(identity, uid, origins)
-		if !ok {
-			return nil
-		}
-		originPath = inheritedPath
-	}
-
-	return m.rememberProcessOrigin(processOrigin{
-		PID:              pid,
+	return processOrigin{
+		PID:              identity.PID,
 		UID:              uid,
 		PPID:             identity.PPID,
 		SessionID:        identity.SessionID,
 		SessionStartTime: sessionStartTime,
 		StartTime:        identity.StartTime,
-		CgroupPath:       originPath,
-	})
+		CgroupPath:       cgroupPath,
+	}
+}
+
+func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string) ([]int, error) {
+	m.originMu.Lock()
+	defer m.originMu.Unlock()
+
+	if m.processOrigins == nil {
+		m.processOrigins = make(map[int]processOrigin)
+	}
+
+	type pendingOrigin struct {
+		identity processIdentity
+	}
+	pending := make([]pendingOrigin, 0)
+	movable := make([]int, 0, len(pids))
+	previous := make(map[int]previousProcessOrigin)
+	basePath := m.getBaseCgroupPath()
+
+	rememberPrevious := func(pid int) {
+		if _, recorded := previous[pid]; recorded {
+			return
+		}
+		origin, exists := m.processOrigins[pid]
+		previous[pid] = previousProcessOrigin{Origin: origin, Exists: exists}
+	}
+	setOrigin := func(origin processOrigin) {
+		rememberPrevious(origin.PID)
+		m.processOrigins[origin.PID] = origin
+	}
+	rollback := func() {
+		for pid, old := range previous {
+			if old.Exists {
+				m.processOrigins[pid] = old.Origin
+			} else {
+				delete(m.processOrigins, pid)
+			}
+		}
+	}
+
+	for _, pid := range pids {
+		identity, err := m.readProcessIdentity(pid)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
+		}
+		currentPath, err := m.readUnifiedCgroupPath(pid)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
+		}
+		movable = append(movable, pid)
+
+		currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
+		if filepath.Clean(currentFilesystemPath) == filepath.Clean(destination) {
+			continue
+		}
+		if existing, ok := m.processOrigins[pid]; ok && existing.StartTime == identity.StartTime {
+			continue
+		}
+		if !pathWithin(currentFilesystemPath, basePath) || m.isRecoveryPath(currentFilesystemPath) {
+			setOrigin(m.newProcessOrigin(identity, uid, currentPath))
+			continue
+		}
+		pending = append(pending, pendingOrigin{identity: identity})
+	}
+
+	for _, candidate := range pending {
+		inheritedPath, ok := m.resolveInheritedOrigin(candidate.identity, uid, m.processOrigins)
+		if !ok {
+			continue
+		}
+		setOrigin(m.newProcessOrigin(candidate.identity, uid, inheritedPath))
+	}
+
+	if len(previous) == 0 {
+		return movable, nil
+	}
+	if err := m.flushProcessOriginsLocked(); err != nil {
+		rollback()
+		return nil, fmt.Errorf("failed to persist process origins before migration: %w", err)
+	}
+	return movable, nil
+}
+
+func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]int, map[int]error, error) {
+	movable, err := m.captureProcessOrigins(pids, uid, destination)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	moved := make([]int, 0, len(movable))
+	moveErrors := make(map[int]error)
+	disappeared := make(map[int]bool)
+	cgroupProcsFile := filepath.Join(destination, "cgroup.procs")
+	for _, pid := range movable {
+		if err := m.writePIDToCgroup(cgroupProcsFile, pid); errors.Is(err, syscall.ESRCH) {
+			disappeared[pid] = true
+		} else if err != nil {
+			moveErrors[pid] = err
+		} else {
+			moved = append(moved, pid)
+		}
+	}
+	if err := m.removeProcessOrigins(disappeared); err != nil {
+		return moved, moveErrors, fmt.Errorf("failed to remove origins for exited processes: %w", err)
+	}
+	return moved, moveErrors, nil
 }
 
 func (m *Manager) ensureRecoveryCgroup(uid int, normalQuota string) (string, error) {

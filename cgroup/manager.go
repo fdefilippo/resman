@@ -32,6 +32,7 @@ type Manager struct {
 	processOriginsFile string
 	procRoot           string
 	writePID           func(string, int) error
+	persistOrigins     func() error
 
 	// Cache per le verifiche
 	controllersAvailable bool

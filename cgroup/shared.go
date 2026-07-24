@@ -153,6 +153,14 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		"uid", uid,
 		"shared_path", sharedPath,
 	)
+	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
+	if _, err := os.Stat(userPath); os.IsNotExist(err) {
+		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
+			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
+	}
 
 	// Try gopsutil first
 	procs, err := process.Processes()
@@ -163,6 +171,7 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 
 	var movedCount int
 	var errors []string
+	var pids []int
 
 	for _, p := range procs {
 		uids, err := p.Uids()
@@ -176,11 +185,16 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		if m.getConfig().IsProcessExcluded(processName) {
 			continue
 		}
+		pids = append(pids, pid)
+	}
 
-		if err := m.MoveProcessToSharedCgroup(pid, sharedPath, uid); err != nil {
-			errors = append(errors, fmt.Sprintf("PID %d: %v", pid, err))
-		} else {
-			movedCount++
+	moved, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
+	if err != nil {
+		errors = append(errors, err.Error())
+	} else {
+		movedCount = len(moved)
+		for pid, moveErr := range moveErrors {
+			errors = append(errors, fmt.Sprintf("PID %d: %v", pid, moveErr))
 		}
 	}
 
@@ -255,6 +269,7 @@ func (m *Manager) moveAllUserProcessesToSharedCgroupFallback(uid int, sharedPath
 
 	var movedCount int
 	var errors []string
+	var pids []int
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -273,12 +288,18 @@ func (m *Manager) moveAllUserProcessesToSharedCgroupFallback(uid int, sharedPath
 			if m.getConfig().IsProcessExcluded(processName) {
 				continue
 			}
+			pids = append(pids, pid)
+		}
+	}
 
-			if err := m.MoveProcessToSharedCgroup(pid, sharedPath, uid); err != nil {
-				errors = append(errors, fmt.Sprintf("PID %d: %v", pid, err))
-			} else {
-				movedCount++
-			}
+	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
+	moved, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
+	if err != nil {
+		errors = append(errors, err.Error())
+	} else {
+		movedCount = len(moved)
+		for pid, moveErr := range moveErrors {
+			errors = append(errors, fmt.Sprintf("PID %d: %v", pid, moveErr))
 		}
 	}
 

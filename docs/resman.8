@@ -431,7 +431,7 @@ POLLING_INTERVAL=30          # Control cycle interval
 MIN_ACTIVE_TIME=60           # Minimum activation time for limits
 METRICS_CACHE_TTL=15         # Metrics cache duration
 METRICS_REFRESH_INTERVAL=30  # Prometheus/Grafana refresh interval
-PROCESS_MIN_AGE_SECONDS=60   # Minimum process age for CPU accounting
+PROCESS_MIN_AGE_SECONDS=60   # Minimum age for lifetime-average CPU metrics
 
 # TIMEOUT CONFIGURATION (seconds/milliseconds)
 # CGROUP_OPERATION_TIMEOUT=5      # Timeout for cgroup operations (seconds)
@@ -601,18 +601,17 @@ For a newly started CPU-bound process, the effective activation time is approxim
 .PP
 .RS
 .nf
-PROCESS_MIN_AGE_SECONDS + one CPU delta sample + CPU_THRESHOLD_DURATION
+one CPU delta sample + CPU_THRESHOLD_DURATION
 .fi
 .RE
 .PP
 With
 .B POLLING_INTERVAL=30,
-.B PROCESS_MIN_AGE_SECONDS=60,
-and
 .B CPU_THRESHOLD_DURATION=90,
-limits can be applied after about 180 seconds. Set
-.B PROCESS_MIN_AGE_SECONDS=0
-to account newly started processes immediately.
+limits normally activate about 120 seconds after the first observation, plus
+polling alignment. Every process state is included in instantaneous CPU deltas.
+.B PROCESS_MIN_AGE_SECONDS
+only stabilizes the lifetime-average CPU metric and does not delay activation.
 .PP
 .B total_cpu_usage
 is the host-wide normalized CPU percentage (0-100). Activation decisions use

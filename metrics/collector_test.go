@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/shirou/gopsutil/v3/cpu"
 )
 
 func TestUserMetricsStruct(t *testing.T) {
@@ -68,6 +69,46 @@ func TestNewCollector(t *testing.T) {
 	}
 	if collector.cacheTimestamps == nil {
 		t.Error("collector.cacheTimestamps not initialized")
+	}
+}
+
+func TestUpdateProcessCPUSampleCountsConsecutiveDelta(t *testing.T) {
+	collector := &Collector{
+		procCache: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+	}
+	now := time.Now()
+
+	if got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1, System: 1}, now); got != 0 {
+		t.Fatalf("first sample = %f, want 0", got)
+	}
+	got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 2.5, System: 1.5}, now.Add(time.Second))
+	if got != 200 {
+		t.Fatalf("second sample = %f, want 200", got)
+	}
+}
+
+func TestUpdateProcessCPUSampleResetsReusedPID(t *testing.T) {
+	collector := &Collector{
+		procCache: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+	}
+	now := time.Now()
+	collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1}, now)
+
+	got := collector.updateProcessCPUSample(42, 2000, cpu.TimesStat{User: 20}, now.Add(time.Second))
+	if got != 0 {
+		t.Fatalf("first sample for reused PID = %f, want 0", got)
+	}
+	got = collector.updateProcessCPUSample(42, 2000, cpu.TimesStat{User: 21}, now.Add(2*time.Second))
+	if got != 100 {
+		t.Fatalf("second sample for reused PID = %f, want 100", got)
 	}
 }
 

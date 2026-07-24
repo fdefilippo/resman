@@ -37,6 +37,7 @@ type IOBoostState struct {
 	BoostCount        int       // Numero di boost nell'ultima ora
 	LastBoostTime     time.Time // Ultimo boost applicato
 	StarvationStart   time.Time // Quando e' iniziata la starvation
+	LastSeen          time.Time // Ultimo ciclo in cui l'utente era limitato
 }
 
 // IORemediation gestisce il rilevamento e la remediation della IO starvation.
@@ -96,6 +97,7 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 			state = &IOBoostState{}
 			r.boostStates[uid] = state
 		}
+		state.LastSeen = now
 
 		// Leggi PSI
 		psiStats, err := deps.GetPSIStats(uid)
@@ -195,12 +197,11 @@ func (r *IORemediation) Cleanup(maxAge time.Duration) {
 
 	now := time.Now()
 	for uid, state := range r.boostStates {
-		// Rimuovi stati vecchi
-		if !state.IsActive && now.Sub(state.LastBoostTime) > maxAge {
+		if !state.IsActive && !state.LastSeen.IsZero() && now.Sub(state.LastSeen) > maxAge {
 			delete(r.boostStates, uid)
+			continue
 		}
-		// Reset boost count se e' passata un'ora dall'ultimo boost
-		if now.Sub(state.LastBoostTime) > time.Hour {
+		if !state.LastBoostTime.IsZero() && now.Sub(state.LastBoostTime) > time.Hour {
 			state.BoostCount = 0
 		}
 	}

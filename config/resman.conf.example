@@ -50,14 +50,15 @@ CPU_RELEASE_THRESHOLD=40     # Release limits if user CPU < 40%
 # Default: 90 seconds (3 cycles of 30s)
 # Set to 0 for immediate activation (legacy behavior)
 #
-# PROCESS_MIN_AGE_SECONDS: minimum process age before process CPU contributes to
-# user CPU usage. This avoids unstable deltas for newly started processes.
-# Default: 60 seconds. Set to 0 to account new processes immediately.
+# PROCESS_MIN_AGE_SECONDS: minimum process age for the lifetime-average CPU
+# metric. Instantaneous CPU accounting records every process state immediately
+# and starts contributing after its first delta sample.
+# Default: 60 seconds. Set to 0 to expose lifetime averages immediately.
 #
 # Effective activation time for a new CPU-bound process is approximately:
-# PROCESS_MIN_AGE_SECONDS + one CPU delta sample + CPU_THRESHOLD_DURATION.
-# With POLLING_INTERVAL=30, PROCESS_MIN_AGE_SECONDS=60 and
-# CPU_THRESHOLD_DURATION=90, activation can happen after about 180 seconds.
+# one CPU delta sample + CPU_THRESHOLD_DURATION, plus scheduling alignment with
+# POLLING_INTERVAL. With POLLING_INTERVAL=30 and CPU_THRESHOLD_DURATION=90,
+# activation normally happens about 120 seconds after the first observation.
 #
 # Examples:
 # # Immediate activation (pre-v1.15.0 behavior)

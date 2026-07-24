@@ -476,6 +476,21 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	if manager.sharedCgroupPath != sharedPath {
 		t.Fatalf("sharedCgroupPath = %q, want %q", manager.sharedCgroupPath, sharedPath)
 	}
+
+	cgroupManager.applySharedCPULimitCalls = nil
+	metrics := &SystemMetrics{
+		TotalCores: 4,
+		UserCPUUsage: map[int]float64{
+			1001: 10,
+		},
+	}
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+	wantQuota := sharedPath + ":300000 100000"
+	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{wantQuota}) {
+		t.Fatalf("shared quota reconciliation calls = %v, want [%s]", cgroupManager.applySharedCPULimitCalls, wantQuota)
+	}
 }
 
 func TestCleanup(t *testing.T) {
