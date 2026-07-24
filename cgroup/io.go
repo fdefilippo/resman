@@ -2,6 +2,7 @@ package cgroup
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,17 +35,14 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 		writeIOPSStr = strconv.Itoa(writeIOPS)
 	}
 
-	// Device: "default" per tutti i dispositivi, oppure "major:minor"
-	device := "default"
-	if deviceFilter != "" && deviceFilter != "all" {
-		device = deviceFilter
+	devices, err := m.resolveIODevices(deviceFilter)
+	if err != nil {
+		return fmt.Errorf("failed to resolve IO devices for UID %d: %w", uid, err)
 	}
 
-	// Formato: "major:minor rbps=X wbps=Y riops=Z wiops=W"
-	value := fmt.Sprintf("%s rbps=%s wbps=%s riops=%s wiops=%s",
-		device, readBPS, writeBPS, readIOPSStr, writeIOPSStr)
-
-	if err := os.WriteFile(ioMaxFile, []byte(value), defaultFilePerm); err != nil {
+	limits := fmt.Sprintf("rbps=%s wbps=%s riops=%s wiops=%s",
+		readBPS, writeBPS, readIOPSStr, writeIOPSStr)
+	if err := writeIOMax(ioMaxFile, devices, limits); err != nil {
 		return fmt.Errorf("failed to apply IO limit for UID %d: %w", uid, err)
 	}
 
@@ -54,7 +52,7 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 		"writeBPS", writeBPS,
 		"readIOPS", readIOPSStr,
 		"writeIOPS", writeIOPSStr,
-		"device", device,
+		"devices", strings.Join(devices, ","),
 		"path", ioMaxFile,
 	)
 
@@ -69,7 +67,89 @@ func (m *Manager) RemoveIOLimit(uid int) error {
 	}
 
 	ioMaxFile := filepath.Join(cgroupPath, "io.max")
-	return os.WriteFile(ioMaxFile, []byte("default rbps=max wbps=max riops=max wiops=max"), defaultFilePerm)
+	data, err := os.ReadFile(ioMaxFile)
+	if err != nil {
+		return fmt.Errorf("failed to read IO limits for UID %d: %w", uid, err)
+	}
+
+	devices := ioMaxDevices(data)
+	if len(devices) == 0 {
+		return nil
+	}
+	if err := writeIOMax(ioMaxFile, devices, "rbps=max wbps=max riops=max wiops=max"); err != nil {
+		return fmt.Errorf("failed to remove IO limits for UID %d: %w", uid, err)
+	}
+	return nil
+}
+
+func (m *Manager) resolveIODevices(deviceFilter string) ([]string, error) {
+	deviceFilter = strings.TrimSpace(deviceFilter)
+	if deviceFilter != "" && deviceFilter != "all" {
+		return []string{deviceFilter}, nil
+	}
+
+	sysBlockRoot := m.sysBlockRoot
+	if sysBlockRoot == "" {
+		sysBlockRoot = "/sys/block"
+	}
+	entries, err := os.ReadDir(sysBlockRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enumerate block devices in %s: %w", sysBlockRoot, err)
+	}
+
+	devices := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		devicePath := filepath.Join(sysBlockRoot, entry.Name(), "dev")
+		data, err := os.ReadFile(devicePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read block device number from %s: %w", devicePath, err)
+		}
+		device := strings.TrimSpace(string(data))
+		if device == "" {
+			return nil, fmt.Errorf("block device number in %s is empty", devicePath)
+		}
+		devices = append(devices, device)
+	}
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no block devices found in %s", sysBlockRoot)
+	}
+	return devices, nil
+}
+
+func writeIOMax(path string, devices []string, limits string) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, defaultFilePerm)
+	if err != nil {
+		return err
+	}
+
+	for _, device := range devices {
+		if _, err := io.WriteString(file, device+" "+limits+"\n"); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("failed to write limits for device %s: %w", device, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close %s: %w", path, err)
+	}
+	return nil
+}
+
+func ioMaxDevices(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	devices := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if _, exists := seen[fields[0]]; exists {
+			continue
+		}
+		seen[fields[0]] = struct{}{}
+		devices = append(devices, fields[0])
+	}
+	return devices
 }
 
 // GetIOStats restituisce le statistiche di IO aggregate per tutti i dispositivi.

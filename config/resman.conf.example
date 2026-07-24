@@ -183,7 +183,8 @@ RAM_USER_EXCLUDE_LIST=root
 # IO_READ_IOPS: Per-user read IOPS limit (0 = unlimited)
 # IO_WRITE_IOPS: Per-user write IOPS limit (0 = unlimited)
 #
-# IO_DEVICE_FILTER: "all" = apply to all devices, or "8:0" for specific device
+# IO_DEVICE_FILTER: "all" = enumerate all whole block devices from /sys/block,
+# or use a specific "major:minor" device such as "8:0"
 # IO_THRESHOLD_DURATION: Seconds to wait before activating IO limits (0 = immediate)
 #   Useful to avoid throttling on brief IO spikes (e.g., backups, builds, file copies)
 #

@@ -19,6 +19,7 @@ package cgroup
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -167,6 +168,41 @@ func TestWriteControllerIfMissingUsesExactTokenMatch(t *testing.T) {
 	}
 	if string(data) != "+cpu" {
 		t.Fatalf("writeControllerIfMissing() should write +cpu when only cpuset is present, got %q", string(data))
+	}
+}
+
+func TestVerifyCgroupRootWriteAccessDoesNotMoveProcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	procsPath := filepath.Join(tmpDir, "cgroup.procs")
+	const original = "1234\n"
+	if err := os.WriteFile(procsPath, []byte(original), 0644); err != nil {
+		t.Fatalf("failed to create cgroup.procs fixture: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	manager := &Manager{cfg: cfg}
+
+	if err := manager.verifyCgroupRootWriteAccess(); err != nil {
+		t.Fatalf("verifyCgroupRootWriteAccess() error: %v", err)
+	}
+	if !manager.cgroupRootWritable {
+		t.Fatal("cgroup root was not marked writable")
+	}
+	assertFileContent(t, procsPath, original)
+}
+
+func TestVerifyCgroupRootWriteAccessPropagatesOpenError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = t.TempDir()
+	manager := &Manager{cfg: cfg}
+
+	err := manager.verifyCgroupRootWriteAccess()
+	if err == nil {
+		t.Fatal("verifyCgroupRootWriteAccess() expected an error for missing cgroup.procs")
+	}
+	if manager.cgroupRootWritable {
+		t.Fatal("cgroup root was marked writable after an open error")
 	}
 }
 
@@ -389,6 +425,9 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	if err := os.MkdirAll(userPath, 0755); err != nil {
 		t.Fatalf("failed to create shared user path: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(userPath, "io.max"), nil, 0644); err != nil {
+		t.Fatalf("failed to create io.max fixture: %v", err)
+	}
 	if err := manager.trackCgroupPath(1000, userPath); err != nil {
 		t.Fatalf("trackCgroupPath() error: %v", err)
 	}
@@ -406,10 +445,88 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	assertFileContent(t, filepath.Join(userPath, "cpu.weight"), "250")
 	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
 	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
-	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20")
+	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20\n")
 
 	if _, err := os.Stat(filepath.Join(legacyPath, "cpu.weight")); !os.IsNotExist(err) {
 		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)
+	}
+}
+
+func TestApplyIOLimitAllDevices(t *testing.T) {
+	tmpDir := t.TempDir()
+	sysBlockRoot := filepath.Join(tmpDir, "sys", "block")
+	for name, device := range map[string]string{
+		"nvme0n1": "259:0\n",
+		"sda":     "8:0\n",
+	} {
+		deviceDir := filepath.Join(sysBlockRoot, name)
+		if err := os.MkdirAll(deviceDir, 0755); err != nil {
+			t.Fatalf("failed to create fake block device directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(deviceDir, "dev"), []byte(device), 0644); err != nil {
+			t.Fatalf("failed to create fake block device number: %v", err)
+		}
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	cfg.CgroupBase = "resman"
+	manager := &Manager{
+		cfg:            cfg,
+		logger:         logging.GetLogger(),
+		createdCgroups: map[int]string{},
+		sysBlockRoot:   sysBlockRoot,
+	}
+	userPath := filepath.Join(tmpDir, "resman", "user_1000")
+	if err := os.MkdirAll(userPath, 0755); err != nil {
+		t.Fatalf("failed to create user cgroup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userPath, "io.max"), nil, 0644); err != nil {
+		t.Fatalf("failed to create io.max: %v", err)
+	}
+	manager.createdCgroups[1000] = userPath
+
+	if err := manager.ApplyIOLimit(1000, "1024", "2048", 10, 20, "all"); err != nil {
+		t.Fatalf("ApplyIOLimit() error: %v", err)
+	}
+	assertFileContent(t, filepath.Join(userPath, "io.max"),
+		"259:0 rbps=1024 wbps=2048 riops=10 wiops=20\n"+
+			"8:0 rbps=1024 wbps=2048 riops=10 wiops=20\n")
+
+	if err := manager.RemoveIOLimit(1000); err != nil {
+		t.Fatalf("RemoveIOLimit() error: %v", err)
+	}
+	assertFileContent(t, filepath.Join(userPath, "io.max"),
+		"259:0 rbps=max wbps=max riops=max wiops=max\n"+
+			"8:0 rbps=max wbps=max riops=max wiops=max\n")
+}
+
+func TestApplyIOLimitAllDevicesFailsWhenNoDevicesExist(t *testing.T) {
+	tmpDir := t.TempDir()
+	sysBlockRoot := filepath.Join(tmpDir, "sys", "block")
+	if err := os.MkdirAll(sysBlockRoot, 0755); err != nil {
+		t.Fatalf("failed to create fake sysfs root: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	cfg.CgroupBase = "resman"
+	manager := &Manager{
+		cfg:            cfg,
+		logger:         logging.GetLogger(),
+		createdCgroups: map[int]string{1000: filepath.Join(tmpDir, "resman", "user_1000")},
+		sysBlockRoot:   sysBlockRoot,
+	}
+	if err := os.MkdirAll(manager.createdCgroups[1000], 0755); err != nil {
+		t.Fatalf("failed to create user cgroup: %v", err)
+	}
+
+	err := manager.ApplyIOLimit(1000, "1024", "2048", 10, 20, "all")
+	if err == nil {
+		t.Fatal("ApplyIOLimit() expected an error when no block devices are available")
+	}
+	if !strings.Contains(err.Error(), "no block devices found") {
+		t.Fatalf("ApplyIOLimit() error = %v, want no block devices context", err)
 	}
 }
 

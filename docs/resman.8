@@ -166,7 +166,8 @@ Configuration parameters:
 - Write IOPS limit (0 = unlimited)
 .IP \(bu
 .B IO_DEVICE_FILTER
-- Device specification ("all" or "major:minor")
+- Device specification. "all" enumerates all whole block devices in /sys/block;
+  alternatively specify one "major:minor" device.
 .IP \(bu
 .B IO_THRESHOLD_DURATION
 - Seconds to wait before activating IO limits (0 = immediate)
@@ -464,7 +465,7 @@ CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
 # IO_WRITE_BPS=50M                     # Per-user write bandwidth limit
 # IO_READ_IOPS=1000                    # Per-user read IOPS limit (0 = unlimited)
 # IO_WRITE_IOPS=500                    # Per-user write IOPS limit
-# IO_DEVICE_FILTER=all                 # "all" or "major:minor" device specification
+# IO_DEVICE_FILTER=all                 # All /sys/block devices, or one "major:minor"
 # IO_THRESHOLD_DURATION=0              # Seconds to wait before activating IO limits
 
 # LIMIT HOOK

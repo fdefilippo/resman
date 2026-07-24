@@ -31,6 +31,7 @@ type Manager struct {
 	processOrigins     map[int]processOrigin
 	processOriginsFile string
 	procRoot           string
+	sysBlockRoot       string
 	writePID           func(string, int) error
 	persistOrigins     func() error
 
@@ -51,6 +52,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		processOrigins:     make(map[int]processOrigin),
 		processOriginsFile: processOriginsPath(cfg.CreatedCgroupsFile),
 		procRoot:           "/proc",
+		sysBlockRoot:       "/sys/block",
 	}
 
 	// Verifica che i cgroups v2 siano disponibili e configurati correttamente
@@ -130,14 +132,10 @@ func (m *Manager) verifyCgroupSetup() error {
 		m.controllersAvailable = true
 	}
 
-	// 4. Verifica scrivibilità
-	testFile := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
-	if err := os.WriteFile(testFile, []byte("0"), 0644); err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("no write permission to cgroup root %s: %w", cfg.CgroupRoot, err)
-		}
+	// 4. Verify write access without migrating the daemon out of its service cgroup.
+	if err := m.verifyCgroupRootWriteAccess(); err != nil {
+		return err
 	}
-	m.cgroupRootWritable = true
 
 	// 5. Crea il cgroup base se non esiste
 	baseCgroupPath := m.getBaseCgroupPath()
@@ -197,6 +195,22 @@ func (m *Manager) verifyCgroupSetup() error {
 	}
 
 	m.logger.Debug("Cgroup setup verified successfully")
+	return nil
+}
+
+func (m *Manager) verifyCgroupRootWriteAccess() error {
+	cfg := m.getConfig()
+	procsPath := filepath.Join(cfg.CgroupRoot, "cgroup.procs")
+
+	file, err := os.OpenFile(procsPath, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("cannot open cgroup root process file %s for writing: %w", procsPath, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close cgroup root process file %s: %w", procsPath, err)
+	}
+
+	m.cgroupRootWritable = true
 	return nil
 }
 

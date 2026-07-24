@@ -233,42 +233,74 @@ func (w *PSIWatcher) pollLoop() {
 
 		// Process pressure events from remaining fds
 		for i := 1; i < len(pollFds); i++ {
-			pfd := pollFds[i]
-			if pfd.Revents&unix.POLLPRI == 0 && pfd.Revents&unix.POLLERR == 0 {
-				continue
-			}
-
-			w.mu.Lock()
-			idx, ok := fdIndex[pfd.Fd]
-			if !ok || idx >= len(w.monitors) || !w.monitors[idx].active {
-				w.mu.Unlock()
-				continue
-			}
-			mon := w.monitors[idx]
-			w.mu.Unlock()
-
-			data := make([]byte, 4096)
-			n, err := mon.fd.ReadAt(data, 0)
-			if err != nil {
-				continue
-			}
-
-			stats, err := parsePSI(string(data[:n]))
-			if err != nil {
-				continue
-			}
-
-			select {
-			case w.events <- PSIEvent{
-				UID:       mon.uid,
-				Type:      mon.typ,
-				SomeAvg10: stats.SomeAvg10,
-				Timestamp: time.Now(),
-			}:
-			case <-w.done:
-				return
-			default:
-			}
+			w.processPollEvent(pollFds[i], fdIndex)
 		}
 	}
+}
+
+func (w *PSIWatcher) processPollEvent(pfd unix.PollFd, fdIndex map[int32]int) {
+	terminalEvents := int16(unix.POLLERR | unix.POLLNVAL | unix.POLLHUP)
+	if pfd.Revents&terminalEvents != 0 {
+		w.deactivatePolledMonitor(pfd.Fd, fdIndex)
+		return
+	}
+	if pfd.Revents&unix.POLLPRI == 0 {
+		return
+	}
+
+	mon := w.activePolledMonitor(pfd.Fd, fdIndex)
+	if mon == nil {
+		return
+	}
+
+	data := make([]byte, 4096)
+	n, err := mon.fd.ReadAt(data, 0)
+	if err != nil {
+		w.deactivateMonitor(mon)
+		return
+	}
+
+	stats, err := parsePSI(string(data[:n]))
+	if err != nil {
+		return
+	}
+
+	select {
+	case w.events <- PSIEvent{
+		UID:       mon.uid,
+		Type:      mon.typ,
+		SomeAvg10: stats.SomeAvg10,
+		Timestamp: time.Now(),
+	}:
+	case <-w.done:
+	default:
+	}
+}
+
+func (w *PSIWatcher) activePolledMonitor(fd int32, fdIndex map[int32]int) *psiMonitor {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	idx, ok := fdIndex[fd]
+	if !ok || idx >= len(w.monitors) || !w.monitors[idx].active {
+		return nil
+	}
+	return w.monitors[idx]
+}
+
+func (w *PSIWatcher) deactivatePolledMonitor(fd int32, fdIndex map[int32]int) {
+	if mon := w.activePolledMonitor(fd, fdIndex); mon != nil {
+		w.deactivateMonitor(mon)
+	}
+}
+
+func (w *PSIWatcher) deactivateMonitor(mon *psiMonitor) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if !mon.active {
+		return
+	}
+	mon.active = false
+	_ = mon.fd.Close()
 }

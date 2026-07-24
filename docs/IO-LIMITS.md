@@ -37,7 +37,7 @@ Il controller `io` di cgroups v2 permette di:
 | `IO_WRITE_BPS` | `50M` | Limite banda scrittura per utente |
 | `IO_READ_IOPS` | `1000` | Limite IOPS lettura per utente |
 | `IO_WRITE_IOPS` | `500` | Limite IOPS scrittura per utente |
-| `IO_DEVICE_FILTER` | `all` | Applica a tutti i dispositivi o device specifico |
+| `IO_DEVICE_FILTER` | `all` | Enumera tutti i device interi in `/sys/block`, oppure usa un device `major:minor` specifico |
 
 ### Formato bande
 
@@ -114,9 +114,11 @@ sum by (username) (rate(resman_user_io_read_ops_total[5m]) + rate(resman_user_io
 ### Attivazione
 
 Quando `IO_LIMIT_ENABLED=true` e l'utente supera `IO_THRESHOLD`:
-1. ResMan scrive in `<cgroup>/io.max` il formato:
+1. Con `IO_DEVICE_FILTER=all`, ResMan enumera i dispositivi interi presenti in
+   `/sys/block` e scrive una riga per ogni `major:minor` in `<cgroup>/io.max`:
    ```
-   default rbps=104857600 wbps=52428800 riops=1000 wiops=500
+   8:0 rbps=104857600 wbps=52428800 riops=1000 wiops=500
+   259:0 rbps=104857600 wbps=52428800 riops=1000 wiops=500
    ```
 2. Il kernel limita le operazioni di I/O del cgroup
 3. Le operazioni eccedenti vengono ritardate (throttling)
@@ -124,9 +126,10 @@ Quando `IO_LIMIT_ENABLED=true` e l'utente supera `IO_THRESHOLD`:
 ### Disattivazione
 
 Quando l'utente scende sotto `IO_RELEASE_THRESHOLD`:
-1. ResMan scrive in `<cgroup>/io.max`:
+1. ResMan rimuove i limiti per tutti i device presenti in `<cgroup>/io.max`:
    ```
-   default rbps=max wbps=max riops=max wiops=max
+   8:0 rbps=max wbps=max riops=max wiops=max
+   259:0 rbps=max wbps=max riops=max wiops=max
    ```
 2. I limiti vengono rimossi
 
