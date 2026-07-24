@@ -441,13 +441,6 @@ func (m *Manager) deactivateLimits() error {
 	}
 	m.stabilityTracker.mu.Unlock()
 
-	// Pulisci PSI boost tracker
-	m.mu.Lock()
-	for _, uid := range usersToCleanup {
-		delete(m.psiBoostedAt, uid)
-	}
-	m.mu.Unlock()
-
 	var firstError error
 	deactivatedCount := 0
 	deactivatedUsers := make(map[int]bool, len(usersToCleanup))

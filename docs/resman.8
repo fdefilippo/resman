@@ -519,7 +519,9 @@ SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 # Format: "days hours" (multiple timeframes separated by ;)
 # Days: 0=Sunday, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
 #       Or: * (all), 1-5 (Mon-Fri), 0,6 (weekend)
-# Hours: 24h format (00-23)
+# Hours: half-open range start-end. Start is 00-23, end is 00-24.
+# The end is excluded; 08-18 means 08:00 through 17:59.
+# A range such as 22-06 crosses midnight; days identify the start day.
 #
 # Examples:
 # # Disable during business hours (Mon-Fri, 8-18)
@@ -529,13 +531,16 @@ SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 # BLACKOUT=1-5 08-12
 #
 # # Disable on weekend (Sat-Sun, all day)
-# BLACKOUT=0,6 00-23
+# BLACKOUT=0,6 00-24
 #
 # # Disable business hours + weekend
-# BLACKOUT=1-5 08-18;0,6 00-23
+# BLACKOUT=1-5 08-18;0,6 00-24
+#
+# # Disable overnight, starting Mon-Fri at 22:00 until the following 06:00
+# BLACKOUT=1-5 22-06
 #
 # # Disable always (for testing)
-# BLACKOUT=* 00-23
+# BLACKOUT=* 00-24
 #
 # # No blackout (default - Resource Manager always active)
 BLACKOUT=

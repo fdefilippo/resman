@@ -458,6 +458,38 @@ func (m *Manager) revertPSIBoosts() {
 	m.mu.Unlock()
 }
 
+func (m *Manager) revertAllPSIBoosts() error {
+	m.mu.RLock()
+	boosted := make([]int, 0, len(m.psiBoostedAt))
+	for uid := range m.psiBoostedAt {
+		boosted = append(boosted, uid)
+	}
+	m.mu.RUnlock()
+
+	var firstError error
+	var reverted []int
+	for _, uid := range boosted {
+		if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
+			m.logger.Warn("Failed to revert CPU weight while suspending limits",
+				"uid", uid,
+				"error", err,
+			)
+			if firstError == nil {
+				firstError = err
+			}
+			continue
+		}
+		reverted = append(reverted, uid)
+	}
+
+	m.mu.Lock()
+	for _, uid := range reverted {
+		delete(m.psiBoostedAt, uid)
+	}
+	m.mu.Unlock()
+	return firstError
+}
+
 // GetConfig returns the current configuration
 func (m *Manager) GetConfig() *config.Config {
 	m.mu.RLock()

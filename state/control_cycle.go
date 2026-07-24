@@ -119,20 +119,35 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	// Controlla se siamo in un blackout timeframe
-	if run.cfg.IsInBlackout() {
-		nextEnd := run.cfg.GetNextBlackoutEnd()
-		if nextEnd != nil {
-			m.logger.Info("Skipping control cycle - blackout timeframe active",
+	nextEnd := run.cfg.GetNextBlackoutEnd()
+	if nextEnd != nil {
+		if err := m.revertAllPSIBoosts(); err != nil {
+			m.logger.Warn("Failed to revert all PSI boosts while entering blackout",
 				"cycle_id", run.cycleID,
-				"trigger", run.trigger,
-				"next_check", nextEnd.Format("2006-01-02 15:04:05"),
-			)
-		} else {
-			m.logger.Debug("Skipping control cycle - blackout timeframe active",
-				"cycle_id", run.cycleID,
-				"trigger", run.trigger,
+				"error", err,
 			)
 		}
+
+		ioBoostsReset := 0
+		if m.ioRemediation != nil {
+			ioBoostsReset = m.ioRemediation.ResetActiveBoosts()
+		}
+
+		m.mu.RLock()
+		limitsNeedDeactivation := m.limitsActive || len(m.activeUsers) > 0 || m.sharedCgroupPath != ""
+		m.mu.RUnlock()
+		if limitsNeedDeactivation {
+			if err := m.deactivateLimits(); err != nil {
+				return fmt.Errorf("failed to deactivate limits for blackout (cycle %d): %w", run.cycleID, err)
+			}
+		}
+
+		m.logger.Info("Control cycle suspended - blackout timeframe active",
+			"cycle_id", run.cycleID,
+			"trigger", run.trigger,
+			"next_check", nextEnd.Format("2006-01-02 15:04:05"),
+			"io_boosts_reset", ioBoostsReset,
+		)
 		run.stopWithoutError = true
 	}
 	return nil

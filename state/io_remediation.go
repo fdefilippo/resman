@@ -206,3 +206,21 @@ func (r *IORemediation) Cleanup(maxAge time.Duration) {
 		}
 	}
 }
+
+// ResetActiveBoosts clears temporary IO boost state when resource limiting is suspended.
+func (r *IORemediation) ResetActiveBoosts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reset := 0
+	for _, state := range r.boostStates {
+		if !state.IsActive {
+			continue
+		}
+		state.IsActive = false
+		state.StartTime = time.Time{}
+		state.StarvationStart = time.Time{}
+		reset++
+	}
+	return reset
+}

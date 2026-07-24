@@ -467,7 +467,9 @@ PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 #
 # Days: 0=Sunday, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
 #       Or: * (all), 1-5 (Mon-Fri), 0,6 (weekend)
-# Hours: 24h format (00-23)
+# Hours: half-open range start-end in 24h format. Start is 00-23, end is 00-24.
+#        The end hour is excluded: 08-18 means 08:00 through 17:59.
+#        Ranges such as 22-06 cross midnight; days identify when the range starts.
 #
 # Examples:
 #
@@ -478,13 +480,16 @@ PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 # BLACKOUT=1-5 08-12
 #
 # # Disable on weekends (Sat-Sun, all day)
-# BLACKOUT=0,6 00-23
+# BLACKOUT=0,6 00-24
 #
 # # Disable working hours + weekend
-# BLACKOUT=1-5 08-18;0,6 00-23
+# BLACKOUT=1-5 08-18;0,6 00-24
+#
+# # Disable overnight, starting Mon-Fri at 22:00 until the following 06:00
+# BLACKOUT=1-5 22-06
 #
 # # Disable always (for testing)
-# BLACKOUT=* 00-23
+# BLACKOUT=* 00-24
 #
 # # No blackout (default - ResMan always active)
 BLACKOUT=

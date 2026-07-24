@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -385,6 +386,131 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.PrometheusMetricsBindPort != 1974 {
 		t.Errorf("PrometheusMetricsBindPort: got %d, expected 1974", cfg.PrometheusMetricsBindPort)
+	}
+}
+
+func TestLoadFromEnvironmentParsesBlackout(t *testing.T) {
+	t.Setenv("BLACKOUT", "1-5 22-06")
+
+	cfg := DefaultConfig()
+	loadFromEnvironment(cfg)
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("validateConfig() error: %v", err)
+	}
+
+	if len(cfg.BlackoutTimeframes) != 1 {
+		t.Fatalf("BlackoutTimeframes length = %d, want 1", len(cfg.BlackoutTimeframes))
+	}
+	timeframe := cfg.BlackoutTimeframes[0]
+	if timeframe.HourStart != 22 || timeframe.HourEnd != 6 {
+		t.Fatalf("blackout hours = %02d-%02d, want 22-06", timeframe.HourStart, timeframe.HourEnd)
+	}
+}
+
+func TestLoadFromEnvironmentRejectsInvalidBlackout(t *testing.T) {
+	t.Setenv("BLACKOUT", "1-5 24-06")
+
+	cfg := DefaultConfig()
+	loadFromEnvironment(cfg)
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() expected an error for invalid BLACKOUT from environment")
+	}
+}
+
+func TestBlackoutTimeframes(t *testing.T) {
+	location := time.UTC
+	monday := time.Date(2026, time.July, 20, 0, 0, 0, 0, location)
+	if monday.Weekday() != time.Monday {
+		t.Fatalf("test fixture is %s, want Monday", monday.Weekday())
+	}
+
+	tests := []struct {
+		name        string
+		spec        string
+		at          time.Time
+		active      bool
+		expectedEnd time.Time
+	}{
+		{
+			name:        "business window starts inclusively",
+			spec:        "1-5 08-18",
+			at:          monday.Add(8 * time.Hour),
+			active:      true,
+			expectedEnd: monday.Add(18 * time.Hour),
+		},
+		{
+			name:   "business window ends exclusively",
+			spec:   "1-5 08-18",
+			at:     monday.Add(18 * time.Hour),
+			active: false,
+		},
+		{
+			name:        "full day includes final hour",
+			spec:        "* 00-24",
+			at:          monday.Add(23*time.Hour + 59*time.Minute),
+			active:      true,
+			expectedEnd: monday.Add(24 * time.Hour),
+		},
+		{
+			name:        "overnight start day",
+			spec:        "1-5 22-06",
+			at:          monday.Add(23 * time.Hour),
+			active:      true,
+			expectedEnd: monday.Add(30 * time.Hour),
+		},
+		{
+			name:        "overnight following day",
+			spec:        "1-5 22-06",
+			at:          monday.Add(29 * time.Hour),
+			active:      true,
+			expectedEnd: monday.Add(30 * time.Hour),
+		},
+		{
+			name:        "Friday overnight includes Saturday morning",
+			spec:        "1-5 22-06",
+			at:          monday.Add(5*24*time.Hour + 5*time.Hour),
+			active:      true,
+			expectedEnd: monday.Add(5*24*time.Hour + 6*time.Hour),
+		},
+		{
+			name:   "Saturday does not start weekday overnight",
+			spec:   "1-5 22-06",
+			at:     monday.Add(6*24*time.Hour + 5*time.Hour),
+			active: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			timeframes, err := ParseTimeframe(tt.spec)
+			if err != nil {
+				t.Fatalf("ParseTimeframe(%q) error: %v", tt.spec, err)
+			}
+			cfg := DefaultConfig()
+			cfg.BlackoutTimeframes = timeframes
+
+			end, active := cfg.blackoutEndAt(tt.at)
+			if active != tt.active {
+				t.Fatalf("blackout active = %v, want %v at %s", active, tt.active, tt.at)
+			}
+			if tt.active && !end.Equal(tt.expectedEnd) {
+				t.Fatalf("blackout end = %s, want %s", end, tt.expectedEnd)
+			}
+		})
+	}
+}
+
+func TestParseTimeframeRejectsAmbiguousOrOutOfRangeHours(t *testing.T) {
+	for _, spec := range []string{
+		"* 00-00",
+		"* 24-06",
+		"* 00-25",
+	} {
+		t.Run(spec, func(t *testing.T) {
+			if _, err := ParseTimeframe(spec); err == nil {
+				t.Fatalf("ParseTimeframe(%q) expected an error", spec)
+			}
+		})
 	}
 }
 

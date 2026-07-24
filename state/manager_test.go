@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
@@ -373,6 +374,7 @@ func TestForceDeactivateLimits(t *testing.T) {
 type deactivateCgroupManager struct {
 	mockCgroupManager
 	applyCPULimitCalls       []int
+	applyCPUWeightCalls      []int
 	applySharedCPULimitCalls []string
 	releasedUsers            []int
 	releaseErrors            map[int]error
@@ -380,6 +382,11 @@ type deactivateCgroupManager struct {
 
 func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
 	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) ApplyCPUWeight(uid int, weight int) error {
+	m.applyCPUWeightCalls = append(m.applyCPUWeightCalls, uid)
 	return nil
 }
 
@@ -490,6 +497,64 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	wantQuota := sharedPath + ":300000 100000"
 	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{wantQuota}) {
 		t.Fatalf("shared quota reconciliation calls = %v, want [%s]", cgroupManager.applySharedCPULimitCalls, wantQuota)
+	}
+}
+
+func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {
+	cfg := config.DefaultConfig()
+	timeframes, err := config.ParseTimeframe("* 00-24")
+	if err != nil {
+		t.Fatalf("ParseTimeframe() error: %v", err)
+	}
+	cfg.BlackoutSpec = "* 00-24"
+	cfg.BlackoutTimeframes = timeframes
+
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("failed to create shared cgroup test path: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	manager.activeUsers[1000] = true
+	manager.psiBoostedAt[1000] = time.Now()
+	manager.ioRemediation.boostStates[1000] = &IOBoostState{
+		IsActive:        true,
+		StartTime:       time.Now(),
+		StarvationStart: time.Now(),
+	}
+
+	run := &controlCycleContext{
+		cfg:     cfg,
+		cycleID: 123,
+		trigger: ControlCycleTriggerTicker,
+	}
+	if err := manager.stageCheckBlackout(run); err != nil {
+		t.Fatalf("stageCheckBlackout() error: %v", err)
+	}
+
+	if !run.stopWithoutError {
+		t.Fatal("blackout did not suspend the control cycle")
+	}
+	if manager.limitsActive || len(manager.activeUsers) != 0 {
+		t.Fatalf("limits remained active during blackout: active=%v users=%v", manager.limitsActive, manager.activeUsers)
+	}
+	if !reflect.DeepEqual(cgroupManager.applyCPUWeightCalls, []int{1000}) {
+		t.Fatalf("ApplyCPUWeight calls = %v, want [1000]", cgroupManager.applyCPUWeightCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.releasedUsers, []int{1000}) {
+		t.Fatalf("released users = %v, want [1000]", cgroupManager.releasedUsers)
+	}
+	if len(manager.psiBoostedAt) != 0 {
+		t.Fatalf("PSI boost state remained after blackout: %v", manager.psiBoostedAt)
+	}
+	if manager.ioRemediation.boostStates[1000].IsActive {
+		t.Fatal("IO boost state remained active after blackout")
 	}
 }
 

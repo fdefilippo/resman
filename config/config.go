@@ -33,7 +33,7 @@ import (
 type Timeframe struct {
 	DaysOfWeek []int // Giorni della settimana (0-6, 0=Domenica)
 	HourStart  int   // Ora inizio (0-23)
-	HourEnd    int   // Ora fine (0-23)
+	HourEnd    int   // Ora fine esclusiva (0-24)
 }
 
 // Config contiene tutti i parametri configurabili dell'applicazione.
@@ -811,6 +811,10 @@ func parsePlainList(value string) []string {
 func validateConfig(cfg *Config) error {
 	var errors []string
 
+	if err := setBlackout(cfg, cfg.BlackoutSpec); err != nil {
+		errors = append(errors, err.Error())
+	}
+
 	// Validate CPU thresholds
 	if cfg.CPUThreshold < 1 || cfg.CPUThreshold > 100 {
 		errors = append(errors, "CPU_THRESHOLD must be between 1 and 100")
@@ -1363,7 +1367,7 @@ func (c *Config) generateConfigLines() []string {
 	}
 }
 
-// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-23"
+// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-24"
 func ParseTimeframe(spec string) ([]Timeframe, error) {
 	var timeframes []Timeframe
 
@@ -1455,7 +1459,7 @@ func parseDays(spec string) ([]int, error) {
 	return days, nil
 }
 
-// parseHours gestisce formati: 08-18, 00-23
+// parseHours gestisce formati: 08-18, 00-24, 22-06
 func parseHours(spec string) (int, int, error) {
 	parts := strings.Split(spec, "-")
 	if len(parts) != 2 {
@@ -1472,12 +1476,12 @@ func parseHours(spec string) (int, int, error) {
 		return 0, 0, err
 	}
 
-	if start < 0 || start > 23 || end < 0 || end > 23 {
-		return 0, 0, fmt.Errorf("hours must be 0-23")
+	if start < 0 || start > 23 || end < 0 || end > 24 {
+		return 0, 0, fmt.Errorf("start hour must be 0-23 and end hour must be 0-24")
 	}
 
-	if start >= end {
-		return 0, 0, fmt.Errorf("start hour must be before end hour")
+	if start == end {
+		return 0, 0, fmt.Errorf("start and end hour must differ")
 	}
 
 	return start, end, nil
@@ -1486,69 +1490,54 @@ func parseHours(spec string) (int, int, error) {
 // IsInBlackout verifica se l'orario corrente è in un blackout timeframe
 // Restituisce true se CPU Manager NON deve applicare limiti
 func (c *Config) IsInBlackout() bool {
-	if len(c.BlackoutTimeframes) == 0 {
-		return false
-	}
-
-	now := time.Now()
-	currentDay := int(now.Weekday()) // 0=Domenica in Go
-	currentHour := now.Hour()
-
-	for _, tf := range c.BlackoutTimeframes {
-		// Controlla giorno
-		dayMatch := false
-		for _, day := range tf.DaysOfWeek {
-			if day == currentDay {
-				dayMatch = true
-				break
-			}
-		}
-
-		if !dayMatch {
-			continue
-		}
-
-		// Controlla ora
-		if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
-			return true
-		}
-	}
-
-	return false
+	_, active := c.blackoutEndAt(time.Now())
+	return active
 }
 
 // GetNextBlackoutEnd restituisce la prossima fine del blackout (se attivo)
 func (c *Config) GetNextBlackoutEnd() *time.Time {
-	if !c.IsInBlackout() {
+	end, active := c.blackoutEndAt(time.Now())
+	if !active {
 		return nil
 	}
+	return &end
+}
 
-	now := time.Now()
+func (c *Config) blackoutEndAt(now time.Time) (time.Time, bool) {
 	currentDay := int(now.Weekday())
 	currentHour := now.Hour()
 
 	for _, tf := range c.BlackoutTimeframes {
-		// Controlla se siamo in questo timeframe
-		dayMatch := false
-		for _, day := range tf.DaysOfWeek {
-			if day == currentDay {
-				dayMatch = true
-				break
+		if tf.HourStart < tf.HourEnd {
+			if timeframeIncludesDay(tf, currentDay) &&
+				currentHour >= tf.HourStart && currentHour < tf.HourEnd {
+				end := time.Date(now.Year(), now.Month(), now.Day(), tf.HourEnd, 0, 0, 0, now.Location())
+				return end, true
 			}
-		}
-
-		if !dayMatch {
 			continue
 		}
 
-		if currentHour >= tf.HourStart && currentHour < tf.HourEnd {
-			// Siamo in questo blackout, calcola la fine
+		if timeframeIncludesDay(tf, currentDay) && currentHour >= tf.HourStart {
+			end := time.Date(now.Year(), now.Month(), now.Day()+1, tf.HourEnd, 0, 0, 0, now.Location())
+			return end, true
+		}
+		previousDay := (currentDay + 6) % 7
+		if timeframeIncludesDay(tf, previousDay) && currentHour < tf.HourEnd {
 			end := time.Date(now.Year(), now.Month(), now.Day(), tf.HourEnd, 0, 0, 0, now.Location())
-			return &end
+			return end, true
 		}
 	}
 
-	return nil
+	return time.Time{}, false
+}
+
+func timeframeIncludesDay(tf Timeframe, day int) bool {
+	for _, configuredDay := range tf.DaysOfWeek {
+		if configuredDay == day {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================
