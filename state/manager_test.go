@@ -19,6 +19,10 @@ package state
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/fdefilippo/resman/cgroup"
@@ -360,6 +364,75 @@ func TestForceDeactivateLimits(t *testing.T) {
 	err := manager.ForceDeactivateLimits()
 	if err != nil {
 		t.Logf("ForceDeactivateLimits() error: %v", err)
+	}
+}
+
+type deactivateCgroupManager struct {
+	mockCgroupManager
+	applyCPULimitCalls       []int
+	applySharedCPULimitCalls []string
+	releasedUsers            []int
+}
+
+func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
+	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) ApplySharedCPULimit(path string, quota string) error {
+	m.applySharedCPULimitCalls = append(m.applySharedCPULimitCalls, fmt.Sprintf("%s:%s", path, quota))
+	return nil
+}
+
+func (m *deactivateCgroupManager) ReleaseUserFromSharedCgroup(uid int, path string) error {
+	m.releasedUsers = append(m.releasedUsers, uid)
+	return nil
+}
+
+func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
+	cfg := config.DefaultConfig()
+	metricsCollector := &mockMetricsCollector{}
+	cgroupManager := &deactivateCgroupManager{}
+	prometheusExporter := &mockPrometheusExporter{}
+
+	manager, err := NewManager(cfg, metricsCollector, cgroupManager, prometheusExporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("failed to create shared cgroup test path: %v", err)
+	}
+
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	manager.activeUsers[1000] = true
+	manager.activeUsers[1001] = true
+
+	if err := manager.deactivateLimits(); err != nil {
+		t.Fatalf("deactivateLimits() error: %v", err)
+	}
+
+	if len(cgroupManager.applyCPULimitCalls) != 0 {
+		t.Fatalf("ApplyCPULimit should not be used for shared cgroup deactivation, got calls for %v", cgroupManager.applyCPULimitCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{sharedPath + ":max 100000"}) {
+		t.Fatalf("ApplySharedCPULimit calls = %v", cgroupManager.applySharedCPULimitCalls)
+	}
+
+	sort.Ints(cgroupManager.releasedUsers)
+	if !reflect.DeepEqual(cgroupManager.releasedUsers, []int{1000, 1001}) {
+		t.Fatalf("released users = %v, want [1000 1001]", cgroupManager.releasedUsers)
+	}
+	if manager.limitsActive {
+		t.Fatal("limitsActive should be false after all shared users are released")
+	}
+	if manager.sharedCgroupPath != "" {
+		t.Fatalf("sharedCgroupPath = %q, want empty", manager.sharedCgroupPath)
+	}
+	if len(manager.activeUsers) != 0 {
+		t.Fatalf("activeUsers = %v, want empty", manager.activeUsers)
 	}
 }
 

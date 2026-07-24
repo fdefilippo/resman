@@ -420,25 +420,8 @@ func (m *Manager) deactivateLimits() error {
 	// Salva il conteggio
 	userCount := len(usersToCleanup)
 
-	// Pulisci la mappa
-	for uid := range m.activeUsers {
-		delete(m.activeUsers, uid)
-	}
-	m.limitsActive = false
-	m.limitsAppliedTime = time.Time{}
-
-	// Pulisci il percorso del cgroup condiviso
 	sharedPath := m.sharedCgroupPath
-	m.sharedCgroupPath = ""
 	m.mu.Unlock()
-
-	// Rimuovi monitoraggi PSI per questi utenti
-	if m.psiWatcher != nil {
-		for _, uid := range usersToCleanup {
-			m.psiWatcher.RemoveMonitor(uid, "cpu")
-			m.psiWatcher.RemoveMonitor(uid, "io")
-		}
-	}
 
 	// FIX A1: Cleanup stability tracker to prevent memory leak
 	m.stabilityTracker.mu.Lock()
@@ -456,11 +439,47 @@ func (m *Manager) deactivateLimits() error {
 
 	var firstError error
 	deactivatedCount := 0
+	deactivatedUsers := make(map[int]bool, len(usersToCleanup))
+
+	if sharedPath != "" {
+		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, "max 100000"); err != nil {
+			m.logger.Warn("Failed to reset shared cgroup CPU quota before deactivation",
+				"path", sharedPath,
+				"error", err,
+			)
+			if firstError == nil {
+				firstError = err
+			}
+		}
+	}
 
 	// Per ogni utente, rimuovi i limiti
 	for _, uid := range usersToCleanup {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
+
+		if sharedPath != "" {
+			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath); err != nil {
+				m.logger.Error("Failed to release user from shared cgroup",
+					"user", userStr,
+					"shared_cgroup", sharedPath,
+					"error", err,
+				)
+				if firstError == nil {
+					firstError = err
+				}
+				continue
+			}
+
+			deactivatedUsers[uid] = true
+			deactivatedCount++
+			m.logger.Debug("User released from shared CPU limits",
+				"uid", uid,
+				"shared_cgroup", sharedPath,
+			)
+			continue
+		}
+
 		// Ripristina il limite normale
 		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for user",
@@ -507,24 +526,51 @@ func (m *Manager) deactivateLimits() error {
 				m.logger.Debug("IO limit removed for user", "uid", uid)
 			}
 		}
+		deactivatedUsers[uid] = true
 	}
 
 	// Rimuovi il cgroup condiviso se esiste
+	sharedRemoved := sharedPath == ""
 	if sharedPath != "" {
 		if err := os.RemoveAll(sharedPath); err != nil {
 			m.logger.Warn("Failed to remove shared cgroup",
 				"path", sharedPath,
 				"error", err,
 			)
+			if firstError == nil {
+				firstError = err
+			}
 		} else {
+			sharedRemoved = true
 			m.logger.Debug("Shared cgroup removed", "path", sharedPath)
 		}
 	}
 
+	if m.psiWatcher != nil {
+		for uid := range deactivatedUsers {
+			m.psiWatcher.RemoveMonitor(uid, "cpu")
+			m.psiWatcher.RemoveMonitor(uid, "io")
+		}
+	}
+
+	m.mu.Lock()
+	for uid := range deactivatedUsers {
+		delete(m.activeUsers, uid)
+		delete(m.psiBoostedAt, uid)
+	}
+	if len(m.activeUsers) == 0 {
+		m.limitsActive = false
+		m.limitsAppliedTime = time.Time{}
+		if sharedRemoved {
+			m.sharedCgroupPath = ""
+		}
+	}
+	m.mu.Unlock()
+
 	m.logger.Info("CPU limits deactivated",
 		"users_freed", deactivatedCount,
 		"attempted", userCount,
-		"shared_cgroup_removed", sharedPath != "",
+		"shared_cgroup_removed", sharedRemoved,
 	)
 
 	return firstError
