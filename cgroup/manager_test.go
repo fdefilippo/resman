@@ -18,11 +18,18 @@ package cgroup
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 )
+
+func TestMain(m *testing.M) {
+	logging.InitLogger("ERROR", filepath.Join(os.TempDir(), "resman-cgroup-test.log"), 10*1024*1024, false)
+	os.Exit(m.Run())
+}
 
 func TestNewManager(t *testing.T) {
 	// This test requires root and cgroups v2, so it will be skipped in most CI environments
@@ -219,6 +226,7 @@ func TestLoadExistingCgroups(t *testing.T) {
 
 	manager := &Manager{
 		cfg:                cfg,
+		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: cfg.CreatedCgroupsFile,
 	}
@@ -242,6 +250,7 @@ func TestSaveCgroupToFile(t *testing.T) {
 
 	manager := &Manager{
 		cfg:                cfg,
+		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: cfg.CreatedCgroupsFile,
 	}
@@ -280,6 +289,7 @@ func TestRemoveCgroupFromFile(t *testing.T) {
 
 	manager := &Manager{
 		cfg:                cfg,
+		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: cfg.CreatedCgroupsFile,
 	}
@@ -320,5 +330,130 @@ func TestGetCreatedCgroups(t *testing.T) {
 	uids := manager.GetCreatedCgroups()
 	if len(uids) != 2 {
 		t.Errorf("GetCreatedCgroups(): got %d uids, expected 2", len(uids))
+	}
+}
+
+func TestCreateUserSubCgroupTracksSharedPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	cfg.CgroupBase = "resman"
+	cfg.CreatedCgroupsFile = filepath.Join(tmpDir, "created-cgroups")
+
+	manager := &Manager{
+		cfg:                cfg,
+		logger:             logging.GetLogger(),
+		createdCgroups:     make(map[int]string),
+		createdCgroupsFile: cfg.CreatedCgroupsFile,
+	}
+
+	sharedPath := filepath.Join(tmpDir, "resman", "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("failed to create shared path: %v", err)
+	}
+
+	userPath, err := manager.CreateUserSubCgroup(1000, sharedPath)
+	if err != nil {
+		t.Fatalf("CreateUserSubCgroup() error: %v", err)
+	}
+
+	got, exists := manager.getCgroupPath(1000)
+	if !exists {
+		t.Fatal("expected shared user cgroup to be tracked")
+	}
+	if got != userPath {
+		t.Fatalf("tracked path = %s, want %s", got, userPath)
+	}
+	if got == manager.getUserCgroupPath(1000) {
+		t.Fatalf("shared user cgroup should not track legacy path %s", got)
+	}
+}
+
+func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	cfg.CgroupBase = "resman"
+	cfg.CreatedCgroupsFile = filepath.Join(tmpDir, "created-cgroups")
+
+	manager := &Manager{
+		cfg:                cfg,
+		logger:             logging.GetLogger(),
+		createdCgroups:     make(map[int]string),
+		createdCgroupsFile: cfg.CreatedCgroupsFile,
+	}
+
+	sharedPath := filepath.Join(tmpDir, "resman", "limited")
+	userPath := filepath.Join(sharedPath, "user_1000")
+	legacyPath := manager.getUserCgroupPath(1000)
+	if err := os.MkdirAll(userPath, 0755); err != nil {
+		t.Fatalf("failed to create shared user path: %v", err)
+	}
+	if err := manager.trackCgroupPath(1000, userPath); err != nil {
+		t.Fatalf("trackCgroupPath() error: %v", err)
+	}
+
+	if err := manager.ApplyCPUWeight(1000, 250); err != nil {
+		t.Fatalf("ApplyCPUWeight() error: %v", err)
+	}
+	if err := manager.ApplyRAMLimitWithHigh(1000, "1048576", "524288"); err != nil {
+		t.Fatalf("ApplyRAMLimitWithHigh() error: %v", err)
+	}
+	if err := manager.ApplyIOLimit(1000, "1024", "2048", 10, 20, "8:0"); err != nil {
+		t.Fatalf("ApplyIOLimit() error: %v", err)
+	}
+
+	assertFileContent(t, filepath.Join(userPath, "cpu.weight"), "250")
+	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
+	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
+	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20")
+
+	if _, err := os.Stat(filepath.Join(legacyPath, "cpu.weight")); !os.IsNotExist(err) {
+		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)
+	}
+}
+
+func TestGetPSIStatsUsesTrackedSharedCgroupPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = tmpDir
+	cfg.CgroupBase = "resman"
+	cfg.CreatedCgroupsFile = filepath.Join(tmpDir, "created-cgroups")
+
+	manager := &Manager{
+		cfg:                cfg,
+		logger:             logging.GetLogger(),
+		createdCgroups:     make(map[int]string),
+		createdCgroupsFile: cfg.CreatedCgroupsFile,
+	}
+
+	userPath := filepath.Join(tmpDir, "resman", "limited", "user_1000")
+	if err := os.MkdirAll(userPath, 0755); err != nil {
+		t.Fatalf("failed to create shared user path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userPath, "io.pressure"), []byte("some avg10=25.00 avg60=18.50 avg300=12.30 total=1234567\nfull avg10=10.00 avg60=8.20 avg300=5.10 total=567890\n"), 0644); err != nil {
+		t.Fatalf("failed to write io.pressure: %v", err)
+	}
+	if err := manager.trackCgroupPath(1000, userPath); err != nil {
+		t.Fatalf("trackCgroupPath() error: %v", err)
+	}
+
+	stats, err := manager.GetPSIStats(1000)
+	if err != nil {
+		t.Fatalf("GetPSIStats() error: %v", err)
+	}
+	if stats.SomeAvg10 != 25.00 || stats.FullAvg10 != 10.00 {
+		t.Fatalf("unexpected PSI stats: %+v", stats)
+	}
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	if string(data) != want {
+		t.Fatalf("%s = %q, want %q", path, string(data), want)
 	}
 }

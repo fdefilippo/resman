@@ -120,6 +120,14 @@ func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error
 		)
 	}
 
+	if err := m.trackCgroupPath(uid, userPath); err != nil {
+		m.logger.Warn("Failed to track user sub-cgroup",
+			"uid", uid,
+			"path", userPath,
+			"error", err,
+		)
+	}
+
 	m.logger.Debug("User sub-cgroup created",
 		"uid", uid,
 		"path", userPath,
@@ -223,6 +231,14 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath string) error 
 
 	if err := os.Remove(userPath); err != nil {
 		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
+	}
+
+	if err := m.untrackCgroupPath(uid); err != nil {
+		m.logger.Warn("Failed to untrack user shared cgroup",
+			"uid", uid,
+			"path", userPath,
+			"error", err,
+		)
 	}
 
 	m.logger.Debug("User released from shared cgroup",

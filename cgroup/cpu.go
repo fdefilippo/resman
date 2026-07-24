@@ -11,13 +11,21 @@ import (
 )
 
 func (m *Manager) CreateUserCgroup(uid int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	// Verifica se esiste già
-	if _, exists := m.createdCgroups[uid]; exists {
-		m.logger.Debug("Cgroup already exists for user", "uid", uid)
-		return nil
+	if existingPath, exists := m.getCgroupPath(uid); exists {
+		if _, err := os.Stat(existingPath); err == nil {
+			m.logger.Debug("Cgroup already exists for user", "uid", uid)
+			return nil
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to stat existing cgroup %s for UID %d: %w", existingPath, uid, err)
+		}
+		if err := m.untrackCgroupPath(uid); err != nil {
+			m.logger.Warn("Failed to remove stale cgroup tracking entry",
+				"uid", uid,
+				"path", existingPath,
+				"error", err,
+			)
+		}
 	}
 
 	cgroupPath := m.getUserCgroupPath(uid)
@@ -27,11 +35,7 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 		return fmt.Errorf("failed to create cgroup directory %s for UID %d: %w", cgroupPath, uid, err)
 	}
 
-	// Traccia il cgroup creato
-	m.createdCgroups[uid] = cgroupPath
-
-	// Salva nel file di tracciamento
-	if err := m.saveCgroupToFile(uid, cgroupPath); err != nil {
+	if err := m.trackCgroupPath(uid, cgroupPath); err != nil {
 		m.logger.Warn("Failed to save cgroup to tracking file",
 			"uid", uid,
 			"error", err,
@@ -45,15 +49,9 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 
 // ApplyCPULimit applica un limite di CPU a un cgroup utente.
 func (m *Manager) ApplyCPULimit(uid int, quota string) error {
-	// Assicurati che il cgroup esista
-	cgroupPath := m.getUserCgroupPath(uid)
-
-	// Verifica che la directory esista
-	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
-		// Crea il cgroup se non esiste
-		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup %s before applying limit for UID %d: %w", cgroupPath, uid, err)
-		}
+	cgroupPath, err := m.ensureCgroupPath(uid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying CPU limit for UID %d: %w", uid, err)
 	}
 
 	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
@@ -141,14 +139,9 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 
 // ApplyCPUWeight applica un peso CPU (proporzionale) a un cgroup utente.
 func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
-	cgroupPath := m.getUserCgroupPath(uid)
-
-	// Verifica che la directory esista
-	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
-		// Crea il cgroup se non esiste
-		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup before applying weight: %w", err)
-		}
+	cgroupPath, err := m.ensureCgroupPath(uid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying weight: %w", err)
 	}
 
 	cpuWeightFile := filepath.Join(cgroupPath, "cpu.weight")

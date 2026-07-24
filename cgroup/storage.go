@@ -20,6 +20,25 @@ func (m *Manager) saveCgroupToFile(uid int, cgroupPath string) error {
 	return err
 }
 
+func (m *Manager) trackCgroupPath(uid int, cgroupPath string) error {
+	m.mu.Lock()
+	m.createdCgroups[uid] = cgroupPath
+	m.mu.Unlock()
+
+	if err := m.removeCgroupFromFile(uid); err != nil {
+		return err
+	}
+	return m.saveCgroupToFile(uid, cgroupPath)
+}
+
+func (m *Manager) untrackCgroupPath(uid int) error {
+	m.mu.Lock()
+	delete(m.createdCgroups, uid)
+	m.mu.Unlock()
+
+	return m.removeCgroupFromFile(uid)
+}
+
 // removeCgroupFromFile rimuove un cgroup dal file di tracciamento.
 func (m *Manager) removeCgroupFromFile(uid int) error {
 	// Leggi tutto il file, filtra e riscrivi
@@ -103,6 +122,33 @@ func (m *Manager) getCgroupPath(uid int) (string, bool) {
 
 	path, exists := m.createdCgroups[uid]
 	return path, exists
+}
+
+func (m *Manager) ensureCgroupPath(uid int) (string, error) {
+	if cgroupPath, exists := m.getCgroupPath(uid); exists {
+		if _, err := os.Stat(cgroupPath); err == nil {
+			return cgroupPath, nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed to stat cgroup for UID %d at %s: %w", uid, cgroupPath, err)
+		}
+		if err := m.untrackCgroupPath(uid); err != nil {
+			m.logger.Warn("Failed to remove stale cgroup tracking entry",
+				"uid", uid,
+				"path", cgroupPath,
+				"error", err,
+			)
+		}
+	}
+
+	if err := m.CreateUserCgroup(uid); err != nil {
+		return "", err
+	}
+
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return "", fmt.Errorf("cgroup for UID %d not found after creation", uid)
+	}
+	return cgroupPath, nil
 }
 
 // readPidsFromFile legge i PIDs da un file cgroup.procs.

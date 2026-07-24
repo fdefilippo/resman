@@ -9,12 +9,9 @@ import (
 )
 
 func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup before applying IO limit: %w", err)
-		}
-		cgroupPath, _ = m.getCgroupPath(uid)
+	cgroupPath, err := m.ensureCgroupPath(uid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying IO limit: %w", err)
 	}
 
 	ioMaxFile := filepath.Join(cgroupPath, "io.max")

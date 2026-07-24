@@ -9,12 +9,9 @@ import (
 )
 
 func (m *Manager) ApplyRAMLimit(uid int, limit string) error {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup before applying RAM limit: %w", err)
-		}
-		cgroupPath, _ = m.getCgroupPath(uid)
+	cgroupPath, err := m.ensureCgroupPath(uid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying RAM limit: %w", err)
 	}
 
 	memoryMaxFile := filepath.Join(cgroupPath, "memory.max")
@@ -89,12 +86,9 @@ func (m *Manager) GetCgroupRAMUsage(uid int) (uint64, error) {
 // ma NON invoca l'OOM killer. Utile per segnalare pressione di memoria senza uccidere processi.
 // limit: bytes (es. "536870912") o suffissi (es. "512M", "1G", "2T")
 func (m *Manager) ApplyRAMHigh(uid int, limit string) error {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		if err := m.CreateUserCgroup(uid); err != nil {
-			return fmt.Errorf("failed to create cgroup before applying RAM high: %w", err)
-		}
-		cgroupPath, _ = m.getCgroupPath(uid)
+	cgroupPath, err := m.ensureCgroupPath(uid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying RAM high: %w", err)
 	}
 
 	memoryHighFile := filepath.Join(cgroupPath, "memory.high")
