@@ -215,6 +215,39 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestValidateConfigIODeviceFilter(t *testing.T) {
+	tests := []struct {
+		name        string
+		filter      string
+		expectError bool
+	}{
+		{name: "all devices", filter: "all"},
+		{name: "empty uses all devices", filter: ""},
+		{name: "SCSI disk", filter: "8:0"},
+		{name: "NVMe disk", filter: "259:12"},
+		{name: "device name", filter: "sda", expectError: true},
+		{name: "missing minor", filter: "8:", expectError: true},
+		{name: "missing major", filter: ":0", expectError: true},
+		{name: "negative major", filter: "-8:0", expectError: true},
+		{name: "extra component", filter: "8:0:1", expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.IODeviceFilter = tt.filter
+
+			err := validateConfig(cfg)
+			if tt.expectError && err == nil {
+				t.Fatalf("validateConfig() expected an error for IO_DEVICE_FILTER=%q", tt.filter)
+			}
+			if !tt.expectError && err != nil {
+				t.Fatalf("validateConfig() unexpected error for IO_DEVICE_FILTER=%q: %v", tt.filter, err)
+			}
+		})
+	}
+}
+
 func TestIsValidCPUQuota(t *testing.T) {
 	tests := []struct {
 		name     string

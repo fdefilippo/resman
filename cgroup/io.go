@@ -102,11 +102,18 @@ func (m *Manager) resolveIODevices(deviceFilter string) ([]string, error) {
 		devicePath := filepath.Join(sysBlockRoot, entry.Name(), "dev")
 		data, err := os.ReadFile(devicePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read block device number from %s: %w", devicePath, err)
+			m.logger.Debug("Skipping block device during IO enumeration",
+				"path", devicePath,
+				"error", err,
+			)
+			continue
 		}
 		device := strings.TrimSpace(string(data))
 		if device == "" {
-			return nil, fmt.Errorf("block device number in %s is empty", devicePath)
+			m.logger.Debug("Skipping block device with empty device number",
+				"path", devicePath,
+			)
+			continue
 		}
 		devices = append(devices, device)
 	}

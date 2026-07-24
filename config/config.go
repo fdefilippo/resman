@@ -913,6 +913,9 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Validate IO limits
+	if !isValidIODeviceFilter(cfg.IODeviceFilter) {
+		errors = append(errors, "IO_DEVICE_FILTER must be 'all' or a 'major:minor' device number")
+	}
 	if cfg.IOEnabled {
 		if cfg.IOThreshold < 1 || cfg.IOThreshold > 100 {
 			errors = append(errors, "IO_THRESHOLD must be between 1 and 100")
@@ -959,6 +962,27 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("%s", strings.Join(errors, "; "))
 	}
 	return nil
+}
+
+func isValidIODeviceFilter(filter string) bool {
+	filter = strings.TrimSpace(filter)
+	if filter == "" || filter == "all" {
+		return true
+	}
+
+	parts := strings.Split(filter, ":")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isValidCPUQuota verifica il formato "quota period" o "max period".

@@ -467,6 +467,9 @@ func TestApplyIOLimitAllDevices(t *testing.T) {
 			t.Fatalf("failed to create fake block device number: %v", err)
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(sysBlockRoot, "vanished"), 0755); err != nil {
+		t.Fatalf("failed to create vanished block device fixture: %v", err)
+	}
 
 	cfg := config.DefaultConfig()
 	cfg.CgroupRoot = tmpDir
