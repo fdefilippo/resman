@@ -45,3 +45,7 @@ gha-creds-*.json
 .dolt/
 *.db
 .beads-credential-key
+
+# Local product page drafts
+docs/resman-product-page.html
+docs/resman-product-page-business.html
