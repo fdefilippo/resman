@@ -297,6 +297,64 @@ func TestDatabaseTimeRangesCompareUTCInstants(t *testing.T) {
 	}
 }
 
+func TestResolveUserUIDFromHistoricalMetrics(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	now := time.Now().UTC()
+	for _, record := range []*UserMetricsRecord{
+		{Timestamp: now.Add(-2 * time.Hour), UID: 1000, Username: "offline-user", ProcessCount: 1},
+		{Timestamp: now.Add(-time.Hour), UID: 1000, Username: "offline-user", ProcessCount: 1},
+	} {
+		if err := manager.WriteUserMetrics(record); err != nil {
+			t.Fatalf("WriteUserMetrics() error: %v", err)
+		}
+	}
+
+	uid, found, err := manager.ResolveUserUID("offline-user", now.Add(-3*time.Hour), now)
+	if err != nil {
+		t.Fatalf("ResolveUserUID() error = %v", err)
+	}
+	if !found || uid != 1000 {
+		t.Fatalf("ResolveUserUID() = %d, %t; want 1000, true", uid, found)
+	}
+
+	_, found, err = manager.ResolveUserUID("missing", now.Add(-3*time.Hour), now)
+	if err != nil {
+		t.Fatalf("ResolveUserUID() missing user error = %v", err)
+	}
+	if found {
+		t.Fatal("ResolveUserUID() found an unknown username")
+	}
+}
+
+func TestResolveUserUIDRejectsAmbiguousHistoricalUsername(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	now := time.Now().UTC()
+	for _, uid := range []int{1000, 2000} {
+		if err := manager.WriteUserMetrics(&UserMetricsRecord{
+			Timestamp:    now,
+			UID:          uid,
+			Username:     "reused-name",
+			ProcessCount: 1,
+		}); err != nil {
+			t.Fatalf("WriteUserMetrics() error: %v", err)
+		}
+	}
+
+	if _, _, err := manager.ResolveUserUID("reused-name", now.Add(-time.Hour), now.Add(time.Hour)); err == nil {
+		t.Fatal("ResolveUserUID() accepted a username associated with multiple UIDs")
+	}
+}
+
 func TestNewDatabaseManagerNormalizesLegacyTimestampOffsets(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "metrics.db")
 	manager, err := NewDatabaseManager(dbPath)

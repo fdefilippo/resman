@@ -196,6 +196,7 @@ func (m *DatabaseManager) InitSchema() error {
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid ON user_metrics(uid);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid_timestamp ON user_metrics(uid, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_user_metrics_username_timestamp ON user_metrics(username, timestamp);
     CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON system_metrics(timestamp);
     `
 
@@ -415,6 +416,44 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 	}
 
 	return records, rows.Err()
+}
+
+// ResolveUserUID finds the unique UID associated with a username in a time range.
+func (m *DatabaseManager) ResolveUserUID(username string, startTime, endTime time.Time) (int, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	rows, err := m.db.Query(`
+    SELECT DISTINCT uid
+    FROM user_metrics
+    WHERE username = ? AND timestamp BETWEEN ? AND ?
+    LIMIT 2
+    `, username, startTime.UTC(), endTime.UTC())
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to resolve username %q in metrics history: %w", username, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	uids := make([]int, 0, 2)
+	for rows.Next() {
+		var uid int
+		if err := rows.Scan(&uid); err != nil {
+			return 0, false, fmt.Errorf("failed to scan UID for username %q: %w", username, err)
+		}
+		uids = append(uids, uid)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, fmt.Errorf("failed while resolving username %q: %w", username, err)
+	}
+
+	switch len(uids) {
+	case 0:
+		return 0, false, nil
+	case 1:
+		return uids[0], true, nil
+	default:
+		return 0, false, fmt.Errorf("username %q maps to multiple UIDs in the requested time range; specify uid explicitly", username)
+	}
 }
 
 // GetSystemHistory recupera lo storico delle metriche di sistema

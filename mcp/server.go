@@ -203,12 +203,7 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
 
-	s.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
+	s.httpServer = newMCPHTTPServer(addr, mux)
 
 	s.wg.Add(1)
 	go func() {
@@ -225,6 +220,15 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func newMCPHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+	}
 }
 
 // loggingMiddleware logs HTTP requests before passing them to the handler

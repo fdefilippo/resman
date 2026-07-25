@@ -454,3 +454,14 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPHTTPServerAllowsLongLivedResponses(t *testing.T) {
+	server := newMCPHTTPServer("127.0.0.1:0", http.NewServeMux())
+
+	if server.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %s, want 0 for streaming responses", server.WriteTimeout)
+	}
+	if server.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %s, want a positive slow-loris deadline", server.ReadHeaderTimeout)
+	}
+}

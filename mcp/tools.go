@@ -1110,20 +1110,9 @@ func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequ
 
 	limit := normalizeHistoryLimit(args.Limit)
 
-	// Get UID from username if needed
-	uid := 0
-	if args.UID != nil {
-		uid = *args.UID
-	} else if args.Username != "" {
-		// Try to resolve username to UID
-		uid = s.stateManager.GetUIDFromUsername(args.Username)
-		if uid == 0 {
-			return nil, GetHistoryResult{}, fmt.Errorf("user not found: %s", args.Username)
-		}
-	}
-
-	if uid == 0 {
-		return nil, GetHistoryResult{}, fmt.Errorf("either uid or username must be provided")
+	uid, err := s.resolveHistoricalUID(args, startTime, endTime)
+	if err != nil {
+		return nil, GetHistoryResult{}, err
 	}
 
 	// Query database
@@ -1225,19 +1214,9 @@ func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequ
 		return &mcp.CallToolResult{}, GetUserSummaryResult{}, err
 	}
 
-	// Get UID from username if needed
-	uid := 0
-	if args.UID != nil {
-		uid = *args.UID
-	} else if args.Username != "" {
-		uid = s.stateManager.GetUIDFromUsername(args.Username)
-		if uid == 0 {
-			return &mcp.CallToolResult{}, GetUserSummaryResult{}, fmt.Errorf("user not found: %s", args.Username)
-		}
-	}
-
-	if uid == 0 {
-		return &mcp.CallToolResult{}, GetUserSummaryResult{}, fmt.Errorf("either uid or username must be provided")
+	uid, err := s.resolveHistoricalUID(args, startTime, endTime)
+	if err != nil {
+		return &mcp.CallToolResult{}, GetUserSummaryResult{}, err
 	}
 
 	// Query database
@@ -1382,6 +1361,34 @@ func activationResult(force, limitsActive bool, err error) ActivateLimitsResult 
 		Success: false,
 		Message: "Control cycle completed, but limits were not activated because activation conditions were not met",
 	}
+}
+
+func (s *Server) resolveHistoricalUID(args GetHistoryArgs, startTime, endTime time.Time) (int, error) {
+	if args.UID != nil {
+		if *args.UID <= 0 {
+			return 0, fmt.Errorf("uid must be greater than zero")
+		}
+		return *args.UID, nil
+	}
+	if args.Username == "" {
+		return 0, fmt.Errorf("either uid or username must be provided")
+	}
+
+	uid, found, err := s.dbManager.ResolveUserUID(args.Username, startTime, endTime)
+	if err != nil {
+		return 0, err
+	}
+	if found {
+		return uid, nil
+	}
+
+	if s.stateManager != nil {
+		uid = s.stateManager.GetUIDFromUsername(args.Username)
+		if uid != 0 {
+			return uid, nil
+		}
+	}
+	return 0, fmt.Errorf("user not found: %s", args.Username)
 }
 
 func getFloatMetric(metrics map[string]any, key string, defaultVal float64) float64 {

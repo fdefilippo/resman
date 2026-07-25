@@ -19,9 +19,12 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fdefilippo/resman/database"
 )
 
 func TestResolveHistoryTimeRangeRejectsInvalidExplicitTimes(t *testing.T) {
@@ -203,5 +206,36 @@ func TestActivationResultReflectsRuntimeState(t *testing.T) {
 				t.Errorf("Message = %q, want substring %q", result.Message, tt.wantMessage)
 			}
 		})
+	}
+}
+
+func TestResolveHistoricalUIDUsesDatabaseForInactiveUser(t *testing.T) {
+	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error = %v", err)
+	}
+	defer func() { _ = dbManager.Close() }()
+
+	now := time.Now().UTC()
+	if err := dbManager.WriteUserMetrics(&database.UserMetricsRecord{
+		Timestamp:    now,
+		UID:          1000,
+		Username:     "offline-user",
+		ProcessCount: 1,
+	}); err != nil {
+		t.Fatalf("WriteUserMetrics() error = %v", err)
+	}
+
+	server := &Server{dbManager: dbManager}
+	uid, err := server.resolveHistoricalUID(
+		GetHistoryArgs{Username: "offline-user"},
+		now.Add(-time.Hour),
+		now.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("resolveHistoricalUID() error = %v", err)
+	}
+	if uid != 1000 {
+		t.Errorf("resolveHistoricalUID() = %d, want 1000", uid)
 	}
 }
