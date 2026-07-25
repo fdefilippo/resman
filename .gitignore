@@ -46,6 +46,20 @@ gha-creds-*.json
 *.db
 .beads-credential-key
 
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/
+
 # Local product page drafts
 docs/resman-product-page.html
 docs/resman-product-page-business.html
+
+# Local agent and analysis material
+AGENT.md
+AGENTS.md
+CLAUDE.md
+.agents/
+.codex
+resman.file
+docs/*.md
+docs/analysis/
+docs/superpowers/
