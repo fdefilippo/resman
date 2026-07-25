@@ -80,6 +80,10 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota); err != nil {
 				m.logger.Warn("Failed to release idle user from shared cgroup",
 					"uid", uid, "shared_path", sharedPath, "error", err)
+				return
+			}
+			if m.ioRemediation != nil {
+				m.ioRemediation.ForgetUsers([]int{uid})
 			}
 		}(uid, sharedPath, normalQuota)
 	}
@@ -587,6 +591,13 @@ func (m *Manager) deactivateLimits() error {
 		}
 	}
 	m.mu.Unlock()
+	if m.ioRemediation != nil {
+		released := make([]int, 0, len(deactivatedUsers))
+		for uid := range deactivatedUsers {
+			released = append(released, uid)
+		}
+		m.ioRemediation.ForgetUsers(released)
+	}
 
 	m.logger.Info("CPU limits deactivated",
 		"users_freed", deactivatedCount,

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -10,25 +11,36 @@ import (
 )
 
 type ioRemediationTestDeps struct {
-	psi         cgroup.PSIStats
-	removeCalls int
+	psi            cgroup.PSIStats
+	temporaryCalls []temporaryIOLimitCall
+	temporaryError error
+}
+
+type temporaryIOLimitCall struct {
+	uid          int
+	readBPS      string
+	writeBPS     string
+	readIOPS     int
+	writeIOPS    int
+	deviceFilter string
+	multiplier   float64
 }
 
 func (d *ioRemediationTestDeps) GetPSIStats(int) (cgroup.PSIStats, error) {
 	return d.psi, nil
 }
 
-func (d *ioRemediationTestDeps) GetIOStats(int) (uint64, uint64, uint64, uint64, error) {
-	return 0, 0, 0, 0, nil
-}
-
-func (d *ioRemediationTestDeps) ApplyTemporaryIOLimit(int, string, string, int, int, string, float64) error {
-	return nil
-}
-
-func (d *ioRemediationTestDeps) RemoveIOLimit(int) error {
-	d.removeCalls++
-	return nil
+func (d *ioRemediationTestDeps) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
+	d.temporaryCalls = append(d.temporaryCalls, temporaryIOLimitCall{
+		uid:          uid,
+		readBPS:      readBPS,
+		writeBPS:     writeBPS,
+		readIOPS:     readIOPS,
+		writeIOPS:    writeIOPS,
+		deviceFilter: deviceFilter,
+		multiplier:   multiplier,
+	})
+	return d.temporaryError
 }
 
 func TestIORemediationCleanupPreservesStarvationState(t *testing.T) {
@@ -57,11 +69,82 @@ func TestIORemediationCleanupPreservesStarvationState(t *testing.T) {
 
 	state.StarvationStart = time.Now().Add(-time.Duration(cfg.IOStarvationThreshold) * time.Second)
 	remediation.CheckAndRemediate(deps, cfg, []int{1000})
-	if deps.removeCalls != 1 {
-		t.Fatalf("IO boost calls = %d, want 1 after continuous starvation", deps.removeCalls)
+	if len(deps.temporaryCalls) != 1 {
+		t.Fatalf("IO boost calls = %d, want 1 after continuous starvation", len(deps.temporaryCalls))
+	}
+	call := deps.temporaryCalls[0]
+	if call.multiplier != cfg.IOBoostMultiplier ||
+		call.readBPS != cfg.IOReadBPS ||
+		call.writeBPS != cfg.IOWriteBPS ||
+		call.readIOPS != cfg.IOReadIOPS ||
+		call.writeIOPS != cfg.IOWriteIOPS ||
+		call.deviceFilter != cfg.IODeviceFilter {
+		t.Fatalf("temporary IO limit call = %+v, want configured limits with multiplier %v", call, cfg.IOBoostMultiplier)
 	}
 	if !state.IsActive {
 		t.Fatal("IO boost state should be active after remediation")
+	}
+}
+
+func TestIORemediationExpiresBoostWhenPressureIsNormal(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IORemediationEnabled = true
+	cfg.IOStarvationCheckInterval = 0
+	cfg.IOBoostDuration = 60
+	cfg.IORevertOnNormal = false
+
+	deps := &ioRemediationTestDeps{psi: cgroup.PSIStats{SomeAvg10: 0}}
+	remediation := NewIORemediation(logging.GetLogger())
+	remediation.boostStates[1000] = &IOBoostState{
+		IsActive:             true,
+		StartTime:            time.Now().Add(-time.Minute),
+		OriginalReadBPS:      "100M",
+		OriginalWriteBPS:     "50M",
+		OriginalReadIOPS:     100,
+		OriginalWriteIOPS:    50,
+		OriginalDeviceFilter: "8:0",
+	}
+
+	remediation.CheckAndRemediate(deps, cfg, []int{1000})
+
+	if len(deps.temporaryCalls) != 1 {
+		t.Fatalf("restore calls = %d, want 1", len(deps.temporaryCalls))
+	}
+	call := deps.temporaryCalls[0]
+	if call.uid != 1000 ||
+		call.readBPS != "100M" ||
+		call.writeBPS != "50M" ||
+		call.readIOPS != 100 ||
+		call.writeIOPS != 50 ||
+		call.deviceFilter != "8:0" ||
+		call.multiplier != 1 {
+		t.Fatalf("restore calls = %+v, want one call with multiplier 1", deps.temporaryCalls)
+	}
+	if remediation.boostStates[1000].IsActive {
+		t.Fatal("expired boost remained active while pressure was normal")
+	}
+}
+
+func TestIORemediationRetriesFailedRestore(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IORemediationEnabled = true
+	cfg.IOStarvationCheckInterval = 0
+	cfg.IOBoostDuration = 60
+
+	deps := &ioRemediationTestDeps{
+		psi:            cgroup.PSIStats{SomeAvg10: 0},
+		temporaryError: errors.New("write failed"),
+	}
+	remediation := NewIORemediation(logging.GetLogger())
+	remediation.boostStates[1000] = &IOBoostState{
+		IsActive:  true,
+		StartTime: time.Now().Add(-time.Minute),
+	}
+
+	remediation.CheckAndRemediate(deps, cfg, []int{1000})
+
+	if !remediation.boostStates[1000].IsActive {
+		t.Fatal("failed restore cleared active boost state instead of leaving it for retry")
 	}
 }
 

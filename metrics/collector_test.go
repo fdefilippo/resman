@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/database"
 	"github.com/shirou/gopsutil/v3/cpu"
 )
 
@@ -48,6 +49,57 @@ func TestUserMetricsStruct(t *testing.T) {
 	}
 	if um.ProcessCount != 10 {
 		t.Errorf("ProcessCount: got %d, expected 10", um.ProcessCount)
+	}
+}
+
+func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
+	dbManager, err := database.NewDatabaseManager(t.TempDir() + "/metrics.db")
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbManager.Close(); err != nil {
+			t.Errorf("DatabaseManager.Close() error: %v", err)
+		}
+	})
+
+	collector := &Collector{
+		dbWriter: NewDBWriter(dbManager, 0),
+	}
+	collector.WriteMetricsToDatabase(
+		map[int]*UserMetrics{
+			1000: {
+				UID:          1000,
+				Username:     "limited-user",
+				CPUUsage:     75,
+				MemoryUsage:  1024,
+				ProcessCount: 3,
+				IsLimited:    true,
+			},
+		},
+		50,
+		4,
+		2.5,
+		true,
+		1,
+	)
+
+	start := time.Now().Add(-time.Minute)
+	end := time.Now().Add(time.Minute)
+	userHistory, err := dbManager.GetUserHistory(1000, start, end, 1)
+	if err != nil {
+		t.Fatalf("GetUserHistory() error: %v", err)
+	}
+	if len(userHistory) != 1 || !userHistory[0].IsLimited {
+		t.Fatalf("user history = %+v, want one limited record", userHistory)
+	}
+
+	systemHistory, err := dbManager.GetSystemHistory(start, end, 1)
+	if err != nil {
+		t.Fatalf("GetSystemHistory() error: %v", err)
+	}
+	if len(systemHistory) != 1 || systemHistory[0].SystemLoad != 2.5 {
+		t.Fatalf("system history = %+v, want system load 2.5", systemHistory)
 	}
 }
 

@@ -1580,9 +1580,9 @@ func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, tot
 			metrics.CPUUsage,
 			metrics.MemoryUsage,
 			metrics.ProcessCount,
-			false, // isLimited verrà impostato dallo state manager
-			"",    // cgroupPath
-			"",    // cpuQuota
+			metrics.IsLimited,
+			"", // cgroupPath
+			"", // cpuQuota
 		)
 	}
 

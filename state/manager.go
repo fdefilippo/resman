@@ -99,6 +99,7 @@ type MetricsCollector interface {
 	GetTotalMemoryMB() float64
 	GetCachedMemoryMB() float64
 	IsSystemUnderLoad() bool
+	GetSystemLoad() (float64, error)
 	GetAllUserMetrics() map[int]*resmanmetrics.UserMetrics
 	GetDBWriter() *resmanmetrics.DBWriter
 	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
@@ -248,26 +249,6 @@ func (m *Manager) isUserLimited(uid int) bool {
 	defer m.mu.RUnlock()
 	_, exists := m.activeUsers[uid]
 	return exists
-}
-
-// getLoadAverage restituisce il load average di 1 minuto
-func (m *Manager) getLoadAverage() (float64, error) {
-	data, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return 0.0, err
-	}
-
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return 0.0, fmt.Errorf("invalid loadavg format")
-	}
-
-	load1, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return 0.0, err
-	}
-
-	return load1, nil
 }
 
 // boolToFloat converte un booleano in float64 (1.0 per true, 0.0 per false).

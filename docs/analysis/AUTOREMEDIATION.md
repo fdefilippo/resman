@@ -154,7 +154,7 @@ config/
 IO_REMEDIATION_ENABLED=false
 IO_STARVATION_THRESHOLD=300        # Secondi di throttling continuo prima di agire
 IO_STARVATION_CHECK_INTERVAL=30    # Frequenza check (secondi)
-IO_TEMPORARY_BOOST_MULTIPLIER=2.0  # Moltiplicatore per limiti temporanei (2x)
+IO_BOOST_MULTIPLIER=2.0            # Moltiplicatore per limiti temporanei (2x)
 IO_BOOST_DURATION=600              # Durata del boost (secondi, default 10 min)
 IO_BOOST_MAX_PER_HOUR=3            # Max boost per utente per ora
 IO_PSI_THRESHOLD=50                # PSI some avg10 % sopra cui considerare starvation
@@ -173,7 +173,7 @@ Ogni IO_STARVATION_CHECK_INTERVAL secondi:
        b. Applica limiti temporanei (limiti * BOOST_MULTIPLIER)
        c. Logga evento con motivo
        d. Avvia timer per revert (BOOST_DURATION)
-    4. Se timer di boost scaduto E IO sotto soglia:
+    4. Se il timer di boost è scaduto, indipendentemente dal PSI corrente:
        a. Revert limiti originali
        b. Logga evento
 ```

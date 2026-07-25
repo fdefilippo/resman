@@ -36,6 +36,8 @@ import (
 type mockMetricsCollector struct {
 	allUserMetrics map[int]*metrics.UserMetrics
 	usernames      map[int]string
+	systemLoad     float64
+	systemLoadErr  error
 }
 
 func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
@@ -45,6 +47,9 @@ func (m *mockMetricsCollector) GetMemoryUsage() float64         { return 1024.0 
 func (m *mockMetricsCollector) GetTotalMemoryMB() float64       { return 16384.0 }
 func (m *mockMetricsCollector) GetCachedMemoryMB() float64      { return 4096.0 }
 func (m *mockMetricsCollector) IsSystemUnderLoad() bool         { return false }
+func (m *mockMetricsCollector) GetSystemLoad() (float64, error) {
+	return m.systemLoad, m.systemLoadErr
+}
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics {
 	return m.allUserMetrics
 }
@@ -282,7 +287,7 @@ func TestGetStatus(t *testing.T) {
 
 func TestCollectSystemMetrics(t *testing.T) {
 	cfg := config.DefaultConfig()
-	metricsCollector := &mockMetricsCollector{}
+	metricsCollector := &mockMetricsCollector{systemLoad: 2.5}
 	cgroupManager := &mockCgroupManager{}
 	prometheusExporter := &mockPrometheusExporter{}
 
@@ -296,6 +301,9 @@ func TestCollectSystemMetrics(t *testing.T) {
 
 	if sysMetrics.TotalCores != 4 {
 		t.Errorf("collectSystemMetrics(): got %d cores, expected 4", sysMetrics.TotalCores)
+	}
+	if sysMetrics.SystemLoad != 2.5 {
+		t.Errorf("collectSystemMetrics(): got load %f, expected 2.5", sysMetrics.SystemLoad)
 	}
 }
 
@@ -333,24 +341,6 @@ func TestGetUsername(t *testing.T) {
 	// Should now return the username from the metrics collector (mock returns "user1000")
 	if username != "user1000" {
 		t.Errorf("getUsername(): got %s, expected user1000", username)
-	}
-}
-
-func TestGetLoadAverage(t *testing.T) {
-	cfg := config.DefaultConfig()
-	metricsCollector := &mockMetricsCollector{}
-	cgroupManager := &mockCgroupManager{}
-	prometheusExporter := &mockPrometheusExporter{}
-
-	manager, _ := NewManager(cfg, metricsCollector, cgroupManager, prometheusExporter)
-
-	load, err := manager.getLoadAverage()
-
-	// May fail in some environments
-	if err != nil {
-		t.Logf("getLoadAverage() error (expected in some environments): %v", err)
-	} else if load < 0 {
-		t.Errorf("getLoadAverage(): got %f, expected >= 0", load)
 	}
 }
 
@@ -606,6 +596,58 @@ func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 	}
 }
 
+func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testing.T) {
+	tests := []struct {
+		name       string
+		releaseErr error
+		wantState  bool
+	}{
+		{
+			name:      "successful release",
+			wantState: false,
+		},
+		{
+			name:       "failed release",
+			releaseErr: errors.New("restore failed"),
+			wantState:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cgroupManager := &deactivateCgroupManager{
+				releaseErrors: map[int]error{1000: tt.releaseErr},
+			}
+			manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+
+			manager.limitsActive = true
+			manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+			manager.activeUsers[1000] = true
+			manager.ioRemediation.boostStates[1000] = &IOBoostState{IsActive: true}
+
+			metrics := &SystemMetrics{
+				TotalCores:   4,
+				UserCPUUsage: map[int]float64{1000: 0},
+			}
+			if err := manager.releaseIdleUsers(metrics); err != nil {
+				t.Fatalf("releaseIdleUsers() error: %v", err)
+			}
+			manager.wg.Wait()
+
+			manager.ioRemediation.mu.RLock()
+			_, stateExists := manager.ioRemediation.boostStates[1000]
+			manager.ioRemediation.mu.RUnlock()
+			if stateExists != tt.wantState {
+				t.Fatalf("IO remediation state exists = %t, want %t", stateExists, tt.wantState)
+			}
+		})
+	}
+}
+
 func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.AutodetectPatterns = true
@@ -781,6 +823,38 @@ func TestPatternPolicyIsRevertedWhenAutodetectIsDisabled(t *testing.T) {
 	}
 }
 
+func TestIORemediationUsesOnlyActiveIOEligibleUsers(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IOEnabled = true
+	cfg.IORemediationEnabled = true
+	cfg.IOStarvationCheckInterval = 0
+	cfg.IOUserIncludeList = []string{"^allowed$"}
+
+	collector := &mockMetricsCollector{
+		usernames: map[int]string{
+			1000: "allowed",
+			1001: "excluded",
+		},
+	}
+	manager, err := NewManager(cfg, collector, &deactivateCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.activeUsers[1001] = true
+
+	if err := manager.stageIORemediation(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("stageIORemediation() error: %v", err)
+	}
+
+	if _, exists := manager.ioRemediation.boostStates[1000]; !exists {
+		t.Fatal("active IO-eligible user was not checked")
+	}
+	if _, exists := manager.ioRemediation.boostStates[1001]; exists {
+		t.Fatal("IO-excluded user was checked for remediation")
+	}
+}
+
 func batchNightStats() *UserHourlyStats {
 	return &UserHourlyStats{Buckets: []hourlyPatternBucket{{
 		Hour:        mostRecentHour(23),
@@ -851,8 +925,8 @@ func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {
 	if len(manager.psiBoostedAt) != 0 {
 		t.Fatalf("PSI boost state remained after blackout: %v", manager.psiBoostedAt)
 	}
-	if manager.ioRemediation.boostStates[1000].IsActive {
-		t.Fatal("IO boost state remained active after blackout")
+	if _, exists := manager.ioRemediation.boostStates[1000]; exists {
+		t.Fatal("IO boost state remained after blackout released the user cgroup")
 	}
 }
 

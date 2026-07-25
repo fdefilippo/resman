@@ -230,6 +230,8 @@ IO_USER_EXCLUDE_LIST=root
 # IO Starvation Auto-Remediation
 # Detects when a user is IO-throttled for too long and temporarily
 # increases limits to prevent prolonged performance degradation.
+# Applies only to users with active IO limits and restores the configured
+# limits when the boost expires, even when IO_REVERT_ON_NORMAL is false.
 # Requires kernel >= 4.20 with CONFIG_PSI=y for PSI detection.
 # IO_REMEDIATION_ENABLED: true = enable auto-remediation
 # IO_STARVATION_THRESHOLD: Seconds of continuous throttling before acting

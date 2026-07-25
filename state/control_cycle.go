@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -213,7 +214,17 @@ func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
 func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 	// 7. IO Starvation Auto-Remediation
 	if m.ioRemediation != nil {
-		limitedUsers := m.metricsCollector.GetLimitedUsers()
+		var limitedUsers []int
+		if run.cfg.GetIOEnabled() {
+			m.mu.RLock()
+			for uid := range m.activeUsers {
+				limitedUsers = append(limitedUsers, uid)
+			}
+			m.mu.RUnlock()
+			limitedUsers = slices.DeleteFunc(limitedUsers, func(uid int) bool {
+				return !run.cfg.IsUserWhitelistedForIO(m.getUsername(uid))
+			})
+		}
 		m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
 		// Cleanup periodico stati vecchi
 		m.ioRemediation.Cleanup(24 * time.Hour)
@@ -359,6 +370,7 @@ type SystemMetrics struct {
 	MemoryUsage     float64 // MB
 	TotalMemoryMB   float64 // MB
 	CachedMemoryMB  float64 // MB
+	SystemLoad      float64
 	SystemUnderLoad bool
 	UserCPUUsage    map[int]float64                    // UID -> percentuale
 	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
@@ -388,6 +400,12 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	metrics.TotalMemoryMB = m.metricsCollector.GetTotalMemoryMB()
 	metrics.CachedMemoryMB = m.metricsCollector.GetCachedMemoryMB()
 	metrics.SystemUnderLoad = m.metricsCollector.IsSystemUnderLoad()
+	systemLoad, err := m.metricsCollector.GetSystemLoad()
+	if err != nil {
+		m.logger.Warn("Failed to collect system load", "error", err)
+	} else {
+		metrics.SystemLoad = systemLoad
+	}
 
 	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
@@ -467,6 +485,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		return
 	}
 
+	m.mu.RLock()
+	limitedUsers := len(m.activeUsers)
+	limitsActive := m.limitsActive
+	m.mu.RUnlock()
+
 	// Metriche base per il metodo UpdateMetrics
 	promMetrics := map[string]float64{
 		// System metrics
@@ -487,13 +510,9 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		"memory_usage_mb":  metrics.MemoryUsage,
 		"total_memory_mb":  metrics.TotalMemoryMB,
 		"cached_memory_mb": metrics.CachedMemoryMB,
-		"limited_users":    float64(len(m.activeUsers)),
-		"limits_active":    boolToFloat(m.limitsActive),
-	}
-
-	// Aggiungi load average se disponibile
-	if load, err := m.getLoadAverage(); err == nil {
-		promMetrics["system_load"] = load
+		"limited_users":    float64(limitedUsers),
+		"limits_active":    boolToFloat(limitsActive),
+		"system_load":      metrics.SystemLoad,
 	}
 
 	m.prometheusExporter.UpdateMetrics(promMetrics)
@@ -563,13 +582,11 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 	m.prometheusExporter.CleanupUserMetrics(activeUids)
 
 	// Aggiorna metriche di sistema
-	if load, err := m.getLoadAverage(); err == nil {
-		actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
-		if actionCores < 1 {
-			actionCores = 1
-		}
-		m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, load)
+	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
+	if actionCores < 1 {
+		actionCores = 1
 	}
+	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
 }
 
 func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
@@ -588,19 +605,24 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 		return
 	}
 
+	m.mu.RLock()
+	limitsActive := m.limitsActive
+	activeUsers := len(m.activeUsers)
+	m.mu.RUnlock()
+
 	// Scrivi le metriche
 	m.metricsCollector.WriteMetricsToDatabase(
 		metrics.UserMetrics,
 		metrics.TotalCPUUsage,
 		metrics.TotalCores,
-		0.0, // systemLoad non sempre disponibile
-		m.limitsActive,
-		len(m.activeUsers),
+		metrics.SystemLoad,
+		limitsActive,
+		activeUsers,
 	)
 
 	m.logger.Debug("Metrics written to database",
 		"users", len(metrics.UserMetrics),
-		"limits_active", m.limitsActive,
+		"limits_active", limitsActive,
 	)
 }
 

@@ -179,6 +179,14 @@ Configuration parameters:
 - Regex patterns for users excluded from IO limits
 .PP
 IO starvation auto\-remediation can be enabled to temporarily boost limits when processes experience excessive throttling:
+.PP
+Remediation applies only to users that currently have active resman limits and pass
+.B IO_USER_INCLUDE_LIST
+and
+.B IO_USER_EXCLUDE_LIST
+. The configured I/O limits are multiplied for the boost duration and restored exactly when the boost expires. Expiration is enforced regardless of the current PSI value; with
+.B IO_REVERT_ON_NORMAL=true
+the original limits are restored earlier when pressure returns to normal.
 .IP \(bu 2
 .B IO_REMEDIATION_ENABLED
 - Enable auto\-remediation (true/false)
@@ -198,7 +206,7 @@ IO starvation auto\-remediation can be enabled to temporarily boost limits when 
 .B IO_PSI_THRESHOLD
 - PSI some avg10 % threshold for detection
 .IP \(bu
-. B IO_REVERT_ON_NORMAL
+.B IO_REVERT_ON_NORMAL
 - Revert limits when I/O returns to normal (true/false)
 .PP
 .SH PROCESS CGROUP RESTORATION
