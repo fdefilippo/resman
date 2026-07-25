@@ -106,7 +106,7 @@ jobs:
     name: Build RPM on Enterprise Linux 9
     needs: quality
     runs-on: ubuntu-24.04
-    container: rockylinux:9
+    container: quay.io/rockylinux/rockylinux:9
     steps:
       - name: Install RPM build tools
         run: |
