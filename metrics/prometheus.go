@@ -119,10 +119,7 @@ type PrometheusExporter struct {
 	controlCycleDuration      prometheus.Histogram
 	metricsCollectionDuration prometheus.Histogram
 
-	// Cache per evitare aggiornamenti troppo frequenti
-	lastUpdate     time.Time
-	updateInterval time.Duration
-	mu             sync.RWMutex
+	mu sync.RWMutex
 
 	// Stato interno
 	isRunning bool
@@ -174,7 +171,6 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		registry:             prometheus.NewRegistry(),
 		hostname:             hostname,
 		serverRole:           serverRole,
-		updateInterval:       15 * time.Second,
 		stopChan:             make(chan struct{}, 1),
 		activeUserMetrics:    make(map[string]bool),
 		prevMemoryHighEvents: make(map[string]uint64),
@@ -691,16 +687,6 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 	exp.mu.Lock()
 	defer exp.mu.Unlock()
 
-	// Aggiorna solo se è passato abbastanza tempo dall'ultimo aggiornamento
-	now := time.Now()
-	if now.Sub(exp.lastUpdate) < exp.updateInterval {
-		return
-	}
-	exp.lastUpdate = now
-
-	// Incrementa il contatore dei cicli
-	exp.controlCyclesTotal.Inc()
-
 	// Aggiorna le metriche base
 	for key, value := range metrics {
 		switch {
@@ -1086,6 +1072,7 @@ func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	if trigger == "" {
 		trigger = "unknown"
 	}
+	exp.controlCyclesTotal.Inc()
 	exp.controlCycleTriggers.WithLabelValues(trigger).Inc()
 }
 

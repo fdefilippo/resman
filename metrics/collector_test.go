@@ -214,6 +214,68 @@ func TestUpdateProcessCPUSampleRetainsBaselinesAboveLegacyLimit(t *testing.T) {
 	}
 }
 
+func TestCalculateProcessCPUAveragePreservesMulticoreUsage(t *testing.T) {
+	if got := calculateProcessCPUAverage(4, 1); got != 400 {
+		t.Fatalf("multicore average CPU = %f, want 400", got)
+	}
+	if got := calculateProcessCPUAverage(-1, 1); got != 0 {
+		t.Fatalf("negative average CPU = %f, want 0", got)
+	}
+}
+
+func TestUsernameCacheEvictsUIDZeroWhenOldest(t *testing.T) {
+	collector, err := NewCollector(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+
+	now := time.Now()
+	for uid := 0; uid < MAX_USERNAME_CACHE_SIZE; uid++ {
+		collector.usernameCache[uid] = "cached"
+		collector.usernameCacheTime[uid] = now
+	}
+	collector.usernameCacheTime[0] = now.Add(-time.Hour)
+
+	collector.cacheUsername(MAX_USERNAME_CACHE_SIZE, "new-user")
+
+	if _, exists := collector.usernameCache[0]; exists {
+		t.Fatal("oldest root cache entry was not evicted")
+	}
+	if got := len(collector.usernameCache); got != MAX_USERNAME_CACHE_SIZE {
+		t.Fatalf("username cache size = %d, want %d", got, MAX_USERNAME_CACHE_SIZE)
+	}
+	if got := collector.usernameCache[MAX_USERNAME_CACHE_SIZE]; got != "new-user" {
+		t.Fatalf("new cache entry = %q, want new-user", got)
+	}
+}
+
+func TestUsernameCacheTTLConcurrentAccess(t *testing.T) {
+	collector, err := NewCollector(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+	collector.cacheUsername(1000, "testuser")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			collector.SetUsernameCacheTTL(time.Duration(i+1) * time.Second)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_ = collector.GetUsernameCacheTTL()
+			_, _ = collector.getCachedUsername(1000)
+		}
+	}()
+	wg.Wait()
+}
+
 func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
 	collector := &Collector{
 		procCache: &procCache{

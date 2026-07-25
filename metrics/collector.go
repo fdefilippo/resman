@@ -498,16 +498,18 @@ func (c *Collector) cacheUsername(uid int, username string) {
 	// If cache is full, remove oldest entry (LRU eviction)
 	if len(c.usernameCache) >= MAX_USERNAME_CACHE_SIZE {
 		oldestUID := 0
-		oldestTime := time.Now()
+		var oldestTime time.Time
+		found := false
 
 		for uid, ts := range c.usernameCacheTime {
-			if ts.Before(oldestTime) {
+			if !found || ts.Before(oldestTime) {
 				oldestTime = ts
 				oldestUID = uid
+				found = true
 			}
 		}
 
-		if oldestUID != 0 {
+		if found {
 			delete(c.usernameCache, oldestUID)
 			delete(c.usernameCacheTime, oldestUID)
 			c.logger.Debug("Username cache full - evicted oldest entry",
@@ -522,16 +524,16 @@ func (c *Collector) cacheUsername(uid int, username string) {
 
 // SetUsernameCacheTTL imposta il TTL della cache username
 func (c *Collector) SetUsernameCacheTTL(ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.usernameCacheMutex.Lock()
+	defer c.usernameCacheMutex.Unlock()
 	c.usernameCacheTTL = ttl
 	c.logger.Debug("Username cache TTL updated", "ttl", ttl)
 }
 
 // GetUsernameCacheTTL restituisce il TTL corrente della cache username
 func (c *Collector) GetUsernameCacheTTL() time.Duration {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.usernameCacheMutex.RLock()
+	defer c.usernameCacheMutex.RUnlock()
 	return c.usernameCacheTTL
 }
 
@@ -1450,15 +1452,14 @@ func (c *Collector) getProcessCPUAverage(p *process.Process, systemUptimeSeconds
 		return 0
 	}
 
-	// Average CPU% = (total CPU seconds / process age seconds) * 100
+	return calculateProcessCPUAverage(totalCPUSeconds, processAgeSeconds)
+}
+
+func calculateProcessCPUAverage(totalCPUSeconds, processAgeSeconds float64) float64 {
 	avgCPU := (totalCPUSeconds / processAgeSeconds) * 100.0
 	if avgCPU < 0 {
 		return 0
 	}
-	if avgCPU > 100 {
-		return 100
-	}
-
 	return avgCPU
 }
 

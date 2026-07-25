@@ -359,6 +359,54 @@ func TestCleanupUserMetricsRemovesCPUAverageAndEMASeries(t *testing.T) {
 	}
 }
 
+func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.UpdateMetrics(map[string]float64{"cpu_total_usage": 10})
+	exporter.UpdateMetrics(map[string]float64{"cpu_total_usage": 25})
+
+	if got := gatheredMetricValue(t, exporter, "resman_cpu_total_usage_percent"); got != 25 {
+		t.Fatalf("CPU gauge after immediate refresh = %f, want 25", got)
+	}
+	if got := gatheredMetricValue(t, exporter, "resman_control_cycles_total"); got != 0 {
+		t.Fatalf("control cycles after metrics-only refresh = %f, want 0", got)
+	}
+
+	exporter.RecordControlCycleTrigger("polling")
+	exporter.RecordControlCycleTrigger("psi")
+	if got := gatheredMetricValue(t, exporter, "resman_control_cycles_total"); got != 2 {
+		t.Fatalf("control cycles after two triggers = %f, want 2", got)
+	}
+}
+
+func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string) float64 {
+	t.Helper()
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != name || len(family.Metric) == 0 {
+			continue
+		}
+		metric := family.Metric[0]
+		if metric.Gauge != nil {
+			return metric.Gauge.GetValue()
+		}
+		if metric.Counter != nil {
+			return metric.Counter.GetValue()
+		}
+		t.Fatalf("metric %s is neither gauge nor counter", name)
+	}
+	t.Fatalf("metric %s not found", name)
+	return 0
+}
+
 func writeCredentialFile(t *testing.T, name, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
