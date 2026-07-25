@@ -556,7 +556,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Name:        "user_io_read_ops_total",
-			Help:        "Total read operations on block devices by user",
+			Help:        "Total read-family syscalls reported by /proc/PID/io syscr per user",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "username"},
@@ -566,7 +566,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Name:        "user_io_write_ops_total",
-			Help:        "Total write operations on block devices by user",
+			Help:        "Total write-family syscalls reported by /proc/PID/io syscw per user",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "username"},

@@ -55,6 +55,31 @@ func TestUserMetricsStruct(t *testing.T) {
 	}
 }
 
+func TestParseProcessIOSeparatesStorageBytesFromSyscalls(t *testing.T) {
+	data := []byte(`rchar: 999999
+wchar: 888888
+syscr: 123
+syscw: 45
+read_bytes: 4096
+write_bytes: 8192
+cancelled_write_bytes: 1024
+`)
+
+	readBytes, writeBytes, readSyscalls, writeSyscalls := parseProcessIO(data)
+	if readBytes != 4096 {
+		t.Errorf("readBytes = %d, want 4096", readBytes)
+	}
+	if writeBytes != 8192 {
+		t.Errorf("writeBytes = %d, want 8192", writeBytes)
+	}
+	if readSyscalls != 123 {
+		t.Errorf("readSyscalls = %d, want 123", readSyscalls)
+	}
+	if writeSyscalls != 45 {
+		t.Errorf("writeSyscalls = %d, want 45", writeSyscalls)
+	}
+}
+
 func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	dbManager, err := database.NewDatabaseManager(t.TempDir() + "/metrics.db")
 	if err != nil {

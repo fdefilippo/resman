@@ -94,6 +94,12 @@ resman_user_io_read_ops_total{uid, username}
 resman_user_io_write_ops_total{uid, username}
 ```
 
+Le metriche `*_bytes_total` misurano i byte trasferiti verso i dispositivi a
+blocchi. Le metriche `*_ops_total` mantengono il nome storico, ma derivano dai
+contatori `syscr` e `syscw` di `/proc/PID/io`: contano le syscall della famiglia
+`read(2)` e `write(2)`, incluse quelle servite dalla page cache o dirette a pipe
+e socket, e non rappresentano gli IOPS del dispositivo usati da `io.max`.
+
 ### Query utili
 
 ```promql
@@ -103,7 +109,7 @@ topk(5, rate(resman_user_io_read_bytes_total[5m]))
 # Banda totale di scrittura per hostname
 sum by (hostname) (rate(resman_user_io_write_bytes_total[5m]))
 
-# IOPS totali per utente
+# Frequenza delle syscall read/write per utente (non IOPS del dispositivo)
 sum by (username) (rate(resman_user_io_read_ops_total[5m]) + rate(resman_user_io_write_ops_total[5m]))
 ```
 

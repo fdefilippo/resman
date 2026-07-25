@@ -721,13 +721,13 @@ resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
 .IP \(bu
 resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (PSS in bytes, RSS fallback)
 .IP \(bu
-resman_user_io_read_bytes{uid, username} \- IO read bytes per user (when IO limits enabled)
+resman_user_io_read_bytes_total{uid, username} \- Bytes read from block devices per user (when IO limits enabled)
 .IP \(bu
-resman_user_io_write_bytes{uid, username} \- IO write bytes per user
+resman_user_io_write_bytes_total{uid, username} \- Bytes written to block devices per user
 .IP \(bu
-resman_user_io_read_ops{uid, username} \- IO read operations per user
+resman_user_io_read_ops_total{uid, username} \- Read-family syscall count from /proc/PID/io syscr per user; this is not block-device IOPS
 .IP \(bu
-resman_user_io_write_ops{uid, username} \- IO write operations per user
+resman_user_io_write_ops_total{uid, username} \- Write-family syscall count from /proc/PID/io syscw per user; this is not block-device IOPS
 .IP \(bu
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu

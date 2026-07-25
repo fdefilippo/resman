@@ -384,6 +384,54 @@ func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *te
 	}
 }
 
+func TestIOOperationMetricHelpDescribesSyscallCounters(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.UpdateUserMetrics(
+		1000,
+		"testuser",
+		0,
+		0,
+		0,
+		0,
+		1,
+		false,
+		"",
+		"",
+		0,
+		0,
+		0,
+		10,
+		20,
+	)
+
+	tests := []struct {
+		name string
+		help string
+	}{
+		{
+			name: "resman_user_io_read_ops_total",
+			help: "Total read-family syscalls reported by /proc/PID/io syscr per user",
+		},
+		{
+			name: "resman_user_io_write_ops_total",
+			help: "Total write-family syscalls reported by /proc/PID/io syscw per user",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gatheredMetricHelp(t, exporter, tt.name); got != tt.help {
+				t.Fatalf("metric help = %q, want %q", got, tt.help)
+			}
+		})
+	}
+}
+
 func TestPrometheusExporterUsesSharedUsernameResolver(t *testing.T) {
 	exporter := &PrometheusExporter{}
 	var resolvedUID int
@@ -421,6 +469,21 @@ func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string
 	}
 	t.Fatalf("metric %s not found", name)
 	return 0
+}
+
+func gatheredMetricHelp(t *testing.T, exporter *PrometheusExporter, name string) string {
+	t.Helper()
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() == name {
+			return family.GetHelp()
+		}
+	}
+	t.Fatalf("metric %s not found", name)
+	return ""
 }
 
 func writeCredentialFile(t *testing.T, name, contents string) string {

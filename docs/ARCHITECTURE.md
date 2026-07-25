@@ -68,6 +68,10 @@ resman_user_io_read_ops_total{uid, username}
 resman_user_io_write_ops_total{uid, username}
 ```
 
+The `*_bytes_total` series report block-device traffic. For compatibility, the
+`*_ops_total` series retain their historical names but expose `/proc/PID/io`
+`syscr`/`syscw`: read/write-family syscall counts, not block-device IOPS.
+
 To show only limited users in dashboards, filter by `resman_user_cpu_limited{uid, username} == 1`.
 
 ## Cgroup Hierarchy

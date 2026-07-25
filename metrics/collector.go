@@ -53,8 +53,8 @@ type UserMetrics struct {
 	IsLimited       bool    // Whether user has CPU limits applied
 	IOReadBytes     uint64  // Total bytes read from block devices
 	IOWriteBytes    uint64  // Total bytes written to block devices
-	IOReadOps       uint64  // Total read operations
-	IOWriteOps      uint64  // Total write operations
+	IOReadOps       uint64  // Total read-family syscalls reported by /proc/PID/io syscr
+	IOWriteOps      uint64  // Total write-family syscalls reported by /proc/PID/io syscw
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -1065,11 +1065,11 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
 		tempData[uid].cpuUsageAvg += cpuAvg
 
-		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
-		tempData[uid].ioReadBytes += rB
-		tempData[uid].ioWriteBytes += wB
-		tempData[uid].ioReadOps += rO
-		tempData[uid].ioWriteOps += wO
+		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(int(p.Pid))
+		tempData[uid].ioReadBytes += readBytes
+		tempData[uid].ioWriteBytes += writeBytes
+		tempData[uid].ioReadOps += readSyscalls
+		tempData[uid].ioWriteOps += writeSyscalls
 	}
 
 	// Convert to UserMetrics with username
@@ -1158,11 +1158,11 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		}
 
 		// IO
-		rB, wB, rO, wO := c.getProcessIO(pid)
-		tempData[uid].ioReadBytes += rB
-		tempData[uid].ioWriteBytes += wB
-		tempData[uid].ioReadOps += rO
-		tempData[uid].ioWriteOps += wO
+		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(pid)
+		tempData[uid].ioReadBytes += readBytes
+		tempData[uid].ioWriteBytes += writeBytes
+		tempData[uid].ioReadOps += readSyscalls
+		tempData[uid].ioWriteOps += writeSyscalls
 	}
 
 	for uid, data := range tempData {
@@ -1301,9 +1301,10 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 	return 0
 }
 
-// getProcessIO reads /proc/[pid]/io and returns readBytes, writeBytes, readOps, writeOps.
+// getProcessIO reads /proc/[pid]/io. Byte counters describe storage traffic,
+// while syscall counters are syscr/syscw and do not represent block-device IOPS.
 // Returns 0 for all values if the file doesn't exist or can't be read.
-func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, writeOps uint64) {
+func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
 	ioFile := fmt.Sprintf("/proc/%d/io", pid)
 	data, err := os.ReadFile(ioFile)
 	if err != nil {
@@ -1312,6 +1313,10 @@ func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, write
 		return 0, 0, 0, 0
 	}
 
+	return parseProcessIO(data)
+}
+
+func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1335,13 +1340,13 @@ func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readOps, write
 		case "write_bytes":
 			writeBytes = val
 		case "syscr":
-			readOps = val
+			readSyscalls = val
 		case "syscw":
-			writeOps = val
+			writeSyscalls = val
 		}
 	}
 
-	return readBytes, writeBytes, readOps, writeOps
+	return readBytes, writeBytes, readSyscalls, writeSyscalls
 }
 
 // getSystemUptimeSeconds reads /proc/uptime and returns system uptime in seconds.
