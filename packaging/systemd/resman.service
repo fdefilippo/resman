@@ -1,13 +1,22 @@
 [Unit]
 Description=ResMan - Dynamic CPU/RAM/IO Resource Management
 Documentation=https://github.com/fdefilippo/resman
-After=network.target
-Wants=cgroup-tweaks.service
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target systemd-user-sessions.service vcs.service shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/usr/bin/resman /etc/resman.conf /sys/fs/cgroup /var/log /run
 ConditionDirectoryNotEmpty=/sys/fs/cgroup
 
 [Service]
 Type=simple
 User=root
+RuntimeDirectory=resman
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+ExecStartPre=/bin/sh -ec 'echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control; echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control'
+ExecStartPre=-/bin/sh -c 'echo "+io" > /sys/fs/cgroup/cgroup.subtree_control'
+ExecStartPre=-/bin/sh -c 'echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control'
 ExecStart=/usr/bin/resman --config /etc/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always

@@ -8,7 +8,7 @@
 
 # Nome del progetto
 PROJECT_NAME = resman
-VERSION = 1.24.2
+VERSION = 1.25
 RELEASE = 1
 
 # Percorsi
@@ -164,7 +164,12 @@ uninstall:
 # Crea struttura RPM
 rpm-dirs:
 	@echo "Creating RPM build directories..."
-	mkdir -p $(RPMBUILD_DIR)/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+	mkdir -p \
+		$(RPMBUILD_DIR)/BUILD \
+		$(RPMBUILD_DIR)/RPMS \
+		$(RPMBUILD_DIR)/SOURCES \
+		$(RPMBUILD_DIR)/SPECS \
+		$(RPMBUILD_DIR)/SRPMS
 
 # Crea tarball per RPM
 rpm-source: build rpm-dirs

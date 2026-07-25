@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.24.2
+Version: 1.25
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -54,6 +54,7 @@ v1.20.0: IO limits via cgroups v2 io controller.
 v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
 v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
 v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint gate.
+v1.25: architecture review remediation, dependency refresh and early systemd startup.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -133,7 +134,6 @@ install -m 644 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman.con
 
 # Installa service systemd
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
-install -m 644 packaging/systemd/cgroup-tweaks.service %{buildroot}/%{_unitdir}/
 
 # Installa man page
 install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_mandir}/man8/
@@ -161,7 +161,6 @@ install -p -m 0644 packaging/syslog/resman %{buildroot}%{_sysconfdir}/logrotate.
 
 # Crea directory per runtime files (buildroot)
 install -d -m 755 %{buildroot}/%{_sharedstatedir}/resman
-install -d -m 755 %{buildroot}/var/run/resman
 
 # Crea directory per certificati TLS (vuota, verrà popolata dall'admin)
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman/tls
@@ -184,28 +183,9 @@ fi
 # Post-install script
 %systemd_post resman.service
 
-# Crea directory per i file di runtime
-mkdir -p /var/run/resman
-chmod 755 /var/run/resman
-chown root:root /var/run/resman
-
 # Crea file di log
 touch /var/log/resman.log
 chmod 644 /var/log/resman.log
-
-# Abilita cgroup controllers se non già abilitati
-if ! grep -q "+cpu" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-    echo "+cpu" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-fi
-if ! grep -q "+cpuset" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-    echo "+cpuset" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-fi
-if ! grep -q "+io" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-    echo "+io" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-fi
-if ! grep -q "+memory" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-    echo "+memory" >> /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-fi
 
 echo "Resource Manager installed successfully!"
 echo ""
@@ -228,19 +208,13 @@ echo "Please review /etc/resman.conf before starting the service."
 # Aggiorna database man page
 %{_bindir}/mandb -q 2>/dev/null || true
 
-# Rimuove directory runtime (solo se vuota)
-rmdir /var/run/resman 2>/dev/null || true
-
 %files
 %license LICENSE
-%doc README.md
 %{_bindir}/%{name}
 %config(noreplace) %{_sysconfdir}/resman.conf
 %{_unitdir}/resman.service
-%{_unitdir}/cgroup-tweaks.service
 %{_mandir}/man8/resman.8.gz
 %dir %{_sharedstatedir}/resman
-%dir /var/run/resman
 %dir %{_sysconfdir}/resman/tls
 %config(noreplace) %{_sysconfdir}/rsyslog.d/resman.conf
 %config %{_sysconfdir}/logrotate.d/resman
@@ -253,6 +227,11 @@ rmdir /var/run/resman 2>/dev/null || true
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Jul 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.25-1
+- FIX: completed architecture review remediation across cgroup, state, metrics, database, config, logging and MCP
+- BUILD: refreshed compatible Go dependencies and verified the dependency graph
+- PACKAGING: merged cgroup controller setup into an early-boot resman.service ordered before Veritas and user sessions
+
 * Sun May 31 2026 Francesco Defilippo <francesco@defilippo.org> - 1.24.2-1
 - CLEANUP: resolved all golangci-lint findings (errcheck, staticcheck, ineffassign, unused)
 - FIX: error returns now handled or explicitly ignored on resource cleanup paths
@@ -290,7 +269,7 @@ rmdir /var/run/resman 2>/dev/null || true
 - FIX: Polling interval reload now updates the main loop ticker
 - FIX: Hardened config access during hot reload
 
-* Wed Apr 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.21.0-1
+* Thu Apr 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.21.0-1
 - NEW: CPU average metrics (resman_user_cpu_usage_average_percent)
 - NEW: CPU EMA metrics (resman_user_cpu_usage_ema_percent, α=0.3)
 - FIX: CPU filtering now excludes processes not running for >= 60 seconds
@@ -300,7 +279,7 @@ rmdir /var/run/resman 2>/dev/null || true
 - Dashboard: Updated Grafana dashboard v2.1 with CPU average/EMA panels
 - Updated man page to v1.21.0
 
-* Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.1-1
+* Wed Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.1-1
 - FIX: IO filtering now uses IOUserIncludeList/IOUserExcludeList (was using CPU lists)
 - FIX: RAM and IO thresholds now participate in activate/deactivate decisions
 - FIX: Removed unused UserMetrics fields (MemoryHighEvents, IO*)
@@ -310,7 +289,7 @@ rmdir /var/run/resman 2>/dev/null || true
 - Docs: Added docs/ARCHITECTURE.md
 - Updated Grafana dashboard for new metric labels
 
-* Tue Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.0-1
+* Wed Apr 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.20.0-1
 - NEW: IO limits via cgroups v2 io controller
 - New configuration parameters: IO_LIMIT_ENABLED, IO_READ_BPS, IO_WRITE_BPS, IO_READ_IOPS, IO_WRITE_IOPS
 - IO limits apply throttling when exceeded (no process killing)
