@@ -221,10 +221,10 @@ func (exp *PrometheusExporter) loadCredentials() error {
 	// Carica password per Basic Auth
 	if authType == "basic" || authType == "both" {
 		if strings.TrimSpace(exp.cfg.PrometheusAuthUsername) == "" {
-			return fmt.Errorf("Prometheus basic authentication username is empty")
+			return fmt.Errorf("prometheus basic authentication username is empty")
 		}
 		if exp.cfg.PrometheusAuthPasswordFile == "" {
-			return fmt.Errorf("Prometheus basic authentication password file is not configured")
+			return fmt.Errorf("prometheus basic authentication password file is not configured")
 		}
 		password, err := os.ReadFile(exp.cfg.PrometheusAuthPasswordFile)
 		if err != nil {
@@ -232,7 +232,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		}
 		exp.basicAuthPassword = strings.TrimSpace(string(password))
 		if exp.basicAuthPassword == "" {
-			return fmt.Errorf("Prometheus basic authentication password is empty")
+			return fmt.Errorf("prometheus basic authentication password is empty")
 		}
 		exp.logger.Info("Basic authentication password loaded")
 	}
@@ -240,7 +240,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 	// Carica secret per JWT
 	if authType == "jwt" || authType == "both" {
 		if exp.cfg.PrometheusJWTSecretFile == "" {
-			return fmt.Errorf("Prometheus JWT secret file is not configured")
+			return fmt.Errorf("prometheus JWT secret file is not configured")
 		}
 		secret, err := os.ReadFile(exp.cfg.PrometheusJWTSecretFile)
 		if err != nil {
@@ -248,7 +248,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		}
 		exp.jwtSecret = []byte(strings.TrimSpace(string(secret)))
 		if len(exp.jwtSecret) == 0 {
-			return fmt.Errorf("Prometheus JWT secret is empty")
+			return fmt.Errorf("prometheus JWT secret is empty")
 		}
 		exp.logger.Info("JWT secret loaded",
 			"issuer", exp.cfg.PrometheusJWTIssuer,
