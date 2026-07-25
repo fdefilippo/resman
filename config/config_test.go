@@ -514,6 +514,29 @@ func TestLoadFromEnvironmentSupportsPrometheusAliases(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvironmentAppliesEmptyOverrides(t *testing.T) {
+	t.Setenv("USER_EXCLUDE_LIST", "")
+	t.Setenv("BLACKOUT", "")
+
+	cfg := DefaultConfig()
+	cfg.UserExcludeList = []string{"^batch$"}
+	cfg.BlackoutSpec = "1-5 22-06"
+	cfg.BlackoutTimeframes = []Timeframe{{}}
+
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error: %v", err)
+	}
+	if cfg.UserExcludeList != nil {
+		t.Fatalf("UserExcludeList = %v, want nil after empty override", cfg.UserExcludeList)
+	}
+	if cfg.BlackoutSpec != "" {
+		t.Fatalf("BlackoutSpec = %q, want empty after override", cfg.BlackoutSpec)
+	}
+	if cfg.BlackoutTimeframes != nil {
+		t.Fatalf("BlackoutTimeframes = %v, want nil after empty override", cfg.BlackoutTimeframes)
+	}
+}
+
 func TestEveryEnvironmentFieldUsesAValidatedHandler(t *testing.T) {
 	cfgType := reflect.TypeOf(Config{})
 	for i := 0; i < cfgType.NumField(); i++ {
