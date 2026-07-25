@@ -1,0 +1,201 @@
+name: Release packages
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_version=${GITHUB_REF_NAME#v}
+          make_version=$(awk '$1 == "VERSION" && $2 == "=" { print $3; exit }' Makefile)
+          spec_version=$(awk '$1 == "Version:" { print $2; exit }' packaging/rpm/resman.spec)
+          main_version=$(sed -n 's/^var version = "\(.*\)"/\1/p' main.go)
+
+          if [[ "$tag_version" != "$make_version" && "$tag_version" != "${make_version}.0" ]]; then
+            echo "tag version $tag_version does not match project version $make_version" >&2
+            exit 1
+          fi
+          if [[ "$spec_version" != "$make_version" ]]; then
+            echo "RPM version $spec_version does not match Makefile version $make_version" >&2
+            exit 1
+          fi
+          if [[ "$main_version" != "$make_version" ]]; then
+            echo "main.go version $main_version does not match Makefile version $make_version" >&2
+            exit 1
+          fi
+
+      - name: Verify module files
+        run: |
+          go mod tidy
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Run tests with race detector
+        run: go test -race ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --max-same-issues=0 --max-issues-per-linter=0 ./...
+
+  deb:
+    name: Build DEB
+    needs: quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Debian packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential dpkg-dev
+
+      - name: Build Debian package
+        run: make deb
+
+      - name: Verify Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package=$(find build/deb -maxdepth 1 -type f -name 'resman_*.deb' -print -quit)
+          test -n "$package"
+          dpkg-deb --info "$package"
+          dpkg-deb --contents "$package"
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: build/deb/resman_*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: Build RPM on Enterprise Linux 9
+    needs: quality
+    runs-on: ubuntu-24.04
+    container: rockylinux:9
+    steps:
+      - name: Install RPM build tools
+        run: |
+          dnf install --assumeyes --setopt=install_weak_deps=False \
+            gcc \
+            git \
+            glibc-devel \
+            golang \
+            groff-base \
+            gzip \
+            make \
+            openssl \
+            rpm-build \
+            systemd \
+            systemd-rpm-macros \
+            tar
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build RPM package
+        run: make rpm
+
+      - name: Collect and verify RPM package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release
+          find "$HOME/rpmbuild/RPMS" -type f -name 'resman-*.rpm' \
+            -exec cp --target-directory=build/release {} +
+          test -n "$(find build/release -maxdepth 1 -type f -name 'resman-*.rpm' -print -quit)"
+          rpm --checksig build/release/resman-*.rpm
+          rpm --query --package --info build/release/resman-*.rpm
+          rpm --query --package --list build/release/resman-*.rpm
+
+      - name: Upload RPM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: build/release/resman-*.rpm
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - deb
+      - rpm
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-package"
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum resman_*.deb resman-*.rpm > SHA256SUMS
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/resman_*.deb release-assets/resman-*.rpm release-assets/SHA256SUMS)
+          if (( ${#assets[@]} != 3 )); then
+            echo "expected one DEB, one RPM and SHA256SUMS, found ${#assets[@]} assets" >&2
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "resman ${GITHUB_REF_NAME#v}" \
+              --repo "$GITHUB_REPOSITORY"
+          fi
