@@ -611,7 +611,7 @@ METRICS_DB_WRITE_INTERVAL=30
 USERNAME_CACHE_TTL=60
 
 # ========================
-# PSI EVENT-DRIVEN MODE [S]
+# PSI EVENT-DRIVEN MODE [D]
 # ========================
 # Uses poll() on cpu.pressure and io.pressure to trigger control cycles
 # only when system pressure exceeds configured thresholds, instead of
@@ -631,6 +631,7 @@ USERNAME_CACHE_TTL=60
 # PSI_WINDOW_US: PSI tracking window in microseconds
 # Default: 1000000 (1 second)
 # The kernel tracks stall time within this rolling window.
+# Changes to PSI_EVENT_DRIVEN, thresholds, or window rebuild the watcher.
 #
 # PSI_FALLBACK_INTERVAL: Fallback polling interval in seconds
 # Default: 300 (5 minutes)
@@ -641,6 +642,7 @@ USERNAME_CACHE_TTL=60
 # when PSI_EVENT_DRIVEN=true. This keeps operational dashboards fresh even
 # when no PSI pressure event wakes the decision loop. It does not apply or
 # remove limits. Default: 30 seconds.
+# Fallback and metrics refresh interval changes update their tickers immediately.
 #
 # PSI_BOOST_WEIGHT: CPU weight to apply when a limited user experiences
 # PSI pressure. When a user's cgroup is throttled by cpu.max, their

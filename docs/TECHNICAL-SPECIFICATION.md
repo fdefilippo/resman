@@ -494,24 +494,26 @@ The following processes are automatically excluded from CPU limits:
 - Handle component-specific reload logic
 
 **Reload Order:**
-1. Logging (immediate, for tracing)
-2. Prometheus exporter (may require restart)
-3. State manager (update thresholds)
-4. Cgroup manager (update paths)
-5. Metrics collector (update cache TTL, exclude lists)
+1. Preserve restart-required cgroup and Prometheus fields at their active values
+2. Logging (immediate, for tracing)
+3. Cgroup manager runtime parameters
+4. State manager
+5. Metrics collector
+6. Application runtime hook, including PSI watcher reconciliation
 
 **Key Functions:**
-- `NewReloader(state, cgroup, metrics, prometheus)`: Creates reloader
+- `NewReloader(state, cgroup, metrics, prometheus, hooks...)`: Creates reloader
 - `OnConfigChange(newConfig)`: Applies new configuration
 - `SafeConfigUpdate(updateFunc)`: Thread-safe configuration update
-- `handlePrometheusConfigChange(newConfig)`: Handles Prometheus changes
 
 **Dynamic Updates:**
 - `USER_EXCLUDE_LIST`: Applied immediately, cache cleared
 - `CPU_THRESHOLD`: Applied on next control cycle
 - `POLLING_INTERVAL`: Applied on next cycle
-- `LOG_LEVEL`: Applied on next log message
-- `PROMETHEUS_*`: May require restart for some changes
+- `LOG_LEVEL`: Applied immediately
+- `PSI_EVENT_DRIVEN`, PSI thresholds, and `PSI_WINDOW_US`: Rebuild the PSI watcher
+- `PSI_FALLBACK_INTERVAL`, `METRICS_REFRESH_INTERVAL`: Rebuild loop tickers immediately
+- `ENABLE_PROMETHEUS`, Prometheus bind host/port: Deferred until restart
 
 ---
 
@@ -983,12 +985,13 @@ type Manager struct {
 
 ```
 1. Config watcher detects change
-2. Debounce (100ms delay)
+2. Debounce (2 second delay)
 3. Load new configuration
 4. Validate configuration
 5. Call reloader.OnConfigChange()
 6. Update each component
-7. Log success/failure
+7. Record the processed file version even after a partial component failure
+8. Log success/failure
 ```
 
 ### 11.3 Component Updates
@@ -999,7 +1002,8 @@ type Manager struct {
 | Metrics | `UpdateConfig()` | Yes (cache cleared) |
 | State | Internal check | Next cycle |
 | Cgroup | Internal check | Next activation |
-| Prometheus | Check changes | May need restart |
+| Application/PSI | Runtime hook | Yes (watcher rebuilt when needed) |
+| Prometheus bind/lifecycle | Preserve active value | Restart required |
 
 ---
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"sync"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
@@ -22,6 +23,8 @@ type App struct {
 	sigChan    <-chan os.Signal
 	logger     *logging.Logger
 	err        error
+	cfgMu      sync.RWMutex
+	psiMu      sync.RWMutex
 
 	cgroupMgr          *cgroup.Manager
 	metricsCollector   *metrics.Collector
@@ -33,16 +36,30 @@ type App struct {
 	psiWatcher         *cgroup.PSIWatcher
 	psiEvents          <-chan cgroup.PSIEvent
 	psiEventDriven     bool
+	configReloaded     chan struct{}
+}
+
+func (a *App) currentConfig() *config.Config {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	return a.cfg
+}
+
+func (a *App) setCurrentConfig(cfg *config.Config) {
+	a.cfgMu.Lock()
+	a.cfg = cfg
+	a.cfgMu.Unlock()
 }
 
 // NewApp crea il builder dell'applicazione.
 func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, logger *logging.Logger) *App {
 	return &App{
-		cfg:        cfg,
-		configPath: configPath,
-		ctx:        ctx,
-		cancel:     cancel,
-		sigChan:    sigChan,
-		logger:     logger,
+		cfg:            cfg,
+		configPath:     configPath,
+		ctx:            ctx,
+		cancel:         cancel,
+		sigChan:        sigChan,
+		logger:         logger,
+		configReloaded: make(chan struct{}, 1),
 	}
 }

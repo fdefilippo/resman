@@ -146,11 +146,17 @@ heartbeat. Prometheus/Grafana metrics are refreshed separately every
 `METRICS_REFRESH_INTERVAL` seconds so dashboards remain current even without PSI
 events. That refresh does not apply or remove limits.
 
+PSI mode, trigger thresholds, tracking window, fallback interval, and metrics
+refresh interval support hot reload. Changes that affect kernel PSI triggers
+rebuild the watcher; loop interval changes take effect immediately.
+
 Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
 a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,
 `shared_cgroup`, `timestamp`, and `server_role`.
 
-Restart the service after configuration changes:
+Dynamic fields are reloaded automatically. Restart the service after changing
+fields marked static in `config/resman.conf.example`, such as cgroup paths or
+Prometheus listener, TLS, and authentication settings:
 
 ```bash
 sudo systemctl restart resman

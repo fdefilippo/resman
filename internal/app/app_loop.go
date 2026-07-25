@@ -20,12 +20,13 @@ func (a *App) Run() error {
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {
+	cfg := a.currentConfig()
 	pollingInterval := a.controlCycleInterval()
 	metricsRefreshInterval := a.metricsRefreshInterval()
 	a.logger.Info("Entering main control loop",
 		"polling_interval_seconds", pollingInterval,
 		"metrics_refresh_interval_seconds", metricsRefreshInterval,
-		"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_configured", cfg.GetPSIEventDriven(),
 		"psi_event_driven_active", a.isPSIEventDrivenActive(),
 	)
 
@@ -58,7 +59,7 @@ func (a *App) runControlLoop() error {
 		fmt.Fprintf(os.Stderr, "  1. Cgroup setup issues\n")
 		fmt.Fprintf(os.Stderr, "  2. Permission problems\n")
 		fmt.Fprintf(os.Stderr, "  3. Invalid configuration\n")
-		fmt.Fprintf(os.Stderr, "Check logs for details: tail -f %s\n", a.cfg.LogFile)
+		fmt.Fprintf(os.Stderr, "Check logs for details: tail -f %s\n", cfg.LogFile)
 	}
 
 	cycleComplete := make(chan struct{})
@@ -77,7 +78,10 @@ func (a *App) runControlLoop() error {
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
 		case <-retentionC:
 			a.handleDatabaseRetention()
-		case psiEvent, ok := <-a.psiEvents:
+		case <-a.configReloaded:
+			ticker = a.refreshControlTicker(ticker, &pollingInterval)
+			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
+		case psiEvent, ok := <-a.psiEventChannel():
 			if ok {
 				a.handlePSIEvent(psiEvent, &cycleComplete)
 			}
@@ -113,17 +117,7 @@ func (a *App) handleDatabaseRetention() {
 }
 
 func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycleComplete *chan struct{}) *time.Ticker {
-	currentPollingInterval := a.controlCycleInterval()
-	if currentPollingInterval != *pollingInterval {
-		ticker.Stop()
-		*pollingInterval = currentPollingInterval
-		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
-		a.logger.Info("Control loop interval updated",
-			"polling_interval_seconds", *pollingInterval,
-			"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
-			"psi_event_driven_active", a.isPSIEventDrivenActive(),
-		)
-	}
+	ticker = a.refreshControlTicker(ticker, pollingInterval)
 
 	startTime := time.Now()
 	if !a.acquireCycleSlot(*cycleComplete, "ticker", *pollingInterval) {
@@ -149,6 +143,22 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 		)
 	}
 
+	return ticker
+}
+
+func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *time.Ticker {
+	currentPollingInterval := a.controlCycleInterval()
+	if currentPollingInterval != *pollingInterval {
+		cfg := a.currentConfig()
+		ticker.Stop()
+		*pollingInterval = currentPollingInterval
+		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
+		a.logger.Info("Control loop interval updated",
+			"polling_interval_seconds", *pollingInterval,
+			"psi_event_driven_configured", cfg.GetPSIEventDriven(),
+			"psi_event_driven_active", a.isPSIEventDrivenActive(),
+		)
+	}
 	return ticker
 }
 
@@ -194,16 +204,18 @@ func (a *App) refreshMetricsTicker(current *time.Ticker, currentC <-chan time.Ti
 	*currentInterval = nextInterval
 
 	if nextInterval <= 0 {
+		cfg := a.currentConfig()
 		a.logger.Info("Metrics refresh loop disabled",
-			"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+			"psi_event_driven_configured", cfg.GetPSIEventDriven(),
 			"psi_event_driven_active", a.isPSIEventDrivenActive(),
 		)
 		return nil, nil
 	}
 
+	cfg := a.currentConfig()
 	a.logger.Info("Metrics refresh interval updated",
 		"metrics_refresh_interval_seconds", nextInterval,
-		"psi_event_driven_configured", a.cfg.GetPSIEventDriven(),
+		"psi_event_driven_configured", cfg.GetPSIEventDriven(),
 		"psi_event_driven_active", a.isPSIEventDrivenActive(),
 	)
 	return newOptionalTicker(nextInterval)

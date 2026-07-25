@@ -4,15 +4,20 @@ import (
 	"os"
 
 	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/config"
 )
 
 func (a *App) startPSIWatcher() {
-	if !a.cfg.GetPSIEventDriven() {
+	a.startPSIWatcherWithConfig(a.currentConfig())
+}
+
+func (a *App) startPSIWatcherWithConfig(cfg *config.Config) {
+	if cfg == nil || !cfg.GetPSIEventDriven() {
 		return
 	}
 
-	cgroupCPUPressure := a.cfg.CgroupRoot + "/cpu.pressure"
-	cgroupIOPressure := a.cfg.CgroupRoot + "/io.pressure"
+	cgroupCPUPressure := cfg.CgroupRoot + "/cpu.pressure"
+	cgroupIOPressure := cfg.CgroupRoot + "/io.pressure"
 	sysCPUPressure := selectPressurePath(cgroupCPUPressure, "/proc/pressure/cpu")
 	sysIOPressure := selectPressurePath(cgroupIOPressure, "/proc/pressure/io")
 	if sysCPUPressure == "" && sysIOPressure == "" {
@@ -21,14 +26,14 @@ func (a *App) startPSIWatcher() {
 			"cgroup_io_pressure_path", cgroupIOPressure,
 			"proc_cpu_pressure_path", "/proc/pressure/cpu",
 			"proc_io_pressure_path", "/proc/pressure/io",
-			"polling_interval_seconds", a.cfg.GetPollingInterval(),
+			"polling_interval_seconds", cfg.GetPollingInterval(),
 		)
 		return
 	}
 
-	psiWatcher := cgroup.NewPSIWatcher(uint64(a.cfg.GetPSIWindowUs()))
-	psiWatcher.SetThreshold("cpu", uint64(a.cfg.GetPSICPUStallThreshold()))
-	psiWatcher.SetThreshold("io", uint64(a.cfg.GetPSIOStallThreshold()))
+	psiWatcher := cgroup.NewPSIWatcher(uint64(cfg.GetPSIWindowUs()))
+	psiWatcher.SetThreshold("cpu", uint64(cfg.GetPSICPUStallThreshold()))
+	psiWatcher.SetThreshold("io", uint64(cfg.GetPSIOStallThreshold()))
 	if err := psiWatcher.Start(); err != nil {
 		a.logger.Warn("Failed to start PSI watcher, falling back to polling", "error", err)
 		return
@@ -52,28 +57,76 @@ func (a *App) startPSIWatcher() {
 	if monitored == 0 {
 		psiWatcher.Stop()
 		a.logger.Warn("No PSI pressure files could be monitored, falling back to polling",
-			"polling_interval_seconds", a.cfg.GetPollingInterval(),
+			"polling_interval_seconds", cfg.GetPollingInterval(),
 		)
 		return
 	}
 
+	a.psiMu.Lock()
 	a.psiWatcher = psiWatcher
 	a.psiEvents = psiWatcher.Events()
 	a.psiEventDriven = true
+	a.psiMu.Unlock()
 	if pressureFileExists(cgroupCPUPressure) || pressureFileExists(cgroupIOPressure) {
 		a.stateManager.RegisterPSIWatcher(psiWatcher)
 	} else {
 		a.logger.Info("Per-user PSI boosting disabled because cgroup pressure files are unavailable")
 	}
 	a.logger.Info("PSI event-driven mode enabled",
-		"cpu_threshold_us", a.cfg.GetPSICPUStallThreshold(),
-		"io_threshold_us", a.cfg.GetPSIOStallThreshold(),
-		"window_us", a.cfg.GetPSIWindowUs(),
+		"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
+		"io_threshold_us", cfg.GetPSIOStallThreshold(),
+		"window_us", cfg.GetPSIWindowUs(),
 		"cpu_pressure_path", sysCPUPressure,
 		"io_pressure_path", sysIOPressure,
 		"system_monitors", monitored,
 		"note", "PSI events trigger user CPU weight boosts and extra control cycles",
 	)
+}
+
+func (a *App) applyReloadedConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+
+	previous := a.currentConfig()
+	restartPSI := previous == nil ||
+		previous.GetPSIEventDriven() != cfg.GetPSIEventDriven() ||
+		previous.GetPSICPUStallThreshold() != cfg.GetPSICPUStallThreshold() ||
+		previous.GetPSIOStallThreshold() != cfg.GetPSIOStallThreshold() ||
+		previous.GetPSIWindowUs() != cfg.GetPSIWindowUs()
+	a.setCurrentConfig(cfg)
+	if !restartPSI {
+		a.notifyConfigReloaded()
+		return nil
+	}
+
+	a.stopPSIWatcher()
+	a.startPSIWatcherWithConfig(cfg)
+	a.notifyConfigReloaded()
+	return nil
+}
+
+func (a *App) notifyConfigReloaded() {
+	select {
+	case a.configReloaded <- struct{}{}:
+	default:
+	}
+}
+
+func (a *App) stopPSIWatcher() {
+	a.psiMu.Lock()
+	psiWatcher := a.psiWatcher
+	a.psiWatcher = nil
+	a.psiEvents = nil
+	a.psiEventDriven = false
+	a.psiMu.Unlock()
+
+	if a.stateManager != nil {
+		a.stateManager.RegisterPSIWatcher(nil)
+	}
+	if psiWatcher != nil {
+		psiWatcher.Stop()
+	}
 }
 
 func selectPressurePath(cgroupPath string, procPath string) string {
@@ -92,7 +145,17 @@ func pressureFileExists(path string) bool {
 }
 
 func (a *App) isPSIEventDrivenActive() bool {
-	return a.cfg.GetPSIEventDriven() && a.psiEventDriven
+	cfg := a.currentConfig()
+	a.psiMu.RLock()
+	active := a.psiEventDriven
+	a.psiMu.RUnlock()
+	return cfg != nil && cfg.GetPSIEventDriven() && active
+}
+
+func (a *App) psiEventChannel() <-chan cgroup.PSIEvent {
+	a.psiMu.RLock()
+	defer a.psiMu.RUnlock()
+	return a.psiEvents
 }
 
 func (a *App) handlePSIEvent(psiEvent cgroup.PSIEvent, cycleComplete *chan struct{}) {

@@ -256,23 +256,29 @@ func (w *Watcher) handleConfigChange(force bool) {
 
 	w.logger.Info("Configuration reloaded successfully")
 
-	// Chiama il callback per applicare la nuova configurazione
+	var applyErr error
 	if w.onChange != nil {
 		if err := w.onChange.OnConfigChange(newConfig); err != nil {
+			applyErr = err
 			w.logger.Error("Failed to apply new configuration",
 				"error", err,
 			)
-			// Non aggiornare la configurazione corrente se fallisce
-			return
 		}
 	}
 
-	// Aggiorna lo stato interno
 	w.mu.Lock()
 	w.currentConfig = newConfig
 	w.lastModTime = fileInfo.ModTime()
 	w.lastFileSize = fileInfo.Size()
 	w.mu.Unlock()
+
+	if applyErr != nil {
+		w.logger.Warn("Configuration file marked as processed after partial apply",
+			"file", w.configPath,
+			"error", applyErr,
+		)
+		return
+	}
 
 	w.logger.Info("New configuration applied successfully")
 }

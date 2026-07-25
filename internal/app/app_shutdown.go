@@ -26,16 +26,17 @@ func (a *App) startSignalHandler() {
 						a.logger.Warn("Config watcher not available for SIGHUP reload")
 					}
 				case syscall.SIGINT, syscall.SIGTERM:
+					cfg := a.currentConfig()
 					a.logger.Info("Received termination signal, initiating shutdown",
 						"signal", sig.String(),
 					)
 					a.cancel()
 
 					go func() {
-						timeout := time.Duration(a.cfg.GetMCPShutdownTimeout()*2) * time.Second
+						timeout := time.Duration(cfg.GetMCPShutdownTimeout()*2) * time.Second
 						time.Sleep(timeout)
 						a.logger.Warn("Shutdown timeout exceeded — cleanup did not complete. Forcing exit.",
-							"timeout_seconds", a.cfg.GetMCPShutdownTimeout()*2,
+							"timeout_seconds", cfg.GetMCPShutdownTimeout()*2,
 						)
 						// Last-resort force exit; nothing actionable if it fails.
 						_ = syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
@@ -76,8 +77,11 @@ func (a *App) shutdown() {
 		a.logger.Info("Metrics collector stopped")
 	}
 
-	if a.psiWatcher != nil {
-		a.psiWatcher.Stop()
+	a.psiMu.RLock()
+	psiWatcherActive := a.psiWatcher != nil
+	a.psiMu.RUnlock()
+	if psiWatcherActive {
+		a.stopPSIWatcher()
 		a.logger.Info("PSI watcher stopped")
 	}
 

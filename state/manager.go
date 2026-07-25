@@ -365,6 +365,8 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 
 // RegisterPSIWatcher sets the PSI watcher for per-user cgroup monitoring.
 func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	m.psiWatcher = w
 }
 

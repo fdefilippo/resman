@@ -273,6 +273,11 @@ Configuration parameters:
 .IP \(bu 2
 .B PSI_EVENT_DRIVEN
 - Enable PSI event-driven mode (true/false, default: false)
+.PP
+PSI mode, CPU and I/O stall thresholds, the tracking window, fallback interval,
+and metrics refresh interval support configuration reload. Changes to the mode,
+thresholds, or window rebuild the kernel PSI monitors. Loop interval changes
+take effect immediately.
 .IP \(bu
 .B PSI_CPU_STALL_THRESHOLD
 - CPU stall threshold in microseconds (default: 50000 = 5% on 1s window)

@@ -201,8 +201,8 @@ func (a *App) WithConfigWatcher() *App {
 		return a
 	}
 
-	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.prometheusExporter)
-	configWatcher, err := config.NewWatcher(a.configPath, a.cfg, reloader)
+	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.prometheusExporter, a.applyReloadedConfig)
+	configWatcher, err := config.NewWatcher(a.configPath, a.currentConfig(), reloader)
 	if err != nil {
 		a.logger.Warn("Failed to create config watcher, continuing without auto-reload",
 			"error", err,
@@ -231,12 +231,13 @@ func (a *App) WithMCPServer() *App {
 		return a
 	}
 
-	if !a.cfg.MCPEnabled {
+	cfg := a.currentConfig()
+	if !cfg.MCPEnabled {
 		a.logger.Info("MCP server disabled by configuration")
 		return a
 	}
 
-	mcpServer, err := mcp.NewServer(a.cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager)
+	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager)
 	if err != nil {
 		a.logger.Error("Failed to initialize MCP server", "error", err)
 		fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize MCP server: %v\n", err)
@@ -250,17 +251,17 @@ func (a *App) WithMCPServer() *App {
 		a.logger.Error("Failed to start MCP server", "error", err)
 		fmt.Fprintf(os.Stderr, "\nWarning: Failed to start MCP server: %v\n", err)
 		fmt.Fprintf(os.Stderr, "MCP server unavailable. Check:\n")
-		fmt.Fprintf(os.Stderr, "  1. Transport type: %s\n", a.cfg.MCPTransport)
-		if a.cfg.MCPTransport == "http" {
-			fmt.Fprintf(os.Stderr, "  2. Port availability: %d\n", a.cfg.MCPHTTPPort)
+		fmt.Fprintf(os.Stderr, "  1. Transport type: %s\n", cfg.MCPTransport)
+		if cfg.MCPTransport == "http" {
+			fmt.Fprintf(os.Stderr, "  2. Port availability: %d\n", cfg.MCPHTTPPort)
 		}
 		return a
 	}
 
 	a.mcpServer = mcpServer
 	a.logger.Info("MCP server started",
-		"transport", a.cfg.MCPTransport,
-		"port", a.cfg.MCPHTTPPort,
+		"transport", cfg.MCPTransport,
+		"port", cfg.MCPHTTPPort,
 	)
 	return a
 }
