@@ -15,6 +15,8 @@ METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 # TIMING [D]
 # ========================
 POLLING_INTERVAL=30
+# Minimum duration for global limits and each newly limited/re-added user.
+# Idle release uses the per-user CPU EMA after this hold time expires.
 MIN_ACTIVE_TIME=60
 METRICS_CACHE_TTL=15
 METRICS_REFRESH_INTERVAL=30

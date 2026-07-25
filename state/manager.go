@@ -44,7 +44,9 @@ type Manager struct {
 	limitsActive      bool
 	limitsAppliedTime time.Time
 	activeUsers       map[int]bool // UID -> se limitato
-	sharedCgroupPath  string       // Percorso del cgroup condiviso
+	userLimitedAt     map[int]time.Time
+	resourceLimits    map[int]userResourceLimitState
+	sharedCgroupPath  string // Percorso del cgroup condiviso
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -74,6 +76,14 @@ type Manager struct {
 	// PSI watcher for per-user adaptive CPU weight boosting
 	psiWatcher   *cgroup.PSIWatcher
 	psiBoostedAt map[int]time.Time // uid -> when last boosted
+}
+
+type userResourceLimitState struct {
+	ram        bool
+	ramApplied bool
+	swap       bool
+	io         bool
+	ioApplied  bool
 }
 
 // ThresholdTracker monitora il superamento della soglia CPU nel tempo
@@ -119,6 +129,7 @@ type CgroupManager interface {
 	ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string, highLimit string) error
 	RemoveRAMLimit(uid int) error
 	RemoveRAMHigh(uid int) error
+	RemoveRAMSwapLimit(uid int) error
 	GetCgroupRAMUsage(uid int) (uint64, error)
 	GetMemoryHighEvents(uid int) (uint64, error)
 	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
@@ -173,6 +184,8 @@ func NewManager(
 		limitsActive:       false,
 		limitsAppliedTime:  time.Time{},
 		activeUsers:        make(map[int]bool),
+		userLimitedAt:      make(map[int]time.Time),
+		resourceLimits:     make(map[int]userResourceLimitState),
 		sharedCgroupPath:   "",
 		thresholdTracker:   &ThresholdTracker{},
 		stabilityTracker:   &UserStabilityTracker{underThreshold: make(map[int]int)},

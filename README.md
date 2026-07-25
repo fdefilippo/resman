@@ -107,6 +107,14 @@ before `CPU_THRESHOLD_DURATION` starts. Every process state is sampled
 immediately; `PROCESS_MIN_AGE_SECONDS` affects only the lifetime-average metric.
 With `POLLING_INTERVAL=30` and `CPU_THRESHOLD_DURATION=90`, limits normally
 activate about 120 seconds after the first observation, plus polling alignment.
+Idle release uses each user's CPU EMA rather than a single instantaneous sample.
+`MIN_ACTIVE_TIME` is also the minimum hold time after that user is initially
+limited or re-added; re-adding a user does not restart the global activation
+timer.
+
+Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
+are already active. Limits that are disabled or no longer applicable are reset
+and retried on later cycles if cleanup fails.
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of

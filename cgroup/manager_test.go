@@ -206,6 +206,26 @@ func TestVerifyCgroupRootWriteAccessPropagatesOpenError(t *testing.T) {
 	}
 }
 
+func TestRemoveRAMSwapLimitWritesMax(t *testing.T) {
+	userPath := filepath.Join(t.TempDir(), "user_1000")
+	if err := os.MkdirAll(userPath, 0755); err != nil {
+		t.Fatalf("failed to create user cgroup fixture: %v", err)
+	}
+	swapMaxPath := filepath.Join(userPath, "memory.swap.max")
+	if err := os.WriteFile(swapMaxPath, []byte("0"), 0644); err != nil {
+		t.Fatalf("failed to create memory.swap.max fixture: %v", err)
+	}
+
+	manager := &Manager{
+		logger:         logging.GetLogger(),
+		createdCgroups: map[int]string{1000: userPath},
+	}
+	if err := manager.RemoveRAMSwapLimit(1000); err != nil {
+		t.Fatalf("RemoveRAMSwapLimit() error: %v", err)
+	}
+	assertFileContent(t, swapMaxPath, "max")
+}
+
 func TestEnableCPUControllers(t *testing.T) {
 	// This test requires root and cgroups
 	if os.Getuid() != 0 {

@@ -91,6 +91,9 @@ func (m *mockCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLim
 }
 func (m *mockCgroupManager) RemoveRAMLimit(uid int) error { return nil }
 func (m *mockCgroupManager) RemoveRAMHigh(uid int) error  { return nil }
+func (m *mockCgroupManager) RemoveRAMSwapLimit(uid int) error {
+	return nil
+}
 func (m *mockCgroupManager) GetCgroupRAMUsage(uid int) (uint64, error) {
 	return 0, nil
 }
@@ -379,6 +382,10 @@ type deactivateCgroupManager struct {
 	applyCPUWeightCalls      []int
 	applyRAMLimitCalls       []string
 	applyIOLimitCalls        []int
+	removeRAMHighCalls       []int
+	removeRAMLimitCalls      []int
+	removeRAMSwapLimitCalls  []int
+	removeIOLimitCalls       []int
 	applySharedCPULimitCalls []string
 	createdUserSubgroups     []int
 	movedSharedUsers         []int
@@ -390,6 +397,30 @@ type blockingReleaseCgroupManager struct {
 	deactivateCgroupManager
 	releaseStarted chan struct{}
 	releaseProceed chan struct{}
+}
+
+type flakyResourceCgroupManager struct {
+	deactivateCgroupManager
+	ramFailures int
+	ioFailures  int
+}
+
+func (m *flakyResourceCgroupManager) ApplyRAMLimitWithHigh(uid int, maxLimit, highLimit string) error {
+	m.applyRAMLimitCalls = append(m.applyRAMLimitCalls, fmt.Sprintf("%d:%s:%s", uid, maxLimit, highLimit))
+	if m.ramFailures > 0 {
+		m.ramFailures--
+		return errors.New("RAM apply failed")
+	}
+	return nil
+}
+
+func (m *flakyResourceCgroupManager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
+	m.applyIOLimitCalls = append(m.applyIOLimitCalls, uid)
+	if m.ioFailures > 0 {
+		m.ioFailures--
+		return errors.New("IO apply failed")
+	}
+	return nil
 }
 
 func (m *blockingReleaseCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
@@ -434,6 +465,26 @@ func (m *deactivateCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, 
 
 func (m *deactivateCgroupManager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
 	m.applyIOLimitCalls = append(m.applyIOLimitCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) RemoveRAMHigh(uid int) error {
+	m.removeRAMHighCalls = append(m.removeRAMHighCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) RemoveRAMLimit(uid int) error {
+	m.removeRAMLimitCalls = append(m.removeRAMLimitCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) RemoveRAMSwapLimit(uid int) error {
+	m.removeRAMSwapLimitCalls = append(m.removeRAMSwapLimitCalls, uid)
+	return nil
+}
+
+func (m *deactivateCgroupManager) RemoveIOLimit(uid int) error {
+	m.removeIOLimitCalls = append(m.removeIOLimitCalls, uid)
 	return nil
 }
 
@@ -575,6 +626,46 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	}
 }
 
+func TestDeactivateLimitsRemovesResourcesAppliedBeforeReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.RAMQuotaPerUser = "1G"
+	cfg.DisableSwap = true
+	cfg.IOEnabled = true
+
+	collector := &mockMetricsCollector{usernames: map[int]string{1000: "user1000"}}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("MkdirAll(%s) error: %v", sharedPath, err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	manager.activeUsers[1000] = true
+	manager.applyUserResourceLimits(1000, cfg)
+
+	manager.UpdateConfig(config.DefaultConfig())
+	if err := manager.deactivateLimits(); err != nil {
+		t.Fatalf("deactivateLimits() error: %v", err)
+	}
+
+	if !reflect.DeepEqual(cgroupManager.removeRAMHighCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeRAMLimitCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeRAMSwapLimitCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeIOLimitCalls, []int{1000}) {
+		t.Fatalf("tracked resource cleanup calls high=%v max=%v swap=%v io=%v, want [1000] each",
+			cgroupManager.removeRAMHighCalls,
+			cgroupManager.removeRAMLimitCalls,
+			cgroupManager.removeRAMSwapLimitCalls,
+			cgroupManager.removeIOLimitCalls,
+		)
+	}
+}
+
 func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.RAMEnabled = true
@@ -614,6 +705,222 @@ func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 	}
 	if !manager.activeUsers[1000] {
 		t.Fatal("re-added user 1000 should be active")
+	}
+}
+
+func TestReleaseIdleUsersReconcilesResourceLimitsAfterReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.RAMQuotaPerUser = "1G"
+	cfg.DisableSwap = true
+	cfg.IOEnabled = true
+
+	collector := &mockMetricsCollector{usernames: map[int]string{1000: "user1000"}}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+	manager.activeUsers[1000] = true
+	manager.userLimitedAt[1000] = time.Now().Add(-time.Minute)
+	manager.applyUserResourceLimits(1000, cfg)
+
+	reloaded := config.DefaultConfig()
+	manager.UpdateConfig(reloaded)
+	metrics := &SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  map[int]float64{1000: 10},
+		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		EligibleUsers: []int{1000},
+	}
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	if !reflect.DeepEqual(cgroupManager.removeRAMHighCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeRAMLimitCalls, []int{1000}) {
+		t.Fatalf("RAM removal calls high=%v max=%v, want [1000] for both",
+			cgroupManager.removeRAMHighCalls, cgroupManager.removeRAMLimitCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.removeIOLimitCalls, []int{1000}) {
+		t.Fatalf("IO removal calls = %v, want [1000]", cgroupManager.removeIOLimitCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.removeRAMSwapLimitCalls, []int{1000}) {
+		t.Fatalf("RAM swap removal calls = %v, want [1000]", cgroupManager.removeRAMSwapLimitCalls)
+	}
+	if !manager.activeUsers[1000] {
+		t.Fatal("resource-only reload removed the user from CPU limiting")
+	}
+	if _, exists := manager.resourceLimits[1000]; exists {
+		t.Fatal("resource limit tracking remained after successful reconciliation")
+	}
+}
+
+func TestReleaseIdleUsersRetriesPartialResourceLimitApplication(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.RAMQuotaPerUser = "1G"
+	cfg.IOEnabled = true
+
+	collector := &mockMetricsCollector{usernames: map[int]string{1000: "user1000"}}
+	cgroupManager := &flakyResourceCgroupManager{ramFailures: 1, ioFailures: 1}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+	manager.activeUsers[1000] = true
+	manager.userLimitedAt[1000] = time.Now()
+	manager.applyUserResourceLimits(1000, cfg)
+
+	initialState := manager.resourceLimits[1000]
+	if !initialState.ram || initialState.ramApplied || !initialState.io || initialState.ioApplied {
+		t.Fatalf("partial resource state = %+v, want tracked but not fully applied", initialState)
+	}
+
+	systemMetrics := &SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  map[int]float64{1000: 10},
+		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		EligibleUsers: []int{1000},
+	}
+	if err := manager.releaseIdleUsers(systemMetrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	if len(cgroupManager.applyRAMLimitCalls) != 2 || len(cgroupManager.applyIOLimitCalls) != 2 {
+		t.Fatalf("resource apply attempts RAM=%d IO=%d, want two each",
+			len(cgroupManager.applyRAMLimitCalls), len(cgroupManager.applyIOLimitCalls))
+	}
+	finalState := manager.resourceLimits[1000]
+	if !finalState.ramApplied || !finalState.ioApplied {
+		t.Fatalf("resource state after retry = %+v, want fully applied", finalState)
+	}
+}
+
+func TestReleaseIdleUsersReleasesNewlyIneligibleUser(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.RAMQuotaPerUser = "1G"
+	cfg.IOEnabled = true
+
+	collector := &mockMetricsCollector{usernames: map[int]string{1000: "user1000"}}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+	manager.activeUsers[1000] = true
+	manager.userLimitedAt[1000] = time.Now()
+	manager.applyUserResourceLimits(1000, cfg)
+
+	metrics := &SystemMetrics{
+		TotalCores:   4,
+		UserCPUUsage: map[int]float64{1000: 10},
+		UserMetrics:  map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+	}
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	if manager.activeUsers[1000] {
+		t.Fatal("newly ineligible user remained in activeUsers")
+	}
+	if !reflect.DeepEqual(cgroupManager.releasedUsers, []int{1000}) {
+		t.Fatalf("released users = %v, want [1000]", cgroupManager.releasedUsers)
+	}
+	if !reflect.DeepEqual(cgroupManager.removeRAMHighCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeRAMLimitCalls, []int{1000}) ||
+		!reflect.DeepEqual(cgroupManager.removeIOLimitCalls, []int{1000}) {
+		t.Fatalf("tracked resource limits were not removed: high=%v max=%v io=%v",
+			cgroupManager.removeRAMHighCalls,
+			cgroupManager.removeRAMLimitCalls,
+			cgroupManager.removeIOLimitCalls,
+		)
+	}
+}
+
+func TestReleaseIdleUsersUsesEMAAndPerUserHoldTime(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinActiveTime = 60
+
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+	manager.activeUsers[1000] = true
+	manager.userLimitedAt[1000] = time.Now().Add(-2 * time.Minute)
+
+	metrics := &SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  map[int]float64{1000: 0},
+		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 5}},
+		EligibleUsers: []int{1000},
+	}
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers(high EMA) error: %v", err)
+	}
+	if !manager.activeUsers[1000] {
+		t.Fatal("instantaneous idle sample released a user whose EMA was active")
+	}
+
+	metrics.UserMetrics[1000].CPUUsageEMA = 0
+	manager.userLimitedAt[1000] = time.Now()
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers(hold time) error: %v", err)
+	}
+	if !manager.activeUsers[1000] {
+		t.Fatal("user was released before its per-user minimum active time")
+	}
+
+	manager.userLimitedAt[1000] = time.Now().Add(-2 * time.Minute)
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers(expired hold) error: %v", err)
+	}
+	if manager.activeUsers[1000] {
+		t.Fatal("idle user remained limited after EMA and hold-time conditions were met")
+	}
+}
+
+func TestReleaseIdleUsersReAddDoesNotResetGlobalActivationTime(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	globalActivation := time.Now().Add(-10 * time.Minute)
+	manager.limitsActive = true
+	manager.limitsAppliedTime = globalActivation
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+
+	metrics := &SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  map[int]float64{1000: 10},
+		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		EligibleUsers: []int{1000},
+	}
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	if !manager.activeUsers[1000] {
+		t.Fatal("active eligible user was not re-added")
+	}
+	if !manager.limitsAppliedTime.Equal(globalActivation) {
+		t.Fatalf("global limitsAppliedTime changed from %s to %s",
+			globalActivation, manager.limitsAppliedTime)
+	}
+	if manager.userLimitedAt[1000].Before(globalActivation) {
+		t.Fatalf("per-user activation time = %s, want re-add time", manager.userLimitedAt[1000])
 	}
 }
 

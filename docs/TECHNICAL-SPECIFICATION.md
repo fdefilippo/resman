@@ -551,7 +551,7 @@ METRICS_CACHE_FILE="/var/run/resman/metrics.cache"
 # TIMING (seconds)
 # ========================
 POLLING_INTERVAL=30          # Control cycle interval
-MIN_ACTIVE_TIME=60           # Minimum time limits stay active
+MIN_ACTIVE_TIME=60           # Global and per-user minimum active time
 METRICS_CACHE_TTL=15         # Metrics cache duration
 
 # ========================
@@ -658,6 +658,13 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman-go --config /etc/resman.conf
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
 - `time_since_activation >= MIN_ACTIVE_TIME`
 - `system_load OK`
+
+**Idle User Release:**
+- Uses the per-user CPU EMA rather than one instantaneous sample
+- Requires the user's own `MIN_ACTIVE_TIME` hold to expire
+- Releases users immediately when they disappear or become ineligible
+- Re-adds active eligible users without resetting the global activation time
+- Reconciles tracked RAM/IO limits after dynamic enable or filter changes
 
 ### 5.3 Limit Application
 

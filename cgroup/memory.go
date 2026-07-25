@@ -60,6 +60,20 @@ func (m *Manager) RemoveRAMLimit(uid int) error {
 	return m.ApplyRAMLimit(uid, "max")
 }
 
+// RemoveRAMSwapLimit removes the swap limit by setting memory.swap.max to max.
+func (m *Manager) RemoveRAMSwapLimit(uid int) error {
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return fmt.Errorf("cgroup for UID %d not found", uid)
+	}
+
+	swapMaxFile := filepath.Join(cgroupPath, "memory.swap.max")
+	if err := os.WriteFile(swapMaxFile, []byte("max"), defaultFilePerm); err != nil {
+		return fmt.Errorf("failed to remove swap limit for UID %d: %w", uid, err)
+	}
+	return nil
+}
+
 // GetCgroupRAMUsage restituisce l'uso corrente di RAM del cgroup utente in bytes.
 func (m *Manager) GetCgroupRAMUsage(uid int) (uint64, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
