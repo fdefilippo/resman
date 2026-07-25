@@ -182,20 +182,21 @@ func (w *Watcher) watchLoop() {
 				return
 			}
 
-			w.logger.Debug("File system event",
-				"file", event.Name,
-				"op", event.Op.String(),
-			)
+			// Ignore unrelated directory events before logging. Logging them can
+			// feed back into fsnotify when the log shares the config directory.
+			if filepath.Clean(event.Name) != w.configPath {
+				continue
+			}
 
 			// Interessa solo scritture, rinomine o rimozioni
 			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
 				continue
 			}
 
-			// Verifica se è il nostro file di configurazione
-			if filepath.Clean(event.Name) != w.configPath {
-				continue
-			}
+			w.logger.Debug("File system event",
+				"file", event.Name,
+				"op", event.Op.String(),
+			)
 
 			// Debounce: aspetta altri cambiamenti per 2 secondi
 			if !pendingReload {

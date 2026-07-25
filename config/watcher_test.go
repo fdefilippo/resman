@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,23 @@ import (
 
 	"github.com/fdefilippo/resman/logging"
 )
+
+var watcherTestLogPath string
+
+func TestMain(m *testing.M) {
+	testDir, err := os.MkdirTemp("", "resman-config-watcher-")
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "failed to create watcher test directory: %v\n", err)
+		os.Exit(1)
+	}
+	watcherTestLogPath = filepath.Join(testDir, "resman.log")
+	logging.InitLogger("DEBUG", watcherTestLogPath, 16*1024*1024, false)
+
+	code := m.Run()
+	_ = logging.GetLogger().Close()
+	_ = os.RemoveAll(testDir)
+	os.Exit(code)
+}
 
 type failingConfigChangeHandler struct {
 	calls int
@@ -50,6 +68,52 @@ func (h *blockingConfigChangeHandler) OnConfigChange(*Config) error {
 	<-h.release
 	h.active.Add(-1)
 	return nil
+}
+
+func TestWatcherDoesNotLogEventsForOtherFiles(t *testing.T) {
+	configPath := filepath.Join(filepath.Dir(watcherTestLogPath), "resman-loop.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0600); err != nil {
+		t.Fatalf("WriteFile(config) error: %v", err)
+	}
+	logInfo, err := os.Stat(watcherTestLogPath)
+	if err != nil {
+		t.Fatalf("Stat(log) error: %v", err)
+	}
+
+	watcher, err := NewWatcher(configPath, DefaultConfig(), &channelConfigChangeHandler{
+		values: make(chan int, 1),
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher() error: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	unrelatedPath := filepath.Join(filepath.Dir(configPath), "unrelated.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("event\n"), 0600); err != nil {
+		_ = watcher.Stop()
+		t.Fatalf("WriteFile(unrelated) error: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := watcher.Stop(); err != nil {
+		t.Fatalf("Stop() error: %v", err)
+	}
+
+	logData, err := os.ReadFile(watcherTestLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error: %v", err)
+	}
+	if logInfo.Size() > int64(len(logData)) {
+		t.Fatalf("log shrank from %d to %d bytes during test", logInfo.Size(), len(logData))
+	}
+	newLog := string(logData[logInfo.Size():])
+	if strings.Contains(newLog, "File system event file="+watcherTestLogPath) {
+		t.Fatal("watcher logged its own log-file event")
+	}
+	if strings.Contains(newLog, "File system event file="+unrelatedPath) {
+		t.Fatal("watcher logged an unrelated directory event")
+	}
 }
 
 func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
