@@ -222,6 +222,12 @@ func (m *Manager) GetCgroupInfo(uid int) (map[string]string, error) {
 		info["cpu.weight"] = strings.TrimSpace(string(data))
 	}
 
+	for _, name := range []string{"memory.current", "memory.max", "memory.high"} {
+		if data, err := os.ReadFile(filepath.Join(cgroupPath, name)); err == nil {
+			info[name] = strings.TrimSpace(string(data))
+		}
+	}
+
 	return info, nil
 }
 

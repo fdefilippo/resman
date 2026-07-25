@@ -373,6 +373,39 @@ func TestGetCgroupInfo(t *testing.T) {
 	}
 }
 
+func TestGetCgroupInfoIncludesMemoryValues(t *testing.T) {
+	cgroupPath := t.TempDir()
+	values := map[string]string{
+		"cpu.max":        "50000 100000",
+		"cpu.weight":     "100",
+		"memory.current": "1048576",
+		"memory.max":     "max",
+		"memory.high":    "2097152",
+	}
+	for name, value := range values {
+		if err := os.WriteFile(filepath.Join(cgroupPath, name), []byte(value), 0644); err != nil {
+			t.Fatalf("failed to write %s fixture: %v", name, err)
+		}
+	}
+
+	manager := &Manager{
+		cfg: config.DefaultConfig(),
+		createdCgroups: map[int]string{
+			1000: cgroupPath,
+		},
+	}
+
+	info, err := manager.GetCgroupInfo(1000)
+	if err != nil {
+		t.Fatalf("GetCgroupInfo() error = %v", err)
+	}
+	for name, want := range values {
+		if got := info[name]; got != want {
+			t.Errorf("GetCgroupInfo()[%q] = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestGetCreatedCgroups(t *testing.T) {
 	cfg := config.DefaultConfig()
 	manager := &Manager{

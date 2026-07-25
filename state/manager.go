@@ -280,7 +280,7 @@ func (m *Manager) GetStatus() map[string]interface{} {
 		"limits_active":        m.limitsActive,
 		"limits_applied_time":  m.limitsAppliedTime.Format(time.RFC3339),
 		"active_users_count":   len(m.activeUsers),
-		"active_users":         m.getActiveUsersList(),
+		"active_users":         m.getActiveUsersListLocked(),
 		"shared_cgroup_path":   m.sharedCgroupPath,
 		"shared_cgroup_active": m.sharedCgroupPath != "",
 	}
@@ -308,11 +308,7 @@ func (m *Manager) GetStatus() map[string]interface{} {
 	return status
 }
 
-// getActiveUsersList restituisce la lista degli UID attualmente limitati.
-func (m *Manager) getActiveUsersList() []int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+func (m *Manager) getActiveUsersListLocked() []int {
 	users := make([]int, 0, len(m.activeUsers))
 	for uid := range m.activeUsers {
 		users = append(users, uid)

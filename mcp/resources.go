@@ -216,9 +216,18 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 		"is_limited":    metrics.IsLimited,
 	}
 
-	// Add RAM cgroup metrics
-	if ramUsage, err := s.cgroupManager.GetCgroupRAMUsage(uid); err == nil {
-		result["ram_usage_bytes"] = ramUsage
+	// Add RAM cgroup metrics and limits.
+	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
+		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
+		if hasCurrent {
+			result["cgroup_memory_current_bytes"] = current
+		}
+		if max != "" {
+			result["memory_max"] = max
+		}
+		if high != "" {
+			result["memory_high"] = high
+		}
 	}
 	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
 		result["memory_high_events"] = highEvents

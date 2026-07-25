@@ -17,6 +17,8 @@
 package mcp
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +120,88 @@ func TestReportMetricExtraction(t *testing.T) {
 	}
 	if got := totalSystemMemoryMB(metrics); got != 16384 {
 		t.Errorf("totalSystemMemoryMB() = %.1f, want 16384.0", got)
+	}
+}
+
+func TestExtractCgroupMemoryMetrics(t *testing.T) {
+	current, hasCurrent, max, high := extractCgroupMemoryMetrics(map[string]string{
+		"memory.current": "1048576",
+		"memory.max":     "max",
+		"memory.high":    "2097152",
+	})
+
+	if !hasCurrent || current != 1048576 {
+		t.Errorf("current = %d, present = %t; want 1048576, true", current, hasCurrent)
+	}
+	if max != "max" {
+		t.Errorf("max = %q, want %q", max, "max")
+	}
+	if high != "2097152" {
+		t.Errorf("high = %q, want %q", high, "2097152")
+	}
+}
+
+func TestUserMetricJSONUsesExplicitCgroupMemoryFields(t *testing.T) {
+	data, err := json.Marshal(UserMetric{
+		CgroupMemoryCurrentBytes: 1048576,
+		MemoryMax:                "max",
+		MemoryHigh:               "2097152",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	payload := string(data)
+	for _, field := range []string{"cgroup_memory_current_bytes", "memory_max", "memory_high"} {
+		if !strings.Contains(payload, `"`+field+`"`) {
+			t.Errorf("JSON payload %s does not contain field %q", payload, field)
+		}
+	}
+	if strings.Contains(payload, `"memory_max_bytes"`) {
+		t.Errorf("JSON payload %s contains obsolete field memory_max_bytes", payload)
+	}
+}
+
+func TestActivationResultReflectsRuntimeState(t *testing.T) {
+	tests := []struct {
+		name         string
+		force        bool
+		limitsActive bool
+		err          error
+		wantSuccess  bool
+		wantMessage  string
+	}{
+		{
+			name:         "control cycle activates limits",
+			limitsActive: true,
+			wantSuccess:  true,
+			wantMessage:  "Limits activated successfully",
+		},
+		{
+			name:        "control cycle maintains current state",
+			wantMessage: "activation conditions were not met",
+		},
+		{
+			name:        "forced activation leaves limits inactive",
+			force:       true,
+			wantMessage: "limits are not active",
+		},
+		{
+			name:        "activation fails",
+			err:         errors.New("cgroup unavailable"),
+			wantMessage: "cgroup unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := activationResult(tt.force, tt.limitsActive, tt.err)
+			if result.Success != tt.wantSuccess {
+				t.Errorf("Success = %t, want %t", result.Success, tt.wantSuccess)
+			}
+			if !strings.Contains(result.Message, tt.wantMessage) {
+				t.Errorf("Message = %q, want substring %q", result.Message, tt.wantMessage)
+			}
+		})
 	}
 }

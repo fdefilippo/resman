@@ -354,6 +354,7 @@ func TestGetStatus(t *testing.T) {
 	prometheusExporter := &mockPrometheusExporter{}
 
 	manager, _ := NewManager(cfg, metricsCollector, cgroupManager, prometheusExporter)
+	manager.activeUsers[1000] = true
 
 	status := manager.GetStatus()
 
@@ -363,6 +364,13 @@ func TestGetStatus(t *testing.T) {
 
 	if _, ok := status["limits_active"]; !ok {
 		t.Error("GetStatus() should include limits_active")
+	}
+	activeUsers, ok := status["active_users"].([]int)
+	if !ok {
+		t.Fatalf("GetStatus() active_users type = %T, want []int", status["active_users"])
+	}
+	if len(activeUsers) != 1 || activeUsers[0] != 1000 {
+		t.Errorf("GetStatus() active_users = %v, want [1000]", activeUsers)
 	}
 }
 

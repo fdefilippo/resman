@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,9 +61,10 @@ type UserMetric struct {
 	ProcessCount int     `json:"process_count"`
 	IsLimited    bool    `json:"is_limited"`
 	// RAM cgroup metrics
-	MemoryMaxBytes   uint64 `json:"memory_max_bytes,omitempty"`
-	MemoryHighBytes  uint64 `json:"memory_high_bytes,omitempty"`
-	MemoryHighEvents uint64 `json:"memory_high_events,omitempty"`
+	CgroupMemoryCurrentBytes uint64 `json:"cgroup_memory_current_bytes,omitempty"`
+	MemoryMax                string `json:"memory_max,omitempty"`
+	MemoryHigh               string `json:"memory_high,omitempty"`
+	MemoryHighEvents         uint64 `json:"memory_high_events,omitempty"`
 	// IO cgroup metrics
 	IOReadBytes  uint64 `json:"io_read_bytes,omitempty"`
 	IOWriteBytes uint64 `json:"io_write_bytes,omitempty"`
@@ -966,9 +968,14 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 			IsLimited:    metrics.IsLimited,
 		}
 
-		// Fetch RAM cgroup metrics
-		if ramUsage, err := s.cgroupManager.GetCgroupRAMUsage(uid); err == nil {
-			um.MemoryMaxBytes = ramUsage
+		// Fetch RAM cgroup metrics and limits.
+		if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
+			current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
+			if hasCurrent {
+				um.CgroupMemoryCurrentBytes = current
+			}
+			um.MemoryMax = max
+			um.MemoryHigh = high
 		}
 		if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
 			um.MemoryHighEvents = highEvents
@@ -1000,19 +1007,15 @@ func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolReque
 	}
 
 	result := GetCgroupInfoResult{
-		Path:     info["path"],
-		CPUQuota: info["cpu.max"],
-		Weight:   info["cpu.weight"],
+		Path:       info["path"],
+		CPUQuota:   info["cpu.max"],
+		Weight:     info["cpu.weight"],
+		MemoryMax:  info["memory.max"],
+		MemoryHigh: info["memory.high"],
 	}
 
-	// Read RAM limits from cgroup
+	// Read IO limits from cgroup.
 	if cgroupPath, ok := info["path"]; ok && cgroupPath != "" {
-		if data, err := os.ReadFile(cgroupPath + "/memory.max"); err == nil {
-			result.MemoryMax = strings.TrimSpace(string(data))
-		}
-		if data, err := os.ReadFile(cgroupPath + "/memory.high"); err == nil {
-			result.MemoryHigh = strings.TrimSpace(string(data))
-		}
 		if data, err := os.ReadFile(cgroupPath + "/io.max"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 			for _, line := range lines {
@@ -1086,16 +1089,8 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 		err = s.stateManager.RunControlCycle(ctx)
 	}
 
-	success := err == nil
-	message := "Limits activated successfully"
-	if err != nil {
-		message = "Failed to activate limits: " + err.Error()
-	}
-
-	return &mcp.CallToolResult{}, ActivateLimitsResult{
-		Success: success,
-		Message: message,
-	}, nil
+	limitsActive := getBool(s.stateManager.GetStatus(), "limits_active", false)
+	return &mcp.CallToolResult{}, activationResult(args.Force, limitsActive, err), nil
 }
 
 // handleGetUserHistory handles get_user_history tool requests
@@ -1357,6 +1352,36 @@ func totalCPUCapacityPercent(metrics map[string]any) float64 {
 
 func totalSystemMemoryMB(metrics map[string]any) float64 {
 	return getFloatMetric(metrics, "total_memory_mb", 0)
+}
+
+func extractCgroupMemoryMetrics(info map[string]string) (uint64, bool, string, string) {
+	current, err := strconv.ParseUint(info["memory.current"], 10, 64)
+	return current, err == nil, info["memory.max"], info["memory.high"]
+}
+
+func activationResult(force, limitsActive bool, err error) ActivateLimitsResult {
+	if err != nil {
+		return ActivateLimitsResult{
+			Success: false,
+			Message: "Failed to activate limits: " + err.Error(),
+		}
+	}
+	if limitsActive {
+		return ActivateLimitsResult{
+			Success: true,
+			Message: "Limits activated successfully",
+		}
+	}
+	if force {
+		return ActivateLimitsResult{
+			Success: false,
+			Message: "Forced activation completed without error, but limits are not active",
+		}
+	}
+	return ActivateLimitsResult{
+		Success: false,
+		Message: "Control cycle completed, but limits were not activated because activation conditions were not met",
+	}
 }
 
 func getFloatMetric(metrics map[string]any, key string, defaultVal float64) float64 {
