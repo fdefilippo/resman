@@ -40,7 +40,7 @@ metrics/
 # Workload Pattern Detection
 AUTODETECT_PATTERNS=false
 PATTERN_HISTORY_HOURS=168          # Finestra storica (7 giorni default)
-PATTERN_MIN_SAMPLES=24             # Minimo campioni per decidere
+PATTERN_MIN_SAMPLES=24             # Minimo bucket orari distinti per decidere
 PATTERN_CONFIDENCE_THRESHOLD=0.7   # Soglia confidenza (0.0-1.0)
 
 # Policy per pattern

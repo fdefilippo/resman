@@ -38,13 +38,15 @@ const (
 	PatternSporadic       WorkloadPattern = "sporadic"
 )
 
-// UserHourlyStats contiene le statistiche aggregate per fascia oraria.
+type hourlyPatternBucket struct {
+	Hour        time.Time
+	CPUSum      float64
+	SampleCount int
+}
+
+// UserHourlyStats contains the retained hourly observations for a user.
 type UserHourlyStats struct {
-	HourlyCPU    [24]float64 // Media CPU per ora (0-23)
-	HourlyCount  [24]int     // Numero di campioni per ora
-	TotalSamples int
-	FirstSample  time.Time
-	LastSample   time.Time
+	Buckets []hourlyPatternBucket
 }
 
 // PatternResult contiene il risultato della classificazione.
@@ -70,23 +72,32 @@ func NewPatternDetector(logger *logging.Logger) *PatternDetector {
 
 // Update aggiorna le statistiche per un utente con un nuovo campione.
 func (pd *PatternDetector) Update(uid int, cpuUsage float64) {
+	pd.updateAt(uid, cpuUsage, time.Now())
+}
+
+func (pd *PatternDetector) updateAt(uid int, cpuUsage float64, now time.Time) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
 	stats, exists := pd.userStats[uid]
 	if !exists {
-		stats = &UserHourlyStats{
-			FirstSample: time.Now(),
-		}
+		stats = &UserHourlyStats{}
 		pd.userStats[uid] = stats
 	}
 
-	now := time.Now()
-	hour := now.Hour()
-	stats.HourlyCPU[hour] = (stats.HourlyCPU[hour]*float64(stats.HourlyCount[hour]) + cpuUsage) / float64(stats.HourlyCount[hour]+1)
-	stats.HourlyCount[hour]++
-	stats.TotalSamples++
-	stats.LastSample = now
+	hour := patternHourStart(now)
+	for i := len(stats.Buckets) - 1; i >= 0; i-- {
+		if stats.Buckets[i].Hour.Equal(hour) {
+			stats.Buckets[i].CPUSum += cpuUsage
+			stats.Buckets[i].SampleCount++
+			return
+		}
+	}
+	stats.Buckets = append(stats.Buckets, hourlyPatternBucket{
+		Hour:        hour,
+		CPUSum:      cpuUsage,
+		SampleCount: 1,
+	})
 }
 
 // Analyze analizza i pattern per tutti gli utenti e restituisce i risultati.
@@ -99,7 +110,7 @@ func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
 	confidenceThreshold := cfg.GetPatternConfidenceThreshold()
 
 	for uid, stats := range pd.userStats {
-		if stats.TotalSamples < minSamples {
+		if len(stats.Buckets) < minSamples {
 			results[uid] = PatternResult{Pattern: PatternUnknown, Confidence: 0}
 			continue
 		}
@@ -113,11 +124,13 @@ func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
 
 // classifyPattern classifica il pattern di un utente basandosi sulle statistiche orarie.
 func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) PatternResult {
+	hourlyCPU, hourlyCount := aggregateHourlyBuckets(stats.Buckets)
+
 	// Calcola varianza oraria
-	nightAvg, nightSamples := weightedAverage(stats.HourlyCPU[:], stats.HourlyCount[:], 22, 23, 0, 1, 2, 3, 4, 5, 6)
-	dayAvg, daySamples := weightedAverage(stats.HourlyCPU[:], stats.HourlyCount[:], 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
-	overallAvg := overallAverage(stats.HourlyCPU[:], stats.HourlyCount[:])
-	variance := calculateVariance(stats.HourlyCPU[:], stats.HourlyCount[:])
+	nightAvg, nightSamples := weightedAverage(hourlyCPU[:], hourlyCount[:], 22, 23, 0, 1, 2, 3, 4, 5, 6)
+	dayAvg, daySamples := weightedAverage(hourlyCPU[:], hourlyCount[:], 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+	overallAvg := overallAverage(hourlyCPU[:], hourlyCount[:])
+	variance := calculateVariance(hourlyCPU[:], hourlyCount[:])
 
 	// Normalizza varianza (0-1)
 	normalizedVariance := math.Min(variance/50.0, 1.0)
@@ -178,6 +191,21 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 	return PatternResult{Pattern: pattern, Confidence: confidence}
 }
 
+func aggregateHourlyBuckets(buckets []hourlyPatternBucket) ([24]float64, [24]int) {
+	var hourlyCPU [24]float64
+	var hourlyCount [24]int
+	for _, bucket := range buckets {
+		if bucket.SampleCount <= 0 {
+			continue
+		}
+		hour := bucket.Hour.Hour()
+		bucketAverage := bucket.CPUSum / float64(bucket.SampleCount)
+		hourlyCPU[hour] = (hourlyCPU[hour]*float64(hourlyCount[hour]) + bucketAverage) / float64(hourlyCount[hour]+1)
+		hourlyCount[hour]++
+	}
+	return hourlyCPU, hourlyCount
+}
+
 // weightedAverage calculates the sample-weighted mean for selected hours.
 func weightedAverage(values []float64, counts []int, hours ...int) (float64, int) {
 	total := 0.0
@@ -233,18 +261,45 @@ func calculateVariance(values []float64, counts []int) float64 {
 
 // Cleanup removes statistics older than the configured history window.
 func (pd *PatternDetector) Cleanup(maxAge time.Duration) []int {
+	return pd.cleanupAt(maxAge, time.Now())
+}
+
+func (pd *PatternDetector) cleanupAt(maxAge time.Duration, now time.Time) []int {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
-	now := time.Now()
+	historyHours := int(maxAge / time.Hour)
+	if maxAge%time.Hour != 0 {
+		historyHours++
+	}
+	if historyHours < 1 {
+		historyHours = 1
+	}
+	oldestHour := patternHourStart(now).Add(-time.Duration(historyHours-1) * time.Hour)
+
 	var removed []int
 	for uid, stats := range pd.userStats {
-		if now.Sub(stats.LastSample) > maxAge {
+		retained := stats.Buckets[:0]
+		for _, bucket := range stats.Buckets {
+			if !bucket.Hour.Before(oldestHour) {
+				retained = append(retained, bucket)
+			}
+		}
+		stats.Buckets = retained
+		if len(stats.Buckets) == 0 {
 			delete(pd.userStats, uid)
 			removed = append(removed, uid)
 		}
 	}
 	return removed
+}
+
+func patternHourStart(value time.Time) time.Time {
+	return value.Add(
+		-time.Duration(value.Minute())*time.Minute -
+			time.Duration(value.Second())*time.Second -
+			time.Duration(value.Nanosecond()),
+	)
 }
 
 // RetainUsers removes statistics for users that are no longer eligible.

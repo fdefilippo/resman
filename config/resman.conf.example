@@ -266,8 +266,8 @@ IO_REVERT_ON_NORMAL=true
 # Default: 168 (7 days)
 # Longer windows provide better classification but take longer to converge
 #
-# PATTERN_MIN_SAMPLES: Minimum samples before making a classification
-# Default: 24 (24 hours of data)
+# PATTERN_MIN_SAMPLES: Minimum distinct hourly buckets before classification
+# Default: 24 (24 observed hours, independent of polling or PSI event frequency)
 #
 # PATTERN_CONFIDENCE_THRESHOLD: Minimum confidence for classification (0.0-1.0)
 # Default: 0.7

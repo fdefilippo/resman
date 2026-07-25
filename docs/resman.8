@@ -329,9 +329,13 @@ The pattern detection algorithm uses a sliding window of
 .B PATTERN_HISTORY_HOURS
 hours and requires at least
 .B PATTERN_MIN_SAMPLES
-data points before making decisions. Classification confidence must exceed
+distinct hourly buckets before making decisions. Classification confidence must exceed
 .B PATTERN_CONFIDENCE_THRESHOLD
 (0.0\-1.0).
+.PP
+Samples collected within the same wall\-clock hour are aggregated into one hourly bucket. Each hourly bucket has equal weight regardless of polling frequency or PSI events. Buckets older than
+.B PATTERN_HISTORY_HOURS
+are removed, including for continuously active users.
 .PP
 Detected patterns influence resource allocation:
 .RS
@@ -360,7 +364,7 @@ Configuration parameters:
 - Historical window in hours (default: 168 = 1 week)
 .IP \(bu
 .B PATTERN_MIN_SAMPLES
-- Minimum samples required for classification
+- Minimum number of distinct hourly buckets required for classification
 .IP \(bu
 .B PATTERN_CONFIDENCE_THRESHOLD
 - Confidence threshold (0.0\-1.0)

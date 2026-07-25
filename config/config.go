@@ -120,7 +120,7 @@ type Config struct {
 	// Workload Pattern Detection (auto-detect user patterns)
 	AutodetectPatterns         bool    `config:"AUTODETECT_PATTERNS"`
 	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // Finestra storica (ore)
-	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimo campioni per decidere
+	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
 	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Soglia confidenza (0.0-1.0)
 	// Policy per pattern
 	BatchNightCPUQuota  int    `config:"BATCH_NIGHT_CPU_QUOTA"` // CPU quota per batch (microseconds)
@@ -291,7 +291,7 @@ func DefaultConfig() *Config {
 		// Workload Pattern Detection
 		AutodetectPatterns:         false,
 		PatternHistoryHours:        168, // 7 days
-		PatternMinSamples:          24,  // 24 hours minimum
+		PatternMinSamples:          24,  // 24 distinct hourly buckets minimum
 		PatternConfidenceThreshold: 0.7,
 		BatchNightCPUQuota:         200000, // 200% (2 cores)
 		BatchNightRAMQuota:         "4G",

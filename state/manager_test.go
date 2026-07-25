@@ -666,7 +666,6 @@ func TestPatternHistorySurvivesTemporaryProcessAbsence(t *testing.T) {
 		t.Fatalf("NewManager() error: %v", err)
 	}
 	stats := batchNightStats()
-	stats.LastSample = time.Now().Add(-time.Hour)
 	manager.patternDetector.userStats[1000] = stats
 	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
 
@@ -678,8 +677,8 @@ func TestPatternHistorySurvivesTemporaryProcessAbsence(t *testing.T) {
 	if !exists {
 		t.Fatal("pattern history was removed while the configured user had no live processes")
 	}
-	if retained.TotalSamples != 30 {
-		t.Fatalf("retained samples = %d, want 30", retained.TotalSamples)
+	if len(retained.Buckets) != 1 || retained.Buckets[0].SampleCount != 30 {
+		t.Fatalf("retained buckets = %+v, want one bucket with 30 samples", retained.Buckets)
 	}
 	if _, exists := manager.policyEngine.GetPolicy(1000); !exists {
 		t.Fatal("pattern policy was removed while retained history was still valid")
@@ -702,7 +701,7 @@ func TestPatternHistoryExpiryRemovesPolicy(t *testing.T) {
 		t.Fatalf("NewManager() error: %v", err)
 	}
 	stats := batchNightStats()
-	stats.LastSample = time.Now().Add(-2 * time.Hour)
+	stats.Buckets[0].Hour = patternHourStart(time.Now().Add(-2 * time.Hour))
 	manager.patternDetector.userStats[1000] = stats
 	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
 	manager.activeUsers[1000] = true
@@ -739,8 +738,12 @@ func TestPatternPolicyIsRevertedWhenClassificationDecays(t *testing.T) {
 	}
 	manager.activeUsers[1000] = true
 	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
-	manager.patternDetector.userStats[1000] = &UserHourlyStats{TotalSamples: 30}
-	manager.patternDetector.userStats[1000].HourlyCount[12] = 30
+	noon := mostRecentHour(12)
+	manager.patternDetector.userStats[1000] = &UserHourlyStats{Buckets: []hourlyPatternBucket{{
+		Hour:        noon,
+		CPUSum:      0,
+		SampleCount: 30,
+	}}}
 
 	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
 		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
@@ -779,10 +782,20 @@ func TestPatternPolicyIsRevertedWhenAutodetectIsDisabled(t *testing.T) {
 }
 
 func batchNightStats() *UserHourlyStats {
-	stats := &UserHourlyStats{TotalSamples: 30}
-	stats.HourlyCPU[23] = 100
-	stats.HourlyCount[23] = 30
-	return stats
+	return &UserHourlyStats{Buckets: []hourlyPatternBucket{{
+		Hour:        mostRecentHour(23),
+		CPUSum:      3000,
+		SampleCount: 30,
+	}}}
+}
+
+func mostRecentHour(hour int) time.Time {
+	now := time.Now()
+	candidate := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+	if candidate.After(now) {
+		candidate = candidate.Add(-24 * time.Hour)
+	}
+	return candidate
 }
 
 func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {
