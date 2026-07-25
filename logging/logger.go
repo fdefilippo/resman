@@ -101,36 +101,14 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			return
 		}
 
-		// ALTRIMENTI: usa file di log (comportamento originale)
-		// Crea la directory del log se non esiste
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			log.Printf("ERROR: Failed to create log directory: %v", err)
-			// Fallback to stderr so protocol streams on stdout remain clean.
-			currentLogger = createStderrLogger(logLevel)
-			return
-		}
-
-		// Apri o crea il file di log
-		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		fileLogger, err := newFileLogger(logLevel, filePath, int64(maxSize))
 		if err != nil {
-			log.Printf("ERROR: Failed to open log file %s: %v", filePath, err)
+			log.Printf("ERROR: Failed to initialize file logger: %v", err)
 			// Fallback to stderr so protocol streams on stdout remain clean.
 			currentLogger = createStderrLogger(logLevel)
 			return
 		}
-
-		// Crea il logger
-		currentLogger = &Logger{
-			level:        logLevel,
-			file:         file,
-			filePath:     filePath,
-			maxSize:      int64(maxSize),
-			logger:       log.New(file, "", 0),
-			lastRotation: time.Now(),
-			UseSyslog:    false,
-			syslogWriter: nil,
-			fields:       make(map[string]interface{}),
-		}
+		currentLogger = fileLogger
 
 		// Logga il primo messaggio
 		currentLogger.logInternal(INFO, "Logger initialized",
@@ -139,6 +117,29 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			"max_size", fmt.Sprintf("%d bytes", maxSize),
 		)
 	})
+}
+
+func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, error) {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create log directory %s: %w", filepath.Dir(filePath), err)
+	}
+
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	}
+
+	return &Logger{
+		level:        level,
+		file:         file,
+		filePath:     filePath,
+		maxSize:      maxSize,
+		logger:       log.New(file, "", 0),
+		lastRotation: time.Now(),
+		UseSyslog:    false,
+		syslogWriter: nil,
+		fields:       make(map[string]interface{}),
+	}, nil
 }
 
 // GetLogger restituisce il logger globale inizializzato.

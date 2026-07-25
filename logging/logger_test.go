@@ -17,6 +17,7 @@
 package logging
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"os"
@@ -27,30 +28,34 @@ import (
 	"time"
 )
 
-func TestInitLogger(t *testing.T) {
-	// Test initialization with file logging
-	tmpDir := t.TempDir()
-	logFile := filepath.Join(tmpDir, "test.log")
+func newBufferLogger(level LogLevel) (*Logger, *bytes.Buffer) {
+	var output bytes.Buffer
+	return &Logger{
+		level:  level,
+		logger: log.New(&output, "", 0),
+		fields: make(map[string]interface{}),
+	}, &output
+}
 
-	InitLogger("INFO", logFile, 1024*1024, false)
-	logger := GetLogger()
-
-	if logger == nil {
-		t.Fatal("GetLogger() returned nil")
+func TestNewFileLogger(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "test.log")
+	logger, err := newFileLogger(INFO, logFile, 1024*1024)
+	if err != nil {
+		t.Fatalf("newFileLogger() error = %v", err)
 	}
+	defer func() { _ = logger.Close() }()
 
 	if logger.level != INFO {
 		t.Errorf("Logger level: got %v, expected INFO", logger.level)
 	}
-}
-
-func TestInitLoggerSyslog(t *testing.T) {
-	// Test initialization with syslog (may fail in containerized environments)
-	InitLogger("DEBUG", "/tmp/test-syslog.log", 1024*1024, true)
-	logger := GetLogger()
-
-	if logger == nil {
-		t.Fatal("GetLogger() returned nil")
+	if logger.filePath != logFile {
+		t.Errorf("Logger filePath: got %q, expected %q", logger.filePath, logFile)
+	}
+	if logger.maxSize != 1024*1024 {
+		t.Errorf("Logger maxSize: got %d, expected %d", logger.maxSize, 1024*1024)
+	}
+	if logger.file == nil {
+		t.Fatal("newFileLogger() did not open the log file")
 	}
 }
 
@@ -79,31 +84,36 @@ func TestParseLogLevel(t *testing.T) {
 }
 
 func TestLoggerMethods(t *testing.T) {
-	// Logger already initialized by previous tests
-	logger := GetLogger()
-	if logger == nil {
-		t.Fatal("GetLogger() returned nil")
-	}
+	logger, output := newBufferLogger(DEBUG)
 
-	// Test all log levels (will log to previously configured destination)
 	logger.Debug("Debug message", "key", "value")
 	logger.Info("Info message", "key", "value")
 	logger.Warn("Warning message", "key", "value")
 	logger.Error("Error message", "key", "value")
+
+	for _, want := range []string{"[DEBUG] Debug message", "[INFO] Info message", "[WARN] Warning message", "[ERROR] Error message", "key=value"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("logger output does not contain %q: %s", want, output.String())
+		}
+	}
 }
 
 func TestLoggerLevelFiltering(t *testing.T) {
-	// Skip due to singleton logger - level already set by other tests
-	t.Skip("Skipping test due to singleton logger initialization")
+	logger, output := newBufferLogger(INFO)
+	logger.Debug("suppressed")
+	logger.Info("visible")
+
+	if strings.Contains(output.String(), "suppressed") {
+		t.Errorf("DEBUG message was not filtered: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "visible") {
+		t.Errorf("INFO message was filtered: %s", output.String())
+	}
 }
 
 func TestSetLevel(t *testing.T) {
-	logger := GetLogger()
-	if logger == nil {
-		t.Fatal("GetLogger() returned nil")
-	}
+	logger, _ := newBufferLogger(INFO)
 
-	// Change level
 	logger.SetLevel("DEBUG")
 	if logger.level != DEBUG {
 		t.Errorf("SetLevel: got %v, expected DEBUG", logger.level)
@@ -116,15 +126,12 @@ func TestSetLevel(t *testing.T) {
 }
 
 func TestLoggerClose(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := filepath.Join(tmpDir, "test.log")
-
-	InitLogger("INFO", logFile, 1024*1024, false)
-	logger := GetLogger()
-
-	// Close should not error
-	err := logger.Close()
+	logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), 1024*1024)
 	if err != nil {
+		t.Fatalf("newFileLogger() error = %v", err)
+	}
+
+	if err := logger.Close(); err != nil {
 		t.Errorf("Close() error: %v", err)
 	}
 }
@@ -132,19 +139,11 @@ func TestLoggerClose(t *testing.T) {
 func TestLogRotation(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "test.log")
-	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logger, err := newFileLogger(INFO, logFile, 1)
 	if err != nil {
-		t.Fatalf("failed to create log file: %v", err)
+		t.Fatalf("newFileLogger() error = %v", err)
 	}
-	logger := &Logger{
-		level:        INFO,
-		file:         file,
-		filePath:     logFile,
-		maxSize:      1,
-		logger:       log.New(file, "", 0),
-		lastRotation: time.Now().Add(-2 * time.Second),
-		fields:       make(map[string]interface{}),
-	}
+	logger.lastRotation = time.Now().Add(-2 * time.Second)
 
 	logged := make(chan struct{})
 	go func() {
@@ -197,24 +196,28 @@ func TestSetLevelConcurrentWithLogging(t *testing.T) {
 	wg.Wait()
 }
 
-func TestGetLoggerWithoutInit(t *testing.T) {
-	// GetLogger should always return a logger (creates default if needed)
-	// Note: In real usage, InitLogger is always called first
-	logger := GetLogger()
-	if logger == nil {
-		t.Error("GetLogger() should always return a logger")
+func TestLoggerWithMultipleFields(t *testing.T) {
+	logger, output := newBufferLogger(INFO)
+	logger.WithField("uid", 1000).WithField("username", "test-user").Info("limited")
+
+	for _, want := range []string{"uid=1000", "username=test-user", "limited"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("logger output does not contain %q: %s", want, output.String())
+		}
 	}
 }
 
-func TestLoggerWithMultipleFields(t *testing.T) {
-	// Skip this test as logger is singleton and already initialized
-	// In production, this would work correctly
-	t.Skip("Skipping test due to singleton logger initialization")
-}
-
 func TestLoggerTimestamp(t *testing.T) {
-	// Skip this test as logger is singleton and already initialized
-	t.Skip("Skipping test due to singleton logger initialization")
+	logger, output := newBufferLogger(INFO)
+	logger.Info("timestamped")
+
+	text := output.String()
+	if len(text) < 20 {
+		t.Fatalf("logger output is too short: %q", text)
+	}
+	if _, err := time.Parse("2006-01-02 15:04:05", text[1:20]); err != nil {
+		t.Errorf("logger timestamp %q is invalid: %v", text[1:20], err)
+	}
 }
 
 func TestLoggerFallbackUsesStderr(t *testing.T) {
