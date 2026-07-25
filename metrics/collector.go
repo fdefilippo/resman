@@ -1036,6 +1036,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 
 	// Second pass for IO: collect for ALL visible PIDs (including system users like mysql)
 	ioData := make(map[int]*userData)
+	seenPIDs := make(map[int32]struct{}, len(procs))
 
 	for _, p := range procs {
 		// Get process UID
@@ -1048,6 +1049,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		if !c.isMonitoredUserUID(uid) {
 			continue
 		}
+		seenPIDs[p.Pid] = struct{}{}
 
 		// Initialize structure if it doesn't exist
 		if tempData[uid] == nil {
@@ -1134,6 +1136,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		}
 	}
 
+	c.retainProcessCPUBaselines(seenPIDs)
 	c.retainEMAUsers(userMetrics)
 	return userMetrics
 }
@@ -1155,6 +1158,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
 	ioData := make(map[int]*userData)
+	seenPIDs := make(map[int32]struct{}, len(entries))
 
 	// Read system uptime once
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
@@ -1174,6 +1178,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		if err != nil || !c.isMonitoredUserUID(uid) {
 			continue
 		}
+		seenPIDs[int32(pid)] = struct{}{}
 
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
@@ -1233,6 +1238,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		}
 	}
 
+	c.retainProcessCPUBaselines(seenPIDs)
 	c.retainEMAUsers(userMetrics)
 	return userMetrics
 }
@@ -1545,11 +1551,59 @@ func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu
 		}
 	}
 
-	// Keep every recently observed process baseline. cleanupCache removes stale PIDs.
+	// Keep every recently observed process baseline. Completed scans and cleanupCache remove stale PIDs.
 	c.procCache.prevProcCPU[pid] = times
 	c.procCache.prevProcTime[pid] = now
 	c.procCache.procStartTime[pid] = startTime
 	return 0
+}
+
+// retainProcessCPUBaselines removes samples for PIDs absent from a completed scan.
+// Rebuilding the maps also releases bucket capacity retained after PID churn.
+func (c *Collector) retainProcessCPUBaselines(seen map[int32]struct{}) int {
+	if c.procCache == nil {
+		return 0
+	}
+
+	c.procCache.mu.Lock()
+	defer c.procCache.mu.Unlock()
+
+	needsRebuild := len(c.procCache.prevProcCPU) != len(c.procCache.prevProcTime) ||
+		len(c.procCache.prevProcCPU) != len(c.procCache.procStartTime)
+	if !needsRebuild {
+		for pid := range c.procCache.prevProcCPU {
+			if _, ok := seen[pid]; !ok {
+				needsRebuild = true
+				break
+			}
+		}
+	}
+	if !needsRebuild {
+		return 0
+	}
+
+	oldSize := len(c.procCache.prevProcCPU)
+	capacity := min(oldSize, len(seen))
+	prevProcCPU := make(map[int32]cpu.TimesStat, capacity)
+	prevProcTime := make(map[int32]time.Time, capacity)
+	procStartTime := make(map[int32]int64, capacity)
+	for pid, times := range c.procCache.prevProcCPU {
+		if _, ok := seen[pid]; !ok {
+			continue
+		}
+		sampledAt, ok := c.procCache.prevProcTime[pid]
+		if !ok {
+			continue
+		}
+		prevProcCPU[pid] = times
+		prevProcTime[pid] = sampledAt
+		procStartTime[pid] = c.procCache.procStartTime[pid]
+	}
+
+	c.procCache.prevProcCPU = prevProcCPU
+	c.procCache.prevProcTime = prevProcTime
+	c.procCache.procStartTime = procStartTime
+	return oldSize - len(prevProcCPU)
 }
 
 // GetUserProcessCount returns the number of processes for a user.

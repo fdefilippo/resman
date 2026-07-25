@@ -214,6 +214,45 @@ func TestUpdateProcessCPUSampleRetainsBaselinesAboveLegacyLimit(t *testing.T) {
 	}
 }
 
+func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
+	collector := &Collector{
+		procCache: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+	}
+	now := time.Now()
+	const processCount = 6000
+	for pid := int32(1); pid <= processCount; pid++ {
+		collector.updateProcessCPUSample(pid, int64(pid), cpu.TimesStat{User: 1}, now)
+	}
+
+	removed := collector.retainProcessCPUBaselines(map[int32]struct{}{
+		1:            {},
+		processCount: {},
+	})
+	if removed != processCount-2 {
+		t.Fatalf("removed process baselines = %d, want %d", removed, processCount-2)
+	}
+	if got := len(collector.procCache.prevProcCPU); got != 2 {
+		t.Fatalf("process cache size = %d, want 2", got)
+	}
+	if got := len(collector.procCache.prevProcTime); got != 2 {
+		t.Fatalf("process timestamp cache size = %d, want 2", got)
+	}
+	if got := len(collector.procCache.procStartTime); got != 2 {
+		t.Fatalf("process start-time cache size = %d, want 2", got)
+	}
+
+	if got := collector.updateProcessCPUSample(1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 100 {
+		t.Fatalf("retained process CPU delta = %f, want 100", got)
+	}
+	if got := collector.updateProcessCPUSample(2, 2, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 0 {
+		t.Fatalf("removed process CPU delta = %f, want 0", got)
+	}
+}
+
 func TestUpdateFallbackCPUSampleUsesDedicatedJiffyBaseline(t *testing.T) {
 	collector := &Collector{}
 	now := time.Now()
