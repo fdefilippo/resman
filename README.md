@@ -150,6 +150,9 @@ to generate CPU PSI because work is waiting. resman records the cycle trigger
 `psi_user_io`) and exports PSI event counters so dashboards can separate usage
 from pressure.
 
+CPU pressure files that expose only the `some` line, as on older kernels with
+PSI backports, are supported; the `full` line is treated as optional.
+
 On Red Hat Enterprise Linux 8 and later, PSI may be compiled in but disabled at
 boot. Enable it with:
 

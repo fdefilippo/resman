@@ -171,6 +171,29 @@ func TestWriteControllerIfMissingUsesExactTokenMatch(t *testing.T) {
 	}
 }
 
+func TestHasControllerUsesExactTokenMatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		controllers string
+		wanted      string
+		want        bool
+	}{
+		{name: "cpu present", controllers: "cpu cpuset io memory", wanted: "cpu", want: true},
+		{name: "cpu absent from cpuset", controllers: "cpuset io memory", wanted: "cpu", want: false},
+		{name: "cpuset absent from cpu", controllers: "cpu io memory", wanted: "cpuset", want: false},
+		{name: "newline separated", controllers: "cpu\nmemory\nio", wanted: "memory", want: true},
+		{name: "substring is not token", controllers: "memory_hugetlb", wanted: "memory", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasController(tt.controllers, tt.wanted); got != tt.want {
+				t.Fatalf("hasController(%q, %q) = %t, want %t",
+					tt.controllers, tt.wanted, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVerifyCgroupRootWriteAccessDoesNotMoveProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	procsPath := filepath.Join(tmpDir, "cgroup.procs")

@@ -25,7 +25,7 @@ import (
 	"strings"
 )
 
-// PSIStats contiene le statistiche Pressure Stall Information per IO.
+// PSIStats contains Pressure Stall Information statistics.
 type PSIStats struct {
 	SomeAvg10  float64 // % di tempo con almeno un task stallato (media 10s)
 	SomeAvg60  float64 // % di tempo con almeno un task stallato (media 60s)
@@ -55,8 +55,8 @@ func (m *Manager) GetPSIStats(uid int) (PSIStats, error) {
 	return parsePSI(string(data))
 }
 
-// parsePSI analizza il contenuto di un file io.pressure.
-// Formato atteso:
+// parsePSI parses a pressure file. The full line is optional because older
+// kernels expose only some pressure for CPU.
 //
 //	some avg10=25.00 avg60=18.50 avg300=12.30 total=1234567
 //	full avg10=10.00 avg60=8.20 avg300=5.10 total=567890
@@ -64,27 +64,38 @@ func parsePSI(content string) (PSIStats, error) {
 	var stats PSIStats
 
 	lines := strings.Split(strings.TrimSpace(content), "\n")
-	if len(lines) < 2 {
-		return stats, fmt.Errorf("invalid PSI format: expected 2 lines, got %d", len(lines))
-	}
+	hasSome := false
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
 
-	some, err := parsePSILine(lines[0])
-	if err != nil {
-		return stats, fmt.Errorf("failed to parse 'some' PSI line: %w", err)
+		switch fields[0] {
+		case "some":
+			some, err := parsePSILine(line)
+			if err != nil {
+				return stats, fmt.Errorf("failed to parse 'some' PSI line: %w", err)
+			}
+			stats.SomeAvg10 = some.avg10
+			stats.SomeAvg60 = some.avg60
+			stats.SomeAvg300 = some.avg300
+			stats.SomeTotal = some.total
+			hasSome = true
+		case "full":
+			full, err := parsePSILine(line)
+			if err != nil {
+				return stats, fmt.Errorf("failed to parse 'full' PSI line: %w", err)
+			}
+			stats.FullAvg10 = full.avg10
+			stats.FullAvg60 = full.avg60
+			stats.FullAvg300 = full.avg300
+			stats.FullTotal = full.total
+		}
 	}
-	stats.SomeAvg10 = some.avg10
-	stats.SomeAvg60 = some.avg60
-	stats.SomeAvg300 = some.avg300
-	stats.SomeTotal = some.total
-
-	full, err := parsePSILine(lines[1])
-	if err != nil {
-		return stats, fmt.Errorf("failed to parse 'full' PSI line: %w", err)
+	if !hasSome {
+		return stats, fmt.Errorf("invalid PSI format: missing 'some' line")
 	}
-	stats.FullAvg10 = full.avg10
-	stats.FullAvg60 = full.avg60
-	stats.FullAvg300 = full.avg300
-	stats.FullTotal = full.total
 
 	return stats, nil
 }

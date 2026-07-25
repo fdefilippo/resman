@@ -1,7 +1,9 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -119,6 +121,7 @@ func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
 			_ = m.fd.Close()
 		}
 	}
+	w.compactInactiveMonitorsLocked()
 
 	w.wake()
 }
@@ -190,7 +193,7 @@ func (w *PSIWatcher) pollLoop() {
 
 		w.mu.Lock()
 		pollFds := make([]unix.PollFd, 0, len(w.monitors)+1)
-		fdIndex := make(map[int32]int) // monitor fd -> index in monitors
+		fdMonitors := make(map[int32]*psiMonitor)
 
 		// Wake pipe is always first in the list
 		pollFds = append(pollFds, unix.PollFd{
@@ -198,13 +201,13 @@ func (w *PSIWatcher) pollLoop() {
 			Events: unix.POLLIN,
 		})
 
-		for i, m := range w.monitors {
+		for _, m := range w.monitors {
 			if !m.active {
 				continue
 			}
 			fd := int32(m.fd.Fd())
 			pollFds = append(pollFds, unix.PollFd{Fd: fd, Events: unix.POLLPRI})
-			fdIndex[fd] = i
+			fdMonitors[fd] = m
 		}
 		w.mu.Unlock()
 
@@ -233,29 +236,33 @@ func (w *PSIWatcher) pollLoop() {
 
 		// Process pressure events from remaining fds
 		for i := 1; i < len(pollFds); i++ {
-			w.processPollEvent(pollFds[i], fdIndex)
+			w.processPollEvent(pollFds[i], fdMonitors)
 		}
 	}
 }
 
-func (w *PSIWatcher) processPollEvent(pfd unix.PollFd, fdIndex map[int32]int) {
+func (w *PSIWatcher) processPollEvent(pfd unix.PollFd, fdMonitors map[int32]*psiMonitor) {
 	terminalEvents := int16(unix.POLLERR | unix.POLLNVAL | unix.POLLHUP)
 	if pfd.Revents&terminalEvents != 0 {
-		w.deactivatePolledMonitor(pfd.Fd, fdIndex)
+		w.deactivatePolledMonitor(pfd.Fd, fdMonitors)
 		return
 	}
 	if pfd.Revents&unix.POLLPRI == 0 {
 		return
 	}
 
-	mon := w.activePolledMonitor(pfd.Fd, fdIndex)
+	mon := w.activePolledMonitor(pfd.Fd, fdMonitors)
 	if mon == nil {
 		return
 	}
 
 	data := make([]byte, 4096)
 	n, err := mon.fd.ReadAt(data, 0)
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
+		w.deactivateMonitor(mon)
+		return
+	}
+	if n == 0 {
 		w.deactivateMonitor(mon)
 		return
 	}
@@ -277,19 +284,19 @@ func (w *PSIWatcher) processPollEvent(pfd unix.PollFd, fdIndex map[int32]int) {
 	}
 }
 
-func (w *PSIWatcher) activePolledMonitor(fd int32, fdIndex map[int32]int) *psiMonitor {
+func (w *PSIWatcher) activePolledMonitor(fd int32, fdMonitors map[int32]*psiMonitor) *psiMonitor {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	idx, ok := fdIndex[fd]
-	if !ok || idx >= len(w.monitors) || !w.monitors[idx].active {
+	mon, ok := fdMonitors[fd]
+	if !ok || !mon.active {
 		return nil
 	}
-	return w.monitors[idx]
+	return mon
 }
 
-func (w *PSIWatcher) deactivatePolledMonitor(fd int32, fdIndex map[int32]int) {
-	if mon := w.activePolledMonitor(fd, fdIndex); mon != nil {
+func (w *PSIWatcher) deactivatePolledMonitor(fd int32, fdMonitors map[int32]*psiMonitor) {
+	if mon := w.activePolledMonitor(fd, fdMonitors); mon != nil {
 		w.deactivateMonitor(mon)
 	}
 }
@@ -303,4 +310,17 @@ func (w *PSIWatcher) deactivateMonitor(mon *psiMonitor) {
 	}
 	mon.active = false
 	_ = mon.fd.Close()
+	w.compactInactiveMonitorsLocked()
+}
+
+func (w *PSIWatcher) compactInactiveMonitorsLocked() {
+	activeCount := 0
+	for _, mon := range w.monitors {
+		if mon.active {
+			w.monitors[activeCount] = mon
+			activeCount++
+		}
+	}
+	clear(w.monitors[activeCount:])
+	w.monitors = w.monitors[:activeCount]
 }

@@ -103,7 +103,7 @@ func (m *Manager) verifyCgroupSetup() error {
 	m.logger.Info("Available cgroup controllers",
 		"controllers", strings.TrimSpace(string(controllersData)),
 	)
-	if !strings.Contains(string(controllersData), "cpu") {
+	if !hasController(string(controllersData), "cpu") {
 		m.logger.Error("CPU controller not available in cgroup.controllers",
 			"available_controllers", strings.TrimSpace(string(controllersData)),
 		)
@@ -118,8 +118,8 @@ func (m *Manager) verifyCgroupSetup() error {
 	}
 
 	controllers := string(data)
-	m.controllersAvailable = strings.Contains(controllers, "cpu") &&
-		strings.Contains(controllers, "cpuset")
+	m.controllersAvailable = hasController(controllers, "cpu") &&
+		hasController(controllers, "cpuset")
 
 	if !m.controllersAvailable {
 		m.logger.Warn("CPU or cpuset controllers not enabled in subtree_control",
@@ -169,7 +169,7 @@ func (m *Manager) verifyCgroupSetup() error {
 	}
 	// Enable io controller for block I/O limits (best-effort, non-fatal)
 	// Only attempt if the io controller is available in the cgroup root
-	if strings.Contains(string(controllersData), "io") {
+	if hasController(string(controllersData), "io") {
 		if err := m.writeControllerIfMissing(baseSubtreeControl, "+io"); err != nil {
 			m.logger.Warn("Failed to enable io controller in base cgroup (IO limits will not work)",
 				"path", baseCgroupPath,
@@ -181,7 +181,7 @@ func (m *Manager) verifyCgroupSetup() error {
 			"available_controllers", strings.TrimSpace(string(controllersData)),
 		)
 	}
-	if strings.Contains(string(controllersData), "memory") {
+	if hasController(string(controllersData), "memory") {
 		if err := m.writeControllerIfMissing(baseSubtreeControl, "+memory"); err != nil {
 			m.logger.Warn("Failed to enable memory controller in base cgroup (RAM limits will not work)",
 				"path", baseCgroupPath,
@@ -196,6 +196,15 @@ func (m *Manager) verifyCgroupSetup() error {
 
 	m.logger.Debug("Cgroup setup verified successfully")
 	return nil
+}
+
+func hasController(controllers, wanted string) bool {
+	for _, controller := range strings.Fields(controllers) {
+		if controller == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) verifyCgroupRootWriteAccess() error {

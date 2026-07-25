@@ -247,6 +247,11 @@ files from the cgroup root and uses the
 syscall with
 .B POLLPRI
 to block until the kernel signals that pressure has exceeded the stall threshold.
+Older CPU pressure files that expose only the
+.B some
+line are supported; the
+.B full
+line is optional.
 When a PSI event fires, the daemon immediately runs a control cycle.
 Control-cycle logs and Prometheus metrics include the trigger source, such as
 .B initial ,
