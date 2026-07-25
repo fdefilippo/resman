@@ -392,7 +392,7 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	}
 
 	// 4. Warning se USER_INCLUDE_LIST è vuota (nessun utente sarà limitato)
-	if len(cfg.UserIncludeList) == 0 {
+	if len(cfg.GetUserIncludeList()) == 0 {
 		fmt.Fprintf(os.Stderr, "WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. "+
 			"Set USER_INCLUDE_LIST=.* to limit all users, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
 	}
@@ -446,71 +446,44 @@ func loadFromFile(path string, cfg *Config) error {
 // Restituisce una lista di warning per valori non parsabili.
 func loadFromEnvironment(cfg *Config) []string {
 	cfgType := reflect.TypeOf(cfg).Elem()
-	cfgValue := reflect.ValueOf(cfg).Elem()
 	var warnings []string
 
 	for i := 0; i < cfgType.NumField(); i++ {
 		field := cfgType.Field(i)
 
-		// Ottieni il tag 'config' per il nome della variabile d'ambiente
 		envKey := field.Tag.Get("config")
-		if envKey == "" {
+		if envKey == "" || envKey == "-" {
 			continue
 		}
 
-		// Cerca la variabile d'ambiente
-		envValue := os.Getenv(envKey)
-		if envValue == "" {
+		envValue, ok := os.LookupEnv(envKey)
+		if !ok {
 			continue
 		}
 
-		// Imposta il valore in base al tipo
-		fieldValue := cfgValue.Field(i)
-		if !fieldValue.CanSet() {
+		if err := setConfigField(cfg, envKey, envValue); err != nil {
+			warnings = append(warnings, fmt.Sprintf("invalid environment override %s=%q: %v", envKey, envValue, err))
+		}
+	}
+
+	aliases := []struct {
+		key       string
+		canonical string
+	}{
+		{key: "PROMETHEUS_HOST", canonical: "PROMETHEUS_METRICS_BIND_HOST"},
+		{key: "PROMETHEUS_PORT", canonical: "PROMETHEUS_METRICS_BIND_PORT"},
+		{key: "USER_WHITELIST", canonical: "USER_EXCLUDE_LIST"},
+	}
+	for _, alias := range aliases {
+		if _, canonicalSet := os.LookupEnv(alias.canonical); canonicalSet {
 			continue
 		}
-
-		switch field.Type.Kind() {
-		case reflect.String:
-			fieldValue.SetString(envValue)
-		case reflect.Int:
-			if intVal, err := strconv.Atoi(envValue); err == nil {
-				fieldValue.SetInt(int64(intVal))
-			} else {
-				warnings = append(warnings, fmt.Sprintf("Invalid integer for %s=%q, using default value %d", envKey, envValue, fieldValue.Int()))
-			}
-		case reflect.Bool:
-			lowerVal := strings.ToLower(envValue)
-			boolVal := false
-			switch lowerVal {
-			case "true", "1", "yes", "on":
-				boolVal = true
-			case "false", "0", "no", "off":
-				boolVal = false
-			default:
-				warnings = append(warnings, fmt.Sprintf("Invalid boolean for %s=%q, using default value %v", envKey, envValue, fieldValue.Bool()))
-			}
-			fieldValue.SetBool(boolVal)
-		case reflect.Slice:
-			if field.Type.Elem().Kind() == reflect.String {
-				parts := strings.Split(envValue, ",")
-				sliceVal := reflect.MakeSlice(field.Type, 0, len(parts))
-				for _, part := range parts {
-					part = strings.TrimSpace(part)
-					if part != "" {
-						sliceVal = reflect.Append(sliceVal, reflect.ValueOf(part))
-					}
-				}
-				fieldValue.Set(sliceVal)
-			} else {
-				warnings = append(warnings, fmt.Sprintf("Unsupported slice type for %s=%q", envKey, envValue))
-			}
-		case reflect.Float64:
-			if fVal, err := strconv.ParseFloat(envValue, 64); err == nil {
-				fieldValue.SetFloat(fVal)
-			} else {
-				warnings = append(warnings, fmt.Sprintf("Invalid float for %s=%q, using default value %f", envKey, envValue, fieldValue.Float()))
-			}
+		envValue, ok := os.LookupEnv(alias.key)
+		if !ok {
+			continue
+		}
+		if err := setConfigField(cfg, alias.key, envValue); err != nil {
+			warnings = append(warnings, fmt.Sprintf("invalid environment override %s=%q: %v", alias.key, envValue, err))
 		}
 	}
 
@@ -550,11 +523,11 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
 	"CPU_QUOTA_NORMAL":       setString(func(cfg *Config, value string) { cfg.CPUQuotaNormal = value }),
 	"CPU_QUOTA_LIMITED":      setString(func(cfg *Config, value string) { cfg.CPUQuotaLimited = value }),
-	"LIMIT_HOOK_ENABLED":     setBool(false, func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
+	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
 	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
 	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
 	"LIMIT_HOOK_TIMEOUT":     setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
-	"ENABLE_PROMETHEUS":      setBool(false, func(cfg *Config, value bool) { cfg.EnablePrometheus = value }),
+	"ENABLE_PROMETHEUS":      setBool(func(cfg *Config, value bool) { cfg.EnablePrometheus = value }),
 	"PROMETHEUS_METRICS_BIND_HOST": setString(func(cfg *Config, value string) {
 		cfg.PrometheusMetricsBindHost = value
 	}),
@@ -567,7 +540,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_PORT": setPort("PROMETHEUS_PORT", func(cfg *Config, value int) {
 		cfg.PrometheusMetricsBindPort = value
 	}),
-	"PROMETHEUS_TLS_ENABLED":   setBool(false, func(cfg *Config, value bool) { cfg.PrometheusTLSEnabled = value }),
+	"PROMETHEUS_TLS_ENABLED":   setBool(func(cfg *Config, value bool) { cfg.PrometheusTLSEnabled = value }),
 	"PROMETHEUS_TLS_CERT_FILE": setString(func(cfg *Config, value string) { cfg.PrometheusTLSCertFile = value }),
 	"PROMETHEUS_TLS_KEY_FILE":  setString(func(cfg *Config, value string) { cfg.PrometheusTLSKeyFile = value }),
 	"PROMETHEUS_TLS_CA_FILE":   setString(func(cfg *Config, value string) { cfg.PrometheusTLSCAFile = value }),
@@ -585,7 +558,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_JWT_EXPIRY":         setInt(func(cfg *Config, value int) { cfg.PrometheusJWTExpiry = value }),
 	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
 	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
-	"USE_SYSLOG":                    setBool(false, func(cfg *Config, value bool) { cfg.UseSyslog = value }),
+	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
 	"MIN_SYSTEM_CORES":              setInt(func(cfg *Config, value int) { cfg.MinSystemCores = value }),
 	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
 	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
@@ -594,16 +567,16 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROCESS_EXCLUDE_LIST":          setRegexList(" in PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
 	"BLACKOUT":                      setBlackout,
 	"USER_WHITELIST":                setPlainList(func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
-	"IGNORE_SYSTEM_LOAD":            setBool(false, func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
+	"IGNORE_SYSTEM_LOAD":            setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
 	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
-	"MCP_ENABLED":                   setBool(false, func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
+	"MCP_ENABLED":                   setBool(func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
 	"MCP_TRANSPORT":                 setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
 	"MCP_HTTP_PORT":                 setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
 	"MCP_HTTP_HOST":                 setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
 	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
 	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
-	"MCP_ALLOW_WRITE_OPS":           setBool(false, func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
-	"METRICS_DB_ENABLED":            setBool(false, func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
+	"MCP_ALLOW_WRITE_OPS":           setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
+	"METRICS_DB_ENABLED":            setBool(func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
 	"METRICS_DB_PATH":               setString(func(cfg *Config, value string) { cfg.MetricsDBPath = value }),
 	"METRICS_DB_RETENTION_DAYS":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRetentionDays = value }),
 	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
@@ -611,16 +584,16 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CGROUP_OPERATION_TIMEOUT":      setInt(func(cfg *Config, value int) { cfg.CgroupOperationTimeout = value }),
 	"CGROUP_RETRY_DELAY_MS":         setInt(func(cfg *Config, value int) { cfg.CgroupRetryDelayMs = value }),
 	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
-	"RAM_LIMIT_ENABLED":             setBool(false, func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
+	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
 	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
 	"RAM_RELEASE_THRESHOLD":         setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
 	"RAM_QUOTA_LIMITED":             setString(func(cfg *Config, value string) { cfg.RAMQuotaLimited = value }),
 	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
-	"DISABLE_SWAP":                  setBool(false, func(cfg *Config, value bool) { cfg.DisableSwap = value }),
+	"DISABLE_SWAP":                  setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
 	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
 	"RAM_USER_INCLUDE_LIST":         setRegexList(" in RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
 	"RAM_USER_EXCLUDE_LIST":         setRegexList(" in RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
-	"IO_LIMIT_ENABLED":              setBool(false, func(cfg *Config, value bool) { cfg.IOEnabled = value }),
+	"IO_LIMIT_ENABLED":              setBool(func(cfg *Config, value bool) { cfg.IOEnabled = value }),
 	"IO_THRESHOLD":                  setInt(func(cfg *Config, value int) { cfg.IOThreshold = value }),
 	"IO_RELEASE_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.IOReleaseThreshold = value }),
 	"IO_READ_BPS":                   setString(func(cfg *Config, value string) { cfg.IOReadBPS = value }),
@@ -631,15 +604,15 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
 	"IO_USER_INCLUDE_LIST":          setRegexList(" in IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
 	"IO_USER_EXCLUDE_LIST":          setRegexList(" in IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
-	"IO_REMEDIATION_ENABLED":        setBool(false, func(cfg *Config, value bool) { cfg.IORemediationEnabled = value }),
+	"IO_REMEDIATION_ENABLED":        setBool(func(cfg *Config, value bool) { cfg.IORemediationEnabled = value }),
 	"IO_STARVATION_THRESHOLD":       setInt(func(cfg *Config, value int) { cfg.IOStarvationThreshold = value }),
 	"IO_STARVATION_CHECK_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.IOStarvationCheckInterval = value }),
 	"IO_BOOST_MULTIPLIER":           setFloat(func(cfg *Config, value float64) { cfg.IOBoostMultiplier = value }),
 	"IO_BOOST_DURATION":             setInt(func(cfg *Config, value int) { cfg.IOBoostDuration = value }),
 	"IO_BOOST_MAX_PER_HOUR":         setInt(func(cfg *Config, value int) { cfg.IOBoostMaxPerHour = value }),
 	"IO_PSI_THRESHOLD":              setFloat(func(cfg *Config, value float64) { cfg.IOPSIThreshold = value }),
-	"IO_REVERT_ON_NORMAL":           setBool(true, func(cfg *Config, value bool) { cfg.IORevertOnNormal = value }),
-	"AUTODETECT_PATTERNS":           setBool(false, func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
+	"IO_REVERT_ON_NORMAL":           setBool(func(cfg *Config, value bool) { cfg.IORevertOnNormal = value }),
+	"AUTODETECT_PATTERNS":           setBool(func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
 	"PATTERN_HISTORY_HOURS":         setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
 	"PATTERN_MIN_SAMPLES":           setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
 	"PATTERN_CONFIDENCE_THRESHOLD":  setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
@@ -647,7 +620,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"BATCH_NIGHT_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.BatchNightRAMQuota = value }),
 	"INTERACTIVE_CPU_QUOTA":         setInt(func(cfg *Config, value int) { cfg.InteractiveCPUQuota = value }),
 	"INTERACTIVE_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.InteractiveRAMQuota = value }),
-	"PSI_EVENT_DRIVEN":              setBool(false, func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
+	"PSI_EVENT_DRIVEN":              setBool(func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
 	"PSI_CPU_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
 	"PSI_IO_STALL_THRESHOLD":        setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
 	"PSI_WINDOW_US":                 setPositiveInt(func(cfg *Config, value int) { cfg.PSIWindowUs = value }),
@@ -672,32 +645,41 @@ func setStringTransform(transform func(string) string, assign func(*Config, stri
 
 func setInt(assign func(*Config, int)) configFieldHandler {
 	return func(cfg *Config, value string) error {
-		if i, err := strconv.Atoi(value); err == nil {
-			assign(cfg, i)
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid integer %q: %w", value, err)
 		}
+		assign(cfg, i)
 		return nil
 	}
 }
 
 func setPositiveInt(assign func(*Config, int)) configFieldHandler {
 	return func(cfg *Config, value string) error {
-		if i, err := strconv.Atoi(value); err == nil && i > 0 {
-			assign(cfg, i)
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid positive integer %q: %w", value, err)
 		}
+		if i <= 0 {
+			return fmt.Errorf("value must be greater than 0, got %d", i)
+		}
+		assign(cfg, i)
 		return nil
 	}
 }
 
 func setFloat(assign func(*Config, float64)) configFieldHandler {
 	return func(cfg *Config, value string) error {
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			assign(cfg, f)
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("invalid floating-point value %q: %w", value, err)
 		}
+		assign(cfg, f)
 		return nil
 	}
 }
 
-func setBool(defaultValue bool, assign func(*Config, bool)) configFieldHandler {
+func setBool(assign func(*Config, bool)) configFieldHandler {
 	return func(cfg *Config, value string) error {
 		switch strings.ToLower(value) {
 		case "true", "1", "yes", "on":
@@ -705,7 +687,7 @@ func setBool(defaultValue bool, assign func(*Config, bool)) configFieldHandler {
 		case "false", "0", "no", "off":
 			assign(cfg, false)
 		default:
-			assign(cfg, defaultValue)
+			return fmt.Errorf("invalid boolean %q (expected true, false, 1, 0, yes, no, on, or off)", value)
 		}
 		return nil
 	}
@@ -713,12 +695,14 @@ func setBool(defaultValue bool, assign func(*Config, bool)) configFieldHandler {
 
 func setPort(key string, assign func(*Config, int)) configFieldHandler {
 	return func(cfg *Config, value string) error {
-		if i, err := strconv.Atoi(value); err == nil {
-			if i < 1 || i > 65535 {
-				return fmt.Errorf("invalid %s: %d (must be 1-65535)", key, i)
-			}
-			assign(cfg, i)
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", key, value, err)
 		}
+		if i < 1 || i > 65535 {
+			return fmt.Errorf("invalid %s: %d (must be 1-65535)", key, i)
+		}
+		assign(cfg, i)
 		return nil
 	}
 }
@@ -852,6 +836,12 @@ func validateConfig(cfg *Config) error {
 	if cfg.ProcessMinAgeSeconds < 0 {
 		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
 	}
+	if cfg.CgroupOperationTimeout <= 0 {
+		errors = append(errors, "CGROUP_OPERATION_TIMEOUT must be greater than 0")
+	}
+	if cfg.MCPShutdownTimeout <= 0 {
+		errors = append(errors, "MCP_SHUTDOWN_TIMEOUT must be greater than 0")
+	}
 	if cfg.PrometheusTLSMinVersion == "" {
 		if cfg.PrometheusTLSEnabled {
 			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION is required when Prometheus TLS is enabled")
@@ -906,7 +896,10 @@ func validateConfig(cfg *Config) error {
 
 	// Validate CPU quota format
 	if !isValidCPUQuota(cfg.CPUQuotaLimited) {
-		errors = append(errors, "CPU_QUOTA_LIMITED must be in format 'quota period' or 'max period'")
+		errors = append(errors, "CPU_QUOTA_LIMITED must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
+	}
+	if !isValidCPUQuota(cfg.CPUQuotaNormal) {
+		errors = append(errors, "CPU_QUOTA_NORMAL must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
 	}
 
 	// Validate RAM limits configuration
@@ -1006,18 +999,19 @@ func isValidIODeviceFilter(filter string) bool {
 
 // isValidCPUQuota verifica il formato "quota period" o "max period".
 func isValidCPUQuota(quota string) bool {
-	parts := strings.Split(quota, " ")
+	parts := strings.Fields(quota)
 	if len(parts) != 2 {
 		return false
 	}
-	if parts[0] == "max" {
-		_, err := strconv.Atoi(parts[1])
-		return err == nil
+	period, err := strconv.Atoi(parts[1])
+	if err != nil || period <= 0 {
+		return false
 	}
-	// Entrambi devono essere numeri
-	_, err1 := strconv.Atoi(parts[0])
-	_, err2 := strconv.Atoi(parts[1])
-	return err1 == nil && err2 == nil
+	if parts[0] == "max" {
+		return true
+	}
+	numericQuota, err := strconv.Atoi(parts[0])
+	return err == nil && numericQuota >= 1000
 }
 
 // isValidByteQuota verifica il formato di una quota in byte.
@@ -1088,6 +1082,12 @@ func (c *Config) matchPattern(pattern, s string) bool {
 // IsUserIncluded verifica se un username corrisponde ai pattern della include list
 // Se la include list è nil o vuota, tutti gli utenti sono inclusi
 func (c *Config) IsUserIncluded(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedLocked(username)
+}
+
+func (c *Config) isUserIncludedLocked(username string) bool {
 	// Se la include list non è configurata o è vuota, tutti gli utenti sono inclusi
 	if len(c.UserIncludeList) == 0 {
 		return true // No include list = all users included
@@ -1105,6 +1105,12 @@ func (c *Config) IsUserIncluded(username string) bool {
 // IsUserExcluded verifica se un username corrisponde ai pattern della exclude list
 // Se la exclude list è nil o vuota, nessun utente è escluso (tutti possono essere limitati)
 func (c *Config) IsUserExcluded(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserExcludedLocked(username)
+}
+
+func (c *Config) isUserExcludedLocked(username string) bool {
 	// Se la exclude list non è configurata o è vuota, nessun utente è escluso
 	if len(c.UserExcludeList) == 0 {
 		return false // No exclude list = no users excluded
@@ -1124,7 +1130,9 @@ func (c *Config) IsUserExcluded(username string) bool {
 // 1. È incluso nella include list (se configurata)
 // 2. NON è escluso dalla exclude list
 func (c *Config) IsUserWhitelisted(username string) bool {
-	return c.IsUserIncluded(username) && !c.IsUserExcluded(username)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedLocked(username) && !c.isUserExcludedLocked(username)
 }
 
 // IsProcessExcluded verifica se un processo deve essere escluso dai limiti
@@ -1210,7 +1218,7 @@ func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload
 	// Valida tutti i pattern regex
 	for _, pattern := range patterns {
 		if _, err := regexp.Compile(pattern); err != nil {
-			return nil, fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+			return c.GetUserExcludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
 		}
 	}
 
@@ -1222,13 +1230,13 @@ func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload
 	copy(previousValue, c.UserExcludeList)
 
 	// Aggiorna configurazione in memoria
-	c.UserExcludeList = patterns
+	c.UserExcludeList = append([]string(nil), patterns...)
 
 	// Salva su file
-	if err := c.SaveToFile(configPath); err != nil {
+	if err := c.saveToFileLocked(configPath); err != nil {
 		// Ripristina valore precedente se salvataggio fallisce
 		c.UserExcludeList = previousValue
-		return nil, err
+		return previousValue, err
 	}
 
 	return previousValue, nil
@@ -1239,7 +1247,7 @@ func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload
 	// Valida tutti i pattern regex
 	for _, pattern := range patterns {
 		if _, err := regexp.Compile(pattern); err != nil {
-			return nil, fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+			return c.GetUserIncludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
 		}
 	}
 
@@ -1251,13 +1259,13 @@ func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload
 	copy(previousValue, c.UserIncludeList)
 
 	// Aggiorna configurazione in memoria
-	c.UserIncludeList = patterns
+	c.UserIncludeList = append([]string(nil), patterns...)
 
 	// Salva su file
-	if err := c.SaveToFile(configPath); err != nil {
+	if err := c.saveToFileLocked(configPath); err != nil {
 		// Ripristina valore precedente se salvataggio fallisce
 		c.UserIncludeList = previousValue
-		return nil, err
+		return previousValue, err
 	}
 
 	return previousValue, nil
@@ -1265,6 +1273,12 @@ func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload
 
 // SaveToFile salva la configurazione su file, creando backup automatico
 func (c *Config) SaveToFile(path string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.saveToFileLocked(path)
+}
+
+func (c *Config) saveToFileLocked(path string) error {
 	// 1. Crea backup del file esistente
 	if _, err := os.Stat(path); err == nil {
 		timestamp := time.Now().Format("20060102_150405")
@@ -1453,6 +1467,9 @@ func parseDays(spec string) ([]int, error) {
 
 			if start < 0 || start > 6 || end < 0 || end > 6 {
 				return nil, fmt.Errorf("days must be 0-6 (0=Sunday)")
+			}
+			if start > end {
+				return nil, fmt.Errorf("day range start must not be greater than end: %s", part)
 			}
 
 			for i := start; i <= end; i++ {

@@ -19,6 +19,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -74,6 +77,9 @@ func TestValidateConfig(t *testing.T) {
 				CPUReleaseThreshold:    40,
 				PollingInterval:        30,
 				MetricsRefreshInterval: 30,
+				CgroupOperationTimeout: 5,
+				MCPShutdownTimeout:     10,
+				CPUQuotaNormal:         "max 100000",
 				CPUQuotaLimited:        "50000 100000",
 				LogLevel:               "INFO",
 				SystemUIDMin:           1000,
@@ -288,6 +294,13 @@ func TestIsValidCPUQuota(t *testing.T) {
 		{"three parts", "50000 100000 extra", false},
 		{"max without period", "max", false},
 		{"period without quota", " 100000", false},
+		{"quota below kernel minimum", "999 100000", false},
+		{"zero quota", "0 100000", false},
+		{"negative quota", "-1000 100000", false},
+		{"zero period", "50000 0", false},
+		{"negative period", "50000 -1", false},
+		{"max with zero period", "max 0", false},
+		{"extra whitespace", " 50000   100000 ", true},
 	}
 
 	for _, tt := range tests {
@@ -382,14 +395,41 @@ CPU_RELEASE_THRESHOLD=50
 	}
 }
 
+func TestLoadFromFileRejectsInvalidPrimitiveValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "integer", entry: "POLLING_INTERVAL=invalid"},
+		{name: "positive integer", entry: "METRICS_REFRESH_INTERVAL=0"},
+		{name: "float", entry: "RAM_HIGH_RATIO=invalid"},
+		{name: "boolean", entry: "ENABLE_PROMETHEUS=invalid"},
+		{name: "port", entry: "PROMETHEUS_PORT=invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "invalid.conf")
+			if err := os.WriteFile(configPath, []byte(tt.entry+"\n"), 0644); err != nil {
+				t.Fatalf("failed to create config file: %v", err)
+			}
+
+			if err := loadFromFile(configPath, DefaultConfig()); err == nil {
+				t.Fatalf("loadFromFile() accepted %q", tt.entry)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvironment(t *testing.T) {
 	// Imposta variabili d'ambiente (t.Setenv ripristina automaticamente a fine test)
 	t.Setenv("CPU_THRESHOLD", "85")
 	t.Setenv("CPU_RELEASE_THRESHOLD", "55")
 	t.Setenv("POLLING_INTERVAL", "45")
-	t.Setenv("LOG_LEVEL", "DEBUG")
+	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("ENABLE_PROMETHEUS", "true")
 	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "1974")
+	t.Setenv("PROMETHEUS_AUTH_TYPE", "BASIC")
 
 	cfg := DefaultConfig()
 	loadFromEnvironment(cfg)
@@ -411,6 +451,96 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.PrometheusMetricsBindPort != 1974 {
 		t.Errorf("PrometheusMetricsBindPort: got %d, expected 1974", cfg.PrometheusMetricsBindPort)
+	}
+	if cfg.PrometheusAuthType != "basic" {
+		t.Errorf("PrometheusAuthType: got %s, expected basic", cfg.PrometheusAuthType)
+	}
+}
+
+func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
+	t.Setenv("USER_INCLUDE_LIST", "[")
+	t.Setenv("CGROUP_BASE", "../escape")
+	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "invalid")
+	t.Setenv("ENABLE_PROMETHEUS", "invalid")
+
+	cfg := DefaultConfig()
+	warnings := loadFromEnvironment(cfg)
+
+	for _, key := range []string{
+		"USER_INCLUDE_LIST",
+		"CGROUP_BASE",
+		"PROMETHEUS_METRICS_BIND_PORT",
+		"ENABLE_PROMETHEUS",
+	} {
+		found := false
+		for _, warning := range warnings {
+			if strings.Contains(warning, key) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("loadFromEnvironment() did not report invalid %s: %v", key, warnings)
+		}
+	}
+	if cfg.UserIncludeList != nil {
+		t.Errorf("invalid USER_INCLUDE_LIST changed value to %v", cfg.UserIncludeList)
+	}
+	if cfg.CgroupBase != "resman" {
+		t.Errorf("invalid CGROUP_BASE changed value to %q", cfg.CgroupBase)
+	}
+	if cfg.PrometheusMetricsBindPort != 1974 {
+		t.Errorf("invalid Prometheus port changed value to %d", cfg.PrometheusMetricsBindPort)
+	}
+	if cfg.EnablePrometheus {
+		t.Error("invalid ENABLE_PROMETHEUS changed its default")
+	}
+}
+
+func TestLoadFromEnvironmentSupportsPrometheusAliases(t *testing.T) {
+	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_HOST")
+	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_PORT")
+	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
+	t.Setenv("PROMETHEUS_PORT", "9191")
+
+	cfg := DefaultConfig()
+	loadFromEnvironment(cfg)
+	if cfg.PrometheusMetricsBindHost != "192.0.2.10" {
+		t.Errorf("PrometheusMetricsBindHost = %q, want 192.0.2.10", cfg.PrometheusMetricsBindHost)
+	}
+	if cfg.PrometheusMetricsBindPort != 9191 {
+		t.Errorf("PrometheusMetricsBindPort = %d, want 9191", cfg.PrometheusMetricsBindPort)
+	}
+}
+
+func TestEveryEnvironmentFieldUsesAValidatedHandler(t *testing.T) {
+	cfgType := reflect.TypeOf(Config{})
+	for i := 0; i < cfgType.NumField(); i++ {
+		key := cfgType.Field(i).Tag.Get("config")
+		if key == "" || key == "-" {
+			continue
+		}
+		if _, ok := configFieldHandlers[key]; !ok {
+			t.Errorf("config field %s has no handler for %s", cfgType.Field(i).Name, key)
+		}
+	}
+}
+
+func TestLoadFromEnvironmentPrefersCanonicalPrometheusKeys(t *testing.T) {
+	t.Setenv("PROMETHEUS_METRICS_BIND_HOST", "127.0.0.2")
+	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
+	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "9192")
+	t.Setenv("PROMETHEUS_PORT", "9191")
+
+	cfg := DefaultConfig()
+	if warnings := loadFromEnvironment(cfg); len(warnings) != 0 {
+		t.Fatalf("loadFromEnvironment() warnings: %v", warnings)
+	}
+	if cfg.PrometheusMetricsBindHost != "127.0.0.2" {
+		t.Errorf("PrometheusMetricsBindHost = %q, want canonical value", cfg.PrometheusMetricsBindHost)
+	}
+	if cfg.PrometheusMetricsBindPort != 9192 {
+		t.Errorf("PrometheusMetricsBindPort = %d, want canonical value", cfg.PrometheusMetricsBindPort)
 	}
 }
 
@@ -555,6 +685,54 @@ func TestParseTimeframeRejectsAmbiguousOrOutOfRangeHours(t *testing.T) {
 	}
 }
 
+func TestParseTimeframeRejectsReversedDayRange(t *testing.T) {
+	if _, err := ParseTimeframe("6-0 00-24"); err == nil {
+		t.Fatal("ParseTimeframe() accepted reversed day range 6-0")
+	}
+}
+
+func TestValidateConfigRejectsInvalidCPUQuotaAndTimeouts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "invalid normal CPU quota",
+			mutate: func(cfg *Config) {
+				cfg.CPUQuotaNormal = "0 100000"
+			},
+		},
+		{
+			name: "invalid limited CPU quota",
+			mutate: func(cfg *Config) {
+				cfg.CPUQuotaLimited = "50000 0"
+			},
+		},
+		{
+			name: "zero cgroup operation timeout",
+			mutate: func(cfg *Config) {
+				cfg.CgroupOperationTimeout = 0
+			},
+		},
+		{
+			name: "negative MCP shutdown timeout",
+			mutate: func(cfg *Config) {
+				cfg.MCPShutdownTimeout = -1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.mutate(cfg)
+			if err := validateConfig(cfg); err == nil {
+				t.Fatal("validateConfig() expected an error")
+			}
+		})
+	}
+}
+
 func TestLoadAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test.conf")
@@ -658,4 +836,80 @@ func TestSetConfigField(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUserFilterConcurrentAccess(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=.*\nUSER_EXCLUDE_LIST=\n"), 0644); err != nil {
+		t.Fatalf("failed to create config file: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	const iterations = 25
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			patterns := []string{"^include$", "^shared$"}
+			if _, err := cfg.SetUserIncludeList(patterns, configPath, false); err != nil {
+				errs <- err
+				return
+			}
+			patterns[0] = "^mutated$"
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			patterns := []string{"^exclude$"}
+			if _, err := cfg.SetUserExcludeList(patterns, configPath, false); err != nil {
+				errs <- err
+				return
+			}
+			patterns[0] = "^mutated$"
+		}
+	}()
+
+	for i := 0; i < iterations*4; i++ {
+		_ = cfg.IsUserIncluded("include")
+		_ = cfg.IsUserExcluded("exclude")
+		_ = cfg.IsUserWhitelisted("shared")
+		_ = cfg.GetUserIncludeList()
+		_ = cfg.GetUserExcludeList()
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent setter failed: %v", err)
+	}
+
+	for _, pattern := range cfg.GetUserIncludeList() {
+		if pattern == "^mutated$" {
+			t.Fatal("SetUserIncludeList retained caller-owned slice")
+		}
+	}
+	for _, pattern := range cfg.GetUserExcludeList() {
+		if pattern == "^mutated$" {
+			t.Fatal("SetUserExcludeList retained caller-owned slice")
+		}
+	}
+}
+
+func unsetEnvForTest(t *testing.T, key string) {
+	t.Helper()
+	value, existed := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("failed to unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(key, value)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
 }

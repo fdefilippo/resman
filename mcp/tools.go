@@ -655,12 +655,8 @@ Utenti limitati: %d su %d
 		// Get current config
 		cfg := s.stateManager.GetConfig()
 
-		// Save previous value
-		previousValue := make([]string, len(cfg.UserExcludeList))
-		copy(previousValue, cfg.UserExcludeList)
-
 		// Set new exclude list
-		_, err := cfg.SetUserExcludeList(patterns, cfg.ConfigFile, reload)
+		previousValue, err := cfg.SetUserExcludeList(patterns, cfg.ConfigFile, reload)
 		if err != nil {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
@@ -754,12 +750,8 @@ Utenti limitati: %d su %d
 		// Get current config
 		cfg := s.stateManager.GetConfig()
 
-		// Save previous value
-		previousValue := make([]string, len(cfg.UserIncludeList))
-		copy(previousValue, cfg.UserIncludeList)
-
 		// Set new include list
-		_, err := cfg.SetUserIncludeList(patterns, cfg.ConfigFile, reload)
+		previousValue, err := cfg.SetUserIncludeList(patterns, cfg.ConfigFile, reload)
 		if err != nil {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
@@ -808,8 +800,8 @@ Utenti limitati: %d su %d
 		cfg := s.stateManager.GetConfig()
 
 		result := map[string]any{
-			"user_include_list": cfg.UserIncludeList,
-			"user_exclude_list": cfg.UserExcludeList,
+			"user_include_list": cfg.GetUserIncludeList(),
+			"user_exclude_list": cfg.GetUserExcludeList(),
 			"config_file":       cfg.ConfigFile,
 		}
 

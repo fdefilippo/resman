@@ -125,7 +125,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 		r.metricsCollector.UpdateConfig(newConfig)
 		r.logger.Info("Metrics collector configuration updated",
 			"cache_ttl", newConfig.MetricsCacheTTL,
-			"exclude_list", newConfig.UserExcludeList,
+			"exclude_list", newConfig.GetUserExcludeList(),
 		)
 	}
 

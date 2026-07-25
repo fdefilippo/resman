@@ -918,7 +918,7 @@ func (c *Collector) UpdateConfig(newConfig *config.Config) {
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
 		"system_uid_min", newConfig.SystemUIDMin,
 		"system_uid_max", newConfig.SystemUIDMax,
-		"user_exclude_list", newConfig.UserExcludeList,
+		"user_exclude_list", newConfig.GetUserExcludeList(),
 	)
 	// Pulisci la cache per applicare immediatamente i cambiamenti
 	c.ClearCache()
