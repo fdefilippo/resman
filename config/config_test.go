@@ -1126,6 +1126,79 @@ func TestUserFilterConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestCPUUserIncludeListSemantics(t *testing.T) {
+	tests := []struct {
+		name        string
+		includeList []string
+		excludeList []string
+		username    string
+		wantInclude bool
+		wantAllowed bool
+	}{
+		{
+			name:        "empty list disables CPU limiting",
+			username:    "alice",
+			wantInclude: false,
+			wantAllowed: false,
+		},
+		{
+			name:        "match all enables CPU limiting",
+			includeList: []string{".*"},
+			username:    "alice",
+			wantInclude: true,
+			wantAllowed: true,
+		},
+		{
+			name:        "specific pattern includes matching user",
+			includeList: []string{"^app-.*$"},
+			username:    "app-worker",
+			wantInclude: true,
+			wantAllowed: true,
+		},
+		{
+			name:        "specific pattern rejects non-matching user",
+			includeList: []string{"^app-.*$"},
+			username:    "alice",
+			wantInclude: false,
+			wantAllowed: false,
+		},
+		{
+			name:        "exclude list takes precedence",
+			includeList: []string{".*"},
+			excludeList: []string{"^root$"},
+			username:    "root",
+			wantInclude: true,
+			wantAllowed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.UserIncludeList = tt.includeList
+			cfg.UserExcludeList = tt.excludeList
+
+			if got := cfg.IsUserIncluded(tt.username); got != tt.wantInclude {
+				t.Errorf("IsUserIncluded(%q) = %v, want %v", tt.username, got, tt.wantInclude)
+			}
+			if got := cfg.IsUserWhitelisted(tt.username); got != tt.wantAllowed {
+				t.Errorf("IsUserWhitelisted(%q) = %v, want %v", tt.username, got, tt.wantAllowed)
+			}
+		})
+	}
+}
+
+func TestEmptyRAMAndIOIncludeListsStillIncludeAllUsers(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if !cfg.IsUserIncludedForRAM("alice") {
+		t.Fatal("empty RAM_USER_INCLUDE_LIST excluded user")
+	}
+	if !cfg.IsUserIncludedForIO("alice") {
+		t.Fatal("empty IO_USER_INCLUDE_LIST excluded user")
+	}
+}
+
 func unsetEnvForTest(t *testing.T, key string) {
 	t.Helper()
 	value, existed := os.LookupEnv(key)

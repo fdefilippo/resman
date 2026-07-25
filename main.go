@@ -30,7 +30,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-var version = "1.25"
+var version = "1.25.1"
 
 func main() {
 	// Parsing dei flag

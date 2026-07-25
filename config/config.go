@@ -334,8 +334,8 @@ func DefaultConfig() *Config {
 		SystemUIDMax:     pidMax,
 		IgnoreSystemLoad: false,
 		ServerRole:       "",  // Empty by default
-		UserIncludeList:  nil, // nil = all users included (no filter)
-		UserExcludeList:  nil, // nil = no users excluded (all users can be limited)
+		UserIncludeList:  nil, // nil = no users eligible for CPU limits
+		UserExcludeList:  nil, // nil = no additional users excluded
 		ProcessExcludeList: []string{ // Default processes to never limit (regex patterns)
 			"^systemd$", "^dbus-daemon$", "^dbus-broker$", "^polkitd$",
 		},
@@ -399,10 +399,11 @@ func LoadAndValidate(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// 4. Warning se USER_INCLUDE_LIST è vuota (nessun utente sarà limitato)
+	// Warn when CPU limiting is disabled by an empty include list.
 	if len(cfg.GetUserIncludeList()) == 0 {
 		fmt.Fprintf(os.Stderr, "WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. "+
-			"Set USER_INCLUDE_LIST=.* to limit all users, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
+			"Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, "+
+			"or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).\n")
 	}
 
 	return cfg, nil
@@ -1124,8 +1125,8 @@ func (c *Config) matchPattern(pattern, s string) bool {
 	return stored.(*regexp.Regexp).MatchString(s)
 }
 
-// IsUserIncluded verifica se un username corrisponde ai pattern della include list
-// Se la include list è nil o vuota, tutti gli utenti sono inclusi
+// IsUserIncluded reports whether a username matches the CPU include list.
+// An empty list disables CPU limiting for every user.
 func (c *Config) IsUserIncluded(username string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1133,22 +1134,20 @@ func (c *Config) IsUserIncluded(username string) bool {
 }
 
 func (c *Config) isUserIncludedLocked(username string) bool {
-	// Se la include list non è configurata o è vuota, tutti gli utenti sono inclusi
 	if len(c.UserIncludeList) == 0 {
-		return true // No include list = all users included
+		return false
 	}
 
-	// Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
 	for _, pattern := range c.UserIncludeList {
 		if c.matchPattern(pattern, username) {
-			return true // User matches include pattern
+			return true
 		}
 	}
-	return false // User does not match any include pattern
+	return false
 }
 
-// IsUserExcluded verifica se un username corrisponde ai pattern della exclude list
-// Se la exclude list è nil o vuota, nessun utente è escluso (tutti possono essere limitati)
+// IsUserExcluded reports whether a username matches the CPU exclude list.
+// An empty list does not exclude any user that is otherwise CPU-eligible.
 func (c *Config) IsUserExcluded(username string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1170,10 +1169,8 @@ func (c *Config) isUserExcludedLocked(username string) bool {
 	return false
 }
 
-// IsUserWhitelisted verifica se un utente può essere limitato
-// Un utente può essere limitato se:
-// 1. È incluso nella include list (se configurata)
-// 2. NON è escluso dalla exclude list
+// IsUserWhitelisted reports whether a user is eligible for CPU limiting.
+// The user must match a non-empty include list and must not match the exclude list.
 func (c *Config) IsUserWhitelisted(username string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

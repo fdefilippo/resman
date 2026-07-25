@@ -38,7 +38,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.25-1_<architecture>.deb
+# Creates build/deb/resman_1.25.1-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -118,6 +118,12 @@ MCP_TRANSPORT=stdio
 # PSI_FALLBACK_INTERVAL=300
 # METRICS_REFRESH_INTERVAL=30
 ```
+
+`USER_INCLUDE_LIST` controls CPU-limit eligibility, not metrics collection.
+When it is empty or unset, resman continues to monitor users but applies no CPU
+limits. Set it to `.*` to make every non-excluded user eligible. Empty
+`RAM_USER_INCLUDE_LIST` and `IO_USER_INCLUDE_LIST` values continue to include
+all users for their respective optional controllers.
 
 Activation timing for a new CPU-bound process includes one baseline CPU sample
 before `CPU_THRESHOLD_DURATION` starts. Every process state is sampled

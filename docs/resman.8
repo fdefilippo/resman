@@ -1,4 +1,4 @@
-.TH RESMAN 8 "July 2026" "v1.25" "System Administration"
+.TH RESMAN 8 "July 2026" "v1.25.1" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -106,6 +106,19 @@ If User1 uses 0.5 cores, User2 can use 1.5 cores
 .IP \(bu
 If User1 uses no CPU, User2 can use all 2 cores
 .RE
+.PP
+CPU limit eligibility is controlled by
+.B USER_INCLUDE_LIST
+and
+.BR USER_EXCLUDE_LIST .
+An empty or unset
+.B USER_INCLUDE_LIST
+keeps metrics monitoring active but makes no user eligible for CPU limits.
+Set
+.B USER_INCLUDE_LIST=.*
+to make every non\-excluded user eligible. This fail\-safe CPU behavior does
+not change the independent RAM and I/O include lists, where an empty list
+continues to include all users.
 .SH RAM LIMITS
 When enabled, the daemon monitors total memory usage by non\-system users and applies limits when the configured threshold is exceeded.
 .PP
@@ -562,7 +575,8 @@ SYSTEM_UID_MIN=1000          # Minimum UID for non\-system users
 SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
 
 # USER INCLUDE LIST (regex patterns, comma-separated)
-# Only users matching these patterns are monitored
+# Empty means no CPU limits; metrics monitoring remains active
+# Use .* to make every non-excluded user eligible
 # USER_INCLUDE_LIST=^www.*,^apache.*    # Web users only
 # USER_INCLUDE_LIST=francesco,www-data  # Specific users
 

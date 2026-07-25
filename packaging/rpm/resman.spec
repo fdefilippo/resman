@@ -10,7 +10,7 @@
 # - Script generazione certificati TLS
 
 Name:    resman
-Version: 1.25
+Version: 1.25.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -55,6 +55,7 @@ v1.24.0: PSI event-driven control cycles, limit hook notifications and config re
 v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
 v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint gate.
 v1.25: architecture review remediation, dependency refresh and early systemd startup.
+v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -227,6 +228,10 @@ echo "Please review /etc/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Jul 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.25.1-1
+- FIX: empty USER_INCLUDE_LIST keeps monitoring active but disables CPU limiting
+- DOCS: clarify that USER_INCLUDE_LIST=.* enables all non-excluded users
+
 * Sat Jul 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.25-1
 - FIX: completed architecture review remediation across cgroup, state, metrics, database, config, logging and MCP
 - BUILD: refreshed compatible Go dependencies and verified the dependency graph

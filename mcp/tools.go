@@ -696,14 +696,14 @@ Utenti limitati: %d su %d
 	// set_user_include_list - registered manually with explicit schema
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "set_user_include_list",
-		Description: "Set the list of users to include in monitoring (regex patterns supported)",
+		Description: "Set CPU-limit eligibility patterns; an empty list disables CPU limiting and .* includes every non-excluded user",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"patterns": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "List of regex patterns for users to include",
+					"description": "CPU eligibility regex patterns; use an empty array for no users or [\".*\"] for all non-excluded users",
 				},
 				"reload": map[string]any{
 					"type":        "boolean",

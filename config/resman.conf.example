@@ -399,9 +399,9 @@ SYSTEM_UID_MIN=1000
 # ========================
 # USER INCLUDE LIST [D]
 # ========================
-# If specified, INCLUDE in monitoring ONLY users matching the listed
-# regex patterns. If empty or unspecified, NO users will be limited
-# (monitoring is active but no limits are applied).
+# If specified, only users matching the listed regex patterns are eligible
+# for CPU limits. If empty or unspecified, NO users will be limited.
+# Metrics monitoring remains active for all UIDs in the configured range.
 # Format: comma-separated regex patterns, no spaces
 # Examples:
 #   USER_INCLUDE_LIST=francesco                    # Only francesco can be limited
@@ -420,9 +420,9 @@ SYSTEM_UID_MIN=1000
 # ========================
 # USER EXCLUDE LIST [D]
 # ========================
-# If specified, EXCLUDE listed users from monitoring and CPU limit
-# application. If empty or unspecified, all non-system users
-# (UID >= SYSTEM_UID_MIN) can be limited.
+# If specified, exclude matching users from CPU limit application.
+# Metrics monitoring remains active. If empty or unspecified, eligibility
+# is determined only by USER_INCLUDE_LIST.
 # Format: comma-separated regex patterns, no spaces
 # Examples:
 #   USER_EXCLUDE_LIST=francesco                    # Francesco is NOT limited
