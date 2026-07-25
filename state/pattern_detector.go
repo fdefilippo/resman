@@ -231,17 +231,20 @@ func calculateVariance(values []float64, counts []int) float64 {
 	return sumSquaredDiff / float64(totalWeight)
 }
 
-// Cleanup rimuove statistiche vecchie oltre la finestra storica.
-func (pd *PatternDetector) Cleanup(maxAge time.Duration) {
+// Cleanup removes statistics older than the configured history window.
+func (pd *PatternDetector) Cleanup(maxAge time.Duration) []int {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
 	now := time.Now()
+	var removed []int
 	for uid, stats := range pd.userStats {
 		if now.Sub(stats.LastSample) > maxAge {
 			delete(pd.userStats, uid)
+			removed = append(removed, uid)
 		}
 	}
+	return removed
 }
 
 // RetainUsers removes statistics for users that are no longer eligible.
@@ -254,4 +257,16 @@ func (pd *PatternDetector) RetainUsers(eligible map[int]bool) {
 			delete(pd.userStats, uid)
 		}
 	}
+}
+
+// UserIDs returns a snapshot of users with retained pattern history.
+func (pd *PatternDetector) UserIDs() []int {
+	pd.mu.RLock()
+	defer pd.mu.RUnlock()
+
+	uids := make([]int, 0, len(pd.userStats))
+	for uid := range pd.userStats {
+		uids = append(uids, uid)
+	}
+	return uids
 }

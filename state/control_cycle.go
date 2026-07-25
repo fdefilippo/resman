@@ -234,7 +234,7 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 		return nil
 	}
 
-	eligible := make(map[int]bool)
+	configuredEligible := make(map[int]bool)
 	allMetrics := m.metricsCollector.GetAllUserMetrics()
 	for uid, um := range allMetrics {
 		if um == nil {
@@ -244,15 +244,26 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 		if username == "" {
 			username = m.metricsCollector.GetUsernameFromUID(uid)
 		}
-		if !um.IsLimited || !run.cfg.IsUserWhitelisted(username) {
+		if !run.cfg.IsUserWhitelisted(username) {
 			continue
 		}
-		eligible[uid] = true
+		configuredEligible[uid] = true
 		m.patternDetector.Update(uid, um.CPUUsage)
 	}
 
-	m.patternDetector.RetainUsers(eligible)
-	for _, uid := range m.policyEngine.RetainUsers(eligible) {
+	// Preserve history for configured users even when they have no live processes.
+	for _, uid := range m.patternDetector.UserIDs() {
+		if configuredEligible[uid] {
+			continue
+		}
+		username := m.metricsCollector.GetUsernameFromUID(uid)
+		if run.cfg.IsUserWhitelisted(username) {
+			configuredEligible[uid] = true
+		}
+	}
+
+	m.patternDetector.RetainUsers(configuredEligible)
+	for _, uid := range m.policyEngine.RetainUsers(configuredEligible) {
 		m.reconcilePatternPolicy(uid, run.cfg)
 	}
 
@@ -262,6 +273,11 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 	}
 
 	m.lastPatternAnalysis = time.Now()
+	for _, uid := range m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour) {
+		if m.policyEngine.RemovePolicy(uid) {
+			m.reconcilePatternPolicy(uid, run.cfg)
+		}
+	}
 	patterns := m.patternDetector.Analyze(run.cfg)
 	for uid, result := range patterns {
 		if m.prometheusExporter != nil {
@@ -280,7 +296,6 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 		}
 	}
 
-	m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour)
 	return nil
 }
 

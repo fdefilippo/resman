@@ -615,7 +615,7 @@ func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T
 
 	collector := &mockMetricsCollector{
 		allUserMetrics: map[int]*metrics.UserMetrics{
-			1000: {UID: 1000, Username: "allowed", CPUUsage: 0, IsLimited: true},
+			1000: {UID: 1000, Username: "allowed", CPUUsage: 0, IsLimited: false},
 			1001: {UID: 1001, Username: "excluded", CPUUsage: 0, IsLimited: false},
 		},
 		usernames: map[int]string{1000: "allowed", 1001: "excluded"},
@@ -648,6 +648,77 @@ func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T
 	}
 	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:200000 100000"}) {
 		t.Fatalf("CPU quota calls = %v, want [1000:200000 100000]", cgroupManager.applyCPUQuotaCalls)
+	}
+}
+
+func TestPatternHistorySurvivesTemporaryProcessAbsence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternMinSamples = 1
+	cfg.UserIncludeList = []string{"^batch$"}
+
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{},
+		usernames:      map[int]string{1000: "batch"},
+	}
+	manager, err := NewManager(cfg, collector, &deactivateCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	stats := batchNightStats()
+	stats.LastSample = time.Now().Add(-time.Hour)
+	manager.patternDetector.userStats[1000] = stats
+	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
+
+	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
+	}
+
+	retained, exists := manager.patternDetector.userStats[1000]
+	if !exists {
+		t.Fatal("pattern history was removed while the configured user had no live processes")
+	}
+	if retained.TotalSamples != 30 {
+		t.Fatalf("retained samples = %d, want 30", retained.TotalSamples)
+	}
+	if _, exists := manager.policyEngine.GetPolicy(1000); !exists {
+		t.Fatal("pattern policy was removed while retained history was still valid")
+	}
+}
+
+func TestPatternHistoryExpiryRemovesPolicy(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternHistoryHours = 1
+	cfg.UserIncludeList = []string{"^batch$"}
+
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{},
+		usernames:      map[int]string{1000: "batch"},
+	}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	stats := batchNightStats()
+	stats.LastSample = time.Now().Add(-2 * time.Hour)
+	manager.patternDetector.userStats[1000] = stats
+	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
+	manager.activeUsers[1000] = true
+
+	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
+	}
+
+	if _, exists := manager.patternDetector.userStats[1000]; exists {
+		t.Fatal("expired pattern history was retained")
+	}
+	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
+		t.Fatal("policy survived after its pattern history expired")
+	}
+	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
+		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
 	}
 }
 
