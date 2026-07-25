@@ -18,6 +18,7 @@
 package metrics
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -69,7 +70,7 @@ func (w *DBWriter) WriteUserMetrics(uid int, username string, cpuUsage float64, 
 		CgroupPath:       cgroupPath,
 		CPUQuota:         cpuQuota,
 		IsLimited:        isLimited,
-		Timestamp:        time.Now(),
+		Timestamp:        time.Now().UTC(),
 	}
 
 	if err := w.dbManager.WriteUserMetrics(record); err != nil {
@@ -96,12 +97,52 @@ func (w *DBWriter) WriteSystemMetrics(totalCPUUsage float64, totalCores int, sys
 		SystemLoad:           systemLoad,
 		LimitsActive:         limitsActive,
 		LimitedUsersCount:    limitedUsersCount,
-		Timestamp:            time.Now(),
+		Timestamp:            time.Now().UTC(),
 	}
 
 	if err := w.dbManager.WriteSystemMetrics(record); err != nil {
 		w.logger.Debug("Failed to write system metrics to database", "error", err)
 	}
+}
+
+// WriteMetricsBatch writes one system sample and all user samples atomically.
+func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
+	w.mu.RLock()
+	enabled := w.enabled
+	w.mu.RUnlock()
+	if !enabled || w.dbManager == nil {
+		return nil
+	}
+
+	timestamp := time.Now().UTC()
+	systemRecord := &database.SystemMetricsRecord{
+		TotalCPUUsagePercent: totalCPUUsage,
+		TotalCores:           totalCores,
+		SystemLoad:           systemLoad,
+		LimitsActive:         limitsActive,
+		LimitedUsersCount:    limitedUsersCount,
+		Timestamp:            timestamp,
+	}
+	userRecords := make([]*database.UserMetricsRecord, 0, len(userMetrics))
+	for uid, metrics := range userMetrics {
+		if metrics == nil {
+			return fmt.Errorf("user metrics for UID %d are nil", uid)
+		}
+		userRecords = append(userRecords, &database.UserMetricsRecord{
+			UID:              uid,
+			Username:         metrics.Username,
+			CPUUsagePercent:  metrics.CPUUsage,
+			MemoryUsageBytes: int64(metrics.MemoryUsage),
+			ProcessCount:     metrics.ProcessCount,
+			IsLimited:        metrics.IsLimited,
+			Timestamp:        timestamp,
+		})
+	}
+
+	if err := w.dbManager.WriteMetricsBatch(systemRecord, userRecords); err != nil {
+		return fmt.Errorf("failed to write metrics collection batch: %w", err)
+	}
+	return nil
 }
 
 // ShouldWrite verifica se è il momento di scrivere nel database

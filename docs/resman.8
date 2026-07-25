@@ -611,7 +611,9 @@ already active user cgroups.
 .PP
 Database retention runs at startup and every 24 hours. New databases use
 incremental auto-vacuum so periodic cleanup does not run a blocking full
-database vacuum.
+database vacuum. Each collection cycle is committed as one transaction.
+File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
+are stored and queried in UTC.
 .nf
 
 # PSI EVENT-DRIVEN MODE (Linux >= 4.20, CONFIG_PSI=y)
@@ -707,7 +709,7 @@ resman_system_load_average \- System load average (1 minute)
 .IP \(bu
 resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
 .IP \(bu
-resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (bytes)
+resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (PSS in bytes, RSS fallback)
 .IP \(bu
 resman_user_io_read_bytes{uid, username} \- IO read bytes per user (when IO limits enabled)
 .IP \(bu

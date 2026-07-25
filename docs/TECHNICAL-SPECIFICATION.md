@@ -740,7 +740,7 @@ echo "+cpuset" >> /sys/fs/cgroup/cgroup.subtree_control
 | Metric | Calculation |
 |--------|-------------|
 | CPU% | Sum of all process CPU% for UID |
-| Memory bytes | Sum of VmRSS for all processes |
+| Memory bytes | Sum of process PSS from `smaps_rollup`; RSS fallback when unavailable |
 | Process count | Count of processes for UID |
 
 ### 7.3 CPU Usage Calculation

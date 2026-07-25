@@ -864,6 +864,8 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 		if !activeUids[uid] {
 			// Rimuovi dalle metriche
 			exp.userCPUUsage.DeleteLabelValues(uidStr, username)
+			exp.userCPUUsageAverage.DeleteLabelValues(uidStr, username)
+			exp.userCPUUsageEMA.DeleteLabelValues(uidStr, username)
 			exp.userMemoryUsage.DeleteLabelValues(uidStr, username)
 			exp.userProcessCount.DeleteLabelValues(uidStr, username)
 			exp.userLimited.DeleteLabelValues(uidStr, username)

@@ -57,6 +57,30 @@ func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
 	}
 }
 
+func TestNewDatabaseManagerUsesWALAndBusyTimeout(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	var journalMode string
+	if err := manager.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("failed to read journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
+	}
+
+	var busyTimeout int
+	if err := manager.db.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatalf("failed to read busy_timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
+	}
+}
+
 func TestWriteAndReadUserMetrics(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_write.db"
 	defer func() { _ = os.Remove(tmpFile) }()
@@ -143,6 +167,123 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 
 	if records[0].TotalCores != 4 {
 		t.Errorf("Expected 4 cores, got %d", records[0].TotalCores)
+	}
+}
+
+func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	if _, err := manager.db.Exec(`
+		CREATE TRIGGER reject_uid_1001
+		BEFORE INSERT ON user_metrics
+		WHEN NEW.uid = 1001
+		BEGIN
+			SELECT RAISE(ABORT, 'rejected test UID');
+		END;
+	`); err != nil {
+		t.Fatalf("failed to create rejection trigger: %v", err)
+	}
+
+	now := time.Now()
+	err = manager.WriteMetricsBatch(
+		&SystemMetricsRecord{Timestamp: now, TotalCores: 4},
+		[]*UserMetricsRecord{
+			{Timestamp: now, UID: 1000, Username: "accepted", ProcessCount: 1},
+			{Timestamp: now, UID: 1001, Username: "rejected", ProcessCount: 1},
+		},
+	)
+	if err == nil {
+		t.Fatal("WriteMetricsBatch() expected an error")
+	}
+
+	for _, table := range []string{"system_metrics", "user_metrics"} {
+		var count int
+		if err := manager.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("failed to count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows after rollback = %d, want 0", table, count)
+		}
+	}
+}
+
+func TestDatabaseTimeRangesCompareUTCInstants(t *testing.T) {
+	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	local := time.FixedZone("UTC+2", 2*60*60)
+	outside := time.Date(2026, 7, 24, 9, 0, 0, 0, local) // 07:00 UTC
+	inside := time.Date(2026, 7, 24, 11, 0, 0, 0, local) // 09:00 UTC
+	for _, record := range []*UserMetricsRecord{
+		{Timestamp: outside, UID: 1000, Username: "test", CPUUsagePercent: 7, ProcessCount: 1},
+		{Timestamp: inside, UID: 1000, Username: "test", CPUUsagePercent: 9, ProcessCount: 1},
+	} {
+		if err := manager.WriteUserMetrics(record); err != nil {
+			t.Fatalf("WriteUserMetrics() error: %v", err)
+		}
+	}
+
+	start := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	records, err := manager.GetUserHistory(1000, start, end, 10)
+	if err != nil {
+		t.Fatalf("GetUserHistory() error: %v", err)
+	}
+	if len(records) != 1 || records[0].CPUUsagePercent != 9 {
+		t.Fatalf("UTC user history = %+v, want only the 09:00 UTC record", records)
+	}
+	if records[0].Timestamp.Location() != time.UTC {
+		t.Fatalf("record location = %s, want UTC", records[0].Timestamp.Location())
+	}
+}
+
+func TestNewDatabaseManagerNormalizesLegacyTimestampOffsets(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	if err := manager.WriteUserMetrics(&UserMetricsRecord{
+		Timestamp:    time.Now(),
+		UID:          1000,
+		Username:     "legacy",
+		ProcessCount: 1,
+	}); err != nil {
+		t.Fatalf("WriteUserMetrics() error: %v", err)
+	}
+	if _, err := manager.db.Exec(
+		"UPDATE user_metrics SET timestamp = ? WHERE uid = ?",
+		"2026-07-24 09:00:00.000000000+02:00",
+		1000,
+	); err != nil {
+		t.Fatalf("failed to install legacy timestamp fixture: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+
+	manager, err = NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("reopen NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	var stored string
+	if err := manager.db.QueryRow(
+		"SELECT CAST(timestamp AS TEXT) FROM user_metrics WHERE uid = ?",
+		1000,
+	).Scan(&stored); err != nil {
+		t.Fatalf("failed to read normalized timestamp: %v", err)
+	}
+	if stored != "2026-07-24 07:00:00.000+00:00" {
+		t.Fatalf("normalized timestamp = %q, want UTC equivalent", stored)
 	}
 }
 

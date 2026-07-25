@@ -20,7 +20,7 @@ package metrics
 import (
 	"bufio"
 	"fmt"
-	//    "io"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -48,7 +48,7 @@ type UserMetrics struct {
 	CPUUsage        float64 // CPU percentage (instantaneous, last cycle)
 	CPUUsageAverage float64 // CPU percentage average since process start
 	CPUUsageEMA     float64 // CPU percentage exponential moving average (α=0.3)
-	MemoryUsage     uint64  // Memory in bytes (VmRSS)
+	MemoryUsage     uint64  // Memory in bytes (PSS when available, RSS fallback)
 	ProcessCount    int     // Number of processes
 	IsLimited       bool    // Whether user has CPU limits applied
 	IOReadBytes     uint64  // Total bytes read from block devices
@@ -84,6 +84,13 @@ type emaCache struct {
 	values map[int]float64 // uid -> EMA value
 }
 
+type cpuJiffySample struct {
+	total     uint64
+	idle      uint64
+	sampledAt time.Time
+	valid     bool
+}
+
 // Collector collects system metrics.
 type Collector struct {
 	cfg    *config.Config
@@ -95,9 +102,8 @@ type Collector struct {
 	cacheTimestamps map[string]time.Time
 	cacheMutex      sync.RWMutex
 
-	// Stato precedente per calcolo delta CPU
-	prevCPUStats cpu.TimesStat
-	prevCPUTime  time.Time
+	// Previous /proc/stat sample. Values are raw kernel jiffies.
+	prevFallbackCPU cpuJiffySample
 
 	// Cache per CPU usage per processo (necessaria per calcolo delta)
 	procCache *procCache // Single cache instead of sharding
@@ -135,7 +141,6 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		logger:            logger,
 		cache:             make(map[string]interface{}),
 		cacheTimestamps:   make(map[string]time.Time),
-		prevCPUTime:       time.Now(),
 		usernameCache:     make(map[int]string),
 		usernameCacheTime: make(map[int]time.Time),
 		usernameCacheTTL:  DEFAULT_USERNAME_CACHE_TTL,
@@ -152,11 +157,6 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 	}
 
 	go collector.periodicCleanup()
-
-	// Inizializza le statistiche CPU precedenti
-	if stats, err := cpu.Times(false); err == nil && len(stats) > 0 {
-		collector.prevCPUStats = stats[0]
-	}
 
 	logger.Info("Metrics collector initialized")
 	return collector, nil
@@ -302,55 +302,42 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 
 	total := user + nice + system + idle + iowait + irq + softirq + steal
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Calcola la differenza dal precedente campione
-	if c.prevCPUStats.User == 0 && c.prevCPUStats.System == 0 && c.prevCPUStats.Idle == 0 {
-		// Primo campione, salva e ritorna 0
-		c.prevCPUStats = cpu.TimesStat{
-			User:    float64(user),
-			Nice:    float64(nice),
-			System:  float64(system),
-			Idle:    float64(idle),
-			Iowait:  float64(iowait),
-			Irq:     float64(irq),
-			Softirq: float64(softirq),
-			Steal:   float64(steal),
-		}
-		c.prevCPUTime = time.Now()
-		return 0.0
-	}
-
-	// Calcola delta
-	totalDelta := total - (uint64(c.prevCPUStats.User) + uint64(c.prevCPUStats.Nice) +
-		uint64(c.prevCPUStats.System) + uint64(c.prevCPUStats.Idle) +
-		uint64(c.prevCPUStats.Iowait) + uint64(c.prevCPUStats.Irq) +
-		uint64(c.prevCPUStats.Softirq) + uint64(c.prevCPUStats.Steal))
-	idleDelta := idle - uint64(c.prevCPUStats.Idle)
-
-	// Aggiorna lo stato precedente
-	c.prevCPUStats = cpu.TimesStat{
-		User:    float64(user),
-		Nice:    float64(nice),
-		System:  float64(system),
-		Idle:    float64(idle),
-		Iowait:  float64(iowait),
-		Irq:     float64(irq),
-		Softirq: float64(softirq),
-		Steal:   float64(steal),
-	}
-
-	if totalDelta == 0 {
-		return 0.0
-	}
-
-	usage := cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
+	usage := c.updateFallbackCPUSample(total, idle)
 
 	// Cache il risultato
 	c.setInCache("total_cpu_usage", usage)
 
 	return usage
+}
+
+func (c *Collector) updateFallbackCPUSample(total, idle uint64) float64 {
+	return c.updateFallbackCPUSampleAt(total, idle, time.Now())
+}
+
+func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	previous := c.prevFallbackCPU
+	c.prevFallbackCPU = cpuJiffySample{total: total, idle: idle, sampledAt: now, valid: true}
+	maxGap := 30 * time.Second
+	if c.cfg != nil {
+		maxGap = 2 * time.Duration(c.cfg.GetMetricsCacheTTL()) * time.Second
+	}
+	if maxGap <= 0 {
+		maxGap = time.Second
+	}
+	if !previous.valid || now.Before(previous.sampledAt) || now.Sub(previous.sampledAt) > maxGap ||
+		total < previous.total || idle < previous.idle {
+		return 0
+	}
+
+	totalDelta := total - previous.total
+	idleDelta := idle - previous.idle
+	if totalDelta == 0 || idleDelta > totalDelta {
+		return 0
+	}
+	return cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
 }
 
 // GetUserCPUUsage restituisce l'uso CPU per un utente specifico.
@@ -1082,11 +1069,14 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(p)
 		tempData[uid].cpuUsage += cpuUsage
 
-		// Read memory usage (RSS)
+		// Prefer PSS so shared pages are divided among mappings instead of
+		// counted once per process. Fall back to RSS when smaps is unavailable.
+		var rss uint64
 		memInfo, err := p.MemoryInfo()
 		if err == nil && memInfo != nil {
-			tempData[uid].memoryUsage += memInfo.RSS
+			rss = memInfo.RSS
 		}
+		tempData[uid].memoryUsage += c.getProcessMemoryUsageWithFallback(int(p.Pid), rss)
 
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
@@ -1152,6 +1142,7 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 		}
 	}
 
+	c.retainEMAUsers(userMetrics)
 	c.setInCache(cacheKey, userMetrics)
 	return userMetrics
 }
@@ -1251,6 +1242,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		}
 	}
 
+	c.retainEMAUsers(userMetrics)
 	return userMetrics
 }
 
@@ -1319,9 +1311,49 @@ func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
 	return totalMemory
 }
 
-// getProcessMemoryUsage restituisce la memoria RSS di un processo in bytes.
-// Legge VmRSS da /proc/[pid]/status.
+// getProcessMemoryUsage returns PSS when available and falls back to VmRSS.
 func (c *Collector) getProcessMemoryUsage(pid int) uint64 {
+	return c.getProcessMemoryUsageWithFallback(pid, c.getProcessRSS(pid))
+}
+
+func (c *Collector) getProcessMemoryUsageWithFallback(pid int, rss uint64) uint64 {
+	file, err := os.Open(fmt.Sprintf("/proc/%d/smaps_rollup", pid))
+	if err != nil {
+		return rss
+	}
+	defer func() { _ = file.Close() }()
+
+	pss, err := parseProcessPSS(file)
+	if err != nil {
+		return rss
+	}
+	return pss
+}
+
+func parseProcessPSS(r io.Reader) (uint64, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "Pss:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0, fmt.Errorf("invalid Pss line %q", line)
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid Pss value %q: %w", fields[1], err)
+		}
+		return kb * 1024, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("failed to read smaps_rollup: %w", err)
+	}
+	return 0, fmt.Errorf("pss not found in smaps_rollup")
+}
+
+func (c *Collector) getProcessRSS(pid int) uint64 {
 	statusFile := fmt.Sprintf("/proc/%d/status", pid)
 	data, err := os.ReadFile(statusFile)
 	if err != nil {
@@ -1473,6 +1505,17 @@ func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
 	return ema
 }
 
+func (c *Collector) retainEMAUsers(active map[int]*UserMetrics) {
+	c.emaCache.mu.Lock()
+	defer c.emaCache.mu.Unlock()
+
+	for uid := range c.emaCache.values {
+		if _, exists := active[uid]; !exists {
+			delete(c.emaCache.values, uid)
+		}
+	}
+}
+
 // getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
 func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
 	proc, err := process.NewProcess(int32(pid))
@@ -1569,21 +1612,9 @@ func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, tot
 		return
 	}
 
-	// Scrivi metriche di sistema
-	writer.WriteSystemMetrics(totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount)
-
-	// Scrivi metriche per ogni utente
-	for uid, metrics := range userMetrics {
-		writer.WriteUserMetrics(
-			uid,
-			metrics.Username,
-			metrics.CPUUsage,
-			metrics.MemoryUsage,
-			metrics.ProcessCount,
-			metrics.IsLimited,
-			"", // cgroupPath
-			"", // cpuQuota
-		)
+	if err := writer.WriteMetricsBatch(userMetrics, totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount); err != nil {
+		c.logger.Debug("Failed to write metrics batch to database", "error", err)
+		return
 	}
 
 	writer.MarkWritten()

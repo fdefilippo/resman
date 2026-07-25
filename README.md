@@ -120,6 +120,14 @@ and retried on later cycles if cleanup fails.
 activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
 
+Per-user memory uses proportional set size (PSS) from
+`/proc/PID/smaps_rollup`, preventing shared pages from being counted once per
+process. RSS is used only when PSS is unavailable.
+
+SQLite history is written one collection cycle per transaction. File-backed
+databases use WAL mode and a 5-second busy timeout, and all stored/query
+timestamps are normalized to UTC.
+
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with its PID start time. On release, the
 process is restored to that exact cgroup. Processes whose original systemd

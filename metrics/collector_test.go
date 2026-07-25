@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,10 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	}
 	if len(systemHistory) != 1 || systemHistory[0].SystemLoad != 2.5 {
 		t.Fatalf("system history = %+v, want system load 2.5", systemHistory)
+	}
+	if !userHistory[0].Timestamp.Equal(systemHistory[0].Timestamp) {
+		t.Fatalf("batch timestamps differ: user=%s system=%s",
+			userHistory[0].Timestamp, systemHistory[0].Timestamp)
 	}
 }
 
@@ -184,6 +189,52 @@ func TestUpdateProcessCPUSampleRetainsBaselinesAboveLegacyLimit(t *testing.T) {
 	got := collector.updateProcessCPUSample(1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second))
 	if got != 100 {
 		t.Fatalf("CPU delta after cache growth = %f, want 100", got)
+	}
+}
+
+func TestUpdateFallbackCPUSampleUsesDedicatedJiffyBaseline(t *testing.T) {
+	collector := &Collector{}
+	now := time.Now()
+
+	if got := collector.updateFallbackCPUSampleAt(10000, 8000, now); got != 0 {
+		t.Fatalf("first fallback CPU sample = %f, want 0", got)
+	}
+	if got := collector.updateFallbackCPUSampleAt(11000, 8500, now.Add(10*time.Second)); got != 50 {
+		t.Fatalf("second fallback CPU sample = %f, want 50", got)
+	}
+	if got := collector.updateFallbackCPUSampleAt(100, 80, now.Add(20*time.Second)); got != 0 {
+		t.Fatalf("regressed fallback CPU counters = %f, want 0", got)
+	}
+	if got := collector.updateFallbackCPUSampleAt(200, 100, now.Add(2*time.Minute)); got != 0 {
+		t.Fatalf("stale fallback CPU baseline = %f, want 0", got)
+	}
+}
+
+func TestParseProcessPSS(t *testing.T) {
+	input := "Rss:                4096 kB\nPss:                1536 kB\nPss_Anon:           1024 kB\n"
+	got, err := parseProcessPSS(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("parseProcessPSS() error: %v", err)
+	}
+	if want := uint64(1536 * 1024); got != want {
+		t.Fatalf("parseProcessPSS() = %d, want %d", got, want)
+	}
+}
+
+func TestRetainEMAUsersRemovesInactiveUIDs(t *testing.T) {
+	collector := &Collector{
+		emaCache: &emaCache{values: map[int]float64{
+			1000: 10,
+			1001: 20,
+		}},
+	}
+	collector.retainEMAUsers(map[int]*UserMetrics{1001: {UID: 1001}})
+
+	if _, exists := collector.emaCache.values[1000]; exists {
+		t.Fatal("EMA for inactive UID 1000 was not removed")
+	}
+	if got := collector.emaCache.values[1001]; got != 20 {
+		t.Fatalf("EMA for active UID 1001 = %f, want 20", got)
 	}
 }
 

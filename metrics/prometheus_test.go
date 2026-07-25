@@ -140,6 +140,69 @@ func TestAuthenticationChecksFailClosedWithoutLoadedSecrets(t *testing.T) {
 	}
 }
 
+func TestCleanupUserMetricsRemovesCPUAverageAndEMASeries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusAuthType = "none"
+
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+	exporter.UpdateUserMetrics(
+		1000,
+		"testuser",
+		25,
+		20,
+		22,
+		1024,
+		2,
+		false,
+		"",
+		"",
+		0,
+		0,
+		0,
+		0,
+		0,
+	)
+
+	before, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() before cleanup error: %v", err)
+	}
+	beforeCounts := make(map[string]int, len(before))
+	for _, family := range before {
+		beforeCounts[family.GetName()] = len(family.Metric)
+	}
+	for _, name := range []string{
+		"resman_user_cpu_usage_average_percent",
+		"resman_user_cpu_usage_ema_percent",
+	} {
+		if beforeCounts[name] != 1 {
+			t.Fatalf("%s series before cleanup = %d, want 1", name, beforeCounts[name])
+		}
+	}
+
+	exporter.CleanupUserMetrics(map[int]bool{})
+	after, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() after cleanup error: %v", err)
+	}
+	afterCounts := make(map[string]int, len(after))
+	for _, family := range after {
+		afterCounts[family.GetName()] = len(family.Metric)
+	}
+	for _, name := range []string{
+		"resman_user_cpu_usage_average_percent",
+		"resman_user_cpu_usage_ema_percent",
+	} {
+		if afterCounts[name] != 0 {
+			t.Fatalf("%s series after cleanup = %d, want 0", name, afterCounts[name])
+		}
+	}
+}
+
 func writeCredentialFile(t *testing.T, name, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

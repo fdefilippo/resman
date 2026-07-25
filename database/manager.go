@@ -20,6 +20,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -90,6 +91,19 @@ type DatabaseManager struct {
 	dbPath string
 }
 
+const (
+	insertUserMetricsQuery = `
+    INSERT INTO user_metrics (timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
+                              process_count, cgroup_path, cpu_quota, is_limited)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+	insertSystemMetricsQuery = `
+    INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
+                                system_load, limits_active, limited_users_count)
+    VALUES (?, ?, ?, ?, ?, ?)
+    `
+)
+
 // NewDatabaseManager crea un nuovo DatabaseManager
 func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 	// Assicura che la directory esista
@@ -100,7 +114,7 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database at %s: %w", dbPath, err)
 	}
@@ -122,6 +136,24 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 	}
 
 	return manager, nil
+}
+
+func sqliteDSN(dbPath string) string {
+	if dbPath == ":memory:" {
+		return dbPath
+	}
+
+	query := url.Values{}
+	query.Set("_auto_vacuum", "incremental")
+	query.Set("_busy_timeout", "5000")
+	query.Set("_journal_mode", "WAL")
+	query.Set("_loc", "UTC")
+	dsn := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(dbPath),
+		RawQuery: query.Encode(),
+	}
+	return dsn.String()
 }
 
 // InitSchema crea le tabelle se non esistono
@@ -166,57 +198,133 @@ func (m *DatabaseManager) InitSchema() error {
     CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON system_metrics(timestamp);
     `
 
-	_, err := m.db.Exec(schema)
-	return err
+	if _, err := m.db.Exec(schema); err != nil {
+		return err
+	}
+	return m.normalizeStoredTimestamps()
+}
+
+func (m *DatabaseManager) normalizeStoredTimestamps() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start timestamp normalization transaction: %w", err)
+	}
+	rollback := func() {
+		_ = tx.Rollback()
+	}
+
+	updates := []struct {
+		table string
+		query string
+	}{
+		{
+			table: "user_metrics",
+			query: `
+			UPDATE user_metrics
+			SET timestamp = strftime('%Y-%m-%d %H:%M:%f+00:00', timestamp)
+			WHERE substr(CAST(timestamp AS TEXT), -6) != '+00:00'
+			  AND strftime('%Y-%m-%d %H:%M:%f+00:00', timestamp) IS NOT NULL
+		`,
+		},
+		{
+			table: "system_metrics",
+			query: `
+			UPDATE system_metrics
+			SET timestamp = strftime('%Y-%m-%d %H:%M:%f+00:00', timestamp)
+			WHERE substr(CAST(timestamp AS TEXT), -6) != '+00:00'
+			  AND strftime('%Y-%m-%d %H:%M:%f+00:00', timestamp) IS NOT NULL
+		`,
+		},
+	}
+	for _, update := range updates {
+		if _, err := tx.Exec(update.query); err != nil {
+			rollback()
+			return fmt.Errorf("failed to normalize timestamps in %s: %w", update.table, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit timestamp normalization: %w", err)
+	}
+	return nil
 }
 
 // WriteUserMetrics inserisce un record delle metriche utente
 func (m *DatabaseManager) WriteUserMetrics(record *UserMetricsRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	query := `
-    INSERT INTO user_metrics (timestamp, uid, username, cpu_usage_percent, memory_usage_bytes, 
-                              process_count, cgroup_path, cpu_quota, is_limited)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-
-	_, err := m.db.Exec(query,
-		record.Timestamp,
-		record.UID,
-		record.Username,
-		record.CPUUsagePercent,
-		record.MemoryUsageBytes,
-		record.ProcessCount,
-		record.CgroupPath,
-		record.CPUQuota,
-		record.IsLimited,
-	)
-
-	return err
+	return m.WriteMetricsBatch(nil, []*UserMetricsRecord{record})
 }
 
 // WriteSystemMetrics inserisce un record delle metriche di sistema
 func (m *DatabaseManager) WriteSystemMetrics(record *SystemMetricsRecord) error {
+	return m.WriteMetricsBatch(record, nil)
+}
+
+// WriteMetricsBatch writes one complete collection cycle in a single transaction.
+func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users []*UserMetricsRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	query := `
-    INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores, 
-                                system_load, limits_active, limited_users_count)
-    VALUES (?, ?, ?, ?, ?, ?)
-    `
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start metrics batch transaction: %w", err)
+	}
+	rollback := func() {
+		_ = tx.Rollback()
+	}
 
-	_, err := m.db.Exec(query,
-		record.Timestamp,
-		record.TotalCPUUsagePercent,
-		record.TotalCores,
-		record.SystemLoad,
-		record.LimitsActive,
-		record.LimitedUsersCount,
-	)
+	if system != nil {
+		if _, err := tx.Exec(
+			insertSystemMetricsQuery,
+			system.Timestamp.UTC(),
+			system.TotalCPUUsagePercent,
+			system.TotalCores,
+			system.SystemLoad,
+			system.LimitsActive,
+			system.LimitedUsersCount,
+		); err != nil {
+			rollback()
+			return fmt.Errorf("failed to insert system metrics batch record: %w", err)
+		}
+	}
 
-	return err
+	if len(users) > 0 {
+		stmt, err := tx.Prepare(insertUserMetricsQuery)
+		if err != nil {
+			rollback()
+			return fmt.Errorf("failed to prepare user metrics batch insert: %w", err)
+		}
+		for _, record := range users {
+			if record == nil {
+				_ = stmt.Close()
+				rollback()
+				return fmt.Errorf("user metrics batch contains a nil record")
+			}
+			if _, err := stmt.Exec(
+				record.Timestamp.UTC(),
+				record.UID,
+				record.Username,
+				record.CPUUsagePercent,
+				record.MemoryUsageBytes,
+				record.ProcessCount,
+				record.CgroupPath,
+				record.CPUQuota,
+				record.IsLimited,
+			); err != nil {
+				_ = stmt.Close()
+				rollback()
+				return fmt.Errorf("failed to insert user metrics batch record for UID %d: %w", record.UID, err)
+			}
+		}
+		if err := stmt.Close(); err != nil {
+			rollback()
+			return fmt.Errorf("failed to close user metrics batch statement: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit metrics batch transaction: %w", err)
+	}
+	return nil
 }
 
 // GetUserHistory recupera lo storico delle metriche per un utente
@@ -233,7 +341,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
     LIMIT ?
     `
 
-	rows, err := m.db.Query(query, uid, startTime, endTime, limit)
+	rows, err := m.db.Query(query, uid, startTime.UTC(), endTime.UTC(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user history for UID %d (time range %s to %s): %w", uid, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
 	}
@@ -268,7 +376,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
     LIMIT ?
     `
 
-	rows, err := m.db.Query(query, startTime, endTime, limit)
+	rows, err := m.db.Query(query, startTime.UTC(), endTime.UTC(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query system history (time range %s to %s): %w", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
 	}
@@ -316,7 +424,7 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
     `
 
 	var summary UserSummary
-	err := m.db.QueryRow(query, uid, startTime, endTime).Scan(
+	err := m.db.QueryRow(query, uid, startTime.UTC(), endTime.UTC()).Scan(
 		&summary.UID, &summary.Username, &summary.PeriodStart, &summary.PeriodEnd,
 		&summary.CPUAvg, &summary.CPUMin, &summary.CPUMax,
 		&summary.MemoryAvg, &summary.MemoryMin, &summary.MemoryMax,
@@ -395,7 +503,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	tx, err := m.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("failed to start retention transaction: %w", err)
