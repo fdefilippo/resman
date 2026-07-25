@@ -107,6 +107,8 @@ jobs:
     needs: quality
     runs-on: ubuntu-24.04
     container: quay.io/rockylinux/rockylinux:9
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     steps:
       - name: Install RPM build tools
         run: |
