@@ -609,6 +609,7 @@ MCP_TRANSPORT="stdio"        # stdio or http
 MCP_HTTP_HOST="127.0.0.1"
 MCP_HTTP_PORT=8080
 MCP_LOG_LEVEL="INFO"
+MCP_AUTH_TOKEN="replace-with-long-random-token" # Required for HTTP
 MCP_ALLOW_WRITE_OPS=false
 
 # ========================
@@ -868,7 +869,7 @@ func (c *Config) SetUserExcludeList(patterns []string) ([]string, error) {
 **Middleware:**
 - Request logging (method, path, duration)
 - Response status tracking
-- Authentication support (optional token)
+- Mandatory Bearer token authentication for the HTTP MCP endpoint
 
 ---
 

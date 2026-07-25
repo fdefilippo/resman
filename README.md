@@ -93,7 +93,7 @@ LIMIT_HOOK_TIMEOUT=10
 # MCP server
 MCP_ENABLED=true
 MCP_TRANSPORT=stdio
-# MCP_AUTH_TOKEN=change-me-for-http-transport
+# MCP_AUTH_TOKEN=replace-with-a-random-token  # Required with MCP_TRANSPORT=http
 
 # PSI event-driven mode (optional, Linux >= 4.20 with CONFIG_PSI=y)
 # PSI_EVENT_DRIVEN=true

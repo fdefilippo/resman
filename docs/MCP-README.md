@@ -75,7 +75,7 @@ MCP_LOG_LEVEL=INFO
 # WARNING: Enable only if you trust all MCP clients
 MCP_ALLOW_WRITE_OPS=false
 
-# Optional authentication token for HTTP/SSE
+# Required authentication token for HTTP
 # MCP_AUTH_TOKEN=your-secret-token
 ```
 
@@ -104,6 +104,7 @@ MCP_ENABLED=true
 MCP_TRANSPORT=http
 MCP_HTTP_HOST=127.0.0.1
 MCP_HTTP_PORT=8080
+MCP_AUTH_TOKEN=replace-with-a-long-random-token
 ```
 
 2. Access endpoints:
@@ -243,7 +244,7 @@ MCP_ALLOW_WRITE_OPS=true
 
 ### Authentication
 
-For HTTP/SSE transport, you can enable token-based authentication:
+HTTP transport requires token-based authentication:
 
 ```bash
 MCP_AUTH_TOKEN=your-secret-token
@@ -256,9 +257,9 @@ Authorization: Bearer your-secret-token
 
 ### Network Exposure
 
-**WARNING:** The MCP server is designed for **local access only**. Do not expose it to untrusted networks without additional security measures:
+**WARNING:** The MCP server is designed for **local access only**. The Bearer token authenticates requests but plain HTTP does not protect it in transit. Do not expose it to untrusted networks without additional security measures:
 - Use firewall rules to restrict access
-- Enable TLS for HTTPS (future feature)
+- Terminate TLS in a trusted reverse proxy
 - Use strong authentication tokens
 
 ## Testing

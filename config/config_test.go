@@ -417,6 +417,22 @@ func TestLoadFromEnvironmentRejectsInvalidBlackout(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRequiresMCPAuthTokenForHTTP(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MCPEnabled = true
+	cfg.MCPTransport = "http"
+	cfg.MCPAuthToken = ""
+
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() accepted HTTP MCP transport without MCP_AUTH_TOKEN")
+	}
+
+	cfg.MCPAuthToken = "test-token"
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("validateConfig() rejected authenticated HTTP MCP transport: %v", err)
+	}
+}
+
 func TestBlackoutTimeframes(t *testing.T) {
 	location := time.UTC
 	monday := time.Date(2026, time.July, 20, 0, 0, 0, 0, location)

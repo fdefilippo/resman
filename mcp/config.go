@@ -33,7 +33,7 @@ type Config struct {
 	HTTPPort      int
 	HTTPHost      string
 	LogLevel      string
-	AuthToken     string // Optional authentication token for HTTP/SSE
+	AuthToken     string // Required authentication token for HTTP
 	AllowWriteOps bool   // Allow write operations (activate/deactivate limits)
 }
 
@@ -120,6 +120,9 @@ func (c *Config) Validate() error {
 		if c.Transport == "http" {
 			if c.HTTPPort < 1 || c.HTTPPort > 65535 {
 				return fmt.Errorf("invalid HTTP port: %d", c.HTTPPort)
+			}
+			if strings.TrimSpace(c.AuthToken) == "" {
+				return fmt.Errorf("http transport requires MCP_AUTH_TOKEN")
 			}
 		}
 

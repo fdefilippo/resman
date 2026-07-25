@@ -19,9 +19,12 @@ package mcp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/logging"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -48,9 +51,33 @@ func TestConfigValidate(t *testing.T) {
 				HTTPPort:      8080,
 				HTTPHost:      "127.0.0.1",
 				LogLevel:      "INFO",
+				AuthToken:     "test-token",
 				AllowWriteOps: false,
 			},
 			wantErr: false,
+		},
+		{
+			name: "http config without token",
+			cfg: &Config{
+				Enabled:   true,
+				Transport: "http",
+				HTTPPort:  8080,
+				HTTPHost:  "127.0.0.1",
+				LogLevel:  "INFO",
+			},
+			wantErr: true,
+		},
+		{
+			name: "http config with whitespace token",
+			cfg: &Config{
+				Enabled:   true,
+				Transport: "http",
+				HTTPPort:  8080,
+				HTTPHost:  "127.0.0.1",
+				LogLevel:  "INFO",
+				AuthToken: "   ",
+			},
+			wantErr: true,
 		},
 		{
 			name: "invalid transport",
@@ -260,6 +287,23 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
+func TestNewServerRejectsUnauthenticatedHTTP(t *testing.T) {
+	parentCfg := config.DefaultConfig()
+	parentCfg.MCPEnabled = true
+	parentCfg.MCPTransport = "http"
+	parentCfg.MCPHTTPHost = "127.0.0.1"
+	parentCfg.MCPAuthToken = ""
+
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err == nil {
+		t.Fatal("NewServer() accepted HTTP transport without MCP_AUTH_TOKEN")
+	}
+
+	parentCfg.MCPAuthToken = "test-token"
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err != nil {
+		t.Fatalf("NewServer() rejected authenticated HTTP transport: %v", err)
+	}
+}
+
 func TestExtractUIDFromURI(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -341,5 +385,72 @@ func TestServerStartStop(t *testing.T) {
 	// Stop should work without errors
 	if err := server.Stop(); err != nil {
 		t.Errorf("Server.Stop() error = %v", err)
+	}
+}
+
+func TestAuthMiddlewareFailsClosed(t *testing.T) {
+	tests := []struct {
+		name        string
+		serverToken string
+		authHeader  string
+		wantStatus  int
+		wantCalled  bool
+	}{
+		{
+			name:       "authentication not configured",
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name:        "missing authorization header",
+			serverToken: "test-token",
+			wantStatus:  http.StatusUnauthorized,
+		},
+		{
+			name:        "invalid authorization scheme",
+			serverToken: "test-token",
+			authHeader:  "Basic test-token",
+			wantStatus:  http.StatusUnauthorized,
+		},
+		{
+			name:        "invalid token",
+			serverToken: "test-token",
+			authHeader:  "Bearer wrong-token",
+			wantStatus:  http.StatusUnauthorized,
+		},
+		{
+			name:        "valid token",
+			serverToken: "test-token",
+			authHeader:  "Bearer test-token",
+			wantStatus:  http.StatusNoContent,
+			wantCalled:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{
+				cfg:    &Config{AuthToken: tt.serverToken},
+				logger: logging.GetLogger(),
+			}
+			called := false
+			handler := server.authMiddleware(func(w http.ResponseWriter, _ *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			if tt.authHeader != "" {
+				request.Header.Set("Authorization", tt.authHeader)
+			}
+			recorder := httptest.NewRecorder()
+
+			handler(recorder, request)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			if called != tt.wantCalled {
+				t.Fatalf("next handler called = %t, want %t", called, tt.wantCalled)
+			}
+		})
 	}
 }

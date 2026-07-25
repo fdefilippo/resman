@@ -541,7 +541,7 @@ MCP_LOG_LEVEL=INFO
 # WARNING: Enable only if you trust all MCP clients
 MCP_ALLOW_WRITE_OPS=false
 
-# Optional authentication token for HTTP transport
+# Required authentication token for HTTP transport
 # MCP_AUTH_TOKEN=your-secret-token-here
 
 # ========================

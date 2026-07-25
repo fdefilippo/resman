@@ -19,6 +19,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
@@ -257,12 +258,15 @@ func (s *Server) loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authMiddleware validates authentication token if configured
+// authMiddleware validates the HTTP transport authentication token.
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Skip auth if no token configured
-		if s.cfg.AuthToken == "" {
-			next(w, r)
+		if strings.TrimSpace(s.cfg.AuthToken) == "" {
+			http.Error(w, `{"error": "Authentication is not configured"}`, http.StatusServiceUnavailable)
+			s.logger.Error("MCP request rejected: HTTP authentication is not configured",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+			)
 			return
 		}
 
@@ -288,7 +292,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != s.cfg.AuthToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AuthToken)) != 1 {
 			http.Error(w, `{"error": "Invalid authentication token"}`, http.StatusUnauthorized)
 			s.logger.Warn("MCP request rejected: invalid token",
 				"remote_addr", r.RemoteAddr,

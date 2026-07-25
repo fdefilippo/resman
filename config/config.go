@@ -889,6 +889,10 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if cfg.MCPEnabled && cfg.MCPTransport == "http" && strings.TrimSpace(cfg.MCPAuthToken) == "" {
+		errors = append(errors, "MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
+	}
+
 	// Validate CPU quota format
 	if !isValidCPUQuota(cfg.CPUQuotaLimited) {
 		errors = append(errors, "CPU_QUOTA_LIMITED must be in format 'quota period' or 'max period'")
