@@ -156,6 +156,35 @@ func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
 	}
 }
 
+func TestWatcherKeepsCurrentConfigAfterInvalidEnvironmentOverride(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	t.Setenv("CPU_THRESHOLD", "8O")
+
+	initialConfig := DefaultConfig()
+	handler := &channelConfigChangeHandler{values: make(chan int, 1)}
+	watcher := &Watcher{
+		configPath:    configPath,
+		currentConfig: initialConfig,
+		logger:        logging.GetLogger(),
+		onChange:      handler,
+		isRunning:     true,
+	}
+
+	watcher.handleConfigChange(true)
+
+	if watcher.GetCurrentConfig() != initialConfig {
+		t.Fatal("invalid environment override replaced the current configuration")
+	}
+	select {
+	case value := <-handler.values:
+		t.Fatalf("reload handler called with CPU_THRESHOLD=%d", value)
+	default:
+	}
+}
+
 func TestWatcherHandlesRepeatedAtomicReplacement(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "resman.conf")
 	writeAtomicConfig(t, configPath, 80)

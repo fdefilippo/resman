@@ -432,7 +432,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("PROMETHEUS_AUTH_TYPE", "BASIC")
 
 	cfg := DefaultConfig()
-	loadFromEnvironment(cfg)
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error: %v", err)
+	}
 
 	if cfg.CPUThreshold != 85 {
 		t.Errorf("CPUThreshold: got %d, expected 85", cfg.CPUThreshold)
@@ -464,7 +466,11 @@ func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
 	t.Setenv("ENABLE_PROMETHEUS", "invalid")
 
 	cfg := DefaultConfig()
-	warnings := loadFromEnvironment(cfg)
+	err := loadFromEnvironment(cfg)
+	if err == nil {
+		t.Fatal("loadFromEnvironment() accepted invalid overrides")
+	}
+	errorMessage := err.Error()
 
 	for _, key := range []string{
 		"USER_INCLUDE_LIST",
@@ -472,15 +478,8 @@ func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
 		"PROMETHEUS_METRICS_BIND_PORT",
 		"ENABLE_PROMETHEUS",
 	} {
-		found := false
-		for _, warning := range warnings {
-			if strings.Contains(warning, key) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("loadFromEnvironment() did not report invalid %s: %v", key, warnings)
+		if !strings.Contains(errorMessage, key) {
+			t.Errorf("loadFromEnvironment() did not report invalid %s: %v", key, err)
 		}
 	}
 	if cfg.UserIncludeList != nil {
@@ -504,7 +503,9 @@ func TestLoadFromEnvironmentSupportsPrometheusAliases(t *testing.T) {
 	t.Setenv("PROMETHEUS_PORT", "9191")
 
 	cfg := DefaultConfig()
-	loadFromEnvironment(cfg)
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error: %v", err)
+	}
 	if cfg.PrometheusMetricsBindHost != "192.0.2.10" {
 		t.Errorf("PrometheusMetricsBindHost = %q, want 192.0.2.10", cfg.PrometheusMetricsBindHost)
 	}
@@ -533,8 +534,8 @@ func TestLoadFromEnvironmentPrefersCanonicalPrometheusKeys(t *testing.T) {
 	t.Setenv("PROMETHEUS_PORT", "9191")
 
 	cfg := DefaultConfig()
-	if warnings := loadFromEnvironment(cfg); len(warnings) != 0 {
-		t.Fatalf("loadFromEnvironment() warnings: %v", warnings)
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error: %v", err)
 	}
 	if cfg.PrometheusMetricsBindHost != "127.0.0.2" {
 		t.Errorf("PrometheusMetricsBindHost = %q, want canonical value", cfg.PrometheusMetricsBindHost)
@@ -548,7 +549,9 @@ func TestLoadFromEnvironmentParsesBlackout(t *testing.T) {
 	t.Setenv("BLACKOUT", "1-5 22-06")
 
 	cfg := DefaultConfig()
-	loadFromEnvironment(cfg)
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error: %v", err)
+	}
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("validateConfig() error: %v", err)
 	}
@@ -566,9 +569,8 @@ func TestLoadFromEnvironmentRejectsInvalidBlackout(t *testing.T) {
 	t.Setenv("BLACKOUT", "1-5 24-06")
 
 	cfg := DefaultConfig()
-	loadFromEnvironment(cfg)
-	if err := validateConfig(cfg); err == nil {
-		t.Fatal("validateConfig() expected an error for invalid BLACKOUT from environment")
+	if err := loadFromEnvironment(cfg); err == nil {
+		t.Fatal("loadFromEnvironment() accepted invalid BLACKOUT")
 	}
 }
 
@@ -758,6 +760,26 @@ LOG_LEVEL=INFO
 
 	if cfg.CPUThreshold != 80 {
 		t.Errorf("CPUThreshold: got %d, expected 80", cfg.CPUThreshold)
+	}
+}
+
+func TestLoadAndValidateRejectsInvalidEnvironmentOverride(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "test.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0644); err != nil {
+		t.Fatalf("failed to create config file: %v", err)
+	}
+	t.Setenv("CPU_THRESHOLD", "8O")
+
+	cfg, err := LoadAndValidate(configPath)
+	if err == nil {
+		t.Fatal("LoadAndValidate() accepted invalid CPU_THRESHOLD environment override")
+	}
+	if cfg != nil {
+		t.Fatalf("LoadAndValidate() returned config after environment error: %#v", cfg)
+	}
+	if !strings.Contains(err.Error(), "loading environment overrides") ||
+		!strings.Contains(err.Error(), "CPU_THRESHOLD") {
+		t.Fatalf("LoadAndValidate() returned unexpected error: %v", err)
 	}
 }
 

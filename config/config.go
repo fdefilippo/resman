@@ -18,6 +18,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -381,9 +382,8 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	}
 
 	// 2. Sovrascrivi con le variabili d'ambiente
-	warnings := loadFromEnvironment(cfg)
-	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	if err := loadFromEnvironment(cfg); err != nil {
+		return nil, fmt.Errorf("loading environment overrides: %w", err)
 	}
 
 	// 3. Valida
@@ -443,10 +443,9 @@ func loadFromFile(path string, cfg *Config) error {
 }
 
 // loadFromEnvironment sovrascrive i valori con le variabili d'ambiente.
-// Restituisce una lista di warning per valori non parsabili.
-func loadFromEnvironment(cfg *Config) []string {
+func loadFromEnvironment(cfg *Config) error {
 	cfgType := reflect.TypeOf(cfg).Elem()
-	var warnings []string
+	var errs []error
 
 	for i := 0; i < cfgType.NumField(); i++ {
 		field := cfgType.Field(i)
@@ -462,7 +461,7 @@ func loadFromEnvironment(cfg *Config) []string {
 		}
 
 		if err := setConfigField(cfg, envKey, envValue); err != nil {
-			warnings = append(warnings, fmt.Sprintf("invalid environment override %s=%q: %v", envKey, envValue, err))
+			errs = append(errs, fmt.Errorf("%s=%q: %w", envKey, envValue, err))
 		}
 	}
 
@@ -483,11 +482,11 @@ func loadFromEnvironment(cfg *Config) []string {
 			continue
 		}
 		if err := setConfigField(cfg, alias.key, envValue); err != nil {
-			warnings = append(warnings, fmt.Sprintf("invalid environment override %s=%q: %v", alias.key, envValue, err))
+			errs = append(errs, fmt.Errorf("%s=%q: %w", alias.key, envValue, err))
 		}
 	}
 
-	return warnings
+	return errors.Join(errs...)
 }
 
 // setConfigField imposta il valore di un campo nella struct Config basandosi sul tag `config`.
