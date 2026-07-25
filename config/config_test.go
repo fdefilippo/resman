@@ -82,6 +82,7 @@ func TestValidateConfig(t *testing.T) {
 				CPUQuotaNormal:         "max 100000",
 				CPUQuotaLimited:        "50000 100000",
 				LogLevel:               "INFO",
+				LogMaxSize:             10 * 1024 * 1024,
 				SystemUIDMin:           1000,
 				SystemUIDMax:           60000,
 				MetricsDBRetentionDays: 30,
@@ -610,6 +611,25 @@ func TestValidateConfigRequiresMCPAuthTokenForHTTP(t *testing.T) {
 	cfg.MCPAuthToken = "test-token"
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("validateConfig() rejected authenticated HTTP MCP transport: %v", err)
+	}
+}
+
+func TestValidateConfigRejectsNonPositiveLogMaxSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		maxSize int
+	}{
+		{name: "zero", maxSize: 0},
+		{name: "negative", maxSize: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.LogMaxSize = tt.maxSize
+			if err := validateConfig(cfg); err == nil {
+				t.Fatalf("validateConfig() accepted LOG_MAX_SIZE=%d", tt.maxSize)
+			}
+		})
 	}
 }
 

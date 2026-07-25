@@ -31,8 +31,10 @@ import (
 func newBufferLogger(level LogLevel) (*Logger, *bytes.Buffer) {
 	var output bytes.Buffer
 	return &Logger{
-		level:  level,
-		logger: log.New(&output, "", 0),
+		state: &loggerState{
+			level:  level,
+			logger: log.New(&output, "", 0),
+		},
 		fields: make(map[string]interface{}),
 	}, &output
 }
@@ -45,17 +47,25 @@ func TestNewFileLogger(t *testing.T) {
 	}
 	defer func() { _ = logger.Close() }()
 
-	if logger.level != INFO {
-		t.Errorf("Logger level: got %v, expected INFO", logger.level)
+	if logger.state.level != INFO {
+		t.Errorf("Logger level: got %v, expected INFO", logger.state.level)
 	}
-	if logger.filePath != logFile {
-		t.Errorf("Logger filePath: got %q, expected %q", logger.filePath, logFile)
+	if logger.state.filePath != logFile {
+		t.Errorf("Logger filePath: got %q, expected %q", logger.state.filePath, logFile)
 	}
-	if logger.maxSize != 1024*1024 {
-		t.Errorf("Logger maxSize: got %d, expected %d", logger.maxSize, 1024*1024)
+	if logger.state.maxSize != 1024*1024 {
+		t.Errorf("Logger maxSize: got %d, expected %d", logger.state.maxSize, 1024*1024)
 	}
-	if logger.file == nil {
+	if logger.state.file == nil {
 		t.Fatal("newFileLogger() did not open the log file")
+	}
+}
+
+func TestNewFileLoggerRejectsNonPositiveMaxSize(t *testing.T) {
+	for _, maxSize := range []int64{0, -1} {
+		if logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), maxSize); err == nil || logger != nil {
+			t.Fatalf("newFileLogger(maxSize=%d) = (%v, %v), want nil logger and error", maxSize, logger, err)
+		}
 	}
 }
 
@@ -115,13 +125,13 @@ func TestSetLevel(t *testing.T) {
 	logger, _ := newBufferLogger(INFO)
 
 	logger.SetLevel("DEBUG")
-	if logger.level != DEBUG {
-		t.Errorf("SetLevel: got %v, expected DEBUG", logger.level)
+	if logger.state.level != DEBUG {
+		t.Errorf("SetLevel: got %v, expected DEBUG", logger.state.level)
 	}
 
 	logger.SetLevel("ERROR")
-	if logger.level != ERROR {
-		t.Errorf("SetLevel: got %v, expected ERROR", logger.level)
+	if logger.state.level != ERROR {
+		t.Errorf("SetLevel: got %v, expected ERROR", logger.state.level)
 	}
 }
 
@@ -143,7 +153,7 @@ func TestLogRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
-	logger.lastRotation = time.Now().Add(-2 * time.Second)
+	logger.state.lastRotation = time.Now().Add(-2 * time.Second)
 
 	logged := make(chan struct{})
 	go func() {
@@ -172,8 +182,10 @@ func TestLogRotation(t *testing.T) {
 
 func TestSetLevelConcurrentWithLogging(t *testing.T) {
 	logger := &Logger{
-		level:  INFO,
-		logger: log.New(io.Discard, "", 0),
+		state: &loggerState{
+			level:  INFO,
+			logger: log.New(io.Discard, "", 0),
+		},
 		fields: make(map[string]interface{}),
 	}
 
@@ -196,6 +208,32 @@ func TestSetLevelConcurrentWithLogging(t *testing.T) {
 	wg.Wait()
 }
 
+func TestLoggerSanitizesControlCharacters(t *testing.T) {
+	logger, output := newBufferLogger(INFO)
+	logger.WithField("user\nname", "alice\radmin").Info(
+		"accepted\n[ERROR] forged",
+		"process\tname",
+		"worker\x00hidden",
+	)
+
+	text := output.String()
+	if strings.Count(text, "\n") != 1 {
+		t.Fatalf("logger emitted more than one record: %q", text)
+	}
+	if strings.ContainsAny(strings.TrimSuffix(text, "\n"), "\r\t\x00") {
+		t.Fatalf("logger emitted raw control characters: %q", text)
+	}
+	for _, want := range []string{
+		`accepted\n[ERROR] forged`,
+		`user\nname=alice\radmin`,
+		`process\tname=worker\x00hidden`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("logger output does not contain escaped value %q: %q", want, text)
+		}
+	}
+}
+
 func TestLoggerWithMultipleFields(t *testing.T) {
 	logger, output := newBufferLogger(INFO)
 	logger.WithField("uid", 1000).WithField("username", "test-user").Info("limited")
@@ -204,6 +242,40 @@ func TestLoggerWithMultipleFields(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("logger output does not contain %q: %s", want, output.String())
 		}
+	}
+}
+
+func TestWithFieldSharesLevelAndRotationState(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "test.log")
+	logger, err := newFileLogger(INFO, logFile, 1)
+	if err != nil {
+		t.Fatalf("newFileLogger() error = %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+
+	child := logger.WithField("uid", 1000)
+	if child.state != logger.state {
+		t.Fatal("WithField() did not preserve shared logger state")
+	}
+
+	child.SetLevel("ERROR")
+	logger.Info("suppressed through shared level")
+	child.SetLevel("INFO")
+
+	logger.state.lastRotation = time.Now().Add(-2 * time.Second)
+	child.Info("message that rotates through child logger")
+	logger.Info("parent writes after child rotation")
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("failed to read active log after child rotation: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "suppressed through shared level") {
+		t.Fatalf("parent did not observe child level update: %q", text)
+	}
+	if !strings.Contains(text, "parent writes after child rotation") {
+		t.Fatalf("parent retained stale writer after child rotation: %q", text)
 	}
 }
 
@@ -222,7 +294,7 @@ func TestLoggerTimestamp(t *testing.T) {
 
 func TestLoggerFallbackUsesStderr(t *testing.T) {
 	logger := createStderrLogger(INFO)
-	if got := logger.logger.Writer(); got != os.Stderr {
+	if got := logger.state.logger.Writer(); got != os.Stderr {
 		t.Errorf("fallback writer = %v, want os.Stderr", got)
 	}
 }

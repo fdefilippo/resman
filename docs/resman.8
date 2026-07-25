@@ -525,7 +525,7 @@ PROMETHEUS_JWT_EXPIRY=3600            # JWT token expiry in seconds
 
 # LOGGING
 LOG_LEVEL="INFO"             # DEBUG, INFO, WARN, ERROR
-LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
+LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
 USE_SYSLOG=true
 
 # SYSTEM
@@ -688,7 +688,8 @@ LOG_LEVEL=DEBUG resman \-\-config /etc/resman.conf
 .br
 The log file is automatically rotated when it reaches the maximum size
 configured in
-.B LOG_MAX_SIZE.
+.B LOG_MAX_SIZE,
+which must be greater than zero.
 Rotation creates a backup file with .1 extension.
 .SH STATE FILES
 .I /var/run/resman-cgroups.txt

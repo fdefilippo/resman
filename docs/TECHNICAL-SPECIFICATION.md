@@ -607,7 +607,7 @@ USER_EXCLUDE_LIST=
 # LOGGING
 # ========================
 LOG_LEVEL="INFO"             # DEBUG, INFO, WARN, ERROR
-LOG_MAX_SIZE=10485760        # 10MB
+LOG_MAX_SIZE=10485760        # Positive byte count; 10MB
 USE_SYSLOG=false
 
 # ========================

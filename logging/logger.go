@@ -23,6 +23,7 @@ import (
 	"log/syslog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -53,6 +54,11 @@ var (
 
 // Logger è il nostro logger personalizzato con rotazione.
 type Logger struct {
+	state  *loggerState
+	fields map[string]interface{} // Campi contestuali per WithField
+}
+
+type loggerState struct {
 	mu           sync.Mutex
 	level        LogLevel
 	file         *os.File
@@ -60,9 +66,8 @@ type Logger struct {
 	maxSize      int64
 	logger       *log.Logger
 	lastRotation time.Time
-	UseSyslog    bool
+	useSyslog    bool
 	syslogWriter *syslog.Writer
-	fields       map[string]interface{} // Campi contestuali per WithField
 }
 
 // InitLogger inizializza il logger globale con i parametri specificati.
@@ -83,14 +88,13 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 
 			// Crea logger con syslog
 			currentLogger = &Logger{
-				level:        logLevel,
-				file:         nil,
-				filePath:     "",
-				maxSize:      0,
-				logger:       log.New(syslogWriter, "", 0),
-				UseSyslog:    true,
-				syslogWriter: syslogWriter,
-				fields:       make(map[string]interface{}),
+				state: &loggerState{
+					level:        logLevel,
+					logger:       log.New(syslogWriter, "", 0),
+					useSyslog:    true,
+					syslogWriter: syslogWriter,
+				},
+				fields: make(map[string]interface{}),
 			}
 
 			// Logga il primo messaggio via syslog
@@ -120,6 +124,9 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 }
 
 func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, error) {
+	if maxSize <= 0 {
+		return nil, fmt.Errorf("log max size must be greater than 0, got %d", maxSize)
+	}
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create log directory %s: %w", filepath.Dir(filePath), err)
 	}
@@ -130,15 +137,15 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 	}
 
 	return &Logger{
-		level:        level,
-		file:         file,
-		filePath:     filePath,
-		maxSize:      maxSize,
-		logger:       log.New(file, "", 0),
-		lastRotation: time.Now(),
-		UseSyslog:    false,
-		syslogWriter: nil,
-		fields:       make(map[string]interface{}),
+		state: &loggerState{
+			level:        level,
+			file:         file,
+			filePath:     filePath,
+			maxSize:      maxSize,
+			logger:       log.New(file, "", 0),
+			lastRotation: time.Now(),
+		},
+		fields: make(map[string]interface{}),
 	}, nil
 }
 
@@ -168,47 +175,47 @@ func parseLogLevel(level string) LogLevel {
 // createStderrLogger creates a fallback logger that cannot corrupt stdout protocols.
 func createStderrLogger(level LogLevel) *Logger {
 	return &Logger{
-		level:     level,
-		file:      nil,
-		logger:    log.New(os.Stderr, "", 0),
-		UseSyslog: false,
-		fields:    make(map[string]interface{}),
+		state: &loggerState{
+			level:  level,
+			logger: log.New(os.Stderr, "", 0),
+		},
+		fields: make(map[string]interface{}),
 	}
 }
 
 // logInternal è il metodo interno di logging che gestisce la formattazione e la scrittura.
 func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.state.mu.Lock()
+	defer l.state.mu.Unlock()
 
-	if level < l.level {
+	if level < l.state.level {
 		return
 	}
 
 	logMsg := l.formatMessageLocked(level, msg, keyvals...)
 
 	// Se usiamo syslog, gestiamo i livelli appropriati
-	if l.UseSyslog && l.syslogWriter != nil {
+	if l.state.useSyslog && l.state.syslogWriter != nil {
 		// Best-effort syslog write; errors are ignored to avoid logger recursion.
 		switch level {
 		case DEBUG:
-			_ = l.syslogWriter.Debug(logMsg)
+			_ = l.state.syslogWriter.Debug(logMsg)
 		case INFO:
-			_ = l.syslogWriter.Info(logMsg)
+			_ = l.state.syslogWriter.Info(logMsg)
 		case WARN:
-			_ = l.syslogWriter.Warning(logMsg)
+			_ = l.state.syslogWriter.Warning(logMsg)
 		case ERROR:
-			_ = l.syslogWriter.Err(logMsg)
+			_ = l.state.syslogWriter.Err(logMsg)
 		default:
-			_ = l.syslogWriter.Info(logMsg)
+			_ = l.state.syslogWriter.Info(logMsg)
 		}
 	} else {
 		// Write to the underlying file or stderr logger.
-		l.logger.Println(logMsg)
+		l.state.logger.Println(logMsg)
 
 		// Verifica e gestisci la rotazione del log (solo per file-based logger)
-		if l.file != nil {
-			l.checkAndRotate()
+		if l.state.file != nil {
+			l.checkAndRotateLocked()
 		}
 	}
 }
@@ -216,55 +223,60 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 func (l *Logger) formatMessageLocked(level LogLevel, msg string, keyvals ...interface{}) string {
 	// Formatta il messaggio con timestamp e livello
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], msg)
+	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], sanitizeLogValue(msg))
 
 	// Aggiungi i campi contestuali di WithField
 	for k, v := range l.fields {
-		logMsg += fmt.Sprintf(" %v=%v", k, v)
+		logMsg += fmt.Sprintf(" %s=%s", sanitizeLogValue(k), sanitizeLogValue(v))
 	}
 
 	// Aggiungi coppie chiave-valore se presenti
 	if len(keyvals) > 0 {
 		for i := 0; i < len(keyvals); i += 2 {
 			if i+1 < len(keyvals) {
-				logMsg += fmt.Sprintf(" %v=%v", keyvals[i], keyvals[i+1])
+				logMsg += fmt.Sprintf(" %s=%s", sanitizeLogValue(keyvals[i]), sanitizeLogValue(keyvals[i+1]))
 			} else {
-				logMsg += fmt.Sprintf(" %v=", keyvals[i])
+				logMsg += fmt.Sprintf(" %s=", sanitizeLogValue(keyvals[i]))
 			}
 		}
 	}
 	return logMsg
 }
 
+func sanitizeLogValue(value interface{}) string {
+	quoted := strconv.Quote(fmt.Sprint(value))
+	return quoted[1 : len(quoted)-1]
+}
+
 // checkAndRotate verifica se è necessaria la rotazione e la esegue.
-func (l *Logger) checkAndRotate() {
+func (l *Logger) checkAndRotateLocked() {
 	// Verifica solo una volta al secondo per performance
-	if time.Since(l.lastRotation) < time.Second {
+	if time.Since(l.state.lastRotation) < time.Second {
 		return
 	}
 
-	l.lastRotation = time.Now()
+	l.state.lastRotation = time.Now()
 
 	// Ottieni le dimensioni del file
-	info, err := l.file.Stat()
+	info, err := l.state.file.Stat()
 	if err != nil {
 		// Non possiamo verificare, uscire
 		return
 	}
 
 	// Se il file supera la dimensione massima, ruota
-	if info.Size() > l.maxSize {
-		l.rotateLog()
+	if info.Size() > l.state.maxSize {
+		l.rotateLogLocked()
 	}
 }
 
 // rotateLog esegue la rotazione del file di log.
-func (l *Logger) rotateLog() {
+func (l *Logger) rotateLogLocked() {
 	// Chiudi il file corrente
-	_ = l.file.Close()
+	_ = l.state.file.Close()
 
 	// Rinomina il file corrente (es. .log -> .log.1)
-	backupPath := l.filePath + ".1"
+	backupPath := l.state.filePath + ".1"
 
 	// Rimuovi il backup precedente se esiste
 	if _, err := os.Stat(backupPath); err == nil {
@@ -272,26 +284,26 @@ func (l *Logger) rotateLog() {
 	}
 
 	// Rinomina il file corrente
-	if err := os.Rename(l.filePath, backupPath); err != nil {
+	if err := os.Rename(l.state.filePath, backupPath); err != nil {
 		// The standard logger reports rotation errors on stderr.
 		log.Printf("ERROR: Failed to rotate log file: %v", err)
 	}
 
 	// Riapri il nuovo file di log
-	file, err := os.OpenFile(l.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(l.state.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		// If the file cannot be reopened, use stderr to keep stdout clean.
 		log.Printf("ERROR: Failed to reopen log file after rotation: %v", err)
-		l.file = nil
-		l.logger = log.New(os.Stderr, "", 0)
+		l.state.file = nil
+		l.state.logger = log.New(os.Stderr, "", 0)
 		return
 	}
 
-	l.file = file
-	l.logger.SetOutput(file)
+	l.state.file = file
+	l.state.logger.SetOutput(file)
 
-	if INFO >= l.level {
-		l.logger.Println(l.formatMessageLocked(INFO, "Log rotated due to size limit"))
+	if INFO >= l.state.level {
+		l.state.logger.Println(l.formatMessageLocked(INFO, "Log rotated due to size limit"))
 	}
 }
 
@@ -319,19 +331,9 @@ func (l *Logger) Error(msg string, keyvals ...interface{}) {
 
 // WithField crea un nuovo logger con un campo aggiuntivo.
 func (l *Logger) WithField(key string, value interface{}) *Logger {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	newLogger := &Logger{
-		level:        l.level,
-		file:         l.file,
-		filePath:     l.filePath,
-		maxSize:      l.maxSize,
-		logger:       l.logger,
-		lastRotation: l.lastRotation,
-		UseSyslog:    l.UseSyslog,
-		syslogWriter: l.syslogWriter,
-		fields:       make(map[string]interface{}),
+		state:  l.state,
+		fields: make(map[string]interface{}, len(l.fields)+1),
 	}
 
 	// Copia i campi esistenti
@@ -346,22 +348,22 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 
 // SetLevel cambia il livello di log a runtime.
 func (l *Logger) SetLevel(level string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = parseLogLevel(level)
+	l.state.mu.Lock()
+	defer l.state.mu.Unlock()
+	l.state.level = parseLogLevel(level)
 }
 
 // Close chiude il file di log se aperto.
 func (l *Logger) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.state.mu.Lock()
+	defer l.state.mu.Unlock()
 
-	if l.UseSyslog && l.syslogWriter != nil {
-		return l.syslogWriter.Close()
+	if l.state.useSyslog && l.state.syslogWriter != nil {
+		return l.state.syslogWriter.Close()
 	}
 
-	if l.file != nil {
-		return l.file.Close()
+	if l.state.file != nil {
+		return l.state.file.Close()
 	}
 	return nil
 }

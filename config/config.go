@@ -835,6 +835,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.ProcessMinAgeSeconds < 0 {
 		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
 	}
+	if cfg.LogMaxSize <= 0 {
+		errors = append(errors, "LOG_MAX_SIZE must be greater than 0")
+	}
 	if cfg.CgroupOperationTimeout <= 0 {
 		errors = append(errors, "CGROUP_OPERATION_TIMEOUT must be greater than 0")
 	}

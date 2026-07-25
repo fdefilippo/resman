@@ -365,7 +365,7 @@ PROMETHEUS_JWT_EXPIRY=3600
 #   WARN  - Warnings and errors only
 #   ERROR - Errors only
 LOG_LEVEL=INFO
-LOG_MAX_SIZE=10485760        # Maximum log file size (10MB)
+LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
 USE_SYSLOG=false             # true: use system syslog, false: use file
 LOG_FILE=/var/log/resman.log
 
