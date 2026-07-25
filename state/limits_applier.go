@@ -216,6 +216,9 @@ func (m *Manager) commitReleasedUsers(users []int) {
 	if m.ioRemediation != nil {
 		m.ioRemediation.ForgetUsers(users)
 	}
+	if m.stabilityTracker != nil {
+		m.stabilityTracker.ForgetUsers(users)
+	}
 }
 
 func (m *Manager) activateLimits(metrics *SystemMetrics) error {
@@ -380,12 +383,17 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	if limitedCount > 0 || removedCount > 0 {
+		newActivation := false
 		m.mu.Lock()
 		if !m.limitsActive && len(m.activeUsers) > 0 {
 			m.limitsActive = true
 			m.limitsAppliedTime = time.Now()
+			newActivation = true
 		}
 		m.mu.Unlock()
+		if newActivation && m.stabilityTracker != nil {
+			m.stabilityTracker.Reset()
+		}
 
 		m.logger.Info("CPU limits activated with proportional sharing",
 			"users_limited", limitedCount,
@@ -682,13 +690,6 @@ func (m *Manager) deactivateLimits() error {
 	sharedPath := m.sharedCgroupPath
 	m.mu.Unlock()
 
-	// FIX A1: Cleanup stability tracker to prevent memory leak
-	m.stabilityTracker.mu.Lock()
-	for _, uid := range usersToCleanup {
-		delete(m.stabilityTracker.underThreshold, uid)
-	}
-	m.stabilityTracker.mu.Unlock()
-
 	var firstError error
 	deactivatedCount := 0
 	deactivatedUsers := make(map[int]bool, len(usersToCleanup))
@@ -792,6 +793,7 @@ func (m *Manager) deactivateLimits() error {
 		}
 	}
 
+	fullyDeactivated := false
 	m.mu.Lock()
 	for uid := range deactivatedUsers {
 		delete(m.activeUsers, uid)
@@ -802,11 +804,23 @@ func (m *Manager) deactivateLimits() error {
 	if len(m.activeUsers) == 0 {
 		m.limitsActive = false
 		m.limitsAppliedTime = time.Time{}
+		fullyDeactivated = true
 		if sharedRemoved {
 			m.sharedCgroupPath = ""
 		}
 	}
 	m.mu.Unlock()
+	if m.stabilityTracker != nil {
+		if fullyDeactivated {
+			m.stabilityTracker.Reset()
+		} else {
+			released := make([]int, 0, len(deactivatedUsers))
+			for uid := range deactivatedUsers {
+				released = append(released, uid)
+			}
+			m.stabilityTracker.ForgetUsers(released)
+		}
+	}
 	if m.ioRemediation != nil {
 		released := make([]int, 0, len(deactivatedUsers))
 		for uid := range deactivatedUsers {
@@ -858,12 +872,9 @@ func (m *Manager) ForceDeactivateLimits() error {
 	defer m.opMu.Unlock()
 
 	err := m.deactivateLimits()
-	// FIX A4: Reset stability tracker on forced deactivation to avoid stale state
 	if m.stabilityTracker == nil {
-		m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+		m.stabilityTracker = newUserStabilityTracker()
 	}
-	m.stabilityTracker.mu.Lock()
-	m.stabilityTracker.underThreshold = make(map[int]int)
-	m.stabilityTracker.mu.Unlock()
+	m.stabilityTracker.Reset()
 	return err
 }

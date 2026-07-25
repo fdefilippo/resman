@@ -340,7 +340,8 @@ ENABLE_PROMETHEUS=false              # Enable metrics export
 PROMETHEUS_TLS_ENABLED=false
 PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
 PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
-PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
+# Set a client CA only when Prometheus must authenticate with mTLS.
+# PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 PROMETHEUS_TLS_MIN_VERSION=1.2
 
 # Prometheus Authentication (optional)

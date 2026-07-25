@@ -511,7 +511,7 @@ ENABLE_PROMETHEUS=false                  # Enable metrics export
 PROMETHEUS_TLS_ENABLED=false            # Enable HTTPS/TLS
 PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt    # Server certificate
 PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key     # Server private key
-PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt          # CA certificate (optional)
+# PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt        # Client CA; enables mandatory mTLS
 PROMETHEUS_TLS_MIN_VERSION=1.2          # Minimum TLS version (1.0, 1.1, 1.2, 1.3)
 
 # PROMETHEUS AUTHENTICATION (optional)
@@ -660,6 +660,13 @@ limits normally activate about 120 seconds after the first observation, plus
 polling alignment. Every process state is included in instantaneous CPU deltas.
 .B PROCESS_MIN_AGE_SECONDS
 only stabilizes the lifetime-average CPU metric and does not delay activation.
+.PP
+Global deactivation requires every actively limited user's CPU EMA to remain below
+.B CPU_RELEASE_THRESHOLD
+for three
+.B POLLING_INTERVAL
+periods. This cool-down uses elapsed wall-clock time, so additional control
+cycles triggered by PSI events cannot shorten it.
 .PP
 .B total_cpu_usage
 is the host-wide normalized CPU percentage (0-100). Activation decisions use

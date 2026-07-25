@@ -249,6 +249,31 @@ func TestValidateConfigIODeviceFilter(t *testing.T) {
 	}
 }
 
+func TestValidateConfigPrometheusTLSMinVersion(t *testing.T) {
+	for _, version := range []string{"1.0", "1.1", "1.2", "1.3"} {
+		t.Run(version, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.PrometheusTLSMinVersion = version
+			if err := validateConfig(cfg); err != nil {
+				t.Fatalf("validateConfig() rejected TLS version %q: %v", version, err)
+			}
+		})
+	}
+
+	cfg := DefaultConfig()
+	cfg.PrometheusTLSMinVersion = "SSLv3"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() accepted an unsupported TLS version")
+	}
+
+	cfg = DefaultConfig()
+	cfg.PrometheusTLSEnabled = true
+	cfg.PrometheusTLSMinVersion = ""
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("validateConfig() accepted an empty TLS version while TLS is enabled")
+	}
+}
+
 func TestIsValidCPUQuota(t *testing.T) {
 	tests := []struct {
 		name     string

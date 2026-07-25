@@ -1,6 +1,11 @@
 package metrics
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,6 +16,157 @@ import (
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func TestParseTLSVersion(t *testing.T) {
+	tests := []struct {
+		value string
+		want  uint16
+	}{
+		{value: "1.0", want: tls.VersionTLS10},
+		{value: "1.1", want: tls.VersionTLS11},
+		{value: "1.2", want: tls.VersionTLS12},
+		{value: "1.3", want: tls.VersionTLS13},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			got, err := parseTLSVersion(tt.value)
+			if err != nil {
+				t.Fatalf("parseTLSVersion(%q) error: %v", tt.value, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseTLSVersion(%q) = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	if _, err := parseTLSVersion("SSLv3"); err == nil {
+		t.Fatal("parseTLSVersion() accepted an unsupported version")
+	}
+}
+
+func TestGetMetricsEndpointUsesConfiguredScheme(t *testing.T) {
+	cfg := config.DefaultConfig()
+	exporter := &PrometheusExporter{cfg: cfg}
+	if got := exporter.GetMetricsEndpoint(); got != "http://127.0.0.1:1974/metrics" {
+		t.Fatalf("HTTP metrics endpoint = %q", got)
+	}
+
+	cfg.PrometheusTLSEnabled = true
+	if got := exporter.GetMetricsEndpoint(); got != "https://127.0.0.1:1974/metrics" {
+		t.Fatalf("HTTPS metrics endpoint = %q", got)
+	}
+}
+
+func TestPrometheusStartReportsBindFailureSynchronously(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to reserve test port: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusMetricsBindHost = "127.0.0.1"
+	cfg.PrometheusMetricsBindPort = listener.Addr().(*net.TCPAddr).Port
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	if err := exporter.Start(context.Background()); err == nil {
+		t.Fatal("Start() succeeded on an occupied port")
+	}
+	if exporter.IsRunning() {
+		t.Fatal("exporter remained marked running after bind failure")
+	}
+}
+
+func TestNewPrometheusExporterAppliesTLSAndClientCA(t *testing.T) {
+	certFile, keyFile, caFile := writeTestTLSMaterial(t)
+
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusTLSEnabled = true
+	cfg.PrometheusTLSCertFile = certFile
+	cfg.PrometheusTLSKeyFile = keyFile
+	cfg.PrometheusTLSCAFile = caFile
+	cfg.PrometheusTLSMinVersion = "1.3"
+
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+	if exporter.tlsConfig == nil {
+		t.Fatal("TLS configuration was not created")
+	}
+	if exporter.tlsConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("TLS minimum version = %d, want TLS 1.3", exporter.tlsConfig.MinVersion)
+	}
+	if exporter.tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("TLS client authentication = %d, want RequireAndVerifyClientCert", exporter.tlsConfig.ClientAuth)
+	}
+	if exporter.tlsConfig.ClientCAs == nil {
+		t.Fatal("TLS client CA pool was not configured")
+	}
+}
+
+func TestNewPrometheusExporterRejectsInvalidClientCA(t *testing.T) {
+	certFile, keyFile, _ := writeTestTLSMaterial(t)
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusTLSEnabled = true
+	cfg.PrometheusTLSCertFile = certFile
+	cfg.PrometheusTLSKeyFile = keyFile
+	cfg.PrometheusTLSCAFile = writeCredentialFile(t, "ca.crt", "not a certificate")
+
+	if exporter, err := NewPrometheusExporter(cfg); err == nil || exporter != nil {
+		t.Fatalf("NewPrometheusExporter() = (%v, %v), want nil exporter and error", exporter, err)
+	}
+}
+
+func TestNewPrometheusExporterRejectsInvalidTLSKeyPair(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusTLSEnabled = true
+	cfg.PrometheusTLSCertFile = writeCredentialFile(t, "server.crt", "not a certificate")
+	cfg.PrometheusTLSKeyFile = writeCredentialFile(t, "server.key", "not a key")
+
+	if exporter, err := NewPrometheusExporter(cfg); err == nil || exporter != nil {
+		t.Fatalf("NewPrometheusExporter() = (%v, %v), want nil exporter and error", exporter, err)
+	}
+}
+
+func writeTestTLSMaterial(t *testing.T) (certFile, keyFile, caFile string) {
+	t.Helper()
+	testServer := httptest.NewTLSServer(nil)
+	t.Cleanup(testServer.Close)
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: testServer.Certificate().Raw,
+	})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(testServer.TLS.Certificates[0].PrivateKey)
+	if err != nil {
+		t.Fatalf("failed to encode test TLS key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	dir := t.TempDir()
+	certFile = filepath.Join(dir, "server.crt")
+	keyFile = filepath.Join(dir, "server.key")
+	caFile = filepath.Join(dir, "ca.crt")
+	for path, contents := range map[string][]byte{
+		certFile: certPEM,
+		keyFile:  keyPEM,
+		caFile:   certPEM,
+	} {
+		if err := os.WriteFile(path, contents, 0600); err != nil {
+			t.Fatalf("failed to write TLS material %s: %v", path, err)
+		}
+	}
+	return certFile, keyFile, caFile
+}
 
 func TestNewPrometheusExporterRejectsInvalidCredentials(t *testing.T) {
 	tests := []struct {

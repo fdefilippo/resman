@@ -657,7 +657,12 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman-go --config /etc/resman.conf
 **Deactivate Limits When:**
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
 - `time_since_activation >= MIN_ACTIVE_TIME`
+- Every actively limited user's CPU EMA has remained below the release threshold for
+  three `POLLING_INTERVAL` periods
 - `system_load OK`
+
+The release stability guard uses elapsed wall-clock time. Extra control cycles
+triggered by PSI events do not accelerate global deactivation.
 
 **Idle User Release:**
 - Uses the per-user CPU EMA rather than one instantaneous sample

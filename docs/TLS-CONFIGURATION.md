@@ -161,11 +161,21 @@ PROMETHEUS_TLS_ENABLED=true
 # Certificate files
 PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
 PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
-PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 
 # Minimum TLS version (recommended: 1.2 or 1.3)
 PROMETHEUS_TLS_MIN_VERSION=1.2
 ```
+
+This enables one-way TLS: Prometheus verifies the resman server certificate.
+To require mutual TLS, also configure the CA that signed the Prometheus client
+certificate:
+
+```bash
+PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
+```
+
+When this field is set, every HTTPS request, including `/health`, must present a
+valid client certificate signed by that CA.
 
 ### Combine with Authentication (Recommended)
 

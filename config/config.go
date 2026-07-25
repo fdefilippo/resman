@@ -852,6 +852,17 @@ func validateConfig(cfg *Config) error {
 	if cfg.ProcessMinAgeSeconds < 0 {
 		errors = append(errors, "PROCESS_MIN_AGE_SECONDS cannot be negative")
 	}
+	if cfg.PrometheusTLSMinVersion == "" {
+		if cfg.PrometheusTLSEnabled {
+			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION is required when Prometheus TLS is enabled")
+		}
+	} else {
+		switch cfg.PrometheusTLSMinVersion {
+		case "1.0", "1.1", "1.2", "1.3":
+		default:
+			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
+		}
+	}
 
 	// Validate PSI event-driven configuration
 	if cfg.PSICPUStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSICPUStallThreshold == 0) {

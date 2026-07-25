@@ -188,7 +188,7 @@ func NewManager(
 		resourceLimits:     make(map[int]userResourceLimitState),
 		sharedCgroupPath:   "",
 		thresholdTracker:   &ThresholdTracker{},
-		stabilityTracker:   &UserStabilityTracker{underThreshold: make(map[int]int)},
+		stabilityTracker:   newUserStabilityTracker(),
 		ioThresholdTracker: &ThresholdTracker{},
 		metricsCollector:   metrics,
 		cgroupManager:      cgroups,

@@ -21,7 +21,10 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,6 +136,7 @@ type PrometheusExporter struct {
 	tlsCertFile string
 	tlsKeyFile  string
 	tlsCAFile   string
+	tlsConfig   *tls.Config
 }
 
 // NewPrometheusExporter crea un nuovo esportatore Prometheus.
@@ -255,38 +259,75 @@ func (exp *PrometheusExporter) loadCredentials() error {
 
 	// Carica certificati TLS
 	if exp.cfg.PrometheusTLSEnabled {
-		if exp.cfg.PrometheusTLSCertFile != "" {
-			if _, err := os.Stat(exp.cfg.PrometheusTLSCertFile); err != nil {
-				return fmt.Errorf("TLS certificate file not found: %s", exp.cfg.PrometheusTLSCertFile)
-			}
-			exp.tlsCertFile = exp.cfg.PrometheusTLSCertFile
-			exp.logger.Info("TLS certificate file loaded",
-				"cert_file", exp.cfg.PrometheusTLSCertFile,
-			)
+		if exp.cfg.PrometheusTLSCertFile == "" || exp.cfg.PrometheusTLSKeyFile == "" {
+			return fmt.Errorf("prometheus TLS certificate and key files must both be configured")
 		}
-
-		if exp.cfg.PrometheusTLSKeyFile != "" {
-			if _, err := os.Stat(exp.cfg.PrometheusTLSKeyFile); err != nil {
-				return fmt.Errorf("TLS key file not found: %s", exp.cfg.PrometheusTLSKeyFile)
-			}
-			exp.tlsKeyFile = exp.cfg.PrometheusTLSKeyFile
-			exp.logger.Info("TLS key file loaded",
-				"key_file", exp.cfg.PrometheusTLSKeyFile,
-			)
+		certificate, err := tls.LoadX509KeyPair(exp.cfg.PrometheusTLSCertFile, exp.cfg.PrometheusTLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to load Prometheus TLS certificate and key: %w", err)
 		}
+		exp.tlsCertFile = exp.cfg.PrometheusTLSCertFile
+		exp.tlsKeyFile = exp.cfg.PrometheusTLSKeyFile
+		exp.logger.Info("TLS certificate and key loaded",
+			"cert_file", exp.cfg.PrometheusTLSCertFile,
+			"key_file", exp.cfg.PrometheusTLSKeyFile,
+		)
 
 		if exp.cfg.PrometheusTLSCAFile != "" {
-			if _, err := os.Stat(exp.cfg.PrometheusTLSCAFile); err != nil {
-				return fmt.Errorf("TLS CA file not found: %s", exp.cfg.PrometheusTLSCAFile)
-			}
 			exp.tlsCAFile = exp.cfg.PrometheusTLSCAFile
 			exp.logger.Info("TLS CA file loaded",
 				"ca_file", exp.cfg.PrometheusTLSCAFile,
 			)
 		}
+
+		tlsConfig, err := buildPrometheusTLSConfig(exp.cfg.PrometheusTLSMinVersion, exp.tlsCAFile)
+		if err != nil {
+			return err
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+		exp.tlsConfig = tlsConfig
 	}
 
 	return nil
+}
+
+func buildPrometheusTLSConfig(minVersion, caFile string) (*tls.Config, error) {
+	version, err := parseTLSVersion(minVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfig := &tls.Config{MinVersion: version}
+	if caFile == "" {
+		return tlsConfig, nil
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read TLS CA file %s: %w", caFile, err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("TLS CA file %s does not contain a valid PEM certificate", caFile)
+	}
+	tlsConfig.ClientCAs = clientCAs
+	tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	return tlsConfig, nil
+}
+
+func parseTLSVersion(version string) (uint16, error) {
+	switch strings.TrimSpace(version) {
+	case "1.0":
+		return tls.VersionTLS10, nil
+	case "1.1":
+		return tls.VersionTLS11, nil
+	case "1.2":
+		return tls.VersionTLS12, nil
+	case "1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("invalid Prometheus TLS minimum version %q: expected 1.0, 1.1, 1.2, or 1.3", version)
+	}
 }
 
 // registerMetrics registra tutte le metriche Prometheus.
@@ -1266,17 +1307,25 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 
 	addr := fmt.Sprintf("%s:%d", exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
 	exp.server = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:      addr,
+		Handler:   mux,
+		TLSConfig: exp.tlsConfig,
 	}
 
 	// Configura TLS se abilitato
 	if exp.cfg.PrometheusTLSEnabled {
+		if exp.tlsCertFile == "" || exp.tlsKeyFile == "" {
+			exp.mu.Lock()
+			exp.isRunning = false
+			exp.mu.Unlock()
+			return fmt.Errorf("TLS enabled but certificate or key file not configured")
+		}
 		exp.logger.Info("Starting Prometheus HTTPS server",
 			"address", addr,
 			"auth_type", exp.cfg.PrometheusAuthType,
 			"tls_enabled", exp.cfg.PrometheusTLSEnabled,
 			"tls_min_version", exp.cfg.PrometheusTLSMinVersion,
+			"mtls_enabled", exp.tlsCAFile != "",
 		)
 	} else {
 		exp.logger.Info("Starting Prometheus HTTP server",
@@ -1286,38 +1335,29 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		)
 	}
 
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		exp.mu.Lock()
+		exp.isRunning = false
+		exp.mu.Unlock()
+		return fmt.Errorf("failed to listen for Prometheus metrics on %s: %w", addr, err)
+	}
+
 	// Avvia il server in una goroutine
 	listenErr := make(chan error, 1)
 	go func() {
 		var err error
 		if exp.cfg.PrometheusTLSEnabled {
-			// HTTPS con TLS
-			if exp.tlsCertFile == "" || exp.tlsKeyFile == "" {
-				listenErr <- fmt.Errorf("TLS enabled but certificate or key file not configured")
-				return
-			}
-			err = exp.server.ListenAndServeTLS(exp.tlsCertFile, exp.tlsKeyFile)
+			err = exp.server.ServeTLS(listener, exp.tlsCertFile, exp.tlsKeyFile)
 		} else {
-			// HTTP semplice
-			err = exp.server.ListenAndServe()
+			err = exp.server.Serve(listener)
 		}
 		if err != nil && err != http.ErrServerClosed {
 			exp.logger.Error("Prometheus server error", "error", err)
 			listenErr <- err
 		}
 	}()
-
-	// Verifica che il server sia effettivamente in ascolto
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		resp, err := http.Get(fmt.Sprintf("http://%s/health", addr))
-		if err == nil && resp.StatusCode == 200 {
-			exp.logger.Info("Prometheus server verified as running")
-			_ = resp.Body.Close()
-		} else {
-			exp.logger.Warn("Could not verify Prometheus server", "error", err)
-		}
-	}()
+	exp.logger.Info("Prometheus server verified as listening", "address", listener.Addr().String())
 
 	// Gestione shutdown
 	go func() {
@@ -1390,5 +1430,9 @@ func (exp *PrometheusExporter) GetMetricsEndpoint() string {
 	if exp == nil {
 		return ""
 	}
-	return fmt.Sprintf("http://%s:%d/metrics", exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
+	scheme := "http"
+	if exp.cfg.PrometheusTLSEnabled {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d/metrics", scheme, exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
 }

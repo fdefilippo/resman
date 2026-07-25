@@ -110,7 +110,9 @@ activate about 120 seconds after the first observation, plus polling alignment.
 Idle release uses each user's CPU EMA rather than a single instantaneous sample.
 `MIN_ACTIVE_TIME` is also the minimum hold time after that user is initially
 limited or re-added; re-adding a user does not restart the global activation
-timer.
+timer. Global deactivation additionally requires all actively limited users to remain
+below `CPU_RELEASE_THRESHOLD` for three `POLLING_INTERVAL` periods. This
+cool-down is wall-clock based, so PSI events cannot shorten it.
 
 Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
 are already active. Limits that are disabled or no longer applicable are reset
@@ -177,6 +179,10 @@ Prometheus listener, TLS, and authentication settings:
 ```bash
 sudo systemctl restart resman
 ```
+
+When Prometheus TLS is enabled, `PROMETHEUS_TLS_MIN_VERSION` is enforced by the
+server. Setting `PROMETHEUS_TLS_CA_FILE` also enables mandatory client
+certificate verification; leave it empty for one-way TLS.
 
 Monitor the service:
 

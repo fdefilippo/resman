@@ -18,12 +18,10 @@ type ThresholdTracker struct {
 	mu                     sync.RWMutex
 }
 
-
 type UserStabilityTracker struct {
-	mu             sync.RWMutex
-	underThreshold map[int]int // uid -> campioni consecutivi sotto soglia
+	mu                  sync.RWMutex
+	belowThresholdSince map[int]time.Time
 }
-
 
 func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	cfg := m.GetConfig()
@@ -123,40 +121,32 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// Disattiva solo quando TUTTE le risorse sono sotto le soglie di rilascio
 		if allBelow {
 			if m.stabilityTracker == nil {
-				m.stabilityTracker = &UserStabilityTracker{underThreshold: make(map[int]int)}
+				m.stabilityTracker = newUserStabilityTracker()
 			}
 
-			// Verifica stabilità per CPU (evita rilasci nervosi per singoli campioni a 0%)
-			// Richiediamo 3 campionamenti consecutivi sotto soglia (~90 secondi)
-			m.stabilityTracker.mu.Lock()
-			defer m.stabilityTracker.mu.Unlock()
-
-			// Troviamo l'utente con l'uso CPU più alto tra i limitati per decidere il rilascio globale
-			var limitedUsers []int
+			// Only users currently tracked in the shared cgroup participate in
+			// release stability. Configuration eligibility alone is not runtime state.
+			m.mu.RLock()
+			limitedUsers := make([]int, 0, len(m.activeUsers))
+			for uid := range m.activeUsers {
+				limitedUsers = append(limitedUsers, uid)
+			}
+			m.mu.RUnlock()
 			allUserMetrics := make(map[int]*resmanmetrics.UserMetrics)
 			if m.metricsCollector != nil {
-				limitedUsers = m.metricsCollector.GetLimitedUsers()
 				allUserMetrics = m.metricsCollector.GetAllUserMetrics()
 			}
 
-			for _, uid := range limitedUsers {
-				if um, ok := allUserMetrics[uid]; ok {
-					if um.CPUUsageEMA < float64(cpuReleaseThreshold) {
-						m.stabilityTracker.underThreshold[uid]++
-					} else {
-						m.stabilityTracker.underThreshold[uid] = 0
-					}
-				}
-			}
-
-			// Se tutti gli utenti limitati sono stabili sotto soglia per almeno 3 cicli
-			stable := true
-			for _, uid := range limitedUsers {
-				if m.stabilityTracker.underThreshold[uid] < 3 {
-					stable = false
-					break
-				}
-			}
+			// Preserve the historical three-poll cool-down as wall-clock time.
+			// PSI-triggered cycles therefore cannot shorten the release guard.
+			stabilityDuration := 3 * time.Duration(cfg.GetPollingInterval()) * time.Second
+			stable := m.stabilityTracker.AllBelowThreshold(
+				limitedUsers,
+				allUserMetrics,
+				float64(cpuReleaseThreshold),
+				stabilityDuration,
+				time.Now(),
+			)
 
 			if !metrics.SystemUnderLoad && stable {
 				m.thresholdTracker.Reset()
@@ -169,6 +159,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			return DecisionMaintain, "Resources below thresholds but system still under load"
 		}
 
+		if m.stabilityTracker != nil {
+			m.stabilityTracker.Reset()
+		}
 		return DecisionMaintain, "Limits active, at least one resource still above release threshold"
 	}
 
@@ -220,7 +213,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	return DecisionMaintain, "All resources within normal range"
 }
 
-
 func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool, metrics *SystemMetrics, cpuThreshold int) string {
 	cfg := m.GetConfig()
 	reasons := []string{}
@@ -236,14 +228,12 @@ func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool,
 	return fmt.Sprintf("Threshold exceeded: %s", strings.Join(reasons, ", "))
 }
 
-
 func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metrics *SystemMetrics, cpuReleaseThreshold int) string {
 	return fmt.Sprintf(
 		"All resources below release thresholds (CPU %.1f%% < %d%%)",
 		metrics.LimitedUsersCPUUsage, cpuReleaseThreshold,
 	)
 }
-
 
 func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error {
 	switch decision {
@@ -257,6 +247,68 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 	default:
 		return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
 	}
+}
+
+func newUserStabilityTracker() *UserStabilityTracker {
+	return &UserStabilityTracker{belowThresholdSince: make(map[int]time.Time)}
+}
+
+// AllBelowThreshold reports whether every listed user has remained below the
+// CPU threshold for the complete required duration.
+func (t *UserStabilityTracker) AllBelowThreshold(
+	users []int,
+	userMetrics map[int]*resmanmetrics.UserMetrics,
+	threshold float64,
+	requiredDuration time.Duration,
+	now time.Time,
+) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	currentUsers := make(map[int]struct{}, len(users))
+	stable := true
+	for _, uid := range users {
+		currentUsers[uid] = struct{}{}
+		metrics, ok := userMetrics[uid]
+		if !ok || metrics == nil || metrics.CPUUsageEMA >= threshold {
+			delete(t.belowThresholdSince, uid)
+			stable = false
+			continue
+		}
+
+		since, tracked := t.belowThresholdSince[uid]
+		if !tracked || now.Before(since) {
+			t.belowThresholdSince[uid] = now
+			stable = false
+			continue
+		}
+		if now.Sub(since) < requiredDuration {
+			stable = false
+		}
+	}
+
+	for uid := range t.belowThresholdSince {
+		if _, exists := currentUsers[uid]; !exists {
+			delete(t.belowThresholdSince, uid)
+		}
+	}
+	return stable
+}
+
+// ForgetUsers discards release stability state for users leaving the limited set.
+func (t *UserStabilityTracker) ForgetUsers(users []int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, uid := range users {
+		delete(t.belowThresholdSince, uid)
+	}
+}
+
+// Reset discards release stability state from the current limiting epoch.
+func (t *UserStabilityTracker) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.belowThresholdSince = make(map[int]time.Time)
 }
 
 // releaseIdleUsers rilascia gli utenti che non stanno usando CPU mentre i limiti sono attivi
@@ -312,4 +364,3 @@ func (t *ThresholdTracker) GetElapsed() time.Duration {
 	}
 	return time.Since(t.firstOverThresholdTime)
 }
-

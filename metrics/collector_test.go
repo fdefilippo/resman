@@ -19,6 +19,8 @@ package metrics
 import (
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,6 +147,26 @@ func TestUpdateProcessCPUSampleCountsConsecutiveDelta(t *testing.T) {
 	got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 2.5, System: 1.5}, now.Add(time.Second))
 	if got != 200 {
 		t.Fatalf("second sample = %f, want 200", got)
+	}
+}
+
+func TestUpdateProcessCPUSampleWaitsForReliableElapsedTime(t *testing.T) {
+	collector := &Collector{
+		procCache: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+	}
+	now := time.Now()
+
+	collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1}, now)
+	if got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1.5}, now.Add(500*time.Millisecond)); got != 0 {
+		t.Fatalf("sub-second CPU delta = %f, want 0", got)
+	}
+	got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 2}, now.Add(time.Second))
+	if got != 100 {
+		t.Fatalf("CPU delta after one second = %f, want 100", got)
 	}
 }
 
@@ -326,6 +348,73 @@ func TestGetAllUserMetrics(t *testing.T) {
 		if metrics.ProcessCount < 0 {
 			t.Errorf("ProcessCount for UID %d is negative: %d", uid, metrics.ProcessCount)
 		}
+	}
+}
+
+func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector := &Collector{
+		cfg:             cfg,
+		cache:           make(map[string]interface{}),
+		cacheTimestamps: make(map[string]time.Time),
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	collect := func() map[int]*UserMetrics {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return map[int]*UserMetrics{1000: {UID: 1000}}
+	}
+
+	const callers = 8
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	results := make(chan map[int]*UserMetrics, callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			results <- collector.getAllUserMetricsCached(collect)
+		}()
+	}
+
+	<-started
+	close(release)
+	wg.Wait()
+	close(results)
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("full metric scans = %d, want 1", got)
+	}
+	for result := range results {
+		if _, ok := result[1000]; !ok {
+			t.Fatal("coalesced scan did not return the cached result")
+		}
+	}
+}
+
+func TestDerivedUserMetricsDoNotExtendCacheLifetime(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector := &Collector{
+		cfg:             cfg,
+		cache:           make(map[string]interface{}),
+		cacheTimestamps: make(map[string]time.Time),
+	}
+
+	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+		1000: {UID: 1000, CPUUsage: 10},
+	})
+	if got := collector.GetUserCPUUsage(1000); got != 10 {
+		t.Fatalf("initial user CPU = %f, want 10", got)
+	}
+
+	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+		1000: {UID: 1000, CPUUsage: 25},
+	})
+	if got := collector.GetUserCPUUsage(1000); got != 25 {
+		t.Fatalf("updated user CPU = %f, want 25", got)
 	}
 }
 

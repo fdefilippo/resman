@@ -252,6 +252,84 @@ func TestMakeDecisionMaintain(t *testing.T) {
 	}
 }
 
+func TestUserStabilityTrackerUsesWallClockDuration(t *testing.T) {
+	tracker := newUserStabilityTracker()
+	users := []int{1000}
+	userMetrics := map[int]*metrics.UserMetrics{
+		1000: {UID: 1000, CPUUsageEMA: 10},
+	}
+	now := time.Now()
+	required := 90 * time.Second
+
+	if tracker.AllBelowThreshold(users, userMetrics, 40, required, now) {
+		t.Fatal("first below-threshold sample reported stable")
+	}
+	for i := 1; i <= 10; i++ {
+		if tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("rapid cycle %d shortened the wall-clock stability guard", i)
+		}
+	}
+	if !tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(required)) {
+		t.Fatal("user was not stable after the required wall-clock duration")
+	}
+}
+
+func TestUserStabilityTrackerResetsOnThresholdCrossing(t *testing.T) {
+	tracker := newUserStabilityTracker()
+	users := []int{1000}
+	userMetrics := map[int]*metrics.UserMetrics{
+		1000: {UID: 1000, CPUUsageEMA: 10},
+	}
+	now := time.Now()
+	required := 30 * time.Second
+
+	tracker.AllBelowThreshold(users, userMetrics, 40, required, now)
+	userMetrics[1000].CPUUsageEMA = 50
+	if tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(required)) {
+		t.Fatal("above-threshold sample reported stable")
+	}
+	userMetrics[1000].CPUUsageEMA = 10
+	if tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(2*required)) {
+		t.Fatal("stability duration was not restarted after threshold crossing")
+	}
+}
+
+func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CPUReleaseThreshold = 40
+	cfg.MinActiveTime = 0
+	cfg.PollingInterval = 30
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, CPUUsageEMA: 10},
+			1001: {UID: 1001, CPUUsageEMA: 80},
+		},
+	}
+	manager := &Manager{
+		cfg:                cfg,
+		limitsActive:       true,
+		activeUsers:        map[int]bool{1000: true},
+		thresholdTracker:   &ThresholdTracker{},
+		ioThresholdTracker: &ThresholdTracker{},
+		stabilityTracker:   newUserStabilityTracker(),
+		metricsCollector:   collector,
+	}
+	systemMetrics := &SystemMetrics{
+		LimitedUsersCPUUsage: 30,
+		SystemUnderLoad:      false,
+	}
+
+	if decision, _ := manager.makeDecision(systemMetrics); decision != "MAINTAIN_CURRENT_STATE" {
+		t.Fatalf("first release sample decision = %s, want MAINTAIN_CURRENT_STATE", decision)
+	}
+	manager.stabilityTracker.mu.Lock()
+	manager.stabilityTracker.belowThresholdSince[1000] = time.Now().Add(-90 * time.Second)
+	manager.stabilityTracker.mu.Unlock()
+	if decision, _ := manager.makeDecision(systemMetrics); decision != "DEACTIVATE_LIMITS" {
+		t.Fatalf("decision after wall-clock guard = %s, want DEACTIVATE_LIMITS", decision)
+	}
+}
+
 func TestBoolToFloat(t *testing.T) {
 	tests := []struct {
 		input    bool
@@ -528,6 +606,8 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
 	manager.activeUsers[1001] = true
+	manager.stabilityTracker.belowThresholdSince[999] = time.Now().Add(-time.Hour)
+	manager.stabilityTracker.belowThresholdSince[1000] = time.Now().Add(-time.Hour)
 	manager.psiBoostedAt[1000] = time.Now().Add(-time.Hour)
 	manager.psiBoostedAt[1001] = time.Now().Add(-time.Hour)
 
@@ -558,6 +638,9 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	if len(manager.psiBoostedAt) != 0 {
 		t.Fatalf("psiBoostedAt = %v, want empty", manager.psiBoostedAt)
 	}
+	if len(manager.stabilityTracker.belowThresholdSince) != 0 {
+		t.Fatalf("stability state = %v, want empty", manager.stabilityTracker.belowThresholdSince)
+	}
 
 	manager.revertPSIBoosts()
 	if len(cgroupManager.applyCPUWeightCalls) != 0 {
@@ -585,6 +668,8 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
 	manager.activeUsers[1001] = true
+	manager.stabilityTracker.belowThresholdSince[1000] = time.Now().Add(-time.Hour)
+	manager.stabilityTracker.belowThresholdSince[1001] = time.Now().Add(-time.Hour)
 	manager.psiBoostedAt[1000] = time.Now()
 	manager.psiBoostedAt[1001] = time.Now()
 
@@ -608,6 +693,12 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	}
 	if _, exists := manager.psiBoostedAt[1001]; !exists {
 		t.Fatal("PSI boost state for failed user 1001 should be retained")
+	}
+	if _, exists := manager.stabilityTracker.belowThresholdSince[1000]; exists {
+		t.Fatal("stability state for released user 1000 should be removed")
+	}
+	if _, exists := manager.stabilityTracker.belowThresholdSince[1001]; !exists {
+		t.Fatal("stability state for failed user 1001 should be retained for immediate retry")
 	}
 
 	cgroupManager.applySharedCPULimitCalls = nil
