@@ -137,7 +137,9 @@ jobs:
           cache: true
 
       - name: Build RPM package
-        run: make rpm
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          make rpm
 
       - name: Collect and verify RPM package
         shell: bash
