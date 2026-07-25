@@ -164,15 +164,9 @@ func TestLoggerTimestamp(t *testing.T) {
 	t.Skip("Skipping test due to singleton logger initialization")
 }
 
-func TestLoggerStdoutFallback(t *testing.T) {
-	// Test with invalid path that should fallback to stdout
-	InitLogger("INFO", "/invalid/path/log.log", 1024*1024, false)
-	logger := GetLogger()
-
-	if logger == nil {
-		t.Error("Logger should fallback to stdout")
+func TestLoggerFallbackUsesStderr(t *testing.T) {
+	logger := createStderrLogger(INFO)
+	if got := logger.logger.Writer(); got != os.Stderr {
+		t.Errorf("fallback writer = %v, want os.Stderr", got)
 	}
-
-	// Should not panic
-	logger.Info("This should go to stdout")
 }

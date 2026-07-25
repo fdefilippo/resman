@@ -48,8 +48,12 @@ type Server struct {
 	dbManager        *database.DatabaseManager
 	logger           *logging.Logger
 	httpServer       *http.Server
-	shutdownChan     chan struct{}
+	stdioTransport   mcp.Transport
+	transportCancel  context.CancelFunc
 	wg               sync.WaitGroup
+	stopOnce         sync.Once
+	stopErr          error
+	stopped          bool
 	mu               sync.RWMutex
 }
 
@@ -93,7 +97,6 @@ func NewServer(
 		cgroupManager:    cg,
 		dbManager:        dbm,
 		logger:           logger,
-		shutdownChan:     make(chan struct{}),
 	}
 
 	// Register tools and resources
@@ -117,51 +120,84 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return fmt.Errorf("MCP server cannot be started after it has been stopped")
+	}
+	if s.transportCancel != nil {
+		return fmt.Errorf("MCP server is already started")
+	}
+
+	transportCtx, cancel := context.WithCancel(ctx)
+	s.transportCancel = cancel
+
 	s.logger.Info("Starting MCP server",
 		"transport", s.cfg.Transport,
 	)
 
+	var err error
 	switch s.cfg.Transport {
 	case "stdio":
-		return s.startStdioTransport(ctx)
+		err = s.startStdioTransport(transportCtx)
 	case "http":
-		return s.startHTTPTransport(ctx)
+		err = s.startHTTPTransport(transportCtx)
 	default:
-		return fmt.Errorf("unsupported transport: %s (supported: stdio, http)", s.cfg.Transport)
+		err = fmt.Errorf("unsupported transport: %s (supported: stdio, http)", s.cfg.Transport)
 	}
+	if err != nil {
+		cancel()
+		s.transportCancel = nil
+	}
+	return err
 }
 
 // Stop stops the MCP server and cleans up resources
 func (s *Server) Stop() error {
+	s.stopOnce.Do(func() {
+		s.stopErr = s.stop()
+	})
+	return s.stopErr
+}
+
+func (s *Server) stop() error {
 	s.logger.Info("Stopping MCP server")
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stopped = true
+	cancel := s.transportCancel
+	httpServer := s.httpServer
+	s.mu.Unlock()
 
-	// Signal shutdown
-	close(s.shutdownChan)
+	if cancel != nil {
+		cancel()
+	}
 
-	// Stop HTTP server if running
-	if s.httpServer != nil {
+	var shutdownErr error
+	if httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := s.httpServer.Shutdown(ctx); err != nil {
+		if err := httpServer.Shutdown(ctx); err != nil {
 			s.logger.Error("Error shutting down HTTP server", "error", err)
-			return err
+			shutdownErr = fmt.Errorf("failed to shut down MCP HTTP server: %w", err)
 		}
 	}
 
-	// Wait for goroutines to finish
 	s.wg.Wait()
 
 	s.logger.Info("MCP server stopped")
-	return nil
+	return shutdownErr
 }
 
 // startStdioTransport starts the MCP server with stdio transport
 func (s *Server) startStdioTransport(ctx context.Context) error {
 	s.logger.Info("MCP server started with stdio transport")
+
+	transport := s.stdioTransport
+	if transport == nil {
+		transport = &mcp.StdioTransport{}
+	}
 
 	// Run MCP server with stdio (stdin/stdout)
 	s.wg.Add(1)
@@ -169,7 +205,7 @@ func (s *Server) startStdioTransport(ctx context.Context) error {
 		defer s.wg.Done()
 
 		// Use the MCP stdio transport
-		if err := s.mcpServer.Run(ctx, &mcp.StdioTransport{}); err != nil {
+		if err := s.mcpServer.Run(ctx, transport); err != nil && ctx.Err() == nil {
 			s.logger.Error("MCP stdio server error", "error", err)
 		}
 	}()

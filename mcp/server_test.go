@@ -22,9 +22,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -385,6 +387,57 @@ func TestServerStartStop(t *testing.T) {
 	// Stop should work without errors
 	if err := server.Stop(); err != nil {
 		t.Errorf("Server.Stop() error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Errorf("second Server.Stop() error = %v", err)
+	}
+}
+
+func TestServerStopCancelsTransportContext(t *testing.T) {
+	transportCtx, cancel := context.WithCancel(context.Background())
+	server := &Server{
+		logger:          logging.GetLogger(),
+		transportCancel: cancel,
+	}
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Server.Stop() error = %v", err)
+	}
+	select {
+	case <-transportCtx.Done():
+	default:
+		t.Fatal("Server.Stop() did not cancel the transport context")
+	}
+}
+
+func TestServerStopTerminatesStdioTransport(t *testing.T) {
+	serverTransport, _ := sdkmcp.NewInMemoryTransports()
+	server := &Server{
+		mcpServer: sdkmcp.NewServer(&sdkmcp.Implementation{
+			Name:    "resman-test",
+			Version: "test",
+		}, nil),
+		cfg:            &Config{Enabled: true, Transport: "stdio"},
+		logger:         logging.GetLogger(),
+		stdioTransport: serverTransport,
+	}
+
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("Server.Start() error = %v", err)
+	}
+
+	stopped := make(chan error, 1)
+	go func() {
+		stopped <- server.Stop()
+	}()
+
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("Server.Stop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Server.Stop() did not terminate the stdio transport")
 	}
 }
 

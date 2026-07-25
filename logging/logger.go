@@ -76,8 +76,8 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			syslogWriter, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "resman")
 			if err != nil {
 				log.Printf("ERROR: Failed to initialize syslog: %v", err)
-				// Fallback a stdout
-				currentLogger = createStdoutLogger(logLevel)
+				// Fallback to stderr so protocol streams on stdout remain clean.
+				currentLogger = createStderrLogger(logLevel)
 				return
 			}
 
@@ -105,8 +105,8 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 		// Crea la directory del log se non esiste
 		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 			log.Printf("ERROR: Failed to create log directory: %v", err)
-			// Fallback a stdout
-			currentLogger = createStdoutLogger(logLevel)
+			// Fallback to stderr so protocol streams on stdout remain clean.
+			currentLogger = createStderrLogger(logLevel)
 			return
 		}
 
@@ -114,8 +114,8 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.Printf("ERROR: Failed to open log file %s: %v", filePath, err)
-			// Fallback a stdout
-			currentLogger = createStdoutLogger(logLevel)
+			// Fallback to stderr so protocol streams on stdout remain clean.
+			currentLogger = createStderrLogger(logLevel)
 			return
 		}
 
@@ -144,7 +144,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 // GetLogger restituisce il logger globale inizializzato.
 func GetLogger() *Logger {
 	if currentLogger == nil {
-		// Se non inizializzato, crea un logger di default su stdout
+		// If uninitialized, create the default logger with stderr fallback.
 		InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, false)
 	}
 	return currentLogger
@@ -164,12 +164,12 @@ func parseLogLevel(level string) LogLevel {
 	}
 }
 
-// createStdoutLogger crea un logger di fallback su stdout.
-func createStdoutLogger(level LogLevel) *Logger {
+// createStderrLogger creates a fallback logger that cannot corrupt stdout protocols.
+func createStderrLogger(level LogLevel) *Logger {
 	return &Logger{
 		level:     level,
 		file:      nil,
-		logger:    log.New(os.Stdout, "", 0),
+		logger:    log.New(os.Stderr, "", 0),
 		UseSyslog: false,
 		fields:    make(map[string]interface{}),
 	}
@@ -225,7 +225,7 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 			_ = l.syslogWriter.Info(logMsg)
 		}
 	} else {
-		// Scrivi sul logger sottostante (file/stdout)
+		// Write to the underlying file or stderr logger.
 		l.logger.Println(logMsg)
 
 		// Verifica e gestisci la rotazione del log (solo per file-based logger)
@@ -272,17 +272,17 @@ func (l *Logger) rotateLog() {
 
 	// Rinomina il file corrente
 	if err := os.Rename(l.filePath, backupPath); err != nil {
-		// Se la rinomina fallisce, logga l'errore su stdout
+		// The standard logger reports rotation errors on stderr.
 		log.Printf("ERROR: Failed to rotate log file: %v", err)
 	}
 
 	// Riapri il nuovo file di log
 	file, err := os.OpenFile(l.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		// Se non possiamo riaprire il file, usiamo stdout
+		// If the file cannot be reopened, use stderr to keep stdout clean.
 		log.Printf("ERROR: Failed to reopen log file after rotation: %v", err)
 		l.file = nil
-		l.logger = log.New(os.Stdout, "", 0)
+		l.logger = log.New(os.Stderr, "", 0)
 		return
 	}
 
