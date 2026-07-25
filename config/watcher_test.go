@@ -2,8 +2,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +20,36 @@ type failingConfigChangeHandler struct {
 func (h *failingConfigChangeHandler) OnConfigChange(*Config) error {
 	h.calls++
 	return errors.New("partial apply")
+}
+
+type channelConfigChangeHandler struct {
+	values chan int
+}
+
+func (h *channelConfigChangeHandler) OnConfigChange(cfg *Config) error {
+	h.values <- cfg.CPUThreshold
+	return nil
+}
+
+type blockingConfigChangeHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	active  atomic.Int32
+	max     atomic.Int32
+}
+
+func (h *blockingConfigChangeHandler) OnConfigChange(*Config) error {
+	active := h.active.Add(1)
+	for {
+		current := h.max.Load()
+		if active <= current || h.max.CompareAndSwap(current, active) {
+			break
+		}
+	}
+	h.entered <- struct{}{}
+	<-h.release
+	h.active.Add(-1)
+	return nil
 }
 
 func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
@@ -36,6 +69,7 @@ func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
 		currentConfig: initialConfig,
 		logger:        logging.GetLogger(),
 		onChange:      handler,
+		isRunning:     true,
 		lastModTime:   time.Time{},
 		lastFileSize:  -1,
 	}
@@ -55,5 +89,117 @@ func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
 	watcher.checkConfigChange()
 	if handler.calls != 1 {
 		t.Fatalf("unchanged failed version was retried: handler calls = %d", handler.calls)
+	}
+}
+
+func TestWatcherHandlesRepeatedAtomicReplacement(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	writeAtomicConfig(t, configPath, 80)
+
+	handler := &channelConfigChangeHandler{values: make(chan int, 2)}
+	watcher, err := NewWatcher(configPath, DefaultConfig(), handler)
+	if err != nil {
+		t.Fatalf("NewWatcher() error: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := watcher.Stop(); err != nil {
+			t.Errorf("Stop() error: %v", err)
+		}
+	})
+
+	for _, threshold := range []int{81, 82} {
+		writeAtomicConfig(t, configPath, threshold)
+		select {
+		case got := <-handler.values:
+			if got != threshold {
+				t.Fatalf("reloaded CPU_THRESHOLD = %d, want %d", got, threshold)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for atomic replacement with CPU_THRESHOLD=%d", threshold)
+		}
+	}
+}
+
+func TestWatcherSerializesReloadsAndStopWaitsForCallback(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	handler := &blockingConfigChangeHandler{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}, 2),
+	}
+	watcher, err := NewWatcher(configPath, DefaultConfig(), handler)
+	if err != nil {
+		t.Fatalf("NewWatcher() error: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	var reloadWG sync.WaitGroup
+	reloadWG.Add(2)
+	for range 2 {
+		go func() {
+			defer reloadWG.Done()
+			watcher.HandleConfigChange()
+		}()
+	}
+
+	select {
+	case <-handler.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first reload did not enter callback")
+	}
+	select {
+	case <-handler.entered:
+		t.Fatal("reload callbacks ran concurrently")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- watcher.Stop()
+	}()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("Stop() returned before callback completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	handler.release <- struct{}{}
+	select {
+	case <-handler.entered:
+		t.Fatal("queued reload entered callback after Stop() began")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop() error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not wait for callback completion")
+	}
+	reloadWG.Wait()
+	if got := handler.max.Load(); got != 1 {
+		t.Fatalf("maximum concurrent callbacks = %d, want 1", got)
+	}
+}
+
+func writeAtomicConfig(t *testing.T, configPath string, threshold int) {
+	t.Helper()
+	tmpPath := configPath + ".tmp"
+	content := []byte(fmt.Sprintf("CPU_THRESHOLD=%d\n", threshold))
+	if err := os.WriteFile(tmpPath, content, 0600); err != nil {
+		t.Fatalf("WriteFile(%s) error: %v", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		t.Fatalf("Rename(%s, %s) error: %v", tmpPath, configPath, err)
 	}
 }

@@ -234,15 +234,18 @@ type Config struct {
 #### watcher.go
 
 **Responsibilities:**
-- Monitor configuration file for changes using `fsnotify`
+- Monitor the parent directory with `fsnotify` and filter events for the
+  configuration file, preserving monitoring across atomic file replacement
 - Trigger configuration reload on file modification
-- Debounce rapid changes (100ms delay)
-- Handle file creation/deletion events
+- Debounce rapid changes (2 second delay)
+- Serialize automatic, periodic, and SIGHUP reload paths
+- Wait for the watcher loop and any active reload callback during shutdown
 
 **Events Handled:**
 - `fsnotify.Write`: File modified
 - `fsnotify.Create`: File created
-- `fsnotify.Remove`: File deleted (triggers reload to defaults)
+- `fsnotify.Remove`: File deleted
+- `fsnotify.Rename`: File atomically replaced or renamed
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
@@ -977,6 +980,7 @@ type Manager struct {
 - File modification (fsnotify)
 - File creation (fsnotify)
 - File deletion (fsnotify)
+- Atomic file replacement (fsnotify)
 
 **Manual:**
 - SIGHUP signal
@@ -986,12 +990,13 @@ type Manager struct {
 ```
 1. Config watcher detects change
 2. Debounce (2 second delay)
-3. Load new configuration
-4. Validate configuration
-5. Call reloader.OnConfigChange()
-6. Update each component
-7. Record the processed file version even after a partial component failure
-8. Log success/failure
+3. Serialize the reload with periodic and SIGHUP-triggered reloads
+4. Load new configuration
+5. Validate configuration
+6. Call reloader.OnConfigChange()
+7. Update each component
+8. Record the processed file version even after a partial component failure
+9. Log success/failure
 ```
 
 ### 11.3 Component Updates

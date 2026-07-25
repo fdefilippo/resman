@@ -20,6 +20,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -38,14 +39,18 @@ type Watcher struct {
 	currentConfig *Config
 	logger        *logging.Logger
 
-	watcher *fsnotify.Watcher
-	mu      sync.RWMutex
+	watcher  *fsnotify.Watcher
+	mu       sync.RWMutex
+	reloadMu sync.Mutex
+	loopWG   sync.WaitGroup
+	reloadWG sync.WaitGroup
 
 	// Callback chiamato quando la configurazione cambia
 	onChange ConfigChangeHandler
 
 	// Stato interno
 	isRunning    bool
+	isStopped    bool
 	stopChan     chan struct{}
 	lastModTime  time.Time
 	lastFileSize int64
@@ -61,6 +66,12 @@ func (w *Watcher) HandleConfigChange() {
 // NewWatcher crea un nuovo watcher per il file di configurazione.
 func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeHandler) (*Watcher, error) {
 	logger := logging.GetLogger()
+
+	absoluteConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve config path %s: %w", configPath, err)
+	}
+	configPath = filepath.Clean(absoluteConfigPath)
 
 	// Crea il watcher di fsnotify
 	fswatcher, err := fsnotify.NewWatcher()
@@ -86,24 +97,29 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 		lastFileSize:  fileInfo.Size(),
 	}
 
-	// Aggiungi il file al watcher
-	if err := fswatcher.Add(configPath); err != nil {
+	watchPath := filepath.Dir(configPath)
+	if err := fswatcher.Add(watchPath); err != nil {
 		_ = fswatcher.Close()
-		return nil, fmt.Errorf("failed to add config file %s to watcher: %w", configPath, err)
+		return nil, fmt.Errorf("failed to watch config directory %s: %w", watchPath, err)
 	}
 
-	logger.Info("Configuration watcher initialized", "file", configPath)
+	logger.Info("Configuration watcher initialized", "file", configPath, "directory", watchPath)
 	return watcher, nil
 }
 
 // Start avvia il watcher.
 func (w *Watcher) Start() error {
 	w.mu.Lock()
+	if w.isStopped {
+		w.mu.Unlock()
+		return fmt.Errorf("watcher already stopped")
+	}
 	if w.isRunning {
 		w.mu.Unlock()
 		return fmt.Errorf("watcher already running")
 	}
 	w.isRunning = true
+	w.loopWG.Add(1)
 	w.mu.Unlock()
 
 	w.logger.Info("Starting configuration watcher")
@@ -116,16 +132,22 @@ func (w *Watcher) Start() error {
 // Stop ferma il watcher.
 func (w *Watcher) Stop() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if !w.isRunning {
+	if w.isStopped {
+		w.mu.Unlock()
+		w.loopWG.Wait()
+		w.reloadWG.Wait()
 		return nil
 	}
 
 	w.logger.Info("Stopping configuration watcher")
-	close(w.stopChan)
-	err := w.watcher.Close()
 	w.isRunning = false
+	w.isStopped = true
+	close(w.stopChan)
+	w.mu.Unlock()
+
+	err := w.watcher.Close()
+	w.loopWG.Wait()
+	w.reloadWG.Wait()
 	if err != nil {
 		return fmt.Errorf("failed to close config watcher: %w", err)
 	}
@@ -135,6 +157,8 @@ func (w *Watcher) Stop() error {
 
 // watchLoop è il loop principale che monitora i cambiamenti.
 func (w *Watcher) watchLoop() {
+	defer w.loopWG.Done()
+
 	debounceTimer := time.NewTimer(0)
 	if !debounceTimer.Stop() {
 		<-debounceTimer.C
@@ -169,7 +193,7 @@ func (w *Watcher) watchLoop() {
 			}
 
 			// Verifica se è il nostro file di configurazione
-			if event.Name != w.configPath {
+			if filepath.Clean(event.Name) != w.configPath {
 				continue
 			}
 
@@ -194,7 +218,7 @@ func (w *Watcher) watchLoop() {
 		case <-debounceTimer.C:
 			if pendingReload {
 				pendingReload = false
-				w.handleConfigChange(false)
+				w.handleConfigChange(true)
 			}
 		}
 	}
@@ -220,6 +244,27 @@ func (w *Watcher) checkConfigChange() {
 
 // handleConfigChange gestisce il cambio di configurazione.
 func (w *Watcher) handleConfigChange(force bool) {
+	w.mu.Lock()
+	if !w.isRunning {
+		w.mu.Unlock()
+		w.logger.Debug("Ignoring configuration reload because watcher is stopped")
+		return
+	}
+	w.reloadWG.Add(1)
+	w.mu.Unlock()
+	defer w.reloadWG.Done()
+
+	w.reloadMu.Lock()
+	defer w.reloadMu.Unlock()
+
+	w.mu.RLock()
+	running := w.isRunning
+	w.mu.RUnlock()
+	if !running {
+		w.logger.Debug("Ignoring configuration reload because watcher is stopped")
+		return
+	}
+
 	w.logger.Info("Configuration file changed, attempting to reload")
 
 	// Verifica se il file esiste ancora
