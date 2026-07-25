@@ -276,6 +276,22 @@ func TestUsernameCacheTTLConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
+func TestUnknownUsernameIsNegativelyCached(t *testing.T) {
+	collector, err := NewCollector(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+
+	const uid = 2147483646
+	if got := collector.getUsername(uid); got != "2147483646" {
+		t.Fatalf("unknown username = %q, want numeric UID", got)
+	}
+	if got, ok := collector.getCachedUsername(uid); !ok || got != "2147483646" {
+		t.Fatalf("negative username cache = (%q, %v), want numeric UID and hit", got, ok)
+	}
+}
+
 func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
 	collector := &Collector{
 		procCache: &procCache{

@@ -163,6 +163,9 @@ func (a *App) WithPrometheus() *App {
 	if prometheusExporter == nil {
 		return a
 	}
+	if a.metricsCollector != nil {
+		prometheusExporter.SetUsernameResolver(a.metricsCollector.GetUsernameFromUID)
+	}
 
 	if err := prometheusExporter.Start(a.ctx); err != nil {
 		a.logger.Error("Failed to start Prometheus exporter", "error", err)

@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
@@ -105,6 +106,7 @@ type PrometheusExporter struct {
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
 	prevUserPatterns     map[string]string // "uid_username" -> previous pattern label
+	usernameResolver     atomic.Value      // func(int) string
 
 	// Metriche counter (solo incremento)
 	limitsActivatedTotal   prometheus.Counter
@@ -134,6 +136,14 @@ type PrometheusExporter struct {
 	tlsKeyFile  string
 	tlsCAFile   string
 	tlsConfig   *tls.Config
+}
+
+// SetUsernameResolver configures the shared UID-to-username resolver.
+func (exp *PrometheusExporter) SetUsernameResolver(resolver func(int) string) {
+	if exp == nil || resolver == nil {
+		return
+	}
+	exp.usernameResolver.Store(resolver)
 }
 
 // NewPrometheusExporter crea un nuovo esportatore Prometheus.
@@ -999,6 +1009,9 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	uid, err := strconv.Atoi(uidStr)
 	if err != nil {
 		return "unknown"
+	}
+	if resolver, ok := exp.usernameResolver.Load().(func(int) string); ok {
+		return resolver(uid)
 	}
 
 	// Prova a leggere da /etc/passwd

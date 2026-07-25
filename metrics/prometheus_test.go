@@ -384,6 +384,22 @@ func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *te
 	}
 }
 
+func TestPrometheusExporterUsesSharedUsernameResolver(t *testing.T) {
+	exporter := &PrometheusExporter{}
+	var resolvedUID int
+	exporter.SetUsernameResolver(func(uid int) string {
+		resolvedUID = uid
+		return "directory-user"
+	})
+
+	if got := exporter.getUsernameFromUID("1007"); got != "directory-user" {
+		t.Fatalf("resolved username = %q, want directory-user", got)
+	}
+	if resolvedUID != 1007 {
+		t.Fatalf("resolver UID = %d, want 1007", resolvedUID)
+	}
+}
+
 func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string) float64 {
 	t.Helper()
 	families, err := exporter.registry.Gather()

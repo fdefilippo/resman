@@ -244,20 +244,7 @@ func (c *Collector) GetTotalCPUUsage() float64 {
 		return val.(float64)
 	}
 
-	// Usa gopsutil per ottenere l'uso CPU con un intervallo breve
-	percentages, err := cpu.Percent(100*time.Millisecond, false)
-	if err != nil || len(percentages) == 0 {
-		c.logger.Warn("Failed to get CPU usage via gopsutil, using /proc/stat fallback",
-			"error", err,
-			"percentages_empty", len(percentages) == 0,
-		)
-		// Fallback al metodo manuale
-		return c.getTotalCPUUsageFallback()
-	}
-
-	usage := percentages[0]
-	c.setInCache(cacheKey, usage)
-	return usage
+	return c.getTotalCPUUsageFallback()
 }
 
 // getTotalCPUUsageFallback calcola l'uso CPU manualmente da /proc/stat.
@@ -468,7 +455,9 @@ func (c *Collector) getUsername(uid int) string {
 	}
 
 	// Fallback finale: ritorna l'UID come stringa
-	return fmt.Sprintf("%d", uid)
+	username = strconv.Itoa(uid)
+	c.cacheUsername(uid, username)
+	return username
 }
 
 // getCachedUsername restituisce lo username dalla cache se valido
@@ -1036,8 +1025,6 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 	// Read system uptime once (needed for CPU average calculation)
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
 
-	// Second pass for IO: collect for ALL visible PIDs (including system users like mysql)
-	ioData := make(map[int]*userData)
 	seenPIDs := make(map[int32]struct{}, len(procs))
 
 	for _, p := range procs {
@@ -1077,40 +1064,12 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
 		tempData[uid].cpuUsageAvg += cpuAvg
-	}
-
-	// Collect IO for ALL visible processes (including system users like mysql, root, etc.)
-	// IO is useful for all processes, not just non-system users
-	for _, p := range procs {
-		uids, err := p.Uids()
-		if err != nil || len(uids) == 0 {
-			continue
-		}
-		uid := int(uids[0])
-
-		if ioData[uid] == nil {
-			ioData[uid] = &userData{}
-		}
 
 		rB, wB, rO, wO := c.getProcessIO(int(p.Pid))
-		ioData[uid].ioReadBytes += rB
-		ioData[uid].ioWriteBytes += wB
-		ioData[uid].ioReadOps += rO
-		ioData[uid].ioWriteOps += wO
-	}
-
-	// Merge IO data into main tempData
-	for uid, ioD := range ioData {
-		if !c.isMonitoredUserUID(uid) {
-			continue
-		}
-		if tempData[uid] == nil {
-			tempData[uid] = &userData{}
-		}
-		tempData[uid].ioReadBytes += ioD.ioReadBytes
-		tempData[uid].ioWriteBytes += ioD.ioWriteBytes
-		tempData[uid].ioReadOps += ioD.ioReadOps
-		tempData[uid].ioWriteOps += ioD.ioWriteOps
+		tempData[uid].ioReadBytes += rB
+		tempData[uid].ioWriteBytes += wB
+		tempData[uid].ioReadOps += rO
+		tempData[uid].ioWriteOps += wO
 	}
 
 	// Convert to UserMetrics with username
@@ -1159,7 +1118,6 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
-	ioData := make(map[int]*userData)
 	seenPIDs := make(map[int32]struct{}, len(entries))
 
 	// Read system uptime once
@@ -1200,25 +1158,11 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		}
 
 		// IO
-		if ioData[uid] == nil {
-			ioData[uid] = &userData{}
-		}
 		rB, wB, rO, wO := c.getProcessIO(pid)
-		ioData[uid].ioReadBytes += rB
-		ioData[uid].ioWriteBytes += wB
-		ioData[uid].ioReadOps += rO
-		ioData[uid].ioWriteOps += wO
-	}
-
-	// Merge IO
-	for uid, ioD := range ioData {
-		if tempData[uid] == nil {
-			tempData[uid] = &userData{}
-		}
-		tempData[uid].ioReadBytes += ioD.ioReadBytes
-		tempData[uid].ioWriteBytes += ioD.ioWriteBytes
-		tempData[uid].ioReadOps += ioD.ioReadOps
-		tempData[uid].ioWriteOps += ioD.ioWriteOps
+		tempData[uid].ioReadBytes += rB
+		tempData[uid].ioWriteBytes += wB
+		tempData[uid].ioReadOps += rO
+		tempData[uid].ioWriteOps += wO
 	}
 
 	for uid, data := range tempData {
