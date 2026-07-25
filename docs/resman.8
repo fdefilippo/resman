@@ -64,6 +64,19 @@ Specifies the configuration file path. Default:
 .TP
 \fB\-\-version\fR
 Displays program version and exits.
+.SH PLATFORM REQUIREMENTS
+.B resman
+requires Linux kernel 4.18 or later with cgroups v2 enabled.
+.PP
+The published RPM is built with CGO on Enterprise Linux 8 and targets the EL8
+userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
+Enterprise Linux releases. The RPM is not statically linked because NSS, LDAP,
+NIS, and SSSD username resolution require CGO and the system C library.
+.PP
+PSI event\-driven operation additionally requires kernel PSI support. On
+Enterprise Linux systems where PSI is disabled at boot, enable it with
+.BR psi=1
+as described in the PSI section of this manual.
 .SH ARCHITECTURE AND CPU ALLOCATION
 The system uses a cgroups v2 hierarchy to manage fair CPU resource distribution:
 .IP 1. 3

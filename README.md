@@ -21,7 +21,8 @@ ResMan monitors system resources and automatically applies limits to users when 
 
 ## Requirements
 
-- Linux with cgroups v2 support
+- Linux kernel 4.18 or later with cgroups v2 support
+- Enterprise Linux 8 or later for the published RPM package
 - Go 1.25.7+
 - CGO enabled (for LDAP/NIS username resolution)
 - Debian package tools (`dpkg-dev`) when building `.deb` packages
@@ -48,6 +49,12 @@ CGO must be enabled for LDAP/NIS support:
 ```bash
 CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 ```
+
+The release RPM is a CGO build produced on Enterprise Linux 8. EL8 is the
+minimum supported RPM userspace baseline (glibc 2.28); building on that baseline
+keeps the package compatible with EL8 and later compatible Enterprise Linux
+releases. The RPM is not a static binary, because static builds cannot preserve
+the required NSS/LDAP/SSSD user resolution behavior.
 
 The `.deb` is a native CGO build. `dpkg-shlibdeps` records the actual minimum
 runtime library versions, so release artifacts should be built on the oldest

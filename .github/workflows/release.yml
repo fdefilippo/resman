@@ -103,11 +103,11 @@ jobs:
           if-no-files-found: error
 
   rpm:
-    name: Build RPM on Enterprise Linux 9
+    name: Build RPM on Enterprise Linux 8
     needs: quality
     runs-on: ubuntu-24.04
     container:
-      image: quay.io/rockylinux/rockylinux:9
+      image: quay.io/rockylinux/rockylinux:8
       env:
         PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     steps:
@@ -153,6 +153,17 @@ jobs:
           rpm --query --package --info build/release/resman-*.rpm
           rpm --query --package --list build/release/resman-*.rpm
 
+          glibc_versions=$(
+            rpm --query --package --requires build/release/resman-*.rpm |
+              sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p'
+          )
+          test -n "$glibc_versions"
+          max_glibc=$(printf '%s\n' "$glibc_versions" | sort --version-sort | tail -n 1)
+          if [[ "$(printf '%s\n' 2.28 "$max_glibc" | sort --version-sort | tail -n 1)" != "2.28" ]]; then
+            echo "RPM requires GLIBC_$max_glibc, newer than the EL8 baseline GLIBC_2.28" >&2
+            exit 1
+          fi
+
       - name: Upload RPM package
         uses: actions/upload-artifact@v4
         with:
@@ -194,6 +205,30 @@ jobs:
           fi
 
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            while IFS= read -r existing; do
+              case "$existing" in
+                resman-*.rpm|resman_*.deb)
+                  keep=false
+                  for asset in "${assets[@]}"; do
+                    if [[ "$(basename "$asset")" == "$existing" ]]; then
+                      keep=true
+                      break
+                    fi
+                  done
+                  if [[ "$keep" == false ]]; then
+                    gh release delete-asset "$GITHUB_REF_NAME" "$existing" \
+                      --yes \
+                      --repo "$GITHUB_REPOSITORY"
+                  fi
+                  ;;
+              esac
+            done < <(
+              gh release view "$GITHUB_REF_NAME" \
+                --json assets \
+                --jq '.assets[].name' \
+                --repo "$GITHUB_REPOSITORY"
+            )
+
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
               --clobber \
               --repo "$GITHUB_REPOSITORY"
