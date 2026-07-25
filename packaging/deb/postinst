@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+# Automatically added by dh_installsystemd with --no-enable
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] ||
+    [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    deb-systemd-helper unmask 'resman.service' >/dev/null || true
+    deb-systemd-helper update-state 'resman.service' >/dev/null || true
+fi
+# End automatically added section
+
+# Automatically added by dh_installsystemd with --no-start
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] ||
+    [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+
+        # Keep fresh installations stopped; restart only an active upgrade.
+        if [ "$1" = "configure" ] && [ -n "${2:-}" ]; then
+            deb-systemd-invoke try-restart 'resman.service' >/dev/null || true
+        fi
+    fi
+fi
+# End automatically added section
+
+exit 0

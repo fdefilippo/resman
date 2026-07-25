@@ -1213,41 +1213,52 @@ require (
 
 **Standard Build:**
 ```bash
-cd /path/to/resman-go
+cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.8.1'" -o resman-go .
+go build -v -ldflags="-s -w -X 'main.version=1.25-1'" -o resman .
 ```
 
 **Build RPM:**
 ```bash
 make rpm
-# Creates: ~/rpmbuild/RPMS/*/resman-go-*.rpm
+# Creates: ~/rpmbuild/RPMS/*/resman-*.rpm
 ```
 
 **Build Debian:**
 ```bash
 make deb
-# Creates: build/deb/resman-go_*.deb
+# Creates: build/deb/resman_<version>-<release>_<architecture>.deb
 ```
+
+The Debian build is native because CGO is required for NSS, LDAP, NIS and SSSD
+username resolution. Run it on the target architecture (`amd64` or `arm64`) with
+`dpkg-dev`, a C compiler and Go 1.25.7 or newer installed.
+`dpkg-shlibdeps` derives the minimum runtime library versions from the resulting
+binary. Build release artifacts on the oldest supported distribution baseline
+when the same package must run across multiple Debian and Ubuntu releases.
 
 ### 15.3 Installation
 
 **RPM:**
 ```bash
-sudo rpm -ivh resman-go-*.rpm
+sudo rpm -ivh resman-*.rpm
 sudo systemctl enable resman
 ```
 
 **Debian:**
 ```bash
-sudo dpkg -i resman-go_*.deb
-sudo systemctl enable resman
+sudo apt install ./resman_*.deb
+sudo systemctl enable --now resman
 ```
+
+The package preserves `/etc/resman.conf` as a conffile and does not enable or
+start the service during a fresh installation. An upgrade restarts the service
+only when it is already active.
 
 **Manual:**
 ```bash
-sudo cp resman-go /usr/bin/
+sudo cp resman /usr/bin/
 sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable resman

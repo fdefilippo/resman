@@ -1,0 +1,8 @@
+resman (1.25-1) stable; urgency=medium
+
+  * Complete architecture review remediation.
+  * Refresh Go dependencies.
+  * Consolidate cgroup controller setup into the early systemd service.
+  * Add native Debian and Ubuntu package generation.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 25 Jul 2026 16:45:00 +0200

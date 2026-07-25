@@ -44,11 +44,15 @@ export CGO_LDFLAGS = -lresolv
 ARCHES = amd64 arm64
 OSES = linux
 
-# Debian packaging
-DEB_ARCH_amd64 = amd64
-DEB_ARCH_arm64 = arm64
-DEB_MAINTAINER = Francesco Defilippo <francesco@defilippo.org>
-DEB_DESCRIPTION = Resource Manager - Sistema di gestione delle risorse
+# Debian packaging (native CGO build)
+DEB_ARCH ?= $(shell dpkg --print-architecture 2>/dev/null)
+DEB_PACKAGE_VERSION = $(VERSION)-$(RELEASE)
+DEB_PACKAGE_DIR = $(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(DEB_PACKAGE_VERSION)_$(DEB_ARCH)
+DEB_PACKAGE_FILE = $(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(DEB_PACKAGE_VERSION)_$(DEB_ARCH).deb
+DEB_BINARY = $(DEB_BUILD_DIR)/$(PROJECT_NAME)
+DEB_SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct)
+DEB_GO_FLAGS = -buildmode=pie
+DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,now -X 'main.version=$(VERSION)-$(RELEASE)'"
 
 # ============================================================================
 # TARGET PRINCIPALI
@@ -203,96 +207,49 @@ rpm-install: rpm
 # PACCHETTIZZAZIONE DEBIAN
 # ============================================================================
 
-# Crea directory per build Debian
+# Validate tools and architecture for a native CGO build
+deb-check:
+	@command -v dpkg >/dev/null 2>&1 || { echo "dpkg is required"; exit 1; }
+	@command -v dpkg-deb >/dev/null 2>&1 || { echo "dpkg-deb is required"; exit 1; }
+	@command -v dpkg-shlibdeps >/dev/null 2>&1 || { echo "dpkg-dev is required"; exit 1; }
+	@test -n "$(DEB_ARCH)" || { echo "unable to determine Debian architecture"; exit 1; }
+	@case "$(DEB_ARCH):$$($(GO) env GOARCH)" in \
+		amd64:amd64|arm64:arm64) ;; \
+		*) echo "unsupported native Debian/Go architecture pair: $(DEB_ARCH):$$($(GO) env GOARCH)"; exit 1 ;; \
+	esac
+
+# Create the Debian build directory
 deb-dirs:
-	@echo "Creating Debian build directories..."
-	mkdir -p $(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(VERSION)-$(RELEASE)
+	@echo "Creating Debian build directory..."
+	mkdir -p $(DEB_BUILD_DIR)
 
-# Build binario per Debian (per architettura specifica)
-deb-binary: deps
-	@echo "Building binary for Debian package..."
-	@mkdir -p $(DEB_BUILD_DIR)
-	$(GO) build $(GO_FLAGS) $(GO_LDFLAGS) $(GO_TAGS) -o $(DEB_BUILD_DIR)/$(PROJECT_NAME)-amd64
-	$(GO) build $(GO_FLAGS) $(GO_LDFLAGS) $(GO_TAGS) -o $(DEB_BUILD_DIR)/$(PROJECT_NAME)-arm64
+# Build the native Debian/Ubuntu binary with CGO/NSS support
+deb-binary: deps deb-check deb-dirs
+	@echo "Building native Debian binary for $(DEB_ARCH)..."
+	CGO_CFLAGS="$(CGO_CFLAGS) -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE" \
+		$(GO) build $(GO_FLAGS) $(DEB_GO_FLAGS) $(DEB_GO_LDFLAGS) $(GO_TAGS) -o $(DEB_BINARY)
 
-# Prepara struttura pacchetto Debian
-deb-prepare: deb-dirs deb-binary
+# Prepare the Debian package structure and metadata
+deb-prepare: deb-binary
 	@echo "Preparing Debian package structure..."
-	DEB_ARCH=$(DEB_ARCH_amd64); \
-	echo "Preparing package for $$DEB_ARCH..."; \
-	PKG_DIR=$(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(VERSION)-$(RELEASE)_$$DEB_ARCH; \
-	mkdir -p $$PKG_DIR/DEBIAN; \
-	mkdir -p $$PKG_DIR$(BIN_DIR); \
-	mkdir -p $$PKG_DIR$(CONF_DIR); \
-	mkdir -p $$PKG_DIR$(SYSTEMD_DIR); \
-	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME); \
-	mkdir -p $$PKG_DIR$(CONF_DIR)/resman/tls; \
-	install -m 755 $(DEB_BUILD_DIR)/$(PROJECT_NAME)-amd64 $$PKG_DIR$(BIN_DIR)/$(PROJECT_NAME); \
-	install -m 644 config/resman.conf.example $$PKG_DIR$(CONF_DIR)/resman.conf; \
-	install -m 644 packaging/systemd/resman.service $$PKG_DIR$(SYSTEMD_DIR)/; \
-	install -m 644 README.md $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 LICENSE $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 docs/alerting-rules.yml $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	install -m 644 docs/dashboard-grafana-operations.json $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/; \
-	mkdir -p $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts; \
-	install -m 755 docs/generate-tls-certs.sh $$PKG_DIR/usr/share/doc/$(PROJECT_NAME)/scripts/; \
-	echo "Package: $(PROJECT_NAME)" > $$PKG_DIR/DEBIAN/control; \
-	echo "Version: $(VERSION)-$(RELEASE)" >> $$PKG_DIR/DEBIAN/control; \
-	echo "Section: utils" >> $$PKG_DIR/DEBIAN/control; \
-	echo "Priority: optional" >> $$PKG_DIR/DEBIAN/control; \
-	echo "Architecture: $$DEB_ARCH" >> $$PKG_DIR/DEBIAN/control; \
-	echo "Maintainer: $(DEB_MAINTAINER)" >> $$PKG_DIR/DEBIAN/control; \
-	echo "Description: $(DEB_DESCRIPTION)" >> $$PKG_DIR/DEBIAN/control; \
-	echo "  Resource Manager è un sistema avanzato per la gestione delle risorse ." >> $$PKG_DIR/DEBIAN/control; \
-	echo "  Fornisce isolamento, limitazione e monitoraggio delle risorse per container." >> $$PKG_DIR/DEBIAN/control; \
-	echo "  Supporta TLS/HTTPS, Basic Auth e JWT authentication." >> $$PKG_DIR/DEBIAN/control; \
-	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/postinst; \
-	echo 'set -e' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo 'if [ "$$1" = "configure" ]; then' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    systemctl daemon-reload 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "Resource Manager $(VERSION) installed successfully"' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "TLS certificates: /etc/resman/tls/"' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo '    echo "Generate certs: /usr/share/doc/resman/scripts/generate-tls-certs.sh"' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo 'fi' >> $$PKG_DIR/DEBIAN/postinst; \
-	echo 'exit 0' >> $$PKG_DIR/DEBIAN/postinst; \
-	chmod 755 $$PKG_DIR/DEBIAN/postinst; \
-	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/prerm; \
-	echo 'set -e' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo 'if [ "$$1" = "remove" ] || [ "$$1" = "upgrade" ]; then' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo '    systemctl stop resman 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo '    systemctl disable resman 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo 'fi' >> $$PKG_DIR/DEBIAN/prerm; \
-	echo 'exit 0' >> $$PKG_DIR/DEBIAN/prerm; \
-	chmod 755 $$PKG_DIR/DEBIAN/prerm; \
-	echo '#!/bin/bash' > $$PKG_DIR/DEBIAN/postrm; \
-	echo 'set -e' >> $$PKG_DIR/DEBIAN/postrm; \
-	echo 'if [ "$$1" = "remove" ] || [ "$$1" = "upgrade" ]; then' >> $$PKG_DIR/DEBIAN/postrm; \
-	echo '    systemctl daemon-reload 2>/dev/null || true' >> $$PKG_DIR/DEBIAN/postrm; \
-	echo 'fi' >> $$PKG_DIR/DEBIAN/postrm; \
-	echo 'exit 0' >> $$PKG_DIR/DEBIAN/postrm; \
-	chmod 755 $$PKG_DIR/DEBIAN/postrm
-	@echo "Debian package structure prepared in $(DEB_BUILD_DIR)/"
+	SOURCE_DATE_EPOCH=$(DEB_SOURCE_DATE_EPOCH) packaging/deb/prepare-package.sh \
+		$(DEB_BINARY) \
+		$(VERSION) \
+		$(RELEASE) \
+		$(DEB_ARCH) \
+		$(DEB_PACKAGE_DIR)
 
-# Build pacchetto Debian
+# Build the Debian package
 deb: deb-prepare
-	@echo "Building Debian packages..."
-	DEB_ARCH=$(DEB_ARCH_amd64); \
-	PKG_DIR=$(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(VERSION)-$(RELEASE)_$$DEB_ARCH; \
-	echo "Building .deb for $$DEB_ARCH..."; \
-	dpkg-deb --build $$PKG_DIR $(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(VERSION)-$(RELEASE)_$$DEB_ARCH.deb
-	@echo "Debian packages created in $(DEB_BUILD_DIR)/"
+	@echo "Building $(DEB_PACKAGE_FILE)..."
+	SOURCE_DATE_EPOCH=$(DEB_SOURCE_DATE_EPOCH) \
+		dpkg-deb --build --root-owner-group $(DEB_PACKAGE_DIR) $(DEB_PACKAGE_FILE)
+	@echo "Debian package created: $(DEB_PACKAGE_FILE)"
 
-# Installa pacchetto Debian (locale)
+# Install the Debian package and resolve dependencies
 deb-install: deb
-	@echo "Installing Debian package..."
-	@for arch in $(ARCHES); do \
-                DEB_ARCH=$$(eval echo \$$DEB_ARCH_$$arch); \
-                if [ "$$(dpkg --print-architecture)" = "$$DEB_ARCH" ]; then \
-                        echo "Installing package for $$DEB_ARCH..."; \
-                        sudo dpkg -i $(DEB_BUILD_DIR)/$(PROJECT_NAME)_$(VERSION)-$(RELEASE)_$$DEB_ARCH.deb; \
-                        break; \
-                fi \
-	done
+	@echo "Installing $(DEB_PACKAGE_FILE)..."
+	sudo apt-get install -y $(abspath $(DEB_PACKAGE_FILE))
 
 # ============================================================================
 # DOCKER

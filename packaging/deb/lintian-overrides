@@ -1,0 +1,5 @@
+# This is an upstream package, not an upload to the Debian archive.
+resman: initial-upload-closes-no-bugs
+
+# TLS private keys and credentials are stored below this directory.
+resman: non-standard-dir-perm 0700 != 0755 [etc/resman/tls/]

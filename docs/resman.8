@@ -1,4 +1,4 @@
-.TH RESMAN 8 "May 2026" "v1.24.1" "System Administration"
+.TH RESMAN 8 "July 2026" "v1.25" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -7,13 +7,16 @@ resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 [\fB\-\-version\fR]
 .SH DESCRIPTION
 .B resman
-is a daemon that monitors system CPU and RAM usage and dynamically applies limits to users
-when the load exceeds configured thresholds. It uses Linux cgroups v2 to manage
-CPU resource distribution efficiently and proportionally.
+is a daemon that monitors system and per\-user CPU, RAM, and block I/O usage.
+When configured resource thresholds are exceeded, it dynamically applies CPU
+quota and weight, memory high and maximum limits, and I/O bandwidth and IOPS
+limits to selected users. It uses the Linux cgroups v2 CPU, memory, and I/O
+controllers to enforce those limits.
 .PP
 The daemon operates in control cycles configured via
 .B POLLING_INTERVAL
-and makes decisions based on configurable thresholds to enable or disable CPU limits.
+and makes decisions based on configurable CPU, RAM, and I/O thresholds to
+activate, maintain, or remove resource limits.
 .SH FEATURES
 .IP \(bu 2
 Dynamic CPU limiting based on configurable thresholds
@@ -184,7 +187,7 @@ Remediation applies only to users that currently have active resman limits and p
 .B IO_USER_INCLUDE_LIST
 and
 .B IO_USER_EXCLUDE_LIST
-. The configured I/O limits are multiplied for the boost duration and restored exactly when the boost expires. Expiration is enforced regardless of the current PSI value; with
+The configured I/O limits are multiplied for the boost duration and restored exactly when the boost expires. Expiration is enforced regardless of the current PSI value; with
 .B IO_REVERT_ON_NORMAL=true
 the original limits are restored earlier when pressure returns to normal.
 .IP \(bu 2
@@ -439,7 +442,7 @@ The daemon incorporates several performance optimizations to minimize overhead o
 These optimizations ensure that monitoring overhead remains low even on systems with thousands of processes.
 .SH CONFIGURATION FILE
 The configuration file supports key=value format. Full\-line comments start with
-'#'. An inline '#' starts a comment only outside quotes and when preceded by
+\(aq#\(aq. An inline \(aq#\(aq starts a comment only outside quotes and when preceded by
 whitespace.
 Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
 .PP

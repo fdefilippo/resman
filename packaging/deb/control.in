@@ -1,0 +1,15 @@
+Package: resman
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: Francesco Defilippo <francesco@defilippo.org>
+Depends: @DEPENDS@
+Homepage: https://github.com/fdefilippo/resman
+Description: per-user CPU, memory and IO manager for cgroups v2
+ ResMan monitors Linux resource usage and dynamically applies cgroups v2
+ limits to selected users when configured thresholds are exceeded.
+ .
+ It provides Prometheus metrics, PSI event-driven control, configuration
+ hot reload, SQLite history, limit notifications and an optional MCP server.

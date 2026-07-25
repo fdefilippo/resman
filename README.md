@@ -22,8 +22,9 @@ ResMan monitors system resources and automatically applies limits to users when 
 ## Requirements
 
 - Linux with cgroups v2 support
-- Go 1.21+
+- Go 1.25.7+
 - CGO enabled (for LDAP/NIS username resolution)
+- Debian package tools (`dpkg-dev`) when building `.deb` packages
 
 ## Build
 
@@ -34,8 +35,9 @@ make build
 # RPM package
 make rpm
 
-# Debian package
+# Native Debian/Ubuntu package (amd64 or arm64)
 make deb
+# Creates build/deb/resman_1.25-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -47,13 +49,17 @@ CGO must be enabled for LDAP/NIS support:
 CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 ```
 
+The `.deb` is a native CGO build. `dpkg-shlibdeps` records the actual minimum
+runtime library versions, so release artifacts should be built on the oldest
+Debian or Ubuntu baseline that the release intends to support.
+
 ## Install
 
 ```bash
 # From packages
 sudo rpm -ivh resman-*.rpm
 # or
-sudo dpkg -i resman-*.deb
+sudo apt install ./resman_*.deb
 
 # From source
 sudo cp resman /usr/bin/
@@ -61,6 +67,10 @@ sudo cp config/resman.conf.example /etc/resman.conf
 sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
 sudo systemctl enable --now resman
 ```
+
+Package installation does not enable or start the service automatically. Review
+`/etc/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
+an already active service is restarted after the new package is configured.
 
 ## Usage
 
