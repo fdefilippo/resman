@@ -530,6 +530,10 @@ The following processes are automatically excluded from CPU limits:
 
 **Location:** `/etc/resman.conf`
 
+The active file is selected with `--config` (default `/etc/resman.conf`).
+`CONFIG_FILE` inside the file or environment does not redirect the running
+daemon.
+
 **Format:**
 ```ini
 # Full line comment
@@ -537,6 +541,9 @@ KEY=value  # Inline comment
 KEY="quoted value"
 KEY='single quoted'
 ```
+
+An inline `#` starts a comment only outside quotes and when preceded by
+whitespace; quoted hashes and URL fragments are preserved.
 
 ### 4.2 All Configuration Options
 
@@ -546,7 +553,6 @@ KEY='single quoted'
 # ========================
 CGROUP_ROOT="/sys/fs/cgroup"
 SCRIPT_CGROUP_BASE="cpu_manager"
-CONFIG_FILE="/etc/resman.conf"
 LOG_FILE="/var/log/resman.log"
 CREATED_CGROUPS_FILE="/var/run/resman/cgroups.txt"
 METRICS_CACHE_FILE="/var/run/resman/metrics.cache"

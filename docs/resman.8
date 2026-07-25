@@ -386,13 +386,13 @@ Configuration parameters:
 - CPU quota for batch users (microseconds, e.g., 200000 = 2 cores)
 .IP \(bu
 .B BATCH_NIGHT_RAM_QUOTA
-- RAM quota for batch users (bytes or suffix)
+- RAM quota for batch users (bytes or case\-insensitive K/M/G/T suffix)
 .IP \(bu
 .B INTERACTIVE_CPU_QUOTA
 - CPU quota for interactive users
 .IP \(bu
 .B INTERACTIVE_RAM_QUOTA
-- RAM quota for interactive users
+- RAM quota for interactive users (bytes or case\-insensitive K/M/G/T suffix)
 .PP
 Pattern detection runs hourly and updates user classifications automatically.
 .SH CONTROL CYCLE
@@ -433,8 +433,17 @@ The daemon incorporates several performance optimizations to minimize overhead o
 .PP
 These optimizations ensure that monitoring overhead remains low even on systems with thousands of processes.
 .SH CONFIGURATION FILE
-The configuration file supports key=value format. Comments start with '#'.
+The configuration file supports key=value format. Full\-line comments start with
+'#'. An inline '#' starts a comment only outside quotes and when preceded by
+whitespace.
 Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
+.PP
+The active configuration path is selected by the
+.B \-\-config
+command\-line option (default:
+.IR /etc/resman.conf ).
+It cannot be redirected by a key inside the configuration file or by an
+environment variable.
 .PP
 Example
 .I /etc/resman.conf
@@ -448,7 +457,6 @@ format:
 # PATHS
 CGROUP_ROOT="/sys/fs/cgroup"
 CGROUP_BASE="resman"
-CONFIG_FILE="/etc/resman.conf"
 LOG_FILE="/var/log/resman.log"
 CREATED_CGROUPS_FILE="/var/run/resman-cgroups.txt"
 METRICS_CACHE_FILE="/var/run/resman-metrics.cache"

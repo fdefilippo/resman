@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,8 @@ func TestValidateConfig(t *testing.T) {
 				MCPShutdownTimeout:     10,
 				CPUQuotaNormal:         "max 100000",
 				CPUQuotaLimited:        "50000 100000",
+				BatchNightRAMQuota:     "4G",
+				InteractiveRAMQuota:    "1G",
 				LogLevel:               "INFO",
 				LogMaxSize:             10 * 1024 * 1024,
 				SystemUIDMin:           1000,
@@ -314,6 +317,49 @@ func TestIsValidCPUQuota(t *testing.T) {
 	}
 }
 
+func TestParseRAMQuota(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	tests := []struct {
+		name    string
+		quota   string
+		want    uint64
+		wantErr bool
+	}{
+		{name: "plain bytes", quota: "4096", want: 4096},
+		{name: "uppercase suffix", quota: "2G", want: 2 * 1024 * 1024 * 1024},
+		{name: "lowercase suffix", quota: "512m", want: 512 * 1024 * 1024},
+		{
+			name:  "largest safe kilobyte value",
+			quota: strconv.FormatUint(maxUint64/1024, 10) + "K",
+			want:  (maxUint64 / 1024) * 1024,
+		},
+		{
+			name:    "multiplication overflow",
+			quota:   strconv.FormatUint(maxUint64, 10) + "K",
+			wantErr: true,
+		},
+		{name: "invalid suffix", quota: "1P", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseRAMQuota(tt.quota)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseRAMQuota(%q) = %d, want error", tt.quota, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseRAMQuota(%q) error: %v", tt.quota, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseRAMQuota(%q) = %d, want %d", tt.quota, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadFromFile(t *testing.T) {
 	// Crea un file di configurazione temporaneo
 	tmpDir := t.TempDir()
@@ -356,6 +402,57 @@ PROMETHEUS_PORT=9102
 	}
 	if cfg.PrometheusMetricsBindPort != 9102 {
 		t.Errorf("PrometheusMetricsBindPort: got %d, expected 9102", cfg.PrometheusMetricsBindPort)
+	}
+}
+
+func TestLoadFromFilePreservesHashesOutsideInlineComments(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "hashes.conf")
+	configContent := `USER_EXCLUDE_LIST="^svc#backup$" # exact service account
+LIMIT_HOOK_URL="https://hooks.example.test/resman#limited"
+SERVER_ROLE=api#blue
+LOG_FILE=/var/log/resman.log # destination
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to create config file: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	if err := loadFromFile(configPath, cfg); err != nil {
+		t.Fatalf("loadFromFile() error: %v", err)
+	}
+	if got := cfg.UserExcludeList; len(got) != 1 || got[0] != "^svc#backup$" {
+		t.Fatalf("UserExcludeList = %v, want quoted hash pattern", got)
+	}
+	if cfg.LimitHookURL != "https://hooks.example.test/resman#limited" {
+		t.Fatalf("LimitHookURL = %q, want URL fragment preserved", cfg.LimitHookURL)
+	}
+	if cfg.ServerRole != "api#blue" {
+		t.Fatalf("ServerRole = %q, want unquoted hash preserved", cfg.ServerRole)
+	}
+	if cfg.LogFile != "/var/log/resman.log" {
+		t.Fatalf("LogFile = %q, want inline comment removed", cfg.LogFile)
+	}
+}
+
+func TestStripInlineComment(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "whitespace before comment", value: "value # comment", want: "value "},
+		{name: "tab before comment", value: "value\t# comment", want: "value\t"},
+		{name: "hash in double quotes", value: `"value # literal" # comment`, want: `"value # literal" `},
+		{name: "hash in single quotes", value: `'value # literal' # comment`, want: `'value # literal' `},
+		{name: "unquoted adjacent hash", value: "value#literal", want: "value#literal"},
+		{name: "URL fragment", value: "https://example.test/hook#event", want: "https://example.test/hook#event"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripInlineComment(tt.value); got != tt.want {
+				t.Fatalf("stripInlineComment(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -778,6 +875,35 @@ func TestValidateConfigRejectsInvalidCPUQuotaAndTimeouts(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRejectsInvalidPatternRAMQuotas(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "batch night quota",
+			mutate: func(cfg *Config) {
+				cfg.BatchNightRAMQuota = "invalid"
+			},
+		},
+		{
+			name: "interactive quota overflow",
+			mutate: func(cfg *Config) {
+				cfg.InteractiveRAMQuota = strconv.FormatUint(^uint64(0), 10) + "T"
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.mutate(cfg)
+			if err := validateConfig(cfg); err == nil {
+				t.Fatal("validateConfig() accepted invalid pattern RAM quota")
+			}
+		})
+	}
+}
+
 func TestLoadAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test.conf")
@@ -803,6 +929,42 @@ LOG_LEVEL=INFO
 
 	if cfg.CPUThreshold != 80 {
 		t.Errorf("CPUThreshold: got %d, expected 80", cfg.CPUThreshold)
+	}
+}
+
+func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "active.conf")
+	wrongPath := filepath.Join(t.TempDir(), "wrong.conf")
+	configContent := "CONFIG_FILE=" + wrongPath + "\nUSER_INCLUDE_LIST=.*\n"
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to create config file: %v", err)
+	}
+	t.Setenv("CONFIG_FILE", wrongPath)
+
+	cfg, err := LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate() error: %v", err)
+	}
+	resolvedPath, err := filepath.Abs(configPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error: %v", err)
+	}
+	if cfg.ConfigFile != resolvedPath {
+		t.Fatalf("ConfigFile = %q, want active path %q", cfg.ConfigFile, resolvedPath)
+	}
+
+	if _, err := cfg.SetUserExcludeList([]string{"^service$"}, cfg.ConfigFile, false); err != nil {
+		t.Fatalf("SetUserExcludeList() error: %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read active config: %v", err)
+	}
+	if !strings.Contains(string(content), "USER_EXCLUDE_LIST=^service$") {
+		t.Fatalf("active config was not updated: %q", content)
+	}
+	if _, err := os.Stat(wrongPath); !os.IsNotExist(err) {
+		t.Fatalf("non-authoritative config path was touched: %v", err)
 	}
 }
 

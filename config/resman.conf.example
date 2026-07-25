@@ -280,12 +280,12 @@ IO_REVERT_ON_NORMAL=true
 #
 # BATCH_NIGHT_CPU_QUOTA: CPU quota for batch night pattern (microseconds)
 # Default: 200000 (2 cores, used with 100000 period)
-# BATCH_NIGHT_RAM_QUOTA: RAM quota for batch night pattern
+# BATCH_NIGHT_RAM_QUOTA: RAM quota for batch night pattern (K/M/G/T, case-insensitive)
 # Default: 4G
 #
 # INTERACTIVE_CPU_QUOTA: CPU quota for interactive day pattern (microseconds)
 # Default: 50000 (0.5 core)
-# INTERACTIVE_RAM_QUOTA: RAM quota for interactive day pattern
+# INTERACTIVE_RAM_QUOTA: RAM quota for interactive day pattern (K/M/G/T, case-insensitive)
 # Default: 1G
 #
 # Examples:

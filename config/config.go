@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Timeframe rappresenta un intervallo di tempo per i blackout
@@ -47,7 +49,7 @@ type Config struct {
 	// Paths
 	CgroupRoot         string `config:"CGROUP_ROOT"`
 	CgroupBase         string `config:"CGROUP_BASE"`
-	ConfigFile         string `config:"CONFIG_FILE"` // Ricorsivo, usato all'avvio
+	ConfigFile         string `config:"-"` // Runtime path selected by the --config flag
 	LogFile            string `config:"LOG_FILE"`
 	CreatedCgroupsFile string `config:"CREATED_CGROUPS_FILE"`
 	MetricsCacheFile   string `config:"METRICS_CACHE_FILE"`
@@ -375,16 +377,24 @@ func DefaultConfig() *Config {
 // sovrascrivendo i default, e poi la valida.
 func LoadAndValidate(configPath string) (*Config, error) {
 	cfg := DefaultConfig()
+	resolvedConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config file path %s: %w", configPath, err)
+	}
+	resolvedConfigPath = filepath.Clean(resolvedConfigPath)
 
 	// 1. Carica dal file di configurazione (se esiste)
-	if err := loadFromFile(configPath, cfg); err != nil {
-		return nil, fmt.Errorf("loading config file %s: %w", configPath, err)
+	if err := loadFromFile(resolvedConfigPath, cfg); err != nil {
+		return nil, fmt.Errorf("loading config file %s: %w", resolvedConfigPath, err)
 	}
 
 	// 2. Sovrascrivi con le variabili d'ambiente
 	if err := loadFromEnvironment(cfg); err != nil {
 		return nil, fmt.Errorf("loading environment overrides: %w", err)
 	}
+
+	// The command-line path is authoritative for reloads and MCP writes.
+	cfg.ConfigFile = resolvedConfigPath
 
 	// 3. Valida
 	if err := validateConfig(cfg); err != nil {
@@ -425,14 +435,10 @@ func loadFromFile(path string, cfg *Config) error {
 		}
 
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		// Rimuovi commenti inline (tutto dopo #)
-		if commentIdx := strings.Index(value, "#"); commentIdx != -1 {
-			value = value[:commentIdx]
-		}
+		value := stripInlineComment(parts[1])
 
 		// Rimuovi eventuali virgolette e spazi extra
+		value = strings.TrimSpace(value)
 		value = strings.TrimSpace(strings.Trim(value, `"'`))
 
 		if err := setConfigField(cfg, key, value); err != nil {
@@ -440,6 +446,41 @@ func loadFromFile(path string, cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func stripInlineComment(value string) string {
+	var quote rune
+	escaped := false
+	previousWhitespace := false
+
+	for index, current := range value {
+		if escaped {
+			escaped = false
+			previousWhitespace = unicode.IsSpace(current)
+			continue
+		}
+		if quote != 0 {
+			switch current {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			previousWhitespace = unicode.IsSpace(current)
+			continue
+		}
+		if current == '"' || current == '\'' {
+			quote = current
+			previousWhitespace = false
+			continue
+		}
+		if current == '#' && previousWhitespace {
+			return value[:index]
+		}
+		previousWhitespace = unicode.IsSpace(current)
+	}
+
+	return value
 }
 
 // loadFromEnvironment sovrascrive i valori con le variabili d'ambiente.
@@ -503,7 +544,6 @@ type configFieldHandler func(*Config, string) error
 var configFieldHandlers = map[string]configFieldHandler{
 	"CGROUP_ROOT":          setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
 	"CGROUP_BASE":          setCgroupBase,
-	"CONFIG_FILE":          setString(func(cfg *Config, value string) { cfg.ConfigFile = value }),
 	"LOG_FILE":             setString(func(cfg *Config, value string) { cfg.LogFile = value }),
 	"CREATED_CGROUPS_FILE": setString(func(cfg *Config, value string) { cfg.CreatedCgroupsFile = value }),
 	"METRICS_CACHE_FILE":   setString(func(cfg *Config, value string) { cfg.MetricsCacheFile = value }),
@@ -925,6 +965,12 @@ func validateConfig(cfg *Config) error {
 			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%, 0 to disable)")
 		}
 	}
+	if !isValidByteQuota(cfg.BatchNightRAMQuota) {
+		errors = append(errors, "BATCH_NIGHT_RAM_QUOTA must be a valid byte value (e.g., '8589934592', '8G')")
+	}
+	if !isValidByteQuota(cfg.InteractiveRAMQuota) {
+		errors = append(errors, "INTERACTIVE_RAM_QUOTA must be a valid byte value (e.g., '536870912', '512M')")
+	}
 
 	// Validate IO limits
 	if !isValidIODeviceFilter(cfg.IODeviceFilter) {
@@ -1017,7 +1063,7 @@ func isValidCPUQuota(quota string) bool {
 }
 
 // isValidByteQuota verifica il formato di una quota in byte.
-// Formati validi: bytes (es. "1073741824"), K/M/G/T (es. "512M", "1G")
+// Formati validi: bytes (es. "1073741824"), K/M/G/T case-insensitive (es. "512M", "1g")
 func isValidByteQuota(quota string) bool {
 	if quota == "" {
 		return false
@@ -1026,36 +1072,36 @@ func isValidByteQuota(quota string) bool {
 	return err == nil
 }
 
-// ParseRAMQuota converte una stringa di quota RAM in bytes.
-// Formati supportati: bytes, K, M, G, T (es. "1073741824", "512M", "1G")
+// ParseRAMQuota converts a byte quota with an optional case-insensitive K/M/G/T suffix.
 func ParseRAMQuota(quota string) (uint64, error) {
 	if quota == "" {
 		return 0, fmt.Errorf("empty RAM quota")
 	}
 
-	// Check for suffix
-	suffixes := map[string]uint64{
+	multipliers := map[string]uint64{
 		"K": 1024,
 		"M": 1024 * 1024,
 		"G": 1024 * 1024 * 1024,
 		"T": 1024 * 1024 * 1024 * 1024,
 	}
-
-	for suffix, multiplier := range suffixes {
-		if strings.HasSuffix(quota, suffix) {
-			numStr := strings.TrimSuffix(quota, suffix)
-			val, err := strconv.ParseUint(numStr, 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("invalid number: %s", numStr)
-			}
-			return val * multiplier, nil
+	suffix := strings.ToUpper(quota[len(quota)-1:])
+	multiplier, hasSuffix := multipliers[suffix]
+	if hasSuffix {
+		number := quota[:len(quota)-1]
+		value, err := strconv.ParseUint(number, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid RAM quota number %q: %w", number, err)
 		}
+		if value > ^uint64(0)/multiplier {
+			return 0, fmt.Errorf("RAM quota %q overflows uint64 bytes", quota)
+		}
+		return value * multiplier, nil
 	}
 
 	// Plain bytes
 	val, err := strconv.ParseUint(quota, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid RAM quota format: %s", quota)
+		return 0, fmt.Errorf("invalid RAM quota format %q: %w", quota, err)
 	}
 	return val, nil
 }
