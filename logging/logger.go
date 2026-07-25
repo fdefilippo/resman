@@ -175,39 +175,16 @@ func createStderrLogger(level LogLevel) *Logger {
 	}
 }
 
-// shouldLog determina se un messaggio del dato livello dovrebbe essere loggato.
-func (l *Logger) shouldLog(level LogLevel) bool {
-	return level >= l.level
-}
-
 // logInternal è il metodo interno di logging che gestisce la formattazione e la scrittura.
 func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{}) {
-	if !l.shouldLog(level) {
-		return
-	}
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Formatta il messaggio con timestamp e livello
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], msg)
-
-	// Aggiungi i campi contestuali di WithField
-	for k, v := range l.fields {
-		logMsg += fmt.Sprintf(" %v=%v", k, v)
+	if level < l.level {
+		return
 	}
 
-	// Aggiungi coppie chiave-valore se presenti
-	if len(keyvals) > 0 {
-		for i := 0; i < len(keyvals); i += 2 {
-			if i+1 < len(keyvals) {
-				logMsg += fmt.Sprintf(" %v=%v", keyvals[i], keyvals[i+1])
-			} else {
-				logMsg += fmt.Sprintf(" %v=", keyvals[i])
-			}
-		}
-	}
+	logMsg := l.formatMessageLocked(level, msg, keyvals...)
 
 	// Se usiamo syslog, gestiamo i livelli appropriati
 	if l.UseSyslog && l.syslogWriter != nil {
@@ -233,6 +210,29 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 			l.checkAndRotate()
 		}
 	}
+}
+
+func (l *Logger) formatMessageLocked(level LogLevel, msg string, keyvals ...interface{}) string {
+	// Formatta il messaggio con timestamp e livello
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], msg)
+
+	// Aggiungi i campi contestuali di WithField
+	for k, v := range l.fields {
+		logMsg += fmt.Sprintf(" %v=%v", k, v)
+	}
+
+	// Aggiungi coppie chiave-valore se presenti
+	if len(keyvals) > 0 {
+		for i := 0; i < len(keyvals); i += 2 {
+			if i+1 < len(keyvals) {
+				logMsg += fmt.Sprintf(" %v=%v", keyvals[i], keyvals[i+1])
+			} else {
+				logMsg += fmt.Sprintf(" %v=", keyvals[i])
+			}
+		}
+	}
+	return logMsg
 }
 
 // checkAndRotate verifica se è necessaria la rotazione e la esegue.
@@ -289,8 +289,9 @@ func (l *Logger) rotateLog() {
 	l.file = file
 	l.logger.SetOutput(file)
 
-	// Logga l'evento di rotazione
-	l.logInternal(INFO, "Log rotated due to size limit")
+	if INFO >= l.level {
+		l.logger.Println(l.formatMessageLocked(INFO, "Log rotated due to size limit"))
+	}
 }
 
 // Metodi pubblici per i diversi livelli di log

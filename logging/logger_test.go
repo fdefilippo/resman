@@ -17,9 +17,14 @@
 package logging
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestInitLogger(t *testing.T) {
@@ -127,21 +132,69 @@ func TestLoggerClose(t *testing.T) {
 func TestLogRotation(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "test.log")
-
-	// Create logger with very small max size to trigger rotation
-	InitLogger("INFO", logFile, 100, false)
-	logger := GetLogger()
-
-	// Write enough to trigger rotation
-	for i := 0; i < 10; i++ {
-		logger.Info("This is a test message that should trigger rotation")
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatalf("failed to create log file: %v", err)
+	}
+	logger := &Logger{
+		level:        INFO,
+		file:         file,
+		filePath:     logFile,
+		maxSize:      1,
+		logger:       log.New(file, "", 0),
+		lastRotation: time.Now().Add(-2 * time.Second),
+		fields:       make(map[string]interface{}),
 	}
 
-	// Check if backup file was created
-	backupFile := logFile + ".1"
-	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-		t.Log("Note: Log rotation may not have triggered yet (timing dependent)")
+	logged := make(chan struct{})
+	go func() {
+		logger.Info("message that forces deterministic rotation")
+		close(logged)
+	}()
+
+	select {
+	case <-logged:
+	case <-time.After(time.Second):
+		t.Fatal("logging deadlocked during successful rotation")
 	}
+	defer func() { _ = logger.Close() }()
+
+	if _, err := os.Stat(logFile + ".1"); err != nil {
+		t.Fatalf("rotated log file not found: %v", err)
+	}
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("failed to read active log after rotation: %v", err)
+	}
+	if !strings.Contains(string(data), "Log rotated due to size limit") {
+		t.Fatalf("active log does not contain rotation record: %q", data)
+	}
+}
+
+func TestSetLevelConcurrentWithLogging(t *testing.T) {
+	logger := &Logger{
+		level:  INFO,
+		logger: log.New(io.Discard, "", 0),
+		fields: make(map[string]interface{}),
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			logger.SetLevel("DEBUG")
+			logger.SetLevel("ERROR")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			logger.Debug("concurrent debug message")
+			logger.Error("concurrent error message")
+		}
+	}()
+	wg.Wait()
 }
 
 func TestGetLoggerWithoutInit(t *testing.T) {
