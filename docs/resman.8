@@ -609,9 +609,12 @@ or re-added. Re-adding a user does not reset the activation time of the shared
 cgroup. Dynamic RAM and IO enable or user-filter changes are reconciled against
 already active user cgroups.
 .PP
-Database retention runs at startup and every 24 hours. New databases use
-incremental auto-vacuum so periodic cleanup does not run a blocking full
-database vacuum. Each collection cycle is committed as one transaction.
+Database retention runs at startup and every 24 hours. File-backed databases
+use incremental auto-vacuum so periodic cleanup does not run a blocking full
+database vacuum. Existing databases using auto-vacuum mode NONE are migrated
+once at startup; this first upgraded startup runs a full VACUUM and may require
+additional time and temporary free disk space proportional to the database
+size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
 .nf

@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/logging"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -161,8 +162,8 @@ func (m *DatabaseManager) InitSchema() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, err := m.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
-		return fmt.Errorf("failed to enable incremental auto-vacuum: %w", err)
+	if err := m.ensureIncrementalAutoVacuum(); err != nil {
+		return err
 	}
 
 	schema := `
@@ -202,6 +203,60 @@ func (m *DatabaseManager) InitSchema() error {
 		return err
 	}
 	return m.normalizeStoredTimestamps()
+}
+
+func (m *DatabaseManager) ensureIncrementalAutoVacuum() error {
+	if m.dbPath == ":memory:" {
+		return nil
+	}
+
+	mode, err := m.autoVacuumMode()
+	if err != nil {
+		return err
+	}
+	if mode == 2 {
+		return nil
+	}
+
+	if _, err := m.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		return fmt.Errorf("failed to request incremental auto-vacuum: %w", err)
+	}
+	mode, err = m.autoVacuumMode()
+	if err != nil {
+		return err
+	}
+	if mode == 2 {
+		return nil
+	}
+
+	logger := logging.GetLogger()
+	logger.Info("Migrating metrics database to incremental auto-vacuum",
+		"path", m.dbPath,
+		"previous_mode", mode,
+	)
+	if _, err := m.db.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("failed to migrate database %s to incremental auto-vacuum: %w", m.dbPath, err)
+	}
+
+	mode, err = m.autoVacuumMode()
+	if err != nil {
+		return err
+	}
+	if mode != 2 {
+		return fmt.Errorf("database %s auto-vacuum mode is %d after migration, want 2", m.dbPath, mode)
+	}
+	logger.Info("Metrics database auto-vacuum migration completed",
+		"path", m.dbPath,
+	)
+	return nil
+}
+
+func (m *DatabaseManager) autoVacuumMode() (int, error) {
+	var mode int
+	if err := m.db.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		return 0, fmt.Errorf("failed to read database auto-vacuum mode: %w", err)
+	}
+	return mode, nil
 }
 
 func (m *DatabaseManager) normalizeStoredTimestamps() error {

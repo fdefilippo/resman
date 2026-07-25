@@ -18,6 +18,7 @@
 package database
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,58 @@ func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
 	}
 	if mode != 2 {
 		t.Fatalf("auto_vacuum mode = %d, want 2 (INCREMENTAL)", mode)
+	}
+}
+
+func TestNewDatabaseManagerMigratesLegacyAutoVacuumDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	if _, err := legacyDB.Exec(`
+		CREATE TABLE legacy_data (
+			id INTEGER PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		INSERT INTO legacy_data(value) VALUES ('preserved');
+	`); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to create legacy database: %v", err)
+	}
+	var legacyMode int
+	if err := legacyDB.QueryRow("PRAGMA auto_vacuum").Scan(&legacyMode); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to read legacy auto_vacuum mode: %v", err)
+	}
+	if legacyMode != 0 {
+		_ = legacyDB.Close()
+		t.Fatalf("legacy auto_vacuum mode = %d, want 0 (NONE)", legacyMode)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("failed to close legacy database: %v", err)
+	}
+
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() migration error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	var mode int
+	if err := manager.db.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		t.Fatalf("failed to read migrated auto_vacuum mode: %v", err)
+	}
+	if mode != 2 {
+		t.Fatalf("migrated auto_vacuum mode = %d, want 2 (INCREMENTAL)", mode)
+	}
+
+	var value string
+	if err := manager.db.QueryRow("SELECT value FROM legacy_data WHERE id = 1").Scan(&value); err != nil {
+		t.Fatalf("failed to read data after auto-vacuum migration: %v", err)
+	}
+	if value != "preserved" {
+		t.Fatalf("legacy value after migration = %q, want preserved", value)
 	}
 }
 

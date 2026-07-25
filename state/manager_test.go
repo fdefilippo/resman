@@ -799,6 +799,76 @@ func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 	}
 }
 
+func TestReleaseIdleUsersReaddsUsersWithoutPerUserSettleDelay(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+
+	const userCount = 10
+	userCPUUsage := make(map[int]float64, userCount)
+	userMetrics := make(map[int]*metrics.UserMetrics, userCount)
+	eligibleUsers := make([]int, 0, userCount)
+	for uid := 1000; uid < 1000+userCount; uid++ {
+		userCPUUsage[uid] = 10
+		userMetrics[uid] = &metrics.UserMetrics{UID: uid, CPUUsageEMA: 10}
+		eligibleUsers = append(eligibleUsers, uid)
+	}
+
+	startedAt := time.Now()
+	if err := manager.releaseIdleUsers(&SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  userCPUUsage,
+		UserMetrics:   userMetrics,
+		EligibleUsers: eligibleUsers,
+	}); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 2*time.Second {
+		t.Fatalf("re-adding %d users took %s; per-user settle delay is still serialized", userCount, elapsed)
+	}
+	if len(cgroupManager.movedSharedUsers) != userCount {
+		t.Fatalf("moved users = %d, want %d", len(cgroupManager.movedSharedUsers), userCount)
+	}
+}
+
+func TestActivateLimitsMovesUsersWithoutPerUserSettleDelay(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+
+	const userCount = 10
+	userCPUUsage := make(map[int]float64, userCount)
+	eligibleUsers := make([]int, 0, userCount)
+	for uid := 1000; uid < 1000+userCount; uid++ {
+		userCPUUsage[uid] = 10
+		eligibleUsers = append(eligibleUsers, uid)
+	}
+
+	startedAt := time.Now()
+	if err := manager.activateLimits(&SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  userCPUUsage,
+		EligibleUsers: eligibleUsers,
+	}); err != nil {
+		t.Fatalf("activateLimits() error: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 2*time.Second {
+		t.Fatalf("activating %d users took %s; per-user settle delay is still serialized", userCount, elapsed)
+	}
+	if len(cgroupManager.movedSharedUsers) != userCount {
+		t.Fatalf("moved users = %d, want %d", len(cgroupManager.movedSharedUsers), userCount)
+	}
+}
+
 func TestReleaseIdleUsersReconcilesResourceLimitsAfterReload(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.RAMEnabled = true

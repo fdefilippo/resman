@@ -119,7 +119,6 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				continue
 			}
 
-			time.Sleep(300 * time.Millisecond)
 			if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
 				m.logger.Warn("Failed to move processes for re-added user; user will not be marked limited",
 					"uid", uid, "error", err)
@@ -345,7 +344,6 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			// Se un utente non usa CPU, gli altri possono usare più della loro parte
 			weight := 100 // Peso uguale per tutti
 
-			time.Sleep(300 * time.Millisecond)
 			if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
 				m.logger.Warn("Failed to move processes to shared cgroup; user will not be marked limited",
 					"uid", uid,

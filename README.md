@@ -128,7 +128,10 @@ process. RSS is used only when PSS is unavailable.
 
 SQLite history is written one collection cycle per transaction. File-backed
 databases use WAL mode and a 5-second busy timeout, and all stored/query
-timestamps are normalized to UTC.
+timestamps are normalized to UTC. Existing databases that still use SQLite's
+default `auto_vacuum=NONE` are migrated once to incremental auto-vacuum at
+startup. That first upgraded startup runs a full `VACUUM`, which can take longer
+and requires temporary free disk space proportional to the database size.
 
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with its PID start time. On release, the

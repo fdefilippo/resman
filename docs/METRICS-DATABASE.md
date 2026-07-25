@@ -452,8 +452,12 @@ Il cleanup dei dati vecchi viene eseguito:
 - All'avvio del servizio
 - Ogni 24 ore durante l'esecuzione
 
-I nuovi database usano `auto_vacuum=INCREMENTAL`; dopo ogni cleanup resman
+I database su file usano `auto_vacuum=INCREMENTAL`; dopo ogni cleanup resman
 recupera un numero limitato di pagine senza eseguire un `VACUUM` completo.
+Un database esistente ancora in modalita `auto_vacuum=NONE` viene migrato una
+sola volta all'avvio. Il primo avvio dopo l'aggiornamento esegue quindi un
+`VACUUM` completo, puo richiedere piu tempo e necessita di spazio libero
+temporaneo proporzionale alla dimensione del database.
 
 ---
 
