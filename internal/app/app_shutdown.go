@@ -55,26 +55,10 @@ func (a *App) shutdown() {
 		}
 	}
 
-	if err := a.stateManager.Cleanup(); err != nil {
-		a.logger.Error("Error during state manager cleanup", "error", err)
-		fmt.Fprintf(os.Stderr, "\nWarning: Error during cleanup: %v\n", err)
-	}
-
 	if a.mcpServer != nil {
 		if err := a.mcpServer.Stop(); err != nil {
 			a.logger.Error("Error stopping MCP server", "error", err)
 		}
-	}
-
-	if a.dbManager != nil {
-		if err := a.dbManager.Close(); err != nil {
-			a.logger.Error("Error closing database manager", "error", err)
-		}
-	}
-
-	if a.metricsCollector != nil {
-		a.metricsCollector.Stop()
-		a.logger.Info("Metrics collector stopped")
 	}
 
 	a.psiMu.RLock()
@@ -83,6 +67,22 @@ func (a *App) shutdown() {
 	if psiWatcherActive {
 		a.stopPSIWatcher()
 		a.logger.Info("PSI watcher stopped")
+	}
+
+	if a.metricsCollector != nil {
+		a.metricsCollector.Stop()
+		a.logger.Info("Metrics collector stopped")
+	}
+
+	if err := a.stateManager.Cleanup(); err != nil {
+		a.logger.Error("Error during state manager cleanup", "error", err)
+		fmt.Fprintf(os.Stderr, "\nWarning: Error during cleanup: %v\n", err)
+	}
+
+	if a.dbManager != nil {
+		if err := a.dbManager.Close(); err != nil {
+			a.logger.Error("Error closing database manager", "error", err)
+		}
 	}
 
 	a.logger.Info("Shutdown completed")

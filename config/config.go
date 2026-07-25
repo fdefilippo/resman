@@ -64,9 +64,8 @@ type Config struct {
 	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
 	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
-	// Timeout (seconds/milliseconds)
+	// Timeouts (seconds)
 	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
-	CgroupRetryDelayMs     int `config:"CGROUP_RETRY_DELAY_MS"`    // Delay between cgroup retry attempts (milliseconds)
 	MCPShutdownTimeout     int `config:"MCP_SHUTDOWN_TIMEOUT"`     // Timeout for MCP server shutdown (seconds)
 
 	// Thresholds (percentages)
@@ -246,9 +245,8 @@ func DefaultConfig() *Config {
 		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
-		CgroupOperationTimeout: 5,   // 5 seconds for cgroup operations
-		CgroupRetryDelayMs:     100, // 100ms between retries
-		MCPShutdownTimeout:     10,  // 10 seconds for MCP shutdown
+		CgroupOperationTimeout: 5,  // 5 seconds for cgroup operations
+		MCPShutdownTimeout:     10, // 10 seconds for MCP shutdown
 
 		CPUThreshold:         75,
 		CPUReleaseThreshold:  40,
@@ -621,7 +619,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
 	"USERNAME_CACHE_TTL":            setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
 	"CGROUP_OPERATION_TIMEOUT":      setInt(func(cfg *Config, value int) { cfg.CgroupOperationTimeout = value }),
-	"CGROUP_RETRY_DELAY_MS":         setInt(func(cfg *Config, value int) { cfg.CgroupRetryDelayMs = value }),
 	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
 	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
 	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
@@ -1702,13 +1699,6 @@ func (c *Config) GetCgroupOperationTimeout() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.CgroupOperationTimeout
-}
-
-// GetCgroupRetryDelayMs returns the cgroup retry delay in milliseconds.
-func (c *Config) GetCgroupRetryDelayMs() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.CgroupRetryDelayMs
 }
 
 // GetMCPShutdownTimeout returns the MCP shutdown timeout in seconds.

@@ -198,6 +198,33 @@ func TestMoveProcessBatchRollsBackBeforeAnyMigration(t *testing.T) {
 	}
 }
 
+func TestMoveProcessBatchSkipsProcessesAlreadyInDestination(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destinationCgroup := "/resman/limited/user_1000"
+	destination := createFakeCgroup(t, root, destinationCgroup)
+	writeFakeProcess(t, manager, 131, 1, 131, 5300, 1000, destinationCgroup)
+
+	writeCalls := 0
+	manager.writePID = func(string, int) error {
+		writeCalls++
+		return nil
+	}
+
+	moved, moveErrors, err := manager.moveProcessBatch([]int{131}, 1000, destination)
+	if err != nil {
+		t.Fatalf("moveProcessBatch() error: %v", err)
+	}
+	if len(moved) != 0 || len(moveErrors) != 0 {
+		t.Fatalf("moved=%v moveErrors=%v, want no migration", moved, moveErrors)
+	}
+	if writeCalls != 0 {
+		t.Fatalf("cgroup.procs writes = %d, want 0", writeCalls)
+	}
+	if len(manager.snapshotProcessOrigins()) != 0 {
+		t.Fatal("process already in destination should not be recorded as its own origin")
+	}
+}
+
 func TestBuildRestorePlanInheritsParentOrigin(t *testing.T) {
 	manager, root := newOriginTestManager(t)
 	originalPath := "/user.slice/user-1000.slice/session-8.scope"

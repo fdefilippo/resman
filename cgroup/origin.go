@@ -393,15 +393,15 @@ func (m *Manager) resolveInheritedOrigin(identity processIdentity, uid int, orig
 	return sessionPath, true
 }
 
-func (m *Manager) captureProcessOrigin(pid, uid int, destination string) error {
+func (m *Manager) captureProcessOrigin(pid, uid int, destination string) (bool, error) {
 	pids, err := m.captureProcessOrigins([]int{pid}, uid, destination)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(pids) == 0 {
-		return syscall.ESRCH
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 func (m *Manager) newProcessOrigin(identity processIdentity, uid int, cgroupPath string) processOrigin {
@@ -474,12 +474,11 @@ func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string)
 			rollback()
 			return nil, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
 		}
-		movable = append(movable, pid)
-
 		currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
 		if filepath.Clean(currentFilesystemPath) == filepath.Clean(destination) {
 			continue
 		}
+		movable = append(movable, pid)
 		if existing, ok := m.processOrigins[pid]; ok && existing.StartTime == identity.StartTime {
 			continue
 		}

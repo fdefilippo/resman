@@ -33,9 +33,6 @@ PROCESS_MIN_AGE_SECONDS=60
 # Increase on slow systems or with many processes
 # CGROUP_OPERATION_TIMEOUT=5
 #
-# CGROUP_RETRY_DELAY_MS: Delay between cgroup operation retries
-# Default: 100 milliseconds
-# CGROUP_RETRY_DELAY_MS=100
 #
 # MCP_SHUTDOWN_TIMEOUT: Timeout for MCP server shutdown
 # Default: 10 seconds

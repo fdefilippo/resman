@@ -71,7 +71,6 @@ func (m *Manager) ApplyCPUQuota(uid int, quota string) error {
 					"error", chmodErr,
 				)
 			}
-			time.Sleep(100 * time.Millisecond)
 			err = os.WriteFile(cpuMaxFile, []byte(quota), 0644)
 		}
 		if err != nil {
@@ -80,7 +79,6 @@ func (m *Manager) ApplyCPUQuota(uid int, quota string) error {
 	}
 
 	// Verifica che il limite sia stato applicato
-	time.Sleep(50 * time.Millisecond)
 	if data, err := os.ReadFile(cpuMaxFile); err == nil {
 		appliedQuota := strings.TrimSpace(string(data))
 		if appliedQuota != quota {
@@ -124,8 +122,6 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		delay := time.Duration(cfg.GetCgroupRetryDelayMs()) * time.Millisecond
-		time.Sleep(delay) // Breve delay per stabilizzazione
 		done <- m.MoveAllUserProcesses(uid)
 	}()
 

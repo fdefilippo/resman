@@ -579,3 +579,22 @@ func TestInMemoryDatabase(t *testing.T) {
 		t.Errorf("Failed to write to in-memory database: %v", err)
 	}
 }
+
+func TestConnectionMaxLifetime(t *testing.T) {
+	tests := []struct {
+		name   string
+		dbPath string
+		want   time.Duration
+	}{
+		{name: "in-memory database", dbPath: ":memory:", want: 0},
+		{name: "file database", dbPath: filepath.Join(t.TempDir(), "metrics.db"), want: time.Hour},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := connectionMaxLifetime(tt.dbPath); got != tt.want {
+				t.Fatalf("connectionMaxLifetime(%q) = %s, want %s", tt.dbPath, got, tt.want)
+			}
+		})
+	}
+}

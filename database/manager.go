@@ -123,7 +123,9 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 	// Configura il database per performance migliori
 	db.SetMaxOpenConns(1) // SQLite non supporta connessioni multiple in scrittura
 	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
+	if lifetime := connectionMaxLifetime(dbPath); lifetime > 0 {
+		db.SetConnMaxLifetime(lifetime)
+	}
 
 	manager := &DatabaseManager{
 		db:     db,
@@ -137,6 +139,13 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 	}
 
 	return manager, nil
+}
+
+func connectionMaxLifetime(dbPath string) time.Duration {
+	if dbPath == ":memory:" {
+		return 0
+	}
+	return time.Hour
 }
 
 func sqliteDSN(dbPath string) string {

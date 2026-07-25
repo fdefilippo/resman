@@ -18,12 +18,14 @@ const (
 
 // Manager gestisce tutte le operazioni sui cgroups v2.
 type Manager struct {
-	cfg      *config.Config
-	logger   *logging.Logger
-	cfgMu    sync.RWMutex
-	mu       sync.RWMutex
-	wg       sync.WaitGroup
-	originMu sync.Mutex
+	cfg           *config.Config
+	logger        *logging.Logger
+	cfgMu         sync.RWMutex
+	mu            sync.RWMutex
+	wg            sync.WaitGroup
+	originMu      sync.Mutex
+	processScanMu sync.Mutex
+	usernameMu    sync.RWMutex
 
 	// Tracciamento dei cgroups creati
 	createdCgroups     map[int]string // UID -> cgroup path
@@ -34,6 +36,10 @@ type Manager struct {
 	sysBlockRoot       string
 	writePID           func(string, int) error
 	persistOrigins     func() error
+	processScan        processScanCache
+	usernameCache      map[string]cachedUsername
+	resolveUsername    func(string) (string, error)
+	scanProcessIDs     func() (map[int][]int, error)
 
 	// Cache per le verifiche
 	controllersAvailable bool
@@ -53,6 +59,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		processOriginsFile: processOriginsPath(cfg.CreatedCgroupsFile),
 		procRoot:           "/proc",
 		sysBlockRoot:       "/sys/block",
+		usernameCache:      make(map[string]cachedUsername),
 	}
 
 	// Verifica che i cgroups v2 siano disponibili e configurati correttamente

@@ -524,6 +524,28 @@ func (m *cleanupLockCheckingCgroupManager) CleanupAll() error {
 	return m.checkLock()
 }
 
+type cleanupBestEffortCgroupManager struct {
+	deactivateCgroupManager
+	cleanupCalled bool
+	cleanupErr    error
+}
+
+func (m *cleanupBestEffortCgroupManager) CleanupAll() error {
+	m.cleanupCalled = true
+	return m.cleanupErr
+}
+
+type cleanupPrometheusExporter struct {
+	mockPrometheusExporter
+	stopCalled bool
+	stopErr    error
+}
+
+func (m *cleanupPrometheusExporter) Stop() error {
+	m.stopCalled = true
+	return m.stopErr
+}
+
 func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
 	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
 	return nil
@@ -1226,6 +1248,44 @@ func TestCleanupSerializesCgroupOperations(t *testing.T) {
 
 	if err := manager.Cleanup(); err != nil {
 		t.Fatalf("Cleanup() error: %v", err)
+	}
+}
+
+func TestCleanupAttemptsEveryPhaseAfterErrors(t *testing.T) {
+	releaseErr := errors.New("restore failed")
+	cgroupCleanupErr := errors.New("cgroup cleanup failed")
+	exporterStopErr := errors.New("exporter stop failed")
+	cgroupManager := &cleanupBestEffortCgroupManager{
+		deactivateCgroupManager: deactivateCgroupManager{
+			releaseErrors: map[int]error{1000: releaseErr},
+		},
+		cleanupErr: cgroupCleanupErr,
+	}
+	exporter := &cleanupPrometheusExporter{stopErr: exporterStopErr}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroupManager, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("failed to create shared cgroup test path: %v", err)
+	}
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	manager.activeUsers[1000] = true
+
+	cleanupErr := manager.Cleanup()
+	if !errors.Is(cleanupErr, releaseErr) ||
+		!errors.Is(cleanupErr, cgroupCleanupErr) ||
+		!errors.Is(cleanupErr, exporterStopErr) {
+		t.Fatalf("Cleanup() error = %v, want all phase errors", cleanupErr)
+	}
+	if !cgroupManager.cleanupCalled {
+		t.Fatal("CleanupAll() was skipped after deactivation failed")
+	}
+	if !exporter.stopCalled {
+		t.Fatal("Prometheus exporter Stop() was skipped after earlier failures")
 	}
 }
 

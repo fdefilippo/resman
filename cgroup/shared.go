@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/shirou/gopsutil/v3/process"
 )
 
 func (m *Manager) CreateSharedCgroup() (string, error) {
@@ -128,11 +125,12 @@ func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int)
 	}
 
 	cgroupProcsFile := filepath.Join(userPath, "cgroup.procs")
-	if err := m.captureProcessOrigin(pid, uid, userPath); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
+	movable, err := m.captureProcessOrigin(pid, uid, userPath)
+	if err != nil {
 		return fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
+	}
+	if !movable {
+		return nil
 	}
 
 	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
@@ -162,24 +160,16 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		return fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
 	}
 
-	// Try gopsutil first
-	procs, err := process.Processes()
+	pidsForUID, err := m.processIDsForUID(uid)
 	if err != nil {
-		m.logger.Debug("gopsutil failed, falling back to /proc scan", "error", err)
-		return m.moveAllUserProcessesToSharedCgroupFallback(uid, sharedPath)
+		return err
 	}
 
 	var movedCount int
 	var errors []string
 	var pids []int
 
-	for _, p := range procs {
-		uids, err := p.Uids()
-		if err != nil || len(uids) == 0 || int(uids[0]) != uid {
-			continue
-		}
-
-		pid := int(p.Pid)
+	for _, pid := range pidsForUID {
 		processName := m.getProcessName(pid)
 
 		if m.getConfig().IsProcessExcluded(processName) {
@@ -198,7 +188,7 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		}
 	}
 
-	m.logSharedProcessMoveSummary(uid, movedCount, errors)
+	m.logSharedProcessMoveSummary(uid, movedCount, len(pids), errors)
 
 	if len(errors) > 0 {
 		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
@@ -259,70 +249,23 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 	return nil
 }
 
-// moveAllUserProcessesToSharedCgroupFallback scans /proc manually if gopsutil fails.
-func (m *Manager) moveAllUserProcessesToSharedCgroupFallback(uid int, sharedPath string) error {
-	procDir := "/proc"
-	entries, err := os.ReadDir(procDir)
-	if err != nil {
-		return fmt.Errorf("failed to read /proc: %w", err)
-	}
-
-	var movedCount int
-	var errors []string
-	var pids []int
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		statusFile := filepath.Join(procDir, entry.Name(), "status")
-		if procUID, err := m.getUIDFromStatusFile(statusFile); err == nil && procUID == uid {
-			processName := m.getProcessName(pid)
-
-			if m.getConfig().IsProcessExcluded(processName) {
-				continue
-			}
-			pids = append(pids, pid)
-		}
-	}
-
-	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
-	moved, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
-	if err != nil {
-		errors = append(errors, err.Error())
-	} else {
-		movedCount = len(moved)
-		for pid, moveErr := range moveErrors {
-			errors = append(errors, fmt.Sprintf("PID %d: %v", pid, moveErr))
-		}
-	}
-
-	m.logSharedProcessMoveSummary(uid, movedCount, errors)
-
-	if len(errors) > 0 {
-		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
-	}
-	return nil
-}
-
 // logSharedProcessMoveSummary logs a summary of shared cgroup process movement.
-func (m *Manager) logSharedProcessMoveSummary(uid, movedCount int, errors []string) {
+func (m *Manager) logSharedProcessMoveSummary(uid, movedCount, candidateCount int, errors []string) {
 	if movedCount > 0 {
 		m.logger.Debug("Processes moved to shared cgroup",
 			"uid", uid,
 			"moved_count", movedCount,
 			"error_count", len(errors),
 		)
-	} else {
+	} else if candidateCount == 0 {
 		m.logger.Warn("No processes moved for user to shared cgroup",
 			"uid", uid,
 			"possible_reasons", "no processes found or permission issues",
+		)
+	} else {
+		m.logger.Debug("No process migration required for shared cgroup",
+			"uid", uid,
+			"candidate_count", candidateCount,
 		)
 	}
 

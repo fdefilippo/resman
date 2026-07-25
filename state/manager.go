@@ -19,6 +19,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -322,6 +323,7 @@ func (m *Manager) Cleanup() error {
 	defer m.opMu.Unlock()
 
 	m.logger.Info("Cleaning up state manager")
+	var cleanupErrors []error
 
 	// Rimuovi tutti i limiti attivi
 	m.mu.RLock()
@@ -330,7 +332,7 @@ func (m *Manager) Cleanup() error {
 	if limitsActive {
 		if err := m.deactivateLimits(); err != nil {
 			m.logger.Error("Error during cleanup deactivation", "error", err)
-			return err
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("deactivate limits: %w", err))
 		}
 	}
 
@@ -338,7 +340,7 @@ func (m *Manager) Cleanup() error {
 	if m.cgroupManager != nil {
 		if err := m.cgroupManager.CleanupAll(); err != nil {
 			m.logger.Error("Error during cgroup cleanup", "error", err)
-			return err
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup cgroups: %w", err))
 		}
 	}
 
@@ -346,11 +348,12 @@ func (m *Manager) Cleanup() error {
 	if m.prometheusExporter != nil {
 		if err := m.prometheusExporter.Stop(); err != nil {
 			m.logger.Error("Error stopping Prometheus exporter", "error", err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("stop Prometheus exporter: %w", err))
 		}
 	}
 
 	m.logger.Info("State manager cleanup completed")
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 // ForceActivateLimits attiva forzatamente i limiti (per testing/admin).
