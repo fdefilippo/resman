@@ -33,17 +33,22 @@ import (
 )
 
 // Mock implementations for testing
-type mockMetricsCollector struct{}
+type mockMetricsCollector struct {
+	allUserMetrics map[int]*metrics.UserMetrics
+	usernames      map[int]string
+}
 
-func (m *mockMetricsCollector) GetTotalCores() int                              { return 4 }
-func (m *mockMetricsCollector) GetTotalCPUUsage() float64                       { return 50.0 }
-func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64                 { return 10.0 }
-func (m *mockMetricsCollector) GetMemoryUsage() float64                         { return 1024.0 }
-func (m *mockMetricsCollector) GetTotalMemoryMB() float64                       { return 16384.0 }
-func (m *mockMetricsCollector) GetCachedMemoryMB() float64                      { return 4096.0 }
-func (m *mockMetricsCollector) IsSystemUnderLoad() bool                         { return false }
-func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics { return nil }
-func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter                  { return nil }
+func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
+func (m *mockMetricsCollector) GetTotalCPUUsage() float64       { return 50.0 }
+func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64 { return 10.0 }
+func (m *mockMetricsCollector) GetMemoryUsage() float64         { return 1024.0 }
+func (m *mockMetricsCollector) GetTotalMemoryMB() float64       { return 16384.0 }
+func (m *mockMetricsCollector) GetCachedMemoryMB() float64      { return 4096.0 }
+func (m *mockMetricsCollector) IsSystemUnderLoad() bool         { return false }
+func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics {
+	return m.allUserMetrics
+}
+func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
 func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
 }
 
@@ -56,12 +61,18 @@ func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64 { return 20000000
 func (m *mockMetricsCollector) GetLimitedUsers() []int             { return []int{1000, 1001} }
 func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64   { return 30.0 }
 func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64 { return 1500000000 }
-func (m *mockMetricsCollector) GetUsernameFromUID(uid int) string  { return fmt.Sprintf("user%d", uid) }
+func (m *mockMetricsCollector) GetUsernameFromUID(uid int) string {
+	if username, ok := m.usernames[uid]; ok {
+		return username
+	}
+	return fmt.Sprintf("user%d", uid)
+}
 
 type mockCgroupManager struct{}
 
 func (m *mockCgroupManager) CreateUserCgroup(uid int) error                            { return nil }
 func (m *mockCgroupManager) ApplyCPULimit(uid int, quota string) error                 { return nil }
+func (m *mockCgroupManager) ApplyCPUQuota(uid int, quota string) error                 { return nil }
 func (m *mockCgroupManager) ApplyCPUWeight(uid int, weight int) error                  { return nil }
 func (m *mockCgroupManager) RemoveCPULimit(uid int) error                              { return nil }
 func (m *mockCgroupManager) ApplyRAMLimit(uid int, limit string) error                 { return nil }
@@ -374,8 +385,13 @@ func TestForceDeactivateLimits(t *testing.T) {
 type deactivateCgroupManager struct {
 	mockCgroupManager
 	applyCPULimitCalls       []int
+	applyCPUQuotaCalls       []string
 	applyCPUWeightCalls      []int
+	applyRAMLimitCalls       []string
+	applyIOLimitCalls        []int
 	applySharedCPULimitCalls []string
+	createdUserSubgroups     []int
+	movedSharedUsers         []int
 	releasedUsers            []int
 	releaseErrors            map[int]error
 }
@@ -385,13 +401,43 @@ func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
 	return nil
 }
 
+func (m *deactivateCgroupManager) ApplyCPUQuota(uid int, quota string) error {
+	m.applyCPUQuotaCalls = append(m.applyCPUQuotaCalls, fmt.Sprintf("%d:%s", uid, quota))
+	return nil
+}
+
 func (m *deactivateCgroupManager) ApplyCPUWeight(uid int, weight int) error {
 	m.applyCPUWeightCalls = append(m.applyCPUWeightCalls, uid)
 	return nil
 }
 
+func (m *deactivateCgroupManager) ApplyRAMLimitWithHigh(uid int, maxLimit, highLimit string) error {
+	m.applyRAMLimitCalls = append(m.applyRAMLimitCalls, fmt.Sprintf("%d:%s:%s", uid, maxLimit, highLimit))
+	return nil
+}
+
+func (m *deactivateCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit, highLimit string) error {
+	m.applyRAMLimitCalls = append(m.applyRAMLimitCalls, fmt.Sprintf("%d:%s:%s:swap-off", uid, maxLimit, highLimit))
+	return nil
+}
+
+func (m *deactivateCgroupManager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
+	m.applyIOLimitCalls = append(m.applyIOLimitCalls, uid)
+	return nil
+}
+
 func (m *deactivateCgroupManager) ApplySharedCPULimit(path string, quota string) error {
 	m.applySharedCPULimitCalls = append(m.applySharedCPULimitCalls, fmt.Sprintf("%s:%s", path, quota))
+	return nil
+}
+
+func (m *deactivateCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) {
+	m.createdUserSubgroups = append(m.createdUserSubgroups, uid)
+	return filepath.Join(path, fmt.Sprintf("user_%d", uid)), nil
+}
+
+func (m *deactivateCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
+	m.movedSharedUsers = append(m.movedSharedUsers, uid)
 	return nil
 }
 
@@ -420,6 +466,8 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
 	manager.activeUsers[1001] = true
+	manager.psiBoostedAt[1000] = time.Now().Add(-time.Hour)
+	manager.psiBoostedAt[1001] = time.Now().Add(-time.Hour)
 
 	if err := manager.deactivateLimits(); err != nil {
 		t.Fatalf("deactivateLimits() error: %v", err)
@@ -445,6 +493,14 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	if len(manager.activeUsers) != 0 {
 		t.Fatalf("activeUsers = %v, want empty", manager.activeUsers)
 	}
+	if len(manager.psiBoostedAt) != 0 {
+		t.Fatalf("psiBoostedAt = %v, want empty", manager.psiBoostedAt)
+	}
+
+	manager.revertPSIBoosts()
+	if len(cgroupManager.applyCPUWeightCalls) != 0 {
+		t.Fatalf("expired PSI boosts attempted after deactivation: %v", cgroupManager.applyCPUWeightCalls)
+	}
 }
 
 func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
@@ -467,6 +523,8 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
 	manager.activeUsers[1001] = true
+	manager.psiBoostedAt[1000] = time.Now()
+	manager.psiBoostedAt[1001] = time.Now()
 
 	if err := manager.deactivateLimits(); err == nil {
 		t.Fatal("deactivateLimits() should report the failed user release")
@@ -483,6 +541,12 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	if manager.sharedCgroupPath != sharedPath {
 		t.Fatalf("sharedCgroupPath = %q, want %q", manager.sharedCgroupPath, sharedPath)
 	}
+	if _, exists := manager.psiBoostedAt[1000]; exists {
+		t.Fatal("PSI boost state for released user 1000 should be removed")
+	}
+	if _, exists := manager.psiBoostedAt[1001]; !exists {
+		t.Fatal("PSI boost state for failed user 1001 should be retained")
+	}
 
 	cgroupManager.applySharedCPULimitCalls = nil
 	metrics := &SystemMetrics{
@@ -498,6 +562,156 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{wantQuota}) {
 		t.Fatalf("shared quota reconciliation calls = %v, want [%s]", cgroupManager.applySharedCPULimitCalls, wantQuota)
 	}
+}
+
+func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.RAMQuotaPerUser = "1G"
+	cfg.IOEnabled = true
+
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sharedPath := filepath.Join(t.TempDir(), "limited")
+	manager.limitsActive = true
+	manager.sharedCgroupPath = sharedPath
+	metrics := &SystemMetrics{
+		TotalCores:    4,
+		UserCPUUsage:  map[int]float64{1000: 10},
+		EligibleUsers: []int{1000},
+	}
+
+	if err := manager.releaseIdleUsers(metrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	if !reflect.DeepEqual(cgroupManager.createdUserSubgroups, []int{1000}) {
+		t.Fatalf("created subgroups = %v, want [1000]", cgroupManager.createdUserSubgroups)
+	}
+	if !reflect.DeepEqual(cgroupManager.movedSharedUsers, []int{1000}) {
+		t.Fatalf("moved users = %v, want [1000]", cgroupManager.movedSharedUsers)
+	}
+	if !reflect.DeepEqual(cgroupManager.applyRAMLimitCalls, []string{"1000:1G:858993459"}) {
+		t.Fatalf("RAM limit calls = %v", cgroupManager.applyRAMLimitCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.applyIOLimitCalls, []int{1000}) {
+		t.Fatalf("IO limit calls = %v, want [1000]", cgroupManager.applyIOLimitCalls)
+	}
+	if !manager.activeUsers[1000] {
+		t.Fatal("re-added user 1000 should be active")
+	}
+}
+
+func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternMinSamples = 1
+	cfg.PatternConfidenceThreshold = 0.7
+	cfg.UserIncludeList = []string{"^allowed$"}
+
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "allowed", CPUUsage: 0, IsLimited: true},
+			1001: {UID: 1001, Username: "excluded", CPUUsage: 0, IsLimited: false},
+		},
+		usernames: map[int]string{1000: "allowed", 1001: "excluded"},
+	}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.patternDetector.userStats[1000] = batchNightStats()
+	manager.patternDetector.userStats[1001] = batchNightStats()
+
+	run := &controlCycleContext{cfg: cfg}
+	if err := manager.stageWorkloadPatternDetection(run); err != nil {
+		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
+	}
+
+	if _, exists := manager.policyEngine.GetPolicy(1000); !exists {
+		t.Fatal("eligible user 1000 did not receive a pattern policy")
+	}
+	if _, exists := manager.policyEngine.GetPolicy(1001); exists {
+		t.Fatal("excluded user 1001 received a pattern policy")
+	}
+	if _, exists := manager.patternDetector.userStats[1001]; exists {
+		t.Fatal("excluded user 1001 remained in pattern statistics")
+	}
+	if len(cgroupManager.applyCPULimitCalls) != 0 {
+		t.Fatalf("pattern policy migrated processes through ApplyCPULimit: %v", cgroupManager.applyCPULimitCalls)
+	}
+	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:200000 100000"}) {
+		t.Fatalf("CPU quota calls = %v, want [1000:200000 100000]", cgroupManager.applyCPUQuotaCalls)
+	}
+}
+
+func TestPatternPolicyIsRevertedWhenClassificationDecays(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternMinSamples = 1
+
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "user1000", IsLimited: true},
+		},
+	}
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, collector, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
+	manager.patternDetector.userStats[1000] = &UserHourlyStats{TotalSamples: 30}
+	manager.patternDetector.userStats[1000].HourlyCount[12] = 30
+
+	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
+	}
+
+	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
+		t.Fatal("unknown classification did not remove the existing policy")
+	}
+	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
+		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
+	}
+}
+
+func TestPatternPolicyIsRevertedWhenAutodetectIsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = false
+
+	cgroupManager := &deactivateCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
+
+	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
+	}
+
+	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
+		t.Fatal("disabled autodetect did not clear the existing policy")
+	}
+	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
+		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
+	}
+}
+
+func batchNightStats() *UserHourlyStats {
+	stats := &UserHourlyStats{TotalSamples: 30}
+	stats.HourlyCPU[23] = 100
+	stats.HourlyCount[23] = 30
+	return stats
 }
 
 func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {

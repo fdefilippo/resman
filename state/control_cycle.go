@@ -223,59 +223,72 @@ func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 
 func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error {
 	// 8. Workload Pattern Detection
-	if run.cfg.GetAutodetectPatterns() && m.patternDetector != nil && m.policyEngine != nil {
-		// Aggiorna statistiche per tutti gli utenti
-		allMetrics := m.metricsCollector.GetAllUserMetrics()
-		for uid, um := range allMetrics {
-			m.patternDetector.Update(uid, um.CPUUsage)
+	if m.patternDetector == nil || m.policyEngine == nil {
+		return nil
+	}
+
+	if !run.cfg.GetAutodetectPatterns() {
+		for _, uid := range m.policyEngine.Clear() {
+			m.reconcilePatternPolicy(uid, run.cfg)
+		}
+		return nil
+	}
+
+	eligible := make(map[int]bool)
+	allMetrics := m.metricsCollector.GetAllUserMetrics()
+	for uid, um := range allMetrics {
+		if um == nil {
+			continue
+		}
+		username := um.Username
+		if username == "" {
+			username = m.metricsCollector.GetUsernameFromUID(uid)
+		}
+		if !um.IsLimited || !run.cfg.IsUserWhitelisted(username) {
+			continue
+		}
+		eligible[uid] = true
+		m.patternDetector.Update(uid, um.CPUUsage)
+	}
+
+	m.patternDetector.RetainUsers(eligible)
+	for _, uid := range m.policyEngine.RetainUsers(eligible) {
+		m.reconcilePatternPolicy(uid, run.cfg)
+	}
+
+	// Analizza pattern ogni ora
+	if time.Since(m.lastPatternAnalysis) <= time.Hour {
+		return nil
+	}
+
+	m.lastPatternAnalysis = time.Now()
+	patterns := m.patternDetector.Analyze(run.cfg)
+	for uid, result := range patterns {
+		if m.prometheusExporter != nil {
+			username := m.metricsCollector.GetUsernameFromUID(uid)
+			m.prometheusExporter.UpdateUserWorkloadPattern(uid, username, string(result.Pattern), result.Confidence)
 		}
 
-		// Analizza pattern ogni ora
-		if time.Since(m.lastPatternAnalysis) > time.Hour {
-			m.lastPatternAnalysis = time.Now()
-			patterns := m.patternDetector.Analyze(run.cfg)
-			for uid, result := range patterns {
-				if m.prometheusExporter != nil {
-					username := m.metricsCollector.GetUsernameFromUID(uid)
-					m.prometheusExporter.UpdateUserWorkloadPattern(uid, username, string(result.Pattern), result.Confidence)
-				}
-				if result.Pattern != PatternUnknown {
-					if m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg) {
-						// Policy cambiata, applica limiti
-						policy, _ := m.policyEngine.GetPolicy(uid)
-						if policy != nil {
-							// Applica CPU quota
-							if policy.CPUQuota > 0 {
-								quotaStr := strconv.Itoa(policy.CPUQuota) + " 100000"
-								if err := m.cgroupManager.ApplyCPULimit(uid, quotaStr); err != nil {
-									m.logger.Warn("Failed to apply pattern-based CPU limit",
-										"uid", uid,
-										"pattern", result.Pattern,
-										"error", err,
-									)
-								}
-							}
-							// Applica RAM quota
-							if policy.RAMQuota != "" {
-								if err := m.cgroupManager.ApplyRAMLimit(uid, policy.RAMQuota); err != nil {
-									m.logger.Warn("Failed to apply pattern-based RAM limit",
-										"uid", uid,
-										"pattern", result.Pattern,
-										"ram_quota", policy.RAMQuota,
-										"error", err,
-									)
-								}
-							}
-						}
-					}
-				}
-			}
-			// Cleanup pattern detector
-			m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour)
-			m.policyEngine.Cleanup(24 * time.Hour)
+		changed := false
+		if result.Pattern == PatternUnknown {
+			changed = m.policyEngine.RemovePolicy(uid)
+		} else {
+			changed = m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg)
+		}
+		if changed {
+			m.reconcilePatternPolicy(uid, run.cfg)
 		}
 	}
+
+	m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour)
 	return nil
+}
+
+func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) {
+	if !m.isUserLimited(uid) {
+		return
+	}
+	m.applyUserResourceLimits(uid, cfg)
 }
 
 func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {

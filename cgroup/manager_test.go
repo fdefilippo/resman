@@ -435,6 +435,12 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	if err := manager.ApplyCPUWeight(1000, 250); err != nil {
 		t.Fatalf("ApplyCPUWeight() error: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(userPath, "cpu.max"), nil, 0644); err != nil {
+		t.Fatalf("failed to create cpu.max fixture: %v", err)
+	}
+	if err := manager.ApplyCPUQuota(1000, "50000 100000"); err != nil {
+		t.Fatalf("ApplyCPUQuota() error: %v", err)
+	}
 	if err := manager.ApplyRAMLimitWithHigh(1000, "1048576", "524288"); err != nil {
 		t.Fatalf("ApplyRAMLimitWithHigh() error: %v", err)
 	}
@@ -443,12 +449,20 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	}
 
 	assertFileContent(t, filepath.Join(userPath, "cpu.weight"), "250")
+	assertFileContent(t, filepath.Join(userPath, "cpu.max"), "50000 100000")
 	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
 	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
 	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20\n")
 
 	if _, err := os.Stat(filepath.Join(legacyPath, "cpu.weight")); !os.IsNotExist(err) {
 		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)
+	}
+
+	if err := manager.ApplyCPUQuota(1001, "50000 100000"); err == nil {
+		t.Fatal("ApplyCPUQuota() should reject an untracked user")
+	}
+	if _, err := os.Stat(manager.getUserCgroupPath(1001)); !os.IsNotExist(err) {
+		t.Fatalf("ApplyCPUQuota() created a legacy cgroup for an untracked user, stat err=%v", err)
 	}
 }
 

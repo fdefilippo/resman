@@ -102,7 +102,51 @@ func (pe *PolicyEngine) GetPolicy(uid int) (*UserPolicy, bool) {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
 	policy, exists := pe.userPolicies[uid]
-	return policy, exists
+	if !exists {
+		return nil, false
+	}
+	copy := *policy
+	return &copy, true
+}
+
+// RemovePolicy removes the policy associated with a user.
+func (pe *PolicyEngine) RemovePolicy(uid int) bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	if _, exists := pe.userPolicies[uid]; !exists {
+		return false
+	}
+	delete(pe.userPolicies, uid)
+	return true
+}
+
+// RetainUsers removes policies for users that are no longer eligible.
+func (pe *PolicyEngine) RetainUsers(eligible map[int]bool) []int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	var removed []int
+	for uid := range pe.userPolicies {
+		if !eligible[uid] {
+			delete(pe.userPolicies, uid)
+			removed = append(removed, uid)
+		}
+	}
+	return removed
+}
+
+// Clear removes all policies and returns the affected users.
+func (pe *PolicyEngine) Clear() []int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	removed := make([]int, 0, len(pe.userPolicies))
+	for uid := range pe.userPolicies {
+		removed = append(removed, uid)
+	}
+	pe.userPolicies = make(map[int]*UserPolicy)
+	return removed
 }
 
 // getQuotasForPattern restituisce le quote CPU/RAM per un pattern.
@@ -125,18 +169,5 @@ func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config
 		return cfg.GetInteractiveCPUQuota() / 2, cfg.GetInteractiveRAMQuota()
 	default:
 		return 0, ""
-	}
-}
-
-// Cleanup rimuove policy non piu' attive.
-func (pe *PolicyEngine) Cleanup(maxAge time.Duration) {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	now := time.Now()
-	for uid, policy := range pe.userPolicies {
-		if now.Sub(policy.LastChanged) > maxAge {
-			delete(pe.userPolicies, uid)
-		}
 	}
 }

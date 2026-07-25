@@ -120,10 +120,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 					"uid", uid, "error", err)
 				continue
 			}
-			if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
-				m.logger.Warn("Failed to set CPU weight for re-added user",
-					"uid", uid, "weight", 100, "error", err)
-			}
+			m.applyUserResourceLimits(uid, cfg)
 
 			if m.psiWatcher != nil {
 				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
@@ -288,74 +285,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				continue
 			}
 
-			// Imposta il peso dopo aver spostato i processi
-			if err := m.cgroupManager.ApplyCPUWeight(uid, weight); err != nil {
-				m.logger.Warn("Failed to set CPU weight for user, using default",
-					"uid", uid,
-					"username", username,
-					"weight", weight,
-					"error", err,
-				)
-			}
-
-			// Applica limite RAM se abilitato e l'utente è soggetto a RAM limits
-			if m.shouldApplyRAMLimits(uid) {
-				quotaBytes, err := config.ParseRAMQuota(cfg.RAMQuotaPerUser)
-				if err != nil || quotaBytes == 0 {
-					m.logger.Debug("RAM quota per user is 0 or invalid, skipping",
-						"uid", uid,
-						"quota", cfg.RAMQuotaPerUser,
-					)
-				} else {
-					// Calcola memory.high come percentuale di memory.max
-					highBytes := uint64(float64(quotaBytes) * cfg.GetRAMHighRatio())
-					highStr := strconv.FormatUint(highBytes, 10)
-					maxStr := cfg.RAMQuotaPerUser
-
-					if cfg.DisableSwap {
-						if err := m.cgroupManager.ApplyRAMLimitWithHighAndSwapDisabled(uid, maxStr, highStr); err != nil {
-							m.logger.Warn("Failed to apply RAM high+max limits with swap disabled for user",
-								"uid", uid,
-								"high", highStr,
-								"max", maxStr,
-								"error", err,
-							)
-						}
-					} else {
-						if err := m.cgroupManager.ApplyRAMLimitWithHigh(uid, maxStr, highStr); err != nil {
-							m.logger.Warn("Failed to apply RAM high+max limits for user",
-								"uid", uid,
-								"high", highStr,
-								"max", maxStr,
-								"error", err,
-							)
-						}
-					}
-				}
-			}
-			// Applica limiti IO se abilitati
-			if m.shouldApplyIOLimits(uid) {
-				readBPS := cfg.GetIOReadBPS()
-				writeBPS := cfg.GetIOWriteBPS()
-				readIOPS := cfg.GetIOReadIOPS()
-				writeIOPS := cfg.GetIOWriteIOPS()
-				deviceFilter := cfg.GetIODeviceFilter()
-
-				if err := m.cgroupManager.ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter); err != nil {
-					m.logger.Warn("Failed to apply IO limit for user",
-						"uid", uid,
-						"readBPS", readBPS,
-						"writeBPS", writeBPS,
-						"error", err,
-					)
-				} else {
-					m.logger.Debug("IO limit applied for user",
-						"uid", uid,
-						"readBPS", readBPS,
-						"writeBPS", writeBPS,
-					)
-				}
-			}
+			m.applyUserResourceLimits(uid, cfg)
 
 			// Segna l'utente come limitato
 			m.mu.Lock()
@@ -390,6 +320,93 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	}
 
 	return firstError
+}
+
+func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config) {
+	username := m.metricsCollector.GetUsernameFromUID(uid)
+
+	if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
+		m.logger.Warn("Failed to set CPU weight for user, using default",
+			"uid", uid,
+			"username", username,
+			"weight", 100,
+			"error", err,
+		)
+	}
+
+	cpuQuota := "max 100000"
+	ramQuota := cfg.RAMQuotaPerUser
+	if cfg.GetAutodetectPatterns() && m.policyEngine != nil {
+		if policy, exists := m.policyEngine.GetPolicy(uid); exists {
+			if policy.CPUQuota > 0 {
+				cpuQuota = fmt.Sprintf("%d 100000", policy.CPUQuota)
+			}
+			if policy.RAMQuota != "" {
+				ramQuota = policy.RAMQuota
+			}
+		}
+	}
+	if err := m.cgroupManager.ApplyCPUQuota(uid, cpuQuota); err != nil {
+		m.logger.Warn("Failed to apply per-user CPU quota",
+			"uid", uid,
+			"username", username,
+			"quota", cpuQuota,
+			"error", err,
+		)
+	}
+
+	if m.shouldApplyRAMLimits(uid) {
+		quotaBytes, err := config.ParseRAMQuota(ramQuota)
+		if err != nil || quotaBytes == 0 {
+			m.logger.Debug("RAM quota per user is 0 or invalid, skipping",
+				"uid", uid,
+				"quota", ramQuota,
+			)
+		} else {
+			highBytes := uint64(float64(quotaBytes) * cfg.GetRAMHighRatio())
+			highStr := strconv.FormatUint(highBytes, 10)
+			if cfg.DisableSwap {
+				if err := m.cgroupManager.ApplyRAMLimitWithHighAndSwapDisabled(uid, ramQuota, highStr); err != nil {
+					m.logger.Warn("Failed to apply RAM high+max limits with swap disabled for user",
+						"uid", uid,
+						"high", highStr,
+						"max", ramQuota,
+						"error", err,
+					)
+				}
+			} else if err := m.cgroupManager.ApplyRAMLimitWithHigh(uid, ramQuota, highStr); err != nil {
+				m.logger.Warn("Failed to apply RAM high+max limits for user",
+					"uid", uid,
+					"high", highStr,
+					"max", ramQuota,
+					"error", err,
+				)
+			}
+		}
+	}
+
+	if m.shouldApplyIOLimits(uid) {
+		readBPS := cfg.GetIOReadBPS()
+		writeBPS := cfg.GetIOWriteBPS()
+		readIOPS := cfg.GetIOReadIOPS()
+		writeIOPS := cfg.GetIOWriteIOPS()
+		deviceFilter := cfg.GetIODeviceFilter()
+
+		if err := m.cgroupManager.ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter); err != nil {
+			m.logger.Warn("Failed to apply IO limit for user",
+				"uid", uid,
+				"readBPS", readBPS,
+				"writeBPS", writeBPS,
+				"error", err,
+			)
+		} else {
+			m.logger.Debug("IO limit applied for user",
+				"uid", uid,
+				"readBPS", readBPS,
+				"writeBPS", writeBPS,
+			)
+		}
+	}
 }
 
 func (m *Manager) applySharedCPUQuota(sharedPath string, totalCores int, cfg *config.Config) (string, error) {

@@ -47,11 +47,11 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 	return nil
 }
 
-// ApplyCPULimit applica un limite di CPU a un cgroup utente.
-func (m *Manager) ApplyCPULimit(uid int, quota string) error {
-	cgroupPath, err := m.ensureCgroupPath(uid)
-	if err != nil {
-		return fmt.Errorf("failed to resolve cgroup before applying CPU limit for UID %d: %w", uid, err)
+// ApplyCPUQuota writes cpu.max for an already tracked user cgroup without moving processes.
+func (m *Manager) ApplyCPUQuota(uid int, quota string) error {
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
 	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
@@ -101,6 +101,18 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 				"quota", appliedQuota,
 			)
 		}
+	}
+
+	return nil
+}
+
+// ApplyCPULimit applies cpu.max and moves the user's processes into the cgroup.
+func (m *Manager) ApplyCPULimit(uid int, quota string) error {
+	if _, err := m.ensureCgroupPath(uid); err != nil {
+		return fmt.Errorf("failed to resolve cgroup before applying CPU limit for UID %d: %w", uid, err)
+	}
+	if err := m.ApplyCPUQuota(uid, quota); err != nil {
+		return err
 	}
 
 	// Sposta processi in modo sincrono con timeout configurabile

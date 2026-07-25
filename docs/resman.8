@@ -313,7 +313,17 @@ PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 .fi
 .sp
 .SH WORKLOAD PATTERN DETECTION
-When enabled, the daemon analyzes historical CPU and RAM usage patterns to automatically classify users as "batch" (night\-time high resource consumption) or "interactive" (day\-time moderate usage) and applies appropriate quotas.
+When enabled, the daemon analyzes historical CPU usage to automatically classify eligible users as "batch" (night\-time high resource consumption) or "interactive" (day\-time moderate usage) and selects appropriate CPU and RAM quotas.
+.PP
+Pattern detection respects
+.B USER_INCLUDE_LIST
+and
+.B USER_EXCLUDE_LIST
+and never applies policy to an excluded user. Pattern quotas are applied to the user's existing sub\-cgroup only while global limits are active; pattern analysis does not move processes or create a standalone per\-user cgroup.
+.PP
+When a classification becomes unknown, the user becomes ineligible, or
+.B AUTODETECT_PATTERNS
+is disabled, any active pattern policy is removed. A limited user then returns to the normal shared\-cgroup CPU quota and configured RAM limit.
 .PP
 The pattern detection algorithm uses a sliding window of
 .B PATTERN_HISTORY_HOURS

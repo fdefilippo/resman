@@ -109,6 +109,7 @@ type MetricsCollector interface {
 type CgroupManager interface {
 	CreateUserCgroup(uid int) error
 	ApplyCPULimit(uid int, quota string) error
+	ApplyCPUQuota(uid int, quota string) error
 	ApplyCPUWeight(uid int, weight int) error
 	RemoveCPULimit(uid int) error
 	ApplyRAMLimit(uid int, limit string) error

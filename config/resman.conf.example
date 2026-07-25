@@ -251,9 +251,13 @@ IO_REVERT_ON_NORMAL=true
 # ========================
 # WORKLOAD PATTERN DETECTION [D]
 # ========================
-# Auto-detect user workload patterns (batch/interactive/mixed) and apply
-# appropriate CPU and RAM quotas based on historical usage.
+# Auto-detect eligible user workload patterns (batch/interactive/mixed) and
+# select CPU and RAM quotas based on historical usage.
 # Uses a sliding window of PATTERN_HISTORY_HOURS with hourly analysis.
+# Pattern quotas are applied only while the user is in resman's shared limited
+# cgroup. They never move excluded users or create standalone policy cgroups.
+# When a pattern becomes unknown or this feature is disabled, active users are
+# restored to the normal shared-cgroup limits.
 #
 # AUTODETECT_PATTERNS: Enable pattern detection (true/false)
 # Default: false

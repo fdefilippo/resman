@@ -114,8 +114,8 @@ func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
 // classifyPattern classifica il pattern di un utente basandosi sulle statistiche orarie.
 func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) PatternResult {
 	// Calcola varianza oraria
-	nightAvg := average(stats.HourlyCPU[:], 22, 23, 0, 1, 2, 3, 4, 5, 6)
-	dayAvg := average(stats.HourlyCPU[:], 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+	nightAvg, nightSamples := weightedAverage(stats.HourlyCPU[:], stats.HourlyCount[:], 22, 23, 0, 1, 2, 3, 4, 5, 6)
+	dayAvg, daySamples := weightedAverage(stats.HourlyCPU[:], stats.HourlyCount[:], 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 	overallAvg := overallAverage(stats.HourlyCPU[:], stats.HourlyCount[:])
 	variance := calculateVariance(stats.HourlyCPU[:], stats.HourlyCount[:])
 
@@ -126,6 +126,8 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 	nightDayRatio := 0.0
 	if dayAvg > 0 {
 		nightDayRatio = nightAvg / dayAvg
+	} else if nightAvg > 0 {
+		nightDayRatio = math.Inf(1)
 	}
 
 	// Classificazione
@@ -133,6 +135,11 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 	var confidence float64
 
 	switch {
+	case nightSamples > 0 && daySamples == 0 && nightAvg > 5:
+		// No daytime samples and sustained night usage are strong batch evidence.
+		pattern = PatternBatchNight
+		confidence = math.Min(0.8+math.Min(nightAvg/100.0, 1.0)*0.2, 1.0)
+
 	case nightDayRatio > 1.5 && normalizedVariance > 0.4:
 		// Alta CPU di notte, bassa di giorno, alta varianza
 		pattern = PatternBatchNight
@@ -171,20 +178,20 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 	return PatternResult{Pattern: pattern, Confidence: confidence}
 }
 
-// average calcola la media dei valori per le ore specificate.
-func average(values []float64, hours ...int) float64 {
-	sum := 0.0
-	count := 0
+// weightedAverage calculates the sample-weighted mean for selected hours.
+func weightedAverage(values []float64, counts []int, hours ...int) (float64, int) {
+	total := 0.0
+	samples := 0
 	for _, h := range hours {
-		if h >= 0 && h < len(values) {
-			sum += values[h]
-			count++
+		if h >= 0 && h < len(values) && h < len(counts) && counts[h] > 0 {
+			total += values[h] * float64(counts[h])
+			samples += counts[h]
 		}
 	}
-	if count == 0 {
-		return 0
+	if samples == 0 {
+		return 0, 0
 	}
-	return sum / float64(count)
+	return total / float64(samples), samples
 }
 
 // overallAverage calcola la media ponderata su tutte le ore.
@@ -232,6 +239,18 @@ func (pd *PatternDetector) Cleanup(maxAge time.Duration) {
 	now := time.Now()
 	for uid, stats := range pd.userStats {
 		if now.Sub(stats.LastSample) > maxAge {
+			delete(pd.userStats, uid)
+		}
+	}
+}
+
+// RetainUsers removes statistics for users that are no longer eligible.
+func (pd *PatternDetector) RetainUsers(eligible map[int]bool) {
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+
+	for uid := range pd.userStats {
+		if !eligible[uid] {
 			delete(pd.userStats, uid)
 		}
 	}
