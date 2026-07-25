@@ -386,6 +386,27 @@ type deactivateCgroupManager struct {
 	releaseErrors            map[int]error
 }
 
+type blockingReleaseCgroupManager struct {
+	deactivateCgroupManager
+	releaseStarted chan struct{}
+	releaseProceed chan struct{}
+}
+
+func (m *blockingReleaseCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
+	close(m.releaseStarted)
+	<-m.releaseProceed
+	return nil
+}
+
+type cleanupLockCheckingCgroupManager struct {
+	mockCgroupManager
+	checkLock func() error
+}
+
+func (m *cleanupLockCheckingCgroupManager) CleanupAll() error {
+	return m.checkLock()
+}
+
 func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
 	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
 	return nil
@@ -601,6 +622,7 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 		name       string
 		releaseErr error
 		wantState  bool
+		wantActive bool
 	}{
 		{
 			name:      "successful release",
@@ -610,6 +632,7 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			name:       "failed release",
 			releaseErr: errors.New("restore failed"),
 			wantState:  true,
+			wantActive: true,
 		},
 	}
 
@@ -627,6 +650,7 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			manager.limitsActive = true
 			manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 			manager.activeUsers[1000] = true
+			manager.psiBoostedAt[1000] = time.Now()
 			manager.ioRemediation.boostStates[1000] = &IOBoostState{IsActive: true}
 
 			metrics := &SystemMetrics{
@@ -636,7 +660,6 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			if err := manager.releaseIdleUsers(metrics); err != nil {
 				t.Fatalf("releaseIdleUsers() error: %v", err)
 			}
-			manager.wg.Wait()
 
 			manager.ioRemediation.mu.RLock()
 			_, stateExists := manager.ioRemediation.boostStates[1000]
@@ -644,7 +667,89 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			if stateExists != tt.wantState {
 				t.Fatalf("IO remediation state exists = %t, want %t", stateExists, tt.wantState)
 			}
+			manager.mu.RLock()
+			active := manager.activeUsers[1000]
+			manager.mu.RUnlock()
+			if active != tt.wantActive {
+				t.Fatalf("activeUsers[1000] = %t, want %t", active, tt.wantActive)
+			}
+			manager.mu.RLock()
+			_, psiStateExists := manager.psiBoostedAt[1000]
+			manager.mu.RUnlock()
+			if psiStateExists != tt.wantActive {
+				t.Fatalf("PSI boost state exists = %t, want %t", psiStateExists, tt.wantActive)
+			}
 		})
+	}
+}
+
+func TestReleaseIdleUsersWaitsBeforeCommittingState(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &blockingReleaseCgroupManager{
+		releaseStarted: make(chan struct{}),
+		releaseProceed: make(chan struct{}),
+	}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	manager.limitsActive = true
+	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
+	manager.activeUsers[1000] = true
+	metrics := &SystemMetrics{
+		TotalCores:   4,
+		UserCPUUsage: map[int]float64{1000: 0},
+	}
+
+	releaseDone := make(chan error, 1)
+	go func() {
+		releaseDone <- manager.releaseIdleUsers(metrics)
+	}()
+	<-cgroupManager.releaseStarted
+
+	manager.mu.RLock()
+	activeWhilePending := manager.activeUsers[1000]
+	manager.mu.RUnlock()
+	if !activeWhilePending {
+		t.Fatal("user was removed from activeUsers before cgroup release completed")
+	}
+	select {
+	case err := <-releaseDone:
+		t.Fatalf("releaseIdleUsers() returned before cgroup release completed: %v", err)
+	default:
+	}
+
+	close(cgroupManager.releaseProceed)
+	if err := <-releaseDone; err != nil {
+		t.Fatalf("releaseIdleUsers() error: %v", err)
+	}
+
+	manager.mu.RLock()
+	activeAfterRelease := manager.activeUsers[1000]
+	manager.mu.RUnlock()
+	if activeAfterRelease {
+		t.Fatal("successfully released user remained in activeUsers")
+	}
+}
+
+func TestCleanupSerializesCgroupOperations(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroupManager := &cleanupLockCheckingCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	cgroupManager.checkLock = func() error {
+		if manager.opMu.TryLock() {
+			manager.opMu.Unlock()
+			return errors.New("CleanupAll called without opMu")
+		}
+		return nil
+	}
+
+	if err := manager.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error: %v", err)
 	}
 }
 

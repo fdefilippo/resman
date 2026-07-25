@@ -10,6 +10,11 @@ import (
 	"github.com/fdefilippo/resman/config"
 )
 
+type idleReleaseResult struct {
+	uid int
+	err error
+}
+
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	cfg := m.GetConfig()
 	m.mu.RLock()
@@ -62,39 +67,53 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 	}
 
-	// Rimuovi utenti dalla mappa e pulisci PSI/boost
+	m.mu.Unlock()
+
+	results := make(chan idleReleaseResult, len(usersToRelease))
 	for _, uid := range usersToRelease {
+		go func(uid int, sharedPath, normalQuota string) {
+			if sharedPath == "" {
+				results <- idleReleaseResult{uid: uid}
+				return
+			}
+			err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
+			results <- idleReleaseResult{uid: uid, err: err}
+		}(uid, sharedPath, normalQuota)
+	}
+
+	releasedUsers := make([]int, 0, len(usersToRelease))
+	for range usersToRelease {
+		result := <-results
+		if result.err != nil {
+			m.logger.Warn("Failed to release idle user from shared cgroup",
+				"uid", result.uid, "shared_path", sharedPath, "error", result.err)
+			continue
+		}
+		releasedUsers = append(releasedUsers, result.uid)
+	}
+
+	m.mu.Lock()
+	for _, uid := range releasedUsers {
 		delete(m.activeUsers, uid)
 		delete(m.psiBoostedAt, uid)
+	}
+	remainingLimited := len(m.activeUsers)
+	m.mu.Unlock()
+
+	for _, uid := range releasedUsers {
 		if m.psiWatcher != nil {
 			m.psiWatcher.RemoveMonitor(uid, "cpu")
 			m.psiWatcher.RemoveMonitor(uid, "io")
 		}
-		// Sposta l'utente fuori dal cgroup condiviso e rimuovi il sottocgroup.
-		m.wg.Add(1)
-		go func(uid int, sharedPath, normalQuota string) {
-			defer m.wg.Done()
-			if sharedPath == "" {
-				return
-			}
-			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota); err != nil {
-				m.logger.Warn("Failed to release idle user from shared cgroup",
-					"uid", uid, "shared_path", sharedPath, "error", err)
-				return
-			}
-			if m.ioRemediation != nil {
-				m.ioRemediation.ForgetUsers([]int{uid})
-			}
-		}(uid, sharedPath, normalQuota)
+	}
+	if m.ioRemediation != nil {
+		m.ioRemediation.ForgetUsers(releasedUsers)
 	}
 
-	remainingLimited := len(m.activeUsers)
-	m.mu.Unlock()
-
-	// Log rilascio
 	if len(usersToRelease) > 0 {
-		m.logger.Info("Releasing idle users from CPU limits",
-			"users_released", len(usersToRelease),
+		m.logger.Info("Idle user release completed",
+			"users_released", len(releasedUsers),
+			"release_failures", len(usersToRelease)-len(releasedUsers),
 			"users_still_limited", remainingLimited,
 			"idle_threshold", idleThreshold,
 		)
@@ -435,8 +454,6 @@ func (m *Manager) applySharedCPUQuota(sharedPath string, totalCores int, cfg *co
 func (m *Manager) deactivateLimits() error {
 	cfg := m.GetConfig()
 	m.logger.Info("Deactivating CPU limits")
-
-	m.wg.Wait()
 
 	// Incrementa il contatore di disattivazioni
 	if m.prometheusExporter != nil {

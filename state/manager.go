@@ -39,7 +39,6 @@ type Manager struct {
 	logger *logging.Logger
 	mu     sync.RWMutex
 	opMu   sync.Mutex
-	wg     sync.WaitGroup
 
 	// Stato interno
 	limitsActive      bool
@@ -310,13 +309,16 @@ func (m *Manager) getActiveUsersList() []int {
 
 // Cleanup esegue la pulizia prima dello shutdown.
 func (m *Manager) Cleanup() error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.logger.Info("Cleaning up state manager")
 
-	// Wait for any pending goroutines
-	m.wg.Wait()
-
 	// Rimuovi tutti i limiti attivi
-	if m.limitsActive {
+	m.mu.RLock()
+	limitsActive := m.limitsActive
+	m.mu.RUnlock()
+	if limitsActive {
 		if err := m.deactivateLimits(); err != nil {
 			m.logger.Error("Error during cleanup deactivation", "error", err)
 			return err
