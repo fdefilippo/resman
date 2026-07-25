@@ -174,7 +174,8 @@ a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,
 
 Dynamic fields are reloaded automatically. Restart the service after changing
 fields marked static in `config/resman.conf.example`, such as cgroup paths or
-Prometheus listener, TLS, and authentication settings:
+Prometheus listener, TLS and authentication settings, logging backend settings,
+or MCP listener and security settings:
 
 ```bash
 sudo systemctl restart resman

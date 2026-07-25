@@ -112,15 +112,36 @@ func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) 
 	current.PrometheusMetricsBindPort = 1974
 	current.CgroupRoot = "/sys/fs/cgroup"
 	current.CgroupBase = "resman"
+	current.LogFile = "/var/log/resman.log"
+	current.LogMaxSize = 10 * 1024 * 1024
+	current.UseSyslog = false
+	current.MCPEnabled = true
+	current.MCPTransport = "http"
+	current.MCPHTTPHost = "127.0.0.1"
+	current.MCPHTTPPort = 1969
+	current.MCPLogLevel = "INFO"
+	current.MCPAuthToken = "current-token"
+	current.MCPAllowWriteOps = false
 
 	requested := config.DefaultConfig()
 	requested.CPUThreshold = 88
+	requested.LogLevel = "DEBUG"
 	requested.EnablePrometheus = false
 	requested.PrometheusMetricsBindHost = "0.0.0.0"
 	requested.PrometheusMetricsBindPort = 9101
 	requested.PrometheusTLSEnabled = true
 	requested.CgroupRoot = "/other/cgroup"
 	requested.CgroupBase = "other"
+	requested.LogFile = "/var/log/resman-debug.log"
+	requested.LogMaxSize = 20 * 1024 * 1024
+	requested.UseSyslog = true
+	requested.MCPEnabled = false
+	requested.MCPTransport = "stdio"
+	requested.MCPHTTPHost = "0.0.0.0"
+	requested.MCPHTTPPort = 8080
+	requested.MCPLogLevel = "DEBUG"
+	requested.MCPAuthToken = "rotated-token"
+	requested.MCPAllowWriteOps = true
 
 	stateManager := &testStateConfigManager{cfg: current}
 	cgroupManager := &testCgroupConfigManager{}
@@ -144,6 +165,9 @@ func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) 
 	if requested.CPUThreshold != 88 {
 		t.Fatalf("CPUThreshold = %d, want 88", requested.CPUThreshold)
 	}
+	if requested.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want DEBUG", requested.LogLevel)
+	}
 	if requested.EnablePrometheus != current.EnablePrometheus ||
 		requested.PrometheusMetricsBindHost != current.PrometheusMetricsBindHost ||
 		requested.PrometheusMetricsBindPort != current.PrometheusMetricsBindPort ||
@@ -152,6 +176,20 @@ func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) 
 	}
 	if requested.CgroupRoot != current.CgroupRoot || requested.CgroupBase != current.CgroupBase {
 		t.Fatal("cgroup restart-required fields were applied at runtime")
+	}
+	if requested.LogFile != current.LogFile ||
+		requested.LogMaxSize != current.LogMaxSize ||
+		requested.UseSyslog != current.UseSyslog {
+		t.Fatal("logging restart-required fields were applied at runtime")
+	}
+	if requested.MCPEnabled != current.MCPEnabled ||
+		requested.MCPTransport != current.MCPTransport ||
+		requested.MCPHTTPHost != current.MCPHTTPHost ||
+		requested.MCPHTTPPort != current.MCPHTTPPort ||
+		requested.MCPLogLevel != current.MCPLogLevel ||
+		requested.MCPAuthToken != current.MCPAuthToken ||
+		requested.MCPAllowWriteOps != current.MCPAllowWriteOps {
+		t.Fatal("MCP restart-required fields were applied at runtime")
 	}
 	if stateManager.cfg != requested || cgroupManager.cfg != requested ||
 		metricsCollector.cfg != requested || hookConfig != requested {

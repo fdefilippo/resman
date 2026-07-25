@@ -891,6 +891,17 @@ seconds.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration
+.PP
+Runtime thresholds, filters, PSI settings, polling intervals, and
+.B LOG_LEVEL
+are applied dynamically. Cgroup paths, Prometheus listener and security
+settings,
+.BR LOG_FILE ,
+.BR LOG_MAX_SIZE ,
+.BR USE_SYSLOG ,
+and MCP enablement, transport, listener, authentication, and write permissions
+require a service restart. Requested changes to static fields are logged and
+deferred instead of being published as active runtime configuration.
 .br
 .B SIGINT, SIGTERM
 \- Graceful shutdown

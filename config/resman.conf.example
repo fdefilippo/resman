@@ -2,6 +2,7 @@
 # Location: /etc/resman.conf
 #
 # Legend: [D] = Dynamic (hot reload) | [S] = Static (requires restart)
+#         [D/S] = Mixed; see the section comments
 
 # ========================
 # PATHS [S]
@@ -355,8 +356,9 @@ PROMETHEUS_JWT_AUDIENCE=prometheus
 PROMETHEUS_JWT_EXPIRY=3600
 
 # ========================
-# LOGGING [D]
+# LOGGING [D/S]
 # ========================
+# LOG_LEVEL is dynamic. LOG_MAX_SIZE, USE_SYSLOG and LOG_FILE require restart.
 # Available log levels:
 #   DEBUG - Detailed messages for troubleshooting
 #   INFO  - Normal operational information (recommended default)
@@ -535,7 +537,7 @@ MCP_TRANSPORT=stdio
 # MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
 # MCP endpoint available at: http://HOST:PORT/mcp
 
-# MCP log level [D]
+# MCP log level [S]
 # Available levels: DEBUG, INFO, WARN, ERROR
 # If not specified, uses the same level as LOG_LEVEL
 MCP_LOG_LEVEL=INFO

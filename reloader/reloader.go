@@ -160,6 +160,16 @@ func (r *Reloader) preserveRestartRequiredConfig(currentConfig, newConfig *confi
 	r.preserveRestartInt("PROMETHEUS_JWT_EXPIRY", currentConfig.PrometheusJWTExpiry, &newConfig.PrometheusJWTExpiry)
 	r.preserveRestartString("CGROUP_ROOT", currentConfig.CgroupRoot, &newConfig.CgroupRoot)
 	r.preserveRestartString("CGROUP_BASE", currentConfig.CgroupBase, &newConfig.CgroupBase)
+	r.preserveRestartString("LOG_FILE", currentConfig.LogFile, &newConfig.LogFile)
+	r.preserveRestartInt("LOG_MAX_SIZE", currentConfig.LogMaxSize, &newConfig.LogMaxSize)
+	r.preserveRestartBool("USE_SYSLOG", currentConfig.UseSyslog, &newConfig.UseSyslog)
+	r.preserveRestartBool("MCP_ENABLED", currentConfig.MCPEnabled, &newConfig.MCPEnabled)
+	r.preserveRestartString("MCP_TRANSPORT", currentConfig.MCPTransport, &newConfig.MCPTransport)
+	r.preserveRestartString("MCP_HTTP_HOST", currentConfig.MCPHTTPHost, &newConfig.MCPHTTPHost)
+	r.preserveRestartInt("MCP_HTTP_PORT", currentConfig.MCPHTTPPort, &newConfig.MCPHTTPPort)
+	r.preserveRestartString("MCP_LOG_LEVEL", currentConfig.MCPLogLevel, &newConfig.MCPLogLevel)
+	r.preserveRestartSecretString("MCP_AUTH_TOKEN", currentConfig.MCPAuthToken, &newConfig.MCPAuthToken)
+	r.preserveRestartBool("MCP_ALLOW_WRITE_OPS", currentConfig.MCPAllowWriteOps, &newConfig.MCPAllowWriteOps)
 }
 
 func (r *Reloader) preserveRestartString(field, current string, requested *string) {
@@ -183,6 +193,18 @@ func (r *Reloader) preserveRestartBool(field string, current bool, requested *bo
 		return
 	}
 	r.logRestartRequired(field, current, *requested)
+	*requested = current
+}
+
+func (r *Reloader) preserveRestartSecretString(field, current string, requested *string) {
+	if *requested == current {
+		return
+	}
+	r.logger.Warn("Configuration change deferred until restart",
+		"field", field,
+		"current", "[redacted]",
+		"requested", "[redacted]",
+	)
 	*requested = current
 }
 

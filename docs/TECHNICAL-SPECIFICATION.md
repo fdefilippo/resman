@@ -497,8 +497,9 @@ The following processes are automatically excluded from CPU limits:
 - Handle component-specific reload logic
 
 **Reload Order:**
-1. Preserve restart-required cgroup and Prometheus fields at their active values
-2. Logging (immediate, for tracing)
+1. Preserve restart-required cgroup, Prometheus, logging backend, and MCP server
+   fields at their active values
+2. Logging level (immediate, for tracing)
 3. Cgroup manager runtime parameters
 4. State manager
 5. Metrics collector
@@ -517,6 +518,9 @@ The following processes are automatically excluded from CPU limits:
 - `PSI_EVENT_DRIVEN`, PSI thresholds, and `PSI_WINDOW_US`: Rebuild the PSI watcher
 - `PSI_FALLBACK_INTERVAL`, `METRICS_REFRESH_INTERVAL`: Rebuild loop tickers immediately
 - `ENABLE_PROMETHEUS`, Prometheus bind host/port: Deferred until restart
+- `LOG_FILE`, `LOG_MAX_SIZE`, `USE_SYSLOG`: Deferred until restart
+- MCP enablement, transport, listener, log level, authentication token, and
+  write permissions: Deferred until restart
 
 ---
 
