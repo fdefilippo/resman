@@ -31,6 +31,11 @@ import (
 	"github.com/fdefilippo/resman/database"
 )
 
+const (
+	defaultHistoryLimit = 100
+	maxHistoryLimit     = 10000
+)
+
 // getHostname returns the current hostname
 func getHostname() string {
 	hostname, err := os.Hostname()
@@ -328,7 +333,7 @@ func (s *Server) registerTools() {
 
 		// Build user list with details
 		var users []string
-		var totalCPU, peakCPU float64
+		var peakCPU float64
 		limitedCount := 0
 
 		for uid, userMetrics := range allUserMetrics {
@@ -355,9 +360,6 @@ func (s *Server) registerTools() {
 			)
 			users = append(users, userLine)
 
-			if userMetrics.CPUUsage > totalCPU {
-				totalCPU = userMetrics.CPUUsage
-			}
 			if userMetrics.CPUUsage > peakCPU {
 				peakCPU = userMetrics.CPUUsage
 			}
@@ -399,7 +401,7 @@ Utenti limitati: %d su %d
 			hostname,
 			serverRole,
 			time.Now().Format("2006-01-02 15:04:05"),
-			getFloatMetric(metrics, "total_cores", 0.0)*100,
+			totalCPUCapacityPercent(metrics),
 			getFloatMetric(metrics, "total_cpu_usage", 0.0),
 			joinStrings(users, "\n"),
 			avgCPU,
@@ -446,7 +448,7 @@ Utenti limitati: %d su %d
 
 		// Build user list with memory details
 		var users []string
-		var totalMem, peakMem uint64
+		var peakMem uint64
 		limitedCount := 0
 
 		for uid, userMetrics := range allUserMetrics {
@@ -478,9 +480,6 @@ Utenti limitati: %d su %d
 			)
 			users = append(users, userLine)
 
-			if userMetrics.MemoryUsage > totalMem {
-				totalMem = userMetrics.MemoryUsage
-			}
 			if userMetrics.MemoryUsage > peakMem {
 				peakMem = userMetrics.MemoryUsage
 			}
@@ -496,7 +495,7 @@ Utenti limitati: %d su %d
 		}
 
 		// Get system memory info
-		totalMemMB := getFloatMetric(metrics, "memory_usage_mb", 0.0)
+		totalMemMB := totalSystemMemoryMB(metrics)
 
 		// Get limits status
 		limitsActive := getBool(status, "limits_active", false)
@@ -909,13 +908,13 @@ Utenti limitati: %d su %d
 	// get_user_history - Get historical metrics for a specific user
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "get_user_history",
-		Description: "Get historical CPU and memory metrics for a specific user. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter",
+		Description: "Get historical CPU and memory metrics for a specific user. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter. The limit defaults to 100 and is capped at 10000 records",
 	}, s.handleGetUserHistory)
 
 	// get_system_history - Get historical system metrics
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "get_system_history",
-		Description: "Get historical system-wide CPU and memory metrics. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter",
+		Description: "Get historical system-wide CPU and memory metrics. Supports time ranges via startTime/endTime, period (today, yesterday, last_24_hours, last_7_days, last_30_days), or hours parameter. The limit defaults to 100 and is capped at 10000 records",
 	}, s.handleGetSystemHistory)
 
 	// get_user_summary - Get aggregated statistics for a user
@@ -1105,35 +1104,16 @@ func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequ
 		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
-	// Determine time range
 	now := time.Now()
-	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
-	if err != nil && args.Period != "" {
+	startTime, endTime, err := resolveHistoryTimeRange(args, now)
+	if err != nil {
 		return nil, GetHistoryResult{}, err
 	}
-
-	// Override with explicit startTime/endTime if provided
-	if args.StartTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
-			startTime = t
-		}
-	}
-	if args.EndTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
-			endTime = t
-		}
-	}
-
-	// Handle hours parameter
 	if args.Hours > 0 {
 		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
 	}
 
-	// Default limit
-	limit := args.Limit
-	if limit <= 0 {
-		limit = 100
-	}
+	limit := normalizeHistoryLimit(args.Limit)
 
 	// Get UID from username if needed
 	uid := 0
@@ -1194,35 +1174,16 @@ func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRe
 		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
-	// Determine time range
 	now := time.Now()
-	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
-	if err != nil && args.Period != "" {
+	startTime, endTime, err := resolveHistoryTimeRange(args, now)
+	if err != nil {
 		return nil, GetHistoryResult{}, err
 	}
-
-	// Override with explicit startTime/endTime if provided
-	if args.StartTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
-			startTime = t
-		}
-	}
-	if args.EndTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
-			endTime = t
-		}
-	}
-
-	// Handle hours parameter
 	if args.Hours > 0 {
 		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
 	}
 
-	// Default limit
-	limit := args.Limit
-	if limit <= 0 {
-		limit = 100
-	}
+	limit := normalizeHistoryLimit(args.Limit)
 
 	// Query database
 	records, err := s.dbManager.GetSystemHistory(startTime, endTime, limit)
@@ -1264,23 +1225,9 @@ func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequ
 		return nil, GetUserSummaryResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
-	// Determine time range
-	now := time.Now()
-	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
-	if err != nil && args.Period != "" {
+	startTime, endTime, err := resolveHistoryTimeRange(args, time.Now())
+	if err != nil {
 		return &mcp.CallToolResult{}, GetUserSummaryResult{}, err
-	}
-
-	// Override with explicit startTime/endTime if provided
-	if args.StartTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.StartTime); err == nil {
-			startTime = t
-		}
-	}
-	if args.EndTime != "" {
-		if t, err := time.Parse(time.RFC3339, args.EndTime); err == nil {
-			endTime = t
-		}
 	}
 
 	// Get UID from username if needed
@@ -1370,6 +1317,47 @@ func (s *Server) handleGetMetricsDatabaseInfo(ctx context.Context, req *mcp.Call
 }
 
 // Helper functions
+
+func resolveHistoryTimeRange(args GetHistoryArgs, now time.Time) (time.Time, time.Time, error) {
+	startTime, endTime, err := database.ParseTimeRange(args.Period, now)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid period %q: %w", args.Period, err)
+	}
+
+	if args.StartTime != "" {
+		startTime, err = time.Parse(time.RFC3339, args.StartTime)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid startTime %q: expected RFC3339: %w", args.StartTime, err)
+		}
+	}
+	if args.EndTime != "" {
+		endTime, err = time.Parse(time.RFC3339, args.EndTime)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid endTime %q: expected RFC3339: %w", args.EndTime, err)
+		}
+	}
+
+	return startTime, endTime, nil
+}
+
+func normalizeHistoryLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return defaultHistoryLimit
+	case limit > maxHistoryLimit:
+		return maxHistoryLimit
+	default:
+		return limit
+	}
+}
+
+func totalCPUCapacityPercent(metrics map[string]any) float64 {
+	return float64(getIntMetric(metrics, "total_cores", 0)) * 100
+}
+
+func totalSystemMemoryMB(metrics map[string]any) float64 {
+	return getFloatMetric(metrics, "total_memory_mb", 0)
+}
 
 func getFloatMetric(metrics map[string]any, key string, defaultVal float64) float64 {
 	if val, ok := metrics[key]; ok {

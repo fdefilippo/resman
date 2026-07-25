@@ -133,7 +133,7 @@ Ottiene lo storico delle metriche per un utente specifico.
 - `endTime` (string, opzionale): Fine periodo (ISO 8601)
 - `period` (string, opzionale): Periodo predefinito (`today`, `yesterday`, `last_24_hours`, `last_7_days`, `last_30_days`)
 - `hours` (int, opzionale): Ultime N ore
-- `limit` (int, opzionale): Numero massimo di record (default: 100)
+- `limit` (int, opzionale): Numero massimo di record (default: 100, massimo: 10000)
 
 **Esempi di utilizzo:**
 
@@ -204,7 +204,7 @@ Ottiene lo storico delle metriche di sistema.
 - `endTime` (string, opzionale): Fine periodo (ISO 8601)
 - `period` (string, opzionale): Periodo predefinito
 - `hours` (int, opzionale): Ultime N ore
-- `limit` (int, opzionale): Numero massimo di record (default: 100)
+- `limit` (int, opzionale): Numero massimo di record (default: 100, massimo: 10000)
 
 **Esempi:**
 
