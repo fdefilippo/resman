@@ -15,6 +15,14 @@ an error swallowed under a success log. Each rule below is written against a def
 that actually shipped, and the appendix maps every rule back to the finding that
 motivated it.
 
+The previous audit epic, `resman-ne0`, was closed issue by issue — and the defect class
+survived. Of the eleven `resman-4pw` findings traced back to it, two are direct
+regressions introduced *while* closing an old issue, seven are prior remediations that
+were correct but too local, one was never covered, and one is a latent coupling exposed
+by a later, correct change. That is not a diligence problem. It is what happens when
+fixes are verified at the level of the function that changed rather than the contract
+it belongs to — which is the level these rules operate at.
+
 Read this before your first change. Re-read the checklist in
 [Definition of Done](#definition-of-done) before every pull request.
 
@@ -434,6 +442,9 @@ to prevent and expensive to find.
 
 - Every semantic fix **MUST** ship a table-driven test that would have failed before it.
   "Verified manually" does not close a behavioural issue.
+- The test **MUST** cover the **boundary the change crosses**, not only the unit it
+  edits. See Rule 18: a commit can add hundreds of lines of correct unit tests and still
+  ship a regression across the contract it moved.
 - Empty/zero/disabled inputs (`""`, `0`, `max`, empty list) **MUST** be explicit rows in
   the table, not implicit paths.
 - Cross-package contracts — eligibility, membership reconciliation, reload
@@ -472,6 +483,52 @@ raises the cost of every external contribution.
 
 *Finding: resman-4pw.19*
 
+## Rule 18 — Fixing a defect
+
+A fix is a change of contract. Treat it with the suspicion you would give a feature.
+
+**18.1 — The regression test belongs to the boundary the fix crossed.**
+If the change touches a function signature, an error-propagation path, a unit of
+measure, a timing source, or the shape of persisted data, the test **MUST** exercise the
+full path across that boundary — not the unit that was edited. Unit tests around the
+changed code are necessary and not sufficient.
+
+**18.2 — A constant borrowed from an unrelated contract is a defect.**
+A threshold **MUST** derive from the contract it governs. A sampling staleness window
+comes from the sampling cadence; a cache expiry comes from the cache. Reusing a
+convenient neighbouring value couples two contracts that will diverge, and the coupling
+is invisible at the call site.
+
+**18.3 — Enforcement MUST NOT exceed the contract.**
+Do not harden a promise the code does not keep. Do not validate a key that has no
+runtime consumer, do not make a controller mandatory that enforcement does not use, and
+do not tighten a check whose underlying behaviour is unimplemented. If tightening looks
+right, implement the contract first — the tightening is the second commit, not the
+first. Corollary: a correct hardening can surface a latent defect elsewhere, so a change
+that makes a rule stricter **MUST** be checked against every consumer of the value it
+constrains.
+
+**18.4 — The third local remedy on one mechanism is a design signal.**
+When you are about to extend a hand-maintained list, patch another consumer of a
+stringly-typed contract, or repair one more key of a family, stop and replace the
+mechanism instead. Two rounds of local repair on the same structure is the point at
+which the structure is the defect.
+
+**Why.** Commit `a52c77b` closed two `resman-ne0` findings and introduced two of this
+epic's: it moved persistence to `WriteMetricsBatch` and changed error propagation to the
+control cycle without a test on that boundary (`resman-4pw.11`), and it took
+`2 × MetricsCacheTTL` as the staleness window for a new jiffy baseline
+(`resman-4pw.15`). The commit carried roughly 255 lines of new unit tests and satisfied
+Rule 16 as originally written. Separately, `ad6c0a0` strengthened validation of the
+inert `CPU_QUOTA_LIMITED`, `ca2af8d` shipped a fatal `ExecStartPre` for the optional
+`cpuset` controller, and `404e9f4` — a correct fail-safe change — exposed the latent
+CPU-to-RAM/IO coupling behind `resman-4pw.1`. And `preserveRestartRequiredConfig` was
+introduced by `04b7419`, extended by `76529bb`, and is now up for replacement in
+`resman-4pw.9`.
+
+*Findings: resman-4pw.11, resman-4pw.15, resman-4pw.12, resman-4pw.14, resman-4pw.9,
+resman-4pw.6; historical provenance from epic `resman-ne0`*
+
 ---
 
 ## Definition of Done
@@ -503,6 +560,9 @@ A change is not done until every line is true:
 - [ ] Table-driven test that fails without the change; functional evidence recorded if
       the harness was used (Rule 16).
 - [ ] New comments and identifiers in English (Rule 17).
+- [ ] If this is a fix: the boundary it crosses is tested, no threshold borrowed from an
+      unrelated contract, no enforcement added ahead of the behaviour, and no third
+      local remedy where the mechanism should be replaced (Rule 18).
 
 ---
 
@@ -549,6 +609,7 @@ Until they exist, treat them as review checkpoints.
 | 15. Lock discipline | prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
+| 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |
 
 Findings `resman-4pw.2` (process membership reconciliation), `resman-4pw.3` (excluded
 process accounting), `resman-4pw.8` (refresh must not advance decision state), and
