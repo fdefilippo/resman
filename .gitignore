@@ -59,6 +59,5 @@ CLAUDE.md
 .agents/
 .codex
 resman.file
-docs/*.md
 docs/analysis/
 docs/superpowers/

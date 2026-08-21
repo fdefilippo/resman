@@ -225,6 +225,7 @@ curl -s http://localhost:1974/metrics | grep resman
 ## Documentation
 
 - Man page: `man resman`
+- Development guide (required reading before contributing code): `docs/DEVELOPMENT.md`
 - Grafana dashboard: `docs/dashboard-grafana-v2.json`
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`

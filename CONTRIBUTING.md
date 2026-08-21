@@ -128,6 +128,12 @@ refactor: improve error handling in collector
 
 ### Code Style
 
+> **Read [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) before your first change.**
+> It defines the architectural invariants a change to resman must respect
+> (state model, configuration contracts, metric and error semantics, packaging)
+> and ends with a Definition of Done checklist that reviewers apply to every
+> pull request. This section covers only formatting and general hygiene.
+
 - Follow Go best practices
 - Run `go fmt` before committing
 - Run `go vet` to catch issues
