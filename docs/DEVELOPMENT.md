@@ -50,14 +50,57 @@ survived non-race runs; `-race` is mandatory for any change touching shared stat
 cheap enough to always run.
 
 > Note: today only `.github/workflows/release.yml` runs these gates, at release time.
-> There is no pull-request workflow. Until there is, the gate is your responsibility
-> locally, and the reviewer's during review.
+> There is no pull-request workflow. Until there is (`resman-4pw.17.2`), the gate is
+> your responsibility locally, and the reviewer's during review.
+
+---
+
+# Part 0 — Project policy
+
+## Rule 1 — No backward compatibility. Breaking is allowed; silence is not
+
+resman has **no backward-compatibility requirement**. When a contract is wrong, it is
+changed, not wrapped.
+
+- Obsolete database schemas, configuration keys, metric keys, MCP protocol revisions,
+  and behavioural aliases **MUST NOT** be preserved.
+- Compatibility shims, deprecation periods, dual-read paths, silent migrations, and
+  "accept both spellings" aliases are **forbidden**.
+- A breaking change **MUST** fail clearly or require an explicit operator reset. It
+  **MUST NOT** silently reinterpret old state. Deleting a knob and ignoring it is not
+  a breaking change, it is a hidden one.
+- Concretely:
+  - **Removed configuration key** → startup fails with the offending key and file
+    named. Not warned, not ignored.
+  - **Incompatible persisted schema** → refuse to open the store, tell the operator
+    what to do (delete/reset), and stop. No in-place migration, no best-effort read of
+    the old shape.
+  - **Removed API field, metric key, or protocol revision** → absent and rejected, not
+    aliased to the replacement.
+- The freedom to break is not a licence to break casually. It removes the *shim* from
+  the menu, not the *thinking*: the replacement must be right, documented in the same
+  change, and reflected in `config/resman.conf.example`, `docs/`, and the man page.
+
+This policy is a current product decision recorded in epic `resman-4pw`. Only a later
+explicit product decision reverses it — not an individual pull request.
+
+**Why.** Compatibility debt is what made the audit findings survivable in the first
+place: an inert `CPU_QUOTA_LIMITED` that still validates, a `total_user_cpu_usage` key
+that never existed but is read at three call sites, a `reload=false` parameter that
+does not mean what it says. Each was cheaper to leave than to remove — until there
+were sixteen of them.
+
+**Live gap.** `config/config.go:533-538` returns `nil` for any key not present in
+`configFieldHandlers`: unknown and removed keys are silently ignored today, and so are
+typos. Rule 1 cannot be satisfied until that path rejects instead.
+
+*Source: epic `resman-4pw` policy; findings `resman-4pw.7`, `resman-4pw.12`*
 
 ---
 
 # Part I — Domain invariants
 
-## Rule 1 — Eligibility, intent, and observation are three different things **[checkable]**
+## Rule 2 — Eligibility, intent, and observation are three different things **[checkable]**
 
 For every user and every resource, resman deals with three distinct facts:
 
@@ -72,9 +115,10 @@ For every user and every resource, resman deals with three distinct facts:
   `CPULimitActive`. A bare `IsLimited` is forbidden in new code.
 - A consumer **MUST NOT** re-derive one of these from another. If MCP wants "is this
   user actually limited", it reads the observation, not the config.
-- When a persisted field changes meaning, the change **MUST** come with a schema note
-  or migration — historical rows keep the old semantics and silently corrupt any
-  dashboard built on them.
+- When a persisted field changes meaning, the schema change is **intentionally
+  breaking** (Rule 1): the store refuses to open old data and the operator resets it.
+  Reading old rows under the new meaning is forbidden — historical rows written under
+  the previous semantics would silently corrupt every dashboard built on them.
 
 **Why.** `UserMetrics.IsLimited` is currently assigned from `Config.IsUserWhitelisted`
 in `metrics/collector.go:1092` (eligibility), then overwritten with runtime state in
@@ -85,7 +129,7 @@ value. The same field means eligibility on one path and observation on another, 
 
 *Findings: resman-4pw.1, resman-4pw.6*
 
-## Rule 2 — Resource policy lists have one shared, tested contract **[checkable]**
+## Rule 3 — Resource policy lists have one shared, tested contract **[checkable]**
 
 CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
 
@@ -106,11 +150,11 @@ empty `USER_INCLUDE_LIST`, RAM and I/O limiting select nobody, even though
 
 *Finding: resman-4pw.1*
 
-## Rule 3 — Every configured decision dimension must be evaluated
+## Rule 4 — Every configured decision dimension must be evaluated
 
 If the configuration exposes N dimensions for a resource, the decision engine
 **MUST** evaluate all N, or the unevaluated ones **MUST** be removed from the
-configuration surface.
+configuration surface — removed and rejected, per Rule 1, never left inert.
 
 - Each dimension needs explicit activation, maintenance, and release semantics.
 - The rule combining dimensions (any-of, all-of, weighted) **MUST** be documented next
@@ -126,7 +170,7 @@ other limits are still armed.
 
 *Finding: resman-4pw.4*
 
-## Rule 4 — No knob without effect **[checkable]**
+## Rule 5 — No knob without effect **[checkable]**
 
 Every public configuration key **MUST** have a runtime consumer.
 
@@ -136,11 +180,11 @@ Every public configuration key **MUST** have a runtime consumer.
   the knob first and the behaviour later is forbidden — there is no way for an operator
   to tell the difference between "not implemented yet" and "not working".
 - **Validating an inert key is worse than not having it.** Validation is an implicit
-  promise that the value matters. If a key must be kept for compatibility but has no
-  effect, it **MUST** be rejected with an explicit deprecation warning, not silently
-  accepted.
-- Removing a key **MUST** be an explicit, documented deprecation decision, never a
-  quiet deletion.
+  promise that the value matters. A key that validates successfully while doing nothing
+  **MUST NOT** exist.
+- Removing a key is **immediate and breaking** (Rule 1): the handler is deleted, the
+  key is rejected at load, and the documentation, example config, and man page are
+  updated in the same change. No deprecation window, no alias, no silent ignore.
 
 **Why.** `CPU_QUOTA_LIMITED` and `RAM_QUOTA_LIMITED` are parsed *and validated*
 (`config/config.go:939,957`) with no runtime consumer. `METRICS_CACHE_FILE`,
@@ -153,28 +197,37 @@ preserved across reload (`reloader/reloader.go:160`) but does not cap token vali
 
 # Part II — Contracts across boundaries
 
-## Rule 5 — A key crossing a boundary is a typed constant, never a literal **[checkable]**
+## Rule 6 — Typed contracts across boundaries, and metrics is not status **[checkable]**
 
-Any string key shared between a producer and a consumer in different packages —
-metrics map keys, status map keys, MCP field names — **MUST** be declared once as an
-exported constant (or a typed DTO) and referenced by both sides.
+Any structure shared between a producer and a consumer in different packages — metrics
+snapshots, runtime status, MCP payloads — **MUST** be a typed DTO or a set of exported
+constants referenced by both sides.
 
 - String literals at both ends of a boundary are forbidden. The compiler cannot catch
   a typo, and the failure mode is a silent zero rather than an error.
-- Producer and consumer **MUST** share a test that round-trips the contract.
-- If two maps exist with different contents (e.g. a *metrics* map and a *status* map),
-  the distinction **MUST** be explicit in the type, not left to the caller's memory.
+- **The metrics map and the runtime status map are two different contracts.** They
+  carry different keys, are produced by different components, and **MUST NOT** be
+  interchangeable at a call site. `state/control_cycle.go:500` publishes the *metrics*
+  snapshot; `state/manager.go:283` publishes *runtime status*. A helper that takes
+  "a map" and a string is how a consumer ends up reading the right key from the wrong
+  map. Give each its own type.
+- Counts that mean different things get **different names**: users observed is not
+  users eligible is not users actively limited. Do not reuse one key for whichever the
+  caller happened to want.
+- A key that does not exist is **removed from the consumer**, never aliased into
+  existence (Rule 1).
+- Producer and consumer **MUST** share a test that round-trips the contract, covering
+  both maps.
 
 **Why.** MCP reads `total_user_cpu_usage` in `mcp/tools.go:189`, `mcp/server.go:422`,
 and `mcp/resources.go:82`. That key exists nowhere in the codebase — the producer emits
-`all_users_cpu_usage` (`state/control_cycle.go:500`). Every MCP status surface has been
-reporting a hardcoded zero. The neighbouring `active_users_count` lookups happen to work
-only because they read a *different* map (`state/manager.go:283`), which is exactly the
-confusion this rule removes.
+`all_users_cpu_usage`. Every MCP status surface has been reporting a hardcoded zero.
+The neighbouring `active_users_count` lookups happen to work only because they read the
+*other* map, which is exactly the confusion this rule removes.
 
 *Finding: resman-4pw.6*
 
-## Rule 6 — A counter counts what its name says, after it happened
+## Rule 7 — A counter counts what its name says, after it happened
 
 - A `_total` counter **MUST** be incremented only after the operation it names has
   succeeded.
@@ -196,7 +249,7 @@ called from production code.
 
 *Finding: resman-4pw.10*
 
-## Rule 7 — Never log a success you did not verify
+## Rule 8 — Never log a success you did not verify
 
 - A function that writes to an external resource (database, cgroup, filesystem,
   network) **MUST** return `error`. A `func (...)` with no error return at such a
@@ -215,7 +268,7 @@ receives nothing.
 
 *Finding: resman-4pw.11*
 
-## Rule 8 — Configuration lifecycle is declared in one place
+## Rule 9 — Configuration lifecycle is declared in one place
 
 - Every field **MUST** be classified, in a single authoritative table, as **dynamic**
   (applied on reload) or **restart-required** (preserved on reload, with the divergence
@@ -236,14 +289,15 @@ and nothing reports it.
 
 *Finding: resman-4pw.9*
 
-## Rule 9 — Acknowledge, never sleep
+## Rule 10 — Acknowledge, never sleep
 
 - `time.Sleep` **MUST NOT** be used as synchronisation **[checkable]**. Not to wait for
   a reload, not to wait for a watcher, not to "give it a moment" in production code.
 - An operation that triggers asynchronous work **MUST** return either a confirmed
   result or an explicit timeout/failure — never an optimistic success.
 - A parameter that claims to control whether runtime state changes (`reload=false`)
-  **MUST** actually control it, or be removed with a migration plan.
+  **MUST** actually control it, or be **removed immediately** as a breaking change
+  (Rule 1). A parameter kept for compatibility while meaning nothing is forbidden.
 - Persisted configuration and the published runtime snapshot are separate concepts;
   writing one **MUST NOT** implicitly publish the other.
 
@@ -254,11 +308,43 @@ before the reload can possibly have completed. And `reload=false` mutates the sh
 
 *Finding: resman-4pw.7*
 
+## Rule 11 — MCP is latest-only and protocol-stateless
+
+The supported MCP contract is **`github.com/modelcontextprotocol/go-sdk` v1.7.0 or
+newer**, serving **only** protocol revision **2026-07-28**, over both HTTP and stdio.
+
+- Streamable HTTP **MUST** be constructed with `StreamableHTTPOptions.Stateless=true`.
+  Default options are not acceptable — they are what the repository ships today.
+- The server **MUST NOT** hold protocol or client-session state: no server-side
+  `Mcp-Session-Id` storage, no sticky routing, no per-connection negotiation memory.
+  Two interchangeable server instances **MUST** serve an authenticated request
+  identically.
+- **Protocol-stateless is not application-stateless.** The resource manager's own state
+  — active users, cgroup membership, configuration — remains shared and authoritative.
+  This rule constrains the transport, not the domain.
+- The SDK can still accept older revisions; a **latest-only boundary MUST be enforced
+  explicitly** in resman. Pre-2026-07-28 revisions, `initialize`/`initialized` legacy
+  flows, and legacy session identifiers are **rejected**, not tolerated (Rule 1).
+- `MCPGODEBUG` compatibility flags, protocol aliases, and fallback modes **MUST NOT**
+  appear in the tree **[checkable]**.
+- Authentication and authorisation stay **per-request middleware**. Anything that has
+  to be remembered between requests to authorise the next one is a violation.
+- Discovery, per-request metadata, headers, request bodies, and cancellation **MUST**
+  follow the 2026-07-28 specification, with conformance tests over both transports.
+
+**Why.** `go.mod:9` pins v1.6.1 and the HTTP transport is built with default options,
+so session behaviour is whatever the SDK defaults to and older revisions remain
+negotiable. Both are contracts nobody chose.
+
+*Finding: resman-4pw.18. References:
+[go-sdk v1.7.0](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.7.0),
+[MCP 2026-07-28 changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)*
+
 ---
 
 # Part III — Environment, packaging, and on-disk safety
 
-## Rule 10 — Require only the capabilities the enabled features need
+## Rule 12 — Require only the capabilities the enabled features need
 
 - Kernel/cgroup capabilities **MUST** be discovered once and classified as **mandatory**
   for an enabled feature or **optional** (degrade explicitly).
@@ -279,7 +365,7 @@ not `cpuset` cannot run resman, for no functional reason.
 
 *Finding: resman-4pw.14*
 
-## Rule 11 — Shipped operational assets track runtime defaults **[checkable]**
+## Rule 13 — Shipped operational assets track runtime defaults **[checkable]**
 
 Anything an operator can copy and run — scrape configs, alert rules, dashboards, TLS
 scripts, Dockerfiles, unit files, the man page — is part of the product.
@@ -290,7 +376,8 @@ scripts, Dockerfiles, unit files, the man page — is part of the product.
 - Shipped YAML **SHOULD** be validated by a reproducible check (`promtool check rules`,
   `promtool check config`).
 - Renames **MUST** be swept across `docs/`, `packaging/`, `scripts/`, `README.md`, and
-  `CONTRIBUTING.md`, not just the file that prompted the rename.
+  `CONTRIBUTING.md`, not just the file that prompted the rename. Historical changelog
+  entries are the one exception: they record what was true then and stay untouched.
 
 **Why.** The project was renamed from cpu-manager to resman and the exporter port moved
 to 1974, but `cpu_manager_*` metric names still appear in `docs/alerting-rules.yml`,
@@ -302,7 +389,7 @@ any of these produces a monitoring setup that scrapes nothing.
 
 *Finding: resman-4pw.13*
 
-## Rule 12 — Files written by resman are as restrictive as what they contain
+## Rule 14 — Files written by resman are as restrictive as what they contain
 
 - Configuration can contain secrets (`MCP_AUTH_TOKEN`, password and JWT secret file
   paths). Any file derived from it — temporary file, backup, export — **MUST NOT** be
@@ -327,7 +414,7 @@ world-readable copies of itself, one per change, forever.
 
 # Part IV — Engineering practice
 
-## Rule 13 — Lock discipline
+## Rule 15 — Lock discipline
 
 - Independent state gets an independent mutex. Do not funnel unrelated state through
   one manager-wide lock — it converts a correctness problem into a latency problem and
@@ -343,7 +430,7 @@ world-readable copies of itself, one per change, forever.
 each caused by a shared lock held across a call into another component. They are cheap
 to prevent and expensive to find.
 
-## Rule 14 — Tests encode the contract, not the implementation
+## Rule 16 — Tests encode the contract, not the implementation
 
 - Every semantic fix **MUST** ship a table-driven test that would have failed before it.
   "Verified manually" does not close a behavioural issue.
@@ -351,25 +438,39 @@ to prevent and expensive to find.
   the table, not implicit paths.
 - Cross-package contracts — eligibility, membership reconciliation, reload
   acknowledgement, MCP status, Prometheus outcomes, database failure — belong in the
-  integration suite with isolated cgroup, config, and database fixtures. Host capability
-  requirements **MUST** be explicit skips, never silent passes.
+  **functional harness** (`resman-4pw.16.1`): a disposable SmolVM guest running systemd
+  as PID 1 with writable cgroup v2, isolated config, database, ports, and artifacts.
+  Every cgroup mutation stays inside the guest.
+- A failed environment preflight (`smolvm --version`, `/dev/kvm` readable and writable,
+  cgroup v2 and the required controllers present in the guest) is a **skip or a blocked
+  result — never evidence that resman passed**. Host capability requirements are
+  explicit skips, never silent passes. Invoke KVM-dependent commands through `sg kvm`
+  when the login shell does not yet expose the group; group membership alone cannot
+  substitute for a missing `/dev/kvm`.
+- Functional evidence **MUST** record the SmolVM version, guest image identity, kernel,
+  cgroup mount and controllers, CPU/RAM allocation, and the exact command run.
 - New or modified packages **SHOULD** move coverage up, never down. Current floors, for
   reference (2026-08-21): `internal/app` 16.1%, `mcp` 29.6%, `cgroup` 42.7%,
   `config` 55.7%, `metrics` 57.2%, `database` 62.1%, `logging` 62.9%, `state` 66.6%,
   `reloader` 91.9%.
 
-*Finding: resman-4pw.16*
+*Findings: resman-4pw.16, resman-4pw.16.1, resman-4pw.16.2*
 
-## Rule 15 — One language: English
+## Rule 17 — One language: English
 
 - New comments, identifiers, log messages, and documentation **MUST** be in English.
 - When you touch a function whose comments are in Italian, translate that function's
-  comments as part of the change. Do not open mass-translation pull requests; do not
-  add new Italian.
+  comments as part of the change, and give touched exported declarations godoc-form
+  English comments. Translation **MUST NOT** change behaviour.
+- This is incremental cleanup, tracked as `resman-4pw.19`. Do not open mass-translation
+  pull requests over untouched files, and leave historical changelog entries as they
+  are.
 
 **Why.** Several files (`state/control_cycle.go`, `config/config.go`) alternate between
 Italian and English within a few lines, which makes grep-based review unreliable and
 raises the cost of every external contribution.
+
+*Finding: resman-4pw.19*
 
 ---
 
@@ -378,24 +479,30 @@ raises the cost of every external contribution.
 A change is not done until every line is true:
 
 - [ ] `make fmt`, `make lint`, `make test`, `go vet ./...`, `go test -race ./...` pass.
-- [ ] No field carries more than one of eligibility / intent / observation (Rule 1).
+- [ ] Nothing was kept for compatibility; anything removed is rejected loudly, not
+      ignored (Rule 1).
+- [ ] No field carries more than one of eligibility / intent / observation (Rule 2).
 - [ ] Per-resource policy lists used for their own resource; empty-list behaviour tested
-      (Rule 2).
-- [ ] Every configured dimension of a touched decision is evaluated (Rule 3).
-- [ ] Every configuration key added has a runtime consumer, in this change (Rule 4).
-- [ ] No new cross-package string-literal keys (Rule 5).
-- [ ] Counters increment after success; every declared metric has a call site (Rule 6).
+      (Rule 3).
+- [ ] Every configured dimension of a touched decision is evaluated (Rule 4).
+- [ ] Every configuration key added has a runtime consumer, in this change (Rule 5).
+- [ ] No new cross-package string-literal keys; metrics and status contracts kept
+      distinct (Rule 6).
+- [ ] Counters increment after success; every declared metric has a call site (Rule 7).
 - [ ] External writes return errors; no unverified success log; failures above `Debug`
-      (Rule 7).
+      (Rule 8).
 - [ ] New config fields classified dynamic or restart-required in the authoritative
-      place (Rule 8).
-- [ ] No `time.Sleep` used as synchronisation (Rule 9).
-- [ ] Capability requirements match enabled features, and packaging agrees (Rule 10).
-- [ ] Shipped assets updated for any changed default, name, path, or port (Rule 11).
-- [ ] Files written by resman are no more permissive than their source (Rule 12).
-- [ ] Shared-state changes validated under `-race` (Rule 13).
-- [ ] Table-driven test that fails without the change (Rule 14).
-- [ ] New comments and identifiers in English (Rule 15).
+      place (Rule 9).
+- [ ] No `time.Sleep` used as synchronisation (Rule 10).
+- [ ] MCP stays latest-only and protocol-stateless; no session state, no fallback
+      (Rule 11).
+- [ ] Capability requirements match enabled features, and packaging agrees (Rule 12).
+- [ ] Shipped assets updated for any changed default, name, path, or port (Rule 13).
+- [ ] Files written by resman are no more permissive than their source (Rule 14).
+- [ ] Shared-state changes validated under `-race` (Rule 15).
+- [ ] Table-driven test that fails without the change; functional evidence recorded if
+      the harness was used (Rule 16).
+- [ ] New comments and identifiers in English (Rule 17).
 
 ---
 
@@ -403,18 +510,19 @@ A change is not done until every line is true:
 
 Rules marked **[checkable]** are meant to be enforced by tooling rather than by
 reviewer memory. These checks are **not implemented yet**; they are tracked as
-follow-up work to this guide.
+`resman-4pw.17.1`, with pull-request wiring in `resman-4pw.17.2`.
 
 Planned as `make verify-contracts`:
 
 | Check | Rule | Approach |
 |---|---|---|
-| Every `config:"X"` key has a consumer outside `config/` | 4 | reflect over the struct tags, grep field usage per package |
-| No cross-package string-literal map keys for known contracts | 5 | grep the known key set outside the constants file |
-| Every registered Prometheus metric has a production call site | 6 | AST scan of `metrics/prometheus.go` recorders vs callers |
-| No `time.Sleep` in non-test files outside allowed backoff sites | 9 | AST scan with an explicit allowlist |
-| Shipped assets contain no stale port/namespace | 11 | grep `9100\|9101\|cpu_manager\|cpu-manager` in `docs/`, `packaging/`, `scripts/` |
-| `promtool check rules` / `check config` on shipped YAML | 11 | invoke promtool when available, skip with a warning otherwise |
+| Every `config:"X"` key has a consumer outside `config/`, and unknown keys are rejected at load | 1, 5 | reflect over struct tags, grep field usage per package; assert `setConfigField` errors on unknown keys |
+| No cross-package string-literal map keys for known contracts | 6 | grep the known key set outside the constants file |
+| Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
+| No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
+| No `MCPGODEBUG`, `Mcp-Session-Id` storage, or pre-2026-07-28 revision strings | 11 | grep the tree, allowlist the rejection sites themselves |
+| Shipped assets contain no stale port/namespace | 13 | grep `9100\|9101\|cpu_manager\|cpu-manager` in `docs/`, `packaging/`, `scripts/`, excluding changelogs |
+| `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
 
 Until they exist, treat them as review checkpoints.
 
@@ -424,21 +532,23 @@ Until they exist, treat them as review checkpoints.
 
 | Rule | Audit finding |
 |---|---|
-| 1. Eligibility / intent / observation | `resman-4pw.1`, `resman-4pw.6` |
-| 2. Resource policy lists | `resman-4pw.1` |
-| 3. All decision dimensions evaluated | `resman-4pw.4` |
-| 4. No knob without effect | `resman-4pw.12` |
-| 5. Typed keys across boundaries | `resman-4pw.6` |
-| 6. Counter semantics | `resman-4pw.10` |
-| 7. Truthful errors and logs | `resman-4pw.11` |
-| 8. Configuration lifecycle | `resman-4pw.9` |
-| 9. Acknowledge, never sleep | `resman-4pw.7` |
-| 10. Capability requirements | `resman-4pw.14` |
-| 11. Shipped assets | `resman-4pw.13` |
-| 12. On-disk file permissions | `resman-4pw.5` |
-| 13. Lock discipline | prior race/deadlock fixes in `logging/`, `metrics/` |
-| 14. Tests encode the contract | `resman-4pw.16` |
-| 15. One language | not covered by the audit |
+| 1. No backward compatibility | epic `resman-4pw` policy; `resman-4pw.7`, `resman-4pw.12` |
+| 2. Eligibility / intent / observation | `resman-4pw.1`, `resman-4pw.6` |
+| 3. Resource policy lists | `resman-4pw.1` |
+| 4. All decision dimensions evaluated | `resman-4pw.4` |
+| 5. No knob without effect | `resman-4pw.12` |
+| 6. Typed contracts; metrics ≠ status | `resman-4pw.6` |
+| 7. Counter semantics | `resman-4pw.10` |
+| 8. Truthful errors and logs | `resman-4pw.11` |
+| 9. Configuration lifecycle | `resman-4pw.9` |
+| 10. Acknowledge, never sleep | `resman-4pw.7` |
+| 11. MCP latest-only and stateless | `resman-4pw.18` |
+| 12. Capability requirements | `resman-4pw.14` |
+| 13. Shipped assets | `resman-4pw.13` |
+| 14. On-disk file permissions | `resman-4pw.5` |
+| 15. Lock discipline | prior race/deadlock fixes in `logging/`, `metrics/` |
+| 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
+| 17. One language | `resman-4pw.19` |
 
 Findings `resman-4pw.2` (process membership reconciliation), `resman-4pw.3` (excluded
 process accounting), `resman-4pw.8` (refresh must not advance decision state), and
@@ -453,4 +563,5 @@ before a rule can be written. When those decisions are made, record them here.
 - `docs/ARCHITECTURE.md` — component structure and control flow
 - `docs/TECHNICAL-SPECIFICATION.md` — detailed component and configuration reference
 - `docs/CGROUP-V2-TECHNICAL.md` — cgroup v2 behaviour
+- `docs/MCP-README.md` — MCP server configuration and transports
 - `AGENTS.md` / `CLAUDE.md` — instructions for AI coding agents working on this project
