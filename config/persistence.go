@@ -1,0 +1,193 @@
+/*
+ * Copyright (C) 2026 Francesco Defilippo
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+)
+
+const (
+	configBackupSuffix = ".backup"
+	legacyBackupMarker = ".backup_"
+	legacyTempSuffix   = ".tmp"
+	defaultConfigMode  = os.FileMode(0600)
+)
+
+type configFileMetadata struct {
+	mode         os.FileMode
+	uid          int
+	gid          int
+	hasOwnership bool
+}
+
+type atomicFileWriter func(string, []byte, configFileMetadata) (bool, error)
+
+func readConfigFile(path string) (configFileMetadata, []byte, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return configFileMetadata{mode: defaultConfigMode}, nil, false, nil
+		}
+		return configFileMetadata{}, nil, false, fmt.Errorf("failed to stat config file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return configFileMetadata{}, nil, false, fmt.Errorf("config path %s is not a regular file", path)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return configFileMetadata{}, nil, false, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	metadata := configFileMetadata{mode: info.Mode().Perm()}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		metadata.uid = int(stat.Uid)
+		metadata.gid = int(stat.Gid)
+		metadata.hasOwnership = true
+	}
+	return metadata, content, true, nil
+}
+
+// writeFileAtomically writes and syncs a temporary file before replacing path.
+// The committed result is true when rename succeeded but parent sync failed.
+func writeFileAtomically(path string, content []byte, metadata configFileMetadata) (committed bool, err error) {
+	return writeFileAtomicallyWithSync(path, content, metadata, syncParentDirectory)
+}
+
+func writeFileAtomicallyWithSync(path string, content []byte, metadata configFileMetadata, syncDir func(string) error) (committed bool, err error) {
+	dir := filepath.Dir(path)
+	prefix := "." + filepath.Base(path) + ".tmp-"
+	tmp, err := os.CreateTemp(dir, prefix)
+	if err != nil {
+		return false, fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tmp.Close()
+		}
+		_ = os.Remove(tmpPath)
+	}()
+
+	// Apply final metadata before writing secret-bearing content. CreateTemp
+	// starts at 0600, so the empty file is never exposed with broad access.
+	if err := applyConfigFileMetadata(tmp, metadata); err != nil {
+		return false, err
+	}
+	if _, err := tmp.Write(content); err != nil {
+		return false, fmt.Errorf("failed to write temporary file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return false, fmt.Errorf("failed to sync temporary file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return false, fmt.Errorf("failed to close temporary file: %w", err)
+	}
+	closed = true
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return false, fmt.Errorf("failed to replace %s: %w", path, err)
+	}
+	committed = true
+	if err := syncDir(path); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func applyConfigFileMetadata(file *os.File, metadata configFileMetadata) error {
+	if metadata.hasOwnership {
+		info, err := file.Stat()
+		if err != nil {
+			return fmt.Errorf("failed to inspect temporary file ownership: %w", err)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || int(stat.Uid) != metadata.uid || int(stat.Gid) != metadata.gid {
+			if err := file.Chown(metadata.uid, metadata.gid); err != nil {
+				return fmt.Errorf("failed to preserve file ownership: %w", err)
+			}
+		}
+	}
+	if err := file.Chmod(metadata.mode.Perm()); err != nil {
+		return fmt.Errorf("failed to preserve file permissions: %w", err)
+	}
+	return nil
+}
+
+func removeLegacyConfigArtifacts(path string) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to inspect config directory for legacy artifacts: %w", err)
+	}
+
+	removed := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != base+legacyTempSuffix && !strings.HasPrefix(name, base+legacyBackupMarker) {
+			continue
+		}
+		if entry.IsDir() {
+			return fmt.Errorf("legacy config artifact %s is a directory", filepath.Join(dir, name))
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			return fmt.Errorf("failed to remove legacy config artifact %s: %w", name, err)
+		}
+		removed = true
+	}
+	if removed {
+		return syncParentDirectory(path)
+	}
+	return nil
+}
+
+func removeCommittedFile(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return syncParentDirectory(path)
+}
+
+func syncParentDirectory(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("failed to open parent directory: %w", err)
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapOptionalError("failed to sync parent directory", syncErr),
+			wrapOptionalError("failed to close parent directory", closeErr),
+		)
+	}
+	return nil
+}
+
+func wrapOptionalError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", message, err)
+}

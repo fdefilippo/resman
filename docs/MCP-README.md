@@ -470,9 +470,15 @@ Imposta la lista di utenti da escludere dai limiti CPU (supporta regex).
 }
 ```
 
-**Backup Automatico:**
-- Prima di ogni modifica, viene creato un backup: `/etc/resman.conf.backup_YYYYMMDD_HHMMSS`
-- In caso di errore, la configurazione viene ripristinata automaticamente
+**Automatic backup:**
+- Before each change, the previous configuration atomically replaces the single
+  rolling backup `/etc/resman.conf.backup`.
+- The active file and backup preserve the source mode and ownership; a new file uses
+  mode `0600`.
+- Legacy timestamped backups are removed on the next update after the secure rolling
+  backup has been created.
+- A write or durability failure restores the previous configuration before returning
+  an error.
 
 ### Tool: set_user_include_list
 

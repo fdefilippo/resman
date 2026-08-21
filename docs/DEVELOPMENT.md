@@ -411,10 +411,12 @@ any of these produces a monitoring setup that scrapes nothing.
 - Durability (`fsync` of file and parent directory) **MUST** be a documented, tested
   decision, not an accident of ordering.
 
-**Why.** `config/config.go:1336,1350` writes both the timestamped backup and the
-temporary file with mode `0644` before renaming, with no inspection of the original
-file's permissions and no retention limit. A config readable only by root produces
-world-readable copies of itself, one per change, forever.
+**Why.** Before `resman-4pw.5`, `config/config.go` wrote both the timestamped backup
+and the temporary file with mode `0644` before renaming, with no inspection of the
+original file's permissions and no retention limit. A config readable only by root
+produced world-readable copies of itself, one per change, forever. The remediation
+uses one rolling backup, preserves source metadata, defaults new files to `0600`, and
+syncs both file data and the parent directory.
 
 *Finding: resman-4pw.5*
 

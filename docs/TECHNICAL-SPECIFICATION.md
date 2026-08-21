@@ -821,8 +821,8 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 - **Output:** `success`, `previous_value`, `new_value`, `reload_triggered`
 - **Implementation:**
   1. Validates regex patterns
-  2. Creates timestamped backup
-  3. Updates config file atomically
+  2. Replaces the single rolling backup with the previous configuration
+  3. Updates and syncs the config file atomically
   4. Triggers config reload if requested
 - **Security:** Requires `MCP_ALLOW_WRITE_OPS=true`
 
@@ -841,26 +841,21 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 
 ### 8.2.2 Configuration Save Mechanism
 
-**Backup Process:**
-```go
-func (c *Config) SaveToFile(path string) error {
-    // 1. Create timestamped backup
-    timestamp := time.Now().Format("20060102_150405")
-    backupPath := fmt.Sprintf("%s.backup_%s", path, timestamp)
-    
-    // 2. Read and write backup
-    content, _ := os.ReadFile(path)
-    os.WriteFile(backupPath, content, 0644)
-    
-    // 3. Update config lines
-    lines := c.updateConfigLines(path)
-    
-    // 4. Atomic write (temp file + rename)
-    tmpPath := path + ".tmp"
-    os.WriteFile(tmpPath, content, 0644)
-    os.Rename(tmpPath, path)
-}
-```
+**Backup and durability process:**
+
+1. Inspect the current file and preserve its permission mode and ownership. A new
+   configuration defaults to mode `0600`.
+2. Atomically replace the single rolling backup `<config>.backup` with the exact
+   previous contents. The backup uses the same metadata as the source.
+3. Remove legacy timestamped backups and the obsolete predictable `.tmp` artifact.
+4. Write the replacement through a randomly named same-directory temporary file,
+   applying final metadata before secret-bearing content is written.
+5. Sync the temporary file, rename it over the configuration, and sync the parent
+   directory. A post-rename durability failure restores the previous contents before
+   returning an error.
+
+This keeps retention bounded to one previous version and prevents temporary or backup
+files from becoming more readable than the active configuration.
 
 **Rollback on Error:**
 ```go

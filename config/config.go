@@ -1313,7 +1313,7 @@ func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload
 	return previousValue, nil
 }
 
-// SaveToFile salva la configurazione su file, creando backup automatico
+// SaveToFile persists the configuration with a bounded secure backup.
 func (c *Config) SaveToFile(path string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1321,55 +1321,58 @@ func (c *Config) SaveToFile(path string) error {
 }
 
 func (c *Config) saveToFileLocked(path string) error {
-	// 1. Crea backup del file esistente
-	if _, err := os.Stat(path); err == nil {
-		timestamp := time.Now().Format("20060102_150405")
-		backupPath := fmt.Sprintf("%s.backup_%s", path, timestamp)
+	return c.saveToFileLockedWithWriter(path, writeFileAtomically)
+}
 
-		// Leggi contenuto originale
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to read config file for backup: %w", err)
-		}
-
-		// Scrivi backup
-		if err := os.WriteFile(backupPath, content, 0644); err != nil {
-			return fmt.Errorf("failed to create backup: %w", err)
-		}
-	}
-
-	// 2. Leggi il file esistente e aggiorna le righe
-	lines, err := c.updateConfigLines(path)
+func (c *Config) saveToFileLockedWithWriter(path string, writer atomicFileWriter) error {
+	metadata, original, exists, err := readConfigFile(path)
 	if err != nil {
 		return err
 	}
 
-	// 3. Scrivi su file temporaneo
-	tmpPath := path + ".tmp"
+	backupPath := path + configBackupSuffix
+	if exists {
+		if _, err := writer(backupPath, original, metadata); err != nil {
+			return fmt.Errorf("failed to create secure configuration backup: %w", err)
+		}
+	}
+
+	if err := removeLegacyConfigArtifacts(path); err != nil {
+		return err
+	}
+
+	// Preserve comments and unrelated settings from the exact version backed up
+	// above, avoiding a second read with different contents or metadata.
+	lines := c.updateConfigLines(original, exists)
 	content := strings.Join(lines, "\n")
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write temp config file: %w", err)
+	committed, err := writer(path, []byte(content), metadata)
+	if err == nil {
+		return nil
 	}
 
-	// 4. Rinomina atomico
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath) // Cleanup se rename fallisce
-		return fmt.Errorf("failed to rename config file: %w", err)
+	writeErr := fmt.Errorf("failed to persist configuration: %w", err)
+	if !committed {
+		return writeErr
 	}
 
-	return nil
+	// A parent-directory sync failure happens after rename. Restore the previous
+	// file so callers can safely roll back their in-memory configuration.
+	if exists {
+		if _, restoreErr := writer(path, original, metadata); restoreErr != nil {
+			return errors.Join(writeErr, fmt.Errorf("failed to restore configuration backup: %w", restoreErr))
+		}
+	} else {
+		if removeErr := removeCommittedFile(path); removeErr != nil {
+			return errors.Join(writeErr, fmt.Errorf("failed to remove non-durable configuration: %w", removeErr))
+		}
+	}
+	return writeErr
 }
 
-// updateConfigLines legge e aggiorna le righe della configurazione
-func (c *Config) updateConfigLines(path string) ([]string, error) {
-	// Leggi file esistente
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// File non esiste, crea nuovo
-			return c.generateConfigLines(), nil
-		}
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+// updateConfigLines preserves existing content while updating managed fields.
+func (c *Config) updateConfigLines(content []byte, exists bool) []string {
+	if !exists {
+		return c.generateConfigLines()
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -1381,13 +1384,13 @@ func (c *Config) updateConfigLines(path string) ([]string, error) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Salta commenti e righe vuote
+		// Preserve comments and blank lines.
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			updated = append(updated, line)
 			continue
 		}
 
-		// Controlla se è USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+		// Replace managed filter settings with their current values.
 		if strings.HasPrefix(trimmed, "USER_INCLUDE_LIST=") {
 			value := strings.Join(c.UserIncludeList, ",")
 			updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
@@ -1402,11 +1405,11 @@ func (c *Config) updateConfigLines(path string) ([]string, error) {
 			continue
 		}
 
-		// Altre righe lasciate invariate
+		// Preserve all other settings verbatim.
 		updated = append(updated, line)
 	}
 
-	// Aggiungi righe mancanti
+	// Append managed settings that were absent from the source.
 	if !includeListWritten {
 		value := strings.Join(c.UserIncludeList, ",")
 		updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
@@ -1416,10 +1419,10 @@ func (c *Config) updateConfigLines(path string) ([]string, error) {
 		updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
 	}
 
-	return updated, nil
+	return updated
 }
 
-// generateConfigLines genera linee di configurazione di base
+// generateConfigLines creates a minimal configuration for a new file.
 func (c *Config) generateConfigLines() []string {
 	includeList := ""
 	if len(c.UserIncludeList) > 0 {
