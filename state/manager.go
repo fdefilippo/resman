@@ -87,9 +87,7 @@ type userResourceLimitState struct {
 	ioApplied  bool
 }
 
-// ThresholdTracker monitora il superamento della soglia CPU nel tempo
-// UserStabilityTracker monitora la stabilità dell'utente sotto soglia per il rilascio
-// MetricsCollector è l'interfaccia per raccogliere metriche di sistema.
+// MetricsCollector defines the system metrics boundary used by the state manager.
 type MetricsCollector interface {
 	GetTotalCores() int
 	GetTotalCPUUsage() float64
@@ -112,7 +110,7 @@ type MetricsCollector interface {
 	GetSystemLoad() (float64, error)
 	GetAllUserMetrics() map[int]*resmanmetrics.UserMetrics
 	GetDBWriter() *resmanmetrics.DBWriter
-	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int)
+	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error
 	GetUsernameFromUID(uid int) string
 }
 
@@ -151,13 +149,14 @@ type CgroupManager interface {
 	GetCreatedCgroups() []int
 }
 
-// PrometheusExporter è l'interfaccia per esportare metriche Prometheus.
+// PrometheusExporter defines the Prometheus boundary used by the state manager.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
 	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
+	RecordError(component, errorType string)
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)

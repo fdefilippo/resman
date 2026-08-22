@@ -1571,22 +1571,22 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 	return 0
 }
 
-// WriteMetricsToDatabase scrive le metriche nel database se il DBWriter è configurato
-func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
+// WriteMetricsToDatabase writes one metrics batch when a database writer is configured.
+func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
 	c.mu.RLock()
 	writer := c.dbWriter
 	c.mu.RUnlock()
 
 	if writer == nil {
-		return
+		return nil
 	}
 
 	if err := writer.WriteMetricsBatch(userMetrics, totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount); err != nil {
-		c.logger.Debug("Failed to write metrics batch to database", "error", err)
-		return
+		return fmt.Errorf("write metrics to database: %w", err)
 	}
 
 	writer.MarkWritten()
+	return nil
 }
 
 // Stop stops the collector and its background goroutines

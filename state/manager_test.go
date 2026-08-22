@@ -18,17 +18,22 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	resmandatabase "github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 )
 
@@ -54,7 +59,8 @@ func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics 
 	return m.allUserMetrics
 }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
-func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
+func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
+	return nil
 }
 
 // ALL USERS metrics
@@ -131,7 +137,15 @@ func (m *mockCgroupManager) CleanupAll() error                                  
 func (m *mockCgroupManager) GetCgroupInfo(uid int) (map[string]string, error)         { return nil, nil }
 func (m *mockCgroupManager) GetCreatedCgroups() []int                                 { return nil }
 
-type mockPrometheusExporter struct{}
+type prometheusErrorRecord struct {
+	component string
+	errorType string
+}
+
+type mockPrometheusExporter struct {
+	mu     sync.Mutex
+	errors []prometheusErrorRecord
+}
 
 func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
 func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
@@ -139,12 +153,23 @@ func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu flo
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 }
-func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string)   {}
+func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string) {}
+func (m *mockPrometheusExporter) RecordError(component, errorType string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.errors = append(m.errors, prometheusErrorRecord{component: component, errorType: errorType})
+}
 func (m *mockPrometheusExporter) Start(ctx context.Context) error            { return nil }
 func (m *mockPrometheusExporter) Stop() error                                { return nil }
 func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {}
 func (m *mockPrometheusExporter) IncrementLimitsActivated()                  {}
 func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                {}
+
+func (m *mockPrometheusExporter) recordedErrors() []prometheusErrorRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]prometheusErrorRecord(nil), m.errors...)
+}
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -168,6 +193,153 @@ func TestNewManagerNilConfig(t *testing.T) {
 
 	if err == nil {
 		t.Error("NewManager() should error with nil config")
+	}
+}
+
+func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	dbManager, err := resmandatabase.NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbManager.Close(); err != nil {
+			t.Errorf("DatabaseManager.Close() error: %v", err)
+		}
+	})
+
+	controlDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controlDB.Close(); err != nil {
+			t.Errorf("control database Close() error: %v", err)
+		}
+	})
+	if _, err := controlDB.Exec(`
+		CREATE TRIGGER reject_uid_1001
+		BEFORE INSERT ON user_metrics
+		WHEN NEW.uid = 1001
+		BEGIN
+			SELECT RAISE(ABORT, 'rejected test UID');
+		END;
+	`); err != nil {
+		t.Fatalf("failed to create rejection trigger: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	collector, err := metrics.NewCollector(cfg)
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+
+	writer := metrics.NewDBWriter(dbManager, 3600)
+	collector.SetDBWriter(writer)
+	exporter := &mockPrometheusExporter{}
+	manager := &Manager{
+		logger:             logging.GetLogger(),
+		metricsCollector:   collector,
+		prometheusExporter: exporter,
+		activeUsers:        map[int]bool{1001: true},
+	}
+	sample := &SystemMetrics{
+		TotalCPUUsage: 50,
+		TotalCores:    4,
+		SystemLoad:    2.5,
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1001: {
+				UID:          1001,
+				Username:     "transaction-test",
+				CPUUsage:     25,
+				MemoryUsage:  4096,
+				ProcessCount: 2,
+				IsLimited:    true,
+			},
+		},
+	}
+
+	err = collector.WriteMetricsToDatabase(
+		sample.UserMetrics,
+		sample.TotalCPUUsage,
+		sample.TotalCores,
+		sample.SystemLoad,
+		true,
+		1,
+	)
+	if err == nil {
+		t.Fatal("WriteMetricsToDatabase() expected a transaction error")
+	}
+	for _, fragment := range []string{"write metrics to database", "rejected test UID"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("WriteMetricsToDatabase() error = %q, want fragment %q", err, fragment)
+		}
+	}
+	if !writer.ShouldWrite() {
+		t.Fatal("failed direct write marked the database writer as written")
+	}
+
+	start := time.Now().Add(-time.Minute)
+	end := time.Now().Add(time.Minute)
+	tests := []struct {
+		name            string
+		prepare         func(t *testing.T)
+		wantErrors      []prometheusErrorRecord
+		wantShouldWrite bool
+		wantSystemRows  int
+		wantUserRows    int
+	}{
+		{
+			name:            "failed transaction remains retryable",
+			wantErrors:      []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
+			wantShouldWrite: true,
+		},
+		{
+			name: "successful retry marks write",
+			prepare: func(t *testing.T) {
+				t.Helper()
+				if _, err := controlDB.Exec("DROP TRIGGER reject_uid_1001"); err != nil {
+					t.Fatalf("failed to drop rejection trigger: %v", err)
+				}
+			},
+			wantErrors:      []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
+			wantShouldWrite: false,
+			wantSystemRows:  1,
+			wantUserRows:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.prepare != nil {
+				tt.prepare(t)
+			}
+
+			manager.writeDatabaseMetrics(sample)
+
+			if got := exporter.recordedErrors(); !reflect.DeepEqual(got, tt.wantErrors) {
+				t.Errorf("recorded Prometheus errors = %+v, want %+v", got, tt.wantErrors)
+			}
+			if got := writer.ShouldWrite(); got != tt.wantShouldWrite {
+				t.Errorf("DBWriter.ShouldWrite() = %t, want %t", got, tt.wantShouldWrite)
+			}
+
+			systemHistory, err := dbManager.GetSystemHistory(start, end, 10)
+			if err != nil {
+				t.Fatalf("GetSystemHistory() error: %v", err)
+			}
+			if len(systemHistory) != tt.wantSystemRows {
+				t.Errorf("system rows = %d, want %d", len(systemHistory), tt.wantSystemRows)
+			}
+			userHistory, err := dbManager.GetUserHistory(1001, start, end, 10)
+			if err != nil {
+				t.Fatalf("GetUserHistory() error: %v", err)
+			}
+			if len(userHistory) != tt.wantUserRows {
+				t.Errorf("user rows = %d, want %d", len(userHistory), tt.wantUserRows)
+			}
+		})
 	}
 }
 

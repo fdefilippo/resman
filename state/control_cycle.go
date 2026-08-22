@@ -589,6 +589,12 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
 }
 
+const (
+	metricsDatabaseErrorComponent = "metrics_database"
+	metricsDatabaseWriteFailure   = "write_failure"
+)
+
+// writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.
 func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	if m.metricsCollector == nil {
 		return
@@ -610,15 +616,24 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	activeUsers := len(m.activeUsers)
 	m.mu.RUnlock()
 
-	// Scrivi le metriche
-	m.metricsCollector.WriteMetricsToDatabase(
+	if err := m.metricsCollector.WriteMetricsToDatabase(
 		metrics.UserMetrics,
 		metrics.TotalCPUUsage,
 		metrics.TotalCores,
 		metrics.SystemLoad,
 		limitsActive,
 		activeUsers,
-	)
+	); err != nil {
+		m.logger.Warn("Failed to write metrics to database",
+			"users", len(metrics.UserMetrics),
+			"limits_active", limitsActive,
+			"error", err,
+		)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(metricsDatabaseErrorComponent, metricsDatabaseWriteFailure)
+		}
+		return
+	}
 
 	m.logger.Debug("Metrics written to database",
 		"users", len(metrics.UserMetrics),

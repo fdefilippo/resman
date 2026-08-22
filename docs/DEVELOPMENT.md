@@ -268,11 +268,11 @@ called from production code.
   and **SHOULD** also increment an error metric.
 - Retry logic **MUST NOT** hide the first failure from observability.
 
-**Why.** `Collector.WriteMetricsToDatabase` (`metrics/collector.go:1575`) returns
-nothing and logs a failed batch write at `Debug` before returning; the caller then logs
-`"Metrics written to database"` unconditionally (`state/control_cycle.go:622`). An
-operator watching logs sees continuous successful persistence while the database
-receives nothing.
+**Why.** Before `resman-4pw.11`, `Collector.WriteMetricsToDatabase` returned nothing
+and logged a failed batch write at `Debug`; its caller then logged
+`"Metrics written to database"` unconditionally. The remediation propagates a
+contextual error to the control cycle, which emits a warning and a bounded Prometheus
+error series while leaving the failed batch eligible for retry.
 
 *Finding: resman-4pw.11*
 

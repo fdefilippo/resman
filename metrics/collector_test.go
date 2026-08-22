@@ -94,7 +94,7 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	collector := &Collector{
 		dbWriter: NewDBWriter(dbManager, 0),
 	}
-	collector.WriteMetricsToDatabase(
+	if err := collector.WriteMetricsToDatabase(
 		map[int]*UserMetrics{
 			1000: {
 				UID:          1000,
@@ -110,7 +110,9 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 		2.5,
 		true,
 		1,
-	)
+	); err != nil {
+		t.Fatalf("WriteMetricsToDatabase() error: %v", err)
+	}
 
 	start := time.Now().Add(-time.Minute)
 	end := time.Now().Add(time.Minute)

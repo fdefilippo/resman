@@ -384,6 +384,44 @@ func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *te
 	}
 }
 
+func TestRecordErrorPublishesOneBoundedSeries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.RecordError("metrics_database", "write_failure")
+	exporter.RecordError("metrics_database", "write_failure")
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "resman_errors_total" {
+			continue
+		}
+		if len(family.Metric) != 1 {
+			t.Fatalf("resman_errors_total series = %d, want 1", len(family.Metric))
+		}
+		metric := family.Metric[0]
+		if got := metric.Counter.GetValue(); got != 2 {
+			t.Fatalf("resman_errors_total value = %f, want 2", got)
+		}
+		labels := make(map[string]string, len(metric.Label))
+		for _, label := range metric.Label {
+			labels[label.GetName()] = label.GetValue()
+		}
+		if labels["component"] != "metrics_database" || labels["error_type"] != "write_failure" {
+			t.Fatalf("resman_errors_total labels = %+v, want metrics_database/write_failure", labels)
+		}
+		return
+	}
+	t.Fatal("resman_errors_total metric family not found")
+}
+
 func TestIOOperationMetricHelpDescribesSyscallCounters(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
