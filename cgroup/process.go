@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
@@ -84,7 +86,7 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 	return true, nil
 }
 
-// MoveAllUserProcesses sposta tutti i processi di un utente nel suo cgroup.
+// MoveAllUserProcesses moves every enforceable process owned by a user into its cgroup.
 // Uses gopsutil for efficient process discovery.
 func (m *Manager) MoveAllUserProcesses(uid int) error {
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
@@ -102,6 +104,7 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 
 	var movedCount, totalProcesses int
 	var processNames, errors []string
+	cfg := m.getConfig()
 
 	for _, pid := range pids {
 		totalProcesses++
@@ -112,20 +115,20 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 				"error", infoErr,
 			)
 		}
-		processName := processNameFromInfo(pid, processInfo)
+		selection := processSelectionFromInfo(cfg, processInfo)
 
-		// Salta processi esclusi
-		if m.getConfig().IsProcessExcluded(processName) {
+		// Excluded processes stay in their original cgroup and out of decision inputs.
+		if !selection.Enforceable {
 			continue
 		}
 
-		// Sposta il processo
+		// Move the selected process.
 		moved, err := m.moveProcessToCgroup(pid, uid, processInfo)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", processName, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", selection.Name, err))
 		} else if moved {
 			movedCount++
-			processNames = append(processNames, processName)
+			processNames = append(processNames, selection.Name)
 		}
 	}
 
@@ -277,12 +280,12 @@ func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 	return 0, fmt.Errorf("UID not found in status file")
 }
 
-// CleanupUserCgroup rimuove il cgroup di un utente (dopo aver spostato i processi fuori).
+// getProcessInfo returns process identity and diagnostic fields from procfs.
 func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 	info := make(map[string]string)
 	processPath := filepath.Join(m.getProcRoot(), strconv.Itoa(pid))
 
-	// Nome del processo da /proc/[pid]/comm
+	// Read the kernel process name from /proc/PID/comm.
 	commFile := filepath.Join(processPath, "comm")
 	if data, err := os.ReadFile(commFile); err == nil {
 		info["name"] = strings.TrimSpace(string(data))
@@ -290,18 +293,13 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 		info["name"] = "unknown"
 	}
 
-	// Command line da /proc/[pid]/cmdline
-	cmdlineFile := filepath.Join(processPath, "cmdline")
-	if data, err := os.ReadFile(cmdlineFile); err == nil {
-		cmdline := strings.ReplaceAll(string(data), "\x00", " ")
-		cmdline = strings.TrimSpace(cmdline)
-		if cmdline != "" {
-			info["cmdline"] = cmdline
-		}
+	// Resolve the executable identity without trusting the user-controlled argv[0].
+	if executable, err := os.Readlink(filepath.Join(processPath, "exe")); err == nil {
+		info["executable"] = executable
 	}
 
-	// Username da /proc/[pid]/status (campo Uid:) + cache lookup
-	// Evita exec.Command("ps") che è costoso (fork+exec per ogni processo)
+	// Resolve the username from the real UID and cache the lookup. This avoids
+	// spawning ps once per process.
 	statusFile := filepath.Join(processPath, "status")
 	if data, err := os.ReadFile(statusFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -323,7 +321,7 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 	return info, nil
 }
 
-// getProcessName cerca di ottenere il nome migliore per un processo
+// getProcessName returns the normalized policy identity for a process.
 func (m *Manager) getProcessName(pid int) string {
 	info, err := m.getProcessInfo(pid)
 	if err != nil {
@@ -332,24 +330,12 @@ func (m *Manager) getProcessName(pid int) string {
 	return processNameFromInfo(pid, info)
 }
 
-func processNameFromInfo(pid int, info map[string]string) string {
-	// Preferisci cmdline se disponibile e non troppo lungo
-	if cmdline, ok := info["cmdline"]; ok && cmdline != "" && len(cmdline) < 100 {
-		// Prendi solo il primo comando (prima dello spazio)
-		parts := strings.Fields(cmdline)
-		if len(parts) > 0 {
-			// Estrai solo il nome del comando (senza path)
-			base := filepath.Base(parts[0])
-			return fmt.Sprintf("%s[%d]", base, pid)
-		}
-	}
+func processNameFromInfo(_ int, info map[string]string) string {
+	return processpolicy.CanonicalName(info["executable"], info["name"])
+}
 
-	// Altrimenti usa il nome dal comm
-	if name, ok := info["name"]; ok && name != "" {
-		return fmt.Sprintf("%s[%d]", name, pid)
-	}
-
-	return fmt.Sprintf("PID-%d", pid)
+func processSelectionFromInfo(cfg *config.Config, info map[string]string) processpolicy.Selection {
+	return processpolicy.Evaluate(cfg, info["executable"], info["name"])
 }
 
 func (m *Manager) usernameForUID(uid string) string {

@@ -37,7 +37,7 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 	event := limitHookEvent{
 		UID:             uid,
 		Username:        username,
-		CPUUsage:        metrics.UserCPUUsage[uid],
+		CPUUsage:        userEnforceableCPUUsage(metrics, uid),
 		LimitedUsers:    metrics.CPUEligibleUsersCount,
 		SharedCgroup:    sharedCgroup,
 		Timestamp:       time.Now().UTC(),

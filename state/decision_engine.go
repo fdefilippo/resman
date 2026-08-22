@@ -279,7 +279,7 @@ func (t *UserStabilityTracker) AllBelowThreshold(
 	for _, uid := range users {
 		currentUsers[uid] = struct{}{}
 		metrics, ok := userMetrics[uid]
-		if !ok || metrics == nil || metrics.CPUUsageEMA >= threshold {
+		if !ok || metrics == nil || metrics.EnforceableUsage.CPUUsageEMA >= threshold {
 			delete(t.belowThresholdSince, uid)
 			stable = false
 			continue

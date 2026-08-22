@@ -39,10 +39,11 @@ import (
 
 // Mock implementations for testing
 type mockMetricsCollector struct {
-	allUserMetrics map[int]*metrics.UserMetrics
-	usernames      map[int]string
-	systemLoad     float64
-	systemLoadErr  error
+	allUserMetrics                   map[int]*metrics.UserMetrics
+	preserveExplicitEnforceableUsage bool
+	usernames                        map[int]string
+	systemLoad                       float64
+	systemLoadErr                    error
 }
 
 func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
@@ -56,6 +57,24 @@ func (m *mockMetricsCollector) GetSystemLoad() (float64, error) {
 	return m.systemLoad, m.systemLoadErr
 }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics {
+	if !m.preserveExplicitEnforceableUsage {
+		for _, userMetrics := range m.allUserMetrics {
+			if userMetrics == nil {
+				continue
+			}
+			userMetrics.EnforceableUsage = metrics.ProcessSetMetrics{
+				CPUUsage:        userMetrics.CPUUsage,
+				CPUUsageAverage: userMetrics.CPUUsageAverage,
+				CPUUsageEMA:     userMetrics.CPUUsageEMA,
+				MemoryUsage:     userMetrics.MemoryUsage,
+				ProcessCount:    userMetrics.ProcessCount,
+				IOReadBytes:     userMetrics.IOReadBytes,
+				IOWriteBytes:    userMetrics.IOWriteBytes,
+				IOReadOps:       userMetrics.IOReadOps,
+				IOWriteOps:      userMetrics.IOWriteOps,
+			}
+		}
+	}
 	return m.allUserMetrics
 }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
@@ -683,6 +702,75 @@ func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) 
 	}
 }
 
+func TestCollectSystemMetricsKeepsExcludedUsageOutOfEveryDecisionAggregate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.UserIncludeList = []string{"^alice$"}
+	cfg.CPUThreshold = 1
+	cfg.CPUThresholdDuration = 0
+	cfg.RAMEnabled = true
+	cfg.RAMThreshold = 1
+	cfg.IOEnabled = true
+	cfg.IOThreshold = 1
+	cfg.IOThresholdDuration = 0
+	cfg.IOReadBPS = "1"
+	cfg.IOWriteBPS = "max"
+	cfg.IOReadIOPS = 0
+	cfg.IOWriteIOPS = 0
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {
+				UID: 1000, Username: "alice", CPUUsage: 90, CPUUsageEMA: 90,
+				MemoryUsage: 16 * 1024 * 1024 * 1024, ProcessCount: 1,
+				IOReadBytes: 1 << 30,
+			},
+		},
+	}
+	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	first, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("first collectSystemMetrics() error: %v", err)
+	}
+	manager.prevIOTime = time.Now().Add(-time.Second)
+	collector.allUserMetrics[1000].IOReadBytes += 1 << 30
+	second, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("second collectSystemMetrics() error: %v", err)
+	}
+	if first.AllUsersCPUUsage != 90 || second.AllUsersMemoryUsage != 16*1024*1024*1024 {
+		t.Fatalf("observed totals lost excluded usage: first=%+v second=%+v", first, second)
+	}
+	if second.CPUEligibleCPUUsage != 0 || second.RAMEligibleUsageBytes != 0 || second.IOEligibleReadBPS != 0 {
+		t.Fatalf("decision aggregates include excluded usage: CPU=%.1f RAM=%d IO=%.1f",
+			second.CPUEligibleCPUUsage, second.RAMEligibleUsageBytes, second.IOEligibleReadBPS)
+	}
+	if decision, reason := manager.makeDecision(second); decision != "MAINTAIN_CURRENT_STATE" {
+		t.Fatalf("excluded-only decision = %s (%s), want maintenance", decision, reason)
+	}
+}
+
+func TestManagerUpdateConfigResetsIODecisionBaselineOnProcessPolicyChange(t *testing.T) {
+	cfg := config.DefaultConfig()
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.prevIOCounters[1000] = ioCounters{readBytes: 100}
+	manager.prevIOTime = time.Now()
+
+	reloaded := config.DefaultConfig()
+	reloaded.ProcessExcludeList = []string{"^stress$"}
+	manager.UpdateConfig(reloaded)
+	if len(manager.prevIOCounters) != 0 || !manager.prevIOTime.IsZero() {
+		t.Fatalf("I/O baseline after process-policy reload = %v at %v, want empty",
+			manager.prevIOCounters, manager.prevIOTime)
+	}
+}
+
 func TestMakeDecisionUsesIndependentResourceAggregates(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -962,7 +1050,7 @@ func TestMaintenanceMigratesStandaloneUserAfterCPUEligibilityReload(t *testing.T
 		TotalCores:   4,
 		UserCPUUsage: map[int]float64{1000: 1},
 		UserMetrics: map[int]*metrics.UserMetrics{
-			1000: {UID: 1000, Username: "resource-user", CPUUsageEMA: 1, EligibleForRAM: true},
+			1000: {UID: 1000, Username: "resource-user", CPUUsageEMA: 1, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 1}, EligibleForRAM: true},
 		},
 	}
 	if err := manager.activateLimits(resourceMetrics); err != nil {
@@ -1229,7 +1317,7 @@ func TestUserStabilityTrackerUsesWallClockDuration(t *testing.T) {
 	tracker := newUserStabilityTracker()
 	users := []int{1000}
 	userMetrics := map[int]*metrics.UserMetrics{
-		1000: {UID: 1000, CPUUsageEMA: 10},
+		1000: {UID: 1000, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}},
 	}
 	now := time.Now()
 	required := 90 * time.Second
@@ -1251,17 +1339,19 @@ func TestUserStabilityTrackerResetsOnThresholdCrossing(t *testing.T) {
 	tracker := newUserStabilityTracker()
 	users := []int{1000}
 	userMetrics := map[int]*metrics.UserMetrics{
-		1000: {UID: 1000, CPUUsageEMA: 10},
+		1000: {UID: 1000, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}},
 	}
 	now := time.Now()
 	required := 30 * time.Second
 
 	tracker.AllBelowThreshold(users, userMetrics, 40, required, now)
 	userMetrics[1000].CPUUsageEMA = 50
+	userMetrics[1000].EnforceableUsage.CPUUsageEMA = 50
 	if tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(required)) {
 		t.Fatal("above-threshold sample reported stable")
 	}
 	userMetrics[1000].CPUUsageEMA = 10
+	userMetrics[1000].EnforceableUsage.CPUUsageEMA = 10
 	if tracker.AllBelowThreshold(users, userMetrics, 40, required, now.Add(2*required)) {
 		t.Fatal("stability duration was not restarted after threshold crossing")
 	}
@@ -1781,7 +1871,7 @@ func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 		TotalCores:   4,
 		UserCPUUsage: map[int]float64{1000: 10},
 		UserMetrics: map[int]*metrics.UserMetrics{1000: {
-			UID: 1000, CPUUsageEMA: 10, EligibleForCPU: true, EligibleForRAM: true, EligibleForIO: true,
+			UID: 1000, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}, EligibleForCPU: true, EligibleForRAM: true, EligibleForIO: true,
 		}},
 		CPUEligibleUsers: []int{1000},
 	}
@@ -1823,7 +1913,7 @@ func TestReleaseIdleUsersReaddsUsersWithoutPerUserSettleDelay(t *testing.T) {
 	eligibleUsers := make([]int, 0, userCount)
 	for uid := 1000; uid < 1000+userCount; uid++ {
 		userCPUUsage[uid] = 10
-		userMetrics[uid] = &metrics.UserMetrics{UID: uid, CPUUsageEMA: 10}
+		userMetrics[uid] = &metrics.UserMetrics{UID: uid, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}}
 		eligibleUsers = append(eligibleUsers, uid)
 	}
 
@@ -1903,7 +1993,7 @@ func TestReleaseIdleUsersReconcilesResourceLimitsAfterReload(t *testing.T) {
 	metrics := &SystemMetrics{
 		TotalCores:       4,
 		UserCPUUsage:     map[int]float64{1000: 10},
-		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}}},
 		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {
@@ -2039,7 +2129,7 @@ func TestReleaseIdleUsersUsesEMAAndPerUserHoldTime(t *testing.T) {
 	metrics := &SystemMetrics{
 		TotalCores:       4,
 		UserCPUUsage:     map[int]float64{1000: 0},
-		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 5}},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 5, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 5}}},
 		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {
@@ -2050,6 +2140,7 @@ func TestReleaseIdleUsersUsesEMAAndPerUserHoldTime(t *testing.T) {
 	}
 
 	metrics.UserMetrics[1000].CPUUsageEMA = 0
+	metrics.UserMetrics[1000].EnforceableUsage.CPUUsageEMA = 0
 	manager.userLimitedAt[1000] = time.Now()
 	if err := manager.releaseIdleUsers(metrics); err != nil {
 		t.Fatalf("releaseIdleUsers(hold time) error: %v", err)
@@ -2082,7 +2173,7 @@ func TestReleaseIdleUsersReAddDoesNotResetGlobalActivationTime(t *testing.T) {
 	metrics := &SystemMetrics{
 		TotalCores:       4,
 		UserCPUUsage:     map[int]float64{1000: 10},
-		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10, EnforceableUsage: metrics.ProcessSetMetrics{CPUUsageEMA: 10}}},
 		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {

@@ -24,12 +24,14 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/host"
@@ -65,6 +67,21 @@ type UserMetrics struct {
 	IOWriteBytes      uint64  // Total bytes written to block devices
 	IOReadOps         uint64  // Total read-family syscalls reported by /proc/PID/io syscr
 	IOWriteOps        uint64  // Total write-family syscalls reported by /proc/PID/io syscw
+	EnforceableUsage  ProcessSetMetrics
+}
+
+// ProcessSetMetrics contains usage from processes selected for cgroup
+// enforcement. Observed UserMetrics fields continue to describe every process.
+type ProcessSetMetrics struct {
+	CPUUsage        float64
+	CPUUsageAverage float64
+	CPUUsageEMA     float64
+	MemoryUsage     uint64
+	ProcessCount    int
+	IOReadBytes     uint64
+	IOWriteBytes    uint64
+	IOReadOps       uint64
+	IOWriteOps      uint64
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -78,6 +95,11 @@ type procCache struct {
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
 type userData struct {
+	observed    processUsage
+	enforceable processUsage
+}
+
+type processUsage struct {
 	cpuUsage     float64
 	cpuUsageAvg  float64
 	processCount int
@@ -88,10 +110,56 @@ type userData struct {
 	ioWriteOps   uint64
 }
 
+func (u *processUsage) add(sample processUsage) {
+	u.cpuUsage += sample.cpuUsage
+	u.cpuUsageAvg += sample.cpuUsageAvg
+	u.processCount += sample.processCount
+	u.memoryUsage += sample.memoryUsage
+	u.ioReadBytes += sample.ioReadBytes
+	u.ioWriteBytes += sample.ioWriteBytes
+	u.ioReadOps += sample.ioReadOps
+	u.ioWriteOps += sample.ioWriteOps
+}
+
+func addProcessSample(data *userData, cfg *config.Config, executable, comm string, sample processUsage) processpolicy.Selection {
+	selection := processpolicy.Evaluate(cfg, executable, comm)
+	data.observed.add(sample)
+	if selection.Enforceable {
+		data.enforceable.add(sample)
+	}
+	return selection
+}
+
+func processSetMetrics(usage processUsage, ema float64) ProcessSetMetrics {
+	return ProcessSetMetrics{
+		CPUUsage:        usage.cpuUsage,
+		CPUUsageAverage: usage.cpuUsageAvg,
+		CPUUsageEMA:     ema,
+		MemoryUsage:     usage.memoryUsage,
+		ProcessCount:    usage.processCount,
+		IOReadBytes:     usage.ioReadBytes,
+		IOWriteBytes:    usage.ioWriteBytes,
+		IOReadOps:       usage.ioReadOps,
+		IOWriteOps:      usage.ioWriteOps,
+	}
+}
+
+func readProcessIdentity(procRoot string, pid int) (executable, comm string) {
+	processPath := filepath.Join(procRoot, strconv.Itoa(pid))
+	if resolved, err := os.Readlink(filepath.Join(processPath, "exe")); err == nil {
+		executable = resolved
+	}
+	if data, err := os.ReadFile(filepath.Join(processPath, "comm")); err == nil {
+		comm = string(data)
+	}
+	return executable, comm
+}
+
 // emaCache stores EMA values per UID between cycles.
 type emaCache struct {
-	mu     sync.RWMutex
-	values map[int]float64 // uid -> EMA value
+	mu                sync.RWMutex
+	values            map[int]float64 // uid -> observed EMA value
+	enforceableValues map[int]float64 // uid -> enforceable-process EMA value
 }
 
 type cpuJiffySample struct {
@@ -163,7 +231,8 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 			procStartTime: make(map[int32]int64),
 		},
 		emaCache: &emaCache{
-			values: make(map[int]float64),
+			values:            make(map[int]float64),
+			enforceableValues: make(map[int]float64),
 		},
 	}
 
@@ -913,21 +982,31 @@ func (c *Collector) ClearCache() {
 	c.cacheTimestamps = make(map[string]time.Time)
 }
 
-// UpdateConfig aggiorna la configurazione del collector
+// UpdateConfig replaces the collector configuration used by subsequent scans.
 func (c *Collector) UpdateConfig(newConfig *config.Config) {
 	c.userMetricsScan.Lock()
 	defer c.userMetricsScan.Unlock()
 
 	c.mu.Lock()
+	oldConfig := c.cfg
 	c.cfg = newConfig
 	c.mu.Unlock()
+	processPolicyChanged := oldConfig == nil || !slices.Equal(
+		oldConfig.GetProcessExcludeList(),
+		newConfig.GetProcessExcludeList(),
+	)
+	if processPolicyChanged {
+		c.emaCache.mu.Lock()
+		c.emaCache.enforceableValues = make(map[int]float64)
+		c.emaCache.mu.Unlock()
+	}
 	c.logger.Info("Metrics collector configuration updated",
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
 		"system_uid_min", newConfig.SystemUIDMin,
 		"system_uid_max", newConfig.SystemUIDMax,
 		"user_exclude_list", newConfig.GetUserExcludeList(),
 	)
-	// Pulisci la cache per applicare immediatamente i cambiamenti
+	// Clear cached values so the new configuration takes effect immediately.
 	c.ClearCache()
 }
 
@@ -1040,6 +1119,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 
 	// Read system uptime once (needed for CPU average calculation)
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
+	cfg := c.getConfig()
 
 	seenPIDs := make(map[int32]struct{}, len(procs))
 
@@ -1061,12 +1141,8 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 			tempData[uid] = &userData{}
 		}
 
-		// Count process
-		tempData[uid].processCount++
-
 		// Read CPU usage using gopsutil proc.Times()
 		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(p)
-		tempData[uid].cpuUsage += cpuUsage
 
 		// Prefer PSS so shared pages are divided among mappings instead of
 		// counted once per process. Fall back to RSS when smaps is unavailable.
@@ -1075,44 +1151,54 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		if err == nil && memInfo != nil {
 			rss = memInfo.RSS
 		}
-		tempData[uid].memoryUsage += c.getProcessMemoryUsageWithFallback(int(p.Pid), rss)
+		memoryUsage := c.getProcessMemoryUsageWithFallback(int(p.Pid), rss)
 
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
-		tempData[uid].cpuUsageAvg += cpuAvg
 
 		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(int(p.Pid))
-		tempData[uid].ioReadBytes += readBytes
-		tempData[uid].ioWriteBytes += writeBytes
-		tempData[uid].ioReadOps += readSyscalls
-		tempData[uid].ioWriteOps += writeSyscalls
+		sample := processUsage{
+			cpuUsage:     cpuUsage,
+			cpuUsageAvg:  cpuAvg,
+			processCount: 1,
+			memoryUsage:  memoryUsage,
+			ioReadBytes:  readBytes,
+			ioWriteBytes: writeBytes,
+			ioReadOps:    readSyscalls,
+			ioWriteOps:   writeSyscalls,
+		}
+		executable, _ := p.Exe()
+		comm, _ := p.Name()
+		addProcessSample(tempData[uid], cfg, executable, comm, sample)
 	}
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
-		eligibility := c.getConfig().EvaluateUserEligibility(username)
+		eligibility := cfg.EvaluateUserEligibility(username)
 
-		cpuUsage := data.cpuUsage
+		cpuUsage := data.observed.cpuUsage
 
-		// Calculate EMA for this user
+		// Calculate observed and enforceable EMA values independently.
 		ema := c.calculateEMA(uid, cpuUsage)
+		enforceableEMA := c.calculateEnforceableEMA(uid, data.enforceable.cpuUsage)
 
 		userMetrics[uid] = &UserMetrics{
-			UID:             uid,
-			Username:        username,
-			CPUUsage:        cpuUsage,
-			CPUUsageAverage: data.cpuUsageAvg,
-			CPUUsageEMA:     ema,
-			MemoryUsage:     data.memoryUsage,
-			ProcessCount:    data.processCount,
-			EligibleForCPU:  eligibility.EligibleForCPU,
-			EligibleForRAM:  eligibility.EligibleForRAM,
-			EligibleForIO:   eligibility.EligibleForIO,
-			IOReadBytes:     data.ioReadBytes,
-			IOWriteBytes:    data.ioWriteBytes,
-			IOReadOps:       data.ioReadOps,
-			IOWriteOps:      data.ioWriteOps,
+			UID:              uid,
+			Username:         username,
+			CPUUsage:         cpuUsage,
+			CPUUsageAverage:  data.observed.cpuUsageAvg,
+			CPUUsageEMA:      ema,
+			MemoryUsage:      data.observed.memoryUsage,
+			ProcessCount:     data.observed.processCount,
+			EligibleForCPU:   eligibility.EligibleForCPU,
+			EligibleForRAM:   eligibility.EligibleForRAM,
+			EligibleForIO:    eligibility.EligibleForIO,
+			IOReadBytes:      data.observed.ioReadBytes,
+			IOWriteBytes:     data.observed.ioWriteBytes,
+			IOReadOps:        data.observed.ioReadOps,
+			IOWriteOps:       data.observed.ioWriteOps,
+			EnforceableUsage: processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
@@ -1141,6 +1227,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 
 	// Read system uptime once
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
+	cfg := c.getConfig()
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1163,46 +1250,53 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 			tempData[uid] = &userData{}
 		}
 
-		tempData[uid].processCount++
 		cpuUsage := c.getProcessCPUUsageSimple(pid)
-		tempData[uid].cpuUsage += cpuUsage
 		memoryUsage := c.getProcessMemoryUsage(pid)
-		tempData[uid].memoryUsage += memoryUsage
 
 		// CPU average
+		cpuAvg := 0.0
 		proc, err := process.NewProcess(int32(pid))
 		if err == nil {
-			cpuAvg := c.getProcessCPUAverage(proc, systemUptimeSeconds)
-			tempData[uid].cpuUsageAvg += cpuAvg
+			cpuAvg = c.getProcessCPUAverage(proc, systemUptimeSeconds)
 		}
 
 		// IO
 		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(pid)
-		tempData[uid].ioReadBytes += readBytes
-		tempData[uid].ioWriteBytes += writeBytes
-		tempData[uid].ioReadOps += readSyscalls
-		tempData[uid].ioWriteOps += writeSyscalls
+		sample := processUsage{
+			cpuUsage:     cpuUsage,
+			cpuUsageAvg:  cpuAvg,
+			processCount: 1,
+			memoryUsage:  memoryUsage,
+			ioReadBytes:  readBytes,
+			ioWriteBytes: writeBytes,
+			ioReadOps:    readSyscalls,
+			ioWriteOps:   writeSyscalls,
+		}
+		executable, comm := readProcessIdentity(procDir, pid)
+		addProcessSample(tempData[uid], cfg, executable, comm, sample)
 	}
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
-		ema := c.calculateEMA(uid, data.cpuUsage)
-		eligibility := c.getConfig().EvaluateUserEligibility(username)
+		ema := c.calculateEMA(uid, data.observed.cpuUsage)
+		enforceableEMA := c.calculateEnforceableEMA(uid, data.enforceable.cpuUsage)
+		eligibility := cfg.EvaluateUserEligibility(username)
 		userMetrics[uid] = &UserMetrics{
-			UID:             uid,
-			Username:        username,
-			CPUUsage:        data.cpuUsage,
-			CPUUsageAverage: data.cpuUsageAvg,
-			CPUUsageEMA:     ema,
-			MemoryUsage:     data.memoryUsage,
-			ProcessCount:    data.processCount,
-			EligibleForCPU:  eligibility.EligibleForCPU,
-			EligibleForRAM:  eligibility.EligibleForRAM,
-			EligibleForIO:   eligibility.EligibleForIO,
-			IOReadBytes:     data.ioReadBytes,
-			IOWriteBytes:    data.ioWriteBytes,
-			IOReadOps:       data.ioReadOps,
-			IOWriteOps:      data.ioWriteOps,
+			UID:              uid,
+			Username:         username,
+			CPUUsage:         data.observed.cpuUsage,
+			CPUUsageAverage:  data.observed.cpuUsageAvg,
+			CPUUsageEMA:      ema,
+			MemoryUsage:      data.observed.memoryUsage,
+			ProcessCount:     data.observed.processCount,
+			EligibleForCPU:   eligibility.EligibleForCPU,
+			EligibleForRAM:   eligibility.EligibleForRAM,
+			EligibleForIO:    eligibility.EligibleForIO,
+			IOReadBytes:      data.observed.ioReadBytes,
+			IOWriteBytes:     data.observed.ioWriteBytes,
+			IOReadOps:        data.observed.ioReadOps,
+			IOWriteOps:       data.observed.ioWriteOps,
+			EnforceableUsage: processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
@@ -1453,6 +1547,24 @@ func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
 	return ema
 }
 
+func (c *Collector) calculateEnforceableEMA(uid int, currentValue float64) float64 {
+	const alpha = 0.3
+
+	c.emaCache.mu.Lock()
+	defer c.emaCache.mu.Unlock()
+	if c.emaCache.enforceableValues == nil {
+		c.emaCache.enforceableValues = make(map[int]float64)
+	}
+	prevEMA, exists := c.emaCache.enforceableValues[uid]
+	if !exists {
+		c.emaCache.enforceableValues[uid] = currentValue
+		return currentValue
+	}
+	ema := alpha*currentValue + (1-alpha)*prevEMA
+	c.emaCache.enforceableValues[uid] = ema
+	return ema
+}
+
 func (c *Collector) retainEMAUsers(active map[int]*UserMetrics) {
 	c.emaCache.mu.Lock()
 	defer c.emaCache.mu.Unlock()
@@ -1460,6 +1572,11 @@ func (c *Collector) retainEMAUsers(active map[int]*UserMetrics) {
 	for uid := range c.emaCache.values {
 		if _, exists := active[uid]; !exists {
 			delete(c.emaCache.values, uid)
+		}
+	}
+	for uid := range c.emaCache.enforceableValues {
+		if _, exists := active[uid]; !exists {
+			delete(c.emaCache.enforceableValues, uid)
 		}
 	}
 }

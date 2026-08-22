@@ -149,14 +149,23 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   buried in a helper.
 - Adding a new limited resource **MUST** add its own `IsUserWhitelistedFor<Resource>`
   and its own row in the empty-list test table.
+- `PROCESS_EXCLUDE_LIST` defines the enforceable process set for every resource.
+  Excluded processes **MUST** remain visible in total-user observation, but **MUST NOT**
+	contribute to CPU, RAM, or I/O decision inputs because enforcement deliberately
+	leaves them outside limited cgroups. Accounting and cgroup placement **MUST** consume
+	the same normalized process-policy result. The identity is the basename resolved from
+	`/proc/PID/exe`, with `/proc/PID/comm` only as a fallback; PID-decorated display names
+	and user-controlled `argv[0]` values are not policy identities.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
 RAM and I/O decisions even though their own empty include lists select everybody.
 Independent aggregates and a table-driven policy test now preserve the intended
-asymmetry.
+asymmetry. Process accounting previously included excluded processes even though
+cgroup placement omitted them, allowing unenforceable workload to trigger or prolong
+limits.
 
-*Finding: resman-4pw.1*
+*Findings: resman-4pw.1, resman-4pw.3*
 
 ## Rule 4 — Every configured decision dimension must be evaluated
 

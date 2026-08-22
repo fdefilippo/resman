@@ -31,7 +31,10 @@ Blackout timeframes support (BLACKOUT)
 .IP \(bu
 User filtering with regex support (USER_INCLUDE_LIST, USER_EXCLUDE_LIST)
 .IP \(bu
-Process exclusion list (PROCESS_EXCLUDE_LIST)
+Process exclusion list (PROCESS_EXCLUDE_LIST). Excluded processes remain in
+observed totals but do not contribute to CPU, RAM, or I/O decisions and are not
+moved into limited cgroups. Matching uses the /proc/PID/exe basename, with
+/proc/PID/comm as fallback.
 .IP \(bu
 Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
 .IP \(bu

@@ -262,7 +262,7 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 			continue
 		}
 		configuredEligible[uid] = true
-		m.patternDetector.Update(uid, um.CPUUsage)
+		m.patternDetector.Update(uid, um.EnforceableUsage.CPUUsage)
 	}
 
 	// Preserve history for configured users even when they have no live processes.
@@ -465,26 +465,27 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 			IOWriteBytes:      um.IOWriteBytes,
 			IOReadOps:         um.IOReadOps,
 			IOWriteOps:        um.IOWriteOps,
+			EnforceableUsage:  um.EnforceableUsage,
 		}
 		metrics.UserMetrics[uid] = corrected
 
 		if corrected.EligibleForCPU {
 			metrics.CPUEligibleUsers = append(metrics.CPUEligibleUsers, uid)
-			metrics.CPUEligibleCPUUsage += um.CPUUsage
-			metrics.CPUEligibleMemoryUsage += um.MemoryUsage
+			metrics.CPUEligibleCPUUsage += um.EnforceableUsage.CPUUsage
+			metrics.CPUEligibleMemoryUsage += um.EnforceableUsage.MemoryUsage
 		}
 		if corrected.EligibleForRAM {
 			metrics.RAMEligibleUsers = append(metrics.RAMEligibleUsers, uid)
-			metrics.RAMEligibleUsageBytes += um.MemoryUsage
+			metrics.RAMEligibleUsageBytes += um.EnforceableUsage.MemoryUsage
 		}
 		if corrected.EligibleForIO {
 			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
 			if updateIOState {
 				current := ioCounters{
-					readBytes:  um.IOReadBytes,
-					writeBytes: um.IOWriteBytes,
-					readOps:    um.IOReadOps,
-					writeOps:   um.IOWriteOps,
+					readBytes:  um.EnforceableUsage.IOReadBytes,
+					writeBytes: um.EnforceableUsage.IOWriteBytes,
+					readOps:    um.EnforceableUsage.IOReadOps,
+					writeOps:   um.EnforceableUsage.IOWriteOps,
 				}
 				if previous, ok := m.prevIOCounters[uid]; ok && !m.prevIOTime.IsZero() {
 					rates := calculateIORates(current, previous, sampleTime.Sub(m.prevIOTime))

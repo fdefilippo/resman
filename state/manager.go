@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -398,9 +399,20 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	if newConfig == nil {
 		return
 	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	oldConfig := m.GetConfig()
+	processPolicyChanged := oldConfig == nil || !slices.Equal(
+		oldConfig.GetProcessExcludeList(),
+		newConfig.GetProcessExcludeList(),
+	)
 	m.mu.Lock()
 	m.cfg = newConfig
 	m.mu.Unlock()
+	if processPolicyChanged {
+		m.prevIOCounters = make(map[int]ioCounters)
+		m.prevIOTime = time.Time{}
+	}
 
 	m.logger.Info("State manager configuration updated",
 		"polling_interval", newConfig.PollingInterval,

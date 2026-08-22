@@ -302,7 +302,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 			username := m.metricsCollector.GetUsernameFromUID(uid)
 			m.logger.Info("Re-adding user to shared cgroup (CPU usage recovered)",
 				"uid", uid, "username", username,
-				"cpu", metrics.UserCPUUsage[uid],
+				"cpu", userEnforceableCPUUsage(metrics, uid),
 			)
 
 			m.mu.RLock()
@@ -398,10 +398,17 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 
 func userCPUEMA(metrics *SystemMetrics, uid int) (float64, bool) {
 	if userMetrics, ok := metrics.UserMetrics[uid]; ok && userMetrics != nil {
-		return userMetrics.CPUUsageEMA, true
+		return userMetrics.EnforceableUsage.CPUUsageEMA, true
 	}
 	cpuUsage, ok := metrics.UserCPUUsage[uid]
 	return cpuUsage, ok
+}
+
+func userEnforceableCPUUsage(metrics *SystemMetrics, uid int) float64 {
+	if userMetrics, ok := metrics.UserMetrics[uid]; ok && userMetrics != nil {
+		return userMetrics.EnforceableUsage.CPUUsage
+	}
+	return 0
 }
 
 func userEligibilityFromMetrics(metrics *SystemMetrics, uid int) config.UserEligibility {

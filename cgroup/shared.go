@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/fdefilippo/resman/internal/processpolicy"
 )
 
 func (m *Manager) CreateSharedCgroup() (string, error) {
@@ -144,7 +146,8 @@ func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int)
 	return nil
 }
 
-// MoveAllUserProcessesToSharedCgroup sposta tutti i processi di un utente nel cgroup condiviso
+// MoveAllUserProcessesToSharedCgroup moves every enforceable user process into
+// its shared-cgroup child.
 // Uses gopsutil for efficient process discovery.
 func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error {
 	m.logger.Debug("Moving all processes for user to shared cgroup",
@@ -168,11 +171,18 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	var movedCount int
 	var errors []string
 	var pids []int
+	cfg := m.getConfig()
 
 	for _, pid := range pidsForUID {
-		processName := m.getProcessName(pid)
-
-		if m.getConfig().IsProcessExcluded(processName) {
+		processInfo, infoErr := m.getProcessInfo(pid)
+		if infoErr != nil {
+			m.logger.Debug("Failed to read process details before shared-cgroup migration",
+				"pid", pid,
+				"error", infoErr,
+			)
+		}
+		selection := processpolicy.Evaluate(cfg, processInfo["executable"], processInfo["name"])
+		if !selection.Enforceable {
 			continue
 		}
 		pids = append(pids, pid)

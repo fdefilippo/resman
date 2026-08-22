@@ -438,8 +438,10 @@ USER_EXCLUDE_LIST=root
 # ========================
 # PROCESS EXCLUDE LIST [D]
 # ========================
-# List of processes to exclude from CPU limits (comma-separated)
-# These processes are NEVER limited, even if the user is in the INCLUDE_LIST
+# List of processes to exclude from every resource limit (comma-separated)
+# These processes remain visible in observed totals, but they do not contribute
+# to CPU, RAM, or IO decisions and are never moved into limited cgroups.
+# Matching uses the /proc/PID/exe basename, with /proc/PID/comm as fallback.
 # Useful for protecting critical processes that could cause instability
 # Supports regular expressions (regex) for advanced pattern matching
 #

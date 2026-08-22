@@ -55,6 +55,73 @@ func TestUserMetricsStruct(t *testing.T) {
 	}
 }
 
+func TestAddProcessSampleSeparatesObservedAndEnforceableUsage(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProcessExcludeList = []string{"^systemd$"}
+	data := &userData{}
+
+	excluded := processUsage{
+		cpuUsage: 90, cpuUsageAvg: 80, processCount: 1, memoryUsage: 900,
+		ioReadBytes: 9000, ioWriteBytes: 8000, ioReadOps: 90, ioWriteOps: 80,
+	}
+	included := processUsage{
+		cpuUsage: 10, cpuUsageAvg: 8, processCount: 1, memoryUsage: 100,
+		ioReadBytes: 1000, ioWriteBytes: 2000, ioReadOps: 10, ioWriteOps: 20,
+	}
+	if selection := addProcessSample(data, cfg, "/usr/lib/systemd/systemd", "systemd", excluded); selection.Enforceable {
+		t.Fatalf("excluded process selection = %+v, want enforceable=false", selection)
+	}
+	if selection := addProcessSample(data, cfg, "/usr/bin/stress", "stress", included); !selection.Enforceable {
+		t.Fatalf("included process selection = %+v, want enforceable=true", selection)
+	}
+
+	if data.observed.cpuUsage != 100 || data.observed.memoryUsage != 1000 ||
+		data.observed.processCount != 2 || data.observed.ioReadBytes != 10000 ||
+		data.observed.ioWriteBytes != 10000 || data.observed.ioReadOps != 100 ||
+		data.observed.ioWriteOps != 100 {
+		t.Fatalf("observed usage = %+v, want both process samples", data.observed)
+	}
+	if data.enforceable != included {
+		t.Fatalf("enforceable usage = %+v, want only included sample %+v", data.enforceable, included)
+	}
+}
+
+func TestUpdateConfigResetsOnlyEnforceableEMAWhenProcessPolicyChanges(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector, err := NewCollector(cfg)
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+	collector.emaCache.values[1000] = 90
+	collector.emaCache.enforceableValues[1000] = 80
+
+	reloaded := config.DefaultConfig()
+	reloaded.ProcessExcludeList = []string{"^stress$"}
+	collector.UpdateConfig(reloaded)
+
+	if got := collector.emaCache.values[1000]; got != 90 {
+		t.Fatalf("observed EMA after reload = %.1f, want 90", got)
+	}
+	if len(collector.emaCache.enforceableValues) != 0 {
+		t.Fatalf("enforceable EMA after process-policy reload = %v, want empty", collector.emaCache.enforceableValues)
+	}
+
+	data := &userData{}
+	excluded := processUsage{cpuUsage: 90, memoryUsage: 900, processCount: 1}
+	included := processUsage{cpuUsage: 10, memoryUsage: 100, processCount: 1}
+	activeConfig := collector.getConfig()
+	if selection := addProcessSample(data, activeConfig, "/usr/bin/stress", "stress", excluded); selection.Enforceable {
+		t.Fatalf("reloaded exclusion selection = %+v, want enforceable=false", selection)
+	}
+	if selection := addProcessSample(data, activeConfig, "/usr/bin/worker", "worker", included); !selection.Enforceable {
+		t.Fatalf("reloaded included selection = %+v, want enforceable=true", selection)
+	}
+	if data.observed.cpuUsage != 100 || data.enforceable != included {
+		t.Fatalf("usage after policy reload: observed=%+v enforceable=%+v", data.observed, data.enforceable)
+	}
+}
+
 func TestParseProcessIOSeparatesStorageBytesFromSyscalls(t *testing.T) {
 	data := []byte(`rchar: 999999
 wchar: 888888

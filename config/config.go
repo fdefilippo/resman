@@ -1208,11 +1208,17 @@ func (c *Config) EvaluateUserEligibility(username string) UserEligibility {
 	}
 }
 
-// IsProcessExcluded verifica se un processo deve essere escluso dai limiti
-// I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
+// IsProcessExcluded reports whether a canonical process name matches the
+// process exclusion policy.
 func (c *Config) IsProcessExcluded(processName string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isProcessExcludedLocked(processName)
+}
+
+func (c *Config) isProcessExcludedLocked(processName string) bool {
 	if len(c.ProcessExcludeList) == 0 {
-		return false // No processes excluded
+		return false
 	}
 	for _, pattern := range c.ProcessExcludeList {
 		if c.matchPattern(pattern, processName) {
