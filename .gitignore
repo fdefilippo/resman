@@ -1,5 +1,4 @@
 # Build artifacts
-cpu-manager-go
 resman
 *.exe
 *.exe~

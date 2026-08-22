@@ -13,7 +13,7 @@ A clear and concise description of what the bug is.
 **To Reproduce**
 Steps to reproduce the behavior:
 1. Configure '...'
-2. Start cpu-manager-go with flags '....'
+2. Start resman with flags '....'
 3. Wait for '....'
 4. See error
 
@@ -26,12 +26,12 @@ What actually happened? Include logs, error messages, etc.
 **Environment:**
  - OS: [e.g. RHEL 8, Ubuntu 22.04]
  - Go version: [e.g. 1.21]
- - CPU Manager version: [e.g. 1.0.0]
+ - ResMan version: [e.g. 1.0.0]
  - Kernel version: [run `uname -r`]
  - cgroups version: [run `stat -fc %T /sys/fs/cgroup`]
 
 **Configuration**
-Relevant parts of your `/etc/cpu-manager.conf`:
+Relevant parts of your `/etc/resman.conf`:
 ```
 # Paste relevant config here
 ```

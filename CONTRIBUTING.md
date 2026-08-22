@@ -196,7 +196,7 @@ sudo make test-integration
 
 4. Check metrics:
    ```bash
-   curl http://localhost:9101/metrics
+   curl http://localhost:1974/metrics
    ```
 
 ### Test Coverage
@@ -338,7 +338,7 @@ When adding features or fixing bugs:
 2. **README.md** - Update features list
 3. **Man page** - Update `docs/resman.8`
 4. **Prometheus docs** - Update `docs/prometheus-queries.md`
-5. **Grafana** - Update `docs/dashboard-grafana.json`
+5. **Grafana** - Update `docs/dashboard-grafana-operations.json`
 
 ### Documentation Style
 

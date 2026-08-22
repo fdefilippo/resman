@@ -2,8 +2,9 @@
 
 ## Panoramica
 
-La dashboard Grafana di CPU Manager Go supporta ora:
+La dashboard Grafana di ResMan supporta ora:
 - **Multi-cluster**: Visualizza metriche da più cluster Prometheus
+- **Environment**: Distingue production, staging e development
 - **Server Role**: Filtra per ruolo del server (database, web-frontend, batch, etc.)
 - **Hostname**: Filtra per hostname specifico
 
@@ -17,24 +18,27 @@ Aggiungi external labels alla configurazione Prometheus per identificare il clus
 # prometheus.yml
 global:
   external_labels:
-    cluster: 'production'      # Nome del cluster (es: production, staging, development)
+    cluster: 'primary'         # Nome del cluster
+    environment: 'production' # Ambiente operativo
     region: 'eu-west-1'        # Opzionale: regione
 ```
 
 **Esempio multi-cluster:**
 ```yaml
-# Cluster Production
+# Primary production cluster
 global:
   external_labels:
-    cluster: 'production'
+    cluster: 'primary'
+    environment: 'production'
 
-# Cluster Staging  
+# Secondary staging cluster
 global:
   external_labels:
-    cluster: 'staging'
+    cluster: 'secondary'
+    environment: 'staging'
 ```
 
-### 2. CPU Manager Configuration
+### 2. ResMan Configuration
 
 Configura `SERVER_ROLE` in `/etc/resman.conf`:
 
@@ -53,17 +57,19 @@ SERVER_ROLE=database
 
 ### 3. Metriche con Label
 
-Tutte le metriche CPU Manager includono ora:
+Tutte le metriche ResMan includono ora:
 - `hostname`: Hostname del server (automatico)
 - `server_role`: Ruolo configurato (da SERVER_ROLE)
 - `cluster`: Label esterna Prometheus (da prometheus.yml)
+- `environment`: Label esterna Prometheus (da prometheus.yml)
 
 **Esempio metrica:**
 ```
-cpu_manager_cpu_total_usage_percent{
+resman_cpu_total_usage_percent{
   hostname="db-prod-01",
   server_role="database",
-  cluster="production"
+  cluster="primary",
+  environment="production"
 } 75.5
 ```
 
@@ -74,7 +80,7 @@ cpu_manager_cpu_total_usage_percent{
 ```bash
 1. Apri Grafana
 2. Dashboards → Import
-3. Carica file: docs/dashboard-grafana.json
+3. Carica file: docs/dashboard-grafana-operations.json
 4. Seleziona datasource Prometheus
 5. Clicca Import
 ```
@@ -85,11 +91,11 @@ La dashboard include le seguenti variabili:
 
 | Variabile | Label | Query | Multi-Select |
 |-----------|-------|-------|--------------|
-| `cluster` | Cluster | `label_values(cpu_manager_cpu_total_usage_percent, cluster)` | ✅ Yes |
-| `server_role` | Server Role | `label_values(cpu_manager_cpu_total_usage_percent{cluster=~"$cluster"}, server_role)` | ✅ Yes |
-| `hostname` | Hostname | `label_values(cpu_manager_cpu_total_usage_percent{cluster=~"$cluster", server_role=~"$server_role"}, hostname)` | ✅ Yes |
-| `uid` | User UID | `label_values(cpu_manager_user_cpu_usage_percent, uid)` | ✅ Yes |
-| `username` | Username | `label_values(cpu_manager_user_memory_usage_bytes, username)` | ✅ Yes |
+| `cluster` | Cluster | `label_values(resman_cpu_total_usage_percent, cluster)` | ✅ Yes |
+| `environment` | Environment | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster"}, environment)` | ✅ Yes |
+| `server_role` | Server Role | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment"}, server_role)` | ✅ Yes |
+| `hostname` | Hostname | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role"}, hostname)` | ✅ Yes |
+| `username` | Username | `label_values(resman_user_cpu_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role", hostname=~"$hostname"}, username)` | ✅ Yes |
 
 ### 3. Utilizzo dei Filtri
 
@@ -99,12 +105,12 @@ La dashboard include le seguenti variabili:
 3. Tutti i panel mostrano solo dati dai cluster selezionati
 
 **Filtrare per server role:**
-1. Seleziona prima il cluster
+1. Seleziona prima cluster ed environment
 2. Clicca sul dropdown "Server Role"
 3. Seleziona uno o più ruoli (es: "database", "web-frontend")
 
 **Filtrare per hostname:**
-1. Seleziona cluster e server role
+1. Seleziona cluster, environment e server role
 2. Clicca sul dropdown "Hostname"
 3. Seleziona uno o più hostname specifici
 
@@ -114,33 +120,33 @@ La dashboard include le seguenti variabili:
 
 ```promql
 # CPU totale per cluster
-sum by (cluster) (cpu_manager_cpu_total_usage_percent)
+sum by (cluster) (resman_cpu_total_usage_percent)
 
 # CPU totale per server role
-sum by (server_role) (cpu_manager_cpu_total_usage_percent{cluster=~"$cluster"})
+sum by (server_role) (resman_cpu_total_usage_percent{cluster=~"$cluster"})
 
 # CPU per hostname
-sum by (hostname) (cpu_manager_cpu_total_usage_percent{cluster=~"$cluster", server_role=~"$server_role"})
+sum by (hostname) (resman_cpu_total_usage_percent{cluster=~"$cluster", server_role=~"$server_role"})
 ```
 
 ### Top Users CPU Usage
 
 ```promql
 # Top 5 utenti per CPU usage
-topk(5, cpu_manager_user_cpu_usage_percent{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
+topk(5, resman_user_cpu_usage_percent{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
 
 # Top 5 utenti per memoria
-topk(5, cpu_manager_user_memory_usage_bytes{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
+topk(5, resman_user_memory_usage_bytes{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
 ```
 
 ### Limits Status Multi-Cluster
 
 ```promql
 # Cluster con limiti attivi
-cpu_manager_limits_active{cluster=~"$cluster"} == 1
+resman_limits_active{cluster=~"$cluster"} == 1
 
 # Server role con più utenti limitati
-sum by (server_role) (cpu_manager_limited_users_count{cluster=~"$cluster"})
+sum by (server_role) (resman_limited_users_count{cluster=~"$cluster"})
 ```
 
 ## Alerting Multi-Cluster
@@ -152,7 +158,7 @@ groups:
   - name: resman-multi-cluster
     rules:
       - alert: HighCPUUsageAllClusters
-        expr: cpu_manager_cpu_total_usage_percent > 90
+        expr: resman_cpu_total_usage_percent > 90
         for: 5m
         labels:
           severity: critical
@@ -161,7 +167,7 @@ groups:
           description: "CPU usage is above 90% on {{ $labels.hostname }} ({{ $labels.server_role }}) in cluster {{ $labels.cluster }}"
 
       - alert: LimitsActiveLongTime
-        expr: cpu_manager_limits_active == 1
+        expr: resman_limits_active == 1
         for: 1h
         labels:
           severity: warning
@@ -186,14 +192,14 @@ global:
 
 ### Problema: server_role non appare
 
-**Causa:** SERVER_ROLE non configurato in CPU Manager
+**Causa:** SERVER_ROLE non configurato in ResMan
 
 **Soluzione:**
 ```bash
 # /etc/resman.conf
 SERVER_ROLE=database
 
-# Riavvia CPU Manager
+# Riavvia ResMan
 sudo systemctl restart resman
 ```
 
@@ -268,7 +274,7 @@ scrape_configs:
           server_type: 'web-frontend'
 ```
 
-### CPU Manager (db-prod-01)
+### ResMan (db-prod-01)
 
 ```bash
 # /etc/resman.conf
@@ -280,7 +286,7 @@ PROMETHEUS_METRICS_BIND_HOST=0.0.0.0
 PROMETHEUS_METRICS_BIND_PORT=1974
 ```
 
-### CPU Manager (web-prod-01)
+### ResMan (web-prod-01)
 
 ```bash
 # /etc/resman.conf
@@ -294,7 +300,7 @@ PROMETHEUS_METRICS_BIND_PORT=1974
 
 ### Grafana Dashboard
 
-1. Importa `docs/dashboard-grafana.json`
+1. Importa `docs/dashboard-grafana-operations.json`
 2. Seleziona datasource Prometheus
 3. Usa i dropdown per filtrare:
    - Cluster: production
@@ -303,5 +309,5 @@ PROMETHEUS_METRICS_BIND_PORT=1974
 
 ---
 
-**Versione Dashboard:** 1.1 (Compatibile con CPU Manager Go v1.13.0+)  
+**Versione Dashboard:** 1.1 (Compatibile con ResMan v1.13.0+)
 **Ultimo Aggiornamento:** Marzo 2026

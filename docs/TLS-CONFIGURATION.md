@@ -1,6 +1,6 @@
-# TLS/HTTPS Configuration Guide for CPU Manager Go
+# TLS/HTTPS Configuration Guide for ResMan
 
-This guide explains how to enable HTTPS/TLS encryption for the CPU Manager Go Prometheus metrics endpoint.
+This guide explains how to enable HTTPS/TLS encryption for the ResMan Prometheus metrics endpoint.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ This guide explains how to enable HTTPS/TLS encryption for the CPU Manager Go Pr
 
 ## Overview
 
-CPU Manager Go supports TLS/HTTPS encryption for securing metrics endpoints in production environments. This provides:
+ResMan supports TLS/HTTPS encryption for securing metrics endpoints in production environments. This provides:
 
 - **Encryption in transit** - All metrics data encrypted with TLS 1.2+
 - **Server authentication** - Clients can verify server identity
@@ -29,7 +29,7 @@ CPU Manager Go supports TLS/HTTPS encryption for securing metrics endpoints in p
 
 - OpenSSL installed (`openssl` command)
 - Root or sudo access
-- CPU Manager Go installed
+- ResMan installed
 
 ---
 
@@ -40,7 +40,7 @@ CPU Manager Go supports TLS/HTTPS encryption for securing metrics endpoints in p
 Use the provided script to generate all certificates:
 
 ```bash
-cd /path/to/resman-go
+cd /path/to/resman
 sudo ./docs/generate-tls-certs.sh /etc/resman/tls
 ```
 
@@ -64,7 +64,7 @@ openssl genrsa -out ca.key 4096
 openssl req -x509 -new -nodes -sha256 -days 365 \
     -key ca.key \
     -out ca.crt \
-    -subj "/C=IT/ST=Italy/L=Rome/O=CPU Manager/OU=Monitoring/CN=CPU Manager CA"
+    -subj "/C=IT/ST=Italy/L=Rome/O=ResMan/OU=Monitoring/CN=ResMan CA"
 ```
 
 #### 2. Generate Server Certificate
@@ -77,7 +77,7 @@ openssl genrsa -out server.key 2048
 openssl req -new -sha256 \
     -key server.key \
     -out server.csr \
-    -subj "/C=IT/ST=Italy/L=Rome/O=CPU Manager/OU=Monitoring/CN=resman.local"
+    -subj "/C=IT/ST=Italy/L=Rome/O=ResMan/OU=Monitoring/CN=resman.local"
 
 # Create SAN extension file
 cat > server_ext.cnf << EOF
@@ -115,7 +115,7 @@ openssl genrsa -out client.key 2048
 openssl req -new -sha256 \
     -key client.key \
     -out client.csr \
-    -subj "/C=IT/ST=Italy/L=Rome/O=CPU Manager/OU=Monitoring/CN=prometheus"
+    -subj "/C=IT/ST=Italy/L=Rome/O=ResMan/OU=Monitoring/CN=prometheus"
 
 # Create client extension file
 cat > client_ext.cnf << EOF
@@ -150,7 +150,7 @@ chown -R root:root /etc/resman/tls
 
 ## Configuration
 
-### Enable TLS in CPU Manager
+### Enable TLS in ResMan
 
 Edit `/etc/resman.conf`:
 
@@ -197,7 +197,7 @@ PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
 # PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
 ```
 
-### Restart CPU Manager
+### Restart ResMan
 
 ```bash
 sudo systemctl restart resman
@@ -211,31 +211,31 @@ sudo systemctl restart resman
 
 ```bash
 # With CA certificate
-curl --cacert /etc/resman/tls/ca.crt https://localhost:9101/metrics
+curl --cacert /etc/resman/tls/ca.crt https://localhost:1974/metrics
 
 # With Basic Auth
 curl --cacert /etc/resman/tls/ca.crt \
      -u prometheus:password \
-     https://localhost:9101/metrics
+     https://localhost:1974/metrics
 
 # With mTLS (client certificate)
 curl --cacert /etc/resman/tls/ca.crt \
      --cert /etc/resman/tls/client.crt \
      --key /etc/resman/tls/client.key \
-     https://localhost:9101/metrics
+     https://localhost:1974/metrics
 ```
 
 ### Verify TLS Version
 
 ```bash
 # Check TLS version in use
-curl -v --cacert /etc/resman/tls/ca.crt https://localhost:9101/metrics 2>&1 | grep "TLS"
+curl -v --cacert /etc/resman/tls/ca.crt https://localhost:1974/metrics 2>&1 | grep "TLS"
 ```
 
 ### Check Logs
 
 ```bash
-# View CPU Manager logs
+# View ResMan logs
 sudo journalctl -u resman -f
 
 # Look for TLS-related messages
@@ -253,16 +253,16 @@ sudo journalctl -u resman | grep -i tls
 scrape_configs:
   - job_name: 'resman-https'
     scheme: https
-    
+
     tls_config:
       ca_file: /etc/prometheus/certs/resman-ca.crt
-    
+
     basic_auth:
       username: prometheus
-      password_file: /etc/prometheus/credentials/cpu_manager_password
-    
+      password_file: /etc/prometheus/credentials/resman_password
+
     static_configs:
-      - targets: ['resman.example.com:9101']
+      - targets: ['resman.example.com:1974']
 ```
 
 ### mTLS Configuration (Mutual TLS)
@@ -271,15 +271,15 @@ scrape_configs:
 scrape_configs:
   - job_name: 'resman-mtls'
     scheme: https
-    
+
     tls_config:
       ca_file: /etc/prometheus/certs/resman-ca.crt
       cert_file: /etc/prometheus/certs/resman-client.crt
       key_file: /etc/prometheus/certs/resman-client.key
       insecure_skip_verify: false
-    
+
     static_configs:
-      - targets: ['resman.example.com:9101']
+      - targets: ['resman.example.com:1974']
 ```
 
 ### Copy Certificates to Prometheus
@@ -332,9 +332,9 @@ tls_config:
 **Error**: `connection refused`
 
 **Solutions**:
-1. Verify CPU Manager is running: `systemctl status resman`
+1. Verify ResMan is running: `systemctl status resman`
 2. Check if HTTPS is enabled: `grep PROMETHEUS_TLS_ENABLED /etc/resman.conf`
-3. Verify port is listening: `netstat -tlnp | grep 9101`
+3. Verify port is listening: `netstat -tlnp | grep 1974`
 
 ### Certificate Expired
 
@@ -371,7 +371,7 @@ chown -R root:root /etc/resman/tls
 
 ### Network Security
 
-- **Firewall**: Restrict access to port 9101
+- **Firewall**: Restrict access to port 1974
 - **Internal network**: Use dedicated monitoring VLAN
 - **No HTTP fallback**: Disable HTTP when HTTPS is enabled
 
@@ -406,9 +406,9 @@ mkdir -p $BACKUP_DIR
 cp -r $CERT_DIR $BACKUP_DIR/certs-$(date +%Y%m%d)
 
 # Regenerate certificates
-/path/to/resman-go/docs/generate-tls-certs.sh $CERT_DIR
+/path/to/resman/docs/generate-tls-certs.sh $CERT_DIR
 
-# Restart CPU Manager
+# Restart ResMan
 systemctl restart resman
 
 echo "Certificates renewed at $(date)"

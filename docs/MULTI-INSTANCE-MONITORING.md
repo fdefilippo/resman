@@ -1,4 +1,4 @@
-# Multi-Instance Monitoring Guide for CPU Manager Go
+# Multi-Instance Monitoring Guide for ResMan
 
 ## Centralized Prometheus and Grafana Configuration for Multi-Host Deployments
 
@@ -20,11 +20,11 @@
 
 ## Overview
 
-This document describes how to configure a centralized monitoring solution for CPU Manager Go deployments across multiple hosts. The solution uses:
+This document describes how to configure a centralized monitoring solution for ResMan deployments across multiple hosts. The solution uses:
 
 - **Prometheus** - Central metrics aggregation and storage
 - **Grafana** - Unified visualization and dashboards
-- **CPU Manager Go** - Running on multiple hosts (10-1000+ nodes)
+- **ResMan** - Running on multiple hosts (10-1000+ nodes)
 
 ### Use Cases
 
@@ -46,8 +46,8 @@ This document describes how to configure a centralized monitoring solution for C
 │                                                                  │
 │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
 │  │   Host 1     │     │   Host 2     │     │   Host N     │    │
-│  │  resman │     │  resman │     │  resman │    │
-│  │  :9101       │     │  :9101       │     │  :9101       │    │
+│  │    resman    │     │    resman    │     │    resman    │    │
+│  │  :1974       │     │  :1974       │     │  :1974       │    │
 │  └──────┬───────┘     └──────┬───────┘     └──────┬───────┘    │
 │         │                    │                    │             │
 │         └────────────────────┼────────────────────┘             │
@@ -100,34 +100,34 @@ This document describes how to configure a centralized monitoring solution for C
 
 | Component | Port | Protocol | Direction |
 |-----------|------|----------|-----------|
-| CPU Manager Go | 9101 | TCP | Inbound (from Prometheus) |
+| ResMan | 1974 | TCP | Inbound (from Prometheus) |
 | Prometheus | 9090 | TCP | Inbound (from Grafana) |
 | Grafana | 3000 | TCP | Inbound (from users) |
 
 ### Firewall Configuration
 
 ```bash
-# On each host running CPU Manager Go
+# On each host running ResMan
 # Allow Prometheus to scrape metrics
-sudo iptables -A INPUT -p tcp --dport 9101 -s <PROMETHEUS_IP> -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 1974 -s <PROMETHEUS_IP> -j ACCEPT
 
 # Or with firewalld (RHEL/CentOS/Fedora)
-sudo firewall-cmd --permanent --add-port=9101/tcp
+sudo firewall-cmd --permanent --add-port=1974/tcp
 sudo firewall-cmd --reload
 
 # Or with ufw (Ubuntu/Debian)
-sudo ufw allow from <PROMETHEUS_IP> to any port 9101 proto tcp
+sudo ufw allow from <PROMETHEUS_IP> to any port 1974 proto tcp
 ```
 
-### CPU Manager Configuration
+### ResMan Configuration
 
-Enable Prometheus on each CPU Manager Go instance:
+Enable Prometheus on each ResMan instance:
 
 ```bash
 # /etc/resman.conf
 ENABLE_PROMETHEUS=true
-PROMETHEUS_HOST="0.0.0.0"    # Listen on all interfaces
-PROMETHEUS_PORT=9101
+PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"    # Listen on all interfaces
+PROMETHEUS_METRICS_BIND_PORT=1974
 ```
 
 Restart the service:
@@ -137,7 +137,7 @@ sudo systemctl restart resman
 
 Verify metrics are exposed:
 ```bash
-curl http://localhost:9101/metrics
+curl http://localhost:1974/metrics
 ```
 
 ---
@@ -151,7 +151,7 @@ For small deployments (10-50 hosts), use static target configuration:
 ```yaml
 # /etc/prometheus/prometheus.yml
 global:
-  scrape_interval: 30s      # Match CPU Manager polling interval
+  scrape_interval: 30s      # Match ResMan polling interval
   evaluation_interval: 30s
   external_labels:
     monitor: 'resman-monitor'
@@ -165,23 +165,23 @@ alerting:
 
 # Rule files (optional)
 rule_files:
-  - /etc/prometheus/rules/cpu_manager_alerts.yml
+  - /etc/prometheus/rules/resman_alerts.yml
 
 # Scrape configurations
 scrape_configs:
-  # CPU Manager Go instances
-  - job_name: 'resman-go'
+  # ResMan instances
+  - job_name: 'resman'
     static_configs:
       - targets:
-        - 'host1.example.com:9101'
-        - 'host2.example.com:9101'
-        - 'host3.example.com:9101'
-        - '192.168.1.10:9101'
-        - '192.168.1.11:9101'
+        - 'host1.example.com:1974'
+        - 'host2.example.com:1974'
+        - 'host3.example.com:1974'
+        - '192.168.1.10:1974'
+        - '192.168.1.11:1974'
         labels:
           environment: 'production'
           cluster: 'main'
-    
+
     # Relabel to add instance metadata
     relabel_configs:
       - source_labels: [__address__]
@@ -197,38 +197,41 @@ For medium deployments (50-200 hosts), use file-based service discovery:
 ```yaml
 # /etc/prometheus/prometheus.yml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     file_sd_configs:
       - files:
-        - /etc/prometheus/targets/cpu_manager_*.json
+        - /etc/prometheus/targets/resman_*.json
         refresh_interval: 30s
-    
+
     # Add common labels
     relabel_configs:
       - source_labels: [__meta_environment]
         target_label: environment
-      - source_labels: [__meta_datacenter]
-        target_label: datacenter
+      - source_labels: [__meta_cluster]
+        target_label: cluster
+      - source_labels: [__meta_role]
+        target_label: server_role
 ```
 
 Create target files:
 
+`/etc/prometheus/targets/resman_production.json`:
+
 ```json
-// /etc/prometheus/targets/cpu_manager_production.json
 [
   {
-    "targets": ["host1.example.com:9101", "host2.example.com:9101"],
+    "targets": ["host1.example.com:1974", "host2.example.com:1974"],
     "labels": {
       "__meta_environment": "production",
-      "__meta_datacenter": "us-east-1",
+      "__meta_cluster": "primary",
       "__meta_role": "worker"
     }
   },
   {
-    "targets": ["host3.example.com:9101", "host4.example.com:9101"],
+    "targets": ["host3.example.com:1974", "host4.example.com:1974"],
     "labels": {
       "__meta_environment": "production",
-      "__meta_datacenter": "us-west-2",
+      "__meta_cluster": "secondary",
       "__meta_role": "master"
     }
   }
@@ -241,12 +244,12 @@ For dynamic environments:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     dns_sd_configs:
       - names:
         - '_resman._tcp.example.com'
         type: 'SRV'
-        port: 9101
+        port: 1974
         refresh_interval: 30s
 ```
 
@@ -256,17 +259,17 @@ For Kubernetes deployments:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     kubernetes_sd_configs:
       - role: pod
         selectors:
           - role: pod
-            label: app=resman-go
-    
+            label: app=resman
+
     relabel_configs:
       - source_labels: [__meta_kubernetes_pod_label_app]
         action: keep
-        regex: resman-go
+        regex: resman
       - source_labels: [__meta_kubernetes_namespace]
         target_label: namespace
       - source_labels: [__meta_kubernetes_pod_name]
@@ -275,9 +278,9 @@ scrape_configs:
 
 ### Authentication Options for Prometheus Metrics
 
-CPU Manager Go supports optional authentication for exposing metrics. You can configure either **Basic Authentication** or **JWT (Bearer Token)** authentication based on your security requirements.
+ResMan supports optional authentication for exposing metrics. You can configure either **Basic Authentication** or **JWT (Bearer Token)** authentication based on your security requirements.
 
-#### Configuration on CPU Manager Go
+#### Configuration on ResMan
 
 Enable authentication in the configuration file:
 
@@ -286,8 +289,8 @@ Enable authentication in the configuration file:
 
 # Enable Prometheus metrics
 ENABLE_PROMETHEUS=true
-PROMETHEUS_HOST="0.0.0.0"
-PROMETHEUS_PORT=9101
+PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"
+PROMETHEUS_METRICS_BIND_PORT=1974
 
 # Authentication Method: basic, jwt, or none
 PROMETHEUS_AUTH_TYPE="basic"
@@ -306,7 +309,7 @@ PROMETHEUS_JWT_EXPIRY=3600
 
 #### Option 1: Basic Authentication
 
-**Server-Side Configuration (CPU Manager Go):**
+**Server-Side Configuration (ResMan):**
 
 ```bash
 # /etc/resman.conf
@@ -322,7 +325,7 @@ openssl rand -base64 32 | sudo tee /etc/resman/prometheus_password
 sudo chmod 600 /etc/resman/prometheus_password
 sudo chown root:root /etc/resman/prometheus_password
 
-# Restart CPU Manager
+# Restart ResMan
 sudo systemctl restart resman
 ```
 
@@ -330,23 +333,23 @@ sudo systemctl restart resman
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go-basic'
+  - job_name: 'resman-basic'
     scheme: https  # Recommended with basic auth
-    
+
     # Basic authentication
     basic_auth:
       username: prometheus
-      password_file: /etc/prometheus/credentials/cpu_manager_password
-    
+      password_file: /etc/prometheus/credentials/resman_password
+
     # TLS configuration (recommended)
     tls_config:
       ca_file: /etc/prometheus/certs/ca.crt
       insecure_skip_verify: false
-    
+
     static_configs:
       - targets:
-        - 'host1.example.com:9101'
-        - 'host2.example.com:9101'
+        - 'host1.example.com:1974'
+        - 'host2.example.com:1974'
 ```
 
 **Security Considerations:**
@@ -360,7 +363,7 @@ scrape_configs:
 
 #### Option 2: JWT (Bearer Token) Authentication
 
-**Server-Side Configuration (CPU Manager Go):**
+**Server-Side Configuration (ResMan):**
 
 ```bash
 # /etc/resman.conf
@@ -378,7 +381,7 @@ openssl rand -base64 64 | sudo tee /etc/resman/jwt_secret
 sudo chmod 600 /etc/resman/jwt_secret
 sudo chown root:root /etc/resman/jwt_secret
 
-# Restart CPU Manager
+# Restart ResMan
 sudo systemctl restart resman
 ```
 
@@ -431,25 +434,25 @@ chmod +x /usr/local/bin/generate-resman-jwt.sh
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go-jwt'
+  - job_name: 'resman-jwt'
     scheme: https  # Required with JWT
-    
+
     # Bearer token authentication
     authorization:
       type: Bearer
-      credentials_file: /etc/prometheus/credentials/cpu_manager_jwt_token
-    
+      credentials_file: /etc/prometheus/credentials/resman_jwt_token
+
     # TLS configuration (required)
     tls_config:
       ca_file: /etc/prometheus/certs/ca.crt
       cert_file: /etc/prometheus/certs/client.crt
       key_file: /etc/prometheus/certs/client.key
       insecure_skip_verify: false
-    
+
     static_configs:
       - targets:
-        - 'host1.example.com:9101'
-        - 'host2.example.com:9101'
+        - 'host1.example.com:1974'
+        - 'host2.example.com:1974'
 ```
 
 **Token Rotation Script:**
@@ -460,7 +463,7 @@ Create a script to automatically rotate JWT tokens:
 #!/bin/bash
 # /usr/local/bin/rotate-resman-jwt.sh
 
-TOKEN_FILE="/etc/prometheus/credentials/cpu_manager_jwt_token"
+TOKEN_FILE="/etc/prometheus/credentials/resman_jwt_token"
 TOKEN_DIR=$(dirname $TOKEN_FILE)
 
 # Ensure directory exists
@@ -541,20 +544,20 @@ For internal networks where authentication is handled at the network level:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go-tls-only'
+  - job_name: 'resman-tls-only'
     scheme: https
-    
+
     # TLS only (client certificate for mutual TLS)
     tls_config:
       ca_file: /etc/prometheus/certs/ca.crt
       cert_file: /etc/prometheus/certs/client.crt
       key_file: /etc/prometheus/certs/client.key
       insecure_skip_verify: false
-    
+
     static_configs:
       - targets:
-        - 'host1.example.com:9101'
-        - 'host2.example.com:9101'
+        - 'host1.example.com:1974'
+        - 'host2.example.com:1974'
 ```
 
 ---
@@ -565,22 +568,22 @@ For secure deployments with basic authentication:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     scheme: https
     tls_config:
       ca_file: /etc/prometheus/certs/ca.crt
       cert_file: /etc/prometheus/certs/client.crt
       key_file: /etc/prometheus/certs/client.key
       insecure_skip_verify: false
-    
+
     basic_auth:
       username: prometheus
-      password_file: /etc/prometheus/credentials/cpu_manager_password
-    
+      password_file: /etc/prometheus/credentials/resman_password
+
     static_configs:
       - targets:
-        - 'host1.example.com:9101'
-        - 'host2.example.com:9101'
+        - 'host1.example.com:1974'
+        - 'host2.example.com:1974'
 ```
 
 ---
@@ -595,7 +598,7 @@ scrape_configs:
 2. Click **Add data source**
 3. Select **Prometheus**
 4. Configure:
-   - **Name**: `CPU Manager Prometheus`
+   - **Name**: `ResMan Prometheus`
    - **URL**: `http://prometheus:9090`
    - **Access**: `Server` (recommended) or `Browser`
    - **Auth**: Enable if Prometheus requires authentication
@@ -608,7 +611,7 @@ scrape_configs:
 apiVersion: 1
 
 datasources:
-  - name: CPU Manager Prometheus
+  - name: ResMan Prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -629,7 +632,7 @@ datasources:
 
 #### Import the Provided Dashboard
 
-1. Download `docs/dashboard-grafana.json` from the CPU Manager Go repository
+1. Download `docs/dashboard-grafana-operations.json` from the ResMan repository
 2. In Grafana, navigate to **Dashboards** → **Import**
 3. Upload the JSON file
 4. Select the Prometheus datasource
@@ -645,10 +648,10 @@ Add template variables for filtering:
   "templating": {
     "list": [
       {
-        "name": "datacenter",
+        "name": "cluster",
         "type": "query",
-        "datasource": "CPU Manager Prometheus",
-        "query": "label_values(cpu_manager_cpu_total_usage_percent, datacenter)",
+        "datasource": "ResMan Prometheus",
+        "query": "label_values(resman_cpu_total_usage_percent, cluster)",
         "refresh": 1,
         "includeAll": true,
         "multi": true
@@ -656,8 +659,8 @@ Add template variables for filtering:
       {
         "name": "instance",
         "type": "query",
-        "datasource": "CPU Manager Prometheus",
-        "query": "label_values(cpu_manager_cpu_total_usage_percent{datacenter=~\"$datacenter\"}, instance)",
+        "datasource": "ResMan Prometheus",
+        "query": "label_values(resman_cpu_total_usage_percent{cluster=~\"$cluster\"}, instance)",
         "refresh": 1,
         "includeAll": true,
         "multi": true
@@ -665,8 +668,8 @@ Add template variables for filtering:
       {
         "name": "username",
         "type": "query",
-        "datasource": "CPU Manager Prometheus",
-        "query": "label_values(cpu_manager_user_cpu_usage_percent, username)",
+        "datasource": "ResMan Prometheus",
+        "query": "label_values(resman_user_cpu_usage_percent, username)",
         "refresh": 1,
         "includeAll": true,
         "multi": true
@@ -682,49 +685,49 @@ Add template variables for filtering:
 
 ```promql
 # Sum of CPU usage across all instances
-sum(cpu_manager_cpu_total_usage_percent)
+sum(resman_cpu_total_usage_percent)
 ```
 
 #### Top 10 Hosts by CPU Usage
 
 ```promql
 # Top 10 hosts by total CPU usage
-topk(10, cpu_manager_cpu_total_usage_percent)
+topk(10, resman_cpu_total_usage_percent)
 ```
 
 #### CPU Usage Per User Across All Hosts
 
 ```promql
 # Aggregate CPU usage by username across all hosts
-sum by (username) (cpu_manager_user_cpu_usage_percent)
+sum by (username) (resman_user_cpu_usage_percent)
 ```
 
 #### Memory Usage Per Host
 
 ```promql
 # Memory usage per instance
-cpu_manager_memory_usage_megabytes
+resman_memory_usage_megabytes
 ```
 
 #### Users with Highest Memory (All Hosts)
 
 ```promql
 # Top 10 users by memory across all hosts
-topk(10, sum by (username, instance) (cpu_manager_user_memory_usage_bytes))
+topk(10, sum by (username, instance) (resman_user_memory_usage_bytes))
 ```
 
 #### Hosts with Active CPU Limits
 
 ```promql
 # Count of limited users per host
-sum by (instance) (cpu_manager_user_cpu_limited)
+sum by (instance) (resman_user_cpu_limited)
 ```
 
 #### CPU Limit Activation Rate by Host
 
 ```promql
 # Rate of limit activations per host
-sum by (instance) (rate(cpu_manager_limits_activated_total[5m]))
+sum by (instance) (rate(resman_limits_activated_total[5m]))
 ```
 
 ---
@@ -733,7 +736,7 @@ sum by (instance) (rate(cpu_manager_limits_activated_total[5m]))
 
 ### Authentication Overview
 
-CPU Manager Go supports multiple authentication methods for securing Prometheus metrics endpoints. See the [Authentication Options](#authentication-options-for-prometheus-metrics) section above for detailed configuration.
+ResMan supports multiple authentication methods for securing Prometheus metrics endpoints. See the [Authentication Options](#authentication-options-for-prometheus-metrics) section above for detailed configuration.
 
 **Quick Reference:**
 
@@ -755,42 +758,42 @@ Management Network: 10.0.0.0/24
 └── Alertmanager:   10.0.0.12
 
 Production Network: 192.168.1.0/24
-├── Host 1:         192.168.1.10 (resman :9101)
-├── Host 2:         192.168.1.11 (resman :9101)
-└── Host N:         192.168.1.N  (resman :9101)
+├── Host 1:         192.168.1.10 (resman :1974)
+├── Host 2:         192.168.1.11 (resman :1974)
+└── Host N:         192.168.1.N  (resman :1974)
 
 Firewall Rules:
-- Allow 10.0.0.10 → 192.168.1.0/24:9101 (Prometheus scrape)
+- Allow 10.0.0.10 → 192.168.1.0/24:1974 (Prometheus scrape)
 - Allow 10.0.0.11 → 10.0.0.10:9090 (Grafana query)
-- Deny all other traffic to :9101
+- Deny all other traffic to :1974
 ```
 
-### TLS Configuration for CPU Manager Go
+### TLS Configuration for ResMan
 
-Currently, CPU Manager Go exposes metrics over HTTP. For production environments:
+Currently, ResMan exposes metrics over HTTP. For production environments:
 
 **Option 1: Reverse Proxy with TLS**
 
 ```nginx
 # /etc/nginx/conf.d/resman-prometheus.conf
-upstream cpu_manager {
-    server 127.0.0.1:9101;
+upstream resman {
+    server 127.0.0.1:1974;
 }
 
 server {
     listen 443 ssl;
     server_name resman.example.com;
-    
+
     ssl_certificate /etc/ssl/certs/resman.crt;
     ssl_certificate_key /etc/ssl/private/resman.key;
     ssl_protocols TLSv1.2 TLSv1.3;
-    
+
     # Basic authentication
     auth_basic "Prometheus Metrics";
     auth_basic_user_file /etc/nginx/.prometheus_credentials;
-    
+
     location /metrics {
-        proxy_pass http://cpu_manager;
+        proxy_pass http://resman;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -800,7 +803,7 @@ server {
 Update Prometheus configuration:
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     scheme: https
     basic_auth:
       username: prometheus
@@ -815,7 +818,7 @@ scrape_configs:
 ```bash
 # On Prometheus server, create SSH tunnel to each host
 for host in host1 host2 host3; do
-    ssh -f -N -L 9101:localhost:9101 user@$host &
+    ssh -f -N -L 1974:localhost:1974 user@$host &
 done
 ```
 
@@ -837,14 +840,14 @@ done
 ```yaml
 # Prometheus configuration
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     consul_sd_configs:
       - server: 'consul:8500'
         services:
-          - 'resman-go'
+          - 'resman'
         tags:
           - 'production'
-    
+
     relabel_configs:
       - source_labels: [__meta_consul_service]
         target_label: service
@@ -852,15 +855,15 @@ scrape_configs:
         target_label: tags
 ```
 
-Register CPU Manager Go service in Consul:
+Register ResMan service in Consul:
 ```json
 {
   "service": {
-    "name": "resman-go",
-    "port": 9101,
+    "name": "resman",
+    "port": 1974,
     "tags": ["production", "monitoring"],
     "check": {
-      "http": "http://localhost:9101/metrics",
+      "http": "http://localhost:1974/metrics",
       "interval": "30s"
     }
   }
@@ -871,10 +874,10 @@ Register CPU Manager Go service in Consul:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     ec2_sd_configs:
       - region: us-east-1
-        port: 9101
+        port: 1974
         filters:
           - name: tag:Monitoring
             values:
@@ -882,7 +885,7 @@ scrape_configs:
           - name: instance-state-name
             values:
               - running
-    
+
     relabel_configs:
       - source_labels: [__meta_ec2_tag_Name]
         target_label: instance_name
@@ -894,13 +897,13 @@ scrape_configs:
 
 ```yaml
 scrape_configs:
-  - job_name: 'resman-go'
+  - job_name: 'resman'
     azure_sd_configs:
       - subscription_id: <SUBSCRIPTION_ID>
         tenant_id: <TENANT_ID>
         client_id: <CLIENT_ID>
         client_secret: <CLIENT_SECRET>
-        port: 9101
+        port: 1974
         resource_group: <RESOURCE_GROUP>
 ```
 
@@ -915,18 +918,18 @@ scrape_configs:
 **Check**:
 ```bash
 # From Prometheus server
-curl -v http://<target-host>:9101/metrics
+curl -v http://<target-host>:1974/metrics
 
 # Check firewall
-telnet <target-host> 9101
+telnet <target-host> 1974
 
-# Check CPU Manager service
+# Check ResMan service
 systemctl status resman
 ```
 
 **Solutions**:
-1. Verify firewall allows traffic on port 9101
-2. Check CPU Manager is running and listening on correct interface
+1. Verify firewall allows traffic on port 1974
+2. Check ResMan is running and listening on correct interface
 3. Verify Prometheus configuration syntax: `promtool check config prometheus.yml`
 
 ### Grafana Cannot Query Prometheus
@@ -961,7 +964,7 @@ metric_relabel_configs:
   # Drop metrics older than 7 days
   - action: drop
     source_labels: [__name__]
-    regex: 'cpu_manager_.*'
+    regex: 'resman_.*'
 ```
 
 ### Missing Metrics
@@ -971,13 +974,13 @@ metric_relabel_configs:
 **Check**:
 ```promql
 # Check if metrics exist
-count(cpu_manager_user_cpu_usage_percent)
+count(resman_user_cpu_usage_percent)
 
 # Check which instances are reporting
-label_values(cpu_manager_user_cpu_usage_percent, instance)
+label_values(resman_user_cpu_usage_percent, instance)
 
 # Check for gaps in data
-delta(cpu_manager_cpu_total_usage_percent[5m])
+delta(resman_cpu_total_usage_percent[5m])
 ```
 
 ---
@@ -999,7 +1002,7 @@ delta(cpu_manager_cpu_total_usage_percent[5m])
 ```yaml
 # prometheus.yml
 global:
-  scrape_interval: 30s      # Match CPU Manager cycle
+  scrape_interval: 30s      # Match ResMan cycle
   scrape_timeout: 25s       # Less than interval
   evaluation_interval: 30s
 
@@ -1020,31 +1023,31 @@ storage:
 ### Alerting Strategy
 
 ```yaml
-# /etc/prometheus/rules/cpu_manager_alerts.yml
+# /etc/prometheus/rules/resman_alerts.yml
 groups:
-  - name: cpu_manager_infrastructure
+  - name: resman_infrastructure
     rules:
       # Host down
-      - alert: CPUManagerHostDown
-        expr: up{job="resman-go"} == 0
+      - alert: ResManHostDown
+        expr: up{job="resman"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "CPU Manager host {{ $labels.instance }} is down"
-      
+          summary: "ResMan host {{ $labels.instance }} is down"
+
       # High CPU across multiple hosts
-      - alert: CPUManagerWidespreadHighCPU
-        expr: count(cpu_manager_cpu_total_usage_percent > 80) > 5
+      - alert: ResManWidespreadHighCPU
+        expr: count(resman_cpu_total_usage_percent > 80) > 5
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "High CPU on {{ $value }} hosts"
-      
+
       # User consuming excessive resources cluster-wide
-      - alert: CPUManagerResourceHogUser
-        expr: sum by (username) (cpu_manager_user_cpu_usage_percent) > 200
+      - alert: ResManResourceHogUser
+        expr: sum by (username) (resman_user_cpu_usage_percent) > 200
         for: 15m
         labels:
           severity: warning
@@ -1080,7 +1083,7 @@ cp -r /etc/grafana/provisioning /backup/grafana-provisioning
 ### Security Checklist
 
 #### Network Security
-- [ ] Firewall rules restrict access to port 9101
+- [ ] Firewall rules restrict access to port 1974
 - [ ] Prometheus access restricted to Grafana server
 - [ ] Dedicated monitoring network/VLAN configured
 - [ ] Network segmentation implemented
@@ -1139,29 +1142,29 @@ scrape_configs:
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
-  
-  - job_name: 'resman-go'
+
+  - job_name: 'resman'
     file_sd_configs:
       - files:
-        - /etc/prometheus/targets/cpu_manager_*.json
+        - /etc/prometheus/targets/resman_*.json
         refresh_interval: 30s
-    
+
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
         regex: '([^:]+):\d+'
         replacement: '${1}'
-    
+
     metric_relabel_configs:
       # Keep only relevant metrics
       - source_labels: [__name__]
-        regex: 'cpu_manager_.*|up|scrape_.*'
+        regex: 'resman_.*|up|scrape_.*'
         action: keep
 ```
 
 ### Grafana Dashboard JSON Template
 
-See `docs/dashboard-grafana.json` for the complete multi-instance dashboard.
+See `docs/dashboard-grafana-operations.json` for the complete multi-instance dashboard.
 
 ---
 
@@ -1176,22 +1179,22 @@ GRAFANA_SERVER="grafana.example.com"
 HOSTS=("host1" "host2" "host3")
 
 # Generate Prometheus targets file
-cat > cpu_manager_targets.json << EOF
+cat > resman_targets.json << EOF
 [
   {
     "targets": [
-$(printf '      "%s:9101",\n' "${HOSTS[@]}" | sed '$ s/,$//')
+$(printf '      "%s:1974",\n' "${HOSTS[@]}" | sed '$ s/,$//')
     ],
     "labels": {
       "environment": "production",
-      "job": "resman-go"
+      "job": "resman"
     }
   }
 ]
 EOF
 
 # Copy to Prometheus server
-scp cpu_manager_targets.json $PROMETHEUS_SERVER:/etc/prometheus/targets/
+scp resman_targets.json $PROMETHEUS_SERVER:/etc/prometheus/targets/
 
 # Restart Prometheus
 ssh $PROMETHEUS_SERVER "systemctl restart prometheus"
@@ -1209,7 +1212,7 @@ echo "Grafana: http://$GRAFANA_SERVER:3000"
 |-------|-------|
 | **Version** | 1.0 |
 | **Last Updated** | February 2026 |
-| **Author** | CPU Manager Go Team |
+| **Author** | ResMan Team |
 | **Audience** | System Administrators, DevOps Engineers |
 | **Prerequisites** | Basic Prometheus and Grafana knowledge |
 
@@ -1217,12 +1220,12 @@ echo "Grafana: http://$GRAFANA_SERVER:3000"
 
 ## Related Documentation
 
-- [CPU Manager Go README](../README.md)
+- [ResMan README](../README.md)
 - [Prometheus Queries](prometheus-queries.md)
 - [Alerting Rules](alerting-rules.yml)
-- [CPU Manager Man Page](resman.8)
+- [ResMan Man Page](resman.8)
 
 ## Support
 
 For issues and feature requests, please open an issue at:
-https://github.com/fdefilippo/resman-go/issues
+https://github.com/fdefilippo/resman/issues

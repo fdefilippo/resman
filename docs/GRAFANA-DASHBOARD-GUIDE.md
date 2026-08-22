@@ -2,9 +2,9 @@
 
 ## Overview
 
-The CPU Manager Go Grafana dashboard provides real-time visualization of CPU usage, memory consumption, and CPU limits for all monitored users.
+The ResMan Grafana dashboard provides real-time visualization of CPU usage, memory consumption, and CPU limits for all monitored users.
 
-**Dashboard File:** `docs/dashboard-grafana.json`
+**Dashboard File:** `docs/dashboard-grafana-operations.json`
 
 **Compatibility:** Grafana 8.x+
 
@@ -18,7 +18,7 @@ The CPU Manager Go Grafana dashboard provides real-time visualization of CPU usa
 # Via Grafana UI
 1. Open Grafana
 2. Go to Dashboards → Import
-3. Upload `docs/dashboard-grafana.json`
+3. Upload `docs/dashboard-grafana-operations.json`
 4. Select Prometheus datasource
 5. Click Import
 ```
@@ -26,7 +26,7 @@ The CPU Manager Go Grafana dashboard provides real-time visualization of CPU usa
 ### 2. Via Grafana CLI
 
 ```bash
-grafana-cli --pluginUrl https://github.com/fdefilippo/resman-go/raw/main/docs/dashboard-grafana.json dashboards install resman-go
+grafana-cli --pluginUrl https://github.com/fdefilippo/resman/raw/main/docs/dashboard-grafana-operations.json dashboards install resman
 ```
 
 ---
@@ -37,35 +37,35 @@ grafana-cli --pluginUrl https://github.com/fdefilippo/resman-go/raw/main/docs/da
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Total CPU Usage** | `cpu_manager_cpu_total_usage_percent` | Overall system CPU usage |
-| **User CPU Usage** | `cpu_manager_cpu_user_usage_percent` | CPU usage by non-system users |
-| **Memory Usage** | `cpu_manager_memory_usage_megabytes` | Total system memory usage |
-| **Active Users** | `cpu_manager_active_users_count` | Number of active non-system users |
+| **Total CPU Usage** | `resman_cpu_total_usage_percent` | Overall system CPU usage |
+| **User CPU Usage** | `resman_all_users_cpu_usage_percent` | CPU usage by non-system users |
+| **Memory Usage** | `resman_memory_usage_megabytes` | Total system memory usage |
+| **Active Users** | `resman_all_users_count` | Number of active non-system users |
 
 ### Per-User Metrics
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **CPU Usage per User** | `cpu_manager_user_cpu_usage_percent{uid, username}` | CPU usage breakdown by user |
-| **Memory per User** | `cpu_manager_user_memory_usage_bytes{uid, username}` | Memory consumption by user |
-| **Processes per User** | `cpu_manager_user_process_count{uid, username}` | Number of processes per user |
+| **CPU Usage per User** | `resman_user_cpu_usage_percent{uid, username}` | CPU usage breakdown by user |
+| **Memory per User** | `resman_user_memory_usage_bytes{uid, username}` | Memory consumption by user |
+| **Processes per User** | `resman_user_process_count{uid, username}` | Number of processes per user |
 
 ### Limit Status
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Limits Active** | `cpu_manager_limits_active` | Whether CPU limits are currently applied (1=active) |
-| **Limited Users** | `cpu_manager_limited_users_count` | Number of users with active CPU limits |
-| **User Limit Status** | `cpu_manager_user_cpu_limited{uid, username}` | Per-user limit status (1=limited) |
+| **Limits Active** | `resman_limits_active` | Whether CPU limits are currently applied (1=active) |
+| **Limited Users** | `resman_limited_users_count` | Number of users with active CPU limits |
+| **User Limit Status** | `resman_user_cpu_limited{uid, username}` | Per-user limit status (1=limited) |
 
 ### Control Cycle Performance
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Limits Activated** | `increase(cpu_manager_limits_activated_total[1h])` | Count of limit activations in last hour |
-| **Limits Deactivated** | `increase(cpu_manager_limits_deactivated_total[1h])` | Count of limit deactivations in last hour |
-| **Avg Cycle Duration** | `rate(cpu_manager_control_cycle_duration_seconds_sum[5m]) / rate(cpu_manager_control_cycle_duration_seconds_count[5m])` | Average control cycle duration |
-| **Error Rate** | `sum by (component) (rate(cpu_manager_errors_total[5m]))` | Errors by component |
+| **Limits Activated** | `increase(resman_limits_activated_total[1h])` | Count of limit activations in last hour |
+| **Limits Deactivated** | `increase(resman_limits_deactivated_total[1h])` | Count of limit deactivations in last hour |
+| **Avg Cycle Duration** | `rate(resman_control_cycle_duration_seconds_sum[5m]) / rate(resman_control_cycle_duration_seconds_count[5m])` | Average control cycle duration |
+| **Error Rate** | `sum by (component) (rate(resman_errors_total[5m]))` | Errors by component |
 
 ---
 
@@ -132,9 +132,12 @@ The dashboard includes the following template variables:
 
 | Variable | Label | Query | Multi-Select |
 |----------|-------|-------|--------------|
-| `uid` | User UID | `label_values(cpu_manager_user_cpu_usage_percent, uid)` | ✅ Yes |
-| `username` | Username | `label_values(cpu_manager_user_memory_usage_bytes, username)` | ✅ Yes |
-| `time_range` | Time Range | Manual: 1h, 6h, 12h, 24h, 7d | ❌ No |
+| `DS_PROMETHEUS` | Datasource | Prometheus datasource selector | No |
+| `cluster` | Cluster | `label_values(resman_cpu_total_usage_percent, cluster)` | Yes |
+| `environment` | Environment | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster"}, environment)` | Yes |
+| `server_role` | Server role | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment"}, server_role)` | Yes |
+| `hostname` | Hostname | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role"}, hostname)` | Yes |
+| `username` | Username | `label_values(resman_user_cpu_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role", hostname=~"$hostname"}, username)` | Yes |
 
 ### Using Variables
 
@@ -143,9 +146,10 @@ The dashboard includes the following template variables:
 2. Select one or more users
 3. All per-user panels will update to show only selected users
 
-**Change time range:**
-1. Use the `Time Range` dropdown
-2. Or use Grafana's global time picker
+**Change the monitored scope:**
+1. Select the cluster and environment
+2. Narrow the view by server role and hostname when needed
+3. Use Grafana's global time picker to change the time range
 
 ---
 
@@ -155,32 +159,32 @@ The dashboard includes the following template variables:
 
 **Top 5 users by CPU:**
 ```promql
-topk(5, cpu_manager_user_cpu_usage_percent)
+topk(5, resman_user_cpu_usage_percent)
 ```
 
 **Total memory used by all users:**
 ```promql
-sum(cpu_manager_user_memory_usage_bytes)
+sum(resman_user_memory_usage_bytes)
 ```
 
 **Alert: User memory exceeds 2GB:**
 ```promql
-cpu_manager_user_memory_usage_bytes > 2147483648
+resman_user_memory_usage_bytes > 2147483648
 ```
 
 **Processes for specific user:**
 ```promql
-cpu_manager_user_process_count{username="francesco"}
+resman_user_process_count{username="francesco"}
 ```
 
 **Users with active limits:**
 ```promql
-cpu_manager_user_cpu_limited == 1
+resman_user_cpu_limited == 1
 ```
 
 **Average CPU usage in last hour:**
 ```promql
-avg_over_time(cpu_manager_cpu_user_usage_percent[1h])
+avg_over_time(resman_all_users_cpu_usage_percent[1h])
 ```
 
 ### Alerting Rules
@@ -193,7 +197,7 @@ groups:
   - name: resman
     rules:
       - alert: HighUserCPUUsage
-        expr: cpu_manager_user_cpu_usage_percent > 80
+        expr: resman_user_cpu_usage_percent > 80
         for: 5m
         labels:
           severity: warning
@@ -234,12 +238,12 @@ id username
 
 **Possible Causes:**
 1. Prometheus scrape interval too long
-2. CPU Manager not running
+2. ResMan not running
 3. Prometheus exporter disabled
 
 **Solution:**
 ```bash
-# Check CPU Manager status
+# Check ResMan status
 systemctl status resman
 
 # Check Prometheus exporter
@@ -268,7 +272,7 @@ curl http://localhost:1974/metrics
 # In Grafana: Configuration → Data Sources → Test
 
 # Check if metrics exist
-curl http://localhost:1974/metrics | grep cpu_manager
+curl http://localhost:1974/metrics | grep resman
 
 # Check active users
 ps aux | awk '{print $1}' | sort | uniq
@@ -316,7 +320,7 @@ curl -H "Authorization: Bearer <token>" \
 
 ### 1. Use Template Variables
 
-Leverage the `username` and `uid` variables to create flexible dashboards that work across different environments.
+Use the `cluster`, `environment`, `server_role`, `hostname`, and `username` variables to narrow the same dashboard from fleet level to a single user.
 
 ### 2. Set Appropriate Thresholds
 
@@ -324,11 +328,11 @@ Adjust alert thresholds based on your system's capacity and requirements.
 
 ### 3. Monitor Limit Activations
 
-Keep an eye on `cpu_manager_limits_activated_total` to understand how often limits are being applied.
+Keep an eye on `resman_limits_activated_total` to understand how often limits are being applied.
 
 ### 4. Track Error Rates
 
-Monitor `cpu_manager_errors_total` to catch configuration or runtime issues early.
+Monitor `resman_errors_total` to catch configuration or runtime issues early.
 
 ### 5. Use Time Comparisons
 
@@ -336,10 +340,10 @@ Compare current metrics with historical data using `offset` in queries:
 
 ```promql
 # Current CPU usage
-cpu_manager_cpu_user_usage_percent
+resman_all_users_cpu_usage_percent
 
 # CPU usage 24 hours ago
-cpu_manager_cpu_user_usage_percent offset 24h
+resman_all_users_cpu_usage_percent offset 24h
 ```
 
 ---
@@ -353,5 +357,5 @@ cpu_manager_cpu_user_usage_percent offset 24h
 
 ---
 
-**Dashboard Version:** 1.0 (Compatible with CPU Manager Go v1.3.0+)  
+**Dashboard Version:** 1.0 (Compatible with ResMan v1.3.0+)
 **Last Updated:** March 2026

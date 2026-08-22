@@ -1,9 +1,9 @@
-# CPU Manager Go - Technical Specification
+# ResMan - Technical Specification
 
-**Version:** 1.8.1  
-**Last Updated:** March 2026  
-**License:** GPLv3  
-**Repository:** https://github.com/fdefilippo/resman-go
+**Version:** 1.8.1
+**Last Updated:** March 2026
+**License:** GPLv3
+**Repository:** https://github.com/fdefilippo/resman
 
 ---
 
@@ -31,7 +31,7 @@
 
 ### 1.1 Purpose
 
-CPU Manager Go is an enterprise-grade dynamic CPU resource management tool for Linux systems using cgroups v2. It automatically monitors CPU usage and applies limits to non-system users when configurable thresholds are exceeded.
+ResMan is an enterprise-grade dynamic CPU resource management tool for Linux systems using cgroups v2. It automatically monitors CPU usage and applies limits to non-system users when configurable thresholds are exceeded.
 
 ### 1.2 Key Features
 
@@ -61,7 +61,7 @@ CPU Manager Go is an enterprise-grade dynamic CPU resource management tool for L
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      CPU Manager Go                              │
+│                         ResMan                                  │
 │                                                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
 │  │   Cgroup     │  │   Metrics    │  │     State Manager    │  │
@@ -97,7 +97,7 @@ CPU Manager Go is an enterprise-grade dynamic CPU resource management tool for L
 ### 2.2 Package Structure
 
 ```
-resman-go/
+resman/
 ├── main.go                 # Entry point, signal handling
 ├── config/
 │   ├── config.go          # Configuration structure and parsing
@@ -165,43 +165,43 @@ resman-go/
 type Config struct {
     // Paths
     CgroupRoot         string
-    ScriptCgroupBase   string
+    CgroupBase   string
     ConfigFile         string
     LogFile            string
     CreatedCgroupsFile string
     MetricsCacheFile   string
-    
+
     // Timing
     PollingInterval   int  // seconds
     MinActiveTime     int  // seconds
     MetricsCacheTTL   int  // seconds
-    
+
     // Thresholds
     CPUThreshold       int  // percentage
     CPUReleaseThreshold int // percentage
-    
+
     // CPU Limits
     CPUQuotaNormal   string  // "max 100000"
     CPUQuotaLimited  string  // "50000 100000"
-    
+
     // Prometheus
     EnablePrometheus        bool
     PrometheusMetricsBindHost string
     PrometheusMetricsBindPort int
-    
+
     // Logging
     LogLevel   string
     LogMaxSize int
     UseSyslog  bool
-    
+
     // System
     MinSystemCores int
     SystemUIDMin   int
     SystemUIDMax   int
-    
+
     // User Exclusion
     UserExcludeList []string  // Users to EXCLUDE from limits
-    
+
     // MCP Server
     MCPEnabled       bool
     MCPTransport     string  // "stdio" or "http"
@@ -209,7 +209,7 @@ type Config struct {
     MCPHTTPHost      string
     MCPLogLevel      string
     MCPAllowWriteOps bool
-    
+
     // Server Role (for identification)
     ServerRole string
 }
@@ -260,7 +260,7 @@ type Config struct {
 **Cgroup Hierarchy:**
 ```
 /sys/fs/cgroup/
-└── cpu_manager/              # Base cgroup (ScriptCgroupBase)
+└── resman/                  # Base cgroup (CgroupBase)
     ├── limited/              # Shared cgroup for limited users
     │   ├── user_1000/        # Per-user sub-cgroup
     │   ├── user_1001/
@@ -415,7 +415,7 @@ The following processes are automatically excluded from CPU limits:
 ### 3.6 MCP Server (mcp/)
 
 **Responsibilities:**
-- Expose CPU Manager functionality via Model Context Protocol
+- Expose ResMan functionality via Model Context Protocol
 - Support stdio and HTTP transports
 - Provide tools, resources, and prompts for AI assistants
 
@@ -552,7 +552,7 @@ whitespace; quoted hashes and URL fragments are preserved.
 # PATHS
 # ========================
 CGROUP_ROOT="/sys/fs/cgroup"
-SCRIPT_CGROUP_BASE="cpu_manager"
+CGROUP_BASE="resman"
 LOG_FILE="/var/log/resman.log"
 CREATED_CGROUPS_FILE="/var/run/resman/cgroups.txt"
 METRICS_CACHE_FILE="/var/run/resman/metrics.cache"
@@ -638,7 +638,7 @@ SERVER_ROLE=                 # For identification in reports
 All configuration options can be overridden by environment variables:
 
 ```bash
-LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman-go --config /etc/resman.conf
+LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman.conf
 ```
 
 ---
@@ -684,7 +684,7 @@ triggered by PSI events do not accelerate global deactivation.
 ### 5.3 Limit Application
 
 **Shared Cgroup Approach:**
-1. Create `/sys/fs/cgroup/cpu_manager/limited/`
+1. Create `/sys/fs/cgroup/resman/limited/`
 2. Apply total quota: `available_cores * 100000`
 3. For each active user:
    - Create `user_{uid}/` sub-cgroup
@@ -866,18 +866,18 @@ func (c *Config) SetUserExcludeList(patterns []string) ([]string, error) {
             return nil, err
         }
     }
-    
+
     // Save previous value
     previousValue := make([]string, len(c.UserExcludeList))
     copy(previousValue, c.UserExcludeList)
-    
+
     // Attempt save
     if err := c.SaveToFile(path); err != nil {
         // Rollback on failure
         c.UserExcludeList = previousValue
         return nil, err
     }
-    
+
     return previousValue, nil
 }
 ```
@@ -1034,26 +1034,26 @@ type Manager struct {
 ### 12.1 Metrics Exposed
 
 **System Metrics:**
-- `cpu_manager_cpu_total_usage_percent` (gauge)
-- `cpu_manager_cpu_user_usage_percent` (gauge)
-- `cpu_manager_memory_usage_megabytes` (gauge)
-- `cpu_manager_system_load_average` (gauge)
-- `cpu_manager_active_users_count` (gauge)
-- `cpu_manager_limited_users_count` (gauge)
-- `cpu_manager_limits_active` (gauge)
+- `resman_cpu_total_usage_percent` (gauge)
+- `resman_all_users_cpu_usage_percent` (gauge)
+- `resman_memory_usage_megabytes` (gauge)
+- `resman_system_load_average` (gauge)
+- `resman_all_users_count` (gauge)
+- `resman_limited_users_count` (gauge)
+- `resman_limits_active` (gauge)
 
 **Per-User Metrics:**
-- `cpu_manager_user_cpu_usage_percent{uid, username}` (gauge)
-- `cpu_manager_user_memory_usage_bytes{uid, username}` (gauge)
-- `cpu_manager_user_process_count{uid, username}` (gauge)
-- `cpu_manager_user_cpu_limited{uid, username}` (gauge)
+- `resman_user_cpu_usage_percent{uid, username}` (gauge)
+- `resman_user_memory_usage_bytes{uid, username}` (gauge)
+- `resman_user_process_count{uid, username}` (gauge)
+- `resman_user_cpu_limited{uid, username}` (gauge)
 
 **Counters:**
-- `cpu_manager_limits_activated_total` (counter)
-- `cpu_manager_limits_deactivated_total` (counter)
+- `resman_limits_activated_total` (counter)
+- `resman_limits_deactivated_total` (counter)
 
 **Histograms:**
-- `cpu_manager_control_cycle_duration_seconds` (histogram)
+- `resman_control_cycle_duration_seconds` (histogram)
 
 ### 12.2 Exporter Lifecycle
 
@@ -1296,7 +1296,7 @@ curl http://localhost:1974/metrics
 
 | File | Purpose |
 |------|---------|
-| `/usr/bin/resman-go` | Binary |
+| `/usr/bin/resman` | Binary |
 | `/etc/resman.conf` | Configuration |
 | `/var/log/resman.log` | Log file |
 | `/var/run/resman/cgroups.txt` | Cgroup tracking |

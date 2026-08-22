@@ -2,7 +2,7 @@
 
 ## Panoramica
 
-CPU Manager Go supporta la risoluzione dei nomi utente da LDAP/NIS quando compilato con CGO abilitato.
+ResMan supporta la risoluzione dei nomi utente da LDAP/NIS quando compilato con CGO abilitato.
 
 ## Requisiti
 
@@ -58,31 +58,31 @@ sudo zypper install gcc
 
 ```bash
 # Build standard con CGO
-CGO_ENABLED=1 go build -v -o resman-go .
+CGO_ENABLED=1 go build -v -o resman .
 
 # Build ottimizzata per produzione
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman-go .
+CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 
 # Build con simboli di debug
-CGO_ENABLED=1 go build -v -gcflags="all=-N -l" -o resman-go .
+CGO_ENABLED=1 go build -v -gcflags="all=-N -l" -o resman .
 ```
 
 ### 3. Verifica Build
 
 ```bash
 # Verifica che il binario sia linkato con libc
-ldd /usr/bin/resman-go | grep libc
+ldd /usr/bin/resman | grep libc
 # Dovrebbe mostrare: libc.so.6 => /lib64/libc.so.6
 
 # Verifica versione
-./resman-go --version
+./resman --version
 ```
 
 ## Configurazione
 
-### 1. CPU Manager Configuration
+### 1. ResMan Configuration
 
-Nessuna configurazione speciale necessaria. CPU Manager userà automaticamente NSS per risolvere gli UID.
+Nessuna configurazione speciale necessaria. ResMan userà automaticamente NSS per risolvere gli UID.
 
 ```bash
 # /etc/resman.conf
@@ -96,10 +96,10 @@ Le metriche includeranno i nomi utente risolti da LDAP:
 
 ```promql
 # Prima (senza LDAP):
-cpu_manager_user_cpu_usage_percent{uid="10001", username="10001"}
+resman_user_cpu_usage_percent{uid="10001", username="10001"}
 
 # Dopo (con LDAP):
-cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
+resman_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
 ```
 
 ## Troubleshooting
@@ -114,11 +114,11 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
 1. **CGO non abilitato in compilazione**
    ```bash
    # Verifica
-   ldd /usr/bin/resman-go | grep libc
+   ldd /usr/bin/resman | grep libc
    # Se non mostra libc, CGO non era abilitato
-   
+
    # Ricompila
-   CGO_ENABLED=1 go build -o resman-go .
+   CGO_ENABLED=1 go build -o resman .
    ```
 
 2. **NSS non configurato per LDAP**
@@ -126,7 +126,7 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
    # Verifica
    grep "^passwd:" /etc/nsswitch.conf
    # Dovrebbe mostrare: passwd: files ldap
-   
+
    # Se non c'è ldap, aggiungi
    sudo vi /etc/nsswitch.conf
    ```
@@ -136,7 +136,7 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
    # Test connessione LDAP
    getent passwd 10001
    # Se non restituisce nulla, LDAP non è raggiungibile
-   
+
    # Verifica servizio LDAP
    systemctl status nslcd    # Per nss-pam-ldapd
    systemctl status sssd     # Per SSSD
@@ -146,7 +146,7 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
    ```bash
    # Cerca utente in LDAP
    ldapsearch -x -b "dc=example,dc=com" "(uidNumber=10001)"
-   
+
    # O con getent
    getent passwd 10001
    ```
@@ -154,7 +154,7 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
 ### Problema: Risoluzione lenta
 
 **Sintomi:**
-- CPU Manager impiega molto tempo per avviare
+- ResMan impiega molto tempo per avviare
 - Log mostrano timeout nella risoluzione UID
 
 **Soluzioni:**
@@ -203,7 +203,7 @@ cpu_manager_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
    ```bash
    # Per debug avanzato
    export NSS_DEBUG=1
-   /usr/bin/resman-go --config /etc/resman.conf
+   /usr/bin/resman --config /etc/resman.conf
    ```
 
 ## Esempio Configurazione Completa
@@ -245,12 +245,12 @@ sudo systemctl start sssd
 # 5. Test
 getent passwd 10001
 
-# 6. Compila CPU Manager
-cd /path/to/resman-go
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman-go .
+# 6. Compila ResMan
+cd /path/to/resman
+CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 
 # 7. Installa
-sudo cp resman-go /usr/bin/
+sudo cp resman /usr/bin/
 sudo systemctl restart resman
 
 # 8. Verifica metriche
@@ -278,12 +278,12 @@ bind_policy soft
 # 4. Test
 getent passwd 10001
 
-# 5. Compila CPU Manager
-cd /path/to/resman-go
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman-go .
+# 5. Compila ResMan
+cd /path/to/resman
+CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 
 # 6. Installa
-sudo cp resman-go /usr/bin/
+sudo cp resman /usr/bin/
 sudo systemctl restart resman
 
 # 7. Verifica metriche
@@ -350,13 +350,13 @@ getent passwd 10001
 curl -s http://localhost:1974/metrics | grep "uid=\"10001\""
 # Dovresti vedere username, non "10001"
 
-# 3. Log CPU Manager
+# 3. Log ResMan
 tail -f /var/log/resman.log | grep -i "user"
 # Dovresti vedere username, non UID numerici
 ```
 
 ---
 
-**Versione:** 1.0  
-**Compatibilità:** CPU Manager Go v1.13.1+  
+**Versione:** 1.0
+**Compatibilità:** ResMan v1.13.1+
 **Ultimo Aggiornamento:** Marzo 2026

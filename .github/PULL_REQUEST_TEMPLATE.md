@@ -1,4 +1,4 @@
-<!-- Thank you for contributing to CPU Manager Go! -->
+<!-- Thank you for contributing to ResMan! -->
 <!-- Please fill out the sections below to help us review your PR efficiently. -->
 
 ## Description
@@ -43,9 +43,9 @@ Fixes #____
 <!-- Describe the tests you ran to verify your changes -->
 
 **Test environment:**
-- OS: 
-- Go version: 
-- cgroups version: 
+- OS:
+- Go version:
+- cgroups version:
 
 **Tests performed:**
 - [ ] Unit tests
@@ -70,7 +70,7 @@ Fixes #____
 <!-- Add a brief description of this change for the release notes -->
 
 ```
-# Example: Added new metric cpu_manager_user_memory_usage_bytes
+# Example: Added new metric resman_user_memory_usage_bytes
 ```
 
 ---

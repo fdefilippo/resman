@@ -1,34 +1,34 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25.7-alpine AS builder
 
 WORKDIR /app
 
-# Installa dipendenze necessarie
+# Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Copia prima i file di modulo per caching
+# Copy module files first for dependency caching
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copia il resto del codice
+# Copy the remaining source
 COPY . .
 
-# Build del binario
+# Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.version=docker'" -o resman
 
 # ============================================================================
 FROM alpine:3.18
 
-# Installa certificati SSL e fuso orario
+# Install CA certificates and timezone data
 RUN apk add --no-cache ca-certificates tzdata
 
-# Crea utente non-root per sicurezza
+# Create an unprivileged runtime user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copia binario e configurazione
+# Copy the binary and default configuration
 COPY --from=builder /app/resman /usr/local/bin/resman
 COPY --from=builder /app/config/resman.conf.example /etc/resman.conf
 
-# Configura permessi
+# Configure runtime permissions
 RUN mkdir -p /var/log /var/run/resman \
     && chown -R appuser:appgroup /var/log /var/run/resman \
     && chmod 755 /usr/local/bin/resman
@@ -36,10 +36,10 @@ RUN mkdir -p /var/log /var/run/resman \
 USER appuser
 WORKDIR /home/appuser
 
-# Esponi porta Prometheus
-EXPOSE 9101
+# Expose the default Prometheus metrics port
+EXPOSE 1974
 
-# Volume per configurazione esterna
+# Allow an external configuration mount
 VOLUME ["/etc/resman.conf"]
 
 ENTRYPOINT ["resman"]
