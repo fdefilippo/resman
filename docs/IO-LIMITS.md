@@ -31,8 +31,8 @@ Il controller `io` di cgroups v2 permette di:
 | Variabile | Default | Descrizione |
 |-----------|---------|-------------|
 | `IO_LIMIT_ENABLED` | `false` | Abilita/disabilita limiti IO |
-| `IO_THRESHOLD` | `75` | Soglia % per attivare limiti |
-| `IO_RELEASE_THRESHOLD` | `40` | Soglia % per rilasciare limiti |
+| `IO_THRESHOLD` | `75` | Soglia %: una dimensione configurata sopra soglia attiva i limiti |
+| `IO_RELEASE_THRESHOLD` | `40` | Soglia %: tutte le dimensioni configurate devono scendere sotto soglia |
 | `IO_READ_BPS` | `100M` | Limite banda lettura per utente |
 | `IO_WRITE_BPS` | `50M` | Limite banda scrittura per utente |
 | `IO_READ_IOPS` | `1000` | Limite IOPS lettura per utente |
@@ -48,6 +48,10 @@ IO_READ_BPS=104857600   # 100 MB/s in bytes
 IO_READ_BPS=100M        # 100 MB/s con suffisso
 IO_READ_BPS=max         # Nessun limite
 ```
+
+`max` o una stringa vuota disabilitano solo la relativa dimensione di banda;
+`0` disabilita solo la relativa dimensione IOPS. Le altre dimensioni restano
+attive e continuano a partecipare alla decisione.
 
 ### Esempi di configurazione
 
@@ -119,7 +123,22 @@ sum by (username) (rate(resman_user_io_read_ops_total[5m]) + rate(resman_user_io
 
 ### Attivazione
 
-Quando `IO_LIMIT_ENABLED=true` e l'utente supera `IO_THRESHOLD`:
+Quando `IO_LIMIT_ENABLED=true`, ResMan calcola separatamente la percentuale di
+utilizzo per banda di lettura, banda di scrittura, operazioni di lettura e
+operazioni di scrittura. Per ogni dimensione, il denominatore è il limite per
+utente moltiplicato per il numero di utenti eleggibili I/O. Una qualunque
+dimensione configurata che raggiunge `IO_THRESHOLD` attiva o mantiene i limiti;
+`IO_THRESHOLD_DURATION`, se maggiore di zero, si applica al picco percentuale
+fra le dimensioni sopra soglia.
+
+Prima dell'enforcement, i segnali di banda derivano da `read_bytes` e
+`write_bytes` di `/proc/PID/io`. I segnali per le dimensioni IOPS derivano da
+`syscr` e `syscw`, perché un utente non dispone ancora di un cgroup ResMan dal
+quale leggere `io.stat`: sono quindi rate di syscall read/write usati come
+segnale di attivazione, non conteggi di operazioni del block device. Dopo
+l'attivazione, `io.max` applica comunque i limiti IOPS reali del dispositivo.
+
+Quando la regola di attivazione è soddisfatta:
 1. Con `IO_DEVICE_FILTER=all`, ResMan enumera i dispositivi interi presenti in
    `/sys/block` e scrive una riga per ogni `major:minor` in `<cgroup>/io.max`:
    ```
@@ -131,7 +150,9 @@ Quando `IO_LIMIT_ENABLED=true` e l'utente supera `IO_THRESHOLD`:
 
 ### Disattivazione
 
-Quando l'utente scende sotto `IO_RELEASE_THRESHOLD`:
+Il rilascio usa la regola complementare: tutte le dimensioni configurate devono
+essere strettamente sotto `IO_RELEASE_THRESHOLD`. Una sola dimensione ancora
+alla soglia o sopra mantiene l'enforcement. Quando la regola è soddisfatta:
 1. ResMan rimuove i limiti per tutti i device presenti in `<cgroup>/io.max`:
    ```
    8:0 rbps=max wbps=max riops=max wiops=max

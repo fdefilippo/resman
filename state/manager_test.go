@@ -712,7 +712,7 @@ func TestMakeDecisionUsesIndependentResourceAggregates(t *testing.T) {
 			metrics: &SystemMetrics{
 				TotalCores:           4,
 				IOEligibleUsersCount: 1,
-				IOEligibleWriteBytes: 60 * 1024 * 1024,
+				IOEligibleWriteBPS:   60 * 1024 * 1024,
 			},
 		},
 	}
@@ -756,7 +756,7 @@ func TestMinSystemCoresGatesOnlyCPUEnforcement(t *testing.T) {
 				cfg.IOThreshold = 10
 				cfg.IOWriteBPS = "1M"
 			},
-			metrics: &SystemMetrics{TotalCores: 2, IOEligibleUsersCount: 1, IOEligibleWriteBytes: 2 * 1024 * 1024},
+			metrics: &SystemMetrics{TotalCores: 2, IOEligibleUsersCount: 1, IOEligibleWriteBPS: 2 * 1024 * 1024},
 		},
 	}
 

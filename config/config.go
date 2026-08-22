@@ -217,6 +217,19 @@ type Config struct {
 	PSIBoostDuration     int  `config:"PSI_BOOST_DURATION"`      // Seconds before reverting PSI boost (default 120)
 }
 
+// IODecisionPolicy is an atomic snapshot of the configuration used to decide
+// whether I/O enforcement should be activated, maintained, or released.
+type IODecisionPolicy struct {
+	Enabled           bool
+	Threshold         int
+	ReleaseThreshold  int
+	ThresholdDuration int
+	ReadBPS           string
+	WriteBPS          string
+	ReadIOPS          int
+	WriteIOPS         int
+}
+
 // DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
 func DefaultConfig() *Config {
 	// Lettura dinamica del pid_max per il default di SYSTEM_UID_MAX
@@ -1777,6 +1790,22 @@ func (c *Config) GetIOEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IOEnabled
+}
+
+// GetIODecisionPolicy returns a consistent snapshot of every I/O decision knob.
+func (c *Config) GetIODecisionPolicy() IODecisionPolicy {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return IODecisionPolicy{
+		Enabled:           c.IOEnabled,
+		Threshold:         c.IOThreshold,
+		ReleaseThreshold:  c.IOReleaseThreshold,
+		ThresholdDuration: c.IOThresholdDuration,
+		ReadBPS:           c.IOReadBPS,
+		WriteBPS:          c.IOWriteBPS,
+		ReadIOPS:          c.IOReadIOPS,
+		WriteIOPS:         c.IOWriteIOPS,
+	}
 }
 
 // GetIOReadBPS returns the read bandwidth limit.

@@ -73,9 +73,9 @@ type Manager struct {
 	// Control cycle history, initialized by NewManager.
 	controlHist *controlHistory
 
-	// IO rate tracking: cumulative bytes from /proc/[pid]/io -> per-second rate
-	prevIOBytes map[int]uint64 // uid -> previous cycle cumulative write bytes
-	prevIOTime  time.Time
+	// I/O rate tracking: cumulative /proc/[pid]/io counters converted to rates.
+	prevIOCounters map[int]ioCounters
+	prevIOTime     time.Time
 
 	// PSI watcher for per-user adaptive CPU weight boosting
 	psiWatcher   *cgroup.PSIWatcher
@@ -89,6 +89,13 @@ type userResourceLimitState struct {
 	io         bool
 	ioApplied  bool
 	standalone bool
+}
+
+type ioCounters struct {
+	readBytes  uint64
+	writeBytes uint64
+	readOps    uint64
+	writeOps   uint64
 }
 
 // UserLimitState separates policy eligibility, control intent, and observed enforcement.
@@ -225,8 +232,8 @@ func NewManager(
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
 		},
-		prevIOBytes:  make(map[int]uint64),
-		psiBoostedAt: make(map[int]time.Time),
+		prevIOCounters: make(map[int]ioCounters),
+		psiBoostedAt:   make(map[int]time.Time),
 	}
 
 	logger.Info("State manager initialized",

@@ -170,11 +170,11 @@ configuration surface — removed and rejected, per Rule 1, never left inert.
 - "Disabled" values (`max`, `0`, `""`) **MUST** be handled per dimension. One dimension
   being disabled **MUST NOT** disable the others.
 
-**Why.** `state/decision_engine.go:61,101` activates and releases I/O limiting from
-`IOWriteBPS` only. `IO_READ_BPS`, `IO_READ_IOPS`, and `IO_WRITE_IOPS` are parsed,
-validated, and applied to cgroups, but can never trigger a limit — and setting
-`IO_WRITE_BPS=max` disables I/O limiting entirely while the operator believes three
-other limits are still armed.
+**Why.** The decision engine previously activated and released I/O limiting from
+write bandwidth only. Read bandwidth and read/write operation limits were parsed,
+validated, and applied to cgroups but could not trigger enforcement; setting write
+bandwidth to `max` disabled the entire I/O decision. The engine now evaluates each
+configured dimension independently with any-of activation and all-of release.
 
 *Finding: resman-4pw.4*
 

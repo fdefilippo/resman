@@ -176,8 +176,8 @@ RAM_USER_EXCLUDE_LIST=root
 # Enable/disable IO limiting via cgroups v2 io controller
 # IO_LIMIT_ENABLED: true = enable IO limits, false = disable
 #
-# IO_THRESHOLD: Percentage of total user IO to activate limits
-# IO_RELEASE_THRESHOLD: Percentage to release limits
+# IO_THRESHOLD: Any configured IO dimension activates at this percentage
+# IO_RELEASE_THRESHOLD: Every configured IO dimension must fall below this percentage
 #
 # IO_READ_BPS: Per-user read bandwidth limit (bytes/s with K/M/G/T suffix)
 # IO_WRITE_BPS: Per-user write bandwidth limit

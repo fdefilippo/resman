@@ -184,10 +184,11 @@ Configuration parameters:
 - Enable IO limiting (true/false)
 .IP \(bu
 .B IO_THRESHOLD
-- Activation threshold percentage of total user I/O usage
+- Activation percentage applied independently to each configured I/O dimension;
+  any dimension at or above the threshold activates or maintains enforcement
 .IP \(bu
 .B IO_RELEASE_THRESHOLD
-- Deactivation threshold percentage
+- Release percentage; every configured I/O dimension must be below it
 .IP \(bu
 .B IO_READ_BPS
 - Read bandwidth limit (e.g., "100M", "1G")
@@ -200,6 +201,13 @@ Configuration parameters:
 .IP \(bu
 .B IO_WRITE_IOPS
 - Write IOPS limit (0 = unlimited)
+.PP
+Bandwidth values of "max" or an empty value and IOPS values of 0 disable only
+their own dimension. Before enforcement, bandwidth decisions use per-user
+/proc/PID/io byte rates. The read/write IOPS decision signals use syscr/syscw
+rates because no resman io.stat cgroup exists yet; io.max enforcement itself
+uses real block-device IOPS. The activation rule is any-of across configured
+dimensions and the release rule is all-of.
 .IP \(bu
 .B IO_DEVICE_FILTER
 - Device specification. "all" enumerates all whole block devices in /sys/block;
@@ -534,8 +542,8 @@ CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
 
 # IO LIMITS
 # IO_LIMIT_ENABLED=false               # Enable IO limiting via cgroups v2 io controller
-# IO_THRESHOLD=75                      # Percentage of total user IO to activate limits
-# IO_RELEASE_THRESHOLD=40              # Percentage to release limits
+# IO_THRESHOLD=75                      # Any configured IO dimension activates at this percentage
+# IO_RELEASE_THRESHOLD=40              # Every configured IO dimension must fall below this percentage
 # IO_READ_BPS=100M                     # Per-user read bandwidth limit (bytes/s)
 # IO_WRITE_BPS=50M                     # Per-user write bandwidth limit
 # IO_READ_IOPS=1000                    # Per-user read IOPS limit (0 = unlimited)

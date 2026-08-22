@@ -367,13 +367,16 @@ type SystemMetrics struct {
 	AllUsersCount       int
 
 	// Per-resource eligible-user metrics.
-	CPUEligibleCPUUsage    float64
-	CPUEligibleMemoryUsage uint64
-	CPUEligibleUsersCount  int
-	RAMEligibleUsersCount  int
-	IOEligibleUsersCount   int
-	RAMEligibleUsageBytes  uint64
-	IOEligibleWriteBytes   uint64
+	CPUEligibleCPUUsage              float64
+	CPUEligibleMemoryUsage           uint64
+	CPUEligibleUsersCount            int
+	RAMEligibleUsersCount            int
+	IOEligibleUsersCount             int
+	RAMEligibleUsageBytes            uint64
+	IOEligibleReadBPS                float64
+	IOEligibleWriteBPS               float64
+	IOEligibleReadSyscallsPerSecond  float64
+	IOEligibleWriteSyscallsPerSecond float64
 
 	MemoryUsage      float64 // MB
 	TotalMemoryMB    float64 // MB
@@ -397,6 +400,7 @@ func (m *Manager) collectSystemMetricsForRefresh() (*SystemMetrics, error) {
 
 func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMetrics, error) {
 	collectionStarted := time.Now()
+	sampleTime := collectionStarted
 	if exporter := m.prometheusExporter; exporter != nil {
 		defer func() {
 			exporter.RecordMetricsCollectionDuration(time.Since(collectionStarted))
@@ -404,7 +408,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	}
 
 	metrics := &SystemMetrics{
-		Timestamp:    time.Now(),
+		Timestamp:    sampleTime,
 		UserCPUUsage: make(map[int]float64),
 		UserMetrics:  make(map[int]*resmanmetrics.UserMetrics),
 	}
@@ -476,16 +480,20 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 		if corrected.EligibleForIO {
 			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
 			if updateIOState {
-				// Calculate I/O bytes per second from the previous decision-cycle sample.
-				ioDelta := um.IOWriteBytes
-				if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
-					elapsed := time.Since(m.prevIOTime).Seconds()
-					if elapsed > 0 && ioDelta >= prev {
-						ioRate := float64(ioDelta-prev) / elapsed
-						metrics.IOEligibleWriteBytes += uint64(ioRate)
-					}
+				current := ioCounters{
+					readBytes:  um.IOReadBytes,
+					writeBytes: um.IOWriteBytes,
+					readOps:    um.IOReadOps,
+					writeOps:   um.IOWriteOps,
 				}
-				m.prevIOBytes[uid] = ioDelta
+				if previous, ok := m.prevIOCounters[uid]; ok && !m.prevIOTime.IsZero() {
+					rates := calculateIORates(current, previous, sampleTime.Sub(m.prevIOTime))
+					metrics.IOEligibleReadBPS += rates.readBytes
+					metrics.IOEligibleWriteBPS += rates.writeBytes
+					metrics.IOEligibleReadSyscallsPerSecond += rates.readOps
+					metrics.IOEligibleWriteSyscallsPerSecond += rates.writeOps
+				}
+				m.prevIOCounters[uid] = current
 			}
 		}
 	}
@@ -494,17 +502,52 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
 	if updateIOState {
-		m.prevIOTime = time.Now()
+		m.prevIOTime = sampleTime
 
-		// Remove I/O baselines for users that are no longer active.
-		for uid := range m.prevIOBytes {
-			if _, exists := allUserMetrics[uid]; !exists {
-				delete(m.prevIOBytes, uid)
+		// Remove baselines for users that are no longer I/O eligible. If they
+		// become eligible again, their first sample establishes a fresh baseline.
+		ioEligibleUsers := make(map[int]struct{}, len(metrics.IOEligibleUsers))
+		for _, uid := range metrics.IOEligibleUsers {
+			ioEligibleUsers[uid] = struct{}{}
+		}
+		for uid := range m.prevIOCounters {
+			if _, exists := ioEligibleUsers[uid]; !exists {
+				delete(m.prevIOCounters, uid)
 			}
 		}
 	}
 
 	return metrics, nil
+}
+
+// calculateIORates converts monotonic cumulative counters into per-second rates.
+// The operation counters originate from /proc/PID/io syscr and syscw; they are
+// read/write-family syscall rates, not block-device IOPS from cgroup io.stat.
+func calculateIORates(current, previous ioCounters, elapsed time.Duration) ioCountersRate {
+	seconds := elapsed.Seconds()
+	if seconds <= 0 {
+		return ioCountersRate{}
+	}
+	return ioCountersRate{
+		readBytes:  monotonicRate(current.readBytes, previous.readBytes, seconds),
+		writeBytes: monotonicRate(current.writeBytes, previous.writeBytes, seconds),
+		readOps:    monotonicRate(current.readOps, previous.readOps, seconds),
+		writeOps:   monotonicRate(current.writeOps, previous.writeOps, seconds),
+	}
+}
+
+type ioCountersRate struct {
+	readBytes  float64
+	writeBytes float64
+	readOps    float64
+	writeOps   float64
+}
+
+func monotonicRate(current, previous uint64, elapsedSeconds float64) float64 {
+	if current < previous {
+		return 0
+	}
+	return float64(current-previous) / elapsedSeconds
 }
 
 func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {

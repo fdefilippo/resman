@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -58,30 +57,22 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		ramExceeded = ramPercent >= float64(cfg.RAMThreshold)
 	}
 
-	ioExceeded := false
-	ioPercent := 0.0
-	ioThresholdDuration := cfg.GetIOThresholdDuration()
-	if cfg.IOEnabled && cfg.IOThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
-		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
-		if err == nil && writeLimit > 0 {
-			totalWriteLimit := writeLimit * uint64(metrics.IOEligibleUsersCount)
-			if totalWriteLimit > 0 {
-				ioPercent = float64(metrics.IOEligibleWriteBytes) / float64(totalWriteLimit) * 100
-				ioExceeded = ioPercent >= float64(cfg.IOThreshold)
-			}
-		}
-	}
+	ioPolicy := cfg.GetIODecisionPolicy()
+	ioActivationPressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.Threshold)
+	ioExceeded := ioActivationPressure.exceeded()
+	ioThresholdPending := false
 
 	// Apply the I/O threshold duration when configured.
-	if ioThresholdDuration > 0 && ioExceeded {
+	if ioPolicy.ThresholdDuration > 0 && ioExceeded {
 		ioTrackerReady := m.ioThresholdTracker.ShouldActivateLimits(
-			ioPercent,
-			float64(cfg.IOThreshold),
-			time.Duration(ioThresholdDuration)*time.Second,
+			ioActivationPressure.maxPercent,
+			float64(ioPolicy.Threshold),
+			time.Duration(ioPolicy.ThresholdDuration)*time.Second,
 		)
 		if !ioTrackerReady {
 			// I/O is above threshold but has not remained there long enough.
 			ioExceeded = false
+			ioThresholdPending = true
 		}
 	} else {
 		// Reset when I/O is below threshold or the duration guard is disabled.
@@ -89,6 +80,16 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	anyExceeded := cpuExceeded || ramExceeded || ioExceeded
+	if !anyExceeded && ioThresholdPending {
+		m.thresholdTracker.Reset()
+		remaining := time.Duration(ioPolicy.ThresholdDuration)*time.Second - m.ioThresholdTracker.GetElapsed()
+		return DecisionMaintain, fmt.Sprintf(
+			"IO threshold exceeded, waiting %s before activating limits (peak %.1f%% >= %d%%)",
+			remaining.Round(time.Second),
+			ioActivationPressure.maxPercent,
+			ioPolicy.Threshold,
+		)
+	}
 
 	// Evaluate release thresholds independently for every resource.
 	cpuBelow := metrics.CPUEligibleCPUUsage < float64(cpuReleaseThreshold)
@@ -100,17 +101,8 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		ramBelow = ramPercent < float64(cfg.RAMReleaseThreshold)
 	}
 
-	ioBelow := true
-	if cfg.IOEnabled && cfg.IOReleaseThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
-		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
-		if err == nil && writeLimit > 0 {
-			totalWriteLimit := writeLimit * uint64(metrics.IOEligibleUsersCount)
-			if totalWriteLimit > 0 {
-				ioPercent := float64(metrics.IOEligibleWriteBytes) / float64(totalWriteLimit) * 100
-				ioBelow = ioPercent < float64(cfg.IOReleaseThreshold)
-			}
-		}
-	}
+	ioReleasePressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.ReleaseThreshold)
+	ioBelow := !ioReleasePressure.exceeded()
 
 	allBelow := cpuBelow && ramBelow && ioBelow
 
@@ -207,7 +199,15 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			}
 		}
 
-		return DecisionActivate, m.buildActivateReason(cpuExceeded, ramExceeded, ioExceeded, metrics, cpuThreshold)
+		return DecisionActivate, m.buildActivateReason(
+			cpuExceeded,
+			ramExceeded,
+			ioExceeded,
+			metrics,
+			cpuThreshold,
+			ioActivationPressure,
+			ioPolicy.Threshold,
+		)
 	}
 
 	// No resource exceeds its threshold; reset activation tracking.
@@ -216,7 +216,13 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	return DecisionMaintain, "All resources within normal range"
 }
 
-func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool, metrics *SystemMetrics, cpuThreshold int) string {
+func (m *Manager) buildActivateReason(
+	cpuExceeded, ramExceeded, ioExceeded bool,
+	metrics *SystemMetrics,
+	cpuThreshold int,
+	ioActivationPressure ioPressure,
+	ioThreshold int,
+) string {
 	cfg := m.GetConfig()
 	reasons := []string{}
 	if cpuExceeded {
@@ -226,7 +232,7 @@ func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool,
 		reasons = append(reasons, fmt.Sprintf("RAM >= %d%%", cfg.RAMThreshold))
 	}
 	if ioExceeded {
-		reasons = append(reasons, fmt.Sprintf("IO >= %d%%", cfg.IOThreshold))
+		reasons = append(reasons, ioActivationPressure.reason(ioThreshold))
 	}
 	return fmt.Sprintf("Threshold exceeded: %s", strings.Join(reasons, ", "))
 }
