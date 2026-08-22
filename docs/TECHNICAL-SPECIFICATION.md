@@ -278,6 +278,16 @@ unambiguous parent or session origin; otherwise they enter the resman-owned
 recovery hierarchy. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is
 never written into systemd-managed cgroups.
 
+At startup, the manager enables the controllers it may use and creates a
+temporary child below the resman base cgroup. Capability is determined from the
+interface files populated in that real child, not from controller names alone.
+CPU limiting always requires `cpu.max`; `RAM_LIMIT_ENABLED=true` additionally
+requires `memory.max`, and `IO_LIMIT_ENABLED=true` requires `io.max`. A missing
+required interface aborts startup with the feature, controller, and interface in
+the error. Controllers for disabled RAM or I/O features may be absent. `cpuset`
+is optional because quota and proportional CPU enforcement use the `cpu`
+controller.
+
 **Key Functions:**
 - `NewManager(cfg)`: Creates cgroup manager
 - `verifyCgroupSetup()`: Verifies cgroups v2 availability

@@ -20,7 +20,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership) ;;
+	resource-only|process-membership|missing-io-startup) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -71,11 +71,15 @@ fail() {
 
 controllers=$(< /sys/fs/cgroup/cgroup.controllers)
 required_controllers=(cpu)
-if [[ $scenario == resource-only ]]; then
+if [[ $scenario == resource-only || $scenario == missing-io-startup ]]; then
 	required_controllers+=(memory io)
 fi
 for controller in "${required_controllers[@]}"; do
     [[ " $controllers " == *" $controller "* ]] || blocked "required $controller controller is unavailable"
+	if [[ " $(< /sys/fs/cgroup/cgroup.subtree_control) " != *" $controller "* ]]; then
+		printf '+%s\n' "$controller" > /sys/fs/cgroup/cgroup.subtree_control \
+			|| blocked "cannot enable required $controller controller for interface probing"
+	fi
 done
 psi_available=true
 for pressure_file in cpu memory io; do
@@ -94,9 +98,24 @@ pressure_summary() {
     fi
 }
 
-probe=/sys/fs/cgroup/resman-functional-probe-$run_id
-mkdir "$probe" || blocked "cannot create a guest cgroup"
-rmdir "$probe" || fail "cannot remove the guest cgroup preflight probe"
+controller_probe=/sys/fs/cgroup/resman-functional-probe-$run_id
+mkdir "$controller_probe" || blocked "cannot create the controller-interface probe cgroup"
+cpu_max_available=false
+memory_max_available=false
+io_max_available=false
+[[ -e $controller_probe/cpu.max ]] && cpu_max_available=true
+[[ -e $controller_probe/memory.max ]] && memory_max_available=true
+[[ -e $controller_probe/io.max ]] && io_max_available=true
+rmdir "$controller_probe" || fail "cannot remove the controller-interface probe cgroup"
+[[ $cpu_max_available == true ]] || blocked "cpu controller is listed but cpu.max is unavailable"
+if [[ $scenario == resource-only ]]; then
+	[[ $memory_max_available == true ]] || blocked "memory controller is listed but memory.max is unavailable"
+	[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable"
+fi
+if [[ $scenario == missing-io-startup ]]; then
+	[[ $memory_max_available == true ]] || blocked "memory.max is also unavailable; missing-io startup attribution would be ambiguous"
+	[[ $io_max_available == false ]] || blocked "io.max is available; the guest cannot exercise missing-interface startup rejection"
+fi
 
 sed "s/@RUN_ID@/$run_id/g" /opt/resman-functional/fixtures/resman.conf >"$config_file"
 if [[ $scenario == process-membership ]]; then
@@ -118,7 +137,10 @@ chmod 0600 "$runtime_dir/environment"
     printf 'pid1=%s\n' "$(ps -p 1 -o comm= | tr -d ' ')"
     printf 'cgroup_mount=%s\n' "$(findmnt -n -o SOURCE,FSTYPE,OPTIONS /sys/fs/cgroup)"
     printf 'controllers_available=%s\n' "$controllers"
-    printf 'controllers_enabled=%s\n' "$(< /sys/fs/cgroup/cgroup.subtree_control)"
+	printf 'controllers_enabled=%s\n' "$(< /sys/fs/cgroup/cgroup.subtree_control)"
+	printf 'cpu_max_available=%s\n' "$cpu_max_available"
+	printf 'memory_max_available=%s\n' "$memory_max_available"
+	printf 'io_max_available=%s\n' "$io_max_available"
     printf 'psi_required=%s\n' "$require_psi"
 	printf 'psi_available=%s\n' "$psi_available"
 	printf 'scenario=%s\n' "$scenario"
@@ -138,6 +160,27 @@ chmod 0600 "$runtime_dir/environment"
 } >>"$artifact_dir/environment.txt"
 
 systemctl daemon-reload
+if [[ $scenario == missing-io-startup ]]; then
+	set +e
+	timeout 15s /usr/bin/resman --config "$config_file" \
+		>"$artifact_dir/controller-startup-rejection.txt" 2>&1
+	startup_status=$?
+	set -e
+	if [[ $startup_status -eq 0 ]]; then
+		fail "resman started with IO limiting enabled but io.max unavailable"
+	fi
+	[[ $startup_status -ne 124 ]] || fail "resman did not reject the missing io.max interface within 15 seconds"
+	grep -Fq 'I/O limiting' "$artifact_dir/controller-startup-rejection.txt" \
+		|| fail "startup rejection did not name the I/O limiting feature"
+	grep -Fq 'controller "io"' "$artifact_dir/controller-startup-rejection.txt" \
+		|| fail "startup rejection did not name the io controller"
+	grep -Fq 'interface "io.max"' "$artifact_dir/controller-startup-rejection.txt" \
+		|| fail "startup rejection did not name the io.max interface"
+	result=PASS
+	detail="startup rejected IO limiting because the real child cgroup lacked io.max"
+	echo "PASS: $detail"
+	exit 0
+fi
 if ! systemctl start "$service"; then
     fail "resman systemd service failed to start"
 fi
@@ -153,29 +196,6 @@ sqlite3 "$state_dir/metrics.db" '.schema' >"$artifact_dir/database-schema.sql" \
     || fail "SQLite metrics database is unreadable"
 base_cgroup=/sys/fs/cgroup/resman-functional-$run_id
 [[ -d $base_cgroup ]] || fail "isolated cgroup root was not created"
-
-# A controller name alone does not prove that the kernel exposes the files
-# needed by the configured policy. Probe a real child below resman's base after
-# the manager has enabled its subtree controllers.
-controller_probe=$base_cgroup/controller-probe
-mkdir "$controller_probe" || blocked "cannot create the controller-interface probe cgroup"
-cpu_max_available=false
-memory_max_available=false
-io_max_available=false
-[[ -e $controller_probe/cpu.max ]] && cpu_max_available=true
-[[ -e $controller_probe/memory.max ]] && memory_max_available=true
-[[ -e $controller_probe/io.max ]] && io_max_available=true
-{
-    printf 'cpu_max_available=%s\n' "$cpu_max_available"
-    printf 'memory_max_available=%s\n' "$memory_max_available"
-    printf 'io_max_available=%s\n' "$io_max_available"
-} >>"$artifact_dir/environment.txt"
-rmdir "$controller_probe" || fail "cannot remove the controller-interface probe cgroup"
-[[ $cpu_max_available == true ]] || blocked "cpu controller is listed but cpu.max is unavailable"
-if [[ $scenario == resource-only ]]; then
-	[[ $memory_max_available == true ]] || blocked "memory controller is listed but memory.max is unavailable"
-	[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable"
-fi
 
 # Exercise the resource-only enforcement boundary. CPU eligibility is empty in
 # the fixture, while the memory and I/O users are independently eligible.

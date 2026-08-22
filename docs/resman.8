@@ -74,6 +74,24 @@ Displays program version and exits.
 .B resman
 requires Linux kernel 4.18 or later with cgroups v2 enabled.
 .PP
+At startup, resman probes a real child cgroup for the interfaces required by the
+configured features. CPU limiting requires
+.BR cpu.max .
+When
+.B RAM_LIMIT_ENABLED=true
+is configured,
+.B memory.max
+is mandatory; when
+.B IO_LIMIT_ENABLED=true
+is configured,
+.B io.max
+is mandatory. A controller name in
+.B cgroup.controllers
+is not sufficient. A missing required interface causes startup to fail with the
+feature, controller, and interface named. The
+.B cpuset
+controller is optional for CPU quota and proportional-weight enforcement.
+.PP
 The published RPM is built with CGO on Enterprise Linux 8 and targets the EL8
 userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
 Enterprise Linux releases. The RPM is not statically linked because NSS, LDAP,

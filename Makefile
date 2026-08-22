@@ -58,7 +58,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-preflight \
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-missing-io-startup test-functional-smolvm-preflight \
 	test-functional-smolvm-unit lint lint-install install uninstall rpm deb docker help
 
 all: clean test lint build
@@ -115,6 +115,10 @@ test-functional-smolvm:
 # Run the sustained-active process-membership scenario independently.
 test-functional-smolvm-process-membership:
 	SMOLVM_SCENARIO=process-membership test/functional/smolvm/run.sh run
+
+# Verify fail-closed startup when io is named but io.max is unavailable.
+test-functional-smolvm-missing-io-startup:
+	SMOLVM_SCENARIO=missing-io-startup test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:

@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fdefilippo/resman/internal/processpolicy"
 )
 
+// CreateSharedCgroup creates the shared hierarchy used for CPU-limited users.
 func (m *Manager) CreateSharedCgroup() (string, error) {
 	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
 
@@ -26,29 +26,28 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 		return "", fmt.Errorf("failed to inspect shared cgroup %s: %w", sharedPath, err)
 	}
 
-	// Crea la directory del cgroup condiviso
+	// Create the shared cgroup directory.
 	if err := os.MkdirAll(sharedPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create shared cgroup directory: %w", err)
 	}
 
-	// Abilita i controller nel cgroup condiviso
+	// A startup probe has already proved these interfaces are usable. Keep
+	// controller enablement fatal here so the decision engine cannot enter a
+	// permanent apply-fail loop if the hierarchy changes at runtime.
 	subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
-	controllersData, controllersErr := os.ReadFile(filepath.Join(sharedPath, "cgroup.controllers"))
-	if err := m.writeControllerIfMissing(subtreeControl, "+cpu"); err != nil {
-		m.logger.Warn("Failed to enable cpu controller in shared cgroup", "error", err)
+	requirements := enabledControllerInterfaces(m.getConfig())
+	if _, err := m.enableControllerInterfaces(subtreeControl, requirements, requirements); err != nil {
+		cleanupErr := os.Remove(sharedPath)
+		return "", errors.Join(err, cleanupErr)
 	}
-	if err := m.writeControllerIfMissing(subtreeControl, "+cpuset"); err != nil {
-		m.logger.Warn("Failed to enable cpuset controller in shared cgroup", "error", err)
-	}
-	if controllersErr == nil && strings.Contains(string(controllersData), "io") {
-		if err := m.writeControllerIfMissing(subtreeControl, "+io"); err != nil {
-			m.logger.Warn("Failed to enable io controller in shared cgroup", "error", err)
-		}
-	}
-	if controllersErr == nil && strings.Contains(string(controllersData), "memory") {
-		if err := m.writeControllerIfMissing(subtreeControl, "+memory"); err != nil {
-			m.logger.Warn("Failed to enable memory controller in shared cgroup", "error", err)
-		}
+	controllersData, err := os.ReadFile(filepath.Join(sharedPath, "cgroup.controllers"))
+	if err != nil {
+		m.logger.Warn("Could not inspect optional controllers in shared cgroup",
+			"path", sharedPath,
+			"error", err,
+		)
+	} else {
+		m.enableOptionalCPUSet(subtreeControl, string(controllersData), "shared cgroup")
 	}
 
 	m.logger.Info("Shared cgroup created and initialized", "path", sharedPath)

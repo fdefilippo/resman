@@ -18,6 +18,18 @@ only the CPU interface:
 make test-functional-smolvm-process-membership
 ```
 
+The SmolVM 1.9.0 kernel lists the I/O controller but does not expose `io.max`.
+Use that environment to verify that an enabled I/O feature fails closed during
+startup and names the feature, controller, and interface:
+
+```bash
+make test-functional-smolvm-missing-io-startup
+```
+
+This scenario is `BLOCKED` rather than passed when `io.max` is available or
+when another required interface is also missing, because either condition
+would not reproduce the intended boundary unambiguously.
+
 The target builds the guest image with `sudo podman` and invokes every
 KVM-dependent SmolVM command through `sg kvm -c`. Starting a new login shell is
 not required after adding the user to the `kvm` group.
@@ -130,6 +142,8 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
 - sustained-active process-membership origin and reconciliation results when that
   scenario is selected;
+- the complete startup rejection naming feature, controller, and interface for
+  the missing-I/O capability scenario;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.
 
 Host-side failures that happen before the guest runner starts are also written
