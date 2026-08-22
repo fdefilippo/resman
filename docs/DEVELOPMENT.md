@@ -563,6 +563,47 @@ introduced by `04b7419`, extended by `76529bb`, and is now up for replacement in
 *Findings: resman-4pw.11, resman-4pw.15, resman-4pw.12, resman-4pw.14, resman-4pw.9,
 resman-4pw.6; historical provenance from epic `resman-ne0`*
 
+## Rule 19 — An anomaly is tracked or refuted, never documented
+
+Rules 1 to 18 address the author of a change. This one addresses whoever reviews it.
+
+**Every anomaly noticed during a review MUST end in one of three states:**
+
+1. **Fixed** in the change under review.
+2. **Filed** as an issue, with reproduction steps.
+3. **Refuted** in writing, with the reason.
+
+Writing it into a note, a code comment, or a document is **not** one of the three
+states. A written note feels resolved, which is exactly why it is dangerous: it buys
+the feeling of having handled something while leaving nothing that will ever force the
+work.
+
+- A note on an issue is admissible **only** when that issue is **open** and its
+  acceptance criteria force the anomaly to be handled. A note on a closed issue is
+  deferred forgetting with a timestamp.
+- A refutation **MUST** say why the condition cannot occur. "Seems minor", "narrow",
+  and "unlikely in practice" are estimates, not refutations. If the reason is a
+  probability rather than a mechanism, the anomaly is filed, not refuted.
+- **Follow the anomaly to its consequence before classifying it.** Ask what the failure
+  disables, for how long, and who sees it. Severity is a property of the consequence,
+  not of the symptom, and the two are routinely an order of magnitude apart.
+- A review **MUST** close by stating, for each anomaly, which of the three states it
+  reached. A review that raises nothing says so explicitly.
+
+**Why.** The `resman-ne0` epic was closed issue by issue and the defect class survived;
+the historical provenance recorded on eleven issues of `resman-4pw` is the evidence.
+The rule exists because the same thing happened again during this epic, in miniature:
+in the review of `resman-4pw.2` a permanently repeating error was classified as a
+documentation gap, and one follow-up question showed it aborts the control cycle at
+stage 6 of 11, disabling history recording, I/O remediation, pattern detection and PSI
+boost reversion for as long as it lasts. It became `resman-4pw.31` only because someone
+asked for clarification. The reviewer had already traced that pipeline behaviour in an
+earlier review. Nothing was unknown; the anomaly simply was not followed to its
+consequence.
+
+*Findings: resman-4pw.31, resman-4pw.32, resman-4pw.33; historical provenance from
+epic `resman-ne0`*
+
 ---
 
 ## Definition of Done
@@ -597,6 +638,10 @@ A change is not done until every line is true:
 - [ ] If this is a fix: the boundary it crosses is tested, no threshold borrowed from an
       unrelated contract, no enforcement added ahead of the behaviour, and no third
       local remedy where the mechanism should be replaced (Rule 18).
+- [ ] Every anomaly raised in review is fixed, filed, or refuted in writing — none left
+      in a note (Rule 19).
+- [ ] Any operator-visible discontinuity introduced by this change has its entry in the
+      upgrade notes, in this commit (Rule 1, `resman-4pw.32`).
 
 ---
 
@@ -644,6 +689,7 @@ Until they exist, treat them as review checkpoints.
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
 | 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |
+| 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
 
 Findings `resman-4pw.8` (refresh must not advance decision state) and
 `resman-4pw.15` (sampling staleness window) require a **product contract decision**
