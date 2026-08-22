@@ -1049,11 +1049,13 @@ type Manager struct {
 - `resman_user_cpu_limited{uid, username}` (gauge)
 
 **Counters:**
-- `resman_limits_activated_total` (counter)
-- `resman_limits_deactivated_total` (counter)
+- `resman_limits_activated_total` (confirmed inactive-to-active transitions)
+- `resman_limits_deactivated_total` (confirmed active-to-inactive transitions)
+- `resman_errors_total{component, error_type}` (operational errors with bounded labels)
 
 **Histograms:**
-- `resman_control_cycle_duration_seconds` (histogram)
+- `resman_control_cycle_duration_seconds` (complete cycles, including failed and suspended cycles)
+- `resman_metrics_collection_duration_seconds` (control-cycle and metrics-only collection)
 
 ### 12.2 Exporter Lifecycle
 

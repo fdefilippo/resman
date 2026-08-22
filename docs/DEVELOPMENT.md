@@ -248,12 +248,11 @@ The neighbouring `active_users_count` lookups happen to work only because they r
 - Help text **MUST** match the semantics, including the unit and whether failures are
   included.
 
-**Why.** `IncrementLimitsActivated()` is called on the first line of `activateLimits`
-(`state/limits_applier.go:229`), before any cgroup write; `limits_activated_total`
-therefore counts attempts under a name that promises transitions. Meanwhile
-`RecordControlCycleDuration`, `RecordMetricsCollectionDuration`, and `RecordError`
-(`metrics/prometheus.go:1111-1127`) are declared, registered, documented — and never
-called from production code.
+**Why.** Before `resman-4pw.10`, activation and deactivation counters were incremented
+before any cgroup operation, while the duration recorders had no production call sites
+and `RecordError` initially had none. The remediation observes complete cycles and
+collection boundaries, records bounded operational failures, and increments transition
+counters only when runtime state actually changes.
 
 *Finding: resman-4pw.10*
 

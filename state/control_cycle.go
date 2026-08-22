@@ -83,7 +83,7 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	return nil
 }
 
-// RunControlCycleWithTrigger esegue un ciclo indicando il motivo che lo ha avviato.
+// RunControlCycleWithTrigger executes one control cycle for the supplied trigger.
 func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -100,8 +100,11 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 	}
 	run.cycleID = run.startTime.Unix()
 
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordControlCycleTrigger(trigger)
+	if exporter := m.prometheusExporter; exporter != nil {
+		exporter.RecordControlCycleTrigger(trigger)
+		defer func() {
+			exporter.RecordControlCycleDuration(time.Since(run.startTime))
+		}()
 	}
 
 	m.logger.Debug("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger)
@@ -386,13 +389,20 @@ func (m *Manager) collectSystemMetricsForRefresh() (*SystemMetrics, error) {
 }
 
 func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMetrics, error) {
+	collectionStarted := time.Now()
+	if exporter := m.prometheusExporter; exporter != nil {
+		defer func() {
+			exporter.RecordMetricsCollectionDuration(time.Since(collectionStarted))
+		}()
+	}
+
 	metrics := &SystemMetrics{
 		Timestamp:    time.Now(),
 		UserCPUUsage: make(map[int]float64),
 		UserMetrics:  make(map[int]*resmanmetrics.UserMetrics),
 	}
 
-	// Raccogli metriche di base
+	// Collect base system metrics.
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
 	metrics.TotalCPUUsage = m.metricsCollector.GetTotalCPUUsage()
 
@@ -403,18 +413,21 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	systemLoad, err := m.metricsCollector.GetSystemLoad()
 	if err != nil {
 		m.logger.Warn("Failed to collect system load", "error", err)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(metricsCollectionErrorComponent, metricsCollectionSystemLoadError)
+		}
 	} else {
 		metrics.SystemLoad = systemLoad
 	}
 
-	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
+	// Collect detailed per-user CPU, memory, process, and I/O metrics in one call.
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
 
-	// Singola passata per calcolare tutti gli aggregati:
+	// Compute every aggregate in one pass:
 	// - AllUsers (CPU, memory, count)
-	// - EligibleUsers (IsLimited == true dal collector)
+	// - EligibleUsers (collector IsLimited == true)
 	// - LimitedUsers (runtime active)
-	// - UserMetrics e UserCPUUsage sovrascrivendo IsLimited con stato runtime
+	// - UserMetrics and UserCPUUsage with IsLimited replaced by runtime state
 	for uid, um := range allUserMetrics {
 		metrics.AllUsersCPUUsage += um.CPUUsage
 		metrics.AllUsersMemoryUsage += um.MemoryUsage
@@ -422,7 +435,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 
 		metrics.UserCPUUsage[uid] = um.CPUUsage
 
-		// FIX M2: Override IsLimited based on actual runtime state, not config
+		// Override IsLimited based on actual runtime state, not configuration.
 		m.mu.RLock()
 		actuallyLimited := m.activeUsers[uid]
 		m.mu.RUnlock()
@@ -443,7 +456,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 		}
 		metrics.UserMetrics[uid] = corrected
 
-		// Eligible users: quelli che superano i filtri di configurazione
+		// Eligible users pass the collector's configuration filters.
 		if um.IsLimited {
 			metrics.EligibleUsers = append(metrics.EligibleUsers, uid)
 			metrics.LimitedUsersCPUUsage += um.CPUUsage
@@ -451,7 +464,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
 
 			if updateIOState {
-				// Calcola IO rate (bytes/sec) dal delta rispetto al ciclo decisionale precedente.
+				// Calculate I/O bytes per second from the previous decision-cycle sample.
 				ioDelta := um.IOWriteBytes
 				if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
 					elapsed := time.Since(m.prevIOTime).Seconds()
@@ -469,7 +482,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	if updateIOState {
 		m.prevIOTime = time.Now()
 
-		// Pulisci prevIOBytes per utenti non più attivi
+		// Remove I/O baselines for users that are no longer active.
 		for uid := range m.prevIOBytes {
 			if _, exists := allUserMetrics[uid]; !exists {
 				delete(m.prevIOBytes, uid)
@@ -590,8 +603,13 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 }
 
 const (
-	metricsDatabaseErrorComponent = "metrics_database"
-	metricsDatabaseWriteFailure   = "write_failure"
+	metricsCollectionErrorComponent    = "metrics_collection"
+	metricsCollectionSystemLoadError   = "system_load_failure"
+	metricsDatabaseErrorComponent      = "metrics_database"
+	metricsDatabaseWriteFailure        = "write_failure"
+	limitTransitionErrorComponent      = "limit_transition"
+	limitTransitionActivationFailure   = "activation_failure"
+	limitTransitionDeactivationFailure = "deactivation_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

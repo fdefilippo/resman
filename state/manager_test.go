@@ -137,14 +137,27 @@ func (m *mockCgroupManager) CleanupAll() error                                  
 func (m *mockCgroupManager) GetCgroupInfo(uid int) (map[string]string, error)         { return nil, nil }
 func (m *mockCgroupManager) GetCreatedCgroups() []int                                 { return nil }
 
+type moveResultCgroupManager struct {
+	mockCgroupManager
+	moveErr error
+}
+
+func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
+	return m.moveErr
+}
+
 type prometheusErrorRecord struct {
 	component string
 	errorType string
 }
 
 type mockPrometheusExporter struct {
-	mu     sync.Mutex
-	errors []prometheusErrorRecord
+	mu                         sync.Mutex
+	errors                     []prometheusErrorRecord
+	controlCycleDurations      []time.Duration
+	metricsCollectionDurations []time.Duration
+	limitsActivated            int
+	limitsDeactivated          int
 }
 
 func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
@@ -154,6 +167,16 @@ func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int,
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 }
 func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string) {}
+func (m *mockPrometheusExporter) RecordControlCycleDuration(duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.controlCycleDurations = append(m.controlCycleDurations, duration)
+}
+func (m *mockPrometheusExporter) RecordMetricsCollectionDuration(duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metricsCollectionDurations = append(m.metricsCollectionDurations, duration)
+}
 func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -162,13 +185,41 @@ func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 func (m *mockPrometheusExporter) Start(ctx context.Context) error            { return nil }
 func (m *mockPrometheusExporter) Stop() error                                { return nil }
 func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {}
-func (m *mockPrometheusExporter) IncrementLimitsActivated()                  {}
-func (m *mockPrometheusExporter) IncrementLimitsDeactivated()                {}
+func (m *mockPrometheusExporter) IncrementLimitsActivated() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.limitsActivated++
+}
+func (m *mockPrometheusExporter) IncrementLimitsDeactivated() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.limitsDeactivated++
+}
 
 func (m *mockPrometheusExporter) recordedErrors() []prometheusErrorRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]prometheusErrorRecord(nil), m.errors...)
+}
+
+type prometheusMetricSnapshot struct {
+	errors                    []prometheusErrorRecord
+	controlCycleDurations     int
+	metricsCollectionDuration int
+	limitsActivated           int
+	limitsDeactivated         int
+}
+
+func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return prometheusMetricSnapshot{
+		errors:                    append([]prometheusErrorRecord(nil), m.errors...),
+		controlCycleDurations:     len(m.controlCycleDurations),
+		metricsCollectionDuration: len(m.metricsCollectionDurations),
+		limitsActivated:           m.limitsActivated,
+		limitsDeactivated:         m.limitsDeactivated,
+	}
 }
 
 func TestNewManager(t *testing.T) {
@@ -193,6 +244,165 @@ func TestNewManagerNilConfig(t *testing.T) {
 
 	if err == nil {
 		t.Error("NewManager() should error with nil config")
+	}
+}
+
+func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
+	tests := []struct {
+		name          string
+		userMetrics   map[int]*metrics.UserMetrics
+		systemLoadErr error
+		moveErr       error
+		wantErr       bool
+		wantErrors    []prometheusErrorRecord
+		wantActivated int
+	}{
+		{
+			name: "successful cycle without transition",
+		},
+		{
+			name:          "degraded metrics collection",
+			systemLoadErr: errors.New("load unavailable"),
+			wantErrors: []prometheusErrorRecord{{
+				component: metricsCollectionErrorComponent,
+				errorType: metricsCollectionSystemLoadError,
+			}},
+		},
+		{
+			name: "confirmed activation",
+			userMetrics: map[int]*metrics.UserMetrics{
+				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, IsLimited: true},
+			},
+			wantActivated: 1,
+		},
+		{
+			name: "failed activation",
+			userMetrics: map[int]*metrics.UserMetrics{
+				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, IsLimited: true},
+			},
+			moveErr:    errors.New("move rejected"),
+			wantErr:    true,
+			wantErrors: []prometheusErrorRecord{{component: limitTransitionErrorComponent, errorType: limitTransitionActivationFailure}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.CPUThreshold = 1
+			cfg.CPUThresholdDuration = 0
+			cfg.IgnoreSystemLoad = true
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(
+				cfg,
+				&mockMetricsCollector{allUserMetrics: tt.userMetrics, systemLoadErr: tt.systemLoadErr},
+				&moveResultCgroupManager{moveErr: tt.moveErr},
+				exporter,
+			)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.sharedCgroupPath = filepath.Join(t.TempDir(), "shared")
+
+			err = manager.RunControlCycleWithTrigger(context.Background(), ControlCycleTriggerManual)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RunControlCycleWithTrigger() error = %v, wantErr %t", err, tt.wantErr)
+			}
+
+			got := exporter.snapshot()
+			if got.controlCycleDurations != 1 {
+				t.Errorf("control cycle duration observations = %d, want 1", got.controlCycleDurations)
+			}
+			if got.metricsCollectionDuration != 1 {
+				t.Errorf("metrics collection duration observations = %d, want 1", got.metricsCollectionDuration)
+			}
+			if got.limitsActivated != tt.wantActivated {
+				t.Errorf("confirmed activation count = %d, want %d", got.limitsActivated, tt.wantActivated)
+			}
+			if !reflect.DeepEqual(got.errors, tt.wantErrors) {
+				t.Errorf("recorded errors = %+v, want %+v", got.errors, tt.wantErrors)
+			}
+		})
+	}
+}
+
+func TestMetricsRefreshRecordsCollectionWithoutControlCycle(t *testing.T) {
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(
+		config.DefaultConfig(),
+		&mockMetricsCollector{},
+		&mockCgroupManager{},
+		exporter,
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	if err := manager.RunMetricsRefresh(context.Background(), "test"); err != nil {
+		t.Fatalf("RunMetricsRefresh() error: %v", err)
+	}
+
+	got := exporter.snapshot()
+	if got.metricsCollectionDuration != 1 {
+		t.Errorf("metrics collection duration observations = %d, want 1", got.metricsCollectionDuration)
+	}
+	if got.controlCycleDurations != 0 {
+		t.Errorf("control cycle duration observations = %d, want 0", got.controlCycleDurations)
+	}
+}
+
+func TestDeactivationMetricsRequireConfirmedTransition(t *testing.T) {
+	tests := []struct {
+		name            string
+		releaseErr      error
+		repeat          bool
+		wantErr         bool
+		wantErrors      []prometheusErrorRecord
+		wantDeactivated int
+	}{
+		{
+			name:            "successful transition is counted once",
+			repeat:          true,
+			wantDeactivated: 1,
+		},
+		{
+			name:       "failed transition is not counted",
+			releaseErr: errors.New("release rejected"),
+			wantErr:    true,
+			wantErrors: []prometheusErrorRecord{{component: limitTransitionErrorComponent, errorType: limitTransitionDeactivationFailure}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := &mockPrometheusExporter{}
+			cgroups := &deactivateCgroupManager{releaseErrors: map[int]error{1000: tt.releaseErr}}
+			manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.limitsActive = true
+			manager.sharedCgroupPath = t.TempDir()
+			manager.activeUsers[1000] = true
+
+			err = manager.deactivateLimits()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("deactivateLimits() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if tt.repeat {
+				if err := manager.deactivateLimits(); err != nil {
+					t.Fatalf("second deactivateLimits() error: %v", err)
+				}
+			}
+
+			got := exporter.snapshot()
+			if got.limitsDeactivated != tt.wantDeactivated {
+				t.Errorf("confirmed deactivation count = %d, want %d", got.limitsDeactivated, tt.wantDeactivated)
+			}
+			if !reflect.DeepEqual(got.errors, tt.wantErrors) {
+				t.Errorf("recorded errors = %+v, want %+v", got.errors, tt.wantErrors)
+			}
+		})
 	}
 }
 

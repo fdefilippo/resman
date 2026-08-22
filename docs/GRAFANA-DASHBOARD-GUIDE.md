@@ -62,8 +62,8 @@ grafana-cli --pluginUrl https://github.com/fdefilippo/resman/raw/main/docs/dashb
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Limits Activated** | `increase(resman_limits_activated_total[1h])` | Count of limit activations in last hour |
-| **Limits Deactivated** | `increase(resman_limits_deactivated_total[1h])` | Count of limit deactivations in last hour |
+| **Limits Activated** | `increase(resman_limits_activated_total[1h])` | Confirmed inactive-to-active transitions in the last hour |
+| **Limits Deactivated** | `increase(resman_limits_deactivated_total[1h])` | Confirmed active-to-inactive transitions in the last hour |
 | **Avg Cycle Duration** | `rate(resman_control_cycle_duration_seconds_sum[5m]) / rate(resman_control_cycle_duration_seconds_count[5m])` | Average control cycle duration |
 | **Error Rate** | `sum by (component) (rate(resman_errors_total[5m]))` | Errors by component |
 
@@ -328,7 +328,7 @@ Adjust alert thresholds based on your system's capacity and requirements.
 
 ### 3. Monitor Limit Activations
 
-Keep an eye on `resman_limits_activated_total` to understand how often limits are being applied.
+Keep an eye on `resman_limits_activated_total` to understand how often limits enter the active state successfully.
 
 ### 4. Track Error Rates
 

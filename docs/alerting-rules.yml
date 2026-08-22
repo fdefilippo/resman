@@ -173,14 +173,14 @@ groups:
       # Frequent Limit Toggling
       # -------------------------------------------------------------------------
       - alert: ResManFrequentLimitToggling
-        expr: increase(resman_limits_activated_total[10m]) > 5
+        expr: (increase(resman_limits_activated_total[10m]) + increase(resman_limits_deactivated_total[10m])) > 5
         for: 0m
         labels:
           severity: warning
           category: operations
         annotations:
           summary: "CPU limits toggling frequently"
-          description: "CPU limits have been activated {{ $value }} times in the last 10 minutes. Check threshold configuration."
+          description: "CPU limits changed state {{ $value }} times in the last 10 minutes. Check threshold configuration."
 
       # -------------------------------------------------------------------------
       # Control Cycle Too Slow
@@ -199,7 +199,7 @@ groups:
       # High Error Rate
       # -------------------------------------------------------------------------
       - alert: ResManHighErrorRate
-        expr: increase(resman_errors_total[5m]) > 10
+        expr: sum(increase(resman_errors_total[5m])) > 10
         for: 0m
         labels:
           severity: warning
@@ -245,27 +245,27 @@ groups:
       # Limits Activated
       # -------------------------------------------------------------------------
       - alert: ResManLimitsActivated
-        expr: resman_limits_active == 1 and changes(resman_limits_active[5m]) > 0
+        expr: increase(resman_limits_activated_total[5m]) > 0
         for: 0m
         labels:
           severity: info
           category: operations
         annotations:
           summary: "CPU limits activated"
-          description: "CPU limits have been activated due to high user CPU usage."
+          description: "CPU limits were activated {{ $value }} time(s) in the last 5 minutes."
 
       # -------------------------------------------------------------------------
       # Limits Deactivated
       # -------------------------------------------------------------------------
       - alert: ResManLimitsDeactivated
-        expr: resman_limits_active == 0 and changes(resman_limits_active[5m]) > 0
+        expr: increase(resman_limits_deactivated_total[5m]) > 0
         for: 0m
         labels:
           severity: info
           category: operations
         annotations:
           summary: "CPU limits deactivated"
-          description: "CPU limits have been deactivated. User CPU usage is now within normal range."
+          description: "CPU limits were deactivated {{ $value }} time(s) in the last 5 minutes."
 
 # ============================================================================
 # INHIBITION RULES (for Alertmanager)

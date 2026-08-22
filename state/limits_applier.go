@@ -220,16 +220,17 @@ func (m *Manager) commitReleasedUsers(users []int) {
 	}
 }
 
-func (m *Manager) activateLimits(metrics *SystemMetrics) error {
+func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
+	defer func() {
+		if resultErr != nil && m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(limitTransitionErrorComponent, limitTransitionActivationFailure)
+		}
+	}()
+
 	cfg := m.GetConfig()
 	m.logger.Info("Activating CPU limits with proportional weights")
 
-	// Incrementa il contatore di attivazioni
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.IncrementLimitsActivated()
-	}
-
-	// Ottieni gli utenti attualmente limitati
+	// Snapshot the users that are currently limited.
 	m.mu.RLock()
 	previouslyLimited := make([]int, 0, len(m.activeUsers))
 	for uid := range m.activeUsers {
@@ -276,9 +277,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 	m.commitReleasedUsers(releasedUsers)
 	removedCount := len(releasedUsers)
 
-	// Fase 2: Crea/Configura il cgroup condiviso
+	// Phase 2: create or configure the shared cgroup.
 	if sharedPath == "" {
-		// Crea il cgroup condiviso
+		// Create the shared cgroup.
 		createdSharedPath, err := m.cgroupManager.CreateSharedCgroup()
 		if err != nil {
 			return fmt.Errorf("failed to create shared cgroup (min_system_cores=%d, total_cores=%d): %w", cfg.GetMinSystemCores(), metrics.TotalCores, err)
@@ -294,21 +295,21 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 		return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
 	}
 
-	// Fase 3: Configura i sottocgroup per gli utenti attuali
-	// Usa EligibleUsers dal SystemMetrics (già filtrati da config al momento della raccolta)
+	// Phase 3: configure user sub-cgroups for the current users.
+	// EligibleUsers was already filtered by configuration during collection.
 	// Filter chain: EligibleUsers = USER_INCLUDE_LIST + USER_EXCLUDE_LIST (gatekeeper)
 	//   → shouldApplyRAMLimits = RAM_USER_INCLUDE_LIST + RAM_USER_EXCLUDE_LIST (sub-filter)
 	//   → shouldApplyIOLimits  = IO_USER_INCLUDE_LIST  + IO_USER_EXCLUDE_LIST  (sub-filter)
 	for _, uid := range metrics.EligibleUsers {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
-		// Verifica se l'utente è già limitato
+		// Check whether the user is already limited.
 		m.mu.RLock()
 		alreadyLimited := m.activeUsers[uid]
 		m.mu.RUnlock()
 
 		if !alreadyLimited {
-			// Crea il sottocgroup per l'utente dentro il cgroup condiviso
+			// Create the user's sub-cgroup inside the shared cgroup.
 			m.mu.RLock()
 			sharedPath := m.sharedCgroupPath
 			m.mu.RUnlock()
@@ -325,7 +326,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				continue
 			}
 
-			// Avvia monitoraggio PSI per questo utente (adaptive boosting)
+			// Start PSI monitoring for adaptive boosting.
 			if m.psiWatcher != nil {
 				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
 				ioPressurePath := filepath.Join(userCgroupPath, "io.pressure")
@@ -339,10 +340,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 				}
 			}
 
-			// Imposta il peso per l'utente (uguale per tutti)
-			// I pesi sono relativi: se tutti hanno peso 100, ottengono parti uguali
-			// Se un utente non usa CPU, gli altri possono usare più della loro parte
-			weight := 100 // Peso uguale per tutti
+			// Set the same relative weight for every user. Idle users leave more CPU
+			// capacity available to the other users.
+			weight := 100
 
 			if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
 				m.logger.Warn("Failed to move processes to shared cgroup; user will not be marked limited",
@@ -363,7 +363,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 
 			m.applyUserResourceLimits(uid, cfg)
 
-			// Segna l'utente come limitato
+			// Mark the user limited only after its processes were moved successfully.
 			m.mu.Lock()
 			m.activeUsers[uid] = true
 			m.userLimitedAt[uid] = time.Now()
@@ -389,6 +389,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) error {
 			newActivation = true
 		}
 		m.mu.Unlock()
+		if newActivation && m.prometheusExporter != nil {
+			m.prometheusExporter.IncrementLimitsActivated()
+		}
 		if newActivation && m.stabilityTracker != nil {
 			m.stabilityTracker.Reset()
 		}
@@ -667,14 +670,15 @@ func (m *Manager) applySharedCPUQuota(sharedPath string, totalCores int, cfg *co
 	return sharedQuota, nil
 }
 
-func (m *Manager) deactivateLimits() error {
+func (m *Manager) deactivateLimits() (resultErr error) {
+	defer func() {
+		if resultErr != nil && m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(limitTransitionErrorComponent, limitTransitionDeactivationFailure)
+		}
+	}()
+
 	cfg := m.GetConfig()
 	m.logger.Info("Deactivating CPU limits")
-
-	// Incrementa il contatore di disattivazioni
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.IncrementLimitsDeactivated()
-	}
 
 	m.mu.Lock()
 	usersToCleanup := make([]int, 0, len(m.activeUsers))
@@ -682,7 +686,7 @@ func (m *Manager) deactivateLimits() error {
 		usersToCleanup = append(usersToCleanup, uid)
 	}
 
-	// Salva il conteggio
+	// Preserve the attempted user count for the completion log.
 	userCount := len(usersToCleanup)
 
 	sharedPath := m.sharedCgroupPath
@@ -704,7 +708,7 @@ func (m *Manager) deactivateLimits() error {
 		}
 	}
 
-	// Per ogni utente, rimuovi i limiti
+	// Remove limits for each tracked user.
 	for _, uid := range usersToCleanup {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
@@ -740,7 +744,7 @@ func (m *Manager) deactivateLimits() error {
 			continue
 		}
 
-		// Ripristina il limite normale
+		// Restore the normal CPU quota.
 		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
 			m.logger.Error("Failed to restore normal CPU limit for user",
 				"user", userStr,
@@ -767,7 +771,7 @@ func (m *Manager) deactivateLimits() error {
 		deactivatedUsers[uid] = true
 	}
 
-	// Rimuovi il cgroup condiviso se esiste
+	// Remove the shared cgroup when it exists.
 	sharedRemoved := sharedPath == ""
 	if sharedPath != "" {
 		if err := os.Remove(sharedPath); err != nil {
@@ -792,7 +796,9 @@ func (m *Manager) deactivateLimits() error {
 	}
 
 	fullyDeactivated := false
+	confirmedDeactivation := false
 	m.mu.Lock()
+	wasActive := m.limitsActive
 	for uid := range deactivatedUsers {
 		delete(m.activeUsers, uid)
 		delete(m.userLimitedAt, uid)
@@ -803,11 +809,15 @@ func (m *Manager) deactivateLimits() error {
 		m.limitsActive = false
 		m.limitsAppliedTime = time.Time{}
 		fullyDeactivated = true
+		confirmedDeactivation = wasActive
 		if sharedRemoved {
 			m.sharedCgroupPath = ""
 		}
 	}
 	m.mu.Unlock()
+	if confirmedDeactivation && m.prometheusExporter != nil {
+		m.prometheusExporter.IncrementLimitsDeactivated()
+	}
 	if m.stabilityTracker != nil {
 		if fullyDeactivated {
 			m.stabilityTracker.Reset()

@@ -336,18 +336,18 @@ func parseTLSVersion(version string) (uint16, error) {
 	}
 }
 
-// registerMetrics registra tutte le metriche Prometheus.
+// registerMetrics registers every Prometheus metric exposed by resman.
 func (exp *PrometheusExporter) registerMetrics() error {
-	// Namespace per tutte le metriche
+	// Use one namespace for all application metrics.
 	namespace := "resman"
 
-	// Label fisse per tutte le metriche
+	// Apply the same bounded identity labels to every application metric.
 	staticLabels := prometheus.Labels{
 		"hostname":    exp.hostname,
 		"server_role": exp.serverRole,
 	}
 
-	// === Metriche Gauge (valori correnti) ===
+	// === Gauges (current values) ===
 
 	exp.cpuTotalUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
@@ -458,7 +458,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	// === Metriche con label ===
+	// === Metrics with dynamic labels ===
 
 	exp.userCPUUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -490,7 +490,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	// NUOVA METRICA: Memoria per utente
+	// Per-user memory usage.
 	exp.userMemoryUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -501,7 +501,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	// NUOVA METRICA: Numero processi per utente
+	// Per-user process count.
 	exp.userProcessCount = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -584,50 +584,56 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	exp.cgroupCPUQuota = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_cpu_quota_microseconds",
-			Help:      "CPU quota in microseconds per period (max = unlimited)",
+			Namespace:   namespace,
+			Name:        "cgroup_cpu_quota_microseconds",
+			Help:        "CPU quota in microseconds per period (max = unlimited)",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
 	exp.cgroupCPUPeriod = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_cpu_period_microseconds",
-			Help:      "CPU period in microseconds",
+			Namespace:   namespace,
+			Name:        "cgroup_cpu_period_microseconds",
+			Help:        "CPU period in microseconds",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
-	// NUOVA METRICA: Memoria cgroup per utente
+	// Per-user cgroup memory usage.
 	exp.cgroupMemoryUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_memory_usage_bytes",
-			Help:      "Memory usage in bytes per cgroup (user)",
+			Namespace:   namespace,
+			Name:        "cgroup_memory_usage_bytes",
+			Help:        "Memory usage in bytes per cgroup (user)",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
-	// === Metriche Counter (solo incremento) ===
+	// === Counters ===
 
 	exp.limitsActivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "limits_activated_total",
-		Help:      "Total number of times CPU limits were activated",
+		Namespace:   namespace,
+		Name:        "limits_activated_total",
+		Help:        "Total confirmed transitions from inactive to active CPU limits",
+		ConstLabels: staticLabels,
 	})
 
 	exp.limitsDeactivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "limits_deactivated_total",
-		Help:      "Total number of times CPU limits were deactivated",
+		Namespace:   namespace,
+		Name:        "limits_deactivated_total",
+		Help:        "Total confirmed transitions from active to inactive CPU limits",
+		ConstLabels: staticLabels,
 	})
 
 	exp.controlCyclesTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "control_cycles_total",
-		Help:      "Total number of control cycles executed",
+		Namespace:   namespace,
+		Name:        "control_cycles_total",
+		Help:        "Total number of control cycles started",
+		ConstLabels: staticLabels,
 	})
 
 	exp.controlCycleTriggers = promauto.With(exp.registry).NewCounterVec(
@@ -662,33 +668,36 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	exp.errorsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "errors_total",
-			Help:      "Total number of errors by type",
+			Namespace:   namespace,
+			Name:        "errors_total",
+			Help:        "Total number of operational errors by component and bounded error type",
+			ConstLabels: staticLabels,
 		},
 		[]string{"component", "error_type"},
 	)
 
-	// === Metriche Histogram (distribuzione) ===
+	// === Execution-time histograms ===
 
 	exp.controlCycleDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "control_cycle_duration_seconds",
-		Help:      "Duration of control cycles in seconds",
-		Buckets:   prometheus.DefBuckets,
+		Namespace:   namespace,
+		Name:        "control_cycle_duration_seconds",
+		Help:        "Duration of control cycles, including failed and suspended cycles, in seconds",
+		ConstLabels: staticLabels,
+		Buckets:     prometheus.DefBuckets,
 	})
 
 	exp.metricsCollectionDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "metrics_collection_duration_seconds",
-		Help:      "Duration of metrics collection in seconds",
-		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5},
+		Namespace:   namespace,
+		Name:        "metrics_collection_duration_seconds",
+		Help:        "Duration of system metrics collection for control cycles and metrics-only refreshes in seconds",
+		ConstLabels: staticLabels,
+		Buckets:     []float64{.001, .005, .01, .025, .05, .1, .25, .5},
 	})
 
 	return nil
 }
 
-// UpdateMetrics aggiorna i valori delle metriche.
+// UpdateMetrics publishes the current values for the legacy gauge map boundary.
 func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 	if exp == nil {
 		return
@@ -697,7 +706,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 	exp.mu.Lock()
 	defer exp.mu.Unlock()
 
-	// Aggiorna le metriche base
+	// Update base metrics.
 	for key, value := range metrics {
 		switch {
 		case key == "cpu_total_usage":
@@ -734,7 +743,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 		case key == "total_cores":
 			exp.totalCores.Set(value)
 		case strings.HasPrefix(key, "user_cpu_usage_"):
-			// Formato: user_cpu_usage_1000 (dove 1000 è l'UID)
+			// Format: user_cpu_usage_1000, where 1000 is the UID.
 			parts := strings.Split(key, "_")
 			if len(parts) >= 4 {
 				uid := parts[3]
@@ -742,12 +751,12 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 				exp.userCPUUsage.WithLabelValues(uid, username).Set(value)
 			}
 		case strings.HasPrefix(key, "user_memory_usage_"):
-			// Formato: user_memory_usage_1000 (dove 1000 è l'UID)
+			// Format: user_memory_usage_1000, where 1000 is the UID.
 			parts := strings.Split(key, "_")
 			if len(parts) >= 4 {
 				uid := parts[3]
 				username := exp.getUsernameFromUID(uid)
-				// Converti MB in bytes se necessario
+				// Convert megabytes to bytes when requested by the key suffix.
 				bytesValue := value
 				if strings.HasSuffix(key, "_mb") {
 					bytesValue = value * 1024 * 1024
@@ -755,7 +764,7 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 				exp.userMemoryUsage.WithLabelValues(uid, username).Set(bytesValue)
 			}
 		case strings.HasPrefix(key, "user_limited_"):
-			// Formato: user_limited_1000
+			// Format: user_limited_1000.
 			parts := strings.Split(key, "_")
 			if len(parts) >= 3 {
 				uid := parts[2]
@@ -763,18 +772,14 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 				exp.userLimited.WithLabelValues(uid, username).Set(value)
 			}
 		case strings.HasPrefix(key, "cgroup_cpu_quota_"):
-			// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/...
+			// Format: cgroup_cpu_quota_1000:/sys/fs/cgroup/...
 			exp.updateCgroupMetric(key, value, exp.cgroupCPUQuota)
 		case strings.HasPrefix(key, "cgroup_cpu_period_"):
-			// Formato: cgroup_cpu_period_1000:/sys/fs/cgroup/...
+			// Format: cgroup_cpu_period_1000:/sys/fs/cgroup/...
 			exp.updateCgroupMetric(key, value, exp.cgroupCPUPeriod)
 		case strings.HasPrefix(key, "cgroup_memory_usage_"):
-			// Formato: cgroup_memory_usage_1000:/sys/fs/cgroup/...
+			// Format: cgroup_memory_usage_1000:/sys/fs/cgroup/...
 			exp.updateCgroupMetric(key, value, exp.cgroupMemoryUsage)
-		case key == "control_cycle_duration":
-			exp.controlCycleDuration.Observe(value)
-		case key == "metrics_collection_duration":
-			exp.metricsCollectionDuration.Observe(value)
 		}
 	}
 }
@@ -1061,7 +1066,7 @@ func (exp *PrometheusExporter) updateCgroupMetric(key string, value float64, met
 	metric.WithLabelValues(uid, cgroupPath).Set(value)
 }
 
-// IncrementLimitsActivated incrementa il contatore di attivazioni limiti.
+// IncrementLimitsActivated records a confirmed inactive-to-active transition.
 func (exp *PrometheusExporter) IncrementLimitsActivated() {
 	if exp == nil {
 		return
@@ -1069,7 +1074,7 @@ func (exp *PrometheusExporter) IncrementLimitsActivated() {
 	exp.limitsActivatedTotal.Inc()
 }
 
-// IncrementLimitsDeactivated incrementa il contatore di disattivazioni limiti.
+// IncrementLimitsDeactivated records a confirmed active-to-inactive transition.
 func (exp *PrometheusExporter) IncrementLimitsDeactivated() {
 	if exp == nil {
 		return
@@ -1077,7 +1082,7 @@ func (exp *PrometheusExporter) IncrementLimitsDeactivated() {
 	exp.limitsDeactivatedTotal.Inc()
 }
 
-// RecordControlCycleTrigger registra la causa che ha avviato un ciclo di controllo.
+// RecordControlCycleTrigger records the source that started a control cycle.
 func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	if exp == nil || exp.controlCycleTriggers == nil {
 		return
@@ -1107,7 +1112,7 @@ func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.
 	exp.psiLastEventTimestamp.WithLabelValues(typ, scope).Set(float64(timestamp.Unix()))
 }
 
-// RecordControlCycleDuration registra la durata di un ciclo di controllo.
+// RecordControlCycleDuration records the duration of one control cycle.
 func (exp *PrometheusExporter) RecordControlCycleDuration(duration time.Duration) {
 	if exp == nil {
 		return
@@ -1115,7 +1120,7 @@ func (exp *PrometheusExporter) RecordControlCycleDuration(duration time.Duration
 	exp.controlCycleDuration.Observe(duration.Seconds())
 }
 
-// RecordMetricsCollectionDuration registra la durata della raccolta metriche.
+// RecordMetricsCollectionDuration records one system metrics collection duration.
 func (exp *PrometheusExporter) RecordMetricsCollectionDuration(duration time.Duration) {
 	if exp == nil {
 		return
@@ -1123,7 +1128,7 @@ func (exp *PrometheusExporter) RecordMetricsCollectionDuration(duration time.Dur
 	exp.metricsCollectionDuration.Observe(duration.Seconds())
 }
 
-// RecordError incrementa il contatore errori per un componente specifico.
+// RecordError records one operational error using a bounded label pair.
 func (exp *PrometheusExporter) RecordError(component, errorType string) {
 	if exp == nil {
 		return

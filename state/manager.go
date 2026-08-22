@@ -156,6 +156,8 @@ type PrometheusExporter interface {
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
+	RecordControlCycleDuration(duration time.Duration)
+	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
 	Start(ctx context.Context) error
 	Stop() error

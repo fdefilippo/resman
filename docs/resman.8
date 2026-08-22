@@ -776,9 +776,9 @@ resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
 resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
 .IP \(bu
-resman_limits_activated_total \- Total limit activations (counter)
+resman_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu
-resman_limits_deactivated_total \- Total limit deactivations (counter)
+resman_limits_deactivated_total \- Confirmed active-to-inactive limit transitions (counter)
 .IP \(bu
 resman_control_cycle_triggers_total{trigger} \- Control cycles by trigger source
 .IP \(bu
@@ -786,9 +786,11 @@ resman_psi_events_total{type, scope} \- PSI pressure events received from the ke
 .IP \(bu
 resman_psi_last_event_timestamp_seconds{type, scope} \- Unix timestamp of last PSI event
 .IP \(bu
-resman_control_cycle_duration_seconds \- Control cycle duration (histogram)
+resman_control_cycle_duration_seconds \- Complete control cycle duration, including failed and suspended cycles (histogram)
 .IP \(bu
-resman_errors_total{component, error_type} \- Errors by component (counter)
+resman_metrics_collection_duration_seconds \- System metrics collection duration for control cycles and metrics-only refreshes (histogram)
+.IP \(bu
+resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
 .PP
 All user-specific metrics include
 .B uid

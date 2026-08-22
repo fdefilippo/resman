@@ -201,12 +201,12 @@ resman_user_cpu_usage_percent > 50 and resman_user_cpu_limited == 1
 resman_limits_active
 ```
 
-### Total Limit Activations (Last Hour)
+### Confirmed Limit Activations (Last Hour)
 ```promql
 increase(resman_limits_activated_total[1h])
 ```
 
-### Total Limit Deactivations (Last Hour)
+### Confirmed Limit Deactivations (Last Hour)
 ```promql
 increase(resman_limits_deactivated_total[1h])
 ```
@@ -264,7 +264,7 @@ sum by (component) (rate(resman_errors_total[5m]))
 
 ### Total Errors (Last Hour)
 ```promql
-increase(resman_errors_total[1h])
+sum(increase(resman_errors_total[1h]))
 ```
 
 ### Errors by Type
@@ -315,8 +315,9 @@ resman_all_users_cpu_usage_percent > 80 and resman_limits_active == 0
 
 ### Frequent Limit Toggling Alert
 ```promql
-# More than 5 activations in 10 minutes
-increase(resman_limits_activated_total[10m]) > 5
+# More than 5 confirmed state changes in 10 minutes
+(increase(resman_limits_activated_total[10m])
+ + increase(resman_limits_deactivated_total[10m])) > 5
 ```
 
 ### Control Cycle Too Slow Alert
@@ -329,7 +330,7 @@ increase(resman_limits_activated_total[10m]) > 5
 ### High Error Rate Alert
 ```promql
 # More than 10 errors in 5 minutes
-increase(resman_errors_total[5m]) > 10
+sum(increase(resman_errors_total[5m])) > 10
 ```
 
 ---

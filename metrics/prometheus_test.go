@@ -422,6 +422,95 @@ func TestRecordErrorPublishesOneBoundedSeries(t *testing.T) {
 	t.Fatal("resman_errors_total metric family not found")
 }
 
+func TestOperationalMetricsPublishTruthfulBoundedSeries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.ServerRole = "test-role"
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.IncrementLimitsActivated()
+	exporter.IncrementLimitsActivated()
+	exporter.IncrementLimitsDeactivated()
+	exporter.RecordControlCycleDuration(2 * time.Second)
+	exporter.RecordControlCycleDuration(3 * time.Second)
+	exporter.RecordMetricsCollectionDuration(25 * time.Millisecond)
+	exporter.RecordError("limit_transition", "activation_failure")
+	exporter.RecordError("limit_transition", "activation_failure")
+
+	tests := []struct {
+		name               string
+		wantCounter        float64
+		wantHistogramCount uint64
+		wantHelp           string
+		wantLabels         map[string]string
+	}{
+		{
+			name:        "resman_limits_activated_total",
+			wantCounter: 2,
+			wantHelp:    "Total confirmed transitions from inactive to active CPU limits",
+		},
+		{
+			name:        "resman_limits_deactivated_total",
+			wantCounter: 1,
+			wantHelp:    "Total confirmed transitions from active to inactive CPU limits",
+		},
+		{
+			name:               "resman_control_cycle_duration_seconds",
+			wantHistogramCount: 2,
+			wantHelp:           "Duration of control cycles, including failed and suspended cycles, in seconds",
+		},
+		{
+			name:               "resman_metrics_collection_duration_seconds",
+			wantHistogramCount: 1,
+			wantHelp:           "Duration of system metrics collection for control cycles and metrics-only refreshes in seconds",
+		},
+		{
+			name:        "resman_errors_total",
+			wantCounter: 2,
+			wantHelp:    "Total number of operational errors by component and bounded error type",
+			wantLabels: map[string]string{
+				"component":  "limit_transition",
+				"error_type": "activation_failure",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gatheredOperationalMetric(t, exporter, tt.name)
+			if got.series != 1 {
+				t.Errorf("series = %d, want 1", got.series)
+			}
+			if got.help != tt.wantHelp {
+				t.Errorf("help = %q, want %q", got.help, tt.wantHelp)
+			}
+			if tt.wantHistogramCount > 0 {
+				if got.histogramCount != tt.wantHistogramCount {
+					t.Errorf("histogram sample count = %d, want %d", got.histogramCount, tt.wantHistogramCount)
+				}
+			} else if got.counter != tt.wantCounter {
+				t.Errorf("counter = %f, want %f", got.counter, tt.wantCounter)
+			}
+			for label, value := range map[string]string{
+				"hostname":    exporter.hostname,
+				"server_role": "test-role",
+			} {
+				if got.labels[label] != value {
+					t.Errorf("label %s = %q, want %q", label, got.labels[label], value)
+				}
+			}
+			for label, value := range tt.wantLabels {
+				if got.labels[label] != value {
+					t.Errorf("label %s = %q, want %q", label, got.labels[label], value)
+				}
+			}
+		})
+	}
+}
+
 func TestIOOperationMetricHelpDescribesSyscallCounters(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
@@ -507,6 +596,41 @@ func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string
 	}
 	t.Fatalf("metric %s not found", name)
 	return 0
+}
+
+type operationalMetricSnapshot struct {
+	series         int
+	counter        float64
+	histogramCount uint64
+	help           string
+	labels         map[string]string
+}
+
+func gatheredOperationalMetric(t *testing.T, exporter *PrometheusExporter, name string) operationalMetricSnapshot {
+	t.Helper()
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != name || len(family.Metric) == 0 {
+			continue
+		}
+		metric := family.Metric[0]
+		labels := make(map[string]string, len(metric.Label))
+		for _, label := range metric.Label {
+			labels[label.GetName()] = label.GetValue()
+		}
+		return operationalMetricSnapshot{
+			series:         len(family.Metric),
+			counter:        metric.GetCounter().GetValue(),
+			histogramCount: metric.GetHistogram().GetSampleCount(),
+			help:           family.GetHelp(),
+			labels:         labels,
+		}
+	}
+	t.Fatalf("metric %s not found", name)
+	return operationalMetricSnapshot{}
 }
 
 func gatheredMetricHelp(t *testing.T, exporter *PrometheusExporter, name string) string {
