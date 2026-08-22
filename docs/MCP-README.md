@@ -21,7 +21,7 @@ resources still read the shared, authoritative resource-manager state.
 
 ## Overview
 
-The MCP server exposes CPU Manager Go functionality to AI assistants and MCP-compatible clients, allowing them to:
+The MCP server exposes ResMan functionality to AI assistants and MCP-compatible clients, allowing them to:
 - Query system CPU and memory status
 - Get per-user metrics (CPU, memory, processes)
 - Check and manage CPU limits
@@ -80,10 +80,15 @@ MCP_ENABLED=true
 # Transport: stdio or http
 MCP_TRANSPORT=stdio
 
-# HTTP settings (only for http transport)
-# MCP_HTTP_HOST=0.0.0.0      # Default: all interfaces (0.0.0.0)
+# HTTPS settings (only for http transport)
+# MCP_HTTP_HOST=127.0.0.1    # Default: loopback
 # MCP_HTTP_PORT=1969         # Default: 1969
-# MCP endpoint: http://HOST:PORT/mcp
+# MCP endpoint: https://HOST:PORT/mcp
+MCP_TLS_ENABLED=true         # Mandatory for HTTP transport
+MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
+# MCP_TLS_CA_FILE=/etc/resman/tls/ca.crt # Enables mandatory client certificates
+MCP_TLS_MIN_VERSION=1.3
 
 # Log level
 MCP_LOG_LEVEL=INFO
@@ -106,7 +111,7 @@ MCP_ENABLED=true
 MCP_TRANSPORT=stdio
 ```
 
-2. Start CPU Manager:
+2. Start ResMan:
 ```bash
 sudo systemctl start resman
 ```
@@ -121,12 +126,16 @@ MCP_ENABLED=true
 MCP_TRANSPORT=http
 MCP_HTTP_HOST=127.0.0.1
 MCP_HTTP_PORT=1969
+MCP_TLS_ENABLED=true
+MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
+MCP_TLS_MIN_VERSION=1.3
 MCP_AUTH_TOKEN=replace-with-a-long-random-token
 ```
 
 2. Access endpoints:
-- `http://127.0.0.1:1969/mcp` - MCP endpoint
-- `http://127.0.0.1:1969/health` - Health check
+- `https://127.0.0.1:1969/mcp` - MCP endpoint
+- `https://127.0.0.1:1969/health` - Health check
 
 ### Example: Claude Desktop Configuration
 
@@ -147,13 +156,13 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-**Note:** The current implementation requires running CPU Manager as a daemon. For Claude Desktop integration, you may want to create a separate MCP server binary or use HTTP transport.
+**Note:** The current implementation requires running ResMan as a daemon. Local clients can use stdio without certificates because that transport never crosses the network.
 
 ### Example: Using HTTP Transport with curl
 
 ```bash
-# Health check
-curl http://127.0.0.1:1969/health
+# Health check with the generated CA
+curl --cacert /etc/resman/tls/ca.crt https://127.0.0.1:1969/health
 
 # Get system status (via MCP client)
 # MCP clients will handle the JSON-RPC protocol automatically
@@ -184,58 +193,58 @@ AI: "Yes, CPU limits are active since 14:30 on server-web01. Currently limiting 
 
 ### Query 4: Generate CPU Report ⭐ NEW
 ```
-User: "Genera un report CPU"
+User: "Generate a CPU report"
 AI: [Calls get_cpu_report tool]
 AI: Returns formatted report:
 ```
 
 **Example CPU Report Output:**
 ```
-Report Utilizzo CPU
+CPU Usage Report
 Hostname: server-web01
-Data: 2026-03-11 18:45:00
-Totale CPU disponibile: 400.0%
-Utilizzo attuale: 45.2%
+Date: 2026-03-11 18:45:00
+Total CPU available: 400.0%
+Current usage: 45.2%
 
-Utenti Attivi:
+Active users:
 francesco
-    Utilizzo CPU: 12.5%
-    Limiti: Attivi
+    CPU usage: 12.5%
+    Limits: Active
 www-data
-    Utilizzo CPU: 8.2%
-    Limiti: Non attivi
+    CPU usage: 8.2%
+    Limits: Inactive
 
-Stato delle Risorse:
-Media Utilizzo CPU: 6.9%
-Picco Utilizzo CPU: 12.5%
-Limiti CPU: Attivi
-Utenti limitati: 1 su 2
+Resource status:
+Average CPU usage: 6.9%
+Peak CPU usage: 12.5%
+CPU limits: Active
+Limited users: 1 of 2
 ```
 
 ### Query 5: Generate Memory Report ⭐ NEW
 ```
-User: "Genera un report memoria"
+User: "Generate a memory report"
 AI: [Calls get_mem_report tool]
 ```
 
 **Example Memory Report Output:**
 ```
-Report Utilizzo Memoria
+Memory Usage Report
 Hostname: server-web01
-Data: 2026-03-11 18:45:00
-Memoria Totale di Sistema: 2048.5 MB
+Date: 2026-03-11 18:45:00
+Total system memory: 2048.5 MB
 
-Utenti Attivi:
+Active users:
 francesco
-    Memoria: 512.3 MB (537231360 bytes)
-    Processi: 15
-    Limiti: Attivi
+    Memory: 512.3 MB (537231360 bytes)
+    Processes: 15
+    Limits: Active
 
-Stato delle Risorse:
-Media Utilizzo Memoria: 256.1 MB
-Picco Utilizzo Memoria: 512.3 MB
-Limiti CPU: Attivi
-Utenti limitati: 1 su 1
+Resource status:
+Average memory usage: 256.1 MB
+Peak memory usage: 512.3 MB
+CPU limits: Active
+Limited users: 1 of 1
 ```
 
 ### Query 4: Activate limits (if enabled)
@@ -272,12 +281,26 @@ Clients must then include:
 Authorization: Bearer your-secret-token
 ```
 
-### Network Exposure
+### TLS and Network Exposure
 
-**WARNING:** The MCP server is designed for **local access only**. The Bearer token authenticates requests but plain HTTP does not protect it in transit. Do not expose it to untrusted networks without additional security measures:
-- Use firewall rules to restrict access
-- Terminate TLS in a trusted reverse proxy
-- Use strong authentication tokens
+The MCP HTTP transport is HTTPS-only. `MCP_TLS_ENABLED=false` is rejected whenever
+HTTP transport is enabled, and the server loads the configured certificate before it
+starts listening. The default bind remains `127.0.0.1`; a deliberate non-loopback
+bind is allowed only through the same TLS-protected path.
+
+The MCP TLS keys are independent from the Prometheus TLS keys. Their defaults point
+at the same `/etc/resman/tls/server.crt` and `server.key` files, so the bundled
+`docs/generate-tls-certs.sh` output can serve both listeners, but changing a
+Prometheus path does not silently change MCP. The generated certificate covers
+`localhost`, `resman`, `resman.local`, and `127.0.0.1`.
+
+Setting `MCP_TLS_CA_FILE` enables mutual TLS: every client must present a certificate
+issued by that CA in addition to sending the mandatory per-request bearer token.
+Leave it empty for server-only TLS. The default minimum version is TLS 1.3.
+
+An existing installation without certificate files cannot enable MCP over HTTP until
+it generates or installs them. Use `docs/generate-tls-certs.sh`, configure the
+`MCP_TLS_*` paths, or use `MCP_TRANSPORT=stdio` for a local non-network client.
 
 ## Testing
 
@@ -297,13 +320,13 @@ go test ./mcp/... -v
 ### Tools not available
 
 1. Verify `MCP_ENABLED=true` in configuration
-2. Check that CPU Manager started successfully
+2. Check that ResMan started successfully
 3. Ensure the MCP server started without errors
 
 ### Permission errors
 
-The MCP server runs with the same permissions as CPU Manager. Ensure:
-- CPU Manager runs as root (required for cgroup access)
+The MCP server runs with the same permissions as ResMan. Ensure:
+- ResMan runs as root (required for cgroup access)
 - Log file permissions are correct
 
 ## Architecture
@@ -330,7 +353,7 @@ The MCP server runs with the same permissions as CPU Manager. Ensure:
 └────────────┬────────────────────────────┘
              │
 ┌────────────▼────────────────────────────┐
-│      CPU Manager Go Components          │
+│          ResMan Go Components           │
 │  - State Manager                        │
 │  - Metrics Collector                    │
 │  - Cgroup Manager                       │
@@ -365,22 +388,22 @@ The MCP server runs with the same permissions as CPU Manager. Ensure:
 
 **Output:** Text report with structured data
 ```
-Report Utilizzo CPU
+CPU Usage Report
 Hostname: server-web01
-Data: 2026-03-11 18:45:00
-Totale CPU disponibile: 400.0%
-Utilizzo attuale: 45.2%
+Date: 2026-03-11 18:45:00
+Total CPU available: 400.0%
+Current usage: 45.2%
 
-Utenti Attivi:
+Active users:
 francesco
-    Utilizzo CPU: 12.5%
-    Limiti: Attivi
+    CPU usage: 12.5%
+    Limits: Active
 
-Stato delle Risorse:
-Media Utilizzo CPU: 6.9%
-Picco Utilizzo CPU: 12.5%
-Limiti CPU: Attivi
-Utenti limitati: 1 su 2
+Resource status:
+Average CPU usage: 6.9%
+Peak CPU usage: 12.5%
+CPU limits: Active
+Limited users: 1 of 2
 ```
 
 ### Tool: get_mem_report ⭐ NEW
@@ -389,20 +412,20 @@ Utenti limitati: 1 su 2
 
 **Output:** Text report with structured data
 ```
-Report Utilizzo Memoria
+Memory Usage Report
 Hostname: server-web01
-Data: 2026-03-11 18:45:00
-Memoria Totale di Sistema: 2048.5 MB
+Date: 2026-03-11 18:45:00
+Total system memory: 2048.5 MB
 
-Utenti Attivi:
+Active users:
 francesco
-    Memoria: 512.3 MB (537231360 bytes)
-    Processi: 15
-    Limiti: Attivi
+    Memory: 512.3 MB (537231360 bytes)
+    Processes: 15
+    Limits: Active
 
-Stato delle Risorse:
-Media Utilizzo Memoria: 256.1 MB
-Picco Utilizzo Memoria: 512.3 MB
+Resource status:
+Average memory usage: 256.1 MB
+Peak memory usage: 512.3 MB
 ```
 ```json
 {
@@ -447,9 +470,9 @@ Picco Utilizzo Memoria: 512.3 MB
 
 ### Tool: get_user_filters
 
-Ottiene le configurazioni correnti dei filtri utente.
+Returns the current user-filter configuration.
 
-**Input:** Nessuno
+**Input:** None
 
 **Output:**
 ```json
@@ -462,7 +485,7 @@ Ottiene le configurazioni correnti dei filtri utente.
 
 ### Tool: set_user_exclude_list
 
-Imposta la lista di utenti da escludere dai limiti CPU (supporta regex).
+Sets the users excluded from CPU limits (regex supported).
 
 **Input:**
 ```json
@@ -472,9 +495,9 @@ Imposta la lista di utenti da escludere dai limiti CPU (supporta regex).
 }
 ```
 
-**Parametri:**
-- `patterns` (array di stringhe): Lista di pattern regex per utenti da escludere
-- `reload` (boolean, opzionale, default=true): Se true, ricarica automaticamente la configurazione
+**Parameters:**
+- `patterns` (array of strings): Regex patterns for users to exclude
+- `reload` (boolean, optional, default=true): Reload the configuration when true
 
 **Output:**
 ```json
@@ -499,7 +522,7 @@ Imposta la lista di utenti da escludere dai limiti CPU (supporta regex).
 
 ### Tool: set_user_include_list
 
-Imposta la lista di pattern per includere utenti nel monitoraggio (supporta regex).
+Sets the patterns used to include users in monitoring (regex supported).
 
 **Input:**
 ```json
@@ -509,9 +532,9 @@ Imposta la lista di pattern per includere utenti nel monitoraggio (supporta rege
 }
 ```
 
-**Parametri:**
-- `patterns` (array di stringhe): Lista di pattern regex per utenti da includere
-- `reload` (boolean, opzionale, default=true): Se true, ricarica automaticamente la configurazione
+**Parameters:**
+- `patterns` (array of strings): Regex patterns for users to include
+- `reload` (boolean, optional, default=true): Reload the configuration when true
 
 **Output:**
 ```json
@@ -526,7 +549,7 @@ Imposta la lista di pattern per includere utenti nel monitoraggio (supporta rege
 
 ### Tool: validate_user_filter_pattern
 
-Valida se un pattern regex è valido e mostra esempi di match.
+Validates a regex pattern and shows example matches.
 
 **Input:**
 ```json
@@ -536,9 +559,9 @@ Valida se un pattern regex è valido e mostra esempi di match.
 }
 ```
 
-**Parametri:**
-- `pattern` (string): Pattern regex da validare (richiesto)
-- `type` (string, opzionale): Tipo di filtro - "include" o "exclude"
+**Parameters:**
+- `pattern` (string): Regex pattern to validate (required)
+- `type` (string, optional): Filter type, `include` or `exclude`
 
 **Output:**
 ```json
@@ -551,8 +574,8 @@ Valida se un pattern regex è valido e mostra esempi di match.
 }
 ```
 
-**Utenti di Test:**
-Il tool testa il pattern contro questi utenti di esempio:
+**Test users:**
+The tool tests the pattern against these example users:
 - francesco, www-data, mysql, nobody, root
 - test-user, dev-web, app-prod, svc-db, admin
 
@@ -560,7 +583,7 @@ Il tool testa il pattern contro questi utenti di esempio:
 
 - [ ] WebSocket transport
 - [ ] Real-time metrics streaming
-- [ ] Enhanced authentication (OAuth2, mTLS)
+- [ ] OAuth2 authentication
 - [ ] Audit logging for write operations
 - [ ] Rate limiting
 - [ ] Custom resource templates
@@ -570,4 +593,4 @@ Il tool testa il pattern contro questi utenti di esempio:
 
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
-- [CPU Manager README](../README.md)
+- [ResMan README](../README.md)

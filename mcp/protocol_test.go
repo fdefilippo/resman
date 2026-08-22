@@ -416,6 +416,7 @@ func TestLatestOnlyStdioConformance(t *testing.T) {
 func newProtocolTestServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := config.DefaultConfig()
+	configureMCPTestTLS(t, cfg)
 	cfg.MCPEnabled = true
 	cfg.MCPTransport = "http"
 	cfg.MCPHTTPHost = "127.0.0.1"

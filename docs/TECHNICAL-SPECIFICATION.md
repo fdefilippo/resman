@@ -620,7 +620,12 @@ USE_SYSLOG=false
 MCP_ENABLED=false
 MCP_TRANSPORT="stdio"        # stdio or http
 MCP_HTTP_HOST="127.0.0.1"
-MCP_HTTP_PORT=8080
+MCP_HTTP_PORT=1969
+MCP_TLS_ENABLED=true         # Mandatory for HTTP transport
+MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
+# MCP_TLS_CA_FILE=/etc/resman/tls/ca.crt # Enables mandatory client certificates
+MCP_TLS_MIN_VERSION=1.3
 MCP_LOG_LEVEL="INFO"
 MCP_AUTH_TOKEN="replace-with-long-random-token" # Required for HTTP
 MCP_ALLOW_WRITE_OPS=false
@@ -630,6 +635,13 @@ MCP_ALLOW_WRITE_OPS=false
 # ========================
 SERVER_ROLE=                 # For identification in reports
 ```
+
+MCP over HTTP is HTTPS-only. TLS is enabled by default and cannot be disabled
+while the HTTP transport is active. MCP and Prometheus use one shared TLS builder;
+their default certificate and key paths are identical, while their configuration
+keys remain independent. `MCP_TLS_CA_FILE` enables mTLS and makes a client
+certificate mandatory in addition to the bearer token. Stdio remains the local
+transport for deployments without certificate files.
 
 ### 4.3 Environment Variable Overrides
 

@@ -51,6 +51,11 @@ func TestDefaultConfig(t *testing.T) {
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
 		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"}, // Secure default
+		{"MCPHTTPHost", cfg.MCPHTTPHost, "127.0.0.1"},
+		{"MCPTLSEnabled", cfg.MCPTLSEnabled, true},
+		{"MCPTLSCertFile", cfg.MCPTLSCertFile, "/etc/resman/tls/server.crt"},
+		{"MCPTLSKeyFile", cfg.MCPTLSKeyFile, "/etc/resman/tls/server.key"},
+		{"MCPTLSMinVersion", cfg.MCPTLSMinVersion, "1.3"},
 		{"LogLevel", cfg.LogLevel, "INFO"},
 		{"SystemUIDMin", cfg.SystemUIDMin, 1000},
 		{"IgnoreSystemLoad", cfg.IgnoreSystemLoad, false},
@@ -62,6 +67,9 @@ func TestDefaultConfig(t *testing.T) {
 		if tt.got != tt.expected {
 			t.Errorf("%s: got %v, expected %v", tt.name, tt.got, tt.expected)
 		}
+	}
+	if cfg.MCPTLSCertFile != cfg.PrometheusTLSCertFile || cfg.MCPTLSKeyFile != cfg.PrometheusTLSKeyFile {
+		t.Fatal("MCP and Prometheus TLS defaults do not point to the same certificate and key files")
 	}
 }
 
@@ -708,6 +716,44 @@ func TestValidateConfigRequiresMCPAuthTokenForHTTP(t *testing.T) {
 	cfg.MCPAuthToken = "test-token"
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("validateConfig() rejected authenticated HTTP MCP transport: %v", err)
+	}
+}
+
+func TestValidateConfigRequiresTLSForMCPHTTP(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		tlsEnabled bool
+		certFile   string
+		keyFile    string
+		minVersion string
+		wantErr    bool
+	}{
+		{name: "default loopback TLS", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "1.3"},
+		{name: "non-loopback protected by TLS", host: "0.0.0.0", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "1.3"},
+		{name: "TLS disabled", host: "127.0.0.1", certFile: "server.crt", keyFile: "server.key", minVersion: "1.3", wantErr: true},
+		{name: "missing certificate", host: "127.0.0.1", tlsEnabled: true, keyFile: "server.key", minVersion: "1.3", wantErr: true},
+		{name: "missing key", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", minVersion: "1.3", wantErr: true},
+		{name: "invalid minimum version", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "SSLv3", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MCPEnabled = true
+			cfg.MCPTransport = "http"
+			cfg.MCPAuthToken = "test-token"
+			cfg.MCPHTTPHost = tt.host
+			cfg.MCPTLSEnabled = tt.tlsEnabled
+			cfg.MCPTLSCertFile = tt.certFile
+			cfg.MCPTLSKeyFile = tt.keyFile
+			cfg.MCPTLSMinVersion = tt.minVersion
+
+			err := validateConfig(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateConfig() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
 	}
 }
 

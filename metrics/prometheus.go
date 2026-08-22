@@ -22,7 +22,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -35,6 +34,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
@@ -132,10 +132,7 @@ type PrometheusExporter struct {
 	jwtSecret         []byte
 
 	// TLS
-	tlsCertFile string
-	tlsKeyFile  string
-	tlsCAFile   string
-	tlsConfig   *tls.Config
+	tlsConfig *tls.Config
 }
 
 // SetUsernameResolver configures the shared UID-to-username resolver.
@@ -215,7 +212,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	return exp, nil
 }
 
-// loadAuthCredentials carica le credenziali di autenticazione e i certificati TLS
+// loadCredentials loads authentication credentials and TLS certificates.
 func (exp *PrometheusExporter) loadCredentials() error {
 	authType := exp.cfg.PrometheusAuthType
 	switch authType {
@@ -224,7 +221,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		return fmt.Errorf("unsupported Prometheus authentication type %q", authType)
 	}
 
-	// Carica password per Basic Auth
+	// Load the Basic Auth password.
 	if authType == "basic" || authType == "both" {
 		if strings.TrimSpace(exp.cfg.PrometheusAuthUsername) == "" {
 			return fmt.Errorf("prometheus basic authentication username is empty")
@@ -243,7 +240,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		exp.logger.Info("Basic authentication password loaded")
 	}
 
-	// Carica secret per JWT
+	// Load the JWT secret.
 	if authType == "jwt" || authType == "both" {
 		if exp.cfg.PrometheusJWTSecretFile == "" {
 			return fmt.Errorf("prometheus JWT secret file is not configured")
@@ -263,77 +260,26 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		)
 	}
 
-	// Carica certificati TLS
+	// Load TLS certificates.
 	if exp.cfg.PrometheusTLSEnabled {
-		if exp.cfg.PrometheusTLSCertFile == "" || exp.cfg.PrometheusTLSKeyFile == "" {
-			return fmt.Errorf("prometheus TLS certificate and key files must both be configured")
-		}
-		certificate, err := tls.LoadX509KeyPair(exp.cfg.PrometheusTLSCertFile, exp.cfg.PrometheusTLSKeyFile)
+		tlsConfig, err := tlsconfig.BuildServer(tlsconfig.ServerOptions{
+			CertFile:   exp.cfg.PrometheusTLSCertFile,
+			KeyFile:    exp.cfg.PrometheusTLSKeyFile,
+			CAFile:     exp.cfg.PrometheusTLSCAFile,
+			MinVersion: exp.cfg.PrometheusTLSMinVersion,
+		})
 		if err != nil {
-			return fmt.Errorf("failed to load Prometheus TLS certificate and key: %w", err)
+			return fmt.Errorf("loading Prometheus TLS configuration: %w", err)
 		}
-		exp.tlsCertFile = exp.cfg.PrometheusTLSCertFile
-		exp.tlsKeyFile = exp.cfg.PrometheusTLSKeyFile
+		exp.tlsConfig = tlsConfig
 		exp.logger.Info("TLS certificate and key loaded",
 			"cert_file", exp.cfg.PrometheusTLSCertFile,
 			"key_file", exp.cfg.PrometheusTLSKeyFile,
+			"ca_file", exp.cfg.PrometheusTLSCAFile,
 		)
-
-		if exp.cfg.PrometheusTLSCAFile != "" {
-			exp.tlsCAFile = exp.cfg.PrometheusTLSCAFile
-			exp.logger.Info("TLS CA file loaded",
-				"ca_file", exp.cfg.PrometheusTLSCAFile,
-			)
-		}
-
-		tlsConfig, err := buildPrometheusTLSConfig(exp.cfg.PrometheusTLSMinVersion, exp.tlsCAFile)
-		if err != nil {
-			return err
-		}
-		tlsConfig.Certificates = []tls.Certificate{certificate}
-		exp.tlsConfig = tlsConfig
 	}
 
 	return nil
-}
-
-func buildPrometheusTLSConfig(minVersion, caFile string) (*tls.Config, error) {
-	version, err := parseTLSVersion(minVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConfig := &tls.Config{MinVersion: version}
-	if caFile == "" {
-		return tlsConfig, nil
-	}
-
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read TLS CA file %s: %w", caFile, err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("TLS CA file %s does not contain a valid PEM certificate", caFile)
-	}
-	tlsConfig.ClientCAs = clientCAs
-	tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-	return tlsConfig, nil
-}
-
-func parseTLSVersion(version string) (uint16, error) {
-	switch strings.TrimSpace(version) {
-	case "1.0":
-		return tls.VersionTLS10, nil
-	case "1.1":
-		return tls.VersionTLS11, nil
-	case "1.2":
-		return tls.VersionTLS12, nil
-	case "1.3":
-		return tls.VersionTLS13, nil
-	default:
-		return 0, fmt.Errorf("invalid Prometheus TLS minimum version %q: expected 1.0, 1.1, 1.2, or 1.3", version)
-	}
 }
 
 // registerMetrics registers every Prometheus metric exposed by resman.
@@ -1279,7 +1225,7 @@ func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Reques
 	_, _ = fmt.Fprintf(w, `<html><body><h1>Resource Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
 }
 
-// Start avvia il server HTTP per Prometheus.
+// Start starts the Prometheus HTTP or HTTPS server.
 func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	if exp == nil {
 		return nil
@@ -1295,7 +1241,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 
-	// Handler per le metriche con autenticazione
+	// Metrics handler with authentication.
 	mux.Handle("/metrics", exp.authMiddleware(promhttp.HandlerFor(
 		exp.registry,
 		promhttp.HandlerOpts{
@@ -1304,7 +1250,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		},
 	)))
 
-	// Health check endpoint (senza autenticazione per monitoring)
+	// Health endpoint without authentication for monitoring.
 	mux.HandleFunc("/health", exp.healthHandler)
 
 	// Root endpoint
@@ -1317,20 +1263,20 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		TLSConfig: exp.tlsConfig,
 	}
 
-	// Configura TLS se abilitato
+	// Configure TLS when enabled.
 	if exp.cfg.PrometheusTLSEnabled {
-		if exp.tlsCertFile == "" || exp.tlsKeyFile == "" {
+		if exp.tlsConfig == nil || len(exp.tlsConfig.Certificates) == 0 {
 			exp.mu.Lock()
 			exp.isRunning = false
 			exp.mu.Unlock()
-			return fmt.Errorf("TLS enabled but certificate or key file not configured")
+			return fmt.Errorf("TLS enabled but server TLS configuration is not loaded")
 		}
 		exp.logger.Info("Starting Prometheus HTTPS server",
 			"address", addr,
 			"auth_type", exp.cfg.PrometheusAuthType,
 			"tls_enabled", exp.cfg.PrometheusTLSEnabled,
 			"tls_min_version", exp.cfg.PrometheusTLSMinVersion,
-			"mtls_enabled", exp.tlsCAFile != "",
+			"mtls_enabled", exp.cfg.PrometheusTLSCAFile != "",
 		)
 	} else {
 		exp.logger.Info("Starting Prometheus HTTP server",
@@ -1348,12 +1294,12 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to listen for Prometheus metrics on %s: %w", addr, err)
 	}
 
-	// Avvia il server in una goroutine
+	// Start the server in a goroutine.
 	listenErr := make(chan error, 1)
 	go func() {
 		var err error
 		if exp.cfg.PrometheusTLSEnabled {
-			err = exp.server.ServeTLS(listener, exp.tlsCertFile, exp.tlsKeyFile)
+			err = exp.server.ServeTLS(listener, "", "")
 		} else {
 			err = exp.server.Serve(listener)
 		}
@@ -1364,7 +1310,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	}()
 	exp.logger.Info("Prometheus server verified as listening", "address", listener.Addr().String())
 
-	// Gestione shutdown
+	// Handle shutdown.
 	go func() {
 		select {
 		case <-ctx.Done():

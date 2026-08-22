@@ -107,8 +107,13 @@ Add to `/etc/resman.conf`:
 # MCP Server Configuration
 MCP_ENABLED=true
 MCP_TRANSPORT=stdio        # stdio, http, or sse
-MCP_HTTP_PORT=8080         # For HTTP/SSE transport
+MCP_HTTP_PORT=1969         # For HTTP transport
 MCP_HTTP_HOST=127.0.0.1    # Bind address
+MCP_TLS_ENABLED=true       # Mandatory for HTTP transport
+MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
+# MCP_TLS_CA_FILE=/etc/resman/tls/ca.crt # Enables mandatory client certificates
+MCP_TLS_MIN_VERSION=1.3
 MCP_LOG_LEVEL=INFO         # MCP-specific log level
 ```
 
@@ -236,6 +241,11 @@ type Config struct {
     MCPTransport  string `config:"MCP_TRANSPORT"`  // stdio, http, sse
     MCPHTTPPort   int    `config:"MCP_HTTP_PORT"`
     MCPHTTPHost   string `config:"MCP_HTTP_HOST"`
+    MCPTLSEnabled bool   `config:"MCP_TLS_ENABLED"`
+    MCPTLSCertFile string `config:"MCP_TLS_CERT_FILE"`
+    MCPTLSKeyFile string `config:"MCP_TLS_KEY_FILE"`
+    MCPTLSCAFile string `config:"MCP_TLS_CA_FILE"`
+    MCPTLSMinVersion string `config:"MCP_TLS_MIN_VERSION"`
     MCPLogLevel   string `config:"MCP_LOG_LEVEL"`
 }
 ```

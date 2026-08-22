@@ -17,34 +17,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestParseTLSVersion(t *testing.T) {
-	tests := []struct {
-		value string
-		want  uint16
-	}{
-		{value: "1.0", want: tls.VersionTLS10},
-		{value: "1.1", want: tls.VersionTLS11},
-		{value: "1.2", want: tls.VersionTLS12},
-		{value: "1.3", want: tls.VersionTLS13},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.value, func(t *testing.T) {
-			got, err := parseTLSVersion(tt.value)
-			if err != nil {
-				t.Fatalf("parseTLSVersion(%q) error: %v", tt.value, err)
-			}
-			if got != tt.want {
-				t.Fatalf("parseTLSVersion(%q) = %d, want %d", tt.value, got, tt.want)
-			}
-		})
-	}
-
-	if _, err := parseTLSVersion("SSLv3"); err == nil {
-		t.Fatal("parseTLSVersion() accepted an unsupported version")
-	}
-}
-
 func TestGetMetricsEndpointUsesConfiguredScheme(t *testing.T) {
 	cfg := config.DefaultConfig()
 	exporter := &PrometheusExporter{cfg: cfg}

@@ -20,11 +20,13 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
@@ -63,6 +66,8 @@ type Server struct {
 	dbManager        *database.DatabaseManager
 	logger           *logging.Logger
 	httpServer       *http.Server
+	tlsConfig        *tls.Config
+	httpListen       func(network, address string) (net.Listener, error)
 	stdioTransport   mcp.Transport
 	transportCancel  context.CancelFunc
 	wg               sync.WaitGroup
@@ -88,6 +93,11 @@ func NewServer(
 		Transport:     parentCfg.MCPTransport,
 		HTTPPort:      parentCfg.MCPHTTPPort,
 		HTTPHost:      parentCfg.MCPHTTPHost,
+		TLSEnabled:    parentCfg.MCPTLSEnabled,
+		TLSCertFile:   parentCfg.MCPTLSCertFile,
+		TLSKeyFile:    parentCfg.MCPTLSKeyFile,
+		TLSCAFile:     parentCfg.MCPTLSCAFile,
+		TLSMinVersion: parentCfg.MCPTLSMinVersion,
 		LogLevel:      parentCfg.MCPLogLevel,
 		AuthToken:     parentCfg.MCPAuthToken,
 		AllowWriteOps: parentCfg.MCPAllowWriteOps,
@@ -95,6 +105,20 @@ func NewServer(
 
 	if err := mcpCfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid MCP configuration: %w", err)
+	}
+
+	var serverTLSConfig *tls.Config
+	if mcpCfg.Enabled && mcpCfg.Transport == "http" {
+		var err error
+		serverTLSConfig, err = tlsconfig.BuildServer(tlsconfig.ServerOptions{
+			CertFile:   mcpCfg.TLSCertFile,
+			KeyFile:    mcpCfg.TLSKeyFile,
+			CAFile:     mcpCfg.TLSCAFile,
+			MinVersion: mcpCfg.TLSMinVersion,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("loading MCP TLS configuration: %w", err)
+		}
 	}
 
 	// Create MCP server
@@ -113,6 +137,7 @@ func NewServer(
 		cgroupManager:    cg,
 		dbManager:        dbm,
 		logger:           logger,
+		tlsConfig:        serverTLSConfig,
 	}
 
 	// Register tools and resources
@@ -231,12 +256,19 @@ func (s *Server) startStdioTransport(ctx context.Context) error {
 
 // startHTTPTransport starts the MCP server with HTTP transport using Streamable HTTP
 func (s *Server) startHTTPTransport(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.HTTPHost, s.cfg.HTTPPort)
+	if s.tlsConfig == nil || len(s.tlsConfig.Certificates) == 0 {
+		return fmt.Errorf("MCP HTTPS transport requires a loaded TLS certificate")
+	}
 
-	// Check if port is available
-	listener, err := net.Listen("tcp", addr)
+	addr := net.JoinHostPort(s.cfg.HTTPHost, strconv.Itoa(s.cfg.HTTPPort))
+
+	listen := s.httpListen
+	if listen == nil {
+		listen = net.Listen
+	}
+	listener, err := listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to bind to %s: %w", addr, err)
+		return fmt.Errorf("failed to bind MCP HTTPS to %s: %w", addr, err)
 	}
 
 	mux := http.NewServeMux()
@@ -245,19 +277,21 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
 
-	s.httpServer = newMCPHTTPServer(addr, mux)
+	s.httpServer = newMCPHTTPServer(addr, mux, s.tlsConfig)
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 
-		s.logger.Info("MCP HTTP streamable server started",
+		s.logger.Info("MCP HTTPS streamable server started",
 			"address", addr,
 			"endpoint", "/mcp",
+			"tls_min_version", s.cfg.TLSMinVersion,
+			"mtls_enabled", s.cfg.TLSCAFile != "",
 		)
 
-		if err := s.httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("MCP HTTP server error", "error", err)
+		if err := s.httpServer.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("MCP HTTPS server error", "error", err)
 		}
 	}()
 
@@ -398,10 +432,11 @@ func writeMCPHTTPError(w http.ResponseWriter, status int, protocolErr error) {
 	}
 }
 
-func newMCPHTTPServer(addr string, handler http.Handler) *http.Server {
+func newMCPHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 	}

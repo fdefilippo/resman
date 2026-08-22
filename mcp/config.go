@@ -29,9 +29,14 @@ import (
 // Config contains MCP server configuration
 type Config struct {
 	Enabled       bool
-	Transport     string // stdio, http, sse
+	Transport     string // stdio, http
 	HTTPPort      int
 	HTTPHost      string
+	TLSEnabled    bool
+	TLSCertFile   string
+	TLSKeyFile    string
+	TLSCAFile     string
+	TLSMinVersion string
 	LogLevel      string
 	AuthToken     string // Required authentication token for HTTP
 	AllowWriteOps bool   // Allow write operations (activate/deactivate limits)
@@ -42,8 +47,13 @@ func DefaultConfig() *Config {
 	return &Config{
 		Enabled:       false,
 		Transport:     "stdio",
-		HTTPPort:      8080,
+		HTTPPort:      1969,
 		HTTPHost:      "127.0.0.1",
+		TLSEnabled:    true,
+		TLSCertFile:   "/etc/resman/tls/server.crt",
+		TLSKeyFile:    "/etc/resman/tls/server.key",
+		TLSCAFile:     "",
+		TLSMinVersion: "1.3",
 		LogLevel:      "INFO",
 		AuthToken:     "",
 		AllowWriteOps: false,
@@ -61,6 +71,11 @@ func LoadFromParentConfig(cfg *config.Config) *Config {
 		Transport:     cfg.MCPTransport,
 		HTTPPort:      cfg.MCPHTTPPort,
 		HTTPHost:      cfg.MCPHTTPHost,
+		TLSEnabled:    cfg.MCPTLSEnabled,
+		TLSCertFile:   cfg.MCPTLSCertFile,
+		TLSKeyFile:    cfg.MCPTLSKeyFile,
+		TLSCAFile:     cfg.MCPTLSCAFile,
+		TLSMinVersion: cfg.MCPTLSMinVersion,
 		LogLevel:      cfg.MCPLogLevel,
 		AuthToken:     cfg.MCPAuthToken,
 		AllowWriteOps: cfg.MCPAllowWriteOps,
@@ -94,6 +109,21 @@ func (c *Config) LoadFromEnv() error {
 	if val := os.Getenv("MCP_HTTP_HOST"); val != "" {
 		c.HTTPHost = val
 	}
+	if val := os.Getenv("MCP_TLS_ENABLED"); val != "" {
+		c.TLSEnabled = strings.ToLower(val) == "true" || val == "1"
+	}
+	if val := os.Getenv("MCP_TLS_CERT_FILE"); val != "" {
+		c.TLSCertFile = val
+	}
+	if val := os.Getenv("MCP_TLS_KEY_FILE"); val != "" {
+		c.TLSKeyFile = val
+	}
+	if val := os.Getenv("MCP_TLS_CA_FILE"); val != "" {
+		c.TLSCAFile = val
+	}
+	if val := os.Getenv("MCP_TLS_MIN_VERSION"); val != "" {
+		c.TLSMinVersion = val
+	}
 
 	if val := os.Getenv("MCP_LOG_LEVEL"); val != "" {
 		c.LogLevel = strings.ToUpper(val)
@@ -123,6 +153,17 @@ func (c *Config) Validate() error {
 			}
 			if strings.TrimSpace(c.AuthToken) == "" {
 				return fmt.Errorf("http transport requires MCP_AUTH_TOKEN")
+			}
+			if !c.TLSEnabled {
+				return fmt.Errorf("http transport requires MCP TLS; MCP_TLS_ENABLED must be true")
+			}
+			if strings.TrimSpace(c.TLSCertFile) == "" || strings.TrimSpace(c.TLSKeyFile) == "" {
+				return fmt.Errorf("http transport requires MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE")
+			}
+			switch strings.TrimSpace(c.TLSMinVersion) {
+			case "1.0", "1.1", "1.2", "1.3":
+			default:
+				return fmt.Errorf("invalid MCP_TLS_MIN_VERSION %q: expected 1.0, 1.1, 1.2, or 1.3", c.TLSMinVersion)
 			}
 		}
 

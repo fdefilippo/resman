@@ -194,6 +194,11 @@ type Config struct {
 	MCPTransport     string `config:"MCP_TRANSPORT"`
 	MCPHTTPPort      int    `config:"MCP_HTTP_PORT"`
 	MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
+	MCPTLSEnabled    bool   `config:"MCP_TLS_ENABLED"`
+	MCPTLSCertFile   string `config:"MCP_TLS_CERT_FILE"`
+	MCPTLSKeyFile    string `config:"MCP_TLS_KEY_FILE"`
+	MCPTLSCAFile     string `config:"MCP_TLS_CA_FILE"`
+	MCPTLSMinVersion string `config:"MCP_TLS_MIN_VERSION"`
 	MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
 	MCPAuthToken     string `config:"MCP_AUTH_TOKEN"`
 	MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
@@ -230,10 +235,10 @@ type IODecisionPolicy struct {
 	WriteIOPS         int
 }
 
-// DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
+// DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
-	// Lettura dinamica del pid_max per il default di SYSTEM_UID_MAX
-	pidMax := 60000 // valore di fallback
+	// Read pid_max dynamically for the SYSTEM_UID_MAX default.
+	pidMax := 60000 // Fallback value.
 	if data, err := os.ReadFile("/proc/sys/kernel/pid_max"); err == nil {
 		if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
 			pidMax = val
@@ -252,9 +257,9 @@ func DefaultConfig() *Config {
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
-		// Refresh Prometheus/Grafana separato dal control loop decisionale.
+		// Refresh Prometheus/Grafana independently from the decision control loop.
 		MetricsRefreshInterval: 30,
-		// Processi piu' giovani non contribuiscono alla CPU utente.
+		// Younger processes do not contribute to user CPU usage.
 		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
@@ -359,7 +364,12 @@ func DefaultConfig() *Config {
 		MCPEnabled:       false,
 		MCPTransport:     "stdio",
 		MCPHTTPPort:      1969,
-		MCPHTTPHost:      "", // Empty = use default 0.0.0.0
+		MCPHTTPHost:      "127.0.0.1",
+		MCPTLSEnabled:    true,
+		MCPTLSCertFile:   "/etc/resman/tls/server.crt",
+		MCPTLSKeyFile:    "/etc/resman/tls/server.key",
+		MCPTLSCAFile:     "",
+		MCPTLSMinVersion: "1.3",
 		MCPLogLevel:      "INFO",
 		MCPAuthToken:     "",
 		MCPAllowWriteOps: false,
@@ -624,6 +634,11 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"MCP_TRANSPORT":                 setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
 	"MCP_HTTP_PORT":                 setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
 	"MCP_HTTP_HOST":                 setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
+	"MCP_TLS_ENABLED":               setBool(func(cfg *Config, value bool) { cfg.MCPTLSEnabled = value }),
+	"MCP_TLS_CERT_FILE":             setString(func(cfg *Config, value string) { cfg.MCPTLSCertFile = value }),
+	"MCP_TLS_KEY_FILE":              setString(func(cfg *Config, value string) { cfg.MCPTLSKeyFile = value }),
+	"MCP_TLS_CA_FILE":               setString(func(cfg *Config, value string) { cfg.MCPTLSCAFile = value }),
+	"MCP_TLS_MIN_VERSION":           setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPTLSMinVersion = value }),
 	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
 	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
 	"MCP_ALLOW_WRITE_OPS":           setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
@@ -841,7 +856,7 @@ func parsePlainList(value string) []string {
 	return values
 }
 
-// validateConfig esegue tutte le validazioni come nello script Bash.
+// validateConfig validates the complete runtime configuration.
 func validateConfig(cfg *Config) error {
 	var errors []string
 
@@ -899,12 +914,8 @@ func validateConfig(cfg *Config) error {
 		if cfg.PrometheusTLSEnabled {
 			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION is required when Prometheus TLS is enabled")
 		}
-	} else {
-		switch cfg.PrometheusTLSMinVersion {
-		case "1.0", "1.1", "1.2", "1.3":
-		default:
-			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
-		}
+	} else if !isValidTLSVersion(cfg.PrometheusTLSMinVersion) {
+		errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
 	}
 
 	// Validate PSI event-driven configuration
@@ -943,8 +954,19 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	if cfg.MCPEnabled && cfg.MCPTransport == "http" && strings.TrimSpace(cfg.MCPAuthToken) == "" {
-		errors = append(errors, "MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
+	if cfg.MCPEnabled && cfg.MCPTransport == "http" {
+		if strings.TrimSpace(cfg.MCPAuthToken) == "" {
+			errors = append(errors, "MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
+		}
+		if !cfg.MCPTLSEnabled {
+			errors = append(errors, "MCP_TLS_ENABLED must be true when MCP_ENABLED=true and MCP_TRANSPORT=http")
+		}
+		if strings.TrimSpace(cfg.MCPTLSCertFile) == "" || strings.TrimSpace(cfg.MCPTLSKeyFile) == "" {
+			errors = append(errors, "MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set when MCP HTTP is enabled")
+		}
+		if !isValidTLSVersion(cfg.MCPTLSMinVersion) {
+			errors = append(errors, "MCP_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
+		}
 	}
 
 	// Validate CPU quota format
@@ -1033,6 +1055,15 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("%s", strings.Join(errors, "; "))
 	}
 	return nil
+}
+
+func isValidTLSVersion(version string) bool {
+	switch strings.TrimSpace(version) {
+	case "1.0", "1.1", "1.2", "1.3":
+		return true
+	default:
+		return false
+	}
 }
 
 func isValidIODeviceFilter(filter string) bool {
