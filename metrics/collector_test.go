@@ -97,12 +97,20 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	if err := collector.WriteMetricsToDatabase(
 		map[int]*UserMetrics{
 			1000: {
-				UID:          1000,
-				Username:     "limited-user",
-				CPUUsage:     75,
-				MemoryUsage:  1024,
-				ProcessCount: 3,
-				IsLimited:    true,
+				UID:               1000,
+				Username:          "limited-user",
+				CPUUsage:          75,
+				MemoryUsage:       1024,
+				ProcessCount:      3,
+				EligibleForCPU:    true,
+				EligibleForRAM:    true,
+				EligibleForIO:     true,
+				CPULimitRequested: true,
+				CPULimitActive:    true,
+				RAMLimitRequested: true,
+				RAMLimitActive:    true,
+				IOLimitRequested:  true,
+				IOLimitActive:     true,
 			},
 		},
 		50,
@@ -120,8 +128,8 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserHistory() error: %v", err)
 	}
-	if len(userHistory) != 1 || !userHistory[0].IsLimited {
-		t.Fatalf("user history = %+v, want one limited record", userHistory)
+	if len(userHistory) != 1 || !userHistory[0].CPULimitActive || !userHistory[0].EligibleForRAM {
+		t.Fatalf("user history = %+v, want one explicit enforcement record", userHistory)
 	}
 
 	systemHistory, err := dbManager.GetSystemHistory(start, end, 1)
@@ -155,6 +163,26 @@ func TestNewCollector(t *testing.T) {
 	}
 	if collector.cacheTimestamps == nil {
 		t.Error("collector.cacheTimestamps not initialized")
+	}
+}
+
+func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
+	collector, err := NewCollector(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+		1000: {UID: 1000, CPUUsage: 10, EligibleForRAM: true, EligibleForIO: true},
+		1001: {UID: 1001, CPUUsage: 20, EligibleForCPU: true},
+	})
+
+	if got := collector.GetLimitedUsersCPUUsage(); got != 20 {
+		t.Fatalf("GetLimitedUsersCPUUsage() = %.1f, want only CPU-eligible usage 20", got)
+	}
+	users := collector.GetLimitedUsers()
+	if len(users) != 1 || users[0] != 1001 {
+		t.Fatalf("GetLimitedUsers() = %v, want [1001]", users)
 	}
 }
 

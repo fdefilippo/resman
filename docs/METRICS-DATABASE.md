@@ -73,9 +73,15 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema del Database
 
-### Tabella `user_metrics`
+### `user_metrics` table
 
-Memorizza le metriche per ogni utente.
+Schema version 2 stores policy eligibility, control intent, and observed enforcement
+as separate facts for every resource. `PRAGMA user_version` is set to `2`.
+
+This is an intentionally breaking schema. A database containing the old unversioned
+`is_limited` column is rejected at startup. ResMan does not migrate or reinterpret old
+rows: move or delete the database and restart the service to create a new version 2
+store.
 
 ```sql
 CREATE TABLE user_metrics (
@@ -88,9 +94,21 @@ CREATE TABLE user_metrics (
     process_count INTEGER NOT NULL,
     cgroup_path TEXT,
     cpu_quota TEXT,
-    is_limited BOOLEAN DEFAULT FALSE
+    eligible_for_cpu BOOLEAN NOT NULL,
+    eligible_for_ram BOOLEAN NOT NULL,
+    eligible_for_io BOOLEAN NOT NULL,
+    cpu_limit_requested BOOLEAN NOT NULL,
+    cpu_limit_active BOOLEAN NOT NULL,
+    ram_limit_requested BOOLEAN NOT NULL,
+    ram_limit_active BOOLEAN NOT NULL,
+    io_limit_requested BOOLEAN NOT NULL,
+    io_limit_active BOOLEAN NOT NULL
 );
 ```
+
+`eligible_for_*` records policy eligibility, `*_limit_requested` records control
+intent, and `*_limit_active` records observed successful application. These values
+must not be inferred from one another.
 
 **Indici:**
 - `idx_user_metrics_timestamp`: Per query temporali
@@ -184,7 +202,15 @@ Ottiene lo storico delle metriche per un utente specifico.
       "cpu_usage": 45.2,
       "memory_usage": 524288000,
       "process_count": 15,
-      "is_limited": false
+      "eligible_for_cpu": false,
+      "eligible_for_ram": true,
+      "eligible_for_io": true,
+      "cpu_limit_requested": false,
+      "cpu_limit_active": false,
+      "ram_limit_requested": true,
+      "ram_limit_active": true,
+      "io_limit_requested": false,
+      "io_limit_active": false
     }
   ],
   "count": 1,
@@ -299,7 +325,7 @@ Ottiene statistiche aggregate (media, min, max) per un utente.
   "memory_min": 268435456,
   "memory_max": 1073741824,
   "process_count_avg": 12.5,
-  "limited_time_percent": 15.5,
+  "cpu_limit_active_time_percent": 15.5,
   "samples": 2880
 }
 ```
@@ -373,13 +399,14 @@ ORDER BY avg_cpu DESC
 LIMIT 10;
 ```
 
-#### Quando sono stati attivi i limiti
+#### When CPU enforcement was observed active
 ```sql
-SELECT datetime(timestamp, 'localtime') as time,
-       limited_users_count
-FROM system_metrics
-WHERE limits_active = 1
-  AND timestamp >= datetime('now', '-24 hours')
+SELECT datetime(timestamp, 'localtime') AS time,
+       username,
+       cpu_limit_requested,
+       cpu_limit_active
+FROM user_metrics
+WHERE cpu_limit_requested OR cpu_limit_active
 ORDER BY timestamp DESC;
 ```
 

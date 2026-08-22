@@ -24,6 +24,9 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
 // registerResources registers all MCP resources
@@ -207,14 +210,8 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 		return nil, fmt.Errorf("no metrics found for UID %d", uid)
 	}
 
-	result := map[string]any{
-		"uid":           uid,
-		"username":      metrics.Username,
-		"cpu_usage":     metrics.CPUUsage,
-		"memory_usage":  metrics.MemoryUsage,
-		"process_count": metrics.ProcessCount,
-		"is_limited":    metrics.IsLimited,
-	}
+	limitState := s.stateManager.GetUserLimitState(uid, metrics.Username)
+	result := newUserMetricsResourcePayload(uid, metrics, limitState)
 
 	// Add RAM cgroup metrics and limits.
 	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
@@ -229,11 +226,13 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 			result["memory_high"] = high
 		}
 	}
-	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
-		result["memory_high_events"] = highEvents
+
+	// Add memory.high events.
+	if events, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
+		result["memory_high_events"] = events
 	}
 
-	// Add IO cgroup metrics
+	// Add I/O stats.
 	if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
 		result["io_read_bytes"] = ioRead
 		result["io_write_bytes"] = ioWrite
@@ -241,15 +240,36 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 		result["io_write_ops"] = ioWOps
 	}
 
+	jsonData := toJSON(result)
+
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
 				URI:      req.Params.URI,
 				MIMEType: "application/json",
-				Text:     toJSON(result),
+				Text:     jsonData,
 			},
 		},
 	}, nil
+}
+
+func newUserMetricsResourcePayload(uid int, sample *resmanmetrics.UserMetrics, limitState state.UserLimitState) map[string]any {
+	return map[string]any{
+		"uid":                 uid,
+		"username":            sample.Username,
+		"cpu_usage":           sample.CPUUsage,
+		"memory_usage":        sample.MemoryUsage,
+		"process_count":       sample.ProcessCount,
+		"eligible_for_cpu":    limitState.EligibleForCPU,
+		"eligible_for_ram":    limitState.EligibleForRAM,
+		"eligible_for_io":     limitState.EligibleForIO,
+		"cpu_limit_requested": limitState.CPULimitRequested,
+		"cpu_limit_active":    limitState.CPULimitActive,
+		"ram_limit_requested": limitState.RAMLimitRequested,
+		"ram_limit_active":    limitState.RAMLimitActive,
+		"io_limit_requested":  limitState.IOLimitRequested,
+		"io_limit_active":     limitState.IOLimitActive,
+	}
 }
 
 // handleCgroupResource handles resman://cgroups/{uid}

@@ -30,6 +30,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/fdefilippo/resman/database"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
 const (
@@ -54,12 +56,20 @@ type GetUserMetricsArgs struct {
 }
 
 type UserMetric struct {
-	UID          int     `json:"uid"`
-	Username     string  `json:"username"`
-	CPUUsage     float64 `json:"cpu_usage"`
-	MemoryUsage  uint64  `json:"memory_usage"`
-	ProcessCount int     `json:"process_count"`
-	IsLimited    bool    `json:"is_limited"`
+	UID               int     `json:"uid"`
+	Username          string  `json:"username"`
+	CPUUsage          float64 `json:"cpu_usage"`
+	MemoryUsage       uint64  `json:"memory_usage"`
+	ProcessCount      int     `json:"process_count"`
+	EligibleForCPU    bool    `json:"eligible_for_cpu"`
+	EligibleForRAM    bool    `json:"eligible_for_ram"`
+	EligibleForIO     bool    `json:"eligible_for_io"`
+	CPULimitRequested bool    `json:"cpu_limit_requested"`
+	CPULimitActive    bool    `json:"cpu_limit_active"`
+	RAMLimitRequested bool    `json:"ram_limit_requested"`
+	RAMLimitActive    bool    `json:"ram_limit_active"`
+	IOLimitRequested  bool    `json:"io_limit_requested"`
+	IOLimitActive     bool    `json:"io_limit_active"`
 	// RAM cgroup metrics
 	CgroupMemoryCurrentBytes uint64 `json:"cgroup_memory_current_bytes,omitempty"`
 	MemoryMax                string `json:"memory_max,omitempty"`
@@ -70,6 +80,25 @@ type UserMetric struct {
 	IOWriteBytes uint64 `json:"io_write_bytes,omitempty"`
 	IOReadOps    uint64 `json:"io_read_ops,omitempty"`
 	IOWriteOps   uint64 `json:"io_write_ops,omitempty"`
+}
+
+func newUserMetric(uid int, sample *resmanmetrics.UserMetrics, limitState state.UserLimitState) UserMetric {
+	return UserMetric{
+		UID:               uid,
+		Username:          sample.Username,
+		CPUUsage:          sample.CPUUsage,
+		MemoryUsage:       sample.MemoryUsage,
+		ProcessCount:      sample.ProcessCount,
+		EligibleForCPU:    limitState.EligibleForCPU,
+		EligibleForRAM:    limitState.EligibleForRAM,
+		EligibleForIO:     limitState.EligibleForIO,
+		CPULimitRequested: limitState.CPULimitRequested,
+		CPULimitActive:    limitState.CPULimitActive,
+		RAMLimitRequested: limitState.RAMLimitRequested,
+		RAMLimitActive:    limitState.RAMLimitActive,
+		IOLimitRequested:  limitState.IOLimitRequested,
+		IOLimitActive:     limitState.IOLimitActive,
+	}
 }
 
 type GetUserMetricsResult struct {
@@ -112,19 +141,19 @@ type GetHistoryResult struct {
 }
 
 type GetUserSummaryResult struct {
-	UID                int     `json:"uid"`
-	Username           string  `json:"username"`
-	PeriodStart        string  `json:"period_start"`
-	PeriodEnd          string  `json:"period_end"`
-	CPUAvg             float64 `json:"cpu_avg"`
-	CPUMin             float64 `json:"cpu_min"`
-	CPUMax             float64 `json:"cpu_max"`
-	MemoryAvg          float64 `json:"memory_avg"`
-	MemoryMin          float64 `json:"memory_min"`
-	MemoryMax          float64 `json:"memory_max"`
-	ProcessCountAvg    float64 `json:"process_count_avg"`
-	LimitedTimePercent float64 `json:"limited_time_percent"`
-	Samples            int     `json:"samples"`
+	UID                       int     `json:"uid"`
+	Username                  string  `json:"username"`
+	PeriodStart               string  `json:"period_start"`
+	PeriodEnd                 string  `json:"period_end"`
+	CPUAvg                    float64 `json:"cpu_avg"`
+	CPUMin                    float64 `json:"cpu_min"`
+	CPUMax                    float64 `json:"cpu_max"`
+	MemoryAvg                 float64 `json:"memory_avg"`
+	MemoryMin                 float64 `json:"memory_min"`
+	MemoryMax                 float64 `json:"memory_max"`
+	ProcessCountAvg           float64 `json:"process_count_avg"`
+	CPULimitActiveTimePercent float64 `json:"cpu_limit_active_time_percent"`
+	Samples                   int     `json:"samples"`
 }
 
 type GetMetricsDatabaseInfoResult struct {
@@ -951,14 +980,8 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 			continue
 		}
 
-		um := UserMetric{
-			UID:          uid,
-			Username:     metrics.Username,
-			CPUUsage:     metrics.CPUUsage,
-			MemoryUsage:  metrics.MemoryUsage,
-			ProcessCount: metrics.ProcessCount,
-			IsLimited:    metrics.IsLimited,
-		}
+		limitState := s.stateManager.GetUserLimitState(uid, metrics.Username)
+		um := newUserMetric(uid, metrics, limitState)
 
 		// Fetch RAM cgroup metrics and limits.
 		if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
@@ -1117,15 +1140,23 @@ func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequ
 	resultRecords := make([]map[string]any, len(records))
 	for i, r := range records {
 		resultRecords[i] = map[string]any{
-			"timestamp":     r.Timestamp.Format(time.RFC3339),
-			"uid":           r.UID,
-			"username":      r.Username,
-			"cpu_usage":     r.CPUUsagePercent,
-			"memory_usage":  r.MemoryUsageBytes,
-			"process_count": r.ProcessCount,
-			"cgroup_path":   r.CgroupPath,
-			"cpu_quota":     r.CPUQuota,
-			"is_limited":    r.IsLimited,
+			"timestamp":           r.Timestamp.Format(time.RFC3339),
+			"uid":                 r.UID,
+			"username":            r.Username,
+			"cpu_usage":           r.CPUUsagePercent,
+			"memory_usage":        r.MemoryUsageBytes,
+			"process_count":       r.ProcessCount,
+			"cgroup_path":         r.CgroupPath,
+			"cpu_quota":           r.CPUQuota,
+			"eligible_for_cpu":    r.EligibleForCPU,
+			"eligible_for_ram":    r.EligibleForRAM,
+			"eligible_for_io":     r.EligibleForIO,
+			"cpu_limit_requested": r.CPULimitRequested,
+			"cpu_limit_active":    r.CPULimitActive,
+			"ram_limit_requested": r.RAMLimitRequested,
+			"ram_limit_active":    r.RAMLimitActive,
+			"io_limit_requested":  r.IOLimitRequested,
+			"io_limit_active":     r.IOLimitActive,
 		}
 	}
 
@@ -1222,19 +1253,19 @@ func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	result := GetUserSummaryResult{
-		UID:                summary.UID,
-		Username:           summary.Username,
-		PeriodStart:        summary.PeriodStart,
-		PeriodEnd:          summary.PeriodEnd,
-		CPUAvg:             summary.CPUAvg,
-		CPUMin:             summary.CPUMin,
-		CPUMax:             summary.CPUMax,
-		MemoryAvg:          summary.MemoryAvg,
-		MemoryMin:          summary.MemoryMin,
-		MemoryMax:          summary.MemoryMax,
-		ProcessCountAvg:    summary.ProcessCountAvg,
-		LimitedTimePercent: summary.LimitedTimePercent,
-		Samples:            summary.Samples,
+		UID:                       summary.UID,
+		Username:                  summary.Username,
+		PeriodStart:               summary.PeriodStart,
+		PeriodEnd:                 summary.PeriodEnd,
+		CPUAvg:                    summary.CPUAvg,
+		CPUMin:                    summary.CPUMin,
+		CPUMax:                    summary.CPUMax,
+		MemoryAvg:                 summary.MemoryAvg,
+		MemoryMin:                 summary.MemoryMin,
+		MemoryMax:                 summary.MemoryMax,
+		ProcessCountAvg:           summary.ProcessCountAvg,
+		CPULimitActiveTimePercent: summary.CPULimitActiveTimePercent,
+		Samples:                   summary.Samples,
 	}
 
 	return &mcp.CallToolResult{

@@ -26,7 +26,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-// DBWriter gestisce la scrittura delle metriche nel database
+// DBWriter coordinates periodic writes to the metrics database.
 type DBWriter struct {
 	dbManager     *database.DatabaseManager
 	logger        *logging.Logger
@@ -48,37 +48,7 @@ func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) 
 	}
 }
 
-// WriteUserMetrics scrive le metriche utente nel database
-func (w *DBWriter) WriteUserMetrics(uid int, username string, cpuUsage float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath string, cpuQuota string) {
-	w.mu.RLock()
-	if !w.enabled {
-		w.mu.RUnlock()
-		return
-	}
-	w.mu.RUnlock()
-
-	if w.dbManager == nil {
-		return
-	}
-
-	record := &database.UserMetricsRecord{
-		UID:              uid,
-		Username:         username,
-		CPUUsagePercent:  cpuUsage,
-		MemoryUsageBytes: int64(memoryUsage),
-		ProcessCount:     processCount,
-		CgroupPath:       cgroupPath,
-		CPUQuota:         cpuQuota,
-		IsLimited:        isLimited,
-		Timestamp:        time.Now().UTC(),
-	}
-
-	if err := w.dbManager.WriteUserMetrics(record); err != nil {
-		w.logger.Debug("Failed to write user metrics to database", "uid", uid, "username", username, "error", err)
-	}
-}
-
-// WriteSystemMetrics scrive le metriche di sistema nel database
+// WriteSystemMetrics writes one system metrics sample to the database.
 func (w *DBWriter) WriteSystemMetrics(totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
 	w.mu.RLock()
 	if !w.enabled {
@@ -129,13 +99,21 @@ func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, totalCPUU
 			return fmt.Errorf("user metrics for UID %d are nil", uid)
 		}
 		userRecords = append(userRecords, &database.UserMetricsRecord{
-			UID:              uid,
-			Username:         metrics.Username,
-			CPUUsagePercent:  metrics.CPUUsage,
-			MemoryUsageBytes: int64(metrics.MemoryUsage),
-			ProcessCount:     metrics.ProcessCount,
-			IsLimited:        metrics.IsLimited,
-			Timestamp:        timestamp,
+			UID:               uid,
+			Username:          metrics.Username,
+			CPUUsagePercent:   metrics.CPUUsage,
+			MemoryUsageBytes:  int64(metrics.MemoryUsage),
+			ProcessCount:      metrics.ProcessCount,
+			EligibleForCPU:    metrics.EligibleForCPU,
+			EligibleForRAM:    metrics.EligibleForRAM,
+			EligibleForIO:     metrics.EligibleForIO,
+			CPULimitRequested: metrics.CPULimitRequested,
+			CPULimitActive:    metrics.CPULimitActive,
+			RAMLimitRequested: metrics.RAMLimitRequested,
+			RAMLimitActive:    metrics.RAMLimitActive,
+			IOLimitRequested:  metrics.IOLimitRequested,
+			IOLimitActive:     metrics.IOLimitActive,
+			Timestamp:         timestamp,
 		})
 	}
 

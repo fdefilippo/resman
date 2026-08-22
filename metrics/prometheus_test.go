@@ -359,6 +359,24 @@ func TestCleanupUserMetricsRemovesCPUAverageAndEMASeries(t *testing.T) {
 	}
 }
 
+func TestUpdateUserMetricsPublishesObservedCPULimitState(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.UpdateUserMetrics(1000, "alice", 10, 10, 10, 1024, 1, false, "", "", 0, 0, 0, 0, 0)
+	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limited"); got != 0 {
+		t.Fatalf("inactive observed CPU limit gauge = %f, want 0", got)
+	}
+	exporter.UpdateUserMetrics(1000, "alice", 10, 10, 10, 1024, 1, true, "", "", 0, 0, 0, 0, 0)
+	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limited"); got != 1 {
+		t.Fatalf("active observed CPU limit gauge = %f, want 1", got)
+	}
+}
+
 func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true

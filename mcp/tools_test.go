@@ -17,6 +17,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/database"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
 func TestResolveHistoryTimeRangeRejectsInvalidExplicitTimes(t *testing.T) {
@@ -165,6 +168,57 @@ func TestUserMetricJSONUsesExplicitCgroupMemoryFields(t *testing.T) {
 	}
 }
 
+func TestUserMetricJSONUsesExplicitLimitSemantics(t *testing.T) {
+	limitState := state.UserLimitState{
+		EligibleForCPU:    true,
+		EligibleForRAM:    false,
+		EligibleForIO:     true,
+		CPULimitRequested: true,
+		CPULimitActive:    false,
+		RAMLimitRequested: true,
+		RAMLimitActive:    true,
+		IOLimitRequested:  false,
+		IOLimitActive:     false,
+	}
+	metric := newUserMetric(1000, &resmanmetrics.UserMetrics{
+		Username:       "alice",
+		EligibleForCPU: false,
+		CPULimitActive: true,
+	}, limitState)
+	data, err := json.Marshal(metric)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	payload := string(data)
+	for _, field := range []string{
+		"eligible_for_cpu", "eligible_for_ram", "eligible_for_io",
+		"cpu_limit_requested", "cpu_limit_active", "ram_limit_requested",
+		"ram_limit_active", "io_limit_requested", "io_limit_active",
+	} {
+		if !strings.Contains(payload, `"`+field+`"`) {
+			t.Errorf("JSON payload %s does not contain field %q", payload, field)
+		}
+	}
+	if strings.Contains(payload, `"is_limited"`) {
+		t.Errorf("JSON payload %s contains removed ambiguous field is_limited", payload)
+	}
+	if !metric.EligibleForCPU || metric.CPULimitActive {
+		t.Fatalf("tool metric re-derived state from collector sample: %+v", metric)
+	}
+
+	resource := newUserMetricsResourcePayload(1000, &resmanmetrics.UserMetrics{
+		Username:       "alice",
+		EligibleForCPU: false,
+		CPULimitActive: true,
+	}, limitState)
+	if resource["eligible_for_cpu"] != true || resource["cpu_limit_active"] != false {
+		t.Fatalf("resource payload re-derived state from collector sample: %+v", resource)
+	}
+	if _, exists := resource["is_limited"]; exists {
+		t.Fatalf("resource payload contains removed is_limited field: %+v", resource)
+	}
+}
+
 func TestActivationResultReflectsRuntimeState(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -237,5 +291,52 @@ func TestResolveHistoricalUIDUsesDatabaseForInactiveUser(t *testing.T) {
 	}
 	if uid != 1000 {
 		t.Errorf("resolveHistoricalUID() = %d, want 1000", uid)
+	}
+}
+
+func TestGetUserHistoryReturnsPersistedExplicitLimitState(t *testing.T) {
+	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error = %v", err)
+	}
+	defer func() { _ = dbManager.Close() }()
+
+	now := time.Now().UTC()
+	if err := dbManager.WriteUserMetrics(&database.UserMetricsRecord{
+		Timestamp:         now,
+		UID:               1000,
+		Username:          "offline-user",
+		ProcessCount:      1,
+		EligibleForCPU:    true,
+		EligibleForRAM:    false,
+		EligibleForIO:     true,
+		CPULimitRequested: true,
+		CPULimitActive:    false,
+		RAMLimitRequested: true,
+		RAMLimitActive:    true,
+	}); err != nil {
+		t.Fatalf("WriteUserMetrics() error = %v", err)
+	}
+
+	server := &Server{dbManager: dbManager}
+	uid := 1000
+	_, result, err := server.handleGetUserHistory(
+		context.Background(),
+		nil,
+		GetHistoryArgs{UID: &uid, Hours: 1},
+	)
+	if err != nil {
+		t.Fatalf("handleGetUserHistory() error = %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("history records = %d, want 1", len(result.Records))
+	}
+	record := result.Records[0]
+	if _, exists := record["is_limited"]; exists {
+		t.Fatalf("history record contains removed is_limited field: %+v", record)
+	}
+	if record["cpu_limit_requested"] != true || record["cpu_limit_active"] != false ||
+		record["ram_limit_requested"] != true || record["ram_limit_active"] != true {
+		t.Fatalf("history record lost requested/active distinctions: %+v", record)
 	}
 }

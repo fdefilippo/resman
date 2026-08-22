@@ -1199,6 +1199,58 @@ func TestEmptyRAMAndIOIncludeListsStillIncludeAllUsers(t *testing.T) {
 	}
 }
 
+func TestEvaluateUserEligibilityKeepsResourcePoliciesIndependent(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		username  string
+		want      UserEligibility
+	}{
+		{
+			name:     "empty lists disable CPU and include RAM and IO",
+			username: "alice",
+			want: UserEligibility{
+				EligibleForRAM: true,
+				EligibleForIO:  true,
+			},
+		},
+		{
+			name: "CPU include does not override RAM and IO excludes",
+			configure: func(cfg *Config) {
+				cfg.UserIncludeList = []string{"^alice$"}
+				cfg.RAMUserExcludeList = []string{"^alice$"}
+				cfg.IOUserExcludeList = []string{"^alice$"}
+			},
+			username: "alice",
+			want:     UserEligibility{EligibleForCPU: true},
+		},
+		{
+			name: "CPU exclude does not disable RAM and IO",
+			configure: func(cfg *Config) {
+				cfg.UserIncludeList = []string{".*"}
+				cfg.UserExcludeList = []string{"^alice$"}
+			},
+			username: "alice",
+			want: UserEligibility{
+				EligibleForRAM: true,
+				EligibleForIO:  true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			if tt.configure != nil {
+				tt.configure(cfg)
+			}
+			if got := cfg.EvaluateUserEligibility(tt.username); got != tt.want {
+				t.Fatalf("EvaluateUserEligibility(%q) = %+v, want %+v", tt.username, got, tt.want)
+			}
+		})
+	}
+}
+
 func unsetEnvForTest(t *testing.T, key string) {
 	t.Helper()
 	value, existed := os.LookupEnv(key)

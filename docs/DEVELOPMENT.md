@@ -128,12 +128,11 @@ For every user and every resource, resman deals with three distinct facts:
   Reading old rows under the new meaning is forbidden — historical rows written under
   the previous semantics would silently corrupt every dashboard built on them.
 
-**Why.** `UserMetrics.IsLimited` is currently assigned from `Config.IsUserWhitelisted`
-in `metrics/collector.go:1092` (eligibility), then overwritten with runtime state in
-`state/control_cycle.go:425-438` before being written to the database — while
-`mcp/resources.go:216` and `mcp/tools.go:960` still read the un-overwritten collector
-value. The same field means eligibility on one path and observation on another, and the
-`is_limited` column in the metrics database has accumulated both.
+**Why.** Before `resman-4pw.1`, `UserMetrics.IsLimited` was assigned from CPU policy
+eligibility in the collector, overwritten with runtime state before database writes,
+and still exposed with its original meaning through MCP. The version 2 metrics schema
+replaced that ambiguous field with explicit eligibility, requested, and active fields;
+old stores are rejected and require an operator reset.
 
 *Findings: resman-4pw.1, resman-4pw.6*
 
@@ -151,10 +150,11 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
 - Adding a new limited resource **MUST** add its own `IsUserWhitelistedFor<Resource>`
   and its own row in the empty-list test table.
 
-**Why.** `state/control_cycle.go:447` aggregates `LimitedUsersRAMUsageBytes` and
-`LimitedUsersIOWriteBytes` inside `if um.IsLimited`, which is CPU eligibility. With an
-empty `USER_INCLUDE_LIST`, RAM and I/O limiting select nobody, even though
-`IsUserIncludedForRAM` (`config/config.go:1194`) says an empty list includes everyone.
+**Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
+the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
+RAM and I/O decisions even though their own empty include lists select everybody.
+Independent aggregates and a table-driven policy test now preserve the intended
+asymmetry.
 
 *Finding: resman-4pw.1*
 

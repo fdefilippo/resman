@@ -45,18 +45,26 @@ const (
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID             int
-	Username        string
-	CPUUsage        float64 // CPU percentage (instantaneous, last cycle)
-	CPUUsageAverage float64 // CPU percentage average since process start
-	CPUUsageEMA     float64 // CPU percentage exponential moving average (α=0.3)
-	MemoryUsage     uint64  // Memory in bytes (PSS when available, RSS fallback)
-	ProcessCount    int     // Number of processes
-	IsLimited       bool    // Whether user has CPU limits applied
-	IOReadBytes     uint64  // Total bytes read from block devices
-	IOWriteBytes    uint64  // Total bytes written to block devices
-	IOReadOps       uint64  // Total read-family syscalls reported by /proc/PID/io syscr
-	IOWriteOps      uint64  // Total write-family syscalls reported by /proc/PID/io syscw
+	UID               int
+	Username          string
+	CPUUsage          float64 // CPU percentage (instantaneous, last cycle)
+	CPUUsageAverage   float64 // CPU percentage average since process start
+	CPUUsageEMA       float64 // CPU percentage exponential moving average (α=0.3)
+	MemoryUsage       uint64  // Memory in bytes (PSS when available, RSS fallback)
+	ProcessCount      int     // Number of processes
+	EligibleForCPU    bool    // Whether CPU policy may limit the user
+	EligibleForRAM    bool    // Whether RAM policy may limit the user
+	EligibleForIO     bool    // Whether I/O policy may limit the user
+	CPULimitRequested bool    // Whether the control cycle currently requests a CPU limit
+	CPULimitActive    bool    // Whether CPU cgroup enforcement is observed as active
+	RAMLimitRequested bool    // Whether the control cycle currently requests a RAM limit
+	RAMLimitActive    bool    // Whether RAM cgroup enforcement is observed as active
+	IOLimitRequested  bool    // Whether the control cycle currently requests an I/O limit
+	IOLimitActive     bool    // Whether I/O cgroup enforcement is observed as active
+	IOReadBytes       uint64  // Total bytes read from block devices
+	IOWriteBytes      uint64  // Total bytes written to block devices
+	IOReadOps         uint64  // Total read-family syscalls reported by /proc/PID/io syscr
+	IOWriteOps        uint64  // Total write-family syscalls reported by /proc/PID/io syscw
 }
 
 // procCache holds CPU timing data for all PIDs.
@@ -395,15 +403,14 @@ func (c *Collector) GetAllUsersCPUUsage() float64 {
 	return totalUsage
 }
 
-// GetLimitedUsersCPUUsage restituisce l'uso CPU totale solo degli utenti che passano i filtri.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+// GetLimitedUsersCPUUsage returns CPU usage from users eligible for CPU limiting.
 func (c *Collector) GetLimitedUsersCPUUsage() float64 {
 	var totalUsage float64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
+	// Reuse the detailed snapshot and filter it by CPU eligibility.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
-		if metrics.IsLimited {
+		if metrics.EligibleForCPU {
 			totalUsage += metrics.CPUUsage
 		}
 	}
@@ -425,15 +432,13 @@ func (c *Collector) GetAllUsers() []int {
 	return users
 }
 
-// GetLimitedUsers restituisce la lista degli UID che passano i filtri per i limiti CPU.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
-// Usato per metriche "limited_users" (sottoinsieme limitabile)
+// GetLimitedUsers returns the UIDs eligible for CPU limiting.
 func (c *Collector) GetLimitedUsers() []int {
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
+	// Reuse the detailed snapshot and filter it by CPU eligibility.
 	allMetrics := c.GetAllUserMetrics()
 	users := make([]int, 0, len(allMetrics))
 	for uid, metrics := range allMetrics {
-		if metrics.IsLimited {
+		if metrics.EligibleForCPU {
 			users = append(users, uid)
 		}
 	}
@@ -1086,6 +1091,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
+		eligibility := c.getConfig().EvaluateUserEligibility(username)
 
 		cpuUsage := data.cpuUsage
 
@@ -1100,7 +1106,9 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 			CPUUsageEMA:     ema,
 			MemoryUsage:     data.memoryUsage,
 			ProcessCount:    data.processCount,
-			IsLimited:       c.getConfig().IsUserWhitelisted(username),
+			EligibleForCPU:  eligibility.EligibleForCPU,
+			EligibleForRAM:  eligibility.EligibleForRAM,
+			EligibleForIO:   eligibility.EligibleForIO,
 			IOReadBytes:     data.ioReadBytes,
 			IOWriteBytes:    data.ioWriteBytes,
 			IOReadOps:       data.ioReadOps,
@@ -1179,6 +1187,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
 		ema := c.calculateEMA(uid, data.cpuUsage)
+		eligibility := c.getConfig().EvaluateUserEligibility(username)
 		userMetrics[uid] = &UserMetrics{
 			UID:             uid,
 			Username:        username,
@@ -1187,7 +1196,9 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 			CPUUsageEMA:     ema,
 			MemoryUsage:     data.memoryUsage,
 			ProcessCount:    data.processCount,
-			IsLimited:       c.getConfig().IsUserWhitelisted(username),
+			EligibleForCPU:  eligibility.EligibleForCPU,
+			EligibleForRAM:  eligibility.EligibleForRAM,
+			EligibleForIO:   eligibility.EligibleForIO,
 			IOReadBytes:     data.ioReadBytes,
 			IOWriteBytes:    data.ioWriteBytes,
 			IOReadOps:       data.ioReadOps,
@@ -1229,15 +1240,14 @@ func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 	return totalMemory
 }
 
-// GetLimitedUsersMemoryUsage restituisce la memoria totale usata solo dagli utenti che passano i filtri.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
+// GetLimitedUsersMemoryUsage returns memory usage from users eligible for CPU limiting.
 func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
 	var totalMemory uint64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
+	// Reuse the detailed snapshot and filter it by CPU eligibility.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
-		if metrics.IsLimited {
+		if metrics.EligibleForCPU {
 			totalMemory += metrics.MemoryUsage
 		}
 	}

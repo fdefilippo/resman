@@ -1177,6 +1177,24 @@ func (c *Config) IsUserWhitelisted(username string) bool {
 	return c.isUserIncludedLocked(username) && !c.isUserExcludedLocked(username)
 }
 
+// UserEligibility describes whether one user may be limited for each resource.
+type UserEligibility struct {
+	EligibleForCPU bool
+	EligibleForRAM bool
+	EligibleForIO  bool
+}
+
+// EvaluateUserEligibility evaluates every resource policy from one config snapshot.
+func (c *Config) EvaluateUserEligibility(username string) UserEligibility {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return UserEligibility{
+		EligibleForCPU: c.isUserIncludedLocked(username) && !c.isUserExcludedLocked(username),
+		EligibleForRAM: c.isUserIncludedForRAMLocked(username) && !c.isUserExcludedForRAMLocked(username),
+		EligibleForIO:  c.isUserIncludedForIOLocked(username) && !c.isUserExcludedForIOLocked(username),
+	}
+}
+
 // IsProcessExcluded verifica se un processo deve essere escluso dai limiti
 // I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
 func (c *Config) IsProcessExcluded(processName string) bool {
@@ -1191,8 +1209,14 @@ func (c *Config) IsProcessExcluded(processName string) bool {
 	return false
 }
 
-// IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
+// IsUserIncludedForRAM reports whether a user matches the RAM include policy.
 func (c *Config) IsUserIncludedForRAM(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForRAMLocked(username)
+}
+
+func (c *Config) isUserIncludedForRAMLocked(username string) bool {
 	if len(c.RAMUserIncludeList) == 0 {
 		return true
 	}
@@ -1204,8 +1228,14 @@ func (c *Config) IsUserIncludedForRAM(username string) bool {
 	return false
 }
 
-// IsUserExcludedForRAM verifica se un utente è escluso dai limiti RAM (regex support)
+// IsUserExcludedForRAM reports whether a user matches the RAM exclude policy.
 func (c *Config) IsUserExcludedForRAM(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserExcludedForRAMLocked(username)
+}
+
+func (c *Config) isUserExcludedForRAMLocked(username string) bool {
 	if len(c.RAMUserExcludeList) == 0 {
 		return false
 	}
@@ -1217,14 +1247,22 @@ func (c *Config) IsUserExcludedForRAM(username string) bool {
 	return false
 }
 
-// IsUserWhitelistedForRAM verifica se un utente può essere limitato per RAM
+// IsUserWhitelistedForRAM reports whether a user is eligible for RAM limiting.
 func (c *Config) IsUserWhitelistedForRAM(username string) bool {
-	return c.IsUserIncludedForRAM(username) && !c.IsUserExcludedForRAM(username)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForRAMLocked(username) && !c.isUserExcludedForRAMLocked(username)
 }
 
-// IsUserIncludedForIO verifica se l'utente è nella IO include list.
-// Se la lista è vuota/nil, tutti sono inclusi.
+// IsUserIncludedForIO reports whether a user matches the I/O include policy.
+// An empty include list includes every user.
 func (c *Config) IsUserIncludedForIO(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForIOLocked(username)
+}
+
+func (c *Config) isUserIncludedForIOLocked(username string) bool {
 	if len(c.IOUserIncludeList) == 0 {
 		return true
 	}
@@ -1236,9 +1274,15 @@ func (c *Config) IsUserIncludedForIO(username string) bool {
 	return false
 }
 
-// IsUserExcludedForIO verifica se l'utente è nella IO exclude list.
-// Se la lista è vuota/nil, nessuno è escluso.
+// IsUserExcludedForIO reports whether a user matches the I/O exclude policy.
+// An empty exclude list excludes no user.
 func (c *Config) IsUserExcludedForIO(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserExcludedForIOLocked(username)
+}
+
+func (c *Config) isUserExcludedForIOLocked(username string) bool {
 	if len(c.IOUserExcludeList) == 0 {
 		return false
 	}
@@ -1250,9 +1294,11 @@ func (c *Config) IsUserExcludedForIO(username string) bool {
 	return false
 }
 
-// IsUserWhitelistedForIO verifica se un utente può essere limitato per IO
+// IsUserWhitelistedForIO reports whether a user is eligible for I/O limiting.
 func (c *Config) IsUserWhitelistedForIO(username string) bool {
-	return c.IsUserIncludedForIO(username) && !c.IsUserExcludedForIO(username)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForIOLocked(username) && !c.isUserExcludedForIOLocked(username)
 }
 
 // SetUserExcludeList imposta la lista di utenti da escludere e salva su file

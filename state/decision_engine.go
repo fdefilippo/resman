@@ -38,19 +38,19 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	ignoreSystemLoad := cfg.GetIgnoreSystemLoad()
 	cpuThresholdDuration := cfg.GetCPUThresholdDuration()
 
-	// Decisioni possibili
+	// Supported decisions.
 	const (
 		DecisionActivate   = "ACTIVATE_LIMITS"
 		DecisionMaintain   = "MAINTAIN_CURRENT_STATE"
 		DecisionDeactivate = "DEACTIVATE_LIMITS"
 	)
 
-	// Calcola se ogni risorsa supera la soglia
-	cpuExceeded := metrics.LimitedUsersCPUUsage >= float64(cpuThreshold)
+	// Evaluate activation thresholds independently for every resource.
+	cpuExceeded := metrics.CPUEligibleCPUUsage >= float64(cpuThreshold)
 
 	ramExceeded := false
 	if cfg.RAMEnabled && cfg.RAMThreshold > 0 && metrics.TotalMemoryMB > 0 {
-		limitedRAMMB := float64(metrics.LimitedUsersRAMUsageBytes) / (1024 * 1024)
+		limitedRAMMB := float64(metrics.RAMEligibleUsageBytes) / (1024 * 1024)
 		ramPercent := (limitedRAMMB / metrics.TotalMemoryMB) * 100
 		ramExceeded = ramPercent >= float64(cfg.RAMThreshold)
 	}
@@ -61,15 +61,15 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if cfg.IOEnabled && cfg.IOThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
 		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
 		if err == nil && writeLimit > 0 {
-			totalWriteLimit := writeLimit * uint64(metrics.LimitedUsersCount)
+			totalWriteLimit := writeLimit * uint64(metrics.IOEligibleUsersCount)
 			if totalWriteLimit > 0 {
-				ioPercent = float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
+				ioPercent = float64(metrics.IOEligibleWriteBytes) / float64(totalWriteLimit) * 100
 				ioExceeded = ioPercent >= float64(cfg.IOThreshold)
 			}
 		}
 	}
 
-	// Applica IO threshold duration se configurata
+	// Apply the I/O threshold duration when configured.
 	if ioThresholdDuration > 0 && ioExceeded {
 		ioTrackerReady := m.ioThresholdTracker.ShouldActivateLimits(
 			ioPercent,
@@ -77,22 +77,22 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			time.Duration(ioThresholdDuration)*time.Second,
 		)
 		if !ioTrackerReady {
-			// IO sopra soglia ma non ancora per abbastanza tempo
+			// I/O is above threshold but has not remained there long enough.
 			ioExceeded = false
 		}
 	} else {
-		// IO sotto soglia o duration disabilitata: reset tracker
+		// Reset when I/O is below threshold or the duration guard is disabled.
 		m.ioThresholdTracker.Reset()
 	}
 
 	anyExceeded := cpuExceeded || ramExceeded || ioExceeded
 
-	// Calcola se ogni risorsa è sotto la soglia di rilascio
-	cpuBelow := metrics.LimitedUsersCPUUsage < float64(cpuReleaseThreshold)
+	// Evaluate release thresholds independently for every resource.
+	cpuBelow := metrics.CPUEligibleCPUUsage < float64(cpuReleaseThreshold)
 
 	ramBelow := true
 	if cfg.RAMEnabled && cfg.RAMReleaseThreshold > 0 && metrics.TotalMemoryMB > 0 {
-		limitedRAMMB := float64(metrics.LimitedUsersRAMUsageBytes) / (1024 * 1024)
+		limitedRAMMB := float64(metrics.RAMEligibleUsageBytes) / (1024 * 1024)
 		ramPercent := (limitedRAMMB / metrics.TotalMemoryMB) * 100
 		ramBelow = ramPercent < float64(cfg.RAMReleaseThreshold)
 	}
@@ -101,9 +101,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if cfg.IOEnabled && cfg.IOReleaseThreshold > 0 && cfg.IOWriteBPS != "" && cfg.IOWriteBPS != "max" {
 		writeLimit, err := config.ParseRAMQuota(cfg.IOWriteBPS)
 		if err == nil && writeLimit > 0 {
-			totalWriteLimit := writeLimit * uint64(metrics.LimitedUsersCount)
+			totalWriteLimit := writeLimit * uint64(metrics.IOEligibleUsersCount)
 			if totalWriteLimit > 0 {
-				ioPercent := float64(metrics.LimitedUsersIOWriteBytes) / float64(totalWriteLimit) * 100
+				ioPercent := float64(metrics.IOEligibleWriteBytes) / float64(totalWriteLimit) * 100
 				ioBelow = ioPercent < float64(cfg.IOReleaseThreshold)
 			}
 		}
@@ -111,14 +111,14 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	allBelow := cpuBelow && ramBelow && ioBelow
 
-	// Se i limiti sono attivi, controlliamo se possiamo disattivarli
+	// Active limits may be released only when all resource conditions allow it.
 	if limitsActive {
 		// Verifica il tempo minimo di attivazione
 		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
 			return DecisionMaintain, "Limits active, waiting for minimum activation time"
 		}
 
-		// Disattiva solo quando TUTTE le risorse sono sotto le soglie di rilascio
+		// Deactivate only when every resource is below its release threshold.
 		if allBelow {
 			if m.stabilityTracker == nil {
 				m.stabilityTracker = newUserStabilityTracker()
@@ -165,7 +165,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		return DecisionMaintain, "Limits active, at least one resource still above release threshold"
 	}
 
-	// Se i limiti non sono attivi, attiva se QUALSIASI risorsa supera la soglia
+	// When inactive, activate if any enabled resource exceeds its threshold.
 	if anyExceeded {
 		// Verifica che ci siano abbastanza core per il sistema
 		if metrics.TotalCores <= minSystemCores {
@@ -184,11 +184,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			return DecisionMaintain, "Threshold exceeded but system already under load from other factors"
 		}
 
-		// Verifica time window (solo per CPU, se configurata)
-		// Blocca l'attivazione solo se CPU è l'unica risorsa sopra soglia
+		// Apply the CPU duration guard only when CPU is the sole exceeded resource.
 		if cpuExceeded && cpuThresholdDuration > 0 {
 			shouldActivate := m.thresholdTracker.ShouldActivateLimits(
-				metrics.LimitedUsersCPUUsage,
+				metrics.CPUEligibleCPUUsage,
 				float64(cpuThreshold),
 				time.Duration(cpuThresholdDuration)*time.Second,
 			)
@@ -199,7 +198,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				return DecisionMaintain, fmt.Sprintf(
 					"CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
 					remaining.Round(time.Second),
-					metrics.LimitedUsersCPUUsage, cpuThreshold,
+					metrics.CPUEligibleCPUUsage, cpuThreshold,
 				)
 			}
 		}
@@ -217,7 +216,7 @@ func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool,
 	cfg := m.GetConfig()
 	reasons := []string{}
 	if cpuExceeded {
-		reasons = append(reasons, fmt.Sprintf("CPU %.1f%% >= %d%%", metrics.LimitedUsersCPUUsage, cpuThreshold))
+		reasons = append(reasons, fmt.Sprintf("CPU %.1f%% >= %d%%", metrics.CPUEligibleCPUUsage, cpuThreshold))
 	}
 	if ramExceeded {
 		reasons = append(reasons, fmt.Sprintf("RAM >= %d%%", cfg.RAMThreshold))
@@ -231,7 +230,7 @@ func (m *Manager) buildActivateReason(cpuExceeded, ramExceeded, ioExceeded bool,
 func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metrics *SystemMetrics, cpuReleaseThreshold int) string {
 	return fmt.Sprintf(
 		"All resources below release thresholds (CPU %.1f%% < %d%%)",
-		metrics.LimitedUsersCPUUsage, cpuReleaseThreshold,
+		metrics.CPUEligibleCPUUsage, cpuReleaseThreshold,
 	)
 }
 

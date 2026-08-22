@@ -38,7 +38,7 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		UID:             uid,
 		Username:        username,
 		CPUUsage:        metrics.UserCPUUsage[uid],
-		LimitedUsers:    metrics.LimitedUsersCount,
+		LimitedUsers:    metrics.CPUEligibleUsersCount,
 		SharedCgroup:    sharedCgroup,
 		Timestamp:       time.Now().UTC(),
 		ServerRole:      cfg.ServerRole,

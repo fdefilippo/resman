@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,6 +111,57 @@ func TestNewDatabaseManagerMigratesLegacyAutoVacuumDatabase(t *testing.T) {
 	}
 }
 
+func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-metrics.db")
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	if _, err := legacyDB.Exec(`
+		CREATE TABLE user_metrics (
+			id INTEGER PRIMARY KEY,
+			uid INTEGER NOT NULL,
+			username TEXT NOT NULL,
+			is_limited BOOLEAN DEFAULT FALSE
+		);
+		INSERT INTO user_metrics(uid, username, is_limited) VALUES (1000, 'ambiguous', 1);
+	`); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to create legacy metrics database: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("legacy database close error: %v", err)
+	}
+
+	manager, err := NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("NewDatabaseManager() returned a manager for an incompatible schema")
+	}
+	if err == nil {
+		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
+	}
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 2"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
+		}
+	}
+
+	legacyDB, err = sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("reopen legacy database error: %v", err)
+	}
+	defer func() { _ = legacyDB.Close() }()
+	var username string
+	var limited bool
+	if err := legacyDB.QueryRow("SELECT username, is_limited FROM user_metrics WHERE uid = 1000").Scan(&username, &limited); err != nil {
+		t.Fatalf("legacy row was not preserved: %v", err)
+	}
+	if username != "ambiguous" || !limited {
+		t.Fatalf("legacy row changed after rejection: username=%q is_limited=%t", username, limited)
+	}
+}
+
 func TestNewDatabaseManagerUsesWALAndBusyTimeout(t *testing.T) {
 	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
 	if err != nil {
@@ -147,15 +199,23 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 	// Scrivi metriche
 	now := time.Now()
 	record := &UserMetricsRecord{
-		UID:              1000,
-		Username:         "testuser",
-		CPUUsagePercent:  45.5,
-		MemoryUsageBytes: 524288000,
-		ProcessCount:     15,
-		CgroupPath:       "/sys/fs/cgroup/user.slice/user-1000.slice",
-		CPUQuota:         "50000 100000",
-		IsLimited:        true,
-		Timestamp:        now,
+		UID:               1000,
+		Username:          "testuser",
+		CPUUsagePercent:   45.5,
+		MemoryUsageBytes:  524288000,
+		ProcessCount:      15,
+		CgroupPath:        "/sys/fs/cgroup/user.slice/user-1000.slice",
+		CPUQuota:          "50000 100000",
+		EligibleForCPU:    true,
+		EligibleForRAM:    false,
+		EligibleForIO:     true,
+		CPULimitRequested: true,
+		CPULimitActive:    false,
+		RAMLimitRequested: true,
+		RAMLimitActive:    true,
+		IOLimitRequested:  true,
+		IOLimitActive:     false,
+		Timestamp:         now,
 	}
 
 	err = manager.WriteUserMetrics(record)
@@ -177,6 +237,14 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 
 	if records[0].CPUUsagePercent != 45.5 {
 		t.Errorf("Expected CPU usage 45.5, got %f", records[0].CPUUsagePercent)
+	}
+	if !records[0].EligibleForCPU || records[0].EligibleForRAM || !records[0].EligibleForIO {
+		t.Errorf("eligibility state was not preserved: %+v", records[0])
+	}
+	if !records[0].CPULimitRequested || records[0].CPULimitActive ||
+		!records[0].RAMLimitRequested || !records[0].RAMLimitActive ||
+		!records[0].IOLimitRequested || records[0].IOLimitActive {
+		t.Errorf("intent/observed state was not preserved: %+v", records[0])
 	}
 }
 
@@ -417,7 +485,7 @@ func TestGetUserSummary(t *testing.T) {
 			CPUUsagePercent:  float64(i * 10),
 			MemoryUsageBytes: int64(500000000 + i*10000000),
 			ProcessCount:     10 + i,
-			IsLimited:        i%2 == 0,
+			CPULimitActive:   i%2 == 0,
 			Timestamp:        now.Add(time.Duration(i) * time.Minute),
 		}
 		if err := manager.WriteUserMetrics(record); err != nil {
@@ -449,6 +517,9 @@ func TestGetUserSummary(t *testing.T) {
 	// Memory avg dovrebbe essere 545000000 (media di 500M, 510M, ... 590M)
 	if summary.MemoryAvg != 545000000.0 {
 		t.Errorf("Expected Memory avg 545000000.0, got %f", summary.MemoryAvg)
+	}
+	if summary.CPULimitActiveTimePercent != 50 {
+		t.Errorf("CPU limit active time = %f, want 50", summary.CPULimitActiveTimePercent)
 	}
 }
 

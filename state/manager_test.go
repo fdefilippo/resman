@@ -271,14 +271,14 @@ func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
 		{
 			name: "confirmed activation",
 			userMetrics: map[int]*metrics.UserMetrics{
-				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, IsLimited: true},
+				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, EligibleForCPU: true},
 			},
 			wantActivated: 1,
 		},
 		{
 			name: "failed activation",
 			userMetrics: map[int]*metrics.UserMetrics{
-				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, IsLimited: true},
+				1000: {UID: 1000, Username: "user1000", CPUUsage: 90, CPUUsageEMA: 90, EligibleForCPU: true},
 			},
 			moveErr:    errors.New("move rejected"),
 			wantErr:    true,
@@ -289,6 +289,7 @@ func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.DefaultConfig()
+			cfg.UserIncludeList = []string{".*"}
 			cfg.CPUThreshold = 1
 			cfg.CPUThresholdDuration = 0
 			cfg.IgnoreSystemLoad = true
@@ -460,12 +461,13 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 		SystemLoad:    2.5,
 		UserMetrics: map[int]*metrics.UserMetrics{
 			1001: {
-				UID:          1001,
-				Username:     "transaction-test",
-				CPUUsage:     25,
-				MemoryUsage:  4096,
-				ProcessCount: 2,
-				IsLimited:    true,
+				UID:            1001,
+				Username:       "transaction-test",
+				CPUUsage:       25,
+				MemoryUsage:    4096,
+				ProcessCount:   2,
+				EligibleForCPU: true,
+				CPULimitActive: true,
 			},
 		},
 	}
@@ -568,9 +570,9 @@ func TestMakeDecision(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		LimitedUsersCPUUsage: 80.0, // Above threshold
-		TotalCores:           4,
-		SystemUnderLoad:      false,
+		CPUEligibleCPUUsage: 80.0, // Above threshold
+		TotalCores:          4,
+		SystemUnderLoad:     false,
 	}
 
 	decision, reason := manager.makeDecision(metrics)
@@ -581,6 +583,196 @@ func TestMakeDecision(t *testing.T) {
 	if reason == "" {
 		t.Error("makeDecision() should return a reason")
 	}
+}
+
+func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector := &mockMetricsCollector{allUserMetrics: map[int]*metrics.UserMetrics{
+		1000: {
+			UID:          1000,
+			Username:     "alice",
+			CPUUsage:     42,
+			MemoryUsage:  4096,
+			IOWriteBytes: 8192,
+		},
+	}}
+	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sample, err := manager.collectSystemMetricsForRefresh()
+	if err != nil {
+		t.Fatalf("collectSystemMetricsForRefresh() error: %v", err)
+	}
+	if sample.CPUEligibleUsersCount != 0 || sample.CPUEligibleCPUUsage != 0 {
+		t.Fatalf("CPU aggregate = count %d usage %.1f, want disabled by empty CPU include list",
+			sample.CPUEligibleUsersCount, sample.CPUEligibleCPUUsage)
+	}
+	if sample.RAMEligibleUsersCount != 1 || sample.RAMEligibleUsageBytes != 4096 {
+		t.Fatalf("RAM aggregate = count %d bytes %d, want 1 and 4096",
+			sample.RAMEligibleUsersCount, sample.RAMEligibleUsageBytes)
+	}
+	if sample.IOEligibleUsersCount != 1 {
+		t.Fatalf("IO eligible count = %d, want 1", sample.IOEligibleUsersCount)
+	}
+	user := sample.UserMetrics[1000]
+	if user == nil || user.EligibleForCPU || !user.EligibleForRAM || !user.EligibleForIO {
+		t.Fatalf("explicit user eligibility = %+v, want CPU=false RAM=true IO=true", user)
+	}
+}
+
+func TestMakeDecisionUsesIndependentResourceAggregates(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*config.Config)
+		metrics   *SystemMetrics
+	}{
+		{
+			name: "RAM can activate with no CPU-eligible users",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+				cfg.RAMThreshold = 50
+			},
+			metrics: &SystemMetrics{
+				TotalCores:            4,
+				TotalMemoryMB:         100,
+				RAMEligibleUsageBytes: 60 * 1024 * 1024,
+			},
+		},
+		{
+			name: "IO can activate with no CPU-eligible users",
+			configure: func(cfg *config.Config) {
+				cfg.IOEnabled = true
+				cfg.IOThreshold = 50
+				cfg.IOWriteBPS = "100M"
+				cfg.IOThresholdDuration = 0
+			},
+			metrics: &SystemMetrics{
+				TotalCores:           4,
+				IOEligibleUsersCount: 1,
+				IOEligibleWriteBytes: 60 * 1024 * 1024,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.CPUThresholdDuration = 0
+			tt.configure(cfg)
+			manager := &Manager{
+				cfg:                cfg,
+				thresholdTracker:   &ThresholdTracker{},
+				ioThresholdTracker: &ThresholdTracker{},
+			}
+			decision, reason := manager.makeDecision(tt.metrics)
+			if decision != "ACTIVATE_LIMITS" {
+				t.Fatalf("makeDecision() = %s (%s), want ACTIVATE_LIMITS", decision, reason)
+			}
+		})
+	}
+}
+
+func TestReconcileUserResourceLimitsUsesIndependentEligibility(t *testing.T) {
+	tests := []struct {
+		name         string
+		eligibility  config.UserEligibility
+		wantRAMCalls int
+		wantIOCalls  int
+	}{
+		{
+			name:         "RAM eligibility does not require CPU eligibility",
+			eligibility:  config.UserEligibility{EligibleForRAM: true},
+			wantRAMCalls: 1,
+		},
+		{
+			name:        "IO eligibility does not require CPU eligibility",
+			eligibility: config.UserEligibility{EligibleForIO: true},
+			wantIOCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.RAMEnabled = true
+			cfg.RAMQuotaPerUser = "1G"
+			cfg.IOEnabled = true
+			cgroups := &deactivateCgroupManager{}
+			manager, err := NewManager(
+				cfg,
+				&mockMetricsCollector{usernames: map[int]string{1000: "alice"}},
+				cgroups,
+				&mockPrometheusExporter{},
+			)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.reconcileUserResourceLimits(1000, cfg, tt.eligibility)
+			if got := len(cgroups.applyRAMLimitCalls); got != tt.wantRAMCalls {
+				t.Fatalf("RAM apply calls = %d, want %d", got, tt.wantRAMCalls)
+			}
+			if got := len(cgroups.applyIOLimitCalls); got != tt.wantIOCalls {
+				t.Fatalf("IO apply calls = %d, want %d", got, tt.wantIOCalls)
+			}
+		})
+	}
+}
+
+func TestUserLimitStateSeparatesRequestedFromObservedEnforcement(t *testing.T) {
+	t.Run("CPU move failure", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.UserIncludeList = []string{".*"}
+		cfg.RAMEnabled = true
+		cfg.RAMQuotaPerUser = "1G"
+		manager, err := NewManager(
+			cfg,
+			&mockMetricsCollector{usernames: map[int]string{1000: "alice"}},
+			&moveResultCgroupManager{moveErr: errors.New("move rejected")},
+			&mockPrometheusExporter{},
+		)
+		if err != nil {
+			t.Fatalf("NewManager() error: %v", err)
+		}
+		manager.sharedCgroupPath = filepath.Join(t.TempDir(), "shared")
+		err = manager.activateLimits(&SystemMetrics{
+			TotalCores:       4,
+			UserCPUUsage:     map[int]float64{1000: 50},
+			CPUEligibleUsers: []int{1000},
+			UserMetrics: map[int]*metrics.UserMetrics{1000: {
+				UID: 1000, Username: "alice", EligibleForCPU: true, EligibleForRAM: true,
+			}},
+		})
+		if err == nil {
+			t.Fatal("activateLimits() expected a move error")
+		}
+		state := manager.GetUserLimitState(1000, "alice")
+		if !state.CPULimitRequested || state.CPULimitActive ||
+			!state.RAMLimitRequested || state.RAMLimitActive {
+			t.Fatalf("state after failed move = %+v, want CPU and RAM requested but inactive", state)
+		}
+	})
+
+	t.Run("RAM application failure", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.RAMEnabled = true
+		cfg.RAMQuotaPerUser = "1G"
+		manager, err := NewManager(
+			cfg,
+			&mockMetricsCollector{usernames: map[int]string{1000: "alice"}},
+			&flakyResourceCgroupManager{ramFailures: 1},
+			&mockPrometheusExporter{},
+		)
+		if err != nil {
+			t.Fatalf("NewManager() error: %v", err)
+		}
+		manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true})
+		state := manager.GetUserLimitState(1000, "alice")
+		if !state.RAMLimitRequested || state.RAMLimitActive {
+			t.Fatalf("RAM state = %+v, want requested=true active=false", state)
+		}
+	})
 }
 
 func TestMakeDecisionDeactivate(t *testing.T) {
@@ -596,8 +788,8 @@ func TestMakeDecisionDeactivate(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		LimitedUsersCPUUsage: 30.0, // Below release threshold
-		SystemUnderLoad:      false,
+		CPUEligibleCPUUsage: 30.0, // Below release threshold
+		SystemUnderLoad:     false,
 	}
 
 	decision, reason := manager.makeDecision(metrics)
@@ -623,8 +815,8 @@ func TestMakeDecisionMaintain(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		LimitedUsersCPUUsage: 50.0, // Between thresholds
-		SystemUnderLoad:      false,
+		CPUEligibleCPUUsage: 50.0, // Between thresholds
+		SystemUnderLoad:     false,
 	}
 
 	decision, _ := manager.makeDecision(metrics)
@@ -697,8 +889,8 @@ func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
 		metricsCollector:   collector,
 	}
 	systemMetrics := &SystemMetrics{
-		LimitedUsersCPUUsage: 30,
-		SystemUnderLoad:      false,
+		CPUEligibleCPUUsage: 30,
+		SystemUnderLoad:     false,
 	}
 
 	if decision, _ := manager.makeDecision(systemMetrics); decision != "MAINTAIN_CURRENT_STATE" {
@@ -1149,7 +1341,7 @@ func TestDeactivateLimitsRemovesResourcesAppliedBeforeReload(t *testing.T) {
 	manager.limitsActive = true
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
-	manager.applyUserResourceLimits(1000, cfg)
+	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
 
 	manager.UpdateConfig(config.DefaultConfig())
 	if err := manager.deactivateLimits(); err != nil {
@@ -1185,9 +1377,12 @@ func TestReleaseIdleUsersReappliesRAMAndIOLimits(t *testing.T) {
 	manager.limitsActive = true
 	manager.sharedCgroupPath = sharedPath
 	metrics := &SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  map[int]float64{1000: 10},
-		EligibleUsers: []int{1000},
+		TotalCores:   4,
+		UserCPUUsage: map[int]float64{1000: 10},
+		UserMetrics: map[int]*metrics.UserMetrics{1000: {
+			UID: 1000, CPUUsageEMA: 10, EligibleForCPU: true, EligibleForRAM: true, EligibleForIO: true,
+		}},
+		CPUEligibleUsers: []int{1000},
 	}
 
 	if err := manager.releaseIdleUsers(metrics); err != nil {
@@ -1233,10 +1428,10 @@ func TestReleaseIdleUsersReaddsUsersWithoutPerUserSettleDelay(t *testing.T) {
 
 	startedAt := time.Now()
 	if err := manager.releaseIdleUsers(&SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  userCPUUsage,
-		UserMetrics:   userMetrics,
-		EligibleUsers: eligibleUsers,
+		TotalCores:       4,
+		UserCPUUsage:     userCPUUsage,
+		UserMetrics:      userMetrics,
+		CPUEligibleUsers: eligibleUsers,
 	}); err != nil {
 		t.Fatalf("releaseIdleUsers() error: %v", err)
 	}
@@ -1267,9 +1462,9 @@ func TestActivateLimitsMovesUsersWithoutPerUserSettleDelay(t *testing.T) {
 
 	startedAt := time.Now()
 	if err := manager.activateLimits(&SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  userCPUUsage,
-		EligibleUsers: eligibleUsers,
+		TotalCores:       4,
+		UserCPUUsage:     userCPUUsage,
+		CPUEligibleUsers: eligibleUsers,
 	}); err != nil {
 		t.Fatalf("activateLimits() error: %v", err)
 	}
@@ -1298,15 +1493,15 @@ func TestReleaseIdleUsersReconcilesResourceLimitsAfterReload(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now().Add(-time.Minute)
-	manager.applyUserResourceLimits(1000, cfg)
+	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
 
 	reloaded := config.DefaultConfig()
 	manager.UpdateConfig(reloaded)
 	metrics := &SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  map[int]float64{1000: 10},
-		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
-		EligibleUsers: []int{1000},
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 10},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {
 		t.Fatalf("releaseIdleUsers() error: %v", err)
@@ -1347,7 +1542,7 @@ func TestReleaseIdleUsersRetriesPartialResourceLimitApplication(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now()
-	manager.applyUserResourceLimits(1000, cfg)
+	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
 
 	initialState := manager.resourceLimits[1000]
 	if !initialState.ram || initialState.ramApplied || !initialState.io || initialState.ioApplied {
@@ -1355,10 +1550,12 @@ func TestReleaseIdleUsersRetriesPartialResourceLimitApplication(t *testing.T) {
 	}
 
 	systemMetrics := &SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  map[int]float64{1000: 10},
-		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
-		EligibleUsers: []int{1000},
+		TotalCores:   4,
+		UserCPUUsage: map[int]float64{1000: 10},
+		UserMetrics: map[int]*metrics.UserMetrics{1000: {
+			UID: 1000, CPUUsageEMA: 10, EligibleForCPU: true, EligibleForRAM: true, EligibleForIO: true,
+		}},
+		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(systemMetrics); err != nil {
 		t.Fatalf("releaseIdleUsers() error: %v", err)
@@ -1390,7 +1587,7 @@ func TestReleaseIdleUsersReleasesNewlyIneligibleUser(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now()
-	manager.applyUserResourceLimits(1000, cfg)
+	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
 
 	metrics := &SystemMetrics{
 		TotalCores:   4,
@@ -1433,10 +1630,10 @@ func TestReleaseIdleUsersUsesEMAAndPerUserHoldTime(t *testing.T) {
 	manager.userLimitedAt[1000] = time.Now().Add(-2 * time.Minute)
 
 	metrics := &SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  map[int]float64{1000: 0},
-		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 5}},
-		EligibleUsers: []int{1000},
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 0},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 5}},
+		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {
 		t.Fatalf("releaseIdleUsers(high EMA) error: %v", err)
@@ -1476,10 +1673,10 @@ func TestReleaseIdleUsersReAddDoesNotResetGlobalActivationTime(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 
 	metrics := &SystemMetrics{
-		TotalCores:    4,
-		UserCPUUsage:  map[int]float64{1000: 10},
-		UserMetrics:   map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
-		EligibleUsers: []int{1000},
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 10},
+		UserMetrics:      map[int]*metrics.UserMetrics{1000: {UID: 1000, CPUUsageEMA: 10}},
+		CPUEligibleUsers: []int{1000},
 	}
 	if err := manager.releaseIdleUsers(metrics); err != nil {
 		t.Fatalf("releaseIdleUsers() error: %v", err)
@@ -1680,8 +1877,8 @@ func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T
 
 	collector := &mockMetricsCollector{
 		allUserMetrics: map[int]*metrics.UserMetrics{
-			1000: {UID: 1000, Username: "allowed", CPUUsage: 0, IsLimited: false},
-			1001: {UID: 1001, Username: "excluded", CPUUsage: 0, IsLimited: false},
+			1000: {UID: 1000, Username: "allowed", CPUUsage: 0, EligibleForCPU: true},
+			1001: {UID: 1001, Username: "excluded", CPUUsage: 0},
 		},
 		usernames: map[int]string{1000: "allowed", 1001: "excluded"},
 	}
@@ -1793,7 +1990,7 @@ func TestPatternPolicyIsRevertedWhenClassificationDecays(t *testing.T) {
 
 	collector := &mockMetricsCollector{
 		allUserMetrics: map[int]*metrics.UserMetrics{
-			1000: {UID: 1000, Username: "user1000", IsLimited: true},
+			1000: {UID: 1000, Username: "user1000", EligibleForCPU: true},
 		},
 	}
 	cgroupManager := &deactivateCgroupManager{}

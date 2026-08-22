@@ -784,15 +784,15 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 	}
 }
 
-// UpdateUserMetrics aggiorna le metriche specifiche per utente.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+// UpdateUserMetrics updates per-user metrics using observed CPU enforcement state.
+func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, cpuLimitActive bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 	if exp == nil || exp.registry == nil {
 		return
 	}
 
 	uidStr := strconv.Itoa(uid)
 
-	// Se username è vuoto, cerca di ottenerlo (before lock to minimize hold time)
+	// Resolve an empty or numeric username before taking the exporter lock.
 	if username == "" || username == uidStr {
 		username = exp.getUsernameFromUID(uidStr)
 	}
@@ -806,29 +806,29 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	exp.mu.Lock()
 	defer exp.mu.Unlock()
 
-	// Marca utente come attivo
+	// Track the user as present in the current metrics set.
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
 	exp.activeUserMetrics[userKey] = true
 
-	// Aggiorna uso CPU dell'utente
+	// Update per-user CPU usage.
 	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(cpuUsage)
 	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(cpuUsageAverage)
 	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(cpuUsageEMA)
 
-	// Aggiorna uso memoria dell'utente (in bytes)
+	// Update per-user memory usage in bytes.
 	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(memoryUsage))
 
-	// Aggiorna numero processi dell'utente
+	// Update the per-user process count.
 	exp.userProcessCount.WithLabelValues(uidStr, username).Set(float64(processCount))
 
-	// Aggiorna stato limite
+	// Publish observed CPU enforcement state.
 	limitedValue := 0.0
-	if isLimited {
+	if cpuLimitActive {
 		limitedValue = 1.0
 	}
 	exp.userLimited.WithLabelValues(uidStr, username).Set(limitedValue)
 
-	// Aggiorna eventi memory.high breach (counter con delta)
+	// Update memory.high breach events by delta.
 	memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 	prev := exp.prevMemoryHighEvents[memoryHighKey]
 	if memoryHighEvents > prev {
@@ -859,9 +859,9 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 		WriteOps:   ioWriteOps,
 	}
 
-	// Se disponibile, aggiorna le metriche cgroup
+	// Update cgroup metrics when a path is available.
 	if cgroupPath != "" {
-		// Aggiorna quota CPU
+		// Update the CPU quota.
 		if cpuQuota != "" {
 			quota, period := parseCPUQuota(cpuQuota)
 			if quota >= 0 {
@@ -872,7 +872,7 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 			}
 		}
 
-		// Aggiorna uso memoria del cgroup (fix #6: use pre-read value, no redundant file read)
+		// Use the value read before locking to avoid redundant cgroup file I/O.
 		exp.cgroupMemoryUsage.WithLabelValues(uidStr, cgroupPath).Set(float64(cgroupMemory))
 	}
 }

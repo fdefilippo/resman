@@ -797,9 +797,10 @@ All user-specific metrics include
 and
 .B username
 labels for easy filtering and aggregation in Grafana dashboards.
-Since v1.17.0, per-user metrics also include
-.B is_limited
-label to distinguish monitored vs limited users.
+The
+.B resman_user_cpu_limited
+gauge reports observed CPU enforcement state: 1 means the user is in the
+CPU-limited cgroup, while 0 means CPU enforcement is not observed.
 .PP
 Example queries:
 .RS
@@ -814,7 +815,7 @@ Processes per user:
 .I resman_user_process_count{username="francesco"}
 .IP \(bu
 Only limited users:
-.I resman_user_cpu_usage_percent{is_limited="true"}
+.I resman_user_cpu_limited == 1
 .RE
 .SH MCP SERVER (MODEL CONTEXT PROTOCOL)
 When enabled, the daemon exposes an MCP server for AI assistant integration.

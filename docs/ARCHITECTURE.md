@@ -8,12 +8,12 @@ ResMan uses a single control cycle that runs every `POLLING_INTERVAL` seconds:
 1. collectSystemMetrics()
    ├─ Scan /proc for CPU, RAM, process counts
    ├─ Read cgroup stats (memory.events, io.stat)
-   └─ Compute aggregates for ALL USERS and LIMITED USERS
+   └─ Compute all-user and independent CPU/RAM/I/O eligibility aggregates
 
 2. makeDecision()
-   ├─ cpuExceeded  = LimitedUsersCPUUsage >= CPUThreshold
-   ├─ ramExceeded  = RAM% of limited users >= RAMThreshold
-   ├─ ioExceeded   = IO% of limited users >= IOThreshold
+   ├─ cpuExceeded  = CPUEligibleCPUUsage >= CPUThreshold
+   ├─ ramExceeded  = RAM% of RAM-eligible users >= RAMThreshold
+   ├─ ioExceeded   = IO% of I/O-eligible users >= IOThreshold
    │
    ├─ ACTIVATE if:  cpuExceeded OR ramExceeded OR ioExceeded
    ├─ DEACTIVATE if: cpuBelow AND ramBelow AND ioBelow
@@ -46,8 +46,10 @@ RAM:  RAM_USER_INCLUDE_LIST  / RAM_USER_EXCLUDE_LIST  → IsUserWhitelistedForRA
 IO:   IO_USER_INCLUDE_LIST   / IO_USER_EXCLUDE_LIST   → IsUserWhitelistedForIO()
 ```
 
-If a controller's include list is empty/nil, all users are included.
-If a controller's exclude list is empty/nil, no users are excluded.
+The empty-list contract is resource-specific: an empty CPU include list selects
+nobody (fail-safe), while empty RAM and I/O include lists select everybody. An empty
+exclude list selects nobody for every resource. Eligibility is evaluated independently;
+CPU eligibility never gates RAM or I/O eligibility.
 
 ## Prometheus Metrics
 

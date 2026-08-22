@@ -41,13 +41,14 @@ type Manager struct {
 	mu     sync.RWMutex
 	opMu   sync.Mutex
 
-	// Stato interno
+	// Internal control and observed enforcement state.
 	limitsActive      bool
 	limitsAppliedTime time.Time
-	activeUsers       map[int]bool // UID -> se limitato
+	requestedCPUUsers map[int]bool
+	activeUsers       map[int]bool // UID -> user observed in the CPU-limited cgroup
 	userLimitedAt     map[int]time.Time
 	resourceLimits    map[int]userResourceLimitState
-	sharedCgroupPath  string // Percorso del cgroup condiviso
+	sharedCgroupPath  string // Shared CPU cgroup path
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -63,7 +64,7 @@ type Manager struct {
 	patternDetector    *PatternDetector
 	policyEngine       *PolicyEngine
 
-	// Cache per le metriche (per performance)
+	// Cached metrics state.
 	metricsCache     map[string]interface{}
 	metricsCacheTime map[string]time.Time
 
@@ -87,18 +88,31 @@ type userResourceLimitState struct {
 	ioApplied  bool
 }
 
+// UserLimitState separates policy eligibility, control intent, and observed enforcement.
+type UserLimitState struct {
+	EligibleForCPU    bool
+	EligibleForRAM    bool
+	EligibleForIO     bool
+	CPULimitRequested bool
+	CPULimitActive    bool
+	RAMLimitRequested bool
+	RAMLimitActive    bool
+	IOLimitRequested  bool
+	IOLimitActive     bool
+}
+
 // MetricsCollector defines the system metrics boundary used by the state manager.
 type MetricsCollector interface {
 	GetTotalCores() int
 	GetTotalCPUUsage() float64
 	GetUserCPUUsage(uid int) float64
 
-	// ALL USERS metrics (tutti gli utenti non-system)
+	// All non-system users.
 	GetAllUsers() []int
 	GetAllUsersCPUUsage() float64
 	GetAllUsersMemoryUsage() uint64
 
-	// LIMITED USERS metrics (solo utenti che passano i filtri)
+	// Users eligible for CPU limiting.
 	GetLimitedUsers() []int
 	GetLimitedUsersCPUUsage() float64
 	GetLimitedUsersMemoryUsage() uint64
@@ -152,7 +166,7 @@ type CgroupManager interface {
 // PrometheusExporter defines the Prometheus boundary used by the state manager.
 type PrometheusExporter interface {
 	UpdateMetrics(metrics map[string]float64)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
+	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, cpuLimitActive bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
@@ -185,6 +199,7 @@ func NewManager(
 		logger:             logger,
 		limitsActive:       false,
 		limitsAppliedTime:  time.Time{},
+		requestedCPUUsers:  make(map[int]bool),
 		activeUsers:        make(map[int]bool),
 		userLimitedAt:      make(map[int]time.Time),
 		resourceLimits:     make(map[int]userResourceLimitState),
@@ -218,19 +233,7 @@ func NewManager(
 	return mgr, nil
 }
 
-// RunControlCycle esegue un singolo ciclo di controllo.
-// SystemMetrics contiene tutte le metriche raccolte in un ciclo.
-// collectSystemMetrics raccoglie tutte le metriche di sistema necessarie.
-// makeDecision prende la decisione se attivare, mantenere o disattivare i limiti.
-// buildActivateReason costruisce la ragione di attivazione basata sulle risorse che superano la soglia.
-// buildDeactivateReason costruisce la ragione di disattivazione.
-// executeDecision esegue l'azione corrispondente alla decisione presa.
-// e riaggiunge utenti che hanno superato la soglia di idle dopo essere stati rilasciati.
-// activateLimits attiva i limiti di CPU per gli utenti attivi usando pesi proporzionali.
-// deactivateLimits rimuove i limiti di CPU da tutti gli utenti.
-// updatePrometheusMetrics aggiorna le metriche per Prometheus.
-// writeDatabaseMetrics scrive le metriche nel database SQLite (se abilitato)
-// getUsername restituisce il nome utente dato l'UID
+// getUsername resolves a UID through the shared metrics collector.
 func (m *Manager) getUsername(uid int) string {
 	if m.metricsCollector != nil {
 		return m.metricsCollector.GetUsernameFromUID(uid)
@@ -238,15 +241,14 @@ func (m *Manager) getUsername(uid int) string {
 	return strconv.Itoa(uid)
 }
 
-// shouldApplyRAMLimits verifica se i limiti RAM dovrebbero essere applicati a un utente.
-// shouldApplyIOLimits verifica se i limiti IO devono essere applicati per l'utente.
-// Restituisce 0 se l'utente non è trovato
+// GetUIDFromUsername resolves a username from the current metrics snapshot.
+// It returns zero when the user is not present.
 func (m *Manager) GetUIDFromUsername(username string) int {
 	if username == "" {
 		return 0
 	}
 
-	// Usa metrics collector per ottenere tutti gli utenti attivi e i loro username
+	// Resolve only users present in the current metrics snapshot.
 	allMetrics := m.metricsCollector.GetAllUserMetrics()
 	for uid, metrics := range allMetrics {
 		if metrics.Username == username {
@@ -257,7 +259,28 @@ func (m *Manager) GetUIDFromUsername(username string) int {
 	return 0
 }
 
-// isUserLimited verifica se un utente ha limiti attivi
+// GetUserLimitState returns the authoritative policy, intent, and enforcement snapshot for a user.
+func (m *Manager) GetUserLimitState(uid int, username string) UserLimitState {
+	eligibility := m.GetConfig().EvaluateUserEligibility(username)
+	m.mu.RLock()
+	requestedCPU := m.requestedCPUUsers[uid]
+	activeCPU := m.activeUsers[uid]
+	resources := m.resourceLimits[uid]
+	m.mu.RUnlock()
+	return UserLimitState{
+		EligibleForCPU:    eligibility.EligibleForCPU,
+		EligibleForRAM:    eligibility.EligibleForRAM,
+		EligibleForIO:     eligibility.EligibleForIO,
+		CPULimitRequested: requestedCPU,
+		CPULimitActive:    activeCPU,
+		RAMLimitRequested: resources.ram,
+		RAMLimitActive:    resources.ramApplied,
+		IOLimitRequested:  resources.io,
+		IOLimitActive:     resources.ioApplied,
+	}
+}
+
+// isUserLimited reports whether CPU enforcement is observed for a user.
 func (m *Manager) isUserLimited(uid int) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

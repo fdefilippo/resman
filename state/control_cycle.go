@@ -52,7 +52,7 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 	return m.RunControlCycleWithTrigger(ctx, ControlCycleTriggerManual)
 }
 
-// RunMetricsRefresh aggiorna solo le metriche Prometheus/Grafana senza decisioni.
+// RunMetricsRefresh refreshes Prometheus metrics without running a decision cycle.
 func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -215,7 +215,7 @@ func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageIORemediation(run *controlCycleContext) error {
-	// 7. IO Starvation Auto-Remediation
+	// Run I/O starvation auto-remediation for observed active, I/O-eligible users.
 	if m.ioRemediation != nil {
 		var limitedUsers []int
 		if run.cfg.GetIOEnabled() {
@@ -225,11 +225,11 @@ func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 			}
 			m.mu.RUnlock()
 			limitedUsers = slices.DeleteFunc(limitedUsers, func(uid int) bool {
-				return !run.cfg.IsUserWhitelistedForIO(m.getUsername(uid))
+				return !run.cfg.EvaluateUserEligibility(m.getUsername(uid)).EligibleForIO
 			})
 		}
 		m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
-		// Cleanup periodico stati vecchi
+		// Remove stale remediation state periodically.
 		m.ioRemediation.Cleanup(24 * time.Hour)
 	}
 	return nil
@@ -317,7 +317,7 @@ func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) {
 	if !m.isUserLimited(uid) {
 		return
 	}
-	m.applyUserResourceLimits(uid, cfg)
+	m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid)))
 }
 
 func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {
@@ -340,8 +340,8 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"decision", run.decision,
 		"reason", run.reason,
 		"total_cpu_usage", run.metrics.TotalCPUUsage,
-		"limited_users_cpu_usage", run.metrics.LimitedUsersCPUUsage,
-		"eligible_users", run.metrics.LimitedUsersCount,
+		"limited_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
+		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
 		"system_under_load", run.metrics.SystemUnderLoad,
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
@@ -354,30 +354,32 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 type SystemMetrics struct {
 	Timestamp     time.Time
 	TotalCores    int
-	TotalCPUUsage float64 // Percentuale
+	TotalCPUUsage float64 // Percentage
 
-	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64
 	AllUsersMemoryUsage uint64
 	AllUsersCount       int
 
-	// LIMITED USERS metrics (solo utenti che passano i filtri)
-	LimitedUsersCPUUsage    float64
-	LimitedUsersMemoryUsage uint64
-	LimitedUsersCount       int
+	// Per-resource eligible-user metrics.
+	CPUEligibleCPUUsage    float64
+	CPUEligibleMemoryUsage uint64
+	CPUEligibleUsersCount  int
+	RAMEligibleUsersCount  int
+	IOEligibleUsersCount   int
+	RAMEligibleUsageBytes  uint64
+	IOEligibleWriteBytes   uint64
 
-	// RAM/IO aggregates for limited users (for threshold decisions)
-	LimitedUsersRAMUsageBytes uint64
-	LimitedUsersIOWriteBytes  uint64
-
-	MemoryUsage     float64 // MB
-	TotalMemoryMB   float64 // MB
-	CachedMemoryMB  float64 // MB
-	SystemLoad      float64
-	SystemUnderLoad bool
-	UserCPUUsage    map[int]float64                    // UID -> percentuale
-	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
-	EligibleUsers   []int                              // Users passing USER_INCLUDE/USER_EXCLUDE filters
+	MemoryUsage      float64 // MB
+	TotalMemoryMB    float64 // MB
+	CachedMemoryMB   float64 // MB
+	SystemLoad       float64
+	SystemUnderLoad  bool
+	UserCPUUsage     map[int]float64                    // UID to CPU percentage
+	UserMetrics      map[int]*resmanmetrics.UserMetrics // Detailed per-user metrics
+	CPUEligibleUsers []int
+	RAMEligibleUsers []int
+	IOEligibleUsers  []int
 }
 
 func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
@@ -423,11 +425,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	// Collect detailed per-user CPU, memory, process, and I/O metrics in one call.
 	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
 
-	// Compute every aggregate in one pass:
-	// - AllUsers (CPU, memory, count)
-	// - EligibleUsers (collector IsLimited == true)
-	// - LimitedUsers (runtime active)
-	// - UserMetrics and UserCPUUsage with IsLimited replaced by runtime state
+	// Compute total and per-resource eligible-user aggregates in one pass.
 	for uid, um := range allUserMetrics {
 		metrics.AllUsersCPUUsage += um.CPUUsage
 		metrics.AllUsersMemoryUsage += um.MemoryUsage
@@ -435,34 +433,43 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 
 		metrics.UserCPUUsage[uid] = um.CPUUsage
 
-		// Override IsLimited based on actual runtime state, not configuration.
-		m.mu.RLock()
-		actuallyLimited := m.activeUsers[uid]
-		m.mu.RUnlock()
+		limitState := m.GetUserLimitState(uid, um.Username)
 
 		corrected := &resmanmetrics.UserMetrics{
-			UID:             um.UID,
-			Username:        um.Username,
-			CPUUsage:        um.CPUUsage,
-			CPUUsageAverage: um.CPUUsageAverage,
-			CPUUsageEMA:     um.CPUUsageEMA,
-			MemoryUsage:     um.MemoryUsage,
-			ProcessCount:    um.ProcessCount,
-			IsLimited:       actuallyLimited,
-			IOReadBytes:     um.IOReadBytes,
-			IOWriteBytes:    um.IOWriteBytes,
-			IOReadOps:       um.IOReadOps,
-			IOWriteOps:      um.IOWriteOps,
+			UID:               um.UID,
+			Username:          um.Username,
+			CPUUsage:          um.CPUUsage,
+			CPUUsageAverage:   um.CPUUsageAverage,
+			CPUUsageEMA:       um.CPUUsageEMA,
+			MemoryUsage:       um.MemoryUsage,
+			ProcessCount:      um.ProcessCount,
+			EligibleForCPU:    limitState.EligibleForCPU,
+			EligibleForRAM:    limitState.EligibleForRAM,
+			EligibleForIO:     limitState.EligibleForIO,
+			CPULimitRequested: limitState.CPULimitRequested,
+			CPULimitActive:    limitState.CPULimitActive,
+			RAMLimitRequested: limitState.RAMLimitRequested,
+			RAMLimitActive:    limitState.RAMLimitActive,
+			IOLimitRequested:  limitState.IOLimitRequested,
+			IOLimitActive:     limitState.IOLimitActive,
+			IOReadBytes:       um.IOReadBytes,
+			IOWriteBytes:      um.IOWriteBytes,
+			IOReadOps:         um.IOReadOps,
+			IOWriteOps:        um.IOWriteOps,
 		}
 		metrics.UserMetrics[uid] = corrected
 
-		// Eligible users pass the collector's configuration filters.
-		if um.IsLimited {
-			metrics.EligibleUsers = append(metrics.EligibleUsers, uid)
-			metrics.LimitedUsersCPUUsage += um.CPUUsage
-			metrics.LimitedUsersMemoryUsage += um.MemoryUsage
-			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
-
+		if corrected.EligibleForCPU {
+			metrics.CPUEligibleUsers = append(metrics.CPUEligibleUsers, uid)
+			metrics.CPUEligibleCPUUsage += um.CPUUsage
+			metrics.CPUEligibleMemoryUsage += um.MemoryUsage
+		}
+		if corrected.EligibleForRAM {
+			metrics.RAMEligibleUsers = append(metrics.RAMEligibleUsers, uid)
+			metrics.RAMEligibleUsageBytes += um.MemoryUsage
+		}
+		if corrected.EligibleForIO {
+			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
 			if updateIOState {
 				// Calculate I/O bytes per second from the previous decision-cycle sample.
 				ioDelta := um.IOWriteBytes
@@ -470,14 +477,16 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 					elapsed := time.Since(m.prevIOTime).Seconds()
 					if elapsed > 0 && ioDelta >= prev {
 						ioRate := float64(ioDelta-prev) / elapsed
-						metrics.LimitedUsersIOWriteBytes += uint64(ioRate)
+						metrics.IOEligibleWriteBytes += uint64(ioRate)
 					}
 				}
 				m.prevIOBytes[uid] = ioDelta
 			}
 		}
 	}
-	metrics.LimitedUsersCount = len(metrics.EligibleUsers)
+	metrics.CPUEligibleUsersCount = len(metrics.CPUEligibleUsers)
+	metrics.RAMEligibleUsersCount = len(metrics.RAMEligibleUsers)
+	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
 	if updateIOState {
 		m.prevIOTime = time.Now()
@@ -515,9 +524,9 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		"all_users_memory_usage": float64(metrics.AllUsersMemoryUsage),
 
 		// LIMITED USERS metrics
-		"limited_users_cpu_usage":    metrics.LimitedUsersCPUUsage,
-		"limited_users_count":        float64(metrics.LimitedUsersCount),
-		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
+		"limited_users_cpu_usage":    metrics.CPUEligibleCPUUsage,
+		"limited_users_count":        float64(metrics.CPUEligibleUsersCount),
+		"limited_users_memory_usage": float64(metrics.CPUEligibleMemoryUsage),
 
 		// Other metrics
 		"memory_usage_mb":  metrics.MemoryUsage,
@@ -530,14 +539,12 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 
 	m.prometheusExporter.UpdateMetrics(promMetrics)
 
-	// Aggiorna metriche specifiche per utente usando UserMetrics
+	// Update per-user metrics from the explicit sample state.
 	for uid, userMetrics := range metrics.UserMetrics {
 		username := userMetrics.Username
 		if username == "" || username == strconv.Itoa(uid) {
 			username = m.getUsername(uid)
 		}
-
-		isLimited := m.isUserLimited(uid)
 
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
@@ -567,7 +574,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			ioWriteOps = cgroupIOWriteOps
 		}
 
-		// Usa UpdateUserMetrics con tutti i parametri
+		// Publish the explicit observed CPU enforcement state.
 		m.prometheusExporter.UpdateUserMetrics(
 			uid,
 			username,
@@ -576,7 +583,7 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 			userMetrics.CPUUsageEMA,
 			userMetrics.MemoryUsage,
 			userMetrics.ProcessCount,
-			isLimited,
+			userMetrics.CPULimitActive,
 			cgroupPath,
 			cpuQuota,
 			memoryHighEvents,
@@ -587,14 +594,14 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		)
 	}
 
-	// Pulisci metriche per utenti non più attivi
+	// Remove metric series for users absent from the current sample.
 	activeUids := make(map[int]bool)
 	for uid := range metrics.UserMetrics {
 		activeUids[uid] = true
 	}
 	m.prometheusExporter.CleanupUserMetrics(activeUids)
 
-	// Aggiorna metriche di sistema
+	// Update system metrics.
 	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
 	if actionCores < 1 {
 		actionCores = 1
@@ -718,7 +725,7 @@ func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMet
 		Decision:      decision,
 		Reason:        reason,
 		TotalCPUUsage: metrics.TotalCPUUsage,
-		UserCPUUsage:  metrics.LimitedUsersCPUUsage,
+		UserCPUUsage:  metrics.CPUEligibleCPUUsage,
 		ActiveUsers:   len(metrics.UserCPUUsage),
 		LimitsActive:  limitsActive,
 		DurationMs:    duration.Milliseconds(),
