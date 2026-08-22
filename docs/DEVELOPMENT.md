@@ -481,6 +481,11 @@ to prevent and expensive to find.
 - When you touch a function whose comments are in Italian, translate that function's
   comments as part of the change, and give touched exported declarations godoc-form
   English comments. Translation **MUST NOT** change behaviour.
+- Existing non-English documents are a transitional exception: a small corrective edit
+  **MUST** follow the document's current language, while adding a new section or
+  materially extending its technical or operator contract **MUST** translate the whole
+  document to English in the same change. A document **MUST NOT** be left with mixed
+  languages.
 - This is incremental cleanup, tracked as `resman-4pw.19`. Do not open mass-translation
   pull requests over untouched files, and leave historical changelog entries as they
   are.
@@ -567,7 +572,7 @@ A change is not done until every line is true:
 - [ ] Shared-state changes validated under `-race` (Rule 15).
 - [ ] Table-driven test that fails without the change; functional evidence recorded if
       the harness was used (Rule 16).
-- [ ] New comments and identifiers in English (Rule 17).
+- [ ] Comments, identifiers, logs, and documentation follow the language policy (Rule 17).
 - [ ] If this is a fix: the boundary it crosses is tested, no threshold borrowed from an
       unrelated contract, no enforcement added ahead of the behaviour, and no third
       local remedy where the mechanism should be replaced (Rule 18).
