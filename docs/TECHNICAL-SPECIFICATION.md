@@ -786,15 +786,20 @@ baseline and returns zero. The next valid sample resumes delta calculation immed
 
 ### 8.1 Protocol
 
-**Based on:** Model Context Protocol Specification
+**Protocol revision:** MCP `2026-07-28`, implemented with go-sdk v1.7.0 or newer
 
 **Transport:**
 - JSON-RPC 2.0 over stdio or HTTP
-- Streamable HTTP for request/response
+- Stateless Streamable HTTP with JSON responses
 
-**Session:**
-- Stateless (each request independent)
-- No session persistence required
+**Protocol state:**
+- Every request is independent and self-describing
+- HTTP authentication, protocol revision, method and method-specific name are
+  validated per request
+- `initialize`, `notifications/initialized`, session identifiers, resumability,
+  batches, pre-2026 revisions and protocol fallbacks are rejected
+- Request cancellation propagates to in-flight handlers
+- Resource-manager application state remains shared and authoritative
 
 ### 8.2 Tool Implementation
 
@@ -1208,7 +1213,7 @@ type CgroupManager interface {
 ```go
 require (
     github.com/fsnotify/fsnotify v1.9.0
-    github.com/modelcontextprotocol/go-sdk v1.4.0
+    github.com/modelcontextprotocol/go-sdk v1.7.0
     github.com/prometheus/client_golang v1.23.2
     github.com/shirou/gopsutil/v3 v3.24.5
 )

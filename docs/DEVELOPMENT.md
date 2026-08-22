@@ -339,9 +339,10 @@ newer**, serving **only** protocol revision **2026-07-28**, over both HTTP and s
 - Discovery, per-request metadata, headers, request bodies, and cancellation **MUST**
   follow the 2026-07-28 specification, with conformance tests over both transports.
 
-**Why.** `go.mod:9` pins v1.6.1 and the HTTP transport is built with default options,
-so session behaviour is whatever the SDK defaults to and older revisions remain
-negotiable. Both are contracts nobody chose.
+**Why.** Before `resman-4pw.18`, `go.mod` pinned v1.6.1 and the HTTP transport was
+built with default options, so session behaviour followed the SDK defaults and older
+revisions remained negotiable. The remediation pins v1.7.0, enables stateless HTTP
+explicitly, and imposes the single supported revision at the ResMan boundary.
 
 *Finding: resman-4pw.18. References:
 [go-sdk v1.7.0](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.7.0),

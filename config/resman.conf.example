@@ -528,12 +528,15 @@ MCP_ENABLED=false
 # Transport: stdio, http
 # stdio: Standard input/output (for local MCP clients like Claude Desktop)
 # http: HTTP POST endpoint (for AnythingLLM and other remote clients)
+# Both transports accept only stateless MCP revision 2026-07-28 requests.
 MCP_TRANSPORT=stdio
 
 # HTTP transport settings (only for http transport)
 # MCP_HTTP_HOST=0.0.0.0      # Bind address (default: all interfaces)
 # MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
 # MCP endpoint available at: http://HOST:PORT/mcp
+# HTTP clients must send the MCP 2026-07-28 request headers and per-request
+# metadata. Authentication is evaluated independently for every request.
 
 # MCP log level [S]
 # Available levels: DEBUG, INFO, WARN, ERROR

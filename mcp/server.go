@@ -20,6 +20,8 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/fdefilippo/resman/cgroup"
@@ -35,6 +38,18 @@ import (
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
+)
+
+const (
+	mcpProtocolVersion           = "2026-07-28"
+	mcpProtocolVersionHeader     = "Mcp-Protocol-Version"
+	mcpMethodHeader              = "Mcp-Method"
+	mcpSessionIDHeader           = "Mcp-Session-Id"
+	mcpLastEventIDHeader         = "Last-Event-ID"
+	mcpMethodInitialize          = "initialize"
+	mcpNotificationInitialized   = "notifications/initialized"
+	mcpMethodDiscover            = "server/discover"
+	mcpDefaultMaxRequestBodySize = 4 << 20
 )
 
 // Server wraps the MCP server and Resource Manager dependencies
@@ -87,6 +102,7 @@ func NewServer(
 		Name:    "resman",
 		Version: getVersion(),
 	}, nil)
+	mcpServer.AddReceivingMiddleware(latestOnlyMCPMiddleware)
 
 	s := &Server{
 		mcpServer:        mcpServer,
@@ -223,18 +239,8 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("failed to bind to %s: %w", addr, err)
 	}
 
-	// Create streamable HTTP handler for MCP
-	// This handler properly processes JSON-RPC messages over HTTP
 	mux := http.NewServeMux()
-
-	// MCP streamable endpoint - handles all MCP JSON-RPC messages
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return s.mcpServer
-	}, nil)
-
-	// Wrap MCP handler with authentication and logging middleware
-	handler := s.authMiddleware(s.loggingMiddleware(mcpHandler.ServeHTTP))
-	mux.HandleFunc("/mcp", handler)
+	mux.Handle("/mcp", s.newMCPHTTPHandler())
 
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
@@ -256,6 +262,140 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (s *Server) newMCPHTTPHandler() http.Handler {
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
+		return s.mcpServer
+	}, &mcp.StreamableHTTPOptions{
+		Stateless:                    true,
+		JSONResponse:                 true,
+		MaxRequestBodyBytes:          mcpDefaultMaxRequestBodySize,
+		PropagateRequestCancellation: true,
+	})
+
+	// Authentication and protocol validation are evaluated independently per request.
+	return s.authMiddleware(s.loggingMiddleware(latestOnlyHTTPMiddleware(mcpHandler.ServeHTTP)))
+}
+
+type protocolVersionRequest interface {
+	ProtocolVersion() string
+}
+
+func latestOnlyMCPMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		version := ""
+		if versioned, ok := req.(protocolVersionRequest); ok {
+			version = versioned.ProtocolVersion()
+		}
+		if err := validateLatestOnlyMCPRequest(method, version); err != nil {
+			return nil, err
+		}
+
+		result, err := next(ctx, method, req)
+		if err != nil {
+			return nil, err
+		}
+		if method == mcpMethodDiscover {
+			if discovery, ok := result.(*mcp.DiscoverResult); ok {
+				discovery.SupportedVersions = []string{mcpProtocolVersion}
+			}
+		}
+		return result, nil
+	}
+}
+
+func validateLatestOnlyMCPRequest(method, version string) error {
+	switch method {
+	case mcpMethodInitialize, mcpNotificationInitialized:
+		return &sdkjsonrpc.Error{
+			Code:    sdkjsonrpc.CodeMethodNotFound,
+			Message: fmt.Sprintf("%q is not supported; use stateless MCP %s requests", method, mcpProtocolVersion),
+		}
+	}
+	if version != mcpProtocolVersion {
+		return unsupportedProtocolVersionError(version)
+	}
+	return nil
+}
+
+func unsupportedProtocolVersionError(requested string) error {
+	data, err := json.Marshal(mcp.UnsupportedProtocolVersionData{
+		Supported: []string{mcpProtocolVersion},
+		Requested: requested,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal static MCP protocol error data: %v", err))
+	}
+	return &sdkjsonrpc.Error{
+		Code:    mcp.CodeUnsupportedProtocolVersion,
+		Message: fmt.Sprintf("unsupported MCP protocol version %q; only %s is supported", requested, mcpProtocolVersion),
+		Data:    data,
+	}
+}
+
+func latestOnlyHTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeMCPHTTPError(w, http.StatusMethodNotAllowed, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "the MCP endpoint accepts POST requests only",
+			})
+			return
+		}
+		if r.Header.Get(mcpSessionIDHeader) != "" {
+			writeMCPHTTPError(w, http.StatusBadRequest, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "Mcp-Session-Id is not supported by the stateless MCP endpoint",
+			})
+			return
+		}
+		if r.Header.Get(mcpLastEventIDHeader) != "" {
+			writeMCPHTTPError(w, http.StatusBadRequest, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "Last-Event-ID resumability is not supported by the stateless MCP endpoint",
+			})
+			return
+		}
+		version := r.Header.Get(mcpProtocolVersionHeader)
+		if version != mcpProtocolVersion {
+			writeMCPHTTPError(w, http.StatusBadRequest, unsupportedProtocolVersionError(version))
+			return
+		}
+		method := r.Header.Get(mcpMethodHeader)
+		if method == mcpMethodInitialize || method == mcpNotificationInitialized {
+			writeMCPHTTPError(w, http.StatusNotFound, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeMethodNotFound,
+				Message: fmt.Sprintf("%q is not supported; use stateless MCP %s requests", method, mcpProtocolVersion),
+			})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func writeMCPHTTPError(w http.ResponseWriter, status int, protocolErr error) {
+	var wireErr *sdkjsonrpc.Error
+	if !errors.As(protocolErr, &wireErr) {
+		wireErr = &sdkjsonrpc.Error{
+			Code:    sdkjsonrpc.CodeInternalError,
+			Message: protocolErr.Error(),
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(struct {
+		JSONRPC string            `json:"jsonrpc"`
+		ID      any               `json:"id"`
+		Error   *sdkjsonrpc.Error `json:"error"`
+	}{
+		JSONRPC: "2.0",
+		ID:      nil,
+		Error:   wireErr,
+	}); err != nil {
+		logging.GetLogger().Error("Failed to write MCP protocol error response", "error", err)
+	}
 }
 
 func newMCPHTTPServer(addr string, handler http.Handler) *http.Server {

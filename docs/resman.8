@@ -820,6 +820,11 @@ Only limited users:
 When enabled, the daemon exposes an MCP server for AI assistant integration.
 The MCP server provides tools and resources for querying system status and generating reports.
 .PP
+ResMan accepts only MCP revision 2026-07-28 over stdio or HTTP. The protocol is
+stateless: every request is self-describing, HTTP authentication is evaluated
+per request, and no MCP session identifier or initialization exchange is
+supported. Pre-2026 revisions and compatibility fallbacks are rejected.
+.PP
 Available MCP tools:
 .IP \(bu 2
 .B get_system_status
@@ -897,7 +902,7 @@ Transport mode:
 .IR http )
 .IP \(bu
 HTTP port (for http transport):
-.I MCP_HTTP_PORT=8080
+.I MCP_HTTP_PORT=1969
 .IP \(bu
 Allow write operations:
 .I MCP_ALLOW_WRITE_OPS=false

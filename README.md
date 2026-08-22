@@ -119,6 +119,11 @@ MCP_TRANSPORT=stdio
 # METRICS_REFRESH_INTERVAL=30
 ```
 
+The MCP endpoint is protocol-stateless and accepts only revision `2026-07-28`
+over stdio or HTTP. HTTP authentication and protocol metadata are validated on
+every request; legacy initialization, sessions, and protocol fallbacks are not
+supported. See [docs/MCP-README.md](docs/MCP-README.md) for the wire contract.
+
 `USER_INCLUDE_LIST` controls CPU-limit eligibility, not metrics collection.
 When it is empty or unset, resman continues to monitor users but applies no CPU
 limits. Set it to `.*` to make every non-excluded user eligible. Empty

@@ -1,6 +1,23 @@
-# MCP Server for CPU Manager Go
+# MCP Server for ResMan
 
-This document describes the Model Context Protocol (MCP) server implementation for CPU Manager Go.
+This document describes the Model Context Protocol (MCP) server implemented by ResMan.
+
+## Protocol contract
+
+ResMan uses `github.com/modelcontextprotocol/go-sdk/mcp` v1.7.0 and accepts only
+MCP revision `2026-07-28` over stdio and Streamable HTTP. The server is
+protocol-stateless: every request carries its protocol revision, client
+capabilities and any method-specific name, and no client session is retained.
+
+The HTTP endpoint accepts `POST` only and requires matching
+`Mcp-Protocol-Version`, `Mcp-Method`, and, where defined by MCP, `Mcp-Name`
+headers. Bearer authentication is checked on every HTTP request. Legacy
+`initialize`/`notifications/initialized`, pre-2026 revisions,
+`Mcp-Session-Id`, resumability headers, JSON-RPC batches, and compatibility
+fallbacks are rejected. Closing an HTTP request cancels its in-flight handler.
+
+Protocol statelessness does not make ResMan application-stateless: tools and
+resources still read the shared, authoritative resource-manager state.
 
 ## Overview
 
@@ -60,10 +77,10 @@ Add to `/etc/resman.conf`:
 # Enable MCP server
 MCP_ENABLED=true
 
-# Transport: stdio, http, sse
+# Transport: stdio or http
 MCP_TRANSPORT=stdio
 
-# HTTP/SSE settings (only for http/sse transport)
+# HTTP settings (only for http transport)
 # MCP_HTTP_HOST=0.0.0.0      # Default: all interfaces (0.0.0.0)
 # MCP_HTTP_PORT=1969         # Default: 1969
 # MCP endpoint: http://HOST:PORT/mcp
@@ -103,13 +120,13 @@ sudo systemctl start resman
 MCP_ENABLED=true
 MCP_TRANSPORT=http
 MCP_HTTP_HOST=127.0.0.1
-MCP_HTTP_PORT=8080
+MCP_HTTP_PORT=1969
 MCP_AUTH_TOKEN=replace-with-a-long-random-token
 ```
 
 2. Access endpoints:
-- `http://127.0.0.1:8080/mcp` - MCP endpoint
-- `http://127.0.0.1:8080/health` - Health check
+- `http://127.0.0.1:1969/mcp` - MCP endpoint
+- `http://127.0.0.1:1969/health` - Health check
 
 ### Example: Claude Desktop Configuration
 
@@ -136,7 +153,7 @@ Add to `claude_desktop_config.json`:
 
 ```bash
 # Health check
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:1969/health
 
 # Get system status (via MCP client)
 # MCP clients will handle the JSON-RPC protocol automatically
@@ -275,13 +292,13 @@ go test ./mcp/... -v
 
 1. Check logs: `journalctl -u resman -f`
 2. Verify configuration: `MCP_ENABLED=true`
-3. Check port availability (for HTTP transport): `netstat -tlnp | grep 8080`
+3. Check port availability (for HTTP transport): `ss -tlnp | grep 1969`
 
 ### Tools not available
 
 1. Verify `MCP_ENABLED=true` in configuration
 2. Check that CPU Manager started successfully
-3. Ensure MCP server initialized without errors
+3. Ensure the MCP server started without errors
 
 ### Permission errors
 

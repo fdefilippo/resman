@@ -1,5 +1,10 @@
 # MCP Server Blueprint for CPU Manager Go
 
+> **Archived design note.** This document records the original MCP integration
+> plan and is not the runtime protocol contract. The current implementation is
+> documented in [MCP-README.md](MCP-README.md) and supports only stateless MCP
+> revision 2026-07-28 through go-sdk v1.7.0 or newer.
+
 ## Overview
 
 This document outlines the blueprint for exposing CPU Manager Go functionality via a **Model Context Protocol (MCP)** server, enabling AI assistants to query and interact with the CPU management system.
