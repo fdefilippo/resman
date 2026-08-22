@@ -1,0 +1,16 @@
+[Unit]
+Description=ResMan isolated functional instance %i
+After=local-fs.target
+RequiresMountsFor=/sys/fs/cgroup /var/lib/resman-functional
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/run/resman-functional/%i/environment
+ExecStart=/usr/bin/resman --config ${RESMAN_CONFIG}
+Restart=no
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
