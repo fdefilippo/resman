@@ -74,10 +74,16 @@ grep -q '^PROMETHEUS_METRICS_BIND_PORT=19100$' "$script_dir/fixtures/resman.conf
 grep -q '^MCP_HTTP_PORT=19101$' "$script_dir/fixtures/resman.conf"
 grep -q '^POLLING_INTERVAL=5$' "$script_dir/fixtures/resman.conf"
 grep -q '^METRICS_REFRESH_INTERVAL=5$' "$script_dir/fixtures/resman.conf"
-grep -q '^FROM docker.io/amd64/oraclelinux:9$' "$script_dir/Containerfile"
-grep -q '^CMD \["/sbin/init"\]$' "$script_dir/Containerfile"
+grep -q '^PROCESS_EXCLUDE_LIST=' "$script_dir/fixtures/resman.conf"
+grep -q '^FROM docker.io/amd64/oraclelinux:9$' "$script_dir/Containerfile.base"
+# shellcheck disable=SC2016 # Match the literal Containerfile build argument.
+grep -q '^FROM \${FUNCTIONAL_BASE_IMAGE}$' "$script_dir/Containerfile"
+grep -q '^CMD \["/sbin/init"\]$' "$script_dir/Containerfile.base"
+grep -q 'fixture_image_reused' "$script_dir/run.sh"
 grep -q 'SMOLVM_REQUIRE_PSI' "$script_dir/run.sh"
+grep -q 'SMOLVM_SCENARIO' "$script_dir/run.sh"
 grep -q 'pressure_summary cpu' "$script_dir/guest/run-functional.sh"
+grep -q 'process-membership' "$script_dir/guest/run-functional.sh"
 grep -q '^EnvironmentFile=/run/resman-functional/%i/environment$' \
     "$script_dir/guest/resman-functional@.service"
 

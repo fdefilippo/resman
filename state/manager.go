@@ -166,6 +166,7 @@ type CgroupManager interface {
 	MoveProcessToCgroup(pid int, uid int) error
 	MoveAllUserProcesses(uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
+	ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error)
 	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
 	CreateSharedCgroup() (string, error)
 	ApplySharedCPULimit(sharedPath string, quota string) error

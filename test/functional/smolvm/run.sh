@@ -11,12 +11,14 @@ memory_mib=${SMOLVM_MEMORY_MIB:-2048}
 storage_gib=${SMOLVM_STORAGE_GIB:-8}
 overlay_gib=${SMOLVM_OVERLAY_GIB:-2}
 require_psi=${SMOLVM_REQUIRE_PSI:-0}
+scenario=${SMOLVM_SCENARIO:-resource-only}
 evidence_root=${SMOLVM_EVIDENCE_ROOT:-$repo_root/build/functional/smolvm}
 command_log=
 evidence_dir=
 scratch_dir=
 image_archive=
 image_ref=
+fixture_image_ref=
 vm_name=
 vm_started=0
 image_built=0
@@ -43,6 +45,7 @@ require_host_capabilities() {
     command -v "$smolvm_bin" >/dev/null 2>&1 || blocked "smolvm is not installed"
     command -v "$sg_bin" >/dev/null 2>&1 || blocked "sg is not installed"
     command -v sudo >/dev/null 2>&1 || blocked "sudo is not installed"
+    command -v sha256sum >/dev/null 2>&1 || blocked "sha256sum is not installed"
 
     local probe
     printf -v probe 'test -c %q && test -r %q && test -w %q' \
@@ -135,10 +138,13 @@ cleanup_resources() {
 run_harness() {
     require_host_capabilities
 
-    [[ $require_psi == 0 || $require_psi == 1 ]] \
-        || blocked "SMOLVM_REQUIRE_PSI must be 0 or 1"
+	[[ $require_psi == 0 || $require_psi == 1 ]] \
+		|| blocked "SMOLVM_REQUIRE_PSI must be 0 or 1"
+	[[ $scenario == resource-only || $scenario == process-membership ]] \
+		|| blocked "SMOLVM_SCENARIO must be resource-only or process-membership"
 
-    local run_id smolvm_version base_image_id base_image_digest image_id guest_status
+    local run_id smolvm_version base_image_id base_image_digest fixture_image_id
+    local fixture_hash fixture_reused image_id guest_status
     run_id=r$(date -u +%Y%m%d%H%M%S)-$$
     evidence_dir=$evidence_root/$run_id
     mkdir -p "$evidence_dir"
@@ -147,6 +153,9 @@ run_harness() {
     scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-smolvm.XXXXXX")
     image_archive=$scratch_dir/resman-functional.tar
     image_ref=localhost/resman-functional:$run_id
+    fixture_hash=$(sha256sum "$script_dir/Containerfile.base")
+    fixture_hash=${fixture_hash%% *}
+    fixture_image_ref=localhost/resman-functional-base:${fixture_hash:0:16}
     vm_name=resman-functional-$run_id
     trap cleanup EXIT
     trap 'interrupt 130' INT
@@ -158,27 +167,44 @@ run_harness() {
         printf 'run_id=%s\n' "$run_id"
         printf 'smolvm_version=%s\n' "$smolvm_version"
         printf 'image_reference=%s\n' "$image_ref"
+        printf 'fixture_image_reference=%s\n' "$fixture_image_ref"
         printf 'requested_cpus=%s\n' "$cpus"
         printf 'requested_memory_mib=%s\n' "$memory_mib"
-        printf 'requested_psi_required=%s\n' "$require_psi"
+		printf 'requested_psi_required=%s\n' "$require_psi"
+		printf 'requested_scenario=%s\n' "$scenario"
         printf 'network=disabled\n'
         printf 'host_ports=none\n'
     } >"$evidence_dir/environment.txt"
 
-    record_command sudo podman build --layers --file "$script_dir/Containerfile" \
+    fixture_reused=true
+    record_command sudo podman image exists "$fixture_image_ref"
+    if ! sudo podman image exists "$fixture_image_ref"; then
+        fixture_reused=false
+        record_command sudo podman build --layers --file "$script_dir/Containerfile.base" \
+            --tag "$fixture_image_ref" "$script_dir"
+        sudo podman build --layers --file "$script_dir/Containerfile.base" \
+            --tag "$fixture_image_ref" "$script_dir"
+    fi
+    record_command sudo podman build --layers --build-arg \
+        "FUNCTIONAL_BASE_IMAGE=$fixture_image_ref" --file "$script_dir/Containerfile" \
         --tag "$image_ref" "$repo_root"
-    sudo podman build --layers --file "$script_dir/Containerfile" --tag "$image_ref" "$repo_root"
+    sudo podman build --layers --build-arg "FUNCTIONAL_BASE_IMAGE=$fixture_image_ref" \
+        --file "$script_dir/Containerfile" --tag "$image_ref" "$repo_root"
     image_built=1
     record_command sudo podman image inspect --format '{{.Id}}' docker.io/amd64/oraclelinux:9
     base_image_id=$(sudo podman image inspect --format '{{.Id}}' docker.io/amd64/oraclelinux:9)
     record_command sudo podman image inspect --format '{{.Digest}}' docker.io/amd64/oraclelinux:9
     base_image_digest=$(sudo podman image inspect --format '{{.Digest}}' docker.io/amd64/oraclelinux:9)
+    record_command sudo podman image inspect --format '{{.Id}}' "$fixture_image_ref"
+    fixture_image_id=$(sudo podman image inspect --format '{{.Id}}' "$fixture_image_ref")
     record_command sudo podman image inspect --format '{{.Id}}' "$image_ref"
     image_id=$(sudo podman image inspect --format '{{.Id}}' "$image_ref")
     {
         printf 'base_image=%s\n' 'docker.io/amd64/oraclelinux:9'
         printf 'base_image_id=%s\n' "$base_image_id"
         printf 'base_image_digest=%s\n' "$base_image_digest"
+        printf 'fixture_image_id=%s\n' "$fixture_image_id"
+        printf 'fixture_image_reused=%s\n' "$fixture_reused"
         printf 'image_id=%s\n' "$image_id"
     } >>"$evidence_dir/environment.txt"
 
@@ -195,8 +221,8 @@ run_harness() {
         /opt/resman-functional/wait-systemd.sh
 
     set +e
-    run_kvm machine exec --stream --name "$vm_name" --timeout 3m -- \
-        /opt/resman-functional/run-functional.sh "$run_id" "$cpus" "$memory_mib" "$require_psi"
+	run_kvm machine exec --stream --name "$vm_name" --timeout 3m -- \
+		/opt/resman-functional/run-functional.sh "$run_id" "$cpus" "$memory_mib" "$require_psi" "$scenario"
     guest_status=$?
     set -e
 

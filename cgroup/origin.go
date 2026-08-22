@@ -421,6 +421,16 @@ func (m *Manager) newProcessOrigin(identity processIdentity, uid int, cgroupPath
 }
 
 func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string) ([]int, error) {
+	movable, _, err := m.captureProcessOriginsExpected(pids, uid, destination, nil)
+	return movable, err
+}
+
+func (m *Manager) captureProcessOriginsExpected(
+	pids []int,
+	uid int,
+	destination string,
+	expectedStartTimes map[int]uint64,
+) ([]int, map[int]bool, error) {
 	m.originMu.Lock()
 	defer m.originMu.Unlock()
 
@@ -433,6 +443,7 @@ func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string)
 	}
 	pending := make([]pendingOrigin, 0)
 	movable := make([]int, 0, len(pids))
+	reused := make(map[int]bool)
 	previous := make(map[int]previousProcessOrigin)
 	basePath := m.getBaseCgroupPath()
 
@@ -464,7 +475,11 @@ func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string)
 		}
 		if err != nil {
 			rollback()
-			return nil, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
+			return nil, reused, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
+		}
+		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
+			reused[pid] = true
+			continue
 		}
 		currentPath, err := m.readUnifiedCgroupPath(pid)
 		if os.IsNotExist(err) {
@@ -472,7 +487,7 @@ func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string)
 		}
 		if err != nil {
 			rollback()
-			return nil, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
+			return nil, reused, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
 		}
 		currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
 		if filepath.Clean(currentFilesystemPath) == filepath.Clean(destination) {
@@ -498,19 +513,29 @@ func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string)
 	}
 
 	if len(previous) == 0 {
-		return movable, nil
+		return movable, reused, nil
 	}
 	if err := m.flushProcessOriginsLocked(); err != nil {
 		rollback()
-		return nil, fmt.Errorf("failed to persist process origins before migration: %w", err)
+		return nil, reused, fmt.Errorf("failed to persist process origins before migration: %w", err)
 	}
-	return movable, nil
+	return movable, reused, nil
 }
 
 func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]int, map[int]error, error) {
-	movable, err := m.captureProcessOrigins(pids, uid, destination)
+	moved, moveErrors, _, err := m.moveProcessBatchExpected(pids, uid, destination, nil)
+	return moved, moveErrors, err
+}
+
+func (m *Manager) moveProcessBatchExpected(
+	pids []int,
+	uid int,
+	destination string,
+	expectedStartTimes map[int]uint64,
+) ([]int, map[int]error, map[int]bool, error) {
+	movable, reused, err := m.captureProcessOriginsExpected(pids, uid, destination, expectedStartTimes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, reused, err
 	}
 
 	moved := make([]int, 0, len(movable))
@@ -518,6 +543,21 @@ func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]i
 	disappeared := make(map[int]bool)
 	cgroupProcsFile := filepath.Join(destination, "cgroup.procs")
 	for _, pid := range movable {
+		if expected, ok := expectedStartTimes[pid]; ok {
+			identity, identityErr := m.readProcessIdentity(pid)
+			switch {
+			case os.IsNotExist(identityErr):
+				disappeared[pid] = true
+				continue
+			case identityErr != nil:
+				moveErrors[pid] = fmt.Errorf("failed to revalidate process identity: %w", identityErr)
+				continue
+			case identity.StartTime != expected:
+				reused[pid] = true
+				disappeared[pid] = true
+				continue
+			}
+		}
 		if err := m.writePIDToCgroup(cgroupProcsFile, pid); errors.Is(err, syscall.ESRCH) {
 			disappeared[pid] = true
 		} else if err != nil {
@@ -527,9 +567,9 @@ func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]i
 		}
 	}
 	if err := m.removeProcessOrigins(disappeared); err != nil {
-		return moved, moveErrors, fmt.Errorf("failed to remove origins for exited processes: %w", err)
+		return moved, moveErrors, reused, fmt.Errorf("failed to remove origins for exited or reused processes: %w", err)
 	}
-	return moved, moveErrors, nil
+	return moved, moveErrors, reused, nil
 }
 
 func (m *Manager) ensureRecoveryCgroup(uid int, normalQuota string) (string, error) {
@@ -563,8 +603,21 @@ func (m *Manager) writePIDToCgroup(cgroupProcsFile string, pid int) error {
 }
 
 func (m *Manager) buildRestorePlan(uid int, pids []int, normalQuota string) ([]processRestore, map[int]bool, error) {
+	plans, processedOrigins, _, err := m.buildRestorePlanExpected(uid, pids, normalQuota, nil, "", true)
+	return plans, processedOrigins, err
+}
+
+func (m *Manager) buildRestorePlanExpected(
+	uid int,
+	pids []int,
+	normalQuota string,
+	expectedStartTimes map[int]uint64,
+	expectedSource string,
+	allowRecovery bool,
+) ([]processRestore, map[int]bool, map[int]bool, error) {
 	origins := m.snapshotProcessOrigins()
 	processedOrigins := make(map[int]bool)
+	reused := make(map[int]bool)
 	plans := make([]processRestore, 0, len(pids))
 	var recoveryPath string
 
@@ -575,7 +628,24 @@ func (m *Manager) buildRestorePlan(uid int, pids []int, normalQuota string) ([]p
 			continue
 		}
 		if err != nil {
-			return nil, processedOrigins, fmt.Errorf("failed to identify PID %d before restore: %w", pid, err)
+			return nil, processedOrigins, reused, fmt.Errorf("failed to identify PID %d before restore: %w", pid, err)
+		}
+		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
+			reused[pid] = true
+			continue
+		}
+		if expectedSource != "" {
+			currentPath, currentErr := m.readUnifiedCgroupPath(pid)
+			if os.IsNotExist(currentErr) {
+				processedOrigins[pid] = true
+				continue
+			}
+			if currentErr != nil {
+				return nil, processedOrigins, reused, fmt.Errorf("failed to read cgroup for PID %d before restore: %w", pid, currentErr)
+			}
+			if filepath.Clean(m.cgroupPathOnFilesystem(currentPath)) != filepath.Clean(expectedSource) {
+				continue
+			}
 		}
 
 		originPath := ""
@@ -598,16 +668,22 @@ func (m *Manager) buildRestorePlan(uid int, pids []int, normalQuota string) ([]p
 			if _, err := os.Stat(originFilesystemPath); err == nil {
 				destination = originFilesystemPath
 			} else if !os.IsNotExist(err) {
-				return nil, processedOrigins, fmt.Errorf("failed to stat original cgroup %s for PID %d: %w", originFilesystemPath, pid, err)
+				return nil, processedOrigins, reused, fmt.Errorf("failed to stat original cgroup %s for PID %d: %w", originFilesystemPath, pid, err)
 			}
 		}
 
 		recovery := destination == ""
 		if recovery {
+			if !allowRecovery {
+				return nil, processedOrigins, reused, fmt.Errorf(
+					"cannot safely restore PID %d: its recorded origin is unavailable",
+					pid,
+				)
+			}
 			if recoveryPath == "" {
 				recoveryPath, err = m.ensureRecoveryCgroup(uid, normalQuota)
 				if err != nil {
-					return nil, processedOrigins, err
+					return nil, processedOrigins, reused, err
 				}
 			}
 			destination = recoveryPath
@@ -619,19 +695,75 @@ func (m *Manager) buildRestorePlan(uid int, pids []int, normalQuota string) ([]p
 			Recovery:    recovery || m.isRecoveryPath(destination),
 		})
 	}
-	return plans, processedOrigins, nil
+	return plans, processedOrigins, reused, nil
 }
 
 func (m *Manager) restoreProcesses(uid int, pids []int, normalQuota string) (bool, error) {
-	plans, processedOrigins, err := m.buildRestorePlan(uid, pids, normalQuota)
+	_, usedRecovery, _, err := m.restoreProcessesExpected(uid, pids, normalQuota, nil, "", true)
+	return usedRecovery, err
+}
+
+func (m *Manager) restoreProcessesExpected(
+	uid int,
+	pids []int,
+	normalQuota string,
+	expectedStartTimes map[int]uint64,
+	expectedSource string,
+	allowRecovery bool,
+) (int, bool, map[int]bool, error) {
+	plans, processedOrigins, reused, err := m.buildRestorePlanExpected(
+		uid,
+		pids,
+		normalQuota,
+		expectedStartTimes,
+		expectedSource,
+		allowRecovery,
+	)
 	if err != nil {
-		return false, err
+		return 0, false, reused, err
 	}
 
+	restored := 0
 	usedRecovery := false
 	recoveryPath := ""
 	var restoreErrors []error
 	for _, plan := range plans {
+		if expected, ok := expectedStartTimes[plan.PID]; ok {
+			identity, identityErr := m.readProcessIdentity(plan.PID)
+			switch {
+			case os.IsNotExist(identityErr):
+				processedOrigins[plan.PID] = true
+				continue
+			case identityErr != nil:
+				restoreErrors = append(restoreErrors, fmt.Errorf(
+					"failed to revalidate PID %d before restore: %w",
+					plan.PID,
+					identityErr,
+				))
+				continue
+			case identity.StartTime != expected:
+				reused[plan.PID] = true
+				continue
+			}
+		}
+		if expectedSource != "" {
+			currentPath, currentErr := m.readUnifiedCgroupPath(plan.PID)
+			if os.IsNotExist(currentErr) {
+				processedOrigins[plan.PID] = true
+				continue
+			}
+			if currentErr != nil {
+				restoreErrors = append(restoreErrors, fmt.Errorf(
+					"failed to revalidate cgroup for PID %d before restore: %w",
+					plan.PID,
+					currentErr,
+				))
+				continue
+			}
+			if filepath.Clean(m.cgroupPathOnFilesystem(currentPath)) != filepath.Clean(expectedSource) {
+				continue
+			}
+		}
 		err := m.writePIDToCgroup(filepath.Join(plan.Destination, "cgroup.procs"), plan.PID)
 		if os.IsNotExist(err) && !plan.Recovery {
 			if recoveryPath == "" {
@@ -651,6 +783,7 @@ func (m *Manager) restoreProcesses(uid int, pids []int, normalQuota string) (boo
 			continue
 		}
 		processedOrigins[plan.PID] = true
+		restored++
 		usedRecovery = usedRecovery || plan.Recovery
 	}
 
@@ -661,7 +794,7 @@ func (m *Manager) restoreProcesses(uid int, pids []int, normalQuota string) (boo
 		restoreErrors = append(restoreErrors, fmt.Errorf("failed to prune process origin state after restore: %w", err))
 	}
 	if len(restoreErrors) > 0 {
-		return usedRecovery, errors.Join(restoreErrors...)
+		return restored, usedRecovery, reused, errors.Join(restoreErrors...)
 	}
-	return usedRecovery, nil
+	return restored, usedRecovery, reused, nil
 }

@@ -34,7 +34,10 @@ User filtering with regex support (USER_INCLUDE_LIST, USER_EXCLUDE_LIST)
 Process exclusion list (PROCESS_EXCLUDE_LIST). Excluded processes remain in
 observed totals but do not contribute to CPU, RAM, or I/O decisions and are not
 moved into limited cgroups. Matching uses the /proc/PID/exe basename, with
-/proc/PID/comm as fallback.
+/proc/PID/comm as fallback. Active limits reconcile membership every control
+cycle. Newly excluded processes return only to a captured origin for the same
+PID start time; without a safe origin they remain constrained and an error is
+reported.
 .IP \(bu
 Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
 .IP \(bu

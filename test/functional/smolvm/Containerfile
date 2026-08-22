@@ -1,3 +1,5 @@
+ARG FUNCTIONAL_BASE_IMAGE
+
 FROM docker.io/library/golang:1.25.7-bookworm AS builder
 
 WORKDIR /src
@@ -17,18 +19,7 @@ RUN CGO_ENABLED=1 go build -trimpath \
     -ldflags="-s -w -X 'main.version=functional'" \
     -o /out/resman ./main.go
 
-FROM docker.io/amd64/oraclelinux:9
-
-ENV container=smolvm
-
-RUN dnf install -y oracle-epel-release-el9 \
- && dnf --enablerepo=ol9_developer_EPEL install -y \
-      ca-certificates curl procps-ng shadow-utils sqlite stress systemd util-linux \
- && dnf clean all \
- && rm -rf /var/cache/dnf \
- && useradd --create-home --shell /bin/bash resman-cpu \
- && useradd --create-home --shell /bin/bash resman-memory \
- && useradd --create-home --shell /bin/bash resman-io
+FROM ${FUNCTIONAL_BASE_IMAGE}
 
 COPY --from=builder /out/resman /usr/bin/resman
 COPY test/functional/smolvm/guest/resman-functional@.service \
@@ -43,8 +34,4 @@ COPY test/functional/smolvm/fixtures/resman.conf \
 RUN chmod 0755 /usr/bin/resman \
       /opt/resman-functional/run-functional.sh \
       /opt/resman-functional/wait-systemd.sh \
-      /opt/resman-functional/workload.sh \
- && systemctl mask systemd-networkd-wait-online.service
-
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
+      /opt/resman-functional/workload.sh

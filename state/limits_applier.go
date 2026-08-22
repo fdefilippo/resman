@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -378,6 +379,9 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	if err := m.reconcileStandaloneResourceUsers(metrics, cfg); err != nil {
 		reconcileErrors = append(reconcileErrors, err)
 	}
+	if err := m.reconcileActiveProcessMembership(cfg); err != nil {
+		reconcileErrors = append(reconcileErrors, err)
+	}
 
 	now = time.Now()
 	m.mu.Lock()
@@ -393,6 +397,65 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 	}
 
+	return errors.Join(reconcileErrors...)
+}
+
+type activeProcessMembership struct {
+	uid        int
+	sharedPath string
+}
+
+func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
+	m.mu.RLock()
+	sharedPath := m.sharedCgroupPath
+	targets := make([]activeProcessMembership, 0, len(m.activeUsers)+len(m.resourceLimits))
+	tracked := make(map[int]bool, len(m.activeUsers))
+	for uid := range m.activeUsers {
+		targets = append(targets, activeProcessMembership{uid: uid, sharedPath: sharedPath})
+		tracked[uid] = true
+	}
+	for uid, state := range m.resourceLimits {
+		if state.standalone && (state.ramApplied || state.ioApplied) && !tracked[uid] {
+			targets = append(targets, activeProcessMembership{uid: uid})
+		}
+	}
+	m.mu.RUnlock()
+
+	sort.Slice(targets, func(i, j int) bool { return targets[i].uid < targets[j].uid })
+	var reconcileErrors []error
+	for _, target := range targets {
+		result, err := m.cgroupManager.ReconcileUserProcessMembership(
+			target.uid,
+			target.sharedPath,
+			cfg.CPUQuotaNormal,
+		)
+		if err != nil {
+			m.logger.Warn("Failed to reconcile active process membership",
+				"uid", target.uid,
+				"shared_path", target.sharedPath,
+				"error", err,
+			)
+			if m.prometheusExporter != nil {
+				m.prometheusExporter.RecordError(processMembershipErrorComponent, processMembershipReconcileFailure)
+			}
+			reconcileErrors = append(reconcileErrors, fmt.Errorf(
+				"reconcile active process membership for UID %d: %w",
+				target.uid,
+				err,
+			))
+			continue
+		}
+		if result.MovedIn > 0 || result.RestoredExcluded > 0 || result.SkippedReused > 0 {
+			m.logger.Info("Active process membership reconciled",
+				"uid", target.uid,
+				"shared_path", target.sharedPath,
+				"processes_scanned", result.Scanned,
+				"processes_moved_in", result.MovedIn,
+				"excluded_processes_restored", result.RestoredExcluded,
+				"reused_pids_skipped", result.SkippedReused,
+			)
+		}
+	}
 	return errors.Join(reconcileErrors...)
 }
 

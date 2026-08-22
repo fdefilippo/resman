@@ -147,6 +147,9 @@ func (m *mockCgroupManager) MoveAllUserProcesses(uid int) error         { return
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
+func (m *mockCgroupManager) ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error) {
+	return cgroup.ProcessMembershipResult{}, nil
+}
 func (m *mockCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
 	return nil
 }
@@ -160,6 +163,24 @@ func (m *mockCgroupManager) GetCreatedCgroups() []int                           
 type moveResultCgroupManager struct {
 	mockCgroupManager
 	moveErr error
+}
+
+type membershipCall struct {
+	uid         int
+	sharedPath  string
+	normalQuota string
+}
+
+type membershipCgroupManager struct {
+	mockCgroupManager
+	calls  []membershipCall
+	result cgroup.ProcessMembershipResult
+	err    error
+}
+
+func (m *membershipCgroupManager) ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error) {
+	m.calls = append(m.calls, membershipCall{uid: uid, sharedPath: sharedPath, normalQuota: normalQuota})
+	return m.result, m.err
 }
 
 func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
@@ -1154,6 +1175,69 @@ func TestActivationWithoutEligibleEnforcementReportsBoundedFailure(t *testing.T)
 	recorded := exporter.recordedErrors()
 	if len(recorded) != 1 || recorded[0].component != limitTransitionErrorComponent || recorded[0].errorType != limitTransitionActivationFailure {
 		t.Fatalf("recorded errors = %+v, want one bounded activation failure", recorded)
+	}
+}
+
+func TestReconcileActiveProcessMembershipVisitsEachObservedTargetOnce(t *testing.T) {
+	cgroups := &membershipCgroupManager{}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.sharedCgroupPath = "/shared"
+	manager.activeUsers[1001] = true
+	manager.resourceLimits[1001] = userResourceLimitState{ramApplied: true}
+	manager.resourceLimits[1002] = userResourceLimitState{standalone: true, ioApplied: true}
+
+	if err := manager.reconcileActiveProcessMembership(config.DefaultConfig()); err != nil {
+		t.Fatalf("reconcileActiveProcessMembership() error: %v", err)
+	}
+	want := []membershipCall{
+		{uid: 1001, sharedPath: "/shared", normalQuota: "max 100000"},
+		{uid: 1002, normalQuota: "max 100000"},
+	}
+	if !reflect.DeepEqual(cgroups.calls, want) {
+		t.Fatalf("membership reconciliation calls = %+v, want %+v", cgroups.calls, want)
+	}
+}
+
+func TestMaintainDecisionReportsMembershipFailureWithoutClearingActiveState(t *testing.T) {
+	cgroups := &membershipCgroupManager{err: errors.New("cgroup.procs write rejected")}
+	exporter := &mockPrometheusExporter{}
+	cfg := config.DefaultConfig()
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.sharedCgroupPath = "/shared"
+	manager.activeUsers[1000] = true
+	manager.limitsActive = true
+	manager.userLimitedAt[1000] = time.Now()
+	snapshot := &SystemMetrics{
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 50},
+		CPUEligibleUsers: []int{1000},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {
+				UID: 1000, Username: "limited-user", EligibleForCPU: true,
+				EnforceableUsage: metrics.ProcessSetMetrics{CPUUsage: 50, CPUUsageEMA: 50},
+			},
+		},
+	}
+
+	err = manager.executeDecision("MAINTAIN_CURRENT_STATE", snapshot)
+	if err == nil || !strings.Contains(err.Error(), "reconcile active process membership") {
+		t.Fatalf("maintain decision error = %v, want membership failure", err)
+	}
+	if !manager.activeUsers[1000] || !manager.limitsActive {
+		t.Fatalf("active state changed after reconciliation failure: users=%v active=%t", manager.activeUsers, manager.limitsActive)
+	}
+	recorded := exporter.recordedErrors()
+	if len(recorded) != 1 || recorded[0] != (prometheusErrorRecord{
+		component: processMembershipErrorComponent,
+		errorType: processMembershipReconcileFailure,
+	}) {
+		t.Fatalf("recorded errors = %+v, want one bounded process-membership failure", recorded)
 	}
 }
 

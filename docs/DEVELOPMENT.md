@@ -156,6 +156,12 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
 	the same normalized process-policy result. The identity is the basename resolved from
 	`/proc/PID/exe`, with `/proc/PID/comm` only as a fallback; PID-decorated display names
 	and user-controlled `argv[0]` values are not policy identities.
+- While any resource limit remains observed as active, every control cycle **MUST**
+  reconcile process membership once per limited user. Newly enforceable processes move
+  into the user's current shared or standalone cgroup. Processes that become excluded
+  move back only to an origin captured for the same PID start time. If that origin is
+  unavailable, reconciliation fails visibly and leaves the process constrained; it
+  **MUST NOT** guess an untracked destination or clear the user's active state.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
@@ -165,7 +171,13 @@ asymmetry. Process accounting previously included excluded processes even though
 cgroup placement omitted them, allowing unenforceable workload to trigger or prolong
 limits.
 
-*Findings: resman-4pw.1, resman-4pw.3*
+Initial placement previously ran only during activation or re-add. A new login or
+service process created while the limit stayed active could therefore remain outside
+the controlled cgroup indefinitely, and a reload that excluded a process left it
+constrained under stale policy. Bounded per-cycle reconciliation now makes membership
+eventually consistent and uses captured start times to avoid acting on reused PIDs.
+
+*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3*
 
 ## Rule 4 — Every configured decision dimension must be evaluated
 
@@ -633,8 +645,7 @@ Until they exist, treat them as review checkpoints.
 | 17. One language | `resman-4pw.19` |
 | 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |
 
-Findings `resman-4pw.2` (process membership reconciliation), `resman-4pw.3` (excluded
-process accounting), `resman-4pw.8` (refresh must not advance decision state), and
+Findings `resman-4pw.8` (refresh must not advance decision state) and
 `resman-4pw.15` (sampling staleness window) require a **product contract decision**
 before a rule can be written. When those decisions are made, record them here.
 

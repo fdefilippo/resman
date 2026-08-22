@@ -10,15 +10,28 @@ I/O, MCP, Prometheus, database, reload, and cgroup-membership scenarios.
 make test-functional-smolvm
 ```
 
+The default `resource-only` scenario requires CPU, memory, and I/O interfaces.
+The process-membership boundary can be run independently on guests that expose
+only the CPU interface:
+
+```bash
+make test-functional-smolvm-process-membership
+```
+
 The target builds the guest image with `sudo podman` and invokes every
 KVM-dependent SmolVM command through `sg kvm -c`. Starting a new login shell is
 not required after adding the user to the `kvm` group.
 
 The guest is derived from `docker.io/amd64/oraclelinux:9`. The derived image
-adds the CGO-enabled resman binary, systemd, SQLite/curl diagnostics, fixture
-users, and the `stress` workload tool from `ol9_developer_EPEL`. The repository
-definition comes from Oracle Linux's `oracle-epel-release-el9` package. Both
-the base digest and the derived image ID are recorded in the evidence.
+adds systemd, SQLite/curl diagnostics, fixture users, and the `stress` workload
+tool from `ol9_developer_EPEL`. The repository definition comes from Oracle
+Linux's `oracle-epel-release-el9` package. This package-and-user fixture is a
+persistent local image keyed by the hash of `Containerfile.base`; ordinary runs
+reuse it and rebuild only the cached Go builder plus the thin layer containing
+the new CGO-enabled resman binary, scripts, and config. Both the upstream base
+digest, fixture image ID/reuse status, and per-run image ID are recorded in the
+evidence. The per-run image is removed during cleanup, while fixture images are
+retained until their definition changes or the operator removes them.
 
 Use the cheaper checks while developing the harness:
 
@@ -88,6 +101,14 @@ cgroups with `cpu.max=max 100000`. It also rejects a run that creates the
 finite shared CPU cgroup. The exact controller values are exported as
 `resource-only-cgroups.txt`.
 
+The `process-membership` scenario activates CPU enforcement for `resman-cpu`,
+starts a second process after activation, and requires the next control cycles
+to move it into the existing user cgroup. It then reloads
+`PROCESS_EXCLUDE_LIST`, verifies that both `stress` processes return to their
+captured origin while a differently named CPU workload keeps the user actively
+limited, removes the exclusion, and verifies that both return to the limited
+cgroup. Evidence is exported as `process-membership.txt`.
+
 The guest probes the actual `cpu.max`, `memory.max`, and `io.max` interfaces in
 a disposable child cgroup. A controller that is merely listed in
 `cgroup.controllers` is insufficient. If the SmolVM kernel lacks a required
@@ -98,7 +119,8 @@ interface, the run is `BLOCKED`/77 and cannot be cited as passing evidence.
 Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 `SMOLVM_EVIDENCE_ROOT` to export it elsewhere. It includes:
 
-- SmolVM version and image reference/digest;
+- SmolVM version, upstream image digest, persistent fixture identity/reuse
+  status, and per-run image identity;
 - exact host commands, including `sg kvm` and `sudo podman`;
 - guest kernel, systemd PID 1, cgroup mount and controllers;
 - requested and observed CPU/RAM;
@@ -106,6 +128,8 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - systemd journal/status, resman log, process snapshot, initial/final Prometheus
   output, cgroup tree, and SQLite schema;
 - standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
+- sustained-active process-membership origin and reconciliation results when that
+  scenario is selected;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.
 
 Host-side failures that happen before the guest runner starts are also written

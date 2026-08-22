@@ -666,6 +666,8 @@ const (
 	limitTransitionErrorComponent      = "limit_transition"
 	limitTransitionActivationFailure   = "activation_failure"
 	limitTransitionDeactivationFailure = "deactivation_failure"
+	processMembershipErrorComponent    = "process_membership"
+	processMembershipReconcileFailure  = "reconciliation_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

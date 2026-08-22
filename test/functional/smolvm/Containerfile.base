@@ -1,0 +1,16 @@
+FROM docker.io/amd64/oraclelinux:9
+
+ENV container=smolvm
+
+RUN dnf install -y oracle-epel-release-el9 \
+ && dnf --enablerepo=ol9_developer_EPEL install -y \
+      ca-certificates curl procps-ng shadow-utils sqlite stress systemd util-linux \
+ && dnf clean all \
+ && rm -rf /var/cache/dnf \
+ && useradd --create-home --shell /bin/bash resman-cpu \
+ && useradd --create-home --shell /bin/bash resman-memory \
+ && useradd --create-home --shell /bin/bash resman-io \
+ && systemctl mask systemd-networkd-wait-online.service
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

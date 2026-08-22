@@ -331,18 +331,14 @@ never written into systemd-managed cgroups.
 - Automatic cleanup of stale entries
 
 **Process Exclusion:**
-The following processes are automatically excluded from CPU limits:
-- System: systemd, dbus-daemon, polkitd, udisks2d
-- Network: NetworkManager, wpa_supplicant, sshd
-- Services: cron, rsyslogd, auditd, firewalld
-- Containers: dockerd, containerd, kubelet, lxcfs
-- Web: nginx, apache2, httpd, php-fpm
-- Database: mysqld, mariadbd, postgres, mongod, redis-server
-- Mail: postfix, master
-- Monitoring: zabbix_agentd, prometheus, node_exporter, grafana-server
-- Virtualization: qemu-system, libvirtd, vmtoolsd, VBoxService
-- Desktop: gdm, gnome-shell, lightdm, sddm
-- Other: cupsd, avahi-daemon, bluetoothd, chronyd, smartd
+- `PROCESS_EXCLUDE_LIST` defines the process set enforceable by every resource.
+- Excluded processes remain in observed totals but do not feed decision inputs.
+- Matching uses the `/proc/PID/exe` basename, with `/proc/PID/comm` as fallback.
+- While limits are active, every control cycle moves new enforceable processes into
+  the current user cgroup and restores newly excluded processes to their captured
+  origins.
+- Origin restoration requires the same PID start time. A missing origin fails closed:
+  the process remains constrained and the control cycle reports the error.
 
 **User Exclusion:**
 - Configured via `USER_EXCLUDE_LIST`
