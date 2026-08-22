@@ -38,7 +38,9 @@ import (
 )
 
 const (
-	cpuPercentMultiplier = 100.0
+	cpuPercentMultiplier                  = 100.0
+	defaultFallbackCPUSamplingInterval    = 30 * time.Second
+	fallbackCPUSampleIntervalsBeforeStale = 2
 )
 
 // UserMetrics contains metrics for a single user.
@@ -237,7 +239,7 @@ func (c *Collector) getTotalCoresFallback() int {
 	return cores
 }
 
-// GetTotalCPUUsage restituisce l'uso totale della CPU in percentuale.
+// GetTotalCPUUsage returns host-wide CPU usage as a percentage.
 func (c *Collector) GetTotalCPUUsage() float64 {
 	cacheKey := "total_cpu_usage"
 	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
@@ -247,7 +249,7 @@ func (c *Collector) GetTotalCPUUsage() float64 {
 	return c.getTotalCPUUsageFallback()
 }
 
-// getTotalCPUUsageFallback calcola l'uso CPU manualmente da /proc/stat.
+// getTotalCPUUsageFallback calculates host CPU usage from /proc/stat jiffies.
 func (c *Collector) getTotalCPUUsageFallback() float64 {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
@@ -303,18 +305,13 @@ func (c *Collector) updateFallbackCPUSample(total, idle uint64) float64 {
 }
 
 func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time) float64 {
+	maxGap := fallbackCPUSampleMaxGap(c.getConfig())
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	previous := c.prevFallbackCPU
 	c.prevFallbackCPU = cpuJiffySample{total: total, idle: idle, sampledAt: now, valid: true}
-	maxGap := 30 * time.Second
-	if c.cfg != nil {
-		maxGap = 2 * time.Duration(c.cfg.GetMetricsCacheTTL()) * time.Second
-	}
-	if maxGap <= 0 {
-		maxGap = time.Second
-	}
 	if !previous.valid || now.Before(previous.sampledAt) || now.Sub(previous.sampledAt) > maxGap ||
 		total < previous.total || idle < previous.idle {
 		return 0
@@ -326,6 +323,20 @@ func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time)
 		return 0
 	}
 	return cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
+}
+
+func fallbackCPUSampleMaxGap(cfg *config.Config) time.Duration {
+	samplingInterval := defaultFallbackCPUSamplingInterval
+	if cfg != nil {
+		intervalSeconds := cfg.GetPollingInterval()
+		if cfg.GetPSIEventDriven() {
+			intervalSeconds = cfg.GetPSIFallbackInterval()
+		}
+		if intervalSeconds > 0 {
+			samplingInterval = time.Duration(intervalSeconds) * time.Second
+		}
+	}
+	return fallbackCPUSampleIntervalsBeforeStale * samplingInterval
 }
 
 // GetUserCPUUsage restituisce l'uso CPU per un utente specifico.

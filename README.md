@@ -144,6 +144,11 @@ and retried on later cycles if cleanup fails.
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
+Host-wide CPU uses consecutive `/proc/stat` jiffy samples. Its baseline tolerates
+normal scheduling jitter and one missed decision-loop tick: it expires after two
+`POLLING_INTERVAL` periods, or two `PSI_FALLBACK_INTERVAL` periods in event-driven
+mode. `METRICS_CACHE_TTL` controls only value reuse and does not set this sampling
+window.
 
 Per-user memory uses proportional set size (PSS) from
 `/proc/PID/smaps_rollup`, preventing shared pages from being counted once per
