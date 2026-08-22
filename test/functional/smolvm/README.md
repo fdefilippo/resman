@@ -16,8 +16,9 @@ not required after adding the user to the `kvm` group.
 
 The guest is derived from `docker.io/amd64/oraclelinux:9`. The derived image
 adds the CGO-enabled resman binary, systemd, SQLite/curl diagnostics, fixture
-users, and a small self-contained workload generator. Both the Oracle Linux
-base digest and the derived image ID are recorded in the evidence.
+users, and the `stress` workload tool from `ol9_developer_EPEL`. The repository
+definition comes from Oracle Linux's `oracle-epel-release-el9` package. Both
+the base digest and the derived image ID are recorded in the evidence.
 
 Use the cheaper checks while developing the harness:
 
@@ -72,14 +73,25 @@ SMOLVM_CPUS=4 SMOLVM_MEMORY_MIB=4096 make test-functional-smolvm
 ```
 
 The image provides three fixture users (`resman-cpu`, `resman-memory`, and
-`resman-io`), a deterministic CPU/RAM/I/O workload helper, `curl`, and
-`sqlite3`. Workloads are launched inside the guest with:
+`resman-io`), a small wrapper around `stress` for CPU/RAM/I/O workloads,
+`curl`, and `sqlite3`. Workloads are launched inside the guest with:
 
 ```bash
 /opt/resman-functional/workload.sh cpu 15s
 /opt/resman-functional/workload.sh memory 15s
 /opt/resman-functional/workload.sh io 15s
 ```
+
+The default semantic scenario leaves CPU eligibility empty, runs CPU, memory,
+and I/O workloads, and requires the RAM/I/O users to appear in standalone
+cgroups with `cpu.max=max 100000`. It also rejects a run that creates the
+finite shared CPU cgroup. The exact controller values are exported as
+`resource-only-cgroups.txt`.
+
+The guest probes the actual `cpu.max`, `memory.max`, and `io.max` interfaces in
+a disposable child cgroup. A controller that is merely listed in
+`cgroup.controllers` is insufficient. If the SmolVM kernel lacks a required
+interface, the run is `BLOCKED`/77 and cannot be cited as passing evidence.
 
 ## Evidence and cleanup
 
@@ -91,7 +103,9 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - guest kernel, systemd PID 1, cgroup mount and controllers;
 - requested and observed CPU/RAM;
 - isolated paths and guest-local endpoints;
-- systemd journal/status, Prometheus output, and SQLite schema;
+- systemd journal/status, resman log, process snapshot, initial/final Prometheus
+  output, cgroup tree, and SQLite schema;
+- standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.
 
 Host-side failures that happen before the guest runner starts are also written

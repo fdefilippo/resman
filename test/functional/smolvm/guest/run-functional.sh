@@ -29,6 +29,12 @@ detail="guest harness did not complete"
 finish() {
     local status=$?
     set +e
+    cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
+    ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
+    find "/sys/fs/cgroup/resman-functional-$run_id" -maxdepth 3 -type d -print \
+        >"$artifact_dir/cgroup-tree.txt" 2>&1
+    curl --fail --silent --show-error --max-time 2 \
+        http://127.0.0.1:19100/metrics >"$artifact_dir/prometheus-metrics-final.txt" 2>&1
     systemctl stop "$service" >/dev/null 2>&1
     journalctl -u "$service" --no-pager >"$artifact_dir/resman-journal.log" 2>&1
     printf '%s\n' "$result" >"$result_file"
@@ -101,6 +107,7 @@ chmod 0600 "$runtime_dir/environment"
     printf 'allocated_memory_mib=%s\n' "$allocated_memory_mib"
     printf 'guest_observed_cpus=%s\n' "$(nproc)"
     printf 'guest_observed_memory_kib=%s\n' "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)"
+    printf 'stress_version=%s\n' "$(stress --version | head -n 1)"
     printf 'config_path=%s\n' "$config_file"
     printf 'database_path=%s\n' "$state_dir/metrics.db"
     printf 'cgroup_path=%s\n' "/sys/fs/cgroup/resman-functional-$run_id"
@@ -122,9 +129,80 @@ grep -q '^resman_' "$artifact_dir/prometheus-metrics.txt" \
 [[ -f "$state_dir/metrics.db" ]] || fail "SQLite metrics database was not created"
 sqlite3 "$state_dir/metrics.db" '.schema' >"$artifact_dir/database-schema.sql" \
     || fail "SQLite metrics database is unreadable"
-[[ -d /sys/fs/cgroup/resman-functional-$run_id ]] || fail "isolated cgroup root was not created"
+base_cgroup=/sys/fs/cgroup/resman-functional-$run_id
+[[ -d $base_cgroup ]] || fail "isolated cgroup root was not created"
+
+# A controller name alone does not prove that the kernel exposes the files
+# needed by the configured policy. Probe a real child below resman's base after
+# the manager has enabled its subtree controllers.
+controller_probe=$base_cgroup/controller-probe
+mkdir "$controller_probe" || blocked "cannot create the controller-interface probe cgroup"
+cpu_max_available=false
+memory_max_available=false
+io_max_available=false
+[[ -e $controller_probe/cpu.max ]] && cpu_max_available=true
+[[ -e $controller_probe/memory.max ]] && memory_max_available=true
+[[ -e $controller_probe/io.max ]] && io_max_available=true
+{
+    printf 'cpu_max_available=%s\n' "$cpu_max_available"
+    printf 'memory_max_available=%s\n' "$memory_max_available"
+    printf 'io_max_available=%s\n' "$io_max_available"
+} >>"$artifact_dir/environment.txt"
+rmdir "$controller_probe" || fail "cannot remove the controller-interface probe cgroup"
+[[ $cpu_max_available == true ]] || blocked "cpu controller is listed but cpu.max is unavailable"
+[[ $memory_max_available == true ]] || blocked "memory controller is listed but memory.max is unavailable"
+[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable"
+
+# Exercise the resource-only enforcement boundary. CPU eligibility is empty in
+# the fixture, while the memory and I/O users are independently eligible.
+/opt/resman-functional/workload.sh cpu 30s &
+cpu_workload_pid=$!
+/opt/resman-functional/workload.sh memory 30s &
+memory_workload_pid=$!
+/opt/resman-functional/workload.sh io 30s &
+io_workload_pid=$!
+cpu_uid=$(id -u resman-cpu)
+memory_uid=$(id -u resman-memory)
+io_uid=$(id -u resman-io)
+memory_cgroup=/sys/fs/cgroup/resman-functional-$run_id/user_$memory_uid
+io_cgroup=/sys/fs/cgroup/resman-functional-$run_id/user_$io_uid
+
+resource_limits_ready=false
+for _ in $(seq 1 25); do
+    if [[ -r $memory_cgroup/memory.max && -r $memory_cgroup/cpu.max \
+        && -r $io_cgroup/io.max && -r $io_cgroup/cpu.max ]] \
+        && [[ $(< "$memory_cgroup/memory.max") == 134217728 ]] \
+        && [[ $(< "$memory_cgroup/cpu.max") == "max 100000" ]] \
+        && [[ $(< "$io_cgroup/cpu.max") == "max 100000" ]] \
+        && grep -q 'wbps=10485760' "$io_cgroup/io.max"; then
+        resource_limits_ready=true
+        break
+    fi
+    sleep 1
+done
+
+[[ $resource_limits_ready == true ]] \
+    || fail "RAM-only and IO-only limits were not observed in standalone CPU-unlimited cgroups"
+[[ ! -d /sys/fs/cgroup/resman-functional-$run_id/limited ]] \
+    || fail "resource-only enforcement unexpectedly created the finite shared CPU cgroup"
+[[ ! -d /sys/fs/cgroup/resman-functional-$run_id/user_$cpu_uid ]] \
+    || fail "CPU-ineligible fixture user unexpectedly received a standalone cgroup"
+
+{
+    printf 'cpu_uid=%s\n' "$cpu_uid"
+    printf 'memory_uid=%s\n' "$memory_uid"
+    printf 'memory_cgroup=%s\n' "$memory_cgroup"
+    printf 'memory_cpu_max=%s\n' "$(< "$memory_cgroup/cpu.max")"
+    printf 'memory_max=%s\n' "$(< "$memory_cgroup/memory.max")"
+    printf 'io_uid=%s\n' "$io_uid"
+    printf 'io_cgroup=%s\n' "$io_cgroup"
+    printf 'io_cpu_max=%s\n' "$(< "$io_cgroup/cpu.max")"
+    printf 'io_max=%s\n' "$(tr '\n' ';' < "$io_cgroup/io.max")"
+} >"$artifact_dir/resource-only-cgroups.txt"
+
+wait "$cpu_workload_pid" "$memory_workload_pid" "$io_workload_pid"
 
 systemctl status "$service" --no-pager >"$artifact_dir/resman-status.txt"
 result=PASS
-detail="systemd, cgroup v2, Prometheus, and SQLite smoke checks passed"
+detail="RAM-only and IO-only users were enforced in standalone CPU-unlimited cgroups"
 echo "PASS: $detail"

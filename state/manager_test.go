@@ -124,6 +124,7 @@ func (m *mockCgroupManager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS str
 }
 func (m *mockCgroupManager) CleanupUserCgroup(uid int) error            { return nil }
 func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return nil }
+func (m *mockCgroupManager) MoveAllUserProcesses(uid int) error         { return nil }
 func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return nil
 }
@@ -144,6 +145,66 @@ type moveResultCgroupManager struct {
 
 func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
 	return m.moveErr
+}
+
+type resourceOnlyCgroupManager struct {
+	mockCgroupManager
+	createdStandalone []int
+	movedStandalone   []int
+	cleanedStandalone []int
+	cpuQuotas         map[int]string
+	sharedCreates     int
+	releasedShared    []int
+	sharedQuotas      []string
+	ramApplyErr       error
+	ioApplyErr        error
+	cleanupErr        error
+}
+
+func (m *resourceOnlyCgroupManager) CreateUserCgroup(uid int) error {
+	m.createdStandalone = append(m.createdStandalone, uid)
+	return nil
+}
+
+func (m *resourceOnlyCgroupManager) MoveAllUserProcesses(uid int) error {
+	m.movedStandalone = append(m.movedStandalone, uid)
+	return nil
+}
+
+func (m *resourceOnlyCgroupManager) CleanupUserCgroup(uid int) error {
+	m.cleanedStandalone = append(m.cleanedStandalone, uid)
+	return m.cleanupErr
+}
+
+func (m *resourceOnlyCgroupManager) ApplyCPUQuota(uid int, quota string) error {
+	if m.cpuQuotas == nil {
+		m.cpuQuotas = make(map[int]string)
+	}
+	m.cpuQuotas[uid] = quota
+	return nil
+}
+
+func (m *resourceOnlyCgroupManager) CreateSharedCgroup() (string, error) {
+	m.sharedCreates++
+	return "/shared", nil
+}
+
+func (m *resourceOnlyCgroupManager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
+	m.releasedShared = append(m.releasedShared, uid)
+	return nil
+}
+
+func (m *resourceOnlyCgroupManager) ApplySharedCPULimit(sharedPath, quota string) error {
+	m.sharedQuotas = append(m.sharedQuotas, quota)
+	return nil
+}
+
+func (m *resourceOnlyCgroupManager) ApplyRAMLimitWithHigh(uid int, maxLimit, highLimit string) error {
+	return m.ramApplyErr
+}
+
+func (m *resourceOnlyCgroupManager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
+	return m.ioApplyErr
 }
 
 type prometheusErrorRecord struct {
@@ -674,6 +735,340 @@ func TestMakeDecisionUsesIndependentResourceAggregates(t *testing.T) {
 	}
 }
 
+func TestMinSystemCoresGatesOnlyCPUEnforcement(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*config.Config)
+		metrics   *SystemMetrics
+	}{
+		{
+			name: "RAM-only pressure activates on a reserved two-core host",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+				cfg.RAMThreshold = 10
+			},
+			metrics: &SystemMetrics{TotalCores: 2, TotalMemoryMB: 1024, RAMEligibleUsageBytes: 256 * 1024 * 1024},
+		},
+		{
+			name: "IO-only pressure activates on a reserved two-core host",
+			configure: func(cfg *config.Config) {
+				cfg.IOEnabled = true
+				cfg.IOThreshold = 10
+				cfg.IOWriteBPS = "1M"
+			},
+			metrics: &SystemMetrics{TotalCores: 2, IOEligibleUsersCount: 1, IOEligibleWriteBytes: 2 * 1024 * 1024},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.MinSystemCores = 2
+			cfg.CPUThreshold = 100
+			cfg.IgnoreSystemLoad = true
+			tt.configure(cfg)
+			manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, &mockPrometheusExporter{})
+			if err != nil {
+				t.Fatalf("NewManager() error = %v", err)
+			}
+
+			decision, _ := manager.makeDecision(tt.metrics)
+			if decision != "ACTIVATE_LIMITS" {
+				t.Fatalf("makeDecision() = %q, want ACTIVATE_LIMITS", decision)
+			}
+		})
+	}
+}
+
+func TestResourceOnlyUsersUseStandaloneCgroupsWithoutCPUThrottle(t *testing.T) {
+	tests := []struct {
+		name        string
+		configure   func(*config.Config)
+		eligibility config.UserEligibility
+		wantRAM     bool
+		wantIO      bool
+	}{
+		{
+			name: "RAM-only user",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+				cfg.IOEnabled = false
+			},
+			eligibility: config.UserEligibility{EligibleForRAM: true},
+			wantRAM:     true,
+		},
+		{
+			name: "IO-only user",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = false
+				cfg.IOEnabled = true
+			},
+			eligibility: config.UserEligibility{EligibleForIO: true},
+			wantIO:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.MinSystemCores = 2
+			tt.configure(cfg)
+			cgroups := &resourceOnlyCgroupManager{}
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error = %v", err)
+			}
+			metrics := &SystemMetrics{
+				TotalCores:   2,
+				UserCPUUsage: map[int]float64{1000: 1},
+				UserMetrics: map[int]*metrics.UserMetrics{
+					1000: {
+						UID:            1000,
+						Username:       "resource-user",
+						EligibleForRAM: tt.eligibility.EligibleForRAM,
+						EligibleForIO:  tt.eligibility.EligibleForIO,
+					},
+				},
+			}
+
+			if err := manager.activateLimits(metrics); err != nil {
+				t.Fatalf("activateLimits() error = %v", err)
+			}
+			if cgroups.sharedCreates != 0 {
+				t.Fatalf("shared CPU cgroup creations = %d, want 0", cgroups.sharedCreates)
+			}
+			if len(cgroups.createdStandalone) != 1 || len(cgroups.movedStandalone) != 1 {
+				t.Fatalf("standalone create/move = %v/%v, want [1000]/[1000]", cgroups.createdStandalone, cgroups.movedStandalone)
+			}
+			if got := cgroups.cpuQuotas[1000]; got != "max 100000" {
+				t.Fatalf("standalone cpu.max = %q, want max 100000", got)
+			}
+			state := manager.resourceLimits[1000]
+			if !state.standalone || state.ram != tt.wantRAM || state.ramApplied != tt.wantRAM || state.io != tt.wantIO || state.ioApplied != tt.wantIO {
+				t.Fatalf("resource state = %+v, want standalone RAM=%t IO=%t requested and applied", state, tt.wantRAM, tt.wantIO)
+			}
+			if manager.activeUsers[1000] || manager.requestedCPUUsers[1000] {
+				t.Fatal("resource-only user was marked as CPU-requested or CPU-active")
+			}
+			if manager.limitsActive || !manager.resourceLimitsActive {
+				t.Fatal("resource-only enforcement changed CPU status or failed to activate resource status")
+			}
+
+			if err := manager.deactivateLimits(); err != nil {
+				t.Fatalf("deactivateLimits() error = %v", err)
+			}
+			if len(cgroups.cleanedStandalone) != 1 || cgroups.cleanedStandalone[0] != 1000 {
+				t.Fatalf("standalone cleanup = %v, want [1000]", cgroups.cleanedStandalone)
+			}
+			if manager.limitsActive || manager.resourceLimitsActive {
+				t.Fatal("CPU or resource status remained active after standalone cleanup")
+			}
+		})
+	}
+}
+
+func TestStandalonePartialFailurePreservesIntentAndObservedSuccess(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinSystemCores = 2
+	cfg.RAMEnabled = true
+	cfg.IOEnabled = true
+	cgroups := &resourceOnlyCgroupManager{ioApplyErr: errors.New("io controller rejected limit")}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	metrics := &SystemMetrics{
+		TotalCores:   2,
+		UserCPUUsage: map[int]float64{1000: 1},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "resource-user", EligibleForRAM: true, EligibleForIO: true},
+		},
+	}
+
+	err = manager.activateLimits(metrics)
+	if err == nil || !strings.Contains(err.Error(), "io controller rejected limit") {
+		t.Fatalf("activateLimits() error = %v, want IO failure", err)
+	}
+	state := manager.resourceLimits[1000]
+	if !state.standalone || !state.ram || !state.ramApplied || !state.io || state.ioApplied {
+		t.Fatalf("resource state after partial failure = %+v, want RAM active and IO requested but inactive", state)
+	}
+	if manager.limitsActive || !manager.resourceLimitsActive {
+		t.Fatal("successful RAM enforcement was lost after partial IO failure")
+	}
+}
+
+func TestStandaloneResourceLifecycleReconcilesReloadAndCleanupFailure(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinSystemCores = 2
+	cfg.RAMEnabled = true
+	cfg.IOEnabled = false
+	cgroups := &resourceOnlyCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	metrics := &SystemMetrics{
+		TotalCores:   2,
+		UserCPUUsage: map[int]float64{1000: 1},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "resource-user", EligibleForRAM: true, EligibleForIO: true},
+		},
+	}
+	if err := manager.activateLimits(metrics); err != nil {
+		t.Fatalf("activateLimits() error = %v", err)
+	}
+
+	cfg.RAMEnabled = false
+	cfg.IOEnabled = true
+	if err := manager.reconcileStandaloneResourceUsers(metrics, cfg); err != nil {
+		t.Fatalf("reconcileStandaloneResourceUsers() error = %v", err)
+	}
+	state := manager.resourceLimits[1000]
+	if !state.standalone || state.ram || state.ramApplied || !state.io || !state.ioApplied {
+		t.Fatalf("resource state after reload = %+v, want standalone IO-only enforcement", state)
+	}
+
+	cgroups.cleanupErr = errors.New("cgroup still populated")
+	err = manager.deactivateLimits()
+	if err == nil || !strings.Contains(err.Error(), "cgroup still populated") {
+		t.Fatalf("deactivateLimits() error = %v, want cleanup failure", err)
+	}
+	state = manager.resourceLimits[1000]
+	if !state.standalone || !state.ioApplied || !manager.resourceLimitsActive {
+		t.Fatalf("failed cleanup lost observed state: state=%+v resourceLimitsActive=%t", state, manager.resourceLimitsActive)
+	}
+
+	cgroups.cleanupErr = nil
+	if err := manager.deactivateLimits(); err != nil {
+		t.Fatalf("deactivateLimits() retry error = %v", err)
+	}
+	if _, exists := manager.resourceLimits[1000]; exists || manager.limitsActive || manager.resourceLimitsActive {
+		t.Fatalf("successful cleanup retry left state=%+v cpuActive=%t resourceActive=%t", manager.resourceLimits[1000], manager.limitsActive, manager.resourceLimitsActive)
+	}
+}
+
+func TestMaintenanceMigratesStandaloneUserAfterCPUEligibilityReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinSystemCores = 2
+	cfg.RAMEnabled = true
+	cgroups := &resourceOnlyCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	resourceMetrics := &SystemMetrics{
+		TotalCores:   4,
+		UserCPUUsage: map[int]float64{1000: 1},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "resource-user", CPUUsageEMA: 1, EligibleForRAM: true},
+		},
+	}
+	if err := manager.activateLimits(resourceMetrics); err != nil {
+		t.Fatalf("activateLimits() error = %v", err)
+	}
+
+	resourceMetrics.CPUEligibleUsers = []int{1000}
+	resourceMetrics.UserMetrics[1000].EligibleForCPU = true
+	if err := manager.releaseIdleUsers(resourceMetrics); err != nil {
+		t.Fatalf("releaseIdleUsers() error = %v", err)
+	}
+	if cgroups.sharedCreates != 1 {
+		t.Fatalf("shared CPU cgroup creations = %d, want 1", cgroups.sharedCreates)
+	}
+	if len(cgroups.cleanedStandalone) != 1 || !manager.activeUsers[1000] {
+		t.Fatalf("standalone cleanup/CPU state = %v/%t, want [1000]/true", cgroups.cleanedStandalone, manager.activeUsers[1000])
+	}
+	if !manager.limitsActive {
+		t.Fatal("CPU aggregate state did not activate after standalone-to-shared migration")
+	}
+	if manager.resourceLimits[1000].standalone {
+		t.Fatal("user remained marked standalone after migration to shared CPU enforcement")
+	}
+}
+
+func TestMaintenanceMigratesCPUUserToStandaloneWhenMinSystemCoresBlocksCPU(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinSystemCores = 2
+	cfg.RAMEnabled = true
+	cgroups := &resourceOnlyCgroupManager{}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	manager.limitsActive = true
+	manager.limitsAppliedTime = time.Now().Add(-time.Minute)
+	manager.activeUsers[1000] = true
+	manager.requestedCPUUsers[1000] = true
+	manager.sharedCgroupPath = "/shared"
+
+	sample := &SystemMetrics{
+		TotalCores:       2,
+		CPUEligibleUsers: []int{1000},
+		UserCPUUsage:     map[int]float64{1000: 1},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {
+				UID:            1000,
+				Username:       "resource-user",
+				CPUUsageEMA:    1,
+				EligibleForCPU: true,
+				EligibleForRAM: true,
+			},
+		},
+	}
+	if err := manager.releaseIdleUsers(sample); err != nil {
+		t.Fatalf("releaseIdleUsers() error = %v", err)
+	}
+	if !reflect.DeepEqual(cgroups.releasedShared, []int{1000}) {
+		t.Fatalf("released shared users = %v, want [1000]", cgroups.releasedShared)
+	}
+	state := manager.resourceLimits[1000]
+	if !state.standalone || !state.ram || !state.ramApplied {
+		t.Fatalf("resource state = %+v, want active standalone RAM", state)
+	}
+	if manager.limitsActive || manager.activeUsers[1000] || manager.requestedCPUUsers[1000] {
+		t.Fatalf("CPU state remained active: aggregate=%t active=%t requested=%t",
+			manager.limitsActive, manager.activeUsers[1000], manager.requestedCPUUsers[1000])
+	}
+	if !manager.resourceLimitsActive {
+		t.Fatal("RAM enforcement was not kept active during CPU release")
+	}
+	if !reflect.DeepEqual(cgroups.sharedQuotas, []string{"max 100000"}) {
+		t.Fatalf("shared CPU quotas = %v, want [max 100000]", cgroups.sharedQuotas)
+	}
+	if got := exporter.snapshot(); got.limitsDeactivated != 1 || got.limitsActivated != 0 {
+		t.Fatalf("CPU transition counters = activated %d deactivated %d, want 0/1",
+			got.limitsActivated, got.limitsDeactivated)
+	}
+}
+
+func TestActivationWithoutEligibleEnforcementReportsBoundedFailure(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MinSystemCores = 2
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	err = manager.activateLimits(&SystemMetrics{
+		TotalCores:   2,
+		UserCPUUsage: map[int]float64{1000: 1},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "ineligible-user"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no CPU, RAM, or IO enforcement") {
+		t.Fatalf("activateLimits() error = %v, want explicit no-enforcement failure", err)
+	}
+	recorded := exporter.recordedErrors()
+	if len(recorded) != 1 || recorded[0].component != limitTransitionErrorComponent || recorded[0].errorType != limitTransitionActivationFailure {
+		t.Fatalf("recorded errors = %+v, want one bounded activation failure", recorded)
+	}
+}
+
 func TestReconcileUserResourceLimitsUsesIndependentEligibility(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -709,7 +1104,9 @@ func TestReconcileUserResourceLimitsUsesIndependentEligibility(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewManager() error: %v", err)
 			}
-			manager.reconcileUserResourceLimits(1000, cfg, tt.eligibility)
+			if err := manager.reconcileUserResourceLimits(1000, cfg, tt.eligibility); err != nil {
+				t.Fatalf("reconcileUserResourceLimits() error: %v", err)
+			}
 			if got := len(cgroups.applyRAMLimitCalls); got != tt.wantRAMCalls {
 				t.Fatalf("RAM apply calls = %d, want %d", got, tt.wantRAMCalls)
 			}
@@ -767,7 +1164,9 @@ func TestUserLimitStateSeparatesRequestedFromObservedEnforcement(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewManager() error: %v", err)
 		}
-		manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true})
+		if err := manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true}); err == nil {
+			t.Fatal("applyUserResourceLimits() error = nil, want injected RAM failure")
+		}
 		state := manager.GetUserLimitState(1000, "alice")
 		if !state.RAMLimitRequested || state.RAMLimitActive {
 			t.Fatalf("RAM state = %+v, want requested=true active=false", state)
@@ -1341,7 +1740,9 @@ func TestDeactivateLimitsRemovesResourcesAppliedBeforeReload(t *testing.T) {
 	manager.limitsActive = true
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
-	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
+	if err := manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true}); err != nil {
+		t.Fatalf("applyUserResourceLimits() error: %v", err)
+	}
 
 	manager.UpdateConfig(config.DefaultConfig())
 	if err := manager.deactivateLimits(); err != nil {
@@ -1493,7 +1894,9 @@ func TestReleaseIdleUsersReconcilesResourceLimitsAfterReload(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now().Add(-time.Minute)
-	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
+	if err := manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true}); err != nil {
+		t.Fatalf("applyUserResourceLimits() error: %v", err)
+	}
 
 	reloaded := config.DefaultConfig()
 	manager.UpdateConfig(reloaded)
@@ -1542,7 +1945,9 @@ func TestReleaseIdleUsersRetriesPartialResourceLimitApplication(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now()
-	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
+	if err := manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true}); err == nil {
+		t.Fatal("applyUserResourceLimits() error = nil, want injected RAM and IO failures")
+	}
 
 	initialState := manager.resourceLimits[1000]
 	if !initialState.ram || initialState.ramApplied || !initialState.io || initialState.ioApplied {
@@ -1587,7 +1992,9 @@ func TestReleaseIdleUsersReleasesNewlyIneligibleUser(t *testing.T) {
 	manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 	manager.activeUsers[1000] = true
 	manager.userLimitedAt[1000] = time.Now()
-	manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true})
+	if err := manager.applyUserResourceLimits(1000, cfg, config.UserEligibility{EligibleForRAM: true, EligibleForIO: true}); err != nil {
+		t.Fatalf("applyUserResourceLimits() error: %v", err)
+	}
 
 	metrics := &SystemMetrics{
 		TotalCores:   4,

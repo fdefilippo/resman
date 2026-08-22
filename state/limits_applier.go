@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,16 +16,182 @@ type idleReleaseResult struct {
 	err error
 }
 
+func (m *Manager) setStandaloneResourceCgroup(uid int, active bool) {
+	m.mu.Lock()
+	state := m.resourceLimits[uid]
+	state.standalone = active
+	if !active && !state.ram && !state.io && !state.ramApplied && !state.ioApplied && !state.swap {
+		delete(m.resourceLimits, uid)
+	} else {
+		m.resourceLimits[uid] = state
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) provisionStandaloneResourceUser(uid int, cfg *config.Config, eligibility config.UserEligibility) (bool, error) {
+	wantRAM := cfg.RAMEnabled && eligibility.EligibleForRAM
+	wantIO := cfg.IOEnabled && eligibility.EligibleForIO
+	m.setResourceLimitIntent(uid, wantRAM, wantIO)
+	if !wantRAM && !wantIO {
+		return false, nil
+	}
+
+	if err := m.cgroupManager.CreateUserCgroup(uid); err != nil {
+		return false, fmt.Errorf("create standalone resource cgroup for UID %d: %w", uid, err)
+	}
+	if err := m.cgroupManager.ApplyCPUQuota(uid, "max 100000"); err != nil {
+		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
+		return false, errors.Join(
+			fmt.Errorf("ensure unlimited CPU quota for standalone resource cgroup UID %d: %w", uid, err),
+			cleanupErr,
+		)
+	}
+	if err := m.cgroupManager.MoveAllUserProcesses(uid); err != nil {
+		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
+		return false, errors.Join(
+			fmt.Errorf("move processes to standalone resource cgroup for UID %d: %w", uid, err),
+			cleanupErr,
+		)
+	}
+	m.setStandaloneResourceCgroup(uid, true)
+
+	ramErr := m.applyRAMResourceLimit(uid, cfg, cfg.RAMQuotaPerUser, eligibility.EligibleForRAM)
+	ioErr := m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
+	m.mu.RLock()
+	state := m.resourceLimits[uid]
+	m.mu.RUnlock()
+	if !state.ramApplied && !state.ioApplied {
+		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
+		m.mu.Lock()
+		delete(m.resourceLimits, uid)
+		m.mu.Unlock()
+		m.setResourceLimitIntent(uid, wantRAM, wantIO)
+		return false, errors.Join(ramErr, ioErr, cleanupErr, fmt.Errorf("standalone resource cgroup for UID %d has no applied RAM or IO limit", uid))
+	}
+
+	return true, errors.Join(ramErr, ioErr)
+}
+
+func (m *Manager) hasObservedEnforcementLocked() bool {
+	return len(m.activeUsers) > 0 || m.hasObservedResourceEnforcementLocked()
+}
+
+func (m *Manager) hasObservedResourceEnforcementLocked() bool {
+	for _, state := range m.resourceLimits {
+		if state.ramApplied || state.ioApplied {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) refreshResourceLimitsActiveLocked(now time.Time) {
+	active := m.hasObservedResourceEnforcementLocked()
+	if active && !m.resourceLimitsActive {
+		m.resourceLimitsAppliedTime = now
+	}
+	if !active {
+		m.resourceLimitsAppliedTime = time.Time{}
+	}
+	m.resourceLimitsActive = active
+}
+
+func (m *Manager) refreshCPULimitsActiveLocked(now time.Time) (activated, deactivated bool) {
+	active := len(m.activeUsers) > 0
+	activated = active && !m.limitsActive
+	deactivated = !active && m.limitsActive
+	if activated {
+		m.limitsAppliedTime = now
+	}
+	if !active {
+		m.limitsAppliedTime = time.Time{}
+	}
+	m.limitsActive = active
+	return activated, deactivated
+}
+
+func (m *Manager) recordCPUTransitions(activated, deactivated bool) {
+	if m.prometheusExporter == nil {
+		return
+	}
+	if activated {
+		m.prometheusExporter.IncrementLimitsActivated()
+	}
+	if deactivated {
+		m.prometheusExporter.IncrementLimitsDeactivated()
+	}
+}
+
+func (m *Manager) reconcileStandaloneResourceUsers(metrics *SystemMetrics, cfg *config.Config) error {
+	desired := make(map[int]config.UserEligibility)
+	ramEnabled := cfg.RAMEnabled
+	ioEnabled := cfg.IOEnabled
+	m.mu.RLock()
+	for uid, userMetrics := range metrics.UserMetrics {
+		if userMetrics == nil || m.activeUsers[uid] {
+			continue
+		}
+		eligibility := config.UserEligibility{
+			EligibleForCPU: userMetrics.EligibleForCPU,
+			EligibleForRAM: userMetrics.EligibleForRAM,
+			EligibleForIO:  userMetrics.EligibleForIO,
+		}
+		if (ramEnabled && eligibility.EligibleForRAM) || (ioEnabled && eligibility.EligibleForIO) {
+			desired[uid] = eligibility
+		}
+	}
+	standalone := make(map[int]userResourceLimitState)
+	for uid, state := range m.resourceLimits {
+		if state.standalone {
+			standalone[uid] = state
+		}
+	}
+	m.mu.RUnlock()
+
+	var reconcileErrors []error
+	for uid := range standalone {
+		eligibility, keep := desired[uid]
+		if keep {
+			if err := m.reconcileUserResourceLimits(uid, cfg, eligibility); err != nil {
+				reconcileErrors = append(reconcileErrors, err)
+			}
+			delete(desired, uid)
+			continue
+		}
+
+		m.setResourceLimitIntent(uid, false, false)
+		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("cleanup standalone resource cgroup for UID %d: %w", uid, err))
+			continue
+		}
+		m.mu.Lock()
+		delete(m.resourceLimits, uid)
+		m.mu.Unlock()
+	}
+
+	for uid, eligibility := range desired {
+		if _, err := m.provisionStandaloneResourceUser(uid, cfg, eligibility); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
+	m.mu.Lock()
+	m.refreshResourceLimitsActiveLocked(time.Now())
+	m.mu.Unlock()
+	return errors.Join(reconcileErrors...)
+}
+
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	cfg := m.GetConfig()
+	var reconcileErrors []error
+	cpuEnforcementAllowed := metrics.TotalCores > cfg.GetMinSystemCores()
 	m.mu.RLock()
-	limitsActive := m.limitsActive
+	limitsActive := m.limitsActive || m.resourceLimitsActive
 	sharedPath := m.sharedCgroupPath
 	m.mu.RUnlock()
 	if !limitsActive {
-		return nil // Limiti non attivi, nessun rilascio necessario
+		return nil // No active enforcement needs reconciliation.
 	}
-	if sharedPath != "" {
+	if sharedPath != "" && cpuEnforcementAllowed {
 		if _, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile shared CPU quota: %w", err)
 		}
@@ -35,8 +202,10 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	now := time.Now()
 	minActiveTime := time.Duration(cfg.GetMinActiveTime()) * time.Second
 	eligible := make(map[int]bool, len(metrics.CPUEligibleUsers))
-	for _, uid := range metrics.CPUEligibleUsers {
-		eligible[uid] = true
+	if cpuEnforcementAllowed {
+		for _, uid := range metrics.CPUEligibleUsers {
+			eligible[uid] = true
+		}
 	}
 
 	m.mu.Lock()
@@ -63,7 +232,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		usersToRelease = append(usersToRelease, uid)
 	}
 
-	for _, uid := range metrics.CPUEligibleUsers {
+	for uid := range eligible {
 		if _, active := m.activeUsers[uid]; active {
 			continue
 		}
@@ -81,9 +250,24 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		m.requestedCPUUsers[uid] = true
 	}
 	m.mu.Unlock()
+	if len(usersToAdd) > 0 && sharedPath == "" && metrics.TotalCores > cfg.GetMinSystemCores() {
+		createdSharedPath, err := m.cgroupManager.CreateSharedCgroup()
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("create shared CPU cgroup during maintenance: %w", err))
+		} else if _, err := m.applySharedCPUQuota(createdSharedPath, metrics.TotalCores, cfg); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("apply shared CPU quota during maintenance: %w", err))
+		} else {
+			sharedPath = createdSharedPath
+			m.mu.Lock()
+			m.sharedCgroupPath = sharedPath
+			m.mu.Unlock()
+		}
+	}
 
 	for _, uid := range usersToRelease {
-		m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid))
+		if err := m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid)); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+		}
 	}
 
 	results := m.releaseTrackedUsers(usersToRelease, sharedPath, normalQuota)
@@ -121,6 +305,20 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				"cpu", metrics.UserCPUUsage[uid],
 			)
 
+			m.mu.RLock()
+			wasStandalone := m.resourceLimits[uid].standalone
+			m.mu.RUnlock()
+			if wasStandalone {
+				if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+					m.logger.Warn("Failed to migrate standalone resource cgroup to shared CPU enforcement", "uid", uid, "error", err)
+					reconcileErrors = append(reconcileErrors, err)
+					continue
+				}
+				m.mu.Lock()
+				delete(m.resourceLimits, uid)
+				m.mu.Unlock()
+			}
+
 			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
 			if err != nil {
 				m.logger.Warn("Failed to re-create user sub-cgroup",
@@ -133,7 +331,9 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 					"uid", uid, "error", err)
 				continue
 			}
-			m.applyUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid))
+			if err := m.applyUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid)); err != nil {
+				reconcileErrors = append(reconcileErrors, err)
+			}
 
 			if m.psiWatcher != nil {
 				cpuPressurePath := filepath.Join(userCgroupPath, "cpu.pressure")
@@ -171,10 +371,29 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	}
 	m.mu.RUnlock()
 	for _, uid := range activeUsers {
-		m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid))
+		if err := m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid)); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
+	if err := m.reconcileStandaloneResourceUsers(metrics, cfg); err != nil {
+		reconcileErrors = append(reconcileErrors, err)
 	}
 
-	return nil
+	now = time.Now()
+	m.mu.Lock()
+	cpuActivated, cpuDeactivated := m.refreshCPULimitsActiveLocked(now)
+	m.mu.Unlock()
+	m.recordCPUTransitions(cpuActivated, cpuDeactivated)
+	if cpuActivated && m.stabilityTracker != nil {
+		m.stabilityTracker.Reset()
+	}
+	if cpuDeactivated && sharedPath != "" {
+		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, "max 100000"); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reset inactive shared CPU cgroup quota: %w", err))
+		}
+	}
+
+	return errors.Join(reconcileErrors...)
 }
 
 func userCPUEMA(metrics *SystemMetrics, uid int) (float64, bool) {
@@ -249,7 +468,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	}()
 
 	cfg := m.GetConfig()
-	m.logger.Info("Activating CPU limits with proportional weights")
+	cpuEnforcementAllowed := metrics.TotalCores > cfg.GetMinSystemCores()
 
 	// Snapshot the users that are currently limited.
 	m.mu.RLock()
@@ -265,8 +484,10 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		currentActiveSet[uid] = true
 	}
 	eligibleSet := make(map[int]bool, len(metrics.CPUEligibleUsers))
-	for _, uid := range metrics.CPUEligibleUsers {
-		eligibleSet[uid] = true
+	if cpuEnforcementAllowed {
+		for _, uid := range metrics.CPUEligibleUsers {
+			eligibleSet[uid] = true
+		}
 	}
 	m.mu.Lock()
 	m.requestedCPUUsers = eligibleSet
@@ -279,7 +500,9 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	for _, uid := range previouslyLimited {
 		if !currentActiveSet[uid] || !eligibleSet[uid] {
 			usersToRelease = append(usersToRelease, uid)
-			m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid))
+			if err := m.reconcileUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid)); err != nil && firstError == nil {
+				firstError = err
+			}
 		}
 	}
 	releaseResults := m.releaseTrackedUsers(usersToRelease, sharedPath, cfg.CPUQuotaNormal)
@@ -300,9 +523,20 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	}
 	m.commitReleasedUsers(releasedUsers)
 	removedCount := len(releasedUsers)
+	releasedSet := make(map[int]bool, len(releasedUsers))
+	for _, uid := range releasedUsers {
+		releasedSet[uid] = true
+		eligibility := userEligibilityFromMetrics(metrics, uid)
+		if _, err := m.provisionStandaloneResourceUser(uid, cfg, eligibility); err != nil {
+			m.logger.Warn("Failed to preserve RAM or IO enforcement after CPU release", "uid", uid, "error", err)
+			if firstError == nil {
+				firstError = err
+			}
+		}
+	}
 
 	// Phase 2: create or configure the shared cgroup.
-	if sharedPath == "" {
+	if len(eligibleSet) > 0 && sharedPath == "" {
 		// Create the shared cgroup.
 		createdSharedPath, err := m.cgroupManager.CreateSharedCgroup()
 		if err != nil {
@@ -314,14 +548,16 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		m.mu.Unlock()
 
 	}
-	sharedQuota, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg)
-	if err != nil {
-		return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
+	if len(eligibleSet) > 0 {
+		sharedQuota, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
+		}
 	}
 
 	// Phase 3: configure user sub-cgroups for the current users.
 	// CPUEligibleUsers was already filtered by CPU policy during collection.
-	for _, uid := range metrics.CPUEligibleUsers {
+	for uid := range eligibleSet {
 		eligibility := userEligibilityFromMetrics(metrics, uid)
 		m.setResourceLimitIntent(
 			uid,
@@ -388,7 +624,12 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 				continue
 			}
 
-			m.applyUserResourceLimits(uid, cfg, eligibility)
+			if err := m.applyUserResourceLimits(uid, cfg, eligibility); err != nil {
+				m.logger.Warn("CPU enforcement applied with partial RAM or IO failure", "uid", uid, "error", err)
+				if firstError == nil {
+					firstError = err
+				}
+			}
 
 			// Mark the user limited only after its processes were moved successfully.
 			m.mu.Lock()
@@ -407,36 +648,52 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		}
 	}
 
-	if limitedCount > 0 || removedCount > 0 {
-		newActivation := false
+	standaloneCount := 0
+	for uid := range metrics.UserCPUUsage {
+		if eligibleSet[uid] || releasedSet[uid] {
+			continue
+		}
+		eligibility := userEligibilityFromMetrics(metrics, uid)
+		provisioned, err := m.provisionStandaloneResourceUser(uid, cfg, eligibility)
+		if err != nil {
+			m.logger.Warn("Failed to provision standalone RAM or IO enforcement", "uid", uid, "error", err)
+			if firstError == nil {
+				firstError = err
+			}
+		}
+		if provisioned {
+			standaloneCount++
+		}
+	}
+
+	if limitedCount > 0 || standaloneCount > 0 || removedCount > 0 {
+		now := time.Now()
 		m.mu.Lock()
-		if !m.limitsActive && len(m.activeUsers) > 0 {
-			m.limitsActive = true
-			m.limitsAppliedTime = time.Now()
-			newActivation = true
-		}
+		cpuActivated, cpuDeactivated := m.refreshCPULimitsActiveLocked(now)
+		m.refreshResourceLimitsActiveLocked(now)
 		m.mu.Unlock()
-		if newActivation && m.prometheusExporter != nil {
-			m.prometheusExporter.IncrementLimitsActivated()
-		}
-		if newActivation && m.stabilityTracker != nil {
+		m.recordCPUTransitions(cpuActivated, cpuDeactivated)
+		if cpuActivated && m.stabilityTracker != nil {
 			m.stabilityTracker.Reset()
 		}
 
-		m.logger.Info("CPU limits activated with proportional sharing",
-			"users_limited", limitedCount,
+		m.logger.Info("Resource limits reconciled",
+			"cpu_limited_users", limitedCount,
+			"standalone_resource_users", standaloneCount,
 			"users_freed", removedCount,
 			"total_active_users", len(metrics.UserCPUUsage),
 			"shared_cgroup", m.sharedCgroupPath,
-			"sharing_logic", "Proportional weights (cpu.weight)",
-			"description", "Users share total quota proportionally; idle users don't consume resources",
 		)
+	}
+	if limitedCount == 0 && standaloneCount == 0 && removedCount == 0 && firstError == nil {
+		firstError = fmt.Errorf("activation requested but no CPU, RAM, or IO enforcement was applied")
+		m.logger.Warn("Activation requested but no resource enforcement was applied")
 	}
 
 	return firstError
 }
 
-func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config, eligibility config.UserEligibility) {
+func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config, eligibility config.UserEligibility) error {
 	username := m.metricsCollector.GetUsernameFromUID(uid)
 	m.setResourceLimitIntent(
 		uid,
@@ -474,13 +731,14 @@ func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config, eligibili
 		)
 	}
 
-	m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM)
-	m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
+	ramErr := m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM)
+	ioErr := m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
+	return errors.Join(ramErr, ioErr)
 }
 
-func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota string, eligible bool) {
+func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota string, eligible bool) error {
 	if !cfg.RAMEnabled || !eligible {
-		return
+		return nil
 	}
 	quotaBytes, err := config.ParseRAMQuota(ramQuota)
 	if err != nil || quotaBytes == 0 {
@@ -488,7 +746,7 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 			"uid", uid,
 			"quota", ramQuota,
 		)
-		return
+		return fmt.Errorf("invalid RAM quota %q for UID %d", ramQuota, uid)
 	}
 
 	m.setResourceLimitState(uid, true, false, cfg.DisableSwap, false)
@@ -502,10 +760,10 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 				"max", ramQuota,
 				"error", err,
 			)
-			return
+			return fmt.Errorf("apply RAM high and max limits with swap disabled for UID %d: %w", uid, err)
 		}
 		m.setResourceLimitState(uid, true, false, true, true)
-		return
+		return nil
 	}
 	if err := m.cgroupManager.ApplyRAMLimitWithHigh(uid, ramQuota, highStr); err != nil {
 		m.logger.Warn("Failed to apply RAM high+max limits for user",
@@ -514,14 +772,15 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 			"max", ramQuota,
 			"error", err,
 		)
-		return
+		return fmt.Errorf("apply RAM high and max limits for UID %d: %w", uid, err)
 	}
 	m.setResourceLimitState(uid, true, false, false, true)
+	return nil
 }
 
-func (m *Manager) applyIOResourceLimit(uid int, cfg *config.Config, eligible bool) {
+func (m *Manager) applyIOResourceLimit(uid int, cfg *config.Config, eligible bool) error {
 	if !cfg.IOEnabled || !eligible {
-		return
+		return nil
 	}
 	readBPS := cfg.GetIOReadBPS()
 	writeBPS := cfg.GetIOWriteBPS()
@@ -537,7 +796,7 @@ func (m *Manager) applyIOResourceLimit(uid int, cfg *config.Config, eligible boo
 			"writeBPS", writeBPS,
 			"error", err,
 		)
-		return
+		return fmt.Errorf("apply IO limit for UID %d: %w", uid, err)
 	}
 	m.setResourceLimitState(uid, false, true, false, true)
 	m.logger.Debug("IO limit applied for user",
@@ -545,18 +804,21 @@ func (m *Manager) applyIOResourceLimit(uid int, cfg *config.Config, eligible boo
 		"readBPS", readBPS,
 		"writeBPS", writeBPS,
 	)
+	return nil
 }
 
-func (m *Manager) reconcileUserResourceLimits(uid int, cfg *config.Config, eligibility config.UserEligibility) {
+func (m *Manager) reconcileUserResourceLimits(uid int, cfg *config.Config, eligibility config.UserEligibility) error {
 	wantRAM := cfg.RAMEnabled && eligibility.EligibleForRAM
 	wantIO := cfg.IOEnabled && eligibility.EligibleForIO
 	previous := m.setResourceLimitIntent(uid, wantRAM, wantIO)
+	var reconcileErrors []error
 	if previous.ramApplied && !wantRAM {
 		if err := m.removeTrackedResourceLimits(uid, true, false); err != nil {
 			m.logger.Warn("Failed to reconcile RAM limits after configuration change",
 				"uid", uid,
 				"error", err,
 			)
+			reconcileErrors = append(reconcileErrors, err)
 		}
 	} else if previous.ramApplied && wantRAM && previous.swap && !cfg.DisableSwap {
 		if err := m.removeTrackedRAMSwapLimit(uid); err != nil {
@@ -564,6 +826,7 @@ func (m *Manager) reconcileUserResourceLimits(uid int, cfg *config.Config, eligi
 				"uid", uid,
 				"error", err,
 			)
+			reconcileErrors = append(reconcileErrors, err)
 		}
 	} else if wantRAM && (!previous.ramApplied || (!previous.swap && cfg.DisableSwap)) {
 		ramQuota := cfg.RAMQuotaPerUser
@@ -572,7 +835,10 @@ func (m *Manager) reconcileUserResourceLimits(uid int, cfg *config.Config, eligi
 				ramQuota = policy.RAMQuota
 			}
 		}
-		m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM)
+		if err := m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM); err != nil {
+			m.logger.Warn("Failed to reconcile RAM limit after configuration change", "uid", uid, "error", err)
+			reconcileErrors = append(reconcileErrors, err)
+		}
 	}
 
 	if previous.ioApplied && !wantIO {
@@ -581,10 +847,15 @@ func (m *Manager) reconcileUserResourceLimits(uid int, cfg *config.Config, eligi
 				"uid", uid,
 				"error", err,
 			)
+			reconcileErrors = append(reconcileErrors, err)
 		}
 	} else if wantIO && !previous.ioApplied {
-		m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
+		if err := m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO); err != nil {
+			m.logger.Warn("Failed to reconcile IO limit after configuration change", "uid", uid, "error", err)
+			reconcileErrors = append(reconcileErrors, err)
+		}
 	}
+	return errors.Join(reconcileErrors...)
 }
 
 func (m *Manager) removeTrackedResourceLimits(uid int, removeRAM, removeIO bool) error {
@@ -670,7 +941,7 @@ func (m *Manager) setResourceLimitIntent(uid int, ramRequested, ioRequested bool
 	current := previous
 	current.ram = ramRequested
 	current.io = ioRequested
-	if !current.ram && !current.io && !current.ramApplied && !current.ioApplied && !current.swap {
+	if !current.ram && !current.io && !current.ramApplied && !current.ioApplied && !current.swap && !current.standalone {
 		delete(m.resourceLimits, uid)
 	} else {
 		m.resourceLimits[uid] = current
@@ -690,7 +961,7 @@ func (m *Manager) clearResourceLimitState(uid int, ram, io bool) {
 		state.io = false
 		state.ioApplied = false
 	}
-	if !state.ram && !state.io {
+	if !state.ram && !state.io && !state.standalone {
 		delete(m.resourceLimits, uid)
 	} else {
 		m.resourceLimits[uid] = state
@@ -725,14 +996,14 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 	}()
 
 	cfg := m.GetConfig()
-	m.logger.Info("Deactivating CPU limits")
+	m.logger.Info("Deactivating resource limits")
 
 	m.mu.Lock()
 	m.requestedCPUUsers = make(map[int]bool)
 	for uid, resources := range m.resourceLimits {
 		resources.ram = false
 		resources.io = false
-		if !resources.ramApplied && !resources.ioApplied && !resources.swap {
+		if !resources.ramApplied && !resources.ioApplied && !resources.swap && !resources.standalone {
 			delete(m.resourceLimits, uid)
 			continue
 		}
@@ -742,9 +1013,15 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 	for uid := range m.activeUsers {
 		usersToCleanup = append(usersToCleanup, uid)
 	}
+	standaloneToCleanup := make([]int, 0)
+	for uid, resources := range m.resourceLimits {
+		if resources.standalone {
+			standaloneToCleanup = append(standaloneToCleanup, uid)
+		}
+	}
 
 	// Preserve the attempted user count for the completion log.
-	userCount := len(usersToCleanup)
+	userCount := len(usersToCleanup) + len(standaloneToCleanup)
 
 	sharedPath := m.sharedCgroupPath
 	m.mu.Unlock()
@@ -828,6 +1105,19 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		deactivatedUsers[uid] = true
 	}
 
+	standaloneDeactivated := make(map[int]bool, len(standaloneToCleanup))
+	for _, uid := range standaloneToCleanup {
+		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+			m.logger.Error("Failed to release standalone RAM or IO cgroup", "uid", uid, "error", err)
+			if firstError == nil {
+				firstError = err
+			}
+			continue
+		}
+		standaloneDeactivated[uid] = true
+		deactivatedCount++
+	}
+
 	// Remove the shared cgroup when it exists.
 	sharedRemoved := sharedPath == ""
 	if sharedPath != "" {
@@ -862,15 +1152,20 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		delete(m.resourceLimits, uid)
 		delete(m.psiBoostedAt, uid)
 	}
+	for uid := range standaloneDeactivated {
+		delete(m.resourceLimits, uid)
+		delete(m.psiBoostedAt, uid)
+	}
 	if len(m.activeUsers) == 0 {
 		m.limitsActive = false
 		m.limitsAppliedTime = time.Time{}
-		fullyDeactivated = true
 		confirmedDeactivation = wasActive
 		if sharedRemoved {
 			m.sharedCgroupPath = ""
 		}
 	}
+	m.refreshResourceLimitsActiveLocked(time.Now())
+	fullyDeactivated = !m.hasObservedEnforcementLocked()
 	m.mu.Unlock()
 	if confirmedDeactivation && m.prometheusExporter != nil {
 		m.prometheusExporter.IncrementLimitsDeactivated()
@@ -894,7 +1189,7 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		m.ioRemediation.ForgetUsers(released)
 	}
 
-	m.logger.Info("CPU limits deactivated",
+	m.logger.Info("Resource limits deactivated",
 		"users_freed", deactivatedCount,
 		"attempted", userCount,
 		"shared_cgroup_removed", sharedRemoved,

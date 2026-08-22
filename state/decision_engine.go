@@ -10,11 +10,11 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
-// ThresholdTracker monitora il superamento della soglia CPU nel tempo
+// ThresholdTracker tracks a threshold crossing over time.
 type ThresholdTracker struct {
-	firstOverThresholdTime time.Time // Primo superamento soglia
-	overThresholdCycles    int       // Cicli sopra soglia
-	totalCycles            int       // Cicli totali
+	firstOverThresholdTime time.Time // First threshold crossing.
+	overThresholdCycles    int       // Cycles above threshold.
+	totalCycles            int       // Total cycles.
 	mu                     sync.RWMutex
 }
 
@@ -26,8 +26,11 @@ type UserStabilityTracker struct {
 func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	cfg := m.GetConfig()
 	m.mu.RLock()
-	limitsActive := m.limitsActive
+	limitsActive := m.limitsActive || m.resourceLimitsActive
 	limitsAppliedTime := m.limitsAppliedTime
+	if limitsAppliedTime.IsZero() || (!m.resourceLimitsAppliedTime.IsZero() && m.resourceLimitsAppliedTime.Before(limitsAppliedTime)) {
+		limitsAppliedTime = m.resourceLimitsAppliedTime
+	}
 	m.mu.RUnlock()
 
 	// Get configuration values atomically to prevent inconsistency during reload
@@ -113,7 +116,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// Active limits may be released only when all resource conditions allow it.
 	if limitsActive {
-		// Verifica il tempo minimo di attivazione
+		// Enforce the minimum activation time.
 		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
 			return DecisionMaintain, "Limits active, waiting for minimum activation time"
 		}
@@ -167,8 +170,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// When inactive, activate if any enabled resource exceeds its threshold.
 	if anyExceeded {
-		// Verifica che ci siano abbastanza core per il sistema
-		if metrics.TotalCores <= minSystemCores {
+		// MIN_SYSTEM_CORES protects only CPU enforcement. RAM or I/O may still
+		// activate in standalone user cgroups that retain an unlimited CPU quota.
+		if cpuExceeded && !ramExceeded && !ioExceeded && metrics.TotalCores <= minSystemCores {
 			m.thresholdTracker.Reset()
 			m.ioThresholdTracker.Reset()
 			return DecisionMaintain, fmt.Sprintf(
@@ -177,7 +181,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			)
 		}
 
-		// Verifica se dobbiamo ignorare il load average
+		// Respect the configured system-load guard.
 		if !ignoreSystemLoad && metrics.SystemUnderLoad {
 			m.thresholdTracker.Reset()
 			m.ioThresholdTracker.Reset()
@@ -192,7 +196,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				time.Duration(cpuThresholdDuration)*time.Second,
 			)
 			if !shouldActivate && !ramExceeded && !ioExceeded {
-				// Solo CPU sopra soglia e non ancora per abbastanza tempo
+				// CPU alone is above threshold but has not stayed there long enough.
 				elapsed := m.thresholdTracker.GetElapsed()
 				remaining := time.Duration(cpuThresholdDuration)*time.Second - elapsed
 				return DecisionMaintain, fmt.Sprintf(
@@ -206,7 +210,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		return DecisionActivate, m.buildActivateReason(cpuExceeded, ramExceeded, ioExceeded, metrics, cpuThreshold)
 	}
 
-	// Nessuna risorsa supera la soglia, reset tracker
+	// No resource exceeds its threshold; reset activation tracking.
 	m.thresholdTracker.Reset()
 	m.ioThresholdTracker.Reset()
 	return DecisionMaintain, "All resources within normal range"
@@ -241,7 +245,7 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 	case "DEACTIVATE_LIMITS":
 		return m.deactivateLimits()
 	case "MAINTAIN_CURRENT_STATE":
-		// Controlla se ci sono utenti inattivi da rilasciare
+		// Reconcile users and release idle CPU enforcement.
 		return m.releaseIdleUsers(metrics)
 	default:
 		return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
@@ -310,8 +314,7 @@ func (t *UserStabilityTracker) Reset() {
 	t.belowThresholdSince = make(map[int]time.Time)
 }
 
-// releaseIdleUsers rilascia gli utenti che non stanno usando CPU mentre i limiti sono attivi
-
+// Reset clears threshold activation state.
 func (t *ThresholdTracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -340,12 +343,12 @@ func (t *ThresholdTracker) ShouldActivateLimits(
 		elapsed := time.Since(t.firstOverThresholdTime)
 		t.totalCycles++
 
-		// Activate only if elapsed time >= required duration
+		// Activate only after the required duration.
 		if elapsed >= requiredDuration {
 			return true
 		}
 	} else {
-		// CPU below threshold, reset tracker
+		// Reset after the value falls below the threshold.
 		t.firstOverThresholdTime = time.Time{}
 		t.overThresholdCycles = 0
 	}
@@ -353,7 +356,7 @@ func (t *ThresholdTracker) ShouldActivateLimits(
 	return false
 }
 
-// GetElapsed restituisce il tempo trascorso dal primo superamento
+// GetElapsed returns the elapsed time since the first threshold crossing.
 func (t *ThresholdTracker) GetElapsed() time.Duration {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

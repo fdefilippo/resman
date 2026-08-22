@@ -13,19 +13,17 @@ COPY mcp ./mcp
 COPY metrics ./metrics
 COPY reloader ./reloader
 COPY state ./state
-COPY test/functional/smolvm/guest/workload.go ./test/functional/smolvm/guest/workload.go
 RUN CGO_ENABLED=1 go build -trimpath \
     -ldflags="-s -w -X 'main.version=functional'" \
-    -o /out/resman ./main.go \
- && CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w" \
-    -o /out/resman-functional-workload ./test/functional/smolvm/guest/workload.go
+    -o /out/resman ./main.go
 
 FROM docker.io/amd64/oraclelinux:9
 
 ENV container=smolvm
 
-RUN dnf install -y ca-certificates curl procps-ng shadow-utils sqlite systemd util-linux \
+RUN dnf install -y oracle-epel-release-el9 \
+ && dnf --enablerepo=ol9_developer_EPEL install -y \
+      ca-certificates curl procps-ng shadow-utils sqlite stress systemd util-linux \
  && dnf clean all \
  && rm -rf /var/cache/dnf \
  && useradd --create-home --shell /bin/bash resman-cpu \
@@ -33,7 +31,6 @@ RUN dnf install -y ca-certificates curl procps-ng shadow-utils sqlite systemd ut
  && useradd --create-home --shell /bin/bash resman-io
 
 COPY --from=builder /out/resman /usr/bin/resman
-COPY --from=builder /out/resman-functional-workload /usr/bin/resman-functional-workload
 COPY test/functional/smolvm/guest/resman-functional@.service \
      /usr/lib/systemd/system/resman-functional@.service
 COPY test/functional/smolvm/guest/run-functional.sh \
@@ -43,7 +40,7 @@ COPY test/functional/smolvm/guest/run-functional.sh \
 COPY test/functional/smolvm/fixtures/resman.conf \
      /opt/resman-functional/fixtures/resman.conf
 
-RUN chmod 0755 /usr/bin/resman /usr/bin/resman-functional-workload \
+RUN chmod 0755 /usr/bin/resman \
       /opt/resman-functional/run-functional.sh \
       /opt/resman-functional/wait-systemd.sh \
       /opt/resman-functional/workload.sh \

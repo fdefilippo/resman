@@ -138,7 +138,7 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 		}
 
 		m.mu.RLock()
-		limitsNeedDeactivation := m.limitsActive || len(m.activeUsers) > 0 || m.sharedCgroupPath != ""
+		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0 || m.sharedCgroupPath != ""
 		m.mu.RUnlock()
 		if limitsNeedDeactivation {
 			if err := m.deactivateLimits(); err != nil {
@@ -317,7 +317,12 @@ func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) {
 	if !m.isUserLimited(uid) {
 		return
 	}
-	m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid)))
+	if err := m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid))); err != nil {
+		m.logger.Warn("Failed to reconcile resource limits for detected workload pattern", "uid", uid, "error", err)
+	}
+	m.mu.Lock()
+	m.refreshResourceLimitsActiveLocked(time.Now())
+	m.mu.Unlock()
 }
 
 func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {

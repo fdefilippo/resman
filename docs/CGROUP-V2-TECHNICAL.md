@@ -72,10 +72,15 @@ cat /sys/fs/cgroup/mygroup/cpu.stat
 ### ResMan Usage
 
 ResMan uses `cpu.max` with a **shared cgroup** approach:
-- All limited users share a common cgroup under `/sys/fs/cgroup/resman/`
+- CPU-limited users share a common cgroup under `/sys/fs/cgroup/resman/`
 - Total quota = `(TotalCores - MinSystemCores) * 100000`
 - Users get proportional `cpu.weight` (default: 100 each)
 - Processes are moved to the shared cgroup via `MoveAllUserProcessesToSharedCgroup()`
+
+Users eligible only for RAM or I/O enforcement use standalone
+`/sys/fs/cgroup/resman/user_UID` cgroups. ResMan writes `max 100000` to their
+`cpu.max`, so `MIN_SYSTEM_CORES` and the shared CPU throttle do not gate or
+indirectly throttle memory-only and I/O-only enforcement.
 
 ---
 

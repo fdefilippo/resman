@@ -34,7 +34,7 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
-// Manager coordina tutta la logica di gestione della CPU.
+// Manager coordinates resource decisions and observed cgroup enforcement.
 type Manager struct {
 	cfg    *config.Config
 	logger *logging.Logger
@@ -42,13 +42,15 @@ type Manager struct {
 	opMu   sync.Mutex
 
 	// Internal control and observed enforcement state.
-	limitsActive      bool
-	limitsAppliedTime time.Time
-	requestedCPUUsers map[int]bool
-	activeUsers       map[int]bool // UID -> user observed in the CPU-limited cgroup
-	userLimitedAt     map[int]time.Time
-	resourceLimits    map[int]userResourceLimitState
-	sharedCgroupPath  string // Shared CPU cgroup path
+	limitsActive              bool
+	limitsAppliedTime         time.Time
+	resourceLimitsActive      bool
+	resourceLimitsAppliedTime time.Time
+	requestedCPUUsers         map[int]bool
+	activeUsers               map[int]bool // UID -> user observed in the CPU-limited cgroup
+	userLimitedAt             map[int]time.Time
+	resourceLimits            map[int]userResourceLimitState
+	sharedCgroupPath          string // Shared CPU cgroup path
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -56,7 +58,7 @@ type Manager struct {
 	stabilityTracker    *UserStabilityTracker
 	lastPatternAnalysis time.Time
 
-	// Dipendenze (saranno iniettate)
+	// Injected dependencies.
 	metricsCollector   MetricsCollector
 	cgroupManager      CgroupManager
 	prometheusExporter PrometheusExporter
@@ -68,7 +70,7 @@ type Manager struct {
 	metricsCache     map[string]interface{}
 	metricsCacheTime map[string]time.Time
 
-	// Control cycle history (inizializzato in NewManager)
+	// Control cycle history, initialized by NewManager.
 	controlHist *controlHistory
 
 	// IO rate tracking: cumulative bytes from /proc/[pid]/io -> per-second rate
@@ -86,6 +88,7 @@ type userResourceLimitState struct {
 	swap       bool
 	io         bool
 	ioApplied  bool
+	standalone bool
 }
 
 // UserLimitState separates policy eligibility, control intent, and observed enforcement.
@@ -128,7 +131,7 @@ type MetricsCollector interface {
 	GetUsernameFromUID(uid int) string
 }
 
-// CgroupManager è l'interfaccia per gestire i cgroups.
+// CgroupManager defines the cgroup v2 operations used by the state manager.
 type CgroupManager interface {
 	CreateUserCgroup(uid int) error
 	ApplyCPULimit(uid int, quota string) error
@@ -153,6 +156,7 @@ type CgroupManager interface {
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 	CleanupUserCgroup(uid int) error
 	MoveProcessToCgroup(pid int, uid int) error
+	MoveAllUserProcesses(uid int) error
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
 	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
 	CreateSharedCgroup() (string, error)
@@ -180,7 +184,7 @@ type PrometheusExporter interface {
 	IncrementLimitsDeactivated()
 }
 
-// NewManager crea un nuovo Manager con le dipendenze configurate.
+// NewManager creates a resource manager with the supplied dependencies.
 func NewManager(
 	cfg *config.Config,
 	metrics MetricsCollector,
@@ -195,26 +199,28 @@ func NewManager(
 	logger := logging.GetLogger()
 
 	mgr := &Manager{
-		cfg:                cfg,
-		logger:             logger,
-		limitsActive:       false,
-		limitsAppliedTime:  time.Time{},
-		requestedCPUUsers:  make(map[int]bool),
-		activeUsers:        make(map[int]bool),
-		userLimitedAt:      make(map[int]time.Time),
-		resourceLimits:     make(map[int]userResourceLimitState),
-		sharedCgroupPath:   "",
-		thresholdTracker:   &ThresholdTracker{},
-		stabilityTracker:   newUserStabilityTracker(),
-		ioThresholdTracker: &ThresholdTracker{},
-		metricsCollector:   metrics,
-		cgroupManager:      cgroups,
-		prometheusExporter: prometheus,
-		ioRemediation:      NewIORemediation(logger),
-		patternDetector:    NewPatternDetector(logger),
-		policyEngine:       NewPolicyEngine(logger),
-		metricsCache:       make(map[string]interface{}),
-		metricsCacheTime:   make(map[string]time.Time),
+		cfg:                       cfg,
+		logger:                    logger,
+		limitsActive:              false,
+		limitsAppliedTime:         time.Time{},
+		resourceLimitsActive:      false,
+		resourceLimitsAppliedTime: time.Time{},
+		requestedCPUUsers:         make(map[int]bool),
+		activeUsers:               make(map[int]bool),
+		userLimitedAt:             make(map[int]time.Time),
+		resourceLimits:            make(map[int]userResourceLimitState),
+		sharedCgroupPath:          "",
+		thresholdTracker:          &ThresholdTracker{},
+		stabilityTracker:          newUserStabilityTracker(),
+		ioThresholdTracker:        &ThresholdTracker{},
+		metricsCollector:          metrics,
+		cgroupManager:             cgroups,
+		prometheusExporter:        prometheus,
+		ioRemediation:             NewIORemediation(logger),
+		patternDetector:           NewPatternDetector(logger),
+		policyEngine:              NewPolicyEngine(logger),
+		metricsCache:              make(map[string]interface{}),
+		metricsCacheTime:          make(map[string]time.Time),
 		controlHist: &controlHistory{
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
@@ -288,7 +294,7 @@ func (m *Manager) isUserLimited(uid int) bool {
 	return exists
 }
 
-// boolToFloat converte un booleano in float64 (1.0 per true, 0.0 per false).
+// boolToFloat converts a boolean to 1 or 0.
 func boolToFloat(b bool) float64 {
 	if b {
 		return 1.0
@@ -296,7 +302,7 @@ func boolToFloat(b bool) float64 {
 	return 0.0
 }
 
-// GetStatus restituisce lo stato corrente del manager.
+// GetStatus returns the current enforcement status.
 func (m *Manager) GetStatus() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -307,18 +313,18 @@ func (m *Manager) GetStatus() map[string]interface{} {
 		"active_users_count":   len(m.activeUsers),
 		"active_users":         m.getActiveUsersListLocked(),
 		"shared_cgroup_path":   m.sharedCgroupPath,
-		"shared_cgroup_active": m.sharedCgroupPath != "",
+		"shared_cgroup_active": m.sharedCgroupPath != "" && m.limitsActive,
 	}
 
-	// Aggiungi info sul cgroup condiviso se attivo
+	// Add shared cgroup details when CPU enforcement is active.
 	if m.sharedCgroupPath != "" {
-		// Leggi la quota corrente del cgroup condiviso
+		// Read the current shared cgroup quota.
 		cpuMaxFile := filepath.Join(m.sharedCgroupPath, "cpu.max")
 		if data, err := os.ReadFile(cpuMaxFile); err == nil {
 			status["shared_cgroup_quota"] = strings.TrimSpace(string(data))
 		}
 
-		// Conta i sottocgroup (utenti)
+		// Count per-user sub-cgroups.
 		if entries, err := os.ReadDir(m.sharedCgroupPath); err == nil {
 			userCount := 0
 			for _, entry := range entries {
@@ -341,7 +347,7 @@ func (m *Manager) getActiveUsersListLocked() []int {
 	return users
 }
 
-// Cleanup esegue la pulizia prima dello shutdown.
+// Cleanup releases active enforcement and shuts down manager dependencies.
 func (m *Manager) Cleanup() error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -349,9 +355,9 @@ func (m *Manager) Cleanup() error {
 	m.logger.Info("Cleaning up state manager")
 	var cleanupErrors []error
 
-	// Rimuovi tutti i limiti attivi
+	// Remove all active limits.
 	m.mu.RLock()
-	limitsActive := m.limitsActive
+	limitsActive := m.limitsActive || m.resourceLimitsActive
 	m.mu.RUnlock()
 	if limitsActive {
 		if err := m.deactivateLimits(); err != nil {
@@ -360,7 +366,7 @@ func (m *Manager) Cleanup() error {
 		}
 	}
 
-	// Pulisci i cgroups
+	// Clean up managed cgroups.
 	if m.cgroupManager != nil {
 		if err := m.cgroupManager.CleanupAll(); err != nil {
 			m.logger.Error("Error during cgroup cleanup", "error", err)
@@ -368,7 +374,7 @@ func (m *Manager) Cleanup() error {
 		}
 	}
 
-	// Ferma l'esportatore Prometheus
+	// Stop the Prometheus exporter.
 	if m.prometheusExporter != nil {
 		if err := m.prometheusExporter.Stop(); err != nil {
 			m.logger.Error("Error stopping Prometheus exporter", "error", err)
@@ -380,9 +386,7 @@ func (m *Manager) Cleanup() error {
 	return errors.Join(cleanupErrors...)
 }
 
-// ForceActivateLimits attiva forzatamente i limiti (per testing/admin).
-// ForceDeactivateLimits disattiva forzatamente i limiti (per testing/admin).
-// UpdateConfig aggiorna la configurazione del manager.
+// UpdateConfig replaces the manager configuration used by subsequent cycles.
 func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	if newConfig == nil {
 		return
@@ -526,6 +530,6 @@ func isMissingUserCgroupError(err error) bool {
 // ControlCycleEntry represents a single control cycle entry in history
 // GetControlHistory returns the recent control cycle history
 // recordControlCycle records a control cycle in history
-// Reset resetta il tracker
+// Reset clears threshold tracking state.
 // ShouldActivateLimits checks if limits should be activated based on threshold duration.
-// GetElapsed restituisce il tempo trascorso dal primo superamento
+// GetElapsed returns the time since the first threshold crossing.

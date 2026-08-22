@@ -145,6 +145,9 @@ cool-down is wall-clock based, so PSI events cannot shorten it.
 Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
 are already active. Limits that are disabled or no longer applicable are reset
 and retried on later cycles if cleanup fails.
+RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
+`cpu.max`; they do not inherit the finite shared CPU quota, and
+`MIN_SYSTEM_CORES` gates CPU enforcement only.
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of

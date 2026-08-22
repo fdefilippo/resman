@@ -265,6 +265,7 @@ type Config struct {
     │   ├── user_1000/        # Per-user sub-cgroup
     │   ├── user_1001/
     │   └── ...
+    ├── user_1002/            # RAM/IO-only; cpu.max remains unlimited
     └── recovery/             # Processes whose original cgroup disappeared
         ├── user_1000/
         └── ...
@@ -286,6 +287,7 @@ never written into systemd-managed cgroups.
 - `ApplyCPUWeight(uid, weight)`: Applies CPU weight to user
 - `ApplySharedCPULimit(path, quota)`: Applies limit to shared cgroup
 - `MoveProcessToCgroup(pid, uid)`: Moves process to user cgroup
+- `MoveAllUserProcesses(uid)`: Moves all user processes to a standalone cgroup
 - `MoveAllUserProcessesToSharedCgroup(uid, path)`: Moves all user processes
 - `CleanupUserCgroup(uid)`: Removes user cgroup
 - `CleanupAll()`: Removes all created cgroups
@@ -383,7 +385,7 @@ The following processes are automatically excluded from CPU limits:
       └─ Else: MAINTAIN_CURRENT_STATE
 
 4. Execute decision:
-   ├─ ACTIVATE_LIMITS: Create shared cgroup, apply weights
+   ├─ ACTIVATE_LIMITS: Reconcile shared CPU and standalone RAM/IO cgroups
    ├─ DEACTIVATE_LIMITS: Remove limits, restore normal
    └─ MAINTAIN: No action
 
@@ -660,8 +662,8 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman.conf
 ### 5.2 Decision Logic
 
 **Activate Limits When:**
-- `user_cpu_usage >= CPU_THRESHOLD` (default: 75%)
-- `total_cores > MIN_SYSTEM_CORES`
+- any independently eligible CPU, RAM, or I/O aggregate exceeds its threshold
+- `total_cores > MIN_SYSTEM_CORES` for CPU enforcement only
 - `system_load OK` OR `IGNORE_SYSTEM_LOAD=true`
 
 **Deactivate Limits When:**
@@ -680,6 +682,12 @@ triggered by PSI events do not accelerate global deactivation.
 - Releases users immediately when they disappear or become ineligible
 - Re-adds active eligible users without resetting the global activation time
 - Reconciles tracked RAM/IO limits after dynamic enable or filter changes
+
+RAM/IO-only users are placed in standalone per-user cgroups whose `cpu.max` is
+explicitly `max 100000`. They never inherit the finite quota of `limited/`.
+Changing eligibility at reload migrates the user between standalone resource
+enforcement and the shared CPU hierarchy while preserving requested versus
+successfully applied state for each resource.
 
 ### 5.3 Limit Application
 

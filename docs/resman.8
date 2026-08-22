@@ -166,6 +166,13 @@ When RAM limits are active, each user's cgroup receives both
 and
 .B memory.high
 limits according to the configured quotas and ratio.
+.PP
+A user eligible for RAM or I/O but not CPU limiting is moved to a standalone
+per\-user cgroup with
+.BR cpu.max="max 100000" .
+It does not inherit the finite shared CPU quota. Consequently,
+.B MIN_SYSTEM_CORES
+gates CPU enforcement only and cannot suppress RAM\-only or I/O\-only limits.
 .SH IO LIMITS
 When enabled, the daemon monitors I/O usage and applies bandwidth and IOPS limits via cgroups v2 io controller.
 .PP
