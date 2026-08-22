@@ -387,13 +387,19 @@ scripts, Dockerfiles, unit files, the man page — is part of the product.
   `CONTRIBUTING.md`, not just the file that prompted the rename. Historical changelog
   entries are the one exception: they record what was true then and stay untouched.
 
-**Why.** The project was renamed from cpu-manager to resman and the exporter port moved
-to 1974, but `cpu_manager_*` metric names still appear in `docs/alerting-rules.yml`,
-`docs/prometheus-queries.md`, the Grafana guides, and `docs/TECHNICAL-SPECIFICATION.md`;
-`9100/9101` still appears in `docs/prometheus.yml`, `docs/generate-tls-certs.sh`,
-`docs/TLS-CONFIGURATION.md`, `CONTRIBUTING.md`, and — worst, because it is shipped
-rather than documentation — `packaging/docker/Dockerfile:40` (`EXPOSE 9101`). Copying
-any of these produces a monitoring setup that scrapes nothing.
+**Why.** Before `resman-4pw.13`, the project had been renamed from cpu-manager to
+resman and the exporter port moved to 1974, while `cpu_manager_*` metric names still
+appeared in `docs/alerting-rules.yml`, `docs/prometheus-queries.md`, the Grafana guides
+and `docs/TECHNICAL-SPECIFICATION.md`, and `9100/9101` still appeared in
+`docs/prometheus.yml`, `docs/generate-tls-certs.sh`, `docs/TLS-CONFIGURATION.md`,
+`CONTRIBUTING.md` and — worst, because it was shipped rather than documentation —
+`packaging/docker/Dockerfile` (`EXPOSE 9101`). Copying any of them produced a monitoring
+setup that scraped nothing.
+
+The sweep also exposed what a rename hides: three of the shipped alert expressions had
+never been able to fire. Two named metrics that no version of the exporter ever
+published, and one tested `changes(...) == -1`, which is unsatisfiable because
+`changes()` is never negative. A stale asset is not only stale — it is unverified.
 
 *Finding: resman-4pw.13*
 
