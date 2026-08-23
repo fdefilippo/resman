@@ -19,8 +19,9 @@ func (a *App) startSignalHandler() {
 					a.logger.Info("Received SIGHUP, forcing configuration reload")
 					if a.configWatcher != nil {
 						go func() {
-							time.Sleep(100 * time.Millisecond)
-							a.configWatcher.HandleConfigChange()
+							if err := a.configWatcher.ForceReload(a.ctx); err != nil {
+								a.logger.Error("SIGHUP configuration reload failed", "error", err)
+							}
 						}()
 					} else {
 						a.logger.Warn("Config watcher not available for SIGHUP reload")

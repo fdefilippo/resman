@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -119,6 +120,23 @@ type GetCgroupInfoResult struct {
 	IOWriteBPS  string `json:"io_write_bps,omitempty"`
 	IOReadIOPS  string `json:"io_read_iops,omitempty"`
 	IOWriteIOPS string `json:"io_write_iops,omitempty"`
+}
+
+type userFilterKind string
+
+const (
+	userFilterInclude userFilterKind = "include"
+	userFilterExclude userFilterKind = "exclude"
+)
+
+type userFilterUpdateResult struct {
+	Success       bool     `json:"success"`
+	Message       string   `json:"message"`
+	PreviousValue []string `json:"previous_value"`
+	NewValue      []string `json:"new_value"`
+	Persisted     bool     `json:"persisted"`
+	Applied       bool     `json:"applied"`
+	Error         string   `json:"error,omitempty"`
 }
 
 // Historical metrics tools structures
@@ -627,195 +645,18 @@ Utenti limitati: %d su %d
 		})
 	}
 
-	// set_user_exclude_list - registered manually with explicit schema
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "set_user_exclude_list",
-		Description: "Set the list of users to exclude from CPU limits (regex patterns supported)",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"patterns": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "List of regex patterns for users to exclude",
-				},
-				"reload": map[string]any{
-					"type":        "boolean",
-					"description": "Automatically reload configuration after change",
-					"default":     true,
-				},
-			},
-			"required": []string{"patterns"},
-		},
-	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Unmarshal arguments from json.RawMessage
-		var args map[string]interface{}
-		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-			return &mcp.CallToolResult{}, fmt.Errorf("invalid parameters: %w", err)
-		}
-
-		// Extract patterns
-		patternsRaw, ok := args["patterns"].([]interface{})
-		if !ok {
-			return &mcp.CallToolResult{}, fmt.Errorf("invalid patterns parameter")
-		}
-
-		// Convert []interface{} to []string
-		patterns := make([]string, len(patternsRaw))
-		for i, p := range patternsRaw {
-			if s, ok := p.(string); ok {
-				patterns[i] = s
-			} else {
-				return &mcp.CallToolResult{}, fmt.Errorf("pattern must be string")
-			}
-		}
-
-		// Get reload parameter (default true)
-		reload := true
-		if reloadRaw, ok := args["reload"].(bool); ok {
-			reload = reloadRaw
-		}
-
-		// Check if write operations are allowed
-		if !s.cfg.AllowWriteOps {
-			return &mcp.CallToolResult{}, fmt.Errorf("write operations not allowed. Set MCP_ALLOW_WRITE_OPS=true")
-		}
-
-		// Get current config
-		cfg := s.stateManager.GetConfig()
-
-		// Set new exclude list
-		previousValue, err := cfg.SetUserExcludeList(patterns, cfg.ConfigFile, reload)
-		if err != nil {
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: toJSON(map[string]any{
-						"success":        false,
-						"error":          err.Error(),
-						"previous_value": previousValue,
-					})},
-				},
-			}, nil
-		}
-
-		// Trigger reload if requested
-		if reload {
-			time.Sleep(1 * time.Second)
-		}
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: toJSON(map[string]any{
-					"success":          true,
-					"message":          "User exclude list updated successfully",
-					"previous_value":   previousValue,
-					"new_value":        patterns,
-					"reload_triggered": reload,
-				})},
-			},
-			StructuredContent: map[string]any{
-				"success":          true,
-				"previous_value":   previousValue,
-				"new_value":        patterns,
-				"reload_triggered": reload,
-			},
-		}, nil
-	})
-
-	// set_user_include_list - registered manually with explicit schema
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "set_user_include_list",
-		Description: "Set CPU-limit eligibility patterns; an empty list disables CPU limiting and .* includes every non-excluded user",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"patterns": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "CPU eligibility regex patterns; use an empty array for no users or [\".*\"] for all non-excluded users",
-				},
-				"reload": map[string]any{
-					"type":        "boolean",
-					"description": "Automatically reload configuration after change",
-					"default":     true,
-				},
-			},
-			"required": []string{"patterns"},
-		},
-	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Unmarshal arguments from json.RawMessage
-		var args map[string]interface{}
-		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-			return &mcp.CallToolResult{}, fmt.Errorf("invalid parameters: %w", err)
-		}
-
-		// Extract patterns
-		patternsRaw, ok := args["patterns"].([]interface{})
-		if !ok {
-			return &mcp.CallToolResult{}, fmt.Errorf("invalid patterns parameter")
-		}
-
-		// Convert []interface{} to []string
-		patterns := make([]string, len(patternsRaw))
-		for i, p := range patternsRaw {
-			if s, ok := p.(string); ok {
-				patterns[i] = s
-			} else {
-				return &mcp.CallToolResult{}, fmt.Errorf("pattern must be string")
-			}
-		}
-
-		// Get reload parameter (default true)
-		reload := true
-		if reloadRaw, ok := args["reload"].(bool); ok {
-			reload = reloadRaw
-		}
-
-		// Check if write operations are allowed
-		if !s.cfg.AllowWriteOps {
-			return &mcp.CallToolResult{}, fmt.Errorf("write operations not allowed. Set MCP_ALLOW_WRITE_OPS=true")
-		}
-
-		// Get current config
-		cfg := s.stateManager.GetConfig()
-
-		// Set new include list
-		previousValue, err := cfg.SetUserIncludeList(patterns, cfg.ConfigFile, reload)
-		if err != nil {
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: toJSON(map[string]any{
-						"success":        false,
-						"error":          err.Error(),
-						"previous_value": previousValue,
-					})},
-				},
-			}, nil
-		}
-
-		// Trigger reload if requested
-		if reload {
-			time.Sleep(1 * time.Second)
-		}
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: toJSON(map[string]any{
-					"success":          true,
-					"message":          "User include list updated successfully",
-					"previous_value":   previousValue,
-					"new_value":        patterns,
-					"reload_triggered": reload,
-				})},
-			},
-			StructuredContent: map[string]any{
-				"success":          true,
-				"previous_value":   previousValue,
-				"new_value":        patterns,
-				"reload_triggered": reload,
-			},
-		}, nil
-	})
+	s.registerUserFilterTool(
+		"set_user_exclude_list",
+		"Persist and apply the users excluded from CPU limits (regex patterns supported)",
+		"List of regex patterns for users to exclude",
+		userFilterExclude,
+	)
+	s.registerUserFilterTool(
+		"set_user_include_list",
+		"Persist and apply CPU-limit eligibility patterns; an empty list disables CPU limiting and .* includes every non-excluded user",
+		"CPU eligibility regex patterns; use an empty array for no users or [\".*\"] for all non-excluded users",
+		userFilterInclude,
+	)
 
 	// get_user_filters - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
@@ -951,6 +792,155 @@ Utenti limitati: %d su %d
 		Name:        "get_metrics_database_info",
 		Description: "Get information about the metrics database including size, record counts, and retention",
 	}, s.handleGetMetricsDatabaseInfo)
+}
+
+func (s *Server) registerUserFilterTool(name, description, patternDescription string, kind userFilterKind) {
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        name,
+		Description: description,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"patterns": map[string]any{
+					"type":        "array",
+					"description": patternDescription,
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+			},
+			"required": []string{"patterns"},
+		},
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args map[string]any
+		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+			return userFilterCallResult(userFilterUpdateResult{}, fmt.Errorf("invalid parameters: %w", err)), nil
+		}
+
+		patterns, err := parseUserFilterPatterns(args)
+		if err != nil {
+			return userFilterCallResult(userFilterUpdateResult{}, err), nil
+		}
+
+		result, err := s.updateUserFilter(ctx, kind, patterns)
+		return userFilterCallResult(result, err), nil
+	})
+}
+
+func parseUserFilterPatterns(args map[string]any) ([]string, error) {
+	if _, exists := args["reload"]; exists {
+		return nil, fmt.Errorf("parameter %q was removed; filter updates are always persisted and synchronously applied", "reload")
+	}
+	for key := range args {
+		if key != "patterns" {
+			return nil, fmt.Errorf("unknown parameter %q", key)
+		}
+	}
+
+	rawPatterns, exists := args["patterns"]
+	if !exists {
+		return nil, fmt.Errorf("missing required parameter %q", "patterns")
+	}
+	values, ok := rawPatterns.([]any)
+	if !ok {
+		return nil, fmt.Errorf("parameter %q must be an array of strings", "patterns")
+	}
+	patterns := make([]string, len(values))
+	for index, value := range values {
+		pattern, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("parameter %q item %d must be a string", "patterns", index)
+		}
+		patterns[index] = pattern
+	}
+	return patterns, nil
+}
+
+func (s *Server) updateUserFilter(ctx context.Context, kind userFilterKind, patterns []string) (userFilterUpdateResult, error) {
+	result := userFilterUpdateResult{
+		PreviousValue: []string{},
+		NewValue:      append([]string{}, patterns...),
+	}
+	if !s.cfg.AllowWriteOps {
+		return result, fmt.Errorf("MCP write operations are disabled")
+	}
+	if s.stateManager == nil {
+		return result, fmt.Errorf("state manager is not available")
+	}
+	if s.configReloader == nil {
+		return result, fmt.Errorf("configuration reloader is not available")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("before persisting user %s filters: %w", kind, err)
+	}
+	if !s.configWriteActive.CompareAndSwap(false, true) {
+		return result, fmt.Errorf("another MCP configuration update is already in progress")
+	}
+	defer s.configWriteActive.Store(false)
+
+	cfg := s.stateManager.GetConfig()
+	if cfg == nil {
+		return result, fmt.Errorf("runtime configuration is not available")
+	}
+
+	var err error
+	switch kind {
+	case userFilterInclude:
+		result.PreviousValue, err = cfg.PersistUserIncludeList(patterns, cfg.ConfigFile)
+	case userFilterExclude:
+		result.PreviousValue, err = cfg.PersistUserExcludeList(patterns, cfg.ConfigFile)
+	default:
+		return result, fmt.Errorf("unsupported user filter kind %q", kind)
+	}
+	result.PreviousValue = append([]string{}, result.PreviousValue...)
+	if err != nil {
+		return result, fmt.Errorf("persist user %s filters: %w", kind, err)
+	}
+	result.Persisted = true
+
+	if err := s.configReloader.Reload(ctx); err != nil {
+		result.Applied = s.userFilterMatchesRuntime(kind, patterns)
+		return result, fmt.Errorf("configuration persisted but runtime reload was not confirmed: %w", err)
+	}
+	result.Applied = s.userFilterMatchesRuntime(kind, patterns)
+	if !result.Applied {
+		return result, fmt.Errorf("reload completed without applying the requested user %s filters", kind)
+	}
+
+	result.Success = true
+	result.Message = fmt.Sprintf("User %s filters persisted and applied successfully", kind)
+	return result, nil
+}
+
+func (s *Server) userFilterMatchesRuntime(kind userFilterKind, patterns []string) bool {
+	cfg := s.stateManager.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	switch kind {
+	case userFilterInclude:
+		return slices.Equal(cfg.GetUserIncludeList(), patterns)
+	case userFilterExclude:
+		return slices.Equal(cfg.GetUserExcludeList(), patterns)
+	default:
+		return false
+	}
+}
+
+func userFilterCallResult(result userFilterUpdateResult, err error) *mcp.CallToolResult {
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		result.Message = "User filter update failed: " + err.Error()
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: toJSON(result)},
+		},
+		StructuredContent: result,
+		IsError:           err != nil,
+	}
 }
 
 // handleGetUserMetrics handles get_user_metrics tool requests

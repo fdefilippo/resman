@@ -20,9 +20,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -999,8 +999,8 @@ func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 		t.Fatalf("ConfigFile = %q, want active path %q", cfg.ConfigFile, resolvedPath)
 	}
 
-	if _, err := cfg.SetUserExcludeList([]string{"^service$"}, cfg.ConfigFile, false); err != nil {
-		t.Fatalf("SetUserExcludeList() error: %v", err)
+	if _, err := cfg.PersistUserExcludeList([]string{"^service$"}, cfg.ConfigFile); err != nil {
+		t.Fatalf("PersistUserExcludeList() error: %v", err)
 	}
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1111,64 +1111,61 @@ func TestSetConfigField(t *testing.T) {
 	}
 }
 
-func TestUserFilterConcurrentAccess(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "resman.conf")
-	if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=.*\nUSER_EXCLUDE_LIST=\n"), 0644); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
+func TestPersistUserFiltersDoesNotPublishLiveState(t *testing.T) {
+	tests := []struct {
+		name     string
+		persist  func(*Config, []string, string) ([]string, error)
+		fileKey  string
+		liveList func(*Config) []string
+	}{
+		{
+			name: "include",
+			persist: func(cfg *Config, patterns []string, path string) ([]string, error) {
+				return cfg.PersistUserIncludeList(patterns, path)
+			},
+			fileKey:  "USER_INCLUDE_LIST=^new$",
+			liveList: (*Config).GetUserIncludeList,
+		},
+		{
+			name: "exclude",
+			persist: func(cfg *Config, patterns []string, path string) ([]string, error) {
+				return cfg.PersistUserExcludeList(patterns, path)
+			},
+			fileKey:  "USER_EXCLUDE_LIST=^new$",
+			liveList: (*Config).GetUserExcludeList,
+		},
 	}
 
-	cfg := DefaultConfig()
-	const iterations = 25
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			patterns := []string{"^include$", "^shared$"}
-			if _, err := cfg.SetUserIncludeList(patterns, configPath, false); err != nil {
-				errs <- err
-				return
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=^old$\nUSER_EXCLUDE_LIST=^old$\n"), 0600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
 			}
-			patterns[0] = "^mutated$"
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			patterns := []string{"^exclude$"}
-			if _, err := cfg.SetUserExcludeList(patterns, configPath, false); err != nil {
-				errs <- err
-				return
+			cfg, err := LoadAndValidate(configPath)
+			if err != nil {
+				t.Fatalf("LoadAndValidate() error: %v", err)
 			}
-			patterns[0] = "^mutated$"
-		}
-	}()
-
-	for i := 0; i < iterations*4; i++ {
-		_ = cfg.IsUserIncluded("include")
-		_ = cfg.IsUserExcluded("exclude")
-		_ = cfg.IsUserWhitelisted("shared")
-		_ = cfg.GetUserIncludeList()
-		_ = cfg.GetUserExcludeList()
-	}
-
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Errorf("concurrent setter failed: %v", err)
-	}
-
-	for _, pattern := range cfg.GetUserIncludeList() {
-		if pattern == "^mutated$" {
-			t.Fatal("SetUserIncludeList retained caller-owned slice")
-		}
-	}
-	for _, pattern := range cfg.GetUserExcludeList() {
-		if pattern == "^mutated$" {
-			t.Fatal("SetUserExcludeList retained caller-owned slice")
-		}
+			patterns := []string{"^new$"}
+			previous, err := tt.persist(cfg, patterns, configPath)
+			if err != nil {
+				t.Fatalf("persist() error: %v", err)
+			}
+			patterns[0] = "^caller-mutated$"
+			if !slices.Equal(previous, []string{"^old$"}) {
+				t.Fatalf("previous value = %v, want [^old$]", previous)
+			}
+			if !slices.Equal(tt.liveList(cfg), []string{"^old$"}) {
+				t.Fatalf("live configuration was published before acknowledgement: %v", tt.liveList(cfg))
+			}
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error: %v", err)
+			}
+			if !strings.Contains(string(content), tt.fileKey) || strings.Contains(string(content), "caller-mutated") {
+				t.Fatalf("persisted content = %q, want detached requested value", content)
+			}
+		})
 	}
 }
 

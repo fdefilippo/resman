@@ -329,10 +329,11 @@ explicitly, and uses one configuration epoch across control-cycle consumers.
 - Persisted configuration and the published runtime snapshot are separate concepts;
   writing one **MUST NOT** implicitly publish the other.
 
-**Why.** MCP filter setters sleep one second (`mcp/tools.go:674,769`) while the config
-watcher debounces for two (`config/watcher.go:204`), so `reload=true` reports success
-before the reload can possibly have completed. And `reload=false` mutates the shared
-`Config` and persists it anyway, so the flag means nothing in either position.
+**Why.** MCP filter setters previously slept one second while the config watcher
+debounced for two, so `reload=true` reported success before the reload could possibly
+have completed. And `reload=false` mutated the shared `Config` and persisted it anyway,
+so the flag meant nothing in either position. The setters now persist a detached
+snapshot and wait for a concrete watcher result; the obsolete flag is rejected.
 
 *Finding: resman-4pw.7*
 

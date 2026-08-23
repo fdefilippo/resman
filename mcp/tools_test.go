@@ -20,7 +20,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,224 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
+
+type configurationReloaderFunc func(context.Context) error
+
+func (f configurationReloaderFunc) Reload(ctx context.Context) error {
+	return f(ctx)
+}
+
+type stateConfigChangeHandler struct {
+	manager *state.Manager
+}
+
+func (h *stateConfigChangeHandler) OnConfigChange(cfg *config.Config) error {
+	h.manager.UpdateConfig(cfg)
+	return nil
+}
+
+func newUserFilterTestServer(t *testing.T, reloader ConfigurationReloader) (*Server, string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	content := []byte("USER_INCLUDE_LIST=^old-include$\nUSER_EXCLUDE_LIST=^old-exclude$\n")
+	if err := os.WriteFile(configPath, content, 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	runtimeConfig, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate() error: %v", err)
+	}
+	manager, err := state.NewManager(runtimeConfig, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	return &Server{
+		cfg:            &Config{AllowWriteOps: true},
+		stateManager:   manager,
+		configReloader: reloader,
+	}, configPath
+}
+
+func TestUserFilterUpdateWaitsForWatcherAcknowledgement(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     userFilterKind
+		patterns []string
+		current  func(*config.Config) []string
+	}{
+		{
+			name:     "include",
+			kind:     userFilterInclude,
+			patterns: []string{"^service$", "^batch-"},
+			current:  (*config.Config).GetUserIncludeList,
+		},
+		{
+			name:     "exclude",
+			kind:     userFilterExclude,
+			patterns: []string{"^root$", "^system-"},
+			current:  (*config.Config).GetUserExcludeList,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, configPath := newUserFilterTestServer(t, nil)
+			watcher, err := config.NewWatcher(configPath, server.stateManager.GetConfig(), &stateConfigChangeHandler{
+				manager: server.stateManager,
+			})
+			if err != nil {
+				t.Fatalf("NewWatcher() error: %v", err)
+			}
+			if err := watcher.Start(); err != nil {
+				t.Fatalf("Start() error: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := watcher.Stop(); err != nil {
+					t.Errorf("Stop() error: %v", err)
+				}
+			})
+			server.configReloader = watcher
+
+			result, err := server.updateUserFilter(context.Background(), tt.kind, tt.patterns)
+			if err != nil {
+				t.Fatalf("updateUserFilter() error: %v", err)
+			}
+			if !result.Success || !result.Persisted || !result.Applied {
+				t.Fatalf("update result = %+v, want success, persisted, and applied", result)
+			}
+			if got := tt.current(server.stateManager.GetConfig()); !slices.Equal(got, tt.patterns) {
+				t.Fatalf("runtime filters = %v, want %v", got, tt.patterns)
+			}
+		})
+	}
+}
+
+func TestUserFilterUpdateDoesNotPublishBeforeAcknowledgement(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server, configPath := newUserFilterTestServer(t, nil)
+	server.configReloader = configurationReloaderFunc(func(context.Context) error {
+		close(entered)
+		<-release
+		reloaded, err := config.LoadAndValidate(configPath)
+		if err != nil {
+			return err
+		}
+		server.stateManager.UpdateConfig(reloaded)
+		return nil
+	})
+
+	type updateOutcome struct {
+		result userFilterUpdateResult
+		err    error
+	}
+	done := make(chan updateOutcome, 1)
+	go func() {
+		result, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^new$"})
+		done <- updateOutcome{result: result, err: err}
+	}()
+	<-entered
+
+	if got := server.stateManager.GetConfig().GetUserIncludeList(); !slices.Equal(got, []string{"^old-include$"}) {
+		t.Fatalf("runtime filters before acknowledgement = %v, want old value", got)
+	}
+	close(release)
+	outcome := <-done
+	if outcome.err != nil {
+		t.Fatalf("updateUserFilter() error: %v", outcome.err)
+	}
+	if !outcome.result.Applied {
+		t.Fatalf("update result = %+v, want applied", outcome.result)
+	}
+}
+
+func TestUserFilterUpdateReportsWatcherFailureAfterPersistence(t *testing.T) {
+	reloadErr := errors.New("watcher apply failed")
+	server, configPath := newUserFilterTestServer(t, configurationReloaderFunc(func(context.Context) error {
+		return reloadErr
+	}))
+
+	result, err := server.updateUserFilter(context.Background(), userFilterExclude, []string{"^new$"})
+	if !errors.Is(err, reloadErr) {
+		t.Fatalf("updateUserFilter() error = %v, want watcher error", err)
+	}
+	if !result.Persisted || result.Applied || result.Success {
+		t.Fatalf("update result = %+v, want persisted but not applied or successful", result)
+	}
+	persisted, loadErr := config.LoadAndValidate(configPath)
+	if loadErr != nil {
+		t.Fatalf("LoadAndValidate() error: %v", loadErr)
+	}
+	if got := persisted.GetUserExcludeList(); !slices.Equal(got, []string{"^new$"}) {
+		t.Fatalf("persisted filters = %v, want [^new$]", got)
+	}
+	if got := server.stateManager.GetConfig().GetUserExcludeList(); !slices.Equal(got, []string{"^old-exclude$"}) {
+		t.Fatalf("runtime filters = %v, want old value", got)
+	}
+}
+
+func TestUserFilterUpdateRejectsConcurrentEdits(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server, configPath := newUserFilterTestServer(t, nil)
+	server.configReloader = configurationReloaderFunc(func(context.Context) error {
+		close(entered)
+		<-release
+		reloaded, err := config.LoadAndValidate(configPath)
+		if err != nil {
+			return err
+		}
+		server.stateManager.UpdateConfig(reloaded)
+		return nil
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^first$"})
+		firstDone <- err
+	}()
+	<-entered
+
+	result, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^second$"})
+	if err == nil || !strings.Contains(err.Error(), "already in progress") {
+		t.Fatalf("concurrent update error = %v, want explicit rejection", err)
+	}
+	if result.Persisted || result.Applied || result.Success {
+		t.Fatalf("rejected update result = %+v, want no side effects", result)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first update error: %v", err)
+	}
+
+	persisted, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate() error: %v", err)
+	}
+	if got := persisted.GetUserIncludeList(); !slices.Equal(got, []string{"^first$"}) {
+		t.Fatalf("persisted filters = %v, want first update", got)
+	}
+}
+
+func TestParseUserFilterPatternsRejectsRemovedAndUnknownParameters(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{name: "removed reload", args: map[string]any{"patterns": []any{".*"}, "reload": true}, want: "was removed"},
+		{name: "unknown", args: map[string]any{"patterns": []any{".*"}, "future": true}, want: "unknown parameter"},
+		{name: "non-string item", args: map[string]any{"patterns": []any{42}}, want: "must be a string"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseUserFilterPatterns(tt.args); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("parseUserFilterPatterns() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
 
 func TestMetricsDatabaseInfoUsesEffectiveRuntimeRetention(t *testing.T) {
 	cfg := config.DefaultConfig()

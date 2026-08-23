@@ -58,7 +58,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-missing-io-startup test-functional-smolvm-preflight \
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-preflight \
 	test-functional-smolvm-unit lint lint-install install uninstall rpm deb docker help
 
 all: clean test lint build
@@ -119,6 +119,10 @@ test-functional-smolvm-process-membership:
 # Verify fail-closed startup when io is named but io.max is unavailable.
 test-functional-smolvm-missing-io-startup:
 	SMOLVM_SCENARIO=missing-io-startup test/functional/smolvm/run.sh run
+
+# Verify acknowledged MCP filter persistence and runtime publication.
+test-functional-smolvm-mcp-filter-reload:
+	SMOLVM_SCENARIO=mcp-filter-reload test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
@@ -394,6 +398,7 @@ help:
 	@echo "    test-cover   - Test con report coverage"
 	@echo "    test-functional-smolvm - Run isolated functional tests in SmolVM"
 	@echo "    test-functional-smolvm-process-membership - Run active process membership in SmolVM"
+	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"

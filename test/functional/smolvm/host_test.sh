@@ -85,6 +85,7 @@ grep -q 'SMOLVM_SCENARIO' "$script_dir/run.sh"
 grep -q 'pressure_summary cpu' "$script_dir/guest/run-functional.sh"
 grep -q 'process-membership' "$script_dir/guest/run-functional.sh"
 grep -q 'missing-io-startup' "$script_dir/guest/run-functional.sh"
+grep -q 'mcp-filter-reload' "$script_dir/guest/run-functional.sh"
 grep -q 'controller-startup-rejection.txt' "$script_dir/guest/run-functional.sh"
 grep -q '^EnvironmentFile=/run/resman-functional/%i/environment$' \
     "$script_dir/guest/resman-functional@.service"

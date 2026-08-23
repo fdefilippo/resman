@@ -64,8 +64,8 @@ mcp/
 | `get_cpu_report` | Generate comprehensive CPU report | None | Formatted text report |
 | `get_mem_report` | Generate comprehensive memory report | None | Formatted text report |
 | `get_user_filters` | Get current user filter configurations | None | Include/exclude lists |
-| `set_user_exclude_list` | Set users to exclude (regex) | `patterns` ([]string), `reload` (bool) | Success, previous/new values |
-| `set_user_include_list` | Set users to include (regex) | `patterns` ([]string), `reload` (bool) | Success, previous/new values |
+| `set_user_exclude_list` | Set users to exclude (regex) | `patterns` ([]string) | Confirmed persisted/applied outcome, previous/new values |
+| `set_user_include_list` | Set CPU-eligibility patterns (regex) | `patterns` ([]string) | Confirmed persisted/applied outcome, previous/new values |
 | `validate_user_filter_pattern` | Validate regex pattern | `pattern` (string), `type` (string) | Valid, test matches |
 | `activate_limits` | Manually activate CPU limits | `force` (bool) | Success/failure, affected users |
 | `deactivate_limits` | Manually deactivate CPU limits | None | Success/failure |
@@ -327,9 +327,9 @@ AI (via MCP):
 - [x] `set_user_exclude_list` - Set exclude list with regex support
 - [x] `set_user_include_list` - Set include list with regex support
 - [x] `validate_user_filter_pattern` - Validate regex patterns
-- [x] Automatic configuration backup with timestamp
+- [x] Secure bounded rolling configuration backup
 - [x] Atomic save with rollback on error
-- [x] Automatic config reload trigger
+- [x] Synchronous config reload acknowledgement with explicit failure/timeout
 
 ### Phase 6: Advanced Features (Future)
 - [ ] Real-time notifications

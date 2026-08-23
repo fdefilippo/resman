@@ -1351,62 +1351,55 @@ func (c *Config) IsUserWhitelistedForIO(username string) bool {
 	return c.isUserIncludedForIOLocked(username) && !c.isUserExcludedForIOLocked(username)
 }
 
-// SetUserExcludeList imposta la lista di utenti da escludere e salva su file
-func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload bool) ([]string, error) {
-	// Valida tutti i pattern regex
-	for _, pattern := range patterns {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return c.GetUserExcludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
-		}
+// PersistUserExcludeList writes a detached exclude-policy snapshot without
+// publishing it to live consumers. A watcher acknowledgement owns publication.
+func (c *Config) PersistUserExcludeList(patterns []string, configPath string) ([]string, error) {
+	include, exclude := c.userFilterSnapshot()
+	if err := validateUserFilterPatterns(patterns); err != nil {
+		return exclude, err
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Salva valore precedente
-	previousValue := make([]string, len(c.UserExcludeList))
-	copy(previousValue, c.UserExcludeList)
-
-	// Aggiorna configurazione in memoria
-	c.UserExcludeList = append([]string(nil), patterns...)
-
-	// Salva su file
-	if err := c.saveToFileLocked(configPath); err != nil {
-		// Ripristina valore precedente se salvataggio fallisce
-		c.UserExcludeList = previousValue
-		return previousValue, err
+	snapshot := &Config{
+		UserIncludeList: include,
+		UserExcludeList: append([]string(nil), patterns...),
 	}
-
-	return previousValue, nil
+	if err := snapshot.saveToFileLocked(configPath); err != nil {
+		return exclude, err
+	}
+	return exclude, nil
 }
 
-// SetUserIncludeList imposta la lista di pattern include e salva su file
-func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload bool) ([]string, error) {
-	// Valida tutti i pattern regex
+// PersistUserIncludeList writes a detached include-policy snapshot without
+// publishing it to live consumers. A watcher acknowledgement owns publication.
+func (c *Config) PersistUserIncludeList(patterns []string, configPath string) ([]string, error) {
+	include, exclude := c.userFilterSnapshot()
+	if err := validateUserFilterPatterns(patterns); err != nil {
+		return include, err
+	}
+
+	snapshot := &Config{
+		UserIncludeList: append([]string(nil), patterns...),
+		UserExcludeList: exclude,
+	}
+	if err := snapshot.saveToFileLocked(configPath); err != nil {
+		return include, err
+	}
+	return include, nil
+}
+
+func (c *Config) userFilterSnapshot() ([]string, []string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.UserIncludeList...), append([]string(nil), c.UserExcludeList...)
+}
+
+func validateUserFilterPatterns(patterns []string) error {
 	for _, pattern := range patterns {
 		if _, err := regexp.Compile(pattern); err != nil {
-			return c.GetUserIncludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
+			return fmt.Errorf("invalid regex pattern %q: %w", pattern, err)
 		}
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Salva valore precedente
-	previousValue := make([]string, len(c.UserIncludeList))
-	copy(previousValue, c.UserIncludeList)
-
-	// Aggiorna configurazione in memoria
-	c.UserIncludeList = append([]string(nil), patterns...)
-
-	// Salva su file
-	if err := c.saveToFileLocked(configPath); err != nil {
-		// Ripristina valore precedente se salvataggio fallisce
-		c.UserIncludeList = previousValue
-		return previousValue, err
-	}
-
-	return previousValue, nil
+	return nil
 }
 
 // SaveToFile persists the configuration with a bounded secure backup.

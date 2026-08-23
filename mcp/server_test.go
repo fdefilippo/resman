@@ -332,7 +332,7 @@ func TestNewServer(t *testing.T) {
 
 	// Create mock dependencies (nil for this test)
 	// In a real test, you'd create proper mocks
-	server, err := NewServer(parentCfg, nil, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -352,12 +352,12 @@ func TestNewServerRejectsUnauthenticatedHTTP(t *testing.T) {
 	parentCfg.MCPHTTPHost = "127.0.0.1"
 	parentCfg.MCPAuthToken = ""
 
-	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err == nil {
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("NewServer() accepted HTTP transport without MCP_AUTH_TOKEN")
 	}
 
 	parentCfg.MCPAuthToken = "test-token"
-	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err != nil {
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("NewServer() rejected authenticated HTTP transport: %v", err)
 	}
 }
@@ -369,7 +369,7 @@ func TestNewServerRequiresTLSForHTTP(t *testing.T) {
 	parentCfg.MCPAuthToken = "test-token"
 	parentCfg.MCPTLSEnabled = false
 
-	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err == nil {
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("NewServer() accepted cleartext MCP HTTP transport")
 	}
 }
@@ -413,7 +413,7 @@ func TestNewServerRejectsInvalidTLSCredentials(t *testing.T) {
 			parentCfg.MCPTLSCertFile = certFile
 			parentCfg.MCPTLSKeyFile = keyFile
 
-			if server, err := NewServer(parentCfg, nil, nil, nil, nil); err == nil || server != nil {
+			if server, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil || server != nil {
 				t.Fatalf("NewServer() = (%v, %v), want nil server and TLS credential error", server, err)
 			}
 		})
@@ -428,7 +428,7 @@ func TestNewServerEnablesMutualTLSWhenClientCAConfigured(t *testing.T) {
 	parentCfg.MCPAuthToken = "test-token"
 	parentCfg.MCPTLSCAFile = caFile
 
-	server, err := NewServer(parentCfg, nil, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestMCPHTTPServerProtectsNonLoopbackBindWithTLS(t *testing.T) {
 	parentCfg.MCPHTTPHost = "0.0.0.0"
 	parentCfg.MCPAuthToken = "test-token"
 
-	mcpServer, err := NewServer(parentCfg, nil, nil, nil, nil)
+	mcpServer, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestServerStartStop(t *testing.T) {
 	parentCfg := config.DefaultConfig()
 	parentCfg.MCPEnabled = false
 
-	server, err := NewServer(parentCfg, nil, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

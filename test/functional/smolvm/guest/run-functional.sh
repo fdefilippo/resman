@@ -12,6 +12,7 @@ state_dir=/var/lib/resman-functional/$run_id
 config_file=$runtime_dir/resman.conf
 service=resman-functional@${run_id}.service
 result_file=$artifact_dir/result
+mcp_pid=
 
 case "$run_id" in
     *[!a-z0-9-]*|'')
@@ -20,7 +21,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership|missing-io-startup) ;;
+	resource-only|process-membership|missing-io-startup|mcp-filter-reload) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -37,6 +38,11 @@ detail="guest harness did not complete"
 finish() {
     local status=$?
     set +e
+	if [[ -n $mcp_pid ]]; then
+		kill -TERM "$mcp_pid" 2>/dev/null
+		wait "$mcp_pid" 2>/dev/null
+		mcp_pid=
+	fi
     cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
     find "/sys/fs/cgroup/resman-functional-$run_id" -maxdepth 3 -type d -print \
@@ -127,6 +133,14 @@ if [[ $scenario == process-membership ]]; then
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
 		"$config_file"
 fi
+if [[ $scenario == mcp-filter-reload ]]; then
+	sed -i \
+		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
+		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		-e 's/^MCP_ENABLED=.*/MCP_ENABLED=true/' \
+		-e 's/^MCP_TRANSPORT=.*/MCP_TRANSPORT=stdio/' \
+		"$config_file"
+fi
 chmod 0600 "$config_file"
 printf 'RESMAN_CONFIG=%s\n' "$config_file" >"$runtime_dir/environment"
 chmod 0600 "$runtime_dir/environment"
@@ -156,7 +170,11 @@ chmod 0600 "$runtime_dir/environment"
     printf 'database_path=%s\n' "$state_dir/metrics.db"
     printf 'cgroup_path=%s\n' "/sys/fs/cgroup/resman-functional-$run_id"
     printf 'prometheus_endpoint=%s\n' 'http://127.0.0.1:19100/metrics'
-    printf 'mcp_endpoint=%s\n' 'http://127.0.0.1:19101/mcp'
+	if [[ $scenario == mcp-filter-reload ]]; then
+		printf 'mcp_endpoint=%s\n' 'stdio'
+	else
+		printf 'mcp_endpoint=%s\n' 'disabled'
+	fi
 } >>"$artifact_dir/environment.txt"
 
 systemctl daemon-reload
@@ -178,6 +196,47 @@ if [[ $scenario == missing-io-startup ]]; then
 		|| fail "startup rejection did not name the io.max interface"
 	result=PASS
 	detail="startup rejected IO limiting because the real child cgroup lacked io.max"
+	echo "PASS: $detail"
+	exit 0
+fi
+if [[ $scenario == mcp-filter-reload ]]; then
+	mcp_stdout=$artifact_dir/mcp-filter-reload.jsonl
+	mcp_stderr=$artifact_dir/mcp-filter-reload.stderr
+	coproc RESMAN_MCP { /usr/bin/resman --config "$config_file" 2>"$mcp_stderr"; }
+	mcp_pid=$RESMAN_MCP_PID
+
+	request_meta='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"smolvm-functional","version":"1"}}'
+	printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^resman-cpu$"]}}}\n' \
+		"$request_meta" >&"${RESMAN_MCP[1]}"
+	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
+		kill -TERM "$mcp_pid" 2>/dev/null || true
+		fail "MCP filter update did not return a confirmed result within 20 seconds"
+	fi
+	printf '%s\n' "$response" >>"$mcp_stdout"
+	[[ $response == *'"persisted":true'* ]] || fail "MCP filter response did not confirm persistence"
+	[[ $response == *'"applied":true'* ]] || fail "MCP filter response did not confirm runtime application"
+	grep -Fq 'USER_INCLUDE_LIST=^resman-cpu$' "$config_file" \
+		|| fail "confirmed MCP filter update is absent from the config file"
+
+	printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^must-not-apply$"],"reload":false}}}\n' \
+		"$request_meta" >&"${RESMAN_MCP[1]}"
+	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
+		kill -TERM "$mcp_pid" 2>/dev/null || true
+		fail "MCP legacy-parameter rejection did not return within 20 seconds"
+	fi
+	printf '%s\n' "$response" >>"$mcp_stdout"
+	[[ $response == *'was removed'* ]] || fail "MCP did not explicitly reject the removed reload parameter"
+	grep -Fq 'USER_INCLUDE_LIST=^resman-cpu$' "$config_file" \
+		|| fail "rejected legacy request changed the persisted filter"
+	if grep -Fq 'must-not-apply' "$config_file"; then
+		fail "rejected legacy request was persisted"
+	fi
+
+	kill -TERM "$mcp_pid" 2>/dev/null || true
+	wait "$mcp_pid" 2>/dev/null || true
+	mcp_pid=
+	result=PASS
+	detail="MCP stdio filter update returned only after persistence and runtime application; removed reload input was rejected"
 	echo "PASS: $detail"
 	exit 0
 fi

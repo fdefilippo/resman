@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -55,25 +56,33 @@ const (
 	mcpDefaultMaxRequestBodySize = 4 << 20
 )
 
+// ConfigurationReloader applies a persisted configuration and returns only
+// after its runtime outcome is known.
+type ConfigurationReloader interface {
+	Reload(context.Context) error
+}
+
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
-	mcpServer        *mcp.Server
-	cfg              *Config
-	stateManager     *state.Manager
-	metricsCollector *metrics.Collector
-	cgroupManager    *cgroup.Manager
-	dbManager        *database.DatabaseManager
-	logger           *logging.Logger
-	httpServer       *http.Server
-	tlsConfig        *tls.Config
-	httpListen       func(network, address string) (net.Listener, error)
-	stdioTransport   mcp.Transport
-	transportCancel  context.CancelFunc
-	wg               sync.WaitGroup
-	stopOnce         sync.Once
-	stopErr          error
-	stopped          bool
-	mu               sync.RWMutex
+	mcpServer         *mcp.Server
+	cfg               *Config
+	stateManager      *state.Manager
+	metricsCollector  *metrics.Collector
+	cgroupManager     *cgroup.Manager
+	dbManager         *database.DatabaseManager
+	configReloader    ConfigurationReloader
+	logger            *logging.Logger
+	httpServer        *http.Server
+	tlsConfig         *tls.Config
+	httpListen        func(network, address string) (net.Listener, error)
+	stdioTransport    mcp.Transport
+	transportCancel   context.CancelFunc
+	wg                sync.WaitGroup
+	stopOnce          sync.Once
+	stopErr           error
+	stopped           bool
+	mu                sync.RWMutex
+	configWriteActive atomic.Bool
 }
 
 // NewServer creates a new MCP server instance
@@ -83,6 +92,7 @@ func NewServer(
 	mc *metrics.Collector,
 	cg *cgroup.Manager,
 	dbm *database.DatabaseManager,
+	configReloader ConfigurationReloader,
 ) (*Server, error) {
 	logger := logging.GetLogger()
 
@@ -134,6 +144,7 @@ func NewServer(
 		metricsCollector: mc,
 		cgroupManager:    cg,
 		dbManager:        dbm,
+		configReloader:   configReloader,
 		logger:           logger,
 		tlsConfig:        serverTLSConfig,
 	}

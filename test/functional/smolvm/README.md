@@ -26,9 +26,20 @@ startup and names the feature, controller, and interface:
 make test-functional-smolvm-missing-io-startup
 ```
 
-This scenario is `BLOCKED` rather than passed when `io.max` is available or
-when another required interface is also missing, because either condition
-would not reproduce the intended boundary unambiguously.
+The `missing-io-startup` scenario is `BLOCKED` rather than passed when `io.max`
+is available or when another required interface is also missing, because either
+condition would not reproduce the intended boundary unambiguously.
+
+The MCP filter reload boundary uses stdio and only the CPU controller, so it does
+not require guest networking, TLS material, `memory.max`, or `io.max`:
+
+```bash
+make test-functional-smolvm-mcp-filter-reload
+```
+
+It calls the real `set_user_include_list` tool using MCP 2026-07-28, requires a
+response that confirms both persistence and runtime application, verifies the
+file, and proves that the removed `reload` input is rejected without side effects.
 
 The target builds the guest image with `sudo podman` and invokes every
 KVM-dependent SmolVM command through `sg kvm -c`. Starting a new login shell is
@@ -142,6 +153,8 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
 - sustained-active process-membership origin and reconciliation results when that
   scenario is selected;
+- MCP stdio request/response evidence for acknowledged filter persistence and
+  runtime application when that scenario is selected;
 - the complete startup rejection naming feature, controller, and interface for
   the missing-I/O capability scenario;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.

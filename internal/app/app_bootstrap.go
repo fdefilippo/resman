@@ -235,7 +235,7 @@ func (a *App) WithMCPServer() *App {
 		return a
 	}
 
-	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager)
+	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager, a.configWatcher)
 	if err != nil {
 		a.logger.Error("Failed to initialize MCP server", "error", err)
 		fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize MCP server: %v\n", err)

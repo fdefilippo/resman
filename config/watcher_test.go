@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -138,7 +139,10 @@ func TestWatcherRecordsFailedApplyVersion(t *testing.T) {
 		lastFileSize:  -1,
 	}
 
-	watcher.handleConfigChange(false)
+	err = watcher.handleConfigChange(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "partial apply") {
+		t.Fatalf("handleConfigChange() error = %v, want partial apply", err)
+	}
 
 	if handler.calls != 1 {
 		t.Fatalf("handler calls = %d, want 1", handler.calls)
@@ -173,7 +177,9 @@ func TestWatcherKeepsCurrentConfigAfterInvalidEnvironmentOverride(t *testing.T) 
 		isRunning:     true,
 	}
 
-	watcher.handleConfigChange(true)
+	if err := watcher.handleConfigChange(context.Background(), true); err == nil {
+		t.Fatal("handleConfigChange() accepted invalid environment override")
+	}
 
 	if watcher.GetCurrentConfig() != initialConfig {
 		t.Fatal("invalid environment override replaced the current configuration")
@@ -235,11 +241,12 @@ func TestWatcherSerializesReloadsAndStopWaitsForCallback(t *testing.T) {
 	}
 
 	var reloadWG sync.WaitGroup
+	reloadErrors := make(chan error, 2)
 	reloadWG.Add(2)
 	for range 2 {
 		go func() {
 			defer reloadWG.Done()
-			watcher.HandleConfigChange()
+			reloadErrors <- watcher.ForceReload(context.Background())
 		}()
 	}
 
@@ -280,8 +287,88 @@ func TestWatcherSerializesReloadsAndStopWaitsForCallback(t *testing.T) {
 		t.Fatal("Stop() did not wait for callback completion")
 	}
 	reloadWG.Wait()
+	close(reloadErrors)
+	for err := range reloadErrors {
+		if err != nil && !errors.Is(err, ErrWatcherStopped) {
+			t.Errorf("Reload() error = %v, want nil or ErrWatcherStopped", err)
+		}
+	}
 	if got := handler.max.Load(); got != 1 {
 		t.Fatalf("maximum concurrent callbacks = %d, want 1", got)
+	}
+}
+
+func TestWatcherReloadReturnsDeadlineWhileQueued(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	handler := &blockingConfigChangeHandler{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}, 1),
+	}
+	watcher, err := NewWatcher(configPath, DefaultConfig(), handler)
+	if err != nil {
+		t.Fatalf("NewWatcher() error: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- watcher.ForceReload(context.Background())
+	}()
+	<-handler.entered
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := watcher.ForceReload(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ForceReload() error = %v, want context deadline exceeded", err)
+	}
+
+	handler.release <- struct{}{}
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Reload() error: %v", err)
+	}
+	if err := watcher.Stop(); err != nil {
+		t.Fatalf("Stop() error: %v", err)
+	}
+}
+
+func TestWatcherReloadRejectsFileChangedDuringApplication(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	writeAtomicConfig(t, configPath, 80)
+	handler := &blockingConfigChangeHandler{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}, 1),
+	}
+	watcher, err := NewWatcher(configPath, DefaultConfig(), handler)
+	if err != nil {
+		t.Fatalf("NewWatcher() error: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	writeAtomicConfig(t, configPath, 81)
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- watcher.Reload(context.Background())
+	}()
+	<-handler.entered
+	writeAtomicConfig(t, configPath, 82)
+	handler.release <- struct{}{}
+
+	if err := <-reloadDone; err == nil || !strings.Contains(err.Error(), "changed while runtime application") {
+		t.Fatalf("Reload() error = %v, want concurrent file-change rejection", err)
+	}
+	if got := watcher.GetCurrentConfig().CPUThreshold; got != 81 {
+		t.Fatalf("applied snapshot CPU_THRESHOLD = %d, want 81", got)
+	}
+	if err := watcher.Stop(); err != nil {
+		t.Fatalf("Stop() error: %v", err)
 	}
 }
 

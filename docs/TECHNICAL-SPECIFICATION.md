@@ -865,19 +865,19 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 
 **Tool: `set_user_exclude_list`**
 - **Description:** Set users to exclude from CPU limits (regex patterns)
-- **Input:** `patterns` ([]string), `reload` (bool, default=true)
-- **Output:** `success`, `previous_value`, `new_value`, `reload_triggered`
+- **Input:** `patterns` ([]string); unknown fields and the removed `reload` field are rejected
+- **Output:** `success`, `previous_value`, `new_value`, `persisted`, `applied`, `error`
 - **Implementation:**
   1. Validates regex patterns
   2. Replaces the single rolling backup with the previous configuration
-  3. Updates and syncs the config file atomically
-  4. Triggers config reload if requested
+  3. Updates and syncs a detached config-file snapshot atomically without mutating live state
+  4. Waits for the watcher to validate and apply the file, returning its success, failure, or timeout
 - **Security:** Requires `MCP_ALLOW_WRITE_OPS=true`
 
 **Tool: `set_user_include_list`**
-- **Description:** Set users to include in monitoring (regex patterns)
-- **Input:** `patterns` ([]string), `reload` (bool, default=true)
-- **Output:** `success`, `previous_value`, `new_value`, `reload_triggered`
+- **Description:** Set CPU-eligibility patterns (regex patterns; an empty list disables CPU limiting)
+- **Input:** `patterns` ([]string); unknown fields and the removed `reload` field are rejected
+- **Output:** `success`, `previous_value`, `new_value`, `persisted`, `applied`, `error`
 - **Implementation:** Same as `set_user_exclude_list`
 - **Security:** Requires `MCP_ALLOW_WRITE_OPS=true`
 
@@ -905,30 +905,21 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 This keeps retention bounded to one previous version and prevents temporary or backup
 files from becoming more readable than the active configuration.
 
-**Rollback on Error:**
+**Publication boundary:**
 ```go
-func (c *Config) SetUserExcludeList(patterns []string) ([]string, error) {
-    // Validate patterns
-    for _, pattern := range patterns {
-        if _, err := regexp.Compile(pattern); err != nil {
-            return nil, err
-        }
-    }
-
-    // Save previous value
-    previousValue := make([]string, len(c.UserExcludeList))
-    copy(previousValue, c.UserExcludeList)
-
-    // Attempt save
-    if err := c.SaveToFile(path); err != nil {
-        // Rollback on failure
-        c.UserExcludeList = previousValue
-        return nil, err
-    }
-
-    return previousValue, nil
+previous, err := cfg.PersistUserExcludeList(patterns, path)
+if err != nil {
+    return err // the runtime snapshot is still unchanged
+}
+if err := watcher.Reload(ctx); err != nil {
+    return err // persisted=true, applied is reported from observed runtime state
 }
 ```
+
+Concurrent MCP configuration writes are rejected explicitly. Automatic filesystem
+events use a content digest, rather than timestamp and size alone, to avoid both
+missing same-size atomic replacements and reapplying a version already acknowledged
+by the synchronous path.
 
 ### 8.3 HTTP Transport
 
@@ -1380,7 +1371,7 @@ curl http://localhost:1974/metrics
 | Version | Date | Key Changes |
 |---------|------|-------------|
 | 1.12.0 | Mar 2026 | **Blackout Timeframes**: `CPU_MANAGER_BLACKOUT` configuration. CPU Manager skips limit application during configured timeframes. Crontab-like format. System timezone support. |
-| 1.11.0 | Mar 2026 | **MCP User Filter Management**: `set_user_exclude_list`, `set_user_include_list`, `get_user_filters`, `validate_user_filter_pattern`. Automatic config backup with timestamp. Atomic save with rollback. |
+| 1.11.0 | Mar 2026 | **MCP User Filter Management**: `set_user_exclude_list`, `set_user_include_list`, `get_user_filters`, `validate_user_filter_pattern`. Secure bounded rolling backup. Atomic durable save. |
 | 1.10.1 | Mar 2026 | Config watcher periodic check (30s) for reliable reload |
 | 1.10.0 | Mar 2026 | **USER_EXCLUDE_LIST regex support**: Pattern matching for user exclusion |
 | 1.9.0 | Mar 2026 | **USER_INCLUDE_LIST**: Regex-based user inclusion filtering |

@@ -490,23 +490,26 @@ Sets the users excluded from CPU limits (regex supported).
 **Input:**
 ```json
 {
-  "patterns": ["^test-.*", "^dev-.*", "francesco"],
-  "reload": true
+  "patterns": ["^test-.*", "^dev-.*", "francesco"]
 }
 ```
 
 **Parameters:**
 - `patterns` (array of strings): Regex patterns for users to exclude
-- `reload` (boolean, optional, default=true): Reload the configuration when true
+
+The tool returns only after the new file has been validated and its runtime
+application has succeeded or failed. The removed `reload` parameter is rejected
+explicitly; persistence without runtime application is not supported.
 
 **Output:**
 ```json
 {
   "success": true,
-  "message": "User exclude list updated successfully",
+  "message": "User exclude filters persisted and applied successfully",
   "previous_value": ["^old-.*"],
   "new_value": ["^test-.*", "^dev-.*", "francesco"],
-  "reload_triggered": true
+  "persisted": true,
+  "applied": true
 }
 ```
 
@@ -527,23 +530,25 @@ Sets the patterns used to include users in monitoring (regex supported).
 **Input:**
 ```json
 {
-  "patterns": ["^www.*", "^app-.*", "mysql"],
-  "reload": true
+  "patterns": ["^www.*", "^app-.*", "mysql"]
 }
 ```
 
 **Parameters:**
 - `patterns` (array of strings): Regex patterns for users to include
-- `reload` (boolean, optional, default=true): Reload the configuration when true
+
+An empty array disables CPU eligibility. The operation has the same synchronous
+persistence and runtime-application contract as `set_user_exclude_list`.
 
 **Output:**
 ```json
 {
   "success": true,
-  "message": "User include list updated successfully",
+  "message": "User include filters persisted and applied successfully",
   "previous_value": [],
   "new_value": ["^www.*", "^app-.*", "mysql"],
-  "reload_triggered": true
+  "persisted": true,
+  "applied": true
 }
 ```
 

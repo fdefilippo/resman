@@ -421,7 +421,7 @@ func newProtocolTestServer(t *testing.T) *Server {
 	cfg.MCPTransport = "http"
 	cfg.MCPHTTPHost = "127.0.0.1"
 	cfg.MCPAuthToken = protocolTestToken
-	server, err := NewServer(cfg, nil, nil, nil, nil)
+	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
