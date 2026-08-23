@@ -703,6 +703,12 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman.conf
 The release stability guard uses elapsed wall-clock time. Extra control cycles
 triggered by PSI events do not accelerate global deactivation.
 
+Per-user decision CPU baselines and EMA advance only on control-cycle samples.
+Metrics-only refreshes use independent per-process baselines, EMA state, and cache
+entries. A refresh can update Prometheus without changing the next activation or
+release input. The release stability guard consumes the same per-user snapshot as the
+rest of its control decision; it does not perform a second collector read.
+
 **Idle User Release:**
 - Uses the per-user CPU EMA rather than one instantaneous sample
 - Requires the user's own `MIN_ACTIVE_TIME` hold to expire
@@ -814,6 +820,9 @@ baseline and returns zero. The next valid sample resumes delta calculation immed
 - Cache cleared on configuration reload
 - Prevents excessive `/proc` reads
 - Cache expiry does not define host-total CPU baseline staleness
+- Observation and decision per-user samples have separate cache entries, per-process
+  baselines, and EMA state
+- Only control-cycle samples advance temporal decision state
 
 ---
 

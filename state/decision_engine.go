@@ -127,9 +127,11 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				limitedUsers = append(limitedUsers, uid)
 			}
 			m.mu.RUnlock()
-			allUserMetrics := make(map[int]*resmanmetrics.UserMetrics)
-			if m.metricsCollector != nil {
-				allUserMetrics = m.metricsCollector.GetAllUserMetrics()
+			// Release stability must consume the same authoritative sample used
+			// for this decision, never a second observation scan.
+			allUserMetrics := metrics.UserMetrics
+			if allUserMetrics == nil {
+				allUserMetrics = make(map[int]*resmanmetrics.UserMetrics)
 			}
 
 			// Preserve the historical three-poll cool-down as wall-clock time.

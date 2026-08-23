@@ -93,18 +93,25 @@ func TestUpdateConfigResetsOnlyEnforceableEMAWhenProcessPolicyChanges(t *testing
 		t.Fatalf("NewCollector() error: %v", err)
 	}
 	t.Cleanup(collector.Stop)
-	collector.emaCache.values[1000] = 90
-	collector.emaCache.enforceableValues[1000] = 80
+	for _, state := range []*userMetricsSamplingState{collector.observationState, collector.decisionState} {
+		state.ema.values[1000] = 90
+		state.ema.enforceableValues[1000] = 80
+	}
 
 	reloaded := config.DefaultConfig()
 	reloaded.ProcessExcludeList = []string{"^stress$"}
 	collector.UpdateConfig(reloaded)
 
-	if got := collector.emaCache.values[1000]; got != 90 {
-		t.Fatalf("observed EMA after reload = %.1f, want 90", got)
-	}
-	if len(collector.emaCache.enforceableValues) != 0 {
-		t.Fatalf("enforceable EMA after process-policy reload = %v, want empty", collector.emaCache.enforceableValues)
+	for name, state := range map[string]*userMetricsSamplingState{
+		"observation": collector.observationState,
+		"decision":    collector.decisionState,
+	} {
+		if got := state.ema.values[1000]; got != 90 {
+			t.Fatalf("%s observed EMA after reload = %.1f, want 90", name, got)
+		}
+		if len(state.ema.enforceableValues) != 0 {
+			t.Fatalf("%s enforceable EMA after process-policy reload = %v, want empty", name, state.ema.enforceableValues)
+		}
 	}
 
 	data := &userData{}
@@ -261,7 +268,7 @@ func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
 	t.Cleanup(collector.Stop)
-	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 10, EligibleForRAM: true, EligibleForIO: true},
 		1001: {UID: 1001, CPUUsage: 20, EligibleForCPU: true},
 	})
@@ -276,85 +283,151 @@ func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
 }
 
 func TestUpdateProcessCPUSampleCountsConsecutiveDelta(t *testing.T) {
-	collector := &Collector{
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-	}
+	state := newUserMetricsSamplingState()
 	now := time.Now()
 
-	if got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1, System: 1}, now); got != 0 {
+	if got := updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 1, System: 1}, now); got != 0 {
 		t.Fatalf("first sample = %f, want 0", got)
 	}
-	got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 2.5, System: 1.5}, now.Add(time.Second))
+	got := updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 2.5, System: 1.5}, now.Add(time.Second))
 	if got != 200 {
 		t.Fatalf("second sample = %f, want 200", got)
 	}
 }
 
 func TestUpdateProcessCPUSampleWaitsForReliableElapsedTime(t *testing.T) {
-	collector := &Collector{
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-	}
+	state := newUserMetricsSamplingState()
 	now := time.Now()
 
-	collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1}, now)
-	if got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1.5}, now.Add(500*time.Millisecond)); got != 0 {
+	updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 1}, now)
+	if got := updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 1.5}, now.Add(500*time.Millisecond)); got != 0 {
 		t.Fatalf("sub-second CPU delta = %f, want 0", got)
 	}
-	got := collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 2}, now.Add(time.Second))
+	got := updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 2}, now.Add(time.Second))
 	if got != 100 {
 		t.Fatalf("CPU delta after one second = %f, want 100", got)
 	}
 }
 
 func TestUpdateProcessCPUSampleResetsReusedPID(t *testing.T) {
-	collector := &Collector{
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-	}
+	state := newUserMetricsSamplingState()
 	now := time.Now()
-	collector.updateProcessCPUSample(42, 1000, cpu.TimesStat{User: 1}, now)
+	updateProcessCPUSample(state, 42, 1000, cpu.TimesStat{User: 1}, now)
 
-	got := collector.updateProcessCPUSample(42, 2000, cpu.TimesStat{User: 20}, now.Add(time.Second))
+	got := updateProcessCPUSample(state, 42, 2000, cpu.TimesStat{User: 20}, now.Add(time.Second))
 	if got != 0 {
 		t.Fatalf("first sample for reused PID = %f, want 0", got)
 	}
-	got = collector.updateProcessCPUSample(42, 2000, cpu.TimesStat{User: 21}, now.Add(2*time.Second))
+	got = updateProcessCPUSample(state, 42, 2000, cpu.TimesStat{User: 21}, now.Add(2*time.Second))
 	if got != 100 {
 		t.Fatalf("second sample for reused PID = %f, want 100", got)
 	}
 }
 
 func TestUpdateProcessCPUSampleRetainsBaselinesAboveLegacyLimit(t *testing.T) {
-	collector := &Collector{
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-	}
+	state := newUserMetricsSamplingState()
 	now := time.Now()
 	const processCount = 6000
 	for pid := int32(1); pid <= processCount; pid++ {
-		collector.updateProcessCPUSample(pid, int64(pid), cpu.TimesStat{User: 1}, now)
+		updateProcessCPUSample(state, pid, int64(pid), cpu.TimesStat{User: 1}, now)
 	}
 
-	if got := len(collector.procCache.prevProcCPU); got != processCount {
+	if got := len(state.process.prevProcCPU); got != processCount {
 		t.Fatalf("process cache size = %d, want %d", got, processCount)
 	}
-	got := collector.updateProcessCPUSample(1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second))
+	got := updateProcessCPUSample(state, 1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second))
 	if got != 100 {
 		t.Fatalf("CPU delta after cache growth = %f, want 100", got)
+	}
+}
+
+func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
+	tests := []struct {
+		name             string
+		observationCount int
+	}{
+		{name: "no observation refresh", observationCount: 0},
+		{name: "one observation refresh", observationCount: 1},
+		{name: "three observation refreshes", observationCount: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decisionState := newUserMetricsSamplingState()
+			observationState := newUserMetricsSamplingState()
+			startedAt := time.Unix(1_700_000_000, 0)
+
+			updateProcessCPUSample(decisionState, 42, 1000, cpu.TimesStat{User: 1}, startedAt)
+			calculateEMA(decisionState, 1000, 10)
+			for i := 0; i < tt.observationCount; i++ {
+				sampledAt := startedAt.Add(time.Duration(i+1) * time.Second)
+				updateProcessCPUSample(
+					observationState,
+					42,
+					1000,
+					cpu.TimesStat{User: float64(i + 2)},
+					sampledAt,
+				)
+				calculateEMA(observationState, 1000, float64(90+i))
+			}
+
+			cpuUsage := updateProcessCPUSample(
+				decisionState,
+				42,
+				1000,
+				cpu.TimesStat{User: 5},
+				startedAt.Add(4*time.Second),
+			)
+			ema := calculateEMA(decisionState, 1000, 80)
+
+			if cpuUsage != 100 {
+				t.Fatalf("decision CPU usage after %d observation refreshes = %.1f, want 100", tt.observationCount, cpuUsage)
+			}
+			if ema != 31 {
+				t.Fatalf("decision EMA after %d observation refreshes = %.1f, want 31", tt.observationCount, ema)
+			}
+		})
+	}
+}
+
+func TestObservationAndDecisionSamplesUseIndependentCacheEntries(t *testing.T) {
+	collector := &Collector{
+		cfg:             config.DefaultConfig(),
+		cache:           make(map[string]interface{}),
+		cacheTimestamps: make(map[string]time.Time),
+	}
+	observationState := newUserMetricsSamplingState()
+	decisionState := newUserMetricsSamplingState()
+	var calls atomic.Int32
+	collect := func(state *userMetricsSamplingState) map[int]*UserMetrics {
+		calls.Add(1)
+		uid := 1000
+		if state == decisionState {
+			uid = 1001
+		}
+		return map[int]*UserMetrics{uid: {UID: uid}}
+	}
+
+	observation := collector.getAllUserMetricsCached(
+		observationUserMetricsCacheKey,
+		observationState,
+		collect,
+	)
+	decision := collector.getAllUserMetricsCached(
+		decisionUserMetricsCacheKey,
+		decisionState,
+		collect,
+	)
+	collector.getAllUserMetricsCached(observationUserMetricsCacheKey, observationState, collect)
+
+	if _, ok := observation[1000]; !ok {
+		t.Fatalf("observation sample = %v, want UID 1000", observation)
+	}
+	if _, ok := decision[1001]; !ok {
+		t.Fatalf("decision sample = %v, want UID 1001", decision)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("collection calls = %d, want one per sampling purpose", got)
 	}
 }
 
@@ -437,40 +510,34 @@ func TestUnknownUsernameIsNegativelyCached(t *testing.T) {
 }
 
 func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
-	collector := &Collector{
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-	}
+	state := newUserMetricsSamplingState()
 	now := time.Now()
 	const processCount = 6000
 	for pid := int32(1); pid <= processCount; pid++ {
-		collector.updateProcessCPUSample(pid, int64(pid), cpu.TimesStat{User: 1}, now)
+		updateProcessCPUSample(state, pid, int64(pid), cpu.TimesStat{User: 1}, now)
 	}
 
-	removed := collector.retainProcessCPUBaselines(map[int32]struct{}{
+	removed := retainProcessCPUBaselines(state, map[int32]struct{}{
 		1:            {},
 		processCount: {},
 	})
 	if removed != processCount-2 {
 		t.Fatalf("removed process baselines = %d, want %d", removed, processCount-2)
 	}
-	if got := len(collector.procCache.prevProcCPU); got != 2 {
+	if got := len(state.process.prevProcCPU); got != 2 {
 		t.Fatalf("process cache size = %d, want 2", got)
 	}
-	if got := len(collector.procCache.prevProcTime); got != 2 {
+	if got := len(state.process.prevProcTime); got != 2 {
 		t.Fatalf("process timestamp cache size = %d, want 2", got)
 	}
-	if got := len(collector.procCache.procStartTime); got != 2 {
+	if got := len(state.process.procStartTime); got != 2 {
 		t.Fatalf("process start-time cache size = %d, want 2", got)
 	}
 
-	if got := collector.updateProcessCPUSample(1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 100 {
+	if got := updateProcessCPUSample(state, 1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 100 {
 		t.Fatalf("retained process CPU delta = %f, want 100", got)
 	}
-	if got := collector.updateProcessCPUSample(2, 2, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 0 {
+	if got := updateProcessCPUSample(state, 2, 2, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 0 {
 		t.Fatalf("removed process CPU delta = %f, want 0", got)
 	}
 }
@@ -642,18 +709,15 @@ func TestParseProcessPSS(t *testing.T) {
 }
 
 func TestRetainEMAUsersRemovesInactiveUIDs(t *testing.T) {
-	collector := &Collector{
-		emaCache: &emaCache{values: map[int]float64{
-			1000: 10,
-			1001: 20,
-		}},
-	}
-	collector.retainEMAUsers(map[int]*UserMetrics{1001: {UID: 1001}})
+	state := newUserMetricsSamplingState()
+	state.ema.values[1000] = 10
+	state.ema.values[1001] = 20
+	retainEMAUsers(state, map[int]*UserMetrics{1001: {UID: 1001}})
 
-	if _, exists := collector.emaCache.values[1000]; exists {
+	if _, exists := state.ema.values[1000]; exists {
 		t.Fatal("EMA for inactive UID 1000 was not removed")
 	}
-	if got := collector.emaCache.values[1001]; got != 20 {
+	if got := state.ema.values[1001]; got != 20 {
 		t.Fatalf("EMA for active UID 1001 = %f, want 20", got)
 	}
 }
@@ -759,7 +823,8 @@ func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	collect := func() map[int]*UserMetrics {
+	state := newUserMetricsSamplingState()
+	collect := func(*userMetricsSamplingState) map[int]*UserMetrics {
 		if calls.Add(1) == 1 {
 			close(started)
 		}
@@ -774,7 +839,7 @@ func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
 	for range callers {
 		go func() {
 			defer wg.Done()
-			results <- collector.getAllUserMetricsCached(collect)
+			results <- collector.getAllUserMetricsCached(decisionUserMetricsCacheKey, state, collect)
 		}()
 	}
 
@@ -801,14 +866,14 @@ func TestDerivedUserMetricsDoNotExtendCacheLifetime(t *testing.T) {
 		cacheTimestamps: make(map[string]time.Time),
 	}
 
-	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 10},
 	})
 	if got := collector.GetUserCPUUsage(1000); got != 10 {
 		t.Fatalf("initial user CPU = %f, want 10", got)
 	}
 
-	collector.setInCache("all_user_metrics", map[int]*UserMetrics{
+	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 25},
 	})
 	if got := collector.GetUserCPUUsage(1000); got != 25 {

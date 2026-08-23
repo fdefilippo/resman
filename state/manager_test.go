@@ -40,10 +40,14 @@ import (
 // Mock implementations for testing
 type mockMetricsCollector struct {
 	allUserMetrics                   map[int]*metrics.UserMetrics
+	decisionUserMetrics              map[int]*metrics.UserMetrics
 	preserveExplicitEnforceableUsage bool
 	usernames                        map[int]string
 	systemLoad                       float64
 	systemLoadErr                    error
+	callMu                           sync.Mutex
+	observationCalls                 int
+	decisionCalls                    int
 }
 
 func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
@@ -57,25 +61,41 @@ func (m *mockMetricsCollector) GetSystemLoad() (float64, error) {
 	return m.systemLoad, m.systemLoadErr
 }
 func (m *mockMetricsCollector) GetAllUserMetrics() map[int]*metrics.UserMetrics {
+	m.callMu.Lock()
+	m.observationCalls++
+	m.callMu.Unlock()
+	return m.prepareUserMetrics(m.allUserMetrics)
+}
+func (m *mockMetricsCollector) GetAllUserMetricsForDecision() map[int]*metrics.UserMetrics {
+	m.callMu.Lock()
+	m.decisionCalls++
+	m.callMu.Unlock()
+	userMetrics := m.decisionUserMetrics
+	if userMetrics == nil {
+		userMetrics = m.allUserMetrics
+	}
+	return m.prepareUserMetrics(userMetrics)
+}
+func (m *mockMetricsCollector) prepareUserMetrics(userMetrics map[int]*metrics.UserMetrics) map[int]*metrics.UserMetrics {
 	if !m.preserveExplicitEnforceableUsage {
-		for _, userMetrics := range m.allUserMetrics {
-			if userMetrics == nil {
+		for _, sample := range userMetrics {
+			if sample == nil {
 				continue
 			}
-			userMetrics.EnforceableUsage = metrics.ProcessSetMetrics{
-				CPUUsage:        userMetrics.CPUUsage,
-				CPUUsageAverage: userMetrics.CPUUsageAverage,
-				CPUUsageEMA:     userMetrics.CPUUsageEMA,
-				MemoryUsage:     userMetrics.MemoryUsage,
-				ProcessCount:    userMetrics.ProcessCount,
-				IOReadBytes:     userMetrics.IOReadBytes,
-				IOWriteBytes:    userMetrics.IOWriteBytes,
-				IOReadOps:       userMetrics.IOReadOps,
-				IOWriteOps:      userMetrics.IOWriteOps,
+			sample.EnforceableUsage = metrics.ProcessSetMetrics{
+				CPUUsage:        sample.CPUUsage,
+				CPUUsageAverage: sample.CPUUsageAverage,
+				CPUUsageEMA:     sample.CPUUsageEMA,
+				MemoryUsage:     sample.MemoryUsage,
+				ProcessCount:    sample.ProcessCount,
+				IOReadBytes:     sample.IOReadBytes,
+				IOWriteBytes:    sample.IOWriteBytes,
+				IOReadOps:       sample.IOReadOps,
+				IOWriteOps:      sample.IOWriteOps,
 			}
 		}
 	}
-	return m.allUserMetrics
+	return userMetrics
 }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
 func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
@@ -720,6 +740,66 @@ func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) 
 	user := sample.UserMetrics[1000]
 	if user == nil || user.EligibleForCPU || !user.EligibleForRAM || !user.EligibleForIO {
 		t.Fatalf("explicit user eligibility = %+v, want CPU=false RAM=true IO=true", user)
+	}
+}
+
+func TestInterleavedMetricsRefreshDoesNotChangeControlDecisionSample(t *testing.T) {
+	tests := []struct {
+		name         string
+		refreshCount int
+	}{
+		{name: "control only", refreshCount: 0},
+		{name: "one refresh", refreshCount: 1},
+		{name: "three refreshes", refreshCount: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.UserIncludeList = []string{"^alice$"}
+			cfg.CPUThreshold = 75
+			cfg.CPUThresholdDuration = 0
+			cfg.AutodetectPatterns = true
+			collector := &mockMetricsCollector{
+				allUserMetrics: map[int]*metrics.UserMetrics{
+					1000: {UID: 1000, Username: "alice", CPUUsage: 90, CPUUsageEMA: 90, ProcessCount: 1},
+				},
+				decisionUserMetrics: map[int]*metrics.UserMetrics{
+					1000: {UID: 1000, Username: "alice", CPUUsage: 10, CPUUsageEMA: 10, ProcessCount: 1},
+				},
+			}
+			manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+
+			for range tt.refreshCount {
+				if err := manager.RunMetricsRefresh(context.Background(), "test_refresh"); err != nil {
+					t.Fatalf("RunMetricsRefresh() error: %v", err)
+				}
+			}
+			if err := manager.RunControlCycle(context.Background()); err != nil {
+				t.Fatalf("RunControlCycle() error: %v", err)
+			}
+
+			if manager.limitsActive {
+				t.Fatal("observation-only CPU sample activated limits")
+			}
+			collector.callMu.Lock()
+			observationCalls := collector.observationCalls
+			decisionCalls := collector.decisionCalls
+			collector.callMu.Unlock()
+			if observationCalls != tt.refreshCount {
+				t.Fatalf("observation calls = %d, want %d", observationCalls, tt.refreshCount)
+			}
+			if decisionCalls != 1 {
+				t.Fatalf("decision calls = %d, want 1", decisionCalls)
+			}
+			history := manager.GetControlHistory(1)
+			if len(history) != 1 || history[0].Decision != "MAINTAIN_CURRENT_STATE" {
+				t.Fatalf("control history = %+v, want one MAINTAIN decision", history)
+			}
+		})
 	}
 }
 
@@ -1464,6 +1544,7 @@ func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
 	systemMetrics := &SystemMetrics{
 		CPUEligibleCPUUsage: 30,
 		SystemUnderLoad:     false,
+		UserMetrics:         collector.allUserMetrics,
 	}
 
 	if decision, _ := manager.makeDecision(systemMetrics); decision != "MAINTAIN_CURRENT_STATE" {
@@ -1474,6 +1555,17 @@ func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
 	manager.stabilityTracker.mu.Unlock()
 	if decision, _ := manager.makeDecision(systemMetrics); decision != "DEACTIVATE_LIMITS" {
 		t.Fatalf("decision after wall-clock guard = %s, want DEACTIVATE_LIMITS", decision)
+	}
+	collector.callMu.Lock()
+	observationCalls := collector.observationCalls
+	decisionCalls := collector.decisionCalls
+	collector.callMu.Unlock()
+	if observationCalls != 0 || decisionCalls != 0 {
+		t.Fatalf(
+			"release stability re-read collector: observation=%d decision=%d, want both zero",
+			observationCalls,
+			decisionCalls,
+		)
 	}
 }
 
@@ -2473,7 +2565,10 @@ func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T
 	manager.patternDetector.userStats[1000] = batchNightStats()
 	manager.patternDetector.userStats[1001] = batchNightStats()
 
-	run := &controlCycleContext{cfg: cfg}
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
 	if err := manager.stageWorkloadPatternDetection(run); err != nil {
 		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
 	}
@@ -2513,7 +2608,11 @@ func TestPatternHistorySurvivesTemporaryProcessAbsence(t *testing.T) {
 	manager.patternDetector.userStats[1000] = stats
 	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
 
-	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
+	if err := manager.stageWorkloadPatternDetection(run); err != nil {
 		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
 	}
 
@@ -2550,7 +2649,11 @@ func TestPatternHistoryExpiryRemovesPolicy(t *testing.T) {
 	manager.policyEngine.ApplyPolicy(1000, PatternBatchNight, cfg)
 	manager.activeUsers[1000] = true
 
-	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
+	if err := manager.stageWorkloadPatternDetection(run); err != nil {
 		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
 	}
 
@@ -2589,7 +2692,11 @@ func TestPatternPolicyIsRevertedWhenClassificationDecays(t *testing.T) {
 		SampleCount: 30,
 	}}}
 
-	if err := manager.stageWorkloadPatternDetection(&controlCycleContext{cfg: cfg}); err != nil {
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
+	if err := manager.stageWorkloadPatternDetection(run); err != nil {
 		t.Fatalf("stageWorkloadPatternDetection() error: %v", err)
 	}
 

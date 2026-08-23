@@ -255,7 +255,9 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 	}
 
 	configuredEligible := make(map[int]bool)
-	allMetrics := m.metricsCollector.GetAllUserMetrics()
+	// Pattern detection is an enforcement input and must consume the control
+	// cycle's authoritative decision snapshot, not an observation-only re-read.
+	allMetrics := run.metrics.UserMetrics
 	for uid, um := range allMetrics {
 		if um == nil {
 			continue
@@ -287,7 +289,7 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 		m.reconcilePatternPolicy(uid, run.cfg)
 	}
 
-	// Analizza pattern ogni ora
+	// Analyze patterns once per hour.
 	if time.Since(m.lastPatternAnalysis) <= time.Hour {
 		return nil
 	}
@@ -397,14 +399,14 @@ type SystemMetrics struct {
 }
 
 func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
-	return m.collectSystemMetricsWithIOState(true)
+	return m.collectSystemMetricsForPurpose(true)
 }
 
 func (m *Manager) collectSystemMetricsForRefresh() (*SystemMetrics, error) {
-	return m.collectSystemMetricsWithIOState(false)
+	return m.collectSystemMetricsForPurpose(false)
 }
 
-func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMetrics, error) {
+func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMetrics, error) {
 	collectionStarted := time.Now()
 	sampleTime := collectionStarted
 	if exporter := m.prometheusExporter; exporter != nil {
@@ -437,8 +439,14 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 		metrics.SystemLoad = systemLoad
 	}
 
-	// Collect detailed per-user CPU, memory, process, and I/O metrics in one call.
-	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
+	// Decision samples own temporal enforcement state. Observation refreshes use
+	// a separate stream and cannot populate or advance the decision stream.
+	var allUserMetrics map[int]*resmanmetrics.UserMetrics
+	if decisionSample {
+		allUserMetrics = m.metricsCollector.GetAllUserMetricsForDecision()
+	} else {
+		allUserMetrics = m.metricsCollector.GetAllUserMetrics()
+	}
 
 	// Compute total and per-resource eligible-user aggregates in one pass.
 	for uid, um := range allUserMetrics {
@@ -486,7 +494,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 		}
 		if corrected.EligibleForIO {
 			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
-			if updateIOState {
+			if decisionSample {
 				current := ioCounters{
 					readBytes:  um.EnforceableUsage.IOReadBytes,
 					writeBytes: um.EnforceableUsage.IOWriteBytes,
@@ -508,7 +516,7 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	metrics.RAMEligibleUsersCount = len(metrics.RAMEligibleUsers)
 	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
-	if updateIOState {
+	if decisionSample {
 		m.prevIOTime = sampleTime
 
 		// Remove baselines for users that are no longer I/O eligible. If they

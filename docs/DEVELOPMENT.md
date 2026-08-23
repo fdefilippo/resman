@@ -605,6 +605,31 @@ consequence.
 *Findings: resman-4pw.31, resman-4pw.32, resman-4pw.33; historical provenance from
 epic `resman-ne0`*
 
+## Rule 20 — Observation cadence does not advance decision state
+
+Metrics collection has two temporal contracts: observation keeps dashboards and MCP
+current; decision sampling advances the baselines and smoothing used to apply or
+release limits. They are not interchangeable.
+
+- Observation-only refreshes and reads **MUST NOT** advance decision baselines, EMA,
+  threshold trackers, cool-down state, or any other temporal enforcement input.
+- Each sampling purpose **MUST** own its cache key and its complete temporal state. A
+  sample cached for observation **MUST NOT** satisfy a decision read, and neither
+  stream may share per-process baselines or smoothing state with the other.
+- A control decision **MUST** consume one authoritative decision sample. It **MUST NOT**
+  re-read the collector partway through the decision or stability evaluation.
+- Tests **MUST** interleave zero, one, and multiple observation refreshes between equal
+  decision samples and prove that the resulting decision input and outcome are equal.
+
+**Why.** `resman-ne0.30` serialized concurrent process scans and stopped duplicate EMA
+updates at cache expiry, but it left observation refresh and control cycles on the same
+per-process baselines, fixed-alpha EMA, and cache entry. `METRICS_REFRESH_INTERVAL`
+could therefore change enforcement while promising only fresher telemetry. The
+contract chosen in `resman-4pw.8` gives observation and decision two complete temporal
+streams and makes the control-cycle sample authoritative through the entire decision.
+
+*Finding: resman-4pw.8; historical provenance from resman-ne0.30*
+
 ---
 
 ## Definition of Done
@@ -641,6 +666,8 @@ A change is not done until every line is true:
       local remedy where the mechanism should be replaced (Rule 18).
 - [ ] Every anomaly raised in review is fixed, filed, or refuted in writing — none left
       in a note (Rule 19).
+- [ ] Observation refreshes cannot advance or populate decision temporal state, and
+      each decision consumes one authoritative sample (Rule 20).
 - [ ] Any operator-visible discontinuity introduced by this change has its entry in the
       upgrade notes, in this commit (Rule 1, `resman-4pw.32`).
 
@@ -691,10 +718,11 @@ Until they exist, treat them as review checkpoints.
 | 17. One language | `resman-4pw.19` |
 | 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |
 | 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
+| 20. Observation cadence is decision-neutral | `resman-4pw.8`; `resman-ne0.30` provenance |
 
-Findings `resman-4pw.8` (refresh must not advance decision state) and
-`resman-4pw.15` (sampling staleness window) require a **product contract decision**
-before a rule can be written. When those decisions are made, record them here.
+Finding `resman-4pw.15` chose `POLLING_INTERVAL` as the normal host-CPU baseline
+contract. Its rule-level provenance is recorded under Rule 18.2 because the defect was
+borrowing staleness from the unrelated metrics-cache contract.
 
 ---
 

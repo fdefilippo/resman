@@ -204,7 +204,9 @@ are still unavailable, resman falls back to the normal polling loop.
 When `PSI_EVENT_DRIVEN=true`, `PSI_FALLBACK_INTERVAL` is only the decision-loop
 heartbeat. Prometheus/Grafana metrics are refreshed separately every
 `METRICS_REFRESH_INTERVAL` seconds so dashboards remain current even without PSI
-events. That refresh does not apply or remove limits.
+events. That refresh does not apply or remove limits and uses independent per-process
+CPU baselines, EMA state, and cache entries, so changing the observability cadence
+cannot change the next control decision.
 
 PSI mode, trigger thresholds, tracking window, fallback interval, and metrics
 refresh interval support hot reload. Changes that affect kernel PSI triggers

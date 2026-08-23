@@ -135,7 +135,10 @@ type MetricsCollector interface {
 	GetCachedMemoryMB() float64
 	IsSystemUnderLoad() bool
 	GetSystemLoad() (float64, error)
+	// GetAllUserMetrics returns an observation-only sample.
 	GetAllUserMetrics() map[int]*resmanmetrics.UserMetrics
+	// GetAllUserMetricsForDecision advances only the control cadence state.
+	GetAllUserMetricsForDecision() map[int]*resmanmetrics.UserMetrics
 	GetDBWriter() *resmanmetrics.DBWriter
 	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error
 	GetUsernameFromUID(uid int) string

@@ -162,6 +162,27 @@ type emaCache struct {
 	enforceableValues map[int]float64 // uid -> enforceable-process EMA value
 }
 
+// userMetricsSamplingState owns temporal data for one sampling purpose. The
+// observation and decision streams must never share baselines or smoothing.
+type userMetricsSamplingState struct {
+	process *procCache
+	ema     *emaCache
+}
+
+func newUserMetricsSamplingState() *userMetricsSamplingState {
+	return &userMetricsSamplingState{
+		process: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+		},
+		ema: &emaCache{
+			values:            make(map[int]float64),
+			enforceableValues: make(map[int]float64),
+		},
+	}
+}
+
 type cpuJiffySample struct {
 	total     uint64
 	idle      uint64
@@ -184,11 +205,10 @@ type Collector struct {
 	// Previous /proc/stat sample. Values are raw kernel jiffies.
 	prevFallbackCPU cpuJiffySample
 
-	// Cache per CPU usage per processo (necessaria per calcolo delta)
-	procCache *procCache // Single cache instead of sharding
-
-	// EMA cache for CPU usage smoothing between cycles
-	emaCache *emaCache
+	// Observation refreshes and control decisions own independent temporal
+	// state so changing observability cadence cannot change enforcement.
+	observationState *userMetricsSamplingState
+	decisionState    *userMetricsSamplingState
 
 	// Database writer (opzionale)
 	dbWriter *DBWriter
@@ -229,15 +249,8 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		usernameCacheTTL:  usernameCacheTTL,
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-		emaCache: &emaCache{
-			values:            make(map[int]float64),
-			enforceableValues: make(map[int]float64),
-		},
+		observationState:  newUserMetricsSamplingState(),
+		decisionState:     newUserMetricsSamplingState(),
 	}
 
 	go collector.periodicCleanup()
@@ -930,11 +943,9 @@ func (c *Collector) periodicCleanup() {
 	}
 }
 
-// cleanupCache rimuove le voci scadute dalla cache.
+// cleanupCache removes expired entries from every collector cache.
 func (c *Collector) cleanupCache() {
 	c.cacheMutex.Lock()
-	defer c.cacheMutex.Unlock()
-
 	now := time.Now()
 	for key, timestamp := range c.cacheTimestamps {
 		if now.Sub(timestamp) > 5*time.Minute {
@@ -942,21 +953,12 @@ func (c *Collector) cleanupCache() {
 			delete(c.cacheTimestamps, key)
 		}
 	}
+	c.cacheMutex.Unlock()
 
-	// Pulisci anche la cache dei processi CPU (processi vecchi > 5 minuti)
-	if c.procCache != nil {
-		c.procCache.mu.Lock()
-		for pid, timestamp := range c.procCache.prevProcTime {
-			if now.Sub(timestamp) > 5*time.Minute {
-				delete(c.procCache.prevProcCPU, pid)
-				delete(c.procCache.prevProcTime, pid)
-				delete(c.procCache.procStartTime, pid)
-			}
-		}
-		c.procCache.mu.Unlock()
-	}
+	cleanupProcessCache(c.observationState, now)
+	cleanupProcessCache(c.decisionState, now)
 
-	// Pulisci anche la cache username (utenti non risolti da > TTL)
+	// Remove username cache entries that have exceeded their independent TTL.
 	c.usernameCacheMutex.Lock()
 	cleanedCount := 0
 	for uid, timestamp := range c.usernameCacheTime {
@@ -977,7 +979,23 @@ func (c *Collector) cleanupCache() {
 	}
 }
 
-// ClearCache svuota la cache.
+func cleanupProcessCache(state *userMetricsSamplingState, now time.Time) {
+	if state == nil || state.process == nil {
+		return
+	}
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
+	for pid, timestamp := range state.process.prevProcTime {
+		if now.Sub(timestamp) <= 5*time.Minute {
+			continue
+		}
+		delete(state.process.prevProcCPU, pid)
+		delete(state.process.prevProcTime, pid)
+		delete(state.process.procStartTime, pid)
+	}
+}
+
+// ClearCache removes every cached metric value.
 func (c *Collector) ClearCache() {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
@@ -999,9 +1017,8 @@ func (c *Collector) UpdateConfig(newConfig *config.Config) {
 		newConfig.GetProcessExcludeList(),
 	)
 	if processPolicyChanged {
-		c.emaCache.mu.Lock()
-		c.emaCache.enforceableValues = make(map[int]float64)
-		c.emaCache.mu.Unlock()
+		resetEnforceableEMA(c.observationState)
+		resetEnforceableEMA(c.decisionState)
 	}
 	c.usernameCacheMutex.Lock()
 	c.usernameCacheTTL = time.Duration(newConfig.UsernameCacheTTL) * time.Minute
@@ -1017,6 +1034,15 @@ func (c *Collector) UpdateConfig(newConfig *config.Config) {
 		"system_uid_max", newConfig.SystemUIDMax,
 		"user_exclude_list", newConfig.GetUserExcludeList(),
 	)
+}
+
+func resetEnforceableEMA(state *userMetricsSamplingState) {
+	if state == nil || state.ema == nil {
+		return
+	}
+	state.ema.mu.Lock()
+	state.ema.enforceableValues = make(map[int]float64)
+	state.ema.mu.Unlock()
 }
 
 // GetDetailedMetrics restituisce metriche dettagliate per debugging.
@@ -1078,14 +1104,36 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 	return load1, nil
 }
 
-// GetAllUserMetrics returns metrics (CPU, memory, processes) for all active users.
-// Uses gopsutil for efficient process discovery with single-pass aggregation.
+const (
+	observationUserMetricsCacheKey = "all_user_metrics_observation"
+	decisionUserMetricsCacheKey    = "all_user_metrics_decision"
+)
+
+// GetAllUserMetrics returns an observation sample for all active users.
+// Observation samples never advance decision baselines or smoothing.
 func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
-	return c.getAllUserMetricsCached(c.collectAllUserMetrics)
+	return c.getAllUserMetricsCached(
+		observationUserMetricsCacheKey,
+		c.observationState,
+		c.collectAllUserMetrics,
+	)
 }
 
-func (c *Collector) getAllUserMetricsCached(collect func() map[int]*UserMetrics) map[int]*UserMetrics {
-	cacheKey := "all_user_metrics"
+// GetAllUserMetricsForDecision returns the control cycle's authoritative sample.
+// Its temporal state and cache are independent from observation refreshes.
+func (c *Collector) GetAllUserMetricsForDecision() map[int]*UserMetrics {
+	return c.getAllUserMetricsCached(
+		decisionUserMetricsCacheKey,
+		c.decisionState,
+		c.collectAllUserMetrics,
+	)
+}
+
+func (c *Collector) getAllUserMetricsCached(
+	cacheKey string,
+	state *userMetricsSamplingState,
+	collect func(*userMetricsSamplingState) map[int]*UserMetrics,
+) map[int]*UserMetrics {
 	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
@@ -1102,12 +1150,12 @@ func (c *Collector) getAllUserMetricsCached(collect func() map[int]*UserMetrics)
 		}
 	}
 
-	userMetrics := collect()
+	userMetrics := collect(state)
 	c.setInCache(cacheKey, userMetrics)
 	return userMetrics
 }
 
-func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
+func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
 
 	// Use gopsutil for efficient process discovery
@@ -1116,7 +1164,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		c.logger.Warn("Failed to get processes via gopsutil, falling back to /proc scan",
 			"error", err,
 		)
-		return c.getAllUserMetricsFallback()
+		return c.getAllUserMetricsFallback(state)
 	}
 
 	c.logger.Debug("GetAllUserMetrics: using gopsutil path",
@@ -1151,7 +1199,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		}
 
 		// Read CPU usage using gopsutil proc.Times()
-		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(p)
+		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(state, p)
 
 		// Prefer PSS so shared pages are divided among mappings instead of
 		// counted once per process. Fall back to RSS when smaps is unavailable.
@@ -1189,8 +1237,8 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		cpuUsage := data.observed.cpuUsage
 
 		// Calculate observed and enforceable EMA values independently.
-		ema := c.calculateEMA(uid, cpuUsage)
-		enforceableEMA := c.calculateEnforceableEMA(uid, data.enforceable.cpuUsage)
+		ema := calculateEMA(state, uid, cpuUsage)
+		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
 
 		userMetrics[uid] = &UserMetrics{
 			UID:              uid,
@@ -1211,13 +1259,13 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		}
 	}
 
-	c.retainProcessCPUBaselines(seenPIDs)
-	c.retainEMAUsers(userMetrics)
+	retainProcessCPUBaselines(state, seenPIDs)
+	retainEMAUsers(state, userMetrics)
 	return userMetrics
 }
 
 // getAllUserMetricsFallback scans /proc manually if gopsutil fails.
-func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
+func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
 	procDir := "/proc"
 
@@ -1259,7 +1307,7 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 			tempData[uid] = &userData{}
 		}
 
-		cpuUsage := c.getProcessCPUUsageSimple(pid)
+		cpuUsage := c.getProcessCPUUsageSimple(state, pid)
 		memoryUsage := c.getProcessMemoryUsage(pid)
 
 		// CPU average
@@ -1287,8 +1335,8 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
-		ema := c.calculateEMA(uid, data.observed.cpuUsage)
-		enforceableEMA := c.calculateEnforceableEMA(uid, data.enforceable.cpuUsage)
+		ema := calculateEMA(state, uid, data.observed.cpuUsage)
+		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
 		eligibility := cfg.EvaluateUserEligibility(username)
 		userMetrics[uid] = &UserMetrics{
 			UID:              uid,
@@ -1309,8 +1357,8 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		}
 	}
 
-	c.retainProcessCPUBaselines(seenPIDs)
-	c.retainEMAUsers(userMetrics)
+	retainProcessCPUBaselines(state, seenPIDs)
+	retainEMAUsers(state, userMetrics)
 	return userMetrics
 }
 
@@ -1538,107 +1586,104 @@ func calculateProcessCPUAverage(totalCPUSeconds, processAgeSeconds float64) floa
 
 // calculateEMA calculates exponential moving average for CPU usage.
 // alpha = 0.3 (weight for new value, rest for previous EMA)
-func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
+func calculateEMA(state *userMetricsSamplingState, uid int, currentValue float64) float64 {
 	const alpha = 0.3
 
-	c.emaCache.mu.Lock()
-	defer c.emaCache.mu.Unlock()
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
 
-	prevEMA, exists := c.emaCache.values[uid]
+	prevEMA, exists := state.ema.values[uid]
 	if !exists {
 		// First value: EMA = currentValue
-		c.emaCache.values[uid] = currentValue
+		state.ema.values[uid] = currentValue
 		return currentValue
 	}
 
 	ema := alpha*currentValue + (1-alpha)*prevEMA
-	c.emaCache.values[uid] = ema
+	state.ema.values[uid] = ema
 	return ema
 }
 
-func (c *Collector) calculateEnforceableEMA(uid int, currentValue float64) float64 {
+func calculateEnforceableEMA(state *userMetricsSamplingState, uid int, currentValue float64) float64 {
 	const alpha = 0.3
 
-	c.emaCache.mu.Lock()
-	defer c.emaCache.mu.Unlock()
-	if c.emaCache.enforceableValues == nil {
-		c.emaCache.enforceableValues = make(map[int]float64)
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
+	if state.ema.enforceableValues == nil {
+		state.ema.enforceableValues = make(map[int]float64)
 	}
-	prevEMA, exists := c.emaCache.enforceableValues[uid]
+	prevEMA, exists := state.ema.enforceableValues[uid]
 	if !exists {
-		c.emaCache.enforceableValues[uid] = currentValue
+		state.ema.enforceableValues[uid] = currentValue
 		return currentValue
 	}
 	ema := alpha*currentValue + (1-alpha)*prevEMA
-	c.emaCache.enforceableValues[uid] = ema
+	state.ema.enforceableValues[uid] = ema
 	return ema
 }
 
-func (c *Collector) retainEMAUsers(active map[int]*UserMetrics) {
-	c.emaCache.mu.Lock()
-	defer c.emaCache.mu.Unlock()
+func retainEMAUsers(state *userMetricsSamplingState, active map[int]*UserMetrics) {
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
 
-	for uid := range c.emaCache.values {
+	for uid := range state.ema.values {
 		if _, exists := active[uid]; !exists {
-			delete(c.emaCache.values, uid)
+			delete(state.ema.values, uid)
 		}
 	}
-	for uid := range c.emaCache.enforceableValues {
+	for uid := range state.ema.enforceableValues {
 		if _, exists := active[uid]; !exists {
-			delete(c.emaCache.enforceableValues, uid)
+			delete(state.ema.enforceableValues, uid)
 		}
 	}
 }
 
-// getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
-func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
+// getProcessCPUUsageSimple calculates process CPU usage between two samples.
+func (c *Collector) getProcessCPUUsageSimple(state *userMetricsSamplingState, pid int) float64 {
 	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return 0
 	}
-	return c.getProcessCPUUsageSimpleWithHandle(proc)
+	return c.getProcessCPUUsageSimpleWithHandle(state, proc)
 }
 
 // getProcessCPUUsageSimpleWithHandle calculates CPU usage from consecutive samples.
 // Every process state contributes after the initial baseline sample.
-func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
+func (c *Collector) getProcessCPUUsageSimpleWithHandle(state *userMetricsSamplingState, proc *process.Process) float64 {
 	pid32 := proc.Pid
 
-	// Ottieni tempi CPU attuali
+	// Read current process CPU times.
 	times, err := proc.Times()
-	if err != nil || c.procCache == nil {
+	if err != nil || state == nil || state.process == nil {
 		return 0
 	}
 	startTime, _ := proc.CreateTime()
-	return c.updateProcessCPUSample(pid32, startTime, *times, time.Now())
+	return updateProcessCPUSample(state, pid32, startTime, *times, time.Now())
 }
 
-func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu.TimesStat, now time.Time) float64 {
-	c.procCache.mu.Lock()
-	defer c.procCache.mu.Unlock()
+func updateProcessCPUSample(state *userMetricsSamplingState, pid int32, startTime int64, times cpu.TimesStat, now time.Time) float64 {
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
 
-	if previousStart := c.procCache.procStartTime[pid]; previousStart != 0 && startTime != 0 && previousStart != startTime {
-		delete(c.procCache.prevProcCPU, pid)
-		delete(c.procCache.prevProcTime, pid)
+	if previousStart := state.process.procStartTime[pid]; previousStart != 0 && startTime != 0 && previousStart != startTime {
+		delete(state.process.prevProcCPU, pid)
+		delete(state.process.prevProcTime, pid)
 	}
 
-	// Controlla se abbiamo un campione precedente
-	if prevTimes, ok := c.procCache.prevProcCPU[pid]; ok {
-		if prevTime, ok := c.procCache.prevProcTime[pid]; ok {
-			// Calcola tempo trascorso in secondi
+	// Calculate usage only when a previous sample exists.
+	if prevTimes, ok := state.process.prevProcCPU[pid]; ok {
+		if prevTime, ok := state.process.prevProcTime[pid]; ok {
 			elapsed := now.Sub(prevTime).Seconds()
 			if elapsed < 1 {
 				return 0
 			}
 
-			// Calcola delta CPU (user + system)
 			delta := (times.User - prevTimes.User) + (times.System - prevTimes.System)
 
-			// Aggiorna campione corrente
-			c.procCache.prevProcCPU[pid] = times
-			c.procCache.prevProcTime[pid] = now
+			state.process.prevProcCPU[pid] = times
+			state.process.prevProcTime[pid] = now
 			if startTime != 0 {
-				c.procCache.procStartTime[pid] = startTime
+				state.process.procStartTime[pid] = startTime
 			}
 
 			if delta <= 0 {
@@ -1649,26 +1694,26 @@ func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu
 	}
 
 	// Keep every recently observed process baseline. Completed scans and cleanupCache remove stale PIDs.
-	c.procCache.prevProcCPU[pid] = times
-	c.procCache.prevProcTime[pid] = now
-	c.procCache.procStartTime[pid] = startTime
+	state.process.prevProcCPU[pid] = times
+	state.process.prevProcTime[pid] = now
+	state.process.procStartTime[pid] = startTime
 	return 0
 }
 
 // retainProcessCPUBaselines removes samples for PIDs absent from a completed scan.
 // Rebuilding the maps also releases bucket capacity retained after PID churn.
-func (c *Collector) retainProcessCPUBaselines(seen map[int32]struct{}) int {
-	if c.procCache == nil {
+func retainProcessCPUBaselines(state *userMetricsSamplingState, seen map[int32]struct{}) int {
+	if state == nil || state.process == nil {
 		return 0
 	}
 
-	c.procCache.mu.Lock()
-	defer c.procCache.mu.Unlock()
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
 
-	needsRebuild := len(c.procCache.prevProcCPU) != len(c.procCache.prevProcTime) ||
-		len(c.procCache.prevProcCPU) != len(c.procCache.procStartTime)
+	needsRebuild := len(state.process.prevProcCPU) != len(state.process.prevProcTime) ||
+		len(state.process.prevProcCPU) != len(state.process.procStartTime)
 	if !needsRebuild {
-		for pid := range c.procCache.prevProcCPU {
+		for pid := range state.process.prevProcCPU {
 			if _, ok := seen[pid]; !ok {
 				needsRebuild = true
 				break
@@ -1679,27 +1724,27 @@ func (c *Collector) retainProcessCPUBaselines(seen map[int32]struct{}) int {
 		return 0
 	}
 
-	oldSize := len(c.procCache.prevProcCPU)
+	oldSize := len(state.process.prevProcCPU)
 	capacity := min(oldSize, len(seen))
 	prevProcCPU := make(map[int32]cpu.TimesStat, capacity)
 	prevProcTime := make(map[int32]time.Time, capacity)
 	procStartTime := make(map[int32]int64, capacity)
-	for pid, times := range c.procCache.prevProcCPU {
+	for pid, times := range state.process.prevProcCPU {
 		if _, ok := seen[pid]; !ok {
 			continue
 		}
-		sampledAt, ok := c.procCache.prevProcTime[pid]
+		sampledAt, ok := state.process.prevProcTime[pid]
 		if !ok {
 			continue
 		}
 		prevProcCPU[pid] = times
 		prevProcTime[pid] = sampledAt
-		procStartTime[pid] = c.procCache.procStartTime[pid]
+		procStartTime[pid] = state.process.procStartTime[pid]
 	}
 
-	c.procCache.prevProcCPU = prevProcCPU
-	c.procCache.prevProcTime = prevProcTime
-	c.procCache.procStartTime = procStartTime
+	state.process.prevProcCPU = prevProcCPU
+	state.process.prevProcTime = prevProcTime
+	state.process.procStartTime = procStartTime
 	return oldSize - len(prevProcCPU)
 }
 
