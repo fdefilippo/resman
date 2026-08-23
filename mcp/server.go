@@ -59,7 +59,6 @@ const (
 type Server struct {
 	mcpServer        *mcp.Server
 	cfg              *Config
-	parentCfg        *config.Config
 	stateManager     *state.Manager
 	metricsCollector *metrics.Collector
 	cgroupManager    *cgroup.Manager
@@ -131,7 +130,6 @@ func NewServer(
 	s := &Server{
 		mcpServer:        mcpServer,
 		cfg:              mcpCfg,
-		parentCfg:        parentCfg,
 		stateManager:     sm,
 		metricsCollector: mc,
 		cgroupManager:    cg,

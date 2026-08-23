@@ -54,6 +54,9 @@ func (m *Manager) RunControlCycle(ctx context.Context) error {
 
 // RunMetricsRefresh refreshes Prometheus metrics without running a decision cycle.
 func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -85,6 +88,9 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 
 // RunControlCycleWithTrigger executes one control cycle for the supplied trigger.
 func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string) error {
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 

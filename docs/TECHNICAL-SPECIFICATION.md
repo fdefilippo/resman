@@ -501,34 +501,43 @@ controller.
 
 **Responsibilities:**
 - Apply configuration changes dynamically
-- Update all components with new configuration
-- Handle component-specific reload logic
+- Classify every public configuration key in the authoritative lifecycle table
+  in `config/lifecycle.go`
+- Reject restart-required changes explicitly while preserving their effective values
+- Publish one configuration epoch across cgroup, state, metrics, and application consumers
 
 **Reload Order:**
-1. Preserve restart-required cgroup, Prometheus, logging backend, and MCP server
-   fields at their active values
-2. Logging level (immediate, for tracing)
-3. Cgroup manager runtime parameters
-4. State manager
-5. Metrics collector
-6. Application runtime hook, including PSI watcher reconciliation
+1. Close the configuration epoch barrier to new control cycles and wait for old
+   cycles to drain
+2. Compare all public keys with the lifecycle table and restore every
+   restart-required key to its effective value
+3. Apply dynamic values to logging, cgroup, state, metrics, and the application
+   runtime hook, including PSI watcher reconciliation
+4. Publish the epoch only after every consumer has received the same effective
+   configuration
+5. Return component errors and an explicit restart-required error listing the
+   rejected key names; configuration values and credentials are never included
 
 **Key Functions:**
 - `NewReloader(state, cgroup, metrics, prometheus, hooks...)`: Creates reloader
 - `OnConfigChange(newConfig)`: Applies new configuration
-- `SafeConfigUpdate(updateFunc)`: Thread-safe configuration update
+- `config.ApplyReloadLifecycle(effective, requested)`: Enforces the lifecycle table
+- `state.Manager.BeginConfigUpdate()`: Starts the cross-component epoch barrier
 
 **Dynamic Updates:**
 - `USER_EXCLUDE_LIST`: Applied immediately, cache cleared
 - `CPU_THRESHOLD`: Applied on next control cycle
 - `POLLING_INTERVAL`: Applied on next cycle
+- `USERNAME_CACHE_TTL`: Applied by the collector regardless of database enablement
+- `METRICS_DB_RETENTION_DAYS`: Applied to cleanup and MCP database status
 - `LOG_LEVEL`: Applied immediately
 - `PSI_EVENT_DRIVEN`, PSI thresholds, and `PSI_WINDOW_US`: Rebuild the PSI watcher
 - `PSI_FALLBACK_INTERVAL`, `METRICS_REFRESH_INTERVAL`: Rebuild loop tickers immediately
-- `ENABLE_PROMETHEUS`, Prometheus bind host/port: Deferred until restart
-- `LOG_FILE`, `LOG_MAX_SIZE`, `USE_SYSLOG`: Deferred until restart
+- `ENABLE_PROMETHEUS`, Prometheus listener, TLS, and authentication: Rejected until restart
+- Cgroup paths, created-cgroup state path, metrics database lifecycle/path/write interval,
+  logging backend, and `SERVER_ROLE`: Rejected until restart
 - MCP enablement, transport, listener, log level, authentication token, and
-  write permissions: Deferred until restart
+  write permissions: Rejected until restart
 
 ---
 
@@ -1050,9 +1059,10 @@ type Manager struct {
 4. Load new configuration
 5. Validate configuration
 6. Call reloader.OnConfigChange()
-7. Update each component
-8. Record the processed file version even after a partial component failure
-9. Log success/failure
+7. Hold new control cycles outside the configuration epoch while every component updates
+8. Preserve static effective values and report every rejected restart-required key
+9. Record the processed file version even after a partial component failure
+10. Log success/failure
 ```
 
 ### 11.3 Component Updates
@@ -1065,6 +1075,14 @@ type Manager struct {
 | Cgroup | Internal check | Next activation |
 | Application/PSI | Runtime hook | Yes (watcher rebuilt when needed) |
 | Prometheus bind/lifecycle | Preserve active value | Restart required |
+| Metrics database enable/path/write interval | Preserve active value | Restart required |
+| Metrics database retention | Effective state configuration | Yes |
+
+A control cycle or metrics refresh that began before reload completes on the old
+epoch. A cycle that begins after reload was requested waits until cgroup, state,
+collector, and application consumers all hold the new effective epoch. It can
+never combine an old `PROCESS_EXCLUDE_LIST` collector scan with new cgroup or
+decision policy.
 
 ---
 

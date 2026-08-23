@@ -1269,6 +1269,9 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 }
 
 func (m *Manager) ForceActivateLimits() error {
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1280,6 +1283,9 @@ func (m *Manager) ForceActivateLimits() error {
 }
 
 func (m *Manager) ForceDeactivateLimits() error {
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 

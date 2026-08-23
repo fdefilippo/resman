@@ -25,10 +25,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
+
+func TestMetricsDatabaseInfoUsesEffectiveRuntimeRetention(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MetricsDBRetentionDays = 11
+	manager, err := state.NewManager(cfg, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = dbManager.Close() }()
+	server := &Server{stateManager: manager, dbManager: dbManager}
+	_, result, err := server.handleGetMetricsDatabaseInfo(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("handleGetMetricsDatabaseInfo() error: %v", err)
+	}
+	if result.RetentionDays != 11 {
+		t.Fatalf("effective retention = %d, want 11", result.RetentionDays)
+	}
+
+	reloaded := config.DefaultConfig()
+	reloaded.MetricsDBRetentionDays = 23
+	manager.UpdateConfig(reloaded)
+	_, result, err = server.handleGetMetricsDatabaseInfo(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("handleGetMetricsDatabaseInfo() after reload error: %v", err)
+	}
+	if result.RetentionDays != 23 {
+		t.Fatalf("effective retention after reload = %d, want 23", result.RetentionDays)
+	}
+}
 
 func TestResolveHistoryTimeRangeRejectsInvalidExplicitTimes(t *testing.T) {
 	now := time.Date(2026, time.July, 25, 10, 0, 0, 0, time.UTC)

@@ -211,9 +211,13 @@ const (
 	MAX_USERNAME_CACHE_SIZE    = 10000 // Maximum number of entries in username cache
 )
 
-// NewCollector crea un nuovo collettore di metriche.
+// NewCollector creates a metrics collector using the initial configuration.
 func NewCollector(cfg *config.Config) (*Collector, error) {
 	logger := logging.GetLogger()
+	usernameCacheTTL := DEFAULT_USERNAME_CACHE_TTL
+	if cfg != nil && cfg.UsernameCacheTTL > 0 {
+		usernameCacheTTL = time.Duration(cfg.UsernameCacheTTL) * time.Minute
+	}
 
 	collector := &Collector{
 		cfg:               cfg,
@@ -222,7 +226,7 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		cacheTimestamps:   make(map[string]time.Time),
 		usernameCache:     make(map[int]string),
 		usernameCacheTime: make(map[int]time.Time),
-		usernameCacheTTL:  DEFAULT_USERNAME_CACHE_TTL,
+		usernameCacheTTL:  usernameCacheTTL,
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
 		procCache: &procCache{
@@ -596,11 +600,11 @@ func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheTime[uid] = time.Now()
 }
 
-// SetUsernameCacheTTL imposta il TTL della cache username
+// SetUsernameCacheTTL updates the username cache lifetime.
 func (c *Collector) SetUsernameCacheTTL(ttl time.Duration) {
 	c.usernameCacheMutex.Lock()
-	defer c.usernameCacheMutex.Unlock()
 	c.usernameCacheTTL = ttl
+	c.usernameCacheMutex.Unlock()
 	c.logger.Debug("Username cache TTL updated", "ttl", ttl)
 }
 
@@ -985,7 +989,6 @@ func (c *Collector) ClearCache() {
 // UpdateConfig replaces the collector configuration used by subsequent scans.
 func (c *Collector) UpdateConfig(newConfig *config.Config) {
 	c.userMetricsScan.Lock()
-	defer c.userMetricsScan.Unlock()
 
 	c.mu.Lock()
 	oldConfig := c.cfg
@@ -1000,14 +1003,20 @@ func (c *Collector) UpdateConfig(newConfig *config.Config) {
 		c.emaCache.enforceableValues = make(map[int]float64)
 		c.emaCache.mu.Unlock()
 	}
+	c.usernameCacheMutex.Lock()
+	c.usernameCacheTTL = time.Duration(newConfig.UsernameCacheTTL) * time.Minute
+	c.usernameCacheMutex.Unlock()
+	// Clear cached values so the new configuration takes effect immediately.
+	c.ClearCache()
+	c.userMetricsScan.Unlock()
+
 	c.logger.Info("Metrics collector configuration updated",
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
+		"username_cache_ttl_minutes", newConfig.UsernameCacheTTL,
 		"system_uid_min", newConfig.SystemUIDMin,
 		"system_uid_max", newConfig.SystemUIDMax,
 		"user_exclude_list", newConfig.GetUserExcludeList(),
 	)
-	// Clear cached values so the new configuration takes effect immediately.
-	c.ClearCache()
 }
 
 // GetDetailedMetrics restituisce metriche dettagliate per debugging.

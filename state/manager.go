@@ -31,6 +31,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/configepoch"
 	"github.com/fdefilippo/resman/logging"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -41,6 +42,7 @@ type Manager struct {
 	logger *logging.Logger
 	mu     sync.RWMutex
 	opMu   sync.Mutex
+	epoch  configepoch.Barrier
 
 	// Internal control and observed enforcement state.
 	limitsActive              bool
@@ -423,6 +425,12 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	)
 }
 
+// BeginConfigUpdate starts an exclusive configuration epoch update. Component
+// callbacks may perform I/O because the epoch barrier does not remain locked.
+func (m *Manager) BeginConfigUpdate() func() {
+	return m.epoch.BeginUpdate()
+}
+
 // RegisterPSIWatcher sets the PSI watcher for per-user cgroup monitoring.
 func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
 	m.opMu.Lock()
@@ -432,6 +440,9 @@ func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
 
 // OnUserPSIEvent handles a per-user PSI pressure event by boosting CPU weight.
 func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 

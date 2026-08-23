@@ -68,7 +68,7 @@ func (a *App) WithMetricsCollector() *App {
 	return a
 }
 
-// WithDatabase inizializza il database metriche se abilitato.
+// WithDatabase initializes metrics persistence when enabled.
 func (a *App) WithDatabase() *App {
 	if a.err != nil {
 		return a
@@ -106,11 +106,6 @@ func (a *App) WithDatabase() *App {
 		"path", a.cfg.MetricsDBPath,
 		"retention_days", a.cfg.MetricsDBRetentionDays,
 		"write_interval", a.cfg.MetricsDBWriteInterval,
-	)
-
-	a.metricsCollector.SetUsernameCacheTTL(time.Duration(a.cfg.UsernameCacheTTL) * time.Minute)
-	a.logger.Info("Username cache configured",
-		"ttl_minutes", a.cfg.UsernameCacheTTL,
 	)
 
 	if deleted, err := dbManager.CleanupOldData(a.cfg.MetricsDBRetentionDays); err != nil {

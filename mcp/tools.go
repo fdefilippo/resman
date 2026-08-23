@@ -1282,11 +1282,7 @@ func (s *Server) handleGetMetricsDatabaseInfo(ctx context.Context, req *mcp.Call
 		return nil, GetMetricsDatabaseInfoResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
-	// Get retention from config
-	retention := 30
-	if s.parentCfg != nil && s.parentCfg.MetricsDBRetentionDays > 0 {
-		retention = s.parentCfg.MetricsDBRetentionDays
-	}
+	retention := s.effectiveMetricsDBRetentionDays()
 
 	// Query database info
 	info, err := s.dbManager.GetDatabaseInfo(retention)
@@ -1311,6 +1307,18 @@ func (s *Server) handleGetMetricsDatabaseInfo(ctx context.Context, req *mcp.Call
 		},
 		StructuredContent: result,
 	}, result, nil
+}
+
+func (s *Server) effectiveMetricsDBRetentionDays() int {
+	const defaultRetentionDays = 30
+	if s.stateManager == nil {
+		return defaultRetentionDays
+	}
+	cfg := s.stateManager.GetConfig()
+	if cfg == nil || cfg.MetricsDBRetentionDays <= 0 {
+		return defaultRetentionDays
+	}
+	return cfg.MetricsDBRetentionDays
 }
 
 // Helper functions

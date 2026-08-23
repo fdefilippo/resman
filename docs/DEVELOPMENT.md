@@ -309,11 +309,11 @@ error series while leaving the failed batch eligible for retry.
 - Published configuration and the effective state of constructed components **MUST NOT**
   be allowed to diverge silently. If they can, the divergence is surfaced.
 
-**Why.** `preserveRestartRequiredConfig` (`reloader/reloader.go:145`) is a hand-written
-list of ~20 entries that omits `METRICS_DB_*` and `CREATED_CGROUPS_FILE`;
-`USERNAME_CACHE_TTL` is applied only on a database-enabled bootstrap path and is not
-updated by `Collector.UpdateConfig`. Published config and running components disagree,
-and nothing reports it.
+**Why.** Before `resman-4pw.9`, `preserveRestartRequiredConfig` was a hand-written
+list that omitted `METRICS_DB_*` and `CREATED_CGROUPS_FILE`, while
+`USERNAME_CACHE_TTL` was applied only on a database-enabled bootstrap path. The
+remediation moved every public key into `config/lifecycle.go`, rejects static changes
+explicitly, and uses one configuration epoch across control-cycle consumers.
 
 *Finding: resman-4pw.9*
 

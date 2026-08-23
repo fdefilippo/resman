@@ -233,6 +233,28 @@ func TestNewCollector(t *testing.T) {
 	}
 }
 
+func TestUsernameCacheTTLLifecycleIsIndependentOfMetricsDatabase(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MetricsDBEnabled = false
+	cfg.UsernameCacheTTL = 17
+	collector, err := NewCollector(cfg)
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+	if got, want := collector.GetUsernameCacheTTL(), 17*time.Minute; got != want {
+		t.Fatalf("initial username cache TTL = %s, want %s", got, want)
+	}
+
+	reloaded := config.DefaultConfig()
+	reloaded.MetricsDBEnabled = false
+	reloaded.UsernameCacheTTL = 9
+	collector.UpdateConfig(reloaded)
+	if got, want := collector.GetUsernameCacheTTL(), 9*time.Minute; got != want {
+		t.Fatalf("reloaded username cache TTL = %s, want %s", got, want)
+	}
+}
+
 func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
 	collector, err := NewCollector(config.DefaultConfig())
 	if err != nil {

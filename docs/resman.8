@@ -1006,14 +1006,24 @@ seconds.
 .PP
 Runtime thresholds, filters, PSI settings, polling intervals, and
 .B LOG_LEVEL
-are applied dynamically. Cgroup paths, Prometheus listener and security
-settings,
+are applied dynamically. This includes
+.BR USERNAME_CACHE_TTL
+regardless of whether the metrics database is enabled, and
+.BR METRICS_DB_RETENTION_DAYS .
+Cgroup paths, created-cgroup state path, Prometheus listener and security settings,
 .BR LOG_FILE ,
 .BR LOG_MAX_SIZE ,
 .BR USE_SYSLOG ,
-and MCP enablement, transport, listener, authentication, and write permissions
+metrics database enablement, path and write interval, server role, and MCP
+enablement, transport, listener, authentication, and write permissions
 require a service restart. Requested changes to static fields are logged and
-deferred instead of being published as active runtime configuration.
+rejected with an error naming each key; their previous effective values remain
+active. Restart the service to apply those keys. Configuration values and
+credentials are not included in that error.
+.PP
+Reload is published as one configuration epoch. Control cycles and metrics
+refreshes finish entirely on the old epoch or wait until all runtime consumers
+hold the new epoch; they never observe a partial cross-component update.
 .br
 .B SIGINT, SIGTERM
 \- Graceful shutdown
