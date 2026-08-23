@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,7 +184,7 @@ type CgroupManager interface {
 
 // PrometheusExporter defines the Prometheus boundary used by the state manager.
 type PrometheusExporter interface {
-	UpdateMetrics(metrics map[string]float64)
+	UpdateSystemSnapshot(metrics resmanmetrics.ExporterMetrics)
 	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, cpuLimitActive bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
 	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
@@ -308,57 +309,86 @@ func (m *Manager) isUserLimited(uid int) bool {
 	return exists
 }
 
-// boolToFloat converts a boolean to 1 or 0.
-func boolToFloat(b bool) float64 {
-	if b {
-		return 1.0
-	}
-	return 0.0
+// RuntimeStatus is an observed snapshot of current enforcement state.
+type RuntimeStatus struct {
+	CPULimitsActive              bool
+	ResourceLimitsActive         bool
+	AnyLimitsActive              bool
+	CPULimitsAppliedTime         time.Time
+	ResourceLimitsAppliedTime    time.Time
+	ActivelyLimitedUsers         []int
+	ActivelyLimitedUsersCount    int
+	CPUActivelyLimitedUsers      []int
+	CPUActivelyLimitedUsersCount int
+	SharedCgroupPath             string
+	SharedCgroupActive           bool
+	SharedCgroupQuota            string
+	SharedCgroupUserCount        int
 }
 
-// GetStatus returns the current enforcement status.
-func (m *Manager) GetStatus() map[string]interface{} {
+// GetStatus returns a typed snapshot of observed enforcement state.
+func (m *Manager) GetStatus() RuntimeStatus {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	cpuUsers := make([]int, 0, len(m.activeUsers))
+	activelyLimited := make(map[int]struct{}, len(m.activeUsers)+len(m.resourceLimits))
+	for uid := range m.activeUsers {
+		cpuUsers = append(cpuUsers, uid)
+		activelyLimited[uid] = struct{}{}
+	}
+	resourceEnforcementObserved := false
+	for uid, resourceState := range m.resourceLimits {
+		if resourceState.ramApplied || resourceState.ioApplied {
+			resourceEnforcementObserved = true
+			activelyLimited[uid] = struct{}{}
+		}
+	}
+	sharedCgroupPath := m.sharedCgroupPath
+	cpuLimitsActive := len(cpuUsers) > 0
+	resourceLimitsActive := resourceEnforcementObserved
+	cpuLimitsAppliedTime := m.limitsAppliedTime
+	resourceLimitsAppliedTime := m.resourceLimitsAppliedTime
+	m.mu.RUnlock()
 
-	status := map[string]interface{}{
-		"limits_active":        m.limitsActive,
-		"limits_applied_time":  m.limitsAppliedTime.Format(time.RFC3339),
-		"active_users_count":   len(m.activeUsers),
-		"active_users":         m.getActiveUsersListLocked(),
-		"shared_cgroup_path":   m.sharedCgroupPath,
-		"shared_cgroup_active": m.sharedCgroupPath != "" && m.limitsActive,
+	activelyLimitedUsers := make([]int, 0, len(activelyLimited))
+	for uid := range activelyLimited {
+		activelyLimitedUsers = append(activelyLimitedUsers, uid)
+	}
+	sort.Ints(cpuUsers)
+	sort.Ints(activelyLimitedUsers)
+
+	status := RuntimeStatus{
+		CPULimitsActive:              cpuLimitsActive,
+		ResourceLimitsActive:         resourceLimitsActive,
+		AnyLimitsActive:              cpuLimitsActive || resourceLimitsActive,
+		CPULimitsAppliedTime:         cpuLimitsAppliedTime,
+		ResourceLimitsAppliedTime:    resourceLimitsAppliedTime,
+		ActivelyLimitedUsers:         activelyLimitedUsers,
+		ActivelyLimitedUsersCount:    len(activelyLimitedUsers),
+		CPUActivelyLimitedUsers:      cpuUsers,
+		CPUActivelyLimitedUsersCount: len(cpuUsers),
+		SharedCgroupPath:             sharedCgroupPath,
+		SharedCgroupActive:           sharedCgroupPath != "" && cpuLimitsActive,
 	}
 
-	// Add shared cgroup details when CPU enforcement is active.
-	if m.sharedCgroupPath != "" {
-		// Read the current shared cgroup quota.
-		cpuMaxFile := filepath.Join(m.sharedCgroupPath, "cpu.max")
+	// Read shared cgroup details without holding the manager lock.
+	if sharedCgroupPath != "" {
+		cpuMaxFile := filepath.Join(sharedCgroupPath, "cpu.max")
 		if data, err := os.ReadFile(cpuMaxFile); err == nil {
-			status["shared_cgroup_quota"] = strings.TrimSpace(string(data))
+			status.SharedCgroupQuota = strings.TrimSpace(string(data))
 		}
 
-		// Count per-user sub-cgroups.
-		if entries, err := os.ReadDir(m.sharedCgroupPath); err == nil {
+		if entries, err := os.ReadDir(sharedCgroupPath); err == nil {
 			userCount := 0
 			for _, entry := range entries {
 				if entry.IsDir() && strings.HasPrefix(entry.Name(), "user_") {
 					userCount++
 				}
 			}
-			status["shared_cgroup_user_count"] = userCount
+			status.SharedCgroupUserCount = userCount
 		}
 	}
 
 	return status
-}
-
-func (m *Manager) getActiveUsersListLocked() []int {
-	users := make([]int, 0, len(m.activeUsers))
-	for uid := range m.activeUsers {
-		users = append(users, uid)
-	}
-	return users
 }
 
 // Cleanup releases active enforcement and shuts down manager dependencies.

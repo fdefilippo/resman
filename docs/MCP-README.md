@@ -371,13 +371,17 @@ The MCP server runs with the same permissions as ResMan. Ensure:
 {
   "hostname": "server-web01",
   "total_cpu_usage": 45.5,
-  "user_cpu_usage": 12.3,
+  "observed_users_cpu_usage": 12.3,
   "memory_usage_mb": 2345.6,
-  "active_users_count": 5,
+  "observed_users_count": 5,
+  "actively_limited_users_count": 2,
   "total_cores": 8,
   "system_under_load": false,
-  "limits_active": true,
-  "limits_applied_time": "2026-03-11T14:30:00Z",
+  "any_limits_active": true,
+  "cpu_limits_active": true,
+  "resource_limits_active": false,
+  "cpu_limits_applied_time": "2026-03-11T14:30:00Z",
+  "resource_limits_applied_time": "",
   "shared_cgroup_active": true
 }
 ```

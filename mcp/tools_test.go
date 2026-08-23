@@ -369,10 +369,10 @@ func TestNormalizeHistoryLimit(t *testing.T) {
 }
 
 func TestReportMetricExtraction(t *testing.T) {
-	metrics := map[string]any{
-		"total_cores":     4,
-		"memory_usage_mb": 1024.0,
-		"total_memory_mb": 16384.0,
+	metrics := resmanmetrics.ObservationMetrics{
+		TotalCores:    4,
+		MemoryUsageMB: 1024,
+		TotalMemoryMB: 16384,
 	}
 
 	if got := totalCPUCapacityPercent(metrics); got != 400 {
@@ -380,6 +380,80 @@ func TestReportMetricExtraction(t *testing.T) {
 	}
 	if got := totalSystemMemoryMB(metrics); got != 16384 {
 		t.Errorf("totalSystemMemoryMB() = %.1f, want 16384.0", got)
+	}
+}
+
+func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) {
+	observation := resmanmetrics.ObservationMetrics{
+		TotalCores:            8,
+		TotalCPUUsage:         71.5,
+		ObservedUsersCPUUsage: 54.25,
+		ObservedUsersCount:    7,
+		MemoryUsageMB:         2048,
+		SystemUnderLoad:       true,
+	}
+	runtime := state.RuntimeStatus{
+		AnyLimitsActive:              true,
+		CPULimitsActive:              true,
+		ResourceLimitsActive:         true,
+		ActivelyLimitedUsers:         []int{1001, 1003},
+		ActivelyLimitedUsersCount:    2,
+		CPUActivelyLimitedUsers:      []int{1001},
+		CPUActivelyLimitedUsersCount: 1,
+		SharedCgroupPath:             "/sys/fs/cgroup/resman/limited",
+		SharedCgroupActive:           true,
+	}
+
+	tests := []struct {
+		name    string
+		payload any
+		want    map[string]any
+	}{
+		{
+			name:    "system status",
+			payload: newSystemStatusPayload("host-a", "worker", observation, runtime),
+			want: map[string]any{
+				"observed_users_cpu_usage":     54.25,
+				"observed_users_count":         float64(7),
+				"actively_limited_users_count": float64(2),
+				"cpu_limits_active":            true,
+				"resource_limits_active":       true,
+			},
+		},
+		{
+			name:    "limits status",
+			payload: newLimitsStatusPayload("host-a", "worker", runtime),
+			want: map[string]any{
+				"actively_limited_users_count":     float64(2),
+				"cpu_actively_limited_users_count": float64(1),
+				"cpu_limits_active":                true,
+				"resource_limits_active":           true,
+			},
+		},
+	}
+
+	legacyFields := []string{"total_user_cpu_usage", "user_cpu_usage", "active_users_count", "active_users", "limits_active", "limits_applied_time"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatalf("marshal payload: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			for key, want := range tt.want {
+				if got[key] != want {
+					t.Errorf("%s = %#v, want %#v", key, got[key], want)
+				}
+			}
+			for _, key := range legacyFields {
+				if _, exists := got[key]; exists {
+					t.Errorf("payload contains removed field %q: %s", key, encoded)
+				}
+			}
+		})
 	}
 }
 

@@ -124,6 +124,12 @@ cgroups with `cpu.max=max 100000`. It also rejects a run that creates the
 finite shared CPU cgroup. The exact controller values are exported as
 `resource-only-cgroups.txt`.
 
+The `mcp-filter-reload` scenario runs an observed CPU workload without applying
+limits, then verifies that the stdio tool, resource, and prompt distinguish
+observed users from actively limited users and omit the removed metric/status
+aliases. It also verifies acknowledged filter persistence/runtime application
+and explicit rejection of the removed `reload` input.
+
 The `process-membership` scenario activates CPU enforcement for `resman-cpu`,
 starts a second process after activation, and requires the next control cycles
 to move it into the existing user cgroup. It then reloads
@@ -153,8 +159,9 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
 - sustained-active process-membership origin and reconciliation results when that
   scenario is selected;
-- MCP stdio request/response evidence for acknowledged filter persistence and
-  runtime application when that scenario is selected;
+- MCP stdio request/response evidence for typed observation/runtime status,
+  acknowledged filter persistence, and runtime application when that scenario
+  is selected;
 - the complete startup rejection naming feature, controller, and interface for
   the missing-I/O capability scenario;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.

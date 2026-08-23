@@ -190,14 +190,15 @@ type GetControlHistoryArgs struct {
 }
 
 type ControlHistoryEntry struct {
-	Timestamp     string  `json:"timestamp"`
-	Decision      string  `json:"decision"`
-	Reason        string  `json:"reason"`
-	TotalCPUUsage float64 `json:"total_cpu_usage"`
-	UserCPUUsage  float64 `json:"user_cpu_usage"`
-	ActiveUsers   int     `json:"active_users"`
-	LimitsActive  bool    `json:"limits_active"`
-	DurationMs    int64   `json:"duration_ms"`
+	Timestamp                    string  `json:"timestamp"`
+	Decision                     string  `json:"decision"`
+	Reason                       string  `json:"reason"`
+	TotalCPUUsage                float64 `json:"total_cpu_usage"`
+	CPUEligibleCPUUsage          float64 `json:"cpu_eligible_users_cpu_usage"`
+	ObservedUsersCount           int     `json:"observed_users_count"`
+	CPUActivelyLimitedUsersCount int     `json:"cpu_actively_limited_users_count"`
+	CPULimitsActive              bool    `json:"cpu_limits_active"`
+	DurationMs                   int64   `json:"duration_ms"`
 }
 
 type GetControlHistoryResult struct {
@@ -213,6 +214,89 @@ type ActivateLimitsResult struct {
 	Message string `json:"message"`
 }
 
+type systemStatusPayload struct {
+	Hostname                  string  `json:"hostname"`
+	ServerRole                string  `json:"server_role"`
+	TotalCPUUsage             float64 `json:"total_cpu_usage"`
+	ObservedUsersCPUUsage     float64 `json:"observed_users_cpu_usage"`
+	MemoryUsageMB             float64 `json:"memory_usage_mb"`
+	ObservedUsersCount        int     `json:"observed_users_count"`
+	ActivelyLimitedUsersCount int     `json:"actively_limited_users_count"`
+	TotalCores                int     `json:"total_cores"`
+	SystemUnderLoad           bool    `json:"system_under_load"`
+	AnyLimitsActive           bool    `json:"any_limits_active"`
+	CPULimitsActive           bool    `json:"cpu_limits_active"`
+	ResourceLimitsActive      bool    `json:"resource_limits_active"`
+	CPULimitsAppliedTime      string  `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime string  `json:"resource_limits_applied_time"`
+	SharedCgroupActive        bool    `json:"shared_cgroup_active"`
+}
+
+type limitsStatusPayload struct {
+	Hostname                     string `json:"hostname"`
+	ServerRole                   string `json:"server_role"`
+	AnyLimitsActive              bool   `json:"any_limits_active"`
+	CPULimitsActive              bool   `json:"cpu_limits_active"`
+	ResourceLimitsActive         bool   `json:"resource_limits_active"`
+	CPULimitsAppliedTime         string `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime    string `json:"resource_limits_applied_time"`
+	ActivelyLimitedUsersCount    int    `json:"actively_limited_users_count"`
+	ActivelyLimitedUsers         []int  `json:"actively_limited_users"`
+	CPUActivelyLimitedUsersCount int    `json:"cpu_actively_limited_users_count"`
+	CPUActivelyLimitedUsers      []int  `json:"cpu_actively_limited_users"`
+	SharedCgroupPath             string `json:"shared_cgroup_path"`
+	SharedCgroupActive           bool   `json:"shared_cgroup_active"`
+	SharedCgroupQuota            string `json:"shared_cgroup_quota,omitempty"`
+	SharedCgroupUserCount        int    `json:"shared_cgroup_user_count"`
+}
+
+func newSystemStatusPayload(hostname, serverRole string, observation resmanmetrics.ObservationMetrics, runtime state.RuntimeStatus) systemStatusPayload {
+	return systemStatusPayload{
+		Hostname:                  hostname,
+		ServerRole:                serverRole,
+		TotalCPUUsage:             observation.TotalCPUUsage,
+		ObservedUsersCPUUsage:     observation.ObservedUsersCPUUsage,
+		MemoryUsageMB:             observation.MemoryUsageMB,
+		ObservedUsersCount:        observation.ObservedUsersCount,
+		ActivelyLimitedUsersCount: runtime.ActivelyLimitedUsersCount,
+		TotalCores:                observation.TotalCores,
+		SystemUnderLoad:           observation.SystemUnderLoad,
+		AnyLimitsActive:           runtime.AnyLimitsActive,
+		CPULimitsActive:           runtime.CPULimitsActive,
+		ResourceLimitsActive:      runtime.ResourceLimitsActive,
+		CPULimitsAppliedTime:      formatOptionalTime(runtime.CPULimitsAppliedTime),
+		ResourceLimitsAppliedTime: formatOptionalTime(runtime.ResourceLimitsAppliedTime),
+		SharedCgroupActive:        runtime.SharedCgroupActive,
+	}
+}
+
+func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeStatus) limitsStatusPayload {
+	return limitsStatusPayload{
+		Hostname:                     hostname,
+		ServerRole:                   serverRole,
+		AnyLimitsActive:              runtime.AnyLimitsActive,
+		CPULimitsActive:              runtime.CPULimitsActive,
+		ResourceLimitsActive:         runtime.ResourceLimitsActive,
+		CPULimitsAppliedTime:         formatOptionalTime(runtime.CPULimitsAppliedTime),
+		ResourceLimitsAppliedTime:    formatOptionalTime(runtime.ResourceLimitsAppliedTime),
+		ActivelyLimitedUsersCount:    runtime.ActivelyLimitedUsersCount,
+		ActivelyLimitedUsers:         runtime.ActivelyLimitedUsers,
+		CPUActivelyLimitedUsersCount: runtime.CPUActivelyLimitedUsersCount,
+		CPUActivelyLimitedUsers:      runtime.CPUActivelyLimitedUsers,
+		SharedCgroupPath:             runtime.SharedCgroupPath,
+		SharedCgroupActive:           runtime.SharedCgroupActive,
+		SharedCgroupQuota:            runtime.SharedCgroupQuota,
+		SharedCgroupUserCount:        runtime.SharedCgroupUserCount,
+	}
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339)
+}
+
 // registerTools registers all MCP tools
 func (s *Server) registerTools() {
 	// get_system_status - registered manually with explicit empty schema
@@ -225,23 +309,10 @@ func (s *Server) registerTools() {
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		status := s.stateManager.GetStatus()
-		metrics := s.metricsCollector.GetDetailedMetrics()
+		metrics := s.metricsCollector.GetObservationMetrics()
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole
-
-		result := map[string]any{
-			"hostname":             hostname,
-			"server_role":          serverRole,
-			"total_cpu_usage":      getFloatMetric(metrics, "total_cpu_usage", 0.0),
-			"user_cpu_usage":       getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-			"memory_usage_mb":      getFloatMetric(metrics, "memory_usage_mb", 0.0),
-			"active_users_count":   getIntMetric(metrics, "active_users_count", 0),
-			"total_cores":          getIntMetric(metrics, "total_cores", 0),
-			"system_under_load":    getBoolMetric(metrics, "system_under_load", false),
-			"limits_active":        getBool(status, "limits_active", false),
-			"limits_applied_time":  getString(status, "limits_applied_time", ""),
-			"shared_cgroup_active": getBool(status, "shared_cgroup_active", false),
-		}
+		result := newSystemStatusPayload(hostname, serverRole, metrics, status)
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -303,18 +374,7 @@ func (s *Server) registerTools() {
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole
 
-		result := map[string]any{
-			"hostname":                 hostname,
-			"server_role":              serverRole,
-			"limits_active":            getBool(status, "limits_active", false),
-			"limits_applied_time":      getString(status, "limits_applied_time", ""),
-			"active_users_count":       getInt(status, "active_users_count", 0),
-			"active_users":             getIntSlice(status, "active_users", []int{}),
-			"shared_cgroup_path":       getString(status, "shared_cgroup_path", ""),
-			"shared_cgroup_active":     getBool(status, "shared_cgroup_active", false),
-			"shared_cgroup_quota":      getString(status, "shared_cgroup_quota", ""),
-			"shared_cgroup_user_count": getInt(status, "shared_cgroup_user_count", 0),
-		}
+		result := newLimitsStatusPayload(hostname, serverRole, status)
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -374,35 +434,29 @@ func (s *Server) registerTools() {
 			"properties": map[string]any{},
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		metrics := s.metricsCollector.GetDetailedMetrics()
+		metrics := s.metricsCollector.GetObservationMetrics()
 		status := s.stateManager.GetStatus()
 		allUserMetrics := s.metricsCollector.GetAllUserMetrics()
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole
 
-		// Build user list with details
+		// Build the user list with CPU enforcement details.
 		var users []string
 		var peakCPU float64
 		limitedCount := 0
 
 		for uid, userMetrics := range allUserMetrics {
-			isLimited := false
-			if activeUsers, ok := status["active_users"].([]int); ok {
-				for _, activeUID := range activeUsers {
-					if activeUID == uid {
-						isLimited = true
-						limitedCount++
-						break
-					}
-				}
-			}
-
-			limitStatus := "Non attivi"
+			isLimited := s.stateManager.GetUserLimitState(uid, userMetrics.Username).CPULimitActive
 			if isLimited {
-				limitStatus = "Attivi"
+				limitedCount++
 			}
 
-			userLine := fmt.Sprintf("%s\n    Utilizzo CPU: %.1f%%\n    Limiti: %s",
+			limitStatus := "Inactive"
+			if isLimited {
+				limitStatus = "Active"
+			}
+
+			userLine := fmt.Sprintf("%s\n    CPU usage: %.1f%%\n    CPU limits: %s",
 				userMetrics.Username,
 				userMetrics.CPUUsage,
 				limitStatus,
@@ -414,7 +468,7 @@ func (s *Server) registerTools() {
 			}
 		}
 
-		// Calculate average CPU usage
+		// Calculate average CPU usage.
 		avgCPU := 0.0
 		if len(allUserMetrics) > 0 {
 			for _, m := range allUserMetrics {
@@ -423,35 +477,35 @@ func (s *Server) registerTools() {
 			avgCPU /= float64(len(allUserMetrics))
 		}
 
-		// Get limits active time
-		limitsActive := getBool(status, "limits_active", false)
-		limitsStatus := "Non attivi"
+		// Read observed CPU enforcement state.
+		limitsActive := status.CPULimitsActive
+		limitsStatus := "Inactive"
 		if limitsActive {
-			limitsStatus = "Attivi"
+			limitsStatus = "Active"
 		}
 
-		// Build report text
-		report := fmt.Sprintf(`Report Utilizzo CPU
+		// Build the report text.
+		report := fmt.Sprintf(`CPU Usage Report
 Hostname: %s
 Server Role: %s
-Data: %s
-Totale CPU disponibile: %.1f%%
-Utilizzo attuale: %.1f%%
+Date: %s
+Total CPU capacity: %.1f%%
+Current usage: %.1f%%
 
-Utenti Attivi:
+Observed Users:
 %s
 
-Stato delle Risorse:
-Media Utilizzo CPU: %.1f%%
-Picco Utilizzo CPU: %.1f%%
-Limiti CPU: %s
-Utenti limitati: %d su %d
+Resource Status:
+Average CPU usage: %.1f%%
+Peak CPU usage: %.1f%%
+CPU limits: %s
+CPU-limited users: %d of %d
 `,
 			hostname,
 			serverRole,
 			time.Now().Format("2006-01-02 15:04:05"),
 			totalCPUCapacityPercent(metrics),
-			getFloatMetric(metrics, "total_cpu_usage", 0.0),
+			metrics.TotalCPUUsage,
 			joinStrings(users, "\n"),
 			avgCPU,
 			peakCPU,
@@ -461,15 +515,15 @@ Utenti limitati: %d su %d
 		)
 
 		result := map[string]any{
-			"hostname":      hostname,
-			"server_role":   serverRole,
-			"report":        report,
-			"total_cpu":     getFloatMetric(metrics, "total_cpu_usage", 0.0),
-			"avg_cpu":       avgCPU,
-			"peak_cpu":      peakCPU,
-			"active_users":  len(allUserMetrics),
-			"limited_users": limitedCount,
-			"limits_active": limitsActive,
+			"hostname":                         hostname,
+			"server_role":                      serverRole,
+			"report":                           report,
+			"total_cpu":                        metrics.TotalCPUUsage,
+			"avg_cpu":                          avgCPU,
+			"peak_cpu":                         peakCPU,
+			"observed_users_count":             len(allUserMetrics),
+			"cpu_actively_limited_users_count": limitedCount,
+			"cpu_limits_active":                limitsActive,
 		}
 
 		return &mcp.CallToolResult{
@@ -489,38 +543,33 @@ Utenti limitati: %d su %d
 			"properties": map[string]any{},
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		metrics := s.metricsCollector.GetDetailedMetrics()
+		metrics := s.metricsCollector.GetObservationMetrics()
 		status := s.stateManager.GetStatus()
 		allUserMetrics := s.metricsCollector.GetAllUserMetrics()
 		hostname := getHostname()
 		serverRole := s.stateManager.GetConfig().ServerRole
 
-		// Build user list with memory details
+		// Build the user list with RAM enforcement details.
 		var users []string
 		var peakMem uint64
 		limitedCount := 0
 
 		for uid, userMetrics := range allUserMetrics {
-			isLimited := false
-			if activeUsers, ok := status["active_users"].([]int); ok {
-				for _, activeUID := range activeUsers {
-					if activeUID == uid {
-						isLimited = true
-						limitedCount++
-						break
-					}
-				}
-			}
-
-			limitStatus := "Non attivi"
+			limitState := s.stateManager.GetUserLimitState(uid, userMetrics.Username)
+			isLimited := limitState.RAMLimitActive
 			if isLimited {
-				limitStatus = "Attivi"
+				limitedCount++
 			}
 
-			// Convert bytes to MB for readability
+			limitStatus := "Inactive"
+			if isLimited {
+				limitStatus = "Active"
+			}
+
+			// Convert bytes to MB for readability.
 			memMB := float64(userMetrics.MemoryUsage) / 1024 / 1024
 
-			userLine := fmt.Sprintf("%s\n    Memoria: %.1f MB (%d bytes)\n    Processi: %d\n    Limiti: %s",
+			userLine := fmt.Sprintf("%s\n    Memory: %.1f MB (%d bytes)\n    Processes: %d\n    RAM limits: %s",
 				userMetrics.Username,
 				memMB,
 				userMetrics.MemoryUsage,
@@ -534,7 +583,7 @@ Utenti limitati: %d su %d
 			}
 		}
 
-		// Calculate average memory usage
+		// Calculate average memory usage.
 		avgMem := uint64(0)
 		if len(allUserMetrics) > 0 {
 			for _, m := range allUserMetrics {
@@ -543,31 +592,31 @@ Utenti limitati: %d su %d
 			avgMem /= uint64(len(allUserMetrics))
 		}
 
-		// Get system memory info
+		// Read system memory information.
 		totalMemMB := totalSystemMemoryMB(metrics)
 
-		// Get limits status
-		limitsActive := getBool(status, "limits_active", false)
-		limitsStatus := "Non attivi"
+		// Read observed resource enforcement state.
+		limitsActive := status.ResourceLimitsActive
+		limitsStatus := "Inactive"
 		if limitsActive {
-			limitsStatus = "Attivi"
+			limitsStatus = "Active"
 		}
 
-		// Build report text
-		report := fmt.Sprintf(`Report Utilizzo Memoria
+		// Build the report text.
+		report := fmt.Sprintf(`Memory Usage Report
 Hostname: %s
 Server Role: %s
-Data: %s
-Memoria Totale di Sistema: %.1f MB
+Date: %s
+Total System Memory: %.1f MB
 
-Utenti Attivi:
+Observed Users:
 %s
 
-Stato delle Risorse:
-Media Utilizzo Memoria: %.1f MB
-Picco Utilizzo Memoria: %.1f MB
-Limiti CPU: %s
-Utenti limitati: %d su %d
+Resource Status:
+Average memory usage: %.1f MB
+Peak memory usage: %.1f MB
+RAM limits: %s
+RAM-limited users: %d of %d
 `,
 			hostname,
 			serverRole,
@@ -582,15 +631,15 @@ Utenti limitati: %d su %d
 		)
 
 		result := map[string]any{
-			"hostname":        hostname,
-			"server_role":     serverRole,
-			"report":          report,
-			"total_memory_mb": totalMemMB,
-			"avg_memory_mb":   float64(avgMem) / 1024 / 1024,
-			"peak_memory_mb":  float64(peakMem) / 1024 / 1024,
-			"active_users":    len(allUserMetrics),
-			"limited_users":   limitedCount,
-			"limits_active":   limitsActive,
+			"hostname":                         hostname,
+			"server_role":                      serverRole,
+			"report":                           report,
+			"total_memory_mb":                  totalMemMB,
+			"avg_memory_mb":                    float64(avgMem) / 1024 / 1024,
+			"peak_memory_mb":                   float64(peakMem) / 1024 / 1024,
+			"observed_users_count":             len(allUserMetrics),
+			"ram_actively_limited_users_count": limitedCount,
+			"resource_limits_active":           limitsActive,
 		}
 
 		return &mcp.CallToolResult{
@@ -1060,14 +1109,15 @@ func (s *Server) handleGetControlHistory(ctx context.Context, req *mcp.CallToolR
 
 	for _, entry := range history {
 		result.Entries = append(result.Entries, ControlHistoryEntry{
-			Timestamp:     entry.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-			Decision:      entry.Decision,
-			Reason:        entry.Reason,
-			TotalCPUUsage: entry.TotalCPUUsage,
-			UserCPUUsage:  entry.UserCPUUsage,
-			ActiveUsers:   entry.ActiveUsers,
-			LimitsActive:  entry.LimitsActive,
-			DurationMs:    entry.DurationMs,
+			Timestamp:                    entry.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+			Decision:                     entry.Decision,
+			Reason:                       entry.Reason,
+			TotalCPUUsage:                entry.TotalCPUUsage,
+			CPUEligibleCPUUsage:          entry.CPUEligibleCPUUsage,
+			ObservedUsersCount:           entry.ObservedUsersCount,
+			CPUActivelyLimitedUsersCount: entry.CPUActivelyLimitedUsersCount,
+			CPULimitsActive:              entry.CPULimitsActive,
+			DurationMs:                   entry.DurationMs,
 		})
 	}
 
@@ -1085,7 +1135,7 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 		err = s.stateManager.ForceActivateLimits()
 	} else {
 		status := s.stateManager.GetStatus()
-		if getBool(status, "limits_active", false) {
+		if status.CPULimitsActive {
 			return &mcp.CallToolResult{}, ActivateLimitsResult{
 				Success: false,
 				Message: "Limits are already active",
@@ -1094,7 +1144,7 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 		err = s.stateManager.RunControlCycle(ctx)
 	}
 
-	limitsActive := getBool(s.stateManager.GetStatus(), "limits_active", false)
+	limitsActive := s.stateManager.GetStatus().CPULimitsActive
 	return &mcp.CallToolResult{}, activationResult(args.Force, limitsActive, err), nil
 }
 
@@ -1192,12 +1242,12 @@ func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRe
 	resultRecords := make([]map[string]any, len(records))
 	for i, r := range records {
 		resultRecords[i] = map[string]any{
-			"timestamp":       r.Timestamp.Format(time.RFC3339),
-			"total_cpu_usage": r.TotalCPUUsagePercent,
-			"total_cores":     r.TotalCores,
-			"system_load":     r.SystemLoad,
-			"limits_active":   r.LimitsActive,
-			"limited_users":   r.LimitedUsersCount,
+			"timestamp":                        r.Timestamp.Format(time.RFC3339),
+			"total_cpu_usage":                  r.TotalCPUUsagePercent,
+			"total_cores":                      r.TotalCores,
+			"system_load":                      r.SystemLoad,
+			"cpu_limits_active":                r.LimitsActive,
+			"cpu_actively_limited_users_count": r.LimitedUsersCount,
 		}
 	}
 
@@ -1346,12 +1396,12 @@ func normalizeHistoryLimit(limit int) int {
 	}
 }
 
-func totalCPUCapacityPercent(metrics map[string]any) float64 {
-	return float64(getIntMetric(metrics, "total_cores", 0)) * 100
+func totalCPUCapacityPercent(metrics resmanmetrics.ObservationMetrics) float64 {
+	return float64(metrics.TotalCores) * 100
 }
 
-func totalSystemMemoryMB(metrics map[string]any) float64 {
-	return getFloatMetric(metrics, "total_memory_mb", 0)
+func totalSystemMemoryMB(metrics resmanmetrics.ObservationMetrics) float64 {
+	return metrics.TotalMemoryMB
 }
 
 func extractCgroupMemoryMetrics(info map[string]string) (uint64, bool, string, string) {
@@ -1410,84 +1460,6 @@ func (s *Server) resolveHistoricalUID(args GetHistoryArgs, startTime, endTime ti
 		}
 	}
 	return 0, fmt.Errorf("user not found: %s", args.Username)
-}
-
-func getFloatMetric(metrics map[string]any, key string, defaultVal float64) float64 {
-	if val, ok := metrics[key]; ok {
-		if f, ok := val.(float64); ok {
-			return f
-		}
-	}
-	return defaultVal
-}
-
-func getIntMetric(metrics map[string]any, key string, defaultVal int) int {
-	if val, ok := metrics[key]; ok {
-		switch v := val.(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		}
-	}
-	return defaultVal
-}
-
-func getBoolMetric(metrics map[string]any, key string, defaultVal bool) bool {
-	if val, ok := metrics[key]; ok {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return defaultVal
-}
-
-func getBool(m map[string]any, key string, defaultVal bool) bool {
-	if val, ok := m[key]; ok {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return defaultVal
-}
-
-func getString(m map[string]any, key string, defaultVal string) string {
-	if val, ok := m[key]; ok {
-		if s, ok := val.(string); ok {
-			return s
-		}
-	}
-	return defaultVal
-}
-
-func getInt(m map[string]any, key string, defaultVal int) int {
-	if val, ok := m[key]; ok {
-		switch v := val.(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		}
-	}
-	return defaultVal
-}
-
-func getIntSlice(m map[string]any, key string, defaultVal []int) []int {
-	if val, ok := m[key]; ok {
-		if slice, ok := val.([]int); ok {
-			return slice
-		}
-		if slice, ok := val.([]any); ok {
-			result := make([]int, 0, len(slice))
-			for _, v := range slice {
-				if i, ok := v.(float64); ok {
-					result = append(result, int(i))
-				}
-			}
-			return result
-		}
-	}
-	return defaultVal
 }
 
 // toJSON converts a value to JSON string

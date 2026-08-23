@@ -93,10 +93,10 @@ This policy is a current product decision recorded in epic `resman-4pw`. Only a 
 explicit product decision reverses it — not an individual pull request.
 
 **Why.** Compatibility debt is what made the audit findings survivable in the first
-place: an inert `CPU_QUOTA_LIMITED` that still validates, a `total_user_cpu_usage` key
-that never existed but is read at three call sites, a `reload=false` parameter that
-does not mean what it says. Each was cheaper to leave than to remove — until there
-were sixteen of them.
+place: an inert `CPU_QUOTA_LIMITED` that still validates, the former
+`total_user_cpu_usage` consumer key that never had a producer, and the removed
+`reload=false` parameter that did not mean what it said. Each was cheaper to leave
+than to remove — until there were sixteen of them.
 
 **Live gap.** `config/config.go:533-538` returns `nil` for any key not present in
 `configFieldHandlers`: unknown and removed keys are silently ignored today, and so are
@@ -248,11 +248,11 @@ constants referenced by both sides.
 - Producer and consumer **MUST** share a test that round-trips the contract, covering
   both maps.
 
-**Why.** MCP reads `total_user_cpu_usage` in `mcp/tools.go:189`, `mcp/server.go:422`,
-and `mcp/resources.go:82`. That key exists nowhere in the codebase — the producer emits
-`all_users_cpu_usage`. Every MCP status surface has been reporting a hardcoded zero.
-The neighbouring `active_users_count` lookups happen to work only because they read the
-*other* map, which is exactly the confusion this rule removes.
+**Why.** MCP formerly read `total_user_cpu_usage`, a key that had no producer, and
+reported a hardcoded zero on every status surface. Neighbouring
+`active_users_count` lookups mixed an observation snapshot with runtime status. The
+fix replaced both string-keyed maps at this boundary with distinct typed contracts;
+observed, CPU-eligible, and actively-limited user counts now have separate names.
 
 *Finding: resman-4pw.6*
 

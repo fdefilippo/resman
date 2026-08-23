@@ -349,7 +349,7 @@ func TestUpdateUserMetricsPublishesObservedCPULimitState(t *testing.T) {
 	}
 }
 
-func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *testing.T) {
+func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlCycle(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
 	exporter, err := NewPrometheusExporter(cfg)
@@ -357,11 +357,44 @@ func TestUpdateMetricsPublishesEveryRefreshWithoutCountingItAsControlCycle(t *te
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateMetrics(map[string]float64{"cpu_total_usage": 10})
-	exporter.UpdateMetrics(map[string]float64{"cpu_total_usage": 25})
+	exporter.UpdateSystemSnapshot(ExporterMetrics{TotalCPUUsage: 10})
+	exporter.UpdateSystemSnapshot(ExporterMetrics{
+		TotalCPUUsage:                25,
+		TotalCores:                   8,
+		ObservedUsersCPUUsage:        40,
+		ObservedUsersCount:           5,
+		ObservedUsersMemoryUsage:     1024,
+		CPUEligibleUsersCPUUsage:     30,
+		CPUEligibleUsersCount:        3,
+		CPUEligibleUsersMemoryUsage:  512,
+		CPUActivelyLimitedUsersCount: 2,
+		CPULimitsActive:              true,
+		MemoryUsageMB:                256,
+		TotalMemoryMB:                2048,
+		CachedMemoryMB:               128,
+		SystemLoad:                   1.5,
+	})
 
-	if got := gatheredMetricValue(t, exporter, "resman_cpu_total_usage_percent"); got != 25 {
-		t.Fatalf("CPU gauge after immediate refresh = %f, want 25", got)
+	wantMetrics := map[string]float64{
+		"resman_cpu_total_usage_percent":          25,
+		"resman_cpu_total_cores":                  8,
+		"resman_all_users_cpu_usage_percent":      40,
+		"resman_all_users_count":                  5,
+		"resman_all_users_memory_usage_bytes":     1024,
+		"resman_limited_users_cpu_usage_percent":  30,
+		"resman_limited_users_count_filtered":     3,
+		"resman_limited_users_memory_usage_bytes": 512,
+		"resman_limited_users_count":              2,
+		"resman_limits_active":                    1,
+		"resman_memory_usage_megabytes":           256,
+		"resman_memory_total_megabytes":           2048,
+		"resman_memory_cached_megabytes":          128,
+		"resman_system_load_average":              1.5,
+	}
+	for name, want := range wantMetrics {
+		if got := gatheredMetricValue(t, exporter, name); got != want {
+			t.Errorf("%s = %f, want %f", name, got, want)
+		}
 	}
 	if got := gatheredMetricValue(t, exporter, "resman_control_cycles_total"); got != 0 {
 		t.Fatalf("control cycles after metrics-only refresh = %f, want 0", got)

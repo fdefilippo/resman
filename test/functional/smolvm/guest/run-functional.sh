@@ -13,6 +13,7 @@ config_file=$runtime_dir/resman.conf
 service=resman-functional@${run_id}.service
 result_file=$artifact_dir/result
 mcp_pid=
+mcp_workload_pid=
 
 case "$run_id" in
     *[!a-z0-9-]*|'')
@@ -42,6 +43,11 @@ finish() {
 		kill -TERM "$mcp_pid" 2>/dev/null
 		wait "$mcp_pid" 2>/dev/null
 		mcp_pid=
+	fi
+	if [[ -n $mcp_workload_pid ]]; then
+		kill -TERM "$mcp_workload_pid" 2>/dev/null
+		wait "$mcp_workload_pid" 2>/dev/null
+		mcp_workload_pid=
 	fi
     cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
@@ -137,6 +143,7 @@ if [[ $scenario == mcp-filter-reload ]]; then
 	sed -i \
 		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		-e 's/^METRICS_CACHE_TTL=.*/METRICS_CACHE_TTL=1/' \
 		-e 's/^MCP_ENABLED=.*/MCP_ENABLED=true/' \
 		-e 's/^MCP_TRANSPORT=.*/MCP_TRANSPORT=stdio/' \
 		"$config_file"
@@ -202,11 +209,67 @@ fi
 if [[ $scenario == mcp-filter-reload ]]; then
 	mcp_stdout=$artifact_dir/mcp-filter-reload.jsonl
 	mcp_stderr=$artifact_dir/mcp-filter-reload.stderr
+	/opt/resman-functional/workload.sh cpu 60s &
+	mcp_workload_pid=$!
 	coproc RESMAN_MCP { /usr/bin/resman --config "$config_file" 2>"$mcp_stderr"; }
 	mcp_pid=$RESMAN_MCP_PID
 
 	request_meta='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"smolvm-functional","version":"1"}}'
-	printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^resman-cpu$"]}}}\n' \
+	status_cpu_observed=false
+	for request_id in $(seq 1 10); do
+		printf '{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{%s,"name":"get_system_status","arguments":{}}}\n' \
+			"$request_id" "$request_meta" >&"${RESMAN_MCP[1]}"
+		if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
+			kill -TERM "$mcp_pid" 2>/dev/null || true
+			fail "MCP system status did not return within 20 seconds"
+		fi
+		printf '%s\n' "$response" >>"$mcp_stdout"
+		if [[ $response =~ \"observed_users_cpu_usage\":([0-9.eE+-]+) ]] \
+			&& awk -v value="${BASH_REMATCH[1]}" 'BEGIN { exit !(value > 0) }'; then
+			status_cpu_observed=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $response == *'"observed_users_cpu_usage"'* ]] \
+		|| fail "MCP system status omitted observed user CPU usage"
+	[[ $status_cpu_observed == true ]] \
+		|| fail "MCP system status never reported the live observed CPU workload"
+	[[ $response == *'"observed_users_count":'* ]] \
+		|| fail "MCP system status omitted the observed-user count"
+	[[ $response == *'"actively_limited_users_count":0'* ]] \
+		|| fail "MCP system status did not report the observed zero actively-limited users"
+	[[ $response != *'total_user_cpu_usage'* && $response != *'"active_users_count"'* \
+		&& $response != *'"limits_active"'* && $response != *'"limits_applied_time"'* ]] \
+		|| fail "MCP system status exposed a removed metric or runtime alias"
+
+	printf '{"jsonrpc":"2.0","id":20,"method":"resources/read","params":{%s,"uri":"resman://limits/status"}}\n' \
+		"$request_meta" >&"${RESMAN_MCP[1]}"
+	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
+		kill -TERM "$mcp_pid" 2>/dev/null || true
+		fail "MCP limits status resource did not return within 20 seconds"
+	fi
+	printf '%s\n' "$response" >>"$mcp_stdout"
+	[[ $response == *'actively_limited_users_count'* \
+		&& $response == *'cpu_actively_limited_users_count'* \
+		&& $response == *'resource_limits_active'* ]] \
+		|| fail "MCP limits resource did not expose the explicit runtime contract"
+	[[ $response != *'active_users_count'* && $response != *'"limits_active"'* \
+		&& $response != *'"limits_applied_time"'* ]] \
+		|| fail "MCP limits resource exposed a removed runtime alias"
+
+	printf '{"jsonrpc":"2.0","id":21,"method":"prompts/get","params":{%s,"name":"system-health","arguments":{}}}\n' \
+		"$request_meta" >&"${RESMAN_MCP[1]}"
+	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
+		kill -TERM "$mcp_pid" 2>/dev/null || true
+		fail "MCP system-health prompt did not return within 20 seconds"
+	fi
+	printf '%s\n' "$response" >>"$mcp_stdout"
+	[[ $response == *'Observed Users'* && $response == *'Actively Limited Users'* \
+		&& $response == *'Resource Limits Active'* ]] \
+		|| fail "MCP system-health prompt did not use the explicit status semantics"
+
+	printf '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^resman-cpu$"]}}}\n' \
 		"$request_meta" >&"${RESMAN_MCP[1]}"
 	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
 		kill -TERM "$mcp_pid" 2>/dev/null || true
@@ -218,7 +281,7 @@ if [[ $scenario == mcp-filter-reload ]]; then
 	grep -Fq 'USER_INCLUDE_LIST=^resman-cpu$' "$config_file" \
 		|| fail "confirmed MCP filter update is absent from the config file"
 
-	printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^must-not-apply$"],"reload":false}}}\n' \
+	printf '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{%s,"name":"set_user_include_list","arguments":{"patterns":["^must-not-apply$"],"reload":false}}}\n' \
 		"$request_meta" >&"${RESMAN_MCP[1]}"
 	if ! IFS= read -r -t 20 response <&"${RESMAN_MCP[0]}"; then
 		kill -TERM "$mcp_pid" 2>/dev/null || true
@@ -235,8 +298,11 @@ if [[ $scenario == mcp-filter-reload ]]; then
 	kill -TERM "$mcp_pid" 2>/dev/null || true
 	wait "$mcp_pid" 2>/dev/null || true
 	mcp_pid=
+	kill -TERM "$mcp_workload_pid" 2>/dev/null || true
+	wait "$mcp_workload_pid" 2>/dev/null || true
+	mcp_workload_pid=
 	result=PASS
-	detail="MCP stdio filter update returned only after persistence and runtime application; removed reload input was rejected"
+	detail="MCP stdio status surfaces used distinct observation/runtime contracts; filter reload was acknowledged and removed input was rejected"
 	echo "PASS: $detail"
 	exit 0
 fi

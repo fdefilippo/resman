@@ -582,39 +582,45 @@ func (s *Server) registerPrompts() {
 
 // handleSystemHealthPrompt handles the system-health prompt
 func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	metrics := s.metricsCollector.GetDetailedMetrics()
+	metrics := s.metricsCollector.GetObservationMetrics()
 	status := s.stateManager.GetStatus()
 
 	text := fmt.Sprintf(`# System Health Check
 
 ## CPU Usage
 - **Total CPU**: %.1f%%
-- **User CPU**: %.1f%%
+- **Observed Users CPU**: %.1f%%
 - **Total Cores**: %d
 
 ## Memory
 - **Usage**: %.1f MB
 
 ## Status
-- **Active Users**: %d
-- **Limits Active**: %v
+- **Observed Users**: %d
+- **Actively Limited Users**: %d
+- **Any Limits Active**: %v
+- **CPU Limits Active**: %v
+- **Resource Limits Active**: %v
 - **System Under Load**: %v
 
 ## Assessment
 `,
-		getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		getIntMetric(metrics, "total_cores", 0),
-		getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		getIntMetric(metrics, "active_users_count", 0),
-		getBool(status, "limits_active", false),
-		getBoolMetric(metrics, "system_under_load", false),
+		metrics.TotalCPUUsage,
+		metrics.ObservedUsersCPUUsage,
+		metrics.TotalCores,
+		metrics.MemoryUsageMB,
+		metrics.ObservedUsersCount,
+		status.ActivelyLimitedUsersCount,
+		status.AnyLimitsActive,
+		status.CPULimitsActive,
+		status.ResourceLimitsActive,
+		metrics.SystemUnderLoad,
 	)
 
 	// Add assessment
-	if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) > 70 {
+	if metrics.ObservedUsersCPUUsage > 70 {
 		text += "**HIGH CPU USAGE** - Consider activating CPU limits\n"
-	} else if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) < 30 {
+	} else if metrics.ObservedUsersCPUUsage < 30 {
 		text += "**LOW CPU USAGE** - System is running smoothly\n"
 	} else {
 		text += "**MODERATE CPU USAGE** - System is operating normally\n"
@@ -663,21 +669,24 @@ func (s *Server) handleUserAnalysisPrompt(ctx context.Context, req *mcp.GetPromp
 // handleTroubleshootingPrompt handles the troubleshooting prompt
 func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	status := s.stateManager.GetStatus()
-	metrics := s.metricsCollector.GetDetailedMetrics()
+	metrics := s.metricsCollector.GetObservationMetrics()
 
 	text := `# Resource Manager Troubleshooting
 
 ## Current Status
 `
-	text += fmt.Sprintf("- **Limits Active**: %v\n", getBool(status, "limits_active", false))
-	text += fmt.Sprintf("- **Total CPU Usage**: %.1f%%\n", getFloatMetric(metrics, "total_cpu_usage", 0.0))
-	text += fmt.Sprintf("- **User CPU Usage**: %.1f%%\n", getFloatMetric(metrics, "total_user_cpu_usage", 0.0))
-	text += fmt.Sprintf("- **Active Users**: %d\n", getIntMetric(metrics, "active_users_count", 0))
+	text += fmt.Sprintf("- **Any Limits Active**: %v\n", status.AnyLimitsActive)
+	text += fmt.Sprintf("- **CPU Limits Active**: %v\n", status.CPULimitsActive)
+	text += fmt.Sprintf("- **Resource Limits Active**: %v\n", status.ResourceLimitsActive)
+	text += fmt.Sprintf("- **Total CPU Usage**: %.1f%%\n", metrics.TotalCPUUsage)
+	text += fmt.Sprintf("- **Observed Users CPU Usage**: %.1f%%\n", metrics.ObservedUsersCPUUsage)
+	text += fmt.Sprintf("- **Observed Users**: %d\n", metrics.ObservedUsersCount)
+	text += fmt.Sprintf("- **Actively Limited Users**: %d\n", status.ActivelyLimitedUsersCount)
 
 	text += "\n## Diagnostic Steps\n\n"
 
 	// Check 1: CPU Usage
-	if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) > 70 {
+	if metrics.ObservedUsersCPUUsage > 70 {
 		text += "1. **HIGH CPU USAGE DETECTED**\n"
 		text += "   - Check which users are consuming the most CPU\n"
 		text += "   - Consider running `activate_limits` if not already active\n"
@@ -686,13 +695,13 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	}
 
 	// Check 2: Limits Status
-	if getBool(status, "limits_active", false) {
-		text += "2. **CPU Limits Active** - Limits are being enforced\n"
-		if count := getInt(status, "active_users_count", 0); count > 0 {
+	if status.AnyLimitsActive {
+		text += "2. **Enforcement Active** - At least one resource limit is being enforced\n"
+		if count := status.ActivelyLimitedUsersCount; count > 0 {
 			text += fmt.Sprintf("   - %d users currently limited\n", count)
 		}
 	} else {
-		text += "2. **CPU Limits Inactive** - No limits currently enforced\n"
+		text += "2. **Enforcement Inactive** - No limits currently enforced\n"
 	}
 
 	text += "\n## Recommended Actions\n"

@@ -171,15 +171,17 @@ Implement handlers that delegate to existing components:
 ```go
 func (s *Server) handleGetSystemStatus(ctx context.Context, req mcp.Request) (mcp.Response, error) {
     status := s.stateManager.GetStatus()
-    metrics := s.metricsCollector.GetDetailedMetrics()
+    observation := s.metricsCollector.GetObservationMetrics()
     
     return mcp.Response{
         Content: map[string]interface{}{
-            "total_cpu_usage": metrics["total_cpu_usage"],
-            "user_cpu_usage":  metrics["total_user_cpu_usage"],
-            "memory_usage_mb": metrics["memory_usage_mb"],
-            "active_users":    metrics["active_users_count"],
-            "limits_active":   status["limits_active"],
+            "total_cpu_usage":                 observation.TotalCPUUsage,
+            "observed_users_cpu_usage":        observation.ObservedUsersCPUUsage,
+            "memory_usage_mb":                 observation.MemoryUsageMB,
+            "observed_users_count":            observation.ObservedUsersCount,
+            "actively_limited_users_count":    status.ActivelyLimitedUsersCount,
+            "cpu_limits_active":               status.CPULimitsActive,
+            "resource_limits_active":          status.ResourceLimitsActive,
         },
     }, nil
 }

@@ -281,7 +281,7 @@ type mockPrometheusExporter struct {
 	limitsDeactivated          int
 }
 
-func (m *mockPrometheusExporter) UpdateMetrics(metrics map[string]float64) {}
+func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.ExporterMetrics) {}
 func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
 }
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
@@ -1569,47 +1569,29 @@ func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
 	}
 }
 
-func TestBoolToFloat(t *testing.T) {
-	tests := []struct {
-		input    bool
-		expected float64
-	}{
-		{true, 1.0},
-		{false, 0.0},
-	}
-
-	for _, tt := range tests {
-		got := boolToFloat(tt.input)
-		if got != tt.expected {
-			t.Errorf("boolToFloat(%v): got %f, expected %f", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestGetStatus(t *testing.T) {
+func TestGetStatusSeparatesCPUAndAnyObservedEnforcement(t *testing.T) {
 	cfg := config.DefaultConfig()
 	metricsCollector := &mockMetricsCollector{}
 	cgroupManager := &mockCgroupManager{}
 	prometheusExporter := &mockPrometheusExporter{}
 
 	manager, _ := NewManager(cfg, metricsCollector, cgroupManager, prometheusExporter)
+	manager.activeUsers[1002] = true
 	manager.activeUsers[1000] = true
+	manager.resourceLimits[1001] = userResourceLimitState{ramApplied: true}
 
 	status := manager.GetStatus()
-
-	if status == nil {
-		t.Fatal("GetStatus() returned nil")
+	if !status.CPULimitsActive || !status.ResourceLimitsActive || !status.AnyLimitsActive {
+		t.Fatalf("GetStatus() active flags = %+v, want all true", status)
 	}
-
-	if _, ok := status["limits_active"]; !ok {
-		t.Error("GetStatus() should include limits_active")
+	if !reflect.DeepEqual(status.CPUActivelyLimitedUsers, []int{1000, 1002}) {
+		t.Errorf("CPUActivelyLimitedUsers = %v, want [1000 1002]", status.CPUActivelyLimitedUsers)
 	}
-	activeUsers, ok := status["active_users"].([]int)
-	if !ok {
-		t.Fatalf("GetStatus() active_users type = %T, want []int", status["active_users"])
+	if !reflect.DeepEqual(status.ActivelyLimitedUsers, []int{1000, 1001, 1002}) {
+		t.Errorf("ActivelyLimitedUsers = %v, want [1000 1001 1002]", status.ActivelyLimitedUsers)
 	}
-	if len(activeUsers) != 1 || activeUsers[0] != 1000 {
-		t.Errorf("GetStatus() active_users = %v, want [1000]", activeUsers)
+	if status.CPUActivelyLimitedUsersCount != 2 || status.ActivelyLimitedUsersCount != 3 {
+		t.Errorf("limited counts = CPU %d, any %d; want 2, 3", status.CPUActivelyLimitedUsersCount, status.ActivelyLimitedUsersCount)
 	}
 }
 

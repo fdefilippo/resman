@@ -9,10 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -411,6 +415,184 @@ func TestLatestOnlyStdioConformance(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMCPStatusContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
+	server := newStatusProtocolTestServer(t)
+
+	httpTool := callStatusOverHTTP(t, server, "tools/call", "get_system_status", map[string]any{
+		"name":      "get_system_status",
+		"arguments": map[string]any{},
+	})
+	stdioTool := callStatusOverStdio(t, server, "tools/call", map[string]any{
+		"name":      "get_system_status",
+		"arguments": map[string]any{},
+	})
+	assertCurrentStatusFields(t, httpTool)
+	assertCurrentStatusFields(t, stdioTool)
+	if got, want := sortedMapKeys(httpTool), sortedMapKeys(stdioTool); !slices.Equal(got, want) {
+		t.Fatalf("HTTP status fields = %v, stdio fields = %v", got, want)
+	}
+
+	resourceResult := callStatusOverHTTP(t, server, "resources/read", "resman://system/status", map[string]any{
+		"uri": "resman://system/status",
+	})
+	assertCurrentStatusFields(t, resourceResult)
+	if got, want := sortedMapKeys(resourceResult), sortedMapKeys(httpTool); !slices.Equal(got, want) {
+		t.Fatalf("resource status fields = %v, tool fields = %v", got, want)
+	}
+
+	promptText := callPromptOverHTTP(t, server, "system-health")
+	for _, term := range []string{"Observed Users CPU", "Observed Users", "Actively Limited Users", "CPU Limits Active", "Resource Limits Active"} {
+		if !strings.Contains(promptText, term) {
+			t.Errorf("system-health prompt is missing %q: %s", term, promptText)
+		}
+	}
+}
+
+func newStatusProtocolTestServer(t *testing.T) *Server {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	configureMCPTestTLS(t, cfg)
+	cfg.MCPEnabled = true
+	cfg.MCPTransport = "http"
+	cfg.MCPHTTPHost = "127.0.0.1"
+	cfg.MCPAuthToken = protocolTestToken
+	collector, err := resmanmetrics.NewCollector(cfg)
+	if err != nil {
+		t.Fatalf("NewCollector() error = %v", err)
+	}
+	manager, err := state.NewManager(cfg, collector, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	server, err := NewServer(cfg, manager, collector, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	return server
+}
+
+func callStatusOverHTTP(t *testing.T, server *Server, method, name string, fields map[string]any) map[string]any {
+	t.Helper()
+	request := newProtocolHTTPRequest(t, method, latestProtocolParams(fields))
+	request.Header.Set("Mcp-Name", name)
+	recorder := httptest.NewRecorder()
+	server.newMCPHTTPHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s HTTP status = %d, want 200; body: %s", method, recorder.Code, recorder.Body.String())
+	}
+	return decodeStatusResult(t, method, recorder.Body.Bytes())
+}
+
+func callStatusOverStdio(t *testing.T, server *Server, method string, fields map[string]any) map[string]any {
+	t.Helper()
+	clientWriter, clientReader, closeTransport := connectRawStdio(t, server.mcpServer)
+	defer closeTransport()
+	request := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+		"params":  latestProtocolParams(fields),
+	}
+	if err := json.NewEncoder(clientWriter).Encode(request); err != nil {
+		t.Fatalf("write stdio status request: %v", err)
+	}
+	var response json.RawMessage
+	if err := json.NewDecoder(clientReader).Decode(&response); err != nil {
+		t.Fatalf("read stdio status response: %v", err)
+	}
+	return decodeStatusResult(t, method, response)
+}
+
+func decodeStatusResult(t *testing.T, method string, response []byte) map[string]any {
+	t.Helper()
+	var wire struct {
+		Result struct {
+			StructuredContent map[string]any `json:"structuredContent"`
+			Contents          []struct {
+				Text string `json:"text"`
+			} `json:"contents"`
+		} `json:"result"`
+		Error *sdkjsonrpc.Error `json:"error"`
+	}
+	if err := json.Unmarshal(response, &wire); err != nil {
+		t.Fatalf("decode %s response: %v; body: %s", method, err, response)
+	}
+	if wire.Error != nil {
+		t.Fatalf("%s protocol error: %+v", method, wire.Error)
+	}
+	if wire.Result.StructuredContent != nil {
+		return wire.Result.StructuredContent
+	}
+	if len(wire.Result.Contents) != 1 {
+		t.Fatalf("%s content count = %d, want 1; body: %s", method, len(wire.Result.Contents), response)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(wire.Result.Contents[0].Text), &result); err != nil {
+		t.Fatalf("decode %s resource text: %v", method, err)
+	}
+	return result
+}
+
+func callPromptOverHTTP(t *testing.T, server *Server, name string) string {
+	t.Helper()
+	request := newProtocolHTTPRequest(t, "prompts/get", latestProtocolParams(map[string]any{
+		"name":      name,
+		"arguments": map[string]any{},
+	}))
+	request.Header.Set("Mcp-Name", name)
+	recorder := httptest.NewRecorder()
+	server.newMCPHTTPHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("prompts/get HTTP status = %d, want 200; body: %s", recorder.Code, recorder.Body.String())
+	}
+	var wire struct {
+		Result struct {
+			Messages []struct {
+				Content struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"messages"`
+		} `json:"result"`
+		Error *sdkjsonrpc.Error `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &wire); err != nil {
+		t.Fatalf("decode prompt response: %v", err)
+	}
+	if wire.Error != nil || len(wire.Result.Messages) != 1 {
+		t.Fatalf("prompt response error = %+v, messages = %d", wire.Error, len(wire.Result.Messages))
+	}
+	return wire.Result.Messages[0].Content.Text
+}
+
+func assertCurrentStatusFields(t *testing.T, status map[string]any) {
+	t.Helper()
+	for _, key := range []string{
+		"observed_users_cpu_usage",
+		"observed_users_count",
+		"actively_limited_users_count",
+		"cpu_limits_active",
+		"resource_limits_active",
+	} {
+		if _, exists := status[key]; !exists {
+			t.Errorf("status is missing %q: %+v", key, status)
+		}
+	}
+	for _, key := range []string{"total_user_cpu_usage", "user_cpu_usage", "active_users_count", "limits_active", "limits_applied_time"} {
+		if _, exists := status[key]; exists {
+			t.Errorf("status contains removed field %q: %+v", key, status)
+		}
+	}
+}
+
+func sortedMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 func newProtocolTestServer(t *testing.T) *Server {

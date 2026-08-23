@@ -408,7 +408,8 @@ controller.
 - `executeDecision(decision, metrics)`: Executes the decision
 - `activateLimits(metrics)`: Activates CPU limits with proportional sharing
 - `deactivateLimits()`: Deactivates CPU limits
-- `GetStatus()`: Returns current status
+- `GetStatus()`: Returns a typed runtime-enforcement snapshot, distinct from
+  collector observations and policy eligibility
 - `GetConfig()`: Returns current configuration
 - `GetControlHistory(limit)`: Returns recent control cycle history
 - `ForceActivateLimits()`: Force activates limits (admin override)

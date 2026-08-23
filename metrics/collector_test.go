@@ -1030,37 +1030,19 @@ func TestIsSystemUnderLoad(t *testing.T) {
 	_ = underLoad
 }
 
-func TestGetDetailedMetrics(t *testing.T) {
+func TestGetObservationMetricsReturnsTypedSnapshot(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector, err := NewCollector(cfg)
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
 
-	metrics := collector.GetDetailedMetrics()
-	if metrics == nil {
-		t.Error("GetDetailedMetrics() returned nil")
+	observation := collector.GetObservationMetrics()
+	if observation.TotalCores <= 0 {
+		t.Errorf("TotalCores = %d, want positive value", observation.TotalCores)
 	}
-
-	expectedKeys := []string{
-		"total_cores",
-		"total_cpu_usage",
-		"all_users_cpu_usage",
-		"all_users_memory_usage",
-		"limited_users_cpu_usage",
-		"limited_users_memory_usage",
-		"limited_users_count",
-		"memory_usage_mb",
-		"system_under_load",
-		"all_users_count",
-		"user_cpu_usage",
-		"cache_size",
-	}
-
-	for _, key := range expectedKeys {
-		if _, exists := metrics[key]; !exists {
-			t.Errorf("GetDetailedMetrics() missing key: %s", key)
-		}
+	if observation.ObservedUsersCount < 0 {
+		t.Errorf("ObservedUsersCount = %d, want non-negative value", observation.ObservedUsersCount)
 	}
 }
 

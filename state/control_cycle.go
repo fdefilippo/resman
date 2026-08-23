@@ -575,32 +575,22 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 	limitsActive := m.limitsActive
 	m.mu.RUnlock()
 
-	// Metriche base per il metodo UpdateMetrics
-	promMetrics := map[string]float64{
-		// System metrics
-		"cpu_total_usage": metrics.TotalCPUUsage,
-		"total_cores":     float64(metrics.TotalCores),
-
-		// ALL USERS metrics
-		"all_users_cpu_usage":    metrics.AllUsersCPUUsage,
-		"all_users_count":        float64(metrics.AllUsersCount),
-		"all_users_memory_usage": float64(metrics.AllUsersMemoryUsage),
-
-		// LIMITED USERS metrics
-		"limited_users_cpu_usage":    metrics.CPUEligibleCPUUsage,
-		"limited_users_count":        float64(metrics.CPUEligibleUsersCount),
-		"limited_users_memory_usage": float64(metrics.CPUEligibleMemoryUsage),
-
-		// Other metrics
-		"memory_usage_mb":  metrics.MemoryUsage,
-		"total_memory_mb":  metrics.TotalMemoryMB,
-		"cached_memory_mb": metrics.CachedMemoryMB,
-		"limited_users":    float64(limitedUsers),
-		"limits_active":    boolToFloat(limitsActive),
-		"system_load":      metrics.SystemLoad,
-	}
-
-	m.prometheusExporter.UpdateMetrics(promMetrics)
+	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.ExporterMetrics{
+		TotalCPUUsage:                metrics.TotalCPUUsage,
+		TotalCores:                   metrics.TotalCores,
+		ObservedUsersCPUUsage:        metrics.AllUsersCPUUsage,
+		ObservedUsersCount:           metrics.AllUsersCount,
+		ObservedUsersMemoryUsage:     metrics.AllUsersMemoryUsage,
+		CPUEligibleUsersCPUUsage:     metrics.CPUEligibleCPUUsage,
+		CPUEligibleUsersCount:        metrics.CPUEligibleUsersCount,
+		CPUEligibleUsersMemoryUsage:  metrics.CPUEligibleMemoryUsage,
+		CPUActivelyLimitedUsersCount: limitedUsers,
+		CPULimitsActive:              limitsActive,
+		MemoryUsageMB:                metrics.MemoryUsage,
+		TotalMemoryMB:                metrics.TotalMemoryMB,
+		CachedMemoryMB:               metrics.CachedMemoryMB,
+		SystemLoad:                   metrics.SystemLoad,
+	})
 
 	// Update per-user metrics from the explicit sample state.
 	for uid, userMetrics := range metrics.UserMetrics {
@@ -732,14 +722,15 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 }
 
 type ControlCycleEntry struct {
-	Timestamp     time.Time `json:"timestamp"`
-	Decision      string    `json:"decision"`
-	Reason        string    `json:"reason"`
-	TotalCPUUsage float64   `json:"total_cpu_usage"`
-	UserCPUUsage  float64   `json:"user_cpu_usage"`
-	ActiveUsers   int       `json:"active_users"`
-	LimitsActive  bool      `json:"limits_active"`
-	DurationMs    int64     `json:"duration_ms"`
+	Timestamp                    time.Time `json:"timestamp"`
+	Decision                     string    `json:"decision"`
+	Reason                       string    `json:"reason"`
+	TotalCPUUsage                float64   `json:"total_cpu_usage"`
+	CPUEligibleCPUUsage          float64   `json:"cpu_eligible_users_cpu_usage"`
+	ObservedUsersCount           int       `json:"observed_users_count"`
+	CPUActivelyLimitedUsersCount int       `json:"cpu_actively_limited_users_count"`
+	CPULimitsActive              bool      `json:"cpu_limits_active"`
+	DurationMs                   int64     `json:"duration_ms"`
 }
 
 // controlHistory stores recent control cycle entries
@@ -783,17 +774,19 @@ func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
 func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMetrics, duration time.Duration) {
 	m.mu.RLock()
 	limitsActive := m.limitsActive
+	activelyLimitedUsers := len(m.activeUsers)
 	m.mu.RUnlock()
 
 	entry := ControlCycleEntry{
-		Timestamp:     time.Now(),
-		Decision:      decision,
-		Reason:        reason,
-		TotalCPUUsage: metrics.TotalCPUUsage,
-		UserCPUUsage:  metrics.CPUEligibleCPUUsage,
-		ActiveUsers:   len(metrics.UserCPUUsage),
-		LimitsActive:  limitsActive,
-		DurationMs:    duration.Milliseconds(),
+		Timestamp:                    time.Now(),
+		Decision:                     decision,
+		Reason:                       reason,
+		TotalCPUUsage:                metrics.TotalCPUUsage,
+		CPUEligibleCPUUsage:          metrics.CPUEligibleCPUUsage,
+		ObservedUsersCount:           len(metrics.UserMetrics),
+		CPUActivelyLimitedUsersCount: activelyLimitedUsers,
+		CPULimitsActive:              limitsActive,
+		DurationMs:                   duration.Milliseconds(),
 	}
 
 	m.addControlHistoryEntry(entry)

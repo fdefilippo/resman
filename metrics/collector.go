@@ -84,6 +84,18 @@ type ProcessSetMetrics struct {
 	IOWriteOps      uint64
 }
 
+// ObservationMetrics is the typed observation snapshot consumed by external
+// status surfaces. It does not contain policy eligibility or runtime state.
+type ObservationMetrics struct {
+	TotalCores            int
+	TotalCPUUsage         float64
+	ObservedUsersCPUUsage float64
+	ObservedUsersCount    int
+	MemoryUsageMB         float64
+	TotalMemoryMB         float64
+	SystemUnderLoad       bool
+}
+
 // procCache holds CPU timing data for all PIDs.
 // Uses single mutex instead of sharding for simplicity and deadlock safety.
 type procCache struct {
@@ -1045,43 +1057,20 @@ func resetEnforceableEMA(state *userMetricsSamplingState) {
 	state.ema.mu.Unlock()
 }
 
-// GetDetailedMetrics restituisce metriche dettagliate per debugging.
-func (c *Collector) GetDetailedMetrics() map[string]interface{} {
-	metrics := make(map[string]interface{})
-
-	metrics["total_cores"] = c.GetTotalCores()
-	metrics["total_cpu_usage"] = c.GetTotalCPUUsage()
-
-	// ALL USERS metrics
-	metrics["all_users_cpu_usage"] = c.GetAllUsersCPUUsage()
-	metrics["all_users_memory_usage"] = c.GetAllUsersMemoryUsage()
+// GetObservationMetrics returns a typed observation snapshot for diagnostics
+// and external status surfaces.
+func (c *Collector) GetObservationMetrics() ObservationMetrics {
 	allUsers := c.GetAllUsers()
-	metrics["all_users_count"] = len(allUsers)
 
-	// LIMITED USERS metrics
-	metrics["limited_users_cpu_usage"] = c.GetLimitedUsersCPUUsage()
-	metrics["limited_users_memory_usage"] = c.GetLimitedUsersMemoryUsage()
-	limitedUsers := c.GetLimitedUsers()
-	metrics["limited_users_count"] = len(limitedUsers)
-
-	metrics["memory_usage_mb"] = c.GetMemoryUsage()
-	metrics["total_memory_mb"] = c.GetTotalMemoryMB()
-	metrics["cached_memory_mb"] = c.GetCachedMemoryMB()
-	metrics["system_under_load"] = c.IsSystemUnderLoad()
-
-	// Uso CPU per utente (per ALL users)
-	userCPU := make(map[int]float64)
-	for _, uid := range allUsers {
-		userCPU[uid] = c.GetUserCPUUsage(uid)
+	return ObservationMetrics{
+		TotalCores:            c.GetTotalCores(),
+		TotalCPUUsage:         c.GetTotalCPUUsage(),
+		ObservedUsersCPUUsage: c.GetAllUsersCPUUsage(),
+		ObservedUsersCount:    len(allUsers),
+		MemoryUsageMB:         c.GetMemoryUsage(),
+		TotalMemoryMB:         c.GetTotalMemoryMB(),
+		SystemUnderLoad:       c.IsSystemUnderLoad(),
 	}
-	metrics["user_cpu_usage"] = userCPU
-
-	// Informazioni sulla cache
-	c.cacheMutex.RLock()
-	metrics["cache_size"] = len(c.cache)
-	c.cacheMutex.RUnlock()
-
-	return metrics
 }
 
 // GetSystemLoad restituisce il load average di 1 minuto.

@@ -78,18 +78,8 @@ func (s *Server) registerResources() {
 // handleSystemStatusResource handles resman://system/status
 func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
-	metrics := s.metricsCollector.GetDetailedMetrics()
-
-	result := map[string]any{
-		"total_cpu_usage":     getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		"user_cpu_usage":      getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		"memory_usage_mb":     getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		"active_users_count":  getIntMetric(metrics, "active_users_count", 0),
-		"total_cores":         getIntMetric(metrics, "total_cores", 0),
-		"system_under_load":   getBoolMetric(metrics, "system_under_load", false),
-		"limits_active":       getBool(status, "limits_active", false),
-		"limits_applied_time": getString(status, "limits_applied_time", ""),
-	}
+	metrics := s.metricsCollector.GetObservationMetrics()
+	result := newSystemStatusPayload(getHostname(), s.stateManager.GetConfig().ServerRole, metrics, status)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
@@ -127,15 +117,7 @@ func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadRes
 // handleLimitsStatusResource handles resman://limits/status
 func (s *Server) handleLimitsStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
-
-	result := map[string]any{
-		"limits_active":        getBool(status, "limits_active", false),
-		"limits_applied_time":  getString(status, "limits_applied_time", ""),
-		"active_users_count":   getInt(status, "active_users_count", 0),
-		"active_users":         getIntSlice(status, "active_users", []int{}),
-		"shared_cgroup_path":   getString(status, "shared_cgroup_path", ""),
-		"shared_cgroup_active": getBool(status, "shared_cgroup_active", false),
-	}
+	result := newLimitsStatusPayload(getHostname(), s.stateManager.GetConfig().ServerRole, status)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{

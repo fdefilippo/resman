@@ -643,8 +643,26 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	return nil
 }
 
-// UpdateMetrics publishes the current values for the legacy gauge map boundary.
-func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
+// ExporterMetrics contains one typed update for system-wide Prometheus gauges.
+type ExporterMetrics struct {
+	TotalCPUUsage                float64
+	TotalCores                   int
+	ObservedUsersCPUUsage        float64
+	ObservedUsersCount           int
+	ObservedUsersMemoryUsage     uint64
+	CPUEligibleUsersCPUUsage     float64
+	CPUEligibleUsersCount        int
+	CPUEligibleUsersMemoryUsage  uint64
+	CPUActivelyLimitedUsersCount int
+	CPULimitsActive              bool
+	MemoryUsageMB                float64
+	TotalMemoryMB                float64
+	CachedMemoryMB               float64
+	SystemLoad                   float64
+}
+
+// UpdateSystemSnapshot publishes one typed system-wide gauge snapshot.
+func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics ExporterMetrics) {
 	if exp == nil {
 		return
 	}
@@ -652,82 +670,27 @@ func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
 	exp.mu.Lock()
 	defer exp.mu.Unlock()
 
-	// Update base metrics.
-	for key, value := range metrics {
-		switch {
-		case key == "cpu_total_usage":
-			exp.cpuTotalUsage.Set(value)
+	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
+	exp.totalCores.Set(float64(metrics.TotalCores))
+	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
+	exp.allUsersCount.Set(float64(metrics.ObservedUsersCount))
+	exp.allUsersMemoryUsage.Set(float64(metrics.ObservedUsersMemoryUsage))
+	exp.limitedUsersCPUUsage.Set(metrics.CPUEligibleUsersCPUUsage)
+	exp.limitedUsersCount.Set(float64(metrics.CPUEligibleUsersCount))
+	exp.limitedUsersMemoryUsage.Set(float64(metrics.CPUEligibleUsersMemoryUsage))
+	exp.limitedUsers.Set(float64(metrics.CPUActivelyLimitedUsersCount))
+	exp.limitsActive.Set(boolMetricValue(metrics.CPULimitsActive))
+	exp.memoryUsage.Set(metrics.MemoryUsageMB)
+	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
+	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)
+	exp.systemLoad.Set(metrics.SystemLoad)
+}
 
-		// ALL USERS metrics
-		case key == "all_users_cpu_usage":
-			exp.allUsersCPUUsage.Set(value)
-		case key == "all_users_count":
-			exp.allUsersCount.Set(value)
-
-		// LIMITED USERS metrics
-		case key == "limited_users":
-			exp.limitedUsers.Set(value)
-		case key == "limited_users_cpu_usage":
-			exp.limitedUsersCPUUsage.Set(value)
-		case key == "limited_users_count":
-			exp.limitedUsersCount.Set(value)
-
-		case key == "memory_usage_mb":
-			exp.memoryUsage.Set(value)
-		case key == "total_memory_mb":
-			exp.totalMemoryMB.Set(value)
-		case key == "cached_memory_mb":
-			exp.cachedMemoryMB.Set(value)
-		case key == "all_users_memory_usage":
-			exp.allUsersMemoryUsage.Set(value)
-		case key == "limited_users_memory_usage":
-			exp.limitedUsersMemoryUsage.Set(value)
-		case key == "limits_active":
-			exp.limitsActive.Set(value)
-		case key == "system_load":
-			exp.systemLoad.Set(value)
-		case key == "total_cores":
-			exp.totalCores.Set(value)
-		case strings.HasPrefix(key, "user_cpu_usage_"):
-			// Format: user_cpu_usage_1000, where 1000 is the UID.
-			parts := strings.Split(key, "_")
-			if len(parts) >= 4 {
-				uid := parts[3]
-				username := exp.getUsernameFromUID(uid)
-				exp.userCPUUsage.WithLabelValues(uid, username).Set(value)
-			}
-		case strings.HasPrefix(key, "user_memory_usage_"):
-			// Format: user_memory_usage_1000, where 1000 is the UID.
-			parts := strings.Split(key, "_")
-			if len(parts) >= 4 {
-				uid := parts[3]
-				username := exp.getUsernameFromUID(uid)
-				// Convert megabytes to bytes when requested by the key suffix.
-				bytesValue := value
-				if strings.HasSuffix(key, "_mb") {
-					bytesValue = value * 1024 * 1024
-				}
-				exp.userMemoryUsage.WithLabelValues(uid, username).Set(bytesValue)
-			}
-		case strings.HasPrefix(key, "user_limited_"):
-			// Format: user_limited_1000.
-			parts := strings.Split(key, "_")
-			if len(parts) >= 3 {
-				uid := parts[2]
-				username := exp.getUsernameFromUID(uid)
-				exp.userLimited.WithLabelValues(uid, username).Set(value)
-			}
-		case strings.HasPrefix(key, "cgroup_cpu_quota_"):
-			// Format: cgroup_cpu_quota_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupCPUQuota)
-		case strings.HasPrefix(key, "cgroup_cpu_period_"):
-			// Format: cgroup_cpu_period_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupCPUPeriod)
-		case strings.HasPrefix(key, "cgroup_memory_usage_"):
-			// Format: cgroup_memory_usage_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupMemoryUsage)
-		}
+func boolMetricValue(value bool) float64 {
+	if value {
+		return 1
 	}
+	return 0
 }
 
 // UpdateUserMetrics updates per-user metrics using observed CPU enforcement state.
@@ -984,32 +947,6 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	}
 
 	return uidStr
-}
-
-// updateCgroupMetric aggiorna una metrica cgroup con parsing delle label.
-func (exp *PrometheusExporter) updateCgroupMetric(key string, value float64, metric *prometheus.GaugeVec) {
-	// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/resman/user_1000
-	if !strings.Contains(key, ":") {
-		return
-	}
-
-	// Rimuove il prefisso (es: "cgroup_cpu_quota_")
-	prefixEnd := strings.Index(key, "_")
-	if prefixEnd == -1 {
-		return
-	}
-
-	// Estrae UID e path
-	remaining := key[prefixEnd+1:]
-	colonIndex := strings.Index(remaining, ":")
-	if colonIndex == -1 {
-		return
-	}
-
-	uid := remaining[:colonIndex]
-	cgroupPath := remaining[colonIndex+1:]
-
-	metric.WithLabelValues(uid, cgroupPath).Set(value)
 }
 
 // IncrementLimitsActivated records a confirmed inactive-to-active transition.
