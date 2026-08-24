@@ -962,15 +962,15 @@ func TestManagerUpdateConfigResetsIODecisionBaselineOnProcessPolicyChange(t *tes
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
-	manager.prevIOCounters[1000] = ioCounters{readBytes: 100}
+	manager.previousIOEligibleUsers[1000] = struct{}{}
 	manager.prevIOTime = time.Now()
 
 	reloaded := config.DefaultConfig()
 	reloaded.ProcessExcludeList = []string{"^stress$"}
 	manager.UpdateConfig(reloaded)
-	if len(manager.prevIOCounters) != 0 || !manager.prevIOTime.IsZero() {
+	if len(manager.previousIOEligibleUsers) != 0 || !manager.prevIOTime.IsZero() {
 		t.Fatalf("I/O baseline after process-policy reload = %v at %v, want empty",
-			manager.prevIOCounters, manager.prevIOTime)
+			manager.previousIOEligibleUsers, manager.prevIOTime)
 	}
 }
 

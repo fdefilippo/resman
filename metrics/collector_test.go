@@ -356,8 +356,10 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 			decisionState := newUserMetricsSamplingState()
 			observationState := newUserMetricsSamplingState()
 			startedAt := time.Unix(1_700_000_000, 0)
+			initialIO := processIOCounters{readBytes: 100, writeBytes: 200, readOps: 10, writeOps: 20}
 
 			updateProcessCPUSample(decisionState, 42, 1000, cpu.TimesStat{User: 1}, startedAt)
+			updateProcessIOSample(decisionState, 42, 1000, initialIO, startedAt)
 			calculateEMA(decisionState, 1000, 10)
 			for i := 0; i < tt.observationCount; i++ {
 				sampledAt := startedAt.Add(time.Duration(i+1) * time.Second)
@@ -366,6 +368,13 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 					42,
 					1000,
 					cpu.TimesStat{User: float64(i + 2)},
+					sampledAt,
+				)
+				updateProcessIOSample(
+					observationState,
+					42,
+					1000,
+					processIOCounters{readBytes: uint64(1000 + i), writeBytes: uint64(2000 + i)},
 					sampledAt,
 				)
 				calculateEMA(observationState, 1000, float64(90+i))
@@ -378,6 +387,13 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 				cpu.TimesStat{User: 5},
 				startedAt.Add(4*time.Second),
 			)
+			ioDelta := updateProcessIOSample(
+				decisionState,
+				42,
+				1000,
+				processIOCounters{readBytes: 500, writeBytes: 800, readOps: 50, writeOps: 80},
+				startedAt.Add(4*time.Second),
+			)
 			ema := calculateEMA(decisionState, 1000, 80)
 
 			if cpuUsage != 100 {
@@ -385,6 +401,9 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 			}
 			if ema != 31 {
 				t.Fatalf("decision EMA after %d observation refreshes = %.1f, want 31", tt.observationCount, ema)
+			}
+			if ioDelta != (ProcessIODelta{ReadBytes: 400, WriteBytes: 600, ReadOps: 40, WriteOps: 60}) {
+				t.Fatalf("decision I/O delta after %d observation refreshes = %+v", tt.observationCount, ioDelta)
 			}
 		})
 	}
@@ -509,20 +528,21 @@ func TestUnknownUsernameIsNegativelyCached(t *testing.T) {
 	}
 }
 
-func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
+func TestRetainProcessBaselinesCompactsExitedProcesses(t *testing.T) {
 	state := newUserMetricsSamplingState()
 	now := time.Now()
 	const processCount = 6000
 	for pid := int32(1); pid <= processCount; pid++ {
 		updateProcessCPUSample(state, pid, int64(pid), cpu.TimesStat{User: 1}, now)
+		updateProcessIOSample(state, pid, int64(pid), processIOCounters{writeBytes: uint64(pid)}, now)
 	}
 
-	removed := retainProcessCPUBaselines(state, map[int32]struct{}{
+	removed := retainProcessBaselines(state, map[int32]struct{}{
 		1:            {},
 		processCount: {},
 	})
-	if removed != processCount-2 {
-		t.Fatalf("removed process baselines = %d, want %d", removed, processCount-2)
+	if removed != (processBaselinePruneResult{cpu: processCount - 2, io: processCount - 2}) {
+		t.Fatalf("removed process baselines = %+v, want %d CPU and I/O", removed, processCount-2)
 	}
 	if got := len(state.process.prevProcCPU); got != 2 {
 		t.Fatalf("process cache size = %d, want 2", got)
@@ -533,12 +553,108 @@ func TestRetainProcessCPUBaselinesCompactsExitedProcesses(t *testing.T) {
 	if got := len(state.process.procStartTime); got != 2 {
 		t.Fatalf("process start-time cache size = %d, want 2", got)
 	}
+	if got := len(state.process.prevProcIO); got != 2 {
+		t.Fatalf("process I/O cache size = %d, want 2", got)
+	}
 
 	if got := updateProcessCPUSample(state, 1, 1, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 100 {
 		t.Fatalf("retained process CPU delta = %f, want 100", got)
 	}
 	if got := updateProcessCPUSample(state, 2, 2, cpu.TimesStat{User: 2}, now.Add(time.Second)); got != 0 {
 		t.Fatalf("removed process CPU delta = %f, want 0", got)
+	}
+	if got := updateProcessIOSample(state, 1, 1, processIOCounters{writeBytes: 2}, now.Add(time.Second)); got.WriteBytes != 1 {
+		t.Fatalf("retained process I/O delta = %+v, want write delta 1", got)
+	}
+	if got := updateProcessIOSample(state, 2, 2, processIOCounters{writeBytes: 2}, now.Add(time.Second)); got != (ProcessIODelta{}) {
+		t.Fatalf("removed process I/O delta = %+v, want zero", got)
+	}
+}
+
+func TestPerProcessIODeltasRemainNonzeroAcrossProcessChurn(t *testing.T) {
+	state := newUserMetricsSamplingState()
+	startedAt := time.Unix(1_700_000_000, 0)
+	const (
+		writerPID   int32 = 10
+		writerStart int64 = 1000
+	)
+
+	updateProcessIOSample(state, writerPID, writerStart, processIOCounters{writeBytes: 100}, startedAt)
+	previousChurnPID := int32(20)
+	updateProcessIOSample(state, previousChurnPID, 2000, processIOCounters{writeBytes: 10_000}, startedAt)
+	retainProcessBaselines(state, map[int32]struct{}{writerPID: {}, previousChurnPID: {}})
+
+	for cycle := 1; cycle <= 4; cycle++ {
+		sampledAt := startedAt.Add(time.Duration(cycle) * time.Second)
+		writerDelta := updateProcessIOSample(
+			state,
+			writerPID,
+			writerStart,
+			processIOCounters{writeBytes: uint64(100 + cycle*100)},
+			sampledAt,
+		)
+		churnPID := int32(20 + cycle)
+		churnDelta := updateProcessIOSample(
+			state,
+			churnPID,
+			int64(2000+cycle),
+			processIOCounters{writeBytes: uint64(20_000 + cycle*1000)},
+			sampledAt,
+		)
+
+		if total := writerDelta.WriteBytes + churnDelta.WriteBytes; total != 100 {
+			t.Fatalf("cycle %d write delta = %d, want sustained writer delta 100", cycle, total)
+		}
+		removed := retainProcessBaselines(state, map[int32]struct{}{writerPID: {}, churnPID: {}})
+		if removed.io != 1 {
+			t.Fatalf("cycle %d removed I/O baselines = %d, want exited process 1", cycle, removed.io)
+		}
+	}
+}
+
+func TestUpdateProcessIOSampleGuardsCounterResetAndPIDReuse(t *testing.T) {
+	state := newUserMetricsSamplingState()
+	now := time.Unix(1_700_000_000, 0)
+	updateProcessIOSample(
+		state,
+		42,
+		1000,
+		processIOCounters{readBytes: 100, writeBytes: 200, readOps: 30, writeOps: 40},
+		now,
+	)
+
+	reset := updateProcessIOSample(
+		state,
+		42,
+		1000,
+		processIOCounters{readBytes: 150, writeBytes: 20, readOps: 50, writeOps: 80},
+		now.Add(time.Second),
+	)
+	if reset != (ProcessIODelta{ReadBytes: 50, ReadOps: 20, WriteOps: 40}) {
+		t.Fatalf("counter-reset delta = %+v, want only monotonic dimensions", reset)
+	}
+
+	reused := updateProcessIOSample(
+		state,
+		42,
+		2000,
+		processIOCounters{readBytes: 10_000, writeBytes: 10_000},
+		now.Add(2*time.Second),
+	)
+	if reused != (ProcessIODelta{}) {
+		t.Fatalf("reused PID delta = %+v, want fresh baseline", reused)
+	}
+
+	discardProcessIOBaseline(state, 42)
+	afterMissingRead := updateProcessIOSample(
+		state,
+		42,
+		2000,
+		processIOCounters{readBytes: 20_000, writeBytes: 20_000},
+		now.Add(3*time.Second),
+	)
+	if afterMissingRead != (ProcessIODelta{}) {
+		t.Fatalf("delta after missing read = %+v, want fresh baseline", afterMissingRead)
 	}
 }
 

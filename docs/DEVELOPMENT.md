@@ -569,7 +569,7 @@ resman-4pw.6; historical provenance from epic `resman-ne0`*
 
 ## Rule 19 — An anomaly is tracked or refuted, never documented
 
-Rules 1 to 18 address the author of a change. This one addresses whoever reviews it.
+Most rules address the author of a change. This one addresses whoever reviews it.
 
 **Every anomaly noticed during a review MUST end in one of three states:**
 
@@ -633,6 +633,31 @@ streams and makes the control-cycle sample authoritative through the entire deci
 
 *Finding: resman-4pw.8; historical provenance from resman-ne0.30*
 
+## Rule 21 — Difference monotonic counters before aggregating dynamic identities
+
+A cumulative counter is monotonic only for the identity that owns it. Process sets,
+user sessions, and cgroup membership are dynamic and their aggregate is not monotonic.
+
+- Rates over process counters **MUST** be calculated from deltas for the same PID and
+  process start time, then aggregated. Differencing two per-user sums is forbidden.
+- A counter reset **MUST** zero only the affected identity and dimension. It **MUST NOT**
+  discard valid deltas from the user's other processes.
+- PID reuse **MUST** establish a new baseline. A reused numeric PID cannot inherit the
+  previous process's cumulative counters.
+- Baselines for disappeared identities **MUST** be pruned after each completed scan and
+  by bounded stale-state cleanup.
+- An unavailable counter sample **MUST NOT** advance or preserve a baseline in a way
+  that turns a later multi-interval delta into a one-interval rate.
+
+**Why.** Before `resman-4pw.30`, resman summed cumulative `/proc/PID/io` counters per
+user and then differenced consecutive user sums. When any process exited, its lifetime
+counters disappeared from the sum; the aggregate fell and the monotonic guard returned
+zero for the entire user even while surviving processes continued sustained I/O. The
+remediation tracks PID plus start time, sums only per-process non-negative deltas, and
+lets one process reset or disappear without erasing its peers' traffic.
+
+*Finding: resman-4pw.30*
+
 ---
 
 ## Definition of Done
@@ -671,6 +696,8 @@ A change is not done until every line is true:
       in a note (Rule 19).
 - [ ] Observation refreshes cannot advance or populate decision temporal state, and
       each decision consumes one authoritative sample (Rule 20).
+- [ ] Rates from cumulative counters are differenced at their stable identity before
+      aggregation; resets, reuse, and disappearance are isolated (Rule 21).
 - [ ] Any operator-visible discontinuity introduced by this change has its entry in the
       upgrade notes, in this commit (Rule 1, `resman-4pw.32`).
 
@@ -722,6 +749,7 @@ Until they exist, treat them as review checkpoints.
 | 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |
 | 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
 | 20. Observation cadence is decision-neutral | `resman-4pw.8`; `resman-ne0.30` provenance |
+| 21. Difference before aggregating | `resman-4pw.30` |
 
 Finding `resman-4pw.15` chose `POLLING_INTERVAL` as the normal host-CPU baseline
 contract. Its rule-level provenance is recorded under Rule 18.2 because the defect was

@@ -138,6 +138,12 @@ quale leggere `io.stat`: sono quindi rate di syscall read/write usati come
 segnale di attivazione, non conteggi di operazioni del block device. Dopo
 l'attivazione, `io.max` applica comunque i limiti IOPS reali del dispositivo.
 
+I delta sono calcolati separatamente per ogni coppia PID/start time e solo dopo
+sommati per utente. L'uscita o il reset dei contatori di un processo non azzera
+quindi il traffico valido degli altri processi; il riuso di un PID crea una
+nuova baseline e le baseline dei processi usciti vengono eliminate al termine
+della scansione.
+
 Quando la regola di attivazione è soddisfatta:
 1. Con `IO_DEVICE_FILTER=all`, ResMan enumera i dispositivi interi presenti in
    `/sys/block` e scrive una riga per ogni `major:minor` in `<cgroup>/io.max`:

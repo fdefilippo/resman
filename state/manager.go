@@ -77,9 +77,10 @@ type Manager struct {
 	// Control cycle history, initialized by NewManager.
 	controlHist *controlHistory
 
-	// I/O rate tracking: cumulative /proc/[pid]/io counters converted to rates.
-	prevIOCounters map[int]ioCounters
-	prevIOTime     time.Time
+	// I/O rate tracking: per-process deltas from consecutive decision samples
+	// are converted to rates only for users eligible in both samples.
+	previousIOEligibleUsers map[int]struct{}
+	prevIOTime              time.Time
 
 	// PSI watcher for per-user adaptive CPU weight boosting
 	psiWatcher   *cgroup.PSIWatcher
@@ -93,13 +94,6 @@ type userResourceLimitState struct {
 	io         bool
 	ioApplied  bool
 	standalone bool
-}
-
-type ioCounters struct {
-	readBytes  uint64
-	writeBytes uint64
-	readOps    uint64
-	writeOps   uint64
 }
 
 // UserLimitState separates policy eligibility, control intent, and observed enforcement.
@@ -240,8 +234,8 @@ func NewManager(
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
 		},
-		prevIOCounters: make(map[int]ioCounters),
-		psiBoostedAt:   make(map[int]time.Time),
+		previousIOEligibleUsers: make(map[int]struct{}),
+		psiBoostedAt:            make(map[int]time.Time),
 	}
 
 	logger.Info("State manager initialized",
@@ -454,7 +448,7 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	m.cfg = newConfig
 	m.mu.Unlock()
 	if processPolicyChanged {
-		m.prevIOCounters = make(map[int]ioCounters)
+		m.previousIOEligibleUsers = make(map[int]struct{})
 		m.prevIOTime = time.Time{}
 	}
 

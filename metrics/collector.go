@@ -82,6 +82,16 @@ type ProcessSetMetrics struct {
 	IOWriteBytes    uint64
 	IOReadOps       uint64
 	IOWriteOps      uint64
+	IODelta         ProcessIODelta
+}
+
+// ProcessIODelta contains the sum of per-process counter growth observed since
+// the previous sample from the same sampling stream.
+type ProcessIODelta struct {
+	ReadBytes  uint64
+	WriteBytes uint64
+	ReadOps    uint64
+	WriteOps   uint64
 }
 
 // ObservationMetrics is the typed observation snapshot consumed by external
@@ -96,13 +106,27 @@ type ObservationMetrics struct {
 	SystemUnderLoad       bool
 }
 
-// procCache holds CPU timing data for all PIDs.
+type processIOCounters struct {
+	readBytes  uint64
+	writeBytes uint64
+	readOps    uint64
+	writeOps   uint64
+}
+
+type processIOSample struct {
+	startTime int64
+	counters  processIOCounters
+	sampledAt time.Time
+}
+
+// procCache holds temporal CPU and I/O data for all PIDs.
 // Uses single mutex instead of sharding for simplicity and deadlock safety.
 type procCache struct {
 	mu            sync.RWMutex
 	prevProcCPU   map[int32]cpu.TimesStat
 	prevProcTime  map[int32]time.Time
 	procStartTime map[int32]int64
+	prevProcIO    map[int32]processIOSample
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
@@ -120,6 +144,7 @@ type processUsage struct {
 	ioWriteBytes uint64
 	ioReadOps    uint64
 	ioWriteOps   uint64
+	ioDelta      ProcessIODelta
 }
 
 func (u *processUsage) add(sample processUsage) {
@@ -131,6 +156,10 @@ func (u *processUsage) add(sample processUsage) {
 	u.ioWriteBytes += sample.ioWriteBytes
 	u.ioReadOps += sample.ioReadOps
 	u.ioWriteOps += sample.ioWriteOps
+	u.ioDelta.ReadBytes += sample.ioDelta.ReadBytes
+	u.ioDelta.WriteBytes += sample.ioDelta.WriteBytes
+	u.ioDelta.ReadOps += sample.ioDelta.ReadOps
+	u.ioDelta.WriteOps += sample.ioDelta.WriteOps
 }
 
 func addProcessSample(data *userData, cfg *config.Config, executable, comm string, sample processUsage) processpolicy.Selection {
@@ -153,6 +182,7 @@ func processSetMetrics(usage processUsage, ema float64) ProcessSetMetrics {
 		IOWriteBytes:    usage.ioWriteBytes,
 		IOReadOps:       usage.ioReadOps,
 		IOWriteOps:      usage.ioWriteOps,
+		IODelta:         usage.ioDelta,
 	}
 }
 
@@ -187,6 +217,7 @@ func newUserMetricsSamplingState() *userMetricsSamplingState {
 			prevProcCPU:   make(map[int32]cpu.TimesStat),
 			prevProcTime:  make(map[int32]time.Time),
 			procStartTime: make(map[int32]int64),
+			prevProcIO:    make(map[int32]processIOSample),
 		},
 		ema: &emaCache{
 			values:            make(map[int]float64),
@@ -1005,6 +1036,11 @@ func cleanupProcessCache(state *userMetricsSamplingState, now time.Time) {
 		delete(state.process.prevProcTime, pid)
 		delete(state.process.procStartTime, pid)
 	}
+	for pid, sample := range state.process.prevProcIO {
+		if now.Sub(sample.sampledAt) > 5*time.Minute {
+			delete(state.process.prevProcIO, pid)
+		}
+	}
 }
 
 // ClearCache removes every cached metric value.
@@ -1146,6 +1182,7 @@ func (c *Collector) getAllUserMetricsCached(
 
 func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
+	sampleTime := time.Now()
 
 	// Use gopsutil for efficient process discovery
 	procs, err := process.Processes()
@@ -1202,16 +1239,23 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
 
-		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(int(p.Pid))
+		ioCounters, ioAvailable := c.getProcessIO(int(p.Pid))
+		var ioDelta ProcessIODelta
+		if startTime, startErr := p.CreateTime(); ioAvailable && startErr == nil {
+			ioDelta = updateProcessIOSample(state, p.Pid, startTime, ioCounters, sampleTime)
+		} else {
+			discardProcessIOBaseline(state, p.Pid)
+		}
 		sample := processUsage{
 			cpuUsage:     cpuUsage,
 			cpuUsageAvg:  cpuAvg,
 			processCount: 1,
 			memoryUsage:  memoryUsage,
-			ioReadBytes:  readBytes,
-			ioWriteBytes: writeBytes,
-			ioReadOps:    readSyscalls,
-			ioWriteOps:   writeSyscalls,
+			ioReadBytes:  ioCounters.readBytes,
+			ioWriteBytes: ioCounters.writeBytes,
+			ioReadOps:    ioCounters.readOps,
+			ioWriteOps:   ioCounters.writeOps,
+			ioDelta:      ioDelta,
 		}
 		executable, _ := p.Exe()
 		comm, _ := p.Name()
@@ -1248,7 +1292,7 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 		}
 	}
 
-	retainProcessCPUBaselines(state, seenPIDs)
+	retainProcessBaselines(state, seenPIDs)
 	retainEMAUsers(state, userMetrics)
 	return userMetrics
 }
@@ -1257,6 +1301,7 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
 	procDir := "/proc"
+	sampleTime := time.Now()
 
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
@@ -1302,21 +1347,30 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 		// CPU average
 		cpuAvg := 0.0
 		proc, err := process.NewProcess(int32(pid))
+		var startTime int64
 		if err == nil {
 			cpuAvg = c.getProcessCPUAverage(proc, systemUptimeSeconds)
+			startTime, _ = proc.CreateTime()
 		}
 
 		// IO
-		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(pid)
+		ioCounters, ioAvailable := c.getProcessIO(pid)
+		var ioDelta ProcessIODelta
+		if ioAvailable && startTime != 0 {
+			ioDelta = updateProcessIOSample(state, int32(pid), startTime, ioCounters, sampleTime)
+		} else {
+			discardProcessIOBaseline(state, int32(pid))
+		}
 		sample := processUsage{
 			cpuUsage:     cpuUsage,
 			cpuUsageAvg:  cpuAvg,
 			processCount: 1,
 			memoryUsage:  memoryUsage,
-			ioReadBytes:  readBytes,
-			ioWriteBytes: writeBytes,
-			ioReadOps:    readSyscalls,
-			ioWriteOps:   writeSyscalls,
+			ioReadBytes:  ioCounters.readBytes,
+			ioWriteBytes: ioCounters.writeBytes,
+			ioReadOps:    ioCounters.readOps,
+			ioWriteOps:   ioCounters.writeOps,
+			ioDelta:      ioDelta,
 		}
 		executable, comm := readProcessIdentity(procDir, pid)
 		addProcessSample(tempData[uid], cfg, executable, comm, sample)
@@ -1346,7 +1400,7 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 		}
 	}
 
-	retainProcessCPUBaselines(state, seenPIDs)
+	retainProcessBaselines(state, seenPIDs)
 	retainEMAUsers(state, userMetrics)
 	return userMetrics
 }
@@ -1464,17 +1518,23 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 
 // getProcessIO reads /proc/[pid]/io. Byte counters describe storage traffic,
 // while syscall counters are syscr/syscw and do not represent block-device IOPS.
-// Returns 0 for all values if the file doesn't exist or can't be read.
-func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
+// The boolean is false when no reliable sample is available; callers must not
+// advance a temporal baseline in that case.
+func (c *Collector) getProcessIO(pid int) (processIOCounters, bool) {
 	ioFile := fmt.Sprintf("/proc/%d/io", pid)
 	data, err := os.ReadFile(ioFile)
 	if err != nil {
 		// Common errors: EACCES (ptrace restriction), ENOENT (process exited)
-		// Silently ignore - process may have exited or ptrace restriction applies
-		return 0, 0, 0, 0
+		return processIOCounters{}, false
 	}
 
-	return parseProcessIO(data)
+	readBytes, writeBytes, readOps, writeOps := parseProcessIO(data)
+	return processIOCounters{
+		readBytes:  readBytes,
+		writeBytes: writeBytes,
+		readOps:    readOps,
+		writeOps:   writeOps,
+	}, true
 }
 
 func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
@@ -1689,11 +1749,64 @@ func updateProcessCPUSample(state *userMetricsSamplingState, pid int32, startTim
 	return 0
 }
 
-// retainProcessCPUBaselines removes samples for PIDs absent from a completed scan.
-// Rebuilding the maps also releases bucket capacity retained after PID churn.
-func retainProcessCPUBaselines(state *userMetricsSamplingState, seen map[int32]struct{}) int {
+func updateProcessIOSample(
+	state *userMetricsSamplingState,
+	pid int32,
+	startTime int64,
+	counters processIOCounters,
+	now time.Time,
+) ProcessIODelta {
+	if state == nil || state.process == nil || startTime == 0 {
+		return ProcessIODelta{}
+	}
+
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
+
+	previous, exists := state.process.prevProcIO[pid]
+	state.process.prevProcIO[pid] = processIOSample{
+		startTime: startTime,
+		counters:  counters,
+		sampledAt: now,
+	}
+	if !exists || previous.startTime != startTime {
+		return ProcessIODelta{}
+	}
+
+	return ProcessIODelta{
+		ReadBytes:  monotonicCounterDelta(counters.readBytes, previous.counters.readBytes),
+		WriteBytes: monotonicCounterDelta(counters.writeBytes, previous.counters.writeBytes),
+		ReadOps:    monotonicCounterDelta(counters.readOps, previous.counters.readOps),
+		WriteOps:   monotonicCounterDelta(counters.writeOps, previous.counters.writeOps),
+	}
+}
+
+func discardProcessIOBaseline(state *userMetricsSamplingState, pid int32) {
 	if state == nil || state.process == nil {
+		return
+	}
+	state.process.mu.Lock()
+	delete(state.process.prevProcIO, pid)
+	state.process.mu.Unlock()
+}
+
+func monotonicCounterDelta(current, previous uint64) uint64 {
+	if current < previous {
 		return 0
+	}
+	return current - previous
+}
+
+type processBaselinePruneResult struct {
+	cpu int
+	io  int
+}
+
+// retainProcessBaselines removes samples for PIDs absent from a completed scan.
+// Rebuilding the maps also releases bucket capacity retained after PID churn.
+func retainProcessBaselines(state *userMetricsSamplingState, seen map[int32]struct{}) processBaselinePruneResult {
+	if state == nil || state.process == nil {
+		return processBaselinePruneResult{}
 	}
 
 	state.process.mu.Lock()
@@ -1710,14 +1823,23 @@ func retainProcessCPUBaselines(state *userMetricsSamplingState, seen map[int32]s
 		}
 	}
 	if !needsRebuild {
-		return 0
+		for pid := range state.process.prevProcIO {
+			if _, ok := seen[pid]; !ok {
+				needsRebuild = true
+				break
+			}
+		}
+	}
+	if !needsRebuild {
+		return processBaselinePruneResult{}
 	}
 
-	oldSize := len(state.process.prevProcCPU)
-	capacity := min(oldSize, len(seen))
-	prevProcCPU := make(map[int32]cpu.TimesStat, capacity)
-	prevProcTime := make(map[int32]time.Time, capacity)
-	procStartTime := make(map[int32]int64, capacity)
+	oldCPUSize := len(state.process.prevProcCPU)
+	oldIOSize := len(state.process.prevProcIO)
+	cpuCapacity := min(oldCPUSize, len(seen))
+	prevProcCPU := make(map[int32]cpu.TimesStat, cpuCapacity)
+	prevProcTime := make(map[int32]time.Time, cpuCapacity)
+	procStartTime := make(map[int32]int64, cpuCapacity)
 	for pid, times := range state.process.prevProcCPU {
 		if _, ok := seen[pid]; !ok {
 			continue
@@ -1730,11 +1852,22 @@ func retainProcessCPUBaselines(state *userMetricsSamplingState, seen map[int32]s
 		prevProcTime[pid] = sampledAt
 		procStartTime[pid] = state.process.procStartTime[pid]
 	}
+	ioCapacity := min(oldIOSize, len(seen))
+	prevProcIO := make(map[int32]processIOSample, ioCapacity)
+	for pid, sample := range state.process.prevProcIO {
+		if _, ok := seen[pid]; ok {
+			prevProcIO[pid] = sample
+		}
+	}
 
 	state.process.prevProcCPU = prevProcCPU
 	state.process.prevProcTime = prevProcTime
 	state.process.procStartTime = procStartTime
-	return oldSize - len(prevProcCPU)
+	state.process.prevProcIO = prevProcIO
+	return processBaselinePruneResult{
+		cpu: oldCPUSize - len(prevProcCPU),
+		io:  oldIOSize - len(prevProcIO),
+	}
 }
 
 // GetUserProcessCount returns the number of processes for a user.

@@ -244,14 +244,13 @@ func TestMakeDecisionIOThresholdDurationAccumulatesAcrossCycles(t *testing.T) {
 }
 
 func TestCalculateIORatesHandlesEveryCounterIndependently(t *testing.T) {
-	previous := ioCounters{readBytes: 100, writeBytes: 200, readOps: 30, writeOps: 40}
-	current := ioCounters{readBytes: 300, writeBytes: 100, readOps: 50, writeOps: 80}
-	rates := calculateIORates(current, previous, 2*time.Second)
+	delta := resmanmetrics.ProcessIODelta{ReadBytes: 200, WriteBytes: 100, ReadOps: 20, WriteOps: 40}
+	rates := calculateIORates(delta, 2*time.Second)
 
-	if rates.readBytes != 100 || rates.writeBytes != 0 || rates.readOps != 10 || rates.writeOps != 20 {
-		t.Fatalf("calculateIORates() = %+v, want readBPS=100 writeBPS=0 readOpsPS=10 writeOpsPS=20", rates)
+	if rates.readBytes != 100 || rates.writeBytes != 50 || rates.readOps != 10 || rates.writeOps != 20 {
+		t.Fatalf("calculateIORates() = %+v, want readBPS=100 writeBPS=50 readOpsPS=10 writeOpsPS=20", rates)
 	}
-	if got := calculateIORates(current, previous, 0); got != (ioCountersRate{}) {
+	if got := calculateIORates(delta, 0); got != (ioCountersRate{}) {
 		t.Fatalf("zero-duration rates = %+v, want zero", got)
 	}
 }
@@ -276,16 +275,18 @@ func TestByteRateLimitHandlesDisabledValuesPerDimension(t *testing.T) {
 
 func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 	cfg := config.DefaultConfig()
-	collector := &mockMetricsCollector{allUserMetrics: map[int]*resmanmetrics.UserMetrics{
-		1000: {
-			UID:          1000,
-			Username:     "alice",
-			IOReadBytes:  100,
-			IOWriteBytes: 200,
-			IOReadOps:    30,
-			IOWriteOps:   40,
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {
+				UID:      1000,
+				Username: "alice",
+				EnforceableUsage: resmanmetrics.ProcessSetMetrics{
+					IODelta: resmanmetrics.ProcessIODelta{},
+				},
+			},
 		},
-	}}
+	}
 	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
@@ -294,10 +295,12 @@ func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 		t.Fatalf("first collectSystemMetrics() error: %v", err)
 	}
 
-	collector.allUserMetrics[1000].IOReadBytes = 300
-	collector.allUserMetrics[1000].IOWriteBytes = 600
-	collector.allUserMetrics[1000].IOReadOps = 70
-	collector.allUserMetrics[1000].IOWriteOps = 120
+	collector.allUserMetrics[1000].EnforceableUsage.IODelta = resmanmetrics.ProcessIODelta{
+		ReadBytes:  200,
+		WriteBytes: 400,
+		ReadOps:    40,
+		WriteOps:   80,
+	}
 	manager.prevIOTime = time.Now().Add(-2 * time.Second)
 	sample, err := manager.collectSystemMetrics()
 	if err != nil {
@@ -312,5 +315,48 @@ func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 			sample.IOEligibleReadSyscallsPerSecond,
 			sample.IOEligibleWriteSyscallsPerSecond,
 		)
+	}
+}
+
+func TestCollectSystemMetricsKeepsSustainedIORateWhenProcessChurnLowersAggregate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {
+				UID:      1000,
+				Username: "alice",
+				EnforceableUsage: resmanmetrics.ProcessSetMetrics{
+					IOWriteBytes: 50_000,
+				},
+			},
+		},
+	}
+	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	if _, err := manager.collectSystemMetrics(); err != nil {
+		t.Fatalf("initial collectSystemMetrics() error: %v", err)
+	}
+
+	for cycle, aggregate := range []uint64{40_000, 30_000, 20_000, 10_000} {
+		user := collector.allUserMetrics[1000]
+		user.EnforceableUsage.IOWriteBytes = aggregate
+		user.EnforceableUsage.IODelta = resmanmetrics.ProcessIODelta{WriteBytes: 100}
+		manager.prevIOTime = time.Now().Add(-time.Second)
+
+		sample, collectErr := manager.collectSystemMetrics()
+		if collectErr != nil {
+			t.Fatalf("cycle %d collectSystemMetrics() error: %v", cycle+1, collectErr)
+		}
+		if sample.IOEligibleWriteBPS <= 0 {
+			t.Fatalf(
+				"cycle %d I/O rate = %.1f with aggregate lowered to %d, want non-zero sustained rate",
+				cycle+1,
+				sample.IOEligibleWriteBPS,
+				aggregate,
+			)
+		}
 	}
 }
