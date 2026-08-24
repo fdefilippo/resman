@@ -58,8 +58,8 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-preflight \
-	test-functional-smolvm-unit lint lint-install install uninstall rpm deb docker help
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-preflight \
+	test-functional-smolvm-unit lint lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -127,6 +127,10 @@ test-functional-smolvm-missing-io-startup:
 # Verify acknowledged MCP filter persistence and runtime publication.
 test-functional-smolvm-mcp-filter-reload:
 	SMOLVM_SCENARIO=mcp-filter-reload test/functional/smolvm/run.sh run
+
+# Verify the shipped rootful Podman runtime against host users and cgroup v2.
+test-functional-smolvm-container-runtime:
+	SMOLVM_SCENARIO=container-runtime test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
@@ -281,23 +285,29 @@ deb-install: deb
 	sudo apt-get install -y $(abspath $(DEB_PACKAGE_FILE))
 
 # ============================================================================
-# DOCKER
+# CONTAINER
 # ============================================================================
 
-# Build Docker image
-docker-build:
-	@echo "Building Docker image..."
-	docker build -t $(PROJECT_NAME):$(VERSION) -f packaging/docker/Dockerfile .
-	docker tag $(PROJECT_NAME):$(VERSION) $(PROJECT_NAME):latest
+# Build the supported rootful Podman image.
+container-build:
+	@echo "Building container image with sudo podman..."
+	sudo podman build --tag $(PROJECT_NAME):$(VERSION) --file packaging/docker/Dockerfile .
 
-# Run Docker container
-docker-run:
-	@echo "Running Docker container..."
-	docker run --rm -it \
-                --privileged \
-                -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-                -v /etc/resman.conf:/etc/resman.conf:ro \
-                $(PROJECT_NAME):latest
+# Run the supported host-wide container contract. The host paths must exist;
+# see docs/CONTAINER.md for configuration and NSS/SSSD requirements.
+container-run:
+	@echo "Running host-wide resman container with sudo podman..."
+	sudo podman run --rm --name resman \
+		--privileged --pid=host --cgroupns=host --network=host \
+		--security-opt label=disable \
+		-v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+		-v /etc/resman.conf:/etc/resman.conf:ro \
+		-v /etc/passwd:/etc/passwd:ro \
+		-v /etc/group:/etc/group:ro \
+		-v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
+		-v /var/lib/resman:/var/lib/resman:rw \
+		-v /var/log/resman:/var/log/resman:rw \
+		$(PROJECT_NAME):$(VERSION)
 
 # ============================================================================
 # UTILITIES
@@ -404,6 +414,7 @@ help:
 	@echo "    test-functional-smolvm-process-membership - Run active process membership in SmolVM"
 	@echo "    test-functional-smolvm-cpu-without-cpuset - Run CPU enforcement without cpuset in SmolVM"
 	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
+	@echo "    test-functional-smolvm-container-runtime - Verify the shipped sudo podman runtime in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
@@ -428,9 +439,9 @@ help:
 	@echo "    docs         - Genera tutta la documentazione"
 	@echo "    view-man     - Visualizza man page localmente"
 	@echo ""
-	@echo "  DOCKER:"
-	@echo "    docker-build - Crea immagine Docker"
-	@echo "    docker-run   - Esegui container Docker"
+	@echo "  CONTAINER:"
+	@echo "    container-build - Build the image with sudo podman"
+	@echo "    container-run   - Run the supported host-wide container contract"
 	@echo ""
 	@echo "  UTILITIES:"
 	@echo "    clean        - Pulisci file di build"

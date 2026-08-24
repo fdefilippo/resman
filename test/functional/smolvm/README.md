@@ -54,6 +54,20 @@ It calls the real `set_user_include_list` tool using MCP 2026-07-28, requires a
 response that confirms both persistence and runtime application, verifies the
 file, and proves that the removed `reload` input is rejected without side effects.
 
+The container-runtime boundary builds the shipped image with CGO/NSS enabled,
+loads it into rootful Podman inside the guest, and runs the documented host-wide
+contract. It proves local host-user resolution, trustworthy `/proc/PID/exe`
+access for a foreign UID, finite `cpu.max` enforcement, and clean release on
+container shutdown:
+
+```bash
+make test-functional-smolvm-container-runtime
+```
+
+The scenario uses the same 2-vCPU/2-GiB guest defaults. The VM network remains
+disabled: the shipped image archive is mounted from the host scratch directory,
+so a registry pull inside the guest cannot be mistaken for runtime evidence.
+
 The target builds the guest image with `sudo podman` and invokes every
 KVM-dependent SmolVM command through `sg kvm -c`. Starting a new login shell is
 not required after adding the user to the `kvm` group.
@@ -121,6 +135,12 @@ CPU and RAM allocations can be overridden explicitly:
 SMOLVM_CPUS=4 SMOLVM_MEMORY_MIB=4096 make test-functional-smolvm
 ```
 
+The `container-runtime` scenario keeps the standard two CPU and 2 GiB memory
+allocation, but defaults the writable overlay to 8 GiB. Nested Podman uses its
+`vfs` storage driver because SmolVM does not expose `/dev/fuse`; the larger
+overlay accommodates the driver's full layer copies. Set
+`SMOLVM_OVERLAY_GIB` explicitly to override this storage-only default.
+
 The image provides three fixture users (`resman-cpu`, `resman-memory`, and
 `resman-io`), a small wrapper around `stress` for CPU/RAM/I/O workloads,
 `curl`, and `sqlite3`. Workloads are launched inside the guest with:
@@ -182,6 +202,9 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - MCP stdio request/response evidence for typed observation/runtime status,
   acknowledged filter persistence, and runtime application when that scenario
   is selected;
+- the shipped image identity, dynamic libc linkage, root runtime user, exact
+  Podman inspection, host NSS result, foreign-user executable, finite CPU quota,
+  and post-shutdown cgroup for the container-runtime scenario;
 - the complete startup rejection naming feature, controller, and interface for
   the missing-I/O capability scenario;
 - declared daemon-error expectations, every observed error-level line,

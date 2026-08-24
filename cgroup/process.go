@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processidentity"
 	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/shirou/gopsutil/v3/process"
 )
@@ -109,10 +110,14 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 	for _, pid := range pids {
 		totalProcesses++
 		processInfo, infoErr := m.getProcessInfo(pid)
+		if os.IsNotExist(infoErr) {
+			continue
+		}
 		if infoErr != nil {
-			m.logger.Debug("Failed to read process details before migration",
+			m.logger.Error("Trusted executable identity unavailable before migration; process remains enforceable",
 				"pid", pid,
 				"error", infoErr,
+				"policy", "fail_closed",
 			)
 		}
 		selection := processSelectionFromInfo(cfg, processInfo)
@@ -285,18 +290,12 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 	info := make(map[string]string)
 	processPath := filepath.Join(m.getProcRoot(), strconv.Itoa(pid))
 
-	// Read the kernel process name from /proc/PID/comm.
-	commFile := filepath.Join(processPath, "comm")
-	if data, err := os.ReadFile(commFile); err == nil {
-		info["name"] = strings.TrimSpace(string(data))
-	} else {
+	identity, identityErr := processidentity.Read(m.getProcRoot(), pid)
+	info["name"] = strings.TrimSpace(identity.Comm)
+	if info["name"] == "" {
 		info["name"] = "unknown"
 	}
-
-	// Resolve the executable identity without trusting the user-controlled argv[0].
-	if executable, err := os.Readlink(filepath.Join(processPath, "exe")); err == nil {
-		info["executable"] = executable
-	}
+	info["executable"] = identity.Executable
 
 	// Resolve the username from the real UID and cache the lookup. This avoids
 	// spawning ps once per process.
@@ -318,13 +317,13 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 		}
 	}
 
-	return info, nil
+	return info, identityErr
 }
 
 // getProcessName returns the normalized policy identity for a process.
 func (m *Manager) getProcessName(pid int) string {
 	info, err := m.getProcessInfo(pid)
-	if err != nil {
+	if err != nil && len(info) == 0 {
 		return fmt.Sprintf("PID-%d", pid)
 	}
 	return processNameFromInfo(pid, info)

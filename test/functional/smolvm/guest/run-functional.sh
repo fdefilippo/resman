@@ -15,8 +15,19 @@ result_file=$artifact_dir/result
 mcp_pid=
 mcp_workload_pid=
 cpu_workload_pid=
+container_workload_pid=
+container_name=
+container_log_dir=
 functional_cgroup_root=/sys/fs/cgroup
 expected_daemon_error_patterns=()
+
+# SmolVM does not expose /dev/fuse to the guest. Keep nested Podman state
+# isolated to this run and use vfs so the container scenario does not depend on
+# a host device that is unrelated to resman's runtime contract.
+container_podman() {
+	sudo podman --root "$state_dir/podman-storage" \
+		--runroot "$runtime_dir/podman-run" --storage-driver=vfs "$@"
+}
 
 case "$run_id" in
     *[!a-z0-9-]*|'')
@@ -25,7 +36,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload) ;;
+	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -69,13 +80,27 @@ finish() {
 		wait "$cpu_workload_pid" 2>/dev/null
 		cpu_workload_pid=
 	fi
+	if [[ -n $container_name ]]; then
+		container_podman logs "$container_name" >"$artifact_dir/container-stdout.log" 2>"$artifact_dir/container-stderr.log"
+		container_podman rm --force "$container_name" >/dev/null 2>&1
+		container_name=
+	fi
+	if [[ -n $container_workload_pid ]]; then
+		pkill -TERM -u resman-cpu -x stress >/dev/null 2>&1
+		wait "$container_workload_pid" 2>/dev/null
+		container_workload_pid=
+	fi
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
     find "$functional_cgroup_root/resman-functional-$run_id" -maxdepth 3 -type d -print \
         >"$artifact_dir/cgroup-tree.txt" 2>&1
     curl --fail --silent --show-error --max-time 2 \
         http://127.0.0.1:19100/metrics >"$artifact_dir/prometheus-metrics-final.txt" 2>&1
     systemctl stop "$service" >/dev/null 2>&1
-	cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
+	if [[ -n $container_log_dir ]]; then
+		cp "$container_log_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
+	else
+		cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
+	fi
     journalctl -u "$service" --no-pager >"$artifact_dir/resman-journal.log" 2>&1
 	if ! /opt/resman-functional/assert-daemon-errors.sh "$scenario" "$artifact_dir" \
 		"${expected_daemon_error_patterns[@]}"; then
@@ -192,13 +217,27 @@ if [[ $scenario == cpu-without-cpuset ]]; then
 fi
 
 sed "s/@RUN_ID@/$run_id/g" /opt/resman-functional/fixtures/resman.conf >"$config_file"
-if [[ $scenario == process-membership || $scenario == cpu-without-cpuset ]]; then
+if [[ $scenario == process-membership || $scenario == cpu-without-cpuset \
+	|| $scenario == container-runtime ]]; then
 	sed -i \
 		-e 's/^CPU_THRESHOLD=.*/CPU_THRESHOLD=10/' \
 		-e 's/^USER_INCLUDE_LIST=.*/USER_INCLUDE_LIST=^resman-cpu$/' \
 		-e 's/^MIN_SYSTEM_CORES=.*/MIN_SYSTEM_CORES=1/' \
 		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		"$config_file"
+fi
+if [[ $scenario == container-runtime ]]; then
+	container_log_dir=$state_dir/container-log
+	container_state_dir=$state_dir/container-state
+	mkdir -p "$container_log_dir" "$container_state_dir"
+	chmod 0700 "$container_log_dir" "$container_state_dir"
+	sed -i \
+		-e "s|^CGROUP_BASE=.*|CGROUP_BASE=resman-container-$run_id|" \
+		-e "s|^CREATED_CGROUPS_FILE=.*|CREATED_CGROUPS_FILE=/var/lib/resman/cgroups.txt|" \
+		-e 's/^MIN_SYSTEM_CORES=.*/MIN_SYSTEM_CORES=1/' \
+		-e 's/^METRICS_DB_ENABLED=.*/METRICS_DB_ENABLED=false/' \
+		-e 's|^LOG_FILE=.*|LOG_FILE=/var/log/resman/resman.log|' \
 		"$config_file"
 fi
 if [[ $scenario == cpu-without-cpuset ]]; then
@@ -241,6 +280,9 @@ chmod 0600 "$runtime_dir/environment"
     printf 'guest_observed_cpus=%s\n' "$(nproc)"
     printf 'guest_observed_memory_kib=%s\n' "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)"
     printf 'stress_version=%s\n' "$(stress --version | head -n 1)"
+	if [[ $scenario == container-runtime ]]; then
+		printf 'podman_version=%s\n' "$(container_podman version --format '{{.Client.Version}}')"
+	fi
     printf 'config_path=%s\n' "$config_file"
     printf 'database_path=%s\n' "$state_dir/metrics.db"
     printf 'cgroup_path=%s\n' "$functional_cgroup_root/resman-functional-$run_id"
@@ -371,6 +413,110 @@ if [[ $scenario == mcp-filter-reload ]]; then
 	mcp_workload_pid=
 	result=PASS
 	detail="MCP stdio status surfaces used distinct observation/runtime contracts; filter reload was acknowledged and removed input was rejected"
+	echo "PASS: $detail"
+	exit 0
+fi
+if [[ $scenario == container-runtime ]]; then
+	container_image=localhost/resman-container:$run_id
+	container_archive=/mnt/resman-input/resman-container.tar
+	[[ -r $container_archive ]] || fail "shipped container image archive is unavailable in the guest"
+	container_podman load --input "$container_archive" >"$artifact_dir/container-load.txt" \
+		|| fail "cannot load the shipped container image"
+	container_user=$(container_podman image inspect --format '{{.Config.User}}' "$container_image")
+	[[ $container_user == 0 ]] || fail "shipped container user is $container_user instead of root"
+	container_podman run --rm --entrypoint /usr/bin/ldd "$container_image" /usr/local/bin/resman \
+		>"$artifact_dir/container-ldd.txt" \
+		|| fail "cannot inspect the shipped resman binary's dynamic dependencies"
+	grep -Fq 'libc.so' "$artifact_dir/container-ldd.txt" \
+		|| fail "shipped resman binary does not expose a libc dependency"
+
+	/opt/resman-functional/workload.sh cpu 90s &
+	container_workload_pid=$!
+	container_stress_pid=
+	for _ in $(seq 1 50); do
+		container_stress_pid=$(pgrep -u resman-cpu -x stress 2>/dev/null | tail -n 1 || true)
+		[[ -n $container_stress_pid ]] && break
+		sleep 0.1
+	done
+	[[ -n $container_stress_pid ]] || fail "foreign-user CPU workload did not start"
+	container_name=resman-container-$run_id
+	container_podman run --detach --name "$container_name" \
+		--privileged --pid=host --cgroupns=host --network=host \
+		--security-opt label=disable \
+		-v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+		-v "$config_file:/etc/resman.conf:ro" \
+		-v /etc/passwd:/etc/passwd:ro \
+		-v /etc/group:/etc/group:ro \
+		-v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
+		-v "$container_state_dir:/var/lib/resman:rw" \
+		-v "$container_log_dir:/var/log/resman:rw" \
+		"$container_image" >"$artifact_dir/container-id.txt" \
+		|| fail "supported sudo podman invocation did not start"
+
+	curl --fail --silent --show-error --retry 20 --retry-all-errors --retry-delay 1 \
+		--max-time 2 http://127.0.0.1:19100/metrics \
+		>"$artifact_dir/container-prometheus-metrics.txt" \
+		|| fail "container Prometheus endpoint did not become ready"
+	cpu_uid=$(id -u resman-cpu)
+	resolved_user=$(container_podman exec "$container_name" getent passwd "$cpu_uid")
+	[[ $resolved_user == resman-cpu:* ]] \
+		|| fail "container NSS did not resolve the foreign host user"
+	resolved_executable=$(container_podman exec "$container_name" readlink "/proc/$container_stress_pid/exe")
+	[[ $resolved_executable == */stress ]] \
+		|| fail "container could not resolve the foreign-user executable identity"
+
+	container_base_cgroup=/sys/fs/cgroup/resman-container-$run_id
+	container_limited_cgroup=$container_base_cgroup/limited/user_$cpu_uid
+	container_quota_ready=false
+	for _ in $(seq 1 30); do
+		if [[ -r $container_base_cgroup/limited/cpu.max \
+			&& $(< "$container_base_cgroup/limited/cpu.max") != "max 100000" \
+			&& -r $container_limited_cgroup/cgroup.procs ]] \
+			&& grep -qx "$container_stress_pid" "$container_limited_cgroup/cgroup.procs"; then
+			container_quota_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $container_quota_ready == true ]] \
+		|| fail "container did not apply a finite CPU quota to the foreign-user workload"
+	container_cpu_max=$(< "$container_base_cgroup/limited/cpu.max")
+	container_start_time=$(process_start_time "$container_stress_pid")
+	container_podman inspect "$container_name" >"$artifact_dir/container-inspect.json"
+	container_podman stop --time 20 "$container_name" >/dev/null \
+		|| fail "container did not stop cleanly"
+	container_podman logs "$container_name" >"$artifact_dir/container-stdout.log" \
+		2>"$artifact_dir/container-stderr.log"
+	container_exit_code=$(container_podman inspect --format '{{.State.ExitCode}}' "$container_name")
+	[[ $container_exit_code == 0 ]] \
+		|| fail "container shutdown returned exit code $container_exit_code"
+	container_final_cgroup=$(process_cgroup_path "$container_stress_pid")
+	[[ $container_final_cgroup != *"/limited/"* ]] \
+		|| fail "foreign-user workload remained under the finite container limit after shutdown"
+	container_start_time_after=$(process_start_time "$container_stress_pid")
+	[[ $container_start_time_after == "$container_start_time" ]] \
+		|| fail "foreign-user PID was reused during container shutdown"
+	container_podman rm "$container_name" >/dev/null
+	container_name=
+
+	{
+		printf 'container_image=%s\n' "$container_image"
+		printf 'container_user=%s\n' "$container_user"
+		printf 'host_user=%s\n' "$resolved_user"
+		printf 'foreign_pid=%s\n' "$container_stress_pid"
+		printf 'foreign_executable=%s\n' "$resolved_executable"
+		printf 'limited_cgroup=%s\n' "$container_limited_cgroup"
+		printf 'limited_cpu_max=%s\n' "$container_cpu_max"
+		printf 'start_time_before_stop=%s\n' "$container_start_time"
+		printf 'start_time_after_stop=%s\n' "$container_start_time_after"
+		printf 'final_cgroup=%s\n' "$container_final_cgroup"
+		printf 'container_exit_code=%s\n' "$container_exit_code"
+	} >"$artifact_dir/container-runtime.txt"
+	pkill -TERM -u resman-cpu -x stress >/dev/null 2>&1 || true
+	wait "$container_workload_pid" 2>/dev/null || true
+	container_workload_pid=
+	result=PASS
+	detail="rootful Podman resolved a foreign host user and executable, applied a finite CPU quota, and released it on shutdown"
 	echo "PASS: $detail"
 	exit 0
 fi

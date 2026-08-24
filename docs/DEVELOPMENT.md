@@ -154,9 +154,11 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   Excluded processes **MUST** remain visible in total-user observation, but **MUST NOT**
 	contribute to CPU, RAM, or I/O decision inputs because enforcement deliberately
 	leaves them outside limited cgroups. Accounting and cgroup placement **MUST** consume
-	the same normalized process-policy result. The identity is the basename resolved from
-	`/proc/PID/exe`, with `/proc/PID/comm` only as a fallback; PID-decorated display names
-	and user-controlled `argv[0]` values are not policy identities.
+	the same normalized process-policy result. The policy identity is the basename resolved
+	from `/proc/PID/exe`; `/proc/PID/comm` is display-only because the process can rewrite
+	it. If executable identity is unavailable, the process **MUST** remain enforceable and
+	the failure **MUST** be reported explicitly. PID-decorated display names and
+	user-controlled `argv[0]` values are not policy identities.
 - While any resource limit remains observed as active, every control cycle **MUST**
   reconcile process membership once per limited user. Newly enforceable processes move
   into the user's current shared or standalone cgroup. Processes that become excluded
@@ -389,12 +391,25 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
   unstartable regardless of what the code decided.
 - Diagnostics **MUST** distinguish "missing mandatory controller for enabled feature X"
   from "optional controller unavailable, degrading".
+- A supported container deployment **MUST** prove the same capabilities against host
+  processes and the host cgroup hierarchy. Image build success, container UID 0, or a
+  listed Linux capability alone is not evidence that host PID/cgroup namespaces, NSS,
+  `/proc/PID/exe`, `/proc/PID/io`, and cgroup writes compose correctly.
+- A privilege-dependent observation used for a security or enforcement decision **MUST**
+  fail explicitly and conservatively. It **MUST NOT** downgrade to a process-controlled
+  identity or a zero-valued decision signal when access is denied.
 
 **Why.** `cgroup/manager.go:174` returns a fatal error when `+cpuset` cannot be written,
 while `cgroup/manager.go:243-246` treats the identical write as best-effort and
 continues. `packaging/systemd/resman.service:17` uses `sh -ec`, so the unit dies if
 `+cpuset` fails. Delegated or containerised cgroup v2 hierarchies that expose `cpu` but
 not `cpuset` cannot run resman, for no functional reason.
+
+The shipped container once compiled with `CGO_ENABLED=0`, ran as an unprivileged user,
+and documented neither the host PID/cgroup namespaces nor NSS mounts. It could build and
+start while being unable to resolve host users, trust foreign-user process identity, or
+enforce host cgroups. The supported rootful Podman contract is now exercised inside
+SmolVM instead of being inferred from the image manifest.
 
 *Finding: resman-4pw.14*
 

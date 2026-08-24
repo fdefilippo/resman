@@ -15,7 +15,6 @@ func TestEvaluateUsesOneCanonicalIdentityForAnchoredExclusions(t *testing.T) {
 	}{
 		{name: "executable basename", executable: "/usr/lib/systemd/systemd", comm: "systemd", wantName: "systemd"},
 		{name: "deleted executable suffix", executable: "/usr/lib/systemd/systemd (deleted)", comm: "systemd", wantName: "systemd"},
-		{name: "comm fallback", comm: "dbus-broker", wantName: "dbus-broker"},
 	}
 
 	cfg := config.DefaultConfig()
@@ -23,10 +22,20 @@ func TestEvaluateUsesOneCanonicalIdentityForAnchoredExclusions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			selection := Evaluate(cfg, tt.executable, tt.comm)
-			if selection.Name != tt.wantName || selection.Enforceable {
-				t.Fatalf("Evaluate() = %+v, want name %q and enforceable=false", selection, tt.wantName)
+			if selection.Name != tt.wantName || selection.Enforceable || !selection.IdentityTrusted {
+				t.Fatalf("Evaluate() = %+v, want trusted name %q and enforceable=false", selection, tt.wantName)
 			}
 		})
+	}
+}
+
+func TestEvaluateTreatsCommFallbackAsEnforceableAndUntrusted(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProcessExcludeList = []string{"^systemd$"}
+
+	selection := Evaluate(cfg, "", "systemd")
+	if selection.Name != "systemd" || !selection.Enforceable || selection.IdentityTrusted {
+		t.Fatalf("Evaluate() = %+v, want display name systemd, enforceable=true, trusted=false", selection)
 	}
 }
 
@@ -34,7 +43,7 @@ func TestEvaluateDoesNotTrustSpoofableProcessNameWhenExecutableIsAvailable(t *te
 	cfg := config.DefaultConfig()
 	cfg.ProcessExcludeList = []string{"^systemd$"}
 	selection := Evaluate(cfg, "/usr/bin/stress", "systemd")
-	if selection.Name != "stress" || !selection.Enforceable {
+	if selection.Name != "stress" || !selection.Enforceable || !selection.IdentityTrusted {
 		t.Fatalf("Evaluate() = %+v, want executable identity stress and enforceable=true", selection)
 	}
 }
@@ -43,7 +52,7 @@ func TestEvaluateIncludesUnmatchedProcess(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ProcessExcludeList = []string{"^systemd$"}
 	selection := Evaluate(cfg, "/usr/bin/stress", "stress")
-	if selection.Name != "stress" || !selection.Enforceable {
+	if selection.Name != "stress" || !selection.Enforceable || !selection.IdentityTrusted {
 		t.Fatalf("Evaluate() = %+v, want stress and enforceable=true", selection)
 	}
 }

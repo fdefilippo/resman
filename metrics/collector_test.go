@@ -86,6 +86,21 @@ func TestAddProcessSampleSeparatesObservedAndEnforceableUsage(t *testing.T) {
 	}
 }
 
+func TestAddProcessSampleKeepsUntrustedCommFallbackEnforceable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProcessExcludeList = []string{"^systemd$"}
+	data := &userData{}
+	sample := processUsage{cpuUsage: 50, memoryUsage: 4096, processCount: 1}
+
+	selection := addProcessSample(data, cfg, "", "systemd", sample)
+	if !selection.Enforceable || selection.IdentityTrusted {
+		t.Fatalf("selection = %+v, want fail-closed enforceable untrusted identity", selection)
+	}
+	if data.observed != sample || data.enforceable != sample {
+		t.Fatalf("usage observed=%+v enforceable=%+v, want sample in both", data.observed, data.enforceable)
+	}
+}
+
 func TestUpdateConfigResetsOnlyEnforceableEMAWhenProcessPolicyChanges(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector, err := NewCollector(cfg)

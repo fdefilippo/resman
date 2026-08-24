@@ -19,6 +19,7 @@ package metrics
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processidentity"
 	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -184,17 +186,6 @@ func processSetMetrics(usage processUsage, ema float64) ProcessSetMetrics {
 		IOWriteOps:      usage.ioWriteOps,
 		IODelta:         usage.ioDelta,
 	}
-}
-
-func readProcessIdentity(procRoot string, pid int) (executable, comm string) {
-	processPath := filepath.Join(procRoot, strconv.Itoa(pid))
-	if resolved, err := os.Readlink(filepath.Join(processPath, "exe")); err == nil {
-		executable = resolved
-	}
-	if data, err := os.ReadFile(filepath.Join(processPath, "comm")); err == nil {
-		comm = string(data)
-	}
-	return executable, comm
 }
 
 // emaCache stores EMA values per UID between cycles.
@@ -1205,6 +1196,9 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 	cfg := c.getConfig()
 
 	seenPIDs := make(map[int32]struct{}, len(procs))
+	untrustedIdentityCount := 0
+	firstUntrustedPID := 0
+	var firstIdentityError error
 
 	for _, p := range procs {
 		// Get process UID
@@ -1215,6 +1209,10 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 		uid := int(uids[0])
 
 		if !c.isMonitoredUserUID(uid) {
+			continue
+		}
+		identity, identityErr := processidentity.Read("/proc", int(p.Pid))
+		if errors.Is(identityErr, os.ErrNotExist) {
 			continue
 		}
 		seenPIDs[p.Pid] = struct{}{}
@@ -1257,10 +1255,16 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 			ioWriteOps:   ioCounters.writeOps,
 			ioDelta:      ioDelta,
 		}
-		executable, _ := p.Exe()
-		comm, _ := p.Name()
-		addProcessSample(tempData[uid], cfg, executable, comm, sample)
+		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
+		if !selection.IdentityTrusted {
+			untrustedIdentityCount++
+			if firstUntrustedPID == 0 {
+				firstUntrustedPID = int(p.Pid)
+				firstIdentityError = identityErr
+			}
+		}
 	}
+	c.reportUntrustedProcessIdentities(untrustedIdentityCount, firstUntrustedPID, firstIdentityError)
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
@@ -1315,6 +1319,9 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
 	seenPIDs := make(map[int32]struct{}, len(entries))
+	untrustedIdentityCount := 0
+	firstUntrustedPID := 0
+	var firstIdentityError error
 
 	// Read system uptime once
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
@@ -1333,6 +1340,10 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 		statusFile := filepath.Join(procDir, entry.Name(), "status")
 		uid, err := c.getUIDFromStatusFile(statusFile)
 		if err != nil || !c.isMonitoredUserUID(uid) {
+			continue
+		}
+		identity, identityErr := processidentity.Read(procDir, pid)
+		if errors.Is(identityErr, os.ErrNotExist) {
 			continue
 		}
 		seenPIDs[int32(pid)] = struct{}{}
@@ -1372,9 +1383,16 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 			ioWriteOps:   ioCounters.writeOps,
 			ioDelta:      ioDelta,
 		}
-		executable, comm := readProcessIdentity(procDir, pid)
-		addProcessSample(tempData[uid], cfg, executable, comm, sample)
+		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
+		if !selection.IdentityTrusted {
+			untrustedIdentityCount++
+			if firstUntrustedPID == 0 {
+				firstUntrustedPID = pid
+				firstIdentityError = identityErr
+			}
+		}
 	}
+	c.reportUntrustedProcessIdentities(untrustedIdentityCount, firstUntrustedPID, firstIdentityError)
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
@@ -1403,6 +1421,18 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 	retainProcessBaselines(state, seenPIDs)
 	retainEMAUsers(state, userMetrics)
 	return userMetrics
+}
+
+func (c *Collector) reportUntrustedProcessIdentities(count, firstPID int, firstErr error) {
+	if count == 0 {
+		return
+	}
+	c.logger.Error("Trusted executable identity unavailable; process usage remains enforceable",
+		"affected_processes", count,
+		"first_pid", firstPID,
+		"first_error", firstErr,
+		"policy", "fail_closed",
+	)
 }
 
 // GetUserMemoryUsage returns total memory used by a user in bytes.

@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processidentity"
 )
 
 func TestProcessIDsForUIDReusesSingleScan(t *testing.T) {
@@ -108,6 +110,37 @@ func TestProcessSelectionFromInfoMatchesAnchoredPolicyWithoutPIDDecoration(t *te
 	})
 	if selection.Name != "worker" || selection.Enforceable {
 		t.Fatalf("processSelectionFromInfo() = %+v, want worker excluded", selection)
+	}
+}
+
+func TestMissingExecutableIdentityCannotMatchProcessExclusion(t *testing.T) {
+	procRoot := t.TempDir()
+	processPath := filepath.Join(procRoot, "303")
+	if err := os.MkdirAll(processPath, 0755); err != nil {
+		t.Fatalf("create process fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(processPath, "comm"), []byte("systemd\n"), 0644); err != nil {
+		t.Fatalf("write comm fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(processPath, "status"), []byte("Uid:\t1000\t1000\t1000\t1000\n"), 0644); err != nil {
+		t.Fatalf("write status fixture: %v", err)
+	}
+
+	manager := &Manager{
+		cfg:             config.DefaultConfig(),
+		procRoot:        procRoot,
+		usernameCache:   make(map[string]cachedUsername),
+		resolveUsername: func(string) (string, error) { return "alice", nil },
+	}
+	manager.cfg.ProcessExcludeList = []string{"^systemd$"}
+	info, err := manager.getProcessInfo(303)
+	var unavailable *processidentity.ExecutableUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("getProcessInfo() error = %v, want ExecutableUnavailableError", err)
+	}
+	selection := processSelectionFromInfo(manager.cfg, info)
+	if selection.Name != "systemd" || !selection.Enforceable || selection.IdentityTrusted {
+		t.Fatalf("selection = %+v, want comm only for display and fail-closed enforcement", selection)
 	}
 }
 

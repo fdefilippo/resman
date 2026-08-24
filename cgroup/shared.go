@@ -174,10 +174,14 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 
 	for _, pid := range pidsForUID {
 		processInfo, infoErr := m.getProcessInfo(pid)
+		if os.IsNotExist(infoErr) {
+			continue
+		}
 		if infoErr != nil {
-			m.logger.Debug("Failed to read process details before shared-cgroup migration",
+			m.logger.Error("Trusted executable identity unavailable before shared-cgroup migration; process remains enforceable",
 				"pid", pid,
 				"error", infoErr,
+				"policy", "fail_closed",
 			)
 		}
 		selection := processpolicy.Evaluate(cfg, processInfo["executable"], processInfo["name"])

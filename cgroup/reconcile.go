@@ -18,8 +18,9 @@ type ProcessMembershipResult struct {
 }
 
 type processMembershipCandidate struct {
-	startTime uint64
-	selected  bool
+	startTime  uint64
+	selected   bool
+	diagnostic error
 }
 
 // ReconcileUserProcessMembership makes the current process policy true for an
@@ -70,6 +71,9 @@ func (m *Manager) ReconcileUserProcessMembership(
 		if !exists {
 			continue
 		}
+		if candidate.diagnostic != nil {
+			inspectErrors = append(inspectErrors, fmt.Errorf("inspect limited PID %d: %w", pid, candidate.diagnostic))
+		}
 		if !candidate.selected {
 			outgoing = append(outgoing, pid)
 			outgoingStarts[pid] = candidate.startTime
@@ -86,7 +90,13 @@ func (m *Manager) ReconcileUserProcessMembership(
 			inspectErrors = append(inspectErrors, fmt.Errorf("inspect discovered PID %d: %w", pid, inspectErr))
 			continue
 		}
-		if !exists || !candidate.selected {
+		if !exists {
+			continue
+		}
+		if candidate.diagnostic != nil {
+			inspectErrors = append(inspectErrors, fmt.Errorf("inspect discovered PID %d: %w", pid, candidate.diagnostic))
+		}
+		if !candidate.selected {
 			continue
 		}
 		incoming = append(incoming, pid)
@@ -153,9 +163,12 @@ func (m *Manager) inspectProcessMembershipCandidate(pid int) (processMembershipC
 	if err != nil {
 		return processMembershipCandidate{}, false, err
 	}
-	processInfo, err := m.getProcessInfo(pid)
-	if err != nil {
-		return processMembershipCandidate{}, false, err
+	processInfo, identityErr := m.getProcessInfo(pid)
+	if os.IsNotExist(identityErr) {
+		return processMembershipCandidate{}, false, nil
+	}
+	if len(processInfo) == 0 {
+		return processMembershipCandidate{}, false, identityErr
 	}
 	confirmedIdentity, err := m.readProcessIdentity(pid)
 	if os.IsNotExist(err) {
@@ -173,7 +186,8 @@ func (m *Manager) inspectProcessMembershipCandidate(pid int) (processMembershipC
 		processInfo["name"],
 	)
 	return processMembershipCandidate{
-		startTime: identity.StartTime,
-		selected:  selection.Enforceable,
+		startTime:  identity.StartTime,
+		selected:   selection.Enforceable,
+		diagnostic: identityErr,
 	}, true, nil
 }

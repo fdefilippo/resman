@@ -355,7 +355,9 @@ controller.
 **Process Exclusion:**
 - `PROCESS_EXCLUDE_LIST` defines the process set enforceable by every resource.
 - Excluded processes remain in observed totals but do not feed decision inputs.
-- Matching uses the `/proc/PID/exe` basename, with `/proc/PID/comm` as fallback.
+- Matching uses only the `/proc/PID/exe` basename. `/proc/PID/comm` is display-only
+  because a process can rewrite it. If executable identity is unavailable, the
+  process remains in decision inputs and enforcement and an explicit error is emitted.
 - While limits are active, every control cycle moves new enforceable processes into
   the current user cgroup and restores newly excluded processes to their captured
   origins.

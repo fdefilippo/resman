@@ -433,7 +433,8 @@ USER_EXCLUDE_LIST=root
 # List of processes to exclude from every resource limit (comma-separated)
 # These processes remain visible in observed totals, but they do not contribute
 # to CPU, RAM, or IO decisions and are never moved into limited cgroups.
-# Matching uses the /proc/PID/exe basename, with /proc/PID/comm as fallback.
+# Matching uses only the /proc/PID/exe basename. /proc/PID/comm is display-only;
+# an unreadable executable identity remains enforceable and is reported explicitly.
 # Active limits reconcile membership every control cycle. A newly excluded
 # process is restored only to its captured origin for the same PID start time;
 # if no safe origin exists, it remains constrained and the cycle reports an error.
