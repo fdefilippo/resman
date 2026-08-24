@@ -426,8 +426,16 @@ func (m *Manager) Cleanup() error {
 		}
 	}
 
+	cleanupErr := errors.Join(cleanupErrors...)
+	if cleanupErr != nil {
+		m.logger.Warn("State manager cleanup incomplete",
+			"error_count", len(cleanupErrors),
+			"error", cleanupErr,
+		)
+		return cleanupErr
+	}
 	m.logger.Info("State manager cleanup completed")
-	return errors.Join(cleanupErrors...)
+	return nil
 }
 
 // UpdateConfig replaces the manager configuration used by subsequent cycles.

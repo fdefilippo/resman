@@ -39,6 +39,7 @@ type processIdentity struct {
 
 type processRestore struct {
 	PID         int
+	StartTime   uint64
 	Destination string
 	Recovery    bool
 }
@@ -691,6 +692,7 @@ func (m *Manager) buildRestorePlanExpected(
 
 		plans = append(plans, processRestore{
 			PID:         pid,
+			StartTime:   identity.StartTime,
 			Destination: destination,
 			Recovery:    recovery || m.isRecoveryPath(destination),
 		})
@@ -728,23 +730,22 @@ func (m *Manager) restoreProcessesExpected(
 	recoveryPath := ""
 	var restoreErrors []error
 	for _, plan := range plans {
-		if expected, ok := expectedStartTimes[plan.PID]; ok {
-			identity, identityErr := m.readProcessIdentity(plan.PID)
-			switch {
-			case os.IsNotExist(identityErr):
-				processedOrigins[plan.PID] = true
-				continue
-			case identityErr != nil:
-				restoreErrors = append(restoreErrors, fmt.Errorf(
-					"failed to revalidate PID %d before restore: %w",
-					plan.PID,
-					identityErr,
-				))
-				continue
-			case identity.StartTime != expected:
-				reused[plan.PID] = true
-				continue
-			}
+		identity, identityErr := m.readProcessIdentity(plan.PID)
+		switch {
+		case os.IsNotExist(identityErr):
+			processedOrigins[plan.PID] = true
+			continue
+		case identityErr != nil:
+			restoreErrors = append(restoreErrors, fmt.Errorf(
+				"failed to revalidate PID %d before restore: %w",
+				plan.PID,
+				identityErr,
+			))
+			continue
+		case identity.StartTime != plan.StartTime:
+			reused[plan.PID] = true
+			processedOrigins[plan.PID] = true
+			continue
 		}
 		if expectedSource != "" {
 			currentPath, currentErr := m.readUnifiedCgroupPath(plan.PID)
@@ -764,13 +765,17 @@ func (m *Manager) restoreProcessesExpected(
 				continue
 			}
 		}
-		err := m.writePIDToCgroup(filepath.Join(plan.Destination, "cgroup.procs"), plan.PID)
-		if os.IsNotExist(err) && !plan.Recovery {
+		destination := plan.Destination
+		err := m.writePIDToCgroup(filepath.Join(destination, "cgroup.procs"), plan.PID)
+		if !plan.Recovery && (os.IsNotExist(err) || errors.Is(err, syscall.EBUSY)) {
 			if recoveryPath == "" {
 				recoveryPath, err = m.ensureRecoveryCgroup(uid, normalQuota)
+			} else {
+				err = nil
 			}
 			if err == nil {
-				err = m.writePIDToCgroup(filepath.Join(recoveryPath, "cgroup.procs"), plan.PID)
+				destination = recoveryPath
+				err = m.writePIDToCgroup(filepath.Join(destination, "cgroup.procs"), plan.PID)
 				plan.Recovery = true
 			}
 		}
@@ -779,7 +784,7 @@ func (m *Manager) restoreProcessesExpected(
 			continue
 		}
 		if err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("failed to restore PID %d to %s: %w", plan.PID, plan.Destination, err))
+			restoreErrors = append(restoreErrors, fmt.Errorf("failed to restore PID %d to %s: %w", plan.PID, destination, err))
 			continue
 		}
 		processedOrigins[plan.PID] = true

@@ -431,6 +431,202 @@ func TestRestoreProcessesRestoresExactCgroup(t *testing.T) {
 	}
 }
 
+func TestRestoreProcessesSelectsSafeDestinationForDelegatedOrigins(t *testing.T) {
+	tests := []struct {
+		name             string
+		originPath       string
+		originIsInternal bool
+		wantRecovery     bool
+	}{
+		{
+			name:         "leaf origin is restored exactly",
+			originPath:   "/user.slice/user-1000.slice/session-14.scope",
+			wantRecovery: false,
+		},
+		{
+			name:             "delegated internal origin uses recovery leaf",
+			originPath:       "/",
+			originIsInternal: true,
+			wantRecovery:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, root := newOriginTestManager(t)
+			const pid = 902
+			const startTime = 13001
+			limitedPath := "/resman/limited/user_1000"
+			writeFakeProcess(t, manager, pid, 1, pid, startTime, 1000, limitedPath)
+			createFakeCgroup(t, root, limitedPath)
+			originFilesystemPath := createFakeCgroup(t, root, tt.originPath)
+			manager.processOrigins[pid] = processOrigin{
+				PID:        pid,
+				UID:        1000,
+				PPID:       1,
+				SessionID:  pid,
+				StartTime:  startTime,
+				CgroupPath: tt.originPath,
+			}
+
+			var destinations []string
+			manager.writePID = func(path string, movedPID int) error {
+				destinations = append(destinations, path)
+				if movedPID != pid {
+					return fmt.Errorf("unexpected PID %d", movedPID)
+				}
+				if tt.originIsInternal && path == filepath.Join(originFilesystemPath, "cgroup.procs") {
+					return &os.PathError{Op: "write", Path: path, Err: syscall.EBUSY}
+				}
+
+				destination := filepath.Dir(path)
+				relative, err := filepath.Rel(root, destination)
+				if err != nil {
+					return err
+				}
+				writeFakeProcess(t, manager, pid, 1, pid, startTime, 1000, "/"+relative)
+				return nil
+			}
+
+			usedRecovery, err := manager.restoreProcesses(1000, []int{pid}, "max 100000")
+			if err != nil {
+				t.Fatalf("restoreProcesses() error: %v", err)
+			}
+			if usedRecovery != tt.wantRecovery {
+				t.Fatalf("usedRecovery = %t, want %t", usedRecovery, tt.wantRecovery)
+			}
+
+			wantDestination := originFilesystemPath
+			wantAttempts := 1
+			if tt.wantRecovery {
+				wantDestination = manager.getRecoveryCgroupPath(1000)
+				wantAttempts = 2
+			}
+			if len(destinations) != wantAttempts {
+				t.Fatalf("restore attempts = %v, want %d", destinations, wantAttempts)
+			}
+			currentPath, err := manager.readUnifiedCgroupPath(pid)
+			if err != nil {
+				t.Fatalf("readUnifiedCgroupPath() error: %v", err)
+			}
+			if got := manager.cgroupPathOnFilesystem(currentPath); got != wantDestination {
+				t.Fatalf("final cgroup = %s, want %s", got, wantDestination)
+			}
+			if identity, err := manager.readProcessIdentity(pid); err != nil || identity.StartTime != startTime {
+				t.Fatalf("final process identity = %+v, err=%v, want start time %d", identity, err, startTime)
+			}
+			if _, ok := manager.snapshotProcessOrigins()[pid]; ok {
+				t.Fatal("origin record remained after successful restore")
+			}
+		})
+	}
+}
+
+func TestRestoreProcessesRevalidatesEveryPlannedPIDStartTime(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	originalPath := "/user.slice/user-1000.slice/session-15.scope"
+	originalFilesystemPath := createFakeCgroup(t, root, originalPath)
+	const firstPID = 903
+	const reusedPID = 904
+	for _, pid := range []int{firstPID, reusedPID} {
+		writeFakeProcess(t, manager, pid, 1, pid, uint64(14000+pid), 1000, "/resman/limited/user_1000")
+		manager.processOrigins[pid] = processOrigin{
+			PID:        pid,
+			UID:        1000,
+			PPID:       1,
+			SessionID:  pid,
+			StartTime:  uint64(14000 + pid),
+			CgroupPath: originalPath,
+		}
+	}
+
+	var moved []int
+	manager.writePID = func(path string, pid int) error {
+		if path != filepath.Join(originalFilesystemPath, "cgroup.procs") {
+			return fmt.Errorf("unexpected restore destination %s", path)
+		}
+		moved = append(moved, pid)
+		if pid == firstPID {
+			writeFakeProcess(t, manager, reusedPID, 1, reusedPID, 99999, 1000, "/resman/limited/user_1000")
+		}
+		return nil
+	}
+
+	restored, usedRecovery, reused, err := manager.restoreProcessesExpected(
+		1000,
+		[]int{firstPID, reusedPID},
+		"max 100000",
+		nil,
+		"",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("restoreProcessesExpected() error: %v", err)
+	}
+	if restored != 1 || usedRecovery {
+		t.Fatalf("restored=%d usedRecovery=%t, want one exact restore", restored, usedRecovery)
+	}
+	if len(moved) != 1 || moved[0] != firstPID {
+		t.Fatalf("moved PIDs = %v, want only %d", moved, firstPID)
+	}
+	if !reused[reusedPID] {
+		t.Fatalf("PID %d reuse was not reported", reusedPID)
+	}
+	if _, ok := manager.snapshotProcessOrigins()[reusedPID]; ok {
+		t.Fatal("stale origin remained after PID reuse was detected")
+	}
+}
+
+func TestRestoreProcessesReusesRecoveryLeafForMultipleInternalOrigins(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	const uid = 1000
+	pids := []int{905, 906}
+	for _, pid := range pids {
+		startTime := uint64(15000 + pid)
+		writeFakeProcess(t, manager, pid, 1, pid, startTime, uid, "/resman/limited/user_1000")
+		manager.processOrigins[pid] = processOrigin{
+			PID:        pid,
+			UID:        uid,
+			PPID:       1,
+			SessionID:  pid,
+			StartTime:  startTime,
+			CgroupPath: "/",
+		}
+	}
+
+	rootProcs := filepath.Join(root, "cgroup.procs")
+	recoveryProcs := filepath.Join(manager.getRecoveryCgroupPath(uid), "cgroup.procs")
+	writes := make(map[string][]int)
+	manager.writePID = func(path string, pid int) error {
+		writes[path] = append(writes[path], pid)
+		if path == rootProcs {
+			return &os.PathError{Op: "write", Path: path, Err: syscall.EBUSY}
+		}
+		if path != recoveryProcs {
+			return fmt.Errorf("unexpected restore destination %s", path)
+		}
+		return nil
+	}
+
+	restored, usedRecovery, _, err := manager.restoreProcessesExpected(
+		uid,
+		pids,
+		"max 100000",
+		nil,
+		"",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("restoreProcessesExpected() error: %v", err)
+	}
+	if restored != len(pids) || !usedRecovery {
+		t.Fatalf("restored=%d usedRecovery=%t, want %d recovery restores", restored, usedRecovery, len(pids))
+	}
+	if len(writes[rootProcs]) != len(pids) || len(writes[recoveryProcs]) != len(pids) {
+		t.Fatalf("restore writes = %#v, want every PID attempted at origin then recovery", writes)
+	}
+}
+
 func TestRestoreProcessesFallsBackWhenOriginDisappearsDuringMove(t *testing.T) {
 	manager, root := newOriginTestManager(t)
 	originalPath := "/user.slice/user-1000.slice/session-12.scope"

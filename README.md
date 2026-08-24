@@ -171,11 +171,15 @@ and requires temporary free disk space proportional to the database size.
 
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with its PID start time. On release, the
-process is restored to that exact cgroup. Processes whose original systemd
-scope no longer exists, including descendants born while limits were active,
-are moved to the dedicated `resman/recovery/user_UID` cgroup instead of the
-cgroup v2 root. A finite `CPU_QUOTA_NORMAL` is applied only to these resman-owned
-recovery cgroups; resman never writes it into cgroups managed by systemd.
+process is restored to that exact cgroup when it can legally accept processes.
+An original cgroup that distributes controllers to children is an internal node
+under cgroup v2 and cannot accept the process; it therefore uses the same
+dedicated `resman/recovery/user_UID` leaf as a process whose original systemd
+scope disappeared. The PID start time is revalidated immediately before every
+restore write. A finite `CPU_QUOTA_NORMAL` is applied only to these resman-owned
+recovery cgroups; resman never writes it into cgroups managed by systemd. If any
+process cannot be restored safely during shutdown, the daemon exits non-zero
+instead of reporting a successful service stop.
 
 `PSI_EVENT_DRIVEN` is a pressure trigger, not another CPU usage threshold. PSI
 events mean that runnable tasks or IO operations spent time waiting for resources.

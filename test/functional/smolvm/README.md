@@ -20,7 +20,10 @@ make test-functional-smolvm-process-membership
 
 The CPU capability boundary builds a nested delegated cgroup root that exposes
 `cpu` but not `cpuset`, then proves that resman starts, emits the optional
-degradation diagnostic, moves the workload, and applies a finite `cpu.max`:
+degradation diagnostic, moves the workload, and applies a finite `cpu.max`. It
+stops resman while the limited workload is still alive, verifies that the PID
+start time did not change, and requires the process to finish in a valid
+recovery leaf with a successful service result:
 
 ```bash
 make test-functional-smolvm-cpu-without-cpuset

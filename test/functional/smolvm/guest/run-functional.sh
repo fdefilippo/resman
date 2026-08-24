@@ -109,6 +109,16 @@ fail() {
     exit 1
 }
 
+process_cgroup_path() {
+	local pid=$1
+	awk -F '::' '$1 == "0" { print $2 }' "/proc/$pid/cgroup"
+}
+
+process_start_time() {
+	local pid=$1
+	awk '{ print $22 }' "/proc/$pid/stat"
+}
+
 [[ $(ps -p 1 -o comm= | tr -d ' ') == systemd ]] || blocked "systemd is not PID 1"
 [[ $(findmnt -n -o FSTYPE /sys/fs/cgroup) == cgroup2 ]] || blocked "cgroup v2 is not mounted"
 [[ -r /sys/fs/cgroup/cgroup.controllers ]] || blocked "cgroup.controllers is not readable"
@@ -395,18 +405,51 @@ if [[ $scenario == cpu-without-cpuset ]]; then
 		|| fail "CPU quota was not enforced in the delegated hierarchy without cpuset"
 	grep -Fq 'Optional cpuset controller unavailable; CPU limiting remains enabled' "$state_dir/resman.log" \
 		|| fail "the optional cpuset degradation diagnostic was not emitted"
+	cpu_stress_pid=$(pgrep -u resman-cpu -x stress | tail -n 1)
+	[[ -n $cpu_stress_pid ]] || fail "the limited CPU process exited before shutdown restoration"
+	start_time_before_stop=$(process_start_time "$cpu_stress_pid")
+	[[ -n $start_time_before_stop ]] || fail "cannot read the limited process start time before shutdown"
+	shared_cpu_max_before_stop=$(< "$base_cgroup/limited/cpu.max")
+
+	if ! systemctl stop "$service"; then
+		fail "resman service stop failed while restoring a process from a delegated root"
+	fi
+	[[ -r /proc/$cpu_stress_pid/stat ]] || fail "the limited process exited during shutdown restoration"
+	start_time_after_stop=$(process_start_time "$cpu_stress_pid")
+	[[ $start_time_after_stop == "$start_time_before_stop" ]] \
+		|| fail "the PID was reused during shutdown restoration"
+	recovery_cgroup=$base_cgroup/recovery/user_$cpu_uid
+	[[ -r $recovery_cgroup/cgroup.procs ]] \
+		|| fail "the delegated-root process was not given a recovery leaf"
+	grep -qx "$cpu_stress_pid" "$recovery_cgroup/cgroup.procs" \
+		|| fail "the delegated-root process was not restored into the recovery leaf"
+	if grep -qx "$cpu_stress_pid" "$limited_cgroup/cgroup.procs" 2>/dev/null; then
+		fail "the process remained in the limited cgroup after shutdown"
+	fi
+	service_result=$(systemctl show "$service" --property=Result --value)
+	service_exit_status=$(systemctl show "$service" --property=ExecMainStatus --value)
+	[[ $service_result == success && $service_exit_status == 0 ]] \
+		|| fail "incomplete shutdown was reported as service result=$service_result exit=$service_exit_status"
+	final_cgroup=$(process_cgroup_path "$cpu_stress_pid")
 	{
 		printf 'delegated_root=%s\n' "$functional_cgroup_root"
 		printf 'delegated_controllers=%s\n' "$cpu_only_controllers"
-		printf 'shared_cpu_max=%s\n' "$(< "$base_cgroup/limited/cpu.max")"
+		printf 'shared_cpu_max_before_stop=%s\n' "$shared_cpu_max_before_stop"
 		printf 'limited_user_cgroup=%s\n' "$limited_cgroup"
-		printf 'limited_user_pids=%s\n' "$(tr '\n' ',' < "$limited_cgroup/cgroup.procs")"
+		printf 'restored_pid=%s\n' "$cpu_stress_pid"
+		printf 'start_time_before_stop=%s\n' "$start_time_before_stop"
+		printf 'start_time_after_stop=%s\n' "$start_time_after_stop"
+		printf 'recovery_cgroup=%s\n' "$recovery_cgroup"
+		printf 'final_cgroup=%s\n' "$final_cgroup"
+		printf 'service_result=%s\n' "$service_result"
+		printf 'service_exit_status=%s\n' "$service_exit_status"
 	} >"$artifact_dir/cpu-without-cpuset.txt"
+	pkill -TERM -u resman-cpu -x stress >/dev/null 2>&1 || true
 	wait "$cpu_workload_pid" 2>/dev/null || true
 	cpu_workload_pid=
-	systemctl status "$service" --no-pager >"$artifact_dir/resman-status.txt"
+	systemctl status "$service" --no-pager >"$artifact_dir/resman-status.txt" 2>&1 || true
 	result=PASS
-	detail="CPU quota was enforced through cpu.max while cpuset was unavailable"
+	detail="CPU quota was enforced without cpuset and the live process was restored safely at shutdown"
 	echo "PASS: $detail"
 	exit 0
 fi
@@ -502,11 +545,6 @@ cgroup_has_pid() {
 	local cgroup_path=$1
 	local pid=$2
 	[[ -r $cgroup_path/cgroup.procs ]] && grep -qx "$pid" "$cgroup_path/cgroup.procs"
-}
-
-process_cgroup_path() {
-	local pid=$1
-	awk -F '::' '$1 == "0" { print $2 }' "/proc/$pid/cgroup"
 }
 
 /opt/resman-functional/workload.sh cpu 90s &

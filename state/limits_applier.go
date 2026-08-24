@@ -1259,13 +1259,22 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		m.ioRemediation.ForgetUsers(released)
 	}
 
+	if firstError != nil {
+		m.logger.Warn("Resource limit deactivation incomplete",
+			"users_freed", deactivatedCount,
+			"attempted", userCount,
+			"shared_cgroup_removed", sharedRemoved,
+			"error", firstError,
+		)
+		return firstError
+	}
+
 	m.logger.Info("Resource limits deactivated",
 		"users_freed", deactivatedCount,
 		"attempted", userCount,
 		"shared_cgroup_removed", sharedRemoved,
 	)
-
-	return firstError
+	return nil
 }
 
 func (m *Manager) ForceActivateLimits() error {

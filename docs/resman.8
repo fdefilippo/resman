@@ -277,14 +277,21 @@ the original limits are restored earlier when pressure returns to normal.
 .SH PROCESS CGROUP RESTORATION
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with the process start time. At release,
-the process is returned to that exact cgroup so systemd session and service
-membership are preserved.
+the process is returned to that exact cgroup when it can legally accept
+processes, so systemd session and service membership are preserved.
 .PP
 Processes whose original cgroup no longer exists, and descendants for which no
 unambiguous original destination can be resolved, are moved to
 .I CGROUP_BASE/recovery/user_UID
 instead of the cgroup v2 root. This recovery hierarchy is owned by resman and is
 preserved while it contains live processes.
+.PP
+An existing origin that distributes controllers to child cgroups is an internal
+cgroup v2 node and cannot accept processes. Resman treats it like an unavailable
+origin and restores the process to the recovery leaf. The PID start time is
+revalidated immediately before each restore write. If any process cannot be
+restored safely during shutdown, the daemon exits non-zero and the service stop
+is not reported as successful.
 .PP
 .B CPU_QUOTA_NORMAL
 is never written into cgroups managed by systemd. In shared mode, a finite

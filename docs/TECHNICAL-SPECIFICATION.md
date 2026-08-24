@@ -264,17 +264,21 @@ type Config struct {
     │   ├── user_1001/
     │   └── ...
     ├── user_1002/            # RAM/IO-only; cpu.max remains unlimited
-    └── recovery/             # Processes whose original cgroup disappeared
+    └── recovery/             # Processes whose original cgroup cannot accept them
         ├── user_1000/
         └── ...
 ```
 
 Before migration, resman atomically persists PID, process start time, parent,
-session ID, and original cgroup. Release restores the exact original cgroup.
-PID reuse is detected through the start time. Descendants inherit an
-unambiguous parent or session origin; otherwise they enter the resman-owned
-recovery hierarchy. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is
-never written into systemd-managed cgroups.
+session ID, and original cgroup. Release restores the exact original cgroup
+when it can legally accept processes. If that cgroup disappeared or is an
+internal cgroup v2 node with controllers delegated to children, the process
+enters the resman-owned recovery hierarchy. PID reuse is detected by
+revalidating the start time immediately before every restore write. Descendants
+inherit an unambiguous parent or session origin; otherwise they also use
+recovery. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is never
+written into systemd-managed cgroups. An incomplete shutdown restoration is
+returned from the application and produces a non-zero daemon exit status.
 
 At startup, the manager enables the controllers it may use and creates a
 temporary child below the resman base cgroup. Capability is determined from the

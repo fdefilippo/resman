@@ -20,6 +20,10 @@ func (a *App) Run() error {
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {
+	if a.ctx.Err() != nil {
+		return a.shutdown()
+	}
+
 	cfg := a.currentConfig()
 	pollingInterval := a.controlCycleInterval()
 	metricsRefreshInterval := a.metricsRefreshInterval()
@@ -68,8 +72,7 @@ func (a *App) runControlLoop() error {
 	for {
 		select {
 		case <-a.ctx.Done():
-			a.shutdown()
-			return nil
+			return a.shutdown()
 		case <-ticker.C:
 			ticker = a.handleTickerCycle(ticker, &pollingInterval, &cycleComplete)
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
