@@ -58,7 +58,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-preflight \
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-preflight \
 	test-functional-smolvm-unit lint lint-install install uninstall rpm deb docker help
 
 all: clean test lint build
@@ -115,6 +115,10 @@ test-functional-smolvm:
 # Run the sustained-active process-membership scenario independently.
 test-functional-smolvm-process-membership:
 	SMOLVM_SCENARIO=process-membership test/functional/smolvm/run.sh run
+
+# Verify CPU quota enforcement in a delegated hierarchy without cpuset.
+test-functional-smolvm-cpu-without-cpuset:
+	SMOLVM_SCENARIO=cpu-without-cpuset test/functional/smolvm/run.sh run
 
 # Verify fail-closed startup when io is named but io.max is unavailable.
 test-functional-smolvm-missing-io-startup:
@@ -398,6 +402,7 @@ help:
 	@echo "    test-cover   - Test con report coverage"
 	@echo "    test-functional-smolvm - Run isolated functional tests in SmolVM"
 	@echo "    test-functional-smolvm-process-membership - Run active process membership in SmolVM"
+	@echo "    test-functional-smolvm-cpu-without-cpuset - Run CPU enforcement without cpuset in SmolVM"
 	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"

@@ -740,15 +740,12 @@ successfully applied state for each resource.
 
 ### 6.1 Cgroup v2 Requirements
 
-**Controllers Required:**
-- `cpu` - CPU accounting
-- `cpuset` - CPU affinity
-
-**Enable Controllers:**
-```bash
-echo "+cpu" >> /sys/fs/cgroup/cgroup.subtree_control
-echo "+cpuset" >> /sys/fs/cgroup/cgroup.subtree_control
-```
+ResMan discovers and enables controller capabilities at startup. CPU quota and
+proportional-weight enforcement require `cpu.max`; `cpuset` is optional and its
+absence does not disable CPU limiting. Enabling RAM or I/O limiting additionally
+requires `memory.max` or `io.max`, respectively. The packaged systemd unit does
+not write `cgroup.subtree_control` before startup, so the daemon remains the
+single source of mandatory/optional capability diagnostics.
 
 ### 6.2 Cgroup Files Used
 

@@ -14,6 +14,8 @@ service=resman-functional@${run_id}.service
 result_file=$artifact_dir/result
 mcp_pid=
 mcp_workload_pid=
+cpu_workload_pid=
+functional_cgroup_root=/sys/fs/cgroup
 
 case "$run_id" in
     *[!a-z0-9-]*|'')
@@ -22,7 +24,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership|missing-io-startup|mcp-filter-reload) ;;
+	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -49,9 +51,14 @@ finish() {
 		wait "$mcp_workload_pid" 2>/dev/null
 		mcp_workload_pid=
 	fi
+	if [[ -n $cpu_workload_pid ]]; then
+		kill -TERM "$cpu_workload_pid" 2>/dev/null
+		wait "$cpu_workload_pid" 2>/dev/null
+		cpu_workload_pid=
+	fi
     cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
-    find "/sys/fs/cgroup/resman-functional-$run_id" -maxdepth 3 -type d -print \
+    find "$functional_cgroup_root/resman-functional-$run_id" -maxdepth 3 -type d -print \
         >"$artifact_dir/cgroup-tree.txt" 2>&1
     curl --fail --silent --show-error --max-time 2 \
         http://127.0.0.1:19100/metrics >"$artifact_dir/prometheus-metrics-final.txt" 2>&1
@@ -129,8 +136,22 @@ if [[ $scenario == missing-io-startup ]]; then
 	[[ $io_max_available == false ]] || blocked "io.max is available; the guest cannot exercise missing-interface startup rejection"
 fi
 
+if [[ $scenario == cpu-without-cpuset ]]; then
+	cpu_only_parent=/sys/fs/cgroup/resman-functional-cpu-parent-$run_id
+	functional_cgroup_root=$cpu_only_parent/root
+	mkdir "$cpu_only_parent" || blocked "cannot create the CPU-only delegation parent"
+	printf '+cpu\n' >"$cpu_only_parent/cgroup.subtree_control" \
+		|| blocked "cannot delegate the mandatory cpu controller"
+	mkdir "$functional_cgroup_root" || blocked "cannot create the CPU-only delegated root"
+	cpu_only_controllers=$(< "$functional_cgroup_root/cgroup.controllers")
+	[[ " $cpu_only_controllers " == *" cpu "* ]] \
+		|| blocked "the delegated root does not expose the mandatory cpu controller"
+	[[ " $cpu_only_controllers " != *" cpuset "* ]] \
+		|| blocked "the delegated root still exposes cpuset and cannot reproduce the scenario"
+fi
+
 sed "s/@RUN_ID@/$run_id/g" /opt/resman-functional/fixtures/resman.conf >"$config_file"
-if [[ $scenario == process-membership ]]; then
+if [[ $scenario == process-membership || $scenario == cpu-without-cpuset ]]; then
 	sed -i \
 		-e 's/^CPU_THRESHOLD=.*/CPU_THRESHOLD=10/' \
 		-e 's/^USER_INCLUDE_LIST=.*/USER_INCLUDE_LIST=^resman-cpu$/' \
@@ -138,6 +159,9 @@ if [[ $scenario == process-membership ]]; then
 		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
 		"$config_file"
+fi
+if [[ $scenario == cpu-without-cpuset ]]; then
+	sed -i "s|^CGROUP_ROOT=.*|CGROUP_ROOT=$functional_cgroup_root|" "$config_file"
 fi
 if [[ $scenario == mcp-filter-reload ]]; then
 	sed -i \
@@ -159,6 +183,9 @@ chmod 0600 "$runtime_dir/environment"
     printf 'cgroup_mount=%s\n' "$(findmnt -n -o SOURCE,FSTYPE,OPTIONS /sys/fs/cgroup)"
     printf 'controllers_available=%s\n' "$controllers"
 	printf 'controllers_enabled=%s\n' "$(< /sys/fs/cgroup/cgroup.subtree_control)"
+	if [[ $scenario == cpu-without-cpuset ]]; then
+		printf 'delegated_controllers=%s\n' "$cpu_only_controllers"
+	fi
 	printf 'cpu_max_available=%s\n' "$cpu_max_available"
 	printf 'memory_max_available=%s\n' "$memory_max_available"
 	printf 'io_max_available=%s\n' "$io_max_available"
@@ -175,7 +202,7 @@ chmod 0600 "$runtime_dir/environment"
     printf 'stress_version=%s\n' "$(stress --version | head -n 1)"
     printf 'config_path=%s\n' "$config_file"
     printf 'database_path=%s\n' "$state_dir/metrics.db"
-    printf 'cgroup_path=%s\n' "/sys/fs/cgroup/resman-functional-$run_id"
+    printf 'cgroup_path=%s\n' "$functional_cgroup_root/resman-functional-$run_id"
     printf 'prometheus_endpoint=%s\n' 'http://127.0.0.1:19100/metrics'
 	if [[ $scenario == mcp-filter-reload ]]; then
 		printf 'mcp_endpoint=%s\n' 'stdio'
@@ -319,8 +346,44 @@ grep -q '^resman_' "$artifact_dir/prometheus-metrics.txt" \
 [[ -f "$state_dir/metrics.db" ]] || fail "SQLite metrics database was not created"
 sqlite3 "$state_dir/metrics.db" '.schema' >"$artifact_dir/database-schema.sql" \
     || fail "SQLite metrics database is unreadable"
-base_cgroup=/sys/fs/cgroup/resman-functional-$run_id
+base_cgroup=$functional_cgroup_root/resman-functional-$run_id
 [[ -d $base_cgroup ]] || fail "isolated cgroup root was not created"
+
+if [[ $scenario == cpu-without-cpuset ]]; then
+	/opt/resman-functional/workload.sh cpu 25s &
+	cpu_workload_pid=$!
+	cpu_uid=$(id -u resman-cpu)
+	limited_cgroup=$base_cgroup/limited/user_$cpu_uid
+	cpu_quota_ready=false
+	for _ in $(seq 1 30); do
+		if [[ -r $base_cgroup/limited/cpu.max \
+			&& -r $limited_cgroup/cgroup.procs \
+			&& $(< "$base_cgroup/limited/cpu.max") != "max 100000" ]] \
+			&& grep -q . "$limited_cgroup/cgroup.procs"; then
+			cpu_quota_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $cpu_quota_ready == true ]] \
+		|| fail "CPU quota was not enforced in the delegated hierarchy without cpuset"
+	grep -Fq 'Optional cpuset controller unavailable; CPU limiting remains enabled' "$state_dir/resman.log" \
+		|| fail "the optional cpuset degradation diagnostic was not emitted"
+	{
+		printf 'delegated_root=%s\n' "$functional_cgroup_root"
+		printf 'delegated_controllers=%s\n' "$cpu_only_controllers"
+		printf 'shared_cpu_max=%s\n' "$(< "$base_cgroup/limited/cpu.max")"
+		printf 'limited_user_cgroup=%s\n' "$limited_cgroup"
+		printf 'limited_user_pids=%s\n' "$(tr '\n' ',' < "$limited_cgroup/cgroup.procs")"
+	} >"$artifact_dir/cpu-without-cpuset.txt"
+	wait "$cpu_workload_pid" 2>/dev/null || true
+	cpu_workload_pid=
+	systemctl status "$service" --no-pager >"$artifact_dir/resman-status.txt"
+	result=PASS
+	detail="CPU quota was enforced through cpu.max while cpuset was unavailable"
+	echo "PASS: $detail"
+	exit 0
+fi
 
 # Exercise the resource-only enforcement boundary. CPU eligibility is empty in
 # the fixture, while the memory and I/O users are independently eligible.

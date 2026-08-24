@@ -14,19 +14,19 @@ User=root
 RuntimeDirectory=resman
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=restart
-ExecStartPre=/bin/sh -ec 'echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control; echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control'
-ExecStartPre=-/bin/sh -c 'echo "+io" > /sys/fs/cgroup/cgroup.subtree_control'
-ExecStartPre=-/bin/sh -c 'echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control'
+# ResMan discovers and enables the controllers required by the active features.
+# Keeping controller setup in the daemon preserves its mandatory/optional
+# diagnostics and lets CPU quota enforcement run without cpuset.
 ExecStart=/usr/bin/resman --config /etc/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-# Priorità CPU (da -20 a 19, dove -20 è la più alta)
+# CPU priority (-20 is the highest, 19 is the lowest)
 Nice=-10
 
-# Limiti di sicurezza
+# Resource limits
 LimitNOFILE=65536
 LimitNPROC=65536
 
@@ -45,11 +45,10 @@ LimitNPROC=65536
 #LockPersonality=true
 
 # Cgroups
-#Delegate=cpu cpuset
 #CPUAccounting=true
 #MemoryAccounting=true
 
-# Permessi di directory
+# Writable directories
 ReadWritePaths=/sys/fs/cgroup
 ReadWritePaths=/var/log
 ReadWritePaths=/var/run

@@ -18,6 +18,14 @@ only the CPU interface:
 make test-functional-smolvm-process-membership
 ```
 
+The CPU capability boundary builds a nested delegated cgroup root that exposes
+`cpu` but not `cpuset`, then proves that resman starts, emits the optional
+degradation diagnostic, moves the workload, and applies a finite `cpu.max`:
+
+```bash
+make test-functional-smolvm-cpu-without-cpuset
+```
+
 The SmolVM 1.9.0 kernel lists the I/O controller but does not expose `io.max`.
 Use that environment to verify that an enabled I/O feature fails closed during
 startup and names the feature, controller, and interface:
@@ -159,6 +167,8 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
 - standalone RAM/IO cgroup paths and their CPU, memory, and I/O controller values;
 - sustained-active process-membership origin and reconciliation results when that
   scenario is selected;
+- the CPU-only delegated hierarchy, optional cpuset diagnostic, applied quota,
+  and limited process membership for the `cpu-without-cpuset` scenario;
 - MCP stdio request/response evidence for typed observation/runtime status,
   acknowledged filter persistence, and runtime application when that scenario
   is selected;
