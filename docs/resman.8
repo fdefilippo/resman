@@ -299,6 +299,24 @@ normal quota applies only to resman recovery cgroups. The default
 .B "max 100000"
 leaves recovered processes unlimited.
 .PP
+Live policy reconciliation remains fail-closed. If an excluded process has no
+same-start-time recorded or inherited origin, it remains constrained, the cycle
+reports an error, and the later history, I/O remediation, workload detection,
+and PSI-reversion stages still run. Prometheus reports this persistent condition
+through
+.B resman_errors_total
+with
+.B component="process_membership"
+and
+.BR error_type="origin_unavailable" ;
+other reconciliation failures use
+.BR error_type="reconciliation_failure" .
+.PP
+To clear an unavailable-origin condition, stop or restart the affected process
+under its owning service or session. If that cannot be done while resman is
+running, stop resman cleanly so shutdown can place the process in its recovery
+leaf, then restart the owning service or session before starting resman again.
+.PP
 .SH PSI EVENT-DRIVEN MODE
 When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
 trigger control cycles when system pressure exceeds configured thresholds. The

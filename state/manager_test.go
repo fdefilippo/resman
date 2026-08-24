@@ -430,6 +430,9 @@ func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RunControlCycleWithTrigger() error = %v, wantErr %t", err, tt.wantErr)
 			}
+			if history := manager.GetControlHistory(1); len(history) != 1 {
+				t.Fatalf("control-cycle history entries = %d, want 1 even after enforcement failure", len(history))
+			}
 
 			got := exporter.snapshot()
 			if got.controlCycleDurations != 1 {
@@ -443,6 +446,65 @@ func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got.errors, tt.wantErrors) {
 				t.Errorf("recorded errors = %+v, want %+v", got.errors, tt.wantErrors)
+			}
+		})
+	}
+}
+
+func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *testing.T) {
+	stageNames := make([]string, 0, len(defaultControlCyclePipeline))
+	for _, stage := range defaultControlCyclePipeline {
+		stageNames = append(stageNames, stage.name)
+	}
+	tests := []struct {
+		name               string
+		failingStage       string
+		wantVisited        []string
+		wantDeferredErrors int
+	}{
+		{
+			name:               "execute failure runs every protective stage",
+			failingStage:       "execute_decision",
+			wantVisited:        stageNames,
+			wantDeferredErrors: 1,
+		},
+		{
+			name:         "collection failure remains fatal",
+			failingStage: "collect_metrics",
+			wantVisited:  []string{"check_blackout", "collect_metrics"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			permanentErr := errors.New("permanent stage failure")
+			stages := make([]controlCycleStage, len(defaultControlCyclePipeline))
+			copy(stages, defaultControlCyclePipeline)
+			visited := make([]string, 0, len(stages))
+			for i := range stages {
+				stageName := stages[i].name
+				stages[i].run = func(*Manager, *controlCycleContext) error {
+					visited = append(visited, stageName)
+					if stageName == tt.failingStage {
+						return permanentErr
+					}
+					return nil
+				}
+			}
+			run := &controlCycleContext{}
+
+			err := runControlCyclePipeline(&Manager{}, run, stages)
+			if !errors.Is(err, permanentErr) {
+				t.Fatalf("runControlCyclePipeline() error = %v, want permanent failure", err)
+			}
+			if strings.Count(err.Error(), permanentErr.Error()) != 1 {
+				t.Fatalf("cycle error reported %d times, want once: %v", strings.Count(err.Error(), permanentErr.Error()), err)
+			}
+			if !reflect.DeepEqual(visited, tt.wantVisited) {
+				t.Fatalf("visited stages = %v, want %v", visited, tt.wantVisited)
+			}
+			if len(run.deferredErrors) != tt.wantDeferredErrors {
+				t.Fatalf("deferred errors = %d, want %d", len(run.deferredErrors), tt.wantDeferredErrors)
 			}
 		})
 	}
@@ -1281,43 +1343,65 @@ func TestReconcileActiveProcessMembershipVisitsEachObservedTargetOnce(t *testing
 	}
 }
 
-func TestMaintainDecisionReportsMembershipFailureWithoutClearingActiveState(t *testing.T) {
-	cgroups := &membershipCgroupManager{err: errors.New("cgroup.procs write rejected")}
-	exporter := &mockPrometheusExporter{}
-	cfg := config.DefaultConfig()
-	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
-	if err != nil {
-		t.Fatalf("NewManager() error: %v", err)
-	}
-	manager.sharedCgroupPath = "/shared"
-	manager.activeUsers[1000] = true
-	manager.limitsActive = true
-	manager.userLimitedAt[1000] = time.Now()
-	snapshot := &SystemMetrics{
-		TotalCores:       4,
-		UserCPUUsage:     map[int]float64{1000: 50},
-		CPUEligibleUsers: []int{1000},
-		UserMetrics: map[int]*metrics.UserMetrics{
-			1000: {
-				UID: 1000, Username: "limited-user", EligibleForCPU: true,
-				EnforceableUsage: metrics.ProcessSetMetrics{CPUUsage: 50, CPUUsageEMA: 50},
-			},
+func TestMaintainDecisionClassifiesMembershipFailureWithoutClearingActiveState(t *testing.T) {
+	tests := []struct {
+		name          string
+		membershipErr error
+		wantErrorType string
+	}{
+		{
+			name:          "transient reconciliation failure",
+			membershipErr: errors.New("cgroup.procs write rejected"),
+			wantErrorType: processMembershipReconcileFailure,
+		},
+		{
+			name:          "origin unavailable until operator action",
+			membershipErr: &cgroup.ProcessOriginUnavailableError{PID: 9001, UID: 1000},
+			wantErrorType: processMembershipOriginUnavailable,
 		},
 	}
 
-	err = manager.executeDecision("MAINTAIN_CURRENT_STATE", snapshot)
-	if err == nil || !strings.Contains(err.Error(), "reconcile active process membership") {
-		t.Fatalf("maintain decision error = %v, want membership failure", err)
-	}
-	if !manager.activeUsers[1000] || !manager.limitsActive {
-		t.Fatalf("active state changed after reconciliation failure: users=%v active=%t", manager.activeUsers, manager.limitsActive)
-	}
-	recorded := exporter.recordedErrors()
-	if len(recorded) != 1 || recorded[0] != (prometheusErrorRecord{
-		component: processMembershipErrorComponent,
-		errorType: processMembershipReconcileFailure,
-	}) {
-		t.Fatalf("recorded errors = %+v, want one bounded process-membership failure", recorded)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cgroups := &membershipCgroupManager{err: tt.membershipErr}
+			exporter := &mockPrometheusExporter{}
+			cfg := config.DefaultConfig()
+			manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.sharedCgroupPath = "/shared"
+			manager.activeUsers[1000] = true
+			manager.limitsActive = true
+			manager.userLimitedAt[1000] = time.Now()
+			snapshot := &SystemMetrics{
+				TotalCores:       4,
+				UserCPUUsage:     map[int]float64{1000: 50},
+				CPUEligibleUsers: []int{1000},
+				UserMetrics: map[int]*metrics.UserMetrics{
+					1000: {
+						UID: 1000, Username: "limited-user", EligibleForCPU: true,
+						EnforceableUsage: metrics.ProcessSetMetrics{CPUUsage: 50, CPUUsageEMA: 50},
+					},
+				},
+			}
+
+			err = manager.executeDecision("MAINTAIN_CURRENT_STATE", snapshot)
+			if !errors.Is(err, tt.membershipErr) || !strings.Contains(err.Error(), "reconcile active process membership") {
+				t.Fatalf("maintain decision error = %v, want membership failure", err)
+			}
+			if !manager.activeUsers[1000] || !manager.limitsActive {
+				t.Fatalf("active state changed after reconciliation failure: users=%v active=%t", manager.activeUsers, manager.limitsActive)
+			}
+			recorded := exporter.recordedErrors()
+			want := prometheusErrorRecord{
+				component: processMembershipErrorComponent,
+				errorType: tt.wantErrorType,
+			}
+			if len(recorded) != 1 || recorded[0] != want {
+				t.Fatalf("recorded errors = %+v, want one %+v signal", recorded, want)
+			}
+		})
 	}
 }
 

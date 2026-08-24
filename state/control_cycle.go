@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -30,22 +31,27 @@ type controlCycleContext struct {
 	duration           time.Duration
 	activeLimitedUsers int
 	stopWithoutError   bool
+	deferredErrors     []error
 }
 
-type controlCycleStage func(*Manager, *controlCycleContext) error
+type controlCycleStage struct {
+	name               string
+	run                func(*Manager, *controlCycleContext) error
+	continueAfterError bool
+}
 
 var defaultControlCyclePipeline = []controlCycleStage{
-	(*Manager).stageCheckBlackout,
-	(*Manager).stageCollectMetrics,
-	(*Manager).stageUpdatePrometheus,
-	(*Manager).stageWriteDatabase,
-	(*Manager).stageMakeDecision,
-	(*Manager).stageExecuteDecision,
-	(*Manager).stageRecordHistory,
-	(*Manager).stageIORemediation,
-	(*Manager).stageWorkloadPatternDetection,
-	(*Manager).stageRevertPSIBoosts,
-	(*Manager).stageLogCompletion,
+	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
+	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
+	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+	{name: "write_database", run: (*Manager).stageWriteDatabase},
+	{name: "make_decision", run: (*Manager).stageMakeDecision},
+	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+	{name: "record_history", run: (*Manager).stageRecordHistory},
+	{name: "io_remediation", run: (*Manager).stageIORemediation},
+	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection},
+	{name: "revert_psi_boosts", run: (*Manager).stageRevertPSIBoosts},
+	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
 
 func (m *Manager) RunControlCycle(ctx context.Context) error {
@@ -115,16 +121,25 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 
 	m.logger.Debug("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger)
 
-	for _, stage := range defaultControlCyclePipeline {
-		if err := stage(m, run); err != nil {
-			return err
+	return runControlCyclePipeline(m, run, defaultControlCyclePipeline)
+}
+
+func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []controlCycleStage) error {
+	var cycleErrors []error
+	for _, stage := range stages {
+		if err := stage.run(m, run); err != nil {
+			cycleErrors = append(cycleErrors, err)
+			if !stage.continueAfterError {
+				return errors.Join(cycleErrors...)
+			}
+			run.deferredErrors = append(run.deferredErrors, err)
 		}
 		if run.stopWithoutError {
-			return nil
+			return errors.Join(cycleErrors...)
 		}
 	}
 
-	return nil
+	return errors.Join(cycleErrors...)
 }
 
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
@@ -199,15 +214,9 @@ func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
-	// 4. Esegui l'azione corrispondente
+	// Execute the selected enforcement action. The application-level caller owns
+	// the single cycle failure log after protective stages have completed.
 	if err := m.executeDecision(run.decision, run.metrics); err != nil {
-		m.logger.Error("Failed to execute decision",
-			"decision", run.decision,
-			"reason", run.reason,
-			"cycle_id", run.cycleID,
-			"trigger", run.trigger,
-			"error", err,
-		)
 		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
 	}
 	return nil
@@ -346,7 +355,12 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	run.activeLimitedUsers = len(m.activeUsers)
 	m.mu.RUnlock()
 
-	// 9. Logga il risultato del ciclo
+	outcome := "success"
+	if len(run.deferredErrors) > 0 {
+		outcome = "degraded"
+	}
+
+	// Log the complete cycle outcome after all protective stages have run.
 	m.logger.Info("Control cycle completed",
 		"cycle_id", run.cycleID,
 		"trigger", run.trigger,
@@ -359,6 +373,8 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"system_under_load", run.metrics.SystemUnderLoad,
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
 		"duration_ms", run.duration.Milliseconds(),
+		"outcome", outcome,
+		"deferred_error_count", len(run.deferredErrors),
 	)
 
 	return nil
@@ -672,6 +688,7 @@ const (
 	limitTransitionDeactivationFailure = "deactivation_failure"
 	processMembershipErrorComponent    = "process_membership"
 	processMembershipReconcileFailure  = "reconciliation_failure"
+	processMembershipOriginUnavailable = "origin_unavailable"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

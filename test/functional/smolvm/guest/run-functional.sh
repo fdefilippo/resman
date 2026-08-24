@@ -36,6 +36,11 @@ if [[ $scenario == missing-io-startup ]]; then
 		'Failed to initialize cgroup manager.*I/O limiting.*controller "io".*interface "io.max"'
 	)
 fi
+if [[ $scenario == process-membership ]]; then
+	expected_daemon_error_patterns+=(
+		'Error in control cycle.*recorded origin is unavailable'
+	)
+fi
 
 mkdir -p "$artifact_dir" "$runtime_dir" "$state_dir"
 chmod 0700 "$runtime_dir" "$state_dir"
@@ -597,12 +602,41 @@ for _ in $(seq 1 20); do
 done
 [[ $new_limited == true ]] || fail "post-activation process was not reconciled into the limited cgroup"
 
+# Create a process directly inside the limited cgroup without letting resman
+# capture an origin. It is stopped before exec so placement is deterministic.
+blocked_pid_file=/run/resman-functional-blocked-$run_id.pid
+install -o resman-cpu -g resman-cpu -m 0600 /dev/null "$blocked_pid_file"
+# shellcheck disable=SC2016 # Expansion belongs to the nested resman-cpu shell.
+runuser -u resman-cpu -- sh -c \
+	'printf "%s\n" "$$" >"$1"; kill -STOP "$$"; exec stress --cpu 1 --timeout 90s' \
+	sh "$blocked_pid_file" &
+blocked_launcher=$!
+blocked_pid=
+for _ in $(seq 1 50); do
+	blocked_pid=$(cat "$blocked_pid_file" 2>/dev/null || true)
+	[[ -n $blocked_pid && -r /proc/$blocked_pid/stat ]] && break
+	sleep 0.1
+done
+[[ -n $blocked_pid ]] || fail "originless process did not publish its PID"
+rm -f "$blocked_pid_file"
+printf '%s\n' "$blocked_pid" >"$limited_cgroup/cgroup.procs" \
+	|| fail "cannot place originless process directly in the limited cgroup"
+kill -CONT "$blocked_pid"
+for _ in $(seq 1 50); do
+	[[ $(cat "/proc/$blocked_pid/comm" 2>/dev/null || true) == stress ]] && break
+	sleep 0.1
+done
+[[ $(cat "/proc/$blocked_pid/comm" 2>/dev/null || true) == stress ]] \
+	|| fail "originless process did not become the excluded stress workload"
+blocked_start_time=$(process_start_time "$blocked_pid")
+
 sed -i 's/^PROCESS_EXCLUDE_LIST=.*/PROCESS_EXCLUDE_LIST=^stress$/' "$config_file"
 chmod 0600 "$config_file"
 excluded_restored=false
 for _ in $(seq 1 20); do
 	if ! cgroup_has_pid "$limited_cgroup" "$initial_pid" \
 		&& ! cgroup_has_pid "$limited_cgroup" "$new_pid" \
+		&& cgroup_has_pid "$limited_cgroup" "$blocked_pid" \
 		&& cgroup_has_pid "$limited_cgroup" "$anchor_pid" \
 		&& [[ $(process_cgroup_path "$initial_pid") == "$initial_origin" ]] \
 		&& [[ $(process_cgroup_path "$new_pid") == "$new_origin" ]]; then
@@ -613,13 +647,38 @@ for _ in $(seq 1 20); do
 done
 [[ $excluded_restored == true ]] \
 	|| fail "newly excluded processes were not restored to their captured origins"
+blocked_start_time_after_error=$(process_start_time "$blocked_pid")
+[[ $blocked_start_time_after_error == "$blocked_start_time" ]] \
+	|| fail "originless PID was reused while reconciliation remained fail-closed"
+
+origin_unavailable_signal=false
+degraded_cycle_completed=false
+for _ in $(seq 1 20); do
+	curl --fail --silent --show-error --max-time 2 \
+		http://127.0.0.1:19100/metrics >"$artifact_dir/process-membership-metrics.txt" \
+		|| fail "cannot scrape process-membership error signal"
+	if awk '/^resman_errors_total\{/ && /component="process_membership"/ && /error_type="origin_unavailable"/ && $NF > 0 { found=1 } END { exit !found }' \
+		"$artifact_dir/process-membership-metrics.txt"; then
+		origin_unavailable_signal=true
+	fi
+	if grep -q 'Control cycle completed.*outcome=degraded' "$state_dir/resman.log"; then
+		degraded_cycle_completed=true
+	fi
+	[[ $origin_unavailable_signal == true && $degraded_cycle_completed == true ]] && break
+	sleep 1
+done
+[[ $origin_unavailable_signal == true ]] \
+	|| fail "persistent origin-unavailable reconciliation was not exported distinctly"
+[[ $degraded_cycle_completed == true ]] \
+	|| fail "control cycle did not complete after the persistent enforcement error"
 
 sed -i 's/^PROCESS_EXCLUDE_LIST=.*/PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$/' "$config_file"
 chmod 0600 "$config_file"
 reincluded=false
 for _ in $(seq 1 20); do
 	if cgroup_has_pid "$limited_cgroup" "$initial_pid" \
-		&& cgroup_has_pid "$limited_cgroup" "$new_pid"; then
+		&& cgroup_has_pid "$limited_cgroup" "$new_pid" \
+		&& cgroup_has_pid "$limited_cgroup" "$blocked_pid"; then
 		reincluded=true
 		break
 	fi
@@ -640,14 +699,41 @@ systemctl is-active --quiet "$service" || fail "resman stopped during membership
 	printf 'new_origin=%s\n' "$new_origin"
 	printf 'post_activation_reconciled=%s\n' "$new_limited"
 	printf 'excluded_restored=%s\n' "$excluded_restored"
+	printf 'blocked_pid=%s\n' "$blocked_pid"
+	printf 'blocked_start_time=%s\n' "$blocked_start_time"
+	printf 'blocked_start_time_after_error=%s\n' "$blocked_start_time_after_error"
+	printf 'blocked_remained_constrained=true\n'
+	printf 'origin_unavailable_signal=%s\n' "$origin_unavailable_signal"
+	printf 'degraded_cycle_completed=%s\n' "$degraded_cycle_completed"
 	printf 'reincluded=%s\n' "$reincluded"
 } >"$artifact_dir/process-membership.txt"
 
 pkill -TERM -u resman-cpu -x stress >/dev/null 2>&1 || true
 pkill -TERM -u resman-cpu -x yes >/dev/null 2>&1 || true
-kill "$initial_launcher" "$new_launcher" "$anchor_launcher" >/dev/null 2>&1 || true
-wait "$initial_launcher" "$new_launcher" "$anchor_launcher" >/dev/null 2>&1 || true
+membership_launchers=("$initial_launcher" "$new_launcher" "$anchor_launcher" "$blocked_launcher")
+kill -TERM "${membership_launchers[@]}" >/dev/null 2>&1 || true
+for _ in $(seq 1 50); do
+	launchers_alive=false
+	for launcher in "${membership_launchers[@]}"; do
+		if kill -0 "$launcher" >/dev/null 2>&1; then
+			launchers_alive=true
+			break
+		fi
+	done
+	[[ $launchers_alive == false ]] && break
+	sleep 0.1
+done
+launcher_cleanup_forced=false
+for launcher in "${membership_launchers[@]}"; do
+	if kill -0 "$launcher" >/dev/null 2>&1; then
+		launcher_cleanup_forced=true
+		kill -KILL "$launcher" >/dev/null 2>&1 || true
+	fi
+	wait "$launcher" >/dev/null 2>&1 || true
+done
+printf 'launcher_cleanup_forced=%s\n' "$launcher_cleanup_forced" \
+	>>"$artifact_dir/process-membership.txt"
 systemctl status "$service" --no-pager >"$artifact_dir/resman-status.txt"
 result=PASS
-detail="active process membership reconciled new, excluded, and re-included processes"
+detail="membership reconciliation continued past an unavailable origin and restored valid peers"
 echo "PASS: $detail"

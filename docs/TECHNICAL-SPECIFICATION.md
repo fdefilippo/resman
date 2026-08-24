@@ -280,6 +280,16 @@ recovery. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is never
 written into systemd-managed cgroups. An incomplete shutdown restoration is
 returned from the application and produces a non-zero daemon exit status.
 
+Live reconciliation deliberately differs from shutdown recovery. It does not
+guess or create a replacement destination for an excluded process without a
+same-start-time recorded or inherited origin: that process remains constrained.
+The restore planner reports the typed per-process failure and still executes
+valid peer restores. Enforcement errors are returned after history recording,
+I/O remediation, workload pattern detection, PSI boost reversion, and completion
+logging have run. `resman_errors_total` distinguishes the persistent
+`process_membership/origin_unavailable` outcome from transient
+`process_membership/reconciliation_failure` outcomes.
+
 At startup, the manager enables the controllers it may use and creates a
 temporary child below the resman base cgroup. Capability is determined from the
 interface files populated in that real child, not from controller names alone.

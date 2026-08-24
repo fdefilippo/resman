@@ -181,6 +181,16 @@ recovery cgroups; resman never writes it into cgroups managed by systemd. If any
 process cannot be restored safely during shutdown, the daemon exits non-zero
 instead of reporting a successful service stop.
 
+Live policy reconciliation remains fail-closed: if an excluded process has no
+same-start-time recorded or inherited origin, it stays constrained while the
+rest of the control cycle continues. Prometheus distinguishes this persistent
+condition as `resman_errors_total{component="process_membership",error_type="origin_unavailable"}`;
+other reconciliation failures use `error_type="reconciliation_failure"`. To
+clear an unavailable-origin condition, stop or restart the affected process
+under its owning service/session. If that is not possible while resman is
+running, stop resman cleanly so shutdown can place the process in its recovery
+leaf, then restart the owning service/session before starting resman again.
+
 `PSI_EVENT_DRIVEN` is a pressure trigger, not another CPU usage threshold. PSI
 events mean that runnable tasks or IO operations spent time waiting for resources.
 For example, on a 4-core host, 4 CPU-bound threads can show 100% CPU with little

@@ -148,8 +148,13 @@ starts a second process after activation, and requires the next control cycles
 to move it into the existing user cgroup. It then reloads
 `PROCESS_EXCLUDE_LIST`, verifies that both `stress` processes return to their
 captured origin while a differently named CPU workload keeps the user actively
-limited, removes the exclusion, and verifies that both return to the limited
-cgroup. Evidence is exported as `process-membership.txt`.
+limited, and places a third `stress` process directly in the limited cgroup
+without a recorded origin. The persistent fail-closed error must leave only that
+process constrained, restore its valid peers, complete the later cycle stages,
+and export the distinct `origin_unavailable` error signal. The scenario then
+removes the exclusion and verifies that all three processes are in the limited
+cgroup. Evidence is exported as `process-membership.txt` and
+`process-membership-metrics.txt`.
 
 The guest probes the actual `cpu.max`, `memory.max`, and `io.max` interfaces in
 a disposable child cgroup. A controller that is merely listed in

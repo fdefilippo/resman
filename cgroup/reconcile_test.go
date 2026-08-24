@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -135,12 +136,66 @@ func TestReconcileUserProcessMembershipFailsClosedWithoutAnOrigin(t *testing.T) 
 		return nil
 	}
 
-	if _, err := manager.ReconcileUserProcessMembership(uid, sharedPath, "max 100000"); err == nil ||
-		!strings.Contains(err.Error(), "recorded origin is unavailable") {
+	_, err := manager.ReconcileUserProcessMembership(uid, sharedPath, "max 100000")
+	var originErr *ProcessOriginUnavailableError
+	if !errors.As(err, &originErr) || originErr.PID != 201 || originErr.UID != uid {
 		t.Fatalf("ReconcileUserProcessMembership() error = %v, want unavailable-origin failure", err)
 	}
 	if writeCalled {
 		t.Fatal("excluded process moved without a safe origin")
+	}
+}
+
+func TestReconcileUserProcessMembershipRestoresValidPeersWhenOneOriginIsUnavailable(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	manager.getConfig().ProcessExcludeList = []string{"^systemd$"}
+	const uid = 1000
+	const blockedPID = 211
+	const restorablePID = 212
+	sharedPath := createFakeCgroup(t, root, "/resman/limited")
+	target := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	restorableOrigin := "/user.slice/user-1000.slice/session-212.scope"
+	restorableOriginPath := createFakeCgroup(t, root, restorableOrigin)
+
+	for _, pid := range []int{blockedPID, restorablePID} {
+		writeFakeProcess(t, manager, pid, 1, pid, uint64(5200+pid), uid, "/resman/limited/user_1000")
+		writeFakeProcessExecutable(t, manager, pid, "/usr/lib/systemd/systemd")
+	}
+	manager.processOrigins[restorablePID] = processOrigin{
+		PID:        restorablePID,
+		UID:        uid,
+		PPID:       1,
+		SessionID:  restorablePID,
+		StartTime:  uint64(5200 + restorablePID),
+		CgroupPath: restorableOrigin,
+	}
+	members := map[int]bool{blockedPID: true, restorablePID: true}
+	writeFakeCgroupMembers(t, target, members)
+	manager.scanProcessIDs = func() (map[int][]int, error) {
+		return map[int][]int{uid: {blockedPID, restorablePID}}, nil
+	}
+	var restored []int
+	manager.writePID = func(procsFile string, pid int) error {
+		if filepath.Dir(procsFile) != restorableOriginPath {
+			return fmt.Errorf("unexpected destination %s", filepath.Dir(procsFile))
+		}
+		restored = append(restored, pid)
+		delete(members, pid)
+		updateFakeProcessCgroup(t, manager, pid, restorableOriginPath)
+		writeFakeCgroupMembers(t, target, members)
+		return nil
+	}
+
+	result, err := manager.ReconcileUserProcessMembership(uid, sharedPath, "max 100000")
+	var originErr *ProcessOriginUnavailableError
+	if !errors.As(err, &originErr) || originErr.PID != blockedPID {
+		t.Fatalf("ReconcileUserProcessMembership() error = %v, want PID %d unavailable", err, blockedPID)
+	}
+	if result.RestoredExcluded != 1 || len(restored) != 1 || restored[0] != restorablePID {
+		t.Fatalf("reconciliation result = %+v, restored=%v, want only PID %d restored", result, restored, restorablePID)
+	}
+	if !members[blockedPID] || members[restorablePID] {
+		t.Fatalf("limited members after partial reconciliation = %v, want only blocked PID", members)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 )
 
@@ -430,13 +431,13 @@ func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
 			cfg.CPUQuotaNormal,
 		)
 		if err != nil {
-			m.logger.Warn("Failed to reconcile active process membership",
-				"uid", target.uid,
-				"shared_path", target.sharedPath,
-				"error", err,
-			)
 			if m.prometheusExporter != nil {
-				m.prometheusExporter.RecordError(processMembershipErrorComponent, processMembershipReconcileFailure)
+				errorType := processMembershipReconcileFailure
+				var originUnavailable *cgroup.ProcessOriginUnavailableError
+				if errors.As(err, &originUnavailable) {
+					errorType = processMembershipOriginUnavailable
+				}
+				m.prometheusExporter.RecordError(processMembershipErrorComponent, errorType)
 			}
 			reconcileErrors = append(reconcileErrors, fmt.Errorf(
 				"reconcile active process membership for UID %d: %w",

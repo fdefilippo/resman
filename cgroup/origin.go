@@ -44,6 +44,21 @@ type processRestore struct {
 	Recovery    bool
 }
 
+// ProcessOriginUnavailableError reports a process that reconciliation cannot
+// restore without guessing a destination. The process remains constrained.
+type ProcessOriginUnavailableError struct {
+	PID int
+	UID int
+}
+
+func (e *ProcessOriginUnavailableError) Error() string {
+	return fmt.Sprintf(
+		"cannot safely restore PID %d for UID %d: its recorded origin is unavailable",
+		e.PID,
+		e.UID,
+	)
+}
+
 type previousProcessOrigin struct {
 	Origin processOrigin
 	Exists bool
@@ -621,6 +636,7 @@ func (m *Manager) buildRestorePlanExpected(
 	reused := make(map[int]bool)
 	plans := make([]processRestore, 0, len(pids))
 	var recoveryPath string
+	var planErrors []error
 
 	for _, pid := range pids {
 		identity, err := m.readProcessIdentity(pid)
@@ -629,7 +645,8 @@ func (m *Manager) buildRestorePlanExpected(
 			continue
 		}
 		if err != nil {
-			return nil, processedOrigins, reused, fmt.Errorf("failed to identify PID %d before restore: %w", pid, err)
+			planErrors = append(planErrors, fmt.Errorf("failed to identify PID %d before restore: %w", pid, err))
+			continue
 		}
 		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
 			reused[pid] = true
@@ -642,7 +659,8 @@ func (m *Manager) buildRestorePlanExpected(
 				continue
 			}
 			if currentErr != nil {
-				return nil, processedOrigins, reused, fmt.Errorf("failed to read cgroup for PID %d before restore: %w", pid, currentErr)
+				planErrors = append(planErrors, fmt.Errorf("failed to read cgroup for PID %d before restore: %w", pid, currentErr))
+				continue
 			}
 			if filepath.Clean(m.cgroupPathOnFilesystem(currentPath)) != filepath.Clean(expectedSource) {
 				continue
@@ -669,22 +687,22 @@ func (m *Manager) buildRestorePlanExpected(
 			if _, err := os.Stat(originFilesystemPath); err == nil {
 				destination = originFilesystemPath
 			} else if !os.IsNotExist(err) {
-				return nil, processedOrigins, reused, fmt.Errorf("failed to stat original cgroup %s for PID %d: %w", originFilesystemPath, pid, err)
+				planErrors = append(planErrors, fmt.Errorf("failed to stat original cgroup %s for PID %d: %w", originFilesystemPath, pid, err))
+				continue
 			}
 		}
 
 		recovery := destination == ""
 		if recovery {
 			if !allowRecovery {
-				return nil, processedOrigins, reused, fmt.Errorf(
-					"cannot safely restore PID %d: its recorded origin is unavailable",
-					pid,
-				)
+				planErrors = append(planErrors, &ProcessOriginUnavailableError{PID: pid, UID: uid})
+				continue
 			}
 			if recoveryPath == "" {
 				recoveryPath, err = m.ensureRecoveryCgroup(uid, normalQuota)
 				if err != nil {
-					return nil, processedOrigins, reused, err
+					planErrors = append(planErrors, fmt.Errorf("prepare recovery cgroup for PID %d: %w", pid, err))
+					continue
 				}
 			}
 			destination = recoveryPath
@@ -697,7 +715,7 @@ func (m *Manager) buildRestorePlanExpected(
 			Recovery:    recovery || m.isRecoveryPath(destination),
 		})
 	}
-	return plans, processedOrigins, reused, nil
+	return plans, processedOrigins, reused, errors.Join(planErrors...)
 }
 
 func (m *Manager) restoreProcesses(uid int, pids []int, normalQuota string) (bool, error) {
@@ -713,7 +731,7 @@ func (m *Manager) restoreProcessesExpected(
 	expectedSource string,
 	allowRecovery bool,
 ) (int, bool, map[int]bool, error) {
-	plans, processedOrigins, reused, err := m.buildRestorePlanExpected(
+	plans, processedOrigins, reused, planErr := m.buildRestorePlanExpected(
 		uid,
 		pids,
 		normalQuota,
@@ -721,14 +739,13 @@ func (m *Manager) restoreProcessesExpected(
 		expectedSource,
 		allowRecovery,
 	)
-	if err != nil {
-		return 0, false, reused, err
-	}
-
 	restored := 0
 	usedRecovery := false
 	recoveryPath := ""
 	var restoreErrors []error
+	if planErr != nil {
+		restoreErrors = append(restoreErrors, planErr)
+	}
 	for _, plan := range plans {
 		identity, identityErr := m.readProcessIdentity(plan.PID)
 		switch {
