@@ -36,7 +36,9 @@ make test-functional-smolvm-missing-io-startup
 
 The `missing-io-startup` scenario is `BLOCKED` rather than passed when `io.max`
 is available or when another required interface is also missing, because either
-condition would not reproduce the intended boundary unambiguously.
+condition would not reproduce the intended boundary unambiguously. Its startup
+rejection is the only currently expected daemon error and is declared by a
+scenario-specific pattern naming I/O limiting, the `io` controller, and `io.max`.
 
 The MCP filter reload boundary uses stdio and only the CPU controller, so it does
 not require guest networking, TLS material, `memory.max`, or `io.max`:
@@ -174,6 +176,9 @@ Evidence is written to `build/functional/smolvm/<run-id>/` by default. Set
   is selected;
 - the complete startup rejection naming feature, controller, and interface for
   the missing-I/O capability scenario;
+- declared daemon-error expectations, every observed error-level line,
+  unexpected errors, and missing expectations. Any unexpected daemon error or
+  declared error that does not occur changes the scenario result to `FAIL`;
 - a final `PASS`, `BLOCKED`, or `FAIL` result.
 
 Host-side failures that happen before the guest runner starts are also written

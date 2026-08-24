@@ -6,10 +6,14 @@ tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-smolvm-host-test.XXXXXX")
 trap 'rm -rf -- "$tmp_dir"' EXIT
 
 for script in "$script_dir/run.sh" "$script_dir/host_test.sh" \
+	"$script_dir/daemon_errors_test.sh" \
+	"$script_dir/guest/assert-daemon-errors.sh" \
     "$script_dir/guest/run-functional.sh" "$script_dir/guest/wait-systemd.sh" \
     "$script_dir/guest/workload.sh"; do
     bash -n "$script"
 done
+
+"$script_dir/daemon_errors_test.sh"
 
 cat >"$tmp_dir/sg-ok" <<'EOF'
 #!/usr/bin/env bash
@@ -88,6 +92,8 @@ grep -q 'cpu-without-cpuset' "$script_dir/guest/run-functional.sh"
 grep -q 'missing-io-startup' "$script_dir/guest/run-functional.sh"
 grep -q 'mcp-filter-reload' "$script_dir/guest/run-functional.sh"
 grep -q 'controller-startup-rejection.txt' "$script_dir/guest/run-functional.sh"
+grep -q 'expected_daemon_error_patterns' "$script_dir/guest/run-functional.sh"
+grep -q 'assert-daemon-errors.sh' "$script_dir/guest/run-functional.sh"
 grep -q '^EnvironmentFile=/run/resman-functional/%i/environment$' \
     "$script_dir/guest/resman-functional@.service"
 

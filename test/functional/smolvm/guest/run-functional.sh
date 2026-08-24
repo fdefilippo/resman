@@ -16,6 +16,7 @@ mcp_pid=
 mcp_workload_pid=
 cpu_workload_pid=
 functional_cgroup_root=/sys/fs/cgroup
+expected_daemon_error_patterns=()
 
 case "$run_id" in
     *[!a-z0-9-]*|'')
@@ -30,6 +31,11 @@ case "$scenario" in
 		exit 2
 		;;
 esac
+if [[ $scenario == missing-io-startup ]]; then
+	expected_daemon_error_patterns+=(
+		'Failed to initialize cgroup manager.*I/O limiting.*controller "io".*interface "io.max"'
+	)
+fi
 
 mkdir -p "$artifact_dir" "$runtime_dir" "$state_dir"
 chmod 0700 "$runtime_dir" "$state_dir"
@@ -40,6 +46,8 @@ detail="guest harness did not complete"
 
 finish() {
     local status=$?
+	local daemon_error_assertion=PASS
+	trap - EXIT
     set +e
 	if [[ -n $mcp_pid ]]; then
 		kill -TERM "$mcp_pid" 2>/dev/null
@@ -56,17 +64,35 @@ finish() {
 		wait "$cpu_workload_pid" 2>/dev/null
 		cpu_workload_pid=
 	fi
-    cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
     find "$functional_cgroup_root/resman-functional-$run_id" -maxdepth 3 -type d -print \
         >"$artifact_dir/cgroup-tree.txt" 2>&1
     curl --fail --silent --show-error --max-time 2 \
         http://127.0.0.1:19100/metrics >"$artifact_dir/prometheus-metrics-final.txt" 2>&1
     systemctl stop "$service" >/dev/null 2>&1
+	cp "$state_dir/resman.log" "$artifact_dir/resman.log" 2>/dev/null
     journalctl -u "$service" --no-pager >"$artifact_dir/resman-journal.log" 2>&1
+	if ! /opt/resman-functional/assert-daemon-errors.sh "$scenario" "$artifact_dir" \
+		"${expected_daemon_error_patterns[@]}"; then
+		daemon_error_assertion=FAIL
+		if [[ $result == PASS ]]; then
+			detail="unexpected or missing expected daemon error; inspect daemon error evidence"
+		fi
+		result=FAIL
+		status=1
+	fi
+	if [[ $result == PASS && $status -ne 0 ]]; then
+		result=FAIL
+		detail="scenario reported PASS after a non-zero exit"
+	fi
+	if [[ $result == FAIL && $status -eq 0 ]]; then
+		status=1
+	fi
     printf '%s\n' "$result" >"$result_file"
-    printf 'result=%s\ndetail=%s\nexit_code=%d\n' "$result" "$detail" "$status" \
+	printf 'daemon_error_assertion=%s\nresult=%s\ndetail=%s\nexit_code=%d\n' \
+		"$daemon_error_assertion" "$result" "$detail" "$status" \
         >>"$artifact_dir/environment.txt"
+	exit "$status"
 }
 trap finish EXIT
 

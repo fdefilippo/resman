@@ -25,6 +25,7 @@ COPY --from=builder /out/resman /usr/bin/resman
 COPY test/functional/smolvm/guest/resman-functional@.service \
      /usr/lib/systemd/system/resman-functional@.service
 COPY test/functional/smolvm/guest/run-functional.sh \
+     test/functional/smolvm/guest/assert-daemon-errors.sh \
      test/functional/smolvm/guest/wait-systemd.sh \
      test/functional/smolvm/guest/workload.sh \
      /opt/resman-functional/
@@ -33,5 +34,6 @@ COPY test/functional/smolvm/fixtures/resman.conf \
 
 RUN chmod 0755 /usr/bin/resman \
       /opt/resman-functional/run-functional.sh \
+      /opt/resman-functional/assert-daemon-errors.sh \
       /opt/resman-functional/wait-systemd.sh \
       /opt/resman-functional/workload.sh
