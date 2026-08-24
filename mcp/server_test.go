@@ -39,12 +39,12 @@ import (
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     *Config
+		cfg     *config.MCPServerConfig
 		wantErr bool
 	}{
 		{
 			name: "valid stdio config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "stdio",
 				LogLevel:      "INFO",
@@ -54,7 +54,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "valid http config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "http",
 				HTTPPort:      8080,
@@ -71,7 +71,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config without token",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  8080,
@@ -82,7 +82,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config with whitespace token",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  8080,
@@ -94,7 +94,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config with TLS-protected non-loopback bind",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "http",
 				HTTPPort:      8080,
@@ -110,7 +110,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config with TLS disabled",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "http",
 				HTTPPort:      8080,
@@ -125,7 +125,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "invalid transport",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "invalid",
 				LogLevel:  "INFO",
@@ -134,7 +134,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "invalid port",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  70000,
@@ -145,7 +145,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "invalid log level",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "stdio",
 				LogLevel:  "INVALID",
@@ -154,7 +154,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "disabled config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   false,
 				Transport: "stdio",
 				LogLevel:  "INFO",
@@ -170,75 +170,6 @@ func TestConfigValidate(t *testing.T) {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestConfigLoadFromEnv(t *testing.T) {
-	t.Setenv("MCP_ENABLED", "true")
-	t.Setenv("MCP_TRANSPORT", "http")
-	t.Setenv("MCP_HTTP_PORT", "9090")
-	t.Setenv("MCP_HTTP_HOST", "0.0.0.0")
-	t.Setenv("MCP_TLS_ENABLED", "true")
-	t.Setenv("MCP_TLS_CERT_FILE", "/test/server.crt")
-	t.Setenv("MCP_TLS_KEY_FILE", "/test/server.key")
-	t.Setenv("MCP_TLS_CA_FILE", "/test/ca.crt")
-	t.Setenv("MCP_TLS_MIN_VERSION", "1.3")
-	t.Setenv("MCP_LOG_LEVEL", "DEBUG")
-	t.Setenv("MCP_ALLOW_WRITE_OPS", "true")
-
-	cfg := DefaultConfig()
-	if err := cfg.LoadFromEnv(); err != nil {
-		t.Fatalf("Config.LoadFromEnv() error = %v", err)
-	}
-
-	if !cfg.Enabled {
-		t.Error("Expected MCP_ENABLED to be true")
-	}
-	if cfg.Transport != "http" {
-		t.Errorf("Expected MCP_TRANSPORT to be http, got %s", cfg.Transport)
-	}
-	if cfg.HTTPPort != 9090 {
-		t.Errorf("Expected MCP_HTTP_PORT to be 9090, got %d", cfg.HTTPPort)
-	}
-	if cfg.HTTPHost != "0.0.0.0" {
-		t.Errorf("Expected MCP_HTTP_HOST to be 0.0.0.0, got %s", cfg.HTTPHost)
-	}
-	if !cfg.TLSEnabled || cfg.TLSCertFile != "/test/server.crt" || cfg.TLSKeyFile != "/test/server.key" ||
-		cfg.TLSCAFile != "/test/ca.crt" || cfg.TLSMinVersion != "1.3" {
-		t.Fatalf("unexpected MCP TLS environment config: %+v", cfg)
-	}
-	if cfg.LogLevel != "DEBUG" {
-		t.Errorf("Expected MCP_LOG_LEVEL to be DEBUG, got %s", cfg.LogLevel)
-	}
-	if !cfg.AllowWriteOps {
-		t.Error("Expected MCP_ALLOW_WRITE_OPS to be true")
-	}
-}
-
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if cfg.Enabled != false {
-		t.Error("Expected default Enabled to be false")
-	}
-	if cfg.Transport != "stdio" {
-		t.Errorf("Expected default Transport to be stdio, got %s", cfg.Transport)
-	}
-	if cfg.HTTPPort != 1969 {
-		t.Errorf("Expected default HTTPPort to be 1969, got %d", cfg.HTTPPort)
-	}
-	if cfg.HTTPHost != "127.0.0.1" {
-		t.Errorf("Expected default HTTPHost to be 127.0.0.1, got %s", cfg.HTTPHost)
-	}
-	if !cfg.TLSEnabled || cfg.TLSCertFile != "/etc/resman/tls/server.crt" ||
-		cfg.TLSKeyFile != "/etc/resman/tls/server.key" || cfg.TLSMinVersion != "1.3" {
-		t.Fatalf("unexpected default MCP TLS config: %+v", cfg)
-	}
-	if cfg.LogLevel != "INFO" {
-		t.Errorf("Expected default LogLevel to be INFO, got %s", cfg.LogLevel)
-	}
-	if cfg.AllowWriteOps != false {
-		t.Error("Expected default AllowWriteOps to be false")
 	}
 }
 
@@ -529,7 +460,7 @@ func TestServerStopTerminatesStdioTransport(t *testing.T) {
 			Name:    "resman-test",
 			Version: "test",
 		}, nil),
-		cfg:            &Config{Enabled: true, Transport: "stdio"},
+		cfg:            &config.MCPServerConfig{Enabled: true, Transport: "stdio"},
 		logger:         logging.GetLogger(),
 		stdioTransport: serverTransport,
 	}
@@ -594,7 +525,7 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &Server{
-				cfg:    &Config{AuthToken: tt.serverToken},
+				cfg:    &config.MCPServerConfig{AuthToken: tt.serverToken},
 				logger: logging.GetLogger(),
 			}
 			called := false

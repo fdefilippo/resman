@@ -10,7 +10,6 @@
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=resman
 CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
-METRICS_CACHE_FILE=/var/run/resman/metrics.cache
 
 # ========================
 # TIMING [D]
@@ -84,7 +83,6 @@ CPU_THRESHOLD_DURATION=90
 # the process original cgroup no longer exists. resman does not modify
 # cpu.max in cgroups managed by systemd.
 CPU_QUOTA_NORMAL="max 100000"
-CPU_QUOTA_LIMITED="50000 100000"
 
 # ========================
 # RAM LIMITS [D]
@@ -96,9 +94,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_THRESHOLD: Percentage of total user RAM to activate limits
 # RAM_RELEASE_THRESHOLD: Percentage to release limits
 # Format: percentages 1-100
-#
-# RAM_QUOTA_LIMITED: Total RAM limit in bytes or with suffix (K/M/G/T)
-# Examples: "2147483648" (2GB in bytes), "2G", "512M"
 #
 # RAM_QUOTA_PER_USER: Per-user RAM limit (when limits are active)
 # Examples: "536870912" (512MB), "512M", "1G"
@@ -121,7 +116,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_LIMIT_ENABLED=true
 # RAM_THRESHOLD=75
 # RAM_RELEASE_THRESHOLD=40
-# RAM_QUOTA_LIMITED=2G
 # RAM_QUOTA_PER_USER=512M
 # DISABLE_SWAP=false
 # RAM_HIGH_RATIO=0.8
@@ -130,7 +124,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_LIMIT_ENABLED=true
 # RAM_THRESHOLD=80
 # RAM_RELEASE_THRESHOLD=50
-# RAM_QUOTA_LIMITED=4G
 # RAM_QUOTA_PER_USER=1G
 # DISABLE_SWAP=true
 # RAM_HIGH_RATIO=0.9
@@ -143,7 +136,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 RAM_LIMIT_ENABLED=false
 RAM_THRESHOLD=75
 RAM_RELEASE_THRESHOLD=40
-RAM_QUOTA_LIMITED=2G
 RAM_QUOTA_PER_USER=512M
 DISABLE_SWAP=false
 RAM_HIGH_RATIO=0.8
@@ -351,7 +343,7 @@ PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
 PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
 PROMETHEUS_JWT_ISSUER=resman
 PROMETHEUS_JWT_AUDIENCE=prometheus
-PROMETHEUS_JWT_EXPIRY=3600
+# JWT tokens must contain a signed exp claim; the token issuer chooses its lifetime.
 
 # ========================
 # LOGGING [D/S]

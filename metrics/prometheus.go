@@ -256,7 +256,6 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		exp.logger.Info("JWT secret loaded",
 			"issuer", exp.cfg.PrometheusJWTIssuer,
 			"audience", exp.cfg.PrometheusJWTAudience,
-			"expiry_seconds", exp.cfg.PrometheusJWTExpiry,
 		)
 	}
 

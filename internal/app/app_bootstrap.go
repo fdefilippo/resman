@@ -199,7 +199,7 @@ func (a *App) WithConfigWatcher() *App {
 		return a
 	}
 
-	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.prometheusExporter, a.applyReloadedConfig)
+	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.applyReloadedConfig)
 	configWatcher, err := config.NewWatcher(a.configPath, a.currentConfig(), reloader)
 	if err != nil {
 		a.logger.Warn("Failed to create config watcher, continuing without auto-reload",

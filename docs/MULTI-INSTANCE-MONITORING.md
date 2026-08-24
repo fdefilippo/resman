@@ -304,7 +304,6 @@ PROMETHEUS_AUTH_TYPE="jwt"
 PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
 PROMETHEUS_JWT_ISSUER="resman"
 PROMETHEUS_JWT_AUDIENCE="prometheus"
-PROMETHEUS_JWT_EXPIRY=3600
 ```
 
 #### Option 1: Basic Authentication
@@ -371,8 +370,10 @@ PROMETHEUS_AUTH_TYPE="jwt"
 PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
 PROMETHEUS_JWT_ISSUER="resman"
 PROMETHEUS_JWT_AUDIENCE="prometheus"
-PROMETHEUS_JWT_EXPIRY=3600  # Token validity in seconds (1 hour)
 ```
+
+Every token must contain a signed `exp` claim. Its lifetime is chosen by the
+token generator, not by a ResMan configuration key.
 
 Generate JWT secret:
 ```bash
@@ -494,7 +495,7 @@ echo "JWT token rotated successfully at $(date)"
 
 **Security Considerations:**
 - ✅ Token-based authentication (no passwords)
-- ✅ Automatic expiration (configurable)
+- ✅ Automatic expiration (issuer-defined)
 - ✅ Fine-grained permissions support
 - ✅ Industry standard (RFC 7519)
 - ⚠️ More complex to configure
@@ -530,7 +531,7 @@ This allows:
 |---------|-----------|-----|------|
 | **Configuration Complexity** | Low | Medium | Medium |
 | **Security Level** | Medium (with TLS) | High | High |
-| **Token Expiration** | No | Yes (configurable) | Yes (JWT only) |
+| **Token Expiration** | No | Yes (issuer-defined) | Yes (JWT only) |
 | **Credential Rotation** | Manual | Automated | Automated (JWT) |
 | **Permissions Support** | No | Yes | Partial |
 | **Best For** | Small deployments | Large/Enterprise | Migration scenarios |

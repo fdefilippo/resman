@@ -123,8 +123,3 @@ func ParseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid duration unit: %s (use 'h' for hours or 'd' for days)", unit)
 	}
 }
-
-// FormatISO8601 formatta un time.Time in ISO 8601
-func FormatISO8601(t time.Time) string {
-	return t.Format(time.RFC3339)
-}

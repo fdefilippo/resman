@@ -70,7 +70,7 @@ func (c *testMetricsConfigCollector) UpdateConfig(cfg *config.Config) {
 }
 
 func TestNewReloader(t *testing.T) {
-	reloader := NewReloader(nil, nil, nil, nil)
+	reloader := NewReloader(nil, nil, nil)
 
 	if reloader == nil {
 		t.Fatal("NewReloader() returned nil")
@@ -85,13 +85,10 @@ func TestNewReloader(t *testing.T) {
 	if reloader.metricsCollector != nil {
 		t.Error("metricsCollector should be nil")
 	}
-	if reloader.prometheusExporter != nil {
-		t.Error("prometheusExporter should be nil")
-	}
 }
 
 func TestOnConfigChange(t *testing.T) {
-	reloader := NewReloader(nil, nil, nil, nil)
+	reloader := NewReloader(nil, nil, nil)
 
 	if reloader == nil {
 		t.Fatal("NewReloader() returned nil")
@@ -152,7 +149,6 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 		stateManager,
 		cgroupManager,
 		metricsCollector,
-		nil,
 		func(cfg *config.Config) error {
 			hookConfig = cfg
 			return nil
@@ -211,7 +207,7 @@ func TestOnConfigChangeBlocksCyclesUntilEveryConsumerHasOneEpoch(t *testing.T) {
 		releaseUpdate: make(chan struct{}),
 	}
 	metricsCollector := &testMetricsConfigCollector{cfg: current}
-	reloader := NewReloader(stateManager, cgroupManager, metricsCollector, nil)
+	reloader := NewReloader(stateManager, cgroupManager, metricsCollector)
 
 	reloadDone := make(chan error)
 	go func() {
@@ -263,7 +259,6 @@ func TestOnConfigChangeContinuesAfterComponentError(t *testing.T) {
 		stateManager,
 		cgroupManager,
 		metricsCollector,
-		nil,
 		func(*config.Config) error {
 			hookCalled = true
 			return nil

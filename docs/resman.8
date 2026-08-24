@@ -167,9 +167,6 @@ Configuration parameters:
 .B RAM_RELEASE_THRESHOLD
 - Deactivation threshold percentage
 .IP \(bu
-.B RAM_QUOTA_LIMITED
-- Total RAM limit when limits are active (bytes or K/M/G/T suffix)
-.IP \(bu
 .B RAM_QUOTA_PER_USER
 - Per\-user RAM limit (when limits active)
 .IP \(bu
@@ -532,8 +529,6 @@ CGROUP_ROOT="/sys/fs/cgroup"
 CGROUP_BASE="resman"
 LOG_FILE="/var/log/resman.log"
 CREATED_CGROUPS_FILE="/var/run/resman-cgroups.txt"
-METRICS_CACHE_FILE="/var/run/resman-metrics.cache"
-PROMETHEUS_FILE="/var/run/resman-metrics.prom"
 
 # TIMING (seconds)
 POLLING_INTERVAL=30          # Control cycle interval
@@ -553,13 +548,11 @@ CPU_THRESHOLD_DURATION=90    # Wait after threshold breach before activation
 
 # CPU LIMITS ("quota period" format in microseconds)
 CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
-CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
 
 # RAM LIMITS
 # RAM_LIMIT_ENABLED=false              # Enable RAM limiting via cgroups v2
 # RAM_THRESHOLD=75                     # Percentage of total user RAM to activate limits
 # RAM_RELEASE_THRESHOLD=40             # Percentage to release limits
-# RAM_QUOTA_LIMITED=2G                 # Total RAM limit (bytes or K/M/G/T suffix)
 # RAM_QUOTA_PER_USER=512M              # Per-user RAM limit (when limits active)
 # DISABLE_SWAP=false                   # Set memory.swap.max=0 to prevent swap usage
 # RAM_HIGH_RATIO=0.8                   # Ratio between memory.high and memory.max (0.0-1.0)
@@ -601,7 +594,7 @@ PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"  # Password file
 PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"  # JWT secret file path
 PROMETHEUS_JWT_ISSUER="resman"   # JWT issuer claim
 PROMETHEUS_JWT_AUDIENCE="prometheus"  # JWT audience claim
-PROMETHEUS_JWT_EXPIRY=3600            # JWT token expiry in seconds
+# JWT tokens must contain a signed exp claim; the token issuer chooses its lifetime.
 
 # LOGGING
 LOG_LEVEL="INFO"             # DEBUG, INFO, WARN, ERROR

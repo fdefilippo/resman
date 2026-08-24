@@ -41,21 +41,15 @@ type metricsConfigCollector interface {
 	UpdateConfig(*config.Config)
 }
 
-type prometheusConfigExporter interface {
-	IsRunning() bool
-	GetMetricsEndpoint() string
-}
-
 type ConfigApplyHook func(*config.Config) error
 
 // Reloader applies one effective configuration epoch to every runtime component.
 type Reloader struct {
-	stateManager       stateConfigManager
-	cgroupManager      cgroupConfigManager
-	metricsCollector   metricsConfigCollector
-	prometheusExporter prometheusConfigExporter
-	applyHook          ConfigApplyHook
-	logger             *logging.Logger
+	stateManager     stateConfigManager
+	cgroupManager    cgroupConfigManager
+	metricsCollector metricsConfigCollector
+	applyHook        ConfigApplyHook
+	logger           *logging.Logger
 
 	applying atomic.Bool
 }
@@ -75,18 +69,16 @@ func NewReloader(
 	stateMgr stateConfigManager,
 	cgroupMgr cgroupConfigManager,
 	metricsCol metricsConfigCollector,
-	promExp prometheusConfigExporter,
 	hooks ...ConfigApplyHook,
 ) *Reloader {
 
 	logger := logging.GetLogger()
 
 	reloader := &Reloader{
-		stateManager:       stateMgr,
-		cgroupManager:      cgroupMgr,
-		metricsCollector:   metricsCol,
-		prometheusExporter: promExp,
-		logger:             logger,
+		stateManager:     stateMgr,
+		cgroupManager:    cgroupMgr,
+		metricsCollector: metricsCol,
+		logger:           logger,
 	}
 	if len(hooks) > 0 {
 		reloader.applyHook = hooks[0]

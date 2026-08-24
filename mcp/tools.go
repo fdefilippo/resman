@@ -409,7 +409,6 @@ func (s *Server) registerTools() {
 			"polling_interval":      cfg.PollingInterval,
 			"min_system_cores":      cfg.MinSystemCores,
 			"cpu_quota_normal":      cfg.CPUQuotaNormal,
-			"cpu_quota_limited":     cfg.CPUQuotaLimited,
 			"enable_prometheus":     cfg.EnablePrometheus,
 			"prometheus_port":       cfg.PrometheusMetricsBindPort,
 			"ignore_system_load":    cfg.IgnoreSystemLoad,

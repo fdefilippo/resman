@@ -391,17 +391,3 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	w.logger.Info("New configuration applied successfully")
 	return nil
 }
-
-// GetCurrentConfig returns the last processed configuration snapshot.
-func (w *Watcher) GetCurrentConfig() *Config {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.currentConfig
-}
-
-// IsRunning reports whether the watcher accepts reload requests.
-func (w *Watcher) IsRunning() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.isRunning
-}

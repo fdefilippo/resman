@@ -275,11 +275,8 @@ Configure `claude_desktop_config.json`:
 {
   "mcpServers": {
     "resman": {
-      "command": "/usr/bin/resman-mcp",
-      "args": ["--transport", "stdio"],
-      "env": {
-        "CONFIG_FILE": "/etc/resman.conf"
-      }
+      "command": "/usr/bin/resman",
+      "args": ["--config", "/etc/resman.conf"]
     }
   }
 }

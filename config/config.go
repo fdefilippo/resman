@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ type Timeframe struct {
 	HourEnd    int   // Ora fine esclusiva (0-24)
 }
 
-// Config contiene tutti i parametri configurabili dell'applicazione.
+// Config contains every public and derived runtime setting.
 type Config struct {
 	mu sync.RWMutex
 
@@ -52,8 +53,6 @@ type Config struct {
 	ConfigFile         string `config:"-"` // Runtime path selected by the --config flag
 	LogFile            string `config:"LOG_FILE"`
 	CreatedCgroupsFile string `config:"CREATED_CGROUPS_FILE"`
-	MetricsCacheFile   string `config:"METRICS_CACHE_FILE"`
-	PrometheusFile     string `config:"PROMETHEUS_FILE"`
 
 	// Timing
 	PollingInterval int `config:"POLLING_INTERVAL"`
@@ -76,14 +75,12 @@ type Config struct {
 	CPUThresholdDuration int `config:"CPU_THRESHOLD_DURATION"` // Seconds to wait before activating limits (0 = immediate)
 
 	// CPU limits (cpu.max format: "quota period")
-	CPUQuotaNormal  string `config:"CPU_QUOTA_NORMAL"`
-	CPUQuotaLimited string `config:"CPU_QUOTA_LIMITED"`
+	CPUQuotaNormal string `config:"CPU_QUOTA_NORMAL"`
 
 	// RAM limits
 	RAMEnabled          bool    `config:"RAM_LIMIT_ENABLED"`
 	RAMThreshold        int     `config:"RAM_THRESHOLD"`
 	RAMReleaseThreshold int     `config:"RAM_RELEASE_THRESHOLD"`
-	RAMQuotaLimited     string  `config:"RAM_QUOTA_LIMITED"`
 	RAMQuotaPerUser     string  `config:"RAM_QUOTA_PER_USER"`
 	DisableSwap         bool    `config:"DISABLE_SWAP"`
 	RAMHighRatio        float64 `config:"RAM_HIGH_RATIO"` // Ratio for memory.high (0.0-1.0, default 0.8)
@@ -155,7 +152,6 @@ type Config struct {
 	PrometheusJWTSecretFile    string `config:"PROMETHEUS_JWT_SECRET_FILE"`
 	PrometheusJWTIssuer        string `config:"PROMETHEUS_JWT_ISSUER"`
 	PrometheusJWTAudience      string `config:"PROMETHEUS_JWT_AUDIENCE"`
-	PrometheusJWTExpiry        int    `config:"PROMETHEUS_JWT_EXPIRY"` // seconds
 
 	// Logging
 	LogLevel   string `config:"LOG_LEVEL"`
@@ -251,8 +247,6 @@ func DefaultConfig() *Config {
 		ConfigFile:         "/etc/resman.conf",
 		LogFile:            "/var/log/resman.log",
 		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
-		MetricsCacheFile:   "/var/run/resman-metrics.cache",
-		PrometheusFile:     "/var/run/resman-metrics.prom",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -270,13 +264,11 @@ func DefaultConfig() *Config {
 		CPUReleaseThreshold:  40,
 		CPUThresholdDuration: 90, // Default: wait 90 seconds before activating limits
 
-		CPUQuotaNormal:  "max 100000",
-		CPUQuotaLimited: "50000 100000", // 0.5 core
+		CPUQuotaNormal: "max 100000",
 
 		RAMEnabled:          false,
 		RAMThreshold:        75,
 		RAMReleaseThreshold: 40,
-		RAMQuotaLimited:     "2G",
 		RAMQuotaPerUser:     "512M",
 		DisableSwap:         false,
 		RAMHighRatio:        0.8, // Default: memory.high = 80% of memory.max
@@ -341,7 +333,6 @@ func DefaultConfig() *Config {
 		PrometheusJWTSecretFile:    "",
 		PrometheusJWTIssuer:        "resman",
 		PrometheusJWTAudience:      "prometheus",
-		PrometheusJWTExpiry:        3600,
 
 		LogLevel:   "INFO",
 		LogMaxSize: 10 * 1024 * 1024, // 10MB
@@ -394,8 +385,8 @@ func DefaultConfig() *Config {
 	}
 }
 
-// LoadAndValidate carica la configurazione da file e variabili d'ambiente,
-// sovrascrivendo i default, e poi la valida.
+// LoadAndValidate loads file and environment overrides over the defaults, then
+// validates the resulting configuration.
 func LoadAndValidate(configPath string) (*Config, error) {
 	cfg := DefaultConfig()
 	resolvedConfigPath, err := filepath.Abs(configPath)
@@ -404,12 +395,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	}
 	resolvedConfigPath = filepath.Clean(resolvedConfigPath)
 
-	// 1. Carica dal file di configurazione (se esiste)
+	// 1. Load the configuration file when it exists.
 	if err := loadFromFile(resolvedConfigPath, cfg); err != nil {
 		return nil, fmt.Errorf("loading config file %s: %w", resolvedConfigPath, err)
 	}
 
-	// 2. Sovrascrivi con le variabili d'ambiente
+	// 2. Apply environment overrides.
 	if err := loadFromEnvironment(cfg); err != nil {
 		return nil, fmt.Errorf("loading environment overrides: %w", err)
 	}
@@ -417,7 +408,7 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	// The command-line path is authoritative for reloads and MCP writes.
 	cfg.ConfigFile = resolvedConfigPath
 
-	// 3. Valida
+	// 3. Validate the complete result.
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -432,12 +423,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	return cfg, nil
 }
 
-// loadFromFile legge un file di configurazione in formato chiave=valore.
+// loadFromFile reads a key=value configuration file.
 func loadFromFile(path string, cfg *Config) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File non esistente è ok, useremo default/env
+			// A missing file is allowed; defaults and environment still apply.
 			return nil
 		}
 		return err
@@ -446,7 +437,7 @@ func loadFromFile(path string, cfg *Config) error {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
-		// Salta commenti e righe vuote
+		// Skip comments and blank lines.
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -459,12 +450,12 @@ func loadFromFile(path string, cfg *Config) error {
 		key := strings.TrimSpace(parts[0])
 		value := stripInlineComment(parts[1])
 
-		// Rimuovi eventuali virgolette e spazi extra
+		// Remove surrounding quotes and whitespace.
 		value = strings.TrimSpace(value)
 		value = strings.TrimSpace(strings.Trim(value, `"'`))
 
 		if err := setConfigField(cfg, key, value); err != nil {
-			return fmt.Errorf("setting key %s on line %d: %w", key, i+1, err)
+			return fmt.Errorf("configuration file %s line %d key %s: %w", path, i+1, key, err)
 		}
 	}
 	return nil
@@ -505,10 +496,22 @@ func stripInlineComment(value string) string {
 	return value
 }
 
-// loadFromEnvironment sovrascrive i valori con le variabili d'ambiente.
+// loadFromEnvironment applies supported environment overrides and explicitly
+// rejects environment variables for removed public keys.
 func loadFromEnvironment(cfg *Config) error {
 	cfgType := reflect.TypeOf(cfg).Elem()
 	var errs []error
+
+	removedKeys := make([]string, 0, len(removedConfigKeys))
+	for key := range removedConfigKeys {
+		removedKeys = append(removedKeys, key)
+	}
+	sort.Strings(removedKeys)
+	for _, key := range removedKeys {
+		if value, ok := os.LookupEnv(key); ok {
+			errs = append(errs, fmt.Errorf("%s=%q: %w", key, value, removedConfigKeyError(key)))
+		}
+	}
 
 	for i := 0; i < cfgType.NumField(); i++ {
 		field := cfgType.Field(i)
@@ -528,37 +531,35 @@ func loadFromEnvironment(cfg *Config) error {
 		}
 	}
 
-	aliases := []struct {
-		key       string
-		canonical string
-	}{
-		{key: "PROMETHEUS_HOST", canonical: "PROMETHEUS_METRICS_BIND_HOST"},
-		{key: "PROMETHEUS_PORT", canonical: "PROMETHEUS_METRICS_BIND_PORT"},
-		{key: "USER_WHITELIST", canonical: "USER_EXCLUDE_LIST"},
-	}
-	for _, alias := range aliases {
-		if _, canonicalSet := os.LookupEnv(alias.canonical); canonicalSet {
-			continue
-		}
-		envValue, ok := os.LookupEnv(alias.key)
-		if !ok {
-			continue
-		}
-		if err := setConfigField(cfg, alias.key, envValue); err != nil {
-			errs = append(errs, fmt.Errorf("%s=%q: %w", alias.key, envValue, err))
-		}
-	}
-
 	return errors.Join(errs...)
 }
 
-// setConfigField imposta il valore di un campo nella struct Config basandosi sul tag `config`.
+// setConfigField applies one public key through its validated handler.
 func setConfigField(cfg *Config, key, value string) error {
 	handler, ok := configFieldHandlers[key]
 	if !ok {
-		return nil
+		if _, removed := removedConfigKeys[key]; removed {
+			return removedConfigKeyError(key)
+		}
+		return fmt.Errorf("unknown configuration key %q", key)
 	}
 	return handler(cfg, value)
+}
+
+var removedConfigKeys = map[string]string{
+	"CONFIG_FILE":           "select the active file with the --config command-line option",
+	"CPU_QUOTA_LIMITED":     "CPU enforcement is proportional and has no global limited quota",
+	"METRICS_CACHE_FILE":    "resman has no file-backed metrics cache",
+	"PROMETHEUS_FILE":       "resman exports metrics over HTTP and does not write a Prometheus textfile",
+	"PROMETHEUS_HOST":       "use PROMETHEUS_METRICS_BIND_HOST",
+	"PROMETHEUS_JWT_EXPIRY": "token lifetime is set by the signed exp claim at token issuance",
+	"PROMETHEUS_PORT":       "use PROMETHEUS_METRICS_BIND_PORT",
+	"RAM_QUOTA_LIMITED":     "RAM enforcement uses RAM_QUOTA_PER_USER",
+	"USER_WHITELIST":        "use USER_EXCLUDE_LIST",
+}
+
+func removedConfigKeyError(key string) error {
+	return fmt.Errorf("configuration key %s was removed: %s", key, removedConfigKeys[key])
 }
 
 type configFieldHandler func(*Config, string) error
@@ -568,8 +569,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CGROUP_BASE":          setCgroupBase,
 	"LOG_FILE":             setString(func(cfg *Config, value string) { cfg.LogFile = value }),
 	"CREATED_CGROUPS_FILE": setString(func(cfg *Config, value string) { cfg.CreatedCgroupsFile = value }),
-	"METRICS_CACHE_FILE":   setString(func(cfg *Config, value string) { cfg.MetricsCacheFile = value }),
-	"PROMETHEUS_FILE":      setString(func(cfg *Config, value string) { cfg.PrometheusFile = value }),
 	"POLLING_INTERVAL":     setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
 	"MIN_ACTIVE_TIME":      setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
 	"METRICS_CACHE_TTL":    setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
@@ -583,7 +582,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_RELEASE_THRESHOLD":  setInt(func(cfg *Config, value int) { cfg.CPUReleaseThreshold = value }),
 	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
 	"CPU_QUOTA_NORMAL":       setString(func(cfg *Config, value string) { cfg.CPUQuotaNormal = value }),
-	"CPU_QUOTA_LIMITED":      setString(func(cfg *Config, value string) { cfg.CPUQuotaLimited = value }),
 	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
 	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
 	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
@@ -593,12 +591,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 		cfg.PrometheusMetricsBindHost = value
 	}),
 	"PROMETHEUS_METRICS_BIND_PORT": setPort("PROMETHEUS_METRICS_BIND_PORT", func(cfg *Config, value int) {
-		cfg.PrometheusMetricsBindPort = value
-	}),
-	"PROMETHEUS_HOST": setString(func(cfg *Config, value string) {
-		cfg.PrometheusMetricsBindHost = value
-	}),
-	"PROMETHEUS_PORT": setPort("PROMETHEUS_PORT", func(cfg *Config, value int) {
 		cfg.PrometheusMetricsBindPort = value
 	}),
 	"PROMETHEUS_TLS_ENABLED":   setBool(func(cfg *Config, value bool) { cfg.PrometheusTLSEnabled = value }),
@@ -616,7 +608,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_JWT_SECRET_FILE":    setString(func(cfg *Config, value string) { cfg.PrometheusJWTSecretFile = value }),
 	"PROMETHEUS_JWT_ISSUER":         setString(func(cfg *Config, value string) { cfg.PrometheusJWTIssuer = value }),
 	"PROMETHEUS_JWT_AUDIENCE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
-	"PROMETHEUS_JWT_EXPIRY":         setInt(func(cfg *Config, value int) { cfg.PrometheusJWTExpiry = value }),
 	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
 	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
 	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
@@ -627,7 +618,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"USER_EXCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
 	"PROCESS_EXCLUDE_LIST":          setRegexList(" in PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
 	"BLACKOUT":                      setBlackout,
-	"USER_WHITELIST":                setPlainList(func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
 	"IGNORE_SYSTEM_LOAD":            setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
 	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
 	"MCP_ENABLED":                   setBool(func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
@@ -652,7 +642,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
 	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
 	"RAM_RELEASE_THRESHOLD":         setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
-	"RAM_QUOTA_LIMITED":             setString(func(cfg *Config, value string) { cfg.RAMQuotaLimited = value }),
 	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
 	"DISABLE_SWAP":                  setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
 	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
@@ -829,33 +818,6 @@ func parseRegexList(value, errorContext string) ([]string, error) {
 	return patterns, nil
 }
 
-func setPlainList(assign func(*Config, []string)) configFieldHandler {
-	return func(cfg *Config, value string) error {
-		assign(cfg, parsePlainList(value))
-		return nil
-	}
-}
-
-func parsePlainList(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-
-	rawValues := strings.Split(value, ",")
-	values := make([]string, 0, len(rawValues))
-	for _, item := range rawValues {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			values = append(values, item)
-		}
-	}
-	if len(values) == 0 {
-		return nil
-	}
-	return values
-}
-
 // validateConfig validates the complete runtime configuration.
 func validateConfig(cfg *Config) error {
 	var errors []string
@@ -954,30 +916,16 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	if cfg.MCPEnabled && cfg.MCPTransport == "http" {
-		if strings.TrimSpace(cfg.MCPAuthToken) == "" {
-			errors = append(errors, "MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
-		}
-		if !cfg.MCPTLSEnabled {
-			errors = append(errors, "MCP_TLS_ENABLED must be true when MCP_ENABLED=true and MCP_TRANSPORT=http")
-		}
-		if strings.TrimSpace(cfg.MCPTLSCertFile) == "" || strings.TrimSpace(cfg.MCPTLSKeyFile) == "" {
-			errors = append(errors, "MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set when MCP HTTP is enabled")
-		}
-		if !isValidTLSVersion(cfg.MCPTLSMinVersion) {
-			errors = append(errors, "MCP_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
-		}
+	if err := cfg.MCPServerConfig().Validate(); err != nil {
+		errors = append(errors, err.Error())
 	}
 
-	// Validate CPU quota format
-	if !isValidCPUQuota(cfg.CPUQuotaLimited) {
-		errors = append(errors, "CPU_QUOTA_LIMITED must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
-	}
+	// Validate CPU quota format.
 	if !isValidCPUQuota(cfg.CPUQuotaNormal) {
 		errors = append(errors, "CPU_QUOTA_NORMAL must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
 	}
 
-	// Validate RAM limits configuration
+	// Validate RAM limits configuration.
 	if cfg.RAMEnabled {
 		if cfg.RAMThreshold < 1 || cfg.RAMThreshold > 100 {
 			errors = append(errors, "RAM_THRESHOLD must be between 1 and 100")
@@ -987,9 +935,6 @@ func validateConfig(cfg *Config) error {
 		}
 		if cfg.RAMThreshold <= cfg.RAMReleaseThreshold {
 			errors = append(errors, "RAM_THRESHOLD must be greater than RAM_RELEASE_THRESHOLD")
-		}
-		if !isValidByteQuota(cfg.RAMQuotaLimited) {
-			errors = append(errors, "RAM_QUOTA_LIMITED must be a valid byte value (e.g., '1073741824', '512M', '1G')")
 		}
 		if !isValidByteQuota(cfg.RAMQuotaPerUser) {
 			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")

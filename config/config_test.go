@@ -34,7 +34,7 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() returned nil")
 	}
 
-	// Verifica valori default principali
+	// Verify representative default values.
 	tests := []struct {
 		name     string
 		got      interface{}
@@ -47,7 +47,6 @@ func TestDefaultConfig(t *testing.T) {
 		{"CPUThreshold", cfg.CPUThreshold, 75},
 		{"CPUReleaseThreshold", cfg.CPUReleaseThreshold, 40},
 		{"CPUQuotaNormal", cfg.CPUQuotaNormal, "max 100000"},
-		{"CPUQuotaLimited", cfg.CPUQuotaLimited, "50000 100000"},
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
 		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"}, // Secure default
@@ -89,7 +88,6 @@ func TestValidateConfig(t *testing.T) {
 				CgroupOperationTimeout: 5,
 				MCPShutdownTimeout:     10,
 				CPUQuotaNormal:         "max 100000",
-				CPUQuotaLimited:        "50000 100000",
 				BatchNightRAMQuota:     "4G",
 				InteractiveRAMQuota:    "1G",
 				LogLevel:               "INFO",
@@ -108,7 +106,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        0,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -121,7 +118,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        101,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -134,7 +130,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 0,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -147,7 +142,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        40,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -160,20 +154,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     4,
-				CPUQuotaLimited:     "50000 100000",
-				LogLevel:            "INFO",
-				SystemUIDMin:        1000,
-				SystemUIDMax:        60000,
-			},
-			expectError: true,
-		},
-		{
-			name: "invalid CPU_QUOTA_LIMITED format",
-			cfg: &Config{
-				CPUThreshold:        75,
-				CPUReleaseThreshold: 40,
-				PollingInterval:     30,
-				CPUQuotaLimited:     "invalid",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -186,7 +166,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INVALID",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -199,7 +178,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        -1,
 				SystemUIDMax:        60000,
@@ -212,7 +190,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        2000,
 				SystemUIDMax:        1000,
@@ -379,7 +356,7 @@ CPU_RELEASE_THRESHOLD=50
 POLLING_INTERVAL=60
 LOG_LEVEL=DEBUG
 ENABLE_PROMETHEUS=true
-PROMETHEUS_PORT=9102
+PROMETHEUS_METRICS_BIND_PORT=9102
 `
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
@@ -392,7 +369,7 @@ PROMETHEUS_PORT=9102
 		t.Fatalf("loadFromFile() error: %v", err)
 	}
 
-	// Verifica i valori caricati
+	// Verify loaded values.
 	if cfg.CPUThreshold != 80 {
 		t.Errorf("CPUThreshold: got %d, expected 80", cfg.CPUThreshold)
 	}
@@ -510,7 +487,7 @@ func TestLoadFromFileRejectsInvalidPrimitiveValues(t *testing.T) {
 		{name: "positive integer", entry: "METRICS_REFRESH_INTERVAL=0"},
 		{name: "float", entry: "RAM_HIGH_RATIO=invalid"},
 		{name: "boolean", entry: "ENABLE_PROMETHEUS=invalid"},
-		{name: "port", entry: "PROMETHEUS_PORT=invalid"},
+		{name: "port", entry: "PROMETHEUS_METRICS_BIND_PORT=invalid"},
 	}
 
 	for _, tt := range tests {
@@ -602,24 +579,6 @@ func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvironmentSupportsPrometheusAliases(t *testing.T) {
-	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_HOST")
-	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_PORT")
-	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
-	t.Setenv("PROMETHEUS_PORT", "9191")
-
-	cfg := DefaultConfig()
-	if err := loadFromEnvironment(cfg); err != nil {
-		t.Fatalf("loadFromEnvironment() error: %v", err)
-	}
-	if cfg.PrometheusMetricsBindHost != "192.0.2.10" {
-		t.Errorf("PrometheusMetricsBindHost = %q, want 192.0.2.10", cfg.PrometheusMetricsBindHost)
-	}
-	if cfg.PrometheusMetricsBindPort != 9191 {
-		t.Errorf("PrometheusMetricsBindPort = %d, want 9191", cfg.PrometheusMetricsBindPort)
-	}
-}
-
 func TestLoadFromEnvironmentAppliesEmptyOverrides(t *testing.T) {
 	t.Setenv("USER_EXCLUDE_LIST", "")
 	t.Setenv("BLACKOUT", "")
@@ -653,24 +612,6 @@ func TestEveryEnvironmentFieldUsesAValidatedHandler(t *testing.T) {
 		if _, ok := configFieldHandlers[key]; !ok {
 			t.Errorf("config field %s has no handler for %s", cfgType.Field(i).Name, key)
 		}
-	}
-}
-
-func TestLoadFromEnvironmentPrefersCanonicalPrometheusKeys(t *testing.T) {
-	t.Setenv("PROMETHEUS_METRICS_BIND_HOST", "127.0.0.2")
-	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
-	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "9192")
-	t.Setenv("PROMETHEUS_PORT", "9191")
-
-	cfg := DefaultConfig()
-	if err := loadFromEnvironment(cfg); err != nil {
-		t.Fatalf("loadFromEnvironment() error: %v", err)
-	}
-	if cfg.PrometheusMetricsBindHost != "127.0.0.2" {
-		t.Errorf("PrometheusMetricsBindHost = %q, want canonical value", cfg.PrometheusMetricsBindHost)
-	}
-	if cfg.PrometheusMetricsBindPort != 9192 {
-		t.Errorf("PrometheusMetricsBindPort = %d, want canonical value", cfg.PrometheusMetricsBindPort)
 	}
 }
 
@@ -716,6 +657,47 @@ func TestValidateConfigRequiresMCPAuthTokenForHTTP(t *testing.T) {
 	cfg.MCPAuthToken = "test-token"
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("validateConfig() rejected authenticated HTTP MCP transport: %v", err)
+	}
+}
+
+func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
+	t.Setenv("MCP_ENABLED", "yes")
+	t.Setenv("MCP_TRANSPORT", "HTTP")
+	t.Setenv("MCP_HTTP_PORT", "9090")
+	t.Setenv("MCP_HTTP_HOST", "192.0.2.10")
+	t.Setenv("MCP_TLS_ENABLED", "on")
+	t.Setenv("MCP_TLS_CERT_FILE", "/test/server.crt")
+	t.Setenv("MCP_TLS_KEY_FILE", "/test/server.key")
+	t.Setenv("MCP_TLS_CA_FILE", "/test/ca.crt")
+	t.Setenv("MCP_TLS_MIN_VERSION", "1.3")
+	t.Setenv("MCP_LOG_LEVEL", "debug")
+	t.Setenv("MCP_AUTH_TOKEN", "test-token")
+	t.Setenv("MCP_ALLOW_WRITE_OPS", "1")
+
+	cfg := DefaultConfig()
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error = %v", err)
+	}
+	got := cfg.MCPServerConfig()
+	want := MCPServerConfig{
+		Enabled:       true,
+		Transport:     "http",
+		HTTPPort:      9090,
+		HTTPHost:      "192.0.2.10",
+		TLSEnabled:    true,
+		TLSCertFile:   "/test/server.crt",
+		TLSKeyFile:    "/test/server.key",
+		TLSCAFile:     "/test/ca.crt",
+		TLSMinVersion: "1.3",
+		LogLevel:      "DEBUG",
+		AuthToken:     "test-token",
+		AllowWriteOps: true,
+	}
+	if got != want {
+		t.Fatalf("MCPServerConfig() = %+v, want %+v", got, want)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("MCPServerConfig.Validate() error = %v", err)
 	}
 }
 
@@ -891,12 +873,6 @@ func TestValidateConfigRejectsInvalidCPUQuotaAndTimeouts(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid limited CPU quota",
-			mutate: func(cfg *Config) {
-				cfg.CPUQuotaLimited = "50000 0"
-			},
-		},
-		{
 			name: "zero cgroup operation timeout",
 			mutate: func(cfg *Config) {
 				cfg.CgroupOperationTimeout = 0
@@ -980,12 +956,10 @@ LOG_LEVEL=INFO
 
 func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "active.conf")
-	wrongPath := filepath.Join(t.TempDir(), "wrong.conf")
-	configContent := "CONFIG_FILE=" + wrongPath + "\nUSER_INCLUDE_LIST=.*\n"
+	configContent := "USER_INCLUDE_LIST=.*\n"
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
-	t.Setenv("CONFIG_FILE", wrongPath)
 
 	cfg, err := LoadAndValidate(configPath)
 	if err != nil {
@@ -1009,8 +983,50 @@ func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 	if !strings.Contains(string(content), "USER_EXCLUDE_LIST=^service$") {
 		t.Fatalf("active config was not updated: %q", content)
 	}
-	if _, err := os.Stat(wrongPath); !os.IsNotExist(err) {
-		t.Fatalf("non-authoritative config path was touched: %v", err)
+}
+
+func TestRemovedConfigurationKeysAreRejected(t *testing.T) {
+	for key := range removedConfigKeys {
+		unsetEnvForTest(t, key)
+	}
+
+	for key := range removedConfigKeys {
+		key := key
+		t.Run(key+" in file", func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "removed.conf")
+			if err := os.WriteFile(configPath, []byte(key+"=value\n"), 0600); err != nil {
+				t.Fatalf("write removed-key config: %v", err)
+			}
+			cfg, err := LoadAndValidate(configPath)
+			if err == nil || cfg != nil {
+				t.Fatalf("LoadAndValidate() = (%#v, %v), want removed-key error", cfg, err)
+			}
+			if !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), configPath) ||
+				!strings.Contains(err.Error(), "was removed") {
+				t.Fatalf("LoadAndValidate() error = %v, want key, file, and removal reason", err)
+			}
+		})
+
+		t.Run(key+" in environment", func(t *testing.T) {
+			t.Setenv(key, "value")
+			err := loadFromEnvironment(DefaultConfig())
+			if err == nil || !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "was removed") {
+				t.Fatalf("loadFromEnvironment() error = %v, want explicit removed-key error", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromFileRejectsUnknownKeyWithPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "unknown.conf")
+	if err := os.WriteFile(configPath, []byte("MISSPELLED_THRESHOLD=75\n"), 0600); err != nil {
+		t.Fatalf("write unknown-key config: %v", err)
+	}
+
+	err := loadFromFile(configPath, DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "MISSPELLED_THRESHOLD") ||
+		!strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "unknown configuration key") {
+		t.Fatalf("loadFromFile() error = %v, want unknown key and file path", err)
 	}
 }
 
@@ -1085,10 +1101,10 @@ func TestSetConfigField(t *testing.T) {
 			checkFunc:   func(c *Config) bool { return c.IgnoreSystemLoad == true },
 		},
 		{
-			name:        "unknown key (should not error)",
+			name:        "unknown key",
 			key:         "UNKNOWN_KEY",
 			value:       "value",
-			expectError: false,
+			expectError: true,
 			checkFunc:   func(c *Config) bool { return true },
 		},
 	}

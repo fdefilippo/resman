@@ -181,7 +181,7 @@ func TestWatcherKeepsCurrentConfigAfterInvalidEnvironmentOverride(t *testing.T) 
 		t.Fatal("handleConfigChange() accepted invalid environment override")
 	}
 
-	if watcher.GetCurrentConfig() != initialConfig {
+	if watcher.currentConfig != initialConfig {
 		t.Fatal("invalid environment override replaced the current configuration")
 	}
 	select {
@@ -364,7 +364,7 @@ func TestWatcherReloadRejectsFileChangedDuringApplication(t *testing.T) {
 	if err := <-reloadDone; err == nil || !strings.Contains(err.Error(), "changed while runtime application") {
 		t.Fatalf("Reload() error = %v, want concurrent file-change rejection", err)
 	}
-	if got := watcher.GetCurrentConfig().CPUThreshold; got != 81 {
+	if got := watcher.currentConfig.CPUThreshold; got != 81 {
 		t.Fatalf("applied snapshot CPU_THRESHOLD = %d, want 81", got)
 	}
 	if err := watcher.Stop(); err != nil {

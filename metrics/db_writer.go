@@ -23,55 +23,23 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/database"
-	"github.com/fdefilippo/resman/logging"
 )
 
 // DBWriter coordinates periodic writes to the metrics database.
 type DBWriter struct {
 	dbManager     *database.DatabaseManager
-	logger        *logging.Logger
 	writeInterval time.Duration
 	mu            sync.RWMutex
 	lastWriteTime time.Time
 	enabled       bool
 }
 
-// NewDBWriter crea un nuovo DBWriter
+// NewDBWriter creates a periodic metrics database writer.
 func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) *DBWriter {
-	logger := logging.GetLogger()
-
 	return &DBWriter{
 		dbManager:     dbManager,
-		logger:        logger,
 		writeInterval: time.Duration(writeIntervalSeconds) * time.Second,
 		enabled:       true,
-	}
-}
-
-// WriteSystemMetrics writes one system metrics sample to the database.
-func (w *DBWriter) WriteSystemMetrics(totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
-	w.mu.RLock()
-	if !w.enabled {
-		w.mu.RUnlock()
-		return
-	}
-	w.mu.RUnlock()
-
-	if w.dbManager == nil {
-		return
-	}
-
-	record := &database.SystemMetricsRecord{
-		TotalCPUUsagePercent: totalCPUUsage,
-		TotalCores:           totalCores,
-		SystemLoad:           systemLoad,
-		LimitsActive:         limitsActive,
-		LimitedUsersCount:    limitedUsersCount,
-		Timestamp:            time.Now().UTC(),
-	}
-
-	if err := w.dbManager.WriteSystemMetrics(record); err != nil {
-		w.logger.Debug("Failed to write system metrics to database", "error", err)
 	}
 }
 

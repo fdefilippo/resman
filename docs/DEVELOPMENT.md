@@ -98,9 +98,10 @@ place: an inert `CPU_QUOTA_LIMITED` that still validates, the former
 `reload=false` parameter that did not mean what it said. Each was cheaper to leave
 than to remove — until there were sixteen of them.
 
-**Live gap.** `config/config.go:533-538` returns `nil` for any key not present in
-`configFieldHandlers`: unknown and removed keys are silently ignored today, and so are
-typos. Rule 1 cannot be satisfied until that path rejects instead.
+**Resolution.** `setConfigField` now rejects every key absent from
+`configFieldHandlers`, so file typos fail with the key, line, and file named. Removed
+public keys have explicit rejection tombstones so the same failure also applies to
+environment overrides; no tombstone parses or aliases a value.
 
 *Source: epic `resman-4pw` policy; findings `resman-4pw.7`, `resman-4pw.12`*
 
@@ -215,10 +216,12 @@ Every public configuration key **MUST** have a runtime consumer.
   key is rejected at load, and the documentation, example config, and man page are
   updated in the same change. No deprecation window, no alias, no silent ignore.
 
-**Why.** `CPU_QUOTA_LIMITED` and `RAM_QUOTA_LIMITED` are parsed *and validated*
-(`config/config.go:939,957`) with no runtime consumer. `METRICS_CACHE_FILE`,
-`PROMETHEUS_FILE` are parsed and unused. `PROMETHEUS_JWT_EXPIRY` is logged and
-preserved across reload (`reloader/reloader.go:160`) but does not cap token validity.
+**Why.** Before `resman-4pw.12`, `CPU_QUOTA_LIMITED` and `RAM_QUOTA_LIMITED` were parsed
+and validated with no runtime consumer. `METRICS_CACHE_FILE` and `PROMETHEUS_FILE`
+were parsed and unused. `PROMETHEUS_JWT_EXPIRY` was logged but did not cap token
+validity. The remediation removed and explicitly rejects those keys, and JWT lifetime
+now has one contract: the verifier requires the signed `exp` claim chosen by the token
+issuer.
 
 *Finding: resman-4pw.12*
 

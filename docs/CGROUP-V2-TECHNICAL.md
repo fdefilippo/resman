@@ -268,7 +268,6 @@ func (m *Manager) GetMemoryHighEvents(uid int) (uint64, error) {
 RAM_LIMIT_ENABLED=false          # Enable RAM limiting
 RAM_THRESHOLD=75                 # Activation threshold (%)
 RAM_RELEASE_THRESHOLD=40         # Deactivation threshold (%)
-RAM_QUOTA_LIMITED=2G             # Total RAM quota for limited users
 RAM_QUOTA_PER_USER=512M          # Per-user RAM quota
 DISABLE_SWAP=false               # Set memory.swap.max=0
 RAM_HIGH_RATIO=0.8               # memory.high = 80% of memory.max (NEW!)

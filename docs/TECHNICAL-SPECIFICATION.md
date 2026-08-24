@@ -169,7 +169,6 @@ type Config struct {
     ConfigFile         string
     LogFile            string
     CreatedCgroupsFile string
-    MetricsCacheFile   string
 
     // Timing
     PollingInterval   int  // seconds
@@ -182,7 +181,6 @@ type Config struct {
 
     // CPU Limits
     CPUQuotaNormal   string  // "max 100000"
-    CPUQuotaLimited  string  // "50000 100000"
 
     // Prometheus
     EnablePrometheus        bool
@@ -548,9 +546,9 @@ controller.
 
 **Location:** `/etc/resman.conf`
 
-The active file is selected with `--config` (default `/etc/resman.conf`).
-`CONFIG_FILE` inside the file or environment does not redirect the running
-daemon.
+The active file is selected with `--config` (default `/etc/resman.conf`). The
+removed `CONFIG_FILE` configuration key is rejected in files and environment
+overrides; it never selects another file.
 
 **Format:**
 ```ini
@@ -573,7 +571,6 @@ CGROUP_ROOT="/sys/fs/cgroup"
 CGROUP_BASE="resman"
 LOG_FILE="/var/log/resman.log"
 CREATED_CGROUPS_FILE="/var/run/resman/cgroups.txt"
-METRICS_CACHE_FILE="/var/run/resman/metrics.cache"
 
 # ========================
 # TIMING (seconds)
@@ -592,7 +589,6 @@ CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
 # CPU LIMITS (cpu.max format)
 # ========================
 CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
-CPU_QUOTA_LIMITED="50000 100000"   # 0.5 cores
 
 # ========================
 # PROMETHEUS

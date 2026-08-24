@@ -64,7 +64,7 @@ func newUserFilterTestServer(t *testing.T, reloader ConfigurationReloader) (*Ser
 		t.Fatalf("NewManager() error: %v", err)
 	}
 	return &Server{
-		cfg:            &Config{AllowWriteOps: true},
+		cfg:            &config.MCPServerConfig{AllowWriteOps: true},
 		stateManager:   manager,
 		configReloader: reloader,
 	}, configPath

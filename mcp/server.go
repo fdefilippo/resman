@@ -65,7 +65,7 @@ type ConfigurationReloader interface {
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer         *mcp.Server
-	cfg               *Config
+	cfg               *config.MCPServerConfig
 	stateManager      *state.Manager
 	metricsCollector  *metrics.Collector
 	cgroupManager     *cgroup.Manager
@@ -96,21 +96,8 @@ func NewServer(
 ) (*Server, error) {
 	logger := logging.GetLogger()
 
-	// Load MCP configuration
-	mcpCfg := &Config{
-		Enabled:       parentCfg.MCPEnabled,
-		Transport:     parentCfg.MCPTransport,
-		HTTPPort:      parentCfg.MCPHTTPPort,
-		HTTPHost:      parentCfg.MCPHTTPHost,
-		TLSEnabled:    parentCfg.MCPTLSEnabled,
-		TLSCertFile:   parentCfg.MCPTLSCertFile,
-		TLSKeyFile:    parentCfg.MCPTLSKeyFile,
-		TLSCAFile:     parentCfg.MCPTLSCAFile,
-		TLSMinVersion: parentCfg.MCPTLSMinVersion,
-		LogLevel:      parentCfg.MCPLogLevel,
-		AuthToken:     parentCfg.MCPAuthToken,
-		AllowWriteOps: parentCfg.MCPAllowWriteOps,
-	}
+	// Snapshot the shared, centrally parsed MCP configuration contract.
+	mcpCfg := parentCfg.MCPServerConfig()
 
 	if err := mcpCfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid MCP configuration: %w", err)
@@ -139,7 +126,7 @@ func NewServer(
 
 	s := &Server{
 		mcpServer:        mcpServer,
-		cfg:              mcpCfg,
+		cfg:              &mcpCfg,
 		stateManager:     sm,
 		metricsCollector: mc,
 		cgroupManager:    cg,
