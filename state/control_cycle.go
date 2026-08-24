@@ -402,6 +402,11 @@ type SystemMetrics struct {
 	IOEligibleWriteBPS               float64
 	IOEligibleReadSyscallsPerSecond  float64
 	IOEligibleWriteSyscallsPerSecond float64
+	IOEligibleUnavailableProcesses   int
+
+	// Current procfs coverage failures across all observed processes.
+	ProcFSExecutableIdentityUnavailableProcesses int
+	ProcFSIOUnavailableProcesses                 int
 
 	MemoryUsage      float64 // MB
 	TotalMemoryMB    float64 // MB
@@ -470,33 +475,37 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 		metrics.AllUsersCPUUsage += um.CPUUsage
 		metrics.AllUsersMemoryUsage += um.MemoryUsage
 		metrics.AllUsersCount++
+		metrics.ProcFSExecutableIdentityUnavailableProcesses += um.ExecutableIdentityUnavailableProcesses
+		metrics.ProcFSIOUnavailableProcesses += um.IOUnavailableProcesses
 
 		metrics.UserCPUUsage[uid] = um.CPUUsage
 
 		limitState := m.GetUserLimitState(uid, um.Username)
 
 		corrected := &resmanmetrics.UserMetrics{
-			UID:               um.UID,
-			Username:          um.Username,
-			CPUUsage:          um.CPUUsage,
-			CPUUsageAverage:   um.CPUUsageAverage,
-			CPUUsageEMA:       um.CPUUsageEMA,
-			MemoryUsage:       um.MemoryUsage,
-			ProcessCount:      um.ProcessCount,
-			EligibleForCPU:    limitState.EligibleForCPU,
-			EligibleForRAM:    limitState.EligibleForRAM,
-			EligibleForIO:     limitState.EligibleForIO,
-			CPULimitRequested: limitState.CPULimitRequested,
-			CPULimitActive:    limitState.CPULimitActive,
-			RAMLimitRequested: limitState.RAMLimitRequested,
-			RAMLimitActive:    limitState.RAMLimitActive,
-			IOLimitRequested:  limitState.IOLimitRequested,
-			IOLimitActive:     limitState.IOLimitActive,
-			IOReadBytes:       um.IOReadBytes,
-			IOWriteBytes:      um.IOWriteBytes,
-			IOReadOps:         um.IOReadOps,
-			IOWriteOps:        um.IOWriteOps,
-			EnforceableUsage:  um.EnforceableUsage,
+			UID:                                    um.UID,
+			Username:                               um.Username,
+			CPUUsage:                               um.CPUUsage,
+			CPUUsageAverage:                        um.CPUUsageAverage,
+			CPUUsageEMA:                            um.CPUUsageEMA,
+			MemoryUsage:                            um.MemoryUsage,
+			ProcessCount:                           um.ProcessCount,
+			EligibleForCPU:                         limitState.EligibleForCPU,
+			EligibleForRAM:                         limitState.EligibleForRAM,
+			EligibleForIO:                          limitState.EligibleForIO,
+			CPULimitRequested:                      limitState.CPULimitRequested,
+			CPULimitActive:                         limitState.CPULimitActive,
+			RAMLimitRequested:                      limitState.RAMLimitRequested,
+			RAMLimitActive:                         limitState.RAMLimitActive,
+			IOLimitRequested:                       limitState.IOLimitRequested,
+			IOLimitActive:                          limitState.IOLimitActive,
+			IOReadBytes:                            um.IOReadBytes,
+			IOWriteBytes:                           um.IOWriteBytes,
+			IOReadOps:                              um.IOReadOps,
+			IOWriteOps:                             um.IOWriteOps,
+			ExecutableIdentityUnavailableProcesses: um.ExecutableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 um.IOUnavailableProcesses,
+			EnforceableUsage:                       um.EnforceableUsage,
 		}
 		metrics.UserMetrics[uid] = corrected
 
@@ -511,6 +520,7 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 		}
 		if corrected.EligibleForIO {
 			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
+			metrics.IOEligibleUnavailableProcesses += um.EnforceableUsage.IOUnavailableProcesses
 			if decisionSample && !m.prevIOTime.IsZero() {
 				if _, wasEligible := m.previousIOEligibleUsers[uid]; wasEligible {
 					rates := calculateIORates(um.EnforceableUsage.IODelta, sampleTime.Sub(m.prevIOTime))
@@ -585,6 +595,8 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		TotalMemoryMB:                metrics.TotalMemoryMB,
 		CachedMemoryMB:               metrics.CachedMemoryMB,
 		SystemLoad:                   metrics.SystemLoad,
+		ProcFSExecutableIdentityUnavailableProcesses: metrics.ProcFSExecutableIdentityUnavailableProcesses,
+		ProcFSIOUnavailableProcesses:                 metrics.ProcFSIOUnavailableProcesses,
 	})
 
 	// Update system metrics.

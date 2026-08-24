@@ -49,42 +49,46 @@ const (
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID               int
-	Username          string
-	CPUUsage          float64 // CPU percentage (instantaneous, last cycle)
-	CPUUsageAverage   float64 // CPU percentage average since process start
-	CPUUsageEMA       float64 // CPU percentage exponential moving average (α=0.3)
-	MemoryUsage       uint64  // Memory in bytes (PSS when available, RSS fallback)
-	ProcessCount      int     // Number of processes
-	EligibleForCPU    bool    // Whether CPU policy may limit the user
-	EligibleForRAM    bool    // Whether RAM policy may limit the user
-	EligibleForIO     bool    // Whether I/O policy may limit the user
-	CPULimitRequested bool    // Whether the control cycle currently requests a CPU limit
-	CPULimitActive    bool    // Whether CPU cgroup enforcement is observed as active
-	RAMLimitRequested bool    // Whether the control cycle currently requests a RAM limit
-	RAMLimitActive    bool    // Whether RAM cgroup enforcement is observed as active
-	IOLimitRequested  bool    // Whether the control cycle currently requests an I/O limit
-	IOLimitActive     bool    // Whether I/O cgroup enforcement is observed as active
-	IOReadBytes       uint64  // Total bytes read from block devices
-	IOWriteBytes      uint64  // Total bytes written to block devices
-	IOReadOps         uint64  // Total read-family syscalls reported by /proc/PID/io syscr
-	IOWriteOps        uint64  // Total write-family syscalls reported by /proc/PID/io syscw
-	EnforceableUsage  ProcessSetMetrics
+	UID                                    int
+	Username                               string
+	CPUUsage                               float64 // CPU percentage (instantaneous, last cycle)
+	CPUUsageAverage                        float64 // CPU percentage average since process start
+	CPUUsageEMA                            float64 // CPU percentage exponential moving average (α=0.3)
+	MemoryUsage                            uint64  // Memory in bytes (PSS when available, RSS fallback)
+	ProcessCount                           int     // Number of processes
+	EligibleForCPU                         bool    // Whether CPU policy may limit the user
+	EligibleForRAM                         bool    // Whether RAM policy may limit the user
+	EligibleForIO                          bool    // Whether I/O policy may limit the user
+	CPULimitRequested                      bool    // Whether the control cycle currently requests a CPU limit
+	CPULimitActive                         bool    // Whether CPU cgroup enforcement is observed as active
+	RAMLimitRequested                      bool    // Whether the control cycle currently requests a RAM limit
+	RAMLimitActive                         bool    // Whether RAM cgroup enforcement is observed as active
+	IOLimitRequested                       bool    // Whether the control cycle currently requests an I/O limit
+	IOLimitActive                          bool    // Whether I/O cgroup enforcement is observed as active
+	IOReadBytes                            uint64  // Total bytes read from block devices
+	IOWriteBytes                           uint64  // Total bytes written to block devices
+	IOReadOps                              uint64  // Total read-family syscalls reported by /proc/PID/io syscr
+	IOWriteOps                             uint64  // Total write-family syscalls reported by /proc/PID/io syscw
+	ExecutableIdentityUnavailableProcesses int     // Processes without a trustworthy /proc/PID/exe identity
+	IOUnavailableProcesses                 int     // Processes without a trustworthy I/O decision sample
+	EnforceableUsage                       ProcessSetMetrics
 }
 
 // ProcessSetMetrics contains usage from processes selected for cgroup
 // enforcement. Observed UserMetrics fields continue to describe every process.
 type ProcessSetMetrics struct {
-	CPUUsage        float64
-	CPUUsageAverage float64
-	CPUUsageEMA     float64
-	MemoryUsage     uint64
-	ProcessCount    int
-	IOReadBytes     uint64
-	IOWriteBytes    uint64
-	IOReadOps       uint64
-	IOWriteOps      uint64
-	IODelta         ProcessIODelta
+	CPUUsage                               float64
+	CPUUsageAverage                        float64
+	CPUUsageEMA                            float64
+	MemoryUsage                            uint64
+	ProcessCount                           int
+	IOReadBytes                            uint64
+	IOWriteBytes                           uint64
+	IOReadOps                              uint64
+	IOWriteOps                             uint64
+	IODelta                                ProcessIODelta
+	ExecutableIdentityUnavailableProcesses int
+	IOUnavailableProcesses                 int
 }
 
 // ProcessIODelta contains the sum of per-process counter growth observed since
@@ -138,15 +142,17 @@ type userData struct {
 }
 
 type processUsage struct {
-	cpuUsage     float64
-	cpuUsageAvg  float64
-	processCount int
-	memoryUsage  uint64
-	ioReadBytes  uint64
-	ioWriteBytes uint64
-	ioReadOps    uint64
-	ioWriteOps   uint64
-	ioDelta      ProcessIODelta
+	cpuUsage                               float64
+	cpuUsageAvg                            float64
+	processCount                           int
+	memoryUsage                            uint64
+	ioReadBytes                            uint64
+	ioWriteBytes                           uint64
+	ioReadOps                              uint64
+	ioWriteOps                             uint64
+	ioDelta                                ProcessIODelta
+	executableIdentityUnavailableProcesses int
+	ioUnavailableProcesses                 int
 }
 
 func (u *processUsage) add(sample processUsage) {
@@ -162,6 +168,8 @@ func (u *processUsage) add(sample processUsage) {
 	u.ioDelta.WriteBytes += sample.ioDelta.WriteBytes
 	u.ioDelta.ReadOps += sample.ioDelta.ReadOps
 	u.ioDelta.WriteOps += sample.ioDelta.WriteOps
+	u.executableIdentityUnavailableProcesses += sample.executableIdentityUnavailableProcesses
+	u.ioUnavailableProcesses += sample.ioUnavailableProcesses
 }
 
 func addProcessSample(data *userData, cfg *config.Config, executable, comm string, sample processUsage) processpolicy.Selection {
@@ -175,17 +183,46 @@ func addProcessSample(data *userData, cfg *config.Config, executable, comm strin
 
 func processSetMetrics(usage processUsage, ema float64) ProcessSetMetrics {
 	return ProcessSetMetrics{
-		CPUUsage:        usage.cpuUsage,
-		CPUUsageAverage: usage.cpuUsageAvg,
-		CPUUsageEMA:     ema,
-		MemoryUsage:     usage.memoryUsage,
-		ProcessCount:    usage.processCount,
-		IOReadBytes:     usage.ioReadBytes,
-		IOWriteBytes:    usage.ioWriteBytes,
-		IOReadOps:       usage.ioReadOps,
-		IOWriteOps:      usage.ioWriteOps,
-		IODelta:         usage.ioDelta,
+		CPUUsage:                               usage.cpuUsage,
+		CPUUsageAverage:                        usage.cpuUsageAvg,
+		CPUUsageEMA:                            ema,
+		MemoryUsage:                            usage.memoryUsage,
+		ProcessCount:                           usage.processCount,
+		IOReadBytes:                            usage.ioReadBytes,
+		IOWriteBytes:                           usage.ioWriteBytes,
+		IOReadOps:                              usage.ioReadOps,
+		IOWriteOps:                             usage.ioWriteOps,
+		IODelta:                                usage.ioDelta,
+		ExecutableIdentityUnavailableProcesses: usage.executableIdentityUnavailableProcesses,
+		IOUnavailableProcesses:                 usage.ioUnavailableProcesses,
 	}
+}
+
+type procFSFailureSummary struct {
+	access   string
+	policy   string
+	count    int
+	firstPID int
+	firstErr error
+}
+
+func (s *procFSFailureSummary) record(pid int, err error) {
+	s.count++
+	if s.firstPID == 0 {
+		s.firstPID = pid
+		s.firstErr = err
+	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func reportableProcFSFailure(err error) bool {
+	return err != nil && !errors.Is(err, os.ErrNotExist)
 }
 
 // emaCache stores EMA values per UID between cycles.
@@ -1196,9 +1233,14 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 	cfg := c.getConfig()
 
 	seenPIDs := make(map[int32]struct{}, len(procs))
-	untrustedIdentityCount := 0
-	firstUntrustedPID := 0
-	var firstIdentityError error
+	identityFailures := procFSFailureSummary{
+		access: procFSAccessExecutableIdentity,
+		policy: "process_remains_enforceable",
+	}
+	ioFailures := procFSFailureSummary{
+		access: procFSAccessIODecision,
+		policy: "unknown_is_not_zero",
+	}
 
 	for _, p := range procs {
 		// Get process UID
@@ -1237,34 +1279,42 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
 
-		ioCounters, ioAvailable := c.getProcessIO(int(p.Pid))
+		ioCounters, ioErr := c.getProcessIO(int(p.Pid))
 		var ioDelta ProcessIODelta
-		if startTime, startErr := p.CreateTime(); ioAvailable && startErr == nil {
-			ioDelta = updateProcessIOSample(state, p.Pid, startTime, ioCounters, sampleTime)
-		} else {
+		ioUnavailable := false
+		if ioErr == nil {
+			if startTime, startErr := p.CreateTime(); startErr == nil {
+				ioDelta = updateProcessIOSample(state, p.Pid, startTime, ioCounters, sampleTime)
+			} else {
+				ioErr = fmt.Errorf("read process start time: %w", startErr)
+			}
+		}
+		if ioErr != nil {
+			if reportableProcFSFailure(ioErr) {
+				ioUnavailable = true
+				ioFailures.record(int(p.Pid), ioErr)
+			}
 			discardProcessIOBaseline(state, p.Pid)
 		}
 		sample := processUsage{
-			cpuUsage:     cpuUsage,
-			cpuUsageAvg:  cpuAvg,
-			processCount: 1,
-			memoryUsage:  memoryUsage,
-			ioReadBytes:  ioCounters.readBytes,
-			ioWriteBytes: ioCounters.writeBytes,
-			ioReadOps:    ioCounters.readOps,
-			ioWriteOps:   ioCounters.writeOps,
-			ioDelta:      ioDelta,
+			cpuUsage:                               cpuUsage,
+			cpuUsageAvg:                            cpuAvg,
+			processCount:                           1,
+			memoryUsage:                            memoryUsage,
+			ioReadBytes:                            ioCounters.readBytes,
+			ioWriteBytes:                           ioCounters.writeBytes,
+			ioReadOps:                              ioCounters.readOps,
+			ioWriteOps:                             ioCounters.writeOps,
+			ioDelta:                                ioDelta,
+			executableIdentityUnavailableProcesses: boolCount(identityErr != nil),
+			ioUnavailableProcesses:                 boolCount(ioUnavailable),
 		}
 		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
 		if !selection.IdentityTrusted {
-			untrustedIdentityCount++
-			if firstUntrustedPID == 0 {
-				firstUntrustedPID = int(p.Pid)
-				firstIdentityError = identityErr
-			}
+			identityFailures.record(int(p.Pid), identityErr)
 		}
 	}
-	c.reportUntrustedProcessIdentities(untrustedIdentityCount, firstUntrustedPID, firstIdentityError)
+	c.reportProcFSFailures(identityFailures, ioFailures)
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
@@ -1278,21 +1328,23 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
 
 		userMetrics[uid] = &UserMetrics{
-			UID:              uid,
-			Username:         username,
-			CPUUsage:         cpuUsage,
-			CPUUsageAverage:  data.observed.cpuUsageAvg,
-			CPUUsageEMA:      ema,
-			MemoryUsage:      data.observed.memoryUsage,
-			ProcessCount:     data.observed.processCount,
-			EligibleForCPU:   eligibility.EligibleForCPU,
-			EligibleForRAM:   eligibility.EligibleForRAM,
-			EligibleForIO:    eligibility.EligibleForIO,
-			IOReadBytes:      data.observed.ioReadBytes,
-			IOWriteBytes:     data.observed.ioWriteBytes,
-			IOReadOps:        data.observed.ioReadOps,
-			IOWriteOps:       data.observed.ioWriteOps,
-			EnforceableUsage: processSetMetrics(data.enforceable, enforceableEMA),
+			UID:                                    uid,
+			Username:                               username,
+			CPUUsage:                               cpuUsage,
+			CPUUsageAverage:                        data.observed.cpuUsageAvg,
+			CPUUsageEMA:                            ema,
+			MemoryUsage:                            data.observed.memoryUsage,
+			ProcessCount:                           data.observed.processCount,
+			EligibleForCPU:                         eligibility.EligibleForCPU,
+			EligibleForRAM:                         eligibility.EligibleForRAM,
+			EligibleForIO:                          eligibility.EligibleForIO,
+			IOReadBytes:                            data.observed.ioReadBytes,
+			IOWriteBytes:                           data.observed.ioWriteBytes,
+			IOReadOps:                              data.observed.ioReadOps,
+			IOWriteOps:                             data.observed.ioWriteOps,
+			ExecutableIdentityUnavailableProcesses: data.observed.executableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 data.observed.ioUnavailableProcesses,
+			EnforceableUsage:                       processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
@@ -1319,9 +1371,14 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
 	seenPIDs := make(map[int32]struct{}, len(entries))
-	untrustedIdentityCount := 0
-	firstUntrustedPID := 0
-	var firstIdentityError error
+	identityFailures := procFSFailureSummary{
+		access: procFSAccessExecutableIdentity,
+		policy: "process_remains_enforceable",
+	}
+	ioFailures := procFSFailureSummary{
+		access: procFSAccessIODecision,
+		policy: "unknown_is_not_zero",
+	}
 
 	// Read system uptime once
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
@@ -1359,40 +1416,53 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 		cpuAvg := 0.0
 		proc, err := process.NewProcess(int32(pid))
 		var startTime int64
+		var startTimeErr error
 		if err == nil {
 			cpuAvg = c.getProcessCPUAverage(proc, systemUptimeSeconds)
-			startTime, _ = proc.CreateTime()
+			startTime, startTimeErr = proc.CreateTime()
+		} else {
+			startTimeErr = err
 		}
 
 		// IO
-		ioCounters, ioAvailable := c.getProcessIO(pid)
+		ioCounters, ioErr := c.getProcessIO(pid)
 		var ioDelta ProcessIODelta
-		if ioAvailable && startTime != 0 {
+		ioUnavailable := false
+		if ioErr == nil && startTimeErr == nil && startTime != 0 {
 			ioDelta = updateProcessIOSample(state, int32(pid), startTime, ioCounters, sampleTime)
 		} else {
+			if ioErr == nil {
+				if startTimeErr != nil {
+					ioErr = fmt.Errorf("read process start time: %w", startTimeErr)
+				} else {
+					ioErr = fmt.Errorf("read process start time: unavailable zero value")
+				}
+			}
+			if reportableProcFSFailure(ioErr) {
+				ioUnavailable = true
+				ioFailures.record(pid, ioErr)
+			}
 			discardProcessIOBaseline(state, int32(pid))
 		}
 		sample := processUsage{
-			cpuUsage:     cpuUsage,
-			cpuUsageAvg:  cpuAvg,
-			processCount: 1,
-			memoryUsage:  memoryUsage,
-			ioReadBytes:  ioCounters.readBytes,
-			ioWriteBytes: ioCounters.writeBytes,
-			ioReadOps:    ioCounters.readOps,
-			ioWriteOps:   ioCounters.writeOps,
-			ioDelta:      ioDelta,
+			cpuUsage:                               cpuUsage,
+			cpuUsageAvg:                            cpuAvg,
+			processCount:                           1,
+			memoryUsage:                            memoryUsage,
+			ioReadBytes:                            ioCounters.readBytes,
+			ioWriteBytes:                           ioCounters.writeBytes,
+			ioReadOps:                              ioCounters.readOps,
+			ioWriteOps:                             ioCounters.writeOps,
+			ioDelta:                                ioDelta,
+			executableIdentityUnavailableProcesses: boolCount(identityErr != nil),
+			ioUnavailableProcesses:                 boolCount(ioUnavailable),
 		}
 		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
 		if !selection.IdentityTrusted {
-			untrustedIdentityCount++
-			if firstUntrustedPID == 0 {
-				firstUntrustedPID = pid
-				firstIdentityError = identityErr
-			}
+			identityFailures.record(pid, identityErr)
 		}
 	}
-	c.reportUntrustedProcessIdentities(untrustedIdentityCount, firstUntrustedPID, firstIdentityError)
+	c.reportProcFSFailures(identityFailures, ioFailures)
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
@@ -1400,21 +1470,23 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
 		eligibility := cfg.EvaluateUserEligibility(username)
 		userMetrics[uid] = &UserMetrics{
-			UID:              uid,
-			Username:         username,
-			CPUUsage:         data.observed.cpuUsage,
-			CPUUsageAverage:  data.observed.cpuUsageAvg,
-			CPUUsageEMA:      ema,
-			MemoryUsage:      data.observed.memoryUsage,
-			ProcessCount:     data.observed.processCount,
-			EligibleForCPU:   eligibility.EligibleForCPU,
-			EligibleForRAM:   eligibility.EligibleForRAM,
-			EligibleForIO:    eligibility.EligibleForIO,
-			IOReadBytes:      data.observed.ioReadBytes,
-			IOWriteBytes:     data.observed.ioWriteBytes,
-			IOReadOps:        data.observed.ioReadOps,
-			IOWriteOps:       data.observed.ioWriteOps,
-			EnforceableUsage: processSetMetrics(data.enforceable, enforceableEMA),
+			UID:                                    uid,
+			Username:                               username,
+			CPUUsage:                               data.observed.cpuUsage,
+			CPUUsageAverage:                        data.observed.cpuUsageAvg,
+			CPUUsageEMA:                            ema,
+			MemoryUsage:                            data.observed.memoryUsage,
+			ProcessCount:                           data.observed.processCount,
+			EligibleForCPU:                         eligibility.EligibleForCPU,
+			EligibleForRAM:                         eligibility.EligibleForRAM,
+			EligibleForIO:                          eligibility.EligibleForIO,
+			IOReadBytes:                            data.observed.ioReadBytes,
+			IOWriteBytes:                           data.observed.ioWriteBytes,
+			IOReadOps:                              data.observed.ioReadOps,
+			IOWriteOps:                             data.observed.ioWriteOps,
+			ExecutableIdentityUnavailableProcesses: data.observed.executableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 data.observed.ioUnavailableProcesses,
+			EnforceableUsage:                       processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
@@ -1423,16 +1495,19 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 	return userMetrics
 }
 
-func (c *Collector) reportUntrustedProcessIdentities(count, firstPID int, firstErr error) {
-	if count == 0 {
-		return
+func (c *Collector) reportProcFSFailures(summaries ...procFSFailureSummary) {
+	for _, summary := range summaries {
+		if summary.count == 0 {
+			continue
+		}
+		c.logger.Error("Required procfs access unavailable; decision input remains conservative",
+			"access", summary.access,
+			"affected_processes", summary.count,
+			"first_pid", summary.firstPID,
+			"first_error", summary.firstErr,
+			"policy", summary.policy,
+		)
 	}
-	c.logger.Error("Trusted executable identity unavailable; process usage remains enforceable",
-		"affected_processes", count,
-		"first_pid", firstPID,
-		"first_error", firstErr,
-		"policy", "fail_closed",
-	)
 }
 
 // GetUserMemoryUsage returns total memory used by a user in bytes.
@@ -1548,26 +1623,25 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 
 // getProcessIO reads /proc/[pid]/io. Byte counters describe storage traffic,
 // while syscall counters are syscr/syscw and do not represent block-device IOPS.
-// The boolean is false when no reliable sample is available; callers must not
-// advance a temporal baseline in that case.
-func (c *Collector) getProcessIO(pid int) (processIOCounters, bool) {
+// An error means no reliable sample is available; callers must discard the
+// temporal baseline instead of advancing it.
+func (c *Collector) getProcessIO(pid int) (processIOCounters, error) {
 	ioFile := fmt.Sprintf("/proc/%d/io", pid)
 	data, err := os.ReadFile(ioFile)
 	if err != nil {
-		// Common errors: EACCES (ptrace restriction), ENOENT (process exited)
-		return processIOCounters{}, false
+		return processIOCounters{}, fmt.Errorf("read %s: %w", ioFile, err)
 	}
 
-	readBytes, writeBytes, readOps, writeOps := parseProcessIO(data)
-	return processIOCounters{
-		readBytes:  readBytes,
-		writeBytes: writeBytes,
-		readOps:    readOps,
-		writeOps:   writeOps,
-	}, true
+	counters, err := parseProcessIO(data)
+	if err != nil {
+		return processIOCounters{}, fmt.Errorf("parse %s: %w", ioFile, err)
+	}
+	return counters, nil
 }
 
-func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
+func parseProcessIO(data []byte) (processIOCounters, error) {
+	var counters processIOCounters
+	seen := make(map[string]bool, 4)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1580,24 +1654,44 @@ func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSysc
 		}
 
 		key := strings.TrimSuffix(parts[0], ":")
-		val, parseErr := strconv.ParseUint(parts[1], 10, 64)
-		if parseErr != nil {
-			continue
-		}
-
 		switch key {
 		case "read_bytes":
-			readBytes = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse read_bytes: %w", err)
+			}
+			counters.readBytes = value
+			seen[key] = true
 		case "write_bytes":
-			writeBytes = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse write_bytes: %w", err)
+			}
+			counters.writeBytes = value
+			seen[key] = true
 		case "syscr":
-			readSyscalls = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse syscr: %w", err)
+			}
+			counters.readOps = value
+			seen[key] = true
 		case "syscw":
-			writeSyscalls = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse syscw: %w", err)
+			}
+			counters.writeOps = value
+			seen[key] = true
 		}
 	}
 
-	return readBytes, writeBytes, readSyscalls, writeSyscalls
+	for _, key := range []string{"read_bytes", "write_bytes", "syscr", "syscw"} {
+		if !seen[key] {
+			return processIOCounters{}, fmt.Errorf("required counter %q is missing", key)
+		}
+	}
+	return counters, nil
 }
 
 // getSystemUptimeSeconds reads /proc/uptime and returns system uptime in seconds.

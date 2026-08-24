@@ -231,6 +231,13 @@ their own dimension. Before enforcement, bandwidth decisions use per-user
 rates because no resman io.stat cgroup exists yet; io.max enforcement itself
 uses real block-device IOPS. The activation rule is any-of across configured
 dimensions and the release rule is all-of.
+.PP
+An unavailable /proc/PID/io sample for an enforceable I/O-eligible process is
+unknown, not zero. Available rates remain a lower bound and may still prove an
+activation threshold exceeded. Otherwise resman maintains the current state;
+active limits are never released from an incomplete I/O sample. Current
+coverage failures are exported through
+.BR resman_procfs_unavailable_processes {access}.
 .IP \(bu
 .B IO_DEVICE_FILTER
 - Device specification. "all" enumerates all whole block devices in /sys/block;
@@ -866,6 +873,8 @@ resman_control_cycle_duration_seconds \- Complete control cycle duration, includ
 resman_metrics_collection_duration_seconds \- System metrics collection duration for control cycles and metrics-only refreshes (histogram)
 .IP \(bu
 resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
+.IP \(bu
+resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP
 All user-specific metrics include
 .B uid

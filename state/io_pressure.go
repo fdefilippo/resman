@@ -12,6 +12,12 @@ type ioPressure struct {
 	exceededDimensions []string
 }
 
+func hasConfiguredIODecisionDimension(policy config.IODecisionPolicy) bool {
+	return byteRateLimit(policy.ReadBPS) > 0 ||
+		byteRateLimit(policy.WriteBPS) > 0 ||
+		policy.ReadIOPS > 0 || policy.WriteIOPS > 0
+}
+
 func (p ioPressure) exceeded() bool {
 	return len(p.exceededDimensions) > 0
 }

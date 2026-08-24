@@ -26,6 +26,7 @@ image_ref=
 fixture_image_ref=
 container_image_archive=
 container_image_ref=
+container_image_cache_ref=${RESMAN_CONTAINER_IMAGE_CACHE_REF:-localhost/resman-container-cache:latest}
 vm_name=
 vm_started=0
 image_built=0
@@ -217,6 +218,8 @@ run_harness() {
 		sudo podman build --layers --file "$repo_root/packaging/docker/Dockerfile" \
 			--tag "$container_image_ref" "$repo_root"
 		container_image_built=1
+		record_command sudo podman tag "$container_image_ref" "$container_image_cache_ref"
+		sudo podman tag "$container_image_ref" "$container_image_cache_ref"
 		record_command sudo podman save --output "$container_image_archive" "$container_image_ref"
 		sudo podman save --output "$container_image_archive" "$container_image_ref"
 	fi
@@ -242,6 +245,7 @@ run_harness() {
         printf 'image_id=%s\n' "$image_id"
 		printf 'container_image_reference=%s\n' "$container_image_ref"
 		printf 'container_image_id=%s\n' "$container_image_id"
+		printf 'container_image_cache_reference=%s\n' "$container_image_cache_ref"
     } >>"$evidence_dir/environment.txt"
 
     record_command sudo podman save --output "$image_archive" "$image_ref"

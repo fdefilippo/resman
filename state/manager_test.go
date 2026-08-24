@@ -83,15 +83,17 @@ func (m *mockMetricsCollector) prepareUserMetrics(userMetrics map[int]*metrics.U
 				continue
 			}
 			sample.EnforceableUsage = metrics.ProcessSetMetrics{
-				CPUUsage:        sample.CPUUsage,
-				CPUUsageAverage: sample.CPUUsageAverage,
-				CPUUsageEMA:     sample.CPUUsageEMA,
-				MemoryUsage:     sample.MemoryUsage,
-				ProcessCount:    sample.ProcessCount,
-				IOReadBytes:     sample.IOReadBytes,
-				IOWriteBytes:    sample.IOWriteBytes,
-				IOReadOps:       sample.IOReadOps,
-				IOWriteOps:      sample.IOWriteOps,
+				CPUUsage:                               sample.CPUUsage,
+				CPUUsageAverage:                        sample.CPUUsageAverage,
+				CPUUsageEMA:                            sample.CPUUsageEMA,
+				MemoryUsage:                            sample.MemoryUsage,
+				ProcessCount:                           sample.ProcessCount,
+				IOReadBytes:                            sample.IOReadBytes,
+				IOWriteBytes:                           sample.IOWriteBytes,
+				IOReadOps:                              sample.IOReadOps,
+				IOWriteOps:                             sample.IOWriteOps,
+				ExecutableIdentityUnavailableProcesses: sample.ExecutableIdentityUnavailableProcesses,
+				IOUnavailableProcesses:                 sample.IOUnavailableProcesses,
 			}
 		}
 	}
@@ -792,11 +794,13 @@ func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) 
 	cfg := config.DefaultConfig()
 	collector := &mockMetricsCollector{allUserMetrics: map[int]*metrics.UserMetrics{
 		1000: {
-			UID:          1000,
-			Username:     "alice",
-			CPUUsage:     42,
-			MemoryUsage:  4096,
-			IOWriteBytes: 8192,
+			UID:                                    1000,
+			Username:                               "alice",
+			CPUUsage:                               42,
+			MemoryUsage:                            4096,
+			IOWriteBytes:                           8192,
+			ExecutableIdentityUnavailableProcesses: 2,
+			IOUnavailableProcesses:                 3,
 		},
 	}}
 	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
@@ -818,6 +822,13 @@ func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) 
 	}
 	if sample.IOEligibleUsersCount != 1 {
 		t.Fatalf("IO eligible count = %d, want 1", sample.IOEligibleUsersCount)
+	}
+	if sample.IOEligibleUnavailableProcesses != 3 {
+		t.Fatalf("IO eligible unavailable processes = %d, want 3", sample.IOEligibleUnavailableProcesses)
+	}
+	if sample.ProcFSExecutableIdentityUnavailableProcesses != 2 || sample.ProcFSIOUnavailableProcesses != 3 {
+		t.Fatalf("procfs coverage = identity %d IO %d, want 2 and 3",
+			sample.ProcFSExecutableIdentityUnavailableProcesses, sample.ProcFSIOUnavailableProcesses)
 	}
 	user := sample.UserMetrics[1000]
 	if user == nil || user.EligibleForCPU || !user.EligibleForRAM || !user.EligibleForIO {

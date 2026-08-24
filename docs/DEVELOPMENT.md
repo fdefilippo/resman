@@ -398,6 +398,10 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - A privilege-dependent observation used for a security or enforcement decision **MUST**
   fail explicitly and conservatively. It **MUST NOT** downgrade to a process-controlled
   identity or a zero-valued decision signal when access is denied.
+- Coverage over a dynamic process set **MUST** travel with the aggregate. Available
+  non-negative counters may prove that an activation threshold is exceeded, but an
+  incomplete aggregate **MUST NOT** prove below-threshold pressure or authorize release.
+  Process-exit `ENOENT` races are not persistent capability failures and do not alert.
 
 **Why.** `cgroup/manager.go:174` returns a fatal error when `+cpuset` cannot be written,
 while `cgroup/manager.go:243-246` treats the identical write as best-effort and
@@ -411,7 +415,12 @@ start while being unable to resolve host users, trust foreign-user process ident
 enforce host cgroups. The supported rootful Podman contract is now exercised inside
 SmolVM instead of being inferred from the image manifest.
 
-*Finding: resman-4pw.14*
+The collector also previously converted every `/proc/PID/io` read failure into zero.
+On a host without foreign-process ptrace access this disabled I/O activation
+indefinitely and silently. Procfs coverage now remains explicit through aggregation:
+partial rates are lower bounds that may prove activation, but cannot prove safe release.
+
+*Findings: resman-4pw.14, resman-4pw.23, resman-4pw.46*
 
 ## Rule 13 — Shipped operational assets track runtime defaults **[checkable]**
 
@@ -755,7 +764,7 @@ Until they exist, treat them as review checkpoints.
 | 9. Configuration lifecycle | `resman-4pw.9` |
 | 10. Acknowledge, never sleep | `resman-4pw.7` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
-| 12. Capability requirements | `resman-4pw.14` |
+| 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13` |
 | 14. On-disk file permissions | `resman-4pw.5` |
 | 15. Lock discipline | prior race/deadlock fixes in `logging/`, `metrics/` |

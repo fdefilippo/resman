@@ -457,6 +457,13 @@ if [[ $scenario == container-runtime ]]; then
 		--max-time 2 http://127.0.0.1:19100/metrics \
 		>"$artifact_dir/container-prometheus-metrics.txt" \
 		|| fail "container Prometheus endpoint did not become ready"
+	for access in executable_identity io_decision; do
+		awk -v access="$access" '
+			/^resman_procfs_unavailable_processes\{/ && index($0, "access=\"" access "\"") && $NF == 0 { found=1 }
+			END { exit !found }
+		' "$artifact_dir/container-prometheus-metrics.txt" \
+			|| fail "healthy container did not publish zero procfs failures for $access"
+	done
 	cpu_uid=$(id -u resman-cpu)
 	resolved_user=$(container_podman exec "$container_name" getent passwd "$cpu_uid")
 	[[ $resolved_user == resman-cpu:* ]] \
@@ -464,6 +471,13 @@ if [[ $scenario == container-runtime ]]; then
 	resolved_executable=$(container_podman exec "$container_name" readlink "/proc/$container_stress_pid/exe")
 	[[ $resolved_executable == */stress ]] \
 		|| fail "container could not resolve the foreign-user executable identity"
+	container_podman exec "$container_name" cat "/proc/$container_stress_pid/io" \
+		>"$artifact_dir/container-foreign-process-io.txt" \
+		|| fail "container could not read the foreign-user I/O counters"
+	for counter in read_bytes write_bytes syscr syscw; do
+		grep -Eq "^${counter}:[[:space:]]+[0-9]+$" "$artifact_dir/container-foreign-process-io.txt" \
+			|| fail "foreign-user I/O sample is missing counter $counter"
+	done
 
 	container_base_cgroup=/sys/fs/cgroup/resman-container-$run_id
 	container_limited_cgroup=$container_base_cgroup/limited/user_$cpu_uid
@@ -505,6 +519,7 @@ if [[ $scenario == container-runtime ]]; then
 		printf 'host_user=%s\n' "$resolved_user"
 		printf 'foreign_pid=%s\n' "$container_stress_pid"
 		printf 'foreign_executable=%s\n' "$resolved_executable"
+		printf 'foreign_io_access=%s\n' available
 		printf 'limited_cgroup=%s\n' "$container_limited_cgroup"
 		printf 'limited_cpu_max=%s\n' "$container_cpu_max"
 		printf 'start_time_before_stop=%s\n' "$container_start_time"

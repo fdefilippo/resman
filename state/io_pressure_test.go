@@ -194,6 +194,15 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 			},
 			wantDecision: "DEACTIVATE_LIMITS",
 		},
+		{
+			name:      "unavailable IO sample does not matter when every dimension is disabled",
+			configure: func(*config.Config) {},
+			metrics: SystemMetrics{
+				IOEligibleUsersCount:           1,
+				IOEligibleUnavailableProcesses: 1,
+			},
+			wantDecision: "DEACTIVATE_LIMITS",
+		},
 	}
 
 	for _, tt := range tests {
@@ -212,6 +221,71 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 			decision, reason := manager.makeDecision(&tt.metrics)
 			if decision != tt.wantDecision {
 				t.Fatalf("makeDecision() = %s (%s), want %s", decision, reason, tt.wantDecision)
+			}
+		})
+	}
+}
+
+func TestMakeDecisionTreatsIncompleteIOCoverageAsUnknownNotZero(t *testing.T) {
+	tests := []struct {
+		name             string
+		active           bool
+		cpuUsage         float64
+		readBPS          float64
+		unavailable      int
+		wantDecision     string
+		wantReasonSignal string
+	}{
+		{
+			name:        "inactive partial sample below threshold maintains as unknown",
+			unavailable: 1, wantDecision: "MAINTAIN_CURRENT_STATE", wantReasonSignal: "coverage incomplete",
+		},
+		{
+			name:    "inactive partial sample above threshold still proves activation",
+			readBPS: 80 * 1024 * 1024, unavailable: 1, wantDecision: "ACTIVATE_LIMITS", wantReasonSignal: "read_bps",
+		},
+		{
+			name:             "incomplete IO coverage does not block proven CPU activation",
+			cpuUsage:         100,
+			unavailable:      1,
+			wantDecision:     "ACTIVATE_LIMITS",
+			wantReasonSignal: "CPU 100.0%",
+		},
+		{
+			name:   "active partial sample below threshold cannot prove safe release",
+			active: true, unavailable: 1, wantDecision: "MAINTAIN_CURRENT_STATE", wantReasonSignal: "cannot be released safely",
+		},
+		{
+			name:   "complete sample below threshold retains normal release contract",
+			active: true, wantDecision: "DEACTIVATE_LIMITS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ioDecisionConfig()
+			cfg.IOReadBPS = "100M"
+			manager := &Manager{
+				cfg:                       cfg,
+				resourceLimitsActive:      tt.active,
+				resourceLimitsAppliedTime: time.Now().Add(-time.Hour),
+				thresholdTracker:          &ThresholdTracker{},
+				ioThresholdTracker:        &ThresholdTracker{},
+				stabilityTracker:          newUserStabilityTracker(),
+			}
+			metrics := &SystemMetrics{
+				TotalCores:                     4,
+				CPUEligibleCPUUsage:            tt.cpuUsage,
+				IOEligibleUsersCount:           1,
+				IOEligibleReadBPS:              tt.readBPS,
+				IOEligibleUnavailableProcesses: tt.unavailable,
+			}
+			decision, reason := manager.makeDecision(metrics)
+			if decision != tt.wantDecision {
+				t.Fatalf("makeDecision() = %s (%s), want %s", decision, reason, tt.wantDecision)
+			}
+			if tt.wantReasonSignal != "" && !strings.Contains(reason, tt.wantReasonSignal) {
+				t.Fatalf("reason %q does not contain %q", reason, tt.wantReasonSignal)
 			}
 		})
 	}

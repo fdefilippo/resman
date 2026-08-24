@@ -86,10 +86,12 @@ Verify a deployment before relying on it:
 ```bash
 sudo podman exec resman getent passwd 1000
 sudo podman exec resman readlink /proc/1234/exe
+sudo podman exec resman cat /proc/1234/io
 sudo podman exec resman test -w /sys/fs/cgroup/cgroup.subtree_control
 ```
 
-Use a real foreign-user PID in the second command. Failure of any check means
+Use a real foreign-user PID in both `/proc` commands and verify that the I/O
+output contains `read_bytes`, `write_bytes`, `syscr`, and `syscw`. Failure of any check means
 the runtime does not meet the supported contract and must not be treated as an
 enforcement-capable deployment.
 

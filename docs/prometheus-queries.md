@@ -257,6 +257,15 @@ resman_memory_usage_megabytes
 
 ## Error Tracking
 
+### Processes Missing Required Procfs Access
+```promql
+resman_procfs_unavailable_processes > 0
+```
+
+The bounded `access` label is `executable_identity` or `io_decision`. A non-zero
+value means process policy or I/O decisions are operating conservatively because
+the daemon cannot read a required foreign-process input.
+
 ### Error Rate by Component
 ```promql
 sum by (component) (rate(resman_errors_total[5m]))

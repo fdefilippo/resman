@@ -331,16 +331,16 @@ controller.
 - Collect system CPU usage
 - Collect per-user CPU, memory, and process count
 - Cache metrics with TTL
-- Filter users by exclude list
-- Filter processes by exclusion blacklist
+- Preserve observation for all non-system users while evaluating CPU, RAM, and I/O eligibility independently
+- Separate observed process usage from enforceable usage with the shared process policy
 
 **Key Functions:**
 - `NewCollector(cfg)`: Creates metrics collector
 - `GetTotalCores()`: Returns total CPU cores
 - `GetTotalCPUUsage()`: Returns total CPU usage percentage
-- `GetTotalUserCPUUsage()`: Returns non-system user CPU usage
+- `GetAllUsersCPUUsage()`: Returns observed CPU usage for all non-system users
 - `GetUserCPUUsage(uid)`: Returns CPU usage for specific user
-- `GetActiveUsers()`: Returns list of active non-system UIDs
+- `GetAllUsers()`: Returns observed non-system UIDs
 - `GetMemoryUsage()`: Returns total memory usage in MB
 - `GetAllUserMetrics()`: Returns detailed metrics for all users
 - `IsSystemUnderLoad()`: Checks if system load is high
@@ -363,6 +363,17 @@ controller.
   origins.
 - Origin restoration requires the same PID start time. A missing origin fails closed:
   the process remains constrained and the control cycle reports the error.
+
+**Procfs decision coverage:**
+- Executable identity and I/O decision inputs carry explicit per-scan coverage.
+- `ENOENT` after a process exits is discarded without an operator signal. Permission,
+  parsing, and other persistent failures are aggregated by access type rather than
+  logged once per PID.
+- Available I/O rates are a lower bound. They may prove that activation is required,
+  but incomplete coverage can never prove that pressure is below a threshold or that
+  active limits are safe to release.
+- `resman_procfs_unavailable_processes{access=~"executable_identity|io_decision"}`
+  publishes the current number of affected observed processes with a bounded label set.
 
 **User Exclusion:**
 - Configured via `USER_EXCLUDE_LIST`
@@ -1127,6 +1138,8 @@ defined sampling stream even when PSI event-driven refreshes run at another cade
 - `resman_limits_activated_total` (confirmed inactive-to-active transitions)
 - `resman_limits_deactivated_total` (confirmed active-to-inactive transitions)
 - `resman_errors_total{component, error_type}` (operational errors with bounded labels)
+- `resman_procfs_unavailable_processes{access}` (current missing executable-identity
+  or I/O-decision procfs inputs)
 
 **Histograms:**
 - `resman_control_cycle_duration_seconds` (complete cycles, including failed and suspended cycles)
@@ -1203,11 +1216,18 @@ type MetricsCollector interface {
     GetTotalCores() int
     GetTotalCPUUsage() float64
     GetUserCPUUsage(uid int) float64
-    GetTotalUserCPUUsage() float64
-    GetActiveUsers() []int
+    GetAllUsers() []int
+    GetAllUsersCPUUsage() float64
+    GetAllUsersMemoryUsage() uint64
+    GetLimitedUsers() []int
+    GetLimitedUsersCPUUsage() float64
+    GetLimitedUsersMemoryUsage() uint64
     GetMemoryUsage() float64
+    GetTotalMemoryMB() float64
+    GetCachedMemoryMB() float64
     IsSystemUnderLoad() bool
     GetAllUserMetrics() map[int]*UserMetrics
+    GetAllUserMetricsForDecision() map[int]*UserMetrics
 }
 
 // CgroupManager interface

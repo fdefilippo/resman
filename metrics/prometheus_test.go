@@ -373,6 +373,8 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 		TotalMemoryMB:                2048,
 		CachedMemoryMB:               128,
 		SystemLoad:                   1.5,
+		ProcFSExecutableIdentityUnavailableProcesses: 2,
+		ProcFSIOUnavailableProcesses:                 3,
 	})
 
 	wantMetrics := map[string]float64{
@@ -398,6 +400,40 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 	}
 	if got := gatheredMetricValue(t, exporter, "resman_control_cycles_total"); got != 0 {
 		t.Fatalf("control cycles after metrics-only refresh = %f, want 0", got)
+	}
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	wantCoverage := map[string]float64{"executable_identity": 2, "io_decision": 3}
+	foundCoverage := false
+	for _, family := range families {
+		if family.GetName() != "resman_procfs_unavailable_processes" {
+			continue
+		}
+		foundCoverage = true
+		if len(family.Metric) != len(wantCoverage) {
+			t.Fatalf("procfs coverage series = %d, want %d", len(family.Metric), len(wantCoverage))
+		}
+		for _, metric := range family.Metric {
+			access := ""
+			for _, label := range metric.Label {
+				if label.GetName() == "access" {
+					access = label.GetValue()
+				}
+			}
+			want, ok := wantCoverage[access]
+			if !ok {
+				t.Fatalf("unexpected procfs access label %q", access)
+			}
+			if got := metric.GetGauge().GetValue(); got != want {
+				t.Fatalf("procfs coverage %s = %f, want %f", access, got, want)
+			}
+		}
+	}
+	if !foundCoverage {
+		t.Fatal("resman_procfs_unavailable_processes metric family not found")
 	}
 
 	exporter.RecordControlCycleTrigger("polling")

@@ -17,6 +17,9 @@
 package metrics
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -28,6 +31,36 @@ import (
 	"github.com/fdefilippo/resman/database"
 	"github.com/shirou/gopsutil/v3/cpu"
 )
+
+func TestReportableProcFSFailureIgnoresProcessExitOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "no error", err: nil, want: false},
+		{name: "process exited", err: fmt.Errorf("read procfs: %w", fs.ErrNotExist), want: false},
+		{name: "permission denied", err: fmt.Errorf("read procfs: %w", fs.ErrPermission), want: true},
+		{name: "malformed sample", err: errors.New("required counter missing"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reportableProcFSFailure(tt.err); got != tt.want {
+				t.Fatalf("reportableProcFSFailure(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcFSFailureSummaryAggregatesPerAccessInsteadOfPerPID(t *testing.T) {
+	firstErr := errors.New("first failure")
+	summary := procFSFailureSummary{access: procFSAccessIODecision}
+	summary.record(101, firstErr)
+	summary.record(202, errors.New("second failure"))
+	if summary.count != 2 || summary.firstPID != 101 || !errors.Is(summary.firstErr, firstErr) {
+		t.Fatalf("summary = %+v, want count 2 and first PID/error only", summary)
+	}
+}
 
 func TestUserMetricsStruct(t *testing.T) {
 	um := &UserMetrics{
@@ -90,7 +123,13 @@ func TestAddProcessSampleKeepsUntrustedCommFallbackEnforceable(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ProcessExcludeList = []string{"^systemd$"}
 	data := &userData{}
-	sample := processUsage{cpuUsage: 50, memoryUsage: 4096, processCount: 1}
+	sample := processUsage{
+		cpuUsage:                               50,
+		memoryUsage:                            4096,
+		processCount:                           1,
+		executableIdentityUnavailableProcesses: 1,
+		ioUnavailableProcesses:                 1,
+	}
 
 	selection := addProcessSample(data, cfg, "", "systemd", sample)
 	if !selection.Enforceable || selection.IdentityTrusted {
@@ -98,6 +137,31 @@ func TestAddProcessSampleKeepsUntrustedCommFallbackEnforceable(t *testing.T) {
 	}
 	if data.observed != sample || data.enforceable != sample {
 		t.Fatalf("usage observed=%+v enforceable=%+v, want sample in both", data.observed, data.enforceable)
+	}
+	metrics := processSetMetrics(data.enforceable, 0)
+	if metrics.ExecutableIdentityUnavailableProcesses != 1 || metrics.IOUnavailableProcesses != 1 {
+		t.Fatalf("coverage metrics = %+v, want one unavailable identity and I/O sample", metrics)
+	}
+}
+
+func TestAddProcessSampleKeepsExcludedProcFSCoverageOutOfDecisionAggregate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProcessExcludeList = []string{"^systemd$"}
+	data := &userData{}
+	sample := processUsage{
+		processCount:           1,
+		ioUnavailableProcesses: 1,
+	}
+
+	selection := addProcessSample(data, cfg, "/usr/lib/systemd/systemd", "systemd", sample)
+	if selection.Enforceable || !selection.IdentityTrusted {
+		t.Fatalf("selection = %+v, want trusted exclusion", selection)
+	}
+	if data.observed.ioUnavailableProcesses != 1 {
+		t.Fatalf("observed unavailable I/O processes = %d, want 1", data.observed.ioUnavailableProcesses)
+	}
+	if data.enforceable.ioUnavailableProcesses != 0 {
+		t.Fatalf("decision unavailable I/O processes = %d, want 0 for excluded process", data.enforceable.ioUnavailableProcesses)
 	}
 }
 
@@ -154,18 +218,38 @@ write_bytes: 8192
 cancelled_write_bytes: 1024
 `)
 
-	readBytes, writeBytes, readSyscalls, writeSyscalls := parseProcessIO(data)
-	if readBytes != 4096 {
-		t.Errorf("readBytes = %d, want 4096", readBytes)
+	counters, err := parseProcessIO(data)
+	if err != nil {
+		t.Fatalf("parseProcessIO() error: %v", err)
 	}
-	if writeBytes != 8192 {
-		t.Errorf("writeBytes = %d, want 8192", writeBytes)
+	if counters.readBytes != 4096 {
+		t.Errorf("readBytes = %d, want 4096", counters.readBytes)
 	}
-	if readSyscalls != 123 {
-		t.Errorf("readSyscalls = %d, want 123", readSyscalls)
+	if counters.writeBytes != 8192 {
+		t.Errorf("writeBytes = %d, want 8192", counters.writeBytes)
 	}
-	if writeSyscalls != 45 {
-		t.Errorf("writeSyscalls = %d, want 45", writeSyscalls)
+	if counters.readOps != 123 {
+		t.Errorf("readSyscalls = %d, want 123", counters.readOps)
+	}
+	if counters.writeOps != 45 {
+		t.Errorf("writeSyscalls = %d, want 45", counters.writeOps)
+	}
+}
+
+func TestParseProcessIORejectsIncompleteOrInvalidDecisionSamples(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "missing storage counter", data: "syscr: 1\nsyscw: 2\nwrite_bytes: 3\n"},
+		{name: "invalid syscall counter", data: "syscr: nope\nsyscw: 2\nread_bytes: 3\nwrite_bytes: 4\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseProcessIO([]byte(tt.data)); err == nil {
+				t.Fatal("parseProcessIO() error = nil, want incomplete coverage error")
+			}
+		})
 	}
 }
 

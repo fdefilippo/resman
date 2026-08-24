@@ -43,7 +43,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// ioStatsSnapshot tiene traccia dei valori precedenti per calcolare i delta dei counter IO.
+// ioStatsSnapshot tracks previous values used to calculate I/O counter deltas.
 type ioStatsSnapshot struct {
 	ReadBytes  uint64
 	WriteBytes uint64
@@ -51,40 +51,41 @@ type ioStatsSnapshot struct {
 	WriteOps   uint64
 }
 
-// PrometheusExporter esporta metriche in formato Prometheus.
+// PrometheusExporter exports metrics in Prometheus format.
 type PrometheusExporter struct {
 	cfg      *config.Config
 	logger   *logging.Logger
 	registry *prometheus.Registry
 	server   *http.Server
 
-	// Label fisse per tutte le metriche (da configurazione)
+	// Static labels for every metric (from configuration).
 	hostname   string
 	serverRole string
 
-	// Metriche base (con label hostname e server_role)
+	// Base metrics with hostname and server_role labels.
 	cpuTotalUsage  prometheus.Gauge
 	memoryUsage    prometheus.Gauge
 	totalMemoryMB  prometheus.Gauge
 	cachedMemoryMB prometheus.Gauge
 	limitedUsers   prometheus.Gauge
 
-	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	// ALL USERS metrics include every non-system user (UID >= SYSTEM_UID_MIN).
 	allUsersCPUUsage    prometheus.Gauge
 	allUsersMemoryUsage prometheus.Gauge
 	allUsersCount       prometheus.Gauge
 
-	// LIMITED USERS metrics (solo utenti che passano i filtri)
+	// LIMITED USERS metrics include only users eligible for CPU limiting.
 	limitedUsersCPUUsage    prometheus.Gauge
 	limitedUsersMemoryUsage prometheus.Gauge
 	limitedUsersCount       prometheus.Gauge
 
-	limitsActive prometheus.Gauge
-	systemLoad   prometheus.Gauge
-	totalCores   prometheus.Gauge
-	actionCores  prometheus.Gauge
+	limitsActive               prometheus.Gauge
+	systemLoad                 prometheus.Gauge
+	totalCores                 prometheus.Gauge
+	actionCores                prometheus.Gauge
+	procFSUnavailableProcesses *prometheus.GaugeVec
 
-	// Metriche con label aggiuntive
+	// Metrics with additional labels.
 	userCPUUsage         *prometheus.GaugeVec
 	userCPUUsageAverage  *prometheus.GaugeVec
 	userCPUUsageEMA      *prometheus.GaugeVec
@@ -101,14 +102,14 @@ type PrometheusExporter struct {
 	cgroupCPUPeriod      *prometheus.GaugeVec
 	cgroupMemoryUsage    *prometheus.GaugeVec
 
-	// Track utenti attivi per cleanup metriche
+	// Track active users for metric cleanup.
 	activeUserMetrics    map[string]bool   // "uid_username" -> true
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
 	prevUserPatterns     map[string]string // "uid_username" -> previous pattern label
 	usernameResolver     atomic.Value      // func(int) string
 
-	// Metriche counter (solo incremento)
+	// Counters are increment-only metrics.
 	limitsActivatedTotal   prometheus.Counter
 	limitsDeactivatedTotal prometheus.Counter
 	controlCyclesTotal     prometheus.Counter
@@ -117,17 +118,17 @@ type PrometheusExporter struct {
 	psiLastEventTimestamp  *prometheus.GaugeVec
 	errorsTotal            *prometheus.CounterVec
 
-	// Metriche histogram per tempi di esecuzione
+	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
 	metricsCollectionDuration prometheus.Histogram
 
 	mu sync.RWMutex
 
-	// Stato interno
+	// Internal state.
 	isRunning bool
 	stopChan  chan struct{}
 
-	// Autenticazione
+	// Authentication.
 	basicAuthPassword string
 	jwtSecret         []byte
 
@@ -403,6 +404,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
+	exp.procFSUnavailableProcesses = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "procfs_unavailable_processes",
+			Help:        "Current number of observed processes without a required procfs decision input",
+			ConstLabels: staticLabels,
+		},
+		[]string{"access"},
+	)
+
 	// === Metrics with dynamic labels ===
 
 	exp.userCPUUsage = promauto.With(exp.registry).NewGaugeVec(
@@ -644,20 +655,22 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 // ExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type ExporterMetrics struct {
-	TotalCPUUsage                float64
-	TotalCores                   int
-	ObservedUsersCPUUsage        float64
-	ObservedUsersCount           int
-	ObservedUsersMemoryUsage     uint64
-	CPUEligibleUsersCPUUsage     float64
-	CPUEligibleUsersCount        int
-	CPUEligibleUsersMemoryUsage  uint64
-	CPUActivelyLimitedUsersCount int
-	CPULimitsActive              bool
-	MemoryUsageMB                float64
-	TotalMemoryMB                float64
-	CachedMemoryMB               float64
-	SystemLoad                   float64
+	TotalCPUUsage                                float64
+	TotalCores                                   int
+	ObservedUsersCPUUsage                        float64
+	ObservedUsersCount                           int
+	ObservedUsersMemoryUsage                     uint64
+	CPUEligibleUsersCPUUsage                     float64
+	CPUEligibleUsersCount                        int
+	CPUEligibleUsersMemoryUsage                  uint64
+	CPUActivelyLimitedUsersCount                 int
+	CPULimitsActive                              bool
+	MemoryUsageMB                                float64
+	TotalMemoryMB                                float64
+	CachedMemoryMB                               float64
+	SystemLoad                                   float64
+	ProcFSExecutableIdentityUnavailableProcesses int
+	ProcFSIOUnavailableProcesses                 int
 }
 
 // UpdateSystemSnapshot publishes one typed system-wide gauge snapshot.
@@ -683,6 +696,12 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics ExporterMetrics) {
 	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
 	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)
 	exp.systemLoad.Set(metrics.SystemLoad)
+	exp.procFSUnavailableProcesses.WithLabelValues(procFSAccessExecutableIdentity).Set(
+		float64(metrics.ProcFSExecutableIdentityUnavailableProcesses),
+	)
+	exp.procFSUnavailableProcesses.WithLabelValues(procFSAccessIODecision).Set(
+		float64(metrics.ProcFSIOUnavailableProcesses),
+	)
 }
 
 func boolMetricValue(value bool) float64 {

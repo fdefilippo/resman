@@ -140,6 +140,10 @@ allocation, but defaults the writable overlay to 8 GiB. Nested Podman uses its
 `vfs` storage driver because SmolVM does not expose `/dev/fuse`; the larger
 overlay accommodates the driver's full layer copies. Set
 `SMOLVM_OVERLAY_GIB` explicitly to override this storage-only default.
+The host runner also retains `localhost/resman-container-cache:latest` after a
+successful product-image build. Per-run tags are still removed, while the stable
+cache tag keeps the Oracle Linux package and Go build layers available to later
+runs. Override its name with `RESMAN_CONTAINER_IMAGE_CACHE_REF` when needed.
 
 The image provides three fixture users (`resman-cpu`, `resman-memory`, and
 `resman-io`), a small wrapper around `stress` for CPU/RAM/I/O workloads,

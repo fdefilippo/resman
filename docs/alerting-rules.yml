@@ -212,6 +212,19 @@ groups:
           description: "{{ $value }} errors in the last 5 minutes. Check logs for details."
 
       # -------------------------------------------------------------------------
+      # Required Procfs Access Unavailable
+      # -------------------------------------------------------------------------
+      - alert: ResManProcFSAccessIncomplete
+        expr: sum by (cluster, environment, hostname, server_role, access) (resman_procfs_unavailable_processes) > 0
+        for: 2m
+        labels:
+          severity: warning
+          category: errors
+        annotations:
+          summary: "ResMan cannot read required process data"
+          description: "{{ $value }} processes lack {{ $labels.access }} procfs access; enforcement decisions are conservative."
+
+      # -------------------------------------------------------------------------
       # Service Down
       # -------------------------------------------------------------------------
       - alert: ResManServiceDown

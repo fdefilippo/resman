@@ -58,6 +58,8 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	ioPolicy := cfg.GetIODecisionPolicy()
+	ioCoverageIncomplete := ioPolicy.Enabled && ioPolicy.Threshold > 0 &&
+		hasConfiguredIODecisionDimension(ioPolicy) && metrics.IOEligibleUnavailableProcesses > 0
 	ioActivationPressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.Threshold)
 	ioExceeded := ioActivationPressure.exceeded()
 	ioThresholdPending := false
@@ -75,7 +77,8 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			ioThresholdPending = true
 		}
 	} else {
-		// Reset when I/O is below threshold or the duration guard is disabled.
+		// Incomplete coverage cannot prove continuous pressure, so it resets the
+		// duration guard even though it does not count as a below-threshold sample.
 		m.ioThresholdTracker.Reset()
 	}
 
@@ -102,7 +105,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	ioReleasePressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.ReleaseThreshold)
-	ioBelow := !ioReleasePressure.exceeded()
+	ioBelow := !ioCoverageIncomplete && !ioReleasePressure.exceeded()
 
 	allBelow := cpuBelow && ramBelow && ioBelow
 
@@ -111,6 +114,16 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// Enforce the minimum activation time.
 		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
 			return DecisionMaintain, "Limits active, waiting for minimum activation time"
+		}
+
+		if ioCoverageIncomplete {
+			if m.stabilityTracker != nil {
+				m.stabilityTracker.Reset()
+			}
+			return DecisionMaintain, fmt.Sprintf(
+				"I/O decision coverage incomplete for %d enforceable processes; current limits cannot be released safely",
+				metrics.IOEligibleUnavailableProcesses,
+			)
 		}
 
 		// Deactivate only when every resource is below its release threshold.
@@ -209,6 +222,15 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			cpuThreshold,
 			ioActivationPressure,
 			ioPolicy.Threshold,
+		)
+	}
+
+	if ioCoverageIncomplete {
+		m.thresholdTracker.Reset()
+		m.ioThresholdTracker.Reset()
+		return DecisionMaintain, fmt.Sprintf(
+			"I/O decision coverage incomplete for %d enforceable processes; zero pressure is not established",
+			metrics.IOEligibleUnavailableProcesses,
 		)
 	}
 
