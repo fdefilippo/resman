@@ -277,12 +277,22 @@ type mockPrometheusExporter struct {
 	errors                     []prometheusErrorRecord
 	controlCycleDurations      []time.Duration
 	metricsCollectionDurations []time.Duration
+	systemSnapshots            int
+	userMetricUpdates          int
+	userMetricCleanups         int
 	limitsActivated            int
 	limitsDeactivated          int
 }
 
-func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.ExporterMetrics) {}
+func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.ExporterMetrics) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.systemSnapshots++
+}
 func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.userMetricUpdates++
 }
 func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
@@ -303,9 +313,13 @@ func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 	defer m.mu.Unlock()
 	m.errors = append(m.errors, prometheusErrorRecord{component: component, errorType: errorType})
 }
-func (m *mockPrometheusExporter) Start(ctx context.Context) error            { return nil }
-func (m *mockPrometheusExporter) Stop() error                                { return nil }
-func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {}
+func (m *mockPrometheusExporter) Start(ctx context.Context) error { return nil }
+func (m *mockPrometheusExporter) Stop() error                     { return nil }
+func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.userMetricCleanups++
+}
 func (m *mockPrometheusExporter) IncrementLimitsActivated() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -327,6 +341,9 @@ type prometheusMetricSnapshot struct {
 	errors                    []prometheusErrorRecord
 	controlCycleDurations     int
 	metricsCollectionDuration int
+	systemSnapshots           int
+	userMetricUpdates         int
+	userMetricCleanups        int
 	limitsActivated           int
 	limitsDeactivated         int
 }
@@ -338,6 +355,9 @@ func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
 		errors:                    append([]prometheusErrorRecord(nil), m.errors...),
 		controlCycleDurations:     len(m.controlCycleDurations),
 		metricsCollectionDuration: len(m.metricsCollectionDurations),
+		systemSnapshots:           m.systemSnapshots,
+		userMetricUpdates:         m.userMetricUpdates,
+		userMetricCleanups:        m.userMetricCleanups,
 		limitsActivated:           m.limitsActivated,
 		limitsDeactivated:         m.limitsDeactivated,
 	}
@@ -830,7 +850,8 @@ func TestInterleavedMetricsRefreshDoesNotChangeControlDecisionSample(t *testing.
 					1000: {UID: 1000, Username: "alice", CPUUsage: 10, CPUUsageEMA: 10, ProcessCount: 1},
 				},
 			}
-			manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(cfg, collector, &mockCgroupManager{}, exporter)
 			if err != nil {
 				t.Fatalf("NewManager() error: %v", err)
 			}
@@ -840,8 +861,27 @@ func TestInterleavedMetricsRefreshDoesNotChangeControlDecisionSample(t *testing.
 					t.Fatalf("RunMetricsRefresh() error: %v", err)
 				}
 			}
+			refreshSnapshot := exporter.snapshot()
+			if refreshSnapshot.systemSnapshots != tt.refreshCount {
+				t.Fatalf("system snapshots after observation refresh = %d, want %d", refreshSnapshot.systemSnapshots, tt.refreshCount)
+			}
+			if refreshSnapshot.userMetricUpdates != 0 || refreshSnapshot.userMetricCleanups != 0 {
+				t.Fatalf(
+					"observation refresh touched decision-owned user series: updates=%d cleanups=%d",
+					refreshSnapshot.userMetricUpdates,
+					refreshSnapshot.userMetricCleanups,
+				)
+			}
 			if err := manager.RunControlCycle(context.Background()); err != nil {
 				t.Fatalf("RunControlCycle() error: %v", err)
+			}
+			cycleSnapshot := exporter.snapshot()
+			if cycleSnapshot.userMetricUpdates != 1 || cycleSnapshot.userMetricCleanups != 1 {
+				t.Fatalf(
+					"decision-owned user series writes = %d, cleanups = %d, want one each",
+					cycleSnapshot.userMetricUpdates,
+					cycleSnapshot.userMetricCleanups,
+				)
 			}
 
 			if manager.limitsActive {

@@ -81,7 +81,7 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	}
 
 	if m.prometheusExporter != nil {
-		m.updatePrometheusMetrics(metrics)
+		m.updatePrometheusSystemMetrics(metrics)
 	}
 
 	m.logger.Debug("Metrics refresh completed",
@@ -194,9 +194,10 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
-	// 2. Aggiorna le metriche Prometheus (se abilitato)
+	// Publish system observations and decision-owned per-user metrics.
 	if m.prometheusExporter != nil {
-		m.updatePrometheusMetrics(run.metrics)
+		m.updatePrometheusSystemMetrics(run.metrics)
+		m.updatePrometheusDecisionUserMetrics(run.metrics)
 	}
 	return nil
 }
@@ -581,7 +582,7 @@ func monotonicRate(current, previous uint64, elapsedSeconds float64) float64 {
 	return float64(current-previous) / elapsedSeconds
 }
 
-func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
+func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	if m.prometheusExporter == nil {
 		return
 	}
@@ -608,7 +609,21 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		SystemLoad:                   metrics.SystemLoad,
 	})
 
-	// Update per-user metrics from the explicit sample state.
+	// Update system metrics.
+	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
+	if actionCores < 1 {
+		actionCores = 1
+	}
+	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
+}
+
+func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
+	if m.prometheusExporter == nil {
+		return
+	}
+
+	// Per-user series are owned exclusively by the decision sample. Observation
+	// refreshes must not overwrite them with a different baseline or EMA history.
 	for uid, userMetrics := range metrics.UserMetrics {
 		username := userMetrics.Username
 		if username == "" || username == strconv.Itoa(uid) {
@@ -669,13 +684,6 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 		activeUids[uid] = true
 	}
 	m.prometheusExporter.CleanupUserMetrics(activeUids)
-
-	// Update system metrics.
-	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
-	if actionCores < 1 {
-		actionCores = 1
-	}
-	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
 }
 
 const (

@@ -1109,9 +1109,17 @@ decision policy.
 
 **Per-User Metrics:**
 - `resman_user_cpu_usage_percent{uid, username}` (gauge)
+- `resman_user_cpu_usage_average_percent{uid, username}` (gauge)
+- `resman_user_cpu_usage_ema_percent{uid, username}` (gauge)
 - `resman_user_memory_usage_bytes{uid, username}` (gauge)
 - `resman_user_process_count{uid, username}` (gauge)
 - `resman_user_cpu_limited{uid, username}` (gauge)
+
+Every per-user series is published exclusively from the control-cycle decision
+sample. Its CPU delta and smoothing window therefore match the sample used by
+enforcement. Observation-only refreshes update system-wide gauges but do not write or
+remove per-user series. The shipped per-user alert rules consequently evaluate one
+defined sampling stream even when PSI event-driven refreshes run at another cadence.
 
 **Counters:**
 - `resman_limits_activated_total` (confirmed inactive-to-active transitions)
@@ -1127,17 +1135,16 @@ decision policy.
 **Start:**
 1. Register metrics
 2. Start HTTP server
-3. Begin update loop (15s interval)
 
 **Stop:**
-1. Stop update loop
-2. Shutdown HTTP server
-3. Unregister metrics
+1. Shutdown HTTP server
+2. Unregister metrics
 
-**Update Loop:**
-- Fetch metrics from state manager
-- Update Prometheus gauges
-- Sleep 15 seconds
+**Update ownership:**
+- Control cycles publish system-wide and per-user metrics.
+- Observation-only refreshes publish system-wide metrics only.
+- The application schedules both paths from the configured polling, PSI fallback,
+  and metrics-refresh intervals; the exporter has no independent fixed update loop.
 
 ---
 

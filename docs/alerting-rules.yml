@@ -10,6 +10,9 @@
 #      rule_files:
 #        - "/path/to/alerting-rules.yml"
 #   3. Reload Prometheus: kill -HUP <pid>
+#
+# Per-user series are published from resman's authoritative control-cycle sample.
+# Observation-only refreshes do not overwrite these alert inputs.
 
 groups:
   # ============================================================================

@@ -806,7 +806,9 @@ Stores the original cgroup, process start time, parent, and session identity
 needed to restore processes safely after limits are removed or the daemon
 restarts. The file is replaced atomically and is readable only by its owner.
 .SH PROMETHEUS METRICS
-When enabled, the daemon exposes metrics at http://HOST:PORT/metrics
+When enabled, the daemon exposes metrics at the configured
+.B /metrics
+endpoint over HTTP or HTTPS.
 .IP \(bu 2
 resman_cpu_total_usage_percent \- Total CPU usage
 .IP \(bu
@@ -824,6 +826,10 @@ resman_system_load_average \- System load average (1 minute)
 .IP \(bu
 resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
 .IP \(bu
+resman_user_cpu_usage_average_percent{uid, username} \- Average CPU usage per user
+.IP \(bu
+resman_user_cpu_usage_ema_percent{uid, username} \- Exponential moving average of CPU usage per user
+.IP \(bu
 resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (PSS in bytes, RSS fallback)
 .IP \(bu
 resman_user_io_read_bytes_total{uid, username} \- Bytes read from block devices per user (when IO limits enabled)
@@ -837,6 +843,11 @@ resman_user_io_write_ops_total{uid, username} \- Write-family syscall count from
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
 resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
+.PP
+All per-user series are published exclusively from the authoritative control-cycle
+sample. Observation-only refreshes update system-wide telemetry but do not write or
+remove per-user series, so CPU alerts and the exported EMA use the same sampling
+stream as enforcement.
 .IP \(bu
 resman_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu

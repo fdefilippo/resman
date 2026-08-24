@@ -158,6 +158,10 @@ normal scheduling jitter and one missed decision-loop tick: it expires after two
 mode. `METRICS_CACHE_TTL` controls only value reuse and does not set this sampling
 window.
 
+Prometheus per-user series are published only from the authoritative control-cycle
+sample. Observation-only refreshes update system-wide telemetry but never overwrite
+per-user CPU deltas or EMA with values from their independent sampling window.
+
 Per-user memory uses proportional set size (PSS) from
 `/proc/PID/smaps_rollup`, preventing shared pages from being counted once per
 process. RSS is used only when PSS is unavailable.
