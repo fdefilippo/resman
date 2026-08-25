@@ -182,7 +182,7 @@ func applyConfigFileMetadataWithChown(
 }
 
 // removeLegacyConfigArtifactsBeside removes artifacts written beside a selected
-// configuration by releases before 1.25.1. It remains necessary for custom
+// configuration by version 1.25.1 and earlier. It remains necessary for custom
 // paths; default-layout legacy artifacts are refused at startup and never
 // deleted automatically.
 func removeLegacyConfigArtifactsBeside(path string) error {
