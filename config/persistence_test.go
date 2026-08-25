@@ -18,6 +18,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,6 +221,228 @@ func newTestGateRelease(gate chan struct{}) func() {
 	return func() {
 		once.Do(func() {
 			close(gate)
+		})
+	}
+}
+
+func TestPersistUserFilterRejectsConfigSymlinks(t *testing.T) {
+	tests := []struct {
+		name         string
+		createTarget bool
+	}{
+		{name: "regular target", createTarget: true},
+		{name: "dangling target"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "managed-target.conf")
+			path := filepath.Join(dir, "resman.conf")
+			original := []byte("MCP_AUTH_TOKEN=target-secret\nUSER_INCLUDE_LIST=^old$\n")
+			if tt.createTarget {
+				if err := os.WriteFile(target, original, 0600); err != nil {
+					t.Fatalf("os.WriteFile(target) error = %v", err)
+				}
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatalf("os.Symlink() error = %v", err)
+			}
+
+			cfg := DefaultConfig()
+			_, err := cfg.PersistUserIncludeList([]string{"^new$"}, path)
+			if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "symbolic link") {
+				t.Fatalf("PersistUserIncludeList() error = %v, want named symbolic-link rejection", err)
+			}
+
+			info, lstatErr := os.Lstat(path)
+			if lstatErr != nil {
+				t.Fatalf("os.Lstat(config symlink) error = %v", lstatErr)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("config path mode = %v, want original symbolic link", info.Mode())
+			}
+			if tt.createTarget {
+				content, readErr := os.ReadFile(target)
+				if readErr != nil || string(content) != string(original) {
+					t.Fatalf("symlink target changed: content=%q error=%v", content, readErr)
+				}
+			}
+			if _, statErr := os.Lstat(path + configBackupSuffix); !os.IsNotExist(statErr) {
+				t.Fatalf("backup created for rejected symlink: %v", statErr)
+			}
+			assertNoAtomicTemps(t, path)
+		})
+	}
+}
+
+func TestApplyConfigFileMetadataOwnershipFailureIsActionable(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "metadata-*")
+	if err != nil {
+		t.Fatalf("os.CreateTemp() error = %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("file.Close() error = %v", err)
+		}
+	}()
+
+	uid, gid := fileOwnership(t, file.Name())
+	requiredUID := int(uid) + 1
+	targetPath := filepath.Join(filepath.Dir(file.Name()), "resman.conf")
+	injectedErr := errors.New("injected chown failure")
+	var requestedUID, requestedGID int
+	err = applyConfigFileMetadataWithChown(
+		file,
+		targetPath,
+		configFileMetadata{
+			mode:         0600,
+			uid:          requiredUID,
+			gid:          int(gid),
+			hasOwnership: true,
+		},
+		func(uid, gid int) error {
+			requestedUID = uid
+			requestedGID = gid
+			return injectedErr
+		},
+	)
+	if !errors.Is(err, injectedErr) {
+		t.Fatalf("applyConfigFileMetadataWithChown() error = %v, want injected error", err)
+	}
+	if requestedUID != requiredUID || requestedGID != int(gid) {
+		t.Fatalf("requested ownership = %d:%d, want %d:%d", requestedUID, requestedGID, requiredUID, gid)
+	}
+	info, statErr := file.Stat()
+	if statErr != nil {
+		t.Fatalf("file.Stat() after ownership failure error = %v", statErr)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("temporary file size after ownership failure = %d, want 0 before secret content", info.Size())
+	}
+	for _, fragment := range []string{
+		targetPath,
+		fmt.Sprintf("%d:%d", requiredUID, gid),
+		"grant resman permission to chown",
+		"change the source ownership",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("ownership error %q does not contain %q", err, fragment)
+		}
+	}
+}
+
+func TestPersistUserFilterDurabilityFailureReportsDeterministicRuntimeAndDiskState(t *testing.T) {
+	tests := []struct {
+		name                     string
+		failRollbackSync         bool
+		failRollbackBeforeRename bool
+		wantRollbackMessage      bool
+		wantDivergenceMessage    bool
+	}{
+		{name: "rollback sync succeeds"},
+		{name: "rollback sync also fails", failRollbackSync: true, wantRollbackMessage: true},
+		{
+			name:                     "rollback fails before rename",
+			failRollbackBeforeRename: true,
+			wantDivergenceMessage:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "resman.conf")
+			original := []byte("MCP_AUTH_TOKEN=original-secret\nUSER_INCLUDE_LIST=^old$\n")
+			if err := os.WriteFile(path, original, 0400); err != nil {
+				t.Fatalf("os.WriteFile(config) error = %v", err)
+			}
+			if err := os.Chmod(path, 0400); err != nil {
+				t.Fatalf("os.Chmod(config) error = %v", err)
+			}
+
+			cfg := DefaultConfig()
+			cfg.UserIncludeList = []string{"^old$"}
+			activeWrites := 0
+			writer := func(target string, content []byte, metadata configFileMetadata) (bool, error) {
+				if target != path {
+					return writeFileAtomically(target, content, metadata)
+				}
+				activeWrites++
+				if activeWrites == 2 && tt.failRollbackBeforeRename {
+					return false, errors.New("injected rollback failure before rename")
+				}
+				failSync := activeWrites == 1 || (activeWrites == 2 && tt.failRollbackSync)
+				if failSync {
+					return writeFileAtomicallyWithSync(target, content, metadata, func(string) error {
+						return fmt.Errorf("injected parent sync failure %d", activeWrites)
+					})
+				}
+				return writeFileAtomically(target, content, metadata)
+			}
+
+			previous, err := cfg.persistUserFilterWithWriter(
+				[]string{"^new$"}, path, userFilterInclude, writer,
+			)
+			if err == nil || !strings.Contains(err.Error(), "injected parent sync failure 1") {
+				t.Fatalf("persistUserFilterWithWriter() error = %v, want replacement sync failure", err)
+			}
+			if got := strings.Contains(err.Error(), "failed to confirm rollback durability"); got != tt.wantRollbackMessage {
+				t.Fatalf("rollback durability message present = %t, want %t; error=%v", got, tt.wantRollbackMessage, err)
+			}
+			if got := strings.Contains(err.Error(), "stop resman"); got != tt.wantDivergenceMessage {
+				t.Fatalf("divergence remedy present = %t, want %t; error=%v", got, tt.wantDivergenceMessage, err)
+			}
+			if activeWrites != 2 {
+				t.Fatalf("active-file writes = %d, want replacement and rollback", activeWrites)
+			}
+			if len(previous) != 1 || previous[0] != "^old$" {
+				t.Fatalf("previous filter = %v, want [^old$]", previous)
+			}
+			if got := cfg.GetUserIncludeList(); len(got) != 1 || got[0] != "^old$" {
+				t.Fatalf("runtime filter = %v, want unchanged [^old$]", got)
+			}
+
+			readable, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("os.ReadFile(active config) error = %v", readErr)
+			}
+			if tt.wantDivergenceMessage {
+				if !strings.Contains(string(readable), "USER_INCLUDE_LIST=^new$") {
+					t.Fatalf("active config = %q, want requested content after pre-rename rollback failure", readable)
+				}
+			} else if string(readable) != string(original) {
+				t.Fatalf("readable config diverged: content=%q, want %q", readable, original)
+			}
+			backup, backupErr := os.ReadFile(path + configBackupSuffix)
+			if backupErr != nil || string(backup) != string(original) {
+				t.Fatalf("backup = %q error=%v, want %q", backup, backupErr, original)
+			}
+			if tt.wantDivergenceMessage {
+				reloaded := DefaultConfig()
+				if _, lifecycleErr := ApplyReloadLifecycle(cfg, reloaded); lifecycleErr != nil {
+					t.Fatalf("ApplyReloadLifecycle() error = %v", lifecycleErr)
+				}
+				writerCalled := false
+				_, retryErr := reloaded.persistUserFilterWithWriter(
+					[]string{"^retry$"},
+					path,
+					userFilterInclude,
+					func(string, []byte, configFileMetadata) (bool, error) {
+						writerCalled = true
+						return false, errors.New("writer must remain blocked")
+					},
+				)
+				if retryErr == nil || !strings.Contains(retryErr.Error(), "persistence is unavailable") ||
+					!strings.Contains(retryErr.Error(), path+configBackupSuffix) {
+					t.Fatalf("retry error = %v, want shared unusable state and recovery path", retryErr)
+				}
+				if writerCalled {
+					t.Fatal("persistence writer ran after the coordinator entered an unusable state")
+				}
+			}
+			assertFileMode(t, path, 0400)
+			assertNoAtomicTemps(t, path)
 		})
 	}
 }
@@ -432,6 +655,68 @@ func TestSaveToFileRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
 		t.Fatalf("backup exists for failed new config creation: %v", statErr)
 	}
 	assertNoAtomicTemps(t, path)
+}
+
+func TestNewFileCompensationFailureReportsDeterministicState(t *testing.T) {
+	tests := []struct {
+		name         string
+		removed      bool
+		wantUnusable bool
+	}{
+		{name: "file removed but removal durability fails", removed: true},
+		{name: "file removal fails", wantUnusable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "resman.conf")
+			snapshot := userFilterPersistenceSnapshot{
+				include:      []string{"^new$"},
+				writeInclude: true,
+				writeExclude: true,
+			}
+			writer := func(target string, content []byte, metadata configFileMetadata) (bool, error) {
+				return writeFileAtomicallyWithSync(target, content, metadata, func(string) error {
+					return errors.New("injected creation sync failure")
+				})
+			}
+			remover := func(target string) (bool, error) {
+				if tt.removed {
+					if err := os.Remove(target); err != nil {
+						t.Fatalf("os.Remove(compensated config) error = %v", err)
+					}
+					return true, errors.New("injected removal sync failure")
+				}
+				return false, errors.New("injected removal failure")
+			}
+
+			err := saveUserFilterSnapshot(path, snapshot, writer, remover)
+			if err == nil || !strings.Contains(err.Error(), "injected creation sync failure") {
+				t.Fatalf("saveUserFilterSnapshot() error = %v, want creation sync failure", err)
+			}
+			var unusableErr *configPersistenceUnusableError
+			if got := errors.As(err, &unusableErr); got != tt.wantUnusable {
+				t.Fatalf("unusable persistence state = %t, want %t; error=%v", got, tt.wantUnusable, err)
+			}
+			if tt.removed {
+				if !strings.Contains(err.Error(), "failed to confirm removal durability") {
+					t.Fatalf("compensation error = %v, want unconfirmed removal durability", err)
+				}
+				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("new config remains after successful removal: %v", statErr)
+				}
+			} else {
+				if !strings.Contains(err.Error(), "stop resman") || !strings.Contains(err.Error(), "remove "+path) {
+					t.Fatalf("unusable-state error = %v, want removal and restart remedy", err)
+				}
+				content, readErr := os.ReadFile(path)
+				if readErr != nil || !strings.Contains(string(content), "USER_INCLUDE_LIST=^new$") {
+					t.Fatalf("active new config = %q error=%v, want requested content", content, readErr)
+				}
+			}
+			assertNoAtomicTemps(t, path)
+		})
+	}
 }
 
 func TestWriteFileAtomicallyCleansTemporaryFileAfterRenameFailure(t *testing.T) {

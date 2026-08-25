@@ -40,14 +40,44 @@ type configFileMetadata struct {
 }
 
 type atomicFileWriter func(string, []byte, configFileMetadata) (bool, error)
+type committedFileRemover func(string) (bool, error)
+
+type configPersistenceState struct {
+	unusableErr error
+}
+
+type configPersistenceUnusableError struct {
+	detail   string
+	recovery string
+	cause    error
+}
+
+func (e *configPersistenceUnusableError) Error() string {
+	return fmt.Sprintf(
+		"%s; active file content may differ from the unchanged runtime configuration; %s: %v",
+		e.detail,
+		e.recovery,
+		e.cause,
+	)
+}
+
+func (e *configPersistenceUnusableError) Unwrap() error {
+	return e.cause
+}
 
 func readConfigFile(path string) (configFileMetadata, []byte, bool, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return configFileMetadata{mode: defaultConfigMode}, nil, false, nil
 		}
-		return configFileMetadata{}, nil, false, fmt.Errorf("failed to stat config file: %w", err)
+		return configFileMetadata{}, nil, false, fmt.Errorf("failed to inspect config path %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return configFileMetadata{}, nil, false, fmt.Errorf(
+			"config path %s is a symbolic link; replace it with a regular file or select its target with --config",
+			path,
+		)
 	}
 	if !info.Mode().IsRegular() {
 		return configFileMetadata{}, nil, false, fmt.Errorf("config path %s is not a regular file", path)
@@ -91,7 +121,7 @@ func writeFileAtomicallyWithSync(path string, content []byte, metadata configFil
 
 	// Apply final metadata before writing secret-bearing content. CreateTemp
 	// starts at 0600, so the empty file is never exposed with broad access.
-	if err := applyConfigFileMetadata(tmp, metadata); err != nil {
+	if err := applyConfigFileMetadata(tmp, path, metadata); err != nil {
 		return false, err
 	}
 	if _, err := tmp.Write(content); err != nil {
@@ -115,7 +145,16 @@ func writeFileAtomicallyWithSync(path string, content []byte, metadata configFil
 	return true, nil
 }
 
-func applyConfigFileMetadata(file *os.File, metadata configFileMetadata) error {
+func applyConfigFileMetadata(file *os.File, targetPath string, metadata configFileMetadata) error {
+	return applyConfigFileMetadataWithChown(file, targetPath, metadata, file.Chown)
+}
+
+func applyConfigFileMetadataWithChown(
+	file *os.File,
+	targetPath string,
+	metadata configFileMetadata,
+	chown func(int, int) error,
+) error {
 	if metadata.hasOwnership {
 		info, err := file.Stat()
 		if err != nil {
@@ -123,8 +162,16 @@ func applyConfigFileMetadata(file *os.File, metadata configFileMetadata) error {
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || int(stat.Uid) != metadata.uid || int(stat.Gid) != metadata.gid {
-			if err := file.Chown(metadata.uid, metadata.gid); err != nil {
-				return fmt.Errorf("failed to preserve file ownership: %w", err)
+			if err := chown(metadata.uid, metadata.gid); err != nil {
+				return fmt.Errorf(
+					"cannot preserve required ownership %d:%d for %s while running as %d:%d; grant resman permission to chown the configuration or change the source ownership before retrying: %w",
+					metadata.uid,
+					metadata.gid,
+					targetPath,
+					os.Geteuid(),
+					os.Getegid(),
+					err,
+				)
 			}
 		}
 	}
@@ -162,11 +209,11 @@ func removeLegacyConfigArtifacts(path string) error {
 	return nil
 }
 
-func removeCommittedFile(path string) error {
+func removeCommittedFile(path string) (bool, error) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
-	return syncParentDirectory(path)
+	return true, syncParentDirectory(path)
 }
 
 func syncParentDirectory(path string) error {

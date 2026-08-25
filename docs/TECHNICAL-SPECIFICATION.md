@@ -924,8 +924,10 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 1. Acquire the configuration-file persistence coordinator, snapshot the managed
    values under the configuration lock, and release that lock before filesystem I/O.
    The coordinator is shared by configuration objects across reload epochs.
-2. Inspect the current file and preserve its permission mode and ownership. A new
-   configuration defaults to mode `0600`.
+2. Inspect the current path with `lstat`. A symbolic link is rejected with the path
+   and the required operator action; resman never replaces a managed link while
+   leaving its target stale. For a regular file, preserve its permission mode and
+   ownership. A new configuration defaults to mode `0600`.
 3. Atomically replace the single rolling backup `<config>.backup` with the exact
    previous contents. The backup uses the same metadata as the source.
 4. Remove legacy timestamped backups and the obsolete predictable `.tmp` artifact.
@@ -933,10 +935,23 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
    applying final metadata before secret-bearing content is written.
 6. Sync the temporary file, rename it over the configuration, and sync the parent
    directory. A post-rename durability failure restores the previous contents before
-   returning an error.
+   returning an error. If the rollback rename succeeds but its parent sync also fails,
+   the original content is again readable and runtime publication remains unchanged;
+   the joined error states that rollback durability is still unconfirmed. If rollback
+   fails before its rename, the active file may contain the requested value while
+   runtime remains unchanged. The persistence coordinator enters an explicit unusable
+   state shared across reload epochs and rejects every later write: stop resman,
+   restore `<config>.backup`, and restart before retrying. For a newly created file
+   with no backup, failure to remove the non-durable replacement enters the same state;
+   stop resman, remove the new file, and restart.
 
 This keeps retention bounded to one previous version and prevents temporary or backup
 files from becoming more readable than the active configuration.
+
+Ownership preservation is fail-closed. If the service account cannot apply the
+source UID and GID to a replacement or backup, no secret-bearing content is written;
+the error names the path and required owner and instructs the operator to grant the
+service permission to `chown` or change the source ownership before retrying.
 
 **Publication boundary:**
 ```go

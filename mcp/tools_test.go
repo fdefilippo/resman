@@ -188,6 +188,39 @@ func TestUserFilterUpdateReportsWatcherFailureAfterPersistence(t *testing.T) {
 	}
 }
 
+func TestUserFilterUpdateRejectsSymlinkedConfigBeforeWatcherReload(t *testing.T) {
+	server, configPath := newUserFilterTestServer(t, configurationReloaderFunc(func(context.Context) error {
+		t.Fatal("configuration reloader called after persistence rejected a symbolic link")
+		return nil
+	}))
+	targetPath := filepath.Join(filepath.Dir(configPath), "managed-target.conf")
+	if err := os.Rename(configPath, targetPath); err != nil {
+		t.Fatalf("os.Rename(config target) error = %v", err)
+	}
+	if err := os.Symlink(targetPath, configPath); err != nil {
+		t.Fatalf("os.Symlink(config) error = %v", err)
+	}
+	original, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile(target) error = %v", err)
+	}
+
+	result, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^new$"})
+	if err == nil || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("updateUserFilter() error = %v, want named symbolic-link rejection", err)
+	}
+	if result.Persisted || result.Applied || result.Success {
+		t.Fatalf("rejected update result = %+v, want no persisted or applied state", result)
+	}
+	if got := server.stateManager.GetConfig().GetUserIncludeList(); !slices.Equal(got, []string{"^old-include$"}) {
+		t.Fatalf("runtime filters = %v, want unchanged old value", got)
+	}
+	content, readErr := os.ReadFile(targetPath)
+	if readErr != nil || string(content) != string(original) {
+		t.Fatalf("symlink target changed: content=%q error=%v, want %q", content, readErr, original)
+	}
+}
+
 func TestUserFilterUpdateRejectsConcurrentEdits(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

@@ -549,6 +549,22 @@ command\-line option (default:
 It cannot be redirected by a key inside the configuration file or by an
 environment variable.
 .PP
+Configuration updates initiated through MCP require this path to be a regular file.
+Symbolic links, including dangling links, are rejected without replacing the link or
+changing its target. Select the target itself with
+.B \-\-config
+or replace the link with a regular file. Atomic replacement preserves the source mode
+and ownership and fails before writing secret-bearing content if the service account
+cannot apply the required owner. In that case, grant the service permission to change
+file ownership or change the source ownership to the service account before retrying.
+If a failed atomic replacement cannot restore the rolling backup, stop resman, restore
+.IR /etc/resman.conf.backup ,
+and restart before accepting another configuration write; the active file and runtime
+configuration may differ until recovery is complete. Resman rejects subsequent
+configuration persistence attempts until restart. If a newly created configuration has
+no rolling backup and its compensating removal fails, stop resman, remove the new file,
+and restart.
+.PP
 Example
 .I /etc/resman.conf
 format:

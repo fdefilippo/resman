@@ -46,6 +46,8 @@ type Config struct {
 
 	// saveMu is shared across reload epochs and serializes config-file transactions.
 	saveMu *sync.Mutex
+	// saveState is protected by saveMu and shared across reload epochs.
+	saveState *configPersistenceState
 
 	// Regex cache for pre-compiled patterns (performance optimization)
 	regexCache sync.Map // map[string]*regexp.Regexp
@@ -246,6 +248,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		saveMu:             &sync.Mutex{},
+		saveState:          &configPersistenceState{},
 		CgroupRoot:         "/sys/fs/cgroup",
 		CgroupBase:         "resman",
 		ConfigFile:         "/etc/resman.conf",
@@ -1326,13 +1329,21 @@ type userFilterPersistenceSnapshot struct {
 	writeExclude bool
 }
 
-func (c *Config) persistenceMutex() *sync.Mutex {
+func (c *Config) persistenceCoordinator() (*sync.Mutex, *configPersistenceState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.saveMu == nil {
 		c.saveMu = &sync.Mutex{}
 	}
-	return c.saveMu
+	if c.saveState == nil {
+		c.saveState = &configPersistenceState{}
+	}
+	return c.saveMu, c.saveState
+}
+
+func (c *Config) persistenceMutex() *sync.Mutex {
+	saveMu, _ := c.persistenceCoordinator()
+	return saveMu
 }
 
 func (c *Config) userFilterSnapshot() userFilterPersistenceSnapshot {
@@ -1362,7 +1373,7 @@ func (c *Config) persistUserFilterWithWriter(
 		}
 	}
 
-	saveMu := c.persistenceMutex()
+	saveMu, saveState := c.persistenceCoordinator()
 	saveMu.Lock()
 	defer saveMu.Unlock()
 
@@ -1380,8 +1391,18 @@ func (c *Config) persistUserFilterWithWriter(
 	default:
 		return nil, fmt.Errorf("unknown user filter field %d", field)
 	}
+	if saveState.unusableErr != nil {
+		return previous, fmt.Errorf(
+			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
+			saveState.unusableErr,
+		)
+	}
 
 	if err := saveUserFilterSnapshotWithWriter(configPath, snapshot, writer); err != nil {
+		var unusableErr *configPersistenceUnusableError
+		if errors.As(err, &unusableErr) {
+			saveState.unusableErr = err
+		}
 		return previous, err
 	}
 	return previous, nil
@@ -1402,17 +1423,37 @@ func (c *Config) SaveToFile(path string) error {
 }
 
 func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) error {
-	saveMu := c.persistenceMutex()
+	saveMu, saveState := c.persistenceCoordinator()
 	saveMu.Lock()
 	defer saveMu.Unlock()
+	if saveState.unusableErr != nil {
+		return fmt.Errorf(
+			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
+			saveState.unusableErr,
+		)
+	}
 
 	snapshot := c.userFilterSnapshot()
 	snapshot.writeInclude = true
 	snapshot.writeExclude = true
-	return saveUserFilterSnapshotWithWriter(path, snapshot, writer)
+	err := saveUserFilterSnapshotWithWriter(path, snapshot, writer)
+	var unusableErr *configPersistenceUnusableError
+	if errors.As(err, &unusableErr) {
+		saveState.unusableErr = err
+	}
+	return err
 }
 
 func saveUserFilterSnapshotWithWriter(path string, snapshot userFilterPersistenceSnapshot, writer atomicFileWriter) error {
+	return saveUserFilterSnapshot(path, snapshot, writer, removeCommittedFile)
+}
+
+func saveUserFilterSnapshot(
+	path string,
+	snapshot userFilterPersistenceSnapshot,
+	writer atomicFileWriter,
+	remover committedFileRemover,
+) error {
 	metadata, original, exists, err := readConfigFile(path)
 	if err != nil {
 		return err
@@ -1444,14 +1485,38 @@ func saveUserFilterSnapshotWithWriter(path string, snapshot userFilterPersistenc
 	}
 
 	// A parent-directory sync failure happens after rename. Restore the previous
-	// file so callers can safely roll back their in-memory configuration.
+	// readable contents; live configuration publication remains a separate step.
 	if exists {
-		if _, restoreErr := writer(path, original, metadata); restoreErr != nil {
-			return errors.Join(writeErr, fmt.Errorf("failed to restore configuration backup: %w", restoreErr))
+		restored, restoreErr := writer(path, original, metadata)
+		if restoreErr != nil {
+			if restored {
+				return errors.Join(writeErr, fmt.Errorf(
+					"restored previous readable configuration at %s but failed to confirm rollback durability: %w",
+					path,
+					restoreErr,
+				))
+			}
+			return errors.Join(writeErr, &configPersistenceUnusableError{
+				detail:   fmt.Sprintf("failed to restore configuration at %s", path),
+				recovery: fmt.Sprintf("stop resman, restore %s, and restart before accepting further configuration writes", backupPath),
+				cause:    restoreErr,
+			})
 		}
 	} else {
-		if removeErr := removeCommittedFile(path); removeErr != nil {
-			return errors.Join(writeErr, fmt.Errorf("failed to remove non-durable configuration: %w", removeErr))
+		removed, removeErr := remover(path)
+		if removeErr != nil {
+			if removed {
+				return errors.Join(writeErr, fmt.Errorf(
+					"removed newly created readable configuration at %s but failed to confirm removal durability: %w",
+					path,
+					removeErr,
+				))
+			}
+			return errors.Join(writeErr, &configPersistenceUnusableError{
+				detail:   fmt.Sprintf("failed to remove newly created configuration at %s", path),
+				recovery: fmt.Sprintf("stop resman, remove %s, and restart before accepting further configuration writes", path),
+				cause:    removeErr,
+			})
 		}
 	}
 	return writeErr

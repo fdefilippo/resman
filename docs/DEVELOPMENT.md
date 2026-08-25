@@ -457,12 +457,19 @@ published, and one tested `changes(...) == -1`, which is unsatisfiable because
 - Configuration can contain secrets (`MCP_AUTH_TOKEN`, password and JWT secret file
   paths). Any file derived from it — temporary file, backup, export — **MUST NOT** be
   more permissive than its source.
-- Atomic replacement **MUST** `Stat` the original and create the replacement with the
-  original's mode and, where possible, owner; when no prior file exists, default to a
-  restrictive mode, never `0644`.
+- Atomic replacement **MUST** inspect the original path without following symbolic
+  links, reject a link explicitly, and create the replacement with the regular file's
+  mode and owner; when no prior file exists, default to a restrictive mode, never
+  `0644`.
+- Ownership preservation is fail-closed. Its error **MUST** name the required owner and
+  tell the operator how to make the replacement possible without weakening permissions.
 - Backup retention **MUST** be bounded or explicitly disabled. Unbounded timestamped
   backups turn one leak into a permanent archive of leaks.
 - Failure paths **MUST NOT** leave readable residue containing secrets.
+- If an atomic rollback cannot restore a known readable state, persistence **MUST**
+  enter an explicit unusable state and reject later writes until operator recovery and
+  restart. Logging possible disk/runtime divergence without enforcing that boundary is
+  not recovery.
 - Durability (`fsync` of file and parent directory) **MUST** be a documented, tested
   decision, not an accident of ordering.
 
@@ -471,9 +478,11 @@ and the temporary file with mode `0644` before renaming, with no inspection of t
 original file's permissions and no retention limit. A config readable only by root
 produced world-readable copies of itself, one per change, forever. The remediation
 uses one rolling backup, preserves source metadata, defaults new files to `0600`, and
-syncs both file data and the parent directory.
+syncs both file data and the parent directory. `resman-4pw.26` rejects managed
+configuration symlinks, makes ownership failures actionable, and makes any remaining
+runtime/disk divergence explicit while blocking later writes until recovery.
 
-*Finding: resman-4pw.5*
+*Findings: resman-4pw.5, resman-4pw.26*
 
 ---
 
@@ -770,7 +779,7 @@ Until they exist, treat them as review checkpoints.
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13` |
-| 14. On-disk file permissions | `resman-4pw.5` |
+| 14. On-disk file permissions | `resman-4pw.5`, `.26` |
 | 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
