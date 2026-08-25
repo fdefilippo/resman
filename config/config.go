@@ -44,6 +44,9 @@ type Timeframe struct {
 type Config struct {
 	mu sync.RWMutex
 
+	// saveMu is shared across reload epochs and serializes config-file transactions.
+	saveMu *sync.Mutex
+
 	// Regex cache for pre-compiled patterns (performance optimization)
 	regexCache sync.Map // map[string]*regexp.Regexp
 
@@ -242,6 +245,7 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
+		saveMu:             &sync.Mutex{},
 		CgroupRoot:         "/sys/fs/cgroup",
 		CgroupBase:         "resman",
 		ConfigFile:         "/etc/resman.conf",
@@ -1299,43 +1303,88 @@ func (c *Config) IsUserWhitelistedForIO(username string) bool {
 // PersistUserExcludeList writes a detached exclude-policy snapshot without
 // publishing it to live consumers. A watcher acknowledgement owns publication.
 func (c *Config) PersistUserExcludeList(patterns []string, configPath string) ([]string, error) {
-	include, exclude := c.userFilterSnapshot()
-	if err := validateUserFilterPatterns(patterns); err != nil {
-		return exclude, err
-	}
-
-	snapshot := &Config{
-		UserIncludeList: include,
-		UserExcludeList: append([]string(nil), patterns...),
-	}
-	if err := snapshot.saveToFileLocked(configPath); err != nil {
-		return exclude, err
-	}
-	return exclude, nil
+	return c.persistUserFilterWithWriter(patterns, configPath, userFilterExclude, writeFileAtomically)
 }
 
 // PersistUserIncludeList writes a detached include-policy snapshot without
 // publishing it to live consumers. A watcher acknowledgement owns publication.
 func (c *Config) PersistUserIncludeList(patterns []string, configPath string) ([]string, error) {
-	include, exclude := c.userFilterSnapshot()
-	if err := validateUserFilterPatterns(patterns); err != nil {
-		return include, err
-	}
-
-	snapshot := &Config{
-		UserIncludeList: append([]string(nil), patterns...),
-		UserExcludeList: exclude,
-	}
-	if err := snapshot.saveToFileLocked(configPath); err != nil {
-		return include, err
-	}
-	return include, nil
+	return c.persistUserFilterWithWriter(patterns, configPath, userFilterInclude, writeFileAtomically)
 }
 
-func (c *Config) userFilterSnapshot() ([]string, []string) {
+type userFilterField uint8
+
+const (
+	userFilterInclude userFilterField = iota
+	userFilterExclude
+)
+
+type userFilterPersistenceSnapshot struct {
+	include      []string
+	exclude      []string
+	writeInclude bool
+	writeExclude bool
+}
+
+func (c *Config) persistenceMutex() *sync.Mutex {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.saveMu == nil {
+		c.saveMu = &sync.Mutex{}
+	}
+	return c.saveMu
+}
+
+func (c *Config) userFilterSnapshot() userFilterPersistenceSnapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return append([]string(nil), c.UserIncludeList...), append([]string(nil), c.UserExcludeList...)
+	return userFilterPersistenceSnapshot{
+		include: append([]string(nil), c.UserIncludeList...),
+		exclude: append([]string(nil), c.UserExcludeList...),
+	}
+}
+
+func (c *Config) persistUserFilterWithWriter(
+	patterns []string,
+	configPath string,
+	field userFilterField,
+	writer atomicFileWriter,
+) ([]string, error) {
+	if err := validateUserFilterPatterns(patterns); err != nil {
+		snapshot := c.userFilterSnapshot()
+		switch field {
+		case userFilterInclude:
+			return snapshot.include, err
+		case userFilterExclude:
+			return snapshot.exclude, err
+		default:
+			return nil, fmt.Errorf("unknown user filter field %d: %w", field, err)
+		}
+	}
+
+	saveMu := c.persistenceMutex()
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
+	snapshot := c.userFilterSnapshot()
+	var previous []string
+	switch field {
+	case userFilterInclude:
+		previous = append([]string(nil), snapshot.include...)
+		snapshot.include = append([]string(nil), patterns...)
+		snapshot.writeInclude = true
+	case userFilterExclude:
+		previous = append([]string(nil), snapshot.exclude...)
+		snapshot.exclude = append([]string(nil), patterns...)
+		snapshot.writeExclude = true
+	default:
+		return nil, fmt.Errorf("unknown user filter field %d", field)
+	}
+
+	if err := saveUserFilterSnapshotWithWriter(configPath, snapshot, writer); err != nil {
+		return previous, err
+	}
+	return previous, nil
 }
 
 func validateUserFilterPatterns(patterns []string) error {
@@ -1349,16 +1398,21 @@ func validateUserFilterPatterns(patterns []string) error {
 
 // SaveToFile persists the configuration with a bounded secure backup.
 func (c *Config) SaveToFile(path string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.saveToFileLocked(path)
+	return c.saveToFileWithWriter(path, writeFileAtomically)
 }
 
-func (c *Config) saveToFileLocked(path string) error {
-	return c.saveToFileLockedWithWriter(path, writeFileAtomically)
+func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) error {
+	saveMu := c.persistenceMutex()
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
+	snapshot := c.userFilterSnapshot()
+	snapshot.writeInclude = true
+	snapshot.writeExclude = true
+	return saveUserFilterSnapshotWithWriter(path, snapshot, writer)
 }
 
-func (c *Config) saveToFileLockedWithWriter(path string, writer atomicFileWriter) error {
+func saveUserFilterSnapshotWithWriter(path string, snapshot userFilterPersistenceSnapshot, writer atomicFileWriter) error {
 	metadata, original, exists, err := readConfigFile(path)
 	if err != nil {
 		return err
@@ -1377,7 +1431,7 @@ func (c *Config) saveToFileLockedWithWriter(path string, writer atomicFileWriter
 
 	// Preserve comments and unrelated settings from the exact version backed up
 	// above, avoiding a second read with different contents or metadata.
-	lines := c.updateConfigLines(original, exists)
+	lines := snapshot.updateConfigLines(original, exists)
 	content := strings.Join(lines, "\n")
 	committed, err := writer(path, []byte(content), metadata)
 	if err == nil {
@@ -1403,10 +1457,10 @@ func (c *Config) saveToFileLockedWithWriter(path string, writer atomicFileWriter
 	return writeErr
 }
 
-// updateConfigLines preserves existing content while updating managed fields.
-func (c *Config) updateConfigLines(content []byte, exists bool) []string {
+// updateConfigLines preserves existing content while updating selected managed fields.
+func (s userFilterPersistenceSnapshot) updateConfigLines(content []byte, exists bool) []string {
 	if !exists {
-		return c.generateConfigLines()
+		return s.generateConfigLines()
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -1426,15 +1480,21 @@ func (c *Config) updateConfigLines(content []byte, exists bool) []string {
 
 		// Replace managed filter settings with their current values.
 		if strings.HasPrefix(trimmed, "USER_INCLUDE_LIST=") {
-			value := strings.Join(c.UserIncludeList, ",")
-			updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+			if s.writeInclude {
+				updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", strings.Join(s.include, ",")))
+			} else {
+				updated = append(updated, line)
+			}
 			includeListWritten = true
 			continue
 		}
 
 		if strings.HasPrefix(trimmed, "USER_EXCLUDE_LIST=") {
-			value := strings.Join(c.UserExcludeList, ",")
-			updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+			if s.writeExclude {
+				updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", strings.Join(s.exclude, ",")))
+			} else {
+				updated = append(updated, line)
+			}
 			excludeListWritten = true
 			continue
 		}
@@ -1445,30 +1505,28 @@ func (c *Config) updateConfigLines(content []byte, exists bool) []string {
 
 	// Append managed settings that were absent from the source.
 	if !includeListWritten {
-		value := strings.Join(c.UserIncludeList, ",")
-		updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+		updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", strings.Join(s.include, ",")))
 	}
 	if !excludeListWritten {
-		value := strings.Join(c.UserExcludeList, ",")
-		updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+		updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", strings.Join(s.exclude, ",")))
 	}
 
 	return updated
 }
 
 // generateConfigLines creates a minimal configuration for a new file.
-func (c *Config) generateConfigLines() []string {
+func (s userFilterPersistenceSnapshot) generateConfigLines() []string {
 	includeList := ""
-	if len(c.UserIncludeList) > 0 {
-		includeList = strings.Join(c.UserIncludeList, ",")
+	if len(s.include) > 0 {
+		includeList = strings.Join(s.include, ",")
 	}
 	excludeList := ""
-	if len(c.UserExcludeList) > 0 {
-		excludeList = strings.Join(c.UserExcludeList, ",")
+	if len(s.exclude) > 0 {
+		excludeList = strings.Join(s.exclude, ",")
 	}
 
 	return []string{
-		"# CPU Manager Configuration",
+		"# ResMan Configuration",
 		fmt.Sprintf("USER_INCLUDE_LIST=%s", includeList),
 		fmt.Sprintf("USER_EXCLUDE_LIST=%s", excludeList),
 		"",

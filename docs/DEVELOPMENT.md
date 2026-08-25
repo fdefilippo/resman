@@ -492,8 +492,12 @@ syncs both file data and the parent directory.
   repeated runs (`-count=20`) for anything touching goroutine lifecycle.
 
 **Why.** Rotation deadlocks and username-cache races in `logging/` and `metrics/` were
-each caused by a shared lock held across a call into another component. They are cheap
-to prevent and expensive to find.
+each caused by a shared lock held across a call into another component. Configuration
+persistence originally held the live configuration write lock across directory scans
+and durability syncs, blocking control-cycle getters behind storage latency. A later
+detached snapshot removed that hot-path lock but left file transactions unserialized
+across reload epochs; `resman-4pw.21` separates the lock and transaction contracts.
+These defects are cheap to prevent and expensive to find.
 
 ## Rule 16 — Tests encode the contract, not the implementation
 
@@ -767,7 +771,7 @@ Until they exist, treat them as review checkpoints.
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13` |
 | 14. On-disk file permissions | `resman-4pw.5` |
-| 15. Lock discipline | prior race/deadlock fixes in `logging/`, `metrics/` |
+| 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
 | 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`; epic `resman-ne0` provenance |

@@ -921,14 +921,17 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 
 **Backup and durability process:**
 
-1. Inspect the current file and preserve its permission mode and ownership. A new
+1. Acquire the configuration-file persistence coordinator, snapshot the managed
+   values under the configuration lock, and release that lock before filesystem I/O.
+   The coordinator is shared by configuration objects across reload epochs.
+2. Inspect the current file and preserve its permission mode and ownership. A new
    configuration defaults to mode `0600`.
-2. Atomically replace the single rolling backup `<config>.backup` with the exact
+3. Atomically replace the single rolling backup `<config>.backup` with the exact
    previous contents. The backup uses the same metadata as the source.
-3. Remove legacy timestamped backups and the obsolete predictable `.tmp` artifact.
-4. Write the replacement through a randomly named same-directory temporary file,
+4. Remove legacy timestamped backups and the obsolete predictable `.tmp` artifact.
+5. Write the replacement through a randomly named same-directory temporary file,
    applying final metadata before secret-bearing content is written.
-5. Sync the temporary file, rename it over the configuration, and sync the parent
+6. Sync the temporary file, rename it over the configuration, and sync the parent
    directory. A post-rename durability failure restores the previous contents before
    returning an error.
 
@@ -946,10 +949,16 @@ if err := watcher.Reload(ctx); err != nil {
 }
 ```
 
-Concurrent MCP configuration writes are rejected explicitly. Automatic filesystem
-events use a content digest, rather than timestamp and size alone, to avoid both
-missing same-size atomic replacements and reapplying a version already acknowledged
-by the synchronous path.
+An individual user-filter transaction changes only the requested filter line and
+preserves the other filter from the exact on-disk version it read. This prevents a
+serialized transaction carrying an older runtime snapshot from losing an independent
+filter update. No filesystem operation runs while the live `Config` mutex is held.
+
+Concurrent MCP configuration writes are rejected explicitly, while the lower-level
+persistence coordinator also serializes internal callers and adjacent reload epochs.
+Automatic filesystem events use a content digest, rather than timestamp and size
+alone, to avoid both missing same-size atomic replacements and reapplying a version
+already acknowledged by the synchronous path.
 
 ### 8.3 HTTP Transport
 

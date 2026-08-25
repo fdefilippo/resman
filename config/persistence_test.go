@@ -21,9 +21,208 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
+
+func TestSaveToFileReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	if err := os.WriteFile(path, []byte("USER_INCLUDE_LIST=^old$\nUSER_EXCLUDE_LIST=^old$\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.UserIncludeList = []string{"^saved$"}
+	enteredIO := make(chan struct{})
+	releaseIO := make(chan struct{})
+	release := newTestGateRelease(releaseIO)
+	defer release()
+	var blockOnce sync.Once
+	writer := func(target string, content []byte, metadata configFileMetadata) (bool, error) {
+		shouldBlock := false
+		blockOnce.Do(func() {
+			shouldBlock = true
+			close(enteredIO)
+		})
+		if shouldBlock {
+			<-releaseIO
+		}
+		return writeFileAtomically(target, content, metadata)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cfg.saveToFileWithWriter(path, writer)
+	}()
+	waitForTestSignal(t, enteredIO, "filesystem I/O to start")
+
+	configUpdated := make(chan struct{})
+	go func() {
+		cfg.mu.Lock()
+		cfg.CPUThreshold = 88
+		cfg.mu.Unlock()
+		close(configUpdated)
+	}()
+	select {
+	case <-configUpdated:
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatal("Config.mu remained locked while filesystem I/O was blocked")
+	}
+	if got := cfg.GetCPUThreshold(); got != 88 {
+		release()
+		t.Fatalf("GetCPUThreshold() = %d, want concurrent update 88", got)
+	}
+
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("saveToFileWithWriter() error = %v", err)
+	}
+}
+
+func TestPersistenceCoordinatorSerializesReloadEpochsWithoutLostFilterUpdates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	if err := os.WriteFile(path, []byte("USER_INCLUDE_LIST=^old-include$\nUSER_EXCLUDE_LIST=^old-exclude$\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	effective := DefaultConfig()
+	effective.UserIncludeList = []string{"^old-include$"}
+	effective.UserExcludeList = []string{"^old-exclude$"}
+	requested := DefaultConfig()
+	requested.UserIncludeList = []string{"^old-include$"}
+	requested.UserExcludeList = []string{"^old-exclude$"}
+	if _, err := ApplyReloadLifecycle(effective, requested); err != nil {
+		t.Fatalf("ApplyReloadLifecycle() error = %v", err)
+	}
+
+	includeWriteEntered := make(chan struct{})
+	releaseIncludeWrite := make(chan struct{})
+	releaseInclude := newTestGateRelease(releaseIncludeWrite)
+	defer releaseInclude()
+	var blockOnce sync.Once
+	writer := func(target string, content []byte, metadata configFileMetadata) (bool, error) {
+		body := string(content)
+		if target == path && strings.Contains(body, "USER_INCLUDE_LIST=^new-include$") {
+			shouldBlock := false
+			blockOnce.Do(func() {
+				shouldBlock = true
+				close(includeWriteEntered)
+			})
+			if shouldBlock {
+				<-releaseIncludeWrite
+			}
+		}
+		return writeFileAtomically(target, content, metadata)
+	}
+
+	includeDone := make(chan error, 1)
+	go func() {
+		_, err := effective.persistUserFilterWithWriter(
+			[]string{"^new-include$"}, path, userFilterInclude, writer,
+		)
+		includeDone <- err
+	}()
+	waitForTestSignal(t, includeWriteEntered, "include persistence to reach the active file")
+	sharedMu := requested.persistenceMutex()
+	if sharedMu.TryLock() {
+		sharedMu.Unlock()
+		releaseInclude()
+		t.Fatal("reloaded configuration did not share the locked persistence coordinator")
+	}
+
+	excludeDone := make(chan error, 1)
+	go func() {
+		_, err := requested.persistUserFilterWithWriter(
+			[]string{"^new-exclude$"}, path, userFilterExclude, writer,
+		)
+		excludeDone <- err
+	}()
+
+	releaseInclude()
+	if err := <-includeDone; err != nil {
+		t.Fatalf("include persistence error = %v", err)
+	}
+	if err := <-excludeDone; err != nil {
+		t.Fatalf("exclude persistence error = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(content), "USER_INCLUDE_LIST=^new-include$") ||
+		!strings.Contains(string(content), "USER_EXCLUDE_LIST=^new-exclude$") {
+		t.Fatalf("persisted filters = %q, want both concurrent updates", content)
+	}
+}
+
+func TestFailedPersistenceCannotRollbackNewerRuntimeSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	if err := os.WriteFile(path, []byte("USER_INCLUDE_LIST=^old$\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.UserIncludeList = []string{"^old$"}
+	enteredIO := make(chan struct{})
+	releaseIO := make(chan struct{})
+	release := newTestGateRelease(releaseIO)
+	defer release()
+	writer := func(string, []byte, configFileMetadata) (bool, error) {
+		close(enteredIO)
+		<-releaseIO
+		return false, errors.New("injected persistence failure")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cfg.persistUserFilterWithWriter(
+			[]string{"^stale-request$"}, path, userFilterInclude, writer,
+		)
+		done <- err
+	}()
+	waitForTestSignal(t, enteredIO, "failed persistence to enter filesystem I/O")
+
+	runtimeUpdated := make(chan struct{})
+	go func() {
+		cfg.mu.Lock()
+		cfg.UserIncludeList = []string{"^newer-runtime$"}
+		cfg.mu.Unlock()
+		close(runtimeUpdated)
+	}()
+	waitForTestSignal(t, runtimeUpdated, "newer runtime update while persistence was blocked")
+	release()
+
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "injected persistence failure") {
+		t.Fatalf("persistUserFilterWithWriter() error = %v, want injected failure", err)
+	}
+	if got := cfg.GetUserIncludeList(); len(got) != 1 || got[0] != "^newer-runtime$" {
+		t.Fatalf("runtime include list = %v, want newer update preserved", got)
+	}
+}
+
+func waitForTestSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func newTestGateRelease(gate chan struct{}) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(gate)
+		})
+	}
+}
 
 func TestSaveToFileSecurityContract(t *testing.T) {
 	tests := []struct {
@@ -192,9 +391,9 @@ func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
 		return writeFileAtomically(target, content, metadata)
 	}
 
-	err := cfg.saveToFileLockedWithWriter(path, writer)
+	err := cfg.saveToFileWithWriter(path, writer)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
-		t.Fatalf("saveToFileLockedWithWriter() error = %v, want injected sync failure", err)
+		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
 	}
 	if writeCalls != 3 {
 		t.Fatalf("atomic write calls = %d, want backup, replacement, and restore", writeCalls)
@@ -222,9 +421,9 @@ func TestSaveToFileRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
 		})
 	}
 
-	err := cfg.saveToFileLockedWithWriter(path, writer)
+	err := cfg.saveToFileWithWriter(path, writer)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
-		t.Fatalf("saveToFileLockedWithWriter() error = %v, want injected sync failure", err)
+		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
 	}
 	if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
 		t.Fatalf("new config remains after durability failure: %v", statErr)

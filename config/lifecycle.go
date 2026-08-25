@@ -72,6 +72,7 @@ var configFieldLifecycles = buildConfigFieldLifecycles()
 // not participate independently in reload diffing.
 var nonPublicConfigFields = map[string]string{
 	"mu":                 "internal synchronization",
+	"saveMu":             "shared configuration persistence coordinator",
 	"regexCache":         "derived cache rebuilt from public policy keys",
 	"ConfigFile":         "runtime path selected by the command line",
 	"BlackoutTimeframes": "derived from BLACKOUT",
@@ -110,8 +111,10 @@ func ApplyReloadLifecycle(effective, requested *Config) ([]string, error) {
 		return nil, nil
 	}
 
+	saveMu := effective.persistenceMutex()
 	effective.mu.RLock()
 	requested.mu.Lock()
+	requested.saveMu = saveMu
 	rejected, err := applyReloadLifecycleLocked(effective, requested)
 	requested.mu.Unlock()
 	effective.mu.RUnlock()
