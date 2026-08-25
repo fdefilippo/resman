@@ -46,7 +46,7 @@ The implementation extends the existing monitoring system with continuous activi
 ### 1. Configuration Variables
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 
 # ============================================
 # MONITORING CONFIGURATION
@@ -54,7 +54,7 @@ The implementation extends the existing monitoring system with continuous activi
 
 # Enable monitoring database
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/etc/resman/metrics.db
+METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 

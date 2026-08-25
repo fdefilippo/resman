@@ -571,11 +571,22 @@ controller.
 
 ### 4.1 Configuration File Format
 
-**Location:** `/etc/resman.conf`
+**Location:** `/etc/resman/resman.conf`
 
-The active file is selected with `--config` (default `/etc/resman.conf`). The
+The active file is selected with `--config` (default `/etc/resman/resman.conf`). The
 removed `CONFIG_FILE` configuration key is rejected in files and environment
 overrides; it never selects another file.
+
+With the default path selected, startup rejects legacy `/etc/resman.conf`, the
+`/etc/resman.conf.rpmsave` produced when RPM preserves a modified legacy file, or
+secret-bearing `/etc/resman.conf.backup`, even if the new packaged file exists. The
+operator must choose the authoritative authored contents from the legacy or RPM-saved
+file, install them as a regular file at the new path, remove the legacy source files
+and orphaned backup, and restart. A custom `--config` path is authoritative and
+does not trigger this default-layout guard. When metrics persistence is enabled at
+the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
+component construction. A 1.25.x database must be archived or deleted so schema
+version 2 can be created; it is not moved or migrated.
 
 **Format:**
 ```ini
@@ -597,7 +608,7 @@ whitespace; quoted hashes and URL fragments are preserved.
 CGROUP_ROOT="/sys/fs/cgroup"
 CGROUP_BASE="resman"
 LOG_FILE="/var/log/resman.log"
-CREATED_CGROUPS_FILE="/var/run/resman/cgroups.txt"
+CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 
 # ========================
 # TIMING (seconds)
@@ -691,7 +702,7 @@ transport for deployments without certificate files.
 All configuration options can be overridden by environment variables:
 
 ```bash
-LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman.conf
+LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman/resman.conf
 ```
 
 ---
@@ -1367,7 +1378,7 @@ sudo apt install ./resman_*.deb
 sudo systemctl enable --now resman
 ```
 
-The package preserves `/etc/resman.conf` as a conffile and does not enable or
+The package preserves `/etc/resman/resman.conf` as a conffile and does not enable or
 start the service during a fresh installation. An upgrade restarts the service
 only when it is already active.
 
@@ -1381,12 +1392,13 @@ sudo systemctl enable resman
 
 ### 15.4 Configuration
 
-**Default Location:** `/etc/resman.conf`
+**Default Location:** `/etc/resman/resman.conf`
 
 **Initial Setup:**
 ```bash
-sudo cp config/resman.conf.example /etc/resman.conf
-sudo vi /etc/resman.conf  # Edit as needed
+sudo install -d -m 0700 /etc/resman /var/lib/resman
+sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
+sudo vi /etc/resman/resman.conf  # Edit as needed
 sudo systemctl start resman
 ```
 
@@ -1417,10 +1429,12 @@ curl http://localhost:1974/metrics
 | File | Purpose |
 |------|---------|
 | `/usr/bin/resman` | Binary |
-| `/etc/resman.conf` | Configuration |
+| `/etc/resman/resman.conf` | Configuration |
+| `/etc/resman/resman.conf.backup` | Rolling configuration backup |
+| `/etc/resman/tls/` | Operator-supplied TLS material |
+| `/var/lib/resman/metrics.db` | Mutable metrics database |
 | `/var/log/resman.log` | Log file |
-| `/var/run/resman/cgroups.txt` | Cgroup tracking |
-| `/var/run/resman/metrics.cache` | Metrics cache |
+| `/run/resman-cgroups.txt` | Boot-scoped cgroup tracking |
 | `/usr/lib/systemd/system/resman.service` | Systemd unit |
 
 ---

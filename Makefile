@@ -23,7 +23,8 @@ DIST_DIR = dist
 RPMBUILD_DIR = $(HOME)/rpmbuild
 DEB_BUILD_DIR = $(BUILD_DIR)/deb
 BIN_DIR = /usr/bin
-CONF_DIR = /etc
+CONF_DIR = /etc/resman
+STATE_DIR = /var/lib/resman
 SYSTEMD_DIR = /usr/lib/systemd/system
 
 # Go parameters
@@ -178,7 +179,8 @@ deps:
 install: build
 	@echo "Installing $(PROJECT_NAME) to $(BIN_DIR)..."
 	sudo install -m 755 $(PROJECT_NAME) $(BIN_DIR)/
-	sudo install -m 644 config/resman.conf.example $(CONF_DIR)/resman.conf
+	sudo install -d -m 0700 $(CONF_DIR) $(STATE_DIR)
+	sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo systemctl daemon-reload
 	@echo "Installazione completata!"
@@ -301,7 +303,7 @@ container-run:
 		--privileged --pid=host --cgroupns=host --network=host \
 		--security-opt label=disable \
 		-v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-		-v /etc/resman.conf:/etc/resman.conf:ro \
+		-v /etc/resman:/etc/resman:rw \
 		-v /etc/passwd:/etc/passwd:ro \
 		-v /etc/group:/etc/group:ro \
 		-v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \

@@ -17,6 +17,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -41,6 +42,9 @@ func TestDefaultConfig(t *testing.T) {
 		expected interface{}
 	}{
 		{"CgroupRoot", cfg.CgroupRoot, "/sys/fs/cgroup"},
+		{"ConfigFile", cfg.ConfigFile, DefaultConfigPath},
+		{"CreatedCgroupsFile", cfg.CreatedCgroupsFile, DefaultCreatedCgroupsPath},
+		{"MetricsDBPath", cfg.MetricsDBPath, DefaultMetricsDBPath},
 		{"LogFile", cfg.LogFile, "/var/log/resman.log"},
 		{"PollingInterval", cfg.PollingInterval, 30},
 		{"MinActiveTime", cfg.MinActiveTime, 60},
@@ -951,6 +955,186 @@ LOG_LEVEL=INFO
 
 	if cfg.CPUThreshold != 80 {
 		t.Errorf("CPUThreshold: got %d, expected 80", cfg.CPUThreshold)
+	}
+}
+
+func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		selected     string
+		createNew    bool
+		createLegacy bool
+		createSaved  bool
+		createBackup bool
+		danglingLink string
+		wantError    bool
+	}{
+		{name: "legacy only", selected: "default", createLegacy: true, wantError: true},
+		{name: "RPM-saved legacy only", selected: "default", createSaved: true, wantError: true},
+		{name: "legacy backup only", selected: "default", createBackup: true, wantError: true},
+		{name: "dangling legacy backup", selected: "default", danglingLink: "backup", wantError: true},
+		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, wantError: true},
+		{name: "new default only", selected: "default", createNew: true},
+		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true},
+		{name: "explicit legacy path", selected: "legacy", createLegacy: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			layout := diskLayout{
+				defaultConfigPath: filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:  filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:   filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:  filepath.Join(dir, "etc", "resman.conf.backup"),
+				defaultDBPath:     filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:      filepath.Join(dir, "etc", "resman", "metrics.db"),
+			}
+			customPath := filepath.Join(dir, "custom", "resman.conf")
+			if tt.createNew {
+				writeConfigFixture(t, layout.defaultConfigPath, "USER_INCLUDE_LIST=.*\n")
+			}
+			if tt.createLegacy {
+				writeConfigFixture(t, layout.legacyConfigPath, "USER_INCLUDE_LIST=^legacy$\n")
+			}
+			if tt.createSaved {
+				writeConfigFixture(t, layout.legacySavedPath, "USER_INCLUDE_LIST=^rpm-saved$\n")
+			}
+			if tt.createBackup {
+				writeConfigFixture(t, layout.legacyBackupPath, "MCP_AUTH_TOKEN=legacy-secret\n")
+			}
+			if tt.danglingLink == "backup" {
+				if err := os.MkdirAll(filepath.Dir(layout.legacyBackupPath), 0700); err != nil {
+					t.Fatalf("os.MkdirAll(legacy backup parent) error = %v", err)
+				}
+				if err := os.Symlink(filepath.Join(dir, "missing-backup-target"), layout.legacyBackupPath); err != nil {
+					t.Fatalf("os.Symlink(legacy backup) error = %v", err)
+				}
+			}
+			selectedPath := layout.defaultConfigPath
+			switch tt.selected {
+			case "custom":
+				selectedPath = customPath
+				writeConfigFixture(t, selectedPath, "USER_INCLUDE_LIST=.*\n")
+			case "legacy":
+				selectedPath = layout.legacyConfigPath
+			}
+
+			cfg, err := loadAndValidateWithLayout(selectedPath, layout)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), layout.defaultConfigPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want both layout paths", err)
+				}
+				if tt.createLegacy && !strings.Contains(err.Error(), layout.legacyConfigPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy config path", err)
+				}
+				if tt.createSaved && (!strings.Contains(err.Error(), layout.legacySavedPath) ||
+					!strings.Contains(err.Error(), "authoritative authored contents")) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want RPM-saved recovery guidance", err)
+				}
+				if (tt.createBackup || tt.danglingLink == "backup") && (!strings.Contains(err.Error(), layout.legacyBackupPath) ||
+					!strings.Contains(err.Error(), "securely remove")) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want secure backup removal", err)
+				}
+				if cfg != nil {
+					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadAndValidateWithLayout() error = %v", err)
+			}
+			if cfg.ConfigFile != filepath.Clean(selectedPath) {
+				t.Fatalf("ConfigFile = %q, want %q", cfg.ConfigFile, filepath.Clean(selectedPath))
+			}
+		})
+	}
+}
+
+func TestLoadAndValidateRejectsLegacyDatabaseOnlyWhenDefaultIsEnabled(t *testing.T) {
+	tests := []struct {
+		name         string
+		enabled      bool
+		selectedDB   string
+		createNew    bool
+		createLegacy bool
+		danglingLink bool
+		wantError    bool
+	}{
+		{name: "enabled default with legacy only", enabled: true, selectedDB: "default", createLegacy: true, wantError: true},
+		{name: "enabled default with dangling legacy", enabled: true, selectedDB: "default", danglingLink: true, wantError: true},
+		{name: "enabled default with both databases", enabled: true, selectedDB: "default", createNew: true, createLegacy: true, wantError: true},
+		{name: "enabled default with new database only", enabled: true, selectedDB: "default", createNew: true},
+		{name: "disabled default with legacy present", selectedDB: "default", createLegacy: true},
+		{name: "enabled memory database with legacy present", enabled: true, selectedDB: "memory", createLegacy: true},
+		{name: "enabled custom database with legacy present", enabled: true, selectedDB: "custom", createLegacy: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			layout := diskLayout{
+				defaultConfigPath: filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:  filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:   filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:  filepath.Join(dir, "etc", "resman.conf.backup"),
+				defaultDBPath:     filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:      filepath.Join(dir, "etc", "resman", "metrics.db"),
+			}
+			selectedDB := layout.defaultDBPath
+			switch tt.selectedDB {
+			case "memory":
+				selectedDB = ":memory:"
+			case "custom":
+				selectedDB = filepath.Join(dir, "custom", "metrics.db")
+			}
+			configContent := fmt.Sprintf(
+				"USER_INCLUDE_LIST=.*\nMETRICS_DB_ENABLED=%t\nMETRICS_DB_PATH=%s\n",
+				tt.enabled,
+				selectedDB,
+			)
+			writeConfigFixture(t, layout.defaultConfigPath, configContent)
+			if tt.createNew {
+				writeConfigFixture(t, layout.defaultDBPath, "new database marker")
+			}
+			if tt.createLegacy {
+				writeConfigFixture(t, layout.legacyDBPath, "legacy database marker")
+			}
+			if tt.danglingLink {
+				if err := os.Symlink(filepath.Join(dir, "missing-database-target"), layout.legacyDBPath); err != nil {
+					t.Fatalf("os.Symlink(legacy database) error = %v", err)
+				}
+			}
+
+			cfg, err := loadAndValidateWithLayout(layout.defaultConfigPath, layout)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), layout.legacyDBPath) ||
+					!strings.Contains(err.Error(), layout.defaultDBPath) ||
+					!strings.Contains(err.Error(), "archive or delete") {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want database reset guidance", err)
+				}
+				if cfg != nil {
+					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadAndValidateWithLayout() error = %v", err)
+			}
+			if cfg.MetricsDBPath != selectedDB || cfg.MetricsDBEnabled != tt.enabled {
+				t.Fatalf("database config = enabled:%t path:%q, want enabled:%t path:%q", cfg.MetricsDBEnabled, cfg.MetricsDBPath, tt.enabled, selectedDB)
+			}
+		})
+	}
+}
+
+func writeConfigFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatalf("os.MkdirAll(%s) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("os.WriteFile(%s) error = %v", path, err)
 	}
 }
 

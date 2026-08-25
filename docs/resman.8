@@ -68,7 +68,7 @@ Graceful shutdown with proper resource cleanup
 .TP
 \fB\-\-config\fR \fIFILE\fR
 Specifies the configuration file path. Default:
-.I /etc/resman.conf
+.I /etc/resman/resman.conf
 .TP
 \fB\-\-version\fR
 Displays program version and exits.
@@ -545,9 +545,31 @@ Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be 
 The active configuration path is selected by the
 .B \-\-config
 command\-line option (default:
-.IR /etc/resman.conf ).
+.IR /etc/resman/resman.conf ).
 It cannot be redirected by a key inside the configuration file or by an
 environment variable.
+.PP
+When the default path is selected, startup refuses any legacy
+.I /etc/resman.conf
+or RPM-saved
+.I /etc/resman.conf.rpmsave
+or secret-bearing
+.I /etc/resman.conf.backup
+entry, even when the new packaged configuration already exists. Stop resman,
+choose the authoritative authored contents from the legacy or RPM-saved file,
+install them as a regular file at
+.IR /etc/resman/resman.conf ,
+remove the legacy source files, securely remove the orphaned legacy backup, and
+restart. An explicitly selected custom configuration path is not treated as a
+legacy fallback.
+.PP
+When metrics persistence is enabled at its default
+.I /var/lib/resman/metrics.db
+path, startup likewise refuses a legacy
+.IR /etc/resman/metrics.db .
+The 1.25.x database schema is incompatible: archive or delete the legacy database
+and restart so resman can create schema version 2. It is never migrated or opened
+under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
 Symbolic links, including dangling links, are rejected without replacing the link or
@@ -558,7 +580,7 @@ and ownership and fails before writing secret-bearing content if the service acc
 cannot apply the required owner. In that case, grant the service permission to change
 file ownership or change the source ownership to the service account before retrying.
 If a failed atomic replacement cannot restore the rolling backup, stop resman, restore
-.IR /etc/resman.conf.backup ,
+.IR /etc/resman/resman.conf.backup ,
 and restart before accepting another configuration write; the active file and runtime
 configuration may differ until recovery is complete. Resman rejects subsequent
 configuration persistence attempts until restart. If a newly created configuration has
@@ -566,7 +588,7 @@ no rolling backup and its compensating removal fails, stop resman, remove the ne
 and restart.
 .PP
 Example
-.I /etc/resman.conf
+.I /etc/resman/resman.conf
 format:
 .nf
 .sp
@@ -578,7 +600,7 @@ format:
 CGROUP_ROOT="/sys/fs/cgroup"
 CGROUP_BASE="resman"
 LOG_FILE="/var/log/resman.log"
-CREATED_CGROUPS_FILE="/var/run/resman-cgroups.txt"
+CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 
 # TIMING (seconds)
 POLLING_INTERVAL=30          # Control cycle interval
@@ -726,7 +748,7 @@ USERNAME_CACHE_TTL=60
 # METRICS DATABASE (SQLite for historical data via MCP)
 # Enable persistent storage of metrics for historical queries
 METRICS_DB_ENABLED=false
-METRICS_DB_PATH=/etc/resman/metrics.db
+METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30      # How many days to keep data
 METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 .fi
@@ -810,7 +832,7 @@ All configuration options can be overridden by environment variables
 with the same name. Example:
 .sp
 .nf
-LOG_LEVEL=DEBUG resman \-\-config /etc/resman.conf
+LOG_LEVEL=DEBUG resman \-\-config /etc/resman/resman.conf
 .fi
 .SH LOG FILES
 .I /var/log/resman.log
@@ -821,11 +843,11 @@ configured in
 which must be greater than zero.
 Rotation creates a backup file with .1 extension.
 .SH STATE FILES
-.I /var/run/resman-cgroups.txt
+.I /run/resman-cgroups.txt
 .br
 Tracks created cgroups to enable cleanup after restart.
 .br
-.I /var/run/resman-cgroups-origins.json
+.I /run/resman-cgroups-origins.json
 .br
 Stores the original cgroup, process start time, parent, and session identity
 needed to restore processes safely after limits are removed or the daemon
@@ -1115,13 +1137,13 @@ Go runtime (if running from source)
 .br
 1 \- Configuration or runtime error
 .SH FILES
-.I /etc/resman.conf
+.I /etc/resman/resman.conf
 \- Configuration file
 .br
 .I /var/log/resman.log
 \- Log file
 .br
-.I /var/run/resman\-*
+.I /run/resman\-*
 \- State and cache files
 .SH AUTHOR
 Francesco Defilippo <francesco@defilippo.org>

@@ -44,7 +44,7 @@ Quando un utente supera 512MB:
 ### Variabile RAM_HIGH_RATIO
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 
 # Default: memory.high = 80% di memory.max
 RAM_HIGH_RATIO=0.8

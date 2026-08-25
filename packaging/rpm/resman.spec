@@ -130,8 +130,9 @@ mkdir -p %{buildroot}/%{_docdir}/%{name}
 # Installa binario
 install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 
-# Installa file di configurazione
-install -m 644 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman.conf
+# Install the operator-authored configuration restrictively.
+install -d -m 700 %{buildroot}/%{_sysconfdir}/resman
+install -m 600 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman/resman.conf
 
 # Installa service systemd
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
@@ -160,8 +161,8 @@ install -p -m 0644 packaging/syslog/resman.conf %{buildroot}%{_sysconfdir}/rsysl
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
 install -p -m 0644 packaging/syslog/resman %{buildroot}%{_sysconfdir}/logrotate.d/resman
 
-# Crea directory per runtime files (buildroot)
-install -d -m 755 %{buildroot}/%{_sharedstatedir}/resman
+# Create the mutable-state directory restrictively.
+install -d -m 700 %{buildroot}/%{_sharedstatedir}/resman
 
 # Crea directory per certificati TLS (vuota, verrà popolata dall'admin)
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman/tls
@@ -184,19 +185,32 @@ fi
 # Post-install script
 %systemd_post resman.service
 
+# Enforce the package-owned directory contract across upgrades as well as fresh installs.
+install -d -m 0700 -o root -g root /etc/resman /etc/resman/tls /var/lib/resman
+
+# Report legacy state without migrating or deleting operator data.
+if [ -e /etc/resman.conf ] || [ -L /etc/resman.conf ] || [ -e /etc/resman.conf.rpmsave ] || [ -L /etc/resman.conf.rpmsave ] || [ -e /etc/resman.conf.backup ] || [ -L /etc/resman.conf.backup ]; then
+    echo "WARNING: legacy configuration artifacts detected." >&2
+    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, remove the legacy source files, securely remove /etc/resman.conf.backup, then restart resman." >&2
+fi
+if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
+    echo "WARNING: legacy metrics database detected at /etc/resman/metrics.db." >&2
+    echo "Archive or delete it; resman will create the current schema at /var/lib/resman/metrics.db." >&2
+fi
+
 # Crea file di log
 touch /var/log/resman.log
 chmod 644 /var/log/resman.log
 
 echo "Resource Manager installed successfully!"
 echo ""
-echo "Configuration file: /etc/resman.conf"
+echo "Configuration file: /etc/resman/resman.conf"
 echo "Log file: /var/log/resman.log"
-echo "Runtime directory: /var/run/resman"
+echo "Boot-scoped cgroup state: /run/resman-cgroups.txt"
 echo "Service: systemctl start resman"
 echo "Documentation: man resman"
 echo ""
-echo "Please review /etc/resman.conf before starting the service."
+echo "Please review /etc/resman/resman.conf before starting the service."
 
 %preun
 # Pre-uninstall script
@@ -212,11 +226,12 @@ echo "Please review /etc/resman.conf before starting the service."
 %files
 %license LICENSE
 %{_bindir}/%{name}
-%config(noreplace) %{_sysconfdir}/resman.conf
+%dir %attr(0700,root,root) %{_sysconfdir}/resman
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf
 %{_unitdir}/resman.service
 %{_mandir}/man8/resman.8.gz
-%dir %{_sharedstatedir}/resman
-%dir %{_sysconfdir}/resman/tls
+%dir %attr(0700,root,root) %{_sharedstatedir}/resman
+%dir %attr(0700,root,root) %{_sysconfdir}/resman/tls
 %config(noreplace) %{_sysconfdir}/rsyslog.d/resman.conf
 %config %{_sysconfdir}/logrotate.d/resman
 %dir %{_docdir}/%{name}

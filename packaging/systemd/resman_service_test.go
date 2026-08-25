@@ -28,8 +28,17 @@ func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
 		})
 	}
 
-	const start = "ExecStart=/usr/bin/resman --config /etc/resman.conf"
+	const start = "ExecStart=/usr/bin/resman --config /etc/resman/resman.conf"
 	if !strings.Contains(contents, start) {
 		t.Fatalf("resman.service does not start the capability-aware daemon with %q", start)
+	}
+	for _, required := range []string{
+		"RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman",
+		"ReadWritePaths=/etc/resman",
+		"ReadWritePaths=/var/lib/resman",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("resman.service does not contain required layout contract %q", required)
+		}
 	}
 }

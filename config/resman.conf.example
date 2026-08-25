@@ -1,5 +1,5 @@
 # ResMan Configuration File
-# Location: /etc/resman.conf
+# Location: /etc/resman/resman.conf
 #
 # Legend: [D] = Dynamic (hot reload) | [S] = Static (requires restart)
 #         [D/S] = Mixed; see the section comments
@@ -9,7 +9,7 @@
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=resman
-CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
+CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 
 # ========================
 # TIMING [D]
@@ -570,7 +570,7 @@ MCP_ALLOW_WRITE_OPS=false
 # Default: false (disabled)
 #
 # METRICS_DB_PATH: Path to the SQLite database
-# Default: /etc/resman/metrics.db
+# Default: /var/lib/resman/metrics.db
 # Ensure the directory exists and is writable
 #
 # METRICS_DB_RETENTION_DAYS: How many days to keep data in the database
@@ -586,7 +586,7 @@ MCP_ALLOW_WRITE_OPS=false
 # Examples:
 # # Enable database with 30-day retention
 # METRICS_DB_ENABLED=true
-# METRICS_DB_PATH=/etc/resman/metrics.db
+# METRICS_DB_PATH=/var/lib/resman/metrics.db
 # METRICS_DB_RETENTION_DAYS=30
 # METRICS_DB_WRITE_INTERVAL=30
 #
@@ -599,7 +599,7 @@ MCP_ALLOW_WRITE_OPS=false
 # METRICS_DB_RETENTION_DAYS=90
 #
 METRICS_DB_ENABLED=false
-METRICS_DB_PATH=/etc/resman/metrics.db
+METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 

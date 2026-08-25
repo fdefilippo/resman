@@ -35,13 +35,15 @@ FROM docker.io/library/oraclelinux:9
 RUN dnf install -y ca-certificates sssd-client tzdata \
     && dnf clean all \
     && rm -rf /var/cache/dnf \
+    && install -d -m 0700 /etc/resman /etc/resman/tls \
     && install -d -m 0700 /var/lib/resman \
     && install -d -m 0750 /var/log/resman
 
 COPY --from=builder /out/resman /usr/local/bin/resman
-COPY config/resman.conf.example /etc/resman.conf
+COPY config/resman.conf.example /etc/resman/resman.conf
 
 RUN chmod 0755 /usr/local/bin/resman \
+    && chmod 0600 /etc/resman/resman.conf \
     && ldd /usr/local/bin/resman | grep -q 'libc\.so'
 
 # The supported runtime requires host PID/cgroup namespaces and privileged
@@ -54,4 +56,4 @@ EXPOSE 1974
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/usr/local/bin/resman"]
-CMD ["--config", "/etc/resman.conf"]
+CMD ["--config", "/etc/resman/resman.conf"]

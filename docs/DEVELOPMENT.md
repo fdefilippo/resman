@@ -450,7 +450,12 @@ never been able to fire. Two named metrics that no version of the exporter ever
 published, and one tested `changes(...) == -1`, which is unsatisfiable because
 `changes()` is never negative. A stale asset is not only stale — it is unverified.
 
-*Finding: resman-4pw.13*
+`resman-4pw.48` applies the same rule to filesystem layout: runtime defaults live in
+authoritative constants, package payloads assert exact paths and modes, and a
+repository-wide check permits legacy paths only at explicit startup-rejection and
+operator-recovery boundaries.
+
+*Findings: resman-4pw.13, resman-4pw.48*
 
 ## Rule 14 — Files written by resman are as restrictive as what they contain
 
@@ -481,8 +486,11 @@ uses one rolling backup, preserves source metadata, defaults new files to `0600`
 syncs both file data and the parent directory. `resman-4pw.26` rejects managed
 configuration symlinks, makes ownership failures actionable, and makes any remaining
 runtime/disk divergence explicit while blocking later writes until recovery.
+The packaged configuration is installed as root-owned `0600` below a `0700`
+configuration directory, so the source whose metadata is preserved is restrictive
+before it can acquire an MCP token.
 
-*Findings: resman-4pw.5, resman-4pw.26*
+*Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48*
 
 ---
 
@@ -778,8 +786,8 @@ Until they exist, treat them as review checkpoints.
 | 10. Acknowledge, never sleep | `resman-4pw.7` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
-| 13. Shipped assets | `resman-4pw.13` |
-| 14. On-disk file permissions | `resman-4pw.5`, `.26` |
+| 13. Shipped assets | `resman-4pw.13`, `.48` |
+| 14. On-disk file permissions | `resman-4pw.5`, `.26`, `.48` |
 | 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |

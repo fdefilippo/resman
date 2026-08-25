@@ -186,12 +186,12 @@ sudo make test-integration
 
 2. Create a test configuration:
    ```bash
-   cp config/resman.conf.example /etc/resman.conf
+   cp config/resman.conf.example /etc/resman/resman.conf
    ```
 
 3. Run in debug mode:
    ```bash
-   sudo ./resman --config /etc/resman.conf --log-level DEBUG
+   sudo ./resman --config /etc/resman/resman.conf --log-level DEBUG
    ```
 
 4. Check metrics:

@@ -31,7 +31,7 @@ What actually happened? Include logs, error messages, etc.
  - cgroups version: [run `stat -fc %T /sys/fs/cgroup`]
 
 **Configuration**
-Relevant parts of your `/etc/resman.conf`:
+Relevant parts of your `/etc/resman/resman.conf`:
 ```
 # Paste relevant config here
 ```

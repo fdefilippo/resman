@@ -234,7 +234,7 @@ if [[ $scenario == container-runtime ]]; then
 	chmod 0700 "$container_log_dir" "$container_state_dir"
 	sed -i \
 		-e "s|^CGROUP_BASE=.*|CGROUP_BASE=resman-container-$run_id|" \
-		-e "s|^CREATED_CGROUPS_FILE=.*|CREATED_CGROUPS_FILE=/var/lib/resman/cgroups.txt|" \
+		-e "s|^CREATED_CGROUPS_FILE=.*|CREATED_CGROUPS_FILE=/run/resman-cgroups.txt|" \
 		-e 's/^MIN_SYSTEM_CORES=.*/MIN_SYSTEM_CORES=1/' \
 		-e 's/^METRICS_DB_ENABLED=.*/METRICS_DB_ENABLED=false/' \
 		-e 's|^LOG_FILE=.*|LOG_FILE=/var/log/resman/resman.log|' \
@@ -444,7 +444,7 @@ if [[ $scenario == container-runtime ]]; then
 		--privileged --pid=host --cgroupns=host --network=host \
 		--security-opt label=disable \
 		-v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-		-v "$config_file:/etc/resman.conf:ro" \
+		-v "$runtime_dir:/etc/resman:ro" \
 		-v /etc/passwd:/etc/passwd:ro \
 		-v /etc/group:/etc/group:ro \
 		-v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \

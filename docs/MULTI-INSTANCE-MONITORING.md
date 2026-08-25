@@ -124,7 +124,7 @@ sudo ufw allow from <PROMETHEUS_IP> to any port 1974 proto tcp
 Enable Prometheus on each ResMan instance:
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 ENABLE_PROMETHEUS=true
 PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"    # Listen on all interfaces
 PROMETHEUS_METRICS_BIND_PORT=1974
@@ -285,7 +285,7 @@ ResMan supports optional authentication for exposing metrics. You can configure 
 Enable authentication in the configuration file:
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 
 # Enable Prometheus metrics
 ENABLE_PROMETHEUS=true
@@ -311,7 +311,7 @@ PROMETHEUS_JWT_AUDIENCE="prometheus"
 **Server-Side Configuration (ResMan):**
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 PROMETHEUS_AUTH_TYPE="basic"
 PROMETHEUS_AUTH_USERNAME="prometheus"
 PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"
@@ -365,7 +365,7 @@ scrape_configs:
 **Server-Side Configuration (ResMan):**
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 PROMETHEUS_AUTH_TYPE="jwt"
 PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"
 PROMETHEUS_JWT_ISSUER="resman"
@@ -509,7 +509,7 @@ echo "JWT token rotated successfully at $(date)"
 For maximum flexibility, you can support both authentication methods:
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 PROMETHEUS_AUTH_TYPE="both"
 PROMETHEUS_AUTH_USERNAME="prometheus"
 PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"

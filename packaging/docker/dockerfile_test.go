@@ -16,6 +16,11 @@ func TestShippedContainerPreservesRuntimePrivilegeContract(t *testing.T) {
 		"FROM docker.io/library/oraclelinux:9 AS builder",
 		"RUN CGO_ENABLED=1 GOOS=linux go build",
 		"dnf install -y ca-certificates sssd-client tzdata",
+		"install -d -m 0700 /etc/resman",
+		"/etc/resman/tls",
+		"COPY config/resman.conf.example /etc/resman/resman.conf",
+		"chmod 0600 /etc/resman/resman.conf",
+		`CMD ["--config", "/etc/resman/resman.conf"]`,
 		"USER 0",
 	} {
 		if !strings.Contains(content, required) {
@@ -41,6 +46,7 @@ func TestContainerDocumentationPinsRootfulPodmanNamespacesAndMounts(t *testing.T
 		"--pid=host",
 		"--cgroupns=host",
 		"/sys/fs/cgroup:/sys/fs/cgroup:rw",
+		"/etc/resman:/etc/resman:rw",
 		"/etc/passwd:/etc/passwd:ro",
 		"/etc/nsswitch.conf:/etc/nsswitch.conf:ro",
 	} {

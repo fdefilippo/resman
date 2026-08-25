@@ -251,9 +251,9 @@ func DefaultConfig() *Config {
 		saveState:          &configPersistenceState{},
 		CgroupRoot:         "/sys/fs/cgroup",
 		CgroupBase:         "resman",
-		ConfigFile:         "/etc/resman.conf",
+		ConfigFile:         DefaultConfigPath,
 		LogFile:            "/var/log/resman.log",
-		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
+		CreatedCgroupsFile: DefaultCreatedCgroupsPath,
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -374,7 +374,7 @@ func DefaultConfig() *Config {
 
 		// Metrics Database (SQLite)
 		MetricsDBEnabled:       false,
-		MetricsDBPath:          "/etc/resman/metrics.db",
+		MetricsDBPath:          DefaultMetricsDBPath,
 		MetricsDBRetentionDays: 30,
 		MetricsDBWriteInterval: 30, // Same as polling interval by default
 
@@ -395,12 +395,19 @@ func DefaultConfig() *Config {
 // LoadAndValidate loads file and environment overrides over the defaults, then
 // validates the resulting configuration.
 func LoadAndValidate(configPath string) (*Config, error) {
+	return loadAndValidateWithLayout(configPath, defaultDiskLayout)
+}
+
+func loadAndValidateWithLayout(configPath string, layout diskLayout) (*Config, error) {
 	cfg := DefaultConfig()
 	resolvedConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config file path %s: %w", configPath, err)
 	}
 	resolvedConfigPath = filepath.Clean(resolvedConfigPath)
+	if err := rejectLegacyConfigAtDefault(resolvedConfigPath, layout); err != nil {
+		return nil, err
+	}
 
 	// 1. Load the configuration file when it exists.
 	if err := loadFromFile(resolvedConfigPath, cfg); err != nil {
@@ -418,6 +425,9 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	// 3. Validate the complete result.
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+	if err := rejectLegacyMetricsDBAtDefault(cfg, layout); err != nil {
+		return nil, err
 	}
 
 	// Warn when CPU limiting is disabled by an empty include list.

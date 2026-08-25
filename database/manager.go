@@ -117,12 +117,13 @@ const (
     `
 )
 
-// NewDatabaseManager crea un nuovo DatabaseManager
+// NewDatabaseManager creates a metrics database manager.
 func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
-	// Assicura che la directory esista
-	dir := filepath.Dir(dbPath)
-	if dir != ":" { // Skip per :memory:
-		if err := os.MkdirAll(dir, 0755); err != nil {
+	// Create a missing state directory restrictively. Existing custom
+	// directories retain their operator-managed mode and ownership.
+	if dbPath != ":memory:" {
+		dir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
 		}
 	}
@@ -132,8 +133,8 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 		return nil, fmt.Errorf("failed to open SQLite database at %s: %w", dbPath, err)
 	}
 
-	// Configura il database per performance migliori
-	db.SetMaxOpenConns(1) // SQLite non supporta connessioni multiple in scrittura
+	// Configure SQLite for serialized writes and bounded connection reuse.
+	db.SetMaxOpenConns(1) // SQLite does not support concurrent writers here.
 	db.SetMaxIdleConns(1)
 	if lifetime := connectionMaxLifetime(dbPath); lifetime > 0 {
 		db.SetConnMaxLifetime(lifetime)
@@ -144,7 +145,7 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 		dbPath: dbPath,
 	}
 
-	// Inizializza lo schema
+	// Initialize or validate the schema before publishing the manager.
 	if err := manager.InitSchema(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)

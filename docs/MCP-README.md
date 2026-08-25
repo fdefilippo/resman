@@ -71,7 +71,7 @@ The MCP server exposes ResMan functionality to AI assistants and MCP-compatible 
 
 ## Configuration
 
-Add to `/etc/resman.conf`:
+Add to `/etc/resman/resman.conf`:
 
 ```bash
 # Enable MCP server
@@ -146,7 +146,7 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "resman": {
       "command": "/usr/bin/resman",
-      "args": ["--config", "/etc/resman.conf"],
+      "args": ["--config", "/etc/resman/resman.conf"],
       "env": {
         "MCP_ENABLED": "true",
         "MCP_TRANSPORT": "stdio"
@@ -483,7 +483,7 @@ Returns the current user-filter configuration.
 {
   "user_include_list": ["^www.*", "^app-.*"],
   "user_exclude_list": ["^test-.*", "francesco"],
-  "config_file": "/etc/resman.conf"
+  "config_file": "/etc/resman/resman.conf"
 }
 ```
 
@@ -519,7 +519,7 @@ explicitly; persistence without runtime application is not supported.
 
 **Automatic backup:**
 - Before each change, the previous configuration atomically replaces the single
-  rolling backup `/etc/resman.conf.backup`.
+  rolling backup `/etc/resman/resman.conf.backup`.
 - The active file and backup preserve the source mode and ownership; a new file uses
   mode `0600`.
 - The configured path must be a regular file. Symbolic links, including dangling
@@ -534,7 +534,7 @@ explicitly; persistence without runtime application is not supported.
   returning an error. If both the replacement and rollback parent-directory syncs
   fail, runtime state remains unchanged and the error reports that rollback durability
   could not be confirmed. If rollback fails before replacing the active file, stop
-  resman, restore `/etc/resman.conf.backup`, and restart before accepting another
+  resman, restore `/etc/resman/resman.conf.backup`, and restart before accepting another
   configuration write; the error reports that disk and runtime may differ, and resman
   rejects every later persistence attempt until restart. If the path was newly created
   and therefore has no backup, remove the new file while resman is stopped and restart.

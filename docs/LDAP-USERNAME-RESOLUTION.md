@@ -85,7 +85,7 @@ ldd /usr/bin/resman | grep libc
 Nessuna configurazione speciale necessaria. ResMan userà automaticamente NSS per risolvere gli UID.
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 # Nessuna impostazione speciale necessaria
 # La risoluzione LDAP è automatica
 ```
@@ -176,7 +176,7 @@ resman_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
 
 3. **Riduci SYSTEM_UID_MAX**
    ```bash
-   # /etc/resman.conf
+   # /etc/resman/resman.conf
    SYSTEM_UID_MAX=10000  # Invece di 60000
    # Monitora solo UID fino a 10000
    ```
@@ -203,7 +203,7 @@ resman_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
    ```bash
    # Per debug avanzato
    export NSS_DEBUG=1
-   /usr/bin/resman --config /etc/resman.conf
+   /usr/bin/resman --config /etc/resman/resman.conf
    ```
 
 ## Esempio Configurazione Completa

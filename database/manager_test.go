@@ -186,6 +186,24 @@ func TestNewDatabaseManagerUsesWALAndBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestNewDatabaseManagerCreatesRestrictiveStateDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "resman")
+	manager, err := NewDatabaseManager(filepath.Join(dir, "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("DatabaseManager.Close() error: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("os.Stat(%s) error: %v", dir, err)
+	}
+	if got := info.Mode().Perm(); got != 0700 {
+		t.Fatalf("state directory mode = %04o, want 0700", got)
+	}
+}
+
 func TestWriteAndReadUserMetrics(t *testing.T) {
 	tmpFile := "/tmp/test_metrics_write.db"
 	defer func() { _ = os.Remove(tmpFile) }()

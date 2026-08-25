@@ -223,7 +223,7 @@ groups:
 **Solution:**
 ```bash
 # Check current filter configuration
-grep -E "USER_(INCLUDE|EXCLUDE)_LIST" /etc/resman.conf
+grep -E "USER_(INCLUDE|EXCLUDE)_LIST" /etc/resman/resman.conf
 
 # Check if user has processes
 ps -u username

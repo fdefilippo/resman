@@ -17,13 +17,16 @@ Create a configuration whose persistent paths point at the mounted directories:
 ```ini
 CGROUP_ROOT=/sys/fs/cgroup
 LOG_FILE=/var/log/resman/resman.log
-CREATED_CGROUPS_FILE=/var/lib/resman/cgroups.txt
+CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 METRICS_DB_PATH=/var/lib/resman/metrics.db
 ```
 
-Then create the state directories and build the image:
+Install the configuration restrictively, create the state directories, and build
+the image:
 
 ```bash
+sudo install -d -m 0700 /etc/resman
+sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
 sudo install -d -m 0700 /var/lib/resman
 sudo install -d -m 0750 /var/log/resman
 make container-build
@@ -41,7 +44,7 @@ sudo podman run --rm --name resman \
   --network=host \
   --security-opt label=disable \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  -v /etc/resman.conf:/etc/resman.conf:ro \
+  -v /etc/resman:/etc/resman:rw \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
@@ -68,6 +71,11 @@ SSSD-backed accounts, also bind the host NSS socket:
 Another NSS provider requires its matching client library in a derived image
 and its host socket or configuration mounts. Do not claim LDAP/NIS resolution
 from the three local-account mounts alone.
+
+The configuration is mounted as a directory because MCP write operations replace
+`resman.conf` atomically and cannot rename over a single bind-mounted file. A deployment
+with `MCP_ALLOW_WRITE_OPS=false` may mount `/etc/resman` read-only; it must not report
+configuration write tools as supported.
 
 ## Security and failure contract
 

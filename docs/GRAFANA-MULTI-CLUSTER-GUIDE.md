@@ -40,7 +40,7 @@ global:
 
 ### 2. ResMan Configuration
 
-Configura `SERVER_ROLE` in `/etc/resman.conf`:
+Configura `SERVER_ROLE` in `/etc/resman/resman.conf`:
 
 ```bash
 # Ruoli predefiniti suggeriti:
@@ -196,7 +196,7 @@ global:
 
 **Soluzione:**
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 SERVER_ROLE=database
 
 # Riavvia ResMan
@@ -277,7 +277,7 @@ scrape_configs:
 ### ResMan (db-prod-01)
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 SERVER_ROLE=database
 CPU_THRESHOLD=75
 CPU_RELEASE_THRESHOLD=40
@@ -289,7 +289,7 @@ PROMETHEUS_METRICS_BIND_PORT=1974
 ### ResMan (web-prod-01)
 
 ```bash
-# /etc/resman.conf
+# /etc/resman/resman.conf
 SERVER_ROLE=web-frontend
 CPU_THRESHOLD=80
 CPU_RELEASE_THRESHOLD=45

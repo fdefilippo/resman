@@ -70,18 +70,19 @@ sudo apt install ./resman_*.deb
 
 # From source
 sudo cp resman /usr/bin/
-sudo cp config/resman.conf.example /etc/resman.conf
+sudo install -d -m 0700 /etc/resman /var/lib/resman
+sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
 sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
 sudo systemctl enable --now resman
 ```
 
 Package installation does not enable or start the service automatically. Review
-`/etc/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
+`/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
 ## Usage
 
-Edit `/etc/resman.conf` to configure thresholds and filters:
+Edit `/etc/resman/resman.conf` to configure thresholds and filters:
 
 ```bash
 # CPU thresholds
@@ -263,7 +264,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Grafana dashboard: `docs/dashboard-grafana-operations.json`
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
-- Full configuration reference: `/etc/resman.conf.example`
+- Full configuration reference: `config/resman.conf.example`
 
 ## License
 

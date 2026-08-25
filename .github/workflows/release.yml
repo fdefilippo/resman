@@ -94,6 +94,7 @@ jobs:
           test -n "$package"
           dpkg-deb --info "$package"
           dpkg-deb --contents "$package"
+          packaging/layout/verify-package-layout.sh "$package"
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
@@ -152,6 +153,9 @@ jobs:
           rpm --checksig build/release/resman-*.rpm
           rpm --query --package --info build/release/resman-*.rpm
           rpm --query --package --list build/release/resman-*.rpm
+          for package in build/release/resman-*.rpm; do
+            packaging/layout/verify-package-layout.sh "$package"
+          done
 
           glibc_versions=$(
             rpm --query --package --requires build/release/resman-*.rpm |

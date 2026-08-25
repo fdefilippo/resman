@@ -102,7 +102,7 @@ github.com/modelcontextprotocol/go-sdk v0.1.0  // or latest
 
 ### Server Configuration
 
-Add to `/etc/resman.conf`:
+Add to `/etc/resman/resman.conf`:
 ```bash
 # MCP Server Configuration
 MCP_ENABLED=true
@@ -276,7 +276,7 @@ Configure `claude_desktop_config.json`:
   "mcpServers": {
     "resman": {
       "command": "/usr/bin/resman",
-      "args": ["--config", "/etc/resman.conf"]
+      "args": ["--config", "/etc/resman/resman.conf"]
     }
   }
 }

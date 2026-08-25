@@ -5,7 +5,7 @@ DefaultDependencies=no
 After=local-fs.target
 Before=sysinit.target systemd-user-sessions.service vcs.service shutdown.target
 Conflicts=shutdown.target
-RequiresMountsFor=/usr/bin/resman /etc/resman.conf /sys/fs/cgroup /var/log /run
+RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman /sys/fs/cgroup /var/log /run
 ConditionDirectoryNotEmpty=/sys/fs/cgroup
 
 [Service]
@@ -17,7 +17,7 @@ RuntimeDirectoryPreserve=restart
 # ResMan discovers and enables the controllers required by the active features.
 # Keeping controller setup in the daemon preserves its mandatory/optional
 # diagnostics and lets CPU quota enforcement run without cpuset.
-ExecStart=/usr/bin/resman --config /etc/resman.conf
+ExecStart=/usr/bin/resman --config /etc/resman/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -50,8 +50,9 @@ LimitNPROC=65536
 
 # Writable directories
 ReadWritePaths=/sys/fs/cgroup
+ReadWritePaths=/etc/resman
+ReadWritePaths=/var/lib/resman
 ReadWritePaths=/var/log
-ReadWritePaths=/var/run
 ReadWritePaths=/run
 
 [Install]

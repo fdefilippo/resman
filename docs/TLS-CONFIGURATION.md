@@ -152,7 +152,7 @@ chown -R root:root /etc/resman/tls
 
 ### Enable TLS in ResMan
 
-Edit `/etc/resman.conf`:
+Edit `/etc/resman/resman.conf`:
 
 ```bash
 # Enable TLS/HTTPS
@@ -333,7 +333,7 @@ tls_config:
 
 **Solutions**:
 1. Verify ResMan is running: `systemctl status resman`
-2. Check if HTTPS is enabled: `grep PROMETHEUS_TLS_ENABLED /etc/resman.conf`
+2. Check if HTTPS is enabled: `grep PROMETHEUS_TLS_ENABLED /etc/resman/resman.conf`
 3. Verify port is listening: `netstat -tlnp | grep 1974`
 
 ### Certificate Expired
