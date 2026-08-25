@@ -943,7 +943,11 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
    ownership. A new configuration defaults to mode `0600`.
 3. Atomically replace the single rolling backup `<config>.backup` with the exact
    previous contents. The backup uses the same metadata as the source.
-4. Remove legacy timestamped backups and the obsolete predictable `.tmp` artifact.
+4. Remove only backups that match the historical generated name exactly,
+   `<config>.backup_YYYYMMDD_HHMMSS`, plus the obsolete predictable
+   `<config>.tmp` artifact. A file that merely starts with `.backup_` but has an
+   operator suffix or a non-timestamp name is not removed. The persistence result
+   carries removed basenames even when cleanup later fails.
 5. Write the replacement through a randomly named same-directory temporary file,
    applying final metadata before secret-bearing content is written.
 6. Sync the temporary file, rename it over the configuration, and sync the parent
@@ -960,6 +964,12 @@ func handler(ctx context.Context, req *mcp.CallToolRequest, args Args) (*mcp.Cal
 
 This keeps retention bounded to one previous version and prevents temporary or backup
 files from becoming more readable than the active configuration.
+
+An MCP write that performs this legacy cleanup emits one warning after persistence.
+The warning reports the total count, at most three removed basenames, and an omitted
+count. It never reports file contents, configuration values, or the full directory;
+if cleanup fails after removing some artifacts, the same bounded warning reports the
+completed removals before the tool returns the persistence error.
 
 Ownership preservation is fail-closed. If the service account cannot apply the
 source UID and GID to a replacement or backup, no secret-bearing content is written;

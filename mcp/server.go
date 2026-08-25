@@ -62,6 +62,12 @@ type ConfigurationReloader interface {
 	Reload(context.Context) error
 }
 
+type serverLogger interface {
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+}
+
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer         *mcp.Server
@@ -71,7 +77,7 @@ type Server struct {
 	cgroupManager     *cgroup.Manager
 	dbManager         *database.DatabaseManager
 	configReloader    ConfigurationReloader
-	logger            *logging.Logger
+	logger            serverLogger
 	httpServer        *http.Server
 	tlsConfig         *tls.Config
 	httpListen        func(network, address string) (net.Listener, error)

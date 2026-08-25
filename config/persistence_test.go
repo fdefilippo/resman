@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,7 +57,8 @@ func TestSaveToFileReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- cfg.saveToFileWithWriter(path, writer)
+		_, err := cfg.saveToFileWithWriter(path, writer)
+		done <- err
 	}()
 	waitForTestSignal(t, enteredIO, "filesystem I/O to start")
 
@@ -396,8 +398,8 @@ func TestPersistUserFilterDurabilityFailureReportsDeterministicRuntimeAndDiskSta
 			if activeWrites != 2 {
 				t.Fatalf("active-file writes = %d, want replacement and rollback", activeWrites)
 			}
-			if len(previous) != 1 || previous[0] != "^old$" {
-				t.Fatalf("previous filter = %v, want [^old$]", previous)
+			if len(previous.PreviousValue) != 1 || previous.PreviousValue[0] != "^old$" {
+				t.Fatalf("previous filter = %v, want [^old$]", previous.PreviousValue)
 			}
 			if got := cfg.GetUserIncludeList(); len(got) != 1 || got[0] != "^old$" {
 				t.Fatalf("runtime filter = %v, want unchanged [^old$]", got)
@@ -489,7 +491,7 @@ func TestSaveToFileSecurityContract(t *testing.T) {
 			cfg := DefaultConfig()
 			cfg.UserIncludeList = []string{"^service$"}
 			cfg.UserExcludeList = []string{"^blocked$"}
-			if err := cfg.SaveToFile(path); err != nil {
+			if _, err := cfg.SaveToFile(path); err != nil {
 				t.Fatalf("SaveToFile() error = %v", err)
 			}
 
@@ -553,11 +555,33 @@ func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t
 			t.Fatalf("os.WriteFile(%s) error = %v", legacyPath, err)
 		}
 	}
+	operatorPaths := []string{
+		path + ".backup_prima_della_migrazione",
+		path + ".backup_20260821_030303_manual",
+		path + ".backup_20261321_030303",
+	}
+	for _, operatorPath := range operatorPaths {
+		if err := os.WriteFile(operatorPath, []byte("operator-owned backup\n"), 0600); err != nil {
+			t.Fatalf("os.WriteFile(%s) error = %v", operatorPath, err)
+		}
+	}
 
 	cfg := DefaultConfig()
 	cfg.UserIncludeList = []string{"^second$"}
-	if err := cfg.SaveToFile(path); err != nil {
+	result, err := cfg.SaveToFile(path)
+	if err != nil {
 		t.Fatalf("first SaveToFile() error = %v", err)
+	}
+	wantRemoved := []string{
+		"resman.conf.backup_20260821_010101",
+		"resman.conf.backup_20260821_020202",
+		"resman.conf.tmp",
+	}
+	if !slices.Equal(result.RemovedLegacyArtifacts, wantRemoved) {
+		t.Fatalf("removed legacy artifacts = %v, want %v", result.RemovedLegacyArtifacts, wantRemoved)
+	}
+	if strings.Contains(strings.Join(result.RemovedLegacyArtifacts, ","), "legacy-secret") {
+		t.Fatalf("persistence result exposed file contents: %v", result.RemovedLegacyArtifacts)
 	}
 	firstSaved, err := os.ReadFile(path)
 	if err != nil {
@@ -569,10 +593,19 @@ func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t
 			t.Errorf("legacy artifact %s was not removed: %v", legacyPath, err)
 		}
 	}
+	for _, operatorPath := range operatorPaths {
+		if _, err := os.Lstat(operatorPath); err != nil {
+			t.Errorf("operator-owned backup %s was removed: %v", operatorPath, err)
+		}
+	}
 
 	cfg.UserIncludeList = []string{"^third$"}
-	if err := cfg.SaveToFile(path); err != nil {
+	result, err = cfg.SaveToFile(path)
+	if err != nil {
 		t.Fatalf("second SaveToFile() error = %v", err)
+	}
+	if len(result.RemovedLegacyArtifacts) != 0 {
+		t.Fatalf("second persistence removed legacy artifacts = %v, want none", result.RemovedLegacyArtifacts)
 	}
 	backup, err := os.ReadFile(path + configBackupSuffix)
 	if err != nil {
@@ -587,10 +620,147 @@ func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t
 	if err != nil {
 		t.Fatalf("filepath.Glob() error = %v", err)
 	}
-	if len(backups) != 1 || backups[0] != path+configBackupSuffix {
-		t.Fatalf("backup set = %v, want only %s", backups, path+configBackupSuffix)
+	wantBackupCount := 1 + len(operatorPaths)
+	if len(backups) != wantBackupCount {
+		t.Fatalf("backup set = %v, want rolling backup plus %d operator-owned files", backups, len(operatorPaths))
 	}
 	assertNoAtomicTemps(t, path)
+}
+
+func TestGeneratedLegacyConfigArtifactMatchingIsExact(t *testing.T) {
+	tests := []struct {
+		name      string
+		candidate string
+		want      bool
+	}{
+		{name: "historical timestamp backup", candidate: "resman.conf.backup_20260821_010101", want: true},
+		{name: "historical temporary file", candidate: "resman.conf.tmp", want: true},
+		{name: "operator named backup", candidate: "resman.conf.backup_prima_della_migrazione"},
+		{name: "timestamp with suffix", candidate: "resman.conf.backup_20260821_010101_manual"},
+		{name: "invalid timestamp", candidate: "resman.conf.backup_20261321_010101"},
+		{name: "different config basename", candidate: "other.conf.backup_20260821_010101"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGeneratedLegacyConfigArtifact("resman.conf", tt.candidate); got != tt.want {
+				t.Fatalf("isGeneratedLegacyConfigArtifact() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLegacyConfigArtifactCleanupReportsPartialFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	names := []string{
+		"resman.conf.backup_20260821_010101",
+		"resman.conf.backup_20260821_020202",
+		"resman.conf.tmp",
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("MCP_AUTH_TOKEN=must-not-appear\n"), 0600); err != nil {
+			t.Fatalf("os.WriteFile(%s) error = %v", name, err)
+		}
+	}
+	injectedErr := errors.New("injected removal failure")
+	syncCalled := false
+	result, err := removeLegacyConfigArtifactsBesideWith(
+		path,
+		func(candidate string) error {
+			if filepath.Base(candidate) == names[1] {
+				return injectedErr
+			}
+			return os.Remove(candidate)
+		},
+		func(string) error {
+			syncCalled = true
+			return nil
+		},
+	)
+	if !errors.Is(err, injectedErr) {
+		t.Fatalf("cleanup error = %v, want injected removal failure", err)
+	}
+	if !slices.Equal(result.RemovedLegacyArtifacts, names[:1]) {
+		t.Fatalf("removed artifacts = %v, want %v", result.RemovedLegacyArtifacts, names[:1])
+	}
+	if strings.Contains(err.Error()+strings.Join(result.RemovedLegacyArtifacts, ","), "must-not-appear") {
+		t.Fatalf("partial cleanup result exposed configuration contents: result=%v error=%v", result, err)
+	}
+	if syncCalled {
+		t.Fatal("parent directory sync ran after partial removal failure")
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, names[0])); !os.IsNotExist(statErr) {
+		t.Fatalf("first artifact was not removed: %v", statErr)
+	}
+	for _, name := range names[1:] {
+		if _, statErr := os.Lstat(filepath.Join(dir, name)); statErr != nil {
+			t.Fatalf("unprocessed artifact %s was removed: %v", name, statErr)
+		}
+	}
+}
+
+func TestSaveToFileReportsArtifactsRemovedBeforeCleanupFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	original := []byte("MCP_AUTH_TOKEN=active-secret\nUSER_INCLUDE_LIST=^old$\n")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatalf("os.WriteFile(config) error = %v", err)
+	}
+	removedName := "resman.conf.backup_20260821_010101"
+	blockedName := "resman.conf.backup_20260821_020202"
+	if err := os.WriteFile(filepath.Join(dir, removedName), []byte("MCP_AUTH_TOKEN=legacy-secret\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile(legacy backup) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, blockedName), 0700); err != nil {
+		t.Fatalf("os.Mkdir(blocking artifact) error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.UserIncludeList = []string{"^new$"}
+	result, err := cfg.SaveToFile(path)
+	if err == nil || !strings.Contains(err.Error(), blockedName) || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("SaveToFile() error = %v, want named directory cleanup failure", err)
+	}
+	if !slices.Equal(result.RemovedLegacyArtifacts, []string{removedName}) {
+		t.Fatalf("SaveToFile() removed artifacts = %v, want [%s]", result.RemovedLegacyArtifacts, removedName)
+	}
+	if strings.Contains(err.Error()+strings.Join(result.RemovedLegacyArtifacts, ","), "active-secret") {
+		t.Fatalf("partial persistence result exposed configuration contents: result=%v error=%v", result, err)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil || string(content) != string(original) {
+		t.Fatalf("active config after cleanup failure = %q error=%v, want original", content, readErr)
+	}
+}
+
+func TestLegacyConfigArtifactCleanupNoOpDoesNotMutateOperatorBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resman.conf")
+	operatorBackup := path + ".backup_keep_for_operator"
+	if err := os.WriteFile(operatorBackup, []byte("operator-owned\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile(operator backup) error = %v", err)
+	}
+	result, err := removeLegacyConfigArtifactsBesideWith(
+		path,
+		func(string) error {
+			t.Fatal("cleanup attempted to remove a non-generated backup")
+			return nil
+		},
+		func(string) error {
+			t.Fatal("cleanup synced a directory after removing nothing")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("cleanup no-op error = %v", err)
+	}
+	if len(result.RemovedLegacyArtifacts) != 0 {
+		t.Fatalf("cleanup no-op result = %v, want no removed artifacts", result.RemovedLegacyArtifacts)
+	}
+	if _, err := os.Lstat(operatorBackup); err != nil {
+		t.Fatalf("operator backup changed during cleanup no-op: %v", err)
+	}
 }
 
 func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
@@ -617,7 +787,7 @@ func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
 		return writeFileAtomically(target, content, metadata)
 	}
 
-	err := cfg.saveToFileWithWriter(path, writer)
+	_, err := cfg.saveToFileWithWriter(path, writer)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
 		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
 	}
@@ -647,7 +817,7 @@ func TestSaveToFileRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
 		})
 	}
 
-	err := cfg.saveToFileWithWriter(path, writer)
+	_, err := cfg.saveToFileWithWriter(path, writer)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
 		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
 	}
@@ -693,7 +863,7 @@ func TestNewFileCompensationFailureReportsDeterministicState(t *testing.T) {
 				return false, errors.New("injected removal failure")
 			}
 
-			err := saveUserFilterSnapshot(path, snapshot, writer, remover)
+			_, err := saveUserFilterSnapshot(path, snapshot, writer, remover)
 			if err == nil || !strings.Contains(err.Error(), "injected creation sync failure") {
 				t.Fatalf("saveUserFilterSnapshot() error = %v, want creation sync failure", err)
 			}

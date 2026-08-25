@@ -30,14 +30,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
 
 const (
-	defaultHistoryLimit = 100
-	maxHistoryLimit     = 10000
+	defaultHistoryLimit                   = 100
+	maxHistoryLimit                       = 10000
+	maxLegacyArtifactNamesInCleanupNotice = 3
 )
 
 // getHostname returns the current hostname
@@ -932,16 +934,21 @@ func (s *Server) updateUserFilter(ctx context.Context, kind userFilterKind, patt
 		return result, fmt.Errorf("runtime configuration is not available")
 	}
 
-	var err error
+	var (
+		persistenceResult config.UserFilterPersistenceResult
+		err               error
+	)
 	switch kind {
 	case userFilterInclude:
-		result.PreviousValue, err = cfg.PersistUserIncludeList(patterns, cfg.ConfigFile)
+		persistenceResult, err = cfg.PersistUserIncludeList(patterns, cfg.ConfigFile)
 	case userFilterExclude:
-		result.PreviousValue, err = cfg.PersistUserExcludeList(patterns, cfg.ConfigFile)
+		persistenceResult, err = cfg.PersistUserExcludeList(patterns, cfg.ConfigFile)
 	default:
 		return result, fmt.Errorf("unsupported user filter kind %q", kind)
 	}
+	result.PreviousValue = persistenceResult.PreviousValue
 	result.PreviousValue = append([]string{}, result.PreviousValue...)
+	s.reportLegacyArtifactCleanup(persistenceResult.PersistenceResult)
 	if err != nil {
 		return result, fmt.Errorf("persist user %s filters: %w", kind, err)
 	}
@@ -959,6 +966,20 @@ func (s *Server) updateUserFilter(ctx context.Context, kind userFilterKind, patt
 	result.Success = true
 	result.Message = fmt.Sprintf("User %s filters persisted and applied successfully", kind)
 	return result, nil
+}
+
+func (s *Server) reportLegacyArtifactCleanup(result config.PersistenceResult) {
+	if len(result.RemovedLegacyArtifacts) == 0 {
+		return
+	}
+	visibleCount := min(len(result.RemovedLegacyArtifacts), maxLegacyArtifactNamesInCleanupNotice)
+	visibleNames := strings.Join(result.RemovedLegacyArtifacts[:visibleCount], ",")
+	s.logger.Warn(
+		"Removed insecure legacy configuration artifacts during persistence",
+		"removed_count", len(result.RemovedLegacyArtifacts),
+		"removed_basenames", visibleNames,
+		"omitted_count", len(result.RemovedLegacyArtifacts)-visibleCount,
+	)
 }
 
 func (s *Server) userFilterMatchesRuntime(kind userFilterKind, patterns []string) bool {

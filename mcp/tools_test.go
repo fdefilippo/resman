@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +38,25 @@ type configurationReloaderFunc func(context.Context) error
 
 func (f configurationReloaderFunc) Reload(ctx context.Context) error {
 	return f(ctx)
+}
+
+type recordedServerLog struct {
+	message string
+	fields  []interface{}
+}
+
+type recordingServerLogger struct {
+	warnings []recordedServerLog
+}
+
+func (*recordingServerLogger) Info(string, ...interface{})  {}
+func (*recordingServerLogger) Error(string, ...interface{}) {}
+
+func (l *recordingServerLogger) Warn(message string, fields ...interface{}) {
+	l.warnings = append(l.warnings, recordedServerLog{
+		message: message,
+		fields:  append([]interface{}(nil), fields...),
+	})
 }
 
 type stateConfigChangeHandler struct {
@@ -121,6 +141,106 @@ func TestUserFilterUpdateWaitsForWatcherAcknowledgement(t *testing.T) {
 				t.Fatalf("runtime filters = %v, want %v", got, tt.patterns)
 			}
 		})
+	}
+}
+
+func TestUserFilterUpdateEmitsOneBoundedLegacyCleanupNotice(t *testing.T) {
+	server, configPath := newUserFilterTestServer(t, nil)
+	server.configReloader = configurationReloaderFunc(func(context.Context) error {
+		reloaded, err := config.LoadAndValidate(configPath)
+		if err != nil {
+			return err
+		}
+		server.stateManager.UpdateConfig(reloaded)
+		return nil
+	})
+	logger := &recordingServerLogger{}
+	server.logger = logger
+
+	legacyNames := []string{
+		"resman.conf.backup_20260821_010101",
+		"resman.conf.backup_20260821_020202",
+		"resman.conf.backup_20260821_030303",
+		"resman.conf.backup_20260821_040404",
+		"resman.conf.backup_20260821_050505",
+	}
+	for _, name := range legacyNames {
+		if err := os.WriteFile(
+			filepath.Join(filepath.Dir(configPath), name),
+			[]byte("MCP_AUTH_TOKEN=cleanup-secret\n"),
+			0600,
+		); err != nil {
+			t.Fatalf("os.WriteFile(%s) error = %v", name, err)
+		}
+	}
+
+	result, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^new$"})
+	if err != nil {
+		t.Fatalf("updateUserFilter() error = %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("update result = %+v, want success", result)
+	}
+	if len(logger.warnings) != 1 {
+		t.Fatalf("cleanup warnings = %d, want exactly one: %+v", len(logger.warnings), logger.warnings)
+	}
+	warning := logger.warnings[0]
+	fields := make(map[string]interface{}, len(warning.fields)/2)
+	for index := 0; index+1 < len(warning.fields); index += 2 {
+		fields[fmt.Sprint(warning.fields[index])] = warning.fields[index+1]
+	}
+	if fields["removed_count"] != 5 || fields["omitted_count"] != 2 {
+		t.Fatalf("cleanup notice fields = %v, want removed_count=5 omitted_count=2", fields)
+	}
+	wantVisible := strings.Join(legacyNames[:maxLegacyArtifactNamesInCleanupNotice], ",")
+	if fields["removed_basenames"] != wantVisible {
+		t.Fatalf("visible cleanup basenames = %v, want %q", fields["removed_basenames"], wantVisible)
+	}
+	notice := warning.message + fmt.Sprint(warning.fields)
+	for _, forbidden := range []string{"cleanup-secret", legacyNames[3], legacyNames[4], filepath.Dir(configPath)} {
+		if strings.Contains(notice, forbidden) {
+			t.Fatalf("bounded cleanup notice exposed %q: %s", forbidden, notice)
+		}
+	}
+}
+
+func TestUserFilterUpdateReportsPartialLegacyCleanupBeforeReturningError(t *testing.T) {
+	server, configPath := newUserFilterTestServer(t, configurationReloaderFunc(func(context.Context) error {
+		t.Fatal("configuration reloader called after partial persistence failure")
+		return nil
+	}))
+	logger := &recordingServerLogger{}
+	server.logger = logger
+	dir := filepath.Dir(configPath)
+	removedName := "resman.conf.backup_20260821_010101"
+	blockedName := "resman.conf.backup_20260821_020202"
+	if err := os.WriteFile(filepath.Join(dir, removedName), []byte("MCP_AUTH_TOKEN=partial-secret\n"), 0600); err != nil {
+		t.Fatalf("os.WriteFile(legacy backup) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, blockedName), 0700); err != nil {
+		t.Fatalf("os.Mkdir(blocking artifact) error = %v", err)
+	}
+
+	result, err := server.updateUserFilter(context.Background(), userFilterInclude, []string{"^new$"})
+	if err == nil || !strings.Contains(err.Error(), blockedName) {
+		t.Fatalf("updateUserFilter() error = %v, want named partial cleanup failure", err)
+	}
+	if result.Persisted || result.Applied || result.Success {
+		t.Fatalf("update result = %+v, want failed persistence without runtime apply", result)
+	}
+	if len(logger.warnings) != 1 {
+		t.Fatalf("partial cleanup warnings = %d, want exactly one: %+v", len(logger.warnings), logger.warnings)
+	}
+	warning := logger.warnings[0]
+	fields := make(map[string]interface{}, len(warning.fields)/2)
+	for index := 0; index+1 < len(warning.fields); index += 2 {
+		fields[fmt.Sprint(warning.fields[index])] = warning.fields[index+1]
+	}
+	if fields["removed_count"] != 1 || fields["removed_basenames"] != removedName || fields["omitted_count"] != 0 {
+		t.Fatalf("partial cleanup notice fields = %v, want one reported basename", fields)
+	}
+	if strings.Contains(warning.message+fmt.Sprint(warning.fields), "partial-secret") {
+		t.Fatalf("partial cleanup notice exposed file contents: %+v", warning)
 	}
 }
 

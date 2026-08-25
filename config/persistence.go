@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -41,6 +42,15 @@ type configFileMetadata struct {
 
 type atomicFileWriter func(string, []byte, configFileMetadata) (bool, error)
 type committedFileRemover func(string) (bool, error)
+type legacyArtifactRemover func(string) error
+type parentDirectorySyncer func(string) error
+
+// PersistenceResult reports filesystem cleanup performed while persisting a
+// configuration. RemovedLegacyArtifacts contains basenames only and never file
+// contents or configuration values.
+type PersistenceResult struct {
+	RemovedLegacyArtifacts []string
+}
 
 type configPersistenceState struct {
 	unusableErr error
@@ -185,32 +195,54 @@ func applyConfigFileMetadataWithChown(
 // configuration by version 1.25.1 and earlier. It remains necessary for custom
 // paths; default-layout legacy artifacts are refused at startup and never
 // deleted automatically.
-func removeLegacyConfigArtifactsBeside(path string) error {
+func removeLegacyConfigArtifactsBeside(path string) (PersistenceResult, error) {
+	return removeLegacyConfigArtifactsBesideWith(path, os.Remove, syncParentDirectory)
+}
+
+func removeLegacyConfigArtifactsBesideWith(
+	path string,
+	remove legacyArtifactRemover,
+	syncParent parentDirectorySyncer,
+) (PersistenceResult, error) {
+	result := PersistenceResult{}
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("failed to inspect config directory for legacy artifacts: %w", err)
+		return result, fmt.Errorf("failed to inspect config directory for legacy artifacts: %w", err)
 	}
 
-	removed := false
 	for _, entry := range entries {
 		name := entry.Name()
-		if name != base+legacyTempSuffix && !strings.HasPrefix(name, base+legacyBackupMarker) {
+		if !isGeneratedLegacyConfigArtifact(base, name) {
 			continue
 		}
 		if entry.IsDir() {
-			return fmt.Errorf("legacy config artifact %s is a directory", filepath.Join(dir, name))
+			return result, fmt.Errorf("legacy config artifact %s is a directory", filepath.Join(dir, name))
 		}
-		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			return fmt.Errorf("failed to remove legacy config artifact %s: %w", name, err)
+		if err := remove(filepath.Join(dir, name)); err != nil {
+			return result, fmt.Errorf("failed to remove legacy config artifact %s: %w", name, err)
 		}
-		removed = true
+		result.RemovedLegacyArtifacts = append(result.RemovedLegacyArtifacts, name)
 	}
-	if removed {
-		return syncParentDirectory(path)
+	if len(result.RemovedLegacyArtifacts) > 0 {
+		if err := syncParent(path); err != nil {
+			return result, err
+		}
 	}
-	return nil
+	return result, nil
+}
+
+func isGeneratedLegacyConfigArtifact(base, name string) bool {
+	if name == base+legacyTempSuffix {
+		return true
+	}
+	timestamp, found := strings.CutPrefix(name, base+legacyBackupMarker)
+	if !found {
+		return false
+	}
+	parsed, err := time.Parse("20060102_150405", timestamp)
+	return err == nil && parsed.Format("20060102_150405") == timestamp
 }
 
 func removeCommittedFile(path string) (bool, error) {

@@ -1376,13 +1376,13 @@ func TestSetConfigField(t *testing.T) {
 func TestPersistUserFiltersDoesNotPublishLiveState(t *testing.T) {
 	tests := []struct {
 		name     string
-		persist  func(*Config, []string, string) ([]string, error)
+		persist  func(*Config, []string, string) (UserFilterPersistenceResult, error)
 		fileKey  string
 		liveList func(*Config) []string
 	}{
 		{
 			name: "include",
-			persist: func(cfg *Config, patterns []string, path string) ([]string, error) {
+			persist: func(cfg *Config, patterns []string, path string) (UserFilterPersistenceResult, error) {
 				return cfg.PersistUserIncludeList(patterns, path)
 			},
 			fileKey:  "USER_INCLUDE_LIST=^new$",
@@ -1390,7 +1390,7 @@ func TestPersistUserFiltersDoesNotPublishLiveState(t *testing.T) {
 		},
 		{
 			name: "exclude",
-			persist: func(cfg *Config, patterns []string, path string) ([]string, error) {
+			persist: func(cfg *Config, patterns []string, path string) (UserFilterPersistenceResult, error) {
 				return cfg.PersistUserExcludeList(patterns, path)
 			},
 			fileKey:  "USER_EXCLUDE_LIST=^new$",
@@ -1409,13 +1409,13 @@ func TestPersistUserFiltersDoesNotPublishLiveState(t *testing.T) {
 				t.Fatalf("LoadAndValidate() error: %v", err)
 			}
 			patterns := []string{"^new$"}
-			previous, err := tt.persist(cfg, patterns, configPath)
+			result, err := tt.persist(cfg, patterns, configPath)
 			if err != nil {
 				t.Fatalf("persist() error: %v", err)
 			}
 			patterns[0] = "^caller-mutated$"
-			if !slices.Equal(previous, []string{"^old$"}) {
-				t.Fatalf("previous value = %v, want [^old$]", previous)
+			if !slices.Equal(result.PreviousValue, []string{"^old$"}) {
+				t.Fatalf("previous value = %v, want [^old$]", result.PreviousValue)
 			}
 			if !slices.Equal(tt.liveList(cfg), []string{"^old$"}) {
 				t.Fatalf("live configuration was published before acknowledgement: %v", tt.liveList(cfg))

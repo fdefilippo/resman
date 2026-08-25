@@ -528,8 +528,12 @@ explicitly; persistence without runtime application is not supported.
 - If source ownership cannot be applied to the replacement, the write fails before
   secret-bearing content is written. Grant the resman service permission to `chown`
   the file or change its ownership to the service account before retrying.
-- Legacy timestamped backups are removed on the next update after the secure rolling
-  backup has been created.
+- Legacy backups matching the exact generated name
+  `<config>.backup_YYYYMMDD_HHMMSS`, and the obsolete exact `<config>.tmp` file, are
+  removed on the next update after the secure rolling backup has been created.
+  Operator-named files that merely start with `.backup_` are preserved. Cleanup emits
+  one warning with the total count, at most three removed basenames, and the number
+  omitted; it never includes file contents, configuration values, or the full path.
 - A write or durability failure restores the previous readable configuration before
   returning an error. If both the replacement and rollback parent-directory syncs
   fail, runtime state remains unchanged and the error reports that rollback durability

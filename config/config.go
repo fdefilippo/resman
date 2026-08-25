@@ -1315,13 +1315,13 @@ func (c *Config) IsUserWhitelistedForIO(username string) bool {
 
 // PersistUserExcludeList writes a detached exclude-policy snapshot without
 // publishing it to live consumers. A watcher acknowledgement owns publication.
-func (c *Config) PersistUserExcludeList(patterns []string, configPath string) ([]string, error) {
+func (c *Config) PersistUserExcludeList(patterns []string, configPath string) (UserFilterPersistenceResult, error) {
 	return c.persistUserFilterWithWriter(patterns, configPath, userFilterExclude, writeFileAtomically)
 }
 
 // PersistUserIncludeList writes a detached include-policy snapshot without
 // publishing it to live consumers. A watcher acknowledgement owns publication.
-func (c *Config) PersistUserIncludeList(patterns []string, configPath string) ([]string, error) {
+func (c *Config) PersistUserIncludeList(patterns []string, configPath string) (UserFilterPersistenceResult, error) {
 	return c.persistUserFilterWithWriter(patterns, configPath, userFilterInclude, writeFileAtomically)
 }
 
@@ -1337,6 +1337,13 @@ type userFilterPersistenceSnapshot struct {
 	exclude      []string
 	writeInclude bool
 	writeExclude bool
+}
+
+// UserFilterPersistenceResult reports the previous live value and any legacy
+// filesystem artifacts removed while persisting the detached filter update.
+type UserFilterPersistenceResult struct {
+	PreviousValue []string
+	PersistenceResult
 }
 
 func (c *Config) persistenceCoordinator() (*sync.Mutex, *configPersistenceState) {
@@ -1370,16 +1377,16 @@ func (c *Config) persistUserFilterWithWriter(
 	configPath string,
 	field userFilterField,
 	writer atomicFileWriter,
-) ([]string, error) {
+) (UserFilterPersistenceResult, error) {
 	if err := validateUserFilterPatterns(patterns); err != nil {
 		snapshot := c.userFilterSnapshot()
 		switch field {
 		case userFilterInclude:
-			return snapshot.include, err
+			return UserFilterPersistenceResult{PreviousValue: snapshot.include}, err
 		case userFilterExclude:
-			return snapshot.exclude, err
+			return UserFilterPersistenceResult{PreviousValue: snapshot.exclude}, err
 		default:
-			return nil, fmt.Errorf("unknown user filter field %d: %w", field, err)
+			return UserFilterPersistenceResult{}, fmt.Errorf("unknown user filter field %d: %w", field, err)
 		}
 	}
 
@@ -1399,23 +1406,26 @@ func (c *Config) persistUserFilterWithWriter(
 		snapshot.exclude = append([]string(nil), patterns...)
 		snapshot.writeExclude = true
 	default:
-		return nil, fmt.Errorf("unknown user filter field %d", field)
+		return UserFilterPersistenceResult{}, fmt.Errorf("unknown user filter field %d", field)
 	}
+	result := UserFilterPersistenceResult{PreviousValue: previous}
 	if saveState.unusableErr != nil {
-		return previous, fmt.Errorf(
+		return result, fmt.Errorf(
 			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
 			saveState.unusableErr,
 		)
 	}
 
-	if err := saveUserFilterSnapshotWithWriter(configPath, snapshot, writer); err != nil {
+	persistenceResult, err := saveUserFilterSnapshotWithWriter(configPath, snapshot, writer)
+	result.PersistenceResult = persistenceResult
+	if err != nil {
 		var unusableErr *configPersistenceUnusableError
 		if errors.As(err, &unusableErr) {
 			saveState.unusableErr = err
 		}
-		return previous, err
+		return result, err
 	}
-	return previous, nil
+	return result, nil
 }
 
 func validateUserFilterPatterns(patterns []string) error {
@@ -1427,17 +1437,18 @@ func validateUserFilterPatterns(patterns []string) error {
 	return nil
 }
 
-// SaveToFile persists the configuration with a bounded secure backup.
-func (c *Config) SaveToFile(path string) error {
+// SaveToFile persists the configuration with a bounded secure backup and
+// reports legacy artifacts removed during persistence.
+func (c *Config) SaveToFile(path string) (PersistenceResult, error) {
 	return c.saveToFileWithWriter(path, writeFileAtomically)
 }
 
-func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) error {
+func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) (PersistenceResult, error) {
 	saveMu, saveState := c.persistenceCoordinator()
 	saveMu.Lock()
 	defer saveMu.Unlock()
 	if saveState.unusableErr != nil {
-		return fmt.Errorf(
+		return PersistenceResult{}, fmt.Errorf(
 			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
 			saveState.unusableErr,
 		)
@@ -1446,15 +1457,19 @@ func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) erro
 	snapshot := c.userFilterSnapshot()
 	snapshot.writeInclude = true
 	snapshot.writeExclude = true
-	err := saveUserFilterSnapshotWithWriter(path, snapshot, writer)
+	result, err := saveUserFilterSnapshotWithWriter(path, snapshot, writer)
 	var unusableErr *configPersistenceUnusableError
 	if errors.As(err, &unusableErr) {
 		saveState.unusableErr = err
 	}
-	return err
+	return result, err
 }
 
-func saveUserFilterSnapshotWithWriter(path string, snapshot userFilterPersistenceSnapshot, writer atomicFileWriter) error {
+func saveUserFilterSnapshotWithWriter(
+	path string,
+	snapshot userFilterPersistenceSnapshot,
+	writer atomicFileWriter,
+) (PersistenceResult, error) {
 	return saveUserFilterSnapshot(path, snapshot, writer, removeCommittedFile)
 }
 
@@ -1463,21 +1478,23 @@ func saveUserFilterSnapshot(
 	snapshot userFilterPersistenceSnapshot,
 	writer atomicFileWriter,
 	remover committedFileRemover,
-) error {
+) (PersistenceResult, error) {
+	result := PersistenceResult{}
 	metadata, original, exists, err := readConfigFile(path)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	backupPath := path + configBackupSuffix
 	if exists {
 		if _, err := writer(backupPath, original, metadata); err != nil {
-			return fmt.Errorf("failed to create secure configuration backup: %w", err)
+			return result, fmt.Errorf("failed to create secure configuration backup: %w", err)
 		}
 	}
 
-	if err := removeLegacyConfigArtifactsBeside(path); err != nil {
-		return err
+	result, err = removeLegacyConfigArtifactsBeside(path)
+	if err != nil {
+		return result, err
 	}
 
 	// Preserve comments and unrelated settings from the exact version backed up
@@ -1486,12 +1503,12 @@ func saveUserFilterSnapshot(
 	content := strings.Join(lines, "\n")
 	committed, err := writer(path, []byte(content), metadata)
 	if err == nil {
-		return nil
+		return result, nil
 	}
 
 	writeErr := fmt.Errorf("failed to persist configuration: %w", err)
 	if !committed {
-		return writeErr
+		return result, writeErr
 	}
 
 	// A parent-directory sync failure happens after rename. Restore the previous
@@ -1500,13 +1517,13 @@ func saveUserFilterSnapshot(
 		restored, restoreErr := writer(path, original, metadata)
 		if restoreErr != nil {
 			if restored {
-				return errors.Join(writeErr, fmt.Errorf(
+				return result, errors.Join(writeErr, fmt.Errorf(
 					"restored previous readable configuration at %s but failed to confirm rollback durability: %w",
 					path,
 					restoreErr,
 				))
 			}
-			return errors.Join(writeErr, &configPersistenceUnusableError{
+			return result, errors.Join(writeErr, &configPersistenceUnusableError{
 				detail:   fmt.Sprintf("failed to restore configuration at %s", path),
 				recovery: fmt.Sprintf("stop resman, restore %s, and restart before accepting further configuration writes", backupPath),
 				cause:    restoreErr,
@@ -1516,20 +1533,20 @@ func saveUserFilterSnapshot(
 		removed, removeErr := remover(path)
 		if removeErr != nil {
 			if removed {
-				return errors.Join(writeErr, fmt.Errorf(
+				return result, errors.Join(writeErr, fmt.Errorf(
 					"removed newly created readable configuration at %s but failed to confirm removal durability: %w",
 					path,
 					removeErr,
 				))
 			}
-			return errors.Join(writeErr, &configPersistenceUnusableError{
+			return result, errors.Join(writeErr, &configPersistenceUnusableError{
 				detail:   fmt.Sprintf("failed to remove newly created configuration at %s", path),
 				recovery: fmt.Sprintf("stop resman, remove %s, and restart before accepting further configuration writes", path),
 				cause:    removeErr,
 			})
 		}
 	}
-	return writeErr
+	return result, writeErr
 }
 
 // updateConfigLines preserves existing content while updating selected managed fields.
