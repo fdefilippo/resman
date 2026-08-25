@@ -189,9 +189,16 @@ fi
 install -d -m 0700 -o root -g root /etc/resman /etc/resman/tls /var/lib/resman
 
 # Report legacy state without migrating or deleting operator data.
-if [ -e /etc/resman.conf ] || [ -L /etc/resman.conf ] || [ -e /etc/resman.conf.rpmsave ] || [ -L /etc/resman.conf.rpmsave ] || [ -e /etc/resman.conf.backup ] || [ -L /etc/resman.conf.backup ]; then
+legacy_config_found=false
+for legacy_path in /etc/resman.conf /etc/resman.conf.rpmsave /etc/resman.conf.backup /etc/resman.conf.tmp /etc/resman.conf.backup_*; do
+    if [ -e "$legacy_path" ] || [ -L "$legacy_path" ]; then
+        legacy_config_found=true
+        break
+    fi
+done
+if "$legacy_config_found"; then
     echo "WARNING: legacy configuration artifacts detected." >&2
-    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, remove the legacy source files, securely remove /etc/resman.conf.backup, then restart resman." >&2
+    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, remove the legacy source files, then securely remove /etc/resman.conf.backup, /etc/resman.conf.tmp, and every /etc/resman.conf.backup_* file before restarting resman." >&2
 fi
 if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
     echo "WARNING: legacy metrics database detected at /etc/resman/metrics.db." >&2

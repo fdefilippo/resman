@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
+func TestServiceDelegatesControllerSetupAndContainsOnlyEffectiveLayoutDirectives(t *testing.T) {
 	unit, err := os.ReadFile("resman.service")
 	if err != nil {
 		t.Fatalf("read resman.service: %v", err)
@@ -19,6 +19,8 @@ func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
 	}{
 		{name: "direct subtree control write", value: "cgroup.subtree_control"},
 		{name: "mandatory cpuset activation", value: `echo "+cpuset"`},
+		{name: "unused runtime directory", value: "RuntimeDirectory="},
+		{name: "inert writable path", value: "ReadWritePaths="},
 	}
 	for _, tt := range forbidden {
 		t.Run(tt.name, func(t *testing.T) {
@@ -34,8 +36,6 @@ func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
 	}
 	for _, required := range []string{
 		"RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman",
-		"ReadWritePaths=/etc/resman",
-		"ReadWritePaths=/var/lib/resman",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("resman.service does not contain required layout contract %q", required)

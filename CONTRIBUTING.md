@@ -186,7 +186,8 @@ sudo make test-integration
 
 2. Create a test configuration:
    ```bash
-   cp config/resman.conf.example /etc/resman/resman.conf
+   sudo install -d -m 0700 /etc/resman
+   sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
    ```
 
 3. Run in debug mode:

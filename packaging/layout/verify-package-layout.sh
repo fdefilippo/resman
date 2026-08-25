@@ -26,15 +26,25 @@ assert_entry() {
 
 assert_absent_path() {
 	path=$1
-	listing=$2
-	if awk -F '\t' -v path="$path" '$1 == path { found = 1 } END { exit !found }' "$listing"; then
+	paths=$2
+	if grep -Fqx -- "$path" "$paths"; then
 		echo "package layout retained legacy path: $path" >&2
 		exit 1
 	fi
 }
 
+assert_absent_prefix() {
+	prefix=$1
+	paths=$2
+	if grep -F -- "$prefix" "$paths" >/dev/null; then
+		echo "package layout retained a legacy path beginning with: $prefix" >&2
+		exit 1
+	fi
+}
+
 listing=$(mktemp "${TMPDIR:-/tmp}/resman-package-layout.XXXXXX")
-trap 'rm -f -- "$listing"' EXIT HUP INT TERM
+paths=$(mktemp "${TMPDIR:-/tmp}/resman-package-paths.XXXXXX")
+trap 'rm -f -- "$listing" "$paths"' EXIT HUP INT TERM
 
 case "$package" in
 	*.deb)
@@ -43,7 +53,10 @@ case "$package" in
 			exit 1
 		}
 		dpkg-deb --contents "$package" |
-			awk '{ path = $NF; sub(/^\./, "", path); sub(/\/$/, "", path); print path "\t" $1 "\t" $2 }' >"$listing"
+			awk '{ path = $6; sub(/^\./, "", path); sub(/\/$/, "", path); print path "\t" $1 "\t" $2 }' >"$listing"
+		dpkg-deb --fsys-tarfile "$package" |
+			tar -tf - |
+			awk '{ path = $0; sub(/^\./, "", path); sub(/\/$/, "", path); print path }' >"$paths"
 		;;
 	*.rpm)
 		command -v rpm >/dev/null 2>&1 || {
@@ -53,6 +66,7 @@ case "$package" in
 		rpm --query --package \
 			--queryformat '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}/%{FILEGROUPNAME}\n]' \
 			"$package" >"$listing"
+		cut -f 1 "$listing" >"$paths"
 		;;
 	*)
 		echo "unsupported package type: $package" >&2
@@ -65,9 +79,11 @@ assert_entry '/etc/resman/resman.conf' '-rw-------' 'root/root' "$listing"
 assert_entry '/etc/resman/tls' 'drwx------' 'root/root' "$listing"
 assert_entry '/var/lib/resman' 'drwx------' 'root/root' "$listing"
 
-assert_absent_path '/etc/resman.conf' "$listing"
-assert_absent_path '/etc/resman.conf.rpmsave' "$listing"
-assert_absent_path '/etc/resman.conf.backup' "$listing"
-assert_absent_path '/etc/resman/metrics.db' "$listing"
+assert_absent_path '/etc/resman.conf' "$paths"
+assert_absent_path '/etc/resman.conf.rpmsave' "$paths"
+assert_absent_path '/etc/resman.conf.backup' "$paths"
+assert_absent_path '/etc/resman.conf.tmp' "$paths"
+assert_absent_prefix '/etc/resman.conf.backup_' "$paths"
+assert_absent_path '/etc/resman/metrics.db' "$paths"
 
 echo "package layout verified: $package"

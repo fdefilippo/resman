@@ -11,9 +11,6 @@ ConditionDirectoryNotEmpty=/sys/fs/cgroup
 [Service]
 Type=simple
 User=root
-RuntimeDirectory=resman
-RuntimeDirectoryMode=0755
-RuntimeDirectoryPreserve=restart
 # ResMan discovers and enables the controllers required by the active features.
 # Keeping controller setup in the daemon preserves its mandatory/optional
 # diagnostics and lets CPU quota enforcement run without cpuset.
@@ -47,13 +44,6 @@ LimitNPROC=65536
 # Cgroups
 #CPUAccounting=true
 #MemoryAccounting=true
-
-# Writable directories
-ReadWritePaths=/sys/fs/cgroup
-ReadWritePaths=/etc/resman
-ReadWritePaths=/var/lib/resman
-ReadWritePaths=/var/log
-ReadWritePaths=/run
 
 [Install]
 WantedBy=multi-user.target

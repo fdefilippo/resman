@@ -96,6 +96,23 @@ jobs:
           dpkg-deb --contents "$package"
           packaging/layout/verify-package-layout.sh "$package"
 
+          # A symlink has a target after " -> " in dpkg-deb --contents. Prove
+          # that the verifier checks the member path rather than that target.
+          mutation_dir=$(mktemp -d /tmp/resman-deb-layout.XXXXXX)
+          trap 'rm -rf -- "$mutation_dir"' EXIT
+          dpkg-deb --raw-extract "$package" "$mutation_dir/package"
+          legacy_config=/etc/"resman.conf"
+          ln -s /etc/resman/resman.conf "$mutation_dir/package$legacy_config"
+          dpkg-deb --build --root-owner-group "$mutation_dir/package" "$mutation_dir/resman-mutated.deb"
+          if mutation_output=$(packaging/layout/verify-package-layout.sh "$mutation_dir/resman-mutated.deb" 2>&1); then
+            echo "legacy symlink mutation unexpectedly passed the package layout verifier" >&2
+            exit 1
+          fi
+          case "$mutation_output" in
+            *"package layout retained legacy path: $legacy_config"*) ;;
+            *) echo "$mutation_output" >&2; exit 1 ;;
+          esac
+
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:

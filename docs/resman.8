@@ -553,15 +553,19 @@ When the default path is selected, startup refuses any legacy
 .I /etc/resman.conf
 or RPM-saved
 .I /etc/resman.conf.rpmsave
-or secret-bearing
+and the secret-bearing
 .I /etc/resman.conf.backup
-entry, even when the new packaged configuration already exists. Stop resman,
+and
+.I /etc/resman.conf.tmp
+entries, plus every entry matching
+.IR /etc/resman.conf.backup_* ,
+even when the new packaged configuration already exists. Stop resman,
 choose the authoritative authored contents from the legacy or RPM-saved file,
 install them as a regular file at
 .IR /etc/resman/resman.conf ,
-remove the legacy source files, securely remove the orphaned legacy backup, and
-restart. An explicitly selected custom configuration path is not treated as a
-legacy fallback.
+remove the legacy source files, securely remove every orphaned secret-bearing
+artifact listed above, and restart. An explicitly selected custom configuration
+path is not treated as a legacy fallback.
 .PP
 When metrics persistence is enabled at its default
 .I /var/lib/resman/metrics.db

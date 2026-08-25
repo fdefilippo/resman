@@ -578,12 +578,14 @@ removed `CONFIG_FILE` configuration key is rejected in files and environment
 overrides; it never selects another file.
 
 With the default path selected, startup rejects legacy `/etc/resman.conf`, the
-`/etc/resman.conf.rpmsave` produced when RPM preserves a modified legacy file, or
-secret-bearing `/etc/resman.conf.backup`, even if the new packaged file exists. The
-operator must choose the authoritative authored contents from the legacy or RPM-saved
-file, install them as a regular file at the new path, remove the legacy source files
-and orphaned backup, and restart. A custom `--config` path is authoritative and
-does not trigger this default-layout guard. When metrics persistence is enabled at
+`/etc/resman.conf.rpmsave` produced when RPM preserves a modified legacy file, and
+the secret-bearing `/etc/resman.conf.backup`, `/etc/resman.conf.tmp`, and every
+`/etc/resman.conf.backup_*` entry, even if the new packaged file exists. The operator
+must choose the authoritative authored contents from the legacy or RPM-saved file,
+install them as a regular file at the new path, remove the legacy source files,
+securely remove every orphaned secret-bearing artifact, and restart. A custom
+`--config` path is authoritative and does not trigger this default-layout guard.
+When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
 component construction. A 1.25.x database must be archived or deleted so schema
 version 2 can be created; it is not moved or migrated.

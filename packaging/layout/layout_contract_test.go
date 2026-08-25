@@ -48,6 +48,14 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf",
 			},
 		},
+		{
+			path: "packaging/layout/verify-package-layout.sh",
+			required: []string{
+				"dpkg-deb --fsys-tarfile",
+				"tar -tf -",
+				"assert_absent_path '/etc/" + "resman.conf' \"$paths\"",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -77,6 +85,8 @@ func TestPackagePostInstallMessagesNameEveryLegacyArtifactAndRemedy(t *testing.T
 				"/etc/" + "resman.conf",
 				"/etc/" + "resman.conf.rpmsave",
 				"/etc/" + "resman.conf.backup",
+				"/etc/" + "resman.conf.tmp",
+				"/etc/" + "resman.conf.backup_*",
 				"/etc/resman/" + "metrics.db",
 				"/etc/resman/resman.conf",
 				"/var/lib/resman/metrics.db",
@@ -96,48 +106,62 @@ func TestLiveTreeContainsOnlyAllowlistedLegacyLayoutReferences(t *testing.T) {
 	legacyConfig := "/etc/" + "resman.conf"
 	legacySaved := legacyConfig + ".rpmsave"
 	legacyBackup := legacyConfig + ".backup"
+	legacyTemp := legacyConfig + ".tmp"
+	legacyTimestampedBackup := legacyConfig + ".backup_"
 	legacyDB := "/etc/resman/" + "metrics.db"
 	legacyRuntime := "/var/run/" + "resman-cgroups.txt"
 
 	expected := map[string]map[string]int{
 		"config/paths.go": {
-			legacyConfig: 1,
-			legacySaved:  1,
-			legacyBackup: 1,
-			legacyDB:     1,
+			legacyConfig:            1,
+			legacySaved:             1,
+			legacyBackup:            1,
+			legacyTemp:              1,
+			legacyTimestampedBackup: 1,
+			legacyDB:                1,
 		},
 		"docs/TECHNICAL-SPECIFICATION.md": {
-			legacyConfig: 1,
-			legacySaved:  1,
-			legacyBackup: 1,
-			legacyDB:     1,
+			legacyConfig:            1,
+			legacySaved:             1,
+			legacyBackup:            1,
+			legacyTemp:              1,
+			legacyTimestampedBackup: 1,
+			legacyDB:                1,
 		},
 		"docs/resman.8": {
-			legacyConfig: 1,
-			legacySaved:  1,
-			legacyBackup: 1,
-			legacyDB:     1,
+			legacyConfig:            1,
+			legacySaved:             1,
+			legacyBackup:            1,
+			legacyTemp:              1,
+			legacyTimestampedBackup: 1,
+			legacyDB:                1,
 		},
 		"packaging/deb/postinst": {
-			legacyConfig: 3,
-			legacySaved:  3,
-			legacyBackup: 3,
-			legacyDB:     3,
+			legacyConfig:            2,
+			legacySaved:             2,
+			legacyBackup:            2,
+			legacyTemp:              2,
+			legacyTimestampedBackup: 2,
+			legacyDB:                3,
 		},
 		"packaging/rpm/resman.spec": {
-			legacyConfig: 3,
-			legacySaved:  3,
-			legacyBackup: 3,
-			legacyDB:     3,
+			legacyConfig:            2,
+			legacySaved:             2,
+			legacyBackup:            2,
+			legacyTemp:              2,
+			legacyTimestampedBackup: 2,
+			legacyDB:                3,
 		},
 		"packaging/layout/verify-package-layout.sh": {
-			legacyConfig: 1,
-			legacySaved:  1,
-			legacyBackup: 1,
-			legacyDB:     1,
+			legacyConfig:            1,
+			legacySaved:             1,
+			legacyBackup:            1,
+			legacyTemp:              1,
+			legacyTimestampedBackup: 1,
+			legacyDB:                1,
 		},
 	}
-	legacyPaths := []string{legacyConfig, legacySaved, legacyBackup, legacyDB, legacyRuntime}
+	legacyPaths := []string{legacyConfig, legacySaved, legacyBackup, legacyTemp, legacyTimestampedBackup, legacyDB, legacyRuntime}
 	observed := make(map[string]map[string]int)
 
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -203,6 +227,10 @@ func exactPathCount(content, path string) int {
 	if path == legacyConfig {
 		count -= strings.Count(content, legacyConfig+".backup")
 		count -= strings.Count(content, legacyConfig+".rpmsave")
+		count -= strings.Count(content, legacyConfig+".tmp")
+	}
+	if path == legacyConfig+".backup" {
+		count -= strings.Count(content, legacyConfig+".backup_")
 	}
 	return count
 }

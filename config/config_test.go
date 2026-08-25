@@ -960,22 +960,27 @@ LOG_LEVEL=INFO
 
 func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T) {
 	tests := []struct {
-		name         string
-		selected     string
-		createNew    bool
-		createLegacy bool
-		createSaved  bool
-		createBackup bool
-		danglingLink string
-		wantError    bool
+		name           string
+		selected       string
+		createNew      bool
+		createLegacy   bool
+		createSaved    bool
+		createBackup   bool
+		createTemp     bool
+		backupSuffixes []string
+		danglingLink   string
+		wantError      bool
 	}{
 		{name: "legacy only", selected: "default", createLegacy: true, wantError: true},
 		{name: "RPM-saved legacy only", selected: "default", createSaved: true, wantError: true},
 		{name: "legacy backup only", selected: "default", createBackup: true, wantError: true},
+		{name: "legacy temporary only", selected: "default", createTemp: true, wantError: true},
+		{name: "multiple timestamped legacy backups", selected: "default", backupSuffixes: []string{"20260822020202", "20260822010101"}, wantError: true},
 		{name: "dangling legacy backup", selected: "default", danglingLink: "backup", wantError: true},
-		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, wantError: true},
+		{name: "dangling timestamped legacy backup", selected: "default", danglingLink: "timestamped", wantError: true},
+		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, createTemp: true, backupSuffixes: []string{"20260822030303"}, wantError: true},
 		{name: "new default only", selected: "default", createNew: true},
-		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true},
+		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true, createTemp: true, backupSuffixes: []string{"20260822040404"}},
 		{name: "explicit legacy path", selected: "legacy", createLegacy: true},
 	}
 
@@ -983,12 +988,14 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			layout := diskLayout{
-				defaultConfigPath: filepath.Join(dir, "etc", "resman", "resman.conf"),
-				legacyConfigPath:  filepath.Join(dir, "etc", "resman.conf"),
-				legacySavedPath:   filepath.Join(dir, "etc", "resman.conf.rpmsave"),
-				legacyBackupPath:  filepath.Join(dir, "etc", "resman.conf.backup"),
-				defaultDBPath:     filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
-				legacyDBPath:      filepath.Join(dir, "etc", "resman", "metrics.db"),
+				defaultConfigPath:  filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:   filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:    filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:   filepath.Join(dir, "etc", "resman.conf.backup"),
+				legacyTempPath:     filepath.Join(dir, "etc", "resman.conf.tmp"),
+				legacyBackupPrefix: filepath.Join(dir, "etc", "resman.conf.backup_"),
+				defaultDBPath:      filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:       filepath.Join(dir, "etc", "resman", "metrics.db"),
 			}
 			customPath := filepath.Join(dir, "custom", "resman.conf")
 			if tt.createNew {
@@ -1003,12 +1010,27 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 			if tt.createBackup {
 				writeConfigFixture(t, layout.legacyBackupPath, "MCP_AUTH_TOKEN=legacy-secret\n")
 			}
+			if tt.createTemp {
+				writeConfigFixture(t, layout.legacyTempPath, "MCP_AUTH_TOKEN=legacy-temp-secret\n")
+			}
+			for _, suffix := range tt.backupSuffixes {
+				writeConfigFixture(t, layout.legacyBackupPrefix+suffix, "MCP_AUTH_TOKEN=legacy-timestamped-secret\n")
+			}
 			if tt.danglingLink == "backup" {
 				if err := os.MkdirAll(filepath.Dir(layout.legacyBackupPath), 0700); err != nil {
 					t.Fatalf("os.MkdirAll(legacy backup parent) error = %v", err)
 				}
 				if err := os.Symlink(filepath.Join(dir, "missing-backup-target"), layout.legacyBackupPath); err != nil {
 					t.Fatalf("os.Symlink(legacy backup) error = %v", err)
+				}
+			}
+			if tt.danglingLink == "timestamped" {
+				path := layout.legacyBackupPrefix + "20260822050505"
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatalf("os.MkdirAll(timestamped backup parent) error = %v", err)
+				}
+				if err := os.Symlink(filepath.Join(dir, "missing-timestamped-backup-target"), path); err != nil {
+					t.Fatalf("os.Symlink(timestamped backup) error = %v", err)
 				}
 			}
 			selectedPath := layout.defaultConfigPath
@@ -1035,6 +1057,24 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 				if (tt.createBackup || tt.danglingLink == "backup") && (!strings.Contains(err.Error(), layout.legacyBackupPath) ||
 					!strings.Contains(err.Error(), "securely remove")) {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want secure backup removal", err)
+				}
+				if tt.createTemp && !strings.Contains(err.Error(), layout.legacyTempPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path", err)
+				}
+				for _, suffix := range tt.backupSuffixes {
+					if !strings.Contains(err.Error(), layout.legacyBackupPrefix+suffix) {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want timestamped backup suffix %q", err, suffix)
+					}
+				}
+				if len(tt.backupSuffixes) == 2 {
+					first := strings.Index(err.Error(), layout.legacyBackupPrefix+"20260822010101")
+					second := strings.Index(err.Error(), layout.legacyBackupPrefix+"20260822020202")
+					if first < 0 || second < 0 || first >= second {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want timestamped paths in deterministic filename order", err)
+					}
+				}
+				if tt.danglingLink == "timestamped" && !strings.Contains(err.Error(), layout.legacyBackupPrefix+"20260822050505") {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want dangling timestamped backup path", err)
 				}
 				if cfg != nil {
 					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)
@@ -1074,12 +1114,14 @@ func TestLoadAndValidateRejectsLegacyDatabaseOnlyWhenDefaultIsEnabled(t *testing
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			layout := diskLayout{
-				defaultConfigPath: filepath.Join(dir, "etc", "resman", "resman.conf"),
-				legacyConfigPath:  filepath.Join(dir, "etc", "resman.conf"),
-				legacySavedPath:   filepath.Join(dir, "etc", "resman.conf.rpmsave"),
-				legacyBackupPath:  filepath.Join(dir, "etc", "resman.conf.backup"),
-				defaultDBPath:     filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
-				legacyDBPath:      filepath.Join(dir, "etc", "resman", "metrics.db"),
+				defaultConfigPath:  filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:   filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:    filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:   filepath.Join(dir, "etc", "resman.conf.backup"),
+				legacyTempPath:     filepath.Join(dir, "etc", "resman.conf.tmp"),
+				legacyBackupPrefix: filepath.Join(dir, "etc", "resman.conf.backup_"),
+				defaultDBPath:      filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:       filepath.Join(dir, "etc", "resman", "metrics.db"),
 			}
 			selectedDB := layout.defaultDBPath
 			switch tt.selectedDB {

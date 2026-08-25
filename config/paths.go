@@ -25,6 +25,10 @@ const (
 	LegacyConfigSavedPath = "/etc/resman.conf.rpmsave"
 	// LegacyConfigBackupPath contains secret-bearing configuration from the old layout.
 	LegacyConfigBackupPath = "/etc/resman.conf.backup"
+	// LegacyConfigTempPath is the fixed-name temporary file used by older releases.
+	LegacyConfigTempPath = "/etc/resman.conf.tmp"
+	// LegacyConfigTimestampedBackupPrefix identifies unbounded backups made by older releases.
+	LegacyConfigTimestampedBackupPrefix = "/etc/resman.conf.backup_"
 	// DefaultMetricsDBPath is the authoritative mutable metrics-state path.
 	DefaultMetricsDBPath = "/var/lib/resman/metrics.db"
 	// LegacyMetricsDBPath is rejected when default metrics persistence is enabled.
@@ -34,21 +38,25 @@ const (
 )
 
 type diskLayout struct {
-	defaultConfigPath string
-	legacyConfigPath  string
-	legacySavedPath   string
-	legacyBackupPath  string
-	defaultDBPath     string
-	legacyDBPath      string
+	defaultConfigPath  string
+	legacyConfigPath   string
+	legacySavedPath    string
+	legacyBackupPath   string
+	legacyTempPath     string
+	legacyBackupPrefix string
+	defaultDBPath      string
+	legacyDBPath       string
 }
 
 var defaultDiskLayout = diskLayout{
-	defaultConfigPath: DefaultConfigPath,
-	legacyConfigPath:  LegacyConfigPath,
-	legacySavedPath:   LegacyConfigSavedPath,
-	legacyBackupPath:  LegacyConfigBackupPath,
-	defaultDBPath:     DefaultMetricsDBPath,
-	legacyDBPath:      LegacyMetricsDBPath,
+	defaultConfigPath:  DefaultConfigPath,
+	legacyConfigPath:   LegacyConfigPath,
+	legacySavedPath:    LegacyConfigSavedPath,
+	legacyBackupPath:   LegacyConfigBackupPath,
+	legacyTempPath:     LegacyConfigTempPath,
+	legacyBackupPrefix: LegacyConfigTimestampedBackupPrefix,
+	defaultDBPath:      DefaultMetricsDBPath,
+	legacyDBPath:       LegacyMetricsDBPath,
 }
 
 func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
@@ -67,12 +75,21 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	if err != nil {
 		return fmt.Errorf("inspecting legacy configuration backup path %s: %w", layout.legacyBackupPath, err)
 	}
-	if !configExists && !savedExists && !backupExists {
+	tempExists, err := pathEntryExists(layout.legacyTempPath)
+	if err != nil {
+		return fmt.Errorf("inspecting legacy configuration temporary path %s: %w", layout.legacyTempPath, err)
+	}
+	timestampedBackups, err := matchingLegacyPaths(layout.legacyBackupPrefix)
+	if err != nil {
+		return fmt.Errorf("inspecting timestamped legacy configuration backups %s*: %w", layout.legacyBackupPrefix, err)
+	}
+	if !configExists && !savedExists && !backupExists && !tempExists && len(timestampedBackups) == 0 {
 		return nil
 	}
-	legacyPaths := make([]string, 0, 3)
+	legacyPaths := make([]string, 0, 4+len(timestampedBackups))
 	actions := make([]string, 0, 2)
 	authoredSources := make([]string, 0, 2)
+	secretArtifacts := make([]string, 0, 2+len(timestampedBackups))
 	if configExists {
 		legacyPaths = append(legacyPaths, layout.legacyConfigPath)
 		authoredSources = append(authoredSources, layout.legacyConfigPath)
@@ -90,7 +107,19 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	}
 	if backupExists {
 		legacyPaths = append(legacyPaths, layout.legacyBackupPath)
-		actions = append(actions, fmt.Sprintf("securely remove the orphaned secret-bearing backup %s", layout.legacyBackupPath))
+		secretArtifacts = append(secretArtifacts, layout.legacyBackupPath)
+	}
+	if tempExists {
+		legacyPaths = append(legacyPaths, layout.legacyTempPath)
+		secretArtifacts = append(secretArtifacts, layout.legacyTempPath)
+	}
+	legacyPaths = append(legacyPaths, timestampedBackups...)
+	secretArtifacts = append(secretArtifacts, timestampedBackups...)
+	if len(secretArtifacts) > 0 {
+		actions = append(actions, fmt.Sprintf(
+			"after recovering any needed configuration, securely remove the orphaned secret-bearing artifacts %s",
+			strings.Join(secretArtifacts, ", "),
+		))
 	}
 	return fmt.Errorf(
 		"legacy configuration artifacts exist at %s while the default path is %s; stop resman, %s, and restart",
@@ -98,6 +127,26 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 		layout.defaultConfigPath,
 		strings.Join(actions, "; "),
 	)
+}
+
+func matchingLegacyPaths(prefix string) ([]string, error) {
+	dir := filepath.Dir(prefix)
+	basePrefix := filepath.Base(prefix)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	paths := make([]string, 0)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), basePrefix) {
+			paths = append(paths, filepath.Join(dir, entry.Name()))
+		}
+	}
+	return paths, nil
 }
 
 func rejectLegacyMetricsDBAtDefault(cfg *Config, layout diskLayout) error {
