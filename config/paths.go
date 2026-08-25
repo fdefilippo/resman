@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	legacyBackupExampleLimit = 3
+
 	// DefaultConfigPath is the authoritative operator-authored configuration path.
 	DefaultConfigPath = "/etc/resman/resman.conf"
 	// LegacyConfigPath is rejected at the default-path startup boundary.
@@ -86,10 +88,10 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	if !configExists && !savedExists && !backupExists && !tempExists && len(timestampedBackups) == 0 {
 		return nil
 	}
-	legacyPaths := make([]string, 0, 4+len(timestampedBackups))
+	legacyPaths := make([]string, 0, 5)
 	actions := make([]string, 0, 2)
 	authoredSources := make([]string, 0, 2)
-	secretArtifacts := make([]string, 0, 2+len(timestampedBackups))
+	secretArtifactsDetected := false
 	if configExists {
 		legacyPaths = append(legacyPaths, layout.legacyConfigPath)
 		authoredSources = append(authoredSources, layout.legacyConfigPath)
@@ -107,19 +109,18 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	}
 	if backupExists {
 		legacyPaths = append(legacyPaths, layout.legacyBackupPath)
-		secretArtifacts = append(secretArtifacts, layout.legacyBackupPath)
+		secretArtifactsDetected = true
 	}
 	if tempExists {
 		legacyPaths = append(legacyPaths, layout.legacyTempPath)
-		secretArtifacts = append(secretArtifacts, layout.legacyTempPath)
+		secretArtifactsDetected = true
 	}
-	legacyPaths = append(legacyPaths, timestampedBackups...)
-	secretArtifacts = append(secretArtifacts, timestampedBackups...)
-	if len(secretArtifacts) > 0 {
-		actions = append(actions, fmt.Sprintf(
-			"after recovering any needed configuration, securely remove the orphaned secret-bearing artifacts %s",
-			strings.Join(secretArtifacts, ", "),
-		))
+	if len(timestampedBackups) > 0 {
+		legacyPaths = append(legacyPaths, summarizeTimestampedBackups(layout.legacyBackupPrefix, timestampedBackups))
+		secretArtifactsDetected = true
+	}
+	if secretArtifactsDetected {
+		actions = append(actions, "after recovering any needed configuration, securely remove every detected orphaned secret-bearing backup and temporary artifact")
 	}
 	return fmt.Errorf(
 		"legacy configuration artifacts exist at %s while the default path is %s; stop resman, %s, and restart",
@@ -127,6 +128,24 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 		layout.defaultConfigPath,
 		strings.Join(actions, "; "),
 	)
+}
+
+func summarizeTimestampedBackups(prefix string, paths []string) string {
+	examples := paths
+	if len(examples) > legacyBackupExampleLimit {
+		examples = examples[:legacyBackupExampleLimit]
+	}
+	summary := fmt.Sprintf(
+		"%d timestamped backup entries matching %s* (first %d: %s",
+		len(paths),
+		prefix,
+		len(examples),
+		strings.Join(examples, ", "),
+	)
+	if remaining := len(paths) - len(examples); remaining > 0 {
+		summary += fmt.Sprintf("; %d more", remaining)
+	}
+	return summary + ")"
 }
 
 func matchingLegacyPaths(prefix string) ([]string, error) {

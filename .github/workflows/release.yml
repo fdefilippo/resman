@@ -96,22 +96,39 @@ jobs:
           dpkg-deb --contents "$package"
           packaging/layout/verify-package-layout.sh "$package"
 
-          # A symlink has a target after " -> " in dpkg-deb --contents. Prove
-          # that the verifier checks the member path rather than that target.
+          # Prove every legacy-member rejection against a real mutated DEB.
           mutation_dir=$(mktemp -d /tmp/resman-deb-layout.XXXXXX)
           trap 'rm -rf -- "$mutation_dir"' EXIT
           dpkg-deb --raw-extract "$package" "$mutation_dir/package"
-          legacy_config=/etc/"resman.conf"
+
+          assert_mutation_rejected() {
+            mutation_name=$1
+            expected_error=$2
+            mutated_package="$mutation_dir/resman-$mutation_name.deb"
+            dpkg-deb --build --root-owner-group "$mutation_dir/package" "$mutated_package"
+            if mutation_output=$(packaging/layout/verify-package-layout.sh "$mutated_package" 2>&1); then
+              echo "$mutation_name unexpectedly passed the package layout verifier" >&2
+              exit 1
+            fi
+            case "$mutation_output" in
+              *"$expected_error"*) ;;
+              *) echo "$mutation_output" >&2; exit 1 ;;
+            esac
+          }
+
+          legacy_config=/etc/resman.conf
           ln -s /etc/resman/resman.conf "$mutation_dir/package$legacy_config"
-          dpkg-deb --build --root-owner-group "$mutation_dir/package" "$mutation_dir/resman-mutated.deb"
-          if mutation_output=$(packaging/layout/verify-package-layout.sh "$mutation_dir/resman-mutated.deb" 2>&1); then
-            echo "legacy symlink mutation unexpectedly passed the package layout verifier" >&2
-            exit 1
-          fi
-          case "$mutation_output" in
-            *"package layout retained legacy path: $legacy_config"*) ;;
-            *) echo "$mutation_output" >&2; exit 1 ;;
-          esac
+          assert_mutation_rejected legacy-symlink "package layout retained legacy path: $legacy_config"
+          rm -f -- "$mutation_dir/package$legacy_config"
+
+          legacy_temp=/etc/resman.conf.tmp
+          install -m 0600 /dev/null "$mutation_dir/package$legacy_temp"
+          assert_mutation_rejected legacy-temp "package layout retained legacy path: $legacy_temp"
+          rm -f -- "$mutation_dir/package$legacy_temp"
+
+          legacy_timestamped_backup=/etc/resman.conf.backup_ci_mutation
+          install -m 0600 /dev/null "$mutation_dir/package$legacy_timestamped_backup"
+          assert_mutation_rejected legacy-timestamped-backup "package layout retained a legacy path beginning with: /etc/resman.conf.backup_"
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v4

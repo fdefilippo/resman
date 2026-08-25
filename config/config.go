@@ -1476,7 +1476,7 @@ func saveUserFilterSnapshot(
 		}
 	}
 
-	if err := removeLegacyConfigArtifacts(path); err != nil {
+	if err := removeLegacyConfigArtifactsBeside(path); err != nil {
 		return err
 	}
 

@@ -976,6 +976,7 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 		{name: "legacy backup only", selected: "default", createBackup: true, wantError: true},
 		{name: "legacy temporary only", selected: "default", createTemp: true, wantError: true},
 		{name: "multiple timestamped legacy backups", selected: "default", backupSuffixes: []string{"20260822020202", "20260822010101"}, wantError: true},
+		{name: "many timestamped legacy backups", selected: "default", backupSuffixes: []string{"06", "02", "05", "01", "04", "03"}, wantError: true},
 		{name: "dangling legacy backup", selected: "default", danglingLink: "backup", wantError: true},
 		{name: "dangling timestamped legacy backup", selected: "default", danglingLink: "timestamped", wantError: true},
 		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, createTemp: true, backupSuffixes: []string{"20260822030303"}, wantError: true},
@@ -1058,19 +1059,38 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 					!strings.Contains(err.Error(), "securely remove")) {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want secure backup removal", err)
 				}
+				if tt.createBackup && len(tt.backupSuffixes) == 0 && strings.Count(err.Error(), layout.legacyBackupPath) != 1 {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy backup path exactly once", err)
+				}
 				if tt.createTemp && !strings.Contains(err.Error(), layout.legacyTempPath) {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path", err)
 				}
-				for _, suffix := range tt.backupSuffixes {
-					if !strings.Contains(err.Error(), layout.legacyBackupPrefix+suffix) {
-						t.Fatalf("loadAndValidateWithLayout() error = %v, want timestamped backup suffix %q", err, suffix)
-					}
+				if tt.createTemp && strings.Count(err.Error(), layout.legacyTempPath) != 1 {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path exactly once", err)
 				}
-				if len(tt.backupSuffixes) == 2 {
-					first := strings.Index(err.Error(), layout.legacyBackupPrefix+"20260822010101")
-					second := strings.Index(err.Error(), layout.legacyBackupPrefix+"20260822020202")
-					if first < 0 || second < 0 || first >= second {
-						t.Fatalf("loadAndValidateWithLayout() error = %v, want timestamped paths in deterministic filename order", err)
+				if len(tt.backupSuffixes) > 0 {
+					sortedSuffixes := slices.Clone(tt.backupSuffixes)
+					slices.Sort(sortedSuffixes)
+					wantSummary := fmt.Sprintf("%d timestamped backup entries matching %s*", len(sortedSuffixes), layout.legacyBackupPrefix)
+					if !strings.Contains(err.Error(), wantSummary) {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want bounded summary %q", err, wantSummary)
+					}
+					previousIndex := -1
+					for i, suffix := range sortedSuffixes {
+						path := layout.legacyBackupPrefix + suffix
+						index := strings.Index(err.Error(), path)
+						if i < legacyBackupExampleLimit {
+							if index <= previousIndex || strings.Count(err.Error(), path) != 1 {
+								t.Fatalf("loadAndValidateWithLayout() error = %v, want unique deterministic example %q", err, path)
+							}
+							previousIndex = index
+						} else if index >= 0 {
+							t.Fatalf("loadAndValidateWithLayout() error = %v, want examples capped before %q", err, path)
+						}
+					}
+					if remaining := len(sortedSuffixes) - legacyBackupExampleLimit; remaining > 0 &&
+						!strings.Contains(err.Error(), fmt.Sprintf("%d more", remaining)) {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want omitted backup count %d", err, remaining)
 					}
 				}
 				if tt.danglingLink == "timestamped" && !strings.Contains(err.Error(), layout.legacyBackupPrefix+"20260822050505") {

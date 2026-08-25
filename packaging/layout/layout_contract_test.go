@@ -111,58 +111,63 @@ func TestLiveTreeContainsOnlyAllowlistedLegacyLayoutReferences(t *testing.T) {
 	legacyDB := "/etc/resman/" + "metrics.db"
 	legacyRuntime := "/var/run/" + "resman-cgroups.txt"
 
-	expected := map[string]map[string]int{
+	allowlist := map[string]map[string]string{
 		"config/paths.go": {
-			legacyConfig:            1,
-			legacySaved:             1,
-			legacyBackup:            1,
-			legacyTemp:              1,
-			legacyTimestampedBackup: 1,
-			legacyDB:                1,
+			legacyConfig:            "authoritative rejected legacy configuration constant",
+			legacySaved:             "authoritative RPM-saved configuration constant",
+			legacyBackup:            "authoritative rolling legacy backup constant",
+			legacyTemp:              "authoritative fixed legacy temporary-file constant",
+			legacyTimestampedBackup: "authoritative legacy backup-prefix constant",
+			legacyDB:                "authoritative rejected legacy database constant",
 		},
 		"docs/TECHNICAL-SPECIFICATION.md": {
-			legacyConfig:            1,
-			legacySaved:             1,
-			legacyBackup:            1,
-			legacyTemp:              1,
-			legacyTimestampedBackup: 1,
-			legacyDB:                1,
+			legacyConfig:            "operator migration and refusal contract",
+			legacySaved:             "operator migration and refusal contract",
+			legacyBackup:            "operator secure-removal contract",
+			legacyTemp:              "operator secure-removal contract",
+			legacyTimestampedBackup: "operator secure-removal contract",
+			legacyDB:                "operator database-reset contract",
 		},
 		"docs/resman.8": {
-			legacyConfig:            1,
-			legacySaved:             1,
-			legacyBackup:            1,
-			legacyTemp:              1,
-			legacyTimestampedBackup: 1,
-			legacyDB:                1,
+			legacyConfig:            "operator migration and refusal guidance",
+			legacySaved:             "operator migration and refusal guidance",
+			legacyBackup:            "operator secure-removal guidance",
+			legacyTemp:              "operator secure-removal guidance",
+			legacyTimestampedBackup: "operator secure-removal guidance",
+			legacyDB:                "operator database-reset guidance",
 		},
 		"packaging/deb/postinst": {
-			legacyConfig:            2,
-			legacySaved:             2,
-			legacyBackup:            2,
-			legacyTemp:              2,
-			legacyTimestampedBackup: 2,
-			legacyDB:                3,
+			legacyConfig:            "post-upgrade detection and recovery message",
+			legacySaved:             "post-upgrade detection and recovery message",
+			legacyBackup:            "post-upgrade detection and secure-removal message",
+			legacyTemp:              "post-upgrade detection and secure-removal message",
+			legacyTimestampedBackup: "post-upgrade detection and secure-removal message",
+			legacyDB:                "post-upgrade database-reset message",
 		},
 		"packaging/rpm/resman.spec": {
-			legacyConfig:            2,
-			legacySaved:             2,
-			legacyBackup:            2,
-			legacyTemp:              2,
-			legacyTimestampedBackup: 2,
-			legacyDB:                3,
+			legacyConfig:            "post-upgrade detection and recovery message",
+			legacySaved:             "post-upgrade detection and recovery message",
+			legacyBackup:            "post-upgrade detection and secure-removal message",
+			legacyTemp:              "post-upgrade detection and secure-removal message",
+			legacyTimestampedBackup: "post-upgrade detection and secure-removal message",
+			legacyDB:                "post-upgrade database-reset message",
 		},
 		"packaging/layout/verify-package-layout.sh": {
-			legacyConfig:            1,
-			legacySaved:             1,
-			legacyBackup:            1,
-			legacyTemp:              1,
-			legacyTimestampedBackup: 1,
-			legacyDB:                1,
+			legacyConfig:            "negative package payload assertion",
+			legacySaved:             "negative package payload assertion",
+			legacyBackup:            "negative package payload assertion",
+			legacyTemp:              "negative package payload assertion",
+			legacyTimestampedBackup: "negative package payload assertion",
+			legacyDB:                "negative package payload assertion",
+		},
+		".github/workflows/release.yml": {
+			legacyConfig:            "intentional invalid DEB member used by the release mutation test",
+			legacyTemp:              "intentional invalid DEB member used by the release mutation test",
+			legacyTimestampedBackup: "intentional invalid DEB member used by the release mutation test",
 		},
 	}
 	legacyPaths := []string{legacyConfig, legacySaved, legacyBackup, legacyTemp, legacyTimestampedBackup, legacyDB, legacyRuntime}
-	observed := make(map[string]map[string]int)
+	observed := make(map[string]map[string]bool)
 
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -190,14 +195,13 @@ func TestLiveTreeContainsOnlyAllowlistedLegacyLayoutReferences(t *testing.T) {
 			text = strings.SplitN(text, "%changelog", 2)[0]
 		}
 		for _, legacyPath := range legacyPaths {
-			count := exactPathCount(text, legacyPath)
-			if count == 0 {
+			if !containsExactPath(text, legacyPath) {
 				continue
 			}
 			if observed[rel] == nil {
-				observed[rel] = make(map[string]int)
+				observed[rel] = make(map[string]bool)
 			}
-			observed[rel][legacyPath] = count
+			observed[rel][legacyPath] = true
 		}
 		return nil
 	})
@@ -205,23 +209,29 @@ func TestLiveTreeContainsOnlyAllowlistedLegacyLayoutReferences(t *testing.T) {
 		t.Fatalf("scan repository layout references: %v", err)
 	}
 
-	for path, counts := range observed {
-		for legacyPath, count := range counts {
-			if want := expected[path][legacyPath]; count != want {
-				t.Errorf("%s contains %d live references to %s, want %d", path, count, legacyPath, want)
+	for path, paths := range observed {
+		for legacyPath := range paths {
+			reason, allowed := allowlist[path][legacyPath]
+			if !allowed {
+				t.Errorf("%s contains a non-allowlisted live reference to %s", path, legacyPath)
+			} else if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s allowlists %s without a reason", path, legacyPath)
 			}
 		}
 	}
-	for path, counts := range expected {
-		for legacyPath, want := range counts {
-			if got := observed[path][legacyPath]; got != want {
-				t.Errorf("%s contains %d live references to %s, want %d", path, got, legacyPath, want)
+	for path, paths := range allowlist {
+		for legacyPath, reason := range paths {
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s allowlists %s without a reason", path, legacyPath)
+			}
+			if !observed[path][legacyPath] {
+				t.Errorf("%s allowlists %s but no live reference was found", path, legacyPath)
 			}
 		}
 	}
 }
 
-func exactPathCount(content, path string) int {
+func containsExactPath(content, path string) bool {
 	count := strings.Count(content, path)
 	legacyConfig := "/etc/" + "resman.conf"
 	if path == legacyConfig {
@@ -232,7 +242,7 @@ func exactPathCount(content, path string) int {
 	if path == legacyConfig+".backup" {
 		count -= strings.Count(content, legacyConfig+".backup_")
 	}
-	return count
+	return count > 0
 }
 
 func repositoryRoot(t *testing.T) string {

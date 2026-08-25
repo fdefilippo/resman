@@ -532,9 +532,12 @@ func TestSaveToFileSecurityContract(t *testing.T) {
 	}
 }
 
-func TestSaveToFileKeepsOneRollingBackupAndPrunesLegacyArtifacts(t *testing.T) {
+func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "resman.conf")
+	path := filepath.Join(dir, "custom", "resman.conf")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatalf("os.MkdirAll(custom config parent) error = %v", err)
+	}
 	original := "MCP_AUTH_TOKEN=first-secret\nUSER_INCLUDE_LIST=^first$\n"
 	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
 		t.Fatalf("os.WriteFile(config) error = %v", err)
