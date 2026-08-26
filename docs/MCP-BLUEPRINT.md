@@ -58,7 +58,7 @@ mcp/
 | `get_user_metrics` | Get metrics for specific user(s) | `uids` (optional), `username` (optional) | Per-user CPU%, memory, process count |
 | `get_active_users` | List all active non-system users | None | List of UIDs with usernames |
 | `get_limits_status` | Check if CPU limits are currently active | None | Boolean, applied time, affected users |
-| `get_cgroup_info` | Get cgroup details for a user | `uid` (required) | Cgroup path, CPU quota, weight |
+| `get_cgroup_info` | Get cgroup details for a user | `uid` (required) | Typed CPU and memory interface values with explicit availability |
 | `get_configuration` | Get current configuration | None | Full config as JSON |
 | `get_control_history` | Get recent control cycle history | `limit` (int, optional) | Last N control cycles |
 | `get_cpu_report` | Generate comprehensive CPU report | None | Formatted text report |
@@ -82,6 +82,10 @@ mcp/
 | `resman://limits/status` | Current limits status |
 | `resman://config` | Current configuration |
 | `resman://cgroups/{uid}` | Cgroup info for user |
+
+The cgroup tool and resource expose availability separately from each raw interface
+value. An unreadable interface is absent with its corresponding `*_available` field set
+to `false`; an empty string is never an alias for `max`.
 
 ### 3. Prompts (Pre-built queries for AI)
 

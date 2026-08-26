@@ -270,7 +270,7 @@ func (s *Server) handleCgroupResource(ctx context.Context, req *mcp.ReadResource
 			{
 				URI:      req.Params.URI,
 				MIMEType: "application/json",
-				Text:     toJSON(info),
+				Text:     toJSON(newCgroupResourcePayload(info)),
 			},
 		},
 	}, nil

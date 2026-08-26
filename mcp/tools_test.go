@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -611,10 +612,10 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 }
 
 func TestExtractCgroupMemoryMetrics(t *testing.T) {
-	current, hasCurrent, max, high := extractCgroupMemoryMetrics(map[string]string{
-		"memory.current": "1048576",
-		"memory.max":     "max",
-		"memory.high":    "2097152",
+	current, hasCurrent, max, high := extractCgroupMemoryMetrics(cgroup.CgroupInfo{
+		MemoryCurrent: cgroup.CgroupFileValue{Value: "1048576", Available: true},
+		MemoryMax:     cgroup.CgroupFileValue{Value: "max", Available: true},
+		MemoryHigh:    cgroup.CgroupFileValue{Value: "2097152", Available: true},
 	})
 
 	if !hasCurrent || current != 1048576 {

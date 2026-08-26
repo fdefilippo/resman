@@ -479,6 +479,12 @@ controller.
 - `resman://users/{uid}/metrics` - Per-user metrics
 - `resman://cgroups/{uid}` - Cgroup information
 
+The cgroup tool and resource expose `cpu.max`, `cpu.weight`, `memory.current`,
+`memory.max`, and `memory.high` through a typed internal contract. Each public value is
+paired with an explicit `*_available` boolean. An unreadable interface is omitted with
+availability `false`; consumers must not reinterpret an empty value as an unlimited
+limit.
+
 **Prompts (3 pre-built):**
 - `system-health` - Quick health check with assessment
 - `user-analysis` - User resource analysis table

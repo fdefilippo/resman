@@ -1,4 +1,1 @@
 # literal key | sorted package names | classification | reason
-path | cgroup,mcp | known | resman-4pw.50 replaces GetCgroupInfo map keys with a typed DTO.
-cpu.max | cgroup,mcp | known | resman-4pw.50 replaces GetCgroupInfo map keys with a typed DTO.
-cpu.weight | cgroup,mcp | known | resman-4pw.50 replaces GetCgroupInfo map keys with a typed DTO.

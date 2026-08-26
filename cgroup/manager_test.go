@@ -636,8 +636,8 @@ func TestGetCgroupInfo(t *testing.T) {
 	if err == nil {
 		t.Log("GetCgroupInfo() should error for non-existent cgroup")
 	}
-	if info != nil {
-		t.Error("GetCgroupInfo() should return nil for non-existent cgroup")
+	if info != (CgroupInfo{}) {
+		t.Errorf("GetCgroupInfo() = %#v, want zero value for non-existent cgroup", info)
 	}
 }
 
@@ -667,10 +667,60 @@ func TestGetCgroupInfoIncludesMemoryValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCgroupInfo() error = %v", err)
 	}
-	for name, want := range values {
-		if got := info[name]; got != want {
-			t.Errorf("GetCgroupInfo()[%q] = %q, want %q", name, got, want)
-		}
+	if info.Path != cgroupPath {
+		t.Errorf("Path = %q, want %q", info.Path, cgroupPath)
+	}
+	tests := []struct {
+		name  string
+		value CgroupFileValue
+		want  string
+	}{
+		{name: "CPU quota", value: info.CPUQuota, want: values["cpu.max"]},
+		{name: "CPU weight", value: info.CPUWeight, want: values["cpu.weight"]},
+		{name: "memory current", value: info.MemoryCurrent, want: values["memory.current"]},
+		{name: "memory max", value: info.MemoryMax, want: values["memory.max"]},
+		{name: "memory high", value: info.MemoryHigh, want: values["memory.high"]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.value.Available || tt.value.Value != tt.want {
+				t.Errorf("value = %#v, want available value %q", tt.value, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetCgroupInfoReportsUnavailableInterfaces(t *testing.T) {
+	cgroupPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cgroupPath, "cpu.max"), []byte("max 100000"), 0644); err != nil {
+		t.Fatalf("write cpu.max fixture: %v", err)
+	}
+	manager := &Manager{
+		cfg:            config.DefaultConfig(),
+		createdCgroups: map[int]string{1000: cgroupPath},
+	}
+
+	info, err := manager.GetCgroupInfo(1000)
+	if err != nil {
+		t.Fatalf("GetCgroupInfo() error = %v", err)
+	}
+	if !info.CPUQuota.Available || info.CPUQuota.Value != "max 100000" {
+		t.Errorf("CPUQuota = %#v, want available fixture value", info.CPUQuota)
+	}
+	for _, tt := range []struct {
+		name  string
+		value CgroupFileValue
+	}{
+		{name: "CPU weight", value: info.CPUWeight},
+		{name: "memory current", value: info.MemoryCurrent},
+		{name: "memory max", value: info.MemoryMax},
+		{name: "memory high", value: info.MemoryHigh},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value.Available || tt.value.Value != "" {
+				t.Errorf("value = %#v, want explicit unavailable zero value", tt.value)
+			}
+		})
 	}
 }
 

@@ -68,13 +68,19 @@ type serverLogger interface {
 	Error(string, ...interface{})
 }
 
+type cgroupInfoReader interface {
+	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
+	GetMemoryHighEvents(uid int) (uint64, error)
+	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
+}
+
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer         *mcp.Server
 	cfg               *config.MCPServerConfig
 	stateManager      *state.Manager
 	metricsCollector  *metrics.Collector
-	cgroupManager     *cgroup.Manager
+	cgroupManager     cgroupInfoReader
 	dbManager         *database.DatabaseManager
 	configReloader    ConfigurationReloader
 	logger            serverLogger

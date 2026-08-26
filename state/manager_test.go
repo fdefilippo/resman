@@ -182,8 +182,10 @@ func (m *mockCgroupManager) CreateSharedCgroup() (string, error)                
 func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error      { return nil }
 func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
 func (m *mockCgroupManager) CleanupAll() error                                        { return nil }
-func (m *mockCgroupManager) GetCgroupInfo(uid int) (map[string]string, error)         { return nil, nil }
-func (m *mockCgroupManager) GetCreatedCgroups() []int                                 { return nil }
+func (m *mockCgroupManager) GetCgroupInfo(uid int) (cgroup.CgroupInfo, error) {
+	return cgroup.CgroupInfo{}, nil
+}
+func (m *mockCgroupManager) GetCreatedCgroups() []int { return nil }
 
 type moveResultCgroupManager struct {
 	mockCgroupManager

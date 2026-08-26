@@ -1037,6 +1037,14 @@ resman://users/{uid}/metrics
 .IP \(bu
 resman://cgroups/{uid}
 .PP
+The
+.B get_cgroup_info
+tool and the cgroup resource pair each CPU and memory cgroup interface value with an
+explicit
+.B *_available
+boolean. If an interface cannot be read, its value is omitted and availability is
+false; clients must not treat an empty value as an unlimited limit.
+.PP
 Example MCP configuration:
 .RS
 .IP \(bu 2

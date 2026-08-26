@@ -200,35 +200,45 @@ func (m *Manager) GetCreatedCgroups() []int {
 	return uids
 }
 
-// GetCgroupInfo restituisce informazioni su un cgroup specifico.
-func (m *Manager) GetCgroupInfo(uid int) (map[string]string, error) {
+// CgroupFileValue reports the raw value and readability of one cgroup interface.
+type CgroupFileValue struct {
+	Value     string
+	Available bool
+}
+
+// CgroupInfo is the typed observation contract for a managed user cgroup.
+type CgroupInfo struct {
+	Path          string
+	CPUQuota      CgroupFileValue
+	CPUWeight     CgroupFileValue
+	MemoryCurrent CgroupFileValue
+	MemoryMax     CgroupFileValue
+	MemoryHigh    CgroupFileValue
+}
+
+// GetCgroupInfo returns typed information about a managed user cgroup.
+func (m *Manager) GetCgroupInfo(uid int) (CgroupInfo, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
-		return nil, fmt.Errorf("cgroup for UID %d not found", uid)
+		return CgroupInfo{}, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
-	info := make(map[string]string)
-	info["path"] = cgroupPath
+	return CgroupInfo{
+		Path:          cgroupPath,
+		CPUQuota:      readCgroupFileValue(filepath.Join(cgroupPath, "cpu.max")),
+		CPUWeight:     readCgroupFileValue(filepath.Join(cgroupPath, "cpu.weight")),
+		MemoryCurrent: readCgroupFileValue(filepath.Join(cgroupPath, "memory.current")),
+		MemoryMax:     readCgroupFileValue(filepath.Join(cgroupPath, "memory.max")),
+		MemoryHigh:    readCgroupFileValue(filepath.Join(cgroupPath, "memory.high")),
+	}, nil
+}
 
-	// Leggi il limite CPU corrente
-	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
-	if data, err := os.ReadFile(cpuMaxFile); err == nil {
-		info["cpu.max"] = strings.TrimSpace(string(data))
+func readCgroupFileValue(path string) CgroupFileValue {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CgroupFileValue{}
 	}
-
-	// Leggi il peso CPU corrente
-	cpuWeightFile := filepath.Join(cgroupPath, "cpu.weight")
-	if data, err := os.ReadFile(cpuWeightFile); err == nil {
-		info["cpu.weight"] = strings.TrimSpace(string(data))
-	}
-
-	for _, name := range []string{"memory.current", "memory.max", "memory.high"} {
-		if data, err := os.ReadFile(filepath.Join(cgroupPath, name)); err == nil {
-			info[name] = strings.TrimSpace(string(data))
-		}
-	}
-
-	return info, nil
+	return CgroupFileValue{Value: strings.TrimSpace(string(data)), Available: true}
 }
 
 // GetUserCgroupMetrics legge tutte le metriche cgroup per un utente in una sola chiamata.

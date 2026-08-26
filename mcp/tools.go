@@ -24,7 +24,6 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -112,16 +111,23 @@ type GetCgroupInfoArgs struct {
 	UID int `json:"uid"`
 }
 
+// GetCgroupInfoResult reports cgroup values and their explicit availability.
 type GetCgroupInfoResult struct {
-	Path        string `json:"path"`
-	CPUQuota    string `json:"cpu_max"`
-	Weight      string `json:"cpu_weight"`
-	MemoryMax   string `json:"memory_max,omitempty"`
-	MemoryHigh  string `json:"memory_high,omitempty"`
-	IOReadBPS   string `json:"io_read_bps,omitempty"`
-	IOWriteBPS  string `json:"io_write_bps,omitempty"`
-	IOReadIOPS  string `json:"io_read_iops,omitempty"`
-	IOWriteIOPS string `json:"io_write_iops,omitempty"`
+	Path                   string `json:"path"`
+	CPUQuota               string `json:"cpu_max,omitempty"`
+	CPUQuotaAvailable      bool   `json:"cpu_max_available"`
+	CPUWeight              string `json:"cpu_weight,omitempty"`
+	CPUWeightAvailable     bool   `json:"cpu_weight_available"`
+	MemoryCurrent          string `json:"memory_current,omitempty"`
+	MemoryCurrentAvailable bool   `json:"memory_current_available"`
+	MemoryMax              string `json:"memory_max,omitempty"`
+	MemoryMaxAvailable     bool   `json:"memory_max_available"`
+	MemoryHigh             string `json:"memory_high,omitempty"`
+	MemoryHighAvailable    bool   `json:"memory_high_available"`
+	IOReadBPS              string `json:"io_read_bps,omitempty"`
+	IOWriteBPS             string `json:"io_write_bps,omitempty"`
+	IOReadIOPS             string `json:"io_read_iops,omitempty"`
+	IOWriteIOPS            string `json:"io_write_iops,omitempty"`
 }
 
 type userFilterKind string
@@ -1079,16 +1085,10 @@ func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolReque
 		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("failed to get cgroup info: %w", err)
 	}
 
-	result := GetCgroupInfoResult{
-		Path:       info["path"],
-		CPUQuota:   info["cpu.max"],
-		Weight:     info["cpu.weight"],
-		MemoryMax:  info["memory.max"],
-		MemoryHigh: info["memory.high"],
-	}
+	result := newCgroupInfoResult(info)
 
 	// Read IO limits from cgroup.
-	if cgroupPath, ok := info["path"]; ok && cgroupPath != "" {
+	if cgroupPath := info.Path; cgroupPath != "" {
 		if data, err := os.ReadFile(cgroupPath + "/io.max"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 			for _, line := range lines {
@@ -1421,11 +1421,6 @@ func totalCPUCapacityPercent(metrics resmanmetrics.ObservationMetrics) float64 {
 
 func totalSystemMemoryMB(metrics resmanmetrics.ObservationMetrics) float64 {
 	return metrics.TotalMemoryMB
-}
-
-func extractCgroupMemoryMetrics(info map[string]string) (uint64, bool, string, string) {
-	current, err := strconv.ParseUint(info["memory.current"], 10, 64)
-	return current, err == nil, info["memory.max"], info["memory.high"]
 }
 
 func activationResult(force, limitsActive bool, err error) ActivateLimitsResult {

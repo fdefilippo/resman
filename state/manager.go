@@ -175,7 +175,7 @@ type CgroupManager interface {
 	ApplySharedCPULimit(sharedPath string, quota string) error
 	CreateUserSubCgroup(uid int, sharedPath string) (string, error)
 	CleanupAll() error
-	GetCgroupInfo(uid int) (map[string]string, error)
+	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
 	GetCreatedCgroups() []int
 }
 
