@@ -1,0 +1,2 @@
+# key | Config field | classification | reason
+BLACKOUT | BlackoutSpec | allowed | The validated text is compiled into BlackoutTimeframes, which is the runtime-consumed representation.

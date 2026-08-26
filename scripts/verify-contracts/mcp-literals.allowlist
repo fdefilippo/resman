@@ -1,0 +1,3 @@
+# path | declaration or function | exact literal | classification | reason
+mcp/server.go | mcpSessionIDHeader | Mcp-Session-Id | allowed | Header name exists only so the stateless boundary can reject it explicitly.
+mcp/server.go | latestOnlyHTTPMiddleware | Mcp-Session-Id is not supported by the stateless MCP endpoint | allowed | Negative production boundary rejects session identifiers per request.

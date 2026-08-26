@@ -60,7 +60,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-preflight \
-	test-functional-smolvm-unit lint lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit verify-contracts lint lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -144,6 +144,12 @@ test-functional-smolvm-preflight:
 # Exercise the host-side harness contract without requiring KVM.
 test-functional-smolvm-unit:
 	test/functional/smolvm/host_test.sh
+
+# Verify mechanically checkable development-guide contracts.
+verify-contracts:
+	@echo "Verifying architectural contracts..."
+	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath)$$'
+	$(GO) run ./scripts/verify-contracts
 
 # Linting del codice.
 # Gate anti-regressione: --max-same-issues=0 e --max-issues-per-linter=0
@@ -424,6 +430,7 @@ help:
 	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
+	@echo "    verify-contracts - Verify mechanically checkable architectural contracts"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
 	@echo "    lint-install - Installa la versione pinnata di golangci-lint"
 	@echo "    fmt          - Formatta il codice"

@@ -768,22 +768,27 @@ A change is not done until every line is true:
 ## Mechanical checks
 
 Rules marked **[checkable]** are meant to be enforced by tooling rather than by
-reviewer memory. These checks are **not implemented yet**; they are tracked as
-`resman-4pw.17.1`, with pull-request wiring in `resman-4pw.17.2`.
+reviewer memory. Run them locally with `make verify-contracts`; pull-request wiring is
+tracked as `resman-4pw.17.2`.
 
-Planned as `make verify-contracts`:
+The checker uses Go syntax trees for source contracts and invokes `promtool` for shipped
+Prometheus files when the command is installed. A missing optional `promtool` emits a
+visible warning without skipping the other checks. Narrow exceptions live in the
+versioned allowlist files below `scripts/verify-contracts/`; stale allowlist entries
+fail the check, and an entry classified as a known violation must name its open issue.
 
 | Check | Rule | Approach |
 |---|---|---|
-| Every `config:"X"` key has a consumer outside `config/`, and unknown keys are rejected at load | 1, 5 | reflect over struct tags, grep field usage per package; assert `setConfigField` errors on unknown keys |
-| No cross-package string-literal map keys for known contracts | 6 | grep the known key set outside the constants file |
+| Every `config:"X"` key has a consumer outside `config/`, and unknown keys are rejected at load | 1, 5 | AST field/accessor scan plus focused loader tests |
+| No cross-package string-literal map keys for known contracts | 6 | AST scan of string map-index keys grouped by package |
 | Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
-| No `MCPGODEBUG`, `Mcp-Session-Id` storage, or pre-2026-07-28 revision strings | 11 | grep the tree, allowlist the rejection sites themselves |
+| go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | grep `9100\|9101\|cpu_manager\|cpu-manager` in `docs/`, `packaging/`, `scripts/`, excluding changelogs |
 | `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
 
-Until they exist, treat them as review checkpoints.
+Every failure reports `file:line` and exits non-zero. `KNOWN` lines remain successful
+only because the named issue owns the violation; they are intentionally visible.
 
 ---
 
