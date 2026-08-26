@@ -29,6 +29,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -113,21 +114,26 @@ type GetCgroupInfoArgs struct {
 
 // GetCgroupInfoResult reports cgroup values and their explicit availability.
 type GetCgroupInfoResult struct {
-	Path                   string `json:"path"`
-	CPUQuota               string `json:"cpu_max,omitempty"`
-	CPUQuotaAvailable      bool   `json:"cpu_max_available"`
-	CPUWeight              string `json:"cpu_weight,omitempty"`
-	CPUWeightAvailable     bool   `json:"cpu_weight_available"`
-	MemoryCurrent          string `json:"memory_current,omitempty"`
-	MemoryCurrentAvailable bool   `json:"memory_current_available"`
-	MemoryMax              string `json:"memory_max,omitempty"`
-	MemoryMaxAvailable     bool   `json:"memory_max_available"`
-	MemoryHigh             string `json:"memory_high,omitempty"`
-	MemoryHighAvailable    bool   `json:"memory_high_available"`
-	IOReadBPS              string `json:"io_read_bps,omitempty"`
-	IOWriteBPS             string `json:"io_write_bps,omitempty"`
-	IOReadIOPS             string `json:"io_read_iops,omitempty"`
-	IOWriteIOPS            string `json:"io_write_iops,omitempty"`
+	Path                           string                             `json:"path"`
+	CPUQuota                       string                             `json:"cpu_max,omitempty"`
+	CPUQuotaAvailable              bool                               `json:"cpu_max_available"`
+	CPUQuotaUnavailableReason      cgroup.CgroupFileUnavailableReason `json:"cpu_max_unavailable_reason,omitempty"`
+	CPUWeight                      string                             `json:"cpu_weight,omitempty"`
+	CPUWeightAvailable             bool                               `json:"cpu_weight_available"`
+	CPUWeightUnavailableReason     cgroup.CgroupFileUnavailableReason `json:"cpu_weight_unavailable_reason,omitempty"`
+	MemoryCurrent                  string                             `json:"memory_current,omitempty"`
+	MemoryCurrentAvailable         bool                               `json:"memory_current_available"`
+	MemoryCurrentUnavailableReason cgroup.CgroupFileUnavailableReason `json:"memory_current_unavailable_reason,omitempty"`
+	MemoryMax                      string                             `json:"memory_max,omitempty"`
+	MemoryMaxAvailable             bool                               `json:"memory_max_available"`
+	MemoryMaxUnavailableReason     cgroup.CgroupFileUnavailableReason `json:"memory_max_unavailable_reason,omitempty"`
+	MemoryHigh                     string                             `json:"memory_high,omitempty"`
+	MemoryHighAvailable            bool                               `json:"memory_high_available"`
+	MemoryHighUnavailableReason    cgroup.CgroupFileUnavailableReason `json:"memory_high_unavailable_reason,omitempty"`
+	IOReadBPS                      string                             `json:"io_read_bps,omitempty"`
+	IOWriteBPS                     string                             `json:"io_write_bps,omitempty"`
+	IOReadIOPS                     string                             `json:"io_read_iops,omitempty"`
+	IOWriteIOPS                    string                             `json:"io_write_iops,omitempty"`
 }
 
 type userFilterKind string

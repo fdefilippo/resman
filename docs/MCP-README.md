@@ -79,12 +79,23 @@ deactivation are omitted from discovery unless write operations are enabled.
 - `resman://users/{uid}/metrics` - Per-user metrics
 - `resman://cgroups/{uid}` - Cgroup information
 
+#### Cgroup interface availability
+
 `get_cgroup_info` and `resman://cgroups/{uid}` share one JSON schema. They expose the
 `cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high` interfaces as
 `cpu_max`, `cpu_weight`, `memory_current`, `memory_max`, and `memory_high`, each paired
 with an explicit `*_available` boolean. When an interface cannot be read, its value is
-omitted and the boolean is `false`; clients must not interpret an empty value as an
-unlimited setting.
+omitted, the boolean is `false`, and `*_unavailable_reason` contains one bounded reason.
+Clients must not interpret an empty or absent value as an unlimited setting.
+
+| Unavailable reason | Meaning | Operator action |
+|--------------------|---------|-----------------|
+| `not_present` | The interface or its managed cgroup does not exist. | Verify that the managed cgroup still exists. If the interface is required by the enabled configuration, repair/enable the corresponding `cpu` or `memory` controller in the delegated hierarchy and restart ResMan; an interface for a disabled feature may legitimately be absent. |
+| `permission_denied` | The daemon cannot read an existing interface. | Restore the documented root/delegation model and cgroup mount permissions; do not make individual interface files world-readable. |
+| `read_error` | The read failed for another bounded class, such as a transient kernel or cgroup-filesystem error. | Inspect the ResMan journal and kernel log, verify that the managed cgroup still exists, and investigate persistent cgroup-filesystem failures. |
+
+The reason never contains the attempted interface path or a raw error string. The
+existing `path` field continues to identify the managed cgroup itself.
 
 ### Prompts (3 pre-built queries)
 

@@ -474,8 +474,13 @@ The cgroup tool and resource share one JSON schema backed by a typed internal co
 They expose `cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high`
 as the underscore-named fields `cpu_max`, `cpu_weight`, `memory_current`, `memory_max`,
 and `memory_high`. Each value is paired with an explicit `*_available` boolean. An
-unreadable interface is omitted with availability `false`; consumers must not
-reinterpret an empty value as an unlimited limit.
+unreadable interface is omitted with availability `false` and a bounded
+`*_unavailable_reason`: `not_present`, `permission_denied`, or `read_error`. Available
+values omit that reason. The reason carries neither the attempted interface path nor raw
+error text; the existing `path` field still identifies the managed cgroup. Consumers
+must not reinterpret an empty value as an unlimited limit. The operator action for each
+reason is documented in
+[MCP-README](MCP-README.md#cgroup-interface-availability).
 
 **Prompts (3 pre-built):**
 - `system-health` - Quick health check with assessment
@@ -1291,7 +1296,7 @@ type CgroupManager interface {
     CreateSharedCgroup() (string, error)
     ApplySharedCPULimit(sharedPath string, quota string) error
     CleanupAll() error
-    GetCgroupInfo(uid int) (map[string]string, error)
+    GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
 }
 ```
 

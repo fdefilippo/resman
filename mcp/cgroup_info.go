@@ -8,17 +8,22 @@ import (
 
 func newCgroupInfoResult(info cgroup.CgroupInfo) GetCgroupInfoResult {
 	return GetCgroupInfoResult{
-		Path:                   info.Path,
-		CPUQuota:               availableCgroupValue(info.CPUQuota),
-		CPUQuotaAvailable:      info.CPUQuota.Available,
-		CPUWeight:              availableCgroupValue(info.CPUWeight),
-		CPUWeightAvailable:     info.CPUWeight.Available,
-		MemoryCurrent:          availableCgroupValue(info.MemoryCurrent),
-		MemoryCurrentAvailable: info.MemoryCurrent.Available,
-		MemoryMax:              availableCgroupValue(info.MemoryMax),
-		MemoryMaxAvailable:     info.MemoryMax.Available,
-		MemoryHigh:             availableCgroupValue(info.MemoryHigh),
-		MemoryHighAvailable:    info.MemoryHigh.Available,
+		Path:                           info.Path,
+		CPUQuota:                       availableCgroupValue(info.CPUQuota),
+		CPUQuotaAvailable:              info.CPUQuota.Available,
+		CPUQuotaUnavailableReason:      unavailableCgroupReason(info.CPUQuota),
+		CPUWeight:                      availableCgroupValue(info.CPUWeight),
+		CPUWeightAvailable:             info.CPUWeight.Available,
+		CPUWeightUnavailableReason:     unavailableCgroupReason(info.CPUWeight),
+		MemoryCurrent:                  availableCgroupValue(info.MemoryCurrent),
+		MemoryCurrentAvailable:         info.MemoryCurrent.Available,
+		MemoryCurrentUnavailableReason: unavailableCgroupReason(info.MemoryCurrent),
+		MemoryMax:                      availableCgroupValue(info.MemoryMax),
+		MemoryMaxAvailable:             info.MemoryMax.Available,
+		MemoryMaxUnavailableReason:     unavailableCgroupReason(info.MemoryMax),
+		MemoryHigh:                     availableCgroupValue(info.MemoryHigh),
+		MemoryHighAvailable:            info.MemoryHigh.Available,
+		MemoryHighUnavailableReason:    unavailableCgroupReason(info.MemoryHigh),
 	}
 }
 
@@ -27,6 +32,13 @@ func availableCgroupValue(value cgroup.CgroupFileValue) string {
 		return ""
 	}
 	return value.Value
+}
+
+func unavailableCgroupReason(value cgroup.CgroupFileValue) cgroup.CgroupFileUnavailableReason {
+	if value.Available {
+		return ""
+	}
+	return value.UnavailableReason
 }
 
 func extractCgroupMemoryMetrics(info cgroup.CgroupInfo) (uint64, bool, string, string) {

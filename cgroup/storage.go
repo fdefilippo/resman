@@ -2,6 +2,7 @@ package cgroup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -200,10 +201,20 @@ func (m *Manager) GetCreatedCgroups() []int {
 	return uids
 }
 
-// CgroupFileValue reports the raw value and readability of one cgroup interface.
+// CgroupFileUnavailableReason classifies why a cgroup interface could not be read.
+type CgroupFileUnavailableReason string
+
+const (
+	CgroupFileNotPresent       CgroupFileUnavailableReason = "not_present"
+	CgroupFilePermissionDenied CgroupFileUnavailableReason = "permission_denied"
+	CgroupFileReadError        CgroupFileUnavailableReason = "read_error"
+)
+
+// CgroupFileValue reports the raw value, readability, and bounded failure reason of one cgroup interface.
 type CgroupFileValue struct {
-	Value     string
-	Available bool
+	Value             string
+	Available         bool
+	UnavailableReason CgroupFileUnavailableReason
 }
 
 // CgroupInfo is the typed observation contract for a managed user cgroup.
@@ -222,23 +233,38 @@ func (m *Manager) GetCgroupInfo(uid int) (CgroupInfo, error) {
 	if !exists {
 		return CgroupInfo{}, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
+	readFile := m.readCgroupFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
 
 	return CgroupInfo{
 		Path:          cgroupPath,
-		CPUQuota:      readCgroupFileValue(filepath.Join(cgroupPath, "cpu.max")),
-		CPUWeight:     readCgroupFileValue(filepath.Join(cgroupPath, "cpu.weight")),
-		MemoryCurrent: readCgroupFileValue(filepath.Join(cgroupPath, "memory.current")),
-		MemoryMax:     readCgroupFileValue(filepath.Join(cgroupPath, "memory.max")),
-		MemoryHigh:    readCgroupFileValue(filepath.Join(cgroupPath, "memory.high")),
+		CPUQuota:      readCgroupFileValue(filepath.Join(cgroupPath, "cpu.max"), readFile),
+		CPUWeight:     readCgroupFileValue(filepath.Join(cgroupPath, "cpu.weight"), readFile),
+		MemoryCurrent: readCgroupFileValue(filepath.Join(cgroupPath, "memory.current"), readFile),
+		MemoryMax:     readCgroupFileValue(filepath.Join(cgroupPath, "memory.max"), readFile),
+		MemoryHigh:    readCgroupFileValue(filepath.Join(cgroupPath, "memory.high"), readFile),
 	}, nil
 }
 
-func readCgroupFileValue(path string) CgroupFileValue {
-	data, err := os.ReadFile(path)
+func readCgroupFileValue(path string, readFile func(string) ([]byte, error)) CgroupFileValue {
+	data, err := readFile(path)
 	if err != nil {
-		return CgroupFileValue{}
+		return CgroupFileValue{UnavailableReason: classifyCgroupFileReadError(err)}
 	}
 	return CgroupFileValue{Value: strings.TrimSpace(string(data)), Available: true}
+}
+
+func classifyCgroupFileReadError(err error) CgroupFileUnavailableReason {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return CgroupFileNotPresent
+	case errors.Is(err, os.ErrPermission):
+		return CgroupFilePermissionDenied
+	default:
+		return CgroupFileReadError
+	}
 }
 
 // GetUserCgroupMetrics legge tutte le metriche cgroup per un utente in una sola chiamata.

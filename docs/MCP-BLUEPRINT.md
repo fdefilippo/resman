@@ -69,8 +69,12 @@ blueprint describes the architecture and does not maintain a second tool list.
 
 The cgroup tool and resource share one underscore-named JSON schema and expose
 availability separately from each raw interface value. An unreadable interface is
-absent with its corresponding `*_available` field set to `false`; an empty string is
-never an alias for `max`.
+absent with its corresponding `*_available` field set to `false` and a bounded
+`*_unavailable_reason` of `not_present`, `permission_denied`, or `read_error`.
+An empty string is never an alias for `max`; the bounded reason contains neither the
+attempted interface path nor raw error text. The existing `path` field still identifies
+the managed cgroup. Operator remedies are maintained in
+[MCP-README](MCP-README.md#cgroup-interface-availability).
 
 ### 3. Prompts (Pre-built queries for AI)
 

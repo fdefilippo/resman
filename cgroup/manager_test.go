@@ -17,10 +17,12 @@
 package cgroup
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
@@ -683,7 +685,7 @@ func TestGetCgroupInfoIncludesMemoryValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !tt.value.Available || tt.value.Value != tt.want {
+			if !tt.value.Available || tt.value.Value != tt.want || tt.value.UnavailableReason != "" {
 				t.Errorf("value = %#v, want available value %q", tt.value, tt.want)
 			}
 		})
@@ -717,8 +719,64 @@ func TestGetCgroupInfoReportsUnavailableInterfaces(t *testing.T) {
 		{name: "memory high", value: info.MemoryHigh},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.value.Available || tt.value.Value != "" {
-				t.Errorf("value = %#v, want explicit unavailable zero value", tt.value)
+			if tt.value.Available || tt.value.Value != "" || tt.value.UnavailableReason != CgroupFileNotPresent {
+				t.Errorf("value = %#v, want unavailable reason %q", tt.value, CgroupFileNotPresent)
+			}
+		})
+	}
+}
+
+func TestGetCgroupInfoClassifiesBoundedUnavailableReasons(t *testing.T) {
+	tests := []struct {
+		name string
+		read func(string) ([]byte, error)
+		want CgroupFileValue
+	}{
+		{
+			name: "available",
+			read: func(string) ([]byte, error) { return []byte("  max 100000\n"), nil },
+			want: CgroupFileValue{Value: "max 100000", Available: true},
+		},
+		{
+			name: "not present",
+			read: func(path string) ([]byte, error) {
+				return nil, &os.PathError{Op: "read", Path: path, Err: syscall.ENOENT}
+			},
+			want: CgroupFileValue{UnavailableReason: CgroupFileNotPresent},
+		},
+		{
+			name: "permission denied",
+			read: func(path string) ([]byte, error) {
+				return nil, &os.PathError{Op: "read", Path: path, Err: syscall.EACCES}
+			},
+			want: CgroupFileValue{UnavailableReason: CgroupFilePermissionDenied},
+		},
+		{
+			name: "other read error",
+			read: func(string) ([]byte, error) { return nil, errors.New("device read failed at a sensitive path") },
+			want: CgroupFileValue{UnavailableReason: CgroupFileReadError},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &Manager{
+				cfg:            config.DefaultConfig(),
+				createdCgroups: map[int]string{1000: "/sensitive/cgroup/path"},
+				readCgroupFile: tt.read,
+			}
+			info, err := manager.GetCgroupInfo(1000)
+			if err != nil {
+				t.Fatalf("GetCgroupInfo() error = %v", err)
+			}
+			for name, got := range map[string]CgroupFileValue{
+				"cpu.max": info.CPUQuota, "cpu.weight": info.CPUWeight,
+				"memory.current": info.MemoryCurrent, "memory.max": info.MemoryMax,
+				"memory.high": info.MemoryHigh,
+			} {
+				if got != tt.want {
+					t.Errorf("%s = %#v, want %#v", name, got, tt.want)
+				}
 			}
 		})
 	}
