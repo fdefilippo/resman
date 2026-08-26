@@ -1,0 +1,36 @@
+name: Reusable quality gates
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install promtool
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes prometheus
+
+      - name: Install pinned golangci-lint
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          make lint-install
+
+      - name: Run shared quality gates
+        run: make ci-quality

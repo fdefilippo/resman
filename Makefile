@@ -60,7 +60,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-preflight \
-	test-functional-smolvm-unit verify-contracts lint lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit ci-quality ci-test verify-format verify-modules verify-contracts lint lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -96,6 +96,32 @@ static: deps
 # ============================================================================
 # TEST E QUALITÀ
 # ============================================================================
+
+# Run the authoritative quality-gate sequence used by pull requests and releases.
+ci-quality: verify-modules verify-format
+	@echo "Running CI quality gates..."
+	$(GO) build ./...
+	$(GO) vet ./...
+	$(MAKE) verify-contracts GO="$(GO)"
+	$(MAKE) ci-test GO="$(GO)"
+	$(MAKE) lint GO="$(GO)"
+
+# Run the race-enabled test command shared by CI and its mutation tests.
+ci-test:
+	$(GO) test -race -cover ./...
+
+# Fail when any tracked Go source is not gofmt-clean.
+verify-format:
+	@unformatted="$$(git ls-files -z -- '*.go' | xargs -0 -r gofmt -l)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following Go files are not formatted:" >&2; \
+		echo "$$unformatted" >&2; \
+		exit 1; \
+	fi
+
+# Verify dependencies and reject go.mod or go.sum changes produced by tidy.
+verify-modules: deps
+	git diff --exit-code -- go.mod go.sum
 
 # Esegui test unitari
 test: deps
@@ -430,6 +456,9 @@ help:
 	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
+	@echo "    ci-quality    - Run the quality gates shared by pull requests and releases"
+	@echo "    verify-format - Fail when tracked Go files are not gofmt-clean"
+	@echo "    verify-modules - Verify module files are tidy and unchanged"
 	@echo "    verify-contracts - Verify mechanically checkable architectural contracts"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
 	@echo "    lint-install - Installa la versione pinnata di golangci-lint"

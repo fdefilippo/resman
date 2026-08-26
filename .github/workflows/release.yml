@@ -13,18 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  quality:
-    name: Quality gates
+  validate-version:
+    name: Validate release version
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Validate release version
         shell: bash
@@ -49,20 +43,9 @@ jobs:
             exit 1
           fi
 
-      - name: Verify module files
-        run: |
-          go mod tidy
-          go mod verify
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Run tests with race detector
-        run: go test -race ./...
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.12.2
-          args: --max-same-issues=0 --max-issues-per-linter=0 ./...
+  quality:
+    needs: validate-version
+    uses: ./.github/workflows/quality.yml
 
   deb:
     name: Build DEB

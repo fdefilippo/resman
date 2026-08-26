@@ -768,8 +768,9 @@ A change is not done until every line is true:
 ## Mechanical checks
 
 Rules marked **[checkable]** are meant to be enforced by tooling rather than by
-reviewer memory. Run them locally with `make verify-contracts`; pull-request wiring is
-tracked as `resman-4pw.17.2`.
+reviewer memory. Run them locally with `make verify-contracts`. Pull requests, pushes
+to `main`, and release tags all execute the same `make ci-quality` definition through
+the reusable `.github/workflows/quality.yml` workflow.
 
 The checker uses Go syntax trees for source contracts and invokes `promtool` for shipped
 Prometheus files when the command is installed. A missing optional `promtool` emits a
