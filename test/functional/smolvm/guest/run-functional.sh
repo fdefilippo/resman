@@ -15,6 +15,8 @@ result_file=$artifact_dir/result
 mcp_pid=
 mcp_workload_pid=
 cpu_workload_pid=
+io_workload_pid=
+io_anchor_pid=
 container_workload_pid=
 container_name=
 container_log_dir=
@@ -36,7 +38,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime) ;;
+	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -79,6 +81,16 @@ finish() {
 		kill -TERM "$cpu_workload_pid" 2>/dev/null
 		wait "$cpu_workload_pid" 2>/dev/null
 		cpu_workload_pid=
+	fi
+	if [[ -n $io_workload_pid ]]; then
+		kill -TERM "$io_workload_pid" 2>/dev/null
+		wait "$io_workload_pid" 2>/dev/null
+		io_workload_pid=
+	fi
+	if [[ -n $io_anchor_pid ]]; then
+		kill -TERM "$io_anchor_pid" 2>/dev/null
+		wait "$io_anchor_pid" 2>/dev/null
+		io_anchor_pid=
 	fi
 	if [[ -n $container_name ]]; then
 		container_podman logs "$container_name" >"$artifact_dir/container-stdout.log" 2>"$artifact_dir/container-stderr.log"
@@ -158,6 +170,8 @@ controllers=$(< /sys/fs/cgroup/cgroup.controllers)
 required_controllers=(cpu)
 if [[ $scenario == resource-only || $scenario == missing-io-startup ]]; then
 	required_controllers+=(memory io)
+elif [[ $scenario == block-iops ]]; then
+	required_controllers+=(io)
 fi
 for controller in "${required_controllers[@]}"; do
     [[ " $controllers " == *" $controller "* ]] || blocked "required $controller controller is unavailable"
@@ -197,6 +211,9 @@ if [[ $scenario == resource-only ]]; then
 	[[ $memory_max_available == true ]] || blocked "memory controller is listed but memory.max is unavailable"
 	[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable"
 fi
+if [[ $scenario == block-iops ]]; then
+	[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable for the block IOPS scenario"
+fi
 if [[ $scenario == missing-io-startup ]]; then
 	[[ $memory_max_available == true ]] || blocked "memory.max is also unavailable; missing-io startup attribution would be ambiguous"
 	[[ $io_max_available == false ]] || blocked "io.max is available; the guest cannot exercise missing-interface startup rejection"
@@ -217,6 +234,15 @@ if [[ $scenario == cpu-without-cpuset ]]; then
 fi
 
 sed "s/@RUN_ID@/$run_id/g" /opt/resman-functional/fixtures/resman.conf >"$config_file"
+if [[ $scenario == block-iops ]]; then
+	sed -i \
+		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
+		-e 's/^IO_READ_BPS=.*/IO_READ_BPS=max/' \
+		-e 's/^IO_WRITE_BPS=.*/IO_WRITE_BPS=max/' \
+		-e 's/^IO_THRESHOLD=.*/IO_THRESHOLD=10/' \
+		-e 's/^IO_RELEASE_THRESHOLD=.*/IO_RELEASE_THRESHOLD=5/' \
+		"$config_file"
+fi
 if [[ $scenario == process-membership || $scenario == cpu-without-cpuset \
 	|| $scenario == container-runtime ]]; then
 	sed -i \
@@ -550,6 +576,116 @@ sqlite3 "$state_dir/metrics.db" '.schema' >"$artifact_dir/database-schema.sql" \
     || fail "SQLite metrics database is unreadable"
 base_cgroup=$functional_cgroup_root/resman-functional-$run_id
 [[ -d $base_cgroup ]] || fail "isolated cgroup root was not created"
+
+if [[ $scenario == block-iops ]]; then
+	io_uid=$(id -u resman-io)
+	io_cgroup=$base_cgroup/user_$io_uid
+	io_workdir=$state_dir/block-iops
+	install -d -o resman-io -g resman-io -m 0700 "$io_workdir"
+	dd if=/dev/zero of="$io_workdir/page-cache.bin" bs=1M count=256 status=none
+	chown resman-io:resman-io "$io_workdir/page-cache.bin"
+	cat "$io_workdir/page-cache.bin" >/dev/null
+
+	runuser -u resman-io -- sleep 120s &
+	io_anchor_pid=$!
+	for _ in $(seq 1 20); do
+		[[ -r $io_cgroup/io.stat && -r $io_cgroup/io.max ]] && break
+		sleep 1
+	done
+	[[ -r $io_cgroup/io.stat && -r $io_cgroup/io.max ]] \
+		|| fail "unlimited per-user block IOPS observation cgroup was not created"
+	# Allow one complete decision interval after the observation baseline.
+	sleep 6
+
+	runuser -u resman-io -- dd if="$io_workdir/page-cache.bin" of=/dev/null bs=1 status=none &
+	io_workload_pid=$!
+	page_cache_pid=
+	for _ in $(seq 1 30); do
+		page_cache_pid=$(pgrep -u resman-io -x dd | tail -n 1 || true)
+		[[ -n $page_cache_pid ]] && break
+		sleep 0.1
+	done
+	[[ -n $page_cache_pid ]] || fail "page-cache syscall workload did not start"
+	sleep 6
+	cat "/proc/$page_cache_pid/io" >"$artifact_dir/page-cache-proc-io.txt" \
+		|| fail "page-cache workload ended before its syscall counters were captured"
+	page_cache_syscalls=$(awk '/^syscr:/ {print $2}' "$artifact_dir/page-cache-proc-io.txt")
+	[[ ${page_cache_syscalls:-0} -gt 10000 ]] \
+		|| fail "page-cache workload did not prove a high read syscall rate"
+	if grep -Eq '(^|[[:space:]])(riops|wiops)=[0-9]+' "$io_cgroup/io.max"; then
+		fail "page-cache syscall activity triggered block IOPS enforcement"
+	fi
+	kill -TERM "$io_workload_pid" 2>/dev/null || true
+	wait "$io_workload_pid" 2>/dev/null || true
+	io_workload_pid=
+
+	read_io_stat() {
+		local counter=$1
+		awk -v counter="$counter" '
+			{ for (i = 2; i <= NF; i++) { split($i, field, "="); if (field[1] == counter) total += field[2] } }
+			END { print total + 0 }
+		' "$io_cgroup/io.stat"
+	}
+	write_before=$(read_io_stat wios)
+	runuser -u resman-io -- dd if=/dev/zero of="$io_workdir/direct.bin" \
+		bs=4096 count=512 oflag=direct conv=fsync status=none
+	write_after=$(read_io_stat wios)
+	[[ $write_after -gt $write_before ]] || fail "direct write did not increment io.stat wios"
+	write_limited=false
+	for _ in $(seq 1 20); do
+		if grep -Eq 'wiops=[0-9]+' "$io_cgroup/io.max" \
+			&& grep -q 'write_iops' "$state_dir/resman.log"; then
+			write_limited=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $write_limited == true ]] || fail "direct block writes did not trigger write IOPS enforcement"
+
+	limits_released=false
+	for _ in $(seq 1 40); do
+		if ! grep -Eq '(^|[[:space:]])(riops|wiops)=[0-9]+' "$io_cgroup/io.max"; then
+			limits_released=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $limits_released == true ]] || fail "write IOPS enforcement did not release before the read phase"
+
+	read_before=$(read_io_stat rios)
+	runuser -u resman-io -- dd if="$io_workdir/direct.bin" of=/dev/null \
+		bs=4096 iflag=direct status=none
+	read_after=$(read_io_stat rios)
+	[[ $read_after -gt $read_before ]] || fail "direct read did not increment io.stat rios"
+	read_limited=false
+	for _ in $(seq 1 20); do
+		if grep -Eq 'riops=[0-9]+' "$io_cgroup/io.max" \
+			&& grep -q 'read_iops' "$state_dir/resman.log"; then
+			read_limited=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $read_limited == true ]] || fail "direct block reads did not trigger read IOPS enforcement"
+
+	{
+		printf 'io_uid=%s\n' "$io_uid"
+		printf 'observation_cgroup=%s\n' "$io_cgroup"
+		printf 'page_cache_syscr=%s\n' "$page_cache_syscalls"
+		printf 'write_ops_before=%s\n' "$write_before"
+		printf 'write_ops_after=%s\n' "$write_after"
+		printf 'read_ops_before=%s\n' "$read_before"
+		printf 'read_ops_after=%s\n' "$read_after"
+		printf 'io_max=%s\n' "$(tr '\n' ';' <"$io_cgroup/io.max")"
+	} >"$artifact_dir/block-iops.txt"
+	kill -TERM "$io_anchor_pid" 2>/dev/null || true
+	wait "$io_anchor_pid" 2>/dev/null || true
+	io_anchor_pid=
+	result=PASS
+	detail="page-cache syscalls stayed observational while direct read and write operations triggered true block IOPS enforcement"
+	echo "PASS: $detail"
+	exit 0
+fi
 
 if [[ $scenario == cpu-without-cpuset ]]; then
 	/opt/resman-functional/workload.sh cpu 25s &

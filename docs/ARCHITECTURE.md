@@ -70,9 +70,12 @@ resman_user_io_read_ops_total{uid, username}
 resman_user_io_write_ops_total{uid, username}
 ```
 
-The `*_bytes_total` series report block-device traffic. For compatibility, the
-`*_ops_total` series retain their historical names but expose `/proc/PID/io`
-`syscr`/`syscw`: read/write-family syscall counts, not block-device IOPS.
+The `*_bytes_total` series report block-device traffic. The Prometheus
+`*_ops_total` series expose `/proc/PID/io` `syscr`/`syscw`: read/write-family
+syscall counts, not the block-device IOPS used for decisions. When an IOPS
+dimension is configured, the decision engine reads `rios`/`wios` from unlimited
+per-user observation cgroups and preserves a logical cumulative counter across
+enforcement placement changes.
 
 To show only limited users in dashboards, filter by `resman_user_cpu_limited{uid, username} == 1`.
 
@@ -81,16 +84,16 @@ To show only limited users in dashboards, filter by `resman_user_cpu_limited{uid
 ```
 /sys/fs/cgroup/                     ← root (controllers: cpu, cpuset, io)
   └── resman/                       ← base cgroup
-        ├── limited/                ← shared cgroup (CPU only)
+        ├── limited/               ← shared cgroup (CPU only)
         │     ├── user_1000/        ← per-user sub-cgroup
         │     └── user_1001/
-        ├── user_1000/              ← per-user cgroup (RAM, IO)
+        ├── user_1000/              ← IOPS observation; RAM/IO when active
         └── user_1001/
 ```
 
 - **CPU**: Uses shared cgroup `limited/` with proportional `cpu.weight`
 - **RAM**: Applied directly to per-user cgroup (`memory.max`, `memory.high`)
-- **IO**: Applied directly to per-user cgroup (`io.max`)
+- **IO**: Observed and applied directly in the current per-user cgroup (`io.stat`, `io.max`)
 
 ## Error Handling
 

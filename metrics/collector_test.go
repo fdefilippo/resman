@@ -501,7 +501,7 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 			if ema != 31 {
 				t.Fatalf("decision EMA after %d observation refreshes = %.1f, want 31", tt.observationCount, ema)
 			}
-			if ioDelta != (ProcessIODelta{ReadBytes: 400, WriteBytes: 600, ReadOps: 40, WriteOps: 60}) {
+			if ioDelta != (ProcessIODelta{ReadBytes: 400, WriteBytes: 600}) {
 				t.Fatalf("decision I/O delta after %d observation refreshes = %+v", tt.observationCount, ioDelta)
 			}
 		})
@@ -729,7 +729,7 @@ func TestUpdateProcessIOSampleGuardsCounterResetAndPIDReuse(t *testing.T) {
 		processIOCounters{readBytes: 150, writeBytes: 20, readOps: 50, writeOps: 80},
 		now.Add(time.Second),
 	)
-	if reset != (ProcessIODelta{ReadBytes: 50, ReadOps: 20, WriteOps: 40}) {
+	if reset != (ProcessIODelta{ReadBytes: 50}) {
 		t.Fatalf("counter-reset delta = %+v, want only monotonic dimensions", reset)
 	}
 

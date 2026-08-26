@@ -1,6 +1,7 @@
 package state
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,13 +51,13 @@ func TestMakeDecisionEvaluatesEveryIODimension(t *testing.T) {
 		{
 			name:         "read operations alone activate",
 			configure:    func(cfg *config.Config) { cfg.IOReadIOPS = 1000 },
-			metrics:      SystemMetrics{IOEligibleUsersCount: 1, IOEligibleReadSyscallsPerSecond: 800},
+			metrics:      SystemMetrics{IOEligibleUsersCount: 1, IOEligibleReadBlockIOPS: 800},
 			wantDecision: "ACTIVATE_LIMITS", wantReasonSignal: "read_iops",
 		},
 		{
 			name:         "write operations alone activate",
 			configure:    func(cfg *config.Config) { cfg.IOWriteIOPS = 1000 },
-			metrics:      SystemMetrics{IOEligibleUsersCount: 1, IOEligibleWriteSyscallsPerSecond: 800},
+			metrics:      SystemMetrics{IOEligibleUsersCount: 1, IOEligibleWriteBlockIOPS: 800},
 			wantDecision: "ACTIVATE_LIMITS", wantReasonSignal: "write_iops",
 		},
 		{
@@ -66,9 +67,9 @@ func TestMakeDecisionEvaluatesEveryIODimension(t *testing.T) {
 				cfg.IOWriteIOPS = 1000
 			},
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:             2,
-				IOEligibleReadBPS:                100 * 1024 * 1024,
-				IOEligibleWriteSyscallsPerSecond: 1600,
+				IOEligibleUsersCount:     2,
+				IOEligibleReadBPS:        100 * 1024 * 1024,
+				IOEligibleWriteBlockIOPS: 1600,
 			},
 			wantDecision: "ACTIVATE_LIMITS", wantReasonSignal: "write_iops",
 		},
@@ -76,20 +77,20 @@ func TestMakeDecisionEvaluatesEveryIODimension(t *testing.T) {
 			name:      "disabled dimensions are ignored independently",
 			configure: func(cfg *config.Config) { cfg.IOReadBPS = "100M" },
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:             1,
-				IOEligibleReadBPS:                50 * 1024 * 1024,
-				IOEligibleWriteBPS:               1000 * 1024 * 1024,
-				IOEligibleReadSyscallsPerSecond:  100000,
-				IOEligibleWriteSyscallsPerSecond: 100000,
+				IOEligibleUsersCount:     1,
+				IOEligibleReadBPS:        50 * 1024 * 1024,
+				IOEligibleWriteBPS:       1000 * 1024 * 1024,
+				IOEligibleReadBlockIOPS:  100000,
+				IOEligibleWriteBlockIOPS: 100000,
 			},
 			wantDecision: "MAINTAIN_CURRENT_STATE",
 		},
 		{
 			name: "no configured dimensions cannot activate",
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:             1,
-				IOEligibleReadBPS:                1000 * 1024 * 1024,
-				IOEligibleWriteSyscallsPerSecond: 100000,
+				IOEligibleUsersCount:     1,
+				IOEligibleReadBPS:        1000 * 1024 * 1024,
+				IOEligibleWriteBlockIOPS: 100000,
 			},
 			wantDecision: "MAINTAIN_CURRENT_STATE",
 		},
@@ -156,8 +157,8 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 			name:      "read operations at release threshold maintain",
 			configure: func(cfg *config.Config) { cfg.IOReadIOPS = 1000 },
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:            1,
-				IOEligibleReadSyscallsPerSecond: 400,
+				IOEligibleUsersCount:    1,
+				IOEligibleReadBlockIOPS: 400,
 			},
 			wantDecision: "MAINTAIN_CURRENT_STATE",
 		},
@@ -165,8 +166,8 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 			name:      "write operations at release threshold maintain",
 			configure: func(cfg *config.Config) { cfg.IOWriteIOPS = 1000 },
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:             1,
-				IOEligibleWriteSyscallsPerSecond: 400,
+				IOEligibleUsersCount:     1,
+				IOEligibleWriteBlockIOPS: 400,
 			},
 			wantDecision: "MAINTAIN_CURRENT_STATE",
 		},
@@ -177,9 +178,9 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 				cfg.IOWriteIOPS = 1000
 			},
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:             1,
-				IOEligibleReadBPS:                30 * 1024 * 1024,
-				IOEligibleWriteSyscallsPerSecond: 300,
+				IOEligibleUsersCount:     1,
+				IOEligibleReadBPS:        30 * 1024 * 1024,
+				IOEligibleWriteBlockIOPS: 300,
 			},
 			wantDecision: "DEACTIVATE_LIMITS",
 		},
@@ -187,10 +188,10 @@ func TestMakeDecisionReleasesIOOnlyWhenEveryConfiguredDimensionIsBelow(t *testin
 			name:      "disabled dimensions do not prevent release",
 			configure: func(cfg *config.Config) { cfg.IOReadBPS = "100M" },
 			metrics: SystemMetrics{
-				IOEligibleUsersCount:            1,
-				IOEligibleReadBPS:               30 * 1024 * 1024,
-				IOEligibleWriteBPS:              1000 * 1024 * 1024,
-				IOEligibleReadSyscallsPerSecond: 100000,
+				IOEligibleUsersCount:    1,
+				IOEligibleReadBPS:       30 * 1024 * 1024,
+				IOEligibleWriteBPS:      1000 * 1024 * 1024,
+				IOEligibleReadBlockIOPS: 100000,
 			},
 			wantDecision: "DEACTIVATE_LIMITS",
 		},
@@ -317,14 +318,14 @@ func TestMakeDecisionIOThresholdDurationAccumulatesAcrossCycles(t *testing.T) {
 	}
 }
 
-func TestCalculateIORatesHandlesEveryCounterIndependently(t *testing.T) {
-	delta := resmanmetrics.ProcessIODelta{ReadBytes: 200, WriteBytes: 100, ReadOps: 20, WriteOps: 40}
-	rates := calculateIORates(delta, 2*time.Second)
+func TestCalculateIOByteRatesHandlesEveryCounterIndependently(t *testing.T) {
+	delta := resmanmetrics.ProcessIODelta{ReadBytes: 200, WriteBytes: 100}
+	rates := calculateIOByteRates(delta, 2*time.Second)
 
-	if rates.readBytes != 100 || rates.writeBytes != 50 || rates.readOps != 10 || rates.writeOps != 20 {
-		t.Fatalf("calculateIORates() = %+v, want readBPS=100 writeBPS=50 readOpsPS=10 writeOpsPS=20", rates)
+	if rates.readBytes != 100 || rates.writeBytes != 50 {
+		t.Fatalf("calculateIOByteRates() = %+v, want readBPS=100 writeBPS=50", rates)
 	}
-	if got := calculateIORates(delta, 0); got != (ioCountersRate{}) {
+	if got := calculateIOByteRates(delta, 0); got != (ioByteRate{}) {
 		t.Fatalf("zero-duration rates = %+v, want zero", got)
 	}
 }
@@ -347,8 +348,42 @@ func TestByteRateLimitHandlesDisabledValuesPerDimension(t *testing.T) {
 	}
 }
 
-func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
+type blockIOSequenceCgroupManager struct {
+	mockCgroupManager
+	samples        []blockIOCounterSample
+	index          int
+	placements     []string
+	sharedReleases int
+}
+
+func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(_ int, sharedPath, _ string) (string, error) {
+	m.placements = append(m.placements, sharedPath)
+	return sharedPath, nil
+}
+
+func (m *blockIOSequenceCgroupManager) ReleaseUserFromSharedCgroup(_ int, _, _ string) error {
+	m.sharedReleases++
+	return nil
+}
+
+func (m *blockIOSequenceCgroupManager) GetIOStats(_ int) (uint64, uint64, uint64, uint64, error) {
+	if len(m.samples) == 0 {
+		return 0, 0, 0, 0, nil
+	}
+	index := m.index
+	if index >= len(m.samples) {
+		index = len(m.samples) - 1
+	}
+	m.index++
+	sample := m.samples[index]
+	return 0, 0, sample.readOps, sample.writeOps, nil
+}
+
+func TestCollectSystemMetricsBuildsByteRatesAndBlockIOPS(t *testing.T) {
 	cfg := config.DefaultConfig()
+	cfg.IOEnabled = true
+	cfg.IOReadIOPS = 1000
+	cfg.IOWriteIOPS = 1000
 	collector := &mockMetricsCollector{
 		preserveExplicitEnforceableUsage: true,
 		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
@@ -361,7 +396,11 @@ func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 			},
 		},
 	}
-	manager, err := NewManager(cfg, collector, &mockCgroupManager{}, &mockPrometheusExporter{})
+	cgroups := &blockIOSequenceCgroupManager{samples: []blockIOCounterSample{
+		{},
+		{readOps: 40, writeOps: 80},
+	}}
+	manager, err := NewManager(cfg, collector, cgroups, &mockPrometheusExporter{})
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
@@ -372,8 +411,6 @@ func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 	collector.allUserMetrics[1000].EnforceableUsage.IODelta = resmanmetrics.ProcessIODelta{
 		ReadBytes:  200,
 		WriteBytes: 400,
-		ReadOps:    40,
-		WriteOps:   80,
 	}
 	manager.prevIOTime = time.Now().Add(-2 * time.Second)
 	sample, err := manager.collectSystemMetrics()
@@ -382,13 +419,171 @@ func TestCollectSystemMetricsBuildsAllIORateSignals(t *testing.T) {
 	}
 
 	if sample.IOEligibleReadBPS < 99 || sample.IOEligibleWriteBPS < 199 ||
-		sample.IOEligibleReadSyscallsPerSecond < 19 || sample.IOEligibleWriteSyscallsPerSecond < 39 {
+		sample.IOEligibleReadBlockIOPS < 19 || sample.IOEligibleWriteBlockIOPS < 39 {
 		t.Fatalf("I/O rate sample = read %.1f BPS, write %.1f BPS, read %.1f ops/s, write %.1f ops/s",
 			sample.IOEligibleReadBPS,
 			sample.IOEligibleWriteBPS,
-			sample.IOEligibleReadSyscallsPerSecond,
-			sample.IOEligibleWriteSyscallsPerSecond,
+			sample.IOEligibleReadBlockIOPS,
+			sample.IOEligibleWriteBlockIOPS,
 		)
+	}
+}
+
+func TestBlockIOPSRateContinuesAcrossEnforcementPlacementChanges(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cfg.IOReadIOPS = 1000
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {UID: 1000, Username: "alice"},
+		},
+	}
+	cgroups := &blockIOSequenceCgroupManager{samples: []blockIOCounterSample{
+		{},
+		{readOps: 50},
+		{readOps: 100},
+	}}
+	manager, err := NewManager(cfg, collector, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	first, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("first sample: %v", err)
+	}
+	if !first.IOBlockIOPSUnavailable {
+		t.Fatal("first block IOPS sample was reported as complete without a baseline")
+	}
+
+	manager.mu.Lock()
+	manager.activeUsers[1000] = true
+	manager.sharedCgroupPath = "/limited"
+	manager.mu.Unlock()
+	manager.prevIOTime = time.Now().Add(-time.Second)
+	activated, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("activation placement sample: %v", err)
+	}
+	if activated.IOBlockIOPSUnavailable || activated.IOEligibleReadBlockIOPS < 49 {
+		t.Fatalf("activation placement produced unavailable=%t read_iops=%.1f", activated.IOBlockIOPSUnavailable, activated.IOEligibleReadBlockIOPS)
+	}
+
+	manager.mu.Lock()
+	delete(manager.activeUsers, 1000)
+	manager.mu.Unlock()
+	manager.prevIOTime = time.Now().Add(-time.Second)
+	released, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("release placement sample: %v", err)
+	}
+	if released.IOBlockIOPSUnavailable || released.IOEligibleReadBlockIOPS < 49 {
+		t.Fatalf("release placement produced unavailable=%t read_iops=%.1f", released.IOBlockIOPSUnavailable, released.IOEligibleReadBlockIOPS)
+	}
+	wantPlacements := []string{"", "/limited", ""}
+	if !slices.Equal(cgroups.placements, wantPlacements) {
+		t.Fatalf("placements = %v, want %v", cgroups.placements, wantPlacements)
+	}
+}
+
+func TestDeactivateLimitsPreservesBlockIOObservationCgroup(t *testing.T) {
+	cfg := ioDecisionConfig()
+	sharedPath := t.TempDir()
+	cgroups := &blockIOSequenceCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.limitsActive = true
+	manager.activeUsers[1000] = true
+	manager.blockIOObservedUsers[1000] = true
+	manager.sharedCgroupPath = sharedPath
+
+	if err := manager.deactivateLimits(); err != nil {
+		t.Fatalf("deactivateLimits() error: %v", err)
+	}
+	if cgroups.sharedReleases != 0 {
+		t.Fatalf("origin releases = %d, want 0 for observed user", cgroups.sharedReleases)
+	}
+	if !slices.Equal(cgroups.placements, []string{""}) {
+		t.Fatalf("placements = %v, want standalone observation placement", cgroups.placements)
+	}
+	if !manager.blockIOObservedUsers[1000] {
+		t.Fatal("deactivation discarded block I/O observation state")
+	}
+}
+
+func TestObservedStandaloneResourceStateBecomesSharedWithoutStaleStandaloneFlag(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cgroups := &blockIOSequenceCgroupManager{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.blockIOObservedUsers[1000] = true
+	manager.resourceLimits[1000] = userResourceLimitState{
+		standalone: true,
+		io:         true,
+		ioApplied:  true,
+	}
+
+	if _, err := manager.placeUserInSharedCgroup(1000, "/limited", cfg.CPUQuotaNormal); err != nil {
+		t.Fatalf("placeUserInSharedCgroup() error: %v", err)
+	}
+	state := manager.resourceLimits[1000]
+	if state.standalone || !state.io || !state.ioApplied {
+		t.Fatalf("resource state after shared placement = %+v", state)
+	}
+}
+
+func TestBlockIOPSDecisionIgnoresSyscallsAndUsesDeviceOperations(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cfg.IOReadIOPS = 100
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {
+				UID:      1000,
+				Username: "alice",
+				EnforceableUsage: resmanmetrics.ProcessSetMetrics{
+					IOReadOps: 1_000_000,
+				},
+			},
+		},
+	}
+	cgroups := &blockIOSequenceCgroupManager{samples: []blockIOCounterSample{
+		{},
+		{},
+		{readOps: 100},
+	}}
+	manager, err := NewManager(cfg, collector, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	if _, err := manager.collectSystemMetrics(); err != nil {
+		t.Fatalf("initial collectSystemMetrics() error: %v", err)
+	}
+	manager.prevIOTime = time.Now().Add(-time.Second)
+	pageCacheSample, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("page-cache sample error: %v", err)
+	}
+	if pageCacheSample.IOEligibleReadBlockIOPS != 0 {
+		t.Fatalf("syscall-only activity produced %.1f block IOPS", pageCacheSample.IOEligibleReadBlockIOPS)
+	}
+	if decision, _ := manager.makeDecision(pageCacheSample); decision == "ACTIVATE_LIMITS" {
+		t.Fatal("syscall-only activity activated block IOPS enforcement")
+	}
+
+	manager.prevIOTime = time.Now().Add(-time.Second)
+	directIOSample, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("direct-I/O sample error: %v", err)
+	}
+	if directIOSample.IOEligibleReadBlockIOPS < 99 {
+		t.Fatalf("direct block I/O produced %.1f IOPS, want about 100", directIOSample.IOEligibleReadBlockIOPS)
+	}
+	if decision, reason := manager.makeDecision(directIOSample); decision != "ACTIVATE_LIMITS" {
+		t.Fatalf("direct block I/O decision = %s (%s), want ACTIVATE_LIMITS", decision, reason)
 	}
 }
 

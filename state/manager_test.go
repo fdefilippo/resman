@@ -154,6 +154,9 @@ func (m *mockCgroupManager) RemoveIOLimit(uid int) error { return nil }
 func (m *mockCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
 	return 0, 0, 0, 0, nil
 }
+func (m *mockCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, error) {
+	return sharedPath, nil
+}
 func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
 	return "", "", 0, 0, 0, 0, 0, nil
 }

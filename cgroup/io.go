@@ -159,31 +159,29 @@ func ioMaxDevices(data []byte) []string {
 	return devices
 }
 
-// GetIOStats restituisce le statistiche di IO aggregate per tutti i dispositivi.
-// Legge da io.stat e somma rbytes, wbytes, rios, wios.
+// GetIOStats returns logical I/O counters aggregated across every block device.
+// The logical counters preserve continuity when a user changes managed cgroups.
 func (m *Manager) GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error) {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		return 0, 0, 0, 0, fmt.Errorf("cgroup for UID %d not found", uid)
+	counters, err := m.logicalBlockIOCounters(uid)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("read logical block I/O counters for UID %d: %w", uid, err)
 	}
+	return counters.readBytes, counters.writeBytes, counters.readOps, counters.writeOps, nil
+}
 
-	ioStatFile := filepath.Join(cgroupPath, "io.stat")
+func readIOStatsFile(ioStatFile string) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error) {
 	data, err := os.ReadFile(ioStatFile)
 	if err != nil {
-		// Se il file non esiste (nessun IO), restituisci zero
-		if os.IsNotExist(err) {
-			return 0, 0, 0, 0, nil
-		}
-		return 0, 0, 0, 0, fmt.Errorf("failed to read io.stat for UID %d: %w", uid, err)
+		return 0, 0, 0, 0, err
 	}
 
-	// Parse lines like: "8:0 rios=1234 wios=567 rbytes=104857600 wbytes=52428800"
+	// Parse lines like: "8:0 rios=1234 wios=567 rbytes=104857600 wbytes=52428800".
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Skip device prefix (e.g., "8:0"), parse key=value pairs
+		// Skip the device prefix (for example, "8:0") and parse key=value pairs.
 		parts := strings.Fields(line)
 		for _, part := range parts {
 			kv := strings.SplitN(part, "=", 2)

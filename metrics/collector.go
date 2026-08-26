@@ -96,8 +96,6 @@ type ProcessSetMetrics struct {
 type ProcessIODelta struct {
 	ReadBytes  uint64
 	WriteBytes uint64
-	ReadOps    uint64
-	WriteOps   uint64
 }
 
 // ObservationMetrics is the typed observation snapshot consumed by external
@@ -166,8 +164,6 @@ func (u *processUsage) add(sample processUsage) {
 	u.ioWriteOps += sample.ioWriteOps
 	u.ioDelta.ReadBytes += sample.ioDelta.ReadBytes
 	u.ioDelta.WriteBytes += sample.ioDelta.WriteBytes
-	u.ioDelta.ReadOps += sample.ioDelta.ReadOps
-	u.ioDelta.WriteOps += sample.ioDelta.WriteOps
 	u.executableIdentityUnavailableProcesses += sample.executableIdentityUnavailableProcesses
 	u.ioUnavailableProcesses += sample.ioUnavailableProcesses
 }
@@ -1900,8 +1896,6 @@ func updateProcessIOSample(
 	return ProcessIODelta{
 		ReadBytes:  monotonicCounterDelta(counters.readBytes, previous.counters.readBytes),
 		WriteBytes: monotonicCounterDelta(counters.writeBytes, previous.counters.writeBytes),
-		ReadOps:    monotonicCounterDelta(counters.readOps, previous.counters.readOps),
-		WriteOps:   monotonicCounterDelta(counters.writeOps, previous.counters.writeOps),
 	}
 }
 

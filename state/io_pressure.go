@@ -12,12 +12,6 @@ type ioPressure struct {
 	exceededDimensions []string
 }
 
-func hasConfiguredIODecisionDimension(policy config.IODecisionPolicy) bool {
-	return byteRateLimit(policy.ReadBPS) > 0 ||
-		byteRateLimit(policy.WriteBPS) > 0 ||
-		policy.ReadIOPS > 0 || policy.WriteIOPS > 0
-}
-
 func (p ioPressure) exceeded() bool {
 	return len(p.exceededDimensions) > 0
 }
@@ -48,11 +42,8 @@ func evaluateIOPressure(policy config.IODecisionPolicy, metrics *SystemMetrics, 
 	}{
 		{name: "read_bps", rate: metrics.IOEligibleReadBPS, perUserLimit: byteRateLimit(policy.ReadBPS)},
 		{name: "write_bps", rate: metrics.IOEligibleWriteBPS, perUserLimit: byteRateLimit(policy.WriteBPS)},
-		// Pre-enforcement operation rates originate from /proc/PID/io syscr/syscw.
-		// These are the process-level operation signals available before a user
-		// has an io.stat-bearing resman cgroup; io.max still enforces device IOPS.
-		{name: "read_iops", rate: metrics.IOEligibleReadSyscallsPerSecond, perUserLimit: float64(policy.ReadIOPS)},
-		{name: "write_iops", rate: metrics.IOEligibleWriteSyscallsPerSecond, perUserLimit: float64(policy.WriteIOPS)},
+		{name: "read_iops", rate: metrics.IOEligibleReadBlockIOPS, perUserLimit: float64(policy.ReadIOPS)},
+		{name: "write_iops", rate: metrics.IOEligibleWriteBlockIOPS, perUserLimit: float64(policy.WriteIOPS)},
 	}
 
 	for _, dimension := range dimensions {

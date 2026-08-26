@@ -307,28 +307,8 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				"cpu", userEnforceableCPUUsage(metrics, uid),
 			)
 
-			m.mu.RLock()
-			wasStandalone := m.resourceLimits[uid].standalone
-			m.mu.RUnlock()
-			if wasStandalone {
-				if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
-					m.logger.Warn("Failed to migrate standalone resource cgroup to shared CPU enforcement", "uid", uid, "error", err)
-					reconcileErrors = append(reconcileErrors, err)
-					continue
-				}
-				m.mu.Lock()
-				delete(m.resourceLimits, uid)
-				m.mu.Unlock()
-			}
-
-			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
+			userCgroupPath, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
 			if err != nil {
-				m.logger.Warn("Failed to re-create user sub-cgroup",
-					"uid", uid, "error", err)
-				continue
-			}
-
-			if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
 				m.logger.Warn("Failed to move processes for re-added user; user will not be marked limited",
 					"uid", uid, "error", err)
 				continue
@@ -487,7 +467,43 @@ func userEligibilityFromMetrics(metrics *SystemMetrics, uid int) config.UserElig
 	}
 }
 
+func (m *Manager) placeUserInSharedCgroup(uid int, sharedPath, normalQuota string) (string, error) {
+	m.mu.RLock()
+	observed := m.blockIOObservedUsers[uid]
+	wasStandalone := m.resourceLimits[uid].standalone
+	m.mu.RUnlock()
+	if observed {
+		path, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, sharedPath, normalQuota)
+		if err == nil {
+			m.setStandaloneResourceCgroup(uid, false)
+		}
+		return path, err
+	}
+	if wasStandalone {
+		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+			return "", fmt.Errorf("migrate standalone resource cgroup to shared CPU enforcement for UID %d: %w", uid, err)
+		}
+		m.mu.Lock()
+		delete(m.resourceLimits, uid)
+		m.mu.Unlock()
+	}
+	path, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
+	if err != nil {
+		return "", err
+	}
+	if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func (m *Manager) releaseTrackedUsers(users []int, sharedPath, normalQuota string) []idleReleaseResult {
+	m.mu.RLock()
+	observed := make(map[int]bool, len(users))
+	for _, uid := range users {
+		observed[uid] = m.blockIOObservedUsers[uid]
+	}
+	m.mu.RUnlock()
 	results := make(chan idleReleaseResult, len(users))
 	for _, uid := range users {
 		go func(uid int) {
@@ -495,7 +511,12 @@ func (m *Manager) releaseTrackedUsers(users []int, sharedPath, normalQuota strin
 				results <- idleReleaseResult{uid: uid}
 				return
 			}
-			err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
+			var err error
+			if observed[uid] {
+				_, err = m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalQuota)
+			} else {
+				err = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
+			}
 			results <- idleReleaseResult{uid: uid, err: err}
 		}(uid)
 	}
@@ -643,13 +664,14 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		m.mu.RUnlock()
 
 		if !alreadyLimited {
-			// Create the user's sub-cgroup inside the shared cgroup.
+			// Move directly from an observation cgroup when one exists. The cgroup
+			// manager carries the logical block-I/O counter across the placement.
 			m.mu.RLock()
 			sharedPath := m.sharedCgroupPath
 			m.mu.RUnlock()
-			userCgroupPath, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
+			userCgroupPath, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
 			if err != nil {
-				m.logger.Error("Failed to create user sub-cgroup",
+				m.logger.Error("Failed to place user in shared cgroup",
 					"user", userStr,
 					"shared_cgroup", sharedPath,
 					"error", err,
@@ -677,23 +699,6 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 			// Set the same relative weight for every user. Idle users leave more CPU
 			// capacity available to the other users.
 			weight := 100
-
-			if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
-				m.logger.Warn("Failed to move processes to shared cgroup; user will not be marked limited",
-					"uid", uid,
-					"username", username,
-					"shared_cgroup", sharedPath,
-					"error", err,
-				)
-				if m.psiWatcher != nil {
-					m.psiWatcher.RemoveMonitor(uid, "cpu")
-					m.psiWatcher.RemoveMonitor(uid, "io")
-				}
-				if firstError == nil {
-					firstError = err
-				}
-				continue
-			}
 
 			if err := m.applyUserResourceLimits(uid, cfg, eligibility); err != nil {
 				m.logger.Warn("CPU enforcement applied with partial RAM or IO failure", "uid", uid, "error", err)
@@ -1119,6 +1124,7 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		userStr := fmt.Sprintf("%s(%d)", username, uid)
 		m.mu.RLock()
 		appliedResources := m.resourceLimits[uid]
+		observedForBlockIO := m.blockIOObservedUsers[uid]
 		m.mu.RUnlock()
 
 		if sharedPath != "" {
@@ -1128,14 +1134,20 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 					"error", err,
 				)
 			}
-			if err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal); err != nil {
+			var releaseErr error
+			if observedForBlockIO {
+				_, releaseErr = m.cgroupManager.EnsureUserCgroupPlacement(uid, "", cfg.CPUQuotaNormal)
+			} else {
+				releaseErr = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
+			}
+			if releaseErr != nil {
 				m.logger.Error("Failed to release user from shared cgroup",
 					"user", userStr,
 					"shared_cgroup", sharedPath,
-					"error", err,
+					"error", releaseErr,
 				)
 				if firstError == nil {
-					firstError = err
+					firstError = releaseErr
 				}
 				continue
 			}
@@ -1178,6 +1190,22 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 
 	standaloneDeactivated := make(map[int]bool, len(standaloneToCleanup))
 	for _, uid := range standaloneToCleanup {
+		m.mu.RLock()
+		state := m.resourceLimits[uid]
+		observedForBlockIO := m.blockIOObservedUsers[uid]
+		m.mu.RUnlock()
+		if observedForBlockIO {
+			if err := m.removeTrackedResourceLimits(uid, state.ramApplied, state.ioApplied); err != nil {
+				m.logger.Error("Failed to remove standalone resource limits while preserving block I/O observation", "uid", uid, "error", err)
+				if firstError == nil {
+					firstError = err
+				}
+				continue
+			}
+			standaloneDeactivated[uid] = true
+			deactivatedCount++
+			continue
+		}
 		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
 			m.logger.Error("Failed to release standalone RAM or IO cgroup", "uid", uid, "error", err)
 			if firstError == nil {

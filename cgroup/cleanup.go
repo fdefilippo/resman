@@ -63,6 +63,9 @@ func (m *Manager) CleanupUserCgroup(uid int) error {
 	if err := m.untrackCgroupPath(uid); err != nil {
 		return fmt.Errorf("failed to untrack cleaned cgroup for UID %d: %w", uid, err)
 	}
+	m.blockIOMu.Lock()
+	delete(m.blockIOAccounting, uid)
+	m.blockIOMu.Unlock()
 	m.logger.Debug("Cgroup cleaned up for user",
 		"uid", uid,
 		"processes_moved", len(pids),

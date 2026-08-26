@@ -693,15 +693,25 @@ user sessions, and cgroup membership are dynamic and their aggregate is not mono
   by bounded stale-state cleanup.
 - An unavailable counter sample **MUST NOT** advance or preserve a baseline in a way
   that turns a later multi-interval delta into a one-interval rate.
+- When enforcement moves a workload between kernel accounting identities, raw source
+  and destination counters **MUST NOT** be differenced. The transition must either
+  carry the final source delta into a logical cumulative counter with the destination's
+  initial value as its new baseline, or report the interval as unavailable. It **MUST
+  NOT** publish an artificial spike or zero-rate window.
+- Tests for a movable accounting source **MUST** cover both directions of the placement
+  transition while traffic continues.
 
 **Why.** Before `resman-4pw.30`, resman summed cumulative `/proc/PID/io` counters per
 user and then differenced consecutive user sums. When any process exited, its lifetime
 counters disappeared from the sum; the aggregate fell and the monotonic guard returned
 zero for the entire user even while surviving processes continued sustained I/O. The
 remediation tracks PID plus start time, sums only per-process non-negative deltas, and
-lets one process reset or disappear without erasing its peers' traffic.
+lets one process reset or disappear without erasing its peers' traffic. `resman-4pw.29`
+applies the same rule to `io.stat`: observation and CPU-enforcement cgroups are distinct
+kernel identities, so their raw counters are joined through an explicit logical ledger
+rather than treated as one counter by name.
 
-*Finding: resman-4pw.30*
+*Findings: resman-4pw.29, resman-4pw.30*
 
 ---
 

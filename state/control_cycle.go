@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -392,17 +393,18 @@ type SystemMetrics struct {
 	AllUsersCount       int
 
 	// Per-resource eligible-user metrics.
-	CPUEligibleCPUUsage              float64
-	CPUEligibleMemoryUsage           uint64
-	CPUEligibleUsersCount            int
-	RAMEligibleUsersCount            int
-	IOEligibleUsersCount             int
-	RAMEligibleUsageBytes            uint64
-	IOEligibleReadBPS                float64
-	IOEligibleWriteBPS               float64
-	IOEligibleReadSyscallsPerSecond  float64
-	IOEligibleWriteSyscallsPerSecond float64
-	IOEligibleUnavailableProcesses   int
+	CPUEligibleCPUUsage            float64
+	CPUEligibleMemoryUsage         uint64
+	CPUEligibleUsersCount          int
+	RAMEligibleUsersCount          int
+	IOEligibleUsersCount           int
+	RAMEligibleUsageBytes          uint64
+	IOEligibleReadBPS              float64
+	IOEligibleWriteBPS             float64
+	IOEligibleReadBlockIOPS        float64
+	IOEligibleWriteBlockIOPS       float64
+	IOBlockIOPSUnavailable         bool
+	IOEligibleUnavailableProcesses int
 
 	// Current procfs coverage failures across all observed processes.
 	ProcFSExecutableIdentityUnavailableProcesses int
@@ -523,11 +525,9 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 			metrics.IOEligibleUnavailableProcesses += um.EnforceableUsage.IOUnavailableProcesses
 			if decisionSample && !m.prevIOTime.IsZero() {
 				if _, wasEligible := m.previousIOEligibleUsers[uid]; wasEligible {
-					rates := calculateIORates(um.EnforceableUsage.IODelta, sampleTime.Sub(m.prevIOTime))
+					rates := calculateIOByteRates(um.EnforceableUsage.IODelta, sampleTime.Sub(m.prevIOTime))
 					metrics.IOEligibleReadBPS += rates.readBytes
 					metrics.IOEligibleWriteBPS += rates.writeBytes
-					metrics.IOEligibleReadSyscallsPerSecond += rates.readOps
-					metrics.IOEligibleWriteSyscallsPerSecond += rates.writeOps
 				}
 			}
 		}
@@ -537,6 +537,9 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
 	if decisionSample {
+		if err := m.collectEligibleBlockIOPS(metrics, sampleTime, m.GetConfig().GetIODecisionPolicy()); err != nil {
+			return nil, fmt.Errorf("collect per-user block IOPS: %w", err)
+		}
 		m.prevIOTime = sampleTime
 		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
 		for _, uid := range metrics.IOEligibleUsers {
@@ -547,27 +550,121 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 	return metrics, nil
 }
 
-// calculateIORates converts per-process counter growth into per-second rates.
-// The operation counters originate from /proc/PID/io syscr and syscw; they are
-// read/write-family syscall rates, not block-device IOPS from cgroup io.stat.
-func calculateIORates(delta resmanmetrics.ProcessIODelta, elapsed time.Duration) ioCountersRate {
+type blockIOCounterSample struct {
+	readOps  uint64
+	writeOps uint64
+}
+
+func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy) error {
+	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
+	desired := make(map[int]bool)
+	if needsBlockIO {
+		for _, uid := range metrics.IOEligibleUsers {
+			desired[uid] = true
+		}
+	}
+
+	m.mu.RLock()
+	sharedPath := m.sharedCgroupPath
+	activeUsers := make(map[int]bool, len(m.activeUsers))
+	for uid := range m.activeUsers {
+		activeUsers[uid] = true
+	}
+	observedBefore := make(map[int]bool, len(m.blockIOObservedUsers))
+	for uid := range m.blockIOObservedUsers {
+		observedBefore[uid] = true
+	}
+	resourceStates := make(map[int]userResourceLimitState, len(m.resourceLimits))
+	for uid, state := range m.resourceLimits {
+		resourceStates[uid] = state
+	}
+	m.mu.RUnlock()
+
+	uids := append([]int(nil), metrics.IOEligibleUsers...)
+	sort.Ints(uids)
+	current := make(map[int]blockIOCounterSample, len(uids))
+	baselineReady := true
+	for _, uid := range uids {
+		if !desired[uid] {
+			continue
+		}
+		placement := ""
+		if activeUsers[uid] {
+			placement = sharedPath
+		}
+		if _, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, m.GetConfig().CPUQuotaNormal); err != nil {
+			return fmt.Errorf("ensure observation placement for UID %d: %w", uid, err)
+		}
+		_, _, readOps, writeOps, err := m.cgroupManager.GetIOStats(uid)
+		if err != nil {
+			return fmt.Errorf("read block I/O counters for UID %d: %w", uid, err)
+		}
+		now := blockIOCounterSample{readOps: readOps, writeOps: writeOps}
+		current[uid] = now
+		previous, hadPrevious := m.previousBlockIOCounters[uid]
+		_, wasEligible := m.previousIOEligibleUsers[uid]
+		if hadPrevious && wasEligible && !m.prevIOTime.IsZero() {
+			seconds := sampleTime.Sub(m.prevIOTime).Seconds()
+			if seconds > 0 {
+				metrics.IOEligibleReadBlockIOPS += float64(monotonicUint64Delta(now.readOps, previous.readOps)) / seconds
+				metrics.IOEligibleWriteBlockIOPS += float64(monotonicUint64Delta(now.writeOps, previous.writeOps)) / seconds
+			}
+		} else {
+			baselineReady = false
+		}
+	}
+	if needsBlockIO {
+		metrics.IOBlockIOPSUnavailable = !baselineReady
+	}
+
+	var cleanupErrors []error
+	for uid := range observedBefore {
+		if desired[uid] || activeUsers[uid] {
+			continue
+		}
+		state := resourceStates[uid]
+		if state.ramApplied || state.ioApplied || state.standalone {
+			continue
+		}
+		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove obsolete block I/O observation cgroup for UID %d: %w", uid, err))
+		}
+	}
+	if len(cleanupErrors) > 0 {
+		return errors.Join(cleanupErrors...)
+	}
+
+	m.previousBlockIOCounters = current
+	m.mu.Lock()
+	m.blockIOObservedUsers = desired
+	m.mu.Unlock()
+	return nil
+}
+
+func monotonicUint64Delta(current, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
+}
+
+// calculateIOByteRates converts per-process counter growth into per-second rates.
+// Byte counters originate from per-process /proc/PID/io deltas. Block IOPS are
+// collected separately from the user's observation cgroup.
+func calculateIOByteRates(delta resmanmetrics.ProcessIODelta, elapsed time.Duration) ioByteRate {
 	seconds := elapsed.Seconds()
 	if seconds <= 0 {
-		return ioCountersRate{}
+		return ioByteRate{}
 	}
-	return ioCountersRate{
+	return ioByteRate{
 		readBytes:  float64(delta.ReadBytes) / seconds,
 		writeBytes: float64(delta.WriteBytes) / seconds,
-		readOps:    float64(delta.ReadOps) / seconds,
-		writeOps:   float64(delta.WriteOps) / seconds,
 	}
 }
 
-type ioCountersRate struct {
+type ioByteRate struct {
 	readBytes  float64
 	writeBytes float64
-	readOps    float64
-	writeOps   float64
 }
 
 func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
@@ -623,10 +720,10 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
-		var cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps uint64
+		var cgroupIOReadBytes, cgroupIOWriteBytes uint64
 		if m.cgroupManager != nil {
 			var err error
-			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, err = m.cgroupManager.GetUserCgroupMetrics(uid)
+			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, _, _, err = m.cgroupManager.GetUserCgroupMetrics(uid)
 			if err != nil {
 				if isMissingUserCgroupError(err) {
 					m.logger.Debug("Cgroup metrics unavailable for user without cgroup", "uid", uid)
@@ -635,17 +732,11 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 				}
 			}
 		}
-
-		// Use per-user IO from GetAllUserMetrics
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
-		ioReadOps := userMetrics.IOReadOps
-		ioWriteOps := userMetrics.IOWriteOps
 		if ioReadBytes == 0 && ioWriteBytes == 0 && cgroupIOReadBytes > 0 {
 			ioReadBytes = cgroupIOReadBytes
 			ioWriteBytes = cgroupIOWriteBytes
-			ioReadOps = cgroupIOReadOps
-			ioWriteOps = cgroupIOWriteOps
 		}
 
 		// Publish the explicit observed CPU enforcement state.
@@ -663,8 +754,8 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			memoryHighEvents,
 			ioReadBytes,
 			ioWriteBytes,
-			ioReadOps,
-			ioWriteOps,
+			userMetrics.IOReadOps,
+			userMetrics.IOWriteOps,
 		)
 	}
 

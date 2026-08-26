@@ -59,7 +59,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # TARGET PRINCIPALI
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-preflight \
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-preflight \
 	test-functional-smolvm-unit lint lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
@@ -132,6 +132,10 @@ test-functional-smolvm-mcp-filter-reload:
 # Verify the shipped rootful Podman runtime against host users and cgroup v2.
 test-functional-smolvm-container-runtime:
 	SMOLVM_SCENARIO=container-runtime test/functional/smolvm/run.sh run
+
+# Verify true block IOPS decisions when the guest exposes io.max.
+test-functional-smolvm-block-iops:
+	SMOLVM_SCENARIO=block-iops test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
@@ -417,6 +421,7 @@ help:
 	@echo "    test-functional-smolvm-cpu-without-cpuset - Run CPU enforcement without cpuset in SmolVM"
 	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
 	@echo "    test-functional-smolvm-container-runtime - Verify the shipped sudo podman runtime in SmolVM"
+	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"

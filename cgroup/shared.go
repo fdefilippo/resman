@@ -209,7 +209,7 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	return nil
 }
 
-// ReleaseUserFromSharedCgroup sposta i processi fuori dal sottocgroup condiviso e lo rimuove.
+// ReleaseUserFromSharedCgroup restores processes from a shared child and removes it.
 func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	userProcsFile := filepath.Join(userPath, "cgroup.procs")
@@ -242,6 +242,9 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 			"error", err,
 		)
 	}
+	m.blockIOMu.Lock()
+	delete(m.blockIOAccounting, uid)
+	m.blockIOMu.Unlock()
 	if usedRecovery {
 		recoveryPath := m.getRecoveryCgroupPath(uid)
 		if err := m.trackCgroupPath(uid, recoveryPath); err != nil {

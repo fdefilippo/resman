@@ -226,11 +226,15 @@ Configuration parameters:
 - Write IOPS limit (0 = unlimited)
 .PP
 Bandwidth values of "max" or an empty value and IOPS values of 0 disable only
-their own dimension. Before enforcement, bandwidth decisions use per-user
-/proc/PID/io byte rates. The read/write IOPS decision signals use syscr/syscw
-rates because no resman io.stat cgroup exists yet; io.max enforcement itself
-uses real block-device IOPS. The activation rule is any-of across configured
-dimensions and the release rule is all-of.
+their own dimension. Bandwidth decisions use per-user /proc/PID/io byte rates.
+When either IOPS dimension is configured, ResMan places every I/O-eligible
+user's enforceable processes in an unlimited per-user observation cgroup and
+derives read/write IOPS from io.stat rios/wios. Page-cache hits, pipe traffic,
+and socket traffic therefore cannot trigger device-IOPS enforcement. The same
+logical counters continue across moves into and out of the shared CPU hierarchy.
+The first sample after observation begins or its process policy changes is
+unknown rather than zero and cannot release active limits. The activation rule
+is any-of across configured dimensions and the release rule is all-of.
 .PP
 An unavailable /proc/PID/io sample for an enforceable I/O-eligible process is
 unknown, not zero. Available rates remain a lower bound and may still prove an

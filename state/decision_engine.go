@@ -58,8 +58,12 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	ioPolicy := cfg.GetIODecisionPolicy()
+	byteCoverageIncomplete := (byteRateLimit(ioPolicy.ReadBPS) > 0 || byteRateLimit(ioPolicy.WriteBPS) > 0) &&
+		metrics.IOEligibleUnavailableProcesses > 0
+	blockIOPSCoverageIncomplete := (ioPolicy.ReadIOPS > 0 || ioPolicy.WriteIOPS > 0) &&
+		metrics.IOBlockIOPSUnavailable
 	ioCoverageIncomplete := ioPolicy.Enabled && ioPolicy.Threshold > 0 &&
-		hasConfiguredIODecisionDimension(ioPolicy) && metrics.IOEligibleUnavailableProcesses > 0
+		(byteCoverageIncomplete || blockIOPSCoverageIncomplete)
 	ioActivationPressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.Threshold)
 	ioExceeded := ioActivationPressure.exceeded()
 	ioThresholdPending := false
@@ -120,10 +124,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			if m.stabilityTracker != nil {
 				m.stabilityTracker.Reset()
 			}
-			return DecisionMaintain, fmt.Sprintf(
-				"I/O decision coverage incomplete for %d enforceable processes; current limits cannot be released safely",
-				metrics.IOEligibleUnavailableProcesses,
-			)
+			return DecisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "current limits cannot be released safely")
 		}
 
 		// Deactivate only when every resource is below its release threshold.
@@ -228,16 +229,23 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if ioCoverageIncomplete {
 		m.thresholdTracker.Reset()
 		m.ioThresholdTracker.Reset()
-		return DecisionMaintain, fmt.Sprintf(
-			"I/O decision coverage incomplete for %d enforceable processes; zero pressure is not established",
-			metrics.IOEligibleUnavailableProcesses,
-		)
+		return DecisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "zero pressure is not established")
 	}
 
 	// No resource exceeds its threshold; reset activation tracking.
 	m.thresholdTracker.Reset()
 	m.ioThresholdTracker.Reset()
 	return DecisionMaintain, "All resources within normal range"
+}
+
+func ioCoverageReason(metrics *SystemMetrics, blockIOPSIncomplete bool, consequence string) string {
+	if blockIOPSIncomplete && metrics.IOEligibleUnavailableProcesses > 0 {
+		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS baseline unavailable and %d enforceable process samples unavailable; %s", metrics.IOEligibleUnavailableProcesses, consequence)
+	}
+	if blockIOPSIncomplete {
+		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS baseline unavailable; %s", consequence)
+	}
+	return fmt.Sprintf("I/O decision coverage incomplete for %d enforceable processes; %s", metrics.IOEligibleUnavailableProcesses, consequence)
 }
 
 func (m *Manager) buildActivateReason(

@@ -25,24 +25,27 @@ type Manager struct {
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
 	originMu      sync.Mutex
+	blockIOMu     sync.Mutex
 	processScanMu sync.Mutex
 	usernameMu    sync.RWMutex
 
-	// Tracciamento dei cgroups creati
-	createdCgroups     map[int]string // UID -> cgroup path
-	createdCgroupsFile string
-	processOrigins     map[int]processOrigin
-	processOriginsFile string
-	procRoot           string
-	sysBlockRoot       string
-	writePID           func(string, int) error
-	persistOrigins     func() error
-	processScan        processScanCache
-	usernameCache      map[string]cachedUsername
-	resolveUsername    func(string) (string, error)
-	scanProcessIDs     func() (map[int][]int, error)
-	createCgroupProbe  func(string, string) (string, error)
-	removeCgroupProbe  func(string) error
+	// Managed cgroup tracking.
+	createdCgroups      map[int]string // UID -> cgroup path
+	createdCgroupsFile  string
+	processOrigins      map[int]processOrigin
+	processOriginsFile  string
+	blockIOAccounting   map[int]blockIOAccountingState
+	procRoot            string
+	sysBlockRoot        string
+	writePID            func(string, int) error
+	persistOrigins      func() error
+	processScan         processScanCache
+	usernameCache       map[string]cachedUsername
+	resolveUsername     func(string) (string, error)
+	scanProcessIDs      func() (map[int][]int, error)
+	createCgroupProbe   func(string, string) (string, error)
+	removeCgroupProbe   func(string) error
+	removeManagedCgroup func(string) error
 
 	// Cached verification state.
 	cgroupRootWritable         bool
@@ -60,17 +63,19 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	logger := logging.GetLogger()
 
 	mgr := &Manager{
-		cfg:                cfg,
-		logger:             logger,
-		createdCgroups:     make(map[int]string),
-		createdCgroupsFile: cfg.CreatedCgroupsFile,
-		processOrigins:     make(map[int]processOrigin),
-		processOriginsFile: processOriginsPath(cfg.CreatedCgroupsFile),
-		procRoot:           "/proc",
-		sysBlockRoot:       "/sys/block",
-		usernameCache:      make(map[string]cachedUsername),
-		createCgroupProbe:  os.MkdirTemp,
-		removeCgroupProbe:  os.Remove,
+		cfg:                 cfg,
+		logger:              logger,
+		createdCgroups:      make(map[int]string),
+		createdCgroupsFile:  cfg.CreatedCgroupsFile,
+		processOrigins:      make(map[int]processOrigin),
+		blockIOAccounting:   make(map[int]blockIOAccountingState),
+		processOriginsFile:  processOriginsPath(cfg.CreatedCgroupsFile),
+		procRoot:            "/proc",
+		sysBlockRoot:        "/sys/block",
+		usernameCache:       make(map[string]cachedUsername),
+		createCgroupProbe:   os.MkdirTemp,
+		removeCgroupProbe:   os.Remove,
+		removeManagedCgroup: removeCgroupWithRetry,
 	}
 
 	// Verify that cgroups v2 provides every interface required by enabled features.

@@ -159,8 +159,9 @@ run_harness() {
 		|| blocked "SMOLVM_REQUIRE_PSI must be 0 or 1"
 	[[ $scenario == resource-only || $scenario == process-membership \
 		|| $scenario == cpu-without-cpuset || $scenario == missing-io-startup \
-		|| $scenario == mcp-filter-reload || $scenario == container-runtime ]] \
-		|| blocked "SMOLVM_SCENARIO must be resource-only, process-membership, cpu-without-cpuset, missing-io-startup, mcp-filter-reload, or container-runtime"
+		|| $scenario == mcp-filter-reload || $scenario == container-runtime \
+		|| $scenario == block-iops ]] \
+		|| blocked "SMOLVM_SCENARIO must be resource-only, process-membership, cpu-without-cpuset, missing-io-startup, mcp-filter-reload, container-runtime, or block-iops"
 
     local run_id smolvm_version base_image_id base_image_digest fixture_image_id
     local fixture_hash fixture_reused image_id container_image_id guest_status

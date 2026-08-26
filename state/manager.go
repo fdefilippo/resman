@@ -81,6 +81,8 @@ type Manager struct {
 	// are converted to rates only for users eligible in both samples.
 	previousIOEligibleUsers map[int]struct{}
 	prevIOTime              time.Time
+	previousBlockIOCounters map[int]blockIOCounterSample
+	blockIOObservedUsers    map[int]bool
 
 	// PSI watcher for per-user adaptive CPU weight boosting
 	psiWatcher   *cgroup.PSIWatcher
@@ -159,6 +161,7 @@ type CgroupManager interface {
 	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
 	RemoveIOLimit(uid int) error
 	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
+	EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, error)
 	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
 	GetPSIStats(uid int) (cgroup.PSIStats, error)
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
@@ -235,6 +238,8 @@ func NewManager(
 			maxSize: 100,
 		},
 		previousIOEligibleUsers: make(map[int]struct{}),
+		previousBlockIOCounters: make(map[int]blockIOCounterSample),
+		blockIOObservedUsers:    make(map[int]bool),
 		psiBoostedAt:            make(map[int]time.Time),
 	}
 
@@ -449,6 +454,7 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	m.mu.Unlock()
 	if processPolicyChanged {
 		m.previousIOEligibleUsers = make(map[int]struct{})
+		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)
 		m.prevIOTime = time.Time{}
 	}
 

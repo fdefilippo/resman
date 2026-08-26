@@ -181,6 +181,8 @@ RAM_USER_EXCLUDE_LIST=root
 # IO_THRESHOLD_DURATION: Seconds to wait before activating IO limits (0 = immediate)
 # Unavailable /proc/PID/io samples are treated as unknown, never as zero traffic.
 # Partial rates may prove activation, but incomplete coverage prevents release.
+# Finite IOPS dimensions use io.stat rios/wios from unlimited per-user observation
+# cgroups; page-cache, pipe, and socket syscalls do not count as block IOPS.
 #   Useful to avoid throttling on brief IO spikes (e.g., backups, builds, file copies)
 #
 # IO_USER_INCLUDE_LIST: If specified, include ONLY matching users for IO limits

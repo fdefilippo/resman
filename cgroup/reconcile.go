@@ -40,6 +40,15 @@ func (m *Manager) ReconcileUserProcessMembership(
 	if err != nil {
 		return result, err
 	}
+	return m.reconcileUserProcessMembershipAt(uid, target, normalQuota)
+}
+
+func (m *Manager) reconcileUserProcessMembershipAt(
+	uid int,
+	target string,
+	normalQuota string,
+) (ProcessMembershipResult, error) {
+	var result ProcessMembershipResult
 	currentPIDs, err := m.readPidsFromFile(filepath.Join(target, "cgroup.procs"))
 	if err != nil {
 		return result, fmt.Errorf("read limited process membership for UID %d: %w", uid, err)
