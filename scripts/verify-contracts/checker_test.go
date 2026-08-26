@@ -127,6 +127,24 @@ func TestCrossPackageMapKeyCheckerReportsLiteralBoundary(t *testing.T) {
 	}
 }
 
+func TestCrossPackageMapKeyCheckerReportsCompositeLiteralBoundary(t *testing.T) {
+	root := newCheckerFixture(t)
+	writeFixture(t, root, "cgroup/info.go", `package cgroup; func produce() map[string]string { return map[string]string{"path": "/sys/fs/cgroup/user"} }`)
+	writeFixture(t, root, "mcp/info.go", `package mcp; func consume() map[string]any { return map[string]any{"path": "visible"} }`)
+	writeFixture(t, root, "scripts/verify-contracts/cross-package-map-keys.allowlist", "# empty\n")
+	writeFixture(t, root, "scripts/verify-contracts/cross-package-map-keys.known", "# empty\n")
+	sources, _ := loadGoFiles(root)
+	result := checkCrossPackageMapKeys(root, sources)
+	if len(result.findings) != 2 {
+		t.Fatalf("findings = %d, want 2; findings=%v", len(result.findings), result.findings)
+	}
+	for _, item := range result.findings {
+		if item.line != 1 || !strings.Contains(item.message, `string map key "path" is duplicated across packages cgroup,mcp`) {
+			t.Fatalf("unexpected finding: %+v", item)
+		}
+	}
+}
+
 func TestMCPCheckerPinsSDKRevisionAndStatelessTransport(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -185,19 +203,25 @@ var sdk struct{ StreamableHTTPOptions StreamableHTTPOptions }
 func TestShippedAssetCheckerRejectsTokensAndStaleAllowlist(t *testing.T) {
 	tests := []struct {
 		name       string
+		path       string
 		content    string
 		allowlist  string
 		wantFailed bool
 	}{
 		{name: "clean", content: "ResMan listens on 1974.\n"},
 		{name: "stale token", content: "Copy CPU Manager configuration.\n", wantFailed: true},
+		{name: "changelog-like path is scanned", path: "docs/changelog-notes.md", content: "Copy CPU Manager configuration.\n", wantFailed: true},
 		{name: "allowed provenance", content: "The old port was 9101.\n", allowlist: "docs/example.md | 9101 | old port was 9101 | provenance | allowed | Historical audit provenance.\n"},
 		{name: "stale allowlist", content: "ResMan listens on 1974.\n", allowlist: "docs/example.md | 9101 | old port was 9101 | provenance | allowed | Historical audit provenance.\n", wantFailed: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := newCheckerFixture(t)
-			writeFixture(t, root, "docs/example.md", tt.content)
+			path := tt.path
+			if path == "" {
+				path = "docs/example.md"
+			}
+			writeFixture(t, root, path, tt.content)
 			writeFixture(t, root, "packaging/empty", "")
 			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.allowlist", "# allowed\n"+tt.allowlist)
 			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.known", "# known\n")

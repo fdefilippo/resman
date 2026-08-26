@@ -39,6 +39,8 @@ func checkShippedAssets(root string) checkResult {
 				return nil
 			}
 			if entry.IsDir() {
+				// The checker and its policy files must name every forbidden token, so
+				// scanning their own implementation would create a recursive exception.
 				if filepath.ToSlash(candidate) == filepath.ToSlash(filepath.Join(root, "scripts/verify-contracts")) {
 					return filepath.SkipDir
 				}
@@ -60,7 +62,7 @@ func checkShippedAssetFile(root, path, allowlistPath, knownPath string, allowedE
 	}
 	rel = filepath.ToSlash(rel)
 	lowerPath := strings.ToLower(rel)
-	if strings.Contains(lowerPath, "changelog") || strings.HasSuffix(lowerPath, ".gz") || strings.HasSuffix(lowerPath, ".png") || strings.HasSuffix(lowerPath, ".jpg") {
+	if strings.HasSuffix(lowerPath, ".gz") || strings.HasSuffix(lowerPath, ".png") || strings.HasSuffix(lowerPath, ".jpg") {
 		return
 	}
 	file, err := os.Open(path)

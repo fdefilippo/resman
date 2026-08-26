@@ -780,11 +780,11 @@ fail the check, and an entry classified as a known violation must name its open 
 | Check | Rule | Approach |
 |---|---|---|
 | Every `config:"X"` key has a consumer outside `config/`, and unknown keys are rejected at load | 1, 5 | AST field/accessor scan plus focused loader tests |
-| No cross-package string-literal map keys for known contracts | 6 | AST scan of string map-index keys grouped by package |
+| No cross-package string-literal map keys for known contracts | 6 | AST scan of string map-index and composite-literal keys grouped by package |
 | Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
-| Shipped assets contain no stale port/namespace | 13 | grep `9100\|9101\|cpu_manager\|cpu-manager` in `docs/`, `packaging/`, `scripts/`, excluding changelogs |
+| Shipped assets contain no stale port/namespace | 13 | scan `9100\|9101\|cpu_manager\|cpu-manager` in `docs/`, `packaging/`, `scripts/`, excluding historical RPM `%changelog` entries |
 | `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
 
 Every failure reports `file:line` and exits non-zero. `KNOWN` lines remain successful

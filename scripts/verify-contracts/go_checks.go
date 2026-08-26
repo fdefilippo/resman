@@ -563,20 +563,37 @@ func checkCrossPackageMapKeys(root string, sources []goSource) checkResult {
 	byKey := make(map[string][]mapKeyOccurrence)
 
 	for _, source := range productionGoFiles(sources) {
-		ast.Inspect(source.file, func(node ast.Node) bool {
-			index, ok := node.(*ast.IndexExpr)
-			if !ok {
-				return true
-			}
-			literal, ok := index.Index.(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
-				return true
+		recordKey := func(literal *ast.BasicLit) {
+			if literal.Kind != token.STRING {
+				return
 			}
 			key, err := strconv.Unquote(literal.Value)
 			if err != nil {
-				return true
+				return
 			}
-			byKey[key] = append(byKey[key], mapKeyOccurrence{path: source.path, line: sourceLine(source, literal.Pos()), pkg: source.packageName})
+			byKey[key] = append(byKey[key], mapKeyOccurrence{
+				path: source.path,
+				line: sourceLine(source, literal.Pos()),
+				pkg:  source.packageName,
+			})
+		}
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.IndexExpr:
+				if literal, ok := typed.Index.(*ast.BasicLit); ok {
+					recordKey(literal)
+				}
+			case *ast.CompositeLit:
+				for _, element := range typed.Elts {
+					pair, ok := element.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					if literal, ok := pair.Key.(*ast.BasicLit); ok {
+						recordKey(literal)
+					}
+				}
+			}
 			return true
 		})
 	}
