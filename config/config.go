@@ -179,7 +179,7 @@ type Config struct {
 	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`
 
 	// Blackout timeframes during which ResMan must not apply limits.
-	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
+	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT
 
 	// Blackout specification string (crontab-like format)
 	BlackoutSpec string `config:"BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"

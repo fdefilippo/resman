@@ -210,7 +210,11 @@ func TestShippedAssetCheckerRejectsTokensAndStaleAllowlist(t *testing.T) {
 	}{
 		{name: "clean", content: "ResMan listens on 1974.\n"},
 		{name: "stale token", content: "Copy CPU Manager configuration.\n", wantFailed: true},
+		{name: "mixed-case product name", content: "Copy cPu MaNaGeR configuration.\n", wantFailed: true},
+		{name: "uppercase configuration namespace", content: "CPU_MANAGER_BLACKOUT was the historical key.\n", wantFailed: true},
+		{name: "classified uppercase configuration namespace", content: "CPU_MANAGER_BLACKOUT was the historical key.\n", allowlist: "docs/example.md | CPU_MANAGER | CPU_MANAGER_BLACKOUT | historical configuration key | allowed | This exact historical key is part of the version record.\n"},
 		{name: "changelog-like path is scanned", path: "docs/changelog-notes.md", content: "Copy CPU Manager configuration.\n", wantFailed: true},
+		{name: "RPM changelog is historical", path: "packaging/example.spec", content: "%changelog\n- CPU Manager was the former product name.\n"},
 		{name: "allowed provenance", content: "The old port was 9101.\n", allowlist: "docs/example.md | 9101 | old port was 9101 | provenance | allowed | Historical audit provenance.\n"},
 		{name: "stale allowlist", content: "ResMan listens on 1974.\n", allowlist: "docs/example.md | 9101 | old port was 9101 | provenance | allowed | Historical audit provenance.\n", wantFailed: true},
 	}
@@ -222,16 +226,122 @@ func TestShippedAssetCheckerRejectsTokensAndStaleAllowlist(t *testing.T) {
 				path = "docs/example.md"
 			}
 			writeFixture(t, root, path, tt.content)
+			writeFixture(t, root, "docs/empty", "")
 			writeFixture(t, root, "packaging/empty", "")
 			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.allowlist", "# allowed\n"+tt.allowlist)
 			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.known", "# known\n")
 			writeFixture(t, root, "README.md", "ResMan\n")
 			writeFixture(t, root, "CONTRIBUTING.md", "ResMan\n")
-			result := checkShippedAssets(root)
+			sources, parseFindings := loadGoFiles(root)
+			if len(parseFindings) != 0 {
+				t.Fatalf("parse findings: %v", parseFindings)
+			}
+			result := checkShippedAssets(root, sources)
 			if got := len(result.findings) > 0; got != tt.wantFailed {
 				t.Fatalf("failed = %v, want %v; findings=%v", got, tt.wantFailed, result.findings)
 			}
 		})
+	}
+}
+
+func TestShippedAssetCheckerRejectsObsoleteProductNamesInProductionGo(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		content    string
+		allowlist  string
+		wantFailed bool
+		wantLine   int
+	}{
+		{
+			name:       "string literal",
+			content:    "package app\n\nconst description = \"Get CPU Manager configuration\"\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "comment",
+			content:    "package app\n\n// CPU-Manager applies limits.\nfunc apply() {}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "mixed-case comment",
+			content:    "package app\n\n// cPu_mAnAgEr was the old namespace.\nfunc apply() {}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:      "classified uppercase configuration identifier",
+			content:   "package app\n\nconst historicalKey = \"CPU_MANAGER_BLACKOUT\"\n",
+			allowlist: "app/app.go | CPU_MANAGER | CPU_MANAGER_BLACKOUT | historical configuration key | allowed | This exact historical key is retained as explicit provenance.\n",
+		},
+		{
+			name:    "test source is excluded",
+			path:    "app/app_test.go",
+			content: "package app\n\nconst obsoleteFixture = \"CPU Manager\"\n",
+		},
+		{
+			name:    "checker source is self-excluded",
+			path:    "scripts/verify-contracts/self.go",
+			content: "package main\n\nconst forbiddenPattern = \"CPU Manager\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := newCheckerFixture(t)
+			path := tt.path
+			if path == "" {
+				path = "app/app.go"
+			}
+			writeFixture(t, root, path, tt.content)
+			writeFixture(t, root, "docs/example.md", "ResMan\n")
+			writeFixture(t, root, "packaging/empty", "")
+			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.allowlist", "# allowed\n"+tt.allowlist)
+			writeFixture(t, root, "scripts/verify-contracts/shipped-assets.known", "# known\n")
+			writeFixture(t, root, "README.md", "ResMan\n")
+			writeFixture(t, root, "CONTRIBUTING.md", "ResMan\n")
+
+			sources, parseFindings := loadGoFiles(root)
+			if len(parseFindings) != 0 {
+				t.Fatalf("parse findings: %v", parseFindings)
+			}
+			result := checkShippedAssets(root, sources)
+			if got := len(result.findings) > 0; got != tt.wantFailed {
+				t.Fatalf("failed = %v, want %v; findings=%v", got, tt.wantFailed, result.findings)
+			}
+			if tt.wantFailed && (len(result.findings) != 1 || result.findings[0].path != path || result.findings[0].line != tt.wantLine) {
+				t.Fatalf("unexpected finding location: %+v", result.findings)
+			}
+		})
+	}
+}
+
+func TestShippedAssetCheckerIgnoresUntrackedWorkspaceFiles(t *testing.T) {
+	root := newCheckerFixture(t)
+	writeFixture(t, root, "docs/example.md", "ResMan\n")
+	writeFixture(t, root, "docs/analysis/local.md", "CPU Manager was a local analysis note.\n")
+	writeFixture(t, root, "app/local.go", "package app\n\nconst localNote = \"CPU_MANAGER_LOCAL\"\n")
+	writeFixture(t, root, "packaging/empty", "")
+	writeFixture(t, root, "scripts/verify-contracts/shipped-assets.allowlist", "# allowed\n")
+	writeFixture(t, root, "scripts/verify-contracts/shipped-assets.known", "# known\n")
+	writeFixture(t, root, "README.md", "ResMan\n")
+	writeFixture(t, root, "CONTRIBUTING.md", "ResMan\n")
+
+	sources, parseFindings := loadGoFiles(root)
+	if len(parseFindings) != 0 {
+		t.Fatalf("parse findings: %v", parseFindings)
+	}
+	tracked := map[string]bool{
+		"docs/example.md": true,
+		"packaging/empty": true,
+		"README.md":       true,
+		"CONTRIBUTING.md": true,
+	}
+	result := checkShippedAssetsWithTrackedPaths(root, sources, tracked)
+	if len(result.findings) != 0 {
+		t.Fatalf("untracked workspace files produced findings: %v", result.findings)
 	}
 }
 

@@ -3,16 +3,28 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"go/ast"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
-var staleAssetTokens = []string{"9100", "9101", "cpu_manager", "cpu-manager", "CPU Manager"}
+var obsoleteProductPattern = regexp.MustCompile(`(?i)\bcpu[ _-]+manager`)
 
-func checkShippedAssets(root string) checkResult {
+type obsoleteTokenMatch struct {
+	token  string
+	offset int
+}
+
+func checkShippedAssets(root string, sources []goSource) checkResult {
+	return checkShippedAssetsWithTrackedPaths(root, sources, trackedRepositoryPaths(root))
+}
+
+func checkShippedAssetsWithTrackedPaths(root string, sources []goSource, trackedPaths map[string]bool) checkResult {
 	result := checkResult{name: "shipped-assets"}
 	const allowlistPath = "scripts/verify-contracts/shipped-assets.allowlist"
 	allowedEntries := loadAllowlist(root, allowlistPath, 6, &result)
@@ -29,7 +41,7 @@ func checkShippedAssets(root string) checkResult {
 			continue
 		}
 		if !info.IsDir() {
-			checkShippedAssetFile(root, path, allowlistPath, knownPath, allowedEntries, entries, &result)
+			checkShippedAssetFile(root, path, trackedPaths, allowlistPath, knownPath, allowedEntries, entries, &result)
 			continue
 		}
 		_ = filepath.WalkDir(path, func(candidate string, entry fs.DirEntry, walkErr error) error {
@@ -46,21 +58,25 @@ func checkShippedAssets(root string) checkResult {
 				}
 				return nil
 			}
-			checkShippedAssetFile(root, candidate, allowlistPath, knownPath, allowedEntries, entries, &result)
+			checkShippedAssetFile(root, candidate, trackedPaths, allowlistPath, knownPath, allowedEntries, entries, &result)
 			return nil
 		})
 	}
+	checkProductionGoTerminology(sources, trackedPaths, allowlistPath, knownPath, allowedEntries, entries, &result)
 	requireUsedAllowlist(allowlistPath, allowedEntries, &result)
 	requireUsedAllowlist(knownPath, knownEntries, &result)
 	return result
 }
 
-func checkShippedAssetFile(root, path, allowlistPath, knownPath string, allowedEntries, entries []*allowEntry, result *checkResult) {
+func checkShippedAssetFile(root, path string, trackedPaths map[string]bool, allowlistPath, knownPath string, allowedEntries, entries []*allowEntry, result *checkResult) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return
 	}
 	rel = filepath.ToSlash(rel)
+	if trackedPaths != nil && !trackedPaths[rel] {
+		return
+	}
 	lowerPath := strings.ToLower(rel)
 	if strings.HasSuffix(lowerPath, ".gz") || strings.HasSuffix(lowerPath, ".png") || strings.HasSuffix(lowerPath, ".jpg") {
 		return
@@ -87,30 +103,104 @@ func checkShippedAssetFile(root, path, allowlistPath, knownPath string, allowedE
 		if inRPMChangelog {
 			continue
 		}
-		for _, token := range staleAssetTokens {
-			if !strings.Contains(text, token) {
-				continue
-			}
-			matched := false
-			for _, entry := range entries {
-				if entry.fields[0] == rel && entry.fields[1] == token && strings.Contains(text, entry.fields[2]) {
-					entry.used = true
-					matched = true
-					entryPath := entrySource(entry, allowedEntries, allowlistPath, knownPath)
-					if validateClassification(entry, entryPath, result) {
-						result.known(rel, line, "%s", entry.fields[5])
-					}
-					break
-				}
-			}
-			if !matched {
-				result.fail(rel, line, "stale shipped asset token %q", token)
-			}
+		for _, match := range staleShippedAssetTokens(text) {
+			classifyObsoleteToken(rel, line, text, match.token, allowlistPath, knownPath, allowedEntries, entries, result)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		result.fail(rel, 1, "read shipped asset: %v", err)
 	}
+}
+
+func checkProductionGoTerminology(sources []goSource, trackedPaths map[string]bool, allowlistPath, knownPath string, allowedEntries, entries []*allowEntry, result *checkResult) {
+	for _, source := range productionGoFiles(sources) {
+		if trackedPaths != nil && !trackedPaths[source.path] {
+			continue
+		}
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			classifyGoText(source, literal.Pos(), literal.Value, allowlistPath, knownPath, allowedEntries, entries, result)
+			return true
+		})
+		for _, group := range source.file.Comments {
+			for _, comment := range group.List {
+				classifyGoText(source, comment.Pos(), comment.Text, allowlistPath, knownPath, allowedEntries, entries, result)
+			}
+		}
+	}
+}
+
+func trackedRepositoryPaths(root string) map[string]bool {
+	command := exec.Command("git", "ls-files", "-z")
+	command.Dir = root
+	output, err := command.Output()
+	if err != nil {
+		// Source archives and unit-test fixtures have no Git metadata. In that
+		// environment every file under the declared shipped paths is in scope.
+		return nil
+	}
+	tracked := make(map[string]bool)
+	for _, path := range bytes.Split(output, []byte{0}) {
+		if len(path) > 0 {
+			tracked[filepath.ToSlash(string(path))] = true
+		}
+	}
+	return tracked
+}
+
+func classifyGoText(source goSource, pos token.Pos, text, allowlistPath, knownPath string, allowedEntries, entries []*allowEntry, result *checkResult) {
+	startLine := sourceLine(source, pos)
+	for _, match := range findObsoleteProductTokens(text) {
+		line := startLine + strings.Count(text[:match.offset], "\n")
+		classifyObsoleteToken(source.path, line, text, match.token, allowlistPath, knownPath, allowedEntries, entries, result)
+	}
+}
+
+func classifyObsoleteToken(path string, line int, text, token, allowlistPath, knownPath string, allowedEntries, entries []*allowEntry, result *checkResult) {
+	for _, entry := range entries {
+		if entry.fields[0] != path || entry.fields[1] != token || !strings.Contains(text, entry.fields[2]) {
+			continue
+		}
+		entry.used = true
+		entryPath := entrySource(entry, allowedEntries, allowlistPath, knownPath)
+		if validateClassification(entry, entryPath, result) {
+			result.known(path, line, "%s", entry.fields[5])
+		}
+		return
+	}
+	result.fail(path, line, "obsolete product or namespace token %q", token)
+}
+
+func staleShippedAssetTokens(text string) []obsoleteTokenMatch {
+	matches := findObsoleteProductTokens(text)
+	for _, token := range []string{"9100", "9101"} {
+		if offset := strings.Index(text, token); offset >= 0 {
+			matches = append(matches, obsoleteTokenMatch{token: token, offset: offset})
+		}
+	}
+	return matches
+}
+
+func findObsoleteProductTokens(text string) []obsoleteTokenMatch {
+	indexes := obsoleteProductPattern.FindAllStringIndex(text, -1)
+	matches := make([]obsoleteTokenMatch, 0, len(indexes))
+	for _, index := range indexes {
+		if index[1] < len(text) && isASCIIAlphaNumeric(text[index[1]]) {
+			continue
+		}
+		matches = append(matches, obsoleteTokenMatch{
+			token:  text[index[0]:index[1]],
+			offset: index[0],
+		})
+	}
+	return matches
+}
+
+func isASCIIAlphaNumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func checkPrometheusAssets(root string) checkResult {

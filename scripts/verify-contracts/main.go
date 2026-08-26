@@ -72,7 +72,7 @@ func main() {
 		checkProductionSleeps(root, goFiles),
 		checkCrossPackageMapKeys(root, goFiles),
 		checkMCPContracts(root, goFiles),
-		checkShippedAssets(root),
+		checkShippedAssets(root, goFiles),
 		checkPrometheusAssets(root),
 	}
 
