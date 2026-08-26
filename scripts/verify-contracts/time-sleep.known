@@ -1,3 +1,1 @@
 # path | function | ordinal within function | call purpose | classification | reason
-cgroup/cleanup.go | CleanupUserCgroup | 1 | pre-removal delay | known | resman-4pw.40 replaces fixed pre-removal sleeps with bounded retry.
-cgroup/shared.go | ReleaseUserFromSharedCgroup | 1 | pre-removal delay | known | resman-4pw.40 replaces fixed pre-removal sleeps with bounded retry.

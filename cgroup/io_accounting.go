@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 type blockIOCounters struct {
@@ -343,17 +342,6 @@ func (m *Manager) removeManagedCgroupPath(path string) error {
 		return m.removeManagedCgroup(path)
 	}
 	return removeCgroupWithRetry(path)
-}
-
-func removeCgroupWithRetry(path string) error {
-	if err := os.Remove(path); err == nil || os.IsNotExist(err) {
-		return nil
-	}
-	time.Sleep(25 * time.Millisecond)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
 }
 
 func readBlockIOCounters(cgroupPath string) (blockIOCounters, error) {

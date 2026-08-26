@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/fdefilippo/resman/internal/processpolicy"
 )
@@ -227,11 +226,7 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 	if err != nil {
 		return fmt.Errorf("failed to restore processes from shared cgroup for UID %d: %w", uid, err)
 	}
-	if len(pids) > 0 {
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if err := os.Remove(userPath); err != nil {
+	if err := m.removeManagedCgroupPath(userPath); err != nil {
 		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
 	}
 
