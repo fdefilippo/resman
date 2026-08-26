@@ -210,6 +210,7 @@ func TestShippedAssetCheckerRejectsTokensAndStaleAllowlist(t *testing.T) {
 	}{
 		{name: "clean", content: "ResMan listens on 1974.\n"},
 		{name: "stale token", content: "Copy CPU Manager configuration.\n", wantFailed: true},
+		{name: "plural product name", content: "The CPU Managers are legacy.\n", wantFailed: true},
 		{name: "mixed-case product name", content: "Copy cPu MaNaGeR configuration.\n", wantFailed: true},
 		{name: "uppercase configuration namespace", content: "CPU_MANAGER_BLACKOUT was the historical key.\n", wantFailed: true},
 		{name: "classified uppercase configuration namespace", content: "CPU_MANAGER_BLACKOUT was the historical key.\n", allowlist: "docs/example.md | CPU_MANAGER | CPU_MANAGER_BLACKOUT | historical configuration key | allowed | This exact historical key is part of the version record.\n"},
@@ -286,6 +287,18 @@ func TestShippedAssetCheckerRejectsObsoleteProductNamesInProductionGo(t *testing
 		{
 			name:       "prefixed concatenated identifier",
 			content:    "package app\n\nfunc NewCPUManager() {}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "suffixed concatenated type identifier",
+			content:    "package app\n\ntype CPUManagerFactory struct{}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "suffixed camel-case identifier",
+			content:    "package app\n\nfunc cpuManagerService() {}\n",
 			wantFailed: true,
 			wantLine:   3,
 		},

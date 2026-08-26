@@ -780,6 +780,8 @@ configuration identifiers are not silently exempt: a historical key must have it
 narrow classification. Production Go identifiers, string literals, and comments are
 scanned; the checker implementation and test fixtures are excluded structurally because
 they must contain the rejected examples.
+Matches remain in scope when the obsolete form is embedded in a longer identifier or
+followed by an inflection in prose; prefixes and suffixes must not create an escape.
 In a Git checkout, the scan is limited to paths present in the index, including staged
 new files; ignored and untracked workspace notes are not shipped assets. In a source
 archive without Git metadata, every file below the declared shipped paths is scanned.

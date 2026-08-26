@@ -191,19 +191,12 @@ func findObsoleteProductTokens(text string) []obsoleteTokenMatch {
 	indexes := obsoleteProductPattern.FindAllStringIndex(text, -1)
 	matches := make([]obsoleteTokenMatch, 0, len(indexes))
 	for _, index := range indexes {
-		if index[1] < len(text) && isASCIIAlphaNumeric(text[index[1]]) {
-			continue
-		}
 		matches = append(matches, obsoleteTokenMatch{
 			token:  text[index[0]:index[1]],
 			offset: index[0],
 		})
 	}
 	return matches
-}
-
-func isASCIIAlphaNumeric(value byte) bool {
-	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func checkPrometheusAssets(root string) checkResult {
