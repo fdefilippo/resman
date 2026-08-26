@@ -61,7 +61,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	byteCoverageIncomplete := (byteRateLimit(ioPolicy.ReadBPS) > 0 || byteRateLimit(ioPolicy.WriteBPS) > 0) &&
 		metrics.IOEligibleUnavailableProcesses > 0
 	blockIOPSCoverageIncomplete := (ioPolicy.ReadIOPS > 0 || ioPolicy.WriteIOPS > 0) &&
-		metrics.IOBlockIOPSUnavailable
+		metrics.IOBlockIOPSUnavailableUsers > 0
 	ioCoverageIncomplete := ioPolicy.Enabled && ioPolicy.Threshold > 0 &&
 		(byteCoverageIncomplete || blockIOPSCoverageIncomplete)
 	ioActivationPressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.Threshold)
@@ -240,10 +240,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 func ioCoverageReason(metrics *SystemMetrics, blockIOPSIncomplete bool, consequence string) string {
 	if blockIOPSIncomplete && metrics.IOEligibleUnavailableProcesses > 0 {
-		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS baseline unavailable and %d enforceable process samples unavailable; %s", metrics.IOEligibleUnavailableProcesses, consequence)
+		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS unavailable for %d users and %d enforceable process samples unavailable; %s", metrics.IOBlockIOPSUnavailableUsers, metrics.IOEligibleUnavailableProcesses, consequence)
 	}
 	if blockIOPSIncomplete {
-		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS baseline unavailable; %s", consequence)
+		return fmt.Sprintf("I/O decision coverage incomplete: block IOPS unavailable for %d users; %s", metrics.IOBlockIOPSUnavailableUsers, consequence)
 	}
 	return fmt.Sprintf("I/O decision coverage incomplete for %d enforceable processes; %s", metrics.IOEligibleUnavailableProcesses, consequence)
 }

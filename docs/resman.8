@@ -233,8 +233,11 @@ derives read/write IOPS from io.stat rios/wios. Page-cache hits, pipe traffic,
 and socket traffic therefore cannot trigger device-IOPS enforcement. The same
 logical counters continue across moves into and out of the shared CPU hierarchy.
 The first sample after observation begins or its process policy changes is
-unknown rather than zero and cannot release active limits. The activation rule
-is any-of across configured dimensions and the release rule is all-of.
+unknown rather than zero. Available users remain a lower bound that may prove
+activation, but one eligible user without a baseline blocks the global release
+decision. Continuous eligible-user churn can therefore prolong active I/O
+limits. The activation rule is any-of across configured dimensions and the
+release rule is all-of.
 .PP
 An unavailable /proc/PID/io sample for an enforceable I/O-eligible process is
 unknown, not zero. Available rates remain a lower bound and may still prove an

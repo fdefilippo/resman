@@ -21,6 +21,25 @@ type blockIOAccountingState struct {
 	offset blockIOCounters
 }
 
+// UserCgroupPlacementIncompleteError reports a transient split between the
+// authoritative and alternate ResMan cgroups for one user.
+type UserCgroupPlacementIncompleteError struct {
+	UID           int
+	AlternatePath string
+	DesiredPath   string
+	Processes     int
+}
+
+func (e *UserCgroupPlacementIncompleteError) Error() string {
+	return fmt.Sprintf(
+		"split cgroup placement for UID %d: %s still contains %d processes while %s is authoritative",
+		e.UID,
+		e.AlternatePath,
+		e.Processes,
+		e.DesiredPath,
+	)
+}
+
 func (c blockIOCounters) add(other blockIOCounters) blockIOCounters {
 	return blockIOCounters{
 		readBytes:  c.readBytes + other.readBytes,
@@ -60,8 +79,15 @@ func (m *Manager) logicalBlockIOCounters(uid int) (blockIOCounters, error) {
 			state = initialized
 		}
 
-		raw, err := readBlockIOCounters(state.path)
+		raw, err := m.readManagedBlockIOCounters(state.path)
 		if err != nil {
+			m.blockIOMu.Lock()
+			current, stillCurrent := m.blockIOAccounting[uid]
+			stateChanged := !stillCurrent || current != state
+			m.blockIOMu.Unlock()
+			if stateChanged {
+				continue
+			}
 			return blockIOCounters{}, err
 		}
 
@@ -84,7 +110,7 @@ func (m *Manager) initializeBlockIOAccounting(uid int) (blockIOAccountingState, 
 	if !exists {
 		return blockIOAccountingState{}, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
-	raw, err := readBlockIOCounters(path)
+	raw, err := m.readManagedBlockIOCounters(path)
 	if err != nil {
 		return blockIOAccountingState{}, err
 	}
@@ -152,7 +178,7 @@ func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath s
 		retErr = errors.Join(retErr, cleanupErr)
 	}()
 
-	initial, err := readBlockIOCounters(desiredPath)
+	initial, err := m.readManagedBlockIOCounters(desiredPath)
 	if err != nil {
 		return fmt.Errorf("read initial block I/O counters for UID %d: %w", uid, err)
 	}
@@ -208,7 +234,7 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 	if filepath.Clean(accounting.path) != filepath.Clean(oldPath) {
 		return fmt.Errorf("tracked block I/O source for UID %d is %s, expected %s", uid, accounting.path, oldPath)
 	}
-	newBase, err := readBlockIOCounters(newPath)
+	newBase, err := m.readManagedBlockIOCounters(newPath)
 	if err != nil {
 		return fmt.Errorf("read destination block I/O counters for UID %d: %w", uid, err)
 	}
@@ -228,7 +254,7 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 		errs = append(errs, m.rollbackUserCgroupTransition(uid, moved, oldPath))
 		return errors.Join(errs...)
 	}
-	oldFinal, err := readBlockIOCounters(oldPath)
+	oldFinal, err := m.readManagedBlockIOCounters(oldPath)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf("read final source block I/O counters for UID %d: %w", uid, err),
@@ -279,7 +305,12 @@ func (m *Manager) cleanupAlternateUserCgroup(uid int, desiredPath string) error 
 		return fmt.Errorf("read alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
 	}
 	if len(pids) > 0 {
-		return fmt.Errorf("split cgroup placement for UID %d: %s still contains %d processes while %s is authoritative", uid, alternatePath, len(pids), desiredPath)
+		return &UserCgroupPlacementIncompleteError{
+			UID:           uid,
+			AlternatePath: alternatePath,
+			DesiredPath:   desiredPath,
+			Processes:     len(pids),
+		}
 	}
 	if err := m.removeManagedCgroupPath(alternatePath); err != nil {
 		return fmt.Errorf("remove stale alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
@@ -334,4 +365,11 @@ func readBlockIOCounters(cgroupPath string) (blockIOCounters, error) {
 		readBytes: readBytes, writeBytes: writeBytes,
 		readOps: readOps, writeOps: writeOps,
 	}, nil
+}
+
+func (m *Manager) readManagedBlockIOCounters(cgroupPath string) (blockIOCounters, error) {
+	if m.readBlockIOStats != nil {
+		return m.readBlockIOStats(cgroupPath)
+	}
+	return readBlockIOCounters(cgroupPath)
 }

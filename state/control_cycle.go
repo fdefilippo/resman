@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -33,6 +34,8 @@ type controlCycleContext struct {
 	activeLimitedUsers int
 	stopWithoutError   bool
 	deferredErrors     []error
+	degradedErrors     []error
+	degradedWarnings   []error
 }
 
 type controlCycleStage struct {
@@ -131,16 +134,16 @@ func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []cont
 		if err := stage.run(m, run); err != nil {
 			cycleErrors = append(cycleErrors, err)
 			if !stage.continueAfterError {
-				return errors.Join(cycleErrors...)
+				return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
 			}
 			run.deferredErrors = append(run.deferredErrors, err)
 		}
 		if run.stopWithoutError {
-			return errors.Join(cycleErrors...)
+			return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
 		}
 	}
 
-	return errors.Join(cycleErrors...)
+	return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
 }
 
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
@@ -191,6 +194,8 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", run.cycleID, err)
 	}
 	run.metrics = metrics
+	run.degradedErrors = append(run.degradedErrors, metrics.blockIOObservationErrors...)
+	run.degradedWarnings = append(run.degradedWarnings, metrics.blockIOObservationWarnings...)
 	return nil
 }
 
@@ -358,7 +363,7 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	m.mu.RUnlock()
 
 	outcome := "success"
-	if len(run.deferredErrors) > 0 {
+	if len(run.deferredErrors) > 0 || len(run.degradedErrors) > 0 || len(run.degradedWarnings) > 0 {
 		outcome = "degraded"
 	}
 
@@ -376,7 +381,8 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
 		"duration_ms", run.duration.Milliseconds(),
 		"outcome", outcome,
-		"deferred_error_count", len(run.deferredErrors),
+		"deferred_error_count", len(run.deferredErrors)+len(run.degradedErrors),
+		"degraded_warning_count", len(run.degradedWarnings),
 	)
 
 	return nil
@@ -403,8 +409,10 @@ type SystemMetrics struct {
 	IOEligibleWriteBPS             float64
 	IOEligibleReadBlockIOPS        float64
 	IOEligibleWriteBlockIOPS       float64
-	IOBlockIOPSUnavailable         bool
+	IOBlockIOPSUnavailableUsers    int
 	IOEligibleUnavailableProcesses int
+	blockIOObservationErrors       []error
+	blockIOObservationWarnings     []error
 
 	// Current procfs coverage failures across all observed processes.
 	ProcFSExecutableIdentityUnavailableProcesses int
@@ -537,9 +545,8 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
 	if decisionSample {
-		if err := m.collectEligibleBlockIOPS(metrics, sampleTime, m.GetConfig().GetIODecisionPolicy()); err != nil {
-			return nil, fmt.Errorf("collect per-user block IOPS: %w", err)
-		}
+		decisionConfig := m.GetConfig()
+		m.collectEligibleBlockIOPS(metrics, sampleTime, decisionConfig.GetIODecisionPolicy(), decisionConfig.CPUQuotaNormal)
 		m.prevIOTime = sampleTime
 		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
 		for _, uid := range metrics.IOEligibleUsers {
@@ -555,7 +562,7 @@ type blockIOCounterSample struct {
 	writeOps uint64
 }
 
-func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy) error {
+func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy, normalQuota string) {
 	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
 	desired := make(map[int]bool)
 	if needsBlockIO {
@@ -583,7 +590,10 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 	uids := append([]int(nil), metrics.IOEligibleUsers...)
 	sort.Ints(uids)
 	current := make(map[int]blockIOCounterSample, len(uids))
-	baselineReady := true
+	observedNext := make(map[int]bool, len(desired)+len(observedBefore))
+	for uid := range desired {
+		observedNext[uid] = true
+	}
 	for _, uid := range uids {
 		if !desired[uid] {
 			continue
@@ -592,12 +602,21 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 		if activeUsers[uid] {
 			placement = sharedPath
 		}
-		if _, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, m.GetConfig().CPUQuotaNormal); err != nil {
-			return fmt.Errorf("ensure observation placement for UID %d: %w", uid, err)
+		if _, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota); err != nil {
+			metrics.IOBlockIOPSUnavailableUsers++
+			var incomplete *cgroup.UserCgroupPlacementIncompleteError
+			if errors.As(err, &incomplete) {
+				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementIncomplete, err, true)
+			} else {
+				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementFailure, err, false)
+			}
+			continue
 		}
 		_, _, readOps, writeOps, err := m.cgroupManager.GetIOStats(uid)
 		if err != nil {
-			return fmt.Errorf("read block I/O counters for UID %d: %w", uid, err)
+			metrics.IOBlockIOPSUnavailableUsers++
+			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCounterReadFailure, err, false)
+			continue
 		}
 		now := blockIOCounterSample{readOps: readOps, writeOps: writeOps}
 		current[uid] = now
@@ -608,16 +627,14 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 			if seconds > 0 {
 				metrics.IOEligibleReadBlockIOPS += float64(monotonicUint64Delta(now.readOps, previous.readOps)) / seconds
 				metrics.IOEligibleWriteBlockIOPS += float64(monotonicUint64Delta(now.writeOps, previous.writeOps)) / seconds
+			} else {
+				metrics.IOBlockIOPSUnavailableUsers++
 			}
 		} else {
-			baselineReady = false
+			metrics.IOBlockIOPSUnavailableUsers++
 		}
 	}
-	if needsBlockIO {
-		metrics.IOBlockIOPSUnavailable = !baselineReady
-	}
 
-	var cleanupErrors []error
 	for uid := range observedBefore {
 		if desired[uid] || activeUsers[uid] {
 			continue
@@ -627,18 +644,31 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 			continue
 		}
 		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove obsolete block I/O observation cgroup for UID %d: %w", uid, err))
+			observedNext[uid] = true
+			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCleanupFailure, err, false)
 		}
-	}
-	if len(cleanupErrors) > 0 {
-		return errors.Join(cleanupErrors...)
 	}
 
 	m.previousBlockIOCounters = current
 	m.mu.Lock()
-	m.blockIOObservedUsers = desired
+	m.blockIOObservedUsers = observedNext
 	m.mu.Unlock()
-	return nil
+}
+
+func (m *Manager) recordBlockIOObservationIssue(metrics *SystemMetrics, uid int, errorType string, err error, warning bool) {
+	issue := fmt.Errorf("block I/O observation for UID %d (%s): %w", uid, errorType, err)
+	if warning {
+		metrics.blockIOObservationWarnings = append(metrics.blockIOObservationWarnings, issue)
+		m.logger.Warn("Block I/O observation placement remains split; retrying next cycle",
+			"uid", uid,
+			"error", err,
+		)
+	} else {
+		metrics.blockIOObservationErrors = append(metrics.blockIOObservationErrors, issue)
+	}
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.RecordError(blockIOObservationErrorComponent, errorType)
+	}
 }
 
 func monotonicUint64Delta(current, previous uint64) uint64 {
@@ -768,16 +798,21 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 }
 
 const (
-	metricsCollectionErrorComponent    = "metrics_collection"
-	metricsCollectionSystemLoadError   = "system_load_failure"
-	metricsDatabaseErrorComponent      = "metrics_database"
-	metricsDatabaseWriteFailure        = "write_failure"
-	limitTransitionErrorComponent      = "limit_transition"
-	limitTransitionActivationFailure   = "activation_failure"
-	limitTransitionDeactivationFailure = "deactivation_failure"
-	processMembershipErrorComponent    = "process_membership"
-	processMembershipReconcileFailure  = "reconciliation_failure"
-	processMembershipOriginUnavailable = "origin_unavailable"
+	metricsCollectionErrorComponent       = "metrics_collection"
+	metricsCollectionSystemLoadError      = "system_load_failure"
+	metricsDatabaseErrorComponent         = "metrics_database"
+	metricsDatabaseWriteFailure           = "write_failure"
+	limitTransitionErrorComponent         = "limit_transition"
+	limitTransitionActivationFailure      = "activation_failure"
+	limitTransitionDeactivationFailure    = "deactivation_failure"
+	processMembershipErrorComponent       = "process_membership"
+	processMembershipReconcileFailure     = "reconciliation_failure"
+	processMembershipOriginUnavailable    = "origin_unavailable"
+	blockIOObservationErrorComponent      = "block_io_observation"
+	blockIOObservationPlacementFailure    = "placement_failure"
+	blockIOObservationPlacementIncomplete = "placement_incomplete"
+	blockIOObservationCounterReadFailure  = "counter_read_failure"
+	blockIOObservationCleanupFailure      = "cleanup_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

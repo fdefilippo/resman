@@ -1,11 +1,13 @@
 package state
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -350,14 +352,21 @@ func TestByteRateLimitHandlesDisabledValuesPerDimension(t *testing.T) {
 
 type blockIOSequenceCgroupManager struct {
 	mockCgroupManager
-	samples        []blockIOCounterSample
-	index          int
-	placements     []string
-	sharedReleases int
+	samples         []blockIOCounterSample
+	index           int
+	placements      []string
+	placementErrors map[int]error
+	readErrors      map[int]error
+	cleanupErrors   map[int]error
+	cleanups        []int
+	sharedReleases  int
 }
 
-func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(_ int, sharedPath, _ string) (string, error) {
+func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, _ string) (string, error) {
 	m.placements = append(m.placements, sharedPath)
+	if err := m.placementErrors[uid]; err != nil {
+		return "", err
+	}
 	return sharedPath, nil
 }
 
@@ -366,7 +375,10 @@ func (m *blockIOSequenceCgroupManager) ReleaseUserFromSharedCgroup(_ int, _, _ s
 	return nil
 }
 
-func (m *blockIOSequenceCgroupManager) GetIOStats(_ int) (uint64, uint64, uint64, uint64, error) {
+func (m *blockIOSequenceCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
+	if err := m.readErrors[uid]; err != nil {
+		return 0, 0, 0, 0, err
+	}
 	if len(m.samples) == 0 {
 		return 0, 0, 0, 0, nil
 	}
@@ -377,6 +389,11 @@ func (m *blockIOSequenceCgroupManager) GetIOStats(_ int) (uint64, uint64, uint64
 	m.index++
 	sample := m.samples[index]
 	return 0, 0, sample.readOps, sample.writeOps, nil
+}
+
+func (m *blockIOSequenceCgroupManager) CleanupUserCgroup(uid int) error {
+	m.cleanups = append(m.cleanups, uid)
+	return m.cleanupErrors[uid]
 }
 
 func TestCollectSystemMetricsBuildsByteRatesAndBlockIOPS(t *testing.T) {
@@ -451,7 +468,7 @@ func TestBlockIOPSRateContinuesAcrossEnforcementPlacementChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first sample: %v", err)
 	}
-	if !first.IOBlockIOPSUnavailable {
+	if first.IOBlockIOPSUnavailableUsers != 1 {
 		t.Fatal("first block IOPS sample was reported as complete without a baseline")
 	}
 
@@ -464,8 +481,8 @@ func TestBlockIOPSRateContinuesAcrossEnforcementPlacementChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activation placement sample: %v", err)
 	}
-	if activated.IOBlockIOPSUnavailable || activated.IOEligibleReadBlockIOPS < 49 {
-		t.Fatalf("activation placement produced unavailable=%t read_iops=%.1f", activated.IOBlockIOPSUnavailable, activated.IOEligibleReadBlockIOPS)
+	if activated.IOBlockIOPSUnavailableUsers != 0 || activated.IOEligibleReadBlockIOPS < 49 {
+		t.Fatalf("activation placement produced unavailable_users=%d read_iops=%.1f", activated.IOBlockIOPSUnavailableUsers, activated.IOEligibleReadBlockIOPS)
 	}
 
 	manager.mu.Lock()
@@ -476,12 +493,181 @@ func TestBlockIOPSRateContinuesAcrossEnforcementPlacementChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release placement sample: %v", err)
 	}
-	if released.IOBlockIOPSUnavailable || released.IOEligibleReadBlockIOPS < 49 {
-		t.Fatalf("release placement produced unavailable=%t read_iops=%.1f", released.IOBlockIOPSUnavailable, released.IOEligibleReadBlockIOPS)
+	if released.IOBlockIOPSUnavailableUsers != 0 || released.IOEligibleReadBlockIOPS < 49 {
+		t.Fatalf("release placement produced unavailable_users=%d read_iops=%.1f", released.IOBlockIOPSUnavailableUsers, released.IOEligibleReadBlockIOPS)
 	}
 	wantPlacements := []string{"", "/limited", ""}
 	if !slices.Equal(cgroups.placements, wantPlacements) {
 		t.Fatalf("placements = %v, want %v", cgroups.placements, wantPlacements)
+	}
+}
+
+func TestPerUserBlockIOObservationFailurePreservesTheControlCycleTail(t *testing.T) {
+	tests := []struct {
+		name            string
+		placementErrors map[int]error
+		readErrors      map[int]error
+		wantErrorType   string
+	}{
+		{
+			name:            "placement failure",
+			placementErrors: map[int]error{1001: errors.New("simulated transient EBUSY")},
+			wantErrorType:   blockIOObservationPlacementFailure,
+		},
+		{
+			name:          "counter read failure",
+			readErrors:    map[int]error{1001: errors.New("simulated transient ENOENT")},
+			wantErrorType: blockIOObservationCounterReadFailure,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ioDecisionConfig()
+			cfg.IOReadIOPS = 100
+			collector := &mockMetricsCollector{
+				preserveExplicitEnforceableUsage: true,
+				allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+					1000: {UID: 1000, Username: "alice"},
+					1001: {UID: 1001, Username: "bob"},
+				},
+			}
+			cgroups := &blockIOSequenceCgroupManager{
+				samples:         []blockIOCounterSample{{readOps: 50}},
+				placementErrors: tt.placementErrors,
+				readErrors:      tt.readErrors,
+			}
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(cfg, collector, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.previousBlockIOCounters[1000] = blockIOCounterSample{}
+			manager.previousIOEligibleUsers[1000] = struct{}{}
+			manager.prevIOTime = time.Now().Add(-time.Second)
+
+			tailRan := false
+			run := &controlCycleContext{cfg: cfg, startTime: time.Now(), trigger: ControlCycleTriggerManual}
+			stages := []controlCycleStage{
+				{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
+				{name: "protective_tail", run: func(_ *Manager, _ *controlCycleContext) error {
+					tailRan = true
+					return nil
+				}},
+			}
+			err = runControlCyclePipeline(manager, run, stages)
+			if err == nil || !strings.Contains(err.Error(), "UID 1001") {
+				t.Fatalf("pipeline error = %v, want degraded UID 1001 observation error", err)
+			}
+			if !tailRan {
+				t.Fatal("per-user observation failure aborted the protective tail")
+			}
+			if run.metrics == nil {
+				t.Fatal("per-user observation failure discarded the metrics snapshot")
+			}
+			if run.metrics.IOBlockIOPSUnavailableUsers != 1 {
+				t.Fatalf("unavailable block IOPS users = %d, want 1", run.metrics.IOBlockIOPSUnavailableUsers)
+			}
+			if got := run.metrics.IOEligibleReadBlockIOPS; got < 49 {
+				t.Fatalf("available-user lower-bound read IOPS = %.1f, want about 50", got)
+			}
+			if _, retained := manager.previousBlockIOCounters[1001]; retained {
+				t.Fatal("failed UID retained a baseline that could inflate the next rate")
+			}
+			if len(exporter.errors) != 1 || exporter.errors[0] != (prometheusErrorRecord{
+				component: blockIOObservationErrorComponent,
+				errorType: tt.wantErrorType,
+			}) {
+				t.Fatalf("Prometheus errors = %+v, want one bounded %s", exporter.errors, tt.wantErrorType)
+			}
+		})
+	}
+}
+
+func TestSplitBlockIOPlacementIsAWarningAndCoverageGap(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cfg.IOReadIOPS = 100
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {UID: 1000, Username: "alice"},
+		},
+	}
+	cgroups := &blockIOSequenceCgroupManager{
+		placementErrors: map[int]error{1000: &cgroup.UserCgroupPlacementIncompleteError{
+			UID:           1000,
+			AlternatePath: "/old/user_1000",
+			DesiredPath:   "/new/user_1000",
+			Processes:     1,
+		}},
+	}
+	manager, err := NewManager(cfg, collector, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	run := &controlCycleContext{cfg: cfg, startTime: time.Now(), trigger: ControlCycleTriggerManual}
+	tailRan := false
+	stages := []controlCycleStage{
+		{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
+		{name: "tail", run: func(_ *Manager, _ *controlCycleContext) error {
+			tailRan = true
+			return nil
+		}},
+	}
+	if err := runControlCyclePipeline(manager, run, stages); err != nil {
+		t.Fatalf("split-placement warning returned a hard cycle error: %v", err)
+	}
+	if !tailRan || len(run.degradedWarnings) != 1 || len(run.degradedErrors) != 0 {
+		t.Fatalf("tail=%t warnings=%d errors=%d, want true/1/0", tailRan, len(run.degradedWarnings), len(run.degradedErrors))
+	}
+	if run.metrics.IOBlockIOPSUnavailableUsers != 1 {
+		t.Fatalf("split placement unavailable users = %d, want 1", run.metrics.IOBlockIOPSUnavailableUsers)
+	}
+}
+
+func TestBlockIOPSIncompleteCoverageUsesLowerBoundForActivationButBlocksRelease(t *testing.T) {
+	tests := []struct {
+		name         string
+		active       bool
+		readIOPS     float64
+		wantDecision string
+		wantReason   string
+	}{
+		{
+			name:         "available users can still prove activation",
+			readIOPS:     160,
+			wantDecision: "ACTIVATE_LIMITS",
+			wantReason:   "read_iops",
+		},
+		{
+			name:         "one warming user blocks global release",
+			active:       true,
+			wantDecision: "MAINTAIN_CURRENT_STATE",
+			wantReason:   "unavailable for 1 users",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ioDecisionConfig()
+			cfg.IOReadIOPS = 100
+			manager := &Manager{
+				cfg:                       cfg,
+				resourceLimitsActive:      tt.active,
+				resourceLimitsAppliedTime: time.Now().Add(-time.Hour),
+				thresholdTracker:          &ThresholdTracker{},
+				ioThresholdTracker:        &ThresholdTracker{},
+				stabilityTracker:          newUserStabilityTracker(),
+			}
+			metrics := &SystemMetrics{
+				TotalCores:                  4,
+				IOEligibleUsersCount:        2,
+				IOEligibleReadBlockIOPS:     tt.readIOPS,
+				IOBlockIOPSUnavailableUsers: 1,
+			}
+			decision, reason := manager.makeDecision(metrics)
+			if decision != tt.wantDecision || !strings.Contains(reason, tt.wantReason) {
+				t.Fatalf("makeDecision() = %s (%s), want %s containing %q", decision, reason, tt.wantDecision, tt.wantReason)
+			}
+		})
 	}
 }
 

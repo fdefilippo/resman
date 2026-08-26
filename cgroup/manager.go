@@ -46,6 +46,7 @@ type Manager struct {
 	createCgroupProbe   func(string, string) (string, error)
 	removeCgroupProbe   func(string) error
 	removeManagedCgroup func(string) error
+	readBlockIOStats    func(string) (blockIOCounters, error)
 
 	// Cached verification state.
 	cgroupRootWritable         bool
@@ -76,6 +77,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		createCgroupProbe:   os.MkdirTemp,
 		removeCgroupProbe:   os.Remove,
 		removeManagedCgroup: removeCgroupWithRetry,
+		readBlockIOStats:    readBlockIOCounters,
 	}
 
 	// Verify that cgroups v2 provides every interface required by enabled features.

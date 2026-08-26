@@ -145,7 +145,11 @@ logical cumulative counter. ResMan absorbs the source's final value before the
 move and uses the destination's initial value as the new baseline. Activation
 and release therefore do not produce an artificial spike or zero-rate window.
 The first sample after observation starts or the process policy changes is
-incomplete and cannot release active limits.
+incomplete. Rates from users with a valid baseline remain a lower bound and can
+still prove activation, but any eligible user without a baseline prevents the
+global I/O release decision. On a host where a newly eligible user appears in
+every polling interval, active I/O limits can therefore remain in force until
+one complete interval contains baselines for every eligible user.
 
 For bandwidth signals, ResMan calculates `/proc/PID/io` deltas separately for
 each PID and start-time pair before aggregating them per user. A process exit or

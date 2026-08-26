@@ -401,7 +401,10 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - Coverage over a dynamic process set **MUST** travel with the aggregate. Available
   non-negative counters may prove that an activation threshold is exceeded, but an
   incomplete aggregate **MUST NOT** prove below-threshold pressure or authorize release.
-  Process-exit `ENOENT` races are not persistent capability failures and do not alert.
+  The same rule applies to a dynamic user set: a newly eligible user's first counter
+  sample is an expected coverage gap. Available users remain a lower bound for
+  activation, while any missing user blocks a global release. Process-exit `ENOENT`
+  races are not persistent capability failures and do not alert.
 
 **Why.** `cgroup/manager.go:174` returns a fatal error when `+cpuset` cannot be written,
 while `cgroup/manager.go:243-246` treats the identical write as best-effort and
@@ -419,8 +422,12 @@ The collector also previously converted every `/proc/PID/io` read failure into z
 On a host without foreign-process ptrace access this disabled I/O activation
 indefinitely and silently. Procfs coverage now remains explicit through aggregation:
 partial rates are lower bounds that may prove activation, but cannot prove safe release.
+`resman-4pw.29` applies the same coverage contract to true block IOPS. This deliberately
+means that continuous eligible-user churn can prolong active I/O limits: release is a
+global decision and cannot be proved while any eligible user's first baseline is still
+warming.
 
-*Findings: resman-4pw.14, resman-4pw.23, resman-4pw.46*
+*Findings: resman-4pw.14, resman-4pw.23, resman-4pw.29, resman-4pw.46*
 
 ## Rule 13 — Shipped operational assets track runtime defaults **[checkable]**
 

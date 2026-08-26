@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,5 +118,83 @@ func TestTransitionUserCgroupCarriesFinalSourceCountersIntoDestination(t *testin
 	}
 	if logical.readOps != 12 || logical.writeOps != 16 {
 		t.Fatalf("logical counters after real transition = %+v, want 12/16 ops", logical)
+	}
+}
+
+func TestLogicalBlockIOCountersRetriesReadFailureAfterPlacementChange(t *testing.T) {
+	oldPath := "/old/user_1000"
+	newPath := "/new/user_1000"
+	manager := &Manager{
+		blockIOAccounting: map[int]blockIOAccountingState{
+			1000: {path: oldPath, base: blockIOCounters{readOps: 10}},
+		},
+	}
+	reads := 0
+	manager.readBlockIOStats = func(path string) (blockIOCounters, error) {
+		reads++
+		if path == oldPath {
+			manager.blockIOMu.Lock()
+			manager.blockIOAccounting[1000] = blockIOAccountingState{
+				path:   newPath,
+				base:   blockIOCounters{readOps: 100},
+				offset: blockIOCounters{readOps: 5},
+			}
+			manager.blockIOMu.Unlock()
+			return blockIOCounters{}, &os.PathError{Op: "read", Path: filepath.Join(oldPath, "io.stat"), Err: os.ErrNotExist}
+		}
+		return blockIOCounters{readOps: 107}, nil
+	}
+
+	logical, err := manager.logicalBlockIOCounters(1000)
+	if err != nil {
+		t.Fatalf("logicalBlockIOCounters() error: %v", err)
+	}
+	if reads != 2 || logical.readOps != 12 {
+		t.Fatalf("reads=%d logical=%+v, want 2 reads and 12 read operations", reads, logical)
+	}
+}
+
+func TestCleanupAlternateUserCgroupDefersPopulatedSplitAndRetries(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = root
+	cfg.CgroupBase = "resman"
+	basePath := filepath.Join(root, cfg.CgroupBase)
+	desiredPath := filepath.Join(basePath, "user_1000")
+	alternatePath := filepath.Join(basePath, "limited", "user_1000")
+	writeFakeCgroupFiles(t, desiredPath, 0, 0)
+	writeFakeCgroupFiles(t, alternatePath, 0, 0)
+	if err := os.WriteFile(filepath.Join(alternatePath, "cgroup.procs"), []byte("123\n"), 0644); err != nil {
+		t.Fatalf("write populated alternate cgroup.procs: %v", err)
+	}
+	manager := &Manager{
+		cfg: cfg,
+		removeManagedCgroup: func(path string) error {
+			for _, name := range []string{"cgroup.procs", "io.stat", "cpu.weight"} {
+				if err := os.Remove(filepath.Join(path, name)); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+			}
+			return os.Remove(path)
+		},
+	}
+
+	err := manager.cleanupAlternateUserCgroup(1000, desiredPath)
+	var incomplete *UserCgroupPlacementIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.Processes != 1 {
+		t.Fatalf("cleanup error = %v, want one-process placement-incomplete error", err)
+	}
+	if _, err := os.Stat(alternatePath); err != nil {
+		t.Fatalf("populated alternate was removed instead of deferred: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(alternatePath, "cgroup.procs"), nil, 0644); err != nil {
+		t.Fatalf("clear alternate cgroup.procs: %v", err)
+	}
+	if err := manager.cleanupAlternateUserCgroup(1000, desiredPath); err != nil {
+		t.Fatalf("cleanup retry error: %v", err)
+	}
+	if _, err := os.Stat(alternatePath); !os.IsNotExist(err) {
+		t.Fatalf("empty alternate still exists or returned unexpected error: %v", err)
 	}
 }

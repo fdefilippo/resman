@@ -183,6 +183,8 @@ RAM_USER_EXCLUDE_LIST=root
 # Partial rates may prove activation, but incomplete coverage prevents release.
 # Finite IOPS dimensions use io.stat rios/wios from unlimited per-user observation
 # cgroups; page-cache, pipe, and socket syscalls do not count as block IOPS.
+# A new eligible user's first baseline cannot release global I/O enforcement;
+# available users remain a lower bound that can still prove activation.
 #   Useful to avoid throttling on brief IO spikes (e.g., backups, builds, file copies)
 #
 # IO_USER_INCLUDE_LIST: If specified, include ONLY matching users for IO limits
