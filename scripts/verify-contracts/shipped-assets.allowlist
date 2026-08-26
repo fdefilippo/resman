@@ -11,4 +11,4 @@ docs/DEVELOPMENT.md | 9100 | Shipped assets contain no stale port/namespace | ch
 docs/DEVELOPMENT.md | 9101 | Shipped assets contain no stale port/namespace | checker specification | allowed | The mechanical-check table must name the forbidden token it scans for.
 docs/DEVELOPMENT.md | cpu_manager | Shipped assets contain no stale port/namespace | checker specification | allowed | The mechanical-check table must name the forbidden token it scans for.
 docs/DEVELOPMENT.md | cpu-manager | Shipped assets contain no stale port/namespace | checker specification | allowed | The mechanical-check table must name the forbidden token it scans for.
-docs/TECHNICAL-SPECIFICATION.md | CPU Manager | CPU Manager skips | historical version table | allowed | Historical specification row records the name used by version 1.12.0.
+docs/DEVELOPMENT.md | CPU Manager | Shipped assets contain no stale port/namespace | checker specification | allowed | The mechanical-check table must name the forbidden spaced product name that it scans for.

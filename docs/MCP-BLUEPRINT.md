@@ -1,4 +1,4 @@
-# MCP Server Blueprint for CPU Manager Go
+# MCP Server Blueprint for ResMan
 
 > **Archived design note.** This document records the original MCP integration
 > plan and is not the runtime protocol contract. The current implementation is
@@ -7,13 +7,13 @@
 
 ## Overview
 
-This document outlines the blueprint for exposing CPU Manager Go functionality via a **Model Context Protocol (MCP)** server, enabling AI assistants to query and interact with the CPU management system.
+This document outlines the blueprint for exposing ResMan functionality via a **Model Context Protocol (MCP)** server, enabling AI assistants to query and interact with the resource management system.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     CPU Manager Go                               │
+│                         ResMan                                   │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │   Cgroup    │  │   Metrics   │  │      State Manager      │  │
 │  │   Manager   │  │  Collector  │  │  (Control Logic)        │  │
@@ -366,4 +366,4 @@ AI (via MCP):
 
 - [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
 - [MCP Specification](https://modelcontextprotocol.io/)
-- [Existing CPU Manager Documentation](../README.md)
+- [Existing ResMan Documentation](../README.md)

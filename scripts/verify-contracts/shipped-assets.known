@@ -1,5 +1,1 @@
 # path | token | line fragment | scope | classification | reason
-docs/MCP-BLUEPRINT.md | CPU Manager | CPU Manager Go | shipped terminology | known | resman-4pw.38 removes the obsolete product name from shipped documentation.
-docs/MCP-BLUEPRINT.md | CPU Manager | CPU Manager Documentation | shipped terminology | known | resman-4pw.38 removes the obsolete product name from shipped documentation.
-docs/GITHUB-ACTIONS.md | CPU Manager | CPU Manager Go | shipped terminology | known | resman-4pw.38 removes the obsolete product name from shipped documentation.
-docs/METRICS-DATABASE.md | CPU Manager | CPU Manager supporta | shipped terminology | known | resman-4pw.38 removes the obsolete product name from shipped documentation.

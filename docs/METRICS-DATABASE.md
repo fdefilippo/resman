@@ -2,7 +2,7 @@
 
 ## Panoramica
 
-A partire dalla versione 1.16.0, CPU Manager supporta la persistenza delle metriche in un database locale SQLite per esporre lo storico delle metriche via MCP (Model Context Protocol).
+A partire dalla versione 1.16.0, ResMan supporta la persistenza delle metriche in un database locale SQLite per esporre lo storico delle metriche via MCP (Model Context Protocol).
 
 ### Vantaggi
 

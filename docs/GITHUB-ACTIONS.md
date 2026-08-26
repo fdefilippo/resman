@@ -1,6 +1,6 @@
 # GitHub Actions Workflows Documentation
 
-This document describes the CI/CD workflows configured for CPU Manager Go.
+This document describes the CI/CD workflows configured for ResMan.
 
 ## Overview
 
