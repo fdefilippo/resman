@@ -579,12 +579,16 @@ overrides; it never selects another file.
 
 With the default path selected, startup rejects legacy `/etc/resman.conf`, the
 `/etc/resman.conf.rpmsave` produced when RPM preserves a modified legacy file, and
-the secret-bearing `/etc/resman.conf.backup`, `/etc/resman.conf.tmp`, and every
-`/etc/resman.conf.backup_*` entry, even if the new packaged file exists. The operator
-must choose the authoritative authored contents from the legacy or RPM-saved file,
-install them as a regular file at the new path, remove the legacy source files,
-securely remove every orphaned secret-bearing artifact, and restart. A custom
-`--config` path is authoritative and does not trigger this default-layout guard.
+the secret-bearing `/etc/resman.conf.backup` and `/etc/resman.conf.tmp`, plus every
+potential configuration copy matching `/etc/resman.conf.backup_*`, even if the new
+packaged file exists. The broad read-only guard is deliberately stricter than automatic
+cleanup: it cannot prove whether an operator-named matching file is a credential-bearing
+copy. The operator must choose the authoritative authored contents from the legacy or
+RPM-saved file, install them as a regular file at the new path, remove the legacy source
+files, move any needed operator-managed matching copies to a protected archive outside
+the legacy path, securely remove generated or unneeded copies and fixed-name orphaned
+artifacts, and restart. A custom `--config` path is authoritative and does not trigger
+this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
 component construction. A 1.25.x database must be archived or deleted so schema

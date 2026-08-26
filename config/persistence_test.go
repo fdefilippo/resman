@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-func TestSaveToFileReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
+func TestPersistUserFilterReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "resman.conf")
 	if err := os.WriteFile(path, []byte("USER_INCLUDE_LIST=^old$\nUSER_EXCLUDE_LIST=^old$\n"), 0600); err != nil {
@@ -57,7 +57,9 @@ func TestSaveToFileReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := cfg.saveToFileWithWriter(path, writer)
+		_, err := cfg.persistUserFilterWithWriter(
+			[]string{"^saved$"}, path, userFilterInclude, writer,
+		)
 		done <- err
 	}()
 	waitForTestSignal(t, enteredIO, "filesystem I/O to start")
@@ -82,7 +84,7 @@ func TestSaveToFileReleasesConfigLockBeforeFilesystemIO(t *testing.T) {
 
 	release()
 	if err := <-done; err != nil {
-		t.Fatalf("saveToFileWithWriter() error = %v", err)
+		t.Fatalf("persistUserFilterWithWriter() error = %v", err)
 	}
 }
 
@@ -449,7 +451,7 @@ func TestPersistUserFilterDurabilityFailureReportsDeterministicRuntimeAndDiskSta
 	}
 }
 
-func TestSaveToFileSecurityContract(t *testing.T) {
+func TestUserFilterSnapshotPersistenceSecurityContract(t *testing.T) {
 	tests := []struct {
 		name          string
 		createSource  bool
@@ -488,11 +490,14 @@ func TestSaveToFileSecurityContract(t *testing.T) {
 				sourceUID, sourceGID = fileOwnership(t, path)
 			}
 
-			cfg := DefaultConfig()
-			cfg.UserIncludeList = []string{"^service$"}
-			cfg.UserExcludeList = []string{"^blocked$"}
-			if _, err := cfg.SaveToFile(path); err != nil {
-				t.Fatalf("SaveToFile() error = %v", err)
+			snapshot := userFilterPersistenceSnapshot{
+				include:      []string{"^service$"},
+				exclude:      []string{"^blocked$"},
+				writeInclude: true,
+				writeExclude: true,
+			}
+			if _, err := saveUserFilterSnapshotWithWriter(path, snapshot, writeFileAtomically); err != nil {
+				t.Fatalf("saveUserFilterSnapshotWithWriter() error = %v", err)
 			}
 
 			assertFileMode(t, path, tt.wantMode)
@@ -567,10 +572,9 @@ func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t
 	}
 
 	cfg := DefaultConfig()
-	cfg.UserIncludeList = []string{"^second$"}
-	result, err := cfg.SaveToFile(path)
+	result, err := cfg.PersistUserIncludeList([]string{"^second$"}, path)
 	if err != nil {
-		t.Fatalf("first SaveToFile() error = %v", err)
+		t.Fatalf("first PersistUserIncludeList() error = %v", err)
 	}
 	wantRemoved := []string{
 		"resman.conf.backup_20260821_010101",
@@ -599,10 +603,9 @@ func TestSaveToCustomPathKeepsOneRollingBackupAndPrunesAdjacentLegacyArtifacts(t
 		}
 	}
 
-	cfg.UserIncludeList = []string{"^third$"}
-	result, err = cfg.SaveToFile(path)
+	result, err = cfg.PersistUserIncludeList([]string{"^third$"}, path)
 	if err != nil {
-		t.Fatalf("second SaveToFile() error = %v", err)
+		t.Fatalf("second PersistUserIncludeList() error = %v", err)
 	}
 	if len(result.RemovedLegacyArtifacts) != 0 {
 		t.Fatalf("second persistence removed legacy artifacts = %v, want none", result.RemovedLegacyArtifacts)
@@ -700,7 +703,7 @@ func TestLegacyConfigArtifactCleanupReportsPartialFailure(t *testing.T) {
 	}
 }
 
-func TestSaveToFileReportsArtifactsRemovedBeforeCleanupFailure(t *testing.T) {
+func TestUserFilterPersistenceReportsArtifactsRemovedBeforeCleanupFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "resman.conf")
 	original := []byte("MCP_AUTH_TOKEN=active-secret\nUSER_INCLUDE_LIST=^old$\n")
@@ -717,13 +720,12 @@ func TestSaveToFileReportsArtifactsRemovedBeforeCleanupFailure(t *testing.T) {
 	}
 
 	cfg := DefaultConfig()
-	cfg.UserIncludeList = []string{"^new$"}
-	result, err := cfg.SaveToFile(path)
+	result, err := cfg.PersistUserIncludeList([]string{"^new$"}, path)
 	if err == nil || !strings.Contains(err.Error(), blockedName) || !strings.Contains(err.Error(), "directory") {
-		t.Fatalf("SaveToFile() error = %v, want named directory cleanup failure", err)
+		t.Fatalf("PersistUserIncludeList() error = %v, want named directory cleanup failure", err)
 	}
 	if !slices.Equal(result.RemovedLegacyArtifacts, []string{removedName}) {
-		t.Fatalf("SaveToFile() removed artifacts = %v, want [%s]", result.RemovedLegacyArtifacts, removedName)
+		t.Fatalf("PersistUserIncludeList() removed artifacts = %v, want [%s]", result.RemovedLegacyArtifacts, removedName)
 	}
 	if strings.Contains(err.Error()+strings.Join(result.RemovedLegacyArtifacts, ","), "active-secret") {
 		t.Fatalf("partial persistence result exposed configuration contents: result=%v error=%v", result, err)
@@ -763,7 +765,7 @@ func TestLegacyConfigArtifactCleanupNoOpDoesNotMutateOperatorBackup(t *testing.T
 	}
 }
 
-func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
+func TestUserFilterPersistenceRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "resman.conf")
 	original := []byte("MCP_AUTH_TOKEN=original-secret\nUSER_INCLUDE_LIST=^old$\n")
@@ -787,9 +789,11 @@ func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
 		return writeFileAtomically(target, content, metadata)
 	}
 
-	_, err := cfg.saveToFileWithWriter(path, writer)
+	_, err := cfg.persistUserFilterWithWriter(
+		[]string{"^new$"}, path, userFilterInclude, writer,
+	)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
-		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
+		t.Fatalf("persistUserFilterWithWriter() error = %v, want injected sync failure", err)
 	}
 	if writeCalls != 3 {
 		t.Fatalf("atomic write calls = %d, want backup, replacement, and restore", writeCalls)
@@ -805,7 +809,7 @@ func TestSaveToFileRestoresOriginalAfterPostRenameSyncFailure(t *testing.T) {
 	assertNoAtomicTemps(t, path)
 }
 
-func TestSaveToFileRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
+func TestUserFilterPersistenceRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "resman.conf")
 	cfg := DefaultConfig()
@@ -817,9 +821,11 @@ func TestSaveToFileRemovesNewFileAfterPostRenameSyncFailure(t *testing.T) {
 		})
 	}
 
-	_, err := cfg.saveToFileWithWriter(path, writer)
+	_, err := cfg.persistUserFilterWithWriter(
+		[]string{"^new$"}, path, userFilterInclude, writer,
+	)
 	if err == nil || !strings.Contains(err.Error(), "injected parent sync failure") {
-		t.Fatalf("saveToFileWithWriter() error = %v, want injected sync failure", err)
+		t.Fatalf("persistUserFilterWithWriter() error = %v, want injected sync failure", err)
 	}
 	if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
 		t.Fatalf("new config remains after durability failure: %v", statErr)

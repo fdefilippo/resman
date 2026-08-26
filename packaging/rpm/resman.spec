@@ -198,7 +198,7 @@ for legacy_path in /etc/resman.conf /etc/resman.conf.rpmsave /etc/resman.conf.ba
 done
 if "$legacy_config_found"; then
     echo "WARNING: legacy configuration artifacts detected." >&2
-    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, remove the legacy source files, then securely remove /etc/resman.conf.backup, /etc/resman.conf.tmp, and every /etc/resman.conf.backup_* file before restarting resman." >&2
+    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, and remove the legacy source files. Move any needed operator-managed /etc/resman.conf.backup_* copies to a protected archive outside the legacy path; securely remove generated or unneeded matching copies plus /etc/resman.conf.backup and /etc/resman.conf.tmp before restarting resman." >&2
 fi
 if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
     echo "WARNING: legacy metrics database detected at /etc/resman/metrics.db." >&2

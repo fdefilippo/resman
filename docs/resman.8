@@ -557,15 +557,19 @@ and the secret-bearing
 .I /etc/resman.conf.backup
 and
 .I /etc/resman.conf.tmp
-entries, plus every entry matching
+entries, plus every potential configuration copy matching
 .IR /etc/resman.conf.backup_* ,
 even when the new packaged configuration already exists. Stop resman,
 choose the authoritative authored contents from the legacy or RPM-saved file,
 install them as a regular file at
 .IR /etc/resman/resman.conf ,
-remove the legacy source files, securely remove every orphaned secret-bearing
-artifact listed above, and restart. An explicitly selected custom configuration
-path is not treated as a legacy fallback.
+remove the legacy source files, move any needed operator-managed matching copies
+to a protected archive outside the legacy path, securely remove generated or
+unneeded matching copies and fixed-name orphaned artifacts, and restart. The
+read-only startup guard deliberately treats every matching name as potentially
+credential-bearing; automatic cleanup removes only exact historical generated
+names. An explicitly selected custom configuration path is not treated as a
+legacy fallback.
 .PP
 When metrics persistence is enabled at its default
 .I /var/lib/resman/metrics.db

@@ -1437,34 +1437,6 @@ func validateUserFilterPatterns(patterns []string) error {
 	return nil
 }
 
-// SaveToFile persists the configuration with a bounded secure backup and
-// reports legacy artifacts removed during persistence.
-func (c *Config) SaveToFile(path string) (PersistenceResult, error) {
-	return c.saveToFileWithWriter(path, writeFileAtomically)
-}
-
-func (c *Config) saveToFileWithWriter(path string, writer atomicFileWriter) (PersistenceResult, error) {
-	saveMu, saveState := c.persistenceCoordinator()
-	saveMu.Lock()
-	defer saveMu.Unlock()
-	if saveState.unusableErr != nil {
-		return PersistenceResult{}, fmt.Errorf(
-			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
-			saveState.unusableErr,
-		)
-	}
-
-	snapshot := c.userFilterSnapshot()
-	snapshot.writeInclude = true
-	snapshot.writeExclude = true
-	result, err := saveUserFilterSnapshotWithWriter(path, snapshot, writer)
-	var unusableErr *configPersistenceUnusableError
-	if errors.As(err, &unusableErr) {
-		saveState.unusableErr = err
-	}
-	return result, err
-}
-
 func saveUserFilterSnapshotWithWriter(
 	path string,
 	snapshot userFilterPersistenceSnapshot,

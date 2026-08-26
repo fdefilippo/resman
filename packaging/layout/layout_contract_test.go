@@ -91,6 +91,7 @@ func TestPackagePostInstallMessagesNameEveryLegacyArtifactAndRemedy(t *testing.T
 				"/etc/resman/resman.conf",
 				"/var/lib/resman/metrics.db",
 				"securely remove",
+				"protected archive",
 				"Archive or delete",
 			} {
 				if !strings.Contains(content, required) {

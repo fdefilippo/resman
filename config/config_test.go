@@ -960,28 +960,29 @@ LOG_LEVEL=INFO
 
 func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T) {
 	tests := []struct {
-		name           string
-		selected       string
-		createNew      bool
-		createLegacy   bool
-		createSaved    bool
-		createBackup   bool
-		createTemp     bool
-		backupSuffixes []string
-		danglingLink   string
-		wantError      bool
+		name         string
+		selected     string
+		createNew    bool
+		createLegacy bool
+		createSaved  bool
+		createBackup bool
+		createTemp   bool
+		backupNames  []string
+		danglingLink string
+		wantError    bool
 	}{
 		{name: "legacy only", selected: "default", createLegacy: true, wantError: true},
 		{name: "RPM-saved legacy only", selected: "default", createSaved: true, wantError: true},
 		{name: "legacy backup only", selected: "default", createBackup: true, wantError: true},
 		{name: "legacy temporary only", selected: "default", createTemp: true, wantError: true},
-		{name: "multiple timestamped legacy backups", selected: "default", backupSuffixes: []string{"20260822020202", "20260822010101"}, wantError: true},
-		{name: "many timestamped legacy backups", selected: "default", backupSuffixes: []string{"06", "02", "05", "01", "04", "03"}, wantError: true},
+		{name: "multiple generated legacy backups", selected: "default", backupNames: []string{"20260822_020202", "20260822_010101"}, wantError: true},
+		{name: "many matching legacy backups", selected: "default", backupNames: []string{"20260822_000006", "20260822_000002", "20260822_000005", "20260822_000001", "20260822_000004", "20260822_000003"}, wantError: true},
+		{name: "operator-named legacy backup candidate", selected: "default", backupNames: []string{"prima_della_migrazione"}, wantError: true},
 		{name: "dangling legacy backup", selected: "default", danglingLink: "backup", wantError: true},
-		{name: "dangling timestamped legacy backup", selected: "default", danglingLink: "timestamped", wantError: true},
-		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, createTemp: true, backupSuffixes: []string{"20260822030303"}, wantError: true},
+		{name: "dangling matching legacy backup", selected: "default", danglingLink: "matching", wantError: true},
+		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, createTemp: true, backupNames: []string{"20260822_030303"}, wantError: true},
 		{name: "new default only", selected: "default", createNew: true},
-		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true, createTemp: true, backupSuffixes: []string{"20260822040404"}},
+		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true, createTemp: true, backupNames: []string{"20260822_040404"}},
 		{name: "explicit legacy path", selected: "legacy", createLegacy: true},
 	}
 
@@ -1014,8 +1015,8 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 			if tt.createTemp {
 				writeConfigFixture(t, layout.legacyTempPath, "MCP_AUTH_TOKEN=legacy-temp-secret\n")
 			}
-			for _, suffix := range tt.backupSuffixes {
-				writeConfigFixture(t, layout.legacyBackupPrefix+suffix, "MCP_AUTH_TOKEN=legacy-timestamped-secret\n")
+			for _, name := range tt.backupNames {
+				writeConfigFixture(t, layout.legacyBackupPrefix+name, "MCP_AUTH_TOKEN=legacy-backup-secret\n")
 			}
 			if tt.danglingLink == "backup" {
 				if err := os.MkdirAll(filepath.Dir(layout.legacyBackupPath), 0700); err != nil {
@@ -1025,13 +1026,13 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 					t.Fatalf("os.Symlink(legacy backup) error = %v", err)
 				}
 			}
-			if tt.danglingLink == "timestamped" {
-				path := layout.legacyBackupPrefix + "20260822050505"
+			if tt.danglingLink == "matching" {
+				path := layout.legacyBackupPrefix + "20260822_050505"
 				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-					t.Fatalf("os.MkdirAll(timestamped backup parent) error = %v", err)
+					t.Fatalf("os.MkdirAll(matching backup parent) error = %v", err)
 				}
-				if err := os.Symlink(filepath.Join(dir, "missing-timestamped-backup-target"), path); err != nil {
-					t.Fatalf("os.Symlink(timestamped backup) error = %v", err)
+				if err := os.Symlink(filepath.Join(dir, "missing-matching-backup-target"), path); err != nil {
+					t.Fatalf("os.Symlink(matching backup) error = %v", err)
 				}
 			}
 			selectedPath := layout.defaultConfigPath
@@ -1059,7 +1060,7 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 					!strings.Contains(err.Error(), "securely remove")) {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want secure backup removal", err)
 				}
-				if tt.createBackup && len(tt.backupSuffixes) == 0 && strings.Count(err.Error(), layout.legacyBackupPath) != 1 {
+				if tt.createBackup && len(tt.backupNames) == 0 && strings.Count(err.Error(), layout.legacyBackupPath) != 1 {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy backup path exactly once", err)
 				}
 				if tt.createTemp && !strings.Contains(err.Error(), layout.legacyTempPath) {
@@ -1068,16 +1069,24 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 				if tt.createTemp && strings.Count(err.Error(), layout.legacyTempPath) != 1 {
 					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path exactly once", err)
 				}
-				if len(tt.backupSuffixes) > 0 {
-					sortedSuffixes := slices.Clone(tt.backupSuffixes)
-					slices.Sort(sortedSuffixes)
-					wantSummary := fmt.Sprintf("%d timestamped backup entries matching %s*", len(sortedSuffixes), layout.legacyBackupPrefix)
+				if len(tt.backupNames) > 0 {
+					sortedNames := slices.Clone(tt.backupNames)
+					slices.Sort(sortedNames)
+					wantSummary := fmt.Sprintf("%d potential configuration-copy entries matching %s*", len(sortedNames), layout.legacyBackupPrefix)
 					if !strings.Contains(err.Error(), wantSummary) {
 						t.Fatalf("loadAndValidateWithLayout() error = %v, want bounded summary %q", err, wantSummary)
 					}
+					for _, required := range []string{"operator-managed copies", "protected archive", "securely remove generated or unneeded"} {
+						if !strings.Contains(err.Error(), required) {
+							t.Fatalf("loadAndValidateWithLayout() error = %v, want non-destructive backup-candidate remedy %q", err, required)
+						}
+					}
+					if strings.Contains(err.Error(), "timestamped backup entries") {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want no false timestamp claim", err)
+					}
 					previousIndex := -1
-					for i, suffix := range sortedSuffixes {
-						path := layout.legacyBackupPrefix + suffix
+					for i, name := range sortedNames {
+						path := layout.legacyBackupPrefix + name
 						index := strings.Index(err.Error(), path)
 						if i < legacyBackupExampleLimit {
 							if index <= previousIndex || strings.Count(err.Error(), path) != 1 {
@@ -1088,13 +1097,13 @@ func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T)
 							t.Fatalf("loadAndValidateWithLayout() error = %v, want examples capped before %q", err, path)
 						}
 					}
-					if remaining := len(sortedSuffixes) - legacyBackupExampleLimit; remaining > 0 &&
+					if remaining := len(sortedNames) - legacyBackupExampleLimit; remaining > 0 &&
 						!strings.Contains(err.Error(), fmt.Sprintf("%d more", remaining)) {
 						t.Fatalf("loadAndValidateWithLayout() error = %v, want omitted backup count %d", err, remaining)
 					}
 				}
-				if tt.danglingLink == "timestamped" && !strings.Contains(err.Error(), layout.legacyBackupPrefix+"20260822050505") {
-					t.Fatalf("loadAndValidateWithLayout() error = %v, want dangling timestamped backup path", err)
+				if tt.danglingLink == "matching" && !strings.Contains(err.Error(), layout.legacyBackupPrefix+"20260822_050505") {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want dangling matching backup path", err)
 				}
 				if cfg != nil {
 					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)

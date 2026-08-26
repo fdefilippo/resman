@@ -346,7 +346,7 @@ AI (via MCP):
 | `mcp/resources.go` | ✅ Created | Resource definitions and handlers |
 | `mcp/config.go` | ✅ Created | MCP configuration |
 | `mcp/server_test.go` | ✅ Created | Unit tests |
-| `config/config.go` | ✅ Modified | Added MCP config fields, UserFilter methods, SaveToFile(), backup mechanism |
+| `config/config.go` | ✅ Modified | Added MCP config fields, detached user-filter persistence, and the secure backup mechanism |
 | `config/resman.conf.example` | ✅ Modified | Added MCP example config, USER_INCLUDE_LIST, USER_EXCLUDE_LIST |
 | `state/manager.go` | ✅ Modified | Added GetConfig, GetControlHistory methods |
 | `main.go` | ✅ Modified | Initialize MCP server, fixed logger initialization |

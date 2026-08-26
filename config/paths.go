@@ -29,8 +29,8 @@ const (
 	LegacyConfigBackupPath = "/etc/resman.conf.backup"
 	// LegacyConfigTempPath is the fixed-name temporary file used by older releases.
 	LegacyConfigTempPath = "/etc/resman.conf.tmp"
-	// LegacyConfigTimestampedBackupPrefix identifies unbounded backups made by older releases.
-	LegacyConfigTimestampedBackupPrefix = "/etc/resman.conf.backup_"
+	// LegacyConfigBackupPrefix identifies potential configuration copies in the old layout.
+	LegacyConfigBackupPrefix = "/etc/resman.conf.backup_"
 	// DefaultMetricsDBPath is the authoritative mutable metrics-state path.
 	DefaultMetricsDBPath = "/var/lib/resman/metrics.db"
 	// LegacyMetricsDBPath is rejected when default metrics persistence is enabled.
@@ -56,7 +56,7 @@ var defaultDiskLayout = diskLayout{
 	legacySavedPath:    LegacyConfigSavedPath,
 	legacyBackupPath:   LegacyConfigBackupPath,
 	legacyTempPath:     LegacyConfigTempPath,
-	legacyBackupPrefix: LegacyConfigTimestampedBackupPrefix,
+	legacyBackupPrefix: LegacyConfigBackupPrefix,
 	defaultDBPath:      DefaultMetricsDBPath,
 	legacyDBPath:       LegacyMetricsDBPath,
 }
@@ -81,17 +81,17 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	if err != nil {
 		return fmt.Errorf("inspecting legacy configuration temporary path %s: %w", layout.legacyTempPath, err)
 	}
-	timestampedBackups, err := matchingLegacyPaths(layout.legacyBackupPrefix)
+	backupCandidates, err := matchingLegacyPaths(layout.legacyBackupPrefix)
 	if err != nil {
-		return fmt.Errorf("inspecting timestamped legacy configuration backups %s*: %w", layout.legacyBackupPrefix, err)
+		return fmt.Errorf("inspecting legacy configuration backup candidates %s*: %w", layout.legacyBackupPrefix, err)
 	}
-	if !configExists && !savedExists && !backupExists && !tempExists && len(timestampedBackups) == 0 {
+	if !configExists && !savedExists && !backupExists && !tempExists && len(backupCandidates) == 0 {
 		return nil
 	}
 	legacyPaths := make([]string, 0, 5)
 	actions := make([]string, 0, 2)
 	authoredSources := make([]string, 0, 2)
-	secretArtifactsDetected := false
+	fixedSecretArtifactsDetected := false
 	if configExists {
 		legacyPaths = append(legacyPaths, layout.legacyConfigPath)
 		authoredSources = append(authoredSources, layout.legacyConfigPath)
@@ -109,18 +109,23 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	}
 	if backupExists {
 		legacyPaths = append(legacyPaths, layout.legacyBackupPath)
-		secretArtifactsDetected = true
+		fixedSecretArtifactsDetected = true
 	}
 	if tempExists {
 		legacyPaths = append(legacyPaths, layout.legacyTempPath)
-		secretArtifactsDetected = true
+		fixedSecretArtifactsDetected = true
 	}
-	if len(timestampedBackups) > 0 {
-		legacyPaths = append(legacyPaths, summarizeTimestampedBackups(layout.legacyBackupPrefix, timestampedBackups))
-		secretArtifactsDetected = true
+	if len(backupCandidates) > 0 {
+		legacyPaths = append(legacyPaths, summarizeLegacyBackupCandidates(layout.legacyBackupPrefix, backupCandidates))
 	}
-	if secretArtifactsDetected {
-		actions = append(actions, "after recovering any needed configuration, securely remove every detected orphaned secret-bearing backup and temporary artifact")
+	if fixedSecretArtifactsDetected {
+		actions = append(actions, "after recovering any needed configuration, securely remove the detected fixed-name orphaned backup and temporary artifacts")
+	}
+	if len(backupCandidates) > 0 {
+		actions = append(actions, fmt.Sprintf(
+			"move any needed operator-managed copies matching %s* to a protected archive outside the legacy path, and securely remove generated or unneeded matching copies",
+			layout.legacyBackupPrefix,
+		))
 	}
 	return fmt.Errorf(
 		"legacy configuration artifacts exist at %s while the default path is %s; stop resman, %s, and restart",
@@ -130,13 +135,13 @@ func rejectLegacyConfigAtDefault(selectedPath string, layout diskLayout) error {
 	)
 }
 
-func summarizeTimestampedBackups(prefix string, paths []string) string {
+func summarizeLegacyBackupCandidates(prefix string, paths []string) string {
 	examples := paths
 	if len(examples) > legacyBackupExampleLimit {
 		examples = examples[:legacyBackupExampleLimit]
 	}
 	summary := fmt.Sprintf(
-		"%d timestamped backup entries matching %s* (first %d: %s",
+		"%d potential configuration-copy entries matching %s* (first %d: %s",
 		len(paths),
 		prefix,
 		len(examples),

@@ -946,8 +946,7 @@ func (s *Server) updateUserFilter(ctx context.Context, kind userFilterKind, patt
 	default:
 		return result, fmt.Errorf("unsupported user filter kind %q", kind)
 	}
-	result.PreviousValue = persistenceResult.PreviousValue
-	result.PreviousValue = append([]string{}, result.PreviousValue...)
+	result.PreviousValue = append([]string{}, persistenceResult.PreviousValue...)
 	s.reportLegacyArtifactCleanup(persistenceResult.PersistenceResult)
 	if err != nil {
 		return result, fmt.Errorf("persist user %s filters: %w", kind, err)
