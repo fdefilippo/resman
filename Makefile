@@ -60,7 +60,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-preflight \
-	test-functional-smolvm-unit ci-quality ci-test verify-format verify-modules verify-contracts lint lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -98,13 +98,13 @@ static: deps
 # ============================================================================
 
 # Run the authoritative quality-gate sequence used by pull requests and releases.
-ci-quality: verify-modules verify-format
+ci-quality: verify-modules verify-format verify-promtool
 	@echo "Running CI quality gates..."
 	$(GO) build ./...
 	$(GO) vet ./...
 	$(MAKE) verify-contracts GO="$(GO)"
 	$(MAKE) ci-test GO="$(GO)"
-	$(MAKE) lint GO="$(GO)"
+	$(MAKE) lint-required GO="$(GO)"
 
 # Run the race-enabled test command shared by CI and its mutation tests.
 ci-test:
@@ -112,7 +112,8 @@ ci-test:
 
 # Fail when any tracked Go source is not gofmt-clean.
 verify-format:
-	@unformatted="$$(git ls-files -z -- '*.go' | xargs -0 -r gofmt -l)"; \
+	@set -eu; \
+	unformatted="$$(git ls-files -z -- '*.go' | xargs -0 -r gofmt -l)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "The following Go files are not formatted:" >&2; \
 		echo "$$unformatted" >&2; \
@@ -122,6 +123,13 @@ verify-format:
 # Verify dependencies and reject go.mod or go.sum changes produced by tidy.
 verify-modules: deps
 	git diff --exit-code -- go.mod go.sum
+
+# CI installs promtool deliberately, so its absence must fail rather than warn.
+verify-promtool:
+	@command -v promtool >/dev/null 2>&1 || { \
+		echo "promtool is required by ci-quality but was not found" >&2; \
+		exit 1; \
+	}
 
 # Esegui test unitari
 test: deps
@@ -189,6 +197,20 @@ lint: deps
 		echo "golangci-lint non installato (usa 'make lint-install'), eseguendo go vet..."; \
 		$(GO) vet ./...; \
 	fi
+
+# CI must use exactly the pinned linter; no fallback to go vet is permitted.
+lint-required: deps
+	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
+		echo "$(GOLANGCI_LINT) is required by ci-quality but was not found" >&2; \
+		exit 1; \
+	}
+	@actual_version="$$($(GOLANGCI_LINT) version --short)"; \
+	expected_version="$(patsubst v%,%,$(GOLANGCI_LINT_VERSION))"; \
+	if [ "$$actual_version" != "$$expected_version" ]; then \
+		echo "$(GOLANGCI_LINT) version mismatch: expected $$expected_version, got $$actual_version" >&2; \
+		exit 1; \
+	fi
+	$(GOLANGCI_LINT) run --max-same-issues=0 --max-issues-per-linter=0 ./...
 
 # Installa la versione pinnata di golangci-lint in $(GOPATH)/bin
 lint-install:
@@ -459,8 +481,10 @@ help:
 	@echo "    ci-quality    - Run the quality gates shared by pull requests and releases"
 	@echo "    verify-format - Fail when tracked Go files are not gofmt-clean"
 	@echo "    verify-modules - Verify module files are tidy and unchanged"
+	@echo "    verify-promtool - Require promtool for the strict CI gate"
 	@echo "    verify-contracts - Verify mechanically checkable architectural contracts"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
+	@echo "    lint-required - Run exactly the pinned golangci-lint without fallback"
 	@echo "    lint-install - Installa la versione pinnata di golangci-lint"
 	@echo "    fmt          - Formatta il codice"
 	@echo ""

@@ -46,20 +46,15 @@ dedicated pull request — do not silently make an exception in code.
 Before pushing, all of these must pass locally:
 
 ```bash
-make fmt        # gofmt
-make lint       # golangci-lint (make lint-install to get the pinned version)
-make test       # go test -v -cover ./...
-go test -race ./...
-go vet ./...
+make lint-install  # once, or whenever GOLANGCI_LINT_VERSION changes
+make ci-quality    # the authoritative local, pull-request, main, and release gate
 ```
 
-`make test` alone is not a gate. Concurrency defects in this codebase have repeatedly
-survived non-race runs; `-race` is mandatory for any change touching shared state, and
-cheap enough to always run.
-
-> Note: today only `.github/workflows/release.yml` runs these gates, at release time.
-> There is no pull-request workflow. Until there is (`resman-4pw.17.2`), the gate is
-> your responsibility locally, and the reviewer's during review.
+`make ci-quality` verifies module tidiness, formatting, build, vet, the mechanical
+contracts, `go test -race -cover ./...`, and exactly the pinned golangci-lint version.
+It requires `promtool`; the reusable workflow installs it before running the gate.
+The same `.github/workflows/quality.yml` definition runs on every pull request, push to
+`main`, and release tag, so release validation cannot drift from pull-request CI.
 
 ---
 
