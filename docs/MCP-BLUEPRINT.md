@@ -83,9 +83,10 @@ mcp/
 | `resman://config` | Current configuration |
 | `resman://cgroups/{uid}` | Cgroup info for user |
 
-The cgroup tool and resource expose availability separately from each raw interface
-value. An unreadable interface is absent with its corresponding `*_available` field set
-to `false`; an empty string is never an alias for `max`.
+The cgroup tool and resource share one underscore-named JSON schema and expose
+availability separately from each raw interface value. An unreadable interface is
+absent with its corresponding `*_available` field set to `false`; an empty string is
+never an alias for `max`.
 
 ### 3. Prompts (Pre-built queries for AI)
 

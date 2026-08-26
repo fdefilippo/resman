@@ -63,11 +63,12 @@ The MCP server exposes ResMan functionality to AI assistants and MCP-compatible 
 - `resman://users/{uid}/metrics` - Per-user metrics
 - `resman://cgroups/{uid}` - Cgroup information
 
-`get_cgroup_info` and `resman://cgroups/{uid}` pair every cgroup interface value
-(`cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high`) with an
-explicit `*_available` boolean. When an interface cannot be read, its value is omitted
-and the boolean is `false`; clients must not interpret an empty value as an unlimited
-setting.
+`get_cgroup_info` and `resman://cgroups/{uid}` share one JSON schema. They expose the
+`cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high` interfaces as
+`cpu_max`, `cpu_weight`, `memory_current`, `memory_max`, and `memory_high`, each paired
+with an explicit `*_available` boolean. When an interface cannot be read, its value is
+omitted and the boolean is `false`; clients must not interpret an empty value as an
+unlimited setting.
 
 ### Prompts (3 pre-built queries)
 

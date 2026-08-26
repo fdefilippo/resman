@@ -31,13 +31,11 @@ func (cgroupInfoReaderStub) GetIOStats(int) (uint64, uint64, uint64, uint64, err
 
 func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 	tests := []struct {
-		name               string
-		info               cgroup.CgroupInfo
-		wantTool           GetCgroupInfoResult
-		wantToolValues     map[string]any
-		absentToolKeys     []string
-		wantResourceValues map[string]any
-		absentResourceKeys []string
+		name              string
+		info              cgroup.CgroupInfo
+		wantResult        GetCgroupInfoResult
+		wantPayloadValues map[string]any
+		absentPayloadKeys []string
 	}{
 		{
 			name: "all interfaces available",
@@ -49,7 +47,7 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				MemoryMax:     cgroup.CgroupFileValue{Value: "max", Available: true},
 				MemoryHigh:    cgroup.CgroupFileValue{Value: "2097152", Available: true},
 			},
-			wantTool: GetCgroupInfoResult{
+			wantResult: GetCgroupInfoResult{
 				Path:                   "/sys/fs/cgroup/resman/user_1000",
 				CPUQuota:               "50000 100000",
 				CPUQuotaAvailable:      true,
@@ -62,7 +60,7 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				MemoryHigh:             "2097152",
 				MemoryHighAvailable:    true,
 			},
-			wantToolValues: map[string]any{
+			wantPayloadValues: map[string]any{
 				"path":                     "/sys/fs/cgroup/resman/user_1000",
 				"cpu_max":                  "50000 100000",
 				"cpu_max_available":        true,
@@ -73,19 +71,6 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				"memory_max":               "max",
 				"memory_max_available":     true,
 				"memory_high":              "2097152",
-				"memory_high_available":    true,
-			},
-			wantResourceValues: map[string]any{
-				"path":                     "/sys/fs/cgroup/resman/user_1000",
-				"cpu.max":                  "50000 100000",
-				"cpu_max_available":        true,
-				"cpu.weight":               "100",
-				"cpu_weight_available":     true,
-				"memory.current":           "1048576",
-				"memory_current_available": true,
-				"memory.max":               "max",
-				"memory_max_available":     true,
-				"memory.high":              "2097152",
 				"memory_high_available":    true,
 			},
 		},
@@ -99,14 +84,14 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				MemoryMax:     cgroup.CgroupFileValue{Value: "max", Available: true},
 				MemoryHigh:    cgroup.CgroupFileValue{Value: "stale", Available: false},
 			},
-			wantTool: GetCgroupInfoResult{
+			wantResult: GetCgroupInfoResult{
 				Path:               "/sys/fs/cgroup/resman/user_1001",
 				CPUQuota:           "max 100000",
 				CPUQuotaAvailable:  true,
 				MemoryMax:          "max",
 				MemoryMaxAvailable: true,
 			},
-			wantToolValues: map[string]any{
+			wantPayloadValues: map[string]any{
 				"path":                     "/sys/fs/cgroup/resman/user_1001",
 				"cpu_max":                  "max 100000",
 				"cpu_max_available":        true,
@@ -116,18 +101,7 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				"memory_max_available":     true,
 				"memory_high_available":    false,
 			},
-			absentToolKeys: []string{"cpu_weight", "memory_current", "memory_high"},
-			wantResourceValues: map[string]any{
-				"path":                     "/sys/fs/cgroup/resman/user_1001",
-				"cpu.max":                  "max 100000",
-				"cpu_max_available":        true,
-				"cpu_weight_available":     false,
-				"memory_current_available": false,
-				"memory.max":               "max",
-				"memory_max_available":     true,
-				"memory_high_available":    false,
-			},
-			absentResourceKeys: []string{"cpu.weight", "memory.current", "memory.high"},
+			absentPayloadKeys: []string{"cpu_weight", "memory_current", "memory_high"},
 		},
 	}
 
@@ -138,10 +112,10 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 			if err != nil {
 				t.Fatalf("handleGetCgroupInfo() error = %v", err)
 			}
-			if !reflect.DeepEqual(gotTool, tt.wantTool) {
-				t.Errorf("tool result = %#v, want %#v", gotTool, tt.wantTool)
+			if !reflect.DeepEqual(gotTool, tt.wantResult) {
+				t.Errorf("tool result = %#v, want %#v", gotTool, tt.wantResult)
 			}
-			assertCgroupPayload(t, "tool", gotTool, tt.wantToolValues, tt.absentToolKeys)
+			assertCgroupPayload(t, "tool", gotTool, tt.wantPayloadValues, tt.absentPayloadKeys)
 
 			gotResource, err := server.handleCgroupResource(context.Background(), &sdkmcp.ReadResourceRequest{
 				Params: &sdkmcp.ReadResourceParams{URI: "resman://cgroups/1000"},
@@ -150,7 +124,7 @@ func TestTypedCgroupInfoContractAcrossMCPSurfaces(t *testing.T) {
 				t.Fatalf("handleCgroupResource() error = %v", err)
 			}
 			assertCgroupPayload(t, "resource", json.RawMessage(gotResource.Contents[0].Text),
-				tt.wantResourceValues, tt.absentResourceKeys)
+				tt.wantPayloadValues, tt.absentPayloadKeys)
 		})
 	}
 }

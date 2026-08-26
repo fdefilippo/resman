@@ -479,11 +479,12 @@ controller.
 - `resman://users/{uid}/metrics` - Per-user metrics
 - `resman://cgroups/{uid}` - Cgroup information
 
-The cgroup tool and resource expose `cpu.max`, `cpu.weight`, `memory.current`,
-`memory.max`, and `memory.high` through a typed internal contract. Each public value is
-paired with an explicit `*_available` boolean. An unreadable interface is omitted with
-availability `false`; consumers must not reinterpret an empty value as an unlimited
-limit.
+The cgroup tool and resource share one JSON schema backed by a typed internal contract.
+They expose `cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high`
+as the underscore-named fields `cpu_max`, `cpu_weight`, `memory_current`, `memory_max`,
+and `memory_high`. Each value is paired with an explicit `*_available` boolean. An
+unreadable interface is omitted with availability `false`; consumers must not
+reinterpret an empty value as an unlimited limit.
 
 **Prompts (3 pre-built):**
 - `system-health` - Quick health check with assessment
