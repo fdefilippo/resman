@@ -400,7 +400,7 @@ func (s *Server) registerTools() {
 	// get_configuration - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_configuration",
-		Description: "Get current CPU Manager configuration",
+		Description: "Get current ResMan configuration",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

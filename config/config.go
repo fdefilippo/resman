@@ -178,7 +178,7 @@ type Config struct {
 	// These processes are never limited, even if the user is in the include list
 	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`
 
-	// Blackout Timeframes (when CPU Manager should NOT apply limits)
+	// Blackout timeframes during which ResMan must not apply limits.
 	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
 
 	// Blackout specification string (crontab-like format)
@@ -1720,8 +1720,7 @@ func parseHours(spec string) (int, int, error) {
 	return start, end, nil
 }
 
-// IsInBlackout verifica se l'orario corrente è in un blackout timeframe
-// Restituisce true se CPU Manager NON deve applicare limiti
+// IsInBlackout reports whether the current time is within a blackout timeframe.
 func (c *Config) IsInBlackout() bool {
 	_, active := c.blackoutEndAt(time.Now())
 	return active
