@@ -774,11 +774,12 @@ Prometheus files when the command is installed. A missing optional `promtool` em
 visible warning without skipping the other checks. Narrow exceptions live in the
 versioned allowlist files below `scripts/verify-contracts/`; stale allowlist entries
 fail the check, and an entry classified as a known violation must name its open issue.
-The obsolete product-name matcher is case-insensitive and recognizes `cpu` followed
-by `manager` with spaces, underscores, or hyphens. Uppercase configuration identifiers
-are not silently exempt: a historical key must have its own narrow classification.
-Production Go string literals and comments are scanned; the checker implementation and
-test fixtures are excluded structurally because they must contain the rejected examples.
+The obsolete product-name matcher is case-insensitive and recognizes `cpu` immediately
+followed by `manager` or joined to it with spaces, underscores, or hyphens. Uppercase
+configuration identifiers are not silently exempt: a historical key must have its own
+narrow classification. Production Go identifiers, string literals, and comments are
+scanned; the checker implementation and test fixtures are excluded structurally because
+they must contain the rejected examples.
 In a Git checkout, the scan is limited to paths present in the index, including staged
 new files; ignored and untracked workspace notes are not shipped assets. In a source
 archive without Git metadata, every file below the declared shipped paths is scanned.
@@ -790,7 +791,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
-| Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
+| Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
 | `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
 
 Every failure reports `file:line` and exits non-zero. `KNOWN` lines remain successful

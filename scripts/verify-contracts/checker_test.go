@@ -272,6 +272,24 @@ func TestShippedAssetCheckerRejectsObsoleteProductNamesInProductionGo(t *testing
 			wantLine:   3,
 		},
 		{
+			name:       "concatenated string literal",
+			content:    "package app\n\nconst description = \"CPUManager legacy name\"\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "concatenated type identifier",
+			content:    "package app\n\ntype CPUManager struct{}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
+			name:       "prefixed concatenated identifier",
+			content:    "package app\n\nfunc NewCPUManager() {}\n",
+			wantFailed: true,
+			wantLine:   3,
+		},
+		{
 			name:      "classified uppercase configuration identifier",
 			content:   "package app\n\nconst historicalKey = \"CPU_MANAGER_BLACKOUT\"\n",
 			allowlist: "app/app.go | CPU_MANAGER | CPU_MANAGER_BLACKOUT | historical configuration key | allowed | This exact historical key is retained as explicit provenance.\n",

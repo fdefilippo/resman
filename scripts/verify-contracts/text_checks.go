@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-var obsoleteProductPattern = regexp.MustCompile(`(?i)\bcpu[ _-]+manager`)
+var obsoleteProductPattern = regexp.MustCompile(`(?i)cpu[ _-]*manager`)
 
 type obsoleteTokenMatch struct {
 	token  string
@@ -118,11 +118,14 @@ func checkProductionGoTerminology(sources []goSource, trackedPaths map[string]bo
 			continue
 		}
 		ast.Inspect(source.file, func(node ast.Node) bool {
-			literal, ok := node.(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
-				return true
+			switch typed := node.(type) {
+			case *ast.BasicLit:
+				if typed.Kind == token.STRING {
+					classifyGoText(source, typed.Pos(), typed.Value, allowlistPath, knownPath, allowedEntries, entries, result)
+				}
+			case *ast.Ident:
+				classifyGoText(source, typed.Pos(), typed.Name, allowlistPath, knownPath, allowedEntries, entries, result)
 			}
-			classifyGoText(source, literal.Pos(), literal.Value, allowlistPath, knownPath, allowedEntries, entries, result)
 			return true
 		})
 		for _, group := range source.file.Comments {
