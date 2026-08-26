@@ -29,7 +29,7 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertContains(t, qualityWorkflow, "go-version-file: go.mod")
 	assertContains(t, qualityWorkflow, "sudo apt-get install --yes prometheus")
 	assertContains(t, qualityWorkflow, "make lint-install")
-	assertContains(t, qualityWorkflow, "run: make ci-quality")
+	assertContains(t, qualityWorkflow, `run: make ci-quality GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"`)
 
 	qualityTarget := makeTarget(t, makefile, "ci-quality")
 	for _, required := range []string{
@@ -44,6 +44,8 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	}
 	moduleTarget := makeTarget(t, makefile, "verify-modules")
 	assertContains(t, moduleTarget, "git diff --exit-code -- go.mod go.sum")
+	lintTarget := makeTarget(t, makefile, "lint-required")
+	assertNotContains(t, lintTarget, "version --short")
 }
 
 func TestVerifyFormatRejectsAnUnformattedTrackedFile(t *testing.T) {
@@ -101,23 +103,29 @@ func TestVerifyPromtoolRejectsMissingBinary(t *testing.T) {
 	}
 }
 
-func TestLintRequiredRejectsWrongVersion(t *testing.T) {
+func TestLintRequiredAcceptsAnAvailableLinterWithoutVersionGate(t *testing.T) {
 	root := repositoryRoot(t)
 	fixture := t.TempDir()
 	if err := os.WriteFile(filepath.Join(fixture, "go.mod"), []byte("module example.test/lint-version\n\ngo 1.25.7\n"), 0600); err != nil {
 		t.Fatalf("write fixture go.mod: %v", err)
 	}
 	fakeLint := filepath.Join(fixture, "golangci-lint")
-	if err := os.WriteFile(fakeLint, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 0.0.0; exit 0; fi\nexit 0\n"), 0700); err != nil {
+	marker := filepath.Join(fixture, "lint-ran")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"" + marker + "\"\nexit 0\n"
+	if err := os.WriteFile(fakeLint, []byte(script), 0700); err != nil {
 		t.Fatalf("write fake linter: %v", err)
 	}
 
 	output, err := runMakeTarget(fixture, root, "lint-required", "GOLANGCI_LINT="+fakeLint)
-	if err == nil {
-		t.Fatalf("lint-required accepted the wrong linter version; output=%s", output)
+	if err != nil {
+		t.Fatalf("lint-required rejected an available linter because of its version: %v\n%s", err, output)
 	}
-	if !strings.Contains(output, "version mismatch: expected 2.12.2, got 0.0.0") {
-		t.Fatalf("lint-required failure was not diagnostic; output=%s", output)
+	invocation, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read fake linter invocation: %v", err)
+	}
+	if !strings.Contains(string(invocation), "run --max-same-issues=0 --max-issues-per-linter=0 ./...") {
+		t.Fatalf("lint-required did not execute the full lint gate; invocation=%s", invocation)
 	}
 }
 

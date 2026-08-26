@@ -198,18 +198,12 @@ lint: deps
 		$(GO) vet ./...; \
 	fi
 
-# CI must use exactly the pinned linter; no fallback to go vet is permitted.
+# The authoritative gate requires a linter binary; CI passes its pinned binary explicitly.
 lint-required: deps
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
 		echo "$(GOLANGCI_LINT) is required by ci-quality but was not found" >&2; \
 		exit 1; \
 	}
-	@actual_version="$$($(GOLANGCI_LINT) version --short)"; \
-	expected_version="$(patsubst v%,%,$(GOLANGCI_LINT_VERSION))"; \
-	if [ "$$actual_version" != "$$expected_version" ]; then \
-		echo "$(GOLANGCI_LINT) version mismatch: expected $$expected_version, got $$actual_version" >&2; \
-		exit 1; \
-	fi
 	$(GOLANGCI_LINT) run --max-same-issues=0 --max-issues-per-linter=0 ./...
 
 # Installa la versione pinnata di golangci-lint in $(GOPATH)/bin
@@ -484,7 +478,7 @@ help:
 	@echo "    verify-promtool - Require promtool for the strict CI gate"
 	@echo "    verify-contracts - Verify mechanically checkable architectural contracts"
 	@echo "    lint         - Esegui linting del codice (golangci-lint, gate completo)"
-	@echo "    lint-required - Run exactly the pinned golangci-lint without fallback"
+	@echo "    lint-required - Require golangci-lint without falling back to go vet"
 	@echo "    lint-install - Installa la versione pinnata di golangci-lint"
 	@echo "    fmt          - Formatta il codice"
 	@echo ""

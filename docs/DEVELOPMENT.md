@@ -46,15 +46,17 @@ dedicated pull request — do not silently make an exception in code.
 Before pushing, all of these must pass locally:
 
 ```bash
-make lint-install  # once, or whenever GOLANGCI_LINT_VERSION changes
 make ci-quality    # the authoritative local, pull-request, main, and release gate
 ```
 
 `make ci-quality` verifies module tidiness, formatting, build, vet, the mechanical
-contracts, `go test -race -cover ./...`, and exactly the pinned golangci-lint version.
-It requires `promtool`; the reusable workflow installs it before running the gate.
-The same `.github/workflows/quality.yml` definition runs on every pull request, push to
-`main`, and release tag, so release validation cannot drift from pull-request CI.
+contracts, `go test -race -cover ./...`, and golangci-lint without a fallback to vet.
+It requires `promtool` and a locally available golangci-lint; `make lint-install` is a
+convenience for installing the project-tested version, not a local version constraint.
+The reusable workflow installs the pinned linter and passes that exact binary to the
+gate. The same `.github/workflows/quality.yml` definition runs on every pull request,
+push to `main`, and release tag, so release validation cannot drift from pull-request
+CI.
 
 ---
 
