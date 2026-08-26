@@ -116,7 +116,7 @@ resman/
 │   └── logger.go          # Structured logging
 ├── mcp/
 │   ├── server.go          # MCP server implementation
-│   ├── tools.go           # MCP tools (11 tools)
+│   ├── tools.go           # MCP tool definitions and handlers
 │   ├── resources.go       # MCP resources (6 URIs)
 │   ├── config.go          # MCP configuration
 │   └── server_test.go     # Unit tests
@@ -453,23 +453,14 @@ controller.
 - Support stdio and HTTP transports
 - Provide tools, resources, and prompts for AI assistants
 
-**Tools (11 total):**
+**Tools:**
 
-| Tool | Description | Write Op |
-|------|-------------|----------|
-| `get_system_status` | Get CPU/memory status with hostname | No |
-| `get_user_metrics` | Get metrics for specific user(s) | No |
-| `get_active_users` | List active non-system users | No |
-| `get_limits_status` | Check if CPU limits are active | No |
-| `get_cgroup_info` | Get cgroup details for user | No |
-| `get_configuration` | Get current configuration | No |
-| `get_control_history` | Get recent control cycles | No |
-| `get_cpu_report` | Generate CPU usage report | No |
-| `get_mem_report` | Generate memory usage report | No |
-| `activate_limits` | Manually activate limits | Yes* |
-| `deactivate_limits` | Manually deactivate limits | Yes* |
-
-*Requires `MCP_ALLOW_WRITE_OPS=true`
+The complete production contract is the
+[authoritative tool inventory](MCP-README.md#tool-inventory). It distinguishes tools
+that are always registered from manual limit operations registered only with
+`MCP_ALLOW_WRITE_OPS=true`, and it separately records invocation requirements for
+configuration writes and metrics-database queries. A cross-boundary test compares that
+inventory with the production `tools/list` response.
 
 **Resources (6 URIs):**
 - `resman://system/status` - Real-time system status

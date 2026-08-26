@@ -47,7 +47,7 @@ Username resolution cache for improved performance (USERNAME_CACHE_TTL)
 .IP \(bu
 SQLite metrics database for historical data (METRICS_DB_*)
 .IP \(bu
-MCP server with 15 tools for AI assistant integration
+MCP server with a mechanically verified tool inventory for AI assistant integration
 .IP \(bu
 Prometheus metrics export with hostname and server_role labels
 .IP \(bu
@@ -972,7 +972,8 @@ are independent. The default minimum version is TLS 1.3. Setting
 enables mutual TLS and makes a client certificate mandatory in addition to the
 per-request bearer token. The stdio transport does not require certificates.
 .PP
-Available MCP tools:
+Available MCP tools (this list is verified against the production discovery response):
+.\" BEGIN MCP TOOL INVENTORY
 .IP \(bu 2
 .B get_system_status
 \- Current CPU/memory status with hostname
@@ -1001,6 +1002,18 @@ Available MCP tools:
 .B get_mem_report
 \- Comprehensive memory usage report (formatted text)
 .IP \(bu
+.B set_user_exclude_list
+\- Persist and apply CPU exclusion patterns (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B set_user_include_list
+\- Persist and apply CPU eligibility patterns (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B get_user_filters
+\- Get current CPU include and exclude patterns
+.IP \(bu
+.B validate_user_filter_pattern
+\- Validate a user-filter regular expression
+.IP \(bu
 .B activate_limits
 \- Manually activate CPU limits (requires MCP_ALLOW_WRITE_OPS=true)
 .IP \(bu
@@ -1018,6 +1031,7 @@ Available MCP tools:
 .IP \(bu
 .B get_metrics_database_info
 - Database status and information (requires METRICS_DB_ENABLED=true)
+.\" END MCP TOOL INVENTORY
 .PP
 All metric outputs include a
 .B hostname

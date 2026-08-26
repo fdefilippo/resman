@@ -85,7 +85,7 @@ Features:
 - Server role identification for multi-server environments
 
 MCP Server Features (v1.3+):
-- 11 MCP tools for querying system status and generating reports
+- MCP tools for status, reporting, configuration, enforcement, and metrics history
 - 6 MCP resources for URI-based data access
 - 3 pre-built prompts for common queries
 - HTTP and stdio transport support

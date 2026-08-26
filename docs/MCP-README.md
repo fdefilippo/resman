@@ -30,27 +30,43 @@ The MCP server exposes ResMan functionality to AI assistants and MCP-compatible 
 
 ## Features
 
-### Tools (15 available)
+### Tool inventory
 
-| Tool | Description | Write Operation |
-|------|-------------|-----------------|
-| `get_system_status` | Get current CPU/memory status with hostname | No |
-| `get_user_metrics` | Get metrics for specific user(s) | No |
-| `get_active_users` | List active non-system users with hostname | No |
-| `get_limits_status` | Check if CPU limits are active with hostname | No |
-| `get_cgroup_info` | Get cgroup details for a user | No |
-| `get_configuration` | Get current configuration with hostname | No |
-| `get_control_history` | Get recent control cycle history | No |
-| `get_cpu_report` | **Generate comprehensive CPU usage report** | No |
-| `get_mem_report` | **Generate comprehensive memory usage report** | No |
-| `get_user_filters` | **Get current user include/exclude filters** | No |
-| `set_user_exclude_list` | **Set users to exclude from limits (regex)** | Yes* |
-| `set_user_include_list` | **Set users to include in monitoring (regex)** | Yes* |
-| `validate_user_filter_pattern` | **Validate regex pattern for filters** | No |
-| `activate_limits` | Manually activate CPU limits | Yes* |
-| `deactivate_limits` | Manually deactivate CPU limits | Yes* |
+This table is the authoritative inventory of tools exposed by the production server.
+"Registered when" controls whether a tool appears in `tools/list`; "Invocation
+requirement" controls whether a registered tool can complete successfully.
 
-*Write operations require `MCP_ALLOW_WRITE_OPS=true`
+<!-- BEGIN MCP TOOL INVENTORY -->
+
+| Tool | Description | Registered when | Invocation requirement |
+|------|-------------|-----------------|------------------------|
+| `get_system_status` | Get current CPU and memory status | Always | None |
+| `get_user_metrics` | Get metrics for specific users | Always | None |
+| `get_active_users` | List active non-system users | Always | None |
+| `get_limits_status` | Get current resource-limit status | Always | None |
+| `get_cgroup_info` | Get cgroup details for a user | Always | None |
+| `get_configuration` | Get current ResMan configuration | Always | None |
+| `get_cpu_report` | Generate a CPU usage report | Always | None |
+| `get_mem_report` | Generate a memory usage report | Always | None |
+| `get_control_history` | Get recent control-cycle history | Always | None |
+| `set_user_exclude_list` | Persist and apply CPU exclusion patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
+| `set_user_include_list` | Persist and apply CPU eligibility patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
+| `get_user_filters` | Get current CPU include and exclude patterns | Always | None |
+| `validate_user_filter_pattern` | Validate a user-filter regular expression | Always | None |
+| `get_user_history` | Get historical metrics for a user | Always | `METRICS_DB_ENABLED=true` |
+| `get_system_history` | Get historical system metrics | Always | `METRICS_DB_ENABLED=true` |
+| `get_user_summary` | Get aggregate historical statistics for a user | Always | `METRICS_DB_ENABLED=true` |
+| `get_metrics_database_info` | Get metrics-database status and retention information | Always | `METRICS_DB_ENABLED=true` |
+| `activate_limits` | Manually request CPU-limit activation | `MCP_ALLOW_WRITE_OPS=true` | `MCP_ALLOW_WRITE_OPS=true` |
+| `deactivate_limits` | Manually deactivate CPU limits | `MCP_ALLOW_WRITE_OPS=true` | `MCP_ALLOW_WRITE_OPS=true` |
+
+<!-- END MCP TOOL INVENTORY -->
+
+The database-backed tools remain visible when the metrics database is disabled so a
+client receives an explicit `metrics database is not enabled` error instead of a
+different discovery schema. The two user-filter setters are also always visible, but
+reject invocation while write operations are disabled. Only manual activation and
+deactivation are omitted from discovery unless write operations are enabled.
 
 **All metric outputs include the `hostname` field** for multi-server environments.
 
