@@ -795,6 +795,72 @@ func TestMakeDecision(t *testing.T) {
 	}
 }
 
+func TestMakeDecisionMinimumActiveTimeUsesMostRecentEnforcementEpoch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CPUReleaseThreshold = 40
+	cfg.MinActiveTime = 300
+
+	now := time.Now()
+	expired := now.Add(-10 * time.Minute)
+	recent := now.Add(-30 * time.Second)
+	tests := []struct {
+		name                string
+		cpuActivation       time.Time
+		resourceActivation  time.Time
+		wantDecision        string
+		wantReasonSubstring string
+	}{
+		{
+			name:                "newer RAM or IO epoch protects older CPU enforcement",
+			cpuActivation:       expired,
+			resourceActivation:  recent,
+			wantDecision:        "MAINTAIN_CURRENT_STATE",
+			wantReasonSubstring: "minimum activation time",
+		},
+		{
+			name:                "newer CPU epoch protects older RAM or IO enforcement",
+			cpuActivation:       recent,
+			resourceActivation:  expired,
+			wantDecision:        "MAINTAIN_CURRENT_STATE",
+			wantReasonSubstring: "minimum activation time",
+		},
+		{
+			name:               "release proceeds after both enforcement epochs expire",
+			cpuActivation:      expired,
+			resourceActivation: expired,
+			wantDecision:       "DEACTIVATE_LIMITS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &Manager{
+				cfg:                       cfg,
+				limitsActive:              true,
+				limitsAppliedTime:         tt.cpuActivation,
+				resourceLimitsActive:      true,
+				resourceLimitsAppliedTime: tt.resourceActivation,
+				thresholdTracker:          &ThresholdTracker{},
+				ioThresholdTracker:        &ThresholdTracker{},
+				stabilityTracker:          newUserStabilityTracker(),
+			}
+			decision, reason := manager.makeDecision(&SystemMetrics{
+				CPUEligibleCPUUsage: 0,
+				TotalCores:          4,
+				SystemUnderLoad:     false,
+				UserMetrics:         map[int]*metrics.UserMetrics{},
+			})
+
+			if decision != tt.wantDecision {
+				t.Fatalf("decision = %s, want %s (reason: %s)", decision, tt.wantDecision, reason)
+			}
+			if tt.wantReasonSubstring != "" && !strings.Contains(reason, tt.wantReasonSubstring) {
+				t.Fatalf("reason = %q, want substring %q", reason, tt.wantReasonSubstring)
+			}
+		})
+	}
+}
+
 func TestCollectSystemMetricsUsesIndependentEligibilityAggregates(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector := &mockMetricsCollector{allUserMetrics: map[int]*metrics.UserMetrics{

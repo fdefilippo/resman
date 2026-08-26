@@ -15,8 +15,8 @@ CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 # TIMING [D]
 # ========================
 POLLING_INTERVAL=30
-# Minimum duration for global limits and each newly limited/re-added user.
-# Idle release uses the per-user CPU EMA after this hold time expires.
+# Global release waits from the most recent CPU or RAM/IO activation epoch.
+# Idle CPU-user release has its own hold from initial limit or re-addition.
 MIN_ACTIVE_TIME=60
 # Reuses recently collected values; /proc/stat staleness follows the effective
 # decision-loop cadence observed at runtime.

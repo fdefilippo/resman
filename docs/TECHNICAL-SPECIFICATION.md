@@ -623,7 +623,7 @@ CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 # TIMING (seconds)
 # ========================
 POLLING_INTERVAL=30          # Control cycle interval
-MIN_ACTIVE_TIME=60           # Global and per-user minimum active time
+MIN_ACTIVE_TIME=60           # Latest enforcement epoch and per-user hold time
 METRICS_CACHE_TTL=15         # Metrics cache duration
 
 # ========================
@@ -739,10 +739,16 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman/resman.conf
 
 **Deactivate Limits When:**
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
-- `time_since_activation >= MIN_ACTIVE_TIME`
+- `time_since_most_recent_CPU_or_RAM/IO_activation >= MIN_ACTIVE_TIME`
 - Every actively limited user's CPU EMA has remained below the release threshold for
   three `POLLING_INTERVAL` periods
 - `system_load OK`
+
+Deactivation is all-or-nothing, so the global hold is measured from the later of the
+CPU enforcement activation epoch and the RAM/I/O enforcement activation epoch. A
+newer activation cannot be released merely because the other resource family has
+already been active longer than `MIN_ACTIVE_TIME`. A future per-resource release
+model must replace this rule with explicit per-resource timestamps and tests.
 
 The release stability guard uses elapsed wall-clock time. Extra control cycles
 triggered by PSI events do not accelerate global deactivation.

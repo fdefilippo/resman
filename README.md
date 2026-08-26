@@ -137,11 +137,13 @@ immediately; `PROCESS_MIN_AGE_SECONDS` affects only the lifetime-average metric.
 With `POLLING_INTERVAL=30` and `CPU_THRESHOLD_DURATION=90`, limits normally
 activate about 120 seconds after the first observation, plus polling alignment.
 Idle release uses each user's CPU EMA rather than a single instantaneous sample.
-`MIN_ACTIVE_TIME` is also the minimum hold time after that user is initially
-limited or re-added; re-adding a user does not restart the global activation
-timer. Global deactivation additionally requires all actively limited users to remain
-below `CPU_RELEASE_THRESHOLD` for three `POLLING_INTERVAL` periods. This
-cool-down is wall-clock based, so PSI events cannot shorten it.
+Because deactivation releases every resource together, `MIN_ACTIVE_TIME` protects
+the most recent active enforcement epoch across CPU and RAM/I/O. It is also the
+minimum hold time after an individual CPU user is initially limited or re-added;
+re-adding a user does not restart the CPU enforcement epoch. Global deactivation
+additionally requires all actively limited users to remain below
+`CPU_RELEASE_THRESHOLD` for three `POLLING_INTERVAL` periods. This cool-down is
+wall-clock based, so PSI events cannot shorten it.
 
 Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
 are already active. Limits that are disabled or no longer applicable are reset

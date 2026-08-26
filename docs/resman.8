@@ -619,7 +619,7 @@ CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 
 # TIMING (seconds)
 POLLING_INTERVAL=30          # Control cycle interval
-MIN_ACTIVE_TIME=60           # Global and per-user minimum activation time
+MIN_ACTIVE_TIME=60           # Latest enforcement epoch and per-user hold time
 METRICS_CACHE_TTL=15         # Value reuse only; not CPU baseline staleness
 METRICS_REFRESH_INTERVAL=30  # Prometheus/Grafana refresh interval
 PROCESS_MIN_AGE_SECONDS=60   # Minimum age for lifetime-average CPU metrics
@@ -770,10 +770,13 @@ METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
 .PP
 Idle user release is based on the per-user CPU exponential moving average.
 .B MIN_ACTIVE_TIME
-also acts as the minimum hold time after an individual user is first limited
-or re-added. Re-adding a user does not reset the activation time of the shared
-cgroup. Dynamic RAM and IO enable or user-filter changes are reconciled against
-already active user cgroups.
+protects the most recent active enforcement epoch across CPU and RAM or IO,
+because global deactivation releases every resource together. It also acts as
+the minimum hold time after an individual CPU user is first limited or re-added.
+Re-adding a user does not reset the CPU enforcement epoch. A future per-resource
+release model must define and test its own per-resource activation timestamps.
+Dynamic RAM and IO enable or user-filter changes are reconciled against already
+active user cgroups.
 .PP
 Database retention runs at startup and every 24 hours. File-backed databases
 use incremental auto-vacuum so periodic cleanup does not run a blocking full

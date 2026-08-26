@@ -27,7 +27,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	m.mu.RLock()
 	limitsActive := m.limitsActive || m.resourceLimitsActive
 	limitsAppliedTime := m.limitsAppliedTime
-	if limitsAppliedTime.IsZero() || (!m.resourceLimitsAppliedTime.IsZero() && m.resourceLimitsAppliedTime.Before(limitsAppliedTime)) {
+	if m.resourceLimitsAppliedTime.After(limitsAppliedTime) {
 		limitsAppliedTime = m.resourceLimitsAppliedTime
 	}
 	m.mu.RUnlock()
@@ -115,9 +115,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// Active limits may be released only when all resource conditions allow it.
 	if limitsActive {
-		// Enforce the minimum activation time.
+		// All-or-nothing release protects the most recently activated
+		// enforcement family from immediate release and reactivation.
 		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
-			return DecisionMaintain, "Limits active, waiting for minimum activation time"
+			return DecisionMaintain, "Limits active, waiting for minimum activation time from the most recent enforcement epoch"
 		}
 
 		if ioCoverageIncomplete {

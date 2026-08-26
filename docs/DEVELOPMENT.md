@@ -613,10 +613,14 @@ CPU-to-RAM/IO coupling behind `resman-4pw.1`. And `preserveRestartRequiredConfig
 introduced by `04b7419`, extended by `76529bb`, and is now up for replacement in
 `resman-4pw.9`. `resman-4pw.27` found the same timing-contract error one layer later:
 the corrected CPU staleness window still selected its cadence from configured PSI
-intent instead of the control loop's observed runtime mode.
+intent instead of the control loop's observed runtime mode. `resman-4pw.28` found the
+corresponding release-timing boundary: an all-or-nothing release selected the older of
+the CPU and RAM/I/O activation epochs, so the newest enforcement could bypass its
+anti-flap hold.
 
 *Findings: resman-4pw.11, resman-4pw.15, resman-4pw.12, resman-4pw.14, resman-4pw.9,
-resman-4pw.6, resman-4pw.27; historical provenance from epic `resman-ne0`*
+resman-4pw.6, resman-4pw.27, resman-4pw.28; historical provenance from epic
+`resman-ne0`*
 
 ## Rule 19 — An anomaly is tracked or refuted, never documented
 
@@ -824,7 +828,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
-| 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`, `.27`; epic `resman-ne0` provenance |
+| 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`, `.27`, `.28`; epic `resman-ne0` provenance |
 | 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
 | 20. Observation cadence is decision-neutral | `resman-4pw.8`; `resman-ne0.30` provenance |
 | 21. Difference before aggregating | `resman-4pw.30` |
