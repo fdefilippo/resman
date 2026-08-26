@@ -51,7 +51,7 @@ func (a *App) WithCgroupManager() *App {
 	return a
 }
 
-// WithMetricsCollector inizializza il collector delle metriche.
+// WithMetricsCollector initializes the metrics collector.
 func (a *App) WithMetricsCollector() *App {
 	if a.err != nil {
 		return a
@@ -65,6 +65,7 @@ func (a *App) WithMetricsCollector() *App {
 		return a
 	}
 	a.metricsCollector = metricsCollector
+	a.cpuSamplingCadence = metricsCollector
 	return a
 }
 

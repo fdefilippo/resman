@@ -770,15 +770,23 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 		cfg.PSIFallbackInterval = 300
 		return cfg
 	}
+	configuredButInactivePSI := func() *config.Config {
+		cfg := config.DefaultConfig()
+		cfg.PSIEventDriven = true
+		cfg.PollingInterval = 30
+		cfg.PSIFallbackInterval = 10
+		return cfg
+	}
 
 	tests := []struct {
-		name         string
-		cfg          *config.Config
-		gap          time.Duration
-		secondTotal  uint64
-		secondIdle   uint64
-		want         float64
-		wantRecovery bool
+		name              string
+		cfg               *config.Config
+		gap               time.Duration
+		secondTotal       uint64
+		secondIdle        uint64
+		want              float64
+		wantRecovery      bool
+		effectiveInterval time.Duration
 	}{
 		{
 			name:        "nil config uses default cadence",
@@ -820,28 +828,39 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			wantRecovery: true,
 		},
 		{
-			name:        "PSI heartbeat jitter",
-			cfg:         psiConfig(),
-			gap:         301 * time.Second,
+			name:        "configured but inactive PSI uses polling cadence",
+			cfg:         configuredButInactivePSI(),
+			gap:         31 * time.Second,
 			secondTotal: 1100,
 			secondIdle:  850,
 			want:        50,
 		},
 		{
-			name:        "exact PSI stale boundary remains valid",
-			cfg:         psiConfig(),
-			gap:         600 * time.Second,
-			secondTotal: 1100,
-			secondIdle:  850,
-			want:        50,
+			name:              "PSI heartbeat jitter",
+			cfg:               psiConfig(),
+			gap:               301 * time.Second,
+			secondTotal:       1100,
+			secondIdle:        850,
+			want:              50,
+			effectiveInterval: 300 * time.Second,
 		},
 		{
-			name:         "PSI long gap resets baseline",
-			cfg:          psiConfig(),
-			gap:          600*time.Second + time.Nanosecond,
-			secondTotal:  1100,
-			secondIdle:   850,
-			wantRecovery: true,
+			name:              "exact PSI stale boundary remains valid",
+			cfg:               psiConfig(),
+			gap:               600 * time.Second,
+			secondTotal:       1100,
+			secondIdle:        850,
+			want:              50,
+			effectiveInterval: 300 * time.Second,
+		},
+		{
+			name:              "PSI long gap resets baseline",
+			cfg:               psiConfig(),
+			gap:               600*time.Second + time.Nanosecond,
+			secondTotal:       1100,
+			secondIdle:        850,
+			wantRecovery:      true,
+			effectiveInterval: 300 * time.Second,
 		},
 		{
 			name:         "counter regression resets baseline",
@@ -864,6 +883,9 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := &Collector{cfg: tt.cfg}
+			if tt.effectiveInterval > 0 {
+				collector.SetFallbackCPUSamplingInterval(tt.effectiveInterval)
+			}
 			now := time.Now()
 			if got := collector.updateFallbackCPUSampleAt(1000, 800, now); got != 0 {
 				t.Fatalf("first fallback CPU sample = %f, want 0", got)
@@ -894,19 +916,25 @@ func TestFallbackCPUSampleMaxGapDerivesFromDecisionCadence(t *testing.T) {
 	psiConfig.MetricsCacheTTL = 1
 
 	tests := []struct {
-		name string
-		cfg  *config.Config
-		want time.Duration
+		name              string
+		cfg               *config.Config
+		effectiveInterval time.Duration
+		want              time.Duration
 	}{
 		{name: "nil config", want: 60 * time.Second},
 		{name: "custom polling interval", cfg: normalConfig, want: 90 * time.Second},
-		{name: "custom PSI fallback interval", cfg: psiConfig, want: 240 * time.Second},
+		{name: "configured but inactive PSI uses polling interval", cfg: psiConfig, want: 60 * time.Second},
+		{name: "active PSI uses effective fallback interval", cfg: psiConfig, effectiveInterval: 120 * time.Second, want: 240 * time.Second},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := fallbackCPUSampleMaxGap(tt.cfg); got != tt.want {
-				t.Fatalf("fallbackCPUSampleMaxGap() = %s, want %s", got, tt.want)
+			collector := &Collector{cfg: tt.cfg}
+			if tt.effectiveInterval > 0 {
+				collector.SetFallbackCPUSamplingInterval(tt.effectiveInterval)
+			}
+			if got := collector.fallbackCPUSampleMaxGap(); got != tt.want {
+				t.Fatalf("Collector.fallbackCPUSampleMaxGap() = %s, want %s", got, tt.want)
 			}
 		})
 	}

@@ -155,9 +155,11 @@ activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
 Host-wide CPU uses consecutive `/proc/stat` jiffy samples. Its baseline tolerates
 normal scheduling jitter and one missed decision-loop tick: it expires after two
-`POLLING_INTERVAL` periods, or two `PSI_FALLBACK_INTERVAL` periods in event-driven
-mode. `METRICS_CACHE_TTL` controls only value reuse and does not set this sampling
-window.
+effective decision-loop intervals. That interval is `POLLING_INTERVAL` unless the PSI
+watcher is active at runtime; only an active watcher switches it to
+`PSI_FALLBACK_INTERVAL`. Configuring PSI when the watcher cannot start therefore keeps
+the polling cadence. `METRICS_CACHE_TTL` controls only value reuse and does not set
+this sampling window.
 
 Prometheus per-user series are published only from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but never overwrite

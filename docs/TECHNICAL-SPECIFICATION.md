@@ -846,9 +846,11 @@ single source of mandatory/optional capability diagnostics.
 
 **Host-total method:** Calculate the active/total jiffy delta between consecutive
 `/proc/stat` samples. The first sample establishes a baseline and returns zero. A
-baseline remains valid for up to two decision-loop intervals: `POLLING_INTERVAL` in
-normal mode, or `PSI_FALLBACK_INTERVAL` in event-driven mode. The exact boundary is
-valid; a longer gap, a clock regression, or regressed kernel counters resets the
+baseline remains valid for up to two effective decision-loop intervals. The
+application publishes the runtime cadence to the collector: `POLLING_INTERVAL` while
+the PSI watcher is inactive, including when PSI is configured but unavailable, and
+`PSI_FALLBACK_INTERVAL` only after the watcher starts successfully. The exact boundary
+is valid; a longer gap, a clock regression, or regressed kernel counters resets the
 baseline and returns zero. The next valid sample resumes delta calculation immediately.
 
 **How it works:**

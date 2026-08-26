@@ -10,6 +10,10 @@ import (
 
 const databaseRetentionInterval = 24 * time.Hour
 
+type cpuSamplingCadenceSink interface {
+	SetFallbackCPUSamplingInterval(time.Duration)
+}
+
 func (a *App) Run() error {
 	if a.err != nil {
 		return a.err
@@ -26,6 +30,7 @@ func (a *App) runControlLoop() error {
 
 	cfg := a.currentConfig()
 	pollingInterval := a.controlCycleInterval()
+	a.publishFallbackCPUSamplingInterval(pollingInterval)
 	metricsRefreshInterval := a.metricsRefreshInterval()
 	a.logger.Info("Entering main control loop",
 		"polling_interval_seconds", pollingInterval,
@@ -155,6 +160,7 @@ func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *t
 		cfg := a.currentConfig()
 		ticker.Stop()
 		*pollingInterval = currentPollingInterval
+		a.publishFallbackCPUSamplingInterval(currentPollingInterval)
 		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
 		a.logger.Info("Control loop interval updated",
 			"polling_interval_seconds", *pollingInterval,
@@ -163,6 +169,13 @@ func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *t
 		)
 	}
 	return ticker
+}
+
+func (a *App) publishFallbackCPUSamplingInterval(intervalSeconds int) {
+	if a.cpuSamplingCadence == nil {
+		return
+	}
+	a.cpuSamplingCadence.SetFallbackCPUSamplingInterval(time.Duration(intervalSeconds) * time.Second)
 }
 
 func (a *App) handleMetricsRefreshCycle() {

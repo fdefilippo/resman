@@ -14,7 +14,7 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-// App contiene i componenti runtime del daemon.
+// App contains the daemon runtime components.
 type App struct {
 	cfg        *config.Config
 	configPath string
@@ -28,6 +28,7 @@ type App struct {
 
 	cgroupMgr          *cgroup.Manager
 	metricsCollector   *metrics.Collector
+	cpuSamplingCadence cpuSamplingCadenceSink
 	dbManager          *database.DatabaseManager
 	prometheusExporter *metrics.PrometheusExporter
 	stateManager       *state.Manager

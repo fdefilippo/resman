@@ -263,28 +263,29 @@ type Collector struct {
 	logger *logging.Logger
 	mu     sync.RWMutex
 
-	// Cache per le metriche
+	// Shared metric-value cache.
 	cache           map[string]interface{}
 	cacheTimestamps map[string]time.Time
 	cacheMutex      sync.RWMutex
 	userMetricsScan sync.Mutex
 
 	// Previous /proc/stat sample. Values are raw kernel jiffies.
-	prevFallbackCPU cpuJiffySample
+	prevFallbackCPU             cpuJiffySample
+	fallbackCPUSamplingInterval time.Duration
 
 	// Observation refreshes and control decisions own independent temporal
 	// state so changing observability cadence cannot change enforcement.
 	observationState *userMetricsSamplingState
 	decisionState    *userMetricsSamplingState
 
-	// Database writer (opzionale)
+	// Optional database writer.
 	dbWriter *DBWriter
 
-	// Cache per risoluzione UID -> username
+	// UID-to-username resolution cache.
 	usernameCache      map[int]string    // UID -> username
-	usernameCacheTime  map[int]time.Time // Timestamp ultima risoluzione
+	usernameCacheTime  map[int]time.Time // Last resolution timestamp
 	usernameCacheMutex sync.RWMutex
-	usernameCacheTTL   time.Duration // TTL della cache
+	usernameCacheTTL   time.Duration // Cache TTL
 
 	// Cleanup goroutine control
 	stopCleanup chan struct{}
@@ -307,17 +308,18 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 	}
 
 	collector := &Collector{
-		cfg:               cfg,
-		logger:            logger,
-		cache:             make(map[string]interface{}),
-		cacheTimestamps:   make(map[string]time.Time),
-		usernameCache:     make(map[int]string),
-		usernameCacheTime: make(map[int]time.Time),
-		usernameCacheTTL:  usernameCacheTTL,
-		stopCleanup:       make(chan struct{}),
-		cleanupDone:       make(chan struct{}),
-		observationState:  newUserMetricsSamplingState(),
-		decisionState:     newUserMetricsSamplingState(),
+		cfg:                         cfg,
+		logger:                      logger,
+		cache:                       make(map[string]interface{}),
+		cacheTimestamps:             make(map[string]time.Time),
+		usernameCache:               make(map[int]string),
+		usernameCacheTime:           make(map[int]time.Time),
+		usernameCacheTTL:            usernameCacheTTL,
+		stopCleanup:                 make(chan struct{}),
+		cleanupDone:                 make(chan struct{}),
+		observationState:            newUserMetricsSamplingState(),
+		decisionState:               newUserMetricsSamplingState(),
+		fallbackCPUSamplingInterval: configuredPollingInterval(cfg),
 	}
 
 	go collector.periodicCleanup()
@@ -466,7 +468,7 @@ func (c *Collector) updateFallbackCPUSample(total, idle uint64) float64 {
 }
 
 func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time) float64 {
-	maxGap := fallbackCPUSampleMaxGap(c.getConfig())
+	maxGap := c.fallbackCPUSampleMaxGap()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -486,18 +488,33 @@ func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time)
 	return cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
 }
 
-func fallbackCPUSampleMaxGap(cfg *config.Config) time.Duration {
-	samplingInterval := defaultFallbackCPUSamplingInterval
-	if cfg != nil {
-		intervalSeconds := cfg.GetPollingInterval()
-		if cfg.GetPSIEventDriven() {
-			intervalSeconds = cfg.GetPSIFallbackInterval()
-		}
-		if intervalSeconds > 0 {
-			samplingInterval = time.Duration(intervalSeconds) * time.Second
-		}
+// SetFallbackCPUSamplingInterval records the control loop's effective runtime
+// cadence. Configuration intent alone cannot determine whether PSI monitoring
+// actually started.
+func (c *Collector) SetFallbackCPUSamplingInterval(interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultFallbackCPUSamplingInterval
+	}
+	c.mu.Lock()
+	c.fallbackCPUSamplingInterval = interval
+	c.mu.Unlock()
+}
+
+func (c *Collector) fallbackCPUSampleMaxGap() time.Duration {
+	c.mu.RLock()
+	samplingInterval := c.fallbackCPUSamplingInterval
+	c.mu.RUnlock()
+	if samplingInterval <= 0 {
+		samplingInterval = configuredPollingInterval(c.getConfig())
 	}
 	return fallbackCPUSampleIntervalsBeforeStale * samplingInterval
+}
+
+func configuredPollingInterval(cfg *config.Config) time.Duration {
+	if cfg != nil && cfg.GetPollingInterval() > 0 {
+		return time.Duration(cfg.GetPollingInterval()) * time.Second
+	}
+	return defaultFallbackCPUSamplingInterval
 }
 
 // GetUserCPUUsage restituisce l'uso CPU per un utente specifico.
