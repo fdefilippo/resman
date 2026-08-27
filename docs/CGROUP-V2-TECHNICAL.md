@@ -82,6 +82,80 @@ Users eligible only for RAM or I/O enforcement use standalone
 `cpu.max`, so `MIN_SYSTEM_CORES` and the shared CPU throttle do not gate or
 indirectly throttle memory-only and I/O-only enforcement.
 
+### Managed User Placement Contract
+
+ResMan deliberately uses two possible managed parents for one user. The placement
+depends on observed CPU enforcement, not merely on whether the user is being observed:
+
+```text
+/sys/fs/cgroup/resman/
+├── user_UID/                    # Finite-IOPS observation or standalone RAM/I/O
+│   └── cpu.max = max 100000     # No finite CPU quota
+└── limited/
+    ├── cpu.max = host capacity minus MIN_SYSTEM_CORES
+    └── user_UID/                # Observed CPU enforcement is active
+        ├── cpu.weight
+        └── cpu.max              # Per-user policy quota, otherwise unlimited
+```
+
+The product decision recorded in `resman-4pw.56` keeps this migration-based layout.
+It preserves three properties that a flat cgroup v2 tree cannot provide together:
+
+1. `MIN_SYSTEM_CORES` remains a collective, kernel-enforced ceiling on all CPU-limited
+   users through `resman/limited/cpu.max`.
+2. Users managed only for finite-IOPS observation, or limited only for RAM or I/O,
+   remain outside that ceiling and keep an unlimited `cpu.max`.
+3. Only users with observed CPU enforcement are descendants of `resman/limited`.
+
+The cgroup v2 hierarchy defines controller effects by ancestry, and a cgroup cannot be
+renamed under a different parent. A stable per-user leaf can therefore retain the
+collective kernel ceiling only by placing every managed user below the capped parent,
+which would also throttle finite-IOPS-observation-only and RAM/I/O-only users. Removing
+migration while preserving those users' current unlimited CPU semantics would instead
+require computed per-user quotas and would give up the aggregate kernel boundary.
+ResMan chooses neither semantic change.
+
+The resulting placement lifecycle is intentional:
+
+```text
+original cgroup
+      │
+      ├─────────────── CPU enforcement activates ───────────────┐
+      ▼                                                         ▼
+resman/user_UID  ───────────────────────────────►  resman/limited/user_UID
+finite-IOPS observation or RAM/I/O-only             CPU enforcement active
+      ▲                                                         │
+      └──── CPU enforcement releases while observation remains ┘
+      │
+      └──────── observation/enforcement ends ─────► original or recovery cgroup
+```
+
+The standalone step is optional: a user that does not need pre-enforcement block-I/O
+observation may move directly from its original cgroup into the shared hierarchy.
+
+Because the authoritative kernel accounting identity changes during migration, the
+following mechanisms are permanent parts of the placement contract rather than cleanup
+opportunities:
+
+- `transitionUserCgroup` moves enforceable processes with rollback.
+- `blockIOAccountingState` carries the final source `io.stat` delta into the
+  destination baseline so the logical counter remains monotonic.
+- `cleanupAlternateUserCgroup` and `UserCgroupPlacementIncompleteError` detect and
+  retry a transient split instead of treating both paths as authoritative.
+- `logicalBlockIOCounters` revalidates the tracked path around concurrent reads.
+- The cgroup manager's tracked path is the authoritative placement. The state manager's
+  block-I/O observation set tracks finite-IOPS observation, while the resource-state
+  `standalone` flag records standalone RAM/I/O enforcement and is reconciled during
+  CPU placement changes.
+- Process origins and start times remain authoritative for reconciliation and shutdown
+  restoration.
+
+At steady state, exactly one managed path is authoritative for each UID. A populated
+alternate path is a reported transient condition, never a second valid placement.
+Future topology changes must be explicit product decisions and must revalidate block-I/O
+continuity, process reconciliation, rollback, shutdown restoration, and the functional
+cgroup gate before replacing any of these mechanisms.
+
 ---
 
 ## Memory Limiting (`memory.max` and `memory.high`)
@@ -176,7 +250,7 @@ Scenario C: Process uses 100% CPU AND 600MB RAM
 
 ### CPU Management
 
-**File:** `cgroup/manager.go`
+**Files:** `cgroup/cpu.go`, `cgroup/shared.go`
 
 ```go
 // ApplyCPULimit applies CPU quota via cpu.max
@@ -199,7 +273,7 @@ func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
 
 ### Memory Management
 
-**File:** `cgroup/manager.go`
+**File:** `cgroup/memory.go`
 
 ```go
 // ApplyRAMLimit applies hard memory limit via memory.max
@@ -270,12 +344,12 @@ RAM_THRESHOLD=75                 # Activation threshold (%)
 RAM_RELEASE_THRESHOLD=40         # Deactivation threshold (%)
 RAM_QUOTA_PER_USER=512M          # Per-user RAM quota
 DISABLE_SWAP=false               # Set memory.swap.max=0
-RAM_HIGH_RATIO=0.8               # memory.high = 80% of memory.max (NEW!)
+RAM_HIGH_RATIO=0.8               # memory.high = 80% of memory.max
 ```
 
 ### Prometheus Metrics
 
-**New metric (v1.19.0+):**
+**Metric (available since v1.19.0):**
 ```
 resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
 ```
@@ -322,13 +396,14 @@ allowing monitoring and alerting on memory pressure before OOM kills occur.
 - [Kernel Documentation - Cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
 - [Memory Controller Documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)
 - [CPU Controller Documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu)
+- [Linux cgroup v2 implementation notes](https://github.com/torvalds/linux/blob/master/kernel/cgroup/cgroup.c)
 
 ---
 
 ## Document Metadata
 
-- **Version:** 1.1
-- **Date:** 2026-03-31
+- **Version:** 1.2
+- **Date:** 2026-08-27
 - **Author:** ResMan Development Team
-- **Related Project:** ResMan v1.19.0 (memory.high support added)
-- **Changes:** Added memory.high soft limit implementation, RAM_HIGH_RATIO configuration, user_memory_high_breaches_total metric
+- **Related Project:** ResMan
+- **Changes:** Recorded the managed-user placement decision and refreshed implementation locations
