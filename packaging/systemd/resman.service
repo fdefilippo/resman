@@ -7,6 +7,8 @@ Before=sysinit.target systemd-user-sessions.service vcs.service shutdown.target
 Conflicts=shutdown.target
 RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman /sys/fs/cgroup /var/log /run
 ConditionDirectoryNotEmpty=/sys/fs/cgroup
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -16,8 +18,9 @@ User=root
 # diagnostics and lets CPU quota enforcement run without cpuset.
 ExecStart=/usr/bin/resman --config /etc/resman/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
+Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=78
 StandardOutput=journal
 StandardError=journal
 # CPU priority (-20 is the highest, 19 is the lowest)

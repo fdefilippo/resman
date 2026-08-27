@@ -32,6 +32,11 @@ import (
 
 var version = "1.25.1"
 
+const (
+	exitStatusFailure       = 1
+	exitStatusConfiguration = 78
+)
+
 func main() {
 	// Parse command-line flags.
 	configPath := flag.String("config", config.DefaultConfigPath, "Path to configuration file")
@@ -51,7 +56,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  - File does not exist: create %s from the example\n", config.DefaultConfigPath)
 		fmt.Fprintf(os.Stderr, "  - Invalid syntax: check key=value format\n")
 		fmt.Fprintf(os.Stderr, "  - Invalid values: verify thresholds, ports, and paths\n")
-		os.Exit(1)
+		os.Exit(exitStatusConfiguration)
 	}
 
 	// Initialize logging from the effective configuration.
@@ -92,6 +97,13 @@ func main() {
 		WithMCPServer().
 		Run()
 	if err != nil {
-		os.Exit(1)
+		os.Exit(applicationExitCode(err))
 	}
+}
+
+func applicationExitCode(err error) int {
+	if app.IsPermanentStartupError(err) {
+		return exitStatusConfiguration
+	}
+	return exitStatusFailure
 }

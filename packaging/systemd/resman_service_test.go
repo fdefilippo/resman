@@ -40,6 +40,54 @@ func TestServiceContainsNoIneffectiveLayoutOrHardeningTemplate(t *testing.T) {
 	}
 }
 
+func TestServiceRestartContractDistinguishesPermanentAndTransientFailures(t *testing.T) {
+	contents := readService(t)
+	tests := []struct {
+		name      string
+		section   string
+		directive string
+		want      string
+	}{
+		{name: "bounded retry interval", section: "Unit", directive: "StartLimitIntervalSec", want: "60"},
+		{name: "bounded retry burst", section: "Unit", directive: "StartLimitBurst", want: "3"},
+		{name: "retry failures only", section: "Service", directive: "Restart", want: "on-failure"},
+		{name: "retry delay", section: "Service", directive: "RestartSec", want: "10"},
+		{name: "permanent startup status", section: "Service", directive: "RestartPreventExitStatus", want: "78"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values := activeDirectiveValues(contents, tt.section, tt.directive)
+			if len(values) != 1 || values[0] != tt.want {
+				t.Fatalf("%s.%s values = %v, want exactly [%s]", tt.section, tt.directive, values, tt.want)
+			}
+		})
+	}
+}
+
+func activeDirectiveValues(contents, section, directive string) []string {
+	currentSection := ""
+	var values []string
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			continue
+		}
+		if currentSection != section {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if found && strings.TrimSpace(key) == directive {
+			values = append(values, strings.TrimSpace(value))
+		}
+	}
+	return values
+}
+
 func containsActiveDirective(contents, directive string) bool {
 	for _, line := range strings.Split(contents, "\n") {
 		line = strings.TrimSpace(line)

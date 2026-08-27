@@ -103,6 +103,23 @@ PSI event\-driven operation additionally requires kernel PSI support. On
 Enterprise Linux systems where PSI is disabled at boot, enable it with
 .BR psi=1
 as described in the PSI section of this manual.
+.SH SYSTEMD RESTART CONTRACT
+The packaged systemd unit distinguishes failures that require operator action from
+failures that may be transient. Invalid configuration, unusable cgroup capabilities
+required by an enabled feature, and invalid MCP TLS credentials exit with status
+.BR 78 .
+The unit reports the service as failed and does not restart it automatically. Inspect
+.BR "systemctl status resman"
+and
+.BR "journalctl -u resman" ,
+correct the configuration or host capability, then start the service again.
+.PP
+Other non-zero exits are retried after 10 seconds. The unit permits at most three
+starts within 60 seconds; after that it remains failed with a start-limit result rather
+than retrying forever. After correcting the transient cause, run
+.B systemctl reset-failed resman
+before starting the service when the start limit was reached. A clean stop is not
+automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
 The system uses a cgroups v2 hierarchy to manage fair CPU resource distribution:
 .IP 1. 3

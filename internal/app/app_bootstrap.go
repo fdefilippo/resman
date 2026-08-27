@@ -36,7 +36,7 @@ func (a *App) WithCgroupManager() *App {
 		fmt.Fprintf(os.Stderr, "  3. Reboot and verify: cat /sys/fs/cgroup/cgroup.controllers\n")
 		fmt.Fprintf(os.Stderr, "  4. Verify PSI if PSI_EVENT_DRIVEN=true: ls /proc/pressure\n")
 		fmt.Fprintf(os.Stderr, "  5. Check permissions on %s\n", a.cfg.CgroupRoot)
-		a.err = err
+		a.err = NewPermanentStartupError(fmt.Errorf("initialize cgroup manager: %w", err))
 		return a
 	}
 	if err := cgroupMgr.RecoverExistingCgroups(); err != nil {
@@ -224,7 +224,7 @@ func (a *App) WithConfigWatcher() *App {
 	return a
 }
 
-// WithMCPServer avvia il server MCP se abilitato.
+// WithMCPServer starts the MCP server when enabled.
 func (a *App) WithMCPServer() *App {
 	if a.err != nil {
 		return a
@@ -239,21 +239,23 @@ func (a *App) WithMCPServer() *App {
 	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager, a.configWatcher)
 	if err != nil {
 		a.logger.Error("Failed to initialize MCP server", "error", err)
-		fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize MCP server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "MCP features disabled. To fix:\n")
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize MCP server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Daemon startup aborted. To fix:\n")
 		fmt.Fprintf(os.Stderr, "  1. Check configuration\n")
 		fmt.Fprintf(os.Stderr, "  2. Or disable: MCP_ENABLED=false\n")
+		a.err = NewPermanentStartupError(fmt.Errorf("initialize MCP server: %w", err))
 		return a
 	}
 
 	if err := mcpServer.Start(a.ctx); err != nil {
 		a.logger.Error("Failed to start MCP server", "error", err)
-		fmt.Fprintf(os.Stderr, "\nWarning: Failed to start MCP server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "MCP server unavailable. Check:\n")
+		fmt.Fprintf(os.Stderr, "\nFailed to start MCP server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Daemon startup aborted. Check:\n")
 		fmt.Fprintf(os.Stderr, "  1. Transport type: %s\n", cfg.MCPTransport)
 		if cfg.MCPTransport == "http" {
 			fmt.Fprintf(os.Stderr, "  2. Port availability: %d\n", cfg.MCPHTTPPort)
 		}
+		a.err = fmt.Errorf("start MCP server: %w", err)
 		return a
 	}
 
