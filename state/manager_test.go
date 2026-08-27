@@ -279,9 +279,15 @@ type prometheusErrorRecord struct {
 	errorType string
 }
 
+type limitHookMetricRecord struct {
+	hookType metrics.LimitHookType
+	outcome  metrics.LimitHookOutcome
+}
+
 type mockPrometheusExporter struct {
 	mu                         sync.Mutex
 	errors                     []prometheusErrorRecord
+	limitHookExecutions        []limitHookMetricRecord
 	controlCycleDurations      []time.Duration
 	metricsCollectionDurations []time.Duration
 	systemSnapshots            int
@@ -320,6 +326,12 @@ func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 	defer m.mu.Unlock()
 	m.errors = append(m.errors, prometheusErrorRecord{component: component, errorType: errorType})
 }
+
+func (m *mockPrometheusExporter) RecordLimitHookExecution(hookType metrics.LimitHookType, outcome metrics.LimitHookOutcome) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.limitHookExecutions = append(m.limitHookExecutions, limitHookMetricRecord{hookType: hookType, outcome: outcome})
+}
 func (m *mockPrometheusExporter) Start(ctx context.Context) error { return nil }
 func (m *mockPrometheusExporter) Stop() error                     { return nil }
 func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
@@ -342,6 +354,12 @@ func (m *mockPrometheusExporter) recordedErrors() []prometheusErrorRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]prometheusErrorRecord(nil), m.errors...)
+}
+
+func (m *mockPrometheusExporter) recordedLimitHookExecutions() []limitHookMetricRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]limitHookMetricRecord(nil), m.limitHookExecutions...)
 }
 
 type prometheusMetricSnapshot struct {
@@ -1973,6 +1991,18 @@ func (m *cleanupPrometheusExporter) Stop() error {
 	return m.stopErr
 }
 
+type blockingCleanupPrometheusExporter struct {
+	mockPrometheusExporter
+	stopStarted chan struct{}
+	stopRelease chan struct{}
+}
+
+func (m *blockingCleanupPrometheusExporter) Stop() error {
+	close(m.stopStarted)
+	<-m.stopRelease
+	return nil
+}
+
 func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
 	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
 	return nil
@@ -2727,6 +2757,31 @@ func TestCleanupAttemptsEveryPhaseAfterErrors(t *testing.T) {
 	}
 	if !exporter.stopCalled {
 		t.Fatal("Prometheus exporter Stop() was skipped after earlier failures")
+	}
+}
+
+func TestCleanupDoesNotHoldOperationLockWhilePrometheusStops(t *testing.T) {
+	exporter := &blockingCleanupPrometheusExporter{
+		stopStarted: make(chan struct{}),
+		stopRelease: make(chan struct{}),
+	}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- manager.Cleanup() }()
+	<-exporter.stopStarted
+	if !manager.opMu.TryLock() {
+		close(exporter.stopRelease)
+		<-cleanupDone
+		t.Fatal("Cleanup() held opMu while waiting for Prometheus Stop()")
+	}
+	manager.opMu.Unlock()
+	close(exporter.stopRelease)
+	if err := <-cleanupDone; err != nil {
+		t.Fatalf("Cleanup() error: %v", err)
 	}
 }
 

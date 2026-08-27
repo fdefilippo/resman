@@ -115,6 +115,7 @@ LIMIT_HOOK_ENABLED=false
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
 # Hook process output and URL credentials/paths are never copied into daemon logs.
+# Shutdown cancels and drains in-flight hooks; Prometheus records each terminal outcome.
 LIMIT_HOOK_TIMEOUT=10
 
 # MCP server

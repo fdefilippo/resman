@@ -325,6 +325,9 @@ explicitly, and uses one configuration epoch across control-cycle consumers.
   a reload, not to wait for a watcher, not to "give it a moment" in production code.
 - An operation that triggers asynchronous work **MUST** return either a confirmed
   result or an explicit timeout/failure — never an optimistic success.
+- Returning a timeout or failure **MUST** also leave the owned worker quiescent, or
+  transfer it to an explicitly tracked lifecycle. Cancellation without draining is
+  not completion when the worker can still mutate enforcement state.
 - A parameter that claims to control whether runtime state changes (`reload=false`)
   **MUST** actually control it, or be **removed immediately** as a breaking change
   (Rule 1). A parameter kept for compatibility while meaning nothing is forbidden.
@@ -336,8 +339,12 @@ debounced for two, so `reload=true` reported success before the reload could pos
 have completed. And `reload=false` mutated the shared `Config` and persisted it anyway,
 so the flag meant nothing in either position. The setters now persist a detached
 snapshot and wait for a concrete watcher result; the obsolete flag is rejected.
+The later `resman-4pw.58` sweep found the same false acknowledgement at three other
+boundaries: timed-out PID migration, untracked limit hooks, and asynchronous
+Prometheus shutdown. These operations now cancel and drain owned work before their
+public completion boundary and report terminal outcomes.
 
-*Finding: resman-4pw.7*
+*Findings: resman-4pw.7, resman-4pw.58*
 
 ## Rule 11 — MCP is latest-only and protocol-stateless
 
@@ -820,7 +827,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 7. Counter semantics | `resman-4pw.10` |
 | 8. Truthful errors and logs | `resman-4pw.11` |
 | 9. Configuration lifecycle | `resman-4pw.9` |
-| 10. Acknowledge, never sleep | `resman-4pw.7` |
+| 10. Acknowledge, never sleep | `resman-4pw.7`, `.58` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13`, `.48` |

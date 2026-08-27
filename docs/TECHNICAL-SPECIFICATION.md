@@ -315,6 +315,12 @@ controller.
 - `CleanupAll()`: Removes all created cgroups
 - `GetCgroupInfo(uid)`: Returns cgroup information
 
+`ApplyCPULimit` owns process migration synchronously. `CGROUP_OPERATION_TIMEOUT`
+cancels the scan between PID moves, but the call does not return until any in-flight
+move has completed. A blocked kernel operation can therefore make the call exceed the
+nominal timeout; after the returned error no background worker remains able to change
+cgroup membership.
+
 **CPU Limit Format:**
 - `cpu.max` format: `"quota period"` (in microseconds)
 - Example: `"50000 100000"` = 0.5 CPU cores
@@ -1091,6 +1097,16 @@ type Manager struct {
 - Maximum entries: 100
 - Circular buffer (oldest removed)
 
+### 9.4 Limit Hook Lifecycle
+
+Script and HTTP hooks are asynchronous relative to the control cycle, but are owned
+by the state manager. Every configured delivery terminates as `success`, `failure`,
+`timeout`, or `cancelled` and increments
+`resman_limit_hook_executions_total{hook_type,outcome}`. Shutdown closes dispatch,
+cancels the shared hook context, and waits for every in-flight script or HTTP request
+to become quiescent before state cleanup continues. Script output and secret-bearing
+URL components remain excluded from returned errors and logs.
+
 ---
 
 ## 10. Logging System
@@ -1209,6 +1225,8 @@ defined sampling stream even when PSI event-driven refreshes run at another cade
 - `resman_limits_activated_total` (confirmed inactive-to-active transitions)
 - `resman_limits_deactivated_total` (confirmed active-to-inactive transitions)
 - `resman_errors_total{component, error_type}` (operational errors with bounded labels)
+- `resman_limit_hook_executions_total{hook_type, outcome}` (terminal script and HTTP
+  hook outcomes using bounded labels)
 - `resman_procfs_unavailable_processes{access}` (current missing executable-identity
   or I/O-decision procfs inputs)
 
@@ -1223,8 +1241,10 @@ defined sampling stream even when PSI event-driven refreshes run at another cade
 2. Start HTTP server
 
 **Stop:**
-1. Shutdown HTTP server
-2. Unregister metrics
+1. Request graceful HTTP shutdown with a bounded context
+2. Force-close the listener if graceful shutdown fails
+3. Wait for the serve goroutine to terminate
+4. Return the combined shutdown and serve error to the application
 
 **Update ownership:**
 - Control cycles publish system-wide and per-user metrics.

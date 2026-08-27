@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
 type limitHookEvent struct {
@@ -32,7 +33,8 @@ type sanitizedHookError struct {
 	cause   error
 }
 
-type hookWarningLogger interface {
+type hookOutcomeLogger interface {
+	Info(msg string, keyvals ...interface{})
 	Warn(msg string, keyvals ...interface{})
 }
 
@@ -64,40 +66,109 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		LimitHookSource: "resman",
 	}
 
-	go m.runLimitHook(cfg, event)
+	m.hookMu.Lock()
+	if m.hookClosed {
+		m.hookMu.Unlock()
+		if cfg.LimitHookScript != "" {
+			m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeScript, "", context.Canceled)
+		}
+		if cfg.LimitHookURL != "" {
+			m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeHTTP, cfg.LimitHookURL, context.Canceled)
+		}
+		return
+	}
+	parentCtx := m.hookCtx
+	m.hookWG.Add(1)
+	m.hookMu.Unlock()
+
+	go func() {
+		defer m.hookWG.Done()
+		m.runLimitHook(parentCtx, cfg, event)
+	}()
 }
 
-func (m *Manager) runLimitHook(cfg *config.Config, event limitHookEvent) {
+func (m *Manager) runLimitHook(parentCtx context.Context, cfg *config.Config, event limitHookEvent) {
 	timeout := time.Duration(cfg.LimitHookTimeout) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	if cfg.LimitHookScript != "" {
-		if err := runLimitHookScript(ctx, cfg.LimitHookScript, event); err != nil {
-			reportLimitHookScriptFailure(m.logger, event, err)
-		}
+		err := m.executeHookScript(ctx, cfg.LimitHookScript, event)
+		m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeScript, "", err)
 	}
 
 	if cfg.LimitHookURL != "" {
-		if err := postLimitHook(ctx, cfg.LimitHookURL, event); err != nil {
-			reportLimitHookURLFailure(m.logger, event, cfg.LimitHookURL, err)
-		}
+		err := m.executeHookRequest(ctx, cfg.LimitHookURL, event)
+		m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeHTTP, cfg.LimitHookURL, err)
 	}
 }
 
-func reportLimitHookScriptFailure(logger hookWarningLogger, event limitHookEvent, err error) {
+func (m *Manager) stopLimitHooks() {
+	m.hookMu.Lock()
+	if m.hookClosed {
+		m.hookMu.Unlock()
+		m.hookWG.Wait()
+		return
+	}
+	m.hookClosed = true
+	cancel := m.hookCancel
+	m.hookMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	m.hookWG.Wait()
+}
+
+func (m *Manager) recordLimitHookResult(event limitHookEvent, hookType resmanmetrics.LimitHookType, endpoint string, err error) {
+	outcome := limitHookOutcome(err)
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.RecordLimitHookExecution(hookType, outcome)
+	}
+	if err == nil {
+		m.logger.Info("Limit hook execution completed",
+			"uid", event.UID,
+			"username", event.Username,
+			"hook_type", hookType,
+			"outcome", outcome,
+		)
+		return
+	}
+	if hookType == resmanmetrics.LimitHookTypeHTTP {
+		reportLimitHookURLFailure(m.logger, event, endpoint, outcome, err)
+		return
+	}
+	reportLimitHookScriptFailure(m.logger, event, outcome, err)
+}
+
+func limitHookOutcome(err error) resmanmetrics.LimitHookOutcome {
+	switch {
+	case err == nil:
+		return resmanmetrics.LimitHookOutcomeSuccess
+	case errors.Is(err, context.DeadlineExceeded):
+		return resmanmetrics.LimitHookOutcomeTimeout
+	case errors.Is(err, context.Canceled):
+		return resmanmetrics.LimitHookOutcomeCancelled
+	default:
+		return resmanmetrics.LimitHookOutcomeFailure
+	}
+}
+
+func reportLimitHookScriptFailure(logger hookOutcomeLogger, event limitHookEvent, outcome resmanmetrics.LimitHookOutcome, err error) {
 	logger.Warn("Limit hook script failed",
 		"uid", event.UID,
 		"username", event.Username,
+		"outcome", outcome,
 		"error", err,
 	)
 }
 
-func reportLimitHookURLFailure(logger hookWarningLogger, event limitHookEvent, endpoint string, err error) {
+func reportLimitHookURLFailure(logger hookOutcomeLogger, event limitHookEvent, endpoint string, outcome resmanmetrics.LimitHookOutcome, err error) {
 	logger.Warn("Limit hook webservice failed",
 		"uid", event.UID,
 		"username", event.Username,
 		"endpoint", hookEndpointForLog(endpoint),
+		"outcome", outcome,
 		"error", err,
 	)
 }
@@ -147,10 +218,13 @@ func postLimitHook(ctx context.Context, endpoint string, event limitHookEvent) e
 
 func sanitizeScriptHookError(ctx context.Context, err error) error {
 	reason := "execution failed"
+	cause := err
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		reason = "timed out"
+		cause = context.DeadlineExceeded
 	} else if errors.Is(ctx.Err(), context.Canceled) {
 		reason = "canceled"
+		cause = context.Canceled
 	} else {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
@@ -159,7 +233,7 @@ func sanitizeScriptHookError(ctx context.Context, err error) error {
 	}
 	return &sanitizedHookError{
 		message: "limit hook script " + reason,
-		cause:   err,
+		cause:   cause,
 	}
 }
 

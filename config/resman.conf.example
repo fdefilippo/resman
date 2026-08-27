@@ -319,6 +319,7 @@ INTERACTIVE_RAM_QUOTA=1G
 # URL receives a JSON POST with uid, username, cpu_usage, shared_cgroup, timestamp.
 # Script stdout/stderr is discarded and never copied into daemon errors or logs.
 # URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
+# Shutdown cancels and drains in-flight hooks; each delivery exports one bounded outcome.
 LIMIT_HOOK_ENABLED=false
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited

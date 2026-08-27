@@ -2,12 +2,12 @@ package cgroup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func (m *Manager) CreateUserCgroup(uid int) error {
@@ -113,33 +113,26 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 		return err
 	}
 
-	// Sposta processi in modo sincrono con timeout configurabile
-	cfg := m.getConfig()
-	timeout := time.Duration(cfg.GetCgroupOperationTimeout()) * time.Second
+	// Move processes synchronously. The context stops the loop between process
+	// migrations, and no worker remains able to mutate cgroup membership after
+	// this method returns.
+	timeout := m.operationTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		defer close(done)
-		done <- m.MoveAllUserProcesses(uid)
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			m.logger.Warn("Failed to move user processes to cgroup",
+	if err := m.moveUserProcesses(ctx, uid); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			m.logger.Warn("Timed out moving user processes to cgroup",
 				"uid", uid,
-				"error", err,
+				"timeout", timeout,
 			)
-			return err
+			return fmt.Errorf("move processes to cgroup for UID %d exceeded %v: %w", uid, timeout, context.DeadlineExceeded)
 		}
-	case <-ctx.Done():
-		m.logger.Warn("Timeout moving user processes to cgroup",
+		m.logger.Warn("Failed to move user processes to cgroup",
 			"uid", uid,
-			"timeout", timeout,
+			"error", err,
 		)
-		return fmt.Errorf("timeout (%v) moving processes to cgroup for UID %d", timeout, uid)
+		return fmt.Errorf("move processes to cgroup for UID %d: %w", uid, err)
 	}
 
 	return nil

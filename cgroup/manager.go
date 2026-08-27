@@ -1,12 +1,14 @@
 package cgroup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
@@ -49,6 +51,8 @@ type Manager struct {
 	removeManagedCgroup func(string) error
 	readBlockIOStats    func(string) (blockIOCounters, error)
 	readCgroupFile      func(string) ([]byte, error)
+	moveUserProcesses   func(context.Context, int) error
+	operationTimeout    func() time.Duration
 
 	// Cached verification state.
 	cgroupRootWritable         bool
@@ -104,6 +108,10 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		removeManagedCgroup: removeCgroupWithRetry,
 		readBlockIOStats:    readBlockIOCounters,
 		readCgroupFile:      os.ReadFile,
+	}
+	mgr.moveUserProcesses = mgr.moveAllUserProcesses
+	mgr.operationTimeout = func() time.Duration {
+		return time.Duration(mgr.getConfig().GetCgroupOperationTimeout()) * time.Second
 	}
 
 	// Verify that cgroups v2 provides every interface required by enabled features.

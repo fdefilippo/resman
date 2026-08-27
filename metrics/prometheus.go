@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,12 +52,38 @@ type ioStatsSnapshot struct {
 	WriteOps   uint64
 }
 
+type prometheusRun struct {
+	server    *http.Server
+	stop      chan struct{}
+	stopOnce  sync.Once
+	serveDone chan error
+	done      chan struct{}
+	err       error
+}
+
+// LimitHookType identifies one bounded limit-hook delivery mechanism.
+type LimitHookType string
+
+const (
+	LimitHookTypeScript LimitHookType = "script"
+	LimitHookTypeHTTP   LimitHookType = "http"
+)
+
+// LimitHookOutcome identifies one bounded terminal hook execution outcome.
+type LimitHookOutcome string
+
+const (
+	LimitHookOutcomeSuccess   LimitHookOutcome = "success"
+	LimitHookOutcomeFailure   LimitHookOutcome = "failure"
+	LimitHookOutcomeTimeout   LimitHookOutcome = "timeout"
+	LimitHookOutcomeCancelled LimitHookOutcome = "cancelled"
+)
+
 // PrometheusExporter exports metrics in Prometheus format.
 type PrometheusExporter struct {
 	cfg      *config.Config
 	logger   *logging.Logger
 	registry *prometheus.Registry
-	server   *http.Server
 
 	// Static labels for every metric (from configuration).
 	hostname   string
@@ -117,6 +144,7 @@ type PrometheusExporter struct {
 	psiEventsTotal         *prometheus.CounterVec
 	psiLastEventTimestamp  *prometheus.GaugeVec
 	errorsTotal            *prometheus.CounterVec
+	limitHookExecutions    *prometheus.CounterVec
 
 	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
@@ -126,7 +154,12 @@ type PrometheusExporter struct {
 
 	// Internal state.
 	isRunning bool
-	stopChan  chan struct{}
+	starting  bool
+	startDone chan struct{}
+	run       *prometheusRun
+
+	shutdownHTTPServer func(*http.Server, context.Context) error
+	closeHTTPServer    func(*http.Server) error
 
 	// Authentication.
 	basicAuthPassword string
@@ -179,11 +212,16 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		registry:             prometheus.NewRegistry(),
 		hostname:             hostname,
 		serverRole:           serverRole,
-		stopChan:             make(chan struct{}, 1),
 		activeUserMetrics:    make(map[string]bool),
 		prevMemoryHighEvents: make(map[string]uint64),
 		prevIOStats:          make(map[string]ioStatsSnapshot),
 		prevUserPatterns:     make(map[string]string),
+		shutdownHTTPServer: func(server *http.Server, ctx context.Context) error {
+			return server.Shutdown(ctx)
+		},
+		closeHTTPServer: func(server *http.Server) error {
+			return server.Close()
+		},
 	}
 
 	logger.Info("Prometheus exporter created",
@@ -632,6 +670,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"component", "error_type"},
 	)
 
+	exp.limitHookExecutions = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "limit_hook_executions_total",
+			Help:        "Total completed limit-hook executions by delivery mechanism and terminal outcome",
+			ConstLabels: staticLabels,
+		},
+		[]string{"hook_type", "outcome"},
+	)
+
 	// === Execution-time histograms ===
 
 	exp.controlCycleDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
@@ -1037,6 +1085,34 @@ func (exp *PrometheusExporter) RecordError(component, errorType string) {
 	exp.errorsTotal.WithLabelValues(component, errorType).Inc()
 }
 
+// RecordLimitHookExecution records one terminal hook outcome using bounded labels.
+func (exp *PrometheusExporter) RecordLimitHookExecution(hookType LimitHookType, outcome LimitHookOutcome) {
+	if exp == nil {
+		return
+	}
+	if !validLimitHookType(hookType) || !validLimitHookOutcome(outcome) {
+		exp.logger.Error("Rejected invalid limit hook metric labels",
+			"hook_type", hookType,
+			"outcome", outcome,
+		)
+		return
+	}
+	exp.limitHookExecutions.WithLabelValues(string(hookType), string(outcome)).Inc()
+}
+
+func validLimitHookType(hookType LimitHookType) bool {
+	return hookType == LimitHookTypeScript || hookType == LimitHookTypeHTTP
+}
+
+func validLimitHookOutcome(outcome LimitHookOutcome) bool {
+	switch outcome {
+	case LimitHookOutcomeSuccess, LimitHookOutcomeFailure, LimitHookOutcomeTimeout, LimitHookOutcomeCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // authMiddleware gestisce l'autenticazione per Basic Auth e JWT
 func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1187,12 +1263,16 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	}
 
 	exp.mu.Lock()
-	if exp.isRunning {
+	if exp.isRunning || exp.starting {
 		exp.mu.Unlock()
 		return fmt.Errorf("exporter already running")
 	}
-	exp.isRunning = true
+	exp.starting = true
+	exp.startDone = make(chan struct{})
+	// A failed restart must not expose the terminal result of an earlier run.
+	exp.run = nil
 	exp.mu.Unlock()
+	defer exp.finishStartAttempt()
 
 	mux := http.NewServeMux()
 
@@ -1212,7 +1292,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	mux.HandleFunc("/", exp.rootHandler)
 
 	addr := fmt.Sprintf("%s:%d", exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
-	exp.server = &http.Server{
+	server := &http.Server{
 		Addr:      addr,
 		Handler:   mux,
 		TLSConfig: exp.tlsConfig,
@@ -1221,9 +1301,6 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	// Configure TLS when enabled.
 	if exp.cfg.PrometheusTLSEnabled {
 		if exp.tlsConfig == nil || len(exp.tlsConfig.Certificates) == 0 {
-			exp.mu.Lock()
-			exp.isRunning = false
-			exp.mu.Unlock()
 			return fmt.Errorf("TLS enabled but server TLS configuration is not loaded")
 		}
 		exp.logger.Info("Starting Prometheus HTTPS server",
@@ -1243,80 +1320,116 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		exp.mu.Lock()
-		exp.isRunning = false
-		exp.mu.Unlock()
 		return fmt.Errorf("failed to listen for Prometheus metrics on %s: %w", addr, err)
 	}
 
-	// Start the server in a goroutine.
-	listenErr := make(chan error, 1)
+	run := &prometheusRun{
+		server:    server,
+		stop:      make(chan struct{}),
+		serveDone: make(chan error, 1),
+		done:      make(chan struct{}),
+	}
+	exp.mu.Lock()
+	exp.run = run
+	exp.isRunning = true
+	exp.mu.Unlock()
+
+	// Start the server and retain its terminal result for Stop.
 	go func() {
 		var err error
 		if exp.cfg.PrometheusTLSEnabled {
-			err = exp.server.ServeTLS(listener, "", "")
+			err = server.ServeTLS(listener, "", "")
 		} else {
-			err = exp.server.Serve(listener)
+			err = server.Serve(listener)
 		}
-		if err != nil && err != http.ErrServerClosed {
-			exp.logger.Error("Prometheus server error", "error", err)
-			listenErr <- err
-		}
+		run.serveDone <- err
 	}()
 	exp.logger.Info("Prometheus server verified as listening", "address", listener.Addr().String())
 
-	// Handle shutdown.
-	go func() {
-		select {
-		case <-ctx.Done():
-			exp.logger.Info("Context cancelled, shutting down Prometheus server")
-			exp.shutdown()
-		case err := <-listenErr:
-			exp.logger.Error("Server listen error", "error", err)
-			exp.shutdown()
-		case <-exp.stopChan:
-			exp.logger.Info("Stop signal received")
-			exp.shutdown()
-		}
-	}()
+	go exp.monitorRun(ctx, run)
 
 	return nil
 }
 
-// shutdown esegue lo shutdown graceful del server.
-func (exp *PrometheusExporter) shutdown() {
+func (exp *PrometheusExporter) finishStartAttempt() {
 	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	exp.starting = false
+	if exp.startDone != nil {
+		close(exp.startDone)
+	}
+	exp.mu.Unlock()
+}
 
-	if !exp.isRunning || exp.server == nil {
-		return
+func (exp *PrometheusExporter) monitorRun(ctx context.Context, run *prometheusRun) {
+	var shutdownErr error
+	var serveErr error
+	select {
+	case serveErr = <-run.serveDone:
+	case <-ctx.Done():
+		exp.logger.Info("Context cancelled, shutting down Prometheus server")
+		shutdownErr = exp.shutdownRun(run)
+		serveErr = <-run.serveDone
+	case <-run.stop:
+		exp.logger.Info("Stop signal received")
+		shutdownErr = exp.shutdownRun(run)
+		serveErr = <-run.serveDone
+	}
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	if serveErr != nil {
+		exp.logger.Error("Prometheus server error", "error", serveErr)
 	}
 
+	run.err = errors.Join(shutdownErr, serveErr)
+	exp.mu.Lock()
+	if exp.run == run {
+		exp.isRunning = false
+	}
+	exp.mu.Unlock()
+	close(run.done)
+}
+
+func (exp *PrometheusExporter) shutdownRun(run *prometheusRun) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	exp.logger.Info("Shutting down Prometheus HTTP server")
-	if err := exp.server.Shutdown(shutdownCtx); err != nil {
+	if err := exp.shutdownHTTPServer(run.server, shutdownCtx); err != nil {
 		exp.logger.Error("Error during Prometheus server shutdown", "error", err)
-		// Forza la chiusura se lo shutdown graceful fallisce
-		_ = exp.server.Close()
+		closeErr := exp.closeHTTPServer(run.server)
+		if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			return errors.Join(err, fmt.Errorf("force close Prometheus server: %w", closeErr))
+		}
+		return err
 	}
-
-	exp.isRunning = false
 	exp.logger.Info("Prometheus HTTP server stopped")
+	return nil
 }
 
-// Stop ferma il server Prometheus.
+// Stop waits for the Prometheus server goroutines and returns their terminal error.
 func (exp *PrometheusExporter) Stop() error {
 	if exp == nil {
 		return nil
 	}
 
-	select {
-	case exp.stopChan <- struct{}{}:
-		return nil
-	default:
-		return fmt.Errorf("stop already in progress")
+	for {
+		exp.mu.RLock()
+		starting := exp.starting
+		startDone := exp.startDone
+		run := exp.run
+		exp.mu.RUnlock()
+
+		if starting {
+			<-startDone
+			continue
+		}
+		if run == nil {
+			return nil
+		}
+		run.stopOnce.Do(func() { close(run.stop) })
+		<-run.done
+		return run.err
 	}
 }
 

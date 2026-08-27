@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +13,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fdefilippo/resman/config"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
 type capturingHookLogger struct {
 	message string
 	fields  []interface{}
+}
+
+func (l *capturingHookLogger) Info(message string, fields ...interface{}) {
+	l.message = message
+	l.fields = append([]interface{}(nil), fields...)
 }
 
 func (l *capturingHookLogger) Warn(message string, fields ...interface{}) {
@@ -59,6 +68,117 @@ func TestPostLimitHook(t *testing.T) {
 	}
 }
 
+func TestCleanupCancelsAndWaitsForLimitHooks(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LimitHookEnabled = true
+	cfg.LimitHookScript = "/test/hook"
+	cfg.LimitHookTimeout = 30
+
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	started := make(chan struct{})
+	cancelObserved := make(chan struct{})
+	release := make(chan struct{})
+	manager.executeHookScript = func(ctx context.Context, _ string, _ limitHookEvent) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelObserved)
+		<-release
+		return ctx.Err()
+	}
+
+	manager.notifyUserLimited(cfg, 1000, "alice", &SystemMetrics{
+		UserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {EnforceableUsage: resmanmetrics.ProcessSetMetrics{CPUUsage: 75}},
+		},
+	})
+	<-started
+
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- manager.Cleanup() }()
+	<-cancelObserved
+	select {
+	case err := <-cleanupDone:
+		t.Fatalf("Cleanup() returned before the canceled hook became quiescent: %v", err)
+	default:
+	}
+
+	close(release)
+	if err := <-cleanupDone; err != nil {
+		t.Fatalf("Cleanup() error: %v", err)
+	}
+
+	records := exporter.recordedLimitHookExecutions()
+	if len(records) != 1 {
+		t.Fatalf("limit-hook terminal records = %d, want 1", len(records))
+	}
+	if got, want := records[0], (limitHookMetricRecord{
+		hookType: resmanmetrics.LimitHookTypeScript,
+		outcome:  resmanmetrics.LimitHookOutcomeCancelled,
+	}); got != want {
+		t.Fatalf("limit-hook terminal record = %+v, want %+v", got, want)
+	}
+}
+
+func TestRunLimitHookRecordsEachTerminalOutcome(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LimitHookEnabled = true
+	cfg.LimitHookScript = "/test/hook"
+	cfg.LimitHookURL = "https://hooks.example.test/resman"
+
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	t.Cleanup(manager.stopLimitHooks)
+
+	manager.executeHookScript = func(context.Context, string, limitHookEvent) error { return nil }
+	manager.executeHookRequest = func(context.Context, string, limitHookEvent) error {
+		return errors.New("delivery failed")
+	}
+	manager.runLimitHook(context.Background(), cfg, limitHookEvent{UID: 1000, Username: "alice"})
+
+	records := exporter.recordedLimitHookExecutions()
+	want := []limitHookMetricRecord{
+		{hookType: resmanmetrics.LimitHookTypeScript, outcome: resmanmetrics.LimitHookOutcomeSuccess},
+		{hookType: resmanmetrics.LimitHookTypeHTTP, outcome: resmanmetrics.LimitHookOutcomeFailure},
+	}
+	if len(records) != len(want) {
+		t.Fatalf("limit-hook terminal records = %+v, want %+v", records, want)
+	}
+	for i := range want {
+		if records[i] != want[i] {
+			t.Fatalf("limit-hook terminal record %d = %+v, want %+v", i, records[i], want[i])
+		}
+	}
+}
+
+func TestLimitHookOutcomeUsesBoundedTerminalValues(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want resmanmetrics.LimitHookOutcome
+	}{
+		{name: "success", want: resmanmetrics.LimitHookOutcomeSuccess},
+		{name: "failure", err: errors.New("delivery failed"), want: resmanmetrics.LimitHookOutcomeFailure},
+		{name: "timeout", err: fmt.Errorf("hook: %w", context.DeadlineExceeded), want: resmanmetrics.LimitHookOutcomeTimeout},
+		{name: "cancelled", err: fmt.Errorf("hook: %w", context.Canceled), want: resmanmetrics.LimitHookOutcomeCancelled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := limitHookOutcome(tt.err); got != tt.want {
+				t.Fatalf("limitHookOutcome(%v) = %q, want %q", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPostLimitHookFailureRedactsEndpointSecrets(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -90,7 +210,13 @@ func TestPostLimitHookFailureRedactsEndpointSecrets(t *testing.T) {
 	}
 
 	logger := &capturingHookLogger{}
-	reportLimitHookURLFailure(logger, limitHookEvent{UID: 1000, Username: "app"}, endpoint, err)
+	reportLimitHookURLFailure(
+		logger,
+		limitHookEvent{UID: 1000, Username: "app"},
+		endpoint,
+		resmanmetrics.LimitHookOutcomeFailure,
+		err,
+	)
 	logged := fmt.Sprint(logger.message, logger.fields)
 	for _, secret := range secrets {
 		if strings.Contains(logged, secret) {
@@ -178,7 +304,12 @@ func TestRunLimitHookScriptFailureDoesNotReturnProcessOutput(t *testing.T) {
 	}
 
 	logger := &capturingHookLogger{}
-	reportLimitHookScriptFailure(logger, limitHookEvent{UID: 1000, Username: "app"}, err)
+	reportLimitHookScriptFailure(
+		logger,
+		limitHookEvent{UID: 1000, Username: "app"},
+		resmanmetrics.LimitHookOutcomeFailure,
+		err,
+	)
 	logged := fmt.Sprint(logger.message, logger.fields)
 	for _, secret := range []string{"stdout-canary", "stderr-canary", scriptPath} {
 		if strings.Contains(logged, secret) {

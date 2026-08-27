@@ -958,6 +958,8 @@ resman_metrics_collection_duration_seconds \- System metrics collection duration
 .IP \(bu
 resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
 .IP \(bu
+resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, or cancelled (counter)
+.IP \(bu
 resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP
 All user-specific metrics include
@@ -1170,7 +1172,10 @@ an explicit port); user information, path, query values, and fragments are omitt
 .PP
 Hook execution is asynchronous and bounded by
 .B LIMIT_HOOK_TIMEOUT
-seconds.
+seconds. Every script and HTTP execution records one terminal success, failure,
+timeout, or cancellation outcome. On shutdown ResMan rejects new hook dispatch,
+cancels in-flight hooks, and waits for them to terminate before continuing cleanup.
+The control cycle does not wait for ordinary hook completion.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration

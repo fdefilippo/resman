@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -52,6 +54,116 @@ func TestPrometheusStartReportsBindFailureSynchronously(t *testing.T) {
 	if exporter.IsRunning() {
 		t.Fatal("exporter remained marked running after bind failure")
 	}
+}
+
+func TestPrometheusStopWaitsForShutdownAndServeCompletion(t *testing.T) {
+	exporter := newStartedTestPrometheusExporter(t)
+
+	shutdownStarted := make(chan struct{})
+	releaseShutdown := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseShutdown:
+		default:
+			close(releaseShutdown)
+		}
+	}()
+	exporter.shutdownHTTPServer = func(server *http.Server, ctx context.Context) error {
+		close(shutdownStarted)
+		<-releaseShutdown
+		return server.Shutdown(ctx)
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- exporter.Stop() }()
+	<-shutdownStarted
+	select {
+	case err := <-stopDone:
+		t.Fatalf("Stop() returned before HTTP shutdown completed: %v", err)
+	default:
+	}
+
+	close(releaseShutdown)
+	if err := <-stopDone; err != nil {
+		t.Fatalf("Stop() error: %v", err)
+	}
+	if exporter.IsRunning() {
+		t.Fatal("exporter remained running after Stop() completed")
+	}
+}
+
+func TestPrometheusStopPropagatesShutdownFailure(t *testing.T) {
+	exporter := newStartedTestPrometheusExporter(t)
+	wantErr := errors.New("injected shutdown failure")
+	exporter.shutdownHTTPServer = func(*http.Server, context.Context) error { return wantErr }
+	exporter.closeHTTPServer = func(server *http.Server) error { return server.Close() }
+
+	if err := exporter.Stop(); !errors.Is(err, wantErr) {
+		t.Fatalf("Stop() error = %v, want error wrapping %v", err, wantErr)
+	}
+	if exporter.IsRunning() {
+		t.Fatal("exporter remained running after failed graceful shutdown and forced close")
+	}
+}
+
+func newStartedTestPrometheusExporter(t *testing.T) *PrometheusExporter {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	cfg.PrometheusAuthType = "none"
+	cfg.PrometheusMetricsBindHost = "127.0.0.1"
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+	// The constructor validates the shipped port, while port zero lets the
+	// kernel choose an isolated listener for this lifecycle test.
+	cfg.PrometheusMetricsBindPort = 0
+	if err := exporter.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(func() { _ = exporter.Stop() })
+	return exporter
+}
+
+func TestRecordLimitHookExecutionUsesBoundedLabels(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.RecordLimitHookExecution(LimitHookTypeScript, LimitHookOutcomeSuccess)
+	exporter.RecordLimitHookExecution(LimitHookTypeScript, LimitHookOutcomeSuccess)
+	exporter.RecordLimitHookExecution(LimitHookTypeHTTP, LimitHookOutcomeFailure)
+	exporter.RecordLimitHookExecution(LimitHookType("unbounded"), LimitHookOutcome("unbounded"))
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "resman_limit_hook_executions_total" {
+			continue
+		}
+		if len(family.Metric) != 2 {
+			t.Fatalf("limit-hook metric series = %d, want 2 bounded series", len(family.Metric))
+		}
+		got := make(map[string]float64, len(family.Metric))
+		for _, metric := range family.Metric {
+			labels := make(map[string]string, len(metric.Label))
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			got[labels["hook_type"]+"/"+labels["outcome"]] = metric.GetCounter().GetValue()
+		}
+		if got["script/success"] != 2 || got["http/failure"] != 1 {
+			t.Fatalf("limit-hook metric values = %+v, want script/success=2 and http/failure=1", got)
+		}
+		return
+	}
+	t.Fatal("resman_limit_hook_executions_total metric not found")
 }
 
 func TestNewPrometheusExporterAppliesTLSAndClientCA(t *testing.T) {

@@ -44,6 +44,8 @@ type Manager struct {
 	mu     sync.RWMutex
 	opMu   sync.Mutex
 	epoch  configepoch.Barrier
+	hookMu sync.Mutex
+	hookWG sync.WaitGroup
 
 	// Internal control and observed enforcement state.
 	limitsActive              bool
@@ -69,6 +71,11 @@ type Manager struct {
 	ioRemediation      *IORemediation
 	patternDetector    *PatternDetector
 	policyEngine       *PolicyEngine
+	hookCtx            context.Context
+	hookCancel         context.CancelFunc
+	hookClosed         bool
+	executeHookScript  func(context.Context, string, limitHookEvent) error
+	executeHookRequest func(context.Context, string, limitHookEvent) error
 
 	// Cached metrics state.
 	metricsCache     map[string]interface{}
@@ -189,6 +196,7 @@ type PrometheusExporter interface {
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
+	RecordLimitHookExecution(hookType resmanmetrics.LimitHookType, outcome resmanmetrics.LimitHookOutcome)
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
@@ -209,6 +217,7 @@ func NewManager(
 	}
 
 	logger := logging.GetLogger()
+	hookCtx, hookCancel := context.WithCancel(context.Background())
 
 	mgr := &Manager{
 		cfg:                       cfg,
@@ -231,6 +240,10 @@ func NewManager(
 		ioRemediation:             NewIORemediation(logger),
 		patternDetector:           NewPatternDetector(logger),
 		policyEngine:              NewPolicyEngine(logger),
+		hookCtx:                   hookCtx,
+		hookCancel:                hookCancel,
+		executeHookScript:         runLimitHookScript,
+		executeHookRequest:        postLimitHook,
 		metricsCache:              make(map[string]interface{}),
 		metricsCacheTime:          make(map[string]time.Time),
 		controlHist: &controlHistory{
@@ -392,32 +405,36 @@ func (m *Manager) GetStatus() RuntimeStatus {
 
 // Cleanup releases active enforcement and shuts down manager dependencies.
 func (m *Manager) Cleanup() error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	m.stopLimitHooks()
 
 	m.logger.Info("Cleaning up state manager")
 	var cleanupErrors []error
+	func() {
+		m.opMu.Lock()
+		defer m.opMu.Unlock()
 
-	// Remove all active limits.
-	m.mu.RLock()
-	limitsActive := m.limitsActive || m.resourceLimitsActive
-	m.mu.RUnlock()
-	if limitsActive {
-		if err := m.deactivateLimits(); err != nil {
-			m.logger.Error("Error during cleanup deactivation", "error", err)
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("deactivate limits: %w", err))
+		// Remove all active limits.
+		m.mu.RLock()
+		limitsActive := m.limitsActive || m.resourceLimitsActive
+		m.mu.RUnlock()
+		if limitsActive {
+			if err := m.deactivateLimits(); err != nil {
+				m.logger.Error("Error during cleanup deactivation", "error", err)
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("deactivate limits: %w", err))
+			}
 		}
-	}
 
-	// Clean up managed cgroups.
-	if m.cgroupManager != nil {
-		if err := m.cgroupManager.CleanupAll(); err != nil {
-			m.logger.Error("Error during cgroup cleanup", "error", err)
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup cgroups: %w", err))
+		// Clean up managed cgroups.
+		if m.cgroupManager != nil {
+			if err := m.cgroupManager.CleanupAll(); err != nil {
+				m.logger.Error("Error during cgroup cleanup", "error", err)
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup cgroups: %w", err))
+			}
 		}
-	}
+	}()
 
-	// Stop the Prometheus exporter.
+	// Prometheus shutdown can wait for network I/O and must not hold the
+	// operation lock needed by control-cycle and reconciliation work.
 	if m.prometheusExporter != nil {
 		if err := m.prometheusExporter.Stop(); err != nil {
 			m.logger.Error("Error stopping Prometheus exporter", "error", err)

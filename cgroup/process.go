@@ -2,6 +2,7 @@ package cgroup
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -90,6 +91,10 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 // MoveAllUserProcesses moves every enforceable process owned by a user into its cgroup.
 // Uses gopsutil for efficient process discovery.
 func (m *Manager) MoveAllUserProcesses(uid int) error {
+	return m.moveAllUserProcesses(context.Background(), uid)
+}
+
+func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) error {
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
 
 	// SECURITY: Never move UID 0 (root) processes to user cgroups
@@ -97,10 +102,16 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 		m.logger.Warn("Refusing to move root (UID 0) processes to cgroup - security boundary")
 		return fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("move processes for UID %d interrupted before discovery: %w", uid, err)
+	}
 
 	pids, err := m.processIDsForUID(uid)
 	if err != nil {
 		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("move processes for UID %d interrupted after discovery: %w", uid, err)
 	}
 
 	var movedCount, totalProcesses int
@@ -108,6 +119,9 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 	cfg := m.getConfig()
 
 	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
+		}
 		totalProcesses++
 		processInfo, infoErr := m.getProcessInfo(pid)
 		if os.IsNotExist(infoErr) {
@@ -129,6 +143,9 @@ func (m *Manager) MoveAllUserProcesses(uid int) error {
 
 		// Move the selected process.
 		moved, err := m.moveProcessToCgroup(pid, uid, processInfo)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, ctxErr)
+		}
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", selection.Name, err))
 		} else if moved {

@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/processidentity"
+	"github.com/fdefilippo/resman/logging"
 )
 
 func TestProcessIDsForUIDReusesSingleScan(t *testing.T) {
@@ -47,6 +49,30 @@ func TestProcessIDsForUIDReusesSingleScan(t *testing.T) {
 	}
 	if again[0] != 101 {
 		t.Fatalf("caller modified cached PID slice: %v", again)
+	}
+}
+
+func TestMoveAllUserProcessesHonorsCancellationAfterEmptyDiscovery(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager := &Manager{
+		cfg:    config.DefaultConfig(),
+		logger: logging.GetLogger(),
+		scanProcessIDs: func() (map[int][]int, error) {
+			close(started)
+			<-release
+			return map[int][]int{}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- manager.moveAllUserProcesses(ctx, 1000) }()
+	<-started
+	cancel()
+	close(release)
+
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("moveAllUserProcesses() error = %v, want context cancellation", err)
 	}
 }
 
