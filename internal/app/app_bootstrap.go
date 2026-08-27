@@ -36,7 +36,7 @@ func (a *App) WithCgroupManager() *App {
 		fmt.Fprintf(os.Stderr, "  3. Reboot and verify: cat /sys/fs/cgroup/cgroup.controllers\n")
 		fmt.Fprintf(os.Stderr, "  4. Verify PSI if PSI_EVENT_DRIVEN=true: ls /proc/pressure\n")
 		fmt.Fprintf(os.Stderr, "  5. Check permissions on %s\n", a.cfg.CgroupRoot)
-		a.err = NewPermanentStartupError(fmt.Errorf("initialize cgroup manager: %w", err))
+		a.err = classifyCgroupStartupError(err)
 		return a
 	}
 	if err := cgroupMgr.RecoverExistingCgroups(); err != nil {
@@ -49,6 +49,14 @@ func (a *App) WithCgroupManager() *App {
 	}
 	a.cgroupMgr = cgroupMgr
 	return a
+}
+
+func classifyCgroupStartupError(err error) error {
+	wrapped := fmt.Errorf("initialize cgroup manager: %w", err)
+	if cgroup.IsRequiredCapabilityError(err) {
+		return NewPermanentStartupError(wrapped)
+	}
+	return wrapped
 }
 
 // WithMetricsCollector initializes the metrics collector.

@@ -114,7 +114,12 @@ and
 .BR "journalctl -u resman" ,
 correct the configuration or host capability, then start the service again.
 .PP
-Other non-zero exits are retried after 10 seconds. The unit permits at most three
+An error reading or writing setup state for an otherwise present cgroup capability,
+including a failed write to
+.BR cgroup.subtree_control ,
+is treated as potentially transient rather than as proof that the capability is
+structurally absent. These and other non-zero exits are retried after 10 seconds. The
+unit permits at most three
 starts within 60 seconds; after that it remains failed with a start-limit result rather
 than retrying forever. After correcting the transient cause, run
 .B systemctl reset-failed resman

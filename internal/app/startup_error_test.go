@@ -50,6 +50,17 @@ func TestCgroupCapabilityRejectionIsPermanent(t *testing.T) {
 	}
 }
 
+func TestCgroupSetupFailureRemainsRestartable(t *testing.T) {
+	injected := errors.New("transient subtree_control contention")
+	err := classifyCgroupStartupError(injected)
+	if !errors.Is(err, injected) {
+		t.Fatalf("classifyCgroupStartupError() error = %v, want injected setup failure", err)
+	}
+	if IsPermanentStartupError(err) {
+		t.Fatalf("classifyCgroupStartupError() marked transient setup failure permanent: %v", err)
+	}
+}
+
 func TestMCPMissingTLSCredentialsIsPermanent(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MCPEnabled = true

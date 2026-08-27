@@ -82,9 +82,11 @@ an already active service is restarted after the new package is configured.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
-fixes the cause. Other failures are retried after 10 seconds, with at most three starts
-per minute; after the start limit is reached, use `systemctl reset-failed resman` after
-correcting the cause. See `man resman` and `journalctl -u resman` for diagnostics.
+fixes the cause. Failures reading or writing setup state for an otherwise present
+cgroup capability, including `cgroup.subtree_control`, remain transient. They and other
+failures are retried after 10 seconds, with at most three starts per minute; after the
+start limit is reached, use `systemctl reset-failed resman` after correcting the cause.
+See `man resman` and `journalctl -u resman` for diagnostics.
 
 ## Usage
 

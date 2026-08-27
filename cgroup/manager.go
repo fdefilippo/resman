@@ -45,6 +45,7 @@ type Manager struct {
 	scanProcessIDs      func() (map[int][]int, error)
 	createCgroupProbe   func(string, string) (string, error)
 	removeCgroupProbe   func(string) error
+	writeController     func(string, string) error
 	removeManagedCgroup func(string) error
 	readBlockIOStats    func(string) (blockIOCounters, error)
 	readCgroupFile      func(string) ([]byte, error)
@@ -58,6 +59,29 @@ type controllerRequirement struct {
 	feature       string
 	controller    string
 	interfaceFile string
+}
+
+type requiredCapabilityError struct {
+	err error
+}
+
+func (e *requiredCapabilityError) Error() string {
+	return e.err.Error()
+}
+
+func (e *requiredCapabilityError) Unwrap() error {
+	return e.err
+}
+
+func newRequiredCapabilityError(err error) error {
+	return &requiredCapabilityError{err: err}
+}
+
+// IsRequiredCapabilityError reports a structural cgroup capability absence
+// that cannot be repaired by retrying the same startup configuration.
+func IsRequiredCapabilityError(err error) bool {
+	var target *requiredCapabilityError
+	return errors.As(err, &target)
 }
 
 // NewManager creates a cgroup v2 manager.
@@ -119,15 +143,22 @@ func (m *Manager) verifyCgroupSetup() error {
 	controllerInterfaces := allControllerInterfaces()
 
 	// 1. Verify that the cgroup root exists.
-	if _, err := os.Stat(cfg.CgroupRoot); os.IsNotExist(err) {
-		return fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2 and PSI on Enterprise Linux compatible systems: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1')", cfg.CgroupRoot)
+	if _, err := os.Stat(cfg.CgroupRoot); err != nil {
+		if os.IsNotExist(err) {
+			return newRequiredCapabilityError(fmt.Errorf("cgroup root does not exist: %s (enable cgroups v2 and PSI on Enterprise Linux compatible systems: grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1')", cfg.CgroupRoot))
+		}
+		return fmt.Errorf("cannot inspect cgroup root %s: %w", cfg.CgroupRoot, err)
 	}
 
 	// 2. Verify cgroups v2 and the controllers required by enabled features.
 	controllersFile := filepath.Join(cfg.CgroupRoot, "cgroup.controllers")
 	controllersData, err := os.ReadFile(controllersFile)
 	if err != nil {
-		return fmt.Errorf("cannot read cgroup.controllers at %s: %w", controllersFile, err)
+		readErr := fmt.Errorf("cannot read cgroup.controllers at %s: %w", controllersFile, err)
+		if os.IsNotExist(err) {
+			return newRequiredCapabilityError(readErr)
+		}
+		return readErr
 	}
 	m.logger.Info("Available cgroup controllers",
 		"controllers", strings.TrimSpace(string(controllersData)),
@@ -242,20 +273,24 @@ func verifyRequiredControllers(available string, requirements []controllerRequir
 		if hasController(available, requirement.controller) {
 			continue
 		}
-		return fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q, but the controller is unavailable (available: %s)",
+		return newRequiredCapabilityError(fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q, but the controller is unavailable (available: %s)",
 			requirement.feature,
 			requirement.controller,
 			requirement.interfaceFile,
 			strings.TrimSpace(available),
-		)
+		))
 	}
 	return nil
 }
 
 func (m *Manager) enableControllerInterfaces(subtreeControlFile string, candidates, requirements []controllerRequirement) ([]controllerRequirement, error) {
 	enabled := make([]controllerRequirement, 0, len(candidates))
+	writeController := m.writeController
+	if writeController == nil {
+		writeController = m.writeControllerIfMissing
+	}
 	for _, candidate := range candidates {
-		if err := m.writeControllerIfMissing(subtreeControlFile, "+"+candidate.controller); err != nil {
+		if err := writeController(subtreeControlFile, "+"+candidate.controller); err != nil {
 			if controllerInterfaceRequired(candidate, requirements) {
 				return nil, fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q: failed to enable the controller through %s: %w",
 					candidate.feature,
@@ -337,11 +372,11 @@ func verifyUsableControllerInterfaces(usable map[string]bool, requirements []con
 		if usable[requirement.interfaceFile] {
 			continue
 		}
-		return fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q, but the interface is unusable in a real child cgroup",
+		return newRequiredCapabilityError(fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q, but the interface is unusable in a real child cgroup",
 			requirement.feature,
 			requirement.controller,
 			requirement.interfaceFile,
-		)
+		))
 	}
 	return nil
 }

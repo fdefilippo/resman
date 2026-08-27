@@ -254,6 +254,9 @@ func TestVerifyRequiredControllersMatchesEnabledFeatures(t *testing.T) {
 			if err == nil {
 				t.Fatal("verifyRequiredControllers() expected an error")
 			}
+			if !IsRequiredCapabilityError(err) {
+				t.Fatalf("verifyRequiredControllers() error = %v, want structural capability error", err)
+			}
 			for _, fragment := range tt.wantErrFor {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Errorf("error %q does not name %q", err, fragment)
@@ -350,6 +353,9 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 				if err == nil {
 					t.Fatal("probeControllerInterfaces() expected an error")
 				}
+				if !IsRequiredCapabilityError(err) {
+					t.Fatalf("probeControllerInterfaces() error = %v, want structural capability error", err)
+				}
 				for _, fragment := range tt.wantErrFor {
 					if !strings.Contains(err.Error(), fragment) {
 						t.Errorf("error %q does not name %q", err, fragment)
@@ -360,6 +366,25 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 				t.Errorf("capability probe was not removed: stat error = %v", statErr)
 			}
 		})
+	}
+}
+
+func TestEnableRequiredControllerWriteFailureRemainsTransient(t *testing.T) {
+	injected := errors.New("transient subtree_control contention")
+	manager := &Manager{
+		logger: logging.GetLogger(),
+		writeController: func(string, string) error {
+			return injected
+		},
+	}
+	required := controllerRequirement{feature: "CPU limiting", controller: "cpu", interfaceFile: "cpu.max"}
+
+	_, err := manager.enableControllerInterfaces("/sys/fs/cgroup/cgroup.subtree_control", []controllerRequirement{required}, []controllerRequirement{required})
+	if !errors.Is(err, injected) {
+		t.Fatalf("enableControllerInterfaces() error = %v, want injected write failure", err)
+	}
+	if IsRequiredCapabilityError(err) {
+		t.Fatalf("enableControllerInterfaces() classified transient write failure as structural: %v", err)
 	}
 }
 
