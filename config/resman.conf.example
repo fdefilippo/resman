@@ -317,6 +317,8 @@ INTERACTIVE_RAM_QUOTA=1G
 # Optional notification/action when a user is newly limited.
 # Script receives RESMAN_LIMIT_* environment variables.
 # URL receives a JSON POST with uid, username, cpu_usage, shared_cgroup, timestamp.
+# Script stdout/stderr is discarded and never copied into daemon errors or logs.
+# URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
 LIMIT_HOOK_ENABLED=false
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
@@ -364,6 +366,9 @@ PROMETHEUS_JWT_AUDIENCE=prometheus
 LOG_LEVEL=INFO
 LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
 USE_SYSLOG=false             # true: use system syslog, false: use file
+# New files use 0600. Existing files retain only owner/group read-write access;
+# execute bits and every permission for other users are removed at startup.
+# The managed path must be a regular file; symbolic links are rejected.
 LOG_FILE=/var/log/resman.log
 
 # ========================

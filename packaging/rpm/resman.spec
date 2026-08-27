@@ -205,9 +205,13 @@ if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
     echo "Archive or delete it; resman will create the current schema at /var/lib/resman/metrics.db." >&2
 fi
 
-# Crea file di log
-touch /var/log/resman.log
-chmod 644 /var/log/resman.log
+# Create a missing default log restrictively. On upgrades, preserve deliberate
+# owner/group read-write access while removing execute and all access for others.
+if [ -f /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    chmod a-x,o-rwx /var/log/resman.log
+elif [ ! -e /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    install -m 0600 -o root -g root /dev/null /var/log/resman.log
+fi
 
 echo "Resource Manager installed successfully!"
 echo ""

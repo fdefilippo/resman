@@ -59,6 +59,63 @@ func TestNewFileLogger(t *testing.T) {
 	if logger.state.file == nil {
 		t.Fatal("newFileLogger() did not open the log file")
 	}
+	assertLogFileMode(t, logFile, 0600)
+}
+
+func TestNewFileLoggerRestrictsExistingFileAccess(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   os.FileMode
+		expected os.FileMode
+	}{
+		{name: "world readable", source: 0644, expected: 0640},
+		{name: "world writable and executable", source: 0777, expected: 0660},
+		{name: "intentional group read", source: 0640, expected: 0640},
+		{name: "owner only", source: 0600, expected: 0600},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logFile := filepath.Join(t.TempDir(), "test.log")
+			if err := os.WriteFile(logFile, []byte("existing\n"), tt.source); err != nil {
+				t.Fatalf("write existing log: %v", err)
+			}
+			if err := os.Chmod(logFile, tt.source); err != nil {
+				t.Fatalf("chmod existing log: %v", err)
+			}
+
+			logger, err := newFileLogger(INFO, logFile, 1024*1024)
+			if err != nil {
+				t.Fatalf("newFileLogger() error = %v", err)
+			}
+			defer func() { _ = logger.Close() }()
+			assertLogFileMode(t, logFile, tt.expected)
+		})
+	}
+}
+
+func TestNewFileLoggerRejectsSymbolicLinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.log")
+	if err := os.WriteFile(target, []byte("existing\n"), 0644); err != nil {
+		t.Fatalf("write target log: %v", err)
+	}
+	if err := os.Chmod(target, 0644); err != nil {
+		t.Fatalf("chmod target log: %v", err)
+	}
+	link := filepath.Join(dir, "resman.log")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create log symlink: %v", err)
+	}
+
+	logger, err := newFileLogger(INFO, link, 1024*1024)
+	if err == nil || logger != nil {
+		t.Fatalf("newFileLogger(symlink) = (%v, %v), want nil logger and error", logger, err)
+	}
+	if !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("newFileLogger(symlink) error = %q, want explicit symlink refusal", err)
+	}
+	assertLogFileMode(t, target, 0644)
 }
 
 func TestNewFileLoggerRejectsNonPositiveMaxSize(t *testing.T) {
@@ -149,6 +206,12 @@ func TestLoggerClose(t *testing.T) {
 func TestLogRotation(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "test.log")
+	if err := os.WriteFile(logFile, []byte("existing log\n"), 0644); err != nil {
+		t.Fatalf("write existing log: %v", err)
+	}
+	if err := os.Chmod(logFile, 0644); err != nil {
+		t.Fatalf("chmod existing log: %v", err)
+	}
 	logger, err := newFileLogger(INFO, logFile, 1)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
@@ -177,6 +240,19 @@ func TestLogRotation(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Log rotated due to size limit") {
 		t.Fatalf("active log does not contain rotation record: %q", data)
+	}
+	assertLogFileMode(t, logFile, 0640)
+	assertLogFileMode(t, logFile+".1", 0640)
+}
+
+func assertLogFileMode(t *testing.T, path string, expected os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != expected {
+		t.Fatalf("%s mode = %04o, want %04o", path, got, expected)
 	}
 }
 

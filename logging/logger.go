@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -36,6 +37,9 @@ const (
 	INFO
 	WARN
 	ERROR
+
+	defaultLogFileMode   = os.FileMode(0600)
+	permittedLogFileMode = os.FileMode(0660)
 )
 
 var (
@@ -68,6 +72,13 @@ type loggerState struct {
 	lastRotation time.Time
 	useSyslog    bool
 	syslogWriter *syslog.Writer
+}
+
+type logFileMetadata struct {
+	mode              os.FileMode
+	uid               int
+	gid               int
+	preserveOwnership bool
 }
 
 // InitLogger inizializza il logger globale con i parametri specificati.
@@ -131,9 +142,9 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 		return nil, fmt.Errorf("failed to create log directory %s: %w", filepath.Dir(filePath), err)
 	}
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := openSecureLogFile(filePath, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+		return nil, err
 	}
 
 	return &Logger{
@@ -147,6 +158,69 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 		},
 		fields: make(map[string]interface{}),
 	}, nil
+}
+
+// openSecureLogFile opens a log without ever creating it more broadly than 0600.
+// Existing files preserve intentional owner/group read-write access while
+// removing execute and all access for other users. Symlinks and non-regular
+// destinations are rejected so permission changes apply to the managed inode.
+func openSecureLogFile(filePath string, metadata *logFileMetadata) (*os.File, error) {
+	if info, err := os.Lstat(filePath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symbolic link log file %s", filePath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to inspect log path %s: %w", filePath, err)
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	file, err := os.OpenFile(filePath, flags, defaultLogFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("failed to inspect log file %s: %w", filePath, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("log path %s must be a regular file", filePath)
+	}
+
+	if metadata == nil {
+		metadata = &logFileMetadata{mode: restrictiveLogFileMode(info.Mode())}
+	}
+	if metadata.preserveOwnership {
+		if err := file.Chown(metadata.uid, metadata.gid); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf(
+				"failed to preserve log ownership %d:%d for %s: %w",
+				metadata.uid,
+				metadata.gid,
+				filePath,
+				err,
+			)
+		}
+	}
+	if err := file.Chmod(metadata.mode); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("failed to secure log file %s with mode %04o: %w", filePath, metadata.mode, err)
+	}
+	return file, nil
+}
+
+func restrictiveLogFileMode(mode os.FileMode) os.FileMode {
+	return mode.Perm() & permittedLogFileMode
+}
+
+func metadataForLogRotation(info os.FileInfo) logFileMetadata {
+	metadata := logFileMetadata{mode: restrictiveLogFileMode(info.Mode())}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		metadata.uid = int(stat.Uid)
+		metadata.gid = int(stat.Gid)
+		metadata.preserveOwnership = true
+	}
+	return metadata
 }
 
 // GetLogger restituisce il logger globale inizializzato.
@@ -270,27 +344,32 @@ func (l *Logger) checkAndRotateLocked() {
 	}
 }
 
-// rotateLog esegue la rotazione del file di log.
+// rotateLogLocked rotates the log while preserving its restrictive owner/group access.
 func (l *Logger) rotateLogLocked() {
-	// Chiudi il file corrente
+	metadata := logFileMetadata{mode: defaultLogFileMode}
+	if info, err := l.state.file.Stat(); err == nil {
+		metadata = metadataForLogRotation(info)
+	}
+
+	// Close the current file.
 	_ = l.state.file.Close()
 
-	// Rinomina il file corrente (es. .log -> .log.1)
+	// Rename the current file (for example, .log to .log.1).
 	backupPath := l.state.filePath + ".1"
 
-	// Rimuovi il backup precedente se esiste
+	// Remove the previous backup if it exists.
 	if _, err := os.Stat(backupPath); err == nil {
 		_ = os.Remove(backupPath)
 	}
 
-	// Rinomina il file corrente
+	// Rename the current file.
 	if err := os.Rename(l.state.filePath, backupPath); err != nil {
 		// The standard logger reports rotation errors on stderr.
 		log.Printf("ERROR: Failed to rotate log file: %v", err)
 	}
 
-	// Riapri il nuovo file di log
-	file, err := os.OpenFile(l.state.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Reopen the active log with the sanitized mode inherited from its source.
+	file, err := openSecureLogFile(l.state.filePath, &metadata)
 	if err != nil {
 		// If the file cannot be reopened, use stderr to keep stdout clean.
 		log.Printf("ERROR: Failed to reopen log file after rotation: %v", err)

@@ -7,7 +7,7 @@
     copytruncate
     rotate 7
     daily
-    create 0640 root adm
+    create 0600 root root
     postrotate
         # Ricarica rsyslog dopo la rotazione
         systemctl reload rsyslog 2>/dev/null || \

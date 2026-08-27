@@ -882,6 +882,12 @@ configured in
 .B LOG_MAX_SIZE,
 which must be greater than zero.
 Rotation creates a backup file with .1 extension.
+New log files are created mode 0600. When an existing regular log is opened,
+ResMan preserves only its owner/group read-write bits and removes all execute bits
+and all permissions for other users. The rotated backup and replacement inherit
+that sanitized access mode and ownership. The managed path must be a regular file;
+symbolic links are rejected without changing their target. Packaged rsyslog and
+logrotate defaults use 0600.
 .SH STATE FILES
 .I /run/resman-cgroups.txt
 .br
@@ -1156,6 +1162,11 @@ Webservice hooks are configured with
 .B LIMIT_HOOK_URL
 and receive an HTTP POST with a JSON payload containing uid, username,
 cpu_usage, limited_users, shared_cgroup, timestamp, source, and server_role.
+.PP
+Hook script stdout and stderr are discarded and are never included in returned
+errors or daemon logs. Script failures retain a bounded reason such as timeout or
+exit status. Webservice failure logs identify only the URL scheme and host (including
+an explicit port); user information, path, query values, and fragments are omitted.
 .PP
 Hook execution is asynchronous and bounded by
 .B LIMIT_HOOK_TIMEOUT

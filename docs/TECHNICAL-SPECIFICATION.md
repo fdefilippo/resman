@@ -525,6 +525,15 @@ reason is documented in
 - Triggered when file exceeds `LogMaxSize`
 - Creates backup: `resman.log.1`
 - Maximum one rotation per second
+- Creates a new log at `0600`; an existing file retains only owner/group read-write
+  access after all execute and other-user bits are removed
+- Applies the same sanitized mode to the active file and rotated `.1` backup
+- Preserves ownership across internal rotation, and rejects symbolic links or
+  non-regular managed log destinations
+
+Limit-hook failures are safe to record in this log. Script stdout/stderr is discarded,
+script errors expose only a bounded execution reason, and webservice errors identify
+only `scheme://host[:port]`, never URL userinfo, path, query values, or fragments.
 
 ### 3.8 Configuration Reloader (reloader/reloader.go)
 
@@ -1460,7 +1469,7 @@ curl http://localhost:1974/metrics
 | `/etc/resman/resman.conf.backup` | Rolling configuration backup |
 | `/etc/resman/tls/` | Operator-supplied TLS material |
 | `/var/lib/resman/metrics.db` | Mutable metrics database |
-| `/var/log/resman.log` | Log file |
+| `/var/log/resman.log` | Restrictive log file (new/package default mode `0600`) |
 | `/run/resman-cgroups.txt` | Boot-scoped cgroup tracking |
 | `/usr/lib/systemd/system/resman.service` | Systemd unit |
 

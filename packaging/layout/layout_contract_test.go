@@ -37,7 +37,32 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"%dir %attr(0700,root,root) %{_sysconfdir}/resman",
 				"%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf",
 				"%dir %attr(0700,root,root) %{_sharedstatedir}/resman",
+				"chmod a-x,o-rwx /var/log/resman.log",
+				"install -m 0600 -o root -g root /dev/null /var/log/resman.log",
+				"if [ -f /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then",
 			},
+			forbidden: []string{"chmod 644 /var/log/resman.log"},
+		},
+		{
+			path: "packaging/deb/postinst",
+			required: []string{
+				"chmod a-x,o-rwx /var/log/resman.log",
+				"install -m 0600 -o root -g root /dev/null /var/log/resman.log",
+				"if [ -f /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then",
+			},
+		},
+		{
+			path:     "packaging/syslog/resman.conf",
+			required: []string{`fileCreateMode="0600"`},
+			forbidden: []string{
+				`fileCreateMode="0640"`,
+				`fileCreateMode="0644"`,
+			},
+		},
+		{
+			path:      "packaging/syslog/resman",
+			required:  []string{"create 0600 root root"},
+			forbidden: []string{"create 0640", "create 0644"},
 		},
 		{
 			path: "Makefile",
