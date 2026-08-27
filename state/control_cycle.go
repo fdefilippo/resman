@@ -67,8 +67,8 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
 
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	if trigger == "" {
 		trigger = "metrics_refresh"
@@ -101,8 +101,8 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
 
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	if trigger == "" {
 		trigger = ControlCycleTriggerManual

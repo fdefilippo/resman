@@ -23,10 +23,11 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 )
 
-// IOBoostState tiene traccia dello stato di boost per un utente.
+// IOBoostState tracks temporary I/O boost state for one user.
 type IOBoostState struct {
 	IsActive             bool
 	StartTime            time.Time
@@ -35,21 +36,23 @@ type IOBoostState struct {
 	OriginalReadIOPS     int
 	OriginalWriteIOPS    int
 	OriginalDeviceFilter string
-	BoostCount           int       // Numero di boost nell'ultima ora
-	LastBoostTime        time.Time // Ultimo boost applicato
-	StarvationStart      time.Time // Quando e' iniziata la starvation
-	LastSeen             time.Time // Ultimo ciclo in cui l'utente era limitato
+	BoostCount           int
+	LastBoostTime        time.Time
+	StarvationStart      time.Time
+	LastSeen             time.Time
 }
 
-// IORemediation gestisce il rilevamento e la remediation della IO starvation.
+// IORemediation detects and remediates I/O starvation.
 type IORemediation struct {
 	mu          sync.RWMutex
+	opGate      operationgate.Gate
 	logger      *logging.Logger
-	boostStates map[int]*IOBoostState // uid -> stato boost
+	boostStates map[int]*IOBoostState // UID -> boost state
+	revision    uint64
 	lastCheck   time.Time
 }
 
-// NewIORemediation crea una nuova istanza di IORemediation.
+// NewIORemediation creates an I/O remediation coordinator.
 func NewIORemediation(logger *logging.Logger) *IORemediation {
 	return &IORemediation{
 		logger:      logger,
@@ -57,14 +60,13 @@ func NewIORemediation(logger *logging.Logger) *IORemediation {
 	}
 }
 
-// IORemediationDeps contiene le dipendenze necessarie per la remediation.
+// IORemediationDeps contains the external remediation operations.
 type IORemediationDeps interface {
 	GetPSIStats(uid int) (cgroup.PSIStats, error)
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 }
 
-// CheckAndRemediate verifica la IO starvation per tutti gli utenti e applica remediation se necessario.
-// Deve essere chiamato periodicamente dal control cycle.
+// CheckAndRemediate checks limited users and applies temporary I/O boosts.
 func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Config, limitedUsers []int) {
 	if !cfg.GetIORemediationEnabled() {
 		return
@@ -72,12 +74,16 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 
 	now := time.Now()
 	checkInterval := time.Duration(cfg.GetIOStarvationCheckInterval()) * time.Second
-
-	// Rispetta il check interval
+	r.mu.Lock()
 	if now.Sub(r.lastCheck) < checkInterval {
+		r.mu.Unlock()
 		return
 	}
 	r.lastCheck = now
+	r.mu.Unlock()
+
+	leaveOperation := r.opGate.Enter()
+	defer leaveOperation()
 
 	starvationThreshold := cfg.GetIOStarvationThreshold()
 	psiThreshold := cfg.GetIOPSIThreshold()
@@ -91,70 +97,100 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 	readIOPS := cfg.GetIOReadIOPS()
 	writeIOPS := cfg.GetIOWriteIOPS()
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	for _, uid := range limitedUsers {
-		state, exists := r.boostStates[uid]
-		if !exists {
-			state = &IOBoostState{}
-			r.boostStates[uid] = state
-		}
-		state.LastSeen = now
+		state, version := r.snapshotForCheck(uid, now)
 
 		// Expiration is independent of the current PSI state.
 		if state.IsActive && now.Sub(state.StartTime) >= boostDuration {
-			if !r.revertBoost(deps, uid, state) {
+			if !r.revertBoost(deps, uid, &state) {
 				continue
 			}
+			if !r.publishIfCurrent(uid, version, state) {
+				continue
+			}
+			version++
 		}
 
-		// Leggi PSI
 		psiStats, err := deps.GetPSIStats(uid)
 		if err != nil {
-			// PSI non disponibile, skip
 			continue
 		}
 
-		// Controlla se PSI supera la soglia
 		isStarved := psiStats.SomeAvg10 >= psiThreshold
 
 		if isStarved {
-			// Inizia o continua il tracking della starvation
 			if state.StarvationStart.IsZero() {
 				state.StarvationStart = now
 			}
 
 			starvationDuration := now.Sub(state.StarvationStart)
 
-			// Se la starvation dura abbastanza e non siamo gia' in boost
 			if starvationDuration >= time.Duration(starvationThreshold)*time.Second && !state.IsActive {
-				// Controlla se abbiamo superato il max boost per ora
 				if state.BoostCount >= boostMaxPerHour {
 					r.logger.Warn("IO starvation detected but max boosts per hour reached, skipping",
 						"uid", uid,
 						"boosts_this_hour", state.BoostCount,
 						"psi_avg10", psiStats.SomeAvg10,
 					)
+					r.publishIfCurrent(uid, version, state)
 					continue
 				}
 
-				// Applica boost temporaneo
-				r.applyBoost(deps, uid, state, readBPS, writeBPS, readIOPS, writeIOPS, boostMultiplier, boostDuration, deviceFilter, now)
+				if r.applyBoost(deps, uid, &state, readBPS, writeBPS, readIOPS, writeIOPS, boostMultiplier, boostDuration, deviceFilter, now) {
+					if !r.publishIfCurrent(uid, version, state) {
+						// A concurrent reset or release won while the cgroup write was in flight.
+						if err := deps.ApplyTemporaryIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter, 1); err != nil {
+							r.logger.Warn("Failed to compensate stale IO boost after concurrent state change",
+								"uid", uid,
+								"error", err,
+							)
+						}
+					}
+				} else {
+					r.publishIfCurrent(uid, version, state)
+				}
+				continue
 			}
 		} else {
-			// PSI sotto soglia, reset starvation timer
 			state.StarvationStart = time.Time{}
 
-			// Se siamo in boost e revertOnNormal e' true, revert subito
 			if state.IsActive && revertOnNormal {
-				r.revertBoost(deps, uid, state)
+				r.revertBoost(deps, uid, &state)
 			}
 		}
+		r.publishIfCurrent(uid, version, state)
 	}
 }
 
-// applyBoost applica un boost temporaneo dei limiti IO per un utente.
+func (r *IORemediation) snapshotForCheck(uid int, now time.Time) (IOBoostState, uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, exists := r.boostStates[uid]
+	if !exists {
+		state = &IOBoostState{}
+		r.boostStates[uid] = state
+	}
+	state.LastSeen = now
+	r.revision++
+	return *state, r.revision
+}
+
+func (r *IORemediation) publishIfCurrent(uid int, version uint64, state IOBoostState) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.revision != version {
+		return false
+	}
+	current, exists := r.boostStates[uid]
+	if !exists {
+		return false
+	}
+	*current = state
+	r.revision++
+	return true
+}
+
+// applyBoost applies a temporary I/O limit multiplier.
 func (r *IORemediation) applyBoost(
 	deps IORemediationDeps,
 	uid int,
@@ -165,13 +201,13 @@ func (r *IORemediation) applyBoost(
 	duration time.Duration,
 	deviceFilter string,
 	now time.Time,
-) {
+) bool {
 	if err := deps.ApplyTemporaryIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter, multiplier); err != nil {
 		r.logger.Warn("Failed to apply IO boost for user",
 			"uid", uid,
 			"error", err,
 		)
-		return
+		return false
 	}
 
 	state.OriginalReadBPS = readBPS
@@ -190,9 +226,10 @@ func (r *IORemediation) applyBoost(
 		"duration", duration,
 		"boosts_this_hour", state.BoostCount,
 	)
+	return true
 }
 
-// revertBoost ripristina i limiti IO originali dopo un boost.
+// revertBoost restores the original I/O limits after a boost.
 func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBoostState) bool {
 	if err := deps.ApplyTemporaryIOLimit(
 		uid,
@@ -219,7 +256,7 @@ func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBo
 	return true
 }
 
-// Cleanup rimuove stati di boost scaduti o non piu' attivi.
+// Cleanup removes inactive remediation state and resets hourly counters.
 func (r *IORemediation) Cleanup(maxAge time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -228,10 +265,12 @@ func (r *IORemediation) Cleanup(maxAge time.Duration) {
 	for uid, state := range r.boostStates {
 		if !state.IsActive && !state.LastSeen.IsZero() && now.Sub(state.LastSeen) > maxAge {
 			delete(r.boostStates, uid)
+			r.revision++
 			continue
 		}
 		if !state.LastBoostTime.IsZero() && now.Sub(state.LastBoostTime) > time.Hour {
 			state.BoostCount = 0
+			r.revision++
 		}
 	}
 }
@@ -251,6 +290,9 @@ func (r *IORemediation) ResetActiveBoosts() int {
 		state.StarvationStart = time.Time{}
 		reset++
 	}
+	if reset > 0 {
+		r.revision++
+	}
 	return reset
 }
 
@@ -261,5 +303,8 @@ func (r *IORemediation) ForgetUsers(uids []int) {
 
 	for _, uid := range uids {
 		delete(r.boostStates, uid)
+	}
+	if len(uids) > 0 {
+		r.revision++
 	}
 }

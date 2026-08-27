@@ -33,6 +33,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/configepoch"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -42,7 +43,7 @@ type Manager struct {
 	cfg    *config.Config
 	logger *logging.Logger
 	mu     sync.RWMutex
-	opMu   sync.Mutex
+	opGate operationgate.Gate
 	epoch  configepoch.Barrier
 	hookMu sync.Mutex
 	hookWG sync.WaitGroup
@@ -410,8 +411,8 @@ func (m *Manager) Cleanup() error {
 	m.logger.Info("Cleaning up state manager")
 	var cleanupErrors []error
 	func() {
-		m.opMu.Lock()
-		defer m.opMu.Unlock()
+		leaveOperation := m.opGate.Enter()
+		defer leaveOperation()
 
 		// Remove all active limits.
 		m.mu.RLock()
@@ -459,8 +460,8 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	if newConfig == nil {
 		return
 	}
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 	oldConfig := m.GetConfig()
 	processPolicyChanged := oldConfig == nil || !slices.Equal(
 		oldConfig.GetProcessExcludeList(),
@@ -468,12 +469,12 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	)
 	m.mu.Lock()
 	m.cfg = newConfig
-	m.mu.Unlock()
 	if processPolicyChanged {
 		m.previousIOEligibleUsers = make(map[int]struct{})
 		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)
 		m.prevIOTime = time.Time{}
 	}
+	m.mu.Unlock()
 
 	m.logger.Info("State manager configuration updated",
 		"polling_interval", newConfig.PollingInterval,
@@ -491,8 +492,8 @@ func (m *Manager) BeginConfigUpdate() func() {
 
 // RegisterPSIWatcher sets the PSI watcher for per-user cgroup monitoring.
 func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.psiWatcher = w
 }
 
@@ -501,8 +502,8 @@ func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
 
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	if event.UID <= 0 {
 		return

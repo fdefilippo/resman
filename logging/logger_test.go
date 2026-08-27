@@ -39,6 +39,46 @@ func newBufferLogger(level LogLevel) (*Logger, *bytes.Buffer) {
 	}, &output
 }
 
+type blockingLogWriter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingLogWriter) Write(p []byte) (int, error) {
+	close(w.started)
+	<-w.release
+	return len(p), nil
+}
+
+func TestLoggerLevelRemainsAvailableWhileSinkWriteBlocks(t *testing.T) {
+	writer := &blockingLogWriter{started: make(chan struct{}), release: make(chan struct{})}
+	logger := &Logger{
+		state:  &loggerState{level: INFO, logger: log.New(writer, "", 0)},
+		fields: make(map[string]interface{}),
+	}
+	writeDone := make(chan struct{})
+	go func() {
+		logger.Info("blocked write")
+		close(writeDone)
+	}()
+	<-writer.started
+
+	levelDone := make(chan struct{})
+	go func() {
+		logger.SetLevel("DEBUG")
+		close(levelDone)
+	}()
+	select {
+	case <-levelDone:
+	case <-time.After(time.Second):
+		close(writer.release)
+		<-writeDone
+		t.Fatal("SetLevel() blocked behind log sink I/O")
+	}
+	close(writer.release)
+	<-writeDone
+}
+
 func TestNewFileLogger(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "test.log")
 	logger, err := newFileLogger(INFO, logFile, 1024*1024)

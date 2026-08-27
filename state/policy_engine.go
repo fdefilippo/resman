@@ -50,13 +50,10 @@ func NewPolicyEngine(logger *logging.Logger) *PolicyEngine {
 	}
 }
 
-// ApplyPolicy applica una policy a un utente basata sul pattern rilevato.
-// Restituisce true se la policy e' stata effettivamente cambiata.
+// ApplyPolicy updates one user's policy from a detected workload pattern.
+// It returns true only when the stored policy changes.
 func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *config.Config) bool {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	// Determina la policy target basata sul pattern
+	// Resolve the external configuration before locking policy state.
 	targetCPUQuota, targetRAMQuota := pe.getQuotasForPattern(pattern, cfg)
 
 	// Se non c'e' pattern riconosciuto, non applicare nulla
@@ -64,9 +61,11 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 		return false
 	}
 
+	pe.mu.Lock()
+
 	existing, exists := pe.userPolicies[uid]
 	if exists && existing.CPUQuota == targetCPUQuota && existing.RAMQuota == targetRAMQuota {
-		// Policy gia' applicata, nessun cambiamento
+		pe.mu.Unlock()
 		return false
 	}
 
@@ -86,6 +85,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 			LastChanged: now,
 		}
 	}
+	pe.mu.Unlock()
 
 	pe.logger.Info("Workload pattern policy applied",
 		"uid", uid,

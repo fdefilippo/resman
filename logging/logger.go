@@ -27,6 +27,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
 // LogLevel rappresenta i livelli di log supportati.
@@ -63,7 +65,8 @@ type Logger struct {
 }
 
 type loggerState struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
+	writeGate    operationgate.Gate
 	level        LogLevel
 	file         *os.File
 	filePath     string
@@ -257,16 +260,18 @@ func createStderrLogger(level LogLevel) *Logger {
 	}
 }
 
-// logInternal è il metodo interno di logging che gestisce la formattazione e la scrittura.
+// logInternal formats and writes one ordered log record.
 func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{}) {
-	l.state.mu.Lock()
-	defer l.state.mu.Unlock()
-
-	if level < l.state.level {
+	l.state.mu.RLock()
+	configuredLevel := l.state.level
+	l.state.mu.RUnlock()
+	if level < configuredLevel {
 		return
 	}
 
-	logMsg := l.formatMessageLocked(level, msg, keyvals...)
+	logMsg := l.formatMessage(level, msg, keyvals...)
+	leaveWrite := l.state.writeGate.Enter()
+	defer leaveWrite()
 
 	// Se usiamo syslog, gestiamo i livelli appropriati
 	if l.state.useSyslog && l.state.syslogWriter != nil {
@@ -289,12 +294,12 @@ func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{})
 
 		// Verifica e gestisci la rotazione del log (solo per file-based logger)
 		if l.state.file != nil {
-			l.checkAndRotateLocked()
+			l.checkAndRotate()
 		}
 	}
 }
 
-func (l *Logger) formatMessageLocked(level LogLevel, msg string, keyvals ...interface{}) string {
+func (l *Logger) formatMessage(level LogLevel, msg string, keyvals ...interface{}) string {
 	// Formatta il messaggio con timestamp e livello
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], sanitizeLogValue(msg))
@@ -322,8 +327,8 @@ func sanitizeLogValue(value interface{}) string {
 	return quoted[1 : len(quoted)-1]
 }
 
-// checkAndRotate verifica se è necessaria la rotazione e la esegue.
-func (l *Logger) checkAndRotateLocked() {
+// checkAndRotate rotates an oversized file while the write gate is held.
+func (l *Logger) checkAndRotate() {
 	// Verifica solo una volta al secondo per performance
 	if time.Since(l.state.lastRotation) < time.Second {
 		return
@@ -340,12 +345,12 @@ func (l *Logger) checkAndRotateLocked() {
 
 	// Se il file supera la dimensione massima, ruota
 	if info.Size() > l.state.maxSize {
-		l.rotateLogLocked()
+		l.rotateLog()
 	}
 }
 
-// rotateLogLocked rotates the log while preserving its restrictive owner/group access.
-func (l *Logger) rotateLogLocked() {
+// rotateLog rotates the log while preserving its restrictive owner/group access.
+func (l *Logger) rotateLog() {
 	metadata := logFileMetadata{mode: defaultLogFileMode}
 	if info, err := l.state.file.Stat(); err == nil {
 		metadata = metadataForLogRotation(info)
@@ -381,8 +386,11 @@ func (l *Logger) rotateLogLocked() {
 	l.state.file = file
 	l.state.logger.SetOutput(file)
 
-	if INFO >= l.state.level {
-		l.state.logger.Println(l.formatMessageLocked(INFO, "Log rotated due to size limit"))
+	l.state.mu.RLock()
+	configuredLevel := l.state.level
+	l.state.mu.RUnlock()
+	if INFO >= configuredLevel {
+		l.state.logger.Println(l.formatMessage(INFO, "Log rotated due to size limit"))
 	}
 }
 
@@ -425,17 +433,17 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 	return newLogger
 }
 
-// SetLevel cambia il livello di log a runtime.
+// SetLevel changes the runtime log level without waiting for sink I/O.
 func (l *Logger) SetLevel(level string) {
 	l.state.mu.Lock()
 	defer l.state.mu.Unlock()
 	l.state.level = parseLogLevel(level)
 }
 
-// Close chiude il file di log se aperto.
+// Close closes the active log sink after preceding writes finish.
 func (l *Logger) Close() error {
-	l.state.mu.Lock()
-	defer l.state.mu.Unlock()
+	leaveWrite := l.state.writeGate.Enter()
+	defer leaveWrite()
 
 	if l.state.useSyslog && l.state.syslogWriter != nil {
 		return l.state.syslogWriter.Close()

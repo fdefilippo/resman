@@ -5,9 +5,47 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestPSIWatcherStateRemainsAvailableWhilePressureFileOpenBlocks(t *testing.T) {
+	watcher := NewPSIWatcher(1_000_000)
+	watcher.SetThreshold("cpu", 50_000)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	watcher.openFile = func(path string, flag int, mode os.FileMode) (*os.File, error) {
+		close(started)
+		<-release
+		return os.OpenFile(path, flag, mode)
+	}
+	pressurePath := filepath.Join(t.TempDir(), "cpu.pressure")
+	if err := os.WriteFile(pressurePath, nil, 0600); err != nil {
+		t.Fatalf("write pressure fixture: %v", err)
+	}
+
+	addDone := make(chan error, 1)
+	go func() { addDone <- watcher.AddMonitor(1000, "cpu", pressurePath) }()
+	<-started
+	thresholdDone := make(chan struct{})
+	go func() {
+		watcher.SetThreshold("io", 25_000)
+		close(thresholdDone)
+	}()
+	select {
+	case <-thresholdDone:
+	case <-time.After(time.Second):
+		close(release)
+		<-addDone
+		t.Fatal("SetThreshold() blocked behind pressure-file open")
+	}
+	close(release)
+	if err := <-addDone; err != nil {
+		t.Fatalf("AddMonitor() error: %v", err)
+	}
+	watcher.RemoveMonitor(1000, "cpu")
+}
 
 func TestPSIWatcherDeactivatesMonitorOnTerminalPollEvent(t *testing.T) {
 	events := []int16{

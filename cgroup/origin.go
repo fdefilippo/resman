@@ -59,11 +59,6 @@ func (e *ProcessOriginUnavailableError) Error() string {
 	)
 }
 
-type previousProcessOrigin struct {
-	Origin processOrigin
-	Exists bool
-}
-
 func processOriginsPath(createdCgroupsFile string) string {
 	ext := filepath.Ext(createdCgroupsFile)
 	base := strings.TrimSuffix(createdCgroupsFile, ext)
@@ -83,22 +78,20 @@ func (m *Manager) getProcRoot() string {
 }
 
 func (m *Manager) getProcessOriginsFile() string {
-	if m.processOriginsFile == "" {
-		m.processOriginsFile = processOriginsPath(m.createdCgroupsFile)
+	if m.processOriginsFile != "" {
+		return m.processOriginsFile
 	}
-	return m.processOriginsFile
+	return processOriginsPath(m.createdCgroupsFile)
 }
 
 func (m *Manager) loadProcessOrigins() error {
-	m.originMu.Lock()
-	defer m.originMu.Unlock()
+	leaveOperation := m.originGate.Enter()
+	defer leaveOperation()
 
 	stateFile := m.getProcessOriginsFile()
 	data, err := os.ReadFile(stateFile)
 	if os.IsNotExist(err) {
-		if m.processOrigins == nil {
-			m.processOrigins = make(map[int]processOrigin)
-		}
+		m.replaceProcessOrigins(make(map[int]processOrigin))
 		return nil
 	}
 	if err != nil {
@@ -113,36 +106,37 @@ func (m *Manager) loadProcessOrigins() error {
 		return fmt.Errorf("unsupported process origin state version %d", state.Version)
 	}
 
-	m.processOrigins = make(map[int]processOrigin, len(state.Origins))
+	origins := make(map[int]processOrigin, len(state.Origins))
 	for _, origin := range state.Origins {
 		if origin.PID <= 0 || origin.UID < 0 || origin.StartTime == 0 || origin.CgroupPath == "" {
 			return fmt.Errorf("invalid process origin record for PID %d", origin.PID)
 		}
-		m.processOrigins[origin.PID] = origin
+		origins[origin.PID] = origin
 	}
+	m.replaceProcessOrigins(origins)
 	return nil
 }
 
-func (m *Manager) persistProcessOriginsLocked() error {
+func (m *Manager) persistProcessOrigins(origins map[int]processOrigin) error {
 	stateFile := m.getProcessOriginsFile()
-	if len(m.processOrigins) == 0 {
+	if len(origins) == 0 {
 		if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove empty process origin state %s: %w", stateFile, err)
 		}
 		return nil
 	}
 
-	origins := make([]processOrigin, 0, len(m.processOrigins))
-	for _, origin := range m.processOrigins {
-		origins = append(origins, origin)
+	records := make([]processOrigin, 0, len(origins))
+	for _, origin := range origins {
+		records = append(records, origin)
 	}
-	sort.Slice(origins, func(i, j int) bool {
-		return origins[i].PID < origins[j].PID
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].PID < records[j].PID
 	})
 
 	data, err := json.MarshalIndent(processOriginsState{
 		Version: processOriginsStateVersion,
-		Origins: origins,
+		Origins: records,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to encode process origin state: %w", err)
@@ -192,11 +186,11 @@ func (m *Manager) persistProcessOriginsLocked() error {
 	return nil
 }
 
-func (m *Manager) flushProcessOriginsLocked() error {
+func (m *Manager) flushProcessOrigins(origins map[int]processOrigin) error {
 	if m.persistOrigins != nil {
 		return m.persistOrigins()
 	}
-	return m.persistProcessOriginsLocked()
+	return m.persistProcessOrigins(origins)
 }
 
 func (m *Manager) removeProcessOrigins(pids map[int]bool) error {
@@ -204,22 +198,27 @@ func (m *Manager) removeProcessOrigins(pids map[int]bool) error {
 		return nil
 	}
 
-	m.originMu.Lock()
-	defer m.originMu.Unlock()
+	leaveOperation := m.originGate.Enter()
+	defer leaveOperation()
+	return m.removeProcessOriginsUnderGate(pids)
+}
 
-	removed := make(map[int]processOrigin)
+func (m *Manager) removeProcessOriginsUnderGate(pids map[int]bool) error {
+	next := m.snapshotProcessOrigins()
+	changed := false
 	for pid := range pids {
-		if origin, ok := m.processOrigins[pid]; ok {
-			removed[pid] = origin
-			delete(m.processOrigins, pid)
+		if _, ok := next[pid]; ok {
+			delete(next, pid)
+			changed = true
 		}
 	}
-	if err := m.flushProcessOriginsLocked(); err != nil {
-		for pid, origin := range removed {
-			m.processOrigins[pid] = origin
-		}
+	if !changed {
+		return nil
+	}
+	if err := m.flushProcessOrigins(next); err != nil {
 		return err
 	}
+	m.replaceProcessOrigins(next)
 	return nil
 }
 
@@ -234,7 +233,16 @@ func (m *Manager) snapshotProcessOrigins() map[int]processOrigin {
 	return origins
 }
 
+func (m *Manager) replaceProcessOrigins(origins map[int]processOrigin) {
+	m.originMu.Lock()
+	defer m.originMu.Unlock()
+	m.processOrigins = origins
+}
+
 func (m *Manager) pruneInactiveProcessOrigins(uid int) error {
+	leaveOperation := m.originGate.Enter()
+	defer leaveOperation()
+
 	origins := m.snapshotProcessOrigins()
 	remove := make(map[int]bool)
 	basePath := m.getBaseCgroupPath()
@@ -267,7 +275,7 @@ func (m *Manager) pruneInactiveProcessOrigins(uid int) error {
 			remove[pid] = true
 		}
 	}
-	return m.removeProcessOrigins(remove)
+	return m.removeProcessOriginsUnderGate(remove)
 }
 
 func (m *Manager) readProcessIdentity(pid int) (processIdentity, error) {
@@ -447,12 +455,10 @@ func (m *Manager) captureProcessOriginsExpected(
 	destination string,
 	expectedStartTimes map[int]uint64,
 ) ([]int, map[int]bool, error) {
-	m.originMu.Lock()
-	defer m.originMu.Unlock()
+	leaveOperation := m.originGate.Enter()
+	defer leaveOperation()
 
-	if m.processOrigins == nil {
-		m.processOrigins = make(map[int]processOrigin)
-	}
+	next := m.snapshotProcessOrigins()
 
 	type pendingOrigin struct {
 		identity processIdentity
@@ -460,28 +466,11 @@ func (m *Manager) captureProcessOriginsExpected(
 	pending := make([]pendingOrigin, 0)
 	movable := make([]int, 0, len(pids))
 	reused := make(map[int]bool)
-	previous := make(map[int]previousProcessOrigin)
 	basePath := m.getBaseCgroupPath()
-
-	rememberPrevious := func(pid int) {
-		if _, recorded := previous[pid]; recorded {
-			return
-		}
-		origin, exists := m.processOrigins[pid]
-		previous[pid] = previousProcessOrigin{Origin: origin, Exists: exists}
-	}
+	changed := false
 	setOrigin := func(origin processOrigin) {
-		rememberPrevious(origin.PID)
-		m.processOrigins[origin.PID] = origin
-	}
-	rollback := func() {
-		for pid, old := range previous {
-			if old.Exists {
-				m.processOrigins[pid] = old.Origin
-			} else {
-				delete(m.processOrigins, pid)
-			}
-		}
+		next[origin.PID] = origin
+		changed = true
 	}
 
 	for _, pid := range pids {
@@ -490,7 +479,6 @@ func (m *Manager) captureProcessOriginsExpected(
 			continue
 		}
 		if err != nil {
-			rollback()
 			return nil, reused, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
 		}
 		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
@@ -502,7 +490,6 @@ func (m *Manager) captureProcessOriginsExpected(
 			continue
 		}
 		if err != nil {
-			rollback()
 			return nil, reused, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
 		}
 		currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
@@ -510,7 +497,7 @@ func (m *Manager) captureProcessOriginsExpected(
 			continue
 		}
 		movable = append(movable, pid)
-		if existing, ok := m.processOrigins[pid]; ok && existing.StartTime == identity.StartTime {
+		if existing, ok := next[pid]; ok && existing.StartTime == identity.StartTime {
 			continue
 		}
 		if !pathWithin(currentFilesystemPath, basePath) || m.isRecoveryPath(currentFilesystemPath) {
@@ -521,20 +508,20 @@ func (m *Manager) captureProcessOriginsExpected(
 	}
 
 	for _, candidate := range pending {
-		inheritedPath, ok := m.resolveInheritedOrigin(candidate.identity, uid, m.processOrigins)
+		inheritedPath, ok := m.resolveInheritedOrigin(candidate.identity, uid, next)
 		if !ok {
 			continue
 		}
 		setOrigin(m.newProcessOrigin(candidate.identity, uid, inheritedPath))
 	}
 
-	if len(previous) == 0 {
+	if !changed {
 		return movable, reused, nil
 	}
-	if err := m.flushProcessOriginsLocked(); err != nil {
-		rollback()
+	if err := m.flushProcessOrigins(next); err != nil {
 		return nil, reused, fmt.Errorf("failed to persist process origins before migration: %w", err)
 	}
+	m.replaceProcessOrigins(next)
 	return movable, reused, nil
 }
 

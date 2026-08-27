@@ -163,8 +163,8 @@ func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) error {
 }
 
 func (m *Manager) processIDsForUID(uid int) ([]int, error) {
-	m.processScanMu.Lock()
-	defer m.processScanMu.Unlock()
+	leaveScan := m.processScanGate.Enter()
+	defer leaveScan()
 
 	now := time.Now()
 	if now.Sub(m.processScan.createdAt) <= processScanCacheTTL {

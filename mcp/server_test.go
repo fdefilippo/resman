@@ -436,6 +436,41 @@ func TestServerStartStop(t *testing.T) {
 	}
 }
 
+func TestServerLifecycleStateRemainsAvailableWhileListenerCreationBlocks(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &Server{
+		cfg:       &config.MCPServerConfig{Enabled: true, Transport: "http", HTTPHost: "127.0.0.1", HTTPPort: 1969},
+		logger:    logging.GetLogger(),
+		tlsConfig: &tls.Config{Certificates: []tls.Certificate{{}}},
+		httpListen: func(string, string) (net.Listener, error) {
+			close(started)
+			<-release
+			return nil, os.ErrPermission
+		},
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- server.Start(context.Background()) }()
+	<-started
+
+	stateDone := make(chan bool, 1)
+	go func() { stateDone <- server.IsStarted() }()
+	select {
+	case running := <-stateDone:
+		if !running {
+			t.Fatal("IsStarted() = false while listener creation is in progress")
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-startDone
+		t.Fatal("IsStarted() blocked behind listener creation")
+	}
+	close(release)
+	if err := <-startDone; err == nil {
+		t.Fatal("Start() succeeded after listener creation failed")
+	}
+}
+
 func TestServerStopCancelsTransportContext(t *testing.T) {
 	transportCtx, cancel := context.WithCancel(context.Background())
 	server := &Server{

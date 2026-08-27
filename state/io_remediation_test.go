@@ -16,6 +16,48 @@ type ioRemediationTestDeps struct {
 	temporaryError error
 }
 
+type blockingIORemediationDeps struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingIORemediationDeps) GetPSIStats(int) (cgroup.PSIStats, error) {
+	close(d.started)
+	<-d.release
+	return cgroup.PSIStats{}, nil
+}
+
+func (d *blockingIORemediationDeps) ApplyTemporaryIOLimit(int, string, string, int, int, string, float64) error {
+	return nil
+}
+
+func TestIORemediationStateOperationsRemainAvailableDuringPSIRead(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IORemediationEnabled = true
+	cfg.IOStarvationCheckInterval = 0
+	deps := &blockingIORemediationDeps{started: make(chan struct{}), release: make(chan struct{})}
+	remediation := NewIORemediation(logging.GetLogger())
+
+	done := make(chan struct{})
+	go func() {
+		remediation.CheckAndRemediate(deps, cfg, []int{1000})
+		close(done)
+	}()
+	<-deps.started
+
+	resetDone := make(chan int, 1)
+	go func() { resetDone <- remediation.ResetActiveBoosts() }()
+	select {
+	case <-resetDone:
+	case <-time.After(time.Second):
+		close(deps.release)
+		<-done
+		t.Fatal("ResetActiveBoosts() blocked behind PSI I/O")
+	}
+	close(deps.release)
+	<-done
+}
+
 type temporaryIOLimitCall struct {
 	uid          int
 	readBPS      string

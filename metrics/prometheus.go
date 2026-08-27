@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
@@ -151,6 +152,9 @@ type PrometheusExporter struct {
 	metricsCollectionDuration prometheus.Histogram
 
 	mu sync.RWMutex
+	// metricsGate serializes delta accounting and label cleanup without
+	// coupling Prometheus writes to the lifecycle state mutex.
+	metricsGate operationgate.Gate
 
 	// Internal state.
 	isRunning bool
@@ -727,9 +731,6 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics ExporterMetrics) {
 		return
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
-
 	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
 	exp.totalCores.Set(float64(metrics.TotalCores))
 	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
@@ -778,8 +779,8 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 		cgroupMemory = uint64(exp.getCgroupMemoryUsage(cgroupPath))
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
 	// Track the user as present in the current metrics set.
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
@@ -858,8 +859,8 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 		return
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
 	// Itera su tutti gli utenti tracciati
 	for userKey := range exp.activeUserMetrics {
@@ -931,9 +932,6 @@ func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores i
 		return
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
-
 	exp.totalCores.Set(float64(totalCores))
 	exp.actionCores.Set(float64(actionCores))
 	exp.systemLoad.Set(systemLoad)
@@ -951,8 +949,8 @@ func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username strin
 	}
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
 	if prevPattern, ok := exp.prevUserPatterns[userKey]; ok && prevPattern != pattern {
 		exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)

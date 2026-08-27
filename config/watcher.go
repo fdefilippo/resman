@@ -171,11 +171,11 @@ func (w *Watcher) Stop() error {
 		return nil
 	}
 
-	w.logger.Info("Stopping configuration watcher")
 	w.isRunning = false
 	w.isStopped = true
 	close(w.stopChan)
 	w.mu.Unlock()
+	w.logger.Info("Stopping configuration watcher")
 
 	err := w.watcher.Close()
 	w.loopWG.Wait()

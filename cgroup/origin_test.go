@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
@@ -198,6 +199,48 @@ func TestMoveProcessBatchRollsBackBeforeAnyMigration(t *testing.T) {
 	}
 }
 
+func TestProcessOriginSnapshotRemainsAvailableWhilePersistenceBlocks(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	origin := "/user.slice/session-122.scope"
+	writeFakeProcess(t, manager, 122, 1, 122, 5201, 1000, origin)
+	createFakeCgroup(t, root, origin)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.persistOrigins = func() error {
+		close(started)
+		<-release
+		return nil
+	}
+	moveDone := make(chan error, 1)
+	go func() {
+		_, _, err := manager.moveProcessBatch([]int{122}, 1000, destination)
+		moveDone <- err
+	}()
+	<-started
+
+	snapshotDone := make(chan map[int]processOrigin, 1)
+	go func() { snapshotDone <- manager.snapshotProcessOrigins() }()
+	select {
+	case snapshot := <-snapshotDone:
+		if len(snapshot) != 0 {
+			t.Fatalf("uncommitted process origins became visible: %+v", snapshot)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-moveDone
+		t.Fatal("snapshotProcessOrigins() blocked behind persistence")
+	}
+	close(release)
+	if err := <-moveDone; err != nil {
+		t.Fatalf("moveProcessBatch() error: %v", err)
+	}
+	if _, ok := manager.snapshotProcessOrigins()[122]; !ok {
+		t.Fatal("committed process origin was not published")
+	}
+}
+
 func TestMoveProcessBatchSkipsProcessesAlreadyInDestination(t *testing.T) {
 	manager, root := newOriginTestManager(t)
 	destinationCgroup := "/resman/limited/user_1000"
@@ -367,9 +410,7 @@ func TestRestoreProcessesTreatsESRCHAsSuccess(t *testing.T) {
 		StartTime:  9000,
 		CgroupPath: originalPath,
 	}
-	manager.originMu.Lock()
-	err := manager.persistProcessOriginsLocked()
-	manager.originMu.Unlock()
+	err := manager.persistProcessOrigins(manager.snapshotProcessOrigins())
 	if err != nil {
 		t.Fatalf("failed to persist test origin: %v", err)
 	}
@@ -405,9 +446,7 @@ func TestRestoreProcessesRestoresExactCgroup(t *testing.T) {
 		StartTime:  13000,
 		CgroupPath: originalPath,
 	}
-	manager.originMu.Lock()
-	err := manager.persistProcessOriginsLocked()
-	manager.originMu.Unlock()
+	err := manager.persistProcessOrigins(manager.snapshotProcessOrigins())
 	if err != nil {
 		t.Fatalf("failed to persist test origin: %v", err)
 	}
@@ -675,9 +714,7 @@ func TestPruneInactiveProcessOriginsRemovesExitedProcesses(t *testing.T) {
 		StartTime:  11000,
 		CgroupPath: "/user.slice/user-1000.slice/session-11.scope",
 	}
-	manager.originMu.Lock()
-	err := manager.persistProcessOriginsLocked()
-	manager.originMu.Unlock()
+	err := manager.persistProcessOrigins(manager.snapshotProcessOrigins())
 	if err != nil {
 		t.Fatalf("failed to persist test origin: %v", err)
 	}

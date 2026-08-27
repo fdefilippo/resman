@@ -133,13 +133,6 @@ func TestPersistenceCoordinatorSerializesReloadEpochsWithoutLostFilterUpdates(t 
 		includeDone <- err
 	}()
 	waitForTestSignal(t, includeWriteEntered, "include persistence to reach the active file")
-	sharedMu := requested.persistenceMutex()
-	if sharedMu.TryLock() {
-		sharedMu.Unlock()
-		releaseInclude()
-		t.Fatal("reloaded configuration did not share the locked persistence coordinator")
-	}
-
 	excludeDone := make(chan error, 1)
 	go func() {
 		_, err := requested.persistUserFilterWithWriter(

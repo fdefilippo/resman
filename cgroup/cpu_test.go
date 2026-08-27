@@ -54,6 +54,18 @@ func TestApplyCPULimitWaitsForTimedOutMoverToBecomeQuiescent(t *testing.T) {
 
 	<-started
 	<-cancelObserved
+	stateDone := make(chan []int, 1)
+	go func() { stateDone <- manager.GetCreatedCgroups() }()
+	select {
+	case uids := <-stateDone:
+		if len(uids) != 1 || uids[0] != uid {
+			t.Fatalf("GetCreatedCgroups() = %v, want [%d]", uids, uid)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-result
+		t.Fatal("GetCreatedCgroups() blocked behind cgroup process migration")
+	}
 	select {
 	case err := <-result:
 		t.Fatalf("ApplyCPULimit returned before its mover stopped: %v", err)

@@ -31,6 +31,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
 // Timeframe rappresenta un intervallo di tempo per i blackout
@@ -44,9 +46,9 @@ type Timeframe struct {
 type Config struct {
 	mu sync.RWMutex
 
-	// saveMu is shared across reload epochs and serializes config-file transactions.
-	saveMu *sync.Mutex
-	// saveState is protected by saveMu and shared across reload epochs.
+	// saveGate is shared across reload epochs and serializes config-file transactions.
+	saveGate *operationgate.Gate
+	// saveState is protected by saveGate and shared across reload epochs.
 	saveState *configPersistenceState
 
 	// Regex cache for pre-compiled patterns (performance optimization)
@@ -247,7 +249,7 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		saveMu:             &sync.Mutex{},
+		saveGate:           &operationgate.Gate{},
 		saveState:          &configPersistenceState{},
 		CgroupRoot:         "/sys/fs/cgroup",
 		CgroupBase:         "resman",
@@ -1349,21 +1351,16 @@ type UserFilterPersistenceResult struct {
 	PersistenceResult
 }
 
-func (c *Config) persistenceCoordinator() (*sync.Mutex, *configPersistenceState) {
+func (c *Config) persistenceCoordinator() (*operationgate.Gate, *configPersistenceState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.saveMu == nil {
-		c.saveMu = &sync.Mutex{}
+	if c.saveGate == nil {
+		c.saveGate = &operationgate.Gate{}
 	}
 	if c.saveState == nil {
 		c.saveState = &configPersistenceState{}
 	}
-	return c.saveMu, c.saveState
-}
-
-func (c *Config) persistenceMutex() *sync.Mutex {
-	saveMu, _ := c.persistenceCoordinator()
-	return saveMu
+	return c.saveGate, c.saveState
 }
 
 func (c *Config) userFilterSnapshot() userFilterPersistenceSnapshot {
@@ -1393,9 +1390,9 @@ func (c *Config) persistUserFilterWithWriter(
 		}
 	}
 
-	saveMu, saveState := c.persistenceCoordinator()
-	saveMu.Lock()
-	defer saveMu.Unlock()
+	saveGate, saveState := c.persistenceCoordinator()
+	leavePersistence := saveGate.Enter()
+	defer leavePersistence()
 
 	snapshot := c.userFilterSnapshot()
 	var previous []string

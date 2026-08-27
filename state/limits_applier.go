@@ -1310,8 +1310,8 @@ func (m *Manager) ForceActivateLimits() error {
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
 
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	metrics, err := m.collectSystemMetrics()
 	if err != nil {
@@ -1324,8 +1324,8 @@ func (m *Manager) ForceDeactivateLimits() error {
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
 
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	err := m.deactivateLimits()
 	if m.stabilityTracker == nil {

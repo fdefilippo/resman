@@ -23,9 +23,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -95,9 +95,10 @@ type DatabaseInfo struct {
 
 // DatabaseManager gestisce il database SQLite delle metriche
 type DatabaseManager struct {
-	db     *sql.DB
-	mu     sync.RWMutex
-	dbPath string
+	db              *sql.DB
+	dbGate          operationgate.Gate
+	dbPath          string
+	beforeOperation func()
 }
 
 const (
@@ -181,8 +182,8 @@ func sqliteDSN(dbPath string) string {
 
 // InitSchema creates or validates the current metrics schema.
 func (m *DatabaseManager) InitSchema() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	version, err := m.schemaVersion()
 	if err != nil {
@@ -433,8 +434,11 @@ func (m *DatabaseManager) WriteSystemMetrics(record *SystemMetricsRecord) error 
 
 // WriteMetricsBatch writes one complete collection cycle in a single transaction.
 func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users []*UserMetricsRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
+	if m.beforeOperation != nil {
+		m.beforeOperation()
+	}
 
 	tx, err := m.db.Begin()
 	if err != nil {
@@ -509,8 +513,8 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 
 // GetUserHistory returns persisted metrics for one user and time range.
 func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, limit int) ([]UserMetricsRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -549,8 +553,8 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 
 // ResolveUserUID finds the unique UID associated with a username in a time range.
 func (m *DatabaseManager) ResolveUserUID(username string, startTime, endTime time.Time) (int, bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	rows, err := m.db.Query(`
     SELECT DISTINCT uid
@@ -587,8 +591,8 @@ func (m *DatabaseManager) ResolveUserUID(username string, startTime, endTime tim
 
 // GetSystemHistory returns persisted system metrics for a time range.
 func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit int) ([]SystemMetricsRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT timestamp, total_cpu_usage_percent, total_cores, system_load,
@@ -621,8 +625,8 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 
 // GetUserSummary returns aggregate persisted metrics for one user and time range.
 func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) (*UserSummary, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT
@@ -666,10 +670,10 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
 	return &summary, err
 }
 
-// GetDatabaseInfo recupera le informazioni sul database
+// GetDatabaseInfo returns database size and retained metrics statistics.
 func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	info := &DatabaseInfo{
 		Path:          m.dbPath,
@@ -721,10 +725,10 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
 	return info, nil
 }
 
-// CleanupOldData rimuove i dati più vecchi di retentionDays
+// CleanupOldData removes records older than retentionDays.
 func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	tx, err := m.db.Begin()
@@ -773,10 +777,10 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 	return totalDeleted, nil
 }
 
-// Close chiude la connessione al database
+// Close closes the database connection after preceding operations finish.
 func (m *DatabaseManager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	if m.db != nil {
 		if err := m.db.Close(); err != nil {
@@ -787,13 +791,18 @@ func (m *DatabaseManager) Close() error {
 	return nil
 }
 
-// HealthCheck verifica che il database sia accessibile
+// HealthCheck verifies that the database is reachable.
 func (m *DatabaseManager) HealthCheck() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	if err := m.db.Ping(); err != nil {
 		return fmt.Errorf("database health check failed at %s: %w", m.dbPath, err)
 	}
 	return nil
+}
+
+// Path returns the configured database path without waiting for database I/O.
+func (m *DatabaseManager) Path() string {
+	return m.dbPath
 }

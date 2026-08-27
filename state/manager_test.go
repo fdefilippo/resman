@@ -1965,6 +1965,18 @@ type cleanupLockCheckingCgroupManager struct {
 	checkLock func() error
 }
 
+type blockingCleanupCgroupManager struct {
+	mockCgroupManager
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingCleanupCgroupManager) CleanupAll() error {
+	close(m.started)
+	<-m.release
+	return nil
+}
+
 func (m *cleanupLockCheckingCgroupManager) CleanupAll() error {
 	return m.checkLock()
 }
@@ -2705,19 +2717,46 @@ func TestReleaseIdleUsersWaitsBeforeCommittingState(t *testing.T) {
 func TestCleanupSerializesCgroupOperations(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cgroupManager := &cleanupLockCheckingCgroupManager{}
+	cgroupManager.checkLock = func() error { return nil }
 	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
-	cgroupManager.checkLock = func() error {
-		if manager.opMu.TryLock() {
-			manager.opMu.Unlock()
-			return errors.New("CleanupAll called without opMu")
-		}
-		return nil
+	leaveOperation := manager.opGate.Enter()
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- manager.Cleanup() }()
+	select {
+	case err := <-cleanupDone:
+		t.Fatalf("Cleanup() bypassed the operation gate: %v", err)
+	case <-time.After(25 * time.Millisecond):
 	}
+	leaveOperation()
+	if err := <-cleanupDone; err != nil {
+		t.Fatalf("Cleanup() error: %v", err)
+	}
+}
 
-	if err := manager.Cleanup(); err != nil {
+func TestStateSnapshotRemainsAvailableWhileCgroupOperationBlocks(t *testing.T) {
+	cgroupManager := &blockingCleanupCgroupManager{started: make(chan struct{}), release: make(chan struct{})}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroupManager, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- manager.Cleanup() }()
+	<-cgroupManager.started
+
+	statusDone := make(chan RuntimeStatus, 1)
+	go func() { statusDone <- manager.GetStatus() }()
+	select {
+	case <-statusDone:
+	case <-time.After(time.Second):
+		close(cgroupManager.release)
+		<-cleanupDone
+		t.Fatal("GetStatus() blocked behind cgroup I/O")
+	}
+	close(cgroupManager.release)
+	if err := <-cleanupDone; err != nil {
 		t.Fatalf("Cleanup() error: %v", err)
 	}
 }
@@ -2760,7 +2799,7 @@ func TestCleanupAttemptsEveryPhaseAfterErrors(t *testing.T) {
 	}
 }
 
-func TestCleanupDoesNotHoldOperationLockWhilePrometheusStops(t *testing.T) {
+func TestCleanupKeepsStateAvailableWhilePrometheusStops(t *testing.T) {
 	exporter := &blockingCleanupPrometheusExporter{
 		stopStarted: make(chan struct{}),
 		stopRelease: make(chan struct{}),
@@ -2773,12 +2812,18 @@ func TestCleanupDoesNotHoldOperationLockWhilePrometheusStops(t *testing.T) {
 	cleanupDone := make(chan error, 1)
 	go func() { cleanupDone <- manager.Cleanup() }()
 	<-exporter.stopStarted
-	if !manager.opMu.TryLock() {
+	configDone := make(chan *config.Config, 1)
+	go func() { configDone <- manager.GetConfig() }()
+	select {
+	case got := <-configDone:
+		if got == nil {
+			t.Fatal("GetConfig() returned nil while Prometheus Stop() was blocked")
+		}
+	case <-time.After(time.Second):
 		close(exporter.stopRelease)
 		<-cleanupDone
-		t.Fatal("Cleanup() held opMu while waiting for Prometheus Stop()")
+		t.Fatal("GetConfig() blocked behind Prometheus Stop()")
 	}
-	manager.opMu.Unlock()
 	close(exporter.stopRelease)
 	if err := <-cleanupDone; err != nil {
 		t.Fatalf("Cleanup() error: %v", err)

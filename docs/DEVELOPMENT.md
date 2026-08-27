@@ -516,6 +516,10 @@ before it can acquire an MCP token.
   a lock.
 - Copy what you need out from under the lock, release, then act. The existing
   `m.mu.RLock()` / copy / `m.mu.RUnlock()` pattern in `state/` is the reference.
+- Operations that require ordering across I/O **MUST** use an explicit operation gate,
+  not a state mutex. The maintained whole-tree classification is
+  [`LOCK-BOUNDARY-INVENTORY.md`](LOCK-BOUNDARY-INVENTORY.md); adding a mutex or gate
+  requires updating that inventory in the same change.
 - Any change to shared state **MUST** be validated with `go test -race ./...`, and
   repeated runs (`-count=20`) for anything touching goroutine lifecycle.
 

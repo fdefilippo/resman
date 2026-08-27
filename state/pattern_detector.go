@@ -100,14 +100,15 @@ func (pd *PatternDetector) updateAt(uid int, cpuUsage float64, now time.Time) {
 	})
 }
 
-// Analyze analizza i pattern per tutti gli utenti e restituisce i risultati.
+// Analyze classifies the retained workload history for every user.
 func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
+	minSamples := cfg.GetPatternMinSamples()
+	confidenceThreshold := cfg.GetPatternConfidenceThreshold()
+
 	pd.mu.RLock()
 	defer pd.mu.RUnlock()
 
 	results := make(map[int]PatternResult)
-	minSamples := cfg.GetPatternMinSamples()
-	confidenceThreshold := cfg.GetPatternConfidenceThreshold()
 
 	for uid, stats := range pd.userStats {
 		if len(stats.Buckets) < minSamples {

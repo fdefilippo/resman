@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/processidentity"
 	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/fdefilippo/resman/logging"
@@ -274,7 +275,7 @@ type Collector struct {
 	// Shared metric-value cache.
 	cache           map[string]metricCacheEntry
 	cacheMutex      sync.RWMutex
-	userMetricsScan sync.Mutex
+	userMetricsScan operationgate.Gate
 	now             func() time.Time
 
 	// Previous /proc/stat sample. Values are raw kernel jiffies.
@@ -336,11 +337,11 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 	return collector, nil
 }
 
-// SetDBWriter imposta il DBWriter per la persistenza delle metriche
+// SetDBWriter replaces the optional metrics database writer.
 func (c *Collector) SetDBWriter(writer *DBWriter) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.dbWriter = writer
+	c.mu.Unlock()
 	c.logger.Info("Database writer configured", "enabled", writer != nil)
 }
 
@@ -990,10 +991,10 @@ func (c *Collector) getFromCache(key string) (interface{}, bool) {
 
 // setInCache stores a value with the TTL of the read that populated it.
 func (c *Collector) setInCache(key string, value interface{}, ttl time.Duration) {
+	now := c.currentTime()
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	now := c.currentTime()
 	if _, replacing := c.cache[key]; !replacing && len(c.cache) >= MAX_CACHE_SIZE {
 		oldestKey := ""
 		oldestTime := now
@@ -1080,7 +1081,7 @@ func (c *Collector) ClearCache() {
 
 // UpdateConfig replaces the collector configuration used by subsequent scans.
 func (c *Collector) UpdateConfig(newConfig *config.Config) {
-	c.userMetricsScan.Lock()
+	leaveScan := c.userMetricsScan.Enter()
 
 	c.mu.Lock()
 	oldConfig := c.cfg
@@ -1099,7 +1100,7 @@ func (c *Collector) UpdateConfig(newConfig *config.Config) {
 	c.usernameCacheMutex.Unlock()
 	// Clear cached values so the new configuration takes effect immediately.
 	c.ClearCache()
-	c.userMetricsScan.Unlock()
+	leaveScan()
 
 	c.logger.Info("Metrics collector configuration updated",
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
@@ -1191,8 +1192,8 @@ func (c *Collector) getAllUserMetricsCached(
 		}
 	}
 
-	c.userMetricsScan.Lock()
-	defer c.userMetricsScan.Unlock()
+	leaveScan := c.userMetricsScan.Enter()
+	defer leaveScan()
 
 	// Another caller may have populated the cache while this caller waited.
 	if val, valid := c.getFromCache(cacheKey); valid {

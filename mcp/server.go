@@ -38,6 +38,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
@@ -94,6 +95,7 @@ type Server struct {
 	stopErr           error
 	stopped           bool
 	mu                sync.RWMutex
+	lifecycleGate     operationgate.Gate
 	configWriteActive atomic.Bool
 }
 
@@ -169,17 +171,22 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
+	leaveLifecycle := s.lifecycleGate.Enter()
+	defer leaveLifecycle()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopped {
+		s.mu.Unlock()
 		return fmt.Errorf("MCP server cannot be started after it has been stopped")
 	}
 	if s.transportCancel != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("MCP server is already started")
 	}
 
 	transportCtx, cancel := context.WithCancel(ctx)
 	s.transportCancel = cancel
+	s.mu.Unlock()
 
 	s.logger.Info("Starting MCP server",
 		"transport", s.cfg.Transport,
@@ -196,7 +203,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	if err != nil {
 		cancel()
+		s.mu.Lock()
 		s.transportCancel = nil
+		s.mu.Unlock()
 	}
 	return err
 }
@@ -210,6 +219,9 @@ func (s *Server) Stop() error {
 }
 
 func (s *Server) stop() error {
+	leaveLifecycle := s.lifecycleGate.Enter()
+	defer leaveLifecycle()
+
 	s.logger.Info("Stopping MCP server")
 
 	s.mu.Lock()
@@ -285,7 +297,10 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
 
-	s.httpServer = newMCPHTTPServer(addr, mux, s.tlsConfig)
+	httpServer := newMCPHTTPServer(addr, mux, s.tlsConfig)
+	s.mu.Lock()
+	s.httpServer = httpServer
+	s.mu.Unlock()
 
 	s.wg.Add(1)
 	go func() {
@@ -298,12 +313,19 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 			"mtls_enabled", s.cfg.TLSCAFile != "",
 		)
 
-		if err := s.httpServer.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("MCP HTTPS server error", "error", err)
 		}
 	}()
 
 	return nil
+}
+
+// IsStarted reports lifecycle state without waiting for listener operations.
+func (s *Server) IsStarted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.transportCancel != nil && !s.stopped
 }
 
 func (s *Server) newMCPHTTPHandler() http.Handler {

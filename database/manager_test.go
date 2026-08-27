@@ -43,6 +43,42 @@ func TestNewDatabaseManager(t *testing.T) {
 	}
 }
 
+func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeOperation = func() {
+		close(started)
+		<-release
+	}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- manager.WriteMetricsBatch(nil, nil) }()
+	<-started
+
+	pathDone := make(chan string, 1)
+	go func() { pathDone <- manager.Path() }()
+	select {
+	case got := <-pathDone:
+		if got != dbPath {
+			t.Fatalf("Path() = %q, want %q", got, dbPath)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-writeDone
+		t.Fatal("Path() blocked behind database I/O")
+	}
+	close(release)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("WriteMetricsBatch() error: %v", err)
+	}
+}
+
 func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
 	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
 	if err != nil {

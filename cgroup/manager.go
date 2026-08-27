@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 )
 
@@ -21,15 +22,16 @@ const (
 
 // Manager owns cgroup v2 discovery, lifecycle, and enforcement operations.
 type Manager struct {
-	cfg           *config.Config
-	logger        *logging.Logger
-	cfgMu         sync.RWMutex
-	mu            sync.RWMutex
-	wg            sync.WaitGroup
-	originMu      sync.Mutex
-	blockIOMu     sync.Mutex
-	processScanMu sync.Mutex
-	usernameMu    sync.RWMutex
+	cfg             *config.Config
+	logger          *logging.Logger
+	cfgMu           sync.RWMutex
+	mu              sync.RWMutex
+	wg              sync.WaitGroup
+	originMu        sync.Mutex
+	originGate      operationgate.Gate
+	blockIOMu       sync.Mutex
+	processScanGate operationgate.Gate
+	usernameMu      sync.RWMutex
 
 	// Managed cgroup tracking.
 	createdCgroups      map[int]string // UID -> cgroup path
