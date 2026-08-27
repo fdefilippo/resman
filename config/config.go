@@ -874,6 +874,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
 	}
+	if cfg.MetricsCacheTTL < 1 {
+		errors = append(errors, "METRICS_CACHE_TTL must be at least 1 second")
+	}
 	if cfg.MetricsRefreshInterval < 5 {
 		errors = append(errors, "METRICS_REFRESH_INTERVAL must be at least 5 seconds")
 	}

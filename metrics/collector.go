@@ -235,6 +235,14 @@ type userMetricsSamplingState struct {
 	ema     *emaCache
 }
 
+// metricCacheEntry binds a cached value to the retention contract that owned
+// the read which populated it.
+type metricCacheEntry struct {
+	value    interface{}
+	storedAt time.Time
+	ttl      time.Duration
+}
+
 func newUserMetricsSamplingState() *userMetricsSamplingState {
 	return &userMetricsSamplingState{
 		process: &procCache{
@@ -264,10 +272,10 @@ type Collector struct {
 	mu     sync.RWMutex
 
 	// Shared metric-value cache.
-	cache           map[string]interface{}
-	cacheTimestamps map[string]time.Time
+	cache           map[string]metricCacheEntry
 	cacheMutex      sync.RWMutex
 	userMetricsScan sync.Mutex
+	now             func() time.Time
 
 	// Previous /proc/stat sample. Values are raw kernel jiffies.
 	prevFallbackCPU             cpuJiffySample
@@ -310,8 +318,7 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 	collector := &Collector{
 		cfg:                         cfg,
 		logger:                      logger,
-		cache:                       make(map[string]interface{}),
-		cacheTimestamps:             make(map[string]time.Time),
+		cache:                       make(map[string]metricCacheEntry),
 		usernameCache:               make(map[int]string),
 		usernameCacheTime:           make(map[int]time.Time),
 		usernameCacheTTL:            usernameCacheTTL,
@@ -320,6 +327,7 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		observationState:            newUserMetricsSamplingState(),
 		decisionState:               newUserMetricsSamplingState(),
 		fallbackCPUSamplingInterval: configuredPollingInterval(cfg),
+		now:                         time.Now,
 	}
 
 	go collector.periodicCleanup()
@@ -353,10 +361,17 @@ func (c *Collector) metricsCacheTTL() time.Duration {
 	return time.Duration(c.getConfig().GetMetricsCacheTTL()) * time.Second
 }
 
-// GetTotalCores restituisce il numero totale di core CPU.
+func (c *Collector) currentTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// GetTotalCores returns the total number of CPU cores.
 func (c *Collector) GetTotalCores() int {
 	cacheKey := "total_cores"
-	if val, valid := c.getFromCache(cacheKey, 3600*time.Second); valid { // Cache lunga per questa metrica
+	if val, valid := c.getFromCache(cacheKey); valid { // Core count changes rarely, so it owns a long TTL.
 		return val.(int)
 	}
 
@@ -365,11 +380,11 @@ func (c *Collector) GetTotalCores() int {
 		c.logger.Warn("Failed to get CPU core count via gopsutil, using /proc/cpuinfo fallback",
 			"error", err,
 		)
-		// Fallback: leggi da /proc/cpuinfo
+		// Fall back to /proc/cpuinfo.
 		cores = c.getTotalCoresFallback()
 	}
 
-	c.setInCache(cacheKey, cores)
+	c.setInCache(cacheKey, cores, time.Hour)
 	return cores
 }
 
@@ -405,7 +420,7 @@ func (c *Collector) getTotalCoresFallback() int {
 // GetTotalCPUUsage returns host-wide CPU usage as a percentage.
 func (c *Collector) GetTotalCPUUsage() float64 {
 	cacheKey := "total_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -434,13 +449,13 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 		return 0.0
 	}
 
-	// Parse della linea CPU
+	// Parse the aggregate CPU line.
 	fields := strings.Fields(line)
 	if len(fields) < 8 {
 		return 0.0
 	}
 
-	// Calcola i tempi totali
+	// Calculate total jiffies.
 	user, _ := strconv.ParseUint(fields[1], 10, 64)
 	nice, _ := strconv.ParseUint(fields[2], 10, 64)
 	system, _ := strconv.ParseUint(fields[3], 10, 64)
@@ -457,8 +472,8 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 
 	usage := c.updateFallbackCPUSample(total, idle)
 
-	// Cache il risultato
-	c.setInCache("total_cpu_usage", usage)
+	// Cache the result under the configured value-reuse TTL.
+	c.setInCache("total_cpu_usage", usage, c.metricsCacheTTL())
 
 	return usage
 }
@@ -746,10 +761,10 @@ func (c *Collector) GetUsernameFromUID(uid int) string {
 	return c.getUsername(uid)
 }
 
-// GetMemoryUsage restituisce l'uso della memoria in MB.
+// GetMemoryUsage returns memory usage in MB.
 func (c *Collector) GetMemoryUsage() float64 {
 	cacheKey := "memory_usage"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -761,9 +776,9 @@ func (c *Collector) GetMemoryUsage() float64 {
 		return c.getMemoryUsageFallback()
 	}
 
-	// Converti da byte a MB
+	// Convert bytes to MB.
 	usageMB := float64(vm.Used) / 1024 / 1024
-	c.setInCache(cacheKey, usageMB)
+	c.setInCache(cacheKey, usageMB, c.metricsCacheTTL())
 	return usageMB
 }
 
@@ -816,10 +831,10 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 	return usageMB
 }
 
-// GetTotalMemoryMB restituisce la RAM fisica totale del sistema in MB.
+// GetTotalMemoryMB returns total physical RAM in MB.
 func (c *Collector) GetTotalMemoryMB() float64 {
 	cacheKey := "total_memory"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -832,7 +847,7 @@ func (c *Collector) GetTotalMemoryMB() float64 {
 	}
 
 	totalMB := float64(vm.Total) / 1024 / 1024
-	c.setInCache(cacheKey, totalMB)
+	c.setInCache(cacheKey, totalMB, c.metricsCacheTTL())
 	return totalMB
 }
 
@@ -862,10 +877,10 @@ func (c *Collector) getTotalMemoryFallback() float64 {
 	return 0.0
 }
 
-// GetCachedMemoryMB restituisce la memoria cache del sistema in MB.
+// GetCachedMemoryMB returns cached system memory in MB.
 func (c *Collector) GetCachedMemoryMB() float64 {
 	cacheKey := "cached_memory"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -878,7 +893,7 @@ func (c *Collector) GetCachedMemoryMB() float64 {
 	}
 
 	cachedMB := float64(vm.Cached) / 1024 / 1024
-	c.setInCache(cacheKey, cachedMB)
+	c.setInCache(cacheKey, cachedMB, c.metricsCacheTTL())
 	return cachedMB
 }
 
@@ -908,14 +923,14 @@ func (c *Collector) getCachedMemoryFallback() float64 {
 	return 0.0
 }
 
-// IsSystemUnderLoad determina se il sistema è sotto carico.
+// IsSystemUnderLoad reports whether the system load exceeds the configured heuristic.
 func (c *Collector) IsSystemUnderLoad() bool {
 	cacheKey := "system_under_load"
-	if val, valid := c.getFromCache(cacheKey, 10*time.Second); valid { // Cache breve
+	if val, valid := c.getFromCache(cacheKey); valid { // Load detection owns a short TTL.
 		return val.(bool)
 	}
 
-	// Calcola load average
+	// Calculate the load average.
 	load, cores, err := c.getLoadAverage()
 	if err != nil {
 		c.logger.Warn("Failed to get load average, assuming system not under load",
@@ -924,10 +939,10 @@ func (c *Collector) IsSystemUnderLoad() bool {
 		return false
 	}
 
-	// Sistema è sotto carico se load > 0.7 * cores
+	// Treat the system as loaded when load exceeds 0.7 per core.
 	underLoad := load > float64(cores)*0.7
 
-	c.setInCache(cacheKey, underLoad)
+	c.setInCache(cacheKey, underLoad, 10*time.Second)
 	return underLoad
 }
 
@@ -958,56 +973,49 @@ func (c *Collector) isMonitoredUserUID(uid int) bool {
 	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax()
 }
 
-// getFromCache recupera un valore dalla cache se non è scaduto.
-func (c *Collector) getFromCache(key string, ttl time.Duration) (interface{}, bool) {
+// getFromCache returns a cached value while its owning TTL remains valid.
+func (c *Collector) getFromCache(key string) (interface{}, bool) {
 	c.cacheMutex.RLock()
 	defer c.cacheMutex.RUnlock()
 
-	val, exists := c.cache[key]
+	entry, exists := c.cache[key]
 	if !exists {
 		return nil, false
 	}
-
-	timestamp, timestampExists := c.cacheTimestamps[key]
-	if !timestampExists {
+	if entry.ttl <= 0 || c.currentTime().Sub(entry.storedAt) > entry.ttl {
 		return nil, false
 	}
-
-	if time.Since(timestamp) > ttl {
-		return nil, false
-	}
-
-	return val, true
+	return entry.value, true
 }
 
-// setInCache memorizza un valore nella cache con LRU eviction.
-func (c *Collector) setInCache(key string, value interface{}) {
+// setInCache stores a value with the TTL of the read that populated it.
+func (c *Collector) setInCache(key string, value interface{}, ttl time.Duration) {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	// If cache is full, remove oldest entries (LRU eviction)
-	if len(c.cache) >= MAX_CACHE_SIZE {
+	now := c.currentTime()
+	if _, replacing := c.cache[key]; !replacing && len(c.cache) >= MAX_CACHE_SIZE {
 		oldestKey := ""
-		oldestTime := time.Now()
+		oldestTime := now
+		found := false
 
-		for k, ts := range c.cacheTimestamps {
-			if ts.Before(oldestTime) {
-				oldestTime = ts
+		for k, entry := range c.cache {
+			if !found || entry.storedAt.Before(oldestTime) {
+				oldestTime = entry.storedAt
 				oldestKey = k
+				found = true
 			}
 		}
 
-		if oldestKey != "" {
+		if found {
 			delete(c.cache, oldestKey)
-			delete(c.cacheTimestamps, oldestKey)
 			c.logger.Debug("Cache full - evicted oldest entry",
 				"evicted_key", oldestKey,
 				"cache_size", len(c.cache))
 		}
 	}
 
-	c.cache[key] = value
-	c.cacheTimestamps[key] = time.Now()
+	c.cache[key] = metricCacheEntry{value: value, storedAt: now, ttl: ttl}
 }
 
 // periodicCleanup runs cleanup periodically until stopped
@@ -1027,20 +1035,19 @@ func (c *Collector) periodicCleanup() {
 	}
 }
 
-// cleanupCache removes expired entries from every collector cache.
+// cleanupCache removes expired metric values and username resolutions.
 func (c *Collector) cleanupCache() {
+	c.cleanupCacheAt(c.currentTime())
+}
+
+func (c *Collector) cleanupCacheAt(now time.Time) {
 	c.cacheMutex.Lock()
-	now := time.Now()
-	for key, timestamp := range c.cacheTimestamps {
-		if now.Sub(timestamp) > 5*time.Minute {
+	for key, entry := range c.cache {
+		if entry.ttl <= 0 || now.Sub(entry.storedAt) > entry.ttl {
 			delete(c.cache, key)
-			delete(c.cacheTimestamps, key)
 		}
 	}
 	c.cacheMutex.Unlock()
-
-	cleanupProcessCache(c.observationState, now)
-	cleanupProcessCache(c.decisionState, now)
 
 	// Remove username cache entries that have exceeded their independent TTL.
 	c.usernameCacheMutex.Lock()
@@ -1063,34 +1070,12 @@ func (c *Collector) cleanupCache() {
 	}
 }
 
-func cleanupProcessCache(state *userMetricsSamplingState, now time.Time) {
-	if state == nil || state.process == nil {
-		return
-	}
-	state.process.mu.Lock()
-	defer state.process.mu.Unlock()
-	for pid, timestamp := range state.process.prevProcTime {
-		if now.Sub(timestamp) <= 5*time.Minute {
-			continue
-		}
-		delete(state.process.prevProcCPU, pid)
-		delete(state.process.prevProcTime, pid)
-		delete(state.process.procStartTime, pid)
-	}
-	for pid, sample := range state.process.prevProcIO {
-		if now.Sub(sample.sampledAt) > 5*time.Minute {
-			delete(state.process.prevProcIO, pid)
-		}
-	}
-}
-
 // ClearCache removes every cached metric value.
 func (c *Collector) ClearCache() {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	c.cache = make(map[string]interface{})
-	c.cacheTimestamps = make(map[string]time.Time)
+	c.cache = make(map[string]metricCacheEntry)
 }
 
 // UpdateConfig replaces the collector configuration used by subsequent scans.
@@ -1200,7 +1185,7 @@ func (c *Collector) getAllUserMetricsCached(
 	state *userMetricsSamplingState,
 	collect func(*userMetricsSamplingState) map[int]*UserMetrics,
 ) map[int]*UserMetrics {
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
 		}
@@ -1210,14 +1195,14 @@ func (c *Collector) getAllUserMetricsCached(
 	defer c.userMetricsScan.Unlock()
 
 	// Another caller may have populated the cache while this caller waited.
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
 		}
 	}
 
 	userMetrics := collect(state)
-	c.setInCache(cacheKey, userMetrics)
+	c.setInCache(cacheKey, userMetrics, c.metricsCacheTTL())
 	return userMetrics
 }
 
@@ -1879,7 +1864,7 @@ func updateProcessCPUSample(state *userMetricsSamplingState, pid int32, startTim
 		}
 	}
 
-	// Keep every recently observed process baseline. Completed scans and cleanupCache remove stale PIDs.
+	// Keep every process baseline until a completed scan proves that its PID disappeared.
 	state.process.prevProcCPU[pid] = times
 	state.process.prevProcTime[pid] = now
 	state.process.procStartTime[pid] = startTime

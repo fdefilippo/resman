@@ -171,7 +171,11 @@ effective decision-loop intervals. That interval is `POLLING_INTERVAL` unless th
 watcher is active at runtime; only an active watcher switches it to
 `PSI_FALLBACK_INTERVAL`. Configuring PSI when the watcher cannot start therefore keeps
 the polling cadence. `METRICS_CACHE_TTL` controls only value reuse and does not set
-this sampling window.
+this sampling window. The TTL must be at least one second. A cached value remains valid at the exact TTL boundary and
+expires immediately after it; values above five minutes are not shortened by the
+collector's periodic cleanup. Per-process CPU and I/O baselines remain attached to
+active PID/start-time identities regardless of the configured sampling interval and
+are pruned when a completed scan proves that the process disappeared.
 
 Prometheus per-user series are published only from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but never overwrite

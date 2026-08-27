@@ -591,7 +591,9 @@ changed code are necessary and not sufficient.
 A threshold **MUST** derive from the contract it governs. A sampling staleness window
 comes from the sampling cadence; a cache expiry comes from the cache. Reusing a
 convenient neighbouring value couples two contracts that will diverge, and the coupling
-is invisible at the call site.
+is invisible at the call site. Background cleanup **MUST** honor the owning cache TTL
+or the sampling stream's effective cadence; it **MUST NOT** impose an unrelated fixed
+wall-clock lifetime.
 
 **18.3 — Enforcement MUST NOT exceed the contract.**
 Do not harden a promise the code does not keep. Do not validate a key that has no
@@ -623,10 +625,12 @@ the corrected CPU staleness window still selected its cadence from configured PS
 intent instead of the control loop's observed runtime mode. `resman-4pw.28` found the
 corresponding release-timing boundary: an all-or-nothing release selected the older of
 the CPU and RAM/I/O activation epochs, so the newest enforcement could bypass its
-anti-flap hold.
+anti-flap hold. `resman-4pw.57` found the same contract violation in retention: a fixed
+five-minute cleanup silently shortened both longer cache TTLs and active per-process
+baselines whose legitimate sampling cadence reached or exceeded five minutes.
 
 *Findings: resman-4pw.11, resman-4pw.15, resman-4pw.12, resman-4pw.14, resman-4pw.9,
-resman-4pw.6, resman-4pw.27, resman-4pw.28; historical provenance from epic
+resman-4pw.6, resman-4pw.27, resman-4pw.28, resman-4pw.57; historical provenance from epic
 `resman-ne0`*
 
 ## Rule 19 — An anomaly is tracked or refuted, never documented
@@ -706,8 +710,9 @@ user sessions, and cgroup membership are dynamic and their aggregate is not mono
   discard valid deltas from the user's other processes.
 - PID reuse **MUST** establish a new baseline. A reused numeric PID cannot inherit the
   previous process's cumulative counters.
-- Baselines for disappeared identities **MUST** be pruned after each completed scan and
-  by bounded stale-state cleanup.
+- Baselines for disappeared identities **MUST** be pruned after each completed scan.
+  Background cleanup **MUST NOT** evict an active identity solely by a fixed wall-clock
+  age unrelated to that sampling stream's effective cadence.
 - An unavailable counter sample **MUST NOT** advance or preserve a baseline in a way
   that turns a later multi-interval delta into a one-interval rate.
 - When enforcement moves a workload between kernel accounting identities, raw source
@@ -726,9 +731,11 @@ remediation tracks PID plus start time, sums only per-process non-negative delta
 lets one process reset or disappear without erasing its peers' traffic. `resman-4pw.29`
 applies the same rule to `io.stat`: observation and CPU-enforcement cgroups are distinct
 kernel identities, so their raw counters are joined through an explicit logical ledger
-rather than treated as one counter by name.
+rather than treated as one counter by name. `resman-4pw.57` removed the fixed
+five-minute eviction of otherwise active PID baselines; completed scans already provide
+the bounded identity-based pruning required by this rule.
 
-*Findings: resman-4pw.29, resman-4pw.30*
+*Findings: resman-4pw.29, resman-4pw.30, resman-4pw.57*
 
 ---
 
@@ -835,10 +842,10 @@ only because the named issue owns the violation; they are intentionally visible.
 | 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |
-| 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`, `.27`, `.28`; epic `resman-ne0` provenance |
+| 18. Fixing a defect | `resman-4pw.11`, `.15`, `.12`, `.14`, `.9`, `.6`, `.27`, `.28`, `.57`; epic `resman-ne0` provenance |
 | 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
 | 20. Observation cadence is decision-neutral | `resman-4pw.8`; `resman-ne0.30` provenance |
-| 21. Difference before aggregating | `resman-4pw.30` |
+| 21. Difference before aggregating | `resman-4pw.30`, `.57` |
 
 Finding `resman-4pw.15` chose `POLLING_INTERVAL` as the normal host-CPU baseline
 contract. Its rule-level provenance is recorded under Rule 18.2 because the defect was

@@ -325,6 +325,7 @@ func TestNewCollector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
+	t.Cleanup(collector.Stop)
 	if collector == nil {
 		t.Fatal("NewCollector() returned nil")
 	}
@@ -334,8 +335,8 @@ func TestNewCollector(t *testing.T) {
 	if collector.cache == nil {
 		t.Error("collector.cache not initialized")
 	}
-	if collector.cacheTimestamps == nil {
-		t.Error("collector.cacheTimestamps not initialized")
+	if collector.now == nil {
+		t.Error("collector clock not initialized")
 	}
 }
 
@@ -370,7 +371,7 @@ func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
 	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 10, EligibleForRAM: true, EligibleForIO: true},
 		1001: {UID: 1001, CPUUsage: 20, EligibleForCPU: true},
-	})
+	}, collector.metricsCacheTTL())
 
 	if got := collector.GetLimitedUsersCPUUsage(); got != 20 {
 		t.Fatalf("GetLimitedUsersCPUUsage() = %.1f, want only CPU-eligible usage 20", got)
@@ -510,9 +511,8 @@ func TestObservationSamplesDoNotAdvanceDecisionTemporalState(t *testing.T) {
 
 func TestObservationAndDecisionSamplesUseIndependentCacheEntries(t *testing.T) {
 	collector := &Collector{
-		cfg:             config.DefaultConfig(),
-		cache:           make(map[string]interface{}),
-		cacheTimestamps: make(map[string]time.Time),
+		cfg:   config.DefaultConfig(),
+		cache: make(map[string]metricCacheEntry),
 	}
 	observationState := newUserMetricsSamplingState()
 	decisionState := newUserMetricsSamplingState()
@@ -1059,9 +1059,8 @@ func TestGetAllUserMetrics(t *testing.T) {
 func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector := &Collector{
-		cfg:             cfg,
-		cache:           make(map[string]interface{}),
-		cacheTimestamps: make(map[string]time.Time),
+		cfg:   cfg,
+		cache: make(map[string]metricCacheEntry),
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -1104,21 +1103,20 @@ func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
 func TestDerivedUserMetricsDoNotExtendCacheLifetime(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector := &Collector{
-		cfg:             cfg,
-		cache:           make(map[string]interface{}),
-		cacheTimestamps: make(map[string]time.Time),
+		cfg:   cfg,
+		cache: make(map[string]metricCacheEntry),
 	}
 
 	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 10},
-	})
+	}, collector.metricsCacheTTL())
 	if got := collector.GetUserCPUUsage(1000); got != 10 {
 		t.Fatalf("initial user CPU = %f, want 10", got)
 	}
 
 	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
 		1000: {UID: 1000, CPUUsage: 25},
-	})
+	}, collector.metricsCacheTTL())
 	if got := collector.GetUserCPUUsage(1000); got != 25 {
 		t.Fatalf("updated user CPU = %f, want 25", got)
 	}
@@ -1162,11 +1160,12 @@ func TestCacheFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
+	t.Cleanup(collector.Stop)
 
 	// Test set and get from cache
-	collector.setInCache("test_key", "test_value")
+	collector.setInCache("test_key", "test_value", time.Second)
 
-	val, valid := collector.getFromCache("test_key", 1*time.Second)
+	val, valid := collector.getFromCache("test_key")
 	if !valid {
 		t.Error("getFromCache() returned invalid for existing key")
 	}
@@ -1174,22 +1173,144 @@ func TestCacheFunctions(t *testing.T) {
 		t.Errorf("getFromCache() returned %v, expected test_value", val)
 	}
 
-	// Test expired cache
-	val, valid = collector.getFromCache("test_key", 0*time.Second)
-	if valid {
-		t.Error("getFromCache() should return invalid for expired key")
-	}
-	if val != nil {
-		t.Errorf("getFromCache() returned %v for expired key, expected nil", val)
-	}
-
 	// Test non-existent key
-	val, valid = collector.getFromCache("nonexistent_key", 1*time.Second)
+	val, valid = collector.getFromCache("nonexistent_key")
 	if valid {
 		t.Error("getFromCache() should return invalid for non-existent key")
 	}
 	if val != nil {
 		t.Errorf("getFromCache() returned %v for non-existent key, expected nil", val)
+	}
+}
+
+func TestMetricCacheHonorsEachEntryTTLAtExactBoundary(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	collector := &Collector{
+		cache: make(map[string]metricCacheEntry),
+		now:   func() time.Time { return now },
+	}
+
+	collector.setInCache("short", "short-value", 10*time.Second)
+	collector.setInCache("long", "long-value", time.Hour)
+
+	now = now.Add(5 * time.Minute)
+	collector.cleanupCacheAt(now)
+	if value, valid := collector.getFromCache("short"); valid || value != nil {
+		t.Fatalf("short cache entry after cleanup = (%v, %v), want expired", value, valid)
+	}
+	if value, valid := collector.getFromCache("long"); !valid || value != "long-value" {
+		t.Fatalf("one-hour cache entry after five minutes = (%v, %v), want retained", value, valid)
+	}
+
+	now = time.Unix(1_700_000_000, 0).Add(time.Hour)
+	collector.cleanupCacheAt(now)
+	if value, valid := collector.getFromCache("long"); !valid || value != "long-value" {
+		t.Fatalf("cache entry at exact TTL = (%v, %v), want retained", value, valid)
+	}
+
+	now = now.Add(time.Nanosecond)
+	collector.cleanupCacheAt(now)
+	if value, valid := collector.getFromCache("long"); valid || value != nil {
+		t.Fatalf("cache entry beyond TTL = (%v, %v), want expired", value, valid)
+	}
+}
+
+func TestCleanupPreservesActiveProcessBaselinesAcrossLongSamplingCadences(t *testing.T) {
+	tests := []struct {
+		name string
+		gap  time.Duration
+	}{
+		{name: "default PSI cadence plus scheduler jitter", gap: 301 * time.Second},
+		{name: "accepted interval above five minutes", gap: 10 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := newUserMetricsSamplingState()
+			startedAt := time.Unix(1_700_000_000, 0)
+			const (
+				pid       int32 = 42
+				startTime int64 = 1000
+			)
+			updateProcessCPUSample(state, pid, startTime, cpu.TimesStat{User: 1}, startedAt)
+			updateProcessIOSample(state, pid, startTime, processIOCounters{writeBytes: 100}, startedAt)
+
+			collector := &Collector{
+				cache:             make(map[string]metricCacheEntry),
+				observationState:  newUserMetricsSamplingState(),
+				decisionState:     state,
+				usernameCache:     make(map[int]string),
+				usernameCacheTime: make(map[int]time.Time),
+			}
+			collector.cleanupCacheAt(startedAt.Add(tt.gap))
+
+			cpuUsage := updateProcessCPUSample(
+				state,
+				pid,
+				startTime,
+				cpu.TimesStat{User: 1 + tt.gap.Seconds()},
+				startedAt.Add(tt.gap),
+			)
+			if cpuUsage != 100 {
+				t.Fatalf("CPU usage after %s = %f, want sustained 100", tt.gap, cpuUsage)
+			}
+			ioDelta := updateProcessIOSample(
+				state,
+				pid,
+				startTime,
+				processIOCounters{writeBytes: 200},
+				startedAt.Add(tt.gap),
+			)
+			if ioDelta.WriteBytes != 100 {
+				t.Fatalf("I/O delta after %s = %+v, want write delta 100", tt.gap, ioDelta)
+			}
+		})
+	}
+}
+
+func TestReloadedCacheTTLAndCadencePreserveTheirOwningState(t *testing.T) {
+	initial := config.DefaultConfig()
+	initial.MetricsCacheTTL = 15
+	initial.PollingInterval = 30
+	collector, err := NewCollector(initial)
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	t.Cleanup(collector.Stop)
+
+	startedAt := time.Unix(1_700_000_000, 0)
+	now := startedAt
+	collector.now = func() time.Time { return now }
+	const (
+		pid       int32 = 42
+		startTime int64 = 1000
+	)
+	updateProcessCPUSample(collector.decisionState, pid, startTime, cpu.TimesStat{User: 1}, startedAt)
+	collector.setInCache("old-epoch", "old", collector.metricsCacheTTL())
+
+	reloaded := config.DefaultConfig()
+	reloaded.MetricsCacheTTL = 3600
+	reloaded.PollingInterval = 900
+	collector.UpdateConfig(reloaded)
+	collector.SetFallbackCPUSamplingInterval(15 * time.Minute)
+	if value, valid := collector.getFromCache("old-epoch"); valid || value != nil {
+		t.Fatalf("pre-reload cache entry = (%v, %v), want invalidated", value, valid)
+	}
+
+	collector.setInCache("new-epoch", "new", collector.metricsCacheTTL())
+	now = startedAt.Add(15*time.Minute + time.Second)
+	collector.cleanupCacheAt(now)
+	if value, valid := collector.getFromCache("new-epoch"); !valid || value != "new" {
+		t.Fatalf("reloaded one-hour cache entry = (%v, %v), want retained", value, valid)
+	}
+	if got := updateProcessCPUSample(
+		collector.decisionState,
+		pid,
+		startTime,
+		cpu.TimesStat{User: 902},
+		now,
+	); got != 100 {
+		t.Fatalf("decision CPU usage after cadence reload = %f, want sustained 100", got)
 	}
 }
 
@@ -1199,18 +1320,19 @@ func TestClearCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
+	t.Cleanup(collector.Stop)
 
-	collector.setInCache("key1", "value1")
-	collector.setInCache("key2", "value2")
+	collector.setInCache("key1", "value1", time.Second)
+	collector.setInCache("key2", "value2", time.Second)
 
 	collector.ClearCache()
 
-	val, valid := collector.getFromCache("key1", 1*time.Second)
+	val, valid := collector.getFromCache("key1")
 	if valid {
 		t.Errorf("ClearCache() did not clear key1: got %v", val)
 	}
 
-	val, valid = collector.getFromCache("key2", 1*time.Second)
+	val, valid = collector.getFromCache("key2")
 	if valid {
 		t.Errorf("ClearCache() did not clear key2: got %v", val)
 	}
@@ -1295,6 +1417,7 @@ func TestCollectorConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
+	t.Cleanup(collector.Stop)
 
 	// Test concurrent access to cache
 	done := make(chan bool)
@@ -1302,8 +1425,8 @@ func TestCollectorConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
-				collector.setInCache("key", id)
-				collector.getFromCache("key", 1*time.Second)
+				collector.setInCache("key", id, time.Second)
+				collector.getFromCache("key")
 			}
 			done <- true
 		}(i)

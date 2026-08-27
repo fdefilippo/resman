@@ -354,9 +354,11 @@ cgroup membership.
 - `ClearCache()`: Clears metrics cache
 
 **Metrics Caching:**
-- Cache TTL: Configurable (default: 15 seconds)
+- Cache TTL: Configurable, minimum 1 second (default: 15 seconds)
+- Each entry retains the TTL of the read that populated it; the exact boundary is
+  valid and the entry expires only after that boundary
 - Cache key: Metric name + parameters
-- Automatic cleanup of stale entries
+- Periodic cleanup honors each entry's TTL and does not impose a five-minute cap
 
 **Process Exclusion:**
 - `PROCESS_EXCLUDE_LIST` defines the process set enforceable by every resource.
@@ -639,7 +641,7 @@ CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 # ========================
 POLLING_INTERVAL=30          # Control cycle interval
 MIN_ACTIVE_TIME=60           # Latest enforcement epoch and per-user hold time
-METRICS_CACHE_TTL=15         # Metrics cache duration
+METRICS_CACHE_TTL=15         # Value reuse, minimum 1s; exact boundary remains valid
 
 # ========================
 # CPU THRESHOLDS (percentage)
@@ -880,12 +882,15 @@ baseline and returns zero. The next valid sample resumes delta calculation immed
 3. Subsequent calls: Continue delta calculation
 
 **Caching:**
-- Results cached for `MetricsCacheTTL` seconds
+- Results are cached through the exact `MetricsCacheTTL` boundary and expire after it
+- Periodic cleanup uses each entry's owning TTL, including values above five minutes
 - Cache cleared on configuration reload
 - Prevents excessive `/proc` reads
 - Cache expiry does not define host-total CPU baseline staleness
 - Observation and decision per-user samples have separate cache entries, per-process
   baselines, and EMA state
+- Active PID/start-time baselines are retained across every accepted sampling interval;
+  completed scans prune identities that disappeared
 - Only control-cycle samples advance temporal decision state
 
 ---

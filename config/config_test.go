@@ -88,6 +88,7 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:           75,
 				CPUReleaseThreshold:    40,
 				PollingInterval:        30,
+				MetricsCacheTTL:        15,
 				MetricsRefreshInterval: 30,
 				CgroupOperationTimeout: 5,
 				MCPShutdownTimeout:     10,
@@ -925,6 +926,35 @@ func TestValidateConfigRejectsInvalidPatternRAMQuotas(t *testing.T) {
 			tt.mutate(cfg)
 			if err := validateConfig(cfg); err == nil {
 				t.Fatal("validateConfig() accepted invalid pattern RAM quota")
+			}
+		})
+	}
+}
+
+func TestValidateConfigRequiresPositiveMetricsCacheTTL(t *testing.T) {
+	tests := []struct {
+		name      string
+		ttl       int
+		wantError bool
+	}{
+		{name: "negative", ttl: -1, wantError: true},
+		{name: "zero", ttl: 0, wantError: true},
+		{name: "one second", ttl: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MetricsCacheTTL = tt.ttl
+			err := validateConfig(cfg)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "METRICS_CACHE_TTL must be at least 1 second") {
+					t.Fatalf("validateConfig() error = %v, want METRICS_CACHE_TTL minimum", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateConfig() error = %v, want accepted TTL", err)
 			}
 		})
 	}

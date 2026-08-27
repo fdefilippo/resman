@@ -560,8 +560,8 @@ The daemon incorporates several performance optimizations to minimize overhead o
 .B Pre\-allocated slices
 - Estimated capacity allocation for dynamic slices to reduce heap allocations.
 .IP \(bu
-.B Intelligent cache invalidation
-- Adaptive cache TTL based on system activity and user churn.
+.B Per-entry cache retention
+- Each metric value retains its owning TTL, while completed process scans prune exited PID baselines.
 .RE
 .PP
 These optimizations ensure that monitoring overhead remains low even on systems with thousands of processes.
@@ -570,6 +570,12 @@ The configuration file supports key=value format. Full\-line comments start with
 \(aq#\(aq. An inline \(aq#\(aq starts a comment only outside quotes and when preceded by
 whitespace.
 Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
+.PP
+.B METRICS_CACHE_TTL
+controls value reuse and must be at least one second. A value remains valid at the exact TTL boundary and expires
+after it; periodic cleanup does not shorten values above five minutes. CPU and I/O
+process baselines are independent of this TTL and remain valid for active PID and
+start-time identities until a completed scan proves that the process disappeared.
 .PP
 The active configuration path is selected by the
 .B \-\-config
@@ -642,7 +648,7 @@ CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
 # TIMING (seconds)
 POLLING_INTERVAL=30          # Control cycle interval
 MIN_ACTIVE_TIME=60           # Latest enforcement epoch and per-user hold time
-METRICS_CACHE_TTL=15         # Value reuse only; not CPU baseline staleness
+METRICS_CACHE_TTL=15         # Value reuse through the exact TTL boundary
 METRICS_REFRESH_INTERVAL=30  # Prometheus/Grafana refresh interval
 PROCESS_MIN_AGE_SECONDS=60   # Minimum age for lifetime-average CPU metrics
 
