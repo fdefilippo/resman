@@ -814,6 +814,26 @@ additional time and temporary free disk space proportional to the database
 size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
+.PP
+For a file-backed
+.B METRICS_DB_PATH
+the immediate parent must be a real directory owned by the ResMan process UID
+with mode 0700. ResMan creates a missing parent with that mode, but refuses an
+existing directory with different ownership or permissions. A pre-existing
+database and its
+.B -wal
+and
+.B -shm
+sidecars must be regular, non-symbolic-link files owned by the same UID with
+mode 0600. Correct ownership and permissions explicitly before restarting;
+ResMan does not silently change operator-owned artifacts. The
+.B METRICS_DB_PATH
+ancestor chain must contain no symbolic links and no directory from which an
+untrusted owner, group, or other user can replace the checked child. A sticky
+temporary directory is accepted when it protects the process-owned child. The
+.B :memory:
+database is exempt. These checks occur before SQLite opens the path so a
+permissive service umask cannot expose history files.
 .nf
 
 # PSI EVENT-DRIVEN MODE (Linux >= 4.20, CONFIG_PSI=y)

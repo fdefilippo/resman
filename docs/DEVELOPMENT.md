@@ -487,6 +487,12 @@ operator-recovery boundaries.
 - Backup retention **MUST** be bounded or explicitly disabled. Unbounded timestamped
   backups turn one leak into a permanent archive of leaks.
 - Failure paths **MUST NOT** leave readable residue containing secrets.
+- A file-backed SQLite store **MUST** establish a process-owned mode `0700`
+  parent before opening SQLite. The database and any pre-existing WAL/SHM
+  sidecars **MUST** be regular, non-symlink files owned by the same process UID
+  with mode `0600`; the ancestor chain **MUST NOT** be replaceable by an
+  untrusted owner, group, or other user. Relying on the process umask or a
+  check-then-open race is forbidden.
 - If an atomic rollback cannot restore a known readable state, persistence **MUST**
   enter an explicit unusable state and reject later writes until operator recovery and
   restart. Logging possible disk/runtime divergence without enforcing that boundary is
@@ -504,9 +510,12 @@ configuration symlinks, makes ownership failures actionable, and makes any remai
 runtime/disk divergence explicit while blocking later writes until recovery.
 The packaged configuration is installed as root-owned `0600` below a `0700`
 configuration directory, so the source whose metadata is preserved is restrictive
-before it can acquire an MCP token.
+before it can acquire an MCP token. `resman-4pw.66` applies the same boundary to
+SQLite history: a private parent protects sidecars before SQLite-created modes are
+normalized, while unsafe pre-existing directories and files are rejected with an
+explicit ownership and permission remedy.
 
-*Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48*
+*Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48, resman-4pw.66*
 
 ---
 
@@ -847,7 +856,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13`, `.48` |
-| 14. On-disk file permissions | `resman-4pw.5`, `.26`, `.48` |
+| 14. On-disk file permissions | `resman-4pw.5`, `.26`, `.48`, `.66` |
 | 15. Lock discipline | `resman-4pw.21`; prior race/deadlock fixes in `logging/`, `metrics/` |
 | 16. Tests encode the contract | `resman-4pw.16`, `.16.1`, `.16.2` |
 | 17. One language | `resman-4pw.19` |

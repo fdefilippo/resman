@@ -190,7 +190,11 @@ databases use WAL mode and a 5-second busy timeout, and all stored/query
 timestamps are normalized to UTC. Existing databases that still use SQLite's
 default `auto_vacuum=NONE` are migrated once to incremental auto-vacuum at
 startup. That first upgraded startup runs a full `VACUUM`, which can take longer
-and requires temporary free disk space proportional to the database size.
+and requires temporary free disk space proportional to the database size. The
+database parent is process-owned mode `0700`; the database and existing WAL/SHM
+sidecars are regular, non-symlink mode `0600` files. Unsafe existing custom
+paths or replaceable/symlinked ancestors are refused before SQLite opens them
+rather than relying on the umask or a check-then-open race.
 
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with its PID start time. On release, the

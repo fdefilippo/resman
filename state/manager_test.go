@@ -709,7 +709,7 @@ func TestDeactivationMetricsRequireConfirmedTransition(t *testing.T) {
 }
 
 func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	dbPath := privateMetricsDatabasePath(t)
 	dbManager, err := resmandatabase.NewDatabaseManager(dbPath)
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
@@ -854,6 +854,19 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func privateMetricsDatabasePath(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", root, err)
+	}
+	dir := filepath.Join(root, "database")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatalf("os.Mkdir(%s) error = %v", dir, err)
+	}
+	return filepath.Join(dir, "metrics.db")
 }
 
 func TestMakeDecision(t *testing.T) {

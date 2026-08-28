@@ -412,7 +412,7 @@ func TestMetricsDatabaseInfoUsesEffectiveRuntimeRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
-	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	dbManager, err := database.NewDatabaseManager(privateMetricsDatabasePath(t))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -746,7 +746,7 @@ func TestActivationResultReflectsRuntimeState(t *testing.T) {
 }
 
 func TestResolveHistoricalUIDUsesDatabaseForInactiveUser(t *testing.T) {
-	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	dbManager, err := database.NewDatabaseManager(privateMetricsDatabasePath(t))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error = %v", err)
 	}
@@ -777,7 +777,7 @@ func TestResolveHistoricalUIDUsesDatabaseForInactiveUser(t *testing.T) {
 }
 
 func TestGetUserHistoryReturnsPersistedExplicitLimitState(t *testing.T) {
-	dbManager, err := database.NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	dbManager, err := database.NewDatabaseManager(privateMetricsDatabasePath(t))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error = %v", err)
 	}
@@ -821,4 +821,17 @@ func TestGetUserHistoryReturnsPersistedExplicitLimitState(t *testing.T) {
 		record["ram_limit_requested"] != true || record["ram_limit_active"] != true {
 		t.Fatalf("history record lost requested/active distinctions: %+v", record)
 	}
+}
+
+func privateMetricsDatabasePath(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", root, err)
+	}
+	dir := filepath.Join(root, "database")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatalf("os.Mkdir(%s) error = %v", dir, err)
+	}
+	return filepath.Join(dir, "metrics.db")
 }

@@ -38,6 +38,25 @@ METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 ```
 
+### Contratto dei permessi per database su disco
+
+Per un `METRICS_DB_PATH` su disco, la directory immediatamente superiore deve
+essere una directory reale, non un link simbolico, appartenere all'UID con cui
+gira ResMan e avere modo `0700`. ResMan crea una directory mancante con quel
+modo, ma rifiuta una directory esistente con proprietà o permessi diversi.
+Anche la gerarchia superiore deve essere stabile: non sono ammessi antenati
+simbolici o directory dalle quali un proprietario, gruppo o altro utente non
+fidato possa sostituire il percorso già verificato. Una directory temporanea
+con sticky bit è valida quando protegge la sottodirectory privata.
+
+Un database preesistente e gli eventuali file SQLite `-wal` e `-shm` devono
+essere file regolari, non link simbolici, appartenere allo stesso UID e avere
+modo `0600`. ResMan non corregge silenziosamente artefatti appartenenti
+all'operatore: arresta la persistenza, indica il percorso non sicuro e richiede
+di correggere esplicitamente proprietà e permessi. Il controllo avviene prima
+dell'apertura SQLite; una `umask` permissiva non è quindi usata come controllo
+di riservatezza. Il valore `:memory:` è esente perché non crea file.
+
 ### Esempi di Configurazione
 
 #### Configurazione Base (Consigliata)
@@ -438,7 +457,8 @@ PRAGMA incremental_vacuum(1000);
 
 #### Il database non viene creato
 - Verifica che `METRICS_DB_ENABLED=true`
-- Controlla i permessi sulla directory `/etc/resman/`
+- Verifica che la directory di `METRICS_DB_PATH` appartenga all'UID di ResMan, abbia modo `0700` e si trovi sotto una gerarchia stabile senza link simbolici
+- Verifica che database, `-wal` e `-shm` preesistenti siano file regolari dello stesso UID con modo `0600`
 - Verifica i log: `tail -f /var/log/resman.log | grep -i database`
 
 #### Scrittura troppo lenta

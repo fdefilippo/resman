@@ -100,8 +100,8 @@ func (a *App) WithDatabase() *App {
 		if idx := strings.LastIndex(a.cfg.MetricsDBPath, "/"); idx > 0 {
 			dbDir = a.cfg.MetricsDBPath[:idx]
 		}
-		fmt.Fprintf(os.Stderr, "  1. Ensure directory exists: mkdir -p %s\n", dbDir)
-		fmt.Fprintf(os.Stderr, "  2. Check write permissions\n")
+		fmt.Fprintf(os.Stderr, "  1. Ensure %s is owned by UID %d, writable, mode 0700, and below a stable non-symlink hierarchy\n", dbDir, os.Geteuid())
+		fmt.Fprintf(os.Stderr, "  2. Ensure the database and existing -wal/-shm sidecars are regular files owned by UID %d with mode 0600\n", os.Geteuid())
 		fmt.Fprintf(os.Stderr, "  3. Or disable with METRICS_DB_ENABLED=false\n")
 		a.cfg.MetricsDBEnabled = false
 		return a

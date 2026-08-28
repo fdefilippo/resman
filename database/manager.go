@@ -19,6 +19,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -120,13 +121,9 @@ const (
 
 // NewDatabaseManager creates a metrics database manager.
 func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
-	// Create a missing state directory restrictively. Existing custom
-	// directories retain their operator-managed mode and ownership.
-	if dbPath != ":memory:" {
-		dir := filepath.Dir(dbPath)
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
-		}
+	storage, err := prepareSQLiteStorage(dbPath)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("sqlite3", sqliteDSN(dbPath))
@@ -148,8 +145,20 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 
 	// Initialize or validate the schema before publishing the manager.
 	if err := manager.InitSchema(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
+		startupErr := fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
+		if secureErr := storage.secureRuntimeArtifacts(); secureErr != nil {
+			startupErr = errors.Join(startupErr, secureErr)
+		}
+		if closeErr := db.Close(); closeErr != nil {
+			startupErr = errors.Join(startupErr, fmt.Errorf("failed to close database after startup rejection: %w", closeErr))
+		}
+		return nil, startupErr
+	}
+	if err := storage.secureRuntimeArtifacts(); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to close database after storage protection failure: %w", closeErr))
+		}
+		return nil, err
 	}
 
 	return manager, nil

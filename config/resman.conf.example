@@ -583,7 +583,14 @@ MCP_ALLOW_WRITE_OPS=false
 #
 # METRICS_DB_PATH: Path to the SQLite database
 # Default: /var/lib/resman/metrics.db
-# Ensure the directory exists and is writable
+# For a file-backed database, the immediate parent directory must be a real
+# directory owned by the resman process UID with mode 0700. ResMan creates a
+# missing directory with that mode but rejects unsafe existing permissions.
+# Ancestors must be real directories that cannot be replaced by untrusted users;
+# a sticky temporary directory is valid when it protects the private child.
+# Existing database, -wal, and -shm files must be regular, non-symlink files
+# owned by the same UID with mode 0600. Fix permissions explicitly; they are
+# never widened or silently rewritten. The :memory: database is exempt.
 #
 # METRICS_DB_RETENTION_DAYS: How many days to keep data in the database
 # Default: 30 days

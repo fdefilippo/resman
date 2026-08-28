@@ -1493,7 +1493,7 @@ curl http://localhost:1974/metrics
 | `/etc/resman/resman.conf` | Configuration |
 | `/etc/resman/resman.conf.backup` | Rolling configuration backup |
 | `/etc/resman/tls/` | Operator-supplied TLS material |
-| `/var/lib/resman/metrics.db` | Mutable metrics database |
+| `/var/lib/resman/metrics.db` | Mutable metrics database; mode `0600` below a process-owned mode `0700` directory, with the same regular-file contract for existing WAL/SHM sidecars |
 | `/var/log/resman.log` | Restrictive log file (new/package default mode `0600`) |
 | `/run/resman-cgroups.txt` | Boot-scoped cgroup tracking |
 | `/usr/lib/systemd/system/resman.service` | Systemd unit |
