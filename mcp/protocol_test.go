@@ -225,6 +225,49 @@ func TestLatestOnlyHTTPConformance(t *testing.T) {
 	}
 }
 
+func TestMCPHTTPAuthenticationPrecedesProtocolValidation(t *testing.T) {
+	server := newProtocolTestServer(t)
+	handler := server.newMCPHTTPHandler()
+
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{name: "current protocol", version: mcpProtocolVersion},
+		{name: "unsupported protocol", version: "2025-11-25"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := newProtocolHTTPRequest(t, mcpMethodDiscover, protocolParamsForVersion(tt.version, nil))
+			request.Header.Del("Authorization")
+			request.Header.Set(mcpProtocolVersionHeader, tt.version)
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("HTTP status = %d, want 401; body: %s", recorder.Code, recorder.Body.String())
+			}
+			body := strings.ToLower(recorder.Body.String())
+			if !strings.Contains(body, "missing authorization header") {
+				t.Fatalf("unauthenticated response did not come from authentication middleware: %s", recorder.Body.String())
+			}
+			for _, detail := range []string{
+				strings.ToLower(mcpProtocolVersion),
+				strings.ToLower(tt.version),
+				"protocol",
+				"supported",
+				"requested",
+			} {
+				if strings.Contains(body, detail) {
+					t.Errorf("unauthenticated response disclosed protocol detail %q: %s", detail, recorder.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func TestLatestOnlyHTTPIsStatelessAcrossInstances(t *testing.T) {
 	servers := []*Server{newProtocolTestServer(t), newProtocolTestServer(t)}
 	for index, server := range servers {
