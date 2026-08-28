@@ -20,6 +20,7 @@ fi
 evidence_root=${SMOLVM_EVIDENCE_ROOT:-$repo_root/build/functional/smolvm}
 command_log=
 evidence_dir=
+run_id=
 scratch_dir=
 image_archive=
 image_ref=
@@ -127,8 +128,8 @@ cleanup_resources() {
     [[ -n $evidence_dir ]] && cleanup_log=$evidence_dir/cleanup.log
 
     if [[ $vm_started -eq 1 ]]; then
-        run_kvm machine stop --name "$vm_name" >>"$cleanup_log" 2>&1 || failed=1
-        run_kvm machine delete --force --name "$vm_name" >>"$cleanup_log" 2>&1 || failed=1
+        run_kvm_cleanup machine stop --name "$vm_name" || failed=1
+        run_kvm_cleanup machine delete --force --name "$vm_name" || failed=1
         vm_started=0
     fi
     if [[ $image_built -eq 1 && -n $image_ref ]]; then
@@ -152,7 +153,56 @@ cleanup_resources() {
     return "$failed"
 }
 
+missing_machine_error() {
+    # A launch can fail before SmolVM creates its database record. Only an explicit
+    # absence diagnosis is an idempotent cleanup success; every other error remains fatal.
+    local output=${1,,}
+    [[ $output =~ machine.*not[[:space:]]+found \
+        || $output =~ machine.*does[[:space:]]+not[[:space:]]+exist \
+        || $output =~ no[[:space:]]+such[[:space:]]+machine \
+        || $output =~ unknown[[:space:]]+machine ]]
+}
+
+run_kvm_cleanup() {
+    local cleanup_log=/dev/null
+    local output=
+    [[ -n $evidence_dir ]] && cleanup_log=$evidence_dir/cleanup.log
+
+    if output=$(run_kvm "$@" 2>&1); then
+        [[ -z $output ]] || printf '%s\n' "$output" >>"$cleanup_log"
+        return 0
+    fi
+    [[ -z $output ]] || printf '%s\n' "$output" >>"$cleanup_log"
+    missing_machine_error "$output"
+}
+
+initialize_evidence() {
+    # Evidence and traps precede host capability checks so BLOCKED and early FAIL
+    # outcomes are durable even when no scratch directory or VM ever exists.
+    run_id=r$(date -u +%Y%m%d%H%M%S)-$$
+    evidence_dir=$evidence_root/$run_id
+    mkdir -p "$evidence_dir"
+    chmod 0700 "$evidence_dir"
+    command_log=$evidence_dir/commands.log
+    vm_name=resman-functional-$run_id
+    trap cleanup EXIT
+    trap 'interrupt 130' INT
+    trap 'interrupt 143' TERM
+
+    {
+        printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'run_id=%s\n' "$run_id"
+        printf 'requested_cpus=%s\n' "$cpus"
+        printf 'requested_memory_mib=%s\n' "$memory_mib"
+        printf 'requested_psi_required=%s\n' "$require_psi"
+        printf 'requested_scenario=%s\n' "$scenario"
+        printf 'network=disabled\n'
+        printf 'host_ports=none\n'
+    } >"$evidence_dir/environment.txt"
+}
+
 run_harness() {
+    initialize_evidence
     require_host_capabilities
 
 	[[ $require_psi == 0 || $require_psi == 1 ]] \
@@ -163,13 +213,8 @@ run_harness() {
 		|| $scenario == block-iops ]] \
 		|| blocked "SMOLVM_SCENARIO must be resource-only, process-membership, cpu-without-cpuset, missing-io-startup, mcp-filter-reload, container-runtime, or block-iops"
 
-    local run_id smolvm_version base_image_id base_image_digest fixture_image_id
+    local smolvm_version base_image_id base_image_digest fixture_image_id
     local fixture_hash fixture_reused image_id container_image_id guest_status
-    run_id=r$(date -u +%Y%m%d%H%M%S)-$$
-    evidence_dir=$evidence_root/$run_id
-    mkdir -p "$evidence_dir"
-    chmod 0700 "$evidence_dir"
-    command_log=$evidence_dir/commands.log
     scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-smolvm.XXXXXX")
     image_archive=$scratch_dir/resman-functional.tar
     image_ref=localhost/resman-functional:$run_id
@@ -178,25 +223,13 @@ run_harness() {
     fixture_hash=$(sha256sum "$script_dir/Containerfile.base")
     fixture_hash=${fixture_hash%% *}
     fixture_image_ref=localhost/resman-functional-base:${fixture_hash:0:16}
-    vm_name=resman-functional-$run_id
-    trap cleanup EXIT
-    trap 'interrupt 130' INT
-    trap 'interrupt 143' TERM
 
     smolvm_version=$($smolvm_bin --version)
     {
-        printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf 'run_id=%s\n' "$run_id"
         printf 'smolvm_version=%s\n' "$smolvm_version"
         printf 'image_reference=%s\n' "$image_ref"
         printf 'fixture_image_reference=%s\n' "$fixture_image_ref"
-        printf 'requested_cpus=%s\n' "$cpus"
-        printf 'requested_memory_mib=%s\n' "$memory_mib"
-		printf 'requested_psi_required=%s\n' "$require_psi"
-		printf 'requested_scenario=%s\n' "$scenario"
-        printf 'network=disabled\n'
-        printf 'host_ports=none\n'
-    } >"$evidence_dir/environment.txt"
+    } >>"$evidence_dir/environment.txt"
 
     fixture_reused=true
     record_command sudo podman image exists "$fixture_image_ref"

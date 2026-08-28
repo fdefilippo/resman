@@ -1,0 +1,5 @@
+.git/
+.beads/
+.dolt/
+build/
+rpmbuild/

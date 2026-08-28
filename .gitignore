@@ -15,6 +15,9 @@ resman
 # RPM build directory
 rpmbuild/
 
+# Generated build and functional-test evidence
+build/
+
 # IDE
 .idea/
 .vscode/

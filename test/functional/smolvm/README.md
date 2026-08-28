@@ -220,6 +220,10 @@ Host-side failures that happen before the guest runner starts are also written
 as `FAIL` (or `BLOCKED` for exit status 77); a stale `RUNNING` marker is never a
 completed result.
 
+The repository `.containerignore` keeps `.git/`, `.beads/`, `.dolt/`, `build/`,
+and `rpmbuild/` out of every root-context `sudo podman build`. Functional evidence
+is also ignored by Git and remains available only as a local test artifact.
+
 The EXIT/INT/TERM trap stops and deletes the named VM, removes the unique image
 tag, and removes the validated temporary directory. Evidence is intentionally
 retained. A successful process exit is rejected unless the guest also exported
