@@ -294,9 +294,14 @@ counters only when runtime state actually changes.
 and logged a failed batch write at `Debug`; its caller then logged
 `"Metrics written to database"` unconditionally. The remediation propagates a
 contextual error to the control cycle, which emits a warning and a bounded Prometheus
-error series while leaving the failed batch eligible for retry.
+error series while leaving the failed batch eligible for retry. The same defect later
+survived in I/O starvation remediation and workload-pattern enforcement: per-user
+cgroup failures were skipped or logged locally while the control cycle reported
+success. Those stages now return joined per-user failures, continue their peer work and
+the remaining protective stages, and let the application owner report one degraded
+cycle outcome.
 
-*Finding: resman-4pw.11*
+*Findings: resman-4pw.11, resman-4pw.60*
 
 ## Rule 9 — Configuration lifecycle is declared in one place
 
@@ -836,7 +841,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 5. No knob without effect | `resman-4pw.12` |
 | 6. Typed contracts; metrics ≠ status | `resman-4pw.6` |
 | 7. Counter semantics | `resman-4pw.10` |
-| 8. Truthful errors and logs | `resman-4pw.11` |
+| 8. Truthful errors and logs | `resman-4pw.11`, `.60` |
 | 9. Configuration lifecycle | `resman-4pw.9` |
 | 10. Acknowledge, never sleep | `resman-4pw.7`, `.58` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |

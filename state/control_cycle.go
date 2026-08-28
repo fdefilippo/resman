@@ -44,6 +44,19 @@ type controlCycleStage struct {
 	continueAfterError bool
 }
 
+type patternPolicyError struct {
+	uid int
+	err error
+}
+
+func (e *patternPolicyError) Error() string {
+	return fmt.Sprintf("reconcile workload pattern policy for UID %d: %v", e.uid, e.err)
+}
+
+func (e *patternPolicyError) Unwrap() error {
+	return e.err
+}
+
 var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
 	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
@@ -52,8 +65,8 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "make_decision", run: (*Manager).stageMakeDecision},
 	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
 	{name: "record_history", run: (*Manager).stageRecordHistory},
-	{name: "io_remediation", run: (*Manager).stageIORemediation},
-	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection},
+	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
+	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
 	{name: "revert_psi_boosts", run: (*Manager).stageRevertPSIBoosts},
 	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
@@ -249,10 +262,18 @@ func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 			limitedUsers = slices.DeleteFunc(limitedUsers, func(uid int) bool {
 				return !run.cfg.EvaluateUserEligibility(m.getUsername(uid)).EligibleForIO
 			})
+			sort.Ints(limitedUsers)
 		}
-		m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
+		remediationErrors := m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
+		for _, err := range remediationErrors {
+			var remediationErr *ioRemediationError
+			if errors.As(err, &remediationErr) && m.prometheusExporter != nil {
+				m.prometheusExporter.RecordError(ioRemediationErrorComponent, remediationErr.operation)
+			}
+		}
 		// Remove stale remediation state periodically.
 		m.ioRemediation.Cleanup(24 * time.Hour)
+		return errors.Join(remediationErrors...)
 	}
 	return nil
 }
@@ -262,12 +283,13 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 	if m.patternDetector == nil || m.policyEngine == nil {
 		return nil
 	}
+	toReconcile := m.pendingPatternReconciliationSnapshot()
 
 	if !run.cfg.GetAutodetectPatterns() {
 		for _, uid := range m.policyEngine.Clear() {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
-		return nil
+		return m.reconcilePatternPolicies(toReconcile, run.cfg)
 	}
 
 	configuredEligible := make(map[int]bool)
@@ -302,18 +324,18 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 
 	m.patternDetector.RetainUsers(configuredEligible)
 	for _, uid := range m.policyEngine.RetainUsers(configuredEligible) {
-		m.reconcilePatternPolicy(uid, run.cfg)
+		toReconcile[uid] = struct{}{}
 	}
 
 	// Analyze patterns once per hour.
 	if time.Since(m.lastPatternAnalysis) <= time.Hour {
-		return nil
+		return m.reconcilePatternPolicies(toReconcile, run.cfg)
 	}
 
 	m.lastPatternAnalysis = time.Now()
 	for _, uid := range m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour) {
 		if m.policyEngine.RemovePolicy(uid) {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
 	}
 	patterns := m.patternDetector.Analyze(run.cfg)
@@ -330,23 +352,67 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 			changed = m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg)
 		}
 		if changed {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
 	}
 
-	return nil
+	return m.reconcilePatternPolicies(toReconcile, run.cfg)
 }
 
-func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) {
+func (m *Manager) pendingPatternReconciliationSnapshot() map[int]struct{} {
+	m.mu.RLock()
+	pending := make(map[int]struct{}, len(m.pendingPatternReconciliations))
+	for uid := range m.pendingPatternReconciliations {
+		pending[uid] = struct{}{}
+	}
+	m.mu.RUnlock()
+	return pending
+}
+
+func (m *Manager) reconcilePatternPolicies(uids map[int]struct{}, cfg *config.Config) error {
+	ordered := make([]int, 0, len(uids))
+	for uid := range uids {
+		ordered = append(ordered, uid)
+	}
+	sort.Ints(ordered)
+
+	var reconcileErrors []error
+	for _, uid := range ordered {
+		err := m.reconcilePatternPolicy(uid, cfg)
+		m.mu.Lock()
+		if err != nil {
+			if m.pendingPatternReconciliations == nil {
+				m.pendingPatternReconciliations = make(map[int]struct{})
+			}
+			m.pendingPatternReconciliations[uid] = struct{}{}
+		} else {
+			delete(m.pendingPatternReconciliations, uid)
+		}
+		m.mu.Unlock()
+		if err == nil {
+			continue
+		}
+		reconcileErrors = append(reconcileErrors, err)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(patternPolicyErrorComponent, patternPolicyApplicationFailure)
+		}
+	}
+	return errors.Join(reconcileErrors...)
+}
+
+func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) error {
 	if !m.isUserLimited(uid) {
-		return
+		return nil
 	}
-	if err := m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid))); err != nil {
-		m.logger.Warn("Failed to reconcile resource limits for detected workload pattern", "uid", uid, "error", err)
-	}
+	err := m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid)))
 	m.mu.Lock()
 	m.refreshResourceLimitsActiveLocked(time.Now())
 	m.mu.Unlock()
+	if err != nil {
+		return &patternPolicyError{uid: uid, err: err}
+	}
+	m.logger.Info("Workload pattern resource limits reconciled", "uid", uid)
+	return nil
 }
 
 func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {
@@ -813,6 +879,9 @@ const (
 	blockIOObservationPlacementIncomplete = "placement_incomplete"
 	blockIOObservationCounterReadFailure  = "counter_read_failure"
 	blockIOObservationCleanupFailure      = "cleanup_failure"
+	ioRemediationErrorComponent           = "io_remediation"
+	patternPolicyErrorComponent           = "pattern_policy"
+	patternPolicyApplicationFailure       = "application_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

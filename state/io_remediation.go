@@ -18,6 +18,7 @@
 package state
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -66,10 +67,31 @@ type IORemediationDeps interface {
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 }
 
+const (
+	ioRemediationPSIReadFailure      = "psi_read_failure"
+	ioRemediationBoostApplyFailure   = "boost_apply_failure"
+	ioRemediationBoostRevertFailure  = "boost_revert_failure"
+	ioRemediationCompensationFailure = "compensation_failure"
+)
+
+type ioRemediationError struct {
+	uid       int
+	operation string
+	err       error
+}
+
+func (e *ioRemediationError) Error() string {
+	return fmt.Sprintf("IO remediation %s for UID %d: %v", e.operation, e.uid, e.err)
+}
+
+func (e *ioRemediationError) Unwrap() error {
+	return e.err
+}
+
 // CheckAndRemediate checks limited users and applies temporary I/O boosts.
-func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Config, limitedUsers []int) {
+func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Config, limitedUsers []int) []error {
 	if !cfg.GetIORemediationEnabled() {
-		return
+		return nil
 	}
 
 	now := time.Now()
@@ -77,7 +99,7 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 	r.mu.Lock()
 	if now.Sub(r.lastCheck) < checkInterval {
 		r.mu.Unlock()
-		return
+		return nil
 	}
 	r.lastCheck = now
 	r.mu.Unlock()
@@ -96,23 +118,35 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 	writeBPS := cfg.GetIOWriteBPS()
 	readIOPS := cfg.GetIOReadIOPS()
 	writeIOPS := cfg.GetIOWriteIOPS()
+	var remediationErrors []error
 
 	for _, uid := range limitedUsers {
 		state, version := r.snapshotForCheck(uid, now)
 
 		// Expiration is independent of the current PSI state.
 		if state.IsActive && now.Sub(state.StartTime) >= boostDuration {
-			if !r.revertBoost(deps, uid, &state) {
+			if err := r.revertBoost(deps, uid, &state); err != nil {
+				remediationErrors = append(remediationErrors, &ioRemediationError{
+					uid:       uid,
+					operation: ioRemediationBoostRevertFailure,
+					err:       err,
+				})
 				continue
 			}
 			if !r.publishIfCurrent(uid, version, state) {
 				continue
 			}
+			r.logger.Info("IO starvation remediation: reverted expired boost", "uid", uid)
 			version++
 		}
 
 		psiStats, err := deps.GetPSIStats(uid)
 		if err != nil {
+			remediationErrors = append(remediationErrors, &ioRemediationError{
+				uid:       uid,
+				operation: ioRemediationPSIReadFailure,
+				err:       err,
+			})
 			continue
 		}
 
@@ -136,30 +170,57 @@ func (r *IORemediation) CheckAndRemediate(deps IORemediationDeps, cfg *config.Co
 					continue
 				}
 
-				if r.applyBoost(deps, uid, &state, readBPS, writeBPS, readIOPS, writeIOPS, boostMultiplier, boostDuration, deviceFilter, now) {
-					if !r.publishIfCurrent(uid, version, state) {
-						// A concurrent reset or release won while the cgroup write was in flight.
-						if err := deps.ApplyTemporaryIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter, 1); err != nil {
-							r.logger.Warn("Failed to compensate stale IO boost after concurrent state change",
-								"uid", uid,
-								"error", err,
-							)
-						}
-					}
-				} else {
+				if err := r.applyBoost(deps, uid, &state, readBPS, writeBPS, readIOPS, writeIOPS, boostMultiplier, deviceFilter, now); err != nil {
+					remediationErrors = append(remediationErrors, &ioRemediationError{
+						uid:       uid,
+						operation: ioRemediationBoostApplyFailure,
+						err:       err,
+					})
 					r.publishIfCurrent(uid, version, state)
+					continue
 				}
+				if !r.publishIfCurrent(uid, version, state) {
+					// A concurrent reset or release won while the cgroup write was in flight.
+					if err := deps.ApplyTemporaryIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter, 1); err != nil {
+						remediationErrors = append(remediationErrors, &ioRemediationError{
+							uid:       uid,
+							operation: ioRemediationCompensationFailure,
+							err:       err,
+						})
+					}
+					continue
+				}
+				r.logger.Info("IO starvation remediation: applied temporary boost",
+					"uid", uid,
+					"multiplier", boostMultiplier,
+					"duration", boostDuration,
+					"boosts_this_hour", state.BoostCount,
+				)
 				continue
 			}
 		} else {
 			state.StarvationStart = time.Time{}
 
 			if state.IsActive && revertOnNormal {
-				r.revertBoost(deps, uid, &state)
+				if err := r.revertBoost(deps, uid, &state); err != nil {
+					remediationErrors = append(remediationErrors, &ioRemediationError{
+						uid:       uid,
+						operation: ioRemediationBoostRevertFailure,
+						err:       err,
+					})
+					r.publishIfCurrent(uid, version, state)
+					continue
+				}
+				if r.publishIfCurrent(uid, version, state) {
+					r.logger.Info("IO starvation remediation: reverted boost", "uid", uid)
+				}
+				continue
 			}
 		}
 		r.publishIfCurrent(uid, version, state)
 	}
+
+	return remediationErrors
 }
 
 func (r *IORemediation) snapshotForCheck(uid int, now time.Time) (IOBoostState, uint64) {
@@ -198,16 +259,11 @@ func (r *IORemediation) applyBoost(
 	readBPS, writeBPS string,
 	readIOPS, writeIOPS int,
 	multiplier float64,
-	duration time.Duration,
 	deviceFilter string,
 	now time.Time,
-) bool {
+) error {
 	if err := deps.ApplyTemporaryIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter, multiplier); err != nil {
-		r.logger.Warn("Failed to apply IO boost for user",
-			"uid", uid,
-			"error", err,
-		)
-		return false
+		return err
 	}
 
 	state.OriginalReadBPS = readBPS
@@ -220,17 +276,11 @@ func (r *IORemediation) applyBoost(
 	state.BoostCount++
 	state.LastBoostTime = now
 
-	r.logger.Info("IO starvation remediation: applied temporary boost",
-		"uid", uid,
-		"multiplier", multiplier,
-		"duration", duration,
-		"boosts_this_hour", state.BoostCount,
-	)
-	return true
+	return nil
 }
 
 // revertBoost restores the original I/O limits after a boost.
-func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBoostState) bool {
+func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBoostState) error {
 	if err := deps.ApplyTemporaryIOLimit(
 		uid,
 		state.OriginalReadBPS,
@@ -240,20 +290,13 @@ func (r *IORemediation) revertBoost(deps IORemediationDeps, uid int, state *IOBo
 		state.OriginalDeviceFilter,
 		1,
 	); err != nil {
-		r.logger.Warn("Failed to restore IO limits after temporary boost",
-			"uid", uid,
-			"error", err,
-		)
-		return false
+		return err
 	}
 	state.IsActive = false
 	state.StartTime = time.Time{}
 	state.StarvationStart = time.Time{}
 
-	r.logger.Info("IO starvation remediation: reverted boost",
-		"uid", uid,
-	)
-	return true
+	return nil
 }
 
 // Cleanup removes inactive remediation state and resets hourly counters.

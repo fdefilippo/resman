@@ -56,7 +56,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	// Resolve the external configuration before locking policy state.
 	targetCPUQuota, targetRAMQuota := pe.getQuotasForPattern(pattern, cfg)
 
-	// Se non c'e' pattern riconosciuto, non applicare nulla
+	// An unknown pattern does not select a policy.
 	if pattern == PatternUnknown {
 		return false
 	}
@@ -69,7 +69,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 		return false
 	}
 
-	// Applica nuova policy
+	// Store the newly selected policy before enforcement reconciliation.
 	now := time.Now()
 	if exists {
 		existing.PreviousCPUQuota = existing.CPUQuota
@@ -87,7 +87,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	}
 	pe.mu.Unlock()
 
-	pe.logger.Info("Workload pattern policy applied",
+	pe.logger.Info("Workload pattern policy selected",
 		"uid", uid,
 		"pattern", pattern,
 		"cpu_quota", targetCPUQuota,

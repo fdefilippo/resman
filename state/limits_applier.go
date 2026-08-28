@@ -798,18 +798,14 @@ func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config, eligibili
 			}
 		}
 	}
+	var cpuErr error
 	if err := m.cgroupManager.ApplyCPUQuota(uid, cpuQuota); err != nil {
-		m.logger.Warn("Failed to apply per-user CPU quota",
-			"uid", uid,
-			"username", username,
-			"quota", cpuQuota,
-			"error", err,
-		)
+		cpuErr = fmt.Errorf("apply CPU quota %q for UID %d: %w", cpuQuota, uid, err)
 	}
 
 	ramErr := m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM)
 	ioErr := m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
-	return errors.Join(ramErr, ioErr)
+	return errors.Join(cpuErr, ramErr, ioErr)
 }
 
 func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota string, eligible bool) error {
@@ -818,10 +814,6 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 	}
 	quotaBytes, err := config.ParseRAMQuota(ramQuota)
 	if err != nil || quotaBytes == 0 {
-		m.logger.Debug("RAM quota per user is 0 or invalid, skipping",
-			"uid", uid,
-			"quota", ramQuota,
-		)
 		return fmt.Errorf("invalid RAM quota %q for UID %d", ramQuota, uid)
 	}
 
@@ -830,24 +822,12 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 	highStr := strconv.FormatUint(highBytes, 10)
 	if cfg.DisableSwap {
 		if err := m.cgroupManager.ApplyRAMLimitWithHighAndSwapDisabled(uid, ramQuota, highStr); err != nil {
-			m.logger.Warn("Failed to apply RAM high+max limits with swap disabled for user",
-				"uid", uid,
-				"high", highStr,
-				"max", ramQuota,
-				"error", err,
-			)
 			return fmt.Errorf("apply RAM high and max limits with swap disabled for UID %d: %w", uid, err)
 		}
 		m.setResourceLimitState(uid, true, false, true, true)
 		return nil
 	}
 	if err := m.cgroupManager.ApplyRAMLimitWithHigh(uid, ramQuota, highStr); err != nil {
-		m.logger.Warn("Failed to apply RAM high+max limits for user",
-			"uid", uid,
-			"high", highStr,
-			"max", ramQuota,
-			"error", err,
-		)
 		return fmt.Errorf("apply RAM high and max limits for UID %d: %w", uid, err)
 	}
 	m.setResourceLimitState(uid, true, false, false, true)
@@ -866,12 +846,6 @@ func (m *Manager) applyIOResourceLimit(uid int, cfg *config.Config, eligible boo
 
 	m.setResourceLimitState(uid, false, true, false, false)
 	if err := m.cgroupManager.ApplyIOLimit(uid, readBPS, writeBPS, readIOPS, writeIOPS, deviceFilter); err != nil {
-		m.logger.Warn("Failed to apply IO limit for user",
-			"uid", uid,
-			"readBPS", readBPS,
-			"writeBPS", writeBPS,
-			"error", err,
-		)
 		return fmt.Errorf("apply IO limit for UID %d: %w", uid, err)
 	}
 	m.setResourceLimitState(uid, false, true, false, true)

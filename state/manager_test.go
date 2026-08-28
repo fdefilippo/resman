@@ -228,6 +228,67 @@ type resourceOnlyCgroupManager struct {
 	cleanupErr        error
 }
 
+type remediationStageCgroupManager struct {
+	mockCgroupManager
+	psiErrors       map[int]error
+	temporaryErrors map[int][]error
+	temporaryCalls  []int
+}
+
+func (m *remediationStageCgroupManager) GetPSIStats(uid int) (cgroup.PSIStats, error) {
+	if err := m.psiErrors[uid]; err != nil {
+		return cgroup.PSIStats{}, err
+	}
+	return cgroup.PSIStats{SomeAvg10: 100}, nil
+}
+
+func (m *remediationStageCgroupManager) ApplyTemporaryIOLimit(uid int, _ string, _ string, _ int, _ int, _ string, _ float64) error {
+	m.temporaryCalls = append(m.temporaryCalls, uid)
+	errorsForUID := m.temporaryErrors[uid]
+	if len(errorsForUID) == 0 {
+		return nil
+	}
+	err := errorsForUID[0]
+	m.temporaryErrors[uid] = errorsForUID[1:]
+	return err
+}
+
+type patternPolicyCgroupManager struct {
+	mockCgroupManager
+	cpuErrors map[int][]error
+	cpuCalls  map[int]int
+	ramErrors map[int][]error
+	ramCalls  map[int]int
+}
+
+func (m *patternPolicyCgroupManager) ApplyCPUQuota(uid int, _ string) error {
+	if m.cpuCalls == nil {
+		m.cpuCalls = make(map[int]int)
+	}
+	m.cpuCalls[uid]++
+	errorsForUID := m.cpuErrors[uid]
+	if len(errorsForUID) == 0 {
+		return nil
+	}
+	err := errorsForUID[0]
+	m.cpuErrors[uid] = errorsForUID[1:]
+	return err
+}
+
+func (m *patternPolicyCgroupManager) ApplyRAMLimitWithHigh(uid int, _ string, _ string) error {
+	if m.ramCalls == nil {
+		m.ramCalls = make(map[int]int)
+	}
+	m.ramCalls[uid]++
+	errorsForUID := m.ramErrors[uid]
+	if len(errorsForUID) == 0 {
+		return nil
+	}
+	err := errorsForUID[0]
+	m.ramErrors[uid] = errorsForUID[1:]
+	return err
+}
+
 func (m *resourceOnlyCgroupManager) CreateUserCgroup(uid int) error {
 	m.createdStandalone = append(m.createdStandalone, uid)
 	return nil
@@ -510,6 +571,18 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 		{
 			name:               "execute failure runs every protective stage",
 			failingStage:       "execute_decision",
+			wantVisited:        stageNames,
+			wantDeferredErrors: 1,
+		},
+		{
+			name:               "IO remediation failure runs the remaining protective stages",
+			failingStage:       "io_remediation",
+			wantVisited:        stageNames,
+			wantDeferredErrors: 1,
+		},
+		{
+			name:               "pattern enforcement failure runs the remaining protective stages",
+			failingStage:       "workload_pattern_detection",
 			wantVisited:        stageNames,
 			wantDeferredErrors: 1,
 		},
@@ -3049,6 +3122,295 @@ func TestIORemediationUsesOnlyActiveIOEligibleUsers(t *testing.T) {
 	}
 	if _, exists := manager.ioRemediation.boostStates[1001]; exists {
 		t.Fatal("IO-excluded user was checked for remediation")
+	}
+}
+
+func TestIORemediationFailuresDegradeCycleWithoutSkippingUsersOrTail(t *testing.T) {
+	tests := []struct {
+		name       string
+		failedUIDs []int
+	}{
+		{name: "partial failure", failedUIDs: []int{1000}},
+		{name: "all users fail", failedUIDs: []int{1000, 1001}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.IOEnabled = true
+			cfg.IORemediationEnabled = true
+			cfg.IOStarvationCheckInterval = 0
+			cfg.IOStarvationThreshold = 0
+			cfg.IOPSIThreshold = 1
+
+			cgroups := &remediationStageCgroupManager{temporaryErrors: make(map[int][]error)}
+			for _, uid := range tt.failedUIDs {
+				cgroups.temporaryErrors[uid] = []error{fmt.Errorf("injected boost failure for UID %d", uid)}
+			}
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(cfg, &mockMetricsCollector{usernames: map[int]string{
+				1000: "alice",
+				1001: "bob",
+			}}, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.activeUsers[1000] = true
+			manager.activeUsers[1001] = true
+
+			tailRan := false
+			run := &controlCycleContext{cfg: cfg}
+			stages := []controlCycleStage{
+				{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
+				{name: "protective_tail", run: func(_ *Manager, _ *controlCycleContext) error {
+					tailRan = true
+					return nil
+				}},
+			}
+			err = runControlCyclePipeline(manager, run, stages)
+			if err == nil {
+				t.Fatal("runControlCyclePipeline() error = nil, want degraded remediation failure")
+			}
+			if !tailRan {
+				t.Fatal("remediation failure skipped the protective tail")
+			}
+			if !reflect.DeepEqual(cgroups.temporaryCalls, []int{1000, 1001}) {
+				t.Fatalf("temporary IO calls = %v, want both users in deterministic order", cgroups.temporaryCalls)
+			}
+			if len(run.deferredErrors) != 1 {
+				t.Fatalf("deferred errors = %d, want one stage error", len(run.deferredErrors))
+			}
+			for _, uid := range tt.failedUIDs {
+				fragment := fmt.Sprintf("injected boost failure for UID %d", uid)
+				if strings.Count(err.Error(), fragment) != 1 {
+					t.Errorf("cycle error reports %q %d times, want once: %v", fragment, strings.Count(err.Error(), fragment), err)
+				}
+			}
+			gotMetrics := exporter.recordedErrors()
+			if len(gotMetrics) != len(tt.failedUIDs) {
+				t.Fatalf("Prometheus errors = %+v, want %d", gotMetrics, len(tt.failedUIDs))
+			}
+			for _, got := range gotMetrics {
+				if got != (prometheusErrorRecord{component: ioRemediationErrorComponent, errorType: ioRemediationBoostApplyFailure}) {
+					t.Errorf("Prometheus error = %+v, want bounded IO remediation apply failure", got)
+				}
+			}
+		})
+	}
+}
+
+func TestIORemediationFailedBoostRetriesNextCycle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IOEnabled = true
+	cfg.IORemediationEnabled = true
+	cfg.IOStarvationCheckInterval = 0
+	cfg.IOStarvationThreshold = 0
+	cfg.IOPSIThreshold = 1
+
+	cgroups := &remediationStageCgroupManager{temporaryErrors: map[int][]error{
+		1000: {errors.New("first boost rejected")},
+	}}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{usernames: map[int]string{1000: "alice"}}, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+
+	if err := manager.stageIORemediation(&controlCycleContext{cfg: cfg}); err == nil {
+		t.Fatal("first stageIORemediation() error = nil, want injected failure")
+	}
+	if err := manager.stageIORemediation(&controlCycleContext{cfg: cfg}); err != nil {
+		t.Fatalf("second stageIORemediation() error: %v", err)
+	}
+	if !reflect.DeepEqual(cgroups.temporaryCalls, []int{1000, 1000}) {
+		t.Fatalf("temporary IO calls = %v, want failed attempt and next-cycle retry", cgroups.temporaryCalls)
+	}
+	if state := manager.ioRemediation.boostStates[1000]; state == nil || !state.IsActive {
+		t.Fatalf("remediation state after retry = %+v, want active boost", state)
+	}
+	if got := exporter.recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
+		component: ioRemediationErrorComponent,
+		errorType: ioRemediationBoostApplyFailure,
+	}}) {
+		t.Fatalf("Prometheus errors = %+v, want only the failed attempt", got)
+	}
+}
+
+func TestPatternPolicyFailuresDegradeCycleWithoutSkippingUsersOrTail(t *testing.T) {
+	tests := []struct {
+		name       string
+		failedUIDs []int
+	}{
+		{name: "partial failure", failedUIDs: []int{1000}},
+		{name: "all users fail", failedUIDs: []int{1000, 1001}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.AutodetectPatterns = true
+			cfg.PatternMinSamples = 1
+			cfg.PatternConfidenceThreshold = 0.7
+			cfg.UserIncludeList = []string{".*"}
+			cfg.RAMEnabled = true
+
+			cgroups := &patternPolicyCgroupManager{ramErrors: make(map[int][]error)}
+			for _, uid := range tt.failedUIDs {
+				cgroups.ramErrors[uid] = []error{fmt.Errorf("injected RAM failure for UID %d", uid)}
+			}
+			collector := &mockMetricsCollector{
+				allUserMetrics: map[int]*metrics.UserMetrics{
+					1000: {UID: 1000, Username: "alice", EligibleForCPU: true},
+					1001: {UID: 1001, Username: "bob", EligibleForCPU: true},
+				},
+				usernames: map[int]string{1000: "alice", 1001: "bob"},
+			}
+			exporter := &mockPrometheusExporter{}
+			manager, err := NewManager(cfg, collector, cgroups, exporter)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			manager.activeUsers[1000] = true
+			manager.activeUsers[1001] = true
+			manager.patternDetector.userStats[1000] = batchNightStats()
+			manager.patternDetector.userStats[1001] = batchNightStats()
+
+			tailRan := false
+			run := &controlCycleContext{
+				cfg:     cfg,
+				metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+			}
+			stages := []controlCycleStage{
+				{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
+				{name: "protective_tail", run: func(_ *Manager, _ *controlCycleContext) error {
+					tailRan = true
+					return nil
+				}},
+			}
+			err = runControlCyclePipeline(manager, run, stages)
+			if err == nil {
+				t.Fatal("runControlCyclePipeline() error = nil, want degraded pattern enforcement failure")
+			}
+			if !tailRan {
+				t.Fatal("pattern enforcement failure skipped the protective tail")
+			}
+			if cgroups.ramCalls[1000] != 1 || cgroups.ramCalls[1001] != 1 {
+				t.Fatalf("RAM calls = %v, want every user attempted once", cgroups.ramCalls)
+			}
+			for _, uid := range tt.failedUIDs {
+				fragment := fmt.Sprintf("injected RAM failure for UID %d", uid)
+				if strings.Count(err.Error(), fragment) != 1 {
+					t.Errorf("cycle error reports %q %d times, want once: %v", fragment, strings.Count(err.Error(), fragment), err)
+				}
+				if _, pending := manager.pendingPatternReconciliations[uid]; !pending {
+					t.Errorf("failed UID %d is not pending retry", uid)
+				}
+			}
+			gotMetrics := exporter.recordedErrors()
+			if len(gotMetrics) != len(tt.failedUIDs) {
+				t.Fatalf("Prometheus errors = %+v, want %d", gotMetrics, len(tt.failedUIDs))
+			}
+			for _, got := range gotMetrics {
+				if got != (prometheusErrorRecord{component: patternPolicyErrorComponent, errorType: patternPolicyApplicationFailure}) {
+					t.Errorf("Prometheus error = %+v, want bounded pattern-policy application failure", got)
+				}
+			}
+		})
+	}
+}
+
+func TestPatternPolicyFailedEnforcementRetriesNextCycle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternMinSamples = 1
+	cfg.PatternConfidenceThreshold = 0.7
+	cfg.UserIncludeList = []string{".*"}
+	cfg.RAMEnabled = true
+
+	cgroups := &patternPolicyCgroupManager{ramErrors: map[int][]error{
+		1000: {errors.New("first RAM application rejected")},
+	}}
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "alice", EligibleForCPU: true},
+		},
+		usernames: map[int]string{1000: "alice"},
+	}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, collector, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.patternDetector.userStats[1000] = batchNightStats()
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
+
+	if err := manager.stageWorkloadPatternDetection(run); err == nil {
+		t.Fatal("first stageWorkloadPatternDetection() error = nil, want injected failure")
+	}
+	if err := manager.stageWorkloadPatternDetection(run); err != nil {
+		t.Fatalf("second stageWorkloadPatternDetection() error: %v", err)
+	}
+	if cgroups.ramCalls[1000] != 2 {
+		t.Fatalf("RAM calls for UID 1000 = %d, want failed attempt and next-cycle retry", cgroups.ramCalls[1000])
+	}
+	if _, pending := manager.pendingPatternReconciliations[1000]; pending {
+		t.Fatal("successful retry left UID 1000 pending")
+	}
+	if state := manager.resourceLimits[1000]; !state.ramApplied {
+		t.Fatalf("resource state after retry = %+v, want RAM applied", state)
+	}
+	if got := exporter.recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
+		component: patternPolicyErrorComponent,
+		errorType: patternPolicyApplicationFailure,
+	}}) {
+		t.Fatalf("Prometheus errors = %+v, want only the failed attempt", got)
+	}
+}
+
+func TestPatternPolicyCPUQuotaFailureIsPartOfTheCycleOutcome(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutodetectPatterns = true
+	cfg.PatternMinSamples = 1
+	cfg.PatternConfidenceThreshold = 0.7
+	cfg.UserIncludeList = []string{".*"}
+	cpuErr := errors.New("CPU quota rejected")
+	cgroups := &patternPolicyCgroupManager{cpuErrors: map[int][]error{1000: {cpuErr}}}
+	collector := &mockMetricsCollector{
+		allUserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "alice", EligibleForCPU: true},
+		},
+		usernames: map[int]string{1000: "alice"},
+	}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, collector, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.activeUsers[1000] = true
+	manager.patternDetector.userStats[1000] = batchNightStats()
+	run := &controlCycleContext{
+		cfg:     cfg,
+		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
+	}
+
+	err = manager.stageWorkloadPatternDetection(run)
+	if !errors.Is(err, cpuErr) || !strings.Contains(err.Error(), "CPU quota") || !strings.Contains(err.Error(), "UID 1000") {
+		t.Fatalf("stageWorkloadPatternDetection() error = %v, want UID and CPU quota context", err)
+	}
+	var patternErr *patternPolicyError
+	if !errors.As(err, &patternErr) || patternErr.uid != 1000 {
+		t.Fatalf("stageWorkloadPatternDetection() error = %v, want typed UID 1000 pattern failure", err)
+	}
+	if got := exporter.recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
+		component: patternPolicyErrorComponent,
+		errorType: patternPolicyApplicationFailure,
+	}}) {
+		t.Fatalf("Prometheus errors = %+v, want one bounded pattern-policy failure", got)
 	}
 }
 

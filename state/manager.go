@@ -66,17 +66,18 @@ type Manager struct {
 	lastPatternAnalysis time.Time
 
 	// Injected dependencies.
-	metricsCollector   MetricsCollector
-	cgroupManager      CgroupManager
-	prometheusExporter PrometheusExporter
-	ioRemediation      *IORemediation
-	patternDetector    *PatternDetector
-	policyEngine       *PolicyEngine
-	hookCtx            context.Context
-	hookCancel         context.CancelFunc
-	hookClosed         bool
-	executeHookScript  func(context.Context, string, limitHookEvent) error
-	executeHookRequest func(context.Context, string, limitHookEvent) error
+	metricsCollector              MetricsCollector
+	cgroupManager                 CgroupManager
+	prometheusExporter            PrometheusExporter
+	ioRemediation                 *IORemediation
+	patternDetector               *PatternDetector
+	policyEngine                  *PolicyEngine
+	pendingPatternReconciliations map[int]struct{}
+	hookCtx                       context.Context
+	hookCancel                    context.CancelFunc
+	hookClosed                    bool
+	executeHookScript             func(context.Context, string, limitHookEvent) error
+	executeHookRequest            func(context.Context, string, limitHookEvent) error
 
 	// Cached metrics state.
 	metricsCache     map[string]interface{}
@@ -221,32 +222,33 @@ func NewManager(
 	hookCtx, hookCancel := context.WithCancel(context.Background())
 
 	mgr := &Manager{
-		cfg:                       cfg,
-		logger:                    logger,
-		limitsActive:              false,
-		limitsAppliedTime:         time.Time{},
-		resourceLimitsActive:      false,
-		resourceLimitsAppliedTime: time.Time{},
-		requestedCPUUsers:         make(map[int]bool),
-		activeUsers:               make(map[int]bool),
-		userLimitedAt:             make(map[int]time.Time),
-		resourceLimits:            make(map[int]userResourceLimitState),
-		sharedCgroupPath:          "",
-		thresholdTracker:          &ThresholdTracker{},
-		stabilityTracker:          newUserStabilityTracker(),
-		ioThresholdTracker:        &ThresholdTracker{},
-		metricsCollector:          metrics,
-		cgroupManager:             cgroups,
-		prometheusExporter:        prometheus,
-		ioRemediation:             NewIORemediation(logger),
-		patternDetector:           NewPatternDetector(logger),
-		policyEngine:              NewPolicyEngine(logger),
-		hookCtx:                   hookCtx,
-		hookCancel:                hookCancel,
-		executeHookScript:         runLimitHookScript,
-		executeHookRequest:        postLimitHook,
-		metricsCache:              make(map[string]interface{}),
-		metricsCacheTime:          make(map[string]time.Time),
+		cfg:                           cfg,
+		logger:                        logger,
+		limitsActive:                  false,
+		limitsAppliedTime:             time.Time{},
+		resourceLimitsActive:          false,
+		resourceLimitsAppliedTime:     time.Time{},
+		requestedCPUUsers:             make(map[int]bool),
+		activeUsers:                   make(map[int]bool),
+		userLimitedAt:                 make(map[int]time.Time),
+		resourceLimits:                make(map[int]userResourceLimitState),
+		sharedCgroupPath:              "",
+		thresholdTracker:              &ThresholdTracker{},
+		stabilityTracker:              newUserStabilityTracker(),
+		ioThresholdTracker:            &ThresholdTracker{},
+		metricsCollector:              metrics,
+		cgroupManager:                 cgroups,
+		prometheusExporter:            prometheus,
+		ioRemediation:                 NewIORemediation(logger),
+		patternDetector:               NewPatternDetector(logger),
+		policyEngine:                  NewPolicyEngine(logger),
+		pendingPatternReconciliations: make(map[int]struct{}),
+		hookCtx:                       hookCtx,
+		hookCancel:                    hookCancel,
+		executeHookScript:             runLimitHookScript,
+		executeHookRequest:            postLimitHook,
+		metricsCache:                  make(map[string]interface{}),
+		metricsCacheTime:              make(map[string]time.Time),
 		controlHist: &controlHistory{
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
