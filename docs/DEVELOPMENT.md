@@ -489,7 +489,12 @@ authoritative constants, package payloads assert exact paths and modes, and a
 repository-wide check permits legacy paths only at explicit startup-rejection and
 operator-recovery boundaries.
 
-*Findings: resman-4pw.13, resman-4pw.48*
+`resman-4pw.63` applies it to the public configuration contract. The complete key
+inventory is generated from `Config`, `DefaultConfig`, and the lifecycle table;
+the copyable example and focused operator documentation are mechanically checked
+against it. Remote wildcard binds remain explicit, non-default security decisions.
+
+*Findings: resman-4pw.13, resman-4pw.48, resman-4pw.63*
 
 ## Rule 14 — Files written by resman are as restrictive as what they contain
 

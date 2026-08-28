@@ -286,7 +286,8 @@ curl -s http://localhost:1974/metrics | grep resman
 - Grafana dashboard: `docs/dashboard-grafana-operations.json`
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
-- Full configuration reference: `config/resman.conf.example`
+- Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+- Copyable configuration: `config/resman.conf.example`
 
 ## License
 

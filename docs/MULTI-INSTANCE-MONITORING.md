@@ -126,6 +126,7 @@ Enable Prometheus on each ResMan instance:
 ```bash
 # /etc/resman/resman.conf
 ENABLE_PROMETHEUS=true
+# NON-DEFAULT REMOTE BIND: requires TLS, authentication, and firewall restrictions.
 PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"    # Listen on all interfaces
 PROMETHEUS_METRICS_BIND_PORT=1974
 ```
@@ -289,6 +290,7 @@ Enable authentication in the configuration file:
 
 # Enable Prometheus metrics
 ENABLE_PROMETHEUS=true
+# NON-DEFAULT REMOTE BIND: requires TLS, authentication, and firewall restrictions.
 PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"
 PROMETHEUS_METRICS_BIND_PORT=1974
 

@@ -177,7 +177,7 @@ resman_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
 3. **Riduci SYSTEM_UID_MAX**
    ```bash
    # /etc/resman/resman.conf
-   SYSTEM_UID_MAX=10000  # Invece di 60000
+   SYSTEM_UID_MAX=10000  # Override del valore derivato da /proc/sys/kernel/pid_max
    # Monitora solo UID fino a 10000
    ```
 

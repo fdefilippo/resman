@@ -23,7 +23,7 @@ The implementation extends the existing monitoring system with continuous activi
 
 ### Primary Requirements
 
-1. **Monitor and record** CPU and RAM usage for users defined in `USER_INCLUDE_LIST`
+1. **Monitor and record** CPU and RAM usage for observed users in the configured UID range; `USER_INCLUDE_LIST` controls CPU-limit eligibility only
 2. **Track even if below limits** (continuous monitoring, not just when thresholds exceeded)
 3. **Store in SQLite database** for historical queries
 4. **Remove from monitoring** if process inactive for configurable timeout

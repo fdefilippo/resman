@@ -144,6 +144,7 @@ install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_m
 install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 
 # Installa documentazione TLS
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -249,6 +250,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
+%doc %{_docdir}/%{name}/CONFIGURATION.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/

@@ -639,96 +639,23 @@ KEY='single quoted'
 An inline `#` starts a comment only outside quotes and when preceded by
 whitespace; quoted hashes and URL fragments are preserved.
 
-### 4.2 All Configuration Options
+### 4.2 Authoritative Configuration Reference
 
-```bash
-# ========================
-# PATHS
-# ========================
-CGROUP_ROOT="/sys/fs/cgroup"
-CGROUP_BASE="resman"
-LOG_FILE="/var/log/resman.log"
-CREATED_CGROUPS_FILE="/run/resman-cgroups.txt"
+The complete public-key inventory is generated from the runtime `Config` type,
+`DefaultConfig`, and the authoritative lifecycle table. See
+[`CONFIGURATION.md`](CONFIGURATION.md) for every key, runtime default, hot-reload
+lifecycle, and empty or disabled meaning. Use
+[`config/resman.conf.example`](../config/resman.conf.example) as the copyable
+configuration; `make verify-contracts` rejects drift between these sources.
 
-# ========================
-# TIMING (seconds)
-# ========================
-POLLING_INTERVAL=30          # Control cycle interval
-MIN_ACTIVE_TIME=60           # Latest enforcement epoch and per-user hold time
-METRICS_CACHE_TTL=15         # Value reuse, minimum 1s; exact boundary remains valid
+The core default contracts are:
 
-# ========================
-# CPU THRESHOLDS (percentage)
-# ========================
-CPU_THRESHOLD=75             # Activation threshold
-CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
-
-# ========================
-# CPU LIMITS (cpu.max format)
-# ========================
-CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
-
-# ========================
-# PROMETHEUS
-# ========================
-ENABLE_PROMETHEUS=false
-PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"
-PROMETHEUS_METRICS_BIND_PORT=1974
-
-# ========================
-# USER EXCLUSION
-# ========================
-USER_EXCLUDE_LIST=           # Empty = no users excluded
-# USER_EXCLUDE_LIST=francesco,www-data  # Exclude specific users
-
-# ========================
-# SYSTEM
-# ========================
-MIN_SYSTEM_CORES=1
-SYSTEM_UID_MIN=1000
-SYSTEM_UID_MAX=60000         # Auto-detected from /proc/sys/kernel/pid_max
-
-# ========================
-# USER FILTERS (v1.9.0+)
-# ========================
-# USER_INCLUDE_LIST: Regex patterns for users to INCLUDE in monitoring
-# Empty = all users included
-# Example: USER_INCLUDE_LIST=^www.*,^app-.*,mysql
-USER_INCLUDE_LIST=
-
-# USER_EXCLUDE_LIST: Regex patterns for users to EXCLUDE from limits
-# Empty = no users excluded
-# Example: USER_EXCLUDE_LIST=^test-.*,^dev-.*,francesco
-USER_EXCLUDE_LIST=
-
-# ========================
-# LOGGING
-# ========================
-LOG_LEVEL="INFO"             # DEBUG, INFO, WARN, ERROR
-LOG_MAX_SIZE=10485760        # Positive byte count; 10MB
-USE_SYSLOG=false
-
-# ========================
-# MCP SERVER
-# ========================
-MCP_ENABLED=false
-MCP_TRANSPORT="stdio"        # stdio or http
-MCP_HTTP_HOST="127.0.0.1"
-MCP_HTTP_PORT=1969
-MCP_TLS_ENABLED=true         # Mandatory for HTTP transport
-MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
-MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
-# MCP_TLS_CA_FILE=/etc/resman/tls/ca.crt # Enables mandatory client certificates
-MCP_TLS_MIN_VERSION=1.3
-MCP_LOG_LEVEL="INFO"
-MCP_AUTH_TOKEN="replace-with-long-random-token" # Required for HTTP
-MCP_ALLOW_WRITE_OPS=false
-
-# ========================
-# SERVER ROLE
-# ========================
-SERVER_ROLE=                 # For identification in reports
-```
+- Prometheus binds to `127.0.0.1`. Binding to `0.0.0.0` is a non-default remote
+  exposure and requires TLS, authentication, and firewall restrictions.
+- `SYSTEM_UID_MAX` follows `/proc/sys/kernel/pid_max` at startup, with `60000`
+  only as the read-failure fallback. The example deliberately leaves it unset.
+- An empty `USER_INCLUDE_LIST` makes nobody eligible for CPU limiting. Empty
+  RAM and I/O include lists select every non-excluded user for those resources.
 
 MCP over HTTP is HTTPS-only. TLS is enabled by default and cannot be disabled
 while the HTTP transport is active. MCP and Prometheus use one shared TLS builder;

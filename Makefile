@@ -182,7 +182,8 @@ test-functional-smolvm-unit:
 # Verify mechanically checkable development-guide contracts.
 verify-contracts:
 	@echo "Verifying architectural contracts..."
-	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath)$$'
+	$(GO) run ./scripts/generate-config-reference --check
+	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath|TestPublicConfigReferenceMatchesRuntimeContract|TestExampleConfigMatchesRuntimeDefaults|TestEmptyIncludeListMeaningsMatchEligibility|TestSecondaryConfigurationReferencesStayFocusedAndSecure)$$'
 	$(GO) run ./scripts/verify-contracts
 
 # Linting del codice.

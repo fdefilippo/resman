@@ -69,60 +69,21 @@ grafana-cli --pluginUrl https://github.com/fdefilippo/resman/raw/main/docs/dashb
 
 ---
 
-## User Filter Configuration Impact
+## User Policy Configuration Impact
 
-### USER_INCLUDE_LIST
+`USER_INCLUDE_LIST` and `USER_EXCLUDE_LIST` control CPU-limit eligibility only.
+They do not filter observation or remove users from Prometheus metrics. Empty CPU
+include lists make nobody eligible for CPU limiting; use `USER_INCLUDE_LIST=.*`
+to make every non-excluded user eligible.
 
-When `USER_INCLUDE_LIST` is configured, **only users matching the regex patterns** will appear in the dashboard metrics.
+RAM and I/O use their own include and exclude lists. Empty RAM or I/O include
+lists select every non-excluded user for that resource. See
+[`CONFIGURATION.md`](CONFIGURATION.md) for the generated lifecycle and
+empty-value contract.
 
-**Example:**
-```bash
-USER_INCLUDE_LIST=^www.*,^app-.*
-```
-
-**Result:**
-- ✅ `www-data`, `www-run`, `app-prod`, `app-dev` will appear in metrics
-- ❌ `francesco`, `mysql`, `nobody` will NOT appear in metrics
-
-**Dashboard Impact:**
-- User dropdown will only show matching users
-- Per-user panels will only display data for matching users
-- Active users count will only count matching users
-
-### USER_EXCLUDE_LIST
-
-When `USER_EXCLUDE_LIST` is configured, **users matching the regex patterns** will be excluded from dashboard metrics.
-
-**Example:**
-```bash
-USER_EXCLUDE_LIST=^test-.*,^dev-.*,francesco
-```
-
-**Result:**
-- ❌ `test-user`, `dev-web`, `francesco` will NOT appear in metrics
-- ✅ `www-data`, `mysql`, `app-prod` will appear in metrics
-
-**Dashboard Impact:**
-- Excluded users will not appear in any panels
-- Metrics are calculated excluding filtered users
-- User dropdown will not show excluded users
-
-### Combined Configuration
-
-When both lists are configured:
-1. **USER_INCLUDE_LIST** filters users to include (whitelist)
-2. **USER_EXCLUDE_LIST** removes users from the included set (blacklist)
-
-**Example:**
-```bash
-USER_INCLUDE_LIST=^www-.*
-USER_EXCLUDE_LIST=^www-test-.*
-```
-
-**Result:**
-- ✅ `www-prod`, `www-data` (included, not excluded)
-- ❌ `www-test-dev` (excluded by exclude list)
-- ❌ `francesco` (not in include list)
+The dashboard continues to show observed users in the configured UID range.
+Policy changes affect eligibility and actively-limited status panels, not whether
+an active user is observable.
 
 ---
 
@@ -215,14 +176,13 @@ groups:
 **Problem:** A user is not showing up in the dashboard metrics.
 
 **Possible Causes:**
-1. User is filtered by `USER_INCLUDE_LIST`
-2. User is filtered by `USER_EXCLUDE_LIST`
-3. User has no active processes
-4. User UID is below `SYSTEM_UID_MIN` (default: 1000)
+1. User has no active processes
+2. User UID is below `SYSTEM_UID_MIN` or above the runtime `SYSTEM_UID_MAX`
+3. Prometheus has not scraped the current decision sample yet
 
 **Solution:**
 ```bash
-# Check current filter configuration
+# Check the observed user and UID range
 grep -E "USER_(INCLUDE|EXCLUDE)_LIST" /etc/resman/resman.conf
 
 # Check if user has processes
