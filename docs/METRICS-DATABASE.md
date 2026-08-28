@@ -91,17 +91,11 @@ values are stored in UTC and API responses use RFC 3339.
 
 ## MCP access
 
-The database-backed tools are registered even when persistence is disabled so the
-public tool inventory is stable. Invocation fails explicitly until
-`METRICS_DB_ENABLED=true` and a database manager is available.
-
-- `get_user_history` returns observations for a UID or username over a requested range.
-- `get_system_history` returns host observations over a requested range.
-- `get_user_summary` returns aggregate statistics for one user.
-- `get_metrics_database_info` reports the path, size, retained counts, range, and users.
-
-The authoritative inventory, registration conditions, and invocation requirements are
-in the **MCP tools** section of [`resman.8`](resman.8).
+Database-backed tools remain registered when persistence is disabled so production
+discovery exposes a stable inventory. Invocation fails explicitly until the required
+database capability is available. The authoritative tool names, registration
+conditions, and invocation requirements are maintained in the **MCP tools** section of
+[`resman.8`](resman.8); this guide deliberately does not duplicate that inventory.
 
 Supported time selectors include RFC 3339 timestamps, date-only values, relative
 expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday`,
