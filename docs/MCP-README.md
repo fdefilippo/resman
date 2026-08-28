@@ -45,7 +45,7 @@ requirement" controls whether a registered tool can complete successfully.
 | `get_active_users` | List active non-system users | Always | None |
 | `get_limits_status` | Get current resource-limit status | Always | None |
 | `get_cgroup_info` | Get cgroup details for a user | Always | None |
-| `get_configuration` | Get current ResMan configuration | Always | None |
+| `get_configuration` | Get current CPU, RAM, and I/O resource-policy configuration | Always | None |
 | `get_cpu_report` | Generate a CPU usage report | Always | None |
 | `get_mem_report` | Generate a memory usage report | Always | None |
 | `get_control_history` | Get recent control-cycle history | Always | None |
@@ -68,7 +68,9 @@ different discovery schema. The two user-filter setters are also always visible,
 reject invocation while write operations are disabled. Only manual activation and
 deactivation are omitted from discovery unless write operations are enabled.
 
-**All metric outputs include the `hostname` field** for multi-server environments.
+System-wide payloads and the shared active-user/configuration schemas include
+`hostname` for multi-server identification. Per-user entries are identified by `uid`
+and `username` inside those host-scoped responses.
 
 ### Resources (6 URIs)
 
@@ -78,6 +80,22 @@ deactivation are omitted from discovery unless write operations are enabled.
 - `resman://config` - Current configuration
 - `resman://users/{uid}/metrics` - Per-user metrics
 - `resman://cgroups/{uid}` - Cgroup information
+
+#### Shared tool and resource schemas
+
+MCP result payloads are typed contracts. `get_active_users` and
+`resman://users/active` share one object schema containing `hostname`, `server_role`,
+and a `users` array whose entries contain both `uid` and `username`.
+`get_configuration` and `resman://config` share one resource-policy schema covering
+CPU, RAM, and I/O thresholds and limits plus the host identity. The configuration
+payload is deliberately scoped to policy and exporter settings; it is not a dump of
+secrets or every daemon setting.
+
+`get_user_metrics` and `resman://users/{uid}/metrics` also share the same per-user
+projection, including explicit eligibility, requested-limit, and active-limit fields.
+Historical user and system records remain distinct typed schemas because their fields
+have different meanings. Input JSON Schema maps used by MCP discovery are protocol
+metadata, not result payloads.
 
 #### Cgroup interface availability
 

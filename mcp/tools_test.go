@@ -688,17 +688,6 @@ func TestUserMetricJSONUsesExplicitLimitSemantics(t *testing.T) {
 		t.Fatalf("tool metric re-derived state from collector sample: %+v", metric)
 	}
 
-	resource := newUserMetricsResourcePayload(1000, &resmanmetrics.UserMetrics{
-		Username:       "alice",
-		EligibleForCPU: false,
-		CPULimitActive: true,
-	}, limitState)
-	if resource["eligible_for_cpu"] != true || resource["cpu_limit_active"] != false {
-		t.Fatalf("resource payload re-derived state from collector sample: %+v", resource)
-	}
-	if _, exists := resource["is_limited"]; exists {
-		t.Fatalf("resource payload contains removed is_limited field: %+v", resource)
-	}
 }
 
 func TestActivationResultReflectsRuntimeState(t *testing.T) {
@@ -814,11 +803,15 @@ func TestGetUserHistoryReturnsPersistedExplicitLimitState(t *testing.T) {
 		t.Fatalf("history records = %d, want 1", len(result.Records))
 	}
 	record := result.Records[0]
-	if _, exists := record["is_limited"]; exists {
-		t.Fatalf("history record contains removed is_limited field: %+v", record)
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("json.Marshal(history record) error = %v", err)
 	}
-	if record["cpu_limit_requested"] != true || record["cpu_limit_active"] != false ||
-		record["ram_limit_requested"] != true || record["ram_limit_active"] != true {
+	if strings.Contains(string(encoded), `"is_limited"`) {
+		t.Fatalf("history record contains removed is_limited field: %s", encoded)
+	}
+	if !record.CPULimitRequested || record.CPULimitActive ||
+		!record.RAMLimitRequested || !record.RAMLimitActive {
 		t.Fatalf("history record lost requested/active distinctions: %+v", record)
 	}
 }

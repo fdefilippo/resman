@@ -490,6 +490,13 @@ must not reinterpret an empty value as an unlimited limit. The operator action f
 reason is documented in
 [MCP-README](MCP-README.md#cgroup-interface-availability).
 
+All production MCP result and resource payloads use typed wire DTOs. Tool/resource pairs
+for active users, resource-policy configuration, user metrics, system status, limits
+status, and cgroup information share one projection per semantic contract. User-history
+and system-history records intentionally remain distinct typed contracts. Dynamic maps
+are limited to MCP input-schema metadata and decoded client arguments; they are never
+serialized as production result payloads.
+
 **Prompts (3 pre-built):**
 - `system-health` - Quick health check with assessment
 - `user-analysis` - User resource analysis table

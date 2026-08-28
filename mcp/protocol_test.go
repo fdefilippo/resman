@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -447,6 +448,94 @@ func TestMCPStatusContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
 		if !strings.Contains(promptText, term) {
 			t.Errorf("system-health prompt is missing %q: %s", term, promptText)
 		}
+	}
+}
+
+func TestMCPSharedWireContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
+	server := newStatusProtocolTestServer(t)
+
+	tests := []struct {
+		name         string
+		tool         string
+		resource     string
+		expectedKeys []string
+	}{
+		{
+			name:         "active users",
+			tool:         "get_active_users",
+			resource:     "resman://users/active",
+			expectedKeys: []string{"hostname", "server_role", "users"},
+		},
+		{
+			name:     "resource policy configuration",
+			tool:     "get_configuration",
+			resource: "resman://config",
+			expectedKeys: []string{
+				"cpu_quota_normal", "cpu_release_threshold", "cpu_threshold", "cpu_threshold_duration",
+				"disable_swap", "enable_prometheus", "hostname", "ignore_system_load", "io_device_filter",
+				"io_enabled", "io_read_bps", "io_read_iops", "io_release_threshold", "io_threshold",
+				"io_threshold_duration", "io_write_bps", "io_write_iops", "min_system_cores", "polling_interval",
+				"prometheus_port", "ram_enabled", "ram_high_ratio", "ram_quota_per_user", "ram_release_threshold",
+				"ram_threshold", "server_role", "system_uid_max", "system_uid_min",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpTool := callStatusOverHTTP(t, server, "tools/call", tt.tool, map[string]any{
+				"name": tt.tool, "arguments": map[string]any{},
+			})
+			stdioTool := callStatusOverStdio(t, server, "tools/call", map[string]any{
+				"name": tt.tool, "arguments": map[string]any{},
+			})
+			httpResource := callStatusOverHTTP(t, server, "resources/read", tt.resource, map[string]any{"uri": tt.resource})
+			stdioResource := callStatusOverStdio(t, server, "resources/read", map[string]any{"uri": tt.resource})
+
+			slices.Sort(tt.expectedKeys)
+			for surface, payload := range map[string]map[string]any{
+				"HTTP tool": httpTool, "stdio tool": stdioTool,
+				"HTTP resource": httpResource, "stdio resource": stdioResource,
+			} {
+				if got := sortedMapKeys(payload); !slices.Equal(got, tt.expectedKeys) {
+					t.Errorf("%s keys = %v, want %v", surface, got, tt.expectedKeys)
+				}
+			}
+			if !reflect.DeepEqual(httpTool, stdioTool) || !reflect.DeepEqual(httpTool, httpResource) || !reflect.DeepEqual(httpTool, stdioResource) {
+				t.Fatalf("shared contract differs: HTTP tool=%+v stdio tool=%+v HTTP resource=%+v stdio resource=%+v",
+					httpTool, stdioTool, httpResource, stdioResource)
+			}
+		})
+	}
+}
+
+func TestMCPToolOnlyWireContractsAgreeAcrossTransports(t *testing.T) {
+	server := newStatusProtocolTestServer(t)
+	tests := []struct {
+		tool string
+		keys []string
+	}{
+		{tool: "get_cpu_report", keys: []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"}},
+		{tool: "get_mem_report", keys: []string{"avg_memory_mb", "hostname", "observed_users_count", "peak_memory_mb", "ram_actively_limited_users_count", "report", "resource_limits_active", "server_role", "total_memory_mb"}},
+		{tool: "get_user_filters", keys: []string{"config_file", "user_exclude_list", "user_include_list"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			httpResult := callStatusOverHTTP(t, server, "tools/call", tt.tool, map[string]any{
+				"name": tt.tool, "arguments": map[string]any{},
+			})
+			stdioResult := callStatusOverStdio(t, server, "tools/call", map[string]any{
+				"name": tt.tool, "arguments": map[string]any{},
+			})
+			slices.Sort(tt.keys)
+			if got := sortedMapKeys(httpResult); !slices.Equal(got, tt.keys) {
+				t.Errorf("HTTP keys = %v, want %v", got, tt.keys)
+			}
+			if got := sortedMapKeys(stdioResult); !slices.Equal(got, tt.keys) {
+				t.Errorf("stdio keys = %v, want %v", got, tt.keys)
+			}
+		})
 	}
 }
 

@@ -1,4 +1,1 @@
 # literal key | sorted package names | classification | reason
-username | cgroup,mcp | allowed | The cgroup process-inspection map and MCP JSON payloads are independent contracts that happen to expose the same human identity label.
-hostname | mcp,metrics | allowed | MCP JSON payload fields and Prometheus static labels are independent external schemas, not a map exchanged between packages.
-server_role | mcp,metrics | allowed | MCP JSON payload fields and Prometheus static labels are independent external schemas, not a map exchanged between packages.

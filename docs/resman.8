@@ -1102,9 +1102,10 @@ Available MCP tools (this list is verified against the production discovery resp
 - Database status and information (requires METRICS_DB_ENABLED=true)
 .\" END MCP TOOL INVENTORY
 .PP
-All metric outputs include a
+System-wide payloads and the shared active-user and configuration schemas include a
 .B hostname
-field for multi-server environment identification.
+field for multi-server environment identification. Per-user entries are identified by
+uid and username inside those host-scoped responses.
 .PP
 MCP resources (URI-based access):
 .IP \(bu 2
@@ -1119,6 +1120,20 @@ resman://config
 resman://users/{uid}/metrics
 .IP \(bu
 resman://cgroups/{uid}
+.PP
+The
+.B get_active_users
+tool and
+.B resman://users/active
+resource share one object schema with hostname, server_role, and user entries containing
+both uid and username. The
+.B get_configuration
+tool and
+.B resman://config
+resource share one resource-policy schema covering CPU, RAM, and I/O settings plus host
+identity. The payload deliberately excludes credentials and settings outside that scope.
+The per-user metrics tool and resource likewise share one typed projection. Historical
+user and system records use distinct schemas because their fields have different meanings.
 .PP
 The
 .B get_cgroup_info

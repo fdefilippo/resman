@@ -248,15 +248,18 @@ constants referenced by both sides.
 - A key that does not exist is **removed from the consumer**, never aliased into
   existence (Rule 1).
 - Producer and consumer **MUST** share a test that round-trips the contract, covering
-  both maps.
+  every sibling tool/resource surface and transport that carries it.
 
 **Why.** MCP formerly read `total_user_cpu_usage`, a key that had no producer, and
 reported a hardcoded zero on every status surface. Neighbouring
 `active_users_count` lookups mixed an observation snapshot with runtime status. The
 fix replaced both string-keyed maps at this boundary with distinct typed contracts;
 observed, CPU-eligible, and actively-limited user counts now have separate names.
+The same rule applies at the MCP wire boundary: result and resource payloads use typed
+DTOs, sibling surfaces share one projection when their semantics agree, and the dynamic
+maps required for MCP input-schema metadata never become output payloads.
 
-*Finding: resman-4pw.6*
+*Findings: resman-4pw.6, resman-4pw.65*
 
 ## Rule 7 — A counter counts what its name says, after it happened
 

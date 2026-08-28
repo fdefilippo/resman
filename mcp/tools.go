@@ -165,13 +165,6 @@ type GetHistoryArgs struct {
 	Limit     int    `json:"limit,omitempty"`
 }
 
-type GetHistoryResult struct {
-	Records   []map[string]any `json:"records"`
-	Count     int              `json:"count"`
-	StartTime string           `json:"start_time"`
-	EndTime   string           `json:"end_time"`
-}
-
 type GetUserSummaryResult struct {
 	UID                       int     `json:"uid"`
 	Username                  string  `json:"username"`
@@ -221,11 +214,6 @@ type GetControlHistoryResult struct {
 
 type ActivateLimitsArgs struct {
 	Force bool `json:"force"`
-}
-
-type ActivateLimitsResult struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
 }
 
 type systemStatusPayload struct {
@@ -352,26 +340,13 @@ func (s *Server) registerTools() {
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		activeUsers := s.metricsCollector.GetAllUsers()
 		allMetrics := s.metricsCollector.GetAllUserMetrics()
-		hostname := getHostname()
-		serverRole := s.stateManager.GetConfig().ServerRole
-
-		users := make([]map[string]any, 0, len(activeUsers))
-		for _, uid := range activeUsers {
-			username := fmt.Sprintf("%d", uid)
-			if metrics, ok := allMetrics[uid]; ok && metrics.Username != "" {
-				username = metrics.Username
-			}
-			users = append(users, map[string]any{
-				"uid":      uid,
-				"username": username,
-			})
-		}
+		result := newActiveUsersPayload(getHostname(), s.stateManager.GetConfig().ServerRole, activeUsers, allMetrics)
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: toJSON(map[string]any{"hostname": hostname, "server_role": serverRole, "users": users})},
+				&mcp.TextContent{Text: toJSON(result)},
 			},
-			StructuredContent: map[string]any{"hostname": hostname, "server_role": serverRole, "users": users},
+			StructuredContent: result,
 		}, nil
 	})
 
@@ -406,29 +381,14 @@ func (s *Server) registerTools() {
 	// get_configuration - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_configuration",
-		Description: "Get current ResMan configuration",
+		Description: "Get current CPU, RAM, and I/O resource-policy configuration",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		cfg := s.stateManager.GetConfig()
-		hostname := getHostname()
-
-		result := map[string]any{
-			"hostname":              hostname,
-			"server_role":           cfg.ServerRole,
-			"cpu_threshold":         cfg.CPUThreshold,
-			"cpu_release_threshold": cfg.CPUReleaseThreshold,
-			"polling_interval":      cfg.PollingInterval,
-			"min_system_cores":      cfg.MinSystemCores,
-			"cpu_quota_normal":      cfg.CPUQuotaNormal,
-			"enable_prometheus":     cfg.EnablePrometheus,
-			"prometheus_port":       cfg.PrometheusMetricsBindPort,
-			"ignore_system_load":    cfg.IgnoreSystemLoad,
-			"system_uid_min":        cfg.SystemUIDMin,
-			"system_uid_max":        cfg.SystemUIDMax,
-		}
+		result := newResourcePolicyConfigurationPayload(getHostname(), cfg)
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -527,16 +487,16 @@ CPU-limited users: %d of %d
 			len(allUserMetrics),
 		)
 
-		result := map[string]any{
-			"hostname":                         hostname,
-			"server_role":                      serverRole,
-			"report":                           report,
-			"total_cpu":                        metrics.TotalCPUUsage,
-			"avg_cpu":                          avgCPU,
-			"peak_cpu":                         peakCPU,
-			"observed_users_count":             len(allUserMetrics),
-			"cpu_actively_limited_users_count": limitedCount,
-			"cpu_limits_active":                limitsActive,
+		result := cpuReportPayload{
+			Hostname:                     hostname,
+			ServerRole:                   serverRole,
+			Report:                       report,
+			TotalCPU:                     metrics.TotalCPUUsage,
+			AverageCPU:                   avgCPU,
+			PeakCPU:                      peakCPU,
+			ObservedUsersCount:           len(allUserMetrics),
+			CPUActivelyLimitedUsersCount: limitedCount,
+			CPULimitsActive:              limitsActive,
 		}
 
 		return &mcp.CallToolResult{
@@ -643,16 +603,16 @@ RAM-limited users: %d of %d
 			len(allUserMetrics),
 		)
 
-		result := map[string]any{
-			"hostname":                         hostname,
-			"server_role":                      serverRole,
-			"report":                           report,
-			"total_memory_mb":                  totalMemMB,
-			"avg_memory_mb":                    float64(avgMem) / 1024 / 1024,
-			"peak_memory_mb":                   float64(peakMem) / 1024 / 1024,
-			"observed_users_count":             len(allUserMetrics),
-			"ram_actively_limited_users_count": limitedCount,
-			"resource_limits_active":           limitsActive,
+		result := memoryReportPayload{
+			Hostname:                     hostname,
+			ServerRole:                   serverRole,
+			Report:                       report,
+			TotalMemoryMB:                totalMemMB,
+			AverageMemoryMB:              float64(avgMem) / 1024 / 1024,
+			PeakMemoryMB:                 float64(peakMem) / 1024 / 1024,
+			ObservedUsersCount:           len(allUserMetrics),
+			RAMActivelyLimitedUsersCount: limitedCount,
+			ResourceLimitsActive:         limitsActive,
 		}
 
 		return &mcp.CallToolResult{
@@ -692,17 +652,12 @@ RAM-limited users: %d of %d
 				message = "Failed to deactivate limits: " + err.Error()
 			}
 
+			result := limitActionResult{Success: success, Message: message}
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
-					&mcp.TextContent{Text: toJSON(map[string]any{
-						"success": success,
-						"message": message,
-					})},
+					&mcp.TextContent{Text: toJSON(result)},
 				},
-				StructuredContent: map[string]any{
-					"success": success,
-					"message": message,
-				},
+				StructuredContent: result,
 			}, nil
 		})
 	}
@@ -731,10 +686,10 @@ RAM-limited users: %d of %d
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		cfg := s.stateManager.GetConfig()
 
-		result := map[string]any{
-			"user_include_list": cfg.GetUserIncludeList(),
-			"user_exclude_list": cfg.GetUserExcludeList(),
-			"config_file":       cfg.ConfigFile,
+		result := userFiltersPayload{
+			UserIncludeList: cfg.GetUserIncludeList(),
+			UserExcludeList: cfg.GetUserExcludeList(),
+			ConfigFile:      cfg.ConfigFile,
 		}
 
 		return &mcp.CallToolResult{
@@ -786,17 +741,12 @@ RAM-limited users: %d of %d
 		// Validate regex pattern
 		compiled, err := regexp.Compile(pattern)
 		if err != nil {
+			result := validateUserFilterResult{Valid: false, Error: err.Error()}
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
-					&mcp.TextContent{Text: toJSON(map[string]any{
-						"valid": false,
-						"error": err.Error(),
-					})},
+					&mcp.TextContent{Text: toJSON(result)},
 				},
-				StructuredContent: map[string]any{
-					"valid": false,
-					"error": err.Error(),
-				},
+				StructuredContent: result,
 			}, nil
 		}
 
@@ -811,23 +761,19 @@ RAM-limited users: %d of %d
 			}
 		}
 
+		matchCount := len(matches)
+		result := validateUserFilterResult{
+			Valid:       true,
+			Pattern:     pattern,
+			Type:        filterType,
+			TestMatches: &matches,
+			MatchCount:  &matchCount,
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: toJSON(map[string]any{
-					"valid":        true,
-					"pattern":      pattern,
-					"type":         filterType,
-					"test_matches": matches,
-					"match_count":  len(matches),
-				})},
+				&mcp.TextContent{Text: toJSON(result)},
 			},
-			StructuredContent: map[string]any{
-				"valid":        true,
-				"pattern":      pattern,
-				"type":         filterType,
-				"test_matches": matches,
-				"match_count":  len(matches),
-			},
+			StructuredContent: result,
 		}, nil
 	})
 
@@ -1050,34 +996,34 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 			continue
 		}
 
-		limitState := s.stateManager.GetUserLimitState(uid, metrics.Username)
-		um := newUserMetric(uid, metrics, limitState)
-
-		// Fetch RAM cgroup metrics and limits.
-		if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
-			current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
-			if hasCurrent {
-				um.CgroupMemoryCurrentBytes = current
-			}
-			um.MemoryMax = max
-			um.MemoryHigh = high
-		}
-		if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
-			um.MemoryHighEvents = highEvents
-		}
-
-		// Fetch IO cgroup metrics
-		if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
-			um.IOReadBytes = ioRead
-			um.IOWriteBytes = ioWrite
-			um.IOReadOps = ioROps
-			um.IOWriteOps = ioWOps
-		}
-
-		result.Users = append(result.Users, um)
+		result.Users = append(result.Users, s.newUserMetricPayload(uid, metrics))
 	}
 
 	return &mcp.CallToolResult{}, result, nil
+}
+
+func (s *Server) newUserMetricPayload(uid int, sample *resmanmetrics.UserMetrics) UserMetric {
+	result := newUserMetric(uid, sample, s.stateManager.GetUserLimitState(uid, sample.Username))
+
+	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
+		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
+		if hasCurrent {
+			result.CgroupMemoryCurrentBytes = current
+		}
+		result.MemoryMax = max
+		result.MemoryHigh = high
+	}
+	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
+		result.MemoryHighEvents = highEvents
+	}
+	if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
+		result.IOReadBytes = ioRead
+		result.IOWriteBytes = ioWrite
+		result.IOReadOps = ioROps
+		result.IOWriteOps = ioWOps
+	}
+
+	return result
 }
 
 // handleGetCgroupInfo handles get_cgroup_info tool requests
@@ -1150,9 +1096,9 @@ func (s *Server) handleGetControlHistory(ctx context.Context, req *mcp.CallToolR
 }
 
 // handleActivateLimits handles activate_limits tool requests
-func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequest, args ActivateLimitsArgs) (*mcp.CallToolResult, ActivateLimitsResult, error) {
+func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequest, args ActivateLimitsArgs) (*mcp.CallToolResult, limitActionResult, error) {
 	if !s.cfg.AllowWriteOps {
-		return &mcp.CallToolResult{}, ActivateLimitsResult{Success: false, Message: "write operations are not allowed"}, nil
+		return &mcp.CallToolResult{}, limitActionResult{Success: false, Message: "write operations are not allowed"}, nil
 	}
 
 	var err error
@@ -1161,7 +1107,7 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 	} else {
 		status := s.stateManager.GetStatus()
 		if status.CPULimitsActive {
-			return &mcp.CallToolResult{}, ActivateLimitsResult{
+			return &mcp.CallToolResult{}, limitActionResult{
 				Success: false,
 				Message: "Limits are already active",
 			}, nil
@@ -1174,15 +1120,15 @@ func (s *Server) handleActivateLimits(ctx context.Context, req *mcp.CallToolRequ
 }
 
 // handleGetUserHistory handles get_user_history tool requests
-func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, GetHistoryResult, error) {
+func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, getUserHistoryResult, error) {
 	if s.dbManager == nil {
-		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
+		return nil, getUserHistoryResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
 	now := time.Now()
 	startTime, endTime, err := resolveHistoryTimeRange(args, now)
 	if err != nil {
-		return nil, GetHistoryResult{}, err
+		return nil, getUserHistoryResult{}, err
 	}
 	if args.Hours > 0 {
 		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
@@ -1192,40 +1138,21 @@ func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequ
 
 	uid, err := s.resolveHistoricalUID(args, startTime, endTime)
 	if err != nil {
-		return nil, GetHistoryResult{}, err
+		return nil, getUserHistoryResult{}, err
 	}
 
 	// Query database
 	records, err := s.dbManager.GetUserHistory(uid, startTime, endTime, limit)
 	if err != nil {
-		return nil, GetHistoryResult{}, err
+		return nil, getUserHistoryResult{}, err
 	}
 
-	// Convert to map for JSON
-	resultRecords := make([]map[string]any, len(records))
+	resultRecords := make([]userHistoryRecord, len(records))
 	for i, r := range records {
-		resultRecords[i] = map[string]any{
-			"timestamp":           r.Timestamp.Format(time.RFC3339),
-			"uid":                 r.UID,
-			"username":            r.Username,
-			"cpu_usage":           r.CPUUsagePercent,
-			"memory_usage":        r.MemoryUsageBytes,
-			"process_count":       r.ProcessCount,
-			"cgroup_path":         r.CgroupPath,
-			"cpu_quota":           r.CPUQuota,
-			"eligible_for_cpu":    r.EligibleForCPU,
-			"eligible_for_ram":    r.EligibleForRAM,
-			"eligible_for_io":     r.EligibleForIO,
-			"cpu_limit_requested": r.CPULimitRequested,
-			"cpu_limit_active":    r.CPULimitActive,
-			"ram_limit_requested": r.RAMLimitRequested,
-			"ram_limit_active":    r.RAMLimitActive,
-			"io_limit_requested":  r.IOLimitRequested,
-			"io_limit_active":     r.IOLimitActive,
-		}
+		resultRecords[i] = newUserHistoryRecord(r)
 	}
 
-	result := GetHistoryResult{
+	result := getUserHistoryResult{
 		Records:   resultRecords,
 		Count:     len(resultRecords),
 		StartTime: startTime.Format(time.RFC3339),
@@ -1241,15 +1168,15 @@ func (s *Server) handleGetUserHistory(ctx context.Context, req *mcp.CallToolRequ
 }
 
 // handleGetSystemHistory handles get_system_history tool requests
-func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, GetHistoryResult, error) {
+func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRequest, args GetHistoryArgs) (*mcp.CallToolResult, getSystemHistoryResult, error) {
 	if s.dbManager == nil {
-		return nil, GetHistoryResult{}, fmt.Errorf("metrics database is not enabled")
+		return nil, getSystemHistoryResult{}, fmt.Errorf("metrics database is not enabled")
 	}
 
 	now := time.Now()
 	startTime, endTime, err := resolveHistoryTimeRange(args, now)
 	if err != nil {
-		return nil, GetHistoryResult{}, err
+		return nil, getSystemHistoryResult{}, err
 	}
 	if args.Hours > 0 {
 		startTime = now.Add(-time.Duration(args.Hours) * time.Hour)
@@ -1260,23 +1187,15 @@ func (s *Server) handleGetSystemHistory(ctx context.Context, req *mcp.CallToolRe
 	// Query database
 	records, err := s.dbManager.GetSystemHistory(startTime, endTime, limit)
 	if err != nil {
-		return nil, GetHistoryResult{}, err
+		return nil, getSystemHistoryResult{}, err
 	}
 
-	// Convert to map for JSON
-	resultRecords := make([]map[string]any, len(records))
+	resultRecords := make([]systemHistoryRecord, len(records))
 	for i, r := range records {
-		resultRecords[i] = map[string]any{
-			"timestamp":                        r.Timestamp.Format(time.RFC3339),
-			"total_cpu_usage":                  r.TotalCPUUsagePercent,
-			"total_cores":                      r.TotalCores,
-			"system_load":                      r.SystemLoad,
-			"cpu_limits_active":                r.LimitsActive,
-			"cpu_actively_limited_users_count": r.LimitedUsersCount,
-		}
+		resultRecords[i] = newSystemHistoryRecord(r)
 	}
 
-	result := GetHistoryResult{
+	result := getSystemHistoryResult{
 		Records:   resultRecords,
 		Count:     len(resultRecords),
 		StartTime: startTime.Format(time.RFC3339),
@@ -1429,26 +1348,26 @@ func totalSystemMemoryMB(metrics resmanmetrics.ObservationMetrics) float64 {
 	return metrics.TotalMemoryMB
 }
 
-func activationResult(force, limitsActive bool, err error) ActivateLimitsResult {
+func activationResult(force, limitsActive bool, err error) limitActionResult {
 	if err != nil {
-		return ActivateLimitsResult{
+		return limitActionResult{
 			Success: false,
 			Message: "Failed to activate limits: " + err.Error(),
 		}
 	}
 	if limitsActive {
-		return ActivateLimitsResult{
+		return limitActionResult{
 			Success: true,
 			Message: "Limits activated successfully",
 		}
 	}
 	if force {
-		return ActivateLimitsResult{
+		return limitActionResult{
 			Success: false,
 			Message: "Forced activation completed without error, but limits are not active",
 		}
 	}
-	return ActivateLimitsResult{
+	return limitActionResult{
 		Success: false,
 		Message: "Control cycle completed, but limits were not activated because activation conditions were not met",
 	}
