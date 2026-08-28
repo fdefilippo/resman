@@ -289,6 +289,11 @@ counters only when runtime state actually changes.
 - `Debug` is not a level for failures. Operator-visible failures are `Warn` or `Error`,
   and **SHOULD** also increment an error metric.
 - Retry logic **MUST NOT** hide the first failure from observability.
+- Every configured component **MUST** declare its startup failure boundary. A failed
+  authoritative service or enforcement prerequisite **MUST** abort startup. A
+  non-authoritative observation sink **MAY** degrade only when enforcement remains
+  safe, the failure and remedy are operator-visible, and no startup success is
+  claimed.
 
 **Why.** Before `resman-4pw.11`, `Collector.WriteMetricsToDatabase` returned nothing
 and logged a failed batch write at `Debug`; its caller then logged
@@ -299,9 +304,12 @@ survived in I/O starvation remediation and workload-pattern enforcement: per-use
 cgroup failures were skipped or logged locally while the control cycle reported
 success. Those stages now return joined per-user failures, continue their peer work and
 the remaining protective stages, and let the application owner report one degraded
-cycle outcome.
+cycle outcome. Startup follows the same ownership rule: an enabled MCP transport is an
+authoritative service boundary and fails startup when it cannot be constructed, while
+Prometheus and SQLite history are non-authoritative observation sinks whose explicit
+degradation must not disable resource enforcement.
 
-*Findings: resman-4pw.11, resman-4pw.60*
+*Findings: resman-4pw.11, resman-4pw.45, resman-4pw.60, resman-4pw.66*
 
 ## Rule 9 — Configuration lifecycle is declared in one place
 
