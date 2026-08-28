@@ -53,9 +53,9 @@ func (m *Manager) untrackCgroupPathIf(uid int, expectedPath string) error {
 	return m.removeCgroupFromFile(uid)
 }
 
-// removeCgroupFromFile rimuove un cgroup dal file di tracciamento.
+// removeCgroupFromFile removes a cgroup from the tracking file.
 func (m *Manager) removeCgroupFromFile(uid int) error {
-	// Leggi tutto il file, filtra e riscrivi
+	// Read the file, filter its entries, and rewrite it.
 	if _, err := os.Stat(m.createdCgroupsFile); os.IsNotExist(err) {
 		return nil
 	}
@@ -81,11 +81,11 @@ func (m *Manager) removeCgroupFromFile(uid int) error {
 		}
 	}
 
-	// Risciivi il file
+	// Rewrite the file.
 	return os.WriteFile(m.createdCgroupsFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
-// loadExistingCgroups carica i cgroups esistenti dal file di tracciamento.
+// loadExistingCgroups loads existing cgroups from the tracking file.
 func (m *Manager) loadExistingCgroups() error {
 	if _, err := os.Stat(m.createdCgroupsFile); os.IsNotExist(err) {
 		return nil
@@ -115,7 +115,7 @@ func (m *Manager) loadExistingCgroups() error {
 		}
 
 		cgroupPath := parts[1]
-		// Verifica che il cgroup esista ancora
+		// Verify that the cgroup still exists.
 		if _, err := os.Stat(cgroupPath); err == nil {
 			m.createdCgroups[uid] = cgroupPath
 		}
@@ -129,7 +129,7 @@ func (m *Manager) loadExistingCgroups() error {
 	return scanner.Err()
 }
 
-// getCgroupPath restituisce il percorso del cgroup per un UID.
+// getCgroupPath returns the cgroup path for a UID.
 func (m *Manager) getCgroupPath(uid int) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -165,7 +165,7 @@ func (m *Manager) ensureCgroupPath(uid int) (string, error) {
 	return cgroupPath, nil
 }
 
-// readPidsFromFile legge i PIDs da un file cgroup.procs.
+// readPidsFromFile reads PIDs from a cgroup.procs file.
 func (m *Manager) readPidsFromFile(filePath string) ([]int, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -267,5 +267,5 @@ func classifyCgroupFileReadError(err error) CgroupFileUnavailableReason {
 	}
 }
 
-// GetUserCgroupMetrics legge tutte le metriche cgroup per un utente in una sola chiamata.
-// Evita letture multiple di file cgroup separati.
+// GetUserCgroupMetrics reads all cgroup metrics for a user in one call.
+// It avoids repeated reads of separate cgroup files.

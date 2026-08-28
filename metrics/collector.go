@@ -301,7 +301,7 @@ type Collector struct {
 	cleanupDone chan struct{}
 }
 
-// Default Username Cache TTL
+// Default username cache TTL.
 const (
 	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
 	MAX_CACHE_SIZE             = 10000 // Maximum number of entries in general cache
@@ -345,7 +345,7 @@ func (c *Collector) SetDBWriter(writer *DBWriter) {
 	c.logger.Info("Database writer configured", "enabled", writer != nil)
 }
 
-// GetDBWriter restituisce il DBWriter corrente
+// GetDBWriter returns the current DBWriter.
 func (c *Collector) GetDBWriter() *DBWriter {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -389,7 +389,7 @@ func (c *Collector) GetTotalCores() int {
 	return cores
 }
 
-// getTotalCoresFallback è un fallback per ottenere il numero di core.
+// getTotalCoresFallback returns the core count without gopsutil.
 func (c *Collector) getTotalCoresFallback() int {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
@@ -533,8 +533,8 @@ func configuredPollingInterval(cfg *config.Config) time.Duration {
 	return defaultFallbackCPUSamplingInterval
 }
 
-// GetUserCPUUsage restituisce l'uso CPU per un utente specifico.
-// Esclude i processi di sistema dalla blacklist
+// GetUserCPUUsage returns CPU usage for a user.
+// It excludes configured system processes.
 func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	if !c.isMonitoredUserUID(uid) {
 		return 0.0
@@ -548,7 +548,7 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	return 0
 }
 
-// getUIDFromStatusFile legge l'UID da /proc/[pid]/status.
+// getUIDFromStatusFile reads the UID from /proc/[pid]/status.
 // Used by fallback functions when gopsutil is unavailable.
 func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	file, err := os.Open(statusFile)
@@ -575,12 +575,12 @@ func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	return 0, fmt.Errorf("UID not found")
 }
 
-// GetAllUsersCPUUsage restituisce l'uso CPU totale di TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+// GetAllUsersCPUUsage returns total CPU usage for all non-system users.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
 func (c *Collector) GetAllUsersCPUUsage() float64 {
 	var totalUsage float64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
 		totalUsage += metrics.CPUUsage
@@ -589,11 +589,11 @@ func (c *Collector) GetAllUsersCPUUsage() float64 {
 	return totalUsage
 }
 
-// GetAllUsers restituisce la lista di TUTTI gli UID attivi non di sistema (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
-// Usato per metriche "all_users" (monitoraggio completo)
+// GetAllUsers returns all active non-system UIDs.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
+// It supports complete all_users monitoring.
 func (c *Collector) GetAllUsers() []int {
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	users := make([]int, 0, len(allMetrics))
 	for uid := range allMetrics {
@@ -603,37 +603,37 @@ func (c *Collector) GetAllUsers() []int {
 	return users
 }
 
-// getUsername ritorna la username dato un UID
-// Usa os/user.LookupId() che supporta LDAP/NIS quando CGO è abilitato
-// Implementa cache con TTL per migliorare le performance
+// getUsername returns the username for a UID.
+// It uses os/user.LookupId, which supports LDAP and NIS when CGO is enabled,
+// and caches successful results for the configured TTL.
 func (c *Collector) getUsername(uid int) string {
-	// Controllo cache prima di tutto
+	// Check the cache first.
 	if cachedUsername, valid := c.getCachedUsername(uid); valid {
 		return cachedUsername
 	}
 
-	// Metodo 1: Usa os/user.LookupId() (supporta LDAP/NIS con CGO)
-	// Questo funziona solo se compilato con CGO_ENABLED=1
+	// Method 1 uses os/user.LookupId for LDAP and NIS support.
+	// This requires a build with CGO_ENABLED=1.
 	u, err := user.LookupId(fmt.Sprintf("%d", uid))
 	if err == nil && u.Username != "" {
-		c.cacheUsername(uid, u.Username) // Cache il risultato
+		c.cacheUsername(uid, u.Username) // Cache the result.
 		return u.Username
 	}
 
-	// Metodo 2: Fallback su /etc/passwd (solo utenti locali)
+	// Method 2 falls back to /etc/passwd for local users.
 	username, err := c.getUsernameFromPasswd(uid)
 	if err == nil && username != "" {
-		c.cacheUsername(uid, username) // Cache il risultato
+		c.cacheUsername(uid, username) // Cache the result.
 		return username
 	}
 
-	// Fallback finale: ritorna l'UID come stringa
+	// Finally, use the UID as a string.
 	username = strconv.Itoa(uid)
 	c.cacheUsername(uid, username)
 	return username
 }
 
-// getCachedUsername restituisce lo username dalla cache se valido
+// getCachedUsername returns a valid cached username.
 func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	c.usernameCacheMutex.RLock()
 	defer c.usernameCacheMutex.RUnlock()
@@ -643,7 +643,7 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 		return "", false
 	}
 
-	// Controllo se la cache è scaduta
+	// Check whether the cache entry has expired.
 	timestamp, exists := c.usernameCacheTime[uid]
 	if !exists || time.Since(timestamp) > c.usernameCacheTTL {
 		return "", false
@@ -652,7 +652,7 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	return username, true
 }
 
-// cacheUsername memorizza lo username nella cache con LRU eviction.
+// cacheUsername stores a username in the cache with LRU eviction.
 func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheMutex.Lock()
 	defer c.usernameCacheMutex.Unlock()
@@ -692,14 +692,14 @@ func (c *Collector) SetUsernameCacheTTL(ttl time.Duration) {
 	c.logger.Debug("Username cache TTL updated", "ttl", ttl)
 }
 
-// GetUsernameCacheTTL restituisce il TTL corrente della cache username
+// GetUsernameCacheTTL returns the current username cache TTL.
 func (c *Collector) GetUsernameCacheTTL() time.Duration {
 	c.usernameCacheMutex.RLock()
 	defer c.usernameCacheMutex.RUnlock()
 	return c.usernameCacheTTL
 }
 
-// getUsernameFromPasswd legge il username da /etc/passwd senza usare CGO
+// getUsernameFromPasswd reads a username from /etc/passwd without CGO.
 func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	file, err := os.Open("/etc/passwd")
 	if err != nil {
@@ -711,13 +711,12 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "#") {
-			continue // Salta commenti
+			continue // Skip comments.
 		}
 
 		fields := strings.Split(line, ":")
 		if len(fields) >= 3 {
-			// Campo 0: username
-			// Campo 2: UID (come stringa)
+			// Field 0 is the username; field 2 is the UID string.
 			fileUID, err := strconv.Atoi(fields[2])
 			if err == nil && fileUID == uid {
 				return fields[0], nil
@@ -728,7 +727,7 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	return "", fmt.Errorf("UID %d not found in /etc/passwd", uid)
 }
 
-// GetUsernameFromUID ritorna la username dato un UID (public alias)
+// GetUsernameFromUID returns the username for a UID.
 func (c *Collector) GetUsernameFromUID(uid int) string {
 	return c.getUsername(uid)
 }
@@ -754,7 +753,7 @@ func (c *Collector) GetMemoryUsage() float64 {
 	return usageMB
 }
 
-// getMemoryUsageFallback legge l'uso memoria da /proc/meminfo.
+// getMemoryUsageFallback reads memory usage from /proc/meminfo.
 func (c *Collector) getMemoryUsageFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -792,13 +791,13 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 		return 0.0
 	}
 
-	// Se memAvailable non è stato trovato, usa MemFree come fallback
+	// Fall back to MemFree when MemAvailable was not found.
 	if memAvailable == 0 {
-		// Dovremmo rileggere il file per MemFree, ma per semplicità usiamo 0
+		// Avoid a second read and report zero when MemFree was not retained.
 		memAvailable = 0
 	}
 
-	// MemTotal e MemAvailable sono in KB, converti a MB
+	// MemTotal and MemAvailable are in KiB; convert them to MiB.
 	usageMB := (memTotal - memAvailable) / 1024
 	return usageMB
 }
@@ -823,7 +822,7 @@ func (c *Collector) GetTotalMemoryMB() float64 {
 	return totalMB
 }
 
-// getTotalMemoryFallback legge MemTotal da /proc/meminfo.
+// getTotalMemoryFallback reads MemTotal from /proc/meminfo.
 func (c *Collector) getTotalMemoryFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -869,7 +868,7 @@ func (c *Collector) GetCachedMemoryMB() float64 {
 	return cachedMB
 }
 
-// getCachedMemoryFallback legge Cached da /proc/meminfo.
+// getCachedMemoryFallback reads Cached from /proc/meminfo.
 func (c *Collector) getCachedMemoryFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -918,7 +917,7 @@ func (c *Collector) IsSystemUnderLoad() bool {
 	return underLoad
 }
 
-// getLoadAverage restituisce load average e numero di core.
+// getLoadAverage returns the load average and core count.
 func (c *Collector) getLoadAverage() (float64, int, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -1107,7 +1106,7 @@ func (c *Collector) GetObservationMetrics() ObservationMetrics {
 	}
 }
 
-// GetSystemLoad restituisce il load average di 1 minuto.
+// GetSystemLoad returns the one-minute load average.
 func (c *Collector) GetSystemLoad() (float64, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -1495,12 +1494,12 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	return 0
 }
 
-// GetAllUsersMemoryUsage restituisce la memoria totale usata da TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+// GetAllUsersMemoryUsage returns total memory used by all non-system users.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
 func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 	var totalMemory uint64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
 		totalMemory += metrics.MemoryUsage
@@ -1563,7 +1562,7 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 		if strings.HasPrefix(line, "VmRSS:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				// VmRSS è in kB, converti in bytes
+				// VmRSS is measured in KiB; convert it to bytes.
 				kb, err := strconv.ParseUint(fields[1], 10, 64)
 				if err != nil {
 					return 0

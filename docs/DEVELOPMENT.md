@@ -609,9 +609,8 @@ These defects are cheap to prevent and expensive to find.
   materially extending its technical or operator contract **MUST** translate the whole
   document to English in the same change. A document **MUST NOT** be left with mixed
   languages.
-- This is incremental cleanup, tracked as `resman-4pw.19`. Do not open mass-translation
-  pull requests over untouched files, and leave historical changelog entries as they
-  are.
+- Whole-tree compliance is enforced by `resman-4pw.19`. Historical changelog entries
+  remain unchanged because they record the language and terminology of their release.
 
 **Why.** Several files (`state/control_cycle.go`, `config/config.go`) alternate between
 Italian and English within a few lines, which makes grep-based review unreliable and
@@ -856,6 +855,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
+| Production comments, user-facing strings, build help, and current shipped documentation use English | 17 | conservative Italian-language lexical scan of production Go comments/string literals, the Makefile, and shipped assets, excluding test/checker fixtures and historical RPM/DEB changelogs |
 | `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
 
 Every failure reports `file:line` and exits non-zero. `KNOWN` lines remain successful

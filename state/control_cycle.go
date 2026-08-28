@@ -164,7 +164,7 @@ func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []cont
 }
 
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
-	// Controlla se siamo in un blackout timeframe
+	// Check whether the current time is within a blackout window.
 	nextEnd := run.cfg.GetNextBlackoutEnd()
 	if nextEnd != nil {
 		if err := m.revertAllPSIBoosts(); err != nil {
@@ -200,7 +200,7 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
-	// 1. Raccogli metriche del sistema
+	// 1. Collect system metrics.
 	metrics, err := m.collectSystemMetrics()
 	if err != nil {
 		m.logger.Error("Failed to collect system metrics",
@@ -226,13 +226,13 @@ func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageWriteDatabase(run *controlCycleContext) error {
-	// 3. Scrivi le metriche nel database (se abilitato)
+	// 3. Write metrics to the database when enabled.
 	m.writeDatabaseMetrics(run.metrics)
 	return nil
 }
 
 func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
-	// 4. Prendi decisione basata sulle metriche
+	// 4. Make a decision from the collected metrics.
 	run.decision, run.reason = m.makeDecision(run.metrics)
 	return nil
 }
@@ -247,7 +247,7 @@ func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
-	// 6. Registra lo storico del ciclo
+	// 6. Record the control-cycle history.
 	run.duration = time.Since(run.startTime)
 	m.recordControlCycle(run.decision, run.reason, run.metrics, run.duration)
 	return nil

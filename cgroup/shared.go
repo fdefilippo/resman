@@ -53,16 +53,16 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 	return sharedPath, nil
 }
 
-// ApplySharedCPULimit applica un limite di CPU al cgroup condiviso
+// ApplySharedCPULimit applies a CPU limit to the shared cgroup.
 func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
 	cpuMaxFile := filepath.Join(sharedPath, "cpu.max")
 
-	// Valida il formato della quota
+	// Validate the quota format.
 	if !isValidCPUQuotaFormat(quota) {
 		return fmt.Errorf("invalid CPU quota format: %s", quota)
 	}
 
-	// Applica il limite
+	// Apply the limit.
 	if err := os.WriteFile(cpuMaxFile, []byte(quota), 0644); err != nil {
 		return fmt.Errorf("failed to apply shared CPU limit: %w", err)
 	}
@@ -75,19 +75,19 @@ func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
 	return nil
 }
 
-// CreateUserSubCgroup crea un sottocgroup utente dentro il cgroup condiviso
+// CreateUserSubCgroup creates a user sub-cgroup inside the shared cgroup.
 func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error) {
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
-	// Crea la directory del sottocgroup
+	// Create the sub-cgroup directory.
 	if err := os.MkdirAll(userPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create user sub-cgroup directory: %w", err)
 	}
 
-	// Imposta peso di default (100)
+	// Set the default weight to 100.
 	weightFile := filepath.Join(userPath, "cpu.weight")
 	if err := os.WriteFile(weightFile, []byte("100"), 0644); err != nil {
-		// Non è fatale, logghiamo e continuiamo
+		// Treat this as non-fatal, log it, and continue.
 		m.logger.Warn("Failed to set default CPU weight",
 			"uid", uid,
 			"path", userPath,
@@ -112,12 +112,12 @@ func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error
 	return userPath, nil
 }
 
-// MoveProcessToSharedCgroup sposta un processo nel cgroup condiviso
+// MoveProcessToSharedCgroup moves a process into the shared cgroup.
 func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int) error {
-	// Usa il sottocgroup specifico dell'utente
+	// Use the user's sub-cgroup.
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
-	// Assicurati che il sottocgroup esista
+	// Ensure that the sub-cgroup exists.
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
 			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
@@ -289,4 +289,4 @@ func (m *Manager) logSharedProcessMoveSummary(uid, movedCount, candidateCount in
 	}
 }
 
-// getUIDFromStatusFile estrae il UID dal file /proc/[pid]/status.
+// getUIDFromStatusFile extracts the UID from /proc/[pid]/status.

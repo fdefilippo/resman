@@ -1291,7 +1291,7 @@ ORDER BY inactive_since DESC;
 
 ### Conversation 1: "Are there processes running for more than a week?"
 
-**User:** "Ci sono processi running da più di una settimana?"
+**User:** "Are there processes that have been running for more than a week?"
 
 **AI Assistant:**
 ```
@@ -1336,30 +1336,30 @@ Calling MCP tool: get_long_running_processes(min_days=7)
 ```
 
 **AI Assistant Response:**
-> **Sì, ci sono 3 utenti con processi attivi da più di una settimana:**
+> **Yes. Three users have had active processes for more than a week:**
 >
-> 1. **www-data** (UID 1001): Attivo da **12.5 giorni**
->    - CPU media: 78.5% | CPU corrente: 82.3%
->    - 5 processi in esecuzione
->    - ⚠️ **Alert già generato**
+> 1. **www-data** (UID 1001): active for **12.5 days**
+>    - Average CPU: 78.5% | Current CPU: 82.3%
+>    - 5 running processes
+>    - ⚠️ **Alert already generated**
 >
-> 2. **miner** (UID 1002): Attivo da **9.2 giorni**
->    - CPU media: 95.2% | CPU corrente: 97.1%
->    - 8 processi in esecuzione
->    - ⚠️ **Alert già generato**
+> 2. **miner** (UID 1002): active for **9.2 days**
+>    - Average CPU: 95.2% | Current CPU: 97.1%
+>    - 8 running processes
+>    - ⚠️ **Alert already generated**
 >
-> 3. **backup** (UID 1003): Attivo da **7.1 giorni**
->    - CPU media: 12.3% | CPU corrente: 8.5%
->    - 2 processi in esecuzione
->    - ✅ Nessun alert (CPU bassa, probabilmente legittimo)
+> 3. **backup** (UID 1003): active for **7.1 days**
+>    - Average CPU: 12.3% | Current CPU: 8.5%
+>    - 2 running processes
+>    - ✅ No alert (low CPU, probably legitimate)
 >
-> **Raccomandazione:** Investigare `www-data` e `miner` per attività prolungata ad alto consumo CPU.
+> **Recommendation:** Investigate `www-data` and `miner` for prolonged high CPU use.
 
 ---
 
 ### Conversation 2: "Are there processes using at least 1 CPU?"
 
-**User:** "Ci sono processi running che occupano almeno 1 cpu?"
+**User:** "Are any running processes using at least one full CPU?"
 
 **AI Assistant:**
 ```
@@ -1395,21 +1395,21 @@ Calling MCP tool: get_high_cpu_processes(min_cpu_percent=100)
 ```
 
 **AI Assistant Response:**
-> **Sì, ci sono 2 utenti con processi che occupano almeno 1 CPU completa (100%):**
+> **Yes. Two users have processes consuming at least one full CPU (100%):**
 >
-> 1. **miner** (UID 1002): **312.5% CPU** (~3 core completi)
->    - CPU media: 298.7%
->    - Attivo da 9.2 giorni consecutivi
->    - 8 processi in esecuzione
->    - ⚠️ **Alert già generato**
+> 1. **miner** (UID 1002): **312.5% CPU** (~3 full cores)
+>    - Average CPU: 298.7%
+>    - Active for 9.2 consecutive days
+>    - 8 running processes
+>    - ⚠️ **Alert already generated**
 >
-> 2. **www-data** (UID 1001): **156.3% CPU** (~1.5 core)
->    - CPU media: 142.1%
->    - Attivo da 12.5 giorni consecutivi
->    - 5 processi in esecuzione
->    - ⚠️ **Alert già generato**
+> 2. **www-data** (UID 1001): **156.3% CPU** (~1.5 cores)
+>    - Average CPU: 142.1%
+>    - Active for 12.5 consecutive days
+>    - 5 running processes
+>    - ⚠️ **Alert already generated**
 >
-> **Raccomandazione:** Entrambi gli utenti mostrano consumo CPU anomalo e prolungato. Investigare immediatamente per possibile mining criptovalute o processi runaway.
+> **Recommendation:** Both users show abnormal sustained CPU use. Investigate immediately for possible cryptocurrency mining or runaway processes.
 
 ---
 

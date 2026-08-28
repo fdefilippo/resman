@@ -66,7 +66,7 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 	}
 	processName := processNameFromInfo(pid, processInfo)
 
-	// Scrivi il PID nel file cgroup.procs
+	// Write the PID to cgroup.procs.
 	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
 			_ = m.removeProcessOrigins(map[int]bool{pid: true})
@@ -275,7 +275,7 @@ func (m *Manager) logProcessMoveSummary(uid, movedCount, totalProcesses int, pro
 	}
 }
 
-// CreateSharedCgroup crea un cgroup condiviso per tutti gli utenti limitati
+// CreateSharedCgroup creates a shared cgroup for all limited users.
 func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 	file, err := os.Open(statusFile)
 	if err != nil {
@@ -289,7 +289,7 @@ func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 		if strings.HasPrefix(line, "Uid:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				// Il primo campo dopo "Uid:" è l'UID reale
+				// The first field after "Uid:" is the real UID.
 				uid, err := strconv.Atoi(fields[1])
 				if err != nil {
 					return 0, err
@@ -383,7 +383,7 @@ func (m *Manager) usernameForUID(uid string) string {
 	return username
 }
 
-// ListProcessesInCgroup restituisce l'elenco dei processi in un cgroup
+// ListProcessesInCgroup returns the processes in a cgroup.
 func (m *Manager) ListProcessesInCgroup(uid int) ([]string, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -405,5 +405,5 @@ func (m *Manager) ListProcessesInCgroup(uid int) ([]string, error) {
 	return processes, nil
 }
 
-// ApplyRAMLimit applica un limite di RAM a un cgroup utente.
+// ApplyRAMLimit applies a RAM limit to a user cgroup.
 // limit: bytes (es. "536870912") o suffissi (es. "512M", "1G", "2T")

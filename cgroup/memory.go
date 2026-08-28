@@ -34,7 +34,7 @@ func (m *Manager) ApplyRAMLimit(uid int, limit string) error {
 	return nil
 }
 
-// ApplyRAMLimitWithSwapDisabled applica un limite di RAM con swap disabilitato.
+// ApplyRAMLimitWithSwapDisabled applies a RAM limit and disables swap.
 func (m *Manager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error {
 	if err := m.ApplyRAMLimit(uid, limit); err != nil {
 		return err
@@ -55,7 +55,7 @@ func (m *Manager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error {
 	return nil
 }
 
-// RemoveRAMLimit rimuove il limite di RAM (imposta a "max").
+// RemoveRAMLimit removes the RAM limit by setting it to "max".
 func (m *Manager) RemoveRAMLimit(uid int) error {
 	return m.ApplyRAMLimit(uid, "max")
 }
@@ -74,7 +74,7 @@ func (m *Manager) RemoveRAMSwapLimit(uid int) error {
 	return nil
 }
 
-// GetCgroupRAMUsage restituisce l'uso corrente di RAM del cgroup utente in bytes.
+// GetCgroupRAMUsage returns the current RAM usage of a user cgroup in bytes.
 func (m *Manager) GetCgroupRAMUsage(uid int) (uint64, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -95,10 +95,9 @@ func (m *Manager) GetCgroupRAMUsage(uid int) (uint64, error) {
 	return usage, nil
 }
 
-// ApplyRAMHigh applica un limite soft di RAM (memory.high) a un cgroup utente.
-// Quando un cgroup supera memory.high, il kernel applica throttling e reclaim aggressivo,
-// ma NON invoca l'OOM killer. Utile per segnalare pressione di memoria senza uccidere processi.
-// limit: bytes (es. "536870912") o suffissi (es. "512M", "1G", "2T")
+// ApplyRAMHigh applies a soft RAM limit through memory.high to a user cgroup.
+// Above memory.high, the kernel throttles and aggressively reclaims memory without
+// invoking the OOM killer. The limit accepts bytes or K/M/G/T suffixes.
 func (m *Manager) ApplyRAMHigh(uid int, limit string) error {
 	cgroupPath, err := m.ensureCgroupPath(uid)
 	if err != nil {
@@ -125,16 +124,15 @@ func (m *Manager) ApplyRAMHigh(uid int, limit string) error {
 	return nil
 }
 
-// ApplyRAMLimitWithHigh applica sia memory.high (soft limit) che memory.max (hard limit).
-// memory.high: throttling e reclaim aggressivo quando superato
-// memory.max: OOM killer quando superato
+// ApplyRAMLimitWithHigh applies memory.high as a soft limit and memory.max as a hard limit.
+// memory.high triggers throttling and aggressive reclaim; memory.max may invoke the OOM killer.
 func (m *Manager) ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit string) error {
-	// Applica prima il soft limit (memory.high)
+	// Apply the soft limit first.
 	if err := m.ApplyRAMHigh(uid, highLimit); err != nil {
 		return fmt.Errorf("failed to apply RAM high: %w", err)
 	}
 
-	// Applica il hard limit (memory.max)
+	// Apply the hard limit.
 	if err := m.ApplyRAMLimit(uid, maxLimit); err != nil {
 		return fmt.Errorf("failed to apply RAM max: %w", err)
 	}
@@ -148,7 +146,7 @@ func (m *Manager) ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit stri
 	return nil
 }
 
-// ApplyRAMLimitWithHighAndSwapDisabled applica memory.high, memory.max e disabilita swap.
+// ApplyRAMLimitWithHighAndSwapDisabled applies memory.high and memory.max and disables swap.
 func (m *Manager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string, highLimit string) error {
 	if err := m.ApplyRAMLimitWithHigh(uid, maxLimit, highLimit); err != nil {
 		return err
@@ -169,7 +167,7 @@ func (m *Manager) ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string,
 	return nil
 }
 
-// RemoveRAMHigh rimuove il limite soft di RAM (imposta a "max").
+// RemoveRAMHigh removes the soft RAM limit by setting it to "max".
 func (m *Manager) RemoveRAMHigh(uid int) error {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -180,8 +178,8 @@ func (m *Manager) RemoveRAMHigh(uid int) error {
 	return os.WriteFile(memoryHighFile, []byte("max"), defaultFilePerm)
 }
 
-// GetMemoryHighEvents restituisce il numero di volte che il cgroup ha superato memory.high.
-// Legge da memory.events il campo "high".
+// GetMemoryHighEvents returns how many times the cgroup exceeded memory.high.
+// It reads the "high" field from memory.events.
 func (m *Manager) GetMemoryHighEvents(uid int) (uint64, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -194,7 +192,7 @@ func (m *Manager) GetMemoryHighEvents(uid int) (uint64, error) {
 		return 0, fmt.Errorf("failed to read memory.events for UID %d: %w", uid, err)
 	}
 
-	// Parse "high 123" da memory.events
+	// Parse entries such as "high 123" from memory.events.
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "high ") {
@@ -208,7 +206,6 @@ func (m *Manager) GetMemoryHighEvents(uid int) (uint64, error) {
 	return 0, nil
 }
 
-// ApplyIOLimit applica limiti di IO (bandwidth e IOPS) a un cgroup utente.
-// Scrive nel file io.max del cgroup.
-// readBPS, writeBPS: bytes per secondo (stringa, es. "100M", "max")
-// readIOPS, writeIOPS: operazioni per secondo (int, 0 = unlimited)
+// ApplyIOLimit applies I/O bandwidth and IOPS limits to a user cgroup.
+// It writes the cgroup's io.max file. Bandwidth values are strings such as
+// "100M" or "max"; IOPS values are integers where zero means unlimited.

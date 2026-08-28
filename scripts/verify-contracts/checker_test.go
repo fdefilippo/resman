@@ -376,6 +376,81 @@ func TestShippedAssetCheckerIgnoresUntrackedWorkspaceFiles(t *testing.T) {
 	}
 }
 
+func TestEnglishLanguageCheckerRejectsProductionCommentsAndCurrentDocumentation(t *testing.T) {
+	tests := []struct {
+		name       string
+		goSource   string
+		document   string
+		debHistory string
+		rpmHistory string
+		wantPath   string
+		wantLine   int
+	}{
+		{
+			name:     "English production text",
+			goSource: "package app\n\n// Apply updates the active policy.\nfunc Apply() {}\n",
+			document: "# Operator guide\n\nConfigure the service before starting it.\n",
+		},
+		{
+			name:     "Italian production comment",
+			goSource: "package app\n\n// Apply aggiorna la configurazione attiva.\nfunc Apply() {}\n",
+			document: "# Operator guide\n",
+			wantPath: "app/app.go",
+			wantLine: 3,
+		},
+		{
+			name:     "Italian shipped paragraph",
+			goSource: "package app\n\nfunc Apply() {}\n",
+			document: "# Operator guide\n\nVerifica la configurazione prima di avviare il servizio.\n",
+			wantPath: "docs/example.md",
+			wantLine: 3,
+		},
+		{
+			name:       "Historical changelogs are preserved",
+			goSource:   "package app\n\nfunc Apply() {}\n",
+			document:   "# Operator guide\n",
+			debHistory: "resman (1.0) stable; urgency=low\n\n  * Aggiunta configurazione iniziale.\n",
+			rpmHistory: "%changelog\n* Thu Aug 28 2026 Maintainer\n- Aggiunta configurazione iniziale.\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := newCheckerFixture(t)
+			writeFixture(t, root, "app/app.go", tt.goSource)
+			writeFixture(t, root, "docs/example.md", tt.document)
+			writeFixture(t, root, "packaging/empty", "")
+			if tt.debHistory != "" {
+				writeFixture(t, root, "packaging/deb/changelog", tt.debHistory)
+			}
+			if tt.rpmHistory != "" {
+				writeFixture(t, root, "packaging/example.spec", tt.rpmHistory)
+			}
+			writeFixture(t, root, "scripts/empty", "")
+			writeFixture(t, root, "README.md", "ResMan\n")
+			writeFixture(t, root, "CONTRIBUTING.md", "ResMan\n")
+			writeFixture(t, root, "Makefile", "help:\n\t@echo ResMan\n")
+			sources, parseFindings := loadGoFiles(root)
+			if len(parseFindings) != 0 {
+				t.Fatalf("parse findings: %v", parseFindings)
+			}
+			result := checkEnglishLanguage(root, sources)
+			if tt.wantPath == "" {
+				if len(result.findings) != 0 {
+					t.Fatalf("unexpected findings: %v", result.findings)
+				}
+				return
+			}
+			if len(result.findings) == 0 {
+				t.Fatal("Italian production text was not rejected")
+			}
+			if result.findings[0].path != tt.wantPath || result.findings[0].line != tt.wantLine {
+				t.Fatalf("unexpected finding location: %+v", result.findings[0])
+			}
+		})
+	}
+}
+
 func newCheckerFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

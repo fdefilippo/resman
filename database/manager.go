@@ -84,7 +84,7 @@ type UserSummary struct {
 	Samples                   int     `json:"samples"`
 }
 
-// DatabaseInfo rappresenta le informazioni sul database
+// DatabaseInfo describes the metrics database.
 type DatabaseInfo struct {
 	Path               string  `json:"path"`
 	SizeBytes          int64   `json:"size_bytes"`
@@ -97,7 +97,7 @@ type DatabaseInfo struct {
 	UsersTracked       int64   `json:"users_tracked"`
 }
 
-// DatabaseManager gestisce il database SQLite delle metriche
+// DatabaseManager manages the SQLite metrics database.
 type DatabaseManager struct {
 	db              *sql.DB
 	dbGate          operationgate.Gate
@@ -742,7 +742,7 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
 		RetentionDays: retentionDays,
 	}
 
-	// Dimensione del file
+	// Read the file size.
 	if m.dbPath != ":memory:" {
 		fileInfo, err := os.Stat(m.dbPath)
 		if err != nil {
@@ -801,7 +801,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		_ = tx.Rollback()
 	}
 
-	// Rimuovi user metrics vecchi
+	// Remove old user metrics.
 	result, err := tx.Exec("DELETE FROM user_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
 		rollback()
@@ -814,7 +814,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		return 0, fmt.Errorf("failed to get rows affected for user metrics deletion: %w", err)
 	}
 
-	// Rimuovi system metrics vecchi
+	// Remove old system metrics.
 	result, err = tx.Exec("DELETE FROM system_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
 		rollback()

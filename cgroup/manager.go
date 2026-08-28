@@ -532,13 +532,13 @@ func disableControllerFeature(cfg *config.Config, requirement controllerRequirem
 	}
 }
 
-// getBaseCgroupPath restituisce il percorso del cgroup base.
+// getBaseCgroupPath returns the base cgroup path.
 func (m *Manager) getBaseCgroupPath() string {
 	cfg := m.getConfig()
 	return filepath.Join(cfg.CgroupRoot, cfg.CgroupBase)
 }
 
-// getUserCgroupPath restituisce il percorso del cgroup per un utente specifico.
+// getUserCgroupPath returns the cgroup path for a user.
 func (m *Manager) getUserCgroupPath(uid int) string {
 	return filepath.Join(m.getBaseCgroupPath(), fmt.Sprintf("user_%d", uid))
 }

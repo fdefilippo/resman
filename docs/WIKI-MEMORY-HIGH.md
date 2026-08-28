@@ -1,348 +1,142 @@
-# ResMan v1.19.0 - memory.high Soft Limits
+# `memory.high` Soft Limits
 
-## Panoramica
+## Overview
 
-ResMan v1.19.0 introduce il supporto per i limiti **memory.high** nei cgroups v2, fornendo un sistema di gestione della memoria più sofisticato con degradazione graduale prima dell'OOM killer.
+ResMan can apply both `memory.high` and `memory.max` to RAM-eligible user cgroups.
+The soft boundary provides proportional reclaim and throttling before the hard limit
+can invoke the OOM killer.
 
----
+| Property | `memory.high` | `memory.max` |
+|---|---|---|
+| Boundary | Soft | Hard |
+| Kernel response | Throttling and reclaim | OOM kill when reclaim cannot satisfy the limit |
+| Processes killed directly | No | Possible |
+| ResMan setting | `RAM_HIGH_RATIO` of the hard quota | `RAM_QUOTA_PER_USER` |
 
-## Cos'è memory.high?
+For a 512 MiB hard quota and the default ratio of `0.8`, ResMan writes approximately
+410 MiB to `memory.high` and 512 MiB to `memory.max`.
 
-### Differenza tra memory.high e memory.max
+## Configuration
 
-| Caratteristica | memory.high (Soft Limit) | memory.max (Hard Limit) |
-|----------------|--------------------------|-------------------------|
-| **Comportamento** | Throttling + reclaim aggressivo | OOM killer |
-| **Processi uccisi** | ❌ Mai | ✅ Sì |
-| **Superamento temporaneo** | ✅ Possibile | ⚠️ Raro |
-| **Use case** | Warning, monitoring | Enforcement assoluto |
-
-### Come Funziona
-
-```
-Configurazione Tipica (v1.19.0):
-- memory.high = RAM_QUOTA_PER_USER × RAM_HIGH_RATIO (default: 80%)
-- memory.max = RAM_QUOTA_PER_USER (100%)
-
-Esempio con RAM_QUOTA_PER_USER=512M:
-- memory.high = 512M × 0.8 = 410MB
-- memory.max = 512M
-
-Quando un utente supera 410MB:
-→ Il kernel applica throttling sulle allocazioni
-→ Reclaim aggressivo della memoria
-→ NESSUN OOM killer
-
-Quando un utente supera 512MB:
-→ OOM killer termina i processi
-```
-
----
-
-## Configurazione
-
-### Variabile RAM_HIGH_RATIO
-
-```bash
-# /etc/resman/resman.conf
-
-# Default: memory.high = 80% di memory.max
+```ini
+# Balanced production default: memory.high is 80% of memory.max.
 RAM_HIGH_RATIO=0.8
 
-# Più conservativo (warning precedente al 70%)
-RAM_HIGH_RATIO=0.7
+# Earlier reclaim at 70%.
+# RAM_HIGH_RATIO=0.7
 
-# Più aggressivo (warning più tardi al 90%)
-RAM_HIGH_RATIO=0.9
+# Later reclaim at 90%.
+# RAM_HIGH_RATIO=0.9
 
-# Disabilita memory.high (comportamento legacy pre-v1.19.0)
-RAM_HIGH_RATIO=0
+# Disable the soft limit and use only memory.max.
+# RAM_HIGH_RATIO=0.0
 ```
 
-### Validazione
+`RAM_HIGH_RATIO` accepts values from `0.0` through `1.0`. Configuration validation
+rejects values outside that range. A value of zero disables `memory.high`.
 
-Il valore deve essere tra `0.0` e `1.0`. Valori fuori range vengono rifiutati dalla validazione della configurazione.
+The RAM feature must also be enabled and the user must satisfy the RAM-specific
+include and exclude policy. See [`IO-LIMITS.md`](IO-LIMITS.md) and
+[`TECHNICAL-SPECIFICATION.md`](TECHNICAL-SPECIFICATION.md) for the shared
+eligibility, intent, and observed-enforcement model.
 
----
+## Monitoring
 
-## Monitoraggio
-
-### Nuova Metrica Prometheus
+ResMan exports:
 
 ```promql
-resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
+resman_user_memory_high_events_total
 ```
 
-**Descrizione:** Conta il numero di volte che ogni utente ha superato il limite soft `memory.high`.
-
-**Esempi di Query:**
+The counter is derived from the `high` field in `memory.events` and identifies how
+often a user cgroup crossed the soft boundary. Useful queries include:
 
 ```promql
-# Utenti con più breach negli ultimi 5 minuti
-increase(resman_user_memory_high_breaches_total[5m]) > 0
+# Users with the most soft-limit events in the last five minutes.
+topk(10, increase(resman_user_memory_high_events_total[5m]))
 
-# Top 5 utenti per memory pressure
-topk(5, increase(resman_user_memory_high_breaches_total[1h]))
-
-# Breach totali per hostname
-sum by (hostname) (increase(resman_user_memory_high_breaches_total[24h]))
+# Events grouped by host and user.
+sum by (hostname, uid, username) (
+  increase(resman_user_memory_high_events_total[1h])
+)
 ```
 
-### Grafana Dashboard
+The shipped Grafana dashboard includes memory usage and memory-pressure panels. A
+small number of soft-limit events can be normal during bursts. Sustained growth means
+the workload is repeatedly reclaiming memory and should be investigated before it
+reaches `memory.max`.
 
-Il dashboard aggiornato (v1.19.0) include il nuovo pannello:
-
-**"Memory High Breaches (NEW v1.19.0)"**
-- Posizione: Accanto a "All Users - Memory Usage Per User"
-- Soglia gialla: 1 breach
-- Soglia rossa: 10 breach
-- Mostra max e last value per utente
-
----
-
-## Interpretazione dei Dati
-
-### Scenario Normale
-```
-memory.high breaches: 0-1/ora
-→ Memoria ben gestita
-→ Nessun action richiesta
-```
-
-### Scenario di Attenzione
-```
-memory.high breaches: 5-10/ora
-→ Utente sotto pressione di memoria
-→ Considerare aumento quota o ottimizzazione applicazione
-```
-
-### Scenario Critico
-```
-memory.high breaches: >10/ora OPPURE
-memory.high breaches: costante aumento
-→ Rischio OOM killer imminente
-→ Action immediata richiesta
-```
-
----
-
-## Alerting
-
-### Esempio Alert Rules (Prometheus)
+## Alerting example
 
 ```yaml
 groups:
-  - name: resman-memory-high
-    interval: 30s
+  - name: resman-memory-pressure
     rules:
-      # Warning: utente con memory pressure
-      - alert: ResManMemoryHighPressure
-        expr: increase(resman_user_memory_high_breaches_total[15m]) > 5
+      - alert: ResManUserMemoryPressure
+        expr: increase(resman_user_memory_high_events_total[10m]) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Utente {{ $labels.username }} sotto pressione di memoria"
-          description: "{{ $labels.username }} ha superato memory.high {{ $value }} volte in 15 minuti"
+          summary: "User {{ $labels.username }} is under sustained memory pressure"
 
-      # Critical: rischio OOM
-      - alert: ResManMemoryHighCritical
-        expr: increase(resman_user_memory_high_breaches_total[5m]) > 10
+      - alert: ResManUserMemoryPressureCritical
+        expr: increase(resman_user_memory_high_events_total[5m]) > 50
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Rischio OOM killer per utente {{ $labels.username }}"
-          description: "{{ $labels.username }} ha superato memory.high {{ $value }} volte in 5 minuti - OOM killer imminente"
-
-      # Info: trend crescente
-      - alert: ResManMemoryHighTrend
-        expr: predict_linear(resman_user_memory_high_breaches_total[1h], 3600) > 100
-        for: 10m
-        labels:
-          severity: info
-        annotations:
-          summary: "Trend crescente memory breaches per {{ $labels.username }}"
-          description: "Proiezione: {{ $value }} breach/ora tra 1 ora"
+          summary: "User {{ $labels.username }} is approaching its hard RAM boundary"
 ```
 
----
+Tune thresholds from observed workload behavior. A soft-limit event is not itself an
+OOM event.
 
-## Migration Guide
+## Verification
 
-### Da v1.18.x a v1.19.0
+For a limited UID, inspect the actual cgroup files:
 
-**Default Behavior Change:**
-- Se `RAM_LIMIT_ENABLED=true`, memory.high viene applicato automaticamente
-- Default: 80% di memory.max
-
-**Per mantenere comportamento legacy:**
 ```bash
-# Disabilita memory.high
-RAM_HIGH_RATIO=0
+uid=1001
+base=/sys/fs/cgroup/resman/user_${uid}
+
+cat "$base/memory.high"
+cat "$base/memory.max"
+cat "$base/memory.events"
 ```
 
-**Configurazione Consigliata:**
-```bash
-# Produzione (bilanciato)
-RAM_LIMIT_ENABLED=true
-RAM_QUOTA_PER_USER=512M
-RAM_HIGH_RATIO=0.8
-DISABLE_SWAP=false
-
-# Sviluppo (più aggressivo)
-RAM_LIMIT_ENABLED=true
-RAM_QUOTA_PER_USER=1G
-RAM_HIGH_RATIO=0.9
-DISABLE_SWAP=false
-
-# High-performance (minimo throttling)
-RAM_LIMIT_ENABLED=true
-RAM_QUOTA_PER_USER=2G
-RAM_HIGH_RATIO=0.7
-DISABLE_SWAP=true
-```
-
----
+The exact cgroup path may differ when `CGROUP_ROOT` or `CGROUP_BASE` is customized.
+Use the MCP cgroup information surface or ResMan logs to find the managed path.
 
 ## Troubleshooting
 
-### memory.high breaches ma nessun OOM
+### Soft-limit events occur without an OOM kill
 
-**Normale:** memory.high è progettato per prevenire OOM.
+This is expected: `memory.high` asks the kernel to throttle and reclaim, while
+`memory.max` is the hard boundary. Check whether events are sustained and whether
+application latency is affected.
 
-**Action:**
-1. Verifica se i breach sono frequenti (>10/ora)
-2. Controlla trend con `increase()[1h]`
-3. Se stabile, nessun action necessaria
+### `memory.high` equals `memory.max`
 
-### memory.high = memory.max (nessun effetto)
+Set `RAM_HIGH_RATIO` below `1.0` and reload or restart according to the configuration
+lifecycle reported by ResMan.
 
-**Causa:** `RAM_HIGH_RATIO=1.0` o `RAM_HIGH_RATIO=0`
+### `memory.high` is absent
 
-**Fix:**
-```bash
-# Imposta ratio valido
-RAM_HIGH_RATIO=0.8
+At startup, ResMan probes a real child cgroup for the interfaces required by enabled
+features. If RAM limiting is enabled but `memory.high` or another required memory
+interface is unavailable, startup fails closed and names the missing interface.
 
-# Riavvia resman
-systemctl restart resman
-```
+## Operational guidance
 
-### Verifica applicazione limiti
+- Start with `RAM_HIGH_RATIO=0.8` and adjust from measurements.
+- Alert on sustained event growth rather than a single burst.
+- Correlate events with memory usage, application latency, and OOM records.
+- Size `RAM_QUOTA_PER_USER` from workload requirements rather than suppressing alerts.
+- Keep the memory controller enabled in the delegated cgroup hierarchy.
 
-```bash
-# Controlla memory.high per un utente
-cat /sys/fs/cgroup/resman/user-1000.slice/memory.high
+## References
 
-# Controlla memory.max
-cat /sys/fs/cgroup/resman/user-1000.slice/memory.max
-
-# Verifica breach
-cat /sys/fs/cgroup/resman/user-1000.slice/memory.events | grep high
-```
-
----
-
-## API e Interfaccia
-
-### Nuove Funzioni Cgroup Manager
-
-```go
-// Applica soft limit
-ApplyRAMHigh(uid int, limit string) error
-
-// Applica entrambi i limiti
-ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit string) error
-
-// Applica con swap disabilitato
-ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string, highLimit string) error
-
-// Rimuove soft limit
-RemoveRAMHigh(uid int) error
-
-// Conta breach
-GetMemoryHighEvents(uid int) (uint64, error)
-```
-
-### Esempio Utilizzo
-
-```go
-// Calcola memory.high come 80% di memory.max
-quotaBytes, _ := config.ParseRAMQuota("512M")
-highBytes := uint64(float64(quotaBytes) * 0.8)
-
-// Applica entrambi i limiti
-err := mgr.ApplyRAMLimitWithHigh(
-    uid,
-    "536870912",  // memory.max = 512M
-    "429496730",  // memory.high = 410M (80%)
-)
-```
-
----
-
-## Performance Impact
-
-### Overhead memory.high
-
-- **Lettura memory.events:** < 1ms per utente
-- **Scrittura memory.high:** < 5ms
-- **Throttling kernel:** Variabile (dipende da pressione memoria)
-
-### Benchmark
-
-In test con 50 utenti attivi:
-- Ciclo di controllo: +2-3ms con memory.high abilitato
-- Memoria aggiuntiva: ~100KB per cache eventi
-
----
-
-## Best Practices
-
-### 1. Monitoraggio Proattivo
-
-```promql
-# Dashboard query per identificare problemi
-topk(10, increase(resman_user_memory_high_breaches_total[1h]))
-```
-
-### 2. Sizing Quote
-
-- **Development:** RAM_HIGH_RATIO=0.9 (più margine)
-- **Production:** RAM_HIGH_RATIO=0.8 (bilanciato)
-- **Critical:** RAM_HIGH_RATIO=0.7 (warning precoce)
-
-### 3. Alerting a Livelli
-
-1. **Info:** Trend crescente (>50/ora proiezione)
-2. **Warning:** >5 breach in 15min
-3. **Critical:** >10 breach in 5min
-
-### 4. Capacity Planning
-
-Usa i dati storici per:
-- Identificare utenti con crescita costante
-- Pianificare aumenti quota prima di OOM
-- Ottimizzare distribuzione risorse
-
----
-
-## Riferimenti
-
-- [Kernel Documentation - memory.high](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)
-- [CGROUP-V2-TECHNICAL.md](CGROUP-V2-TECHNICAL.md) - Technical reference completo
-- [CHANGELOG.md](../CHANGELOG.md) - Release notes v1.19.0
-
----
-
-## Supporto
-
-Per issue o domande:
-- GitHub Issues: https://github.com/fdefilippo/resman/issues
-- Documentazione: /usr/share/doc/resman/
-
----
-
-**Ultimo Aggiornamento:** 2026-03-31  
-**Versione:** ResMan v1.19.0
+- [Linux cgroup v2 memory controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory)
+- [PSI documentation](https://www.kernel.org/doc/html/latest/accounting/psi.html)
+- [`docs/TECHNICAL-SPECIFICATION.md`](TECHNICAL-SPECIFICATION.md)

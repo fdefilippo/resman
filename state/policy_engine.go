@@ -25,7 +25,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-// UserPolicy contiene le policy applicate a un utente.
+// UserPolicy contains the policies applied to a user.
 type UserPolicy struct {
 	CPUQuota         int    // CPU quota in microseconds
 	RAMQuota         string // RAM quota string (e.g., "1G")
@@ -35,14 +35,14 @@ type UserPolicy struct {
 	PreviousRAMQuota string
 }
 
-// PolicyEngine applica policy basate sui pattern rilevati.
+// PolicyEngine applies policies based on detected patterns.
 type PolicyEngine struct {
 	mu           sync.RWMutex
 	logger       *logging.Logger
-	userPolicies map[int]*UserPolicy // uid -> policy corrente
+	userPolicies map[int]*UserPolicy // uid -> current policy
 }
 
-// NewPolicyEngine crea un nuovo PolicyEngine.
+// NewPolicyEngine creates a PolicyEngine.
 func NewPolicyEngine(logger *logging.Logger) *PolicyEngine {
 	return &PolicyEngine{
 		logger:       logger,
@@ -97,7 +97,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	return true
 }
 
-// GetPolicy restituisce la policy corrente per un utente.
+// GetPolicy returns the current policy for a user.
 func (pe *PolicyEngine) GetPolicy(uid int) (*UserPolicy, bool) {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
@@ -149,7 +149,7 @@ func (pe *PolicyEngine) Clear() []int {
 	return removed
 }
 
-// getQuotasForPattern restituisce le quote CPU/RAM per un pattern.
+// getQuotasForPattern returns the CPU and RAM quotas for a pattern.
 func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config.Config) (int, string) {
 	switch pattern {
 	case PatternBatchNight:
@@ -157,15 +157,15 @@ func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config
 	case PatternInteractiveDay:
 		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
 	case PatternMixed:
-		// Per pattern misti, usa valori intermedi
+		// Use intermediate values for mixed patterns.
 		batchCPU := cfg.GetBatchNightCPUQuota()
 		interactiveCPU := cfg.GetInteractiveCPUQuota()
 		return (batchCPU + interactiveCPU) / 2, cfg.GetInteractiveRAMQuota()
 	case PatternAlwaysOn:
-		// Utenti sempre attivi: quota moderata
+		// Always-active users receive a moderate quota.
 		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
 	case PatternSporadic:
-		// Utenti sporadici: quota bassa di default
+		// Sporadic users receive a low quota by default.
 		return cfg.GetInteractiveCPUQuota() / 2, cfg.GetInteractiveRAMQuota()
 	default:
 		return 0, ""

@@ -1,13 +1,13 @@
-# SPEC file per resman
-# Build con: rpmbuild -ba resman.spec
+# ResMan RPM spec file
+# Build with: rpmbuild -ba resman.spec
 #
-# Questo spec crea un UNICO pacchetto RPM contenente:
-# - Binario
-# - File di configurazione
-# - Systemd service
+# This spec creates one RPM package containing:
+# - Binary
+# - Configuration file
+# - systemd service
 # - Man page
-# - Documentazione
-# - Script generazione certificati TLS
+# - Documentation
+# - TLS certificate generation script
 
 Name:    resman
 Version: 1.25.1
@@ -114,13 +114,13 @@ export CGO_ENABLED=1
 # Build binario principale
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
-# Prepara man page
+# Prepare the man page.
 mkdir -p %{_builddir}/%{name}-%{version}/man
 cp docs/resman.8 %{_builddir}/%{name}-%{version}/man/
 gzip -9 %{_builddir}/%{name}-%{version}/man/resman.8
 
 %install
-# Crea directory
+# Create package directories.
 mkdir -p %{buildroot}/%{_bindir}
 mkdir -p %{buildroot}/%{_sysconfdir}
 mkdir -p %{buildroot}/%{_unitdir}
@@ -129,55 +129,55 @@ mkdir -p %{buildroot}/%{_localstatedir}/log
 mkdir -p %{buildroot}/%{_mandir}/man8
 mkdir -p %{buildroot}/%{_docdir}/%{name}
 
-# Installa binario
+# Install the binary.
 install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 
 # Install the operator-authored configuration restrictively.
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman
 install -m 600 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman/resman.conf
 
-# Installa service systemd
+# Install the systemd service.
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
 
-# Installa man page
+# Install the man page.
 install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_mandir}/man8/
 
-# Installa documentazione aggiuntiva
+# Install additional documentation.
 install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 
-# Installa documentazione TLS
+# Install TLS and monitoring documentation.
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 docs/dashboard-grafana-operations.json %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 
-# Installa script generazione certificati TLS
+# Install the TLS certificate generation script.
 install -d %{buildroot}/%{_docdir}/%{name}/scripts
 install -m 755 docs/generate-tls-certs.sh %{buildroot}/%{_docdir}/%{name}/scripts/ 2>/dev/null || true
 
-# Installazione file di configurazione syslog
+# Install the syslog configuration.
 install -d %{buildroot}%{_sysconfdir}/rsyslog.d
 install -p -m 0644 packaging/syslog/resman.conf %{buildroot}%{_sysconfdir}/rsyslog.d/resman.conf
 
-# Installazione file di configurazione logrotate
+# Install the logrotate configuration.
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
 install -p -m 0644 packaging/syslog/resman %{buildroot}%{_sysconfdir}/logrotate.d/resman
 
 # Create the mutable-state directory restrictively.
 install -d -m 700 %{buildroot}/%{_sharedstatedir}/resman
 
-# Crea directory per certificati TLS (vuota, verrà popolata dall'admin)
+# Create the TLS certificate directory; the administrator populates it later.
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman/tls
 
 %pre
 # Pre-install script
 if [ $1 -eq 1 ]; then
-    # Nuova installazione
+    # New installation.
     echo "Preparing for Resource Manager installation..."
 
-    # Verifica cgroups v2
+    # Check for cgroups v2.
     if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
         echo "WARNING: cgroups v2 not detected. Please enable with:"
         echo "  grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1'"
@@ -235,7 +235,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 # Post-uninstall script
 %systemd_postun_with_restart resman.service
 
-# Aggiorna database man page
+# Update the man-page database.
 %{_bindir}/mandb -q 2>/dev/null || true
 
 %files

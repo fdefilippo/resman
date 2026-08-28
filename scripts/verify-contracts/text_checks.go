@@ -14,6 +14,7 @@ import (
 )
 
 var obsoleteProductPattern = regexp.MustCompile(`(?i)cpu[ _-]*manager`)
+var nonEnglishItalianPattern = regexp.MustCompile(`(?i)\b(?:abilita|abilitato|aggiorna|ambiente|applica|attività|avvio|carica|calcola|chiude|configurazione|consumo|controlla|converte|crea|database\s+troppo|dati\s+storici|disabilita|esegue|gestisce|giorni|indica|inizializza|installa|lettura|legge|leggi|limite|limiti|memoria|memorizza|metriche|nessun[oa]|ottiene|percorso|predefinit[oa]|processi|processo|registr[ao]|restituisce|riavvia|rimuove|riscrive|risoluzione|ruolo|salva|scrittura|scrive|servizio|settimana|sistema|soglia|sposta|supporta|totale|ultima|ultimo|utente|utenti|utilizza|valori|verifica|vengono)\b`)
 
 type obsoleteTokenMatch struct {
 	token  string
@@ -22,6 +23,125 @@ type obsoleteTokenMatch struct {
 
 func checkShippedAssets(root string, sources []goSource) checkResult {
 	return checkShippedAssetsWithTrackedPaths(root, sources, trackedRepositoryPaths(root))
+}
+
+func checkEnglishLanguage(root string, sources []goSource) checkResult {
+	return checkEnglishLanguageWithTrackedPaths(root, sources, trackedRepositoryPaths(root))
+}
+
+func checkEnglishLanguageWithTrackedPaths(root string, sources []goSource, trackedPaths map[string]bool) checkResult {
+	result := checkResult{name: "english-language"}
+	paths := []string{"docs", "packaging", "scripts", "README.md", "CONTRIBUTING.md", "Makefile"}
+
+	for _, relative := range paths {
+		path := filepath.Join(root, relative)
+		info, err := os.Stat(path)
+		if err != nil {
+			result.fail(relative, 1, "inspect current documentation: %v", err)
+			continue
+		}
+		if !info.IsDir() {
+			checkEnglishAssetFile(root, path, trackedPaths, &result)
+			continue
+		}
+		_ = filepath.WalkDir(path, func(candidate string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				rel, _ := filepath.Rel(root, candidate)
+				result.fail(rel, 1, "scan current documentation: %v", walkErr)
+				return nil
+			}
+			if entry.IsDir() {
+				// The checker contains the Italian rejection lexicon and fixtures by
+				// necessity, so its own implementation is outside the scan boundary.
+				if filepath.ToSlash(candidate) == filepath.ToSlash(filepath.Join(root, "scripts/verify-contracts")) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			checkEnglishAssetFile(root, candidate, trackedPaths, &result)
+			return nil
+		})
+	}
+
+	for _, source := range productionGoFiles(sources) {
+		if trackedPaths != nil && !trackedPaths[source.path] {
+			continue
+		}
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if ok && literal.Kind == token.STRING {
+				checkEnglishGoText(source, literal.Pos(), literal.Value, &result)
+			}
+			return true
+		})
+		for _, group := range source.file.Comments {
+			for _, comment := range group.List {
+				checkEnglishGoText(source, comment.Pos(), comment.Text, &result)
+			}
+		}
+	}
+	return result
+}
+
+func checkEnglishAssetFile(root, path string, trackedPaths map[string]bool, result *checkResult) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	if trackedPaths != nil && !trackedPaths[rel] {
+		return
+	}
+	lowerPath := strings.ToLower(rel)
+	if lowerPath == "packaging/deb/changelog" {
+		// Debian changelogs are immutable historical release records.
+		return
+	}
+	if strings.HasSuffix(lowerPath, ".gz") || strings.HasSuffix(lowerPath, ".png") || strings.HasSuffix(lowerPath, ".jpg") {
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		result.fail(rel, 1, "open current documentation: %v", err)
+		return
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			result.fail(rel, 1, "close current documentation: %v", err)
+		}
+	}()
+
+	inRPMChangelog := false
+	scanner := bufio.NewScanner(file)
+	for line := 1; scanner.Scan(); line++ {
+		text := scanner.Text()
+		if strings.HasSuffix(lowerPath, ".spec") && strings.TrimSpace(text) == "%changelog" {
+			// RPM changelog entries describe historical releases and must not be rewritten.
+			inRPMChangelog = true
+			continue
+		}
+		if inRPMChangelog {
+			continue
+		}
+		checkEnglishText(rel, line, text, result)
+	}
+	if err := scanner.Err(); err != nil {
+		result.fail(rel, 1, "read current documentation: %v", err)
+	}
+}
+
+func checkEnglishGoText(source goSource, pos token.Pos, text string, result *checkResult) {
+	startLine := sourceLine(source, pos)
+	for _, index := range nonEnglishItalianPattern.FindAllStringIndex(text, -1) {
+		line := startLine + strings.Count(text[:index[0]], "\n")
+		result.fail(source.path, line, "Italian production text %q must be English", text[index[0]:index[1]])
+	}
+}
+
+func checkEnglishText(path string, line int, text string, result *checkResult) {
+	for _, match := range nonEnglishItalianPattern.FindAllString(text, -1) {
+		result.fail(path, line, "Italian current documentation text %q must be English", match)
+	}
 }
 
 func checkShippedAssetsWithTrackedPaths(root string, sources []goSource, trackedPaths map[string]bool) checkResult {

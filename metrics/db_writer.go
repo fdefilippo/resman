@@ -106,7 +106,7 @@ func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, system Sy
 	return nil
 }
 
-// ShouldWrite verifica se è il momento di scrivere nel database
+// ShouldWrite reports whether the database write interval has elapsed.
 func (w *DBWriter) ShouldWrite() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -118,21 +118,21 @@ func (w *DBWriter) ShouldWrite() bool {
 	return time.Since(w.lastWriteTime) >= w.writeInterval
 }
 
-// MarkWritten marca la scrittura come avvenuta
+// MarkWritten records a successful database write.
 func (w *DBWriter) MarkWritten() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.lastWriteTime = time.Now()
 }
 
-// SetEnabled abilita o disabilita la scrittura
+// SetEnabled enables or disables database writes.
 func (w *DBWriter) SetEnabled(enabled bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.enabled = enabled
 }
 
-// Close chiude il DBWriter
+// Close disables the DBWriter.
 func (w *DBWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

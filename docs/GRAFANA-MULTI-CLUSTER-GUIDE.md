@@ -1,315 +1,173 @@
-# Grafana Dashboard Multi-Cluster Guide
+# Grafana Multi-Cluster Dashboard Guide
 
-## Panoramica
+## Overview
 
-La dashboard Grafana di ResMan supporta ora:
-- **Multi-cluster**: Visualizza metriche da più cluster Prometheus
-- **Environment**: Distingue production, staging e development
-- **Server Role**: Filtra per ruolo del server (database, web-frontend, batch, etc.)
-- **Hostname**: Filtra per hostname specifico
+The shipped operations dashboard supports filtering and grouping by:
 
-## Configurazione Prometheus
+- Prometheus cluster and environment labels;
+- the ResMan `server_role` label;
+- hostname;
+- one or more selected values for each variable.
 
-### 1. External Labels
+Cluster and environment are scrape-time labels. Hostname and server role are exported
+by ResMan on every relevant metric family.
 
-Aggiungi external labels alla configurazione Prometheus per identificare il cluster:
+## Prometheus configuration
 
-```yaml
-# prometheus.yml
-global:
-  external_labels:
-    cluster: 'primary'         # Nome del cluster
-    environment: 'production' # Ambiente operativo
-    region: 'eu-west-1'        # Opzionale: regione
-```
-
-**Esempio multi-cluster:**
-```yaml
-# Primary production cluster
-global:
-  external_labels:
-    cluster: 'primary'
-    environment: 'production'
-
-# Secondary staging cluster
-global:
-  external_labels:
-    cluster: 'secondary'
-    environment: 'staging'
-```
-
-### 2. ResMan Configuration
-
-Configura `SERVER_ROLE` in `/etc/resman/resman.conf`:
-
-```bash
-# Ruoli predefiniti suggeriti:
-# - database: Server database (MySQL, PostgreSQL, MongoDB)
-# - web-frontend: Server web (Nginx, Apache)
-# - web-backend: Application server (Node.js, Python, Java)
-# - batch: Batch processing server
-# - cache: Cache server (Redis, Memcached)
-# - monitoring: Monitoring server
-# - development: Development server
-
-SERVER_ROLE=database
-```
-
-### 3. Metriche con Label
-
-Tutte le metriche ResMan includono ora:
-- `hostname`: Hostname del server (automatico)
-- `server_role`: Ruolo configurato (da SERVER_ROLE)
-- `cluster`: Label esterna Prometheus (da prometheus.yml)
-- `environment`: Label esterna Prometheus (da prometheus.yml)
-
-**Esempio metrica:**
-```
-resman_cpu_total_usage_percent{
-  hostname="db-prod-01",
-  server_role="database",
-  cluster="primary",
-  environment="production"
-} 75.5
-```
-
-## Importare la Dashboard
-
-### 1. Via Grafana UI
-
-```bash
-1. Apri Grafana
-2. Dashboards → Import
-3. Carica file: docs/dashboard-grafana-operations.json
-4. Seleziona datasource Prometheus
-5. Clicca Import
-```
-
-### 2. Dashboard Variables
-
-La dashboard include le seguenti variabili:
-
-| Variabile | Label | Query | Multi-Select |
-|-----------|-------|-------|--------------|
-| `cluster` | Cluster | `label_values(resman_cpu_total_usage_percent, cluster)` | ✅ Yes |
-| `environment` | Environment | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster"}, environment)` | ✅ Yes |
-| `server_role` | Server Role | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment"}, server_role)` | ✅ Yes |
-| `hostname` | Hostname | `label_values(resman_cpu_total_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role"}, hostname)` | ✅ Yes |
-| `username` | Username | `label_values(resman_user_cpu_usage_percent{cluster=~"$cluster", environment=~"$environment", server_role=~"$server_role", hostname=~"$hostname"}, username)` | ✅ Yes |
-
-### 3. Utilizzo dei Filtri
-
-**Filtrare per cluster:**
-1. Clicca sul dropdown "Cluster" in alto
-2. Seleziona uno o più cluster
-3. Tutti i panel mostrano solo dati dai cluster selezionati
-
-**Filtrare per server role:**
-1. Seleziona prima cluster ed environment
-2. Clicca sul dropdown "Server Role"
-3. Seleziona uno o più ruoli (es: "database", "web-frontend")
-
-**Filtrare per hostname:**
-1. Seleziona cluster, environment e server role
-2. Clicca sul dropdown "Hostname"
-3. Seleziona uno o più hostname specifici
-
-## Esempi di Query
-
-### CPU Usage per Cluster e Role
-
-```promql
-# CPU totale per cluster
-sum by (cluster) (resman_cpu_total_usage_percent)
-
-# CPU totale per server role
-sum by (server_role) (resman_cpu_total_usage_percent{cluster=~"$cluster"})
-
-# CPU per hostname
-sum by (hostname) (resman_cpu_total_usage_percent{cluster=~"$cluster", server_role=~"$server_role"})
-```
-
-### Top Users CPU Usage
-
-```promql
-# Top 5 utenti per CPU usage
-topk(5, resman_user_cpu_usage_percent{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
-
-# Top 5 utenti per memoria
-topk(5, resman_user_memory_usage_bytes{cluster=~"$cluster", server_role=~"$server_role", hostname=~"$hostname"})
-```
-
-### Limits Status Multi-Cluster
-
-```promql
-# Cluster con limiti attivi
-resman_cpu_limits_active{cluster=~"$cluster"} == 1
-
-# Server role con più utenti limitati
-sum by (server_role) (resman_cpu_actively_limited_users_count{cluster=~"$cluster"})
-```
-
-## Alerting Multi-Cluster
-
-Esempio di regole di alerting:
-
-```yaml
-groups:
-  - name: resman-multi-cluster
-    rules:
-      - alert: HighCPUUsageAllClusters
-        expr: resman_cpu_total_usage_percent > 90
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High CPU on {{ $labels.hostname }} ({{ $labels.cluster }})"
-          description: "CPU usage is above 90% on {{ $labels.hostname }} ({{ $labels.server_role }}) in cluster {{ $labels.cluster }}"
-
-      - alert: LimitsActiveLongTime
-        expr: resman_cpu_limits_active == 1
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "CPU limits active for 1h on {{ $labels.hostname }}"
-          description: "CPU limits have been active on {{ $labels.hostname }} ({{ $labels.server_role }}) for more than 1 hour"
-```
-
-## Troubleshooting
-
-### Problema: Variabile cluster vuota
-
-**Causa:** External labels non configurate in Prometheus
-
-**Soluzione:**
-```yaml
-# prometheus.yml
-global:
-  external_labels:
-    cluster: 'production'  # Aggiungi questo
-```
-
-### Problema: server_role non appare
-
-**Causa:** SERVER_ROLE non configurato in ResMan
-
-**Soluzione:**
-```bash
-# /etc/resman/resman.conf
-SERVER_ROLE=database
-
-# Riavvia ResMan
-sudo systemctl restart resman
-```
-
-### Problema: hostname mostra "unknown"
-
-**Causa:** Impossibile risolvere l'hostname di sistema
-
-**Soluzione:**
-```bash
-# Verifica hostname di sistema
-hostnamectl
-
-# Se necessario, imposta hostname
-sudo hostnamectl set-hostname db-prod-01
-```
-
-## Best Practices
-
-### 1. Naming Convention
-
-Usa naming convention coerenti per i cluster:
-- `production`, `staging`, `development`
-- Oppure: `prod-us-east`, `prod-eu-west`, `staging-us`
-
-### 2. Server Role Standardizzati
-
-Definisci una lista di ruoli standard:
-```bash
-# Ruoli consigliati
-SERVER_ROLE=database
-SERVER_ROLE=web-frontend
-SERVER_ROLE=web-backend
-SERVER_ROLE=batch
-SERVER_ROLE=cache
-SERVER_ROLE=monitoring
-SERVER_ROLE=development
-```
-
-### 3. Dashboard Separate per Team
-
-Crea dashboard specifiche per team:
-- **Team Database**: Filtra su `server_role="database"`
-- **Team Web**: Filtra su `server_role=~"web-.*"`
-- **Team Operations**: Tutti i cluster e ruoli
-
-### 4. Alerting per Cluster
-
-Configura alert diversi per cluster:
-- Production: Soglie più basse, escalation immediata
-- Staging: Soglie più alte, notifica email
-- Development: Solo logging, nessun alert
-
-## Esempio Configurazione Completa
-
-### Prometheus (production cluster)
+Add stable external labels to each Prometheus instance:
 
 ```yaml
 # /etc/prometheus/prometheus.yml
 global:
   external_labels:
-    cluster: 'production'
-    region: 'eu-west-1'
+    cluster: production-eu
+    environment: production
 
 scrape_configs:
-  - job_name: 'resman'
+  - job_name: resman
+    scheme: https
     static_configs:
-      - targets: ['db-prod-01:1974']
-        labels:
-          server_type: 'database'
-      - targets: ['web-prod-01:1974']
-        labels:
-          server_type: 'web-frontend'
+      - targets:
+          - db-prod-01.example.com:1974
+          - web-prod-01.example.com:1974
+    tls_config:
+      ca_file: /etc/prometheus/resman-ca.crt
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/resman-token
 ```
 
-### ResMan (db-prod-01)
+Use a different `cluster` label for every Prometheus cluster and a consistent
+`environment` vocabulary such as `production`, `staging`, and `development`.
 
-```bash
-# /etc/resman/resman.conf
+The example in [`prometheus.yml`](prometheus.yml) is the authoritative scrape template.
+
+## ResMan server roles
+
+Set a stable role on each host:
+
+```ini
 SERVER_ROLE=database
-CPU_THRESHOLD=75
-CPU_RELEASE_THRESHOLD=40
-ENABLE_PROMETHEUS=true
-# NON-DEFAULT REMOTE BIND: requires TLS, authentication, and firewall restrictions.
-PROMETHEUS_METRICS_BIND_HOST=0.0.0.0
-PROMETHEUS_METRICS_BIND_PORT=1974
 ```
 
-### ResMan (web-prod-01)
+Recommended values include `database`, `web-frontend`, `web-backend`, `batch`, `cache`,
+`monitoring`, and `development`. Consistency matters more than the exact vocabulary.
+Do not encode the hostname or environment into the role.
+
+## Importing the dashboard
+
+1. Open Grafana and select **Dashboards → New → Import**.
+2. Upload [`dashboard-grafana-operations.json`](dashboard-grafana-operations.json).
+3. Select the Prometheus data source.
+4. Save the dashboard and verify the cluster, environment, role, and hostname variables.
+
+The variables support multi-selection and an **All** value. Narrow cluster and
+environment first, then role and hostname, to keep high-cardinality queries focused.
+
+## Query patterns
+
+### CPU usage by cluster and role
+
+```promql
+sum by (cluster) (resman_all_users_cpu_usage_percent)
+
+sum by (cluster, environment, server_role) (
+  resman_all_users_cpu_usage_percent
+)
+
+sum by (cluster, environment, server_role, hostname) (
+  resman_all_users_cpu_usage_percent
+)
+```
+
+### Highest per-user consumption
+
+```promql
+topk(5, resman_user_cpu_usage_percent)
+
+topk(5, resman_user_memory_usage_bytes)
+```
+
+### Enforcement transitions
+
+```promql
+sum by (cluster, environment, server_role, hostname) (
+  increase(resman_limits_activated_total[15m])
+)
+
+sum by (cluster, environment, server_role, hostname) (
+  increase(resman_limits_deactivated_total[15m])
+)
+```
+
+The transition counters carry hostname and server-role labels. Cluster and environment
+come from Prometheus external labels or scrape relabeling.
+
+## Multi-cluster alerting
+
+Group alerts by labels that identify the affected deployment:
+
+```yaml
+groups:
+  - name: resman-multi-cluster
+    rules:
+      - alert: ResManLimitsActive
+        expr: resman_limits_active == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Limits active on {{ $labels.hostname }}
+            ({{ $labels.cluster }}/{{ $labels.environment }}, {{ $labels.server_role }})
+```
+
+Start from [`alerting-rules.yml`](alerting-rules.yml), whose metric names and semantics
+are checked by `promtool` and the repository contract checker.
+
+## Troubleshooting
+
+### The cluster variable is empty
+
+Confirm that the series carry `cluster` and `environment`:
+
+```promql
+count by (cluster, environment) ({__name__=~"resman_.*"})
+```
+
+If the labels are absent, add external labels or scrape relabeling and reload Prometheus.
+
+### The server role is absent
+
+Confirm `SERVER_ROLE` in `/etc/resman/resman.conf`, restart ResMan when required by the
+configuration lifecycle, and inspect a current series:
+
+```promql
+count by (server_role) (resman_all_users_count)
+```
+
+### Hostname is `unknown`
+
+Check the operating-system hostname before changing ResMan:
 
 ```bash
-# /etc/resman/resman.conf
-SERVER_ROLE=web-frontend
-CPU_THRESHOLD=80
-CPU_RELEASE_THRESHOLD=45
-ENABLE_PROMETHEUS=true
-# NON-DEFAULT REMOTE BIND: requires TLS, authentication, and firewall restrictions.
-PROMETHEUS_METRICS_BIND_HOST=0.0.0.0
-PROMETHEUS_METRICS_BIND_PORT=1974
+hostnamectl status
+hostname
 ```
 
-### Grafana Dashboard
+Set a stable hostname, restart ResMan, and allow Prometheus to scrape the new series.
 
-1. Importa `docs/dashboard-grafana-operations.json`
-2. Seleziona datasource Prometheus
-3. Usa i dropdown per filtrare:
-   - Cluster: production
-   - Server Role: database
-   - Hostname: db-prod-01
+### Panels disappear after selecting a host
 
----
+Confirm that the selected metric family carries the `hostname` and `server_role` labels.
+Series produced before an upgrade that added those labels have a different identity and
+end at the upgrade boundary; new series start from zero for counters.
 
-**Versione Dashboard:** 1.1 (Compatibile con ResMan v1.13.0+)
-**Ultimo Aggiornamento:** Marzo 2026
+## Operational conventions
+
+- Use stable, lowercase cluster, environment, and role values.
+- Keep production and staging distinguishable even when they share Prometheus or Grafana.
+- Create team-specific dashboards by applying variables, not by copying and editing the
+  metric names.
+- Use TLS and authentication for every non-loopback Prometheus bind.
+- Keep wildcard binds explicit and protect them with firewall policy.

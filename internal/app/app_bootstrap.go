@@ -129,7 +129,7 @@ func (a *App) WithDatabase() *App {
 	return a
 }
 
-// WithPrometheus inizializza l'exporter Prometheus se abilitato.
+// WithPrometheus initializes the Prometheus exporter when enabled.
 func (a *App) WithPrometheus() *App {
 	if a.err != nil {
 		return a
@@ -185,7 +185,7 @@ func (a *App) WithPrometheus() *App {
 	return a
 }
 
-// WithStateManager inizializza il decision engine.
+// WithStateManager initializes the decision engine.
 func (a *App) WithStateManager() *App {
 	if a.err != nil {
 		return a
@@ -202,7 +202,7 @@ func (a *App) WithStateManager() *App {
 	return a
 }
 
-// WithConfigWatcher abilita il reload automatico della configurazione.
+// WithConfigWatcher enables automatic configuration reloads.
 func (a *App) WithConfigWatcher() *App {
 	if a.err != nil || a.configPath == "" {
 		return a

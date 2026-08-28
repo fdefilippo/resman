@@ -73,6 +73,7 @@ func main() {
 		checkCrossPackageMapKeys(root, goFiles),
 		checkMCPContracts(root, goFiles),
 		checkShippedAssets(root, goFiles),
+		checkEnglishLanguage(root, goFiles),
 		checkPrometheusAssets(root),
 	}
 

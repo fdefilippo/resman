@@ -11,7 +11,7 @@ import (
 )
 
 func (m *Manager) CreateUserCgroup(uid int) error {
-	// Verifica se esiste già
+	// Check whether the cgroup already exists.
 	if existingPath, exists := m.getCgroupPath(uid); exists {
 		if _, err := os.Stat(existingPath); err == nil {
 			m.logger.Debug("Cgroup already exists for user", "uid", uid)
@@ -30,7 +30,7 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 
 	cgroupPath := m.getUserCgroupPath(uid)
 
-	// Crea la directory del cgroup
+	// Create the cgroup directory.
 	if err := os.MkdirAll(cgroupPath, 0755); err != nil {
 		return fmt.Errorf("failed to create cgroup directory %s for UID %d: %w", cgroupPath, uid, err)
 	}
@@ -40,7 +40,7 @@ func (m *Manager) CreateUserCgroup(uid int) error {
 			"uid", uid,
 			"error", err,
 		)
-		// Non falliamo per questo errore
+		// Do not fail solely because the tracking file could not be updated.
 	}
 
 	m.logger.Debug("Cgroup created for user", "uid", uid, "path", cgroupPath)
@@ -56,14 +56,14 @@ func (m *Manager) ApplyCPUQuota(uid int, quota string) error {
 
 	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
 
-	// Valida il formato della quota
+	// Validate the quota format.
 	if !isValidCPUQuotaFormat(quota) {
 		return fmt.Errorf("invalid CPU quota format '%s': expected 'quota period' (e.g., '50000 100000') or 'max period'", quota)
 	}
 
-	// Applica il limite
+	// Apply the limit.
 	if err := os.WriteFile(cpuMaxFile, []byte(quota), 0644); err != nil {
-		// Prova con permessi diversi
+		// Retry after making the control file writable.
 		if os.IsPermission(err) {
 			if chmodErr := os.Chmod(cpuMaxFile, 0644); chmodErr != nil {
 				m.logger.Warn("Failed to chmod CPU max file",
@@ -78,7 +78,7 @@ func (m *Manager) ApplyCPUQuota(uid int, quota string) error {
 		}
 	}
 
-	// Verifica che il limite sia stato applicato
+	// Verify that the limit was applied.
 	if data, err := os.ReadFile(cpuMaxFile); err == nil {
 		appliedQuota := strings.TrimSpace(string(data))
 		if appliedQuota != quota {
@@ -138,7 +138,7 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 	return nil
 }
 
-// ApplyCPUWeight applica un peso CPU (proporzionale) a un cgroup utente.
+// ApplyCPUWeight applies a proportional CPU weight to a user cgroup.
 func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
 	cgroupPath, err := m.ensureCgroupPath(uid)
 	if err != nil {
@@ -147,7 +147,7 @@ func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
 
 	cpuWeightFile := filepath.Join(cgroupPath, "cpu.weight")
 
-	// Il peso deve essere tra 1 e 10000
+	// Clamp the weight to the kernel-supported range of 1 through 10000.
 	if weight < 1 {
 		weight = 1
 	}
@@ -155,7 +155,7 @@ func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
 		weight = 10000
 	}
 
-	// Applica il peso
+	// Apply the weight.
 	weightStr := strconv.Itoa(weight)
 	if err := os.WriteFile(cpuWeightFile, []byte(weightStr), 0644); err != nil {
 		return fmt.Errorf("failed to apply CPU weight for UID %d: %w", uid, err)
@@ -170,28 +170,28 @@ func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
 	return nil
 }
 
-// RemoveCPULimit rimuove il limite di CPU (imposta a "max").
+// RemoveCPULimit removes the CPU limit by setting it to "max".
 func (m *Manager) RemoveCPULimit(uid int) error {
 	return m.ApplyCPULimit(uid, "max 100000")
 }
 
-// MoveProcessToCgroup sposta un processo nel cgroup dell'utente.
+// isValidCPUQuotaFormat validates a cpu.max quota value.
 func isValidCPUQuotaFormat(quota string) bool {
 	parts := strings.Fields(quota)
 	if len(parts) != 2 {
 		return false
 	}
 
-	// La prima parte può essere "max" o un numero
+	// The first field may be "max" or a number.
 	if parts[0] == "max" {
 		_, err := strconv.Atoi(parts[1])
 		return err == nil
 	}
 
-	// Altrimenti entrambe devono essere numeri
+	// Otherwise, both fields must be numeric.
 	_, err1 := strconv.Atoi(parts[0])
 	_, err2 := strconv.Atoi(parts[1])
 	return err1 == nil && err2 == nil
 }
 
-// GetCreatedCgroups restituisce una lista di UID con cgroups attivi.
+// GetCreatedCgroups returns the UIDs with active cgroups.

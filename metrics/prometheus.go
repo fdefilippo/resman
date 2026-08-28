@@ -191,7 +191,7 @@ func (exp *PrometheusExporter) SetUsernameResolver(resolver func(int) string) {
 	exp.usernameResolver.Store(resolver)
 }
 
-// NewPrometheusExporter crea un nuovo esportatore Prometheus.
+// NewPrometheusExporter creates a Prometheus exporter.
 func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	logger := logging.GetLogger()
 
@@ -205,12 +205,12 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		"port", cfg.PrometheusMetricsBindPort,
 	)
 
-	// Verifica che la porta sia valida
+	// Validate the port.
 	if cfg.PrometheusMetricsBindPort <= 0 || cfg.PrometheusMetricsBindPort > 65535 {
 		return nil, fmt.Errorf("invalid Prometheus metrics bind port %d (must be 1-65535)", cfg.PrometheusMetricsBindPort)
 	}
 
-	// Ottieni hostname e server_role
+	// Resolve the hostname and server role.
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
@@ -243,17 +243,17 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		"server_role", exp.serverRole,
 	)
 
-	// Carica credenziali di autenticazione e certificati TLS
+	// Load authentication credentials and TLS certificates.
 	if err := exp.loadCredentials(); err != nil {
 		return nil, fmt.Errorf("failed to load Prometheus security credentials: %w", err)
 	}
 
-	// Registra metriche
+	// Register application metrics.
 	if err := exp.registerMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to register metrics: %w", err)
 	}
 
-	// Registra metriche standard di Go
+	// Register standard Go metrics.
 	exp.registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -1071,7 +1071,7 @@ func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username strin
 	exp.prevUserPatterns[userKey] = pattern
 }
 
-// parseCPUQuota estrae quota e period da una stringa "quota period".
+// parseCPUQuota extracts quota and period from a "quota period" value.
 func parseCPUQuota(quotaStr string) (quota int64, period int64) {
 	parts := strings.Fields(quotaStr)
 	if len(parts) != 2 {
@@ -1079,7 +1079,7 @@ func parseCPUQuota(quotaStr string) (quota int64, period int64) {
 	}
 
 	if parts[0] == "max" {
-		quota = -1 // Indica "max" (illimitato)
+		quota = -1 // Represent "max" as unlimited.
 	} else {
 		if val, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
 			quota = val
@@ -1093,7 +1093,7 @@ func parseCPUQuota(quotaStr string) (quota int64, period int64) {
 	return quota, period
 }
 
-// getUsernameFromUID converte un UID in username.
+// getUsernameFromUID converts a UID into a username.
 func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	uid, err := strconv.Atoi(uidStr)
 	if err != nil {
@@ -1103,7 +1103,7 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 		return resolver(uid)
 	}
 
-	// Prova a leggere da /etc/passwd
+	// Fall back to /etc/passwd.
 	file, err := os.Open("/etc/passwd")
 	if err != nil {
 		return uidStr
@@ -1152,7 +1152,7 @@ func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	exp.controlCycleTriggers.WithLabelValues(trigger).Inc()
 }
 
-// RecordPSIEvent registra un evento PSI ricevuto dal kernel.
+// RecordPSIEvent records a PSI event received from the kernel.
 func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.Time) {
 	if exp == nil || exp.psiEventsTotal == nil || exp.psiLastEventTimestamp == nil {
 		return
@@ -1222,10 +1222,10 @@ func validLimitHookOutcome(outcome LimitHookOutcome) bool {
 	}
 }
 
-// authMiddleware gestisce l'autenticazione per Basic Auth e JWT
+// authMiddleware handles Basic Auth and JWT authentication.
 func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Se l'autenticazione è disabilitata, passa direttamente
+		// Pass the request through when authentication is disabled.
 		if exp.cfg.PrometheusAuthType == "none" || exp.cfg.PrometheusAuthType == "" {
 			next.ServeHTTP(w, r)
 			return
@@ -1265,7 +1265,7 @@ func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// checkBasicAuth verifica le credenziali Basic Auth
+// checkBasicAuth validates Basic Auth credentials.
 func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 	if exp.cfg.PrometheusAuthUsername == "" || exp.basicAuthPassword == "" {
 		return false
@@ -1275,12 +1275,12 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 		return false
 	}
 
-	// Verifica username
+	// Verify the username.
 	if subtle.ConstantTimeCompare([]byte(username), []byte(exp.cfg.PrometheusAuthUsername)) != 1 {
 		return false
 	}
 
-	// Verifica password
+	// Verify the password.
 	if subtle.ConstantTimeCompare([]byte(password), []byte(exp.basicAuthPassword)) != 1 {
 		return false
 	}
@@ -1288,7 +1288,7 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 	return true
 }
 
-// checkJWTAuth verifica il token JWT
+// checkJWTAuth validates a JWT.
 func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	if len(exp.jwtSecret) == 0 {
 		return false
@@ -1298,7 +1298,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 		return false
 	}
 
-	// Estrai il token Bearer
+	// Extract the bearer token.
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		return false
@@ -1306,9 +1306,9 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 
 	tokenString := parts[1]
 
-	// Parse e valida il token
+	// Parse and validate the token.
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Verifica l'algoritmo
+		// Verify the signing algorithm.
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -1321,14 +1321,14 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		// Verifica issuer
+		// Verify the issuer.
 		if exp.cfg.PrometheusJWTIssuer != "" {
 			if issuer, ok := claims["iss"].(string); !ok || issuer != exp.cfg.PrometheusJWTIssuer {
 				return false
 			}
 		}
 
-		// Verifica audience
+		// Verify the audience.
 		if exp.cfg.PrometheusJWTAudience != "" {
 			if audience, ok := claims["aud"].(string); !ok || audience != exp.cfg.PrometheusJWTAudience {
 				return false
@@ -1341,7 +1341,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	return false
 }
 
-// healthHandler gestisce l'endpoint /health
+// healthHandler serves the /health endpoint.
 func (exp *PrometheusExporter) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1351,7 +1351,7 @@ func (exp *PrometheusExporter) healthHandler(w http.ResponseWriter, r *http.Requ
 	)
 }
 
-// rootHandler gestisce l'endpoint root
+// rootHandler serves the root endpoint.
 func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -1542,7 +1542,7 @@ func (exp *PrometheusExporter) Stop() error {
 	}
 }
 
-// IsRunning restituisce true se l'esportatore è in esecuzione.
+// IsRunning reports whether the exporter is running.
 func (exp *PrometheusExporter) IsRunning() bool {
 	if exp == nil {
 		return false
@@ -1553,7 +1553,7 @@ func (exp *PrometheusExporter) IsRunning() bool {
 	return exp.isRunning
 }
 
-// GetMetricsEndpoint restituisce l'endpoint delle metriche.
+// GetMetricsEndpoint returns the metrics endpoint.
 func (exp *PrometheusExporter) GetMetricsEndpoint() string {
 	if exp == nil {
 		return ""

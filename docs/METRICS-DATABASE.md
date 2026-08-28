@@ -1,523 +1,157 @@
-# Metrics Database - Guida Completa
+# Metrics Database Guide
 
-## Panoramica
+## Overview
 
-A partire dalla versione 1.16.0, ResMan supporta la persistenza delle metriche in un database locale SQLite per esporre lo storico delle metriche via MCP (Model Context Protocol).
+ResMan can persist system and per-user observations in SQLite and expose the retained
+history through MCP. Persistence is disabled by default so an operator must opt in.
+Database write failures are observable and retried on a later control cycle, but they
+do not disable resource enforcement.
 
-### Vantaggi
+## Configuration
 
-- **Storico delle metriche**: Accedi a dati storici CPU e RAM per analisi temporali
-- **Query flessibili**: Ottieni dati per utente, periodo, o metriche di sistema
-- **Integrazione MCP**: 4 nuovi tools per interrogare lo storico
-- **Basso impatto**: Scrittura asincrona che non blocca il ciclo di controllo
-- **Retention automatica**: Cleanup automatico dei dati vecchi
+The authoritative defaults and comments are in
+[`config/resman.conf.example`](../config/resman.conf.example).
 
----
-
-## Configurazione
-
-### Variabili di Configurazione
-
-Aggiungi al file `/etc/resman/resman.conf`:
-
-```bash
-# ========================
-# METRICS DATABASE (SQLite)
-# ========================
-
-# Abilita la persistenza delle metriche (default: false)
+```ini
 METRICS_DB_ENABLED=false
-
-# Percorso del database SQLite (default: /var/lib/resman/metrics.db)
 METRICS_DB_PATH=/var/lib/resman/metrics.db
-
-# Giorni di retention dei dati (default: 30)
 METRICS_DB_RETENTION_DAYS=30
-
-# Intervallo di scrittura in secondi (default: 30)
 METRICS_DB_WRITE_INTERVAL=30
 ```
 
-### Contratto dei permessi per database su disco
+- `METRICS_DB_ENABLED` enables persistence and the database-backed MCP tools.
+- `METRICS_DB_PATH` selects the SQLite file. Use `:memory:` only for tests.
+- `METRICS_DB_RETENTION_DAYS` controls automatic retention cleanup and is dynamic.
+- `METRICS_DB_WRITE_INTERVAL` is measured in seconds and must be at least 5.
 
-Per un `METRICS_DB_PATH` su disco, la directory immediatamente superiore deve
-essere una directory reale, non un link simbolico, appartenere all'UID con cui
-gira ResMan e avere modo `0700`. ResMan crea una directory mancante con quel
-modo, ma rifiuta una directory esistente con proprietà o permessi diversi.
-Anche la gerarchia superiore deve essere stabile: non sono ammessi antenati
-simbolici o directory dalle quali un proprietario, gruppo o altro utente non
-fidato possa sostituire il percorso già verificato. Una directory temporanea
-con sticky bit è valida quando protegge la sottodirectory privata.
+Changing `METRICS_DB_ENABLED`, `METRICS_DB_PATH`, or
+`METRICS_DB_WRITE_INTERVAL` requires a restart. Reload reports that requirement
+explicitly rather than publishing values that the running database does not use.
 
-Un database preesistente e gli eventuali file SQLite `-wal` e `-shm` devono
-essere file regolari, non link simbolici, appartenere allo stesso UID e avere
-modo `0600`. ResMan non corregge silenziosamente artefatti appartenenti
-all'operatore: arresta la persistenza, indica il percorso non sicuro e richiede
-di correggere esplicitamente proprietà e permessi. Il controllo avviene prima
-dell'apertura SQLite; una `umask` permissiva non è quindi usata come controllo
-di riservatezza. Il valore `:memory:` è esente perché non crea file.
+### On-disk security contract
 
-### Esempi di Configurazione
+For a file-backed database, the immediate parent directory must be owned by the UID
+running ResMan and have mode `0700`. ResMan creates a missing parent with that mode.
+The ancestor hierarchy must be stable: symbolic-link ancestors and directories whose
+owner, group, or other users can replace the verified path are rejected.
 
-#### Configurazione Base (Consigliata)
-```bash
+An existing database and its optional `-wal` and `-shm` sidecars must be regular,
+non-symlink files owned by the ResMan UID with mode `0600`. ResMan validates these
+properties before SQLite opens the store and normalizes newly created files to
+`0600`. It never relies on the caller's umask to protect per-user history.
+
+An invalid persistence path disables database features while the resource manager
+continues protecting the host. Startup reports the exact path, expected ownership,
+and required mode. Correct the filesystem state and restart ResMan; do not weaken the
+permissions. The `:memory:` database is exempt because it creates no files.
+
+## Examples
+
+### Standard persistent database
+
+```ini
 METRICS_DB_ENABLED=true
 METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 ```
 
-#### Database in RAM (Per Testing)
-```bash
+### In-memory test database
+
+```ini
 METRICS_DB_ENABLED=true
 METRICS_DB_PATH=:memory:
 ```
-**Nota**: I dati vengono persi al riavvio del servizio.
 
-#### Retention Estesa (90 giorni)
-```bash
+All data in an in-memory database is lost when the service stops.
+
+### Extended retention with fewer writes
+
+```ini
 METRICS_DB_ENABLED=true
-METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=90
-METRICS_DB_WRITE_INTERVAL=30
-```
-
-#### Scrittura Meno Frequente (Ogni 5 minuti)
-```bash
-METRICS_DB_ENABLED=true
 METRICS_DB_WRITE_INTERVAL=300
 ```
 
----
+## Schema and compatibility
 
-## Schema del Database
+The current store contains `user_metrics` and `system_metrics` tables. User records
+include observed CPU, memory, process count, cgroup path, per-resource eligibility,
+requested limits, and observed active enforcement state. System records contain the
+host observation and the distinct CPU, resource, and combined enforcement states.
 
-### `user_metrics` table
+The schema is versioned with SQLite `PRAGMA user_version`. ResMan intentionally does
+not migrate an incompatible database. If the on-disk version differs from the current
+schema, startup refuses to open it and tells the operator to move or delete the store
+before restarting. This prevents old columns from being silently reinterpreted under
+new semantics.
 
-Schema version 3 stores policy eligibility, control intent, and observed enforcement
-as separate facts for every resource. `PRAGMA user_version` is set to `3`.
+Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
+values are stored in UTC and API responses use RFC 3339.
 
-This is an intentionally breaking schema. A database containing the old unversioned
-`is_limited` column is rejected at startup. ResMan does not migrate or reinterpret old
-rows: move or delete the database and restart the service to create a new version 3
-store.
+## MCP access
 
-```sql
-CREATE TABLE user_metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    uid INTEGER NOT NULL,
-    username TEXT NOT NULL,
-    cpu_usage_percent REAL NOT NULL,
-    memory_usage_bytes INTEGER NOT NULL,
-    process_count INTEGER NOT NULL,
-    cgroup_path TEXT,
-    cpu_quota TEXT,
-    eligible_for_cpu BOOLEAN NOT NULL,
-    eligible_for_ram BOOLEAN NOT NULL,
-    eligible_for_io BOOLEAN NOT NULL,
-    cpu_limit_requested BOOLEAN NOT NULL,
-    cpu_limit_active BOOLEAN NOT NULL,
-    ram_limit_requested BOOLEAN NOT NULL,
-    ram_limit_active BOOLEAN NOT NULL,
-    io_limit_requested BOOLEAN NOT NULL,
-    io_limit_active BOOLEAN NOT NULL
-);
+The database-backed tools are registered even when persistence is disabled so the
+public tool inventory is stable. Invocation fails explicitly until
+`METRICS_DB_ENABLED=true` and a database manager is available.
+
+- `get_user_history` returns observations for a UID or username over a requested range.
+- `get_system_history` returns host observations over a requested range.
+- `get_user_summary` returns aggregate statistics for one user.
+- `get_metrics_database_info` reports the path, size, retained counts, range, and users.
+
+The authoritative inventory, registration conditions, and invocation requirements are
+in the **MCP tools** section of [`resman.8`](resman.8).
+
+Supported time selectors include RFC 3339 timestamps, date-only values, relative
+expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday`,
+`last_24_hours`, `last_7_days`, and `last_30_days`.
+
+## Direct inspection
+
+Stop ResMan before maintenance that modifies the database. Read-only inspection can
+use SQLite directly:
+
+```bash
+sqlite3 /var/lib/resman/metrics.db \
+  'SELECT timestamp, uid, username, cpu_usage_percent FROM user_metrics ORDER BY timestamp DESC LIMIT 10;'
+
+sqlite3 /var/lib/resman/metrics.db \
+  'SELECT uid, username, AVG(cpu_usage_percent) FROM user_metrics WHERE timestamp > datetime("now", "-24 hours") GROUP BY uid, username;'
 ```
 
-`eligible_for_*` records policy eligibility, `*_limit_requested` records control
-intent, and `*_limit_active` records observed successful application. These values
-must not be inferred from one another.
+Prefer the MCP tools for applications because they preserve the typed public contract.
 
-**Indici:**
-- `idx_user_metrics_timestamp`: Per query temporali
-- `idx_user_metrics_uid`: Per query per utente
-- `idx_user_metrics_uid_timestamp`: Per query combinate
+## Retention and performance
 
-### Tabella `system_metrics`
+Retention cleanup runs at startup and periodically while ResMan is running. File-backed
+stores use incremental auto-vacuum; cleanup reclaims a bounded number of pages instead
+of running a full blocking `VACUUM` every time. An older store configured with
+`auto_vacuum=NONE` is converted once during startup.
 
-Memorizza le metriche di sistema.
+Choose the write interval and retention period according to user count and available
+storage. Do not set a write interval below five seconds. Monitor database size with
+`get_metrics_database_info` and filesystem tooling.
 
-```sql
-CREATE TABLE system_metrics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    total_cpu_usage_percent REAL NOT NULL,
-    total_cores INTEGER NOT NULL,
-    system_load REAL,
-    cpu_limits_active BOOLEAN NOT NULL,
-    resource_limits_active BOOLEAN NOT NULL,
-    any_limits_active BOOLEAN NOT NULL,
-    cpu_actively_limited_users_count INTEGER NOT NULL,
-    actively_limited_users_count INTEGER NOT NULL
-);
-```
+## Troubleshooting
 
-**Indici:**
-- `idx_system_metrics_timestamp`: Per query temporali
+### The database is not created
 
----
+1. Confirm `METRICS_DB_ENABLED=true`.
+2. Check the startup log for a rejected path or incompatible schema.
+3. Verify the parent is owned by the ResMan UID with mode `0700`.
+4. Verify the database and any WAL/SHM sidecars are regular files owned by that UID
+   with mode `0600`.
+5. Confirm the ancestor hierarchy contains no symlink or untrusted writable directory.
 
-## MCP Tools
+### Writes are slow
 
-La nuova funzionalità espone 4 tools MCP per interrogare lo storico:
+- Increase `METRICS_DB_WRITE_INTERVAL`.
+- Check filesystem latency and free space.
+- Reduce retention if the store is larger than operationally useful.
 
-### 1. `get_user_history`
+### The database is too large
 
-Ottiene lo storico delle metriche per un utente specifico.
-
-**Parametri:**
-- `uid` (int, opzionale): UID dell'utente
-- `username` (string, opzionale): Nome utente
-- `startTime` (string, opzionale): Inizio periodo (ISO 8601)
-- `endTime` (string, opzionale): Fine periodo (ISO 8601)
-- `period` (string, opzionale): Periodo predefinito (`today`, `yesterday`, `last_24_hours`, `last_7_days`, `last_30_days`)
-- `hours` (int, opzionale): Ultime N ore
-- `limit` (int, opzionale): Numero massimo di record (default: 100, massimo: 10000)
-
-**Esempi di utilizzo:**
-
-```json
-// Ultime 24 ore per UID
-{
-  "tool": "get_user_history",
-  "arguments": {"uid": 1000}
-}
-```
-
-```json
-// Ieri per username
-{
-  "tool": "get_user_history",
-  "arguments": {"username": "francesco", "period": "yesterday"}
-}
-```
-
-```json
-// Ultime 6 ore con limite
-{
-  "tool": "get_user_history",
-  "arguments": {"username": "www-data", "hours": 6, "limit": 50}
-}
-```
-
-```json
-// Intervallo personalizzato
-{
-  "tool": "get_user_history",
-  "arguments": {
-    "uid": 1000,
-    "startTime": "2026-03-18T08:00:00Z",
-    "endTime": "2026-03-18T18:00:00Z"
-  }
-}
-```
-
-**Risposta:**
-```json
-{
-  "records": [
-    {
-      "timestamp": "2026-03-19T06:00:00Z",
-      "uid": 1000,
-      "username": "francesco",
-      "cpu_usage": 45.2,
-      "memory_usage": 524288000,
-      "process_count": 15,
-      "eligible_for_cpu": false,
-      "eligible_for_ram": true,
-      "eligible_for_io": true,
-      "cpu_limit_requested": false,
-      "cpu_limit_active": false,
-      "ram_limit_requested": true,
-      "ram_limit_active": true,
-      "io_limit_requested": false,
-      "io_limit_active": false
-    }
-  ],
-  "count": 1,
-  "start_time": "2026-03-19T00:00:00Z",
-  "end_time": "2026-03-19T06:30:00Z"
-}
-```
-
----
-
-### 2. `get_system_history`
-
-Ottiene lo storico delle metriche di sistema.
-
-**Parametri:**
-- `startTime` (string, opzionale): Inizio periodo (ISO 8601)
-- `endTime` (string, opzionale): Fine periodo (ISO 8601)
-- `period` (string, opzionale): Periodo predefinito
-- `hours` (int, opzionale): Ultime N ore
-- `limit` (int, opzionale): Numero massimo di record (default: 100, massimo: 10000)
-
-**Esempi:**
-
-```json
-// Ultime 24 ore
-{
-  "tool": "get_system_history",
-  "arguments": {}
-}
-```
-
-```json
-// Ultima settimana
-{
-  "tool": "get_system_history",
-  "arguments": {"period": "last_7_days"}
-}
-```
-
-```json
-// Intervallo personalizzato
-{
-  "tool": "get_system_history",
-  "arguments": {
-    "startTime": "2026-03-01T00:00:00Z",
-    "endTime": "2026-03-31T23:59:59Z"
-  }
-}
-```
-
-**Risposta:**
-```json
-{
-  "records": [
-    {
-      "timestamp": "2026-03-19T06:00:00Z",
-      "total_cpu_usage": 75.2,
-      "total_cores": 4,
-      "system_load": 2.5,
-      "cpu_limits_active": true,
-      "resource_limits_active": true,
-      "any_limits_active": true,
-      "cpu_actively_limited_users_count": 2,
-      "actively_limited_users_count": 3
-    }
-  ],
-  "count": 1,
-  "start_time": "2026-03-19T00:00:00Z",
-  "end_time": "2026-03-19T06:30:00Z"
-}
-```
-
----
-
-### 3. `get_user_summary`
-
-Ottiene statistiche aggregate (media, min, max) per un utente.
-
-**Parametri:**
-- `uid` (int, opzionale): UID dell'utente
-- `username` (string, opzionale): Nome utente
-- `startTime` (string, opzionale): Inizio periodo (ISO 8601)
-- `endTime` (string, opzionale): Fine periodo (ISO 8601)
-- `period` (string, opzionale): Periodo predefinito
-
-**Esempi:**
-
-```json
-// Summary ultime 24 ore
-{
-  "tool": "get_user_summary",
-  "arguments": {"uid": 1000}
-}
-```
-
-```json
-// Summary mese scorso
-{
-  "tool": "get_user_summary",
-  "arguments": {"username": "mysql", "period": "last_30_days"}
-}
-```
-
-**Risposta:**
-```json
-{
-  "uid": 1000,
-  "username": "francesco",
-  "period_start": "2026-03-18T00:00:00Z",
-  "period_end": "2026-03-19T00:00:00Z",
-  "cpu_avg": 42.5,
-  "cpu_min": 5.2,
-  "cpu_max": 95.3,
-  "memory_avg": 536870912,
-  "memory_min": 268435456,
-  "memory_max": 1073741824,
-  "process_count_avg": 12.5,
-  "cpu_limit_active_time_percent": 15.5,
-  "samples": 2880
-}
-```
-
----
-
-### 4. `get_metrics_database_info`
-
-Ottiene informazioni sul database.
-
-**Parametri:** Nessuno
-
-**Esempio:**
-```json
-{
-  "tool": "get_metrics_database_info",
-  "arguments": {}
-}
-```
-
-**Risposta:**
-```json
-{
-  "path": "/var/lib/resman/metrics.db",
-  "size_mb": 10.5,
-  "user_metrics_count": 86400,
-  "system_metrics_count": 2880,
-  "oldest_record": "2026-02-17T00:00:00Z",
-  "newest_record": "2026-03-19T06:30:00Z",
-  "retention_days": 30,
-  "users_tracked": 15
-}
-```
-
----
-
-## Query SQL Dirette
-
-Puoi interrogare direttamente il database SQLite:
-
-### Esempi di Query
-
-#### Ultimi 10 record per un utente
-```sql
-SELECT datetime(timestamp, 'localtime') as time, 
-       cpu_usage_percent, memory_usage_bytes, process_count
-FROM user_metrics 
-WHERE uid = 1000 
-ORDER BY timestamp DESC 
-LIMIT 10;
-```
-
-#### Media CPU nelle ultime 24 ore
-```sql
-SELECT AVG(cpu_usage_percent) as avg_cpu,
-       MAX(cpu_usage_percent) as max_cpu,
-       MIN(cpu_usage_percent) as min_cpu
-FROM user_metrics 
-WHERE timestamp >= datetime('now', '-24 hours');
-```
-
-#### Utenti più attivi per CPU usage
-```sql
-SELECT username, 
-       AVG(cpu_usage_percent) as avg_cpu,
-       COUNT(*) as samples
-FROM user_metrics 
-WHERE timestamp >= datetime('now', '-24 hours')
-GROUP BY uid, username
-ORDER BY avg_cpu DESC
-LIMIT 10;
-```
-
-#### When CPU enforcement was observed active
-```sql
-SELECT datetime(timestamp, 'localtime') AS time,
-       username,
-       cpu_limit_requested,
-       cpu_limit_active
-FROM user_metrics
-WHERE cpu_limit_requested OR cpu_limit_active
-ORDER BY timestamp DESC;
-```
-
-#### Cleanup manuale dati vecchi
-```sql
-DELETE FROM user_metrics WHERE timestamp < datetime('now', '-90 days');
-DELETE FROM system_metrics WHERE timestamp < datetime('now', '-90 days');
-PRAGMA incremental_vacuum(1000);
-```
-
----
-
-## Performance e Best Practices
-
-### Impatto sulle Performance
-
-- **Scrittura asincrona**: Le metriche vengono scritte in modo non bloccante
-- **Intervallo configurabile**: Default 30 secondi, regolabile in base alle esigenze
-- **Dimensione database**: ~10-20 MB per 30 giorni con 10 utenti attivi
-
-### Best Practices
-
-1. **Retention adeguata**: Imposta `METRICS_DB_RETENTION_DAYS` in base allo spazio disponibile
-2. **Intervallo di scrittura**: Non scendere sotto i 5 secondi per evitare sovraccarico
-3. **Monitoraggio dimensione**: Controlla periodicamente `get_metrics_database_info`
-4. **Backup**: Fai backup regolari del file `/var/lib/resman/metrics.db`
-
-### Troubleshooting
-
-#### Il database non viene creato
-- Verifica che `METRICS_DB_ENABLED=true`
-- Verifica che la directory di `METRICS_DB_PATH` appartenga all'UID di ResMan, abbia modo `0700` e si trovi sotto una gerarchia stabile senza link simbolici
-- Verifica che database, `-wal` e `-shm` preesistenti siano file regolari dello stesso UID con modo `0600`
-- Verifica i log: `tail -f /var/log/resman.log | grep -i database`
-
-#### Scrittura troppo lenta
-- Aumenta `METRICS_DB_WRITE_INTERVAL`
-- Riduci `METRICS_DB_RETENTION_DAYS`
-- Verifica la latenza e lo spazio disponibile sul filesystem
-
-#### Database troppo grande
-- Riduci `METRICS_DB_RETENTION_DAYS`
-- Esegui cleanup manuale: `DELETE FROM ... WHERE timestamp < ...`
-- Abilita solo per utenti specifici (future enhancement)
-
----
-
-## Integrazione con Grafana
-
-Puoi usare il database SQLite come fonte dati per Grafana:
-
-1. Installa il plugin SQLite per Grafana
-2. Configura il datasource puntando a `/var/lib/resman/metrics.db`
-3. Crea dashboard con le query SQL sopra
-
----
-
-## Note Tecniche
-
-### Formato Temporale
-
-I timestamp sono memorizzati in formato ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) e SQLite li gestisce nativamente.
-
-### Supporto Timezone
-
-Le query SQL usano `datetime('now', 'localtime')` per convertire in timezone locale.
-
-### Cleanup Automatico
-
-Il cleanup dei dati vecchi viene eseguito:
-- All'avvio del servizio
-- Ogni 24 ore durante l'esecuzione
-
-I database su file usano `auto_vacuum=INCREMENTAL`; dopo ogni cleanup resman
-recupera un numero limitato di pagine senza eseguire un `VACUUM` completo.
-Un database esistente ancora in modalita `auto_vacuum=NONE` viene migrato una
-sola volta all'avvio. Il primo avvio dopo l'aggiornamento esegue quindi un
-`VACUUM` completo, puo richiedere piu tempo e necessita di spazio libero
-temporaneo proporzionale alla dimensione del database.
-
----
-
-## Changelog
-
-### Versione 1.16.0
-- **Aggiunto**: Supporto database SQLite per metriche storiche
-- **Aggiunto**: 4 nuovi MCP tools (`get_user_history`, `get_system_history`, `get_user_summary`, `get_metrics_database_info`)
-- **Aggiunto**: Configurazione `METRICS_DB_*` per controllo persistenza
-- **Aggiunto**: Cleanup automatico dati vecchi
+- Reduce `METRICS_DB_RETENTION_DAYS` and allow the next cleanup to run.
+- Archive required records outside the live database before reducing retention.
+- Inspect the store rather than deleting it while ResMan is running.

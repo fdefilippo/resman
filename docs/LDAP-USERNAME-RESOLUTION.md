@@ -1,362 +1,169 @@
 # LDAP/NIS Username Resolution Guide
 
-## Panoramica
+## Overview
 
-ResMan supporta la risoluzione dei nomi utente da LDAP/NIS quando compilato con CGO abilitato.
+ResMan resolves UIDs through the operating system NSS configuration. With a CGO-enabled
+build, `os/user.LookupId` uses libc and therefore supports LDAP, NIS, SSSD, and other
+NSS providers. A local `/etc/passwd` lookup is retained as a fallback.
 
-## Requisiti
+The shipped builds use `CGO_ENABLED=1`. A static `CGO_ENABLED=0` binary cannot satisfy
+this contract and is not a supported production build for directory-backed users.
 
-### 1. Sistema Operativo
+## Prerequisites
 
-- Linux con NSS (Name Service Switch) configurato
-- Pacchetti NSS LDAP installati:
-  - **RHEL/CentOS**: `nss-pam-ldapd` o `sssd-ldap`
-  - **Debian/Ubuntu**: `libnss-ldap` o `sssd`
-  - **SUSE**: `nss-pam-ldap`
+1. Configure the host's NSS provider and authentication service.
+2. Confirm that NSS can resolve the target users before starting ResMan.
+3. Build ResMan with CGO and a working C toolchain.
 
-### 2. Configurazione NSS
+Typical `/etc/nsswitch.conf` entries are:
 
-Verifica che `/etc/nsswitch.conf` includa LDAP per gli utenti:
-
-```bash
-# /etc/nsswitch.conf
-passwd:         files ldap
-group:          files ldap
-shadow:         files ldap
+```text
+passwd: files sss
+group:  files sss
+shadow: files sss
 ```
 
-### 3. Test Risoluzione Utenti
+For another NSS provider, replace `sss` with the module configured by the operating
+system. ResMan does not connect directly to an LDAP server and has no LDAP URL,
+bind-DN, or password setting of its own.
 
-Verifica che la risoluzione LDAP funzioni:
+Verify the host first:
 
 ```bash
-# Test con getent (funziona con LDAP/NIS)
+getent passwd ldap-user-01
+id ldap-user-01
 getent passwd 10001
-# Dovrebbe restituire: username:x:10001:10001:User Name:/home/username:/bin/bash
-
-# Test con id
-id 10001
-# Dovrebbe restituire: uid=10001(username) gid=10001(groupname) ...
 ```
 
-## Compilazione con CGO
+These commands must return the expected account and UID. If they fail, correct NSS
+before investigating ResMan.
 
-### 1. Installa GCC
+## Building with CGO
+
+Install a compiler and libc development headers appropriate for the distribution.
 
 ```bash
-# RHEL/CentOS
-sudo yum install gcc
+# Oracle Linux, RHEL, or compatible distributions
+sudo dnf install gcc glibc-devel
 
-# Debian/Ubuntu
-sudo apt-get install gcc
-
-# SUSE
-sudo zypper install gcc
+# Debian or Ubuntu
+sudo apt-get install build-essential libc6-dev
 ```
 
-### 2. Compila con CGO Abilitato
+Build with the project toolchain:
 
 ```bash
-# Build standard con CGO
-CGO_ENABLED=1 go build -v -o resman .
-
-# Build ottimizzata per produzione
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
-
-# Build con simboli di debug
-CGO_ENABLED=1 go build -v -gcflags="all=-N -l" -o resman .
+CGO_ENABLED=1 /usr/local/go/bin/go build -o resman .
 ```
 
-### 3. Verifica Build
+Confirm that the executable is dynamically linked to libc:
 
 ```bash
-# Verifica che il binario sia linkato con libc
-ldd /usr/bin/resman | grep libc
-# Dovrebbe mostrare: libc.so.6 => /lib64/libc.so.6
-
-# Verifica versione
+ldd ./resman
 ./resman --version
 ```
 
-## Configurazione
+`ldd` should list libc. A result such as “not a dynamic executable” usually means the
+binary was built without CGO and will not use the configured LDAP/NIS NSS module.
 
-### 1. ResMan Configuration
+## ResMan configuration
 
-Nessuna configurazione speciale necessaria. ResMan userà automaticamente NSS per risolvere gli UID.
+No directory-service-specific ResMan key is required. Username resolution is automatic.
+The relevant general settings are:
 
-```bash
-# /etc/resman/resman.conf
-# Nessuna impostazione speciale necessaria
-# La risoluzione LDAP è automatica
+```ini
+# Cache successful UID-to-name resolutions for this many minutes.
+USERNAME_CACHE_TTL=60
+
+# Only UIDs at or above the configured system boundary are observed as users.
+SYSTEM_UID_MIN=1000
 ```
 
-### 2. Prometheus Metrics
+The exact public key set and defaults are in
+[`config/resman.conf.example`](../config/resman.conf.example). Unknown keys are rejected,
+so do not add ad-hoc LDAP settings to the ResMan file.
 
-Le metriche includeranno i nomi utente risolti da LDAP:
+When resolution succeeds, metrics use the directory username:
 
 ```promql
-# Prima (senza LDAP):
-resman_user_cpu_usage_percent{uid="10001", username="10001"}
-
-# Dopo (con LDAP):
-resman_user_cpu_usage_percent{uid="10001", username="ldap-user-01"}
+resman_user_cpu_usage_percent{uid="10001",username="ldap-user-01"}
 ```
+
+If both NSS and `/etc/passwd` resolution fail, ResMan uses the numeric UID string as the
+display name. Eligibility based on username patterns may then differ, so numeric output
+must be treated as an observable degradation rather than proof that the account is local.
+
+## SSSD example
+
+Install and configure SSSD according to the identity provider. A minimal shape is:
+
+```ini
+# /etc/sssd/sssd.conf
+[sssd]
+services = nss, pam
+domains = example
+
+[domain/example]
+id_provider = ldap
+auth_provider = ldap
+ldap_uri = ldaps://ldap.example.com
+ldap_search_base = dc=example,dc=com
+cache_credentials = true
+```
+
+Protect the SSSD configuration, enable the service, and verify NSS:
+
+```bash
+sudo chmod 0600 /etc/sssd/sssd.conf
+sudo systemctl enable --now sssd
+getent passwd ldap-user-01
+```
+
+Then start or restart ResMan and query a per-user metric.
+
+## Performance and caching
+
+Directory lookups can block on DNS, TLS, or the identity provider. Use the provider's
+own cache and timeout controls and keep `USERNAME_CACHE_TTL` high enough to avoid a
+lookup on every collection. ResMan bounds its username cache and removes expired entries.
+
+For SSSD, provider-specific settings such as `entry_cache_timeout` and LDAP operation
+timeouts belong in `sssd.conf`, not in ResMan configuration.
 
 ## Troubleshooting
 
-### Problema: Username ancora numerici
+### Metrics show a numeric username
 
-**Sintomi:**
-- Le metriche mostrano `username="10001"` invece di `username="ldap-user-01"`
+1. Run `getent passwd <uid>` as the same user and service context that runs ResMan.
+2. Confirm the binary was built with `CGO_ENABLED=1` and links to libc.
+3. Check `/etc/nsswitch.conf` for the configured provider.
+4. Check SSSD, LDAP, NIS, DNS, and certificate logs.
+5. Confirm the UID is at or above `SYSTEM_UID_MIN`.
+6. Restart ResMan or wait for the username cache entry to expire after fixing NSS.
 
-**Cause possibili:**
+### Resolution is slow
 
-1. **CGO non abilitato in compilazione**
-   ```bash
-   # Verifica
-   ldd /usr/bin/resman | grep libc
-   # Se non mostra libc, CGO non era abilitato
+- Measure `getent passwd <uid>` latency outside ResMan.
+- Enable and tune the provider cache.
+- Configure bounded DNS and directory-service timeouts.
+- Verify that unreachable providers are not queried before the authoritative source.
 
-   # Ricompila
-   CGO_ENABLED=1 go build -o resman .
-   ```
+### `user: unknown userid` appears
 
-2. **NSS non configurato per LDAP**
-   ```bash
-   # Verifica
-   grep "^passwd:" /etc/nsswitch.conf
-   # Dovrebbe mostrare: passwd: files ldap
+The NSS stack could not resolve the UID at that moment. Confirm that the user exists,
+that the ResMan service account can read the necessary NSS configuration, and that the
+identity provider is reachable. ResMan falls back to `/etc/passwd` and then to the UID
+string; it does not invent a username.
 
-   # Se non c'è ldap, aggiungi
-   sudo vi /etc/nsswitch.conf
-   ```
-
-3. **LDAP non raggiungibile**
-   ```bash
-   # Test connessione LDAP
-   getent passwd 10001
-   # Se non restituisce nulla, LDAP non è raggiungibile
-
-   # Verifica servizio LDAP
-   systemctl status nslcd    # Per nss-pam-ldapd
-   systemctl status sssd     # Per SSSD
-   ```
-
-4. **Utente non esiste in LDAP**
-   ```bash
-   # Cerca utente in LDAP
-   ldapsearch -x -b "dc=example,dc=com" "(uidNumber=10001)"
-
-   # O con getent
-   getent passwd 10001
-   ```
-
-### Problema: Risoluzione lenta
-
-**Sintomi:**
-- ResMan impiega molto tempo per avviare
-- Log mostrano timeout nella risoluzione UID
-
-**Soluzioni:**
-
-1. **Aumenta timeout NSS**
-   ```bash
-   # /etc/nsswitch.conf
-   passwd:         files ldap [NOTFOUND=return]
-   # [NOTFOUND=return] evita di cercare oltre se non trovato
-   ```
-
-2. **Configura cache SSSD**
-   ```bash
-   # /etc/sssd/sssd.conf
-   [sssd]
-   entry_cache_timeout = 600
-   entry_cache_negative_timeout = 120
-   ```
-
-3. **Riduci SYSTEM_UID_MAX**
-   ```bash
-   # /etc/resman/resman.conf
-   SYSTEM_UID_MAX=10000  # Override del valore derivato da /proc/sys/kernel/pid_max
-   # Monitora solo UID fino a 10000
-   ```
-
-### Problema: Errori "user: unknown userid"
-
-**Sintomi:**
-- Log mostrano: `Failed to lookup user: user: unknown userid 10001`
-
-**Soluzioni:**
-
-1. **Verifica che l'utente esista**
-   ```bash
-   getent passwd 10001
-   ```
-
-2. **Controlla permessi di lettura LDAP**
-   ```bash
-   # Test con utente di bind
-   ldapsearch -x -D "cn=admin,dc=example,dc=com" -W -b "dc=example,dc=com" "(uidNumber=10001)"
-   ```
-
-3. **Abilita logging NSS**
-   ```bash
-   # Per debug avanzato
-   export NSS_DEBUG=1
-   /usr/bin/resman --config /etc/resman/resman.conf
-   ```
-
-## Esempio Configurazione Completa
-
-### RHEL/CentOS 8+ con SSSD
+## Final verification
 
 ```bash
-# 1. Installa pacchetti
-sudo yum install sssd-ldap sssd-tools nss-pam-ldapd
-
-# 2. Configura SSSD
-sudo vi /etc/sssd/sssd.conf
-[sssd]
-services = nss, pam
-domains = ldap
-
-[nss]
-filter_users = root
-filter_groups = root
-entry_cache_timeout = 600
-
-[domain/ldap]
-id_provider = ldap
-ldap_uri = ldap://ldap.example.com
-ldap_search_base = dc=example,dc=com
-ldap_id_use_start_tls = True
-cache_credentials = True
-
-# 3. Configura NSS
-sudo vi /etc/nsswitch.conf
-passwd:     files sss
-group:      files sss
-shadow:     files sss
-
-# 4. Riavvia servizi
-sudo systemctl enable sssd
-sudo systemctl start sssd
-
-# 5. Test
 getent passwd 10001
-
-# 6. Compila ResMan
-cd /path/to/resman
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
-
-# 7. Installa
-sudo cp resman /usr/bin/
-sudo systemctl restart resman
-
-# 8. Verifica metriche
-curl -s http://localhost:1974/metrics | grep user_cpu
+curl --fail --silent https://127.0.0.1:1974/metrics \
+  --cacert /etc/resman/tls/ca.crt \
+  | grep 'uid="10001"'
+journalctl -u resman --since '10 minutes ago'
 ```
 
-### Debian/Ubuntu con libnss-ldap
-
-```bash
-# 1. Installa pacchetti
-sudo apt-get install libnss-ldap libpam-ldap ldap-utils
-
-# 2. Configura NSS
-sudo vi /etc/nsswitch.conf
-passwd:         files ldap
-group:          files ldap
-shadow:         files ldap
-
-# 3. Configura LDAP
-sudo vi /etc/libnss-ldap.conf
-uri ldap://ldap.example.com
-base dc=example,dc=com
-bind_policy soft
-
-# 4. Test
-getent passwd 10001
-
-# 5. Compila ResMan
-cd /path/to/resman
-CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
-
-# 6. Installa
-sudo cp resman /usr/bin/
-sudo systemctl restart resman
-
-# 7. Verifica metriche
-curl -s http://localhost:1974/metrics | grep user_cpu
-```
-
-## Best Practices
-
-### 1. Cache
-
-Configura cache per ridurre query LDAP:
-
-```bash
-# SSSD: /etc/sssd/sssd.conf
-[sssd]
-entry_cache_timeout = 600           # 10 minuti
-entry_cache_negative_timeout = 120  # 2 minuti per negativi
-```
-
-### 2. Timeout
-
-Imposta timeout ragionevoli:
-
-```bash
-# /etc/nsswitch.conf
-passwd:     files ldap [NOTFOUND=return]
-# [NOTFOUND=return] evita query inutili
-```
-
-### 3. Monitoring
-
-Monitora lo stato LDAP:
-
-```bash
-# Script di monitoring
-#!/bin/bash
-if ! getent passwd 10001 > /dev/null; then
-    echo "CRITICAL: LDAP non raggiungibile"
-    exit 2
-fi
-echo "OK: LDAP funzionante"
-exit 0
-```
-
-### 4. Fallback
-
-Configura fallback locale:
-
-```bash
-# /etc/nsswitch.conf
-passwd:     files ldap [UNAVAIL=return]
-# Se LDAP non disponibile, usa solo files locali
-```
-
-## Verifica Finale
-
-Dopo aver configurato tutto, verifica:
-
-```bash
-# 1. Risoluzione UID
-getent passwd 10001
-
-# 2. Metriche Prometheus
-curl -s http://localhost:1974/metrics | grep "uid=\"10001\""
-# Dovresti vedere username, non "10001"
-
-# 3. Log ResMan
-tail -f /var/log/resman.log | grep -i "user"
-# Dovresti vedere username, non UID numerici
-```
-
----
-
-**Versione:** 1.0
-**Compatibilità:** ResMan v1.13.1+
-**Ultimo Aggiornamento:** Marzo 2026
+Adjust the Prometheus authentication arguments to match the deployment. The important
+evidence is agreement between NSS, the metric's `uid`, and its `username` label.

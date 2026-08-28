@@ -35,9 +35,9 @@ import (
 	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
-// Timeframe rappresenta un intervallo di tempo per i blackout
+// Timeframe represents a blackout time interval.
 type Timeframe struct {
-	DaysOfWeek []int // Giorni della settimana (0-6, 0=Domenica)
+	DaysOfWeek []int // Days of the week (0-6, where 0 is Sunday)
 	HourStart  int   // Ora inizio (0-23)
 	HourEnd    int   // Ora fine esclusiva (0-24)
 }
@@ -65,9 +65,9 @@ type Config struct {
 	PollingInterval int `config:"POLLING_INTERVAL"`
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
-	// MetricsRefreshInterval aggiorna Prometheus/Grafana senza eseguire decisioni.
+	// MetricsRefreshInterval updates Prometheus and Grafana without making decisions.
 	MetricsRefreshInterval int `config:"METRICS_REFRESH_INTERVAL"`
-	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
+	// ProcessMinAgeSeconds prevents newly started processes from distorting the CPU delta.
 	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
 	// Timeouts (seconds)
@@ -125,14 +125,14 @@ type Config struct {
 
 	// Workload Pattern Detection (auto-detect user patterns)
 	AutodetectPatterns         bool    `config:"AUTODETECT_PATTERNS"`
-	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // Finestra storica (ore)
+	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // History window in hours
 	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
-	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Soglia confidenza (0.0-1.0)
-	// Policy per pattern
+	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Confidence threshold (0.0-1.0)
+	// Per-pattern policies
 	BatchNightCPUQuota  int    `config:"BATCH_NIGHT_CPU_QUOTA"` // CPU quota per batch (microseconds)
 	BatchNightRAMQuota  string `config:"BATCH_NIGHT_RAM_QUOTA"` // RAM quota per batch
-	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota per interattivo
-	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota per interattivo
+	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota for interactive workloads
+	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota for interactive workloads
 
 	// Hooks
 	LimitHookEnabled bool   `config:"LIMIT_HOOK_ENABLED"`
@@ -215,7 +215,7 @@ type Config struct {
 	// Username Cache TTL (minutes)
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 
-	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
+	// PSI event-driven mode uses poll() on pressure files instead of only a ticker.
 	PSIEventDriven       bool `config:"PSI_EVENT_DRIVEN"`        // Enable PSI event-driven control cycles
 	PSICPUStallThreshold int  `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
 	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
@@ -1054,7 +1054,7 @@ func isValidIODeviceFilter(filter string) bool {
 	return true
 }
 
-// isValidCPUQuota verifica il formato "quota period" o "max period".
+// isValidCPUQuota validates the "quota period" or "max period" format.
 func isValidCPUQuota(quota string) bool {
 	parts := strings.Fields(quota)
 	if len(parts) != 2 {
@@ -1071,8 +1071,8 @@ func isValidCPUQuota(quota string) bool {
 	return err == nil && numericQuota >= 1000
 }
 
-// isValidByteQuota verifica il formato di una quota in byte.
-// Formati validi: bytes (es. "1073741824"), K/M/G/T case-insensitive (es. "512M", "1g")
+// isValidByteQuota validates a byte quota format.
+// Valid formats are bytes (for example, "1073741824") or case-insensitive K/M/G/T suffixes.
 func isValidByteQuota(quota string) bool {
 	if quota == "" {
 		return false
@@ -1166,12 +1166,12 @@ func (c *Config) IsUserExcluded(username string) bool {
 }
 
 func (c *Config) isUserExcludedLocked(username string) bool {
-	// Se la exclude list non è configurata o è vuota, nessun utente è escluso
+	// An unset or empty exclude list excludes no users.
 	if len(c.UserExcludeList) == 0 {
 		return false // No exclude list = no users excluded
 	}
 
-	// Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
+	// Otherwise, check whether the username matches a configured regular expression.
 	for _, pattern := range c.UserExcludeList {
 		if c.matchPattern(pattern, username) {
 			return true // User matches exclude pattern
@@ -1597,11 +1597,11 @@ func (s userFilterPersistenceSnapshot) generateConfigLines() []string {
 	}
 }
 
-// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-24"
+// ParseTimeframe parses a string such as "1-5 08-18" or multiple ranges such as "1-5 08-18;0,6 00-24".
 func ParseTimeframe(spec string) ([]Timeframe, error) {
 	var timeframes []Timeframe
 
-	// Supporta multipli timeframe separati da ;
+	// Accept multiple timeframes separated by semicolons.
 	specs := strings.Split(spec, ";")
 
 	for _, s := range specs {
@@ -1615,13 +1615,13 @@ func ParseTimeframe(spec string) ([]Timeframe, error) {
 			return nil, fmt.Errorf("invalid timeframe format: %s (expected: days hours)", s)
 		}
 
-		// Parse giorni
+		// Parse days.
 		days, err := parseDays(parts[0])
 		if err != nil {
 			return nil, fmt.Errorf("invalid days spec '%s': %w", parts[0], err)
 		}
 
-		// Parse ore
+		// Parse hours.
 		hourStart, hourEnd, err := parseHours(parts[1])
 		if err != nil {
 			return nil, fmt.Errorf("invalid hours spec '%s': %w", parts[1], err)
@@ -1641,7 +1641,7 @@ func ParseTimeframe(spec string) ([]Timeframe, error) {
 	return timeframes, nil
 }
 
-// parseDays gestisce formati: 1-5, 0,6, *, 1
+// parseDays handles formats such as 1-5, 0,6, *, and 1.
 func parseDays(spec string) ([]int, error) {
 	if spec == "*" {
 		return []int{0, 1, 2, 3, 4, 5, 6}, nil
@@ -1677,7 +1677,7 @@ func parseDays(spec string) ([]int, error) {
 				days = append(days, i)
 			}
 		} else {
-			// Singolo: 1
+			// Single day: 1.
 			day, err := strconv.Atoi(part)
 			if err != nil {
 				return nil, err
@@ -1692,7 +1692,7 @@ func parseDays(spec string) ([]int, error) {
 	return days, nil
 }
 
-// parseHours gestisce formati: 08-18, 00-24, 22-06
+// parseHours handles formats such as 08-18, 00-24, and 22-06.
 func parseHours(spec string) (int, int, error) {
 	parts := strings.Split(spec, "-")
 	if len(parts) != 2 {
@@ -1726,7 +1726,7 @@ func (c *Config) IsInBlackout() bool {
 	return active
 }
 
-// GetNextBlackoutEnd restituisce la prossima fine del blackout (se attivo)
+// GetNextBlackoutEnd returns the next blackout end when a blackout is active.
 func (c *Config) GetNextBlackoutEnd() *time.Time {
 	end, active := c.blackoutEndAt(time.Now())
 	if !active {

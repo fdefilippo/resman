@@ -17,7 +17,7 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 
 	ioMaxFile := filepath.Join(cgroupPath, "io.max")
 
-	// Normalizza valori bandwidth
+	// Normalize bandwidth values.
 	if readBPS == "" || readBPS == "0" {
 		readBPS = "max"
 	}
@@ -25,7 +25,7 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 		writeBPS = "max"
 	}
 
-	// Normalizza valori IOPS
+	// Normalize IOPS values.
 	readIOPSStr := "max"
 	if readIOPS > 0 {
 		readIOPSStr = strconv.Itoa(readIOPS)
@@ -59,7 +59,7 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 	return nil
 }
 
-// RemoveIOLimit rimuove i limiti di IO (imposta tutti i valori a "max").
+// RemoveIOLimit removes I/O limits by setting every value to "max".
 func (m *Manager) RemoveIOLimit(uid int) error {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -208,14 +208,14 @@ func readIOStatsFile(ioStatFile string) (readBytes, writeBytes uint64, readOps, 
 	return readBytes, writeBytes, readOps, writeOps, nil
 }
 
-// ApplyTemporaryIOLimit applica limiti IO temporanei con un moltiplicatore.
-// Salva i limiti originali per permettere il revert.
+// ApplyTemporaryIOLimit applies temporary I/O limits with a multiplier.
+// It preserves the original inputs so the caller can restore them later.
 func (m *Manager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
 	if _, exists := m.getCgroupPath(uid); !exists {
 		return fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
-	// Applica limiti boostati (moltiplicati)
+	// Apply the multiplied boost limits.
 	boostedReadBPS := applyMultiplierToBPS(readBPS, multiplier)
 	boostedWriteBPS := applyMultiplierToBPS(writeBPS, multiplier)
 	boostedReadIOPS := int(float64(readIOPS) * multiplier)
@@ -224,7 +224,7 @@ func (m *Manager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readI
 	return m.ApplyIOLimit(uid, boostedReadBPS, boostedWriteBPS, boostedReadIOPS, boostedWriteIOPS, deviceFilter)
 }
 
-// applyMultiplierToBPS applica un moltiplicatore a una stringa BPS.
+// applyMultiplierToBPS applies a multiplier to a BPS value.
 func applyMultiplierToBPS(bps string, multiplier float64) string {
 	if bps == "" || bps == "max" || bps == "0" {
 		return "max"
@@ -238,7 +238,7 @@ func applyMultiplierToBPS(bps string, multiplier float64) string {
 	return strconv.FormatUint(boosted, 10)
 }
 
-// parseBPSValue converte una stringa BPS in bytes.
+// parseBPSValue converts a BPS value into bytes.
 func parseBPSValue(s string) uint64 {
 	s = strings.TrimSpace(s)
 	if len(s) == 0 {
