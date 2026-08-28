@@ -289,6 +289,10 @@ counters only when runtime state actually changes.
 - `Debug` is not a level for failures. Operator-visible failures are `Warn` or `Error`,
   and **SHOULD** also increment an error metric.
 - Retry logic **MUST NOT** hide the first failure from observability.
+- A logging sink **MUST NOT** be its own failure reporter. Best-effort methods publish
+  bounded health state and use a direct stderr fallback that cannot recurse through
+  the failed logger; checked variants return the same error. Critical lifecycle and
+  control-cycle owners consume checked failures after protective work has completed.
 - Every configured component **MUST** declare its startup failure boundary. A failed
   authoritative service or enforcement prerequisite **MUST** abort startup. A
   non-authoritative observation sink **MAY** degrade only when enforcement remains
@@ -307,9 +311,12 @@ the remaining protective stages, and let the application owner report one degrad
 cycle outcome. Startup follows the same ownership rule: an enabled MCP transport is an
 authoritative service boundary and fails startup when it cannot be constructed, while
 Prometheus and SQLite history are non-authoritative observation sinks whose explicit
-degradation must not disable resource enforcement.
+degradation must not disable resource enforcement. Logging failures formerly vanished
+inside `Println`, syslog and rotation helpers; the logger now returns them, records one
+bounded last-failure snapshot and writes a sanitized failure diagnostic directly to
+stderr without copying the potentially sensitive failed record.
 
-*Findings: resman-4pw.11, resman-4pw.45, resman-4pw.60, resman-4pw.66*
+*Findings: resman-4pw.11, resman-4pw.45, resman-4pw.60, resman-4pw.64, resman-4pw.66*
 
 ## Rule 9 — Configuration lifecycle is declared in one place
 
@@ -858,7 +865,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 5. No knob without effect | `resman-4pw.12` |
 | 6. Typed contracts; metrics ≠ status | `resman-4pw.6` |
 | 7. Counter semantics | `resman-4pw.10` |
-| 8. Truthful errors and logs | `resman-4pw.11`, `.60` |
+| 8. Truthful errors and logs | `resman-4pw.11`, `.60`, `.64` |
 | 9. Configuration lifecycle | `resman-4pw.9` |
 | 10. Acknowledge, never sleep | `resman-4pw.7`, `.58` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |

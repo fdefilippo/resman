@@ -914,6 +914,16 @@ and all permissions for other users. The rotated backup and replacement inherit
 that sanitized access mode and ownership. The managed path must be a regular file;
 symbolic links are rejected without changing their target. Packaged rsyslog and
 logrotate defaults use 0600.
+.PP
+File and syslog writes, rotation steps, and sink close operations are checked. If the
+configured sink fails, ResMan writes a bounded diagnostic directly to standard error
+without recursively calling the failed logger. The failed record itself is not copied
+to the fallback because it can contain sensitive context.
+A later successful write marks the primary sink healthy again while retaining
+cumulative and last-failure diagnostics. A control cycle whose completion record
+cannot be written finishes its protective work and returns a degraded result instead
+of claiming a successful cycle log. Ordinary diagnostic call sites use the same
+health and fallback contract without changing their owning operation's result.
 .SH STATE FILES
 .I /run/resman-cgroups.txt
 .br

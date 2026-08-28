@@ -50,6 +50,26 @@ type mockMetricsCollector struct {
 	decisionCalls                    int
 }
 
+type failingCompletionLogger struct {
+	err      error
+	messages []string
+}
+
+func (l *failingCompletionLogger) Debug(string, ...interface{}) {}
+func (l *failingCompletionLogger) Warn(string, ...interface{})  {}
+func (l *failingCompletionLogger) Error(string, ...interface{}) {}
+func (l *failingCompletionLogger) Info(string, ...interface{})  {}
+func (l *failingCompletionLogger) DebugChecked(string, ...interface{}) error {
+	return nil
+}
+func (l *failingCompletionLogger) InfoChecked(message string, _ ...interface{}) error {
+	l.messages = append(l.messages, message)
+	if message == "Control cycle completed" {
+		return l.err
+	}
+	return nil
+}
+
 func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
 func (m *mockMetricsCollector) GetTotalCPUUsage() float64       { return 50.0 }
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64 { return 10.0 }
@@ -625,6 +645,40 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 				t.Fatalf("deferred errors = %d, want %d", len(run.deferredErrors), tt.wantDeferredErrors)
 			}
 		})
+	}
+}
+
+func TestControlCycleOwnerReceivesCompletionLogFailureAfterProtectiveTail(t *testing.T) {
+	sinkErr := errors.New("injected completion log failure")
+	logger := &failingCompletionLogger{err: sinkErr}
+	manager := &Manager{logger: logger}
+	run := &controlCycleContext{
+		cfg:       config.DefaultConfig(),
+		metrics:   &SystemMetrics{},
+		startTime: time.Now(),
+		trigger:   ControlCycleTriggerManual,
+	}
+	tailRan := false
+	stages := []controlCycleStage{
+		{
+			name: "protective_tail",
+			run: func(*Manager, *controlCycleContext) error {
+				tailRan = true
+				return nil
+			},
+		},
+		{name: "log_completion", run: (*Manager).stageLogCompletion},
+	}
+
+	err := runControlCyclePipeline(manager, run, stages)
+	if !tailRan {
+		t.Fatal("control-cycle protective tail did not run before logging failed")
+	}
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("runControlCyclePipeline() error = %v, want logging sink failure", err)
+	}
+	if !reflect.DeepEqual(logger.messages, []string{"Control cycle completed"}) {
+		t.Fatalf("logger messages = %v", logger.messages)
 	}
 }
 

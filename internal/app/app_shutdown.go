@@ -95,6 +95,8 @@ func (a *App) shutdown() error {
 	if len(shutdownErrors) > 0 {
 		return fmt.Errorf("shutdown incomplete: %w", errors.Join(shutdownErrors...))
 	}
-	a.logger.Info("Shutdown completed")
+	if err := a.logger.InfoChecked("Shutdown completed"); err != nil {
+		return fmt.Errorf("write shutdown completion log: %w", err)
+	}
 	return nil
 }

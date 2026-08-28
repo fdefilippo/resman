@@ -515,6 +515,7 @@ reason is documented in
 - Log levels: DEBUG, INFO, WARN, ERROR
 - File logging with rotation
 - Optional syslog support
+- Bounded sink-health state with a non-recursive stderr fallback
 - Thread-safe
 
 **Log Format:**
@@ -525,7 +526,9 @@ reason is documented in
 **Key Functions:**
 - `InitLogger(level, filePath, maxSize, useSyslog)`: Initializes logger
 - `GetLogger()`: Returns global logger instance
-- `Debug/Info/Warn/Error(msg, keyvals...)`: Log methods
+- `Debug/Info/Warn/Error(msg, keyvals...)`: Best-effort methods that publish health
+- `DebugChecked/InfoChecked/WarnChecked/ErrorChecked(...)`: Return sink failures
+- `Health()`: Detached health snapshot with cumulative/consecutive failure counts
 - `logInternal()`: Internal logging with rotation check
 - `checkAndRotate()`: Rotates log file when max size reached
 
@@ -538,6 +541,10 @@ reason is documented in
 - Applies the same sanitized mode to the active file and rotated `.1` backup
 - Preserves ownership across internal rotation, and rejects symbolic links or
   non-regular managed log destinations
+- Write, stat, close, remove, rename and reopen failures are returned and recorded;
+  stderr receives a sanitized diagnostic directly, without calling the failed logger
+- A later successful primary-sink write clears the consecutive-failure state while
+  preserving the cumulative count and last failure for diagnosis
 
 Limit-hook failures are safe to record in this log. Script stdout/stderr is discarded,
 script errors expose only a bounded execution reason, and webservice errors identify
@@ -1145,6 +1152,11 @@ URL components remain excluded from returned errors and logs.
 2. Rename to `.1`
 3. Open new file
 4. Continue logging
+
+Every close, removal, rename and reopen result is checked. A failed step does not emit
+the rotation-success record; the logger reports the failed operation through its
+bounded health state and direct stderr fallback, then retries the primary file on a
+later record where recovery is possible.
 
 **Rate Limit:** Maximum one rotation per second
 

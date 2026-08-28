@@ -371,6 +371,8 @@ USE_SYSLOG=false             # true: use system syslog, false: use file
 # New files use 0600. Existing files retain only owner/group read-write access;
 # execute bits and every permission for other users are removed at startup.
 # The managed path must be a regular file; symbolic links are rejected.
+# Runtime sink/rotation failures emit a bounded, non-secret stderr diagnostic;
+# the control-cycle owner reports a degraded result if its completion log fails.
 LOG_FILE=/var/log/resman.log
 
 # ========================

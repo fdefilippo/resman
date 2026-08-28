@@ -14,7 +14,7 @@ unrelated state access. A gate may span I/O; a `sync.Mutex` or `sync.RWMutex` ma
 | `cgroup.Manager` | `cfgMu`, `mu`, `originMu`, `blockIOMu`, `usernameMu` | `originGate`, `processScanGate` | Cgroup/procfs reads, writes, origin fsync, NSS lookup and process scans run outside state mutexes. Origin persistence publishes only after durable success. |
 | `cgroup.PSIWatcher` | `mu`, wait group | `opGate` | Monitor lists and descriptors are snapshotted under `mu`; open, write, close, wake and poll run after unlock. |
 | `database.DatabaseManager` | immutable `db` and `dbPath` | `dbGate` | SQLite's one-connection lifecycle is serialized without a state mutex; `Path` remains available during database I/O. |
-| `logging.Logger` | `state.mu` for level | `writeGate` | Sink writes, close and rotation are ordered by the gate; runtime level changes never wait for the sink. |
+| `logging.Logger` | `state.mu` for level; `healthMu` for bounded sink health | `writeGate` | Sink writes, close, rotation and direct stderr fallback are ordered by the gate; health publication performs no I/O, and runtime level/health reads never wait for the sink. |
 | `mcp.Server` | `mu`, wait group, atomics | `lifecycleGate` | Lifecycle intent is published under `mu`; listener creation, serving and shutdown run after unlock. |
 | `metrics.Collector` | `mu`, cache/EMA/process/username mutexes | `userMetricsScan` | Cache and sampling state mutations are local; procfs scans and database writes run after state unlock. |
 | `metrics.DBWriter` | `mu` | database manager gate | The mutex protects enablement and timestamps only; database calls use a prior snapshot. |

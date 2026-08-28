@@ -14,6 +14,14 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
+type appLogger interface {
+	Debug(string, ...interface{})
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+	InfoChecked(string, ...interface{}) error
+}
+
 // App contains the daemon runtime components.
 type App struct {
 	cfg        *config.Config
@@ -21,7 +29,7 @@ type App struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	sigChan    <-chan os.Signal
-	logger     *logging.Logger
+	logger     appLogger
 	err        error
 	cfgMu      sync.RWMutex
 	psiMu      sync.RWMutex
@@ -52,7 +60,7 @@ func (a *App) setCurrentConfig(cfg *config.Config) {
 	a.cfgMu.Unlock()
 }
 
-// NewApp crea il builder dell'applicazione.
+// NewApp constructs the daemon application from its runtime dependencies.
 func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, logger *logging.Logger) *App {
 	return &App{
 		cfg:            cfg,

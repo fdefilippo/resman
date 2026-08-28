@@ -15,6 +15,21 @@ type shutdownCgroupManager struct {
 	cleanupErr error
 }
 
+type shutdownLogger struct {
+	completionErr error
+}
+
+func (*shutdownLogger) Debug(string, ...interface{}) {}
+func (*shutdownLogger) Info(string, ...interface{})  {}
+func (*shutdownLogger) Warn(string, ...interface{})  {}
+func (*shutdownLogger) Error(string, ...interface{}) {}
+func (l *shutdownLogger) InfoChecked(message string, _ ...interface{}) error {
+	if message == "Shutdown completed" {
+		return l.completionErr
+	}
+	return nil
+}
+
 func (m *shutdownCgroupManager) CleanupAll() error {
 	return m.cleanupErr
 }
@@ -81,5 +96,26 @@ func TestControlLoopPropagatesShutdownCleanupFailure(t *testing.T) {
 
 	if err := application.runControlLoop(); !errors.Is(err, cleanupErr) {
 		t.Fatalf("runControlLoop() error = %v, want cleanup failure", err)
+	}
+}
+
+func TestShutdownPropagatesCompletionLogFailure(t *testing.T) {
+	sinkErr := errors.New("injected shutdown log failure")
+	stateManager, err := state.NewManager(
+		config.DefaultConfig(),
+		nil,
+		&shutdownCgroupManager{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	application := &App{
+		logger:       &shutdownLogger{completionErr: sinkErr},
+		stateManager: stateManager,
+	}
+
+	if err := application.shutdown(); !errors.Is(err, sinkErr) {
+		t.Fatalf("shutdown() error = %v, want logging sink failure", err)
 	}
 }

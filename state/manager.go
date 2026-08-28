@@ -38,10 +38,19 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
+type stateLogger interface {
+	Debug(string, ...interface{})
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+	DebugChecked(string, ...interface{}) error
+	InfoChecked(string, ...interface{}) error
+}
+
 // Manager coordinates resource decisions and observed cgroup enforcement.
 type Manager struct {
 	cfg    *config.Config
-	logger *logging.Logger
+	logger stateLogger
 	mu     sync.RWMutex
 	opGate operationgate.Gate
 	epoch  configepoch.Barrier

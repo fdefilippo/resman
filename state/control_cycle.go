@@ -101,10 +101,12 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 		m.updatePrometheusSystemMetrics(metrics)
 	}
 
-	m.logger.Debug("Metrics refresh completed",
+	if err := m.logger.DebugChecked("Metrics refresh completed",
 		"trigger", trigger,
 		"duration_ms", time.Since(startTime).Milliseconds(),
-	)
+	); err != nil {
+		return fmt.Errorf("write metrics-refresh completion log: %w", err)
+	}
 
 	return nil
 }
@@ -136,7 +138,9 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		}()
 	}
 
-	m.logger.Debug("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger)
+	if err := m.logger.DebugChecked("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger); err != nil {
+		run.degradedErrors = append(run.degradedErrors, fmt.Errorf("write control-cycle start log: %w", err))
+	}
 
 	return runControlCyclePipeline(m, run, defaultControlCyclePipeline)
 }
@@ -434,7 +438,7 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	}
 
 	// Log the complete cycle outcome after all protective stages have run.
-	m.logger.Info("Control cycle completed",
+	if err := m.logger.InfoChecked("Control cycle completed",
 		"cycle_id", run.cycleID,
 		"trigger", run.trigger,
 		"decision", run.decision,
@@ -449,7 +453,9 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"outcome", outcome,
 		"deferred_error_count", len(run.deferredErrors)+len(run.degradedErrors),
 		"degraded_warning_count", len(run.degradedWarnings),
-	)
+	); err != nil {
+		return fmt.Errorf("write control-cycle completion log: %w", err)
+	}
 
 	return nil
 }
