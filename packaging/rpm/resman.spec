@@ -57,6 +57,8 @@ v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint 
 v1.25: architecture review remediation, dependency refresh and early systemd startup.
 v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
 
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x.
+
 **IMPORTANT: CGO is required for this package**
 
 CGO is enabled by default in this RPM and is required for:
@@ -92,11 +94,11 @@ MCP Server Features (v1.3+):
 - Hostname and server role in all metric outputs
 - Comprehensive logging middleware
 
-Latest Changes (v1.5.0):
+Current listener defaults:
 - Renamed Prometheus variables for clarity (PROMETHEUS_METRICS_BIND_HOST/PORT)
 - Default Prometheus port changed to 1974
 - Default MCP port changed to 1969
-- All bind addresses default to 0.0.0.0 for remote access
+- Prometheus and MCP bind to 127.0.0.1; remote exposure must be explicit
 - Added SERVER_ROLE configuration for server identification
 - Enhanced documentation with log level descriptions
 
@@ -145,6 +147,7 @@ install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 
 # Installa documentazione TLS
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -251,6 +254,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
 %doc %{_docdir}/%{name}/CONFIGURATION.md
+%doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/

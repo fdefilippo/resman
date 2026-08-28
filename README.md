@@ -80,6 +80,11 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
+Upgrading from 1.25.x is intentionally breaking. Complete the filesystem, database,
+configuration, MCP, Prometheus, hook, capability, and container actions in
+[`docs/UPGRADING.md`](docs/UPGRADING.md) before installing a build that contains the
+post-1.25.1 audit remediation.
+
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
 fixes the cause. Failures reading or writing setup state for an otherwise present
@@ -288,6 +293,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+- Upgrade guide from 1.25.x: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

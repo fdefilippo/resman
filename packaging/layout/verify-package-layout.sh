@@ -78,6 +78,7 @@ assert_entry '/etc/resman' 'drwx------' 'root/root' "$listing"
 assert_entry '/etc/resman/resman.conf' '-rw-------' 'root/root' "$listing"
 assert_entry '/etc/resman/tls' 'drwx------' 'root/root' "$listing"
 assert_entry '/var/lib/resman' 'drwx------' 'root/root' "$listing"
+assert_entry '/usr/share/doc/resman/UPGRADING.md' '-rw-r--r--' 'root/root' "$listing"
 
 assert_absent_path '/etc/resman.conf' "$paths"
 assert_absent_path '/etc/resman.conf.rpmsave' "$paths"

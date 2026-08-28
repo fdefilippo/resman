@@ -635,6 +635,16 @@ and restart.
 The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
+.PP
+.B Upgrade from 1.25.x
+.PP
+The post-1.25.1 audit remediation intentionally breaks filesystem, database,
+configuration, MCP, Prometheus, hook, capability and container contracts. Before
+installing such a build, follow
+.IR /usr/share/doc/resman/UPGRADING.md .
+It lists the visible symptom, cause and required action for every known
+discontinuity; old schemas, keys and wire aliases are not preserved.
+.PP
 The copyable configuration remains
 .IR /etc/resman/resman.conf .
 .PP
