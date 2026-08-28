@@ -338,7 +338,8 @@ func (s *Server) newMCPHTTPHandler() http.Handler {
 		PropagateRequestCancellation: true,
 	})
 
-	// Authentication and protocol validation are evaluated independently per request.
+	// Authentication stays outermost so unauthenticated callers cannot fingerprint
+	// the supported protocol revision.
 	return s.authMiddleware(s.loggingMiddleware(latestOnlyHTTPMiddleware(mcpHandler.ServeHTTP)))
 }
 
