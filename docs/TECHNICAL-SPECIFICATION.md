@@ -625,8 +625,8 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A 1.25.x database must be archived or deleted so schema
-version 2 can be created; it is not moved or migrated.
+component construction. A pre-version-3 database must be archived or deleted so schema
+version 3 can be created; it is not moved or migrated.
 
 **Format:**
 ```ini
@@ -1155,8 +1155,21 @@ decision policy.
 - `resman_memory_usage_megabytes` (gauge)
 - `resman_system_load_average` (gauge)
 - `resman_all_users_count` (gauge)
-- `resman_limited_users_count` (gauge)
-- `resman_limits_active` (gauge)
+- `resman_cpu_eligible_users_cpu_usage_percent` (gauge)
+- `resman_cpu_eligible_users_memory_usage_bytes` (gauge)
+- `resman_cpu_eligible_users_count` (gauge)
+- `resman_ram_eligible_users_memory_usage_bytes` (gauge)
+- `resman_ram_eligible_users_count` (gauge)
+- `resman_io_eligible_users_count` (gauge)
+- `resman_io_eligible_users_read_bytes_per_second` (gauge)
+- `resman_io_eligible_users_write_bytes_per_second` (gauge)
+- `resman_io_eligible_users_read_block_operations_per_second` (gauge)
+- `resman_io_eligible_users_write_block_operations_per_second` (gauge)
+- `resman_cpu_actively_limited_users_count` (gauge)
+- `resman_actively_limited_users_count` (gauge)
+- `resman_cpu_limits_active` (gauge)
+- `resman_resource_limits_active` (gauge)
+- `resman_any_limits_active` (gauge)
 
 **Per-User Metrics:**
 - `resman_user_cpu_usage_percent{uid, username}` (gauge)
@@ -1164,7 +1177,7 @@ decision policy.
 - `resman_user_cpu_usage_ema_percent{uid, username}` (gauge)
 - `resman_user_memory_usage_bytes{uid, username}` (gauge)
 - `resman_user_process_count{uid, username}` (gauge)
-- `resman_user_cpu_limited{uid, username}` (gauge)
+- `resman_user_cpu_limit_active{uid, username}` (gauge)
 
 Every per-user series is published exclusively from the control-cycle decision
 sample. Its CPU delta and smoothing window therefore match the sample used by
@@ -1173,8 +1186,8 @@ remove per-user series. The shipped per-user alert rules consequently evaluate o
 defined sampling stream even when PSI event-driven refreshes run at another cadence.
 
 **Counters:**
-- `resman_limits_activated_total` (confirmed inactive-to-active transitions)
-- `resman_limits_deactivated_total` (confirmed active-to-inactive transitions)
+- `resman_cpu_limits_activated_total` (confirmed inactive-to-active transitions)
+- `resman_cpu_limits_deactivated_total` (confirmed active-to-inactive transitions)
 - `resman_errors_total{component, error_type}` (operational errors with bounded labels)
 - `resman_limit_hook_executions_total{hook_type, outcome}` (terminal script and HTTP
   hook outcomes using bounded labels)
@@ -1226,27 +1239,38 @@ type UserMetrics struct {
 
 // System Metrics (control cycle)
 type SystemMetrics struct {
-    Timestamp         time.Time
-    TotalCores        int
-    TotalCPUUsage     float64
-    TotalUserCPUUsage float64
-    MemoryUsage       float64
-    SystemUnderLoad   bool
-    ActiveUsers       []int
-    UserCPUUsage      map[int]float64
-    UserMetrics       map[int]*UserMetrics
+    Timestamp                 time.Time
+    TotalCores                int
+    TotalCPUUsage             float64
+    AllUsersCPUUsage          float64
+    AllUsersMemoryUsage       uint64
+    AllUsersCount             int
+    CPUEligibleCPUUsage       float64
+    CPUEligibleMemoryUsage    uint64
+    CPUEligibleUsersCount     int
+    RAMEligibleUsageBytes     uint64
+    RAMEligibleUsersCount     int
+    IOEligibleUsersCount      int
+    IOEligibleReadBPS         float64
+    IOEligibleWriteBPS        float64
+    IOEligibleReadBlockIOPS   float64
+    IOEligibleWriteBlockIOPS  float64
+    MemoryUsage               float64
+    SystemUnderLoad           bool
+    UserMetrics               map[int]*UserMetrics
 }
 
 // Control History Entry
 type ControlCycleEntry struct {
-    Timestamp     time.Time
-    Decision      string
-    Reason        string
-    TotalCPUUsage float64
-    UserCPUUsage  float64
-    ActiveUsers   int
-    LimitsActive  bool
-    DurationMs    int64
+    Timestamp                    time.Time
+    Decision                     string
+    Reason                       string
+    TotalCPUUsage                float64
+    CPUEligibleCPUUsage          float64
+    ObservedUsersCount           int
+    CPUActivelyLimitedUsersCount int
+    CPULimitsActive              bool
+    DurationMs                   int64
 }
 ```
 
@@ -1261,15 +1285,19 @@ type MetricsCollector interface {
     GetAllUsers() []int
     GetAllUsersCPUUsage() float64
     GetAllUsersMemoryUsage() uint64
-    GetLimitedUsers() []int
-    GetLimitedUsersCPUUsage() float64
-    GetLimitedUsersMemoryUsage() uint64
     GetMemoryUsage() float64
     GetTotalMemoryMB() float64
     GetCachedMemoryMB() float64
     IsSystemUnderLoad() bool
     GetAllUserMetrics() map[int]*UserMetrics
     GetAllUserMetricsForDecision() map[int]*UserMetrics
+    WriteMetricsToDatabase(map[int]*UserMetrics, SystemPersistenceMetrics) error
+}
+
+// PrometheusExporter accepts typed snapshots; positional scalar projections are forbidden.
+type PrometheusExporter interface {
+    UpdateSystemSnapshot(SystemExporterMetrics)
+    UpdateUserSnapshot(UserExporterMetrics)
 }
 
 // CgroupManager interface

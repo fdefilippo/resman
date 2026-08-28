@@ -110,7 +110,8 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"ram_limit_active", "ram_limit_requested", "timestamp", "uid", "username",
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
-		"cpu_actively_limited_users_count", "cpu_limits_active", "system_load", "timestamp", "total_cores", "total_cpu_usage",
+		"actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users_count", "cpu_limits_active",
+		"resource_limits_active", "system_load", "timestamp", "total_cores", "total_cpu_usage",
 	})
 	assertExactNestedJSONKeys(t, activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}}, "users", []string{"uid", "username"})
 }
@@ -128,8 +129,11 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 	if userRecord.Timestamp != now.Format(time.RFC3339) || userRecord.MemoryUsage != 42 {
 		t.Fatalf("user history projection = %+v", userRecord)
 	}
-	systemRecord := newSystemHistoryRecord(database.SystemMetricsRecord{Timestamp: now, LimitedUsersCount: 2})
-	if systemRecord.Timestamp != now.Format(time.RFC3339) || systemRecord.CPUActivelyLimitedUsersCount != 2 {
+	systemRecord := newSystemHistoryRecord(database.SystemMetricsRecord{
+		Timestamp: now, CPULimitsActive: true, ResourceLimitsActive: true,
+		AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 3,
+	})
+	if systemRecord.Timestamp != now.Format(time.RFC3339) || systemRecord.CPUActivelyLimitedUsersCount != 2 || systemRecord.ActivelyLimitedUsersCount != 3 {
 		t.Fatalf("system history projection = %+v", systemRecord)
 	}
 }

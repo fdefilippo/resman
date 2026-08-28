@@ -18,14 +18,14 @@ import (
 )
 
 type limitHookEvent struct {
-	UID             int       `json:"uid"`
-	Username        string    `json:"username"`
-	CPUUsage        float64   `json:"cpu_usage"`
-	LimitedUsers    int       `json:"limited_users"`
-	SharedCgroup    string    `json:"shared_cgroup"`
-	Timestamp       time.Time `json:"timestamp"`
-	ServerRole      string    `json:"server_role,omitempty"`
-	LimitHookSource string    `json:"source"`
+	UID                        int       `json:"uid"`
+	Username                   string    `json:"username"`
+	EnforceableCPUUsagePercent float64   `json:"enforceable_cpu_usage_percent"`
+	CPUEligibleUsersCount      int       `json:"cpu_eligible_users_count"`
+	SharedCgroup               string    `json:"shared_cgroup"`
+	Timestamp                  time.Time `json:"timestamp"`
+	ServerRole                 string    `json:"server_role,omitempty"`
+	LimitHookSource            string    `json:"source"`
 }
 
 type sanitizedHookError struct {
@@ -56,14 +56,14 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 	m.mu.RUnlock()
 
 	event := limitHookEvent{
-		UID:             uid,
-		Username:        username,
-		CPUUsage:        userEnforceableCPUUsage(metrics, uid),
-		LimitedUsers:    metrics.CPUEligibleUsersCount,
-		SharedCgroup:    sharedCgroup,
-		Timestamp:       time.Now().UTC(),
-		ServerRole:      cfg.ServerRole,
-		LimitHookSource: "resman",
+		UID:                        uid,
+		Username:                   username,
+		EnforceableCPUUsagePercent: userEnforceableCPUUsage(metrics, uid),
+		CPUEligibleUsersCount:      metrics.CPUEligibleUsersCount,
+		SharedCgroup:               sharedCgroup,
+		Timestamp:                  time.Now().UTC(),
+		ServerRole:                 cfg.ServerRole,
+		LimitHookSource:            "resman",
 	}
 
 	m.hookMu.Lock()
@@ -178,8 +178,8 @@ func runLimitHookScript(ctx context.Context, script string, event limitHookEvent
 	cmd.Env = append(os.Environ(),
 		"RESMAN_LIMIT_UID="+strconv.Itoa(event.UID),
 		"RESMAN_LIMIT_USERNAME="+event.Username,
-		"RESMAN_LIMIT_CPU_USAGE="+strconv.FormatFloat(event.CPUUsage, 'f', 2, 64),
-		"RESMAN_LIMIT_LIMITED_USERS="+strconv.Itoa(event.LimitedUsers),
+		"RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT="+strconv.FormatFloat(event.EnforceableCPUUsagePercent, 'f', 2, 64),
+		"RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT="+strconv.Itoa(event.CPUEligibleUsersCount),
 		"RESMAN_LIMIT_SHARED_CGROUP="+event.SharedCgroup,
 		"RESMAN_LIMIT_TIMESTAMP="+event.Timestamp.Format(time.RFC3339),
 		"RESMAN_LIMIT_SERVER_ROLE="+event.ServerRole,

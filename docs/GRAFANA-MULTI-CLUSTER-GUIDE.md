@@ -143,10 +143,10 @@ topk(5, resman_user_memory_usage_bytes{cluster=~"$cluster", server_role=~"$serve
 
 ```promql
 # Cluster con limiti attivi
-resman_limits_active{cluster=~"$cluster"} == 1
+resman_cpu_limits_active{cluster=~"$cluster"} == 1
 
 # Server role con più utenti limitati
-sum by (server_role) (resman_limited_users_count{cluster=~"$cluster"})
+sum by (server_role) (resman_cpu_actively_limited_users_count{cluster=~"$cluster"})
 ```
 
 ## Alerting Multi-Cluster
@@ -167,7 +167,7 @@ groups:
           description: "CPU usage is above 90% on {{ $labels.hostname }} ({{ $labels.server_role }}) in cluster {{ $labels.cluster }}"
 
       - alert: LimitsActiveLongTime
-        expr: resman_limits_active == 1
+        expr: resman_cpu_limits_active == 1
         for: 1h
         labels:
           severity: warning

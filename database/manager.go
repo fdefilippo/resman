@@ -52,14 +52,17 @@ type UserMetricsRecord struct {
 	Timestamp         time.Time
 }
 
-// SystemMetricsRecord rappresenta un record delle metriche di sistema
+// SystemMetricsRecord represents one persisted system metrics sample.
 type SystemMetricsRecord struct {
-	TotalCPUUsagePercent float64
-	TotalCores           int
-	SystemLoad           float64
-	LimitsActive         bool
-	LimitedUsersCount    int
-	Timestamp            time.Time
+	TotalCPUUsagePercent         float64
+	TotalCores                   int
+	SystemLoad                   float64
+	CPULimitsActive              bool
+	ResourceLimitsActive         bool
+	AnyLimitsActive              bool
+	CPUActivelyLimitedUsersCount int
+	ActivelyLimitedUsersCount    int
+	Timestamp                    time.Time
 }
 
 // UserSummary contains aggregate metrics for one user and time range.
@@ -103,7 +106,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 2
+	metricsSchemaVersion   = 3
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
 							  process_count, cgroup_path, cpu_quota, eligible_for_cpu,
@@ -113,9 +116,11 @@ const (
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	insertSystemMetricsQuery = `
-    INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
-                                system_load, limits_active, limited_users_count)
-    VALUES (?, ?, ?, ?, ?, ?)
+	INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
+								system_load, cpu_limits_active, resource_limits_active,
+								any_limits_active, cpu_actively_limited_users_count,
+								actively_limited_users_count)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
 
@@ -236,18 +241,21 @@ func (m *DatabaseManager) InitSchema() error {
         io_limit_active BOOLEAN NOT NULL
     );
 
-    -- Tabella per le metriche di sistema
+    -- System-wide observation and explicit enforcement state.
     CREATE TABLE IF NOT EXISTS system_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_cpu_usage_percent REAL NOT NULL,
         total_cores INTEGER NOT NULL,
         system_load REAL,
-        limits_active BOOLEAN DEFAULT FALSE,
-        limited_users_count INTEGER
+		cpu_limits_active BOOLEAN NOT NULL,
+		resource_limits_active BOOLEAN NOT NULL,
+		any_limits_active BOOLEAN NOT NULL,
+		cpu_actively_limited_users_count INTEGER NOT NULL,
+		actively_limited_users_count INTEGER NOT NULL
     );
 
-    -- Indici per performance
+    -- Query indexes.
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid ON user_metrics(uid);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid_timestamp ON user_metrics(uid, timestamp);
@@ -264,6 +272,9 @@ func (m *DatabaseManager) InitSchema() error {
 		}
 	}
 	if err := m.validateUserMetricsSchema(); err != nil {
+		return err
+	}
+	if err := m.validateSystemMetricsSchema(); err != nil {
 		return err
 	}
 	return m.normalizeStoredTimestamps()
@@ -315,6 +326,42 @@ func (m *DatabaseManager) validateUserMetricsSchema() error {
 		"eligible_for_cpu", "eligible_for_ram", "eligible_for_io",
 		"cpu_limit_requested", "cpu_limit_active", "ram_limit_requested",
 		"ram_limit_active", "io_limit_requested", "io_limit_active",
+	} {
+		if !columns[required] {
+			return m.incompatibleSchemaError(fmt.Sprintf("missing required column %s", required))
+		}
+	}
+	return nil
+}
+
+func (m *DatabaseManager) validateSystemMetricsSchema() error {
+	rows, err := m.db.Query("PRAGMA table_info(system_metrics)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect system_metrics schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("failed to scan system_metrics schema: %w", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed while inspecting system_metrics schema: %w", err)
+	}
+	for _, ambiguous := range []string{"limits_active", "limited_users_count"} {
+		if columns[ambiguous] {
+			return m.incompatibleSchemaError(fmt.Sprintf("ambiguous %s column", ambiguous))
+		}
+	}
+	for _, required := range []string{
+		"cpu_limits_active", "resource_limits_active", "any_limits_active",
+		"cpu_actively_limited_users_count", "actively_limited_users_count",
 	} {
 		if !columns[required] {
 			return m.incompatibleSchemaError(fmt.Sprintf("missing required column %s", required))
@@ -464,8 +511,11 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 			system.TotalCPUUsagePercent,
 			system.TotalCores,
 			system.SystemLoad,
-			system.LimitsActive,
-			system.LimitedUsersCount,
+			system.CPULimitsActive,
+			system.ResourceLimitsActive,
+			system.AnyLimitsActive,
+			system.CPUActivelyLimitedUsersCount,
+			system.ActivelyLimitedUsersCount,
 		); err != nil {
 			rollback()
 			return fmt.Errorf("failed to insert system metrics batch record: %w", err)
@@ -605,7 +655,8 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 
 	query := `
     SELECT timestamp, total_cpu_usage_percent, total_cores, system_load,
-           limits_active, limited_users_count
+		   cpu_limits_active, resource_limits_active, any_limits_active,
+		   cpu_actively_limited_users_count, actively_limited_users_count
     FROM system_metrics
     WHERE timestamp BETWEEN ? AND ?
     ORDER BY timestamp DESC
@@ -622,7 +673,9 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	for rows.Next() {
 		var r SystemMetricsRecord
 		err := rows.Scan(&r.Timestamp, &r.TotalCPUUsagePercent, &r.TotalCores,
-			&r.SystemLoad, &r.LimitsActive, &r.LimitedUsersCount)
+			&r.SystemLoad, &r.CPULimitsActive, &r.ResourceLimitsActive,
+			&r.AnyLimitsActive, &r.CPUActivelyLimitedUsersCount,
+			&r.ActivelyLimitedUsersCount)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan system history record: %w", err)
 		}

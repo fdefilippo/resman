@@ -43,8 +43,20 @@ func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) 
 	}
 }
 
+// SystemPersistenceMetrics contains one typed system sample for database persistence.
+type SystemPersistenceMetrics struct {
+	TotalCPUUsagePercent         float64
+	TotalCores                   int
+	SystemLoad                   float64
+	CPULimitsActive              bool
+	ResourceLimitsActive         bool
+	AnyLimitsActive              bool
+	CPUActivelyLimitedUsersCount int
+	ActivelyLimitedUsersCount    int
+}
+
 // WriteMetricsBatch writes one system sample and all user samples atomically.
-func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
+func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, system SystemPersistenceMetrics) error {
 	w.mu.RLock()
 	enabled := w.enabled
 	w.mu.RUnlock()
@@ -54,12 +66,15 @@ func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, totalCPUU
 
 	timestamp := time.Now().UTC()
 	systemRecord := &database.SystemMetricsRecord{
-		TotalCPUUsagePercent: totalCPUUsage,
-		TotalCores:           totalCores,
-		SystemLoad:           systemLoad,
-		LimitsActive:         limitsActive,
-		LimitedUsersCount:    limitedUsersCount,
-		Timestamp:            timestamp,
+		TotalCPUUsagePercent:         system.TotalCPUUsagePercent,
+		TotalCores:                   system.TotalCores,
+		SystemLoad:                   system.SystemLoad,
+		CPULimitsActive:              system.CPULimitsActive,
+		ResourceLimitsActive:         system.ResourceLimitsActive,
+		AnyLimitsActive:              system.AnyLimitsActive,
+		CPUActivelyLimitedUsersCount: system.CPUActivelyLimitedUsersCount,
+		ActivelyLimitedUsersCount:    system.ActivelyLimitedUsersCount,
+		Timestamp:                    timestamp,
 	}
 	userRecords := make([]*database.UserMetricsRecord, 0, len(userMetrics))
 	for uid, metrics := range userMetrics {

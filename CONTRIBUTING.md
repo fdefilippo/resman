@@ -147,7 +147,7 @@ When adding new Prometheus metrics:
 
 1. Add metric to `metrics/prometheus.go`
 2. Register in `registerMetrics()`
-3. Update through the typed `UpdateSystemSnapshot()` contract or `UpdateUserMetrics()`
+3. Update through the typed `UpdateSystemSnapshot()` or `UpdateUserSnapshot()` contract
 4. Update documentation in `docs/`
 5. Add to Grafana dashboard
 6. Update man page

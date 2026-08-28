@@ -1437,7 +1437,7 @@ Calling MCP tool: get_high_cpu_processes(min_cpu_percent=100)
 
 ### Phase 4: Prometheus Metrics
 - [ ] Add new metrics to `metrics/prometheus.go`
-- [ ] Update `UpdateUserMetrics()` to expose new metrics
+- [ ] Update `UpdateUserSnapshot()` to expose new metrics
 - [ ] Create Prometheus alert rules in `docs/alerting-rules.yml`
 
 ### Phase 5: Testing & Documentation

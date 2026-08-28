@@ -94,12 +94,12 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ### `user_metrics` table
 
-Schema version 2 stores policy eligibility, control intent, and observed enforcement
-as separate facts for every resource. `PRAGMA user_version` is set to `2`.
+Schema version 3 stores policy eligibility, control intent, and observed enforcement
+as separate facts for every resource. `PRAGMA user_version` is set to `3`.
 
 This is an intentionally breaking schema. A database containing the old unversioned
 `is_limited` column is rejected at startup. ResMan does not migrate or reinterpret old
-rows: move or delete the database and restart the service to create a new version 2
+rows: move or delete the database and restart the service to create a new version 3
 store.
 
 ```sql
@@ -145,8 +145,11 @@ CREATE TABLE system_metrics (
     total_cpu_usage_percent REAL NOT NULL,
     total_cores INTEGER NOT NULL,
     system_load REAL,
-    limits_active BOOLEAN DEFAULT FALSE,
-    limited_users_count INTEGER
+    cpu_limits_active BOOLEAN NOT NULL,
+    resource_limits_active BOOLEAN NOT NULL,
+    any_limits_active BOOLEAN NOT NULL,
+    cpu_actively_limited_users_count INTEGER NOT NULL,
+    actively_limited_users_count INTEGER NOT NULL
 );
 ```
 
@@ -289,8 +292,11 @@ Ottiene lo storico delle metriche di sistema.
       "total_cpu_usage": 75.2,
       "total_cores": 4,
       "system_load": 2.5,
-      "limits_active": true,
-      "limited_users": 3
+      "cpu_limits_active": true,
+      "resource_limits_active": true,
+      "any_limits_active": true,
+      "cpu_actively_limited_users_count": 2,
+      "actively_limited_users_count": 3
     }
   ],
   "count": 1,

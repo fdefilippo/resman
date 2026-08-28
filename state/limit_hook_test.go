@@ -35,6 +35,7 @@ func (l *capturingHookLogger) Warn(message string, fields ...interface{}) {
 
 func TestPostLimitHook(t *testing.T) {
 	var received limitHookEvent
+	var receivedFields map[string]json.RawMessage
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -43,21 +44,27 @@ func TestPostLimitHook(t *testing.T) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("content-type: got %s, expected application/json", r.Header.Get("Content-Type"))
 		}
-		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&receivedFields); err != nil {
 			t.Errorf("decode request body: %v", err)
+		}
+		payload, err := json.Marshal(receivedFields)
+		if err != nil {
+			t.Errorf("remarshal request body: %v", err)
+		} else if err := json.Unmarshal(payload, &received); err != nil {
+			t.Errorf("decode typed request body: %v", err)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
 	event := limitHookEvent{
-		UID:             1000,
-		Username:        "app",
-		CPUUsage:        82.5,
-		LimitedUsers:    2,
-		SharedCgroup:    "/sys/fs/cgroup/resman/limited",
-		Timestamp:       time.Now().UTC(),
-		LimitHookSource: "resman",
+		UID:                        1000,
+		Username:                   "app",
+		EnforceableCPUUsagePercent: 82.5,
+		CPUEligibleUsersCount:      2,
+		SharedCgroup:               "/sys/fs/cgroup/resman/limited",
+		Timestamp:                  time.Now().UTC(),
+		LimitHookSource:            "resman",
 	}
 
 	if err := postLimitHook(t.Context(), server.URL, event); err != nil {
@@ -65,6 +72,16 @@ func TestPostLimitHook(t *testing.T) {
 	}
 	if received.UID != event.UID || received.Username != event.Username {
 		t.Fatalf("received event: got uid=%d username=%q", received.UID, received.Username)
+	}
+	for _, required := range []string{"enforceable_cpu_usage_percent", "cpu_eligible_users_count"} {
+		if _, ok := receivedFields[required]; !ok {
+			t.Errorf("hook payload missing explicit field %q", required)
+		}
+	}
+	for _, removed := range []string{"cpu_usage", "limited_users"} {
+		if _, ok := receivedFields[removed]; ok {
+			t.Errorf("hook payload retained ambiguous field %q", removed)
+		}
 	}
 }
 
@@ -254,16 +271,18 @@ func TestRunLimitHookScript(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "hook.out")
 	scriptPath := filepath.Join(tmpDir, "hook.sh")
 
-	script := "#!/bin/sh\nprintf '%s:%s' \"$RESMAN_LIMIT_UID\" \"$RESMAN_LIMIT_USERNAME\" > \"" + outputPath + "\"\n"
+	script := "#!/bin/sh\nprintf '%s:%s:%s:%s' \"$RESMAN_LIMIT_UID\" \"$RESMAN_LIMIT_USERNAME\" \"$RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT\" \"$RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT\" > \"" + outputPath + "\"\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write hook script: %v", err)
 	}
 
 	event := limitHookEvent{
-		UID:             1000,
-		Username:        "app",
-		Timestamp:       time.Now().UTC(),
-		LimitHookSource: "resman",
+		UID:                        1000,
+		Username:                   "app",
+		EnforceableCPUUsagePercent: 82.5,
+		CPUEligibleUsersCount:      2,
+		Timestamp:                  time.Now().UTC(),
+		LimitHookSource:            "resman",
 	}
 
 	if err := runLimitHookScript(t.Context(), scriptPath, event); err != nil {
@@ -274,8 +293,8 @@ func TestRunLimitHookScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hook output: %v", err)
 	}
-	if string(output) != "1000:app" {
-		t.Fatalf("script output: got %q, expected %q", string(output), "1000:app")
+	if string(output) != "1000:app:82.50:2" {
+		t.Fatalf("script output: got %q, expected %q", string(output), "1000:app:82.50:2")
 	}
 }
 

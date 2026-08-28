@@ -60,7 +60,7 @@ All per-user metrics use 2 labels: `uid`, `username`.
 resman_user_cpu_usage_percent{uid, username}
 resman_user_memory_usage_bytes{uid, username}
 resman_user_process_count{uid, username}
-resman_user_cpu_limited{uid, username}          # 0 or 1
+resman_user_cpu_limit_active{uid, username}          # 0 or 1
 
 # Counters (cumulative)
 resman_user_memory_high_breaches_total{uid, username}
@@ -77,7 +77,7 @@ dimension is configured, the decision engine reads `rios`/`wios` from unlimited
 per-user observation cgroups and preserves a logical cumulative counter across
 enforcement placement changes.
 
-To show only limited users in dashboards, filter by `resman_user_cpu_limited{uid, username} == 1`.
+To show only limited users in dashboards, filter by `resman_user_cpu_limit_active{uid, username} == 1`.
 
 ## Cgroup Hierarchy
 

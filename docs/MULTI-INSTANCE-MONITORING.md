@@ -722,15 +722,15 @@ topk(10, sum by (username, instance) (resman_user_memory_usage_bytes))
 #### Hosts with Active CPU Limits
 
 ```promql
-# Count of limited users per host
-sum by (instance) (resman_user_cpu_limited)
+# Count of CPU-limited users per host
+sum by (instance) (resman_user_cpu_limit_active)
 ```
 
 #### CPU Limit Activation Rate by Host
 
 ```promql
 # Rate of limit activations per host
-sum by (instance) (rate(resman_limits_activated_total[5m]))
+sum by (instance) (rate(resman_cpu_limits_activated_total[5m]))
 ```
 
 ---

@@ -128,9 +128,10 @@ For every user and every resource, resman deals with three distinct facts:
 
 **Why.** Before `resman-4pw.1`, `UserMetrics.IsLimited` was assigned from CPU policy
 eligibility in the collector, overwritten with runtime state before database writes,
-and still exposed with its original meaning through MCP. The version 2 metrics schema
-replaced that ambiguous field with explicit eligibility, requested, and active fields;
-old stores are rejected and require an operator reset.
+and still exposed with its original meaning through MCP. The current metrics schema
+uses explicit eligibility, requested, and active fields for users and explicit CPU,
+RAM/I/O, and any-resource enforcement state for system samples; old stores are rejected
+and require an operator reset.
 
 *Findings: resman-4pw.1, resman-4pw.6*
 

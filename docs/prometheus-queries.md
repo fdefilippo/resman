@@ -179,42 +179,42 @@ delta(resman_user_process_count[1h])
 
 ## Limit Status
 
-### Users Currently Limited
+### Users with CPU Limits Currently Active
 ```promql
 # Returns 1 for users with active limits
-resman_user_cpu_limited == 1
+resman_user_cpu_limit_active == 1
 ```
 
-### Count of Limited Users
+### Count of CPU-Limited Users
 ```promql
-count(resman_user_cpu_limited == 1)
+count(resman_user_cpu_limit_active == 1)
 ```
 
-### Limited Users with High CPU
+### CPU-Limited Users with High CPU
 ```promql
-resman_user_cpu_usage_percent > 50 and resman_user_cpu_limited == 1
+resman_user_cpu_usage_percent > 50 and resman_user_cpu_limit_active == 1
 ```
 
-### Limits Activation Status
+### CPU Limits Activation Status
 ```promql
-# 1 = limits active globally, 0 = inactive
-resman_limits_active
+# 1 = CPU limits active, 0 = inactive
+resman_cpu_limits_active
 ```
 
 ### Confirmed Limit Activations (Last Hour)
 ```promql
-increase(resman_limits_activated_total[1h])
+increase(resman_cpu_limits_activated_total[1h])
 ```
 
 ### Confirmed Limit Deactivations (Last Hour)
 ```promql
-increase(resman_limits_deactivated_total[1h])
+increase(resman_cpu_limits_deactivated_total[1h])
 ```
 
 ### Limit Activation Rate
 ```promql
 # Activations per minute
-rate(resman_limits_activated_total[5m]) * 60
+rate(resman_cpu_limits_activated_total[5m]) * 60
 ```
 
 ---
@@ -243,9 +243,9 @@ rate(resman_control_cycle_duration_seconds_count[5m]) * 60
 resman_all_users_count
 ```
 
-### Limited Users Count
+### CPU-Limited Users Count
 ```promql
-resman_limited_users_count
+resman_cpu_actively_limited_users_count
 ```
 
 ### System Memory Usage
@@ -316,17 +316,17 @@ resman_user_process_count > 500
 (resman_system_load_average / resman_cpu_total_cores) > 2
 ```
 
-### Limits Not Activating Alert
+### CPU Limits Not Activating Alert
 ```promql
 # High CPU but limits not active
-resman_all_users_cpu_usage_percent > 80 and resman_limits_active == 0
+resman_all_users_cpu_usage_percent > 80 and resman_cpu_limits_active == 0
 ```
 
-### Frequent Limit Toggling Alert
+### Frequent CPU Limit Toggling Alert
 ```promql
 # More than 5 confirmed state changes in 10 minutes
-(increase(resman_limits_activated_total[10m])
- + increase(resman_limits_deactivated_total[10m])) > 5
+(increase(resman_cpu_limits_activated_total[10m])
+ + increase(resman_cpu_limits_deactivated_total[10m])) > 5
 ```
 
 ### Control Cycle Too Slow Alert
@@ -378,7 +378,7 @@ resman_user_process_count
 
 ### Limits Status Panel
 ```promql
-resman_user_cpu_limited
+resman_user_cpu_limit_active
 ```
 - **Visualization**: Stat
 - **Color mode**: Value
@@ -435,7 +435,7 @@ groups:
     expr: avg_over_time(resman_user_memory_usage_bytes[1h])
 
   - record: job:resman_limits:activation_rate
-    expr: rate(resman_limits_activated_total[5m])
+    expr: rate(resman_cpu_limits_activated_total[5m])
 ```
 
 ---

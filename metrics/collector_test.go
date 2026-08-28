@@ -287,11 +287,15 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 				IOLimitActive:     true,
 			},
 		},
-		50,
-		4,
-		2.5,
-		true,
-		1,
+		SystemPersistenceMetrics{
+			TotalCPUUsagePercent:         50,
+			TotalCores:                   4,
+			SystemLoad:                   2.5,
+			CPULimitsActive:              true,
+			AnyLimitsActive:              true,
+			CPUActivelyLimitedUsersCount: 1,
+			ActivelyLimitedUsersCount:    1,
+		},
 	); err != nil {
 		t.Fatalf("WriteMetricsToDatabase() error: %v", err)
 	}
@@ -373,26 +377,6 @@ func TestUsernameCacheTTLLifecycleIsIndependentOfMetricsDatabase(t *testing.T) {
 	collector.UpdateConfig(reloaded)
 	if got, want := collector.GetUsernameCacheTTL(), 9*time.Minute; got != want {
 		t.Fatalf("reloaded username cache TTL = %s, want %s", got, want)
-	}
-}
-
-func TestCPUEligibilityHelpersDoNotConsumeRAMOrIOEligibility(t *testing.T) {
-	collector, err := NewCollector(config.DefaultConfig())
-	if err != nil {
-		t.Fatalf("NewCollector() error: %v", err)
-	}
-	t.Cleanup(collector.Stop)
-	collector.setInCache(observationUserMetricsCacheKey, map[int]*UserMetrics{
-		1000: {UID: 1000, CPUUsage: 10, EligibleForRAM: true, EligibleForIO: true},
-		1001: {UID: 1001, CPUUsage: 20, EligibleForCPU: true},
-	}, collector.metricsCacheTTL())
-
-	if got := collector.GetLimitedUsersCPUUsage(); got != 20 {
-		t.Fatalf("GetLimitedUsersCPUUsage() = %.1f, want only CPU-eligible usage 20", got)
-	}
-	users := collector.GetLimitedUsers()
-	if len(users) != 1 || users[0] != 1001 {
-		t.Fatalf("GetLimitedUsers() = %v, want [1001]", users)
 	}
 }
 

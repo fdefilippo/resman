@@ -91,23 +91,33 @@ type PrometheusExporter struct {
 	serverRole string
 
 	// Base metrics with hostname and server_role labels.
-	cpuTotalUsage  prometheus.Gauge
-	memoryUsage    prometheus.Gauge
-	totalMemoryMB  prometheus.Gauge
-	cachedMemoryMB prometheus.Gauge
-	limitedUsers   prometheus.Gauge
+	cpuTotalUsage           prometheus.Gauge
+	memoryUsage             prometheus.Gauge
+	totalMemoryMB           prometheus.Gauge
+	cachedMemoryMB          prometheus.Gauge
+	cpuActivelyLimitedUsers prometheus.Gauge
 
 	// ALL USERS metrics include every non-system user (UID >= SYSTEM_UID_MIN).
 	allUsersCPUUsage    prometheus.Gauge
 	allUsersMemoryUsage prometheus.Gauge
 	allUsersCount       prometheus.Gauge
 
-	// LIMITED USERS metrics include only users eligible for CPU limiting.
-	limitedUsersCPUUsage    prometheus.Gauge
-	limitedUsersMemoryUsage prometheus.Gauge
-	limitedUsersCount       prometheus.Gauge
+	// Per-resource eligibility metrics use the matching policy lists.
+	cpuEligibleUsersCPUUsage      prometheus.Gauge
+	cpuEligibleUsersMemoryUsage   prometheus.Gauge
+	cpuEligibleUsersCount         prometheus.Gauge
+	ramEligibleUsersMemoryUsage   prometheus.Gauge
+	ramEligibleUsersCount         prometheus.Gauge
+	ioEligibleUsersCount          prometheus.Gauge
+	ioEligibleUsersReadBPS        prometheus.Gauge
+	ioEligibleUsersWriteBPS       prometheus.Gauge
+	ioEligibleUsersReadBlockIOPS  prometheus.Gauge
+	ioEligibleUsersWriteBlockIOPS prometheus.Gauge
 
-	limitsActive               prometheus.Gauge
+	activelyLimitedUsers       prometheus.Gauge
+	cpuLimitsActive            prometheus.Gauge
+	resourceLimitsActive       prometheus.Gauge
+	anyLimitsActive            prometheus.Gauge
 	systemLoad                 prometheus.Gauge
 	totalCores                 prometheus.Gauge
 	actionCores                prometheus.Gauge
@@ -119,7 +129,7 @@ type PrometheusExporter struct {
 	userCPUUsageEMA      *prometheus.GaugeVec
 	userMemoryUsage      *prometheus.GaugeVec
 	userProcessCount     *prometheus.GaugeVec
-	userLimited          *prometheus.GaugeVec
+	userCPULimitActive   *prometheus.GaugeVec
 	userMemoryHighEvents *prometheus.CounterVec // NEW: memory.high breach events
 	userIOReadBytes      *prometheus.CounterVec
 	userIOWriteBytes     *prometheus.CounterVec
@@ -138,14 +148,14 @@ type PrometheusExporter struct {
 	usernameResolver     atomic.Value      // func(int) string
 
 	// Counters are increment-only metrics.
-	limitsActivatedTotal   prometheus.Counter
-	limitsDeactivatedTotal prometheus.Counter
-	controlCyclesTotal     prometheus.Counter
-	controlCycleTriggers   *prometheus.CounterVec
-	psiEventsTotal         *prometheus.CounterVec
-	psiLastEventTimestamp  *prometheus.GaugeVec
-	errorsTotal            *prometheus.CounterVec
-	limitHookExecutions    *prometheus.CounterVec
+	cpuLimitsActivatedTotal   prometheus.Counter
+	cpuLimitsDeactivatedTotal prometheus.Counter
+	controlCyclesTotal        prometheus.Counter
+	controlCycleTriggers      *prometheus.CounterVec
+	psiEventsTotal            *prometheus.CounterVec
+	psiLastEventTimestamp     *prometheus.GaugeVec
+	errorsTotal               *prometheus.CounterVec
+	limitHookExecutions       *prometheus.CounterVec
 
 	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
@@ -365,9 +375,9 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuActivelyLimitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_count",
+		Name:        "cpu_actively_limited_users_count",
 		Help:        "Number of users with CPU limits currently applied",
 		ConstLabels: staticLabels,
 	})
@@ -395,33 +405,103 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	// === LIMITED USERS metrics (only users passing filters) ===
+	// === PER-RESOURCE ELIGIBILITY metrics ===
 
-	exp.limitedUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_cpu_usage_percent",
-		Help:        "Total CPU usage percentage by users passing filters (USER_INCLUDE_LIST && !USER_EXCLUDE_LIST)",
+		Name:        "cpu_eligible_users_cpu_usage_percent",
+		Help:        "Total enforceable CPU usage percentage by users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_memory_usage_bytes",
-		Help:        "Total memory usage in bytes by users passing filters",
+		Name:        "cpu_eligible_users_memory_usage_bytes",
+		Help:        "Total enforceable memory usage in bytes by users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_count_filtered",
-		Help:        "Number of users passing filters (can be limited)",
+		Name:        "cpu_eligible_users_count",
+		Help:        "Number of users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.ramEligibleUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limits_active",
+		Name:        "ram_eligible_users_memory_usage_bytes",
+		Help:        "Total enforceable memory usage in bytes by users eligible under RAM policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ramEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "ram_eligible_users_count",
+		Help:        "Number of users eligible under RAM policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_count",
+		Help:        "Number of users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersReadBPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_read_bytes_per_second",
+		Help:        "Total enforceable read byte rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersWriteBPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_write_bytes_per_second",
+		Help:        "Total enforceable write byte rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersReadBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_read_block_operations_per_second",
+		Help:        "Total block-device read operation rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersWriteBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_write_block_operations_per_second",
+		Help:        "Total block-device write operation rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.activelyLimitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "actively_limited_users_count",
+		Help:        "Number of distinct users with observed CPU, RAM, or I/O enforcement",
+		ConstLabels: staticLabels,
+	})
+
+	exp.cpuLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "cpu_limits_active",
 		Help:        "Whether CPU limits are currently active (1) or not (0)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.resourceLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "resource_limits_active",
+		Help:        "Whether RAM or I/O limits are currently active (1) or not (0)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.anyLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "any_limits_active",
+		Help:        "Whether CPU, RAM, or I/O limits are currently active (1) or not (0)",
 		ConstLabels: staticLabels,
 	})
 
@@ -510,10 +590,10 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	exp.userLimited = promauto.With(exp.registry).NewGaugeVec(
+	exp.userCPULimitActive = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
-			Name:        "user_cpu_limited",
+			Name:        "user_cpu_limit_active",
 			Help:        "Whether CPU limit is applied for user (1) or not (0)",
 			ConstLabels: staticLabels,
 		},
@@ -613,16 +693,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	// === Counters ===
 
-	exp.limitsActivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
+	exp.cpuLimitsActivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
 		Namespace:   namespace,
-		Name:        "limits_activated_total",
+		Name:        "cpu_limits_activated_total",
 		Help:        "Total confirmed transitions from inactive to active CPU limits",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitsDeactivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
+	exp.cpuLimitsDeactivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
 		Namespace:   namespace,
-		Name:        "limits_deactivated_total",
+		Name:        "cpu_limits_deactivated_total",
 		Help:        "Total confirmed transitions from active to inactive CPU limits",
 		ConstLabels: staticLabels,
 	})
@@ -705,18 +785,29 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	return nil
 }
 
-// ExporterMetrics contains one typed update for system-wide Prometheus gauges.
-type ExporterMetrics struct {
+// SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
+type SystemExporterMetrics struct {
 	TotalCPUUsage                                float64
 	TotalCores                                   int
+	ActionCores                                  int
 	ObservedUsersCPUUsage                        float64
 	ObservedUsersCount                           int
 	ObservedUsersMemoryUsage                     uint64
 	CPUEligibleUsersCPUUsage                     float64
 	CPUEligibleUsersCount                        int
 	CPUEligibleUsersMemoryUsage                  uint64
+	RAMEligibleUsersCount                        int
+	RAMEligibleUsersMemoryUsage                  uint64
+	IOEligibleUsersCount                         int
+	IOEligibleUsersReadBytesPerSecond            float64
+	IOEligibleUsersWriteBytesPerSecond           float64
+	IOEligibleUsersReadBlockOperationsPerSecond  float64
+	IOEligibleUsersWriteBlockOperationsPerSecond float64
 	CPUActivelyLimitedUsersCount                 int
+	ActivelyLimitedUsersCount                    int
 	CPULimitsActive                              bool
+	ResourceLimitsActive                         bool
+	AnyLimitsActive                              bool
 	MemoryUsageMB                                float64
 	TotalMemoryMB                                float64
 	CachedMemoryMB                               float64
@@ -726,21 +817,32 @@ type ExporterMetrics struct {
 }
 
 // UpdateSystemSnapshot publishes one typed system-wide gauge snapshot.
-func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics ExporterMetrics) {
+func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetrics) {
 	if exp == nil {
 		return
 	}
 
 	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
 	exp.totalCores.Set(float64(metrics.TotalCores))
+	exp.actionCores.Set(float64(metrics.ActionCores))
 	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
 	exp.allUsersCount.Set(float64(metrics.ObservedUsersCount))
 	exp.allUsersMemoryUsage.Set(float64(metrics.ObservedUsersMemoryUsage))
-	exp.limitedUsersCPUUsage.Set(metrics.CPUEligibleUsersCPUUsage)
-	exp.limitedUsersCount.Set(float64(metrics.CPUEligibleUsersCount))
-	exp.limitedUsersMemoryUsage.Set(float64(metrics.CPUEligibleUsersMemoryUsage))
-	exp.limitedUsers.Set(float64(metrics.CPUActivelyLimitedUsersCount))
-	exp.limitsActive.Set(boolMetricValue(metrics.CPULimitsActive))
+	exp.cpuEligibleUsersCPUUsage.Set(metrics.CPUEligibleUsersCPUUsage)
+	exp.cpuEligibleUsersCount.Set(float64(metrics.CPUEligibleUsersCount))
+	exp.cpuEligibleUsersMemoryUsage.Set(float64(metrics.CPUEligibleUsersMemoryUsage))
+	exp.ramEligibleUsersCount.Set(float64(metrics.RAMEligibleUsersCount))
+	exp.ramEligibleUsersMemoryUsage.Set(float64(metrics.RAMEligibleUsersMemoryUsage))
+	exp.ioEligibleUsersCount.Set(float64(metrics.IOEligibleUsersCount))
+	exp.ioEligibleUsersReadBPS.Set(metrics.IOEligibleUsersReadBytesPerSecond)
+	exp.ioEligibleUsersWriteBPS.Set(metrics.IOEligibleUsersWriteBytesPerSecond)
+	exp.ioEligibleUsersReadBlockIOPS.Set(metrics.IOEligibleUsersReadBlockOperationsPerSecond)
+	exp.ioEligibleUsersWriteBlockIOPS.Set(metrics.IOEligibleUsersWriteBlockOperationsPerSecond)
+	exp.cpuActivelyLimitedUsers.Set(float64(metrics.CPUActivelyLimitedUsersCount))
+	exp.activelyLimitedUsers.Set(float64(metrics.ActivelyLimitedUsersCount))
+	exp.cpuLimitsActive.Set(boolMetricValue(metrics.CPULimitsActive))
+	exp.resourceLimitsActive.Set(boolMetricValue(metrics.ResourceLimitsActive))
+	exp.anyLimitsActive.Set(boolMetricValue(metrics.AnyLimitsActive))
 	exp.memoryUsage.Set(metrics.MemoryUsageMB)
 	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
 	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)
@@ -760,13 +862,33 @@ func boolMetricValue(value bool) float64 {
 	return 0
 }
 
-// UpdateUserMetrics updates per-user metrics using observed CPU enforcement state.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, cpuLimitActive bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+// UserExporterMetrics contains one typed per-user observation and enforcement snapshot.
+type UserExporterMetrics struct {
+	UID                  int
+	Username             string
+	CPUUsagePercent      float64
+	CPUUsageAverage      float64
+	CPUUsageEMA          float64
+	MemoryUsageBytes     uint64
+	ProcessCount         int
+	CPULimitActive       bool
+	CgroupPath           string
+	CPUQuota             string
+	MemoryHighEvents     uint64
+	ObservedIOReadBytes  uint64
+	ObservedIOWriteBytes uint64
+	ObservedIOReadOps    uint64
+	ObservedIOWriteOps   uint64
+}
+
+// UpdateUserSnapshot updates per-user metrics from one typed snapshot.
+func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 	if exp == nil || exp.registry == nil {
 		return
 	}
 
-	uidStr := strconv.Itoa(uid)
+	uidStr := strconv.Itoa(metrics.UID)
+	username := metrics.Username
 
 	// Resolve an empty or numeric username before taking the exporter lock.
 	if username == "" || username == uidStr {
@@ -775,8 +897,8 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 
 	// Read cgroup memory before acquiring lock (fix #4: avoid file I/O under lock)
 	cgroupMemory := uint64(0)
-	if cgroupPath != "" {
-		cgroupMemory = uint64(exp.getCgroupMemoryUsage(cgroupPath))
+	if metrics.CgroupPath != "" {
+		cgroupMemory = uint64(exp.getCgroupMemoryUsage(metrics.CgroupPath))
 	}
 
 	leaveMetrics := exp.metricsGate.Enter()
@@ -787,73 +909,73 @@ func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUs
 	exp.activeUserMetrics[userKey] = true
 
 	// Update per-user CPU usage.
-	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(cpuUsage)
-	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(cpuUsageAverage)
-	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(cpuUsageEMA)
+	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(metrics.CPUUsagePercent)
+	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(metrics.CPUUsageAverage)
+	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(metrics.CPUUsageEMA)
 
 	// Update per-user memory usage in bytes.
-	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(memoryUsage))
+	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(metrics.MemoryUsageBytes))
 
 	// Update the per-user process count.
-	exp.userProcessCount.WithLabelValues(uidStr, username).Set(float64(processCount))
+	exp.userProcessCount.WithLabelValues(uidStr, username).Set(float64(metrics.ProcessCount))
 
 	// Publish observed CPU enforcement state.
 	limitedValue := 0.0
-	if cpuLimitActive {
+	if metrics.CPULimitActive {
 		limitedValue = 1.0
 	}
-	exp.userLimited.WithLabelValues(uidStr, username).Set(limitedValue)
+	exp.userCPULimitActive.WithLabelValues(uidStr, username).Set(limitedValue)
 
 	// Update memory.high breach events by delta.
 	memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 	prev := exp.prevMemoryHighEvents[memoryHighKey]
-	if memoryHighEvents > prev {
-		delta := memoryHighEvents - prev
+	if metrics.MemoryHighEvents > prev {
+		delta := metrics.MemoryHighEvents - prev
 		exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Add(float64(delta))
 	}
-	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
+	exp.prevMemoryHighEvents[memoryHighKey] = metrics.MemoryHighEvents
 
 	// Update IO statistics (counters with delta)
-	ioKey := fmt.Sprintf("%d_%s", uid, username)
+	ioKey := fmt.Sprintf("%d_%s", metrics.UID, username)
 	prevIO := exp.prevIOStats[ioKey]
-	if ioReadBytes >= prevIO.ReadBytes {
-		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(ioReadBytes - prevIO.ReadBytes))
+	if metrics.ObservedIOReadBytes >= prevIO.ReadBytes {
+		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOReadBytes - prevIO.ReadBytes))
 	}
-	if ioWriteBytes >= prevIO.WriteBytes {
-		exp.userIOWriteBytes.WithLabelValues(uidStr, username).Add(float64(ioWriteBytes - prevIO.WriteBytes))
+	if metrics.ObservedIOWriteBytes >= prevIO.WriteBytes {
+		exp.userIOWriteBytes.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOWriteBytes - prevIO.WriteBytes))
 	}
-	if ioReadOps >= prevIO.ReadOps {
-		exp.userIOReadOps.WithLabelValues(uidStr, username).Add(float64(ioReadOps - prevIO.ReadOps))
+	if metrics.ObservedIOReadOps >= prevIO.ReadOps {
+		exp.userIOReadOps.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOReadOps - prevIO.ReadOps))
 	}
-	if ioWriteOps >= prevIO.WriteOps {
-		exp.userIOWriteOps.WithLabelValues(uidStr, username).Add(float64(ioWriteOps - prevIO.WriteOps))
+	if metrics.ObservedIOWriteOps >= prevIO.WriteOps {
+		exp.userIOWriteOps.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOWriteOps - prevIO.WriteOps))
 	}
 	exp.prevIOStats[ioKey] = ioStatsSnapshot{
-		ReadBytes:  ioReadBytes,
-		WriteBytes: ioWriteBytes,
-		ReadOps:    ioReadOps,
-		WriteOps:   ioWriteOps,
+		ReadBytes:  metrics.ObservedIOReadBytes,
+		WriteBytes: metrics.ObservedIOWriteBytes,
+		ReadOps:    metrics.ObservedIOReadOps,
+		WriteOps:   metrics.ObservedIOWriteOps,
 	}
 
 	// Update cgroup metrics when a path is available.
-	if cgroupPath != "" {
+	if metrics.CgroupPath != "" {
 		// Update the CPU quota.
-		if cpuQuota != "" {
-			quota, period := parseCPUQuota(cpuQuota)
+		if metrics.CPUQuota != "" {
+			quota, period := parseCPUQuota(metrics.CPUQuota)
 			if quota >= 0 {
-				exp.cgroupCPUQuota.WithLabelValues(uidStr, cgroupPath).Set(float64(quota))
+				exp.cgroupCPUQuota.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(quota))
 			}
 			if period > 0 {
-				exp.cgroupCPUPeriod.WithLabelValues(uidStr, cgroupPath).Set(float64(period))
+				exp.cgroupCPUPeriod.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(period))
 			}
 		}
 
 		// Use the value read before locking to avoid redundant cgroup file I/O.
-		exp.cgroupMemoryUsage.WithLabelValues(uidStr, cgroupPath).Set(float64(cgroupMemory))
+		exp.cgroupMemoryUsage.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(cgroupMemory))
 	}
 }
 
-// CleanupUserMetrics rimuove le metriche per gli utenti non più attivi.
+// CleanupUserMetrics removes series for users absent from the current snapshot.
 func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	if exp == nil {
 		return
@@ -862,9 +984,9 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	leaveMetrics := exp.metricsGate.Enter()
 	defer leaveMetrics()
 
-	// Itera su tutti gli utenti tracciati
+	// Iterate over every tracked user.
 	for userKey := range exp.activeUserMetrics {
-		// Controlla se l'utente è ancora attivo
+		// Validate whether the user remains active.
 		parts := strings.SplitN(userKey, "_", 2)
 		if len(parts) != 2 {
 			continue
@@ -878,15 +1000,15 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			continue
 		}
 
-		// Se l'utente non è più attivo, rimuovi le metriche
+		// Remove every series and local baseline for inactive users.
 		if !activeUids[uid] {
-			// Rimuovi dalle metriche
+			// Remove exported series.
 			exp.userCPUUsage.DeleteLabelValues(uidStr, username)
 			exp.userCPUUsageAverage.DeleteLabelValues(uidStr, username)
 			exp.userCPUUsageEMA.DeleteLabelValues(uidStr, username)
 			exp.userMemoryUsage.DeleteLabelValues(uidStr, username)
 			exp.userProcessCount.DeleteLabelValues(uidStr, username)
-			exp.userLimited.DeleteLabelValues(uidStr, username)
+			exp.userCPULimitActive.DeleteLabelValues(uidStr, username)
 			exp.userMemoryHighEvents.DeleteLabelValues(uidStr, username)
 			exp.userIOReadBytes.DeleteLabelValues(uidStr, username)
 			exp.userIOWriteBytes.DeleteLabelValues(uidStr, username)
@@ -896,13 +1018,13 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 				exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
 			}
 
-			// Rimuovi dalla mappa dei valori precedenti
+			// Remove previous-value baselines.
 			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 			delete(exp.prevMemoryHighEvents, memoryHighKey)
 			delete(exp.prevIOStats, memoryHighKey)
 			delete(exp.prevUserPatterns, userKey)
 
-			// Rimuovi dal tracking
+			// Remove presence tracking.
 			delete(exp.activeUserMetrics, userKey)
 
 			exp.logger.Debug("Removed metrics for inactive user",
@@ -913,7 +1035,7 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	}
 }
 
-// getCgroupMemoryUsage legge l'uso memoria da un cgroup specifico
+// getCgroupMemoryUsage reads memory.current for one cgroup.
 func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
 	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
 
@@ -926,18 +1048,7 @@ func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
 	return 0
 }
 
-// UpdateSystemMetrics aggiorna le metriche di sistema.
-func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64) {
-	if exp == nil {
-		return
-	}
-
-	exp.totalCores.Set(float64(totalCores))
-	exp.actionCores.Set(float64(actionCores))
-	exp.systemLoad.Set(systemLoad)
-}
-
-// UpdateUserWorkloadPattern aggiorna il pattern rilevato per un utente.
+// UpdateUserWorkloadPattern publishes the detected pattern for one user.
 func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 	if exp == nil || exp.registry == nil || exp.userWorkloadPattern == nil {
 		return
@@ -1013,20 +1124,20 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	return uidStr
 }
 
-// IncrementLimitsActivated records a confirmed inactive-to-active transition.
-func (exp *PrometheusExporter) IncrementLimitsActivated() {
+// IncrementCPULimitsActivated records a confirmed inactive-to-active CPU transition.
+func (exp *PrometheusExporter) IncrementCPULimitsActivated() {
 	if exp == nil {
 		return
 	}
-	exp.limitsActivatedTotal.Inc()
+	exp.cpuLimitsActivatedTotal.Inc()
 }
 
-// IncrementLimitsDeactivated records a confirmed active-to-inactive transition.
-func (exp *PrometheusExporter) IncrementLimitsDeactivated() {
+// IncrementCPULimitsDeactivated records a confirmed active-to-inactive CPU transition.
+func (exp *PrometheusExporter) IncrementCPULimitsDeactivated() {
 	if exp == nil {
 		return
 	}
-	exp.limitsDeactivatedTotal.Inc()
+	exp.cpuLimitsDeactivatedTotal.Inc()
 }
 
 // RecordControlCycleTrigger records the source that started a control cycle.

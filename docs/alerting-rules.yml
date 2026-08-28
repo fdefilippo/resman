@@ -160,10 +160,10 @@ groups:
 
     rules:
       # -------------------------------------------------------------------------
-      # Limits Not Activating
+      # CPU Limits Not Activating
       # -------------------------------------------------------------------------
-      - alert: ResManLimitsNotActivating
-        expr: resman_all_users_cpu_usage_percent > 80 and resman_limits_active == 0
+      - alert: ResManCPULimitsNotActivating
+        expr: resman_all_users_cpu_usage_percent > 80 and resman_cpu_limits_active == 0
         for: 5m
         labels:
           severity: warning
@@ -173,10 +173,10 @@ groups:
           description: "User CPU usage is {{ $value | printf \"%.1f\" }}% but CPU limits are not active. Check configuration."
 
       # -------------------------------------------------------------------------
-      # Frequent Limit Toggling
+      # Frequent CPU Limit Toggling
       # -------------------------------------------------------------------------
-      - alert: ResManFrequentLimitToggling
-        expr: (increase(resman_limits_activated_total[10m]) + increase(resman_limits_deactivated_total[10m])) > 5
+      - alert: ResManFrequentCPULimitToggling
+        expr: (increase(resman_cpu_limits_activated_total[10m]) + increase(resman_cpu_limits_deactivated_total[10m])) > 5
         for: 0m
         labels:
           severity: warning
@@ -258,10 +258,10 @@ groups:
           description: "Number of active users changed. Current count: {{ $value }}."
 
       # -------------------------------------------------------------------------
-      # Limits Activated
+      # CPU Limits Activated
       # -------------------------------------------------------------------------
-      - alert: ResManLimitsActivated
-        expr: increase(resman_limits_activated_total[5m]) > 0
+      - alert: ResManCPULimitsActivated
+        expr: increase(resman_cpu_limits_activated_total[5m]) > 0
         for: 0m
         labels:
           severity: info
@@ -271,10 +271,10 @@ groups:
           description: "CPU limits were activated {{ $value }} time(s) in the last 5 minutes."
 
       # -------------------------------------------------------------------------
-      # Limits Deactivated
+      # CPU Limits Deactivated
       # -------------------------------------------------------------------------
-      - alert: ResManLimitsDeactivated
-        expr: increase(resman_limits_deactivated_total[5m]) > 0
+      - alert: ResManCPULimitsDeactivated
+        expr: increase(resman_cpu_limits_deactivated_total[5m]) > 0
         for: 0m
         labels:
           severity: info

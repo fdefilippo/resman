@@ -54,16 +54,16 @@ grafana-cli --pluginUrl https://github.com/fdefilippo/resman/raw/main/docs/dashb
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Limits Active** | `resman_limits_active` | Whether CPU limits are currently applied (1=active) |
-| **Limited Users** | `resman_limited_users_count` | Number of users with active CPU limits |
-| **User Limit Status** | `resman_user_cpu_limited{uid, username}` | Per-user limit status (1=limited) |
+| **CPU Limits Active** | `resman_cpu_limits_active` | Whether CPU limits are currently applied (1=active) |
+| **CPU-Limited Users** | `resman_cpu_actively_limited_users_count` | Number of users with active CPU limits |
+| **User Limit Status** | `resman_user_cpu_limit_active{uid, username}` | Per-user limit status (1=limited) |
 
 ### Control Cycle Performance
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Limits Activated** | `increase(resman_limits_activated_total[1h])` | Confirmed inactive-to-active transitions in the last hour |
-| **Limits Deactivated** | `increase(resman_limits_deactivated_total[1h])` | Confirmed active-to-inactive transitions in the last hour |
+| **CPU Limits Activated** | `increase(resman_cpu_limits_activated_total[1h])` | Confirmed inactive-to-active CPU transitions in the last hour |
+| **CPU Limits Deactivated** | `increase(resman_cpu_limits_deactivated_total[1h])` | Confirmed active-to-inactive CPU transitions in the last hour |
 | **Avg Cycle Duration** | `rate(resman_control_cycle_duration_seconds_sum[5m]) / rate(resman_control_cycle_duration_seconds_count[5m])` | Average control cycle duration |
 | **Error Rate** | `sum by (component) (rate(resman_errors_total[5m]))` | Errors by component |
 
@@ -140,7 +140,7 @@ resman_user_process_count{username="francesco"}
 
 **Users with active limits:**
 ```promql
-resman_user_cpu_limited == 1
+resman_user_cpu_limit_active == 1
 ```
 
 **Average CPU usage in last hour:**
@@ -288,7 +288,7 @@ Adjust alert thresholds based on your system's capacity and requirements.
 
 ### 3. Monitor Limit Activations
 
-Keep an eye on `resman_limits_activated_total` to understand how often limits enter the active state successfully.
+Keep an eye on `resman_cpu_limits_activated_total` to understand how often limits enter the active state successfully.
 
 ### 4. Track Error Rates
 

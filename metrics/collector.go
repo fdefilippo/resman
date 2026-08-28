@@ -589,21 +589,6 @@ func (c *Collector) GetAllUsersCPUUsage() float64 {
 	return totalUsage
 }
 
-// GetLimitedUsersCPUUsage returns CPU usage from users eligible for CPU limiting.
-func (c *Collector) GetLimitedUsersCPUUsage() float64 {
-	var totalUsage float64
-
-	// Reuse the detailed snapshot and filter it by CPU eligibility.
-	allMetrics := c.GetAllUserMetrics()
-	for _, metrics := range allMetrics {
-		if metrics.EligibleForCPU {
-			totalUsage += metrics.CPUUsage
-		}
-	}
-
-	return totalUsage
-}
-
 // GetAllUsers restituisce la lista di TUTTI gli UID attivi non di sistema (UID >= SYSTEM_UID_MIN).
 // NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
 // Usato per metriche "all_users" (monitoraggio completo)
@@ -613,20 +598,6 @@ func (c *Collector) GetAllUsers() []int {
 	users := make([]int, 0, len(allMetrics))
 	for uid := range allMetrics {
 		users = append(users, uid)
-	}
-
-	return users
-}
-
-// GetLimitedUsers returns the UIDs eligible for CPU limiting.
-func (c *Collector) GetLimitedUsers() []int {
-	// Reuse the detailed snapshot and filter it by CPU eligibility.
-	allMetrics := c.GetAllUserMetrics()
-	users := make([]int, 0, len(allMetrics))
-	for uid, metrics := range allMetrics {
-		if metrics.EligibleForCPU {
-			users = append(users, uid)
-		}
 	}
 
 	return users
@@ -1538,21 +1509,6 @@ func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 	return totalMemory
 }
 
-// GetLimitedUsersMemoryUsage returns memory usage from users eligible for CPU limiting.
-func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
-	var totalMemory uint64
-
-	// Reuse the detailed snapshot and filter it by CPU eligibility.
-	allMetrics := c.GetAllUserMetrics()
-	for _, metrics := range allMetrics {
-		if metrics.EligibleForCPU {
-			totalMemory += metrics.MemoryUsage
-		}
-	}
-
-	return totalMemory
-}
-
 // getProcessMemoryUsage returns PSS when available and falls back to VmRSS.
 func (c *Collector) getProcessMemoryUsage(pid int) uint64 {
 	return c.getProcessMemoryUsageWithFallback(pid, c.getProcessRSS(pid))
@@ -2006,8 +1962,8 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 	return 0
 }
 
-// WriteMetricsToDatabase writes one metrics batch when a database writer is configured.
-func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
+// WriteMetricsToDatabase writes one typed metrics batch when a database writer is configured.
+func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, system SystemPersistenceMetrics) error {
 	c.mu.RLock()
 	writer := c.dbWriter
 	c.mu.RUnlock()
@@ -2016,7 +1972,7 @@ func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, tot
 		return nil
 	}
 
-	if err := writer.WriteMetricsBatch(userMetrics, totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount); err != nil {
+	if err := writer.WriteMetricsBatch(userMetrics, system); err != nil {
 		return fmt.Errorf("write metrics to database: %w", err)
 	}
 

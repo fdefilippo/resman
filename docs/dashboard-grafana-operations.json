@@ -107,7 +107,7 @@
     },
     {
       "type": "stat",
-      "title": "Utenti limitati",
+      "title": "Utenti con limite CPU",
       "description": "Utenti attualmente soggetti a limite CPU nel perimetro filtrato.",
       "gridPos": {
         "x": 4,
@@ -158,7 +158,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) or vector(0)",
+          "expr": "sum(resman_cpu_actively_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -324,8 +324,8 @@
     },
     {
       "type": "stat",
-      "title": "Attivazioni 1h",
-      "description": "Numero di attivazioni limiti nell ultima ora.",
+      "title": "Attivazioni limiti CPU - 1h",
+      "description": "Numero di attivazioni dei limiti CPU nell ultima ora.",
       "gridPos": {
         "x": 16,
         "y": 1,
@@ -375,7 +375,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
+          "expr": "sum(increase(resman_cpu_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -901,7 +901,7 @@
     },
     {
       "type": "table",
-      "title": "Utenti limitati",
+      "title": "Utenti con limite CPU",
       "description": "Elenco operativo degli utenti con limite CPU attivo.",
       "gridPos": {
         "x": 0,
@@ -965,7 +965,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_limited{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
+          "expr": "sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_limit_active{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1418,7 +1418,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Attivazioni e rimozioni limiti",
+      "title": "Attivazioni e rimozioni limiti CPU",
       "description": "Quando resman applica o rimuove limiti CPU.",
       "gridPos": {
         "x": 0,
@@ -1499,7 +1499,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_cpu_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
           "legendFormat": "activate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
@@ -1512,7 +1512,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_cpu_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
           "legendFormat": "deactivate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",

@@ -389,23 +389,11 @@ func TestCleanupUserMetricsRemovesCPUAverageAndEMASeries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
-	exporter.UpdateUserMetrics(
-		1000,
-		"testuser",
-		25,
-		20,
-		22,
-		1024,
-		2,
-		false,
-		"",
-		"",
-		0,
-		0,
-		0,
-		0,
-		0,
-	)
+	exporter.UpdateUserSnapshot(UserExporterMetrics{
+		UID: 1000, Username: "testuser", CPUUsagePercent: 25,
+		CPUUsageAverage: 20, CPUUsageEMA: 22, MemoryUsageBytes: 1024,
+		ProcessCount: 2,
+	})
 
 	before, err := exporter.registry.Gather()
 	if err != nil {
@@ -443,7 +431,7 @@ func TestCleanupUserMetricsRemovesCPUAverageAndEMASeries(t *testing.T) {
 	}
 }
 
-func TestUpdateUserMetricsPublishesObservedCPULimitState(t *testing.T) {
+func TestUpdateUserSnapshotPublishesObservedCPULimitState(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
 	exporter, err := NewPrometheusExporter(cfg)
@@ -451,12 +439,14 @@ func TestUpdateUserMetricsPublishesObservedCPULimitState(t *testing.T) {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateUserMetrics(1000, "alice", 10, 10, 10, 1024, 1, false, "", "", 0, 0, 0, 0, 0)
-	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limited"); got != 0 {
+	snapshot := UserExporterMetrics{UID: 1000, Username: "alice", CPUUsagePercent: 10, CPUUsageAverage: 10, CPUUsageEMA: 10, MemoryUsageBytes: 1024, ProcessCount: 1}
+	exporter.UpdateUserSnapshot(snapshot)
+	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limit_active"); got != 0 {
 		t.Fatalf("inactive observed CPU limit gauge = %f, want 0", got)
 	}
-	exporter.UpdateUserMetrics(1000, "alice", 10, 10, 10, 1024, 1, true, "", "", 0, 0, 0, 0, 0)
-	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limited"); got != 1 {
+	snapshot.CPULimitActive = true
+	exporter.UpdateUserSnapshot(snapshot)
+	if got := gatheredMetricValue(t, exporter, "resman_user_cpu_limit_active"); got != 1 {
 		t.Fatalf("active observed CPU limit gauge = %f, want 1", got)
 	}
 }
@@ -469,41 +459,63 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateSystemSnapshot(ExporterMetrics{TotalCPUUsage: 10})
-	exporter.UpdateSystemSnapshot(ExporterMetrics{
-		TotalCPUUsage:                25,
-		TotalCores:                   8,
-		ObservedUsersCPUUsage:        40,
-		ObservedUsersCount:           5,
-		ObservedUsersMemoryUsage:     1024,
-		CPUEligibleUsersCPUUsage:     30,
-		CPUEligibleUsersCount:        3,
-		CPUEligibleUsersMemoryUsage:  512,
-		CPUActivelyLimitedUsersCount: 2,
-		CPULimitsActive:              true,
-		MemoryUsageMB:                256,
-		TotalMemoryMB:                2048,
-		CachedMemoryMB:               128,
-		SystemLoad:                   1.5,
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 10})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
+		TotalCPUUsage:                                25,
+		TotalCores:                                   8,
+		ActionCores:                                  6,
+		ObservedUsersCPUUsage:                        40,
+		ObservedUsersCount:                           5,
+		ObservedUsersMemoryUsage:                     1024,
+		CPUEligibleUsersCPUUsage:                     30,
+		CPUEligibleUsersCount:                        3,
+		CPUEligibleUsersMemoryUsage:                  512,
+		RAMEligibleUsersCount:                        4,
+		RAMEligibleUsersMemoryUsage:                  768,
+		IOEligibleUsersCount:                         2,
+		IOEligibleUsersReadBytesPerSecond:            100,
+		IOEligibleUsersWriteBytesPerSecond:           200,
+		IOEligibleUsersReadBlockOperationsPerSecond:  10,
+		IOEligibleUsersWriteBlockOperationsPerSecond: 20,
+		CPUActivelyLimitedUsersCount:                 2,
+		ActivelyLimitedUsersCount:                    3,
+		CPULimitsActive:                              true,
+		ResourceLimitsActive:                         true,
+		AnyLimitsActive:                              true,
+		MemoryUsageMB:                                256,
+		TotalMemoryMB:                                2048,
+		CachedMemoryMB:                               128,
+		SystemLoad:                                   1.5,
 		ProcFSExecutableIdentityUnavailableProcesses: 2,
 		ProcFSIOUnavailableProcesses:                 3,
 	})
 
 	wantMetrics := map[string]float64{
-		"resman_cpu_total_usage_percent":          25,
-		"resman_cpu_total_cores":                  8,
-		"resman_all_users_cpu_usage_percent":      40,
-		"resman_all_users_count":                  5,
-		"resman_all_users_memory_usage_bytes":     1024,
-		"resman_limited_users_cpu_usage_percent":  30,
-		"resman_limited_users_count_filtered":     3,
-		"resman_limited_users_memory_usage_bytes": 512,
-		"resman_limited_users_count":              2,
-		"resman_limits_active":                    1,
-		"resman_memory_usage_megabytes":           256,
-		"resman_memory_total_megabytes":           2048,
-		"resman_memory_cached_megabytes":          128,
-		"resman_system_load_average":              1.5,
+		"resman_cpu_total_usage_percent":                             25,
+		"resman_cpu_total_cores":                                     8,
+		"resman_cpu_action_cores":                                    6,
+		"resman_all_users_cpu_usage_percent":                         40,
+		"resman_all_users_count":                                     5,
+		"resman_all_users_memory_usage_bytes":                        1024,
+		"resman_cpu_eligible_users_cpu_usage_percent":                30,
+		"resman_cpu_eligible_users_count":                            3,
+		"resman_cpu_eligible_users_memory_usage_bytes":               512,
+		"resman_ram_eligible_users_count":                            4,
+		"resman_ram_eligible_users_memory_usage_bytes":               768,
+		"resman_io_eligible_users_count":                             2,
+		"resman_io_eligible_users_read_bytes_per_second":             100,
+		"resman_io_eligible_users_write_bytes_per_second":            200,
+		"resman_io_eligible_users_read_block_operations_per_second":  10,
+		"resman_io_eligible_users_write_block_operations_per_second": 20,
+		"resman_cpu_actively_limited_users_count":                    2,
+		"resman_actively_limited_users_count":                        3,
+		"resman_cpu_limits_active":                                   1,
+		"resman_resource_limits_active":                              1,
+		"resman_any_limits_active":                                   1,
+		"resman_memory_usage_megabytes":                              256,
+		"resman_memory_total_megabytes":                              2048,
+		"resman_memory_cached_megabytes":                             128,
+		"resman_system_load_average":                                 1.5,
 	}
 	for name, want := range wantMetrics {
 		if got := gatheredMetricValue(t, exporter, name); got != want {
@@ -520,7 +532,20 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 	}
 	wantCoverage := map[string]float64{"executable_identity": 2, "io_decision": 3}
 	foundCoverage := false
+	oldAmbiguousNames := map[string]bool{
+		"resman_limited_users_count_filtered":     true,
+		"resman_limited_users_cpu_usage_percent":  true,
+		"resman_limited_users_memory_usage_bytes": true,
+		"resman_limited_users_count":              true,
+		"resman_limits_active":                    true,
+		"resman_user_cpu_limited":                 true,
+		"resman_limits_activated_total":           true,
+		"resman_limits_deactivated_total":         true,
+	}
 	for _, family := range families {
+		if oldAmbiguousNames[family.GetName()] {
+			t.Errorf("legacy ambiguous metric %s is still registered", family.GetName())
+		}
 		if family.GetName() != "resman_procfs_unavailable_processes" {
 			continue
 		}
@@ -602,9 +627,9 @@ func TestOperationalMetricsPublishTruthfulBoundedSeries(t *testing.T) {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.IncrementLimitsActivated()
-	exporter.IncrementLimitsActivated()
-	exporter.IncrementLimitsDeactivated()
+	exporter.IncrementCPULimitsActivated()
+	exporter.IncrementCPULimitsActivated()
+	exporter.IncrementCPULimitsDeactivated()
 	exporter.RecordControlCycleDuration(2 * time.Second)
 	exporter.RecordControlCycleDuration(3 * time.Second)
 	exporter.RecordMetricsCollectionDuration(25 * time.Millisecond)
@@ -619,12 +644,12 @@ func TestOperationalMetricsPublishTruthfulBoundedSeries(t *testing.T) {
 		wantLabels         map[string]string
 	}{
 		{
-			name:        "resman_limits_activated_total",
+			name:        "resman_cpu_limits_activated_total",
 			wantCounter: 2,
 			wantHelp:    "Total confirmed transitions from inactive to active CPU limits",
 		},
 		{
-			name:        "resman_limits_deactivated_total",
+			name:        "resman_cpu_limits_deactivated_total",
 			wantCounter: 1,
 			wantHelp:    "Total confirmed transitions from active to inactive CPU limits",
 		},
@@ -690,23 +715,10 @@ func TestIOOperationMetricHelpDescribesSyscallCounters(t *testing.T) {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateUserMetrics(
-		1000,
-		"testuser",
-		0,
-		0,
-		0,
-		0,
-		1,
-		false,
-		"",
-		"",
-		0,
-		0,
-		0,
-		10,
-		20,
-	)
+	exporter.UpdateUserSnapshot(UserExporterMetrics{
+		UID: 1000, Username: "testuser", ProcessCount: 1,
+		ObservedIOReadOps: 10, ObservedIOWriteOps: 20,
+	})
 
 	tests := []struct {
 		name string

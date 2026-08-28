@@ -611,7 +611,7 @@ When metrics persistence is enabled at its default
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
 The 1.25.x database schema is incompatible: archive or delete the legacy database
-and restart so resman can create schema version 2. It is never migrated or opened
+and restart so resman can create schema version 3. It is never migrated or opened
 under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
@@ -747,7 +747,7 @@ cycles triggered by PSI events cannot shorten it.
 .B total_cpu_usage
 is the host-wide normalized CPU percentage (0-100). Activation decisions use
 per-user CPU usage
-.RB ( limited_users_cpu_usage ),
+.RB ( cpu_eligible_users_cpu_usage ),
 which is the sum of process CPU and can exceed 100 on multi-core systems.
 .SH ENVIRONMENT VARIABLES
 All configuration options can be overridden by environment variables
@@ -803,9 +803,21 @@ resman_memory_usage_megabytes \- Total system memory usage
 .IP \(bu
 resman_all_users_count \- Number of active non\-system users
 .IP \(bu
-resman_limited_users_count \- Users with active limits
+resman_cpu_eligible_users_count \- Users eligible under CPU policy
 .IP \(bu
-resman_limits_active \- Limits status (1=active, 0=inactive)
+resman_ram_eligible_users_count \- Users eligible under RAM policy
+.IP \(bu
+resman_io_eligible_users_count \- Users eligible under I/O policy
+.IP \(bu
+resman_cpu_actively_limited_users_count \- Users with observed CPU limits
+.IP \(bu
+resman_actively_limited_users_count \- Distinct users with observed CPU, RAM, or I/O limits
+.IP \(bu
+resman_cpu_limits_active \- CPU limit status (1=active, 0=inactive)
+.IP \(bu
+resman_resource_limits_active \- RAM or I/O limit status (1=active, 0=inactive)
+.IP \(bu
+resman_any_limits_active \- Any CPU, RAM, or I/O limit status (1=active, 0=inactive)
 .IP \(bu
 resman_system_load_average \- System load average (1 minute)
 .IP \(bu
@@ -827,16 +839,16 @@ resman_user_io_write_ops_total{uid, username} \- Write-family syscall count from
 .IP \(bu
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
-resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
+resman_user_cpu_limit_active{uid, username} \- User limit status (1=limited, 0=unlimited)
 .PP
 All per-user series are published exclusively from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but do not write or
 remove per-user series, so CPU alerts and the exported EMA use the same sampling
 stream as enforcement.
 .IP \(bu
-resman_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
+resman_cpu_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu
-resman_limits_deactivated_total \- Confirmed active-to-inactive limit transitions (counter)
+resman_cpu_limits_deactivated_total \- Confirmed active-to-inactive limit transitions (counter)
 .IP \(bu
 resman_control_cycle_triggers_total{trigger} \- Control cycles by trigger source
 .IP \(bu
@@ -860,7 +872,7 @@ and
 .B username
 labels for easy filtering and aggregation in Grafana dashboards.
 The
-.B resman_user_cpu_limited
+.B resman_user_cpu_limit_active
 gauge reports observed CPU enforcement state: 1 means the user is in the
 CPU-limited cgroup, while 0 means CPU enforcement is not observed.
 .PP
@@ -877,7 +889,7 @@ Processes per user:
 .I resman_user_process_count{username="francesco"}
 .IP \(bu
 Only limited users:
-.I resman_user_cpu_limited == 1
+.I resman_user_cpu_limit_active == 1
 .RE
 .SH MCP SERVER (MODEL CONTEXT PROTOCOL)
 When enabled, the daemon exposes an MCP server for AI assistant integration.
@@ -1056,9 +1068,9 @@ RESMAN_LIMIT_UID
 .IP \(bu
 RESMAN_LIMIT_USERNAME
 .IP \(bu
-RESMAN_LIMIT_CPU_USAGE
+RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT
 .IP \(bu
-RESMAN_LIMIT_LIMITED_USERS
+RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT
 .IP \(bu
 RESMAN_LIMIT_SHARED_CGROUP
 .IP \(bu
@@ -1070,7 +1082,8 @@ RESMAN_LIMIT_SERVER_ROLE
 Webservice hooks are configured with
 .B LIMIT_HOOK_URL
 and receive an HTTP POST with a JSON payload containing uid, username,
-cpu_usage, limited_users, shared_cgroup, timestamp, source, and server_role.
+enforceable_cpu_usage_percent, cpu_eligible_users_count, shared_cgroup,
+timestamp, source, and server_role.
 .PP
 Hook script stdout and stderr are discarded and are never included in returned
 errors or daemon logs. Script failures retain a bounded reason such as timeout or

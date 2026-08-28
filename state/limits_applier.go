@@ -117,10 +117,10 @@ func (m *Manager) recordCPUTransitions(activated, deactivated bool) {
 		return
 	}
 	if activated {
-		m.prometheusExporter.IncrementLimitsActivated()
+		m.prometheusExporter.IncrementCPULimitsActivated()
 	}
 	if deactivated {
-		m.prometheusExporter.IncrementLimitsDeactivated()
+		m.prometheusExporter.IncrementCPULimitsDeactivated()
 	}
 }
 
@@ -1241,7 +1241,7 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 	fullyDeactivated = !m.hasObservedEnforcementLocked()
 	m.mu.Unlock()
 	if confirmedDeactivation && m.prometheusExporter != nil {
-		m.prometheusExporter.IncrementLimitsDeactivated()
+		m.prometheusExporter.IncrementCPULimitsDeactivated()
 	}
 	if m.stabilityTracker != nil {
 		if fullyDeactivated {

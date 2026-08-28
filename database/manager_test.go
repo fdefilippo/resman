@@ -181,7 +181,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 2"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 3"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -199,6 +199,38 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	}
 	if username != "ambiguous" || !limited {
 		t.Fatalf("legacy row changed after rejection: username=%q is_limited=%t", username, limited)
+	}
+}
+
+func TestNewDatabaseManagerRejectsVersionTwoWithoutMigration(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "version-two.db")
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	if _, err := legacyDB.Exec("PRAGMA user_version = 2"); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("set schema version 2: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("legacy database close error: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
+	}
+
+	manager, err := NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("NewDatabaseManager() returned a manager for schema version 2")
+	}
+	if err == nil {
+		t.Fatal("NewDatabaseManager() migrated schema version 2")
+	}
+	for _, fragment := range []string{dbPath, "schema version 2", "delete or move", "schema version 3"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
+		}
 	}
 }
 
@@ -321,12 +353,15 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	// Write system metrics.
 	now := time.Now()
 	record := &SystemMetricsRecord{
-		TotalCPUUsagePercent: 75.2,
-		TotalCores:           4,
-		SystemLoad:           2.5,
-		LimitsActive:         true,
-		LimitedUsersCount:    3,
-		Timestamp:            now,
+		TotalCPUUsagePercent:         75.2,
+		TotalCores:                   4,
+		SystemLoad:                   2.5,
+		CPULimitsActive:              true,
+		ResourceLimitsActive:         true,
+		AnyLimitsActive:              true,
+		CPUActivelyLimitedUsersCount: 2,
+		ActivelyLimitedUsersCount:    3,
+		Timestamp:                    now,
 	}
 
 	err = manager.WriteSystemMetrics(record)
@@ -348,6 +383,12 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 
 	if records[0].TotalCores != 4 {
 		t.Errorf("Expected 4 cores, got %d", records[0].TotalCores)
+	}
+	if !records[0].CPULimitsActive || !records[0].ResourceLimitsActive || !records[0].AnyLimitsActive {
+		t.Errorf("system enforcement state = %+v, want all active", records[0])
+	}
+	if records[0].CPUActivelyLimitedUsersCount != 2 || records[0].ActivelyLimitedUsersCount != 3 {
+		t.Errorf("system enforcement counts = CPU %d, any %d; want 2, 3", records[0].CPUActivelyLimitedUsersCount, records[0].ActivelyLimitedUsersCount)
 	}
 }
 

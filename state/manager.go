@@ -140,11 +140,6 @@ type MetricsCollector interface {
 	GetAllUsersCPUUsage() float64
 	GetAllUsersMemoryUsage() uint64
 
-	// Users eligible for CPU limiting.
-	GetLimitedUsers() []int
-	GetLimitedUsersCPUUsage() float64
-	GetLimitedUsersMemoryUsage() uint64
-
 	GetMemoryUsage() float64
 	GetTotalMemoryMB() float64
 	GetCachedMemoryMB() float64
@@ -155,7 +150,7 @@ type MetricsCollector interface {
 	// GetAllUserMetricsForDecision advances only the control cadence state.
 	GetAllUserMetricsForDecision() map[int]*resmanmetrics.UserMetrics
 	GetDBWriter() *resmanmetrics.DBWriter
-	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error
+	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, system resmanmetrics.SystemPersistenceMetrics) error
 	GetUsernameFromUID(uid int) string
 }
 
@@ -199,9 +194,8 @@ type CgroupManager interface {
 
 // PrometheusExporter defines the Prometheus boundary used by the state manager.
 type PrometheusExporter interface {
-	UpdateSystemSnapshot(metrics resmanmetrics.ExporterMetrics)
-	UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, cpuLimitActive bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64)
-	UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64)
+	UpdateSystemSnapshot(metrics resmanmetrics.SystemExporterMetrics)
+	UpdateUserSnapshot(metrics resmanmetrics.UserExporterMetrics)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
 	RecordControlCycleDuration(duration time.Duration)
@@ -211,8 +205,8 @@ type PrometheusExporter interface {
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
-	IncrementLimitsActivated()
-	IncrementLimitsDeactivated()
+	IncrementCPULimitsActivated()
+	IncrementCPULimitsDeactivated()
 }
 
 // NewManager creates a resource manager with the supplied dependencies.
@@ -350,8 +344,17 @@ type RuntimeStatus struct {
 	SharedCgroupUserCount        int
 }
 
-// GetStatus returns a typed snapshot of observed enforcement state.
-func (m *Manager) GetStatus() RuntimeStatus {
+type enforcementSummary struct {
+	cpuUsers                  []int
+	activelyLimitedUsers      []int
+	cpuLimitsActive           bool
+	resourceLimitsActive      bool
+	cpuLimitsAppliedTime      time.Time
+	resourceLimitsAppliedTime time.Time
+	sharedCgroupPath          string
+}
+
+func (m *Manager) getEnforcementSummary() enforcementSummary {
 	m.mu.RLock()
 	cpuUsers := make([]int, 0, len(m.activeUsers))
 	activelyLimited := make(map[int]struct{}, len(m.activeUsers)+len(m.resourceLimits))
@@ -366,42 +369,51 @@ func (m *Manager) GetStatus() RuntimeStatus {
 			activelyLimited[uid] = struct{}{}
 		}
 	}
-	sharedCgroupPath := m.sharedCgroupPath
-	cpuLimitsActive := len(cpuUsers) > 0
-	resourceLimitsActive := resourceEnforcementObserved
-	cpuLimitsAppliedTime := m.limitsAppliedTime
-	resourceLimitsAppliedTime := m.resourceLimitsAppliedTime
+	summary := enforcementSummary{
+		cpuUsers:                  cpuUsers,
+		cpuLimitsActive:           len(cpuUsers) > 0,
+		resourceLimitsActive:      resourceEnforcementObserved,
+		cpuLimitsAppliedTime:      m.limitsAppliedTime,
+		resourceLimitsAppliedTime: m.resourceLimitsAppliedTime,
+		sharedCgroupPath:          m.sharedCgroupPath,
+	}
 	m.mu.RUnlock()
 
-	activelyLimitedUsers := make([]int, 0, len(activelyLimited))
+	summary.activelyLimitedUsers = make([]int, 0, len(activelyLimited))
 	for uid := range activelyLimited {
-		activelyLimitedUsers = append(activelyLimitedUsers, uid)
+		summary.activelyLimitedUsers = append(summary.activelyLimitedUsers, uid)
 	}
-	sort.Ints(cpuUsers)
-	sort.Ints(activelyLimitedUsers)
+	sort.Ints(summary.cpuUsers)
+	sort.Ints(summary.activelyLimitedUsers)
+	return summary
+}
+
+// GetStatus returns a typed snapshot of observed enforcement state.
+func (m *Manager) GetStatus() RuntimeStatus {
+	summary := m.getEnforcementSummary()
 
 	status := RuntimeStatus{
-		CPULimitsActive:              cpuLimitsActive,
-		ResourceLimitsActive:         resourceLimitsActive,
-		AnyLimitsActive:              cpuLimitsActive || resourceLimitsActive,
-		CPULimitsAppliedTime:         cpuLimitsAppliedTime,
-		ResourceLimitsAppliedTime:    resourceLimitsAppliedTime,
-		ActivelyLimitedUsers:         activelyLimitedUsers,
-		ActivelyLimitedUsersCount:    len(activelyLimitedUsers),
-		CPUActivelyLimitedUsers:      cpuUsers,
-		CPUActivelyLimitedUsersCount: len(cpuUsers),
-		SharedCgroupPath:             sharedCgroupPath,
-		SharedCgroupActive:           sharedCgroupPath != "" && cpuLimitsActive,
+		CPULimitsActive:              summary.cpuLimitsActive,
+		ResourceLimitsActive:         summary.resourceLimitsActive,
+		AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
+		CPULimitsAppliedTime:         summary.cpuLimitsAppliedTime,
+		ResourceLimitsAppliedTime:    summary.resourceLimitsAppliedTime,
+		ActivelyLimitedUsers:         summary.activelyLimitedUsers,
+		ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
+		CPUActivelyLimitedUsers:      summary.cpuUsers,
+		CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
+		SharedCgroupPath:             summary.sharedCgroupPath,
+		SharedCgroupActive:           summary.sharedCgroupPath != "" && summary.cpuLimitsActive,
 	}
 
 	// Read shared cgroup details without holding the manager lock.
-	if sharedCgroupPath != "" {
-		cpuMaxFile := filepath.Join(sharedCgroupPath, "cpu.max")
+	if summary.sharedCgroupPath != "" {
+		cpuMaxFile := filepath.Join(summary.sharedCgroupPath, "cpu.max")
 		if data, err := os.ReadFile(cpuMaxFile); err == nil {
 			status.SharedCgroupQuota = strings.TrimSpace(string(data))
 		}
 
-		if entries, err := os.ReadDir(sharedCgroupPath); err == nil {
+		if entries, err := os.ReadDir(summary.sharedCgroupPath); err == nil {
 			userCount := 0
 			for _, entry := range entries {
 				if entry.IsDir() && strings.HasPrefix(entry.Name(), "user_") {

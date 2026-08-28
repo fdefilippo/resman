@@ -163,7 +163,7 @@ RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
 `MIN_SYSTEM_CORES` gates CPU enforcement only.
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
-activation uses per-user CPU (`limited_users_cpu_usage`), which is the sum of
+activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
 Host-wide CPU uses consecutive `/proc/stat` jiffy samples. Its baseline tolerates
 normal scheduling jitter and one missed decision-loop tick: it expires after two
@@ -254,7 +254,8 @@ refresh interval support hot reload. Changes that affect kernel PSI triggers
 rebuild the watcher; loop interval changes take effect immediately.
 
 Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
-a JSON `POST` with `uid`, `username`, `cpu_usage`, `limited_users`,
+a JSON `POST` with `uid`, `username`, `enforceable_cpu_usage_percent`,
+`cpu_eligible_users_count`,
 `shared_cgroup`, `timestamp`, and `server_role`.
 
 Dynamic fields are reloaded automatically. Restart the service after changing

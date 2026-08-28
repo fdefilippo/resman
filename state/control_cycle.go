@@ -444,7 +444,7 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"decision", run.decision,
 		"reason", run.reason,
 		"total_cpu_usage", run.metrics.TotalCPUUsage,
-		"limited_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
+		"cpu_eligible_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
 		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
 		"system_under_load", run.metrics.SystemUnderLoad,
@@ -774,36 +774,42 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		return
 	}
 
-	m.mu.RLock()
-	limitedUsers := len(m.activeUsers)
-	limitsActive := m.limitsActive
-	m.mu.RUnlock()
+	summary := m.getEnforcementSummary()
 
-	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.ExporterMetrics{
-		TotalCPUUsage:                metrics.TotalCPUUsage,
-		TotalCores:                   metrics.TotalCores,
-		ObservedUsersCPUUsage:        metrics.AllUsersCPUUsage,
-		ObservedUsersCount:           metrics.AllUsersCount,
-		ObservedUsersMemoryUsage:     metrics.AllUsersMemoryUsage,
-		CPUEligibleUsersCPUUsage:     metrics.CPUEligibleCPUUsage,
-		CPUEligibleUsersCount:        metrics.CPUEligibleUsersCount,
-		CPUEligibleUsersMemoryUsage:  metrics.CPUEligibleMemoryUsage,
-		CPUActivelyLimitedUsersCount: limitedUsers,
-		CPULimitsActive:              limitsActive,
-		MemoryUsageMB:                metrics.MemoryUsage,
-		TotalMemoryMB:                metrics.TotalMemoryMB,
-		CachedMemoryMB:               metrics.CachedMemoryMB,
-		SystemLoad:                   metrics.SystemLoad,
-		ProcFSExecutableIdentityUnavailableProcesses: metrics.ProcFSExecutableIdentityUnavailableProcesses,
-		ProcFSIOUnavailableProcesses:                 metrics.ProcFSIOUnavailableProcesses,
-	})
-
-	// Update system metrics.
 	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
 	if actionCores < 1 {
 		actionCores = 1
 	}
-	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
+	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		TotalCPUUsage:                                metrics.TotalCPUUsage,
+		TotalCores:                                   metrics.TotalCores,
+		ActionCores:                                  actionCores,
+		ObservedUsersCPUUsage:                        metrics.AllUsersCPUUsage,
+		ObservedUsersCount:                           metrics.AllUsersCount,
+		ObservedUsersMemoryUsage:                     metrics.AllUsersMemoryUsage,
+		CPUEligibleUsersCPUUsage:                     metrics.CPUEligibleCPUUsage,
+		CPUEligibleUsersCount:                        metrics.CPUEligibleUsersCount,
+		CPUEligibleUsersMemoryUsage:                  metrics.CPUEligibleMemoryUsage,
+		RAMEligibleUsersCount:                        metrics.RAMEligibleUsersCount,
+		RAMEligibleUsersMemoryUsage:                  metrics.RAMEligibleUsageBytes,
+		IOEligibleUsersCount:                         metrics.IOEligibleUsersCount,
+		IOEligibleUsersReadBytesPerSecond:            metrics.IOEligibleReadBPS,
+		IOEligibleUsersWriteBytesPerSecond:           metrics.IOEligibleWriteBPS,
+		IOEligibleUsersReadBlockOperationsPerSecond:  metrics.IOEligibleReadBlockIOPS,
+		IOEligibleUsersWriteBlockOperationsPerSecond: metrics.IOEligibleWriteBlockIOPS,
+		CPUActivelyLimitedUsersCount:                 len(summary.cpuUsers),
+		ActivelyLimitedUsersCount:                    len(summary.activelyLimitedUsers),
+		CPULimitsActive:                              summary.cpuLimitsActive,
+		ResourceLimitsActive:                         summary.resourceLimitsActive,
+		AnyLimitsActive:                              summary.cpuLimitsActive || summary.resourceLimitsActive,
+		MemoryUsageMB:                                metrics.MemoryUsage,
+		TotalMemoryMB:                                metrics.TotalMemoryMB,
+		CachedMemoryMB:                               metrics.CachedMemoryMB,
+		SystemLoad:                                   metrics.SystemLoad,
+		ProcFSExecutableIdentityUnavailableProcesses: metrics.ProcFSExecutableIdentityUnavailableProcesses,
+		ProcFSIOUnavailableProcesses:                 metrics.ProcFSIOUnavailableProcesses,
+	})
+
 }
 
 func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
@@ -842,23 +848,23 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 		}
 
 		// Publish the explicit observed CPU enforcement state.
-		m.prometheusExporter.UpdateUserMetrics(
-			uid,
-			username,
-			userMetrics.CPUUsage,
-			userMetrics.CPUUsageAverage,
-			userMetrics.CPUUsageEMA,
-			userMetrics.MemoryUsage,
-			userMetrics.ProcessCount,
-			userMetrics.CPULimitActive,
-			cgroupPath,
-			cpuQuota,
-			memoryHighEvents,
-			ioReadBytes,
-			ioWriteBytes,
-			userMetrics.IOReadOps,
-			userMetrics.IOWriteOps,
-		)
+		m.prometheusExporter.UpdateUserSnapshot(resmanmetrics.UserExporterMetrics{
+			UID:                  uid,
+			Username:             username,
+			CPUUsagePercent:      userMetrics.CPUUsage,
+			CPUUsageAverage:      userMetrics.CPUUsageAverage,
+			CPUUsageEMA:          userMetrics.CPUUsageEMA,
+			MemoryUsageBytes:     userMetrics.MemoryUsage,
+			ProcessCount:         userMetrics.ProcessCount,
+			CPULimitActive:       userMetrics.CPULimitActive,
+			CgroupPath:           cgroupPath,
+			CPUQuota:             cpuQuota,
+			MemoryHighEvents:     memoryHighEvents,
+			ObservedIOReadBytes:  ioReadBytes,
+			ObservedIOWriteBytes: ioWriteBytes,
+			ObservedIOReadOps:    userMetrics.IOReadOps,
+			ObservedIOWriteOps:   userMetrics.IOWriteOps,
+		})
 	}
 
 	// Remove metric series for users absent from the current sample.
@@ -896,33 +902,36 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 		return
 	}
 
-	// Verifica se il DB writer è configurato
+	// Skip persistence when no database writer is configured.
 	writer := m.metricsCollector.GetDBWriter()
 	if writer == nil {
 		return
 	}
 
-	// Verifica se è il momento di scrivere
+	// Respect the configured persistence cadence.
 	if !writer.ShouldWrite() {
 		return
 	}
 
-	m.mu.RLock()
-	limitsActive := m.limitsActive
-	activeUsers := len(m.activeUsers)
-	m.mu.RUnlock()
+	summary := m.getEnforcementSummary()
 
 	if err := m.metricsCollector.WriteMetricsToDatabase(
 		metrics.UserMetrics,
-		metrics.TotalCPUUsage,
-		metrics.TotalCores,
-		metrics.SystemLoad,
-		limitsActive,
-		activeUsers,
+		resmanmetrics.SystemPersistenceMetrics{
+			TotalCPUUsagePercent:         metrics.TotalCPUUsage,
+			TotalCores:                   metrics.TotalCores,
+			SystemLoad:                   metrics.SystemLoad,
+			CPULimitsActive:              summary.cpuLimitsActive,
+			ResourceLimitsActive:         summary.resourceLimitsActive,
+			AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
+			CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
+			ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
+		},
 	); err != nil {
 		m.logger.Warn("Failed to write metrics to database",
 			"users", len(metrics.UserMetrics),
-			"limits_active", limitsActive,
+			"cpu_limits_active", summary.cpuLimitsActive,
+			"resource_limits_active", summary.resourceLimitsActive,
 			"error", err,
 		)
 		if m.prometheusExporter != nil {
@@ -933,7 +942,8 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 
 	m.logger.Debug("Metrics written to database",
 		"users", len(metrics.UserMetrics),
-		"limits_active", limitsActive,
+		"cpu_limits_active", summary.cpuLimitsActive,
+		"resource_limits_active", summary.resourceLimitsActive,
 	)
 }
 

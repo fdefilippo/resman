@@ -120,7 +120,7 @@ func (m *mockMetricsCollector) prepareUserMetrics(userMetrics map[int]*metrics.U
 	return userMetrics
 }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
-func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) error {
+func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, system metrics.SystemPersistenceMetrics) error {
 	return nil
 }
 
@@ -130,9 +130,6 @@ func (m *mockMetricsCollector) GetAllUsersCPUUsage() float64   { return 40.0 }
 func (m *mockMetricsCollector) GetAllUsersMemoryUsage() uint64 { return 2000000000 }
 
 // LIMITED USERS metrics
-func (m *mockMetricsCollector) GetLimitedUsers() []int             { return []int{1000, 1001} }
-func (m *mockMetricsCollector) GetLimitedUsersCPUUsage() float64   { return 30.0 }
-func (m *mockMetricsCollector) GetLimitedUsersMemoryUsage() uint64 { return 1500000000 }
 func (m *mockMetricsCollector) GetUsernameFromUID(uid int) string {
 	if username, ok := m.usernames[uid]; ok {
 		return username
@@ -371,6 +368,8 @@ type mockPrometheusExporter struct {
 	limitHookExecutions        []limitHookMetricRecord
 	controlCycleDurations      []time.Duration
 	metricsCollectionDurations []time.Duration
+	lastSystemSnapshot         metrics.SystemExporterMetrics
+	lastUserSnapshot           metrics.UserExporterMetrics
 	systemSnapshots            int
 	userMetricUpdates          int
 	userMetricCleanups         int
@@ -378,17 +377,18 @@ type mockPrometheusExporter struct {
 	limitsDeactivated          int
 }
 
-func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.ExporterMetrics) {
+func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.systemSnapshots++
+	m.lastSystemSnapshot = snapshot
 }
-func (m *mockPrometheusExporter) UpdateUserMetrics(uid int, user string, cpu float64, cpuAvg float64, cpuEMA float64, mem uint64, proc int, limited bool, path, quota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+func (m *mockPrometheusExporter) UpdateUserSnapshot(snapshot metrics.UserExporterMetrics) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.userMetricUpdates++
+	m.lastUserSnapshot = snapshot
 }
-func (m *mockPrometheusExporter) UpdateSystemMetrics(cores int, actionCores int, load float64) {}
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 }
 func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string) {}
@@ -420,12 +420,12 @@ func (m *mockPrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	defer m.mu.Unlock()
 	m.userMetricCleanups++
 }
-func (m *mockPrometheusExporter) IncrementLimitsActivated() {
+func (m *mockPrometheusExporter) IncrementCPULimitsActivated() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.limitsActivated++
 }
-func (m *mockPrometheusExporter) IncrementLimitsDeactivated() {
+func (m *mockPrometheusExporter) IncrementCPULimitsDeactivated() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.limitsDeactivated++
@@ -829,11 +829,15 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 
 	err = collector.WriteMetricsToDatabase(
 		sample.UserMetrics,
-		sample.TotalCPUUsage,
-		sample.TotalCores,
-		sample.SystemLoad,
-		true,
-		1,
+		metrics.SystemPersistenceMetrics{
+			TotalCPUUsagePercent:         sample.TotalCPUUsage,
+			TotalCores:                   sample.TotalCores,
+			SystemLoad:                   sample.SystemLoad,
+			CPULimitsActive:              true,
+			AnyLimitsActive:              true,
+			CPUActivelyLimitedUsersCount: 1,
+			ActivelyLimitedUsersCount:    1,
+		},
 	)
 	if err == nil {
 		t.Fatal("WriteMetricsToDatabase() expected a transaction error")
@@ -1956,6 +1960,65 @@ func TestGetStatusSeparatesCPUAndAnyObservedEnforcement(t *testing.T) {
 	}
 	if status.CPUActivelyLimitedUsersCount != 2 || status.ActivelyLimitedUsersCount != 3 {
 		t.Errorf("limited counts = CPU %d, any %d; want 2, 3", status.CPUActivelyLimitedUsersCount, status.ActivelyLimitedUsersCount)
+	}
+}
+
+func TestPrometheusSystemSnapshotKeepsEligibilityAndEnforcementResourcesDistinct(t *testing.T) {
+	cfg := config.DefaultConfig()
+	exporter := &mockPrometheusExporter{}
+	manager, _ := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	manager.resourceLimits[1002] = userResourceLimitState{ramApplied: true}
+
+	manager.updatePrometheusSystemMetrics(&SystemMetrics{
+		TotalCores:               4,
+		CPUEligibleUsersCount:    1,
+		CPUEligibleCPUUsage:      10,
+		CPUEligibleMemoryUsage:   100,
+		RAMEligibleUsersCount:    2,
+		RAMEligibleUsageBytes:    200,
+		IOEligibleUsersCount:     3,
+		IOEligibleReadBPS:        300,
+		IOEligibleWriteBPS:       400,
+		IOEligibleReadBlockIOPS:  5,
+		IOEligibleWriteBlockIOPS: 6,
+	})
+
+	exporter.mu.Lock()
+	snapshot := exporter.lastSystemSnapshot
+	exporter.mu.Unlock()
+	if snapshot.CPUEligibleUsersCount != 1 || snapshot.RAMEligibleUsersCount != 2 || snapshot.IOEligibleUsersCount != 3 {
+		t.Fatalf("per-resource eligibility counts = CPU %d RAM %d IO %d; want 1, 2, 3", snapshot.CPUEligibleUsersCount, snapshot.RAMEligibleUsersCount, snapshot.IOEligibleUsersCount)
+	}
+	if snapshot.CPULimitsActive || !snapshot.ResourceLimitsActive || !snapshot.AnyLimitsActive {
+		t.Fatalf("RAM-only enforcement flags = CPU %t resource %t any %t; want false, true, true", snapshot.CPULimitsActive, snapshot.ResourceLimitsActive, snapshot.AnyLimitsActive)
+	}
+	if snapshot.CPUActivelyLimitedUsersCount != 0 || snapshot.ActivelyLimitedUsersCount != 1 {
+		t.Fatalf("RAM-only enforcement counts = CPU %d any %d; want 0, 1", snapshot.CPUActivelyLimitedUsersCount, snapshot.ActivelyLimitedUsersCount)
+	}
+}
+
+func TestPrometheusUserSnapshotUsesTypedFieldProjection(t *testing.T) {
+	exporter := &mockPrometheusExporter{}
+	manager, _ := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	manager.updatePrometheusDecisionUserMetrics(&SystemMetrics{UserMetrics: map[int]*metrics.UserMetrics{
+		1000: {
+			UID: 1000, Username: "alice", CPUUsage: 11, CPUUsageAverage: 12,
+			CPUUsageEMA: 13, MemoryUsage: 14, ProcessCount: 15, CPULimitActive: true,
+			IOReadBytes: 16, IOWriteBytes: 17, IOReadOps: 18, IOWriteOps: 19,
+		},
+	}})
+
+	exporter.mu.Lock()
+	snapshot := exporter.lastUserSnapshot
+	exporter.mu.Unlock()
+	if snapshot.UID != 1000 || snapshot.Username != "alice" || snapshot.CPUUsagePercent != 11 || snapshot.CPUUsageAverage != 12 || snapshot.CPUUsageEMA != 13 {
+		t.Fatalf("typed CPU projection = %+v", snapshot)
+	}
+	if snapshot.MemoryUsageBytes != 14 || snapshot.ProcessCount != 15 || !snapshot.CPULimitActive {
+		t.Fatalf("typed state projection = %+v", snapshot)
+	}
+	if snapshot.ObservedIOReadBytes != 16 || snapshot.ObservedIOWriteBytes != 17 || snapshot.ObservedIOReadOps != 18 || snapshot.ObservedIOWriteOps != 19 {
+		t.Fatalf("typed I/O projection = %+v", snapshot)
 	}
 }
 

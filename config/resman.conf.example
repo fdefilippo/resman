@@ -316,7 +316,8 @@ INTERACTIVE_RAM_QUOTA=1G
 # ========================
 # Optional notification/action when a user is newly limited.
 # Script receives RESMAN_LIMIT_* environment variables.
-# URL receives a JSON POST with uid, username, cpu_usage, shared_cgroup, timestamp.
+# URL receives a JSON POST with uid, username, enforceable_cpu_usage_percent,
+# cpu_eligible_users_count, shared_cgroup, and timestamp.
 # Script stdout/stderr is discarded and never copied into daemon errors or logs.
 # URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
 # Shutdown cancels and drains in-flight hooks; each delivery exports one bounded outcome.

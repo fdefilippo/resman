@@ -210,7 +210,10 @@ type systemHistoryRecord struct {
 	TotalCores                   int     `json:"total_cores"`
 	SystemLoad                   float64 `json:"system_load"`
 	CPULimitsActive              bool    `json:"cpu_limits_active"`
+	ResourceLimitsActive         bool    `json:"resource_limits_active"`
+	AnyLimitsActive              bool    `json:"any_limits_active"`
 	CPUActivelyLimitedUsersCount int     `json:"cpu_actively_limited_users_count"`
+	ActivelyLimitedUsersCount    int     `json:"actively_limited_users_count"`
 }
 
 type getSystemHistoryResult struct {
@@ -226,7 +229,10 @@ func newSystemHistoryRecord(record database.SystemMetricsRecord) systemHistoryRe
 		TotalCPUUsage:                record.TotalCPUUsagePercent,
 		TotalCores:                   record.TotalCores,
 		SystemLoad:                   record.SystemLoad,
-		CPULimitsActive:              record.LimitsActive,
-		CPUActivelyLimitedUsersCount: record.LimitedUsersCount,
+		CPULimitsActive:              record.CPULimitsActive,
+		ResourceLimitsActive:         record.ResourceLimitsActive,
+		AnyLimitsActive:              record.AnyLimitsActive,
+		CPUActivelyLimitedUsersCount: record.CPUActivelyLimitedUsersCount,
+		ActivelyLimitedUsersCount:    record.ActivelyLimitedUsersCount,
 	}
 }
