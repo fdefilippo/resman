@@ -11,7 +11,8 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=root
 # ResMan discovers and enables the controllers required by the active features.
 # Keeping controller setup in the daemon preserves its mandatory/optional

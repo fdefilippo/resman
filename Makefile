@@ -60,7 +60,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-sendmail test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
-	test-functional-smolvm-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -104,6 +104,7 @@ ci-quality: verify-modules verify-format verify-promtool
 	$(GO) vet ./...
 	$(MAKE) verify-contracts GO="$(GO)"
 	$(MAKE) test-functional-final-unit
+	$(MAKE) test-functional-real-kernel-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
@@ -191,6 +192,10 @@ test-functional-smolvm-preflight:
 # Exercise the host-side harness contract without requiring KVM.
 test-functional-smolvm-unit:
 	test/functional/smolvm/host_test.sh
+
+# Exercise packaged-service harness sequencing without a remote host.
+test-functional-real-kernel-unit:
+	test/functional/real-kernel/host_test.sh
 
 # Run current-revision evidence on an explicitly selected disposable real-kernel host.
 test-functional-real-kernel-psi:
@@ -502,6 +507,7 @@ help:
 	@echo "    test-functional-smolvm-psi-refresh - Verify PSI refresh neutrality or report BLOCKED"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
+	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-final - Run the final required semantic scenario matrix"

@@ -120,7 +120,13 @@ The packaged systemd unit distinguishes failures that require operator action fr
 failures that may be transient. Invalid configuration, unusable cgroup capabilities
 required by an enabled feature, and invalid MCP TLS credentials exit with status
 .BR 78 .
-The unit reports the service as failed and does not restart it automatically. Inspect
+The unit uses the systemd notification protocol and reports readiness only after
+configuration, capability, and configured listener initialization have completed.
+Consequently,
+.B systemctl start resman
+waits for that boundary and fails when startup is rejected instead of reporting an
+optimistic success for a process that immediately exits. The unit reports the service
+as failed and does not restart it automatically. Inspect
 .BR "systemctl status resman"
 and
 .BR "journalctl -u resman" ,

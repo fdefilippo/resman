@@ -52,6 +52,7 @@ type App struct {
 	psiEvents          <-chan cgroup.PSIEvent
 	psiEventDriven     bool
 	configReloaded     chan struct{}
+	notifyReady        func() error
 }
 
 func (a *App) currentConfig() *config.Config {
@@ -76,5 +77,6 @@ func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel c
 		sigChan:        sigChan,
 		logger:         logger,
 		configReloaded: make(chan struct{}, 1),
+		notifyReady:    notifySystemdReady,
 	}
 }

@@ -65,6 +65,27 @@ func TestServiceRestartContractDistinguishesPermanentAndTransientFailures(t *tes
 	}
 }
 
+func TestServiceStartWaitsForDaemonReadiness(t *testing.T) {
+	contents := readService(t)
+	tests := []struct {
+		name      string
+		directive string
+		want      string
+	}{
+		{name: "notification service type", directive: "Type", want: "notify"},
+		{name: "only main process may notify", directive: "NotifyAccess", want: "main"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values := activeDirectiveValues(contents, "Service", tt.directive)
+			if len(values) != 1 || values[0] != tt.want {
+				t.Fatalf("Service.%s values = %v, want exactly [%s]", tt.directive, values, tt.want)
+			}
+		})
+	}
+}
+
 func activeDirectiveValues(contents, section, directive string) []string {
 	currentSection := ""
 	var values []string

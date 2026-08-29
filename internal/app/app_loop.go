@@ -21,6 +21,9 @@ func (a *App) Run() error {
 
 	a.startSignalHandler()
 	a.startPSIWatcher()
+	if err := a.notifyReady(); err != nil {
+		return fmt.Errorf("notify service readiness: %w", err)
+	}
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {

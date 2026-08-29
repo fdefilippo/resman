@@ -12,8 +12,17 @@ remote_root=
 evidence_dir=
 remote_cleanup_done=0
 
+# Source-revision scenarios ship a binary built from the working tree. Packaged
+# scenarios exercise the installed unit instead and must not ship one, so that a
+# PASS can never be read as coverage of the wrong artifact.
+scenario_family=source
 case "$scenario" in
 	psi-refresh-neutrality|block-io-all-dimensions) ;;
+	service-start-stop|service-reload-lifecycle|service-fatal-config) scenario_family=package ;;
+	prometheus-scrape|mcp-https-endtoend) scenario_family=package ;;
+	blackout-timeframe|metrics-database-lifecycle) scenario_family=package ;;
+	multi-user-enforcement|shutdown-restoration-under-load) scenario_family=package ;;
+	limit-hook-delivery) scenario_family=package ;;
 	*) echo "invalid scenario: $scenario" >&2; exit 2 ;;
 esac
 case "$remote_host" in
@@ -65,12 +74,17 @@ scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-real-kernel.XXXXXX")
 bundle_dir=$scratch_dir/bundle
 mkdir -p "$bundle_dir" "$evidence_root"
 chmod 0700 "$scratch_dir" "$bundle_dir"
-install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
-install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
-(
-	cd "$repo_root"
-	CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
-)
+if [[ $scenario_family == package ]]; then
+	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/run.sh"
+	install -m 0755 "$repo_root/docs/generate-tls-certs.sh" "$bundle_dir/generate-tls-certs.sh"
+else
+	install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
+	install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
+	(
+		cd "$repo_root"
+		CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
+	)
+fi
 
 evidence_dir=$evidence_root/$run_id-$scenario
 mkdir "$evidence_dir"

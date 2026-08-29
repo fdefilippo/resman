@@ -99,6 +99,9 @@ finish() {
 	exit "$status"
 }
 trap finish EXIT
+# A dying control session delivers SIGHUP; without trapping it the exit trap
+# never runs and the host keeps the scenario's modifications.
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 

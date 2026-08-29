@@ -513,12 +513,16 @@ not a capability discovery boundary.
 capabilities, and invalid MCP TLS credentials exit with status 78 and are not retried.
 Other failures retry after 10 seconds but stop after three starts in 60 seconds.
 Present-controller setup I/O failures, including `cgroup.subtree_control` contention,
-remain transient.
+remain transient. The packaged unit now waits for an explicit readiness notification;
+`systemctl start resman` fails directly when bootstrap is rejected instead of returning
+success while the process is about to exit.
 
 **Cause.** `Restart=always` with the former timing retried permanent rejection forever,
 hiding the stable cause in an endless start loop.
 
-**Action.** Repair status-78 failures, then start the unit. After the transient start
+**Action.** Treat a successful `systemctl start resman` as confirmation that
+configuration, capability, and configured listener initialization completed. Repair
+status-78 failures, then start the unit. After the transient start
 limit, repair the cause and run `systemctl reset-failed resman` before starting it.
 
 ### Shutdown restoration and completion are stricter
