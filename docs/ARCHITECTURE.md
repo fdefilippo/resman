@@ -15,7 +15,9 @@ ResMan uses a single control cycle that runs every `POLLING_INTERVAL` seconds:
    ├─ ramExceeded  = RAM% of RAM-eligible users >= RAMThreshold
    ├─ ioExceeded   = IO% of I/O-eligible users >= IOThreshold
    │
-   ├─ ACTIVATE if:  cpuExceeded OR ramExceeded OR ioExceeded
+   ├─ attribute host load from eligible CPU share when load average is high
+   ├─ ACTIVATE if:  cpuExceeded OR ramExceeded OR ioExceeded,
+   │                unless external CPU is the measured majority
    ├─ DEACTIVATE if: cpuBelow AND ramBelow AND ioBelow
    └─ MAINTAIN otherwise
 
@@ -50,6 +52,12 @@ The empty-list contract is resource-specific: an empty CPU include list selects
 nobody (fail-safe), while empty RAM and I/O include lists select everybody. An empty
 exclude list selects nobody for every resource. Eligibility is evaluated independently;
 CPU eligibility never gates RAM or I/O eligibility.
+
+With `IGNORE_SYSTEM_LOAD=false`, high load average suppresses activation only when
+CPU-eligible users contribute less than half of measured host CPU activity. Host CPU
+is converted from normalized 0-100 percentage to aggregate per-core percentage before
+comparison with the process sum. A missing host sample delays activation without
+asserting an unmeasured external cause.
 
 ## Prometheus Metrics
 

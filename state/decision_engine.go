@@ -9,6 +9,13 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
+const minimumEligibleCPUShareForLoadOwnership = 0.5
+
+type cpuLoadAttribution struct {
+	measurable    bool
+	eligibleShare float64
+}
+
 // ThresholdTracker tracks a threshold crossing over time.
 type ThresholdTracker struct {
 	firstOverThresholdTime time.Time // First threshold crossing.
@@ -190,11 +197,20 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			)
 		}
 
-		// Respect the configured system-load guard.
+		// Suppress only when measured CPU activity is primarily external to the
+		// population that CPU enforcement can affect. Load average alone cannot
+		// establish that attribution.
 		if !ignoreSystemLoad && metrics.SystemUnderLoad {
-			m.thresholdTracker.Reset()
-			m.ioThresholdTracker.Reset()
-			return DecisionMaintain, "Threshold exceeded but system already under load from other factors"
+			attribution := measureCPULoadAttribution(metrics)
+			if !attribution.measurable {
+				return DecisionMaintain, "Threshold exceeded while system load attribution is unavailable because the host CPU sample is empty"
+			}
+			if attribution.eligibleShare < minimumEligibleCPUShareForLoadOwnership {
+				return DecisionMaintain, fmt.Sprintf(
+					"Threshold exceeded while system load is primarily external: CPU-eligible users account for %.1f%% of measured CPU activity",
+					attribution.eligibleShare*100,
+				)
+			}
 		}
 
 		// Apply the CPU duration guard only when CPU is the sole exceeded resource.
@@ -237,6 +253,30 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	m.thresholdTracker.Reset()
 	m.ioThresholdTracker.Reset()
 	return DecisionMaintain, "All resources within normal range"
+}
+
+// measureCPULoadAttribution compares host and eligible-user CPU in the same
+// aggregate per-core percentage unit. Per-process sampling can exceed the host
+// sample slightly because the windows are not identical, so the eligible value
+// is clamped to the measured host total before calculating the share.
+func measureCPULoadAttribution(metrics *SystemMetrics) cpuLoadAttribution {
+	if metrics == nil || metrics.TotalCores <= 0 || metrics.TotalCPUUsage <= 0 {
+		return cpuLoadAttribution{}
+	}
+
+	hostAggregate := metrics.TotalCPUUsage * float64(metrics.TotalCores)
+	eligibleCPU := metrics.CPUEligibleCPUUsage
+	if eligibleCPU < 0 {
+		eligibleCPU = 0
+	}
+	if eligibleCPU > hostAggregate {
+		eligibleCPU = hostAggregate
+	}
+
+	return cpuLoadAttribution{
+		measurable:    true,
+		eligibleShare: eligibleCPU / hostAggregate,
+	}
 }
 
 func ioCoverageReason(metrics *SystemMetrics, blockIOPSIncomplete bool, consequence string) string {

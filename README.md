@@ -38,7 +38,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.30.1-1_<architecture>.deb
+# Creates build/deb/resman_1.30.2-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -80,9 +80,9 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
-Upgrading from 1.25.x to 1.30.1 is intentionally breaking. Complete the filesystem,
+Upgrading from 1.25.x to 1.30.2 is intentionally breaking. Complete the filesystem,
 database, configuration, MCP, Prometheus, hook, capability, and container actions in
-[`docs/UPGRADING.md`](docs/UPGRADING.md) before installing ResMan 1.30.1.
+[`docs/UPGRADING.md`](docs/UPGRADING.md) before installing ResMan 1.30.2.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
@@ -150,6 +150,10 @@ before `CPU_THRESHOLD_DURATION` starts. Every process state is sampled
 immediately; `PROCESS_MIN_AGE_SECONDS` affects only the lifetime-average metric.
 With `POLLING_INTERVAL=30` and `CPU_THRESHOLD_DURATION=90`, limits normally
 activate about 120 seconds after the first observation, plus polling alignment.
+With `IGNORE_SYSTEM_LOAD=false`, a high load average suppresses activation only when
+CPU-eligible users account for less than half of measured aggregate host CPU activity.
+At least half remains actionable; an unavailable host CPU sample delays activation
+without discarding threshold-duration progress.
 Idle release uses each user's CPU EMA rather than a single instantaneous sample.
 Because deactivation releases every resource together, `MIN_ACTIVE_TIME` protects
 the most recent active enforcement epoch across CPU and RAM/I/O. It is also the
@@ -292,7 +296,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Upgrade guide from 1.25.x to 1.30.1: [`docs/UPGRADING.md`](docs/UPGRADING.md)
+- Upgrade guide from 1.25.x to 1.30.2: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

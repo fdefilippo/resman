@@ -527,7 +527,8 @@ BLACKOUT=
 # ========================
 # LOAD AVERAGE HANDLING
 # ========================
-# false: do not activate limits if the system is already under load (conservative default)
+# false: under high load, activate only when CPU-eligible users account for at least
+#        half of measured host CPU activity; unavailable attribution delays activation
 # true: activate limits even if the system is under load (guaranteed isolation)
 IGNORE_SYSTEM_LOAD=false
 

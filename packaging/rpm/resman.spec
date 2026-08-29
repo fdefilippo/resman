@@ -10,7 +10,7 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.30.1
+Version: 1.30.2
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -58,8 +58,9 @@ v1.25: architecture review remediation, dependency refresh and early systemd sta
 v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
 v1.30.0: audited enforcement semantics, secure persistence, stateless MCP and release gates.
 v1.30.1: single-outcome configuration reload reporting without false error diagnostics.
+v1.30.2: measured CPU-load attribution before suppressing enforcement.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.1.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.2.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -262,6 +263,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.2-1
+- FIX: attribute system load before suppressing CPU enforcement
+- FIX: preserve threshold-duration progress during temporary suppression
+- FIX: report measured external-majority attribution honestly
+
 * Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.1-1
 - FIX: report each configuration reload outcome exactly once
 - FIX: keep pure restart-required rejections at warning level

@@ -204,14 +204,24 @@ configuration surface — removed and rejected, per Rule 1, never left inert.
   to the code that implements it.
 - "Disabled" values (`max`, `0`, `""`) **MUST** be handled per dimension. One dimension
   being disabled **MUST NOT** disable the others.
+- Host load average is a pressure signal, not workload attribution. With
+  `IGNORE_SYSTEM_LOAD=false`, activation is suppressed only when CPU-eligible users
+  account for less than half of measured host CPU activity after both values are
+  normalized to aggregate per-core percentage. An exact half is actionable because
+  enforcement can relieve a material share. Missing host CPU observation suppresses
+  conservatively without claiming an external cause, and a temporary suppression
+  **MUST NOT** discard accumulated threshold-duration state.
 
 **Why.** The decision engine previously activated and released I/O limiting from
 write bandwidth only. Read bandwidth and read/write operation limits were parsed,
 validated, and applied to cgroups but could not trigger enforcement; setting write
 bandwidth to `max` disabled the entire I/O decision. The engine now evaluates each
-configured dimension independently with any-of activation and all-of release.
+configured dimension independently with any-of activation and all-of release. Before
+`resman-w18`, the load-average guard attributed every loaded host to "other factors"
+without comparing eligible and total CPU. Managed workload therefore suppressed its
+own enforcement and reset the duration tracker forever.
 
-*Finding: resman-4pw.4*
+*Findings: resman-4pw.4, resman-w18*
 
 ## Rule 5 — No knob without effect **[checkable]**
 

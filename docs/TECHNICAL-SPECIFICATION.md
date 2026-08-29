@@ -429,7 +429,8 @@ cgroup membership.
    └─ If limits inactive:
       ├─ If CPU >= activation threshold
       │  ├─ Check minimum system cores
-      │  ├─ Check system load (if not ignored)
+      │  ├─ If system load is high and not ignored, compare eligible CPU with
+      │  │  aggregate host CPU; suppress only when external CPU is the majority
       │  └─ ACTIVATE_LIMITS
       └─ Else: MAINTAIN_CURRENT_STATE
 
@@ -696,7 +697,14 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman/resman.conf
 **Activate Limits When:**
 - any independently eligible CPU, RAM, or I/O aggregate exceeds its threshold
 - `total_cores > MIN_SYSTEM_CORES` for CPU enforcement only
-- `system_load OK` OR `IGNORE_SYSTEM_LOAD=true`
+- `system_load OK`, `IGNORE_SYSTEM_LOAD=true`, or CPU-eligible users account for at
+  least 50% of measured aggregate host CPU activity
+
+The attribution comparison converts normalized host CPU (0-100) into aggregate
+per-core percentage by multiplying it by `total_cores`, which is the unit used by the
+eligible process sum. If the host sample is unavailable, activation is delayed without
+claiming that the load is external. Temporary external-load suppression preserves the
+CPU threshold-duration tracker.
 
 **Deactivate Limits When:**
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
@@ -1381,7 +1389,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.30.1-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.30.2-1'" -o resman .
 ```
 
 **Build RPM:**

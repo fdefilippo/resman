@@ -1,6 +1,6 @@
-# Upgrading from ResMan 1.25.x to ResMan 1.30.1
+# Upgrading from ResMan 1.25.x to ResMan 1.30.2
 
-This guide applies when moving from ResMan 1.25.x to ResMan 1.30.1. This release
+This guide applies when moving from ResMan 1.25.x to ResMan 1.30.2. This release
 contains the post-1.25.1 audit remediation and intentionally breaks incorrect or
 ambiguous contracts. It does not migrate old database schemas, accept removed
 configuration keys, preserve old MCP shapes, or alias renamed metrics.
@@ -425,6 +425,24 @@ from configured PSI intent rather than observed runtime cadence.
 **Action.** No configuration change is required. Re-evaluate thresholds on hosts that
 previously reported repeated zero CPU samples, especially where PSI is configured but
 unavailable.
+
+### High system load is attributed before suppressing enforcement
+
+**Visible change.** With `IGNORE_SYSTEM_LOAD=false`, a host whose CPU-eligible users
+produce at least half of measured aggregate CPU activity can now activate limits after
+`CPU_THRESHOLD_DURATION`, even while load average reports the host under load. The old
+behavior suppressed every activation and reset the duration tracker, so an unchanged
+configuration may begin enforcing after upgrade. External-majority load remains
+protected; an unavailable host CPU sample delays activation conservatively.
+
+**Cause.** Load average described host pressure but not its owner. The decision engine
+previously asserted that high load came from other factors without comparing it with
+the already-collected eligible-user CPU aggregate.
+
+**Action.** No compatibility switch restores the circular guard. Review
+`USER_INCLUDE_LIST`, `CPU_THRESHOLD`, and `CPU_THRESHOLD_DURATION` before upgrade.
+Set `IGNORE_SYSTEM_LOAD=true` only when enforcement must proceed regardless of measured
+external CPU activity.
 
 ### I/O rates use stable identities and real block operations
 

@@ -1,3 +1,11 @@
+resman (1.30.2-1) stable; urgency=medium
+
+  * Attribute high system load before suppressing CPU enforcement.
+  * Preserve CPU threshold-duration progress during temporary load suppression.
+  * Keep external-majority load protected with explicit measured diagnostics.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 14:29:27 +0200
+
 resman (1.30.1-1) stable; urgency=medium
 
   * Report each configuration reload outcome exactly once.
