@@ -52,20 +52,13 @@ mcp/
 
 ### 1. Tools (Actions AI can request)
 
-The complete production contract, including discovery and invocation conditions, is
-maintained in the [authoritative tool inventory](MCP-README.md#tool-inventory). This
-blueprint describes the architecture and does not maintain a second tool list.
+The complete production contract for tools, fixed resources, resource URI templates,
+and prompts is maintained in the
+[authoritative discovery inventories](MCP-README.md#discovery-inventories). Those
+inventories are verified against production discovery; this blueprint does not maintain
+parallel lists.
 
 ### 2. Resources (Data AI can read)
-
-| Resource URI | Description |
-|--------------|-------------|
-| `resman://system/status` | Real-time system status |
-| `resman://users/{uid}/metrics` | Per-user metrics |
-| `resman://users/active` | List of active users |
-| `resman://limits/status` | Current limits status |
-| `resman://config` | Current configuration |
-| `resman://cgroups/{uid}` | Cgroup info for user |
 
 The cgroup tool and resource share one underscore-named JSON schema and expose
 availability separately from each raw interface value. An unreadable interface is
@@ -78,11 +71,8 @@ the managed cgroup. Operator remedies are maintained in
 
 ### 3. Prompts (Pre-built queries for AI)
 
-| Prompt Name | Description |
-|-------------|-------------|
-| `system-health` | Quick system health check |
-| `user-analysis` | Analyze resource usage by user |
-| `troubleshooting` | Diagnose CPU limit issues |
+The registered prompts are part of the authoritative discovery inventories linked
+above.
 
 ## Implementation Details
 
@@ -293,7 +283,7 @@ AI (via MCP):
 - [x] Read-only tools (get_system_status, get_user_metrics, get_active_users, get_limits_status, get_cgroup_info, get_configuration, get_control_history)
 - [x] Write operation tools (activate_limits, deactivate_limits) - with authorization flag
 - [x] Resource definitions
-- [x] Prompts (system-health, user-analysis, troubleshooting)
+- [x] Prompts implemented and covered by the discovery-inventory contract
 - [x] Unit tests
 - [x] Configuration integration
 

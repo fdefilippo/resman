@@ -30,7 +30,9 @@ The MCP server exposes ResMan functionality to AI assistants and MCP-compatible 
 
 ## Features
 
-### Tool inventory
+### Discovery inventories
+
+#### Tool inventory
 
 This table is the authoritative inventory of tools exposed by the production server.
 "Registered when" controls whether a tool appears in `tools/list`; "Invocation
@@ -72,16 +74,43 @@ System-wide payloads and the shared active-user/configuration schemas include
 `hostname` for multi-server identification. Per-user entries are identified by `uid`
 and `username` inside those host-scoped responses.
 
-### Resources (6 URIs)
+#### Fixed resources
 
-- `resman://system/status` - Real-time system status
-- `resman://users/active` - List of active users
-- `resman://limits/status` - Current limits status
-- `resman://config` - Current configuration
-- `resman://users/{uid}/metrics` - Per-user metrics
-- `resman://cgroups/{uid}` - Cgroup information
+<!-- BEGIN MCP FIXED RESOURCE INVENTORY -->
 
-#### Shared tool and resource schemas
+| Resource URI | Description |
+|--------------|-------------|
+| `resman://system/status` | Real-time system status |
+| `resman://users/active` | List of active users |
+| `resman://limits/status` | Current limits status |
+| `resman://config` | Current configuration |
+
+<!-- END MCP FIXED RESOURCE INVENTORY -->
+
+#### Resource URI templates
+
+<!-- BEGIN MCP RESOURCE TEMPLATE INVENTORY -->
+
+| URI template | Description |
+|--------------|-------------|
+| `resman://users/{uid}/metrics` | Per-user metrics |
+| `resman://cgroups/{uid}` | Cgroup information |
+
+<!-- END MCP RESOURCE TEMPLATE INVENTORY -->
+
+#### Prompts
+
+<!-- BEGIN MCP PROMPT INVENTORY -->
+
+| Prompt | Description |
+|--------|-------------|
+| `system-health` | Quick system health check with assessment |
+| `user-analysis` | Analyze resource usage by user in table format |
+| `troubleshooting` | Diagnose CPU limit issues |
+
+<!-- END MCP PROMPT INVENTORY -->
+
+### Shared tool and resource schemas
 
 MCP result payloads are typed contracts. `get_active_users` and
 `resman://users/active` share one object schema containing `hostname`, `server_role`,
@@ -114,12 +143,6 @@ Clients must not interpret an empty or absent value as an unlimited setting.
 
 The reason never contains the attempted interface path or a raw error string. The
 existing `path` field continues to identify the managed cgroup itself.
-
-### Prompts (3 pre-built queries)
-
-- `system-health` - Quick system health check with assessment
-- `user-analysis` - Analyze resource usage by user (table format)
-- `troubleshooting` - Diagnose CPU limit issues
 
 ## Configuration
 

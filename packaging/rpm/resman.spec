@@ -88,8 +88,8 @@ Features:
 
 MCP Server Features (v1.3+):
 - MCP tools for status, reporting, configuration, enforcement, and metrics history
-- 6 MCP resources for URI-based data access
-- 3 pre-built prompts for common queries
+- Fixed resources and URI templates for data access
+- Pre-built prompts for common queries
 - HTTP and stdio transport support
 - Hostname and server role in all metric outputs
 - Comprehensive logging middleware

@@ -117,7 +117,7 @@ resman/
 ├── mcp/
 │   ├── server.go          # MCP server implementation
 │   ├── tools.go           # MCP tool definitions and handlers
-│   ├── resources.go       # MCP resources (6 URIs)
+│   ├── resources.go       # MCP resources and URI templates
 │   ├── config.go          # MCP configuration
 │   └── server_test.go     # Unit tests
 └── docs/
@@ -473,20 +473,12 @@ cgroup membership.
 
 **Tools:**
 
-The complete production contract is the
-[authoritative tool inventory](MCP-README.md#tool-inventory). It distinguishes tools
-that are always registered from manual limit operations registered only with
-`MCP_ALLOW_WRITE_OPS=true`, and it separately records invocation requirements for
-configuration writes and metrics-database queries. A cross-boundary test compares that
-inventory with the production `tools/list` response.
-
-**Resources (6 URIs):**
-- `resman://system/status` - Real-time system status
-- `resman://users/active` - Active users list
-- `resman://limits/status` - Limits status
-- `resman://config` - Configuration
-- `resman://users/{uid}/metrics` - Per-user metrics
-- `resman://cgroups/{uid}` - Cgroup information
+The complete production contract for tools, fixed resources, resource URI templates,
+and prompts is maintained in the
+[authoritative discovery inventories](MCP-README.md#discovery-inventories). The tool
+inventory distinguishes registration conditions from invocation requirements, while
+the remaining inventories distinguish fixed resources from URI templates. Cross-boundary
+tests compare every inventory with the corresponding production discovery response.
 
 The cgroup tool and resource share one JSON schema backed by a typed internal contract.
 They expose `cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high`
@@ -506,11 +498,6 @@ status, and cgroup information share one projection per semantic contract. User-
 and system-history records intentionally remain distinct typed contracts. Dynamic maps
 are limited to MCP input-schema metadata and decoded client arguments; they are never
 serialized as production result payloads.
-
-**Prompts (3 pre-built):**
-- `system-health` - Quick health check with assessment
-- `user-analysis` - User resource analysis table
-- `troubleshooting` - CPU limit diagnostic
 
 **Transports:**
 - **stdio**: For local MCP clients (Claude Desktop, etc.)

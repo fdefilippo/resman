@@ -997,19 +997,44 @@ System-wide payloads and the shared active-user and configuration schemas includ
 field for multi-server environment identification. Per-user entries are identified by
 uid and username inside those host-scoped responses.
 .PP
-MCP resources (URI-based access):
+Fixed MCP resources (this list is verified against the production discovery response):
+.\" BEGIN MCP FIXED RESOURCE INVENTORY
 .IP \(bu 2
-resman://system/status
+.B resman://system/status
+\- Real-time system status
 .IP \(bu
-resman://users/active
+.B resman://users/active
+\- List of active users
 .IP \(bu
-resman://limits/status
+.B resman://limits/status
+\- Current limits status
 .IP \(bu
-resman://config
+.B resman://config
+\- Current configuration
+.\" END MCP FIXED RESOURCE INVENTORY
+.PP
+MCP resource URI templates (this list is verified against the production discovery response):
+.\" BEGIN MCP RESOURCE TEMPLATE INVENTORY
 .IP \(bu
-resman://users/{uid}/metrics
+.B resman://users/{uid}/metrics
+\- Per-user metrics
 .IP \(bu
-resman://cgroups/{uid}
+.B resman://cgroups/{uid}
+\- Cgroup information
+.\" END MCP RESOURCE TEMPLATE INVENTORY
+.PP
+MCP prompts (this list is verified against the production discovery response):
+.\" BEGIN MCP PROMPT INVENTORY
+.IP \(bu 2
+.B system-health
+\- Quick system health check with assessment
+.IP \(bu
+.B user-analysis
+\- Analyze resource usage by user in table format
+.IP \(bu
+.B troubleshooting
+\- Diagnose CPU limit issues
+.\" END MCP PROMPT INVENTORY
 .PP
 The
 .B get_active_users

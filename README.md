@@ -13,7 +13,7 @@ ResMan monitors system resources and automatically applies limits to users when 
 - User filtering via include/exclude regex lists
 - Blackout timeframes to avoid applying limits during business hours
 - Automatic configuration reload on file changes
-- MCP server for AI assistant integration ([authoritative tool inventory](docs/MCP-README.md#tool-inventory))
+- MCP server for AI assistant integration ([authoritative discovery inventories](docs/MCP-README.md#discovery-inventories))
 - SQLite metrics database for historical data
 - Optional script/webhook notification when a user is limited
 - LDAP/NIS username resolution support (CGO)
