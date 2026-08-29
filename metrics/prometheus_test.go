@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -451,6 +452,97 @@ func TestUpdateUserSnapshotPublishesObservedCPULimitState(t *testing.T) {
 	}
 }
 
+func TestUpdateUserSnapshotRemovesUnavailableAndStaleCgroupSeries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	root := t.TempDir()
+	pathA := filepath.Join(root, "user_1000")
+	pathB := filepath.Join(root, "limited", "user_1000")
+	writeMemoryCurrent := func(path, value string) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("create cgroup fixture %s: %v", path, err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "memory.current"), []byte(value), 0644); err != nil {
+			t.Fatalf("write memory.current in %s: %v", path, err)
+		}
+	}
+	writeMemoryCurrent(pathA, "111\n")
+
+	snapshot := UserExporterMetrics{
+		UID: 1000, Username: "alice", ProcessCount: 1,
+		CgroupPath: pathA, CPUQuota: "50000 100000",
+	}
+	exporter.UpdateUserSnapshot(snapshot)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", map[string]float64{pathA: 50000})
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_period_microseconds", map[string]float64{pathA: 100000})
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_memory_usage_bytes", map[string]float64{pathA: 111})
+	if got := gatheredMetricHelp(t, exporter, "resman_cgroup_cpu_quota_microseconds"); !strings.Contains(got, "absent when cpu.max is unlimited or unavailable") {
+		t.Fatalf("quota help does not describe availability: %q", got)
+	}
+
+	// Unlimited is a valid cpu.max record: retain its period but remove the
+	// previously published finite quota.
+	snapshot.CPUQuota = "max 100000"
+	exporter.UpdateUserSnapshot(snapshot)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", nil)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_period_microseconds", map[string]float64{pathA: 100000})
+
+	// A malformed pair is atomic: neither half may remain visible.
+	snapshot.CPUQuota = "abc 100000"
+	exporter.UpdateUserSnapshot(snapshot)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", nil)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_period_microseconds", nil)
+
+	// An unavailable memory.current removes the old value rather than
+	// publishing zero or retaining the last observation.
+	if err := os.Remove(filepath.Join(pathA, "memory.current")); err != nil {
+		t.Fatalf("remove memory.current fixture: %v", err)
+	}
+	snapshot.CPUQuota = "50000 100000"
+	exporter.UpdateUserSnapshot(snapshot)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_memory_usage_bytes", nil)
+
+	// A placement transition removes every series for the previous path.
+	writeMemoryCurrent(pathB, "222\n")
+	snapshot.CgroupPath = pathB
+	snapshot.CPUQuota = "25000 100000"
+	exporter.UpdateUserSnapshot(snapshot)
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", map[string]float64{pathB: 25000})
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_period_microseconds", map[string]float64{pathB: 100000})
+	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_memory_usage_bytes", map[string]float64{pathB: 222})
+
+	// Releasing the cgroup removes its current labels immediately.
+	snapshot.CgroupPath = ""
+	snapshot.CPUQuota = ""
+	exporter.UpdateUserSnapshot(snapshot)
+	for _, name := range []string{
+		"resman_cgroup_cpu_quota_microseconds",
+		"resman_cgroup_cpu_period_microseconds",
+		"resman_cgroup_memory_usage_bytes",
+	} {
+		assertCgroupGaugeSeries(t, exporter, name, nil)
+	}
+
+	// Cleanup also owns cgroup-labelled series when the user disappears.
+	snapshot.CgroupPath = pathB
+	snapshot.CPUQuota = "25000 100000"
+	exporter.UpdateUserSnapshot(snapshot)
+	exporter.CleanupUserMetrics(map[int]bool{})
+	for _, name := range []string{
+		"resman_cgroup_cpu_quota_microseconds",
+		"resman_cgroup_cpu_period_microseconds",
+		"resman_cgroup_memory_usage_bytes",
+	} {
+		assertCgroupGaugeSeries(t, exporter, name, nil)
+	}
+}
+
 func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlCycle(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
@@ -779,6 +871,38 @@ func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string
 	}
 	t.Fatalf("metric %s not found", name)
 	return 0
+}
+
+func assertCgroupGaugeSeries(t *testing.T, exporter *PrometheusExporter, name string, expected map[string]float64) {
+	t.Helper()
+	actual := make(map[string]float64)
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.Metric {
+			path := ""
+			for _, label := range metric.Label {
+				if label.GetName() == "cgroup_path" {
+					path = label.GetValue()
+					break
+				}
+			}
+			actual[path] = metric.GetGauge().GetValue()
+		}
+	}
+	if len(actual) != len(expected) {
+		t.Fatalf("%s series = %v, want %v", name, actual, expected)
+	}
+	for path, want := range expected {
+		if got, ok := actual[path]; !ok || got != want {
+			t.Fatalf("%s[%s] = %f, %t; want %f, true", name, path, got, ok, want)
+		}
+	}
 }
 
 type operationalMetricSnapshot struct {

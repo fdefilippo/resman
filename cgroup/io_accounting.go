@@ -39,13 +39,27 @@ func (e *UserCgroupPlacementIncompleteError) Error() string {
 	)
 }
 
-func (c blockIOCounters) add(other blockIOCounters) blockIOCounters {
-	return blockIOCounters{
-		readBytes:  c.readBytes + other.readBytes,
-		writeBytes: c.writeBytes + other.writeBytes,
-		readOps:    c.readOps + other.readOps,
-		writeOps:   c.writeOps + other.writeOps,
+func (c blockIOCounters) add(other blockIOCounters) (blockIOCounters, error) {
+	var result blockIOCounters
+	fields := []struct {
+		name        string
+		current     uint64
+		increment   uint64
+		destination *uint64
+	}{
+		{"read bytes", c.readBytes, other.readBytes, &result.readBytes},
+		{"write bytes", c.writeBytes, other.writeBytes, &result.writeBytes},
+		{"read operations", c.readOps, other.readOps, &result.readOps},
+		{"write operations", c.writeOps, other.writeOps, &result.writeOps},
 	}
+	for _, field := range fields {
+		value, err := checkedCounterAdd(field.current, field.increment)
+		if err != nil {
+			return blockIOCounters{}, fmt.Errorf("add logical block I/O %s: %w", field.name, err)
+		}
+		*field.destination = value
+	}
+	return result, nil
 }
 
 func (c blockIOCounters) delta(base blockIOCounters) blockIOCounters {
@@ -95,7 +109,11 @@ func (m *Manager) logicalBlockIOCounters(uid int) (blockIOCounters, error) {
 		unchanged = unchanged && current == state
 		m.blockIOMu.Unlock()
 		if unchanged {
-			return state.offset.add(raw.delta(state.base)), nil
+			logical, err := state.offset.add(raw.delta(state.base))
+			if err != nil {
+				return blockIOCounters{}, fmt.Errorf("calculate logical block I/O counters for UID %d: %w", uid, err)
+			}
+			return logical, nil
 		}
 	}
 	return blockIOCounters{}, fmt.Errorf("cgroup placement for UID %d changed repeatedly while reading block I/O counters", uid)
@@ -260,7 +278,13 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 			m.rollbackUserCgroupTransition(uid, moved, oldPath),
 		)
 	}
-	logicalFinal := accounting.offset.add(oldFinal.delta(accounting.base))
+	logicalFinal, err := accounting.offset.add(oldFinal.delta(accounting.base))
+	if err != nil {
+		return errors.Join(
+			fmt.Errorf("calculate final logical block I/O counters for UID %d: %w", uid, err),
+			m.rollbackUserCgroupTransition(uid, moved, oldPath),
+		)
+	}
 
 	if err := m.trackCgroupPath(uid, newPath); err != nil {
 		return errors.Join(

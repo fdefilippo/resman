@@ -265,6 +265,22 @@ or absent value as `max`.
 
 ## Prometheus, alerts, and hooks
 
+### Unavailable cgroup gauges no longer retain old values
+
+**Visible change.** `resman_cgroup_cpu_quota_microseconds` is absent while `cpu.max`
+is unlimited or unavailable. The period remains present for a valid `max PERIOD`
+record. Quota, period, and memory-usage series are removed when their source becomes
+unavailable, the user moves to another managed cgroup path, or enforcement releases
+the cgroup. Previously published values and old path labels no longer remain visible.
+
+**Cause.** Skipping a Prometheus `GaugeVec.Set` does not remove an existing series.
+The exporter previously presented old finite quotas, memory values, and cgroup paths as
+current observations, while an unreadable `memory.current` became a real zero.
+
+**Action.** Treat absence as unavailable or unlimited according to the companion
+period and runtime enforcement state; do not substitute zero. Queries that retain the
+last sample must apply their own explicit staleness policy.
+
 ### Series identity changes once at upgrade
 
 **Visible change.** Cgroup metrics, counters, and histograms gain constant `hostname`

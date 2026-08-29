@@ -3,6 +3,7 @@ package cgroup
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,6 +71,95 @@ func TestLogicalBlockIOCountersRemainMonotonicAcrossPlacementTransition(t *testi
 	}
 	if after.readOps != 12 || after.writeOps != 16 {
 		t.Fatalf("new logical counters = %+v, want 12/16 ops", after)
+	}
+}
+
+func TestBlockIOCountersAddRejectsOverflowInEveryDimension(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  blockIOCounters
+		right blockIOCounters
+	}{
+		{"read bytes", blockIOCounters{readBytes: math.MaxUint64}, blockIOCounters{readBytes: 1}},
+		{"write bytes", blockIOCounters{writeBytes: math.MaxUint64}, blockIOCounters{writeBytes: 1}},
+		{"read operations", blockIOCounters{readOps: math.MaxUint64}, blockIOCounters{readOps: 1}},
+		{"write operations", blockIOCounters{writeOps: math.MaxUint64}, blockIOCounters{writeOps: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.left.add(tt.right); !errors.Is(err, errCounterOverflow) {
+				t.Fatalf("add() error = %v, want %v", err, errCounterOverflow)
+			}
+		})
+	}
+}
+
+func TestLogicalBlockIOCountersRejectsOffsetOverflow(t *testing.T) {
+	manager := &Manager{
+		blockIOAccounting: map[int]blockIOAccountingState{
+			1000: {
+				path:   "/managed/user_1000",
+				offset: blockIOCounters{readOps: math.MaxUint64},
+			},
+		},
+		readBlockIOStats: func(string) (blockIOCounters, error) {
+			return blockIOCounters{readOps: 1}, nil
+		},
+	}
+
+	if _, err := manager.logicalBlockIOCounters(1000); !errors.Is(err, errCounterOverflow) {
+		t.Fatalf("logicalBlockIOCounters() error = %v, want %v", err, errCounterOverflow)
+	}
+}
+
+func TestReadIOStatsFileRejectsCounterOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "io.stat")
+	content := "8:0 rbytes=18446744073709551615\n8:1 rbytes=1\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write io.stat fixture: %v", err)
+	}
+	if _, _, _, _, err := readIOStatsFile(path); !errors.Is(err, errCounterOverflow) {
+		t.Fatalf("readIOStatsFile() error = %v, want %v", err, errCounterOverflow)
+	}
+}
+
+func TestTransitionUserCgroupRollsBackLogicalCounterOverflow(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.CgroupRoot = root
+	cfg.CgroupBase = "resman"
+	basePath := filepath.Join(root, cfg.CgroupBase)
+	oldPath := filepath.Join(basePath, "user_1000")
+	newPath := filepath.Join(basePath, "limited", "user_1000")
+	writeFakeCgroupFiles(t, oldPath, 1, 0)
+	writeFakeCgroupFiles(t, newPath, 100, 0)
+
+	manager := &Manager{
+		cfg:                cfg,
+		createdCgroups:     map[int]string{1000: oldPath},
+		createdCgroupsFile: filepath.Join(root, "cgroups.txt"),
+		processOrigins:     make(map[int]processOrigin),
+		processOriginsFile: filepath.Join(root, "origins.json"),
+		blockIOAccounting: map[int]blockIOAccountingState{
+			1000: {path: oldPath, offset: blockIOCounters{readOps: math.MaxUint64}},
+		},
+		scanProcessIDs: func() (map[int][]int, error) { return map[int][]int{}, nil },
+		removeManagedCgroup: func(path string) (cgroupRemovalResult, error) {
+			for _, name := range []string{"cgroup.procs", "io.stat", "cpu.weight"} {
+				if err := os.Remove(filepath.Join(path, name)); err != nil && !os.IsNotExist(err) {
+					return cgroupRemovalResult{}, err
+				}
+			}
+			return cgroupRemovalResult{}, os.Remove(path)
+		},
+	}
+
+	err := manager.transitionUserCgroup(1000, oldPath, newPath, cfg.CPUQuotaNormal)
+	if !errors.Is(err, errCounterOverflow) {
+		t.Fatalf("transitionUserCgroup() error = %v, want %v", err, errCounterOverflow)
+	}
+	if got, ok := manager.getCgroupPath(1000); !ok || got != oldPath {
+		t.Fatalf("tracked path after rollback = %q, %t; want %q, true", got, ok, oldPath)
 	}
 }
 

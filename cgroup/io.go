@@ -1,8 +1,10 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +12,15 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 )
+
+var errCounterOverflow = errors.New("uint64 counter overflow")
+
+func checkedCounterAdd(current, value uint64) (uint64, error) {
+	if current > math.MaxUint64-value {
+		return 0, errCounterOverflow
+	}
+	return current + value, nil
+}
 
 func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
 	cgroupPath, err := m.ensureCgroupPath(uid)
@@ -204,6 +215,7 @@ func readIOStatsFile(ioStatFile string) (readBytes, writeBytes uint64, readOps, 
 		}
 		// Skip the device prefix (for example, "8:0") and parse key=value pairs.
 		parts := strings.Fields(line)
+		device := parts[0]
 		for _, part := range parts {
 			kv := strings.SplitN(part, "=", 2)
 			if len(kv) != 2 {
@@ -213,16 +225,27 @@ func readIOStatsFile(ioStatFile string) (readBytes, writeBytes uint64, readOps, 
 			if parseErr != nil {
 				continue
 			}
+			var counter *uint64
 			switch kv[0] {
 			case "rios":
-				readOps += val
+				counter = &readOps
 			case "wios":
-				writeOps += val
+				counter = &writeOps
 			case "rbytes":
-				readBytes += val
+				counter = &readBytes
 			case "wbytes":
-				writeBytes += val
+				counter = &writeBytes
+			default:
+				continue
 			}
+			next, addErr := checkedCounterAdd(*counter, val)
+			if addErr != nil {
+				return 0, 0, 0, 0, fmt.Errorf(
+					"accumulate %s for device %s from %s: %w",
+					kv[0], device, ioStatFile, addErr,
+				)
+			}
+			*counter = next
 		}
 	}
 

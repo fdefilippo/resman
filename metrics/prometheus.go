@@ -142,6 +142,7 @@ type PrometheusExporter struct {
 
 	// Track active users for metric cleanup.
 	activeUserMetrics    map[string]bool   // "uid_username" -> true
+	activeCgroupPaths    map[string]string // UID -> last published cgroup path
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
 	prevUserPatterns     map[string]string // "uid_username" -> previous pattern label
@@ -227,6 +228,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		hostname:             hostname,
 		serverRole:           serverRole,
 		activeUserMetrics:    make(map[string]bool),
+		activeCgroupPaths:    make(map[string]string),
 		prevMemoryHighEvents: make(map[string]uint64),
 		prevIOStats:          make(map[string]ioStatsSnapshot),
 		prevUserPatterns:     make(map[string]string),
@@ -664,7 +666,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "cgroup_cpu_quota_microseconds",
-			Help:        "CPU quota in microseconds per period (max = unlimited)",
+			Help:        "Finite CPU quota in microseconds per period; absent when cpu.max is unlimited or unavailable",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
@@ -674,7 +676,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "cgroup_cpu_period_microseconds",
-			Help:        "CPU period in microseconds",
+			Help:        "CPU period in microseconds; absent when cpu.max is unavailable",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
@@ -685,7 +687,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "cgroup_memory_usage_bytes",
-			Help:        "Memory usage in bytes per cgroup (user)",
+			Help:        "Observed memory.current usage in bytes per user cgroup; absent when unavailable",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
@@ -895,10 +897,11 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 		username = exp.getUsernameFromUID(uidStr)
 	}
 
-	// Read cgroup memory before acquiring lock (fix #4: avoid file I/O under lock)
-	cgroupMemory := uint64(0)
+	// Read cgroup memory before acquiring the metrics gate: filesystem I/O must
+	// not delay other metric updates or cleanup.
+	cgroupMemory, cgroupMemoryAvailable := uint64(0), false
 	if metrics.CgroupPath != "" {
-		cgroupMemory = uint64(exp.getCgroupMemoryUsage(metrics.CgroupPath))
+		cgroupMemory, cgroupMemoryAvailable = exp.getCgroupMemoryUsage(metrics.CgroupPath)
 	}
 
 	leaveMetrics := exp.metricsGate.Enter()
@@ -957,21 +960,34 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 		WriteOps:   metrics.ObservedIOWriteOps,
 	}
 
-	// Update cgroup metrics when a path is available.
-	if metrics.CgroupPath != "" {
-		// Update the CPU quota.
-		if metrics.CPUQuota != "" {
-			quota, period := parseCPUQuota(metrics.CPUQuota)
-			if quota >= 0 {
-				exp.cgroupCPUQuota.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(quota))
-			}
-			if period > 0 {
-				exp.cgroupCPUPeriod.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(period))
-			}
-		}
+	previousCgroupPath := exp.activeCgroupPaths[uidStr]
+	if previousCgroupPath != "" && previousCgroupPath != metrics.CgroupPath {
+		exp.deleteCgroupMetricSeries(uidStr, previousCgroupPath)
+	}
+	if metrics.CgroupPath == "" {
+		delete(exp.activeCgroupPaths, uidStr)
+		return
+	}
+	exp.activeCgroupPaths[uidStr] = metrics.CgroupPath
 
-		// Use the value read before locking to avoid redundant cgroup file I/O.
+	quota, period := parseCPUQuota(metrics.CPUQuota)
+	if period <= 0 {
+		exp.cgroupCPUQuota.DeleteLabelValues(uidStr, metrics.CgroupPath)
+		exp.cgroupCPUPeriod.DeleteLabelValues(uidStr, metrics.CgroupPath)
+	} else {
+		if quota >= 0 {
+			exp.cgroupCPUQuota.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(quota))
+		} else {
+			// A valid max record has a period but no finite quota sample.
+			exp.cgroupCPUQuota.DeleteLabelValues(uidStr, metrics.CgroupPath)
+		}
+		exp.cgroupCPUPeriod.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(period))
+	}
+
+	if cgroupMemoryAvailable {
 		exp.cgroupMemoryUsage.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(cgroupMemory))
+	} else {
+		exp.cgroupMemoryUsage.DeleteLabelValues(uidStr, metrics.CgroupPath)
 	}
 }
 
@@ -1017,6 +1033,10 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			if prevPattern, ok := exp.prevUserPatterns[userKey]; ok {
 				exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
 			}
+			if cgroupPath := exp.activeCgroupPaths[uidStr]; cgroupPath != "" {
+				exp.deleteCgroupMetricSeries(uidStr, cgroupPath)
+				delete(exp.activeCgroupPaths, uidStr)
+			}
 
 			// Remove previous-value baselines.
 			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
@@ -1036,16 +1056,28 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 }
 
 // getCgroupMemoryUsage reads memory.current for one cgroup.
-func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
+func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) (uint64, bool) {
 	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
-
-	if data, err := os.ReadFile(memoryCurrentFile); err == nil {
-		if usage, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
-			return usage
-		}
+	data, err := os.ReadFile(memoryCurrentFile)
+	if err != nil {
+		return 0, false
 	}
+	usage, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return usage, true
+}
 
-	return 0
+// deleteCgroupMetricSeries removes every cgroup gauge for one UID/path tuple.
+// The caller must hold metricsGate.
+func (exp *PrometheusExporter) deleteCgroupMetricSeries(uidStr, cgroupPath string) {
+	if cgroupPath == "" {
+		return
+	}
+	exp.cgroupCPUQuota.DeleteLabelValues(uidStr, cgroupPath)
+	exp.cgroupCPUPeriod.DeleteLabelValues(uidStr, cgroupPath)
+	exp.cgroupMemoryUsage.DeleteLabelValues(uidStr, cgroupPath)
 }
 
 // UpdateUserWorkloadPattern publishes the detected pattern for one user.
@@ -1077,20 +1109,19 @@ func parseCPUQuota(quotaStr string) (quota int64, period int64) {
 	if len(parts) != 2 {
 		return -1, -1
 	}
+	parsedPeriod, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || parsedPeriod <= 0 {
+		return -1, -1
+	}
 
 	if parts[0] == "max" {
-		quota = -1 // Represent "max" as unlimited.
-	} else {
-		if val, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
-			quota = val
-		}
+		return -1, parsedPeriod
 	}
-
-	if val, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-		period = val
+	parsedQuota, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || parsedQuota <= 0 {
+		return -1, -1
 	}
-
-	return quota, period
+	return parsedQuota, parsedPeriod
 }
 
 // getUsernameFromUID converts a UID into a username.
