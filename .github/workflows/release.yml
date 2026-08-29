@@ -124,6 +124,8 @@ jobs:
     name: Build RPM on Enterprise Linux 8
     needs: quality
     runs-on: ubuntu-24.04
+    env:
+      RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       image: quay.io/rockylinux/rockylinux:8
       env:
@@ -157,25 +159,25 @@ jobs:
       - name: Build RPM package
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          make rpm
+          test ! -e "$RPMBUILD_DIR"
+          make RPMBUILD_DIR="$RPMBUILD_DIR" rpm
 
       - name: Collect and verify RPM package
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/release
-          find "$HOME/rpmbuild/RPMS" -type f -name 'resman-*.rpm' \
-            -exec cp --target-directory=build/release {} +
-          test -n "$(find build/release -maxdepth 1 -type f -name 'resman-*.rpm' -print -quit)"
-          rpm --checksig build/release/resman-*.rpm
-          rpm --query --package --info build/release/resman-*.rpm
-          rpm --query --package --list build/release/resman-*.rpm
-          for package in build/release/resman-*.rpm; do
-            packaging/layout/verify-package-layout.sh "$package"
-          done
+          bash packaging/rpm/collect-release-artifacts.sh "$RPMBUILD_DIR" build/release
+          binary_package=$(find build/release -maxdepth 1 -type f -name 'resman-*.rpm' ! -name '*.src.rpm' -print -quit)
+          source_package=$(find build/release -maxdepth 1 -type f -name 'resman-*.src.rpm' -print -quit)
+          test -n "$binary_package"
+          test -n "$source_package"
+          rpm --checksig "$binary_package" "$source_package"
+          rpm --query --package --info "$binary_package" "$source_package"
+          rpm --query --package --list "$binary_package"
+          packaging/layout/verify-package-layout.sh "$binary_package"
 
           glibc_versions=$(
-            rpm --query --package --requires build/release/resman-*.rpm |
+            rpm --query --package --requires "$binary_package" |
               sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p'
           )
           test -n "$glibc_versions"
@@ -220,8 +222,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           assets=(release-assets/resman_*.deb release-assets/resman-*.rpm release-assets/SHA256SUMS)
-          if (( ${#assets[@]} != 3 )); then
-            echo "expected one DEB, one RPM and SHA256SUMS, found ${#assets[@]} assets" >&2
+          if (( ${#assets[@]} != 4 )); then
+            echo "expected one DEB, one binary RPM, one source RPM and SHA256SUMS, found ${#assets[@]} assets" >&2
             exit 1
           fi
 

@@ -48,6 +48,96 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertNotContains(t, lintTarget, "version --short")
 }
 
+func TestReleaseRPMWorkflowUsesOneFreshAuthoritativeDirectory(t *testing.T) {
+	root := repositoryRoot(t)
+	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))
+
+	for _, required := range []string{
+		`RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ github.run_id }}-${{ github.run_attempt }}`,
+		`test ! -e "$RPMBUILD_DIR"`,
+		`make RPMBUILD_DIR="$RPMBUILD_DIR" rpm`,
+		`bash packaging/rpm/collect-release-artifacts.sh "$RPMBUILD_DIR" build/release`,
+		"expected one DEB, one binary RPM, one source RPM and SHA256SUMS",
+	} {
+		assertContains(t, releaseWorkflow, required)
+	}
+	assertNotContains(t, releaseWorkflow, `$HOME/rpmbuild`)
+}
+
+func TestRPMArtifactCollectionRejectsDivergentOrStaleTrees(t *testing.T) {
+	root := repositoryRoot(t)
+	script := filepath.Join(root, "packaging/rpm/collect-release-artifacts.sh")
+
+	t.Run("collects one current binary and source package", func(t *testing.T) {
+		buildDir := t.TempDir()
+		binary := filepath.Join(buildDir, "RPMS/x86_64/resman-1.25.1-1.el8.x86_64.rpm")
+		source := filepath.Join(buildDir, "SRPMS/resman-1.25.1-1.el8.src.rpm")
+		writeFixtureFile(t, binary)
+		writeFixtureFile(t, source)
+		outputDir := filepath.Join(t.TempDir(), "release")
+
+		output, err := runRPMArtifactCollector(script, buildDir, outputDir, "")
+		if err != nil {
+			t.Fatalf("collector rejected current RPM pair: %v\n%s", err, output)
+		}
+		for _, name := range []string{filepath.Base(binary), filepath.Base(source)} {
+			if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+				t.Errorf("collected artifact %s: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("stale default tree cannot satisfy missing current build", func(t *testing.T) {
+		home := t.TempDir()
+		writeFixtureFile(t, filepath.Join(home, "rpmbuild/RPMS/x86_64/resman-1.24.0-1.el8.x86_64.rpm"))
+		writeFixtureFile(t, filepath.Join(home, "rpmbuild/SRPMS/resman-1.24.0-1.el8.src.rpm"))
+		outputDir := filepath.Join(t.TempDir(), "release")
+
+		output, err := runRPMArtifactCollector(script, filepath.Join(t.TempDir(), "current"), outputDir, home)
+		if err == nil {
+			t.Fatalf("collector accepted stale default tree: %s", output)
+		}
+		if _, statErr := os.Stat(outputDir); !os.IsNotExist(statErr) {
+			t.Fatalf("collector created output from stale tree: stat error=%v", statErr)
+		}
+	})
+
+	t.Run("packages split across trees are rejected", func(t *testing.T) {
+		buildDir := t.TempDir()
+		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.25.1-1.el8.x86_64.rpm"))
+		if err := os.MkdirAll(filepath.Join(buildDir, "SRPMS"), 0700); err != nil {
+			t.Fatalf("create empty current SRPM directory: %v", err)
+		}
+		home := t.TempDir()
+		writeFixtureFile(t, filepath.Join(home, "rpmbuild/SRPMS/resman-1.25.1-1.el8.src.rpm"))
+		outputDir := filepath.Join(t.TempDir(), "release")
+
+		output, err := runRPMArtifactCollector(script, buildDir, outputDir, home)
+		if err == nil {
+			t.Fatalf("collector joined packages from divergent trees: %s", output)
+		}
+		if !strings.Contains(output, "found 1 binary and 0 source packages") {
+			t.Fatalf("collector failure did not identify incomplete current tree: %s", output)
+		}
+	})
+
+	t.Run("pre-existing release output is rejected", func(t *testing.T) {
+		buildDir := t.TempDir()
+		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.25.1-1.el8.x86_64.rpm"))
+		writeFixtureFile(t, filepath.Join(buildDir, "SRPMS/resman-1.25.1-1.el8.src.rpm"))
+		outputDir := filepath.Join(t.TempDir(), "release")
+		writeFixtureFile(t, filepath.Join(outputDir, "resman-1.24.0-1.el8.x86_64.rpm"))
+
+		output, err := runRPMArtifactCollector(script, buildDir, outputDir, "")
+		if err == nil {
+			t.Fatalf("collector accepted pre-existing release output: %s", output)
+		}
+		if !strings.Contains(output, "release output directory is not empty") {
+			t.Fatalf("collector failure did not identify stale output: %s", output)
+		}
+	})
+}
+
 func TestVerifyFormatRejectsAnUnformattedTrackedFile(t *testing.T) {
 	root := repositoryRoot(t)
 	fixture := t.TempDir()
@@ -216,4 +306,29 @@ func runCommand(t *testing.T, dir string, env []string, name string, args ...str
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("run %s: %v\n%s", name, err, output)
 	}
+}
+
+func writeFixtureFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatalf("create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("fixture\n"), 0600); err != nil {
+		t.Fatalf("write fixture %s: %v", path, err)
+	}
+}
+
+func runRPMArtifactCollector(script, buildDir, outputDir, home string) (string, error) {
+	command := exec.Command("bash", script, buildDir, outputDir)
+	command.Env = make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if home == "" || !strings.HasPrefix(entry, "HOME=") {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	if home != "" {
+		command.Env = append(command.Env, "HOME="+home)
+	}
+	output, err := command.CombinedOutput()
+	return string(output), err
 }
