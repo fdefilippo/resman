@@ -156,7 +156,7 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 	)
 
 	err := reloader.OnConfigChange(requested)
-	var restartErr *RestartRequiredError
+	var restartErr *config.RestartRequiredError
 	if !errors.As(err, &restartErr) {
 		t.Fatalf("OnConfigChange() error = %v, want RestartRequiredError", err)
 	}

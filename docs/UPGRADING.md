@@ -1,6 +1,6 @@
-# Upgrading from ResMan 1.25.x to ResMan 1.30.0
+# Upgrading from ResMan 1.25.x to ResMan 1.30.1
 
-This guide applies when moving from ResMan 1.25.x to ResMan 1.30.0. This release
+This guide applies when moving from ResMan 1.25.x to ResMan 1.30.1. This release
 contains the post-1.25.1 audit remediation and intentionally breaks incorrect or
 ambiguous contracts. It does not migrate old database schemas, accept removed
 configuration keys, preserve old MCP shapes, or alias renamed metrics.
@@ -155,7 +155,11 @@ firewall restrictions, and an explicit configuration entry.
 listing key names without values and preserves the active values. Dynamic changes in
 the same file are applied atomically as one epoch. Configuration persistence snapshots
 values without holding the live configuration lock across filesystem I/O, so slow
-backup or directory sync no longer blocks control-cycle getters.
+backup or directory sync no longer blocks control-cycle getters. A pure restart-required
+outcome now emits one structured `WARN` with `rejected_fields` and `processed=true`;
+the previous per-field warning, partial-apply warning, and duplicate error records are
+not emitted. A genuine or mixed failure emits one `ERROR` and is never downgraded merely
+because it also contains rejected restart-required fields.
 
 **Cause.** Previous reloads could publish a new configuration while constructed
 components still used old listener, storage, logging, or security settings.
@@ -164,7 +168,8 @@ components still used old listener, storage, logging, or security settings.
 write interval, Prometheus or MCP listener/security settings, logging backend, or
 `SERVER_ROLE`. Treat the reload rejection as proof that the old values remain active.
 `METRICS_DB_RETENTION_DAYS` remains dynamic; `USERNAME_CACHE_TTL` applies at startup
-and reload even when the database is disabled.
+and reload even when the database is disabled. Log-based monitoring should match the
+single terminal record and consume `rejected_fields` instead of the former `field` key.
 
 ### Cache TTL validation and retention change
 

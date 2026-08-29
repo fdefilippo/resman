@@ -70,8 +70,8 @@ func TestRPMArtifactCollectionRejectsDivergentOrStaleTrees(t *testing.T) {
 
 	t.Run("collects one current binary and source package", func(t *testing.T) {
 		buildDir := t.TempDir()
-		binary := filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.0-1.el8.x86_64.rpm")
-		source := filepath.Join(buildDir, "SRPMS/resman-1.30.0-1.el8.src.rpm")
+		binary := filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.1-1.el8.x86_64.rpm")
+		source := filepath.Join(buildDir, "SRPMS/resman-1.30.1-1.el8.src.rpm")
 		writeFixtureFile(t, binary)
 		writeFixtureFile(t, source)
 		outputDir := filepath.Join(t.TempDir(), "release")
@@ -104,12 +104,12 @@ func TestRPMArtifactCollectionRejectsDivergentOrStaleTrees(t *testing.T) {
 
 	t.Run("packages split across trees are rejected", func(t *testing.T) {
 		buildDir := t.TempDir()
-		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.0-1.el8.x86_64.rpm"))
+		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.1-1.el8.x86_64.rpm"))
 		if err := os.MkdirAll(filepath.Join(buildDir, "SRPMS"), 0700); err != nil {
 			t.Fatalf("create empty current SRPM directory: %v", err)
 		}
 		home := t.TempDir()
-		writeFixtureFile(t, filepath.Join(home, "rpmbuild/SRPMS/resman-1.30.0-1.el8.src.rpm"))
+		writeFixtureFile(t, filepath.Join(home, "rpmbuild/SRPMS/resman-1.30.1-1.el8.src.rpm"))
 		outputDir := filepath.Join(t.TempDir(), "release")
 
 		output, err := runRPMArtifactCollector(script, buildDir, outputDir, home)
@@ -123,8 +123,8 @@ func TestRPMArtifactCollectionRejectsDivergentOrStaleTrees(t *testing.T) {
 
 	t.Run("pre-existing release output is rejected", func(t *testing.T) {
 		buildDir := t.TempDir()
-		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.0-1.el8.x86_64.rpm"))
-		writeFixtureFile(t, filepath.Join(buildDir, "SRPMS/resman-1.30.0-1.el8.src.rpm"))
+		writeFixtureFile(t, filepath.Join(buildDir, "RPMS/x86_64/resman-1.30.1-1.el8.x86_64.rpm"))
+		writeFixtureFile(t, filepath.Join(buildDir, "SRPMS/resman-1.30.1-1.el8.src.rpm"))
 		outputDir := filepath.Join(t.TempDir(), "release")
 		writeFixtureFile(t, filepath.Join(outputDir, "resman-1.24.0-1.el8.x86_64.rpm"))
 

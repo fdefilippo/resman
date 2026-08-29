@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,11 +40,31 @@ type ConfigChangeHandler interface {
 	OnConfigChange(*Config) error
 }
 
+type watcherLogger interface {
+	Debug(string, ...interface{})
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+}
+
+type reloadOutcomeError struct {
+	err       error
+	processed bool
+}
+
+func (e *reloadOutcomeError) Error() string {
+	return e.err.Error()
+}
+
+func (e *reloadOutcomeError) Unwrap() error {
+	return e.err
+}
+
 // Watcher monitors and reloads one configuration file.
 type Watcher struct {
 	configPath    string
 	currentConfig *Config
-	logger        *logging.Logger
+	logger        watcherLogger
 
 	watcher    *fsnotify.Watcher
 	mu         sync.RWMutex
@@ -73,7 +94,9 @@ func (w *Watcher) Reload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Manual configuration reload triggered")
-	return w.handleConfigChange(ctx, false)
+	err := w.handleConfigChange(ctx, false)
+	w.reportReloadOutcome("manual", err)
+	return err
 }
 
 // ForceReload reapplies the current file even when its content has already been
@@ -83,7 +106,9 @@ func (w *Watcher) ForceReload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Forced configuration reload triggered")
-	return w.handleConfigChange(ctx, true)
+	err := w.handleConfigChange(ctx, true)
+	w.reportReloadOutcome("forced", err)
+	return err
 }
 
 // NewWatcher creates a watcher for one configuration file.
@@ -263,9 +288,37 @@ func (w *Watcher) checkConfigChange() {
 }
 
 func (w *Watcher) reloadFromEvent(force bool) {
-	if err := w.handleConfigChange(context.Background(), force); err != nil && !errors.Is(err, ErrWatcherStopped) {
-		w.logger.Error("Automatic configuration reload failed", "error", err)
+	err := w.handleConfigChange(context.Background(), force)
+	if err != nil && !errors.Is(err, ErrWatcherStopped) {
+		w.reportReloadOutcome("automatic", err)
 	}
+}
+
+func (w *Watcher) reportReloadOutcome(source string, err error) {
+	if err == nil {
+		return
+	}
+
+	classification := ClassifyReloadError(err)
+	keyvals := []interface{}{
+		"source", source,
+		"processed", reloadOutcomeWasProcessed(err),
+	}
+	if len(classification.RestartRequiredFields) > 0 {
+		keyvals = append(keyvals, "rejected_fields", strings.Join(classification.RestartRequiredFields, ","))
+	}
+	if classification.OnlyRestartRequired {
+		w.logger.Warn("Configuration change rejected until restart", keyvals...)
+		return
+	}
+
+	keyvals = append(keyvals, "error", err)
+	w.logger.Error("Configuration reload failed", keyvals...)
+}
+
+func reloadOutcomeWasProcessed(err error) bool {
+	var outcomeErr *reloadOutcomeError
+	return errors.As(err, &outcomeErr) && outcomeErr.processed
 }
 
 // handleConfigChange serializes, validates, and applies one file version.
@@ -353,9 +406,6 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	if w.onChange != nil {
 		if err := w.onChange.OnConfigChange(newConfig); err != nil {
 			applyErr = err
-			w.logger.Error("Failed to apply new configuration",
-				"error", err,
-			)
 		}
 	}
 	var confirmationErr error
@@ -377,15 +427,17 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	w.mu.Unlock()
 
 	if confirmationErr != nil {
-		return errors.Join(applyErr, confirmationErr)
+		return &reloadOutcomeError{
+			err:       errors.Join(applyErr, confirmationErr),
+			processed: false,
+		}
 	}
 
 	if applyErr != nil {
-		w.logger.Warn("Configuration file marked as processed after partial apply",
-			"file", w.configPath,
-			"error", applyErr,
-		)
-		return fmt.Errorf("apply configuration from %s: %w", w.configPath, applyErr)
+		return &reloadOutcomeError{
+			err:       fmt.Errorf("apply configuration from %s: %w", w.configPath, applyErr),
+			processed: true,
+		}
 	}
 
 	w.logger.Info("New configuration applied successfully")

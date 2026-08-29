@@ -1,3 +1,11 @@
+resman (1.30.1-1) stable; urgency=medium
+
+  * Report each configuration reload outcome exactly once.
+  * Keep restart-required rejections at warning level while preserving typed errors.
+  * Preserve genuine failures when they are joined with restart-required rejections.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 13:45:00 +0200
+
 resman (1.30.0-1) stable; urgency=medium
 
   * Separate CPU, RAM and I/O eligibility, enforcement and observation contracts.

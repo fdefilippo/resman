@@ -40,7 +40,7 @@ func TestRPMBuildDirectoryControlsEveryRPMBuildPath(t *testing.T) {
 			required := []string{
 				filepath.Join(topdir, "BUILD"),
 				filepath.Join(topdir, "RPMS"),
-				filepath.Join(topdir, "SOURCES", "resman-1.30.0.tar.gz"),
+				filepath.Join(topdir, "SOURCES", "resman-1.30.1.tar.gz"),
 				filepath.Join(topdir, "SPECS", "resman.spec"),
 				filepath.Join(topdir, "SRPMS"),
 				`rpmbuild --define "_topdir ` + topdir + `" -ba ` + filepath.Join(topdir, "SPECS", "resman.spec"),

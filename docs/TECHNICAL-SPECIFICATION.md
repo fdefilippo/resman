@@ -574,6 +574,9 @@ only `scheme://host[:port]`, never URL userinfo, path, query values, or fragment
    configuration
 5. Return component errors and an explicit restart-required error listing the
    rejected key names; configuration values and credentials are never included
+6. Let the watcher classify the complete error tree and emit one terminal outcome
+   record: pure restart-required rejection is `WARN`, while genuine and mixed
+   failures are `ERROR`
 
 **Key Functions:**
 - `NewReloader(state, cgroup, metrics, prometheus, hooks...)`: Creates reloader
@@ -1121,7 +1124,8 @@ later record where recovery is possible.
 7. Hold new control cycles outside the configuration epoch while every component updates
 8. Preserve static effective values and report every rejected restart-required key
 9. Record the processed file version even after a partial component failure
-10. Log success/failure
+10. Emit one terminal outcome record with deterministic rejected fields and whether
+    the file digest was recorded; lifecycle `INFO`/`DEBUG` records remain separate
 ```
 
 ### 11.3 Component Updates
@@ -1377,7 +1381,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.30.0-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.30.1-1'" -o resman .
 ```
 
 **Build RPM:**

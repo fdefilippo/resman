@@ -20,7 +20,6 @@ package reloader
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"github.com/fdefilippo/resman/config"
@@ -52,16 +51,6 @@ type Reloader struct {
 	logger           *logging.Logger
 
 	applying atomic.Bool
-}
-
-// RestartRequiredError reports requested fields that were not applied. It
-// deliberately contains key names only, never configuration values.
-type RestartRequiredError struct {
-	Fields []string
-}
-
-func (e *RestartRequiredError) Error() string {
-	return "restart-required configuration changes rejected: " + strings.Join(e.Fields, ", ")
 }
 
 // NewReloader creates a configuration reloader.
@@ -115,10 +104,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 			return fmt.Errorf("apply configuration lifecycle: %w", err)
 		}
 		if len(rejected) > 0 {
-			for _, field := range rejected {
-				r.logger.Warn("Configuration change rejected until restart", "field", field)
-			}
-			applyErrors = append(applyErrors, &RestartRequiredError{Fields: rejected})
+			applyErrors = append(applyErrors, &config.RestartRequiredError{Fields: rejected})
 		}
 	}
 

@@ -22,6 +22,12 @@ type appLogger interface {
 	InfoChecked(string, ...interface{}) error
 }
 
+type configWatcher interface {
+	Reload(context.Context) error
+	ForceReload(context.Context) error
+	Stop() error
+}
+
 // App contains the daemon runtime components.
 type App struct {
 	cfg        *config.Config
@@ -40,7 +46,7 @@ type App struct {
 	dbManager          *database.DatabaseManager
 	prometheusExporter *metrics.PrometheusExporter
 	stateManager       *state.Manager
-	configWatcher      *config.Watcher
+	configWatcher      configWatcher
 	mcpServer          *mcp.Server
 	psiWatcher         *cgroup.PSIWatcher
 	psiEvents          <-chan cgroup.PSIEvent
