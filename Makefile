@@ -305,7 +305,7 @@ rpm-source: build rpm-dirs
 rpm: rpm-source
 	@echo "Building RPM package..."
 	cp packaging/rpm/$(PROJECT_NAME).spec $(RPMBUILD_DIR)/SPECS/
-	rpmbuild -ba $(RPMBUILD_DIR)/SPECS/$(PROJECT_NAME).spec
+	rpmbuild --define "_topdir $(RPMBUILD_DIR)" -ba $(RPMBUILD_DIR)/SPECS/$(PROJECT_NAME).spec
 	@echo "RPM created: $(RPMBUILD_DIR)/RPMS/*/$(PROJECT_NAME)-$(VERSION)-$(RELEASE).*.rpm"
 
 # Install the RPM locally.
