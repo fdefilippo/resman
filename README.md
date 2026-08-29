@@ -38,7 +38,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.30.4-1_<architecture>.deb
+# Creates build/deb/resman_1.30.5-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -80,9 +80,9 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
-Upgrading from 1.25.x to 1.30.4 is intentionally breaking. Complete the filesystem,
+Upgrading from 1.25.x to 1.30.5 is intentionally breaking. Complete the filesystem,
 database, configuration, MCP, Prometheus, hook, capability, and container actions in
-[`docs/UPGRADING.md`](docs/UPGRADING.md) before installing ResMan 1.30.4.
+[`docs/UPGRADING.md`](docs/UPGRADING.md) before installing ResMan 1.30.5.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
@@ -296,7 +296,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Upgrade guide from 1.25.x to 1.30.4: [`docs/UPGRADING.md`](docs/UPGRADING.md)
+- Upgrade guide from 1.25.x to 1.30.5: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

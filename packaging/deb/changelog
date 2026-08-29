@@ -1,3 +1,10 @@
+resman (1.30.5-1) stable; urgency=medium
+
+  * Enforce ShellCheck across every tracked shell script in shared quality gates.
+  * Make missing ShellCheck fail closed in pull-request and release CI.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 15:57:06 +0200
+
 resman (1.30.4-1) stable; urgency=medium
 
   * Wait for explicit systemd readiness before reporting a successful start.

@@ -30,7 +30,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-var version = "1.30.4"
+var version = "1.30.5"
 
 const (
 	exitStatusFailure       = 1
