@@ -59,7 +59,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
+.PHONY: all build clean test test-sendmail test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
@@ -137,6 +137,10 @@ test: deps
 	@echo "Running tests..."
 	$(GO) test -v -cover ./...
 
+# Exercise the sendmail helper with deterministic external commands.
+test-sendmail:
+	scripts/sendmail_test.sh
+
 # Run tests with coverage.
 test-cover: deps
 	@echo "Running tests with coverage..."
@@ -208,6 +212,7 @@ verify-contracts:
 	@echo "Verifying architectural contracts..."
 	$(GO) run ./scripts/generate-config-reference --check
 	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath|TestPublicConfigReferenceMatchesRuntimeContract|TestExampleConfigMatchesRuntimeDefaults|TestEmptyIncludeListMeaningsMatchEligibility|TestSecondaryConfigurationReferencesStayFocusedAndSecure)$$'
+	$(MAKE) test-sendmail
 	$(GO) run ./scripts/verify-contracts
 
 # Lint the code. The unlimited issue flags disable golangci-lint's default
