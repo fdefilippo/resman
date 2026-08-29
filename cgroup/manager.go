@@ -50,7 +50,8 @@ type Manager struct {
 	createCgroupProbe   func(string, string) (string, error)
 	removeCgroupProbe   func(string) error
 	writeController     func(string, string) error
-	removeManagedCgroup func(string) error
+	removeManagedCgroup func(string) (cgroupRemovalResult, error)
+	observeRemovalRetry func()
 	readBlockIOStats    func(string) (blockIOCounters, error)
 	readCgroupFile      func(string) ([]byte, error)
 	moveUserProcesses   func(context.Context, int) error
@@ -108,8 +109,11 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		createCgroupProbe:   os.MkdirTemp,
 		removeCgroupProbe:   os.Remove,
 		removeManagedCgroup: removeCgroupWithRetry,
-		readBlockIOStats:    readBlockIOCounters,
-		readCgroupFile:      os.ReadFile,
+		observeRemovalRetry: func() {
+			logger.Debug("Managed cgroup removal entered retry", "operation", "remove_managed_cgroup")
+		},
+		readBlockIOStats: readBlockIOCounters,
+		readCgroupFile:   os.ReadFile,
 	}
 	mgr.moveUserProcesses = mgr.moveAllUserProcesses
 	mgr.operationTimeout = func() time.Duration {

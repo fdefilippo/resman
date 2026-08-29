@@ -338,10 +338,17 @@ func (m *Manager) rollbackUserCgroupTransition(uid int, moved []int, oldPath str
 }
 
 func (m *Manager) removeManagedCgroupPath(path string) error {
+	var result cgroupRemovalResult
+	var err error
 	if m.removeManagedCgroup != nil {
-		return m.removeManagedCgroup(path)
+		result, err = m.removeManagedCgroup(path)
+	} else {
+		result, err = removeCgroupWithRetry(path)
 	}
-	return removeCgroupWithRetry(path)
+	if result.retried && m.observeRemovalRetry != nil {
+		m.observeRemovalRetry()
+	}
+	return err
 }
 
 func readBlockIOCounters(cgroupPath string) (blockIOCounters, error) {

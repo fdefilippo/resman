@@ -144,19 +144,24 @@ func (m *Manager) recoverSharedCgroup(sharedPath string) error {
 
 const cgroupRemovalRetryDelay = 25 * time.Millisecond
 
-func removeCgroupWithRetry(path string) error {
+type cgroupRemovalResult struct {
+	retried bool
+}
+
+func removeCgroupWithRetry(path string) (cgroupRemovalResult, error) {
 	return removeCgroupWithRetryUsing(path, os.Remove, waitBeforeCgroupRemovalRetry)
 }
 
-func removeCgroupWithRetryUsing(path string, remove func(string) error, backoff func()) error {
+func removeCgroupWithRetryUsing(path string, remove func(string) error, backoff func()) (cgroupRemovalResult, error) {
 	if err := remove(path); err == nil || os.IsNotExist(err) {
-		return nil
+		return cgroupRemovalResult{}, nil
 	}
+	result := cgroupRemovalResult{retried: true}
 	backoff()
 	if err := remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+		return result, err
 	}
-	return nil
+	return result, nil
 }
 
 func waitBeforeCgroupRemovalRetry() {

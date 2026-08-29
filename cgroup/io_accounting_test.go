@@ -92,13 +92,13 @@ func TestTransitionUserCgroupCarriesFinalSourceCountersIntoDestination(t *testin
 		processOriginsFile: filepath.Join(root, "origins.json"),
 		blockIOAccounting:  map[int]blockIOAccountingState{1000: {path: oldPath, base: blockIOCounters{readOps: 10, writeOps: 20}}},
 		scanProcessIDs:     func() (map[int][]int, error) { return map[int][]int{}, nil },
-		removeManagedCgroup: func(path string) error {
+		removeManagedCgroup: func(path string) (cgroupRemovalResult, error) {
 			for _, name := range []string{"cgroup.procs", "io.stat", "cpu.weight"} {
 				if err := os.Remove(filepath.Join(path, name)); err != nil && !os.IsNotExist(err) {
-					return err
+					return cgroupRemovalResult{}, err
 				}
 			}
-			return os.Remove(path)
+			return cgroupRemovalResult{}, os.Remove(path)
 		},
 	}
 
@@ -169,13 +169,13 @@ func TestCleanupAlternateUserCgroupDefersPopulatedSplitAndRetries(t *testing.T) 
 	}
 	manager := &Manager{
 		cfg: cfg,
-		removeManagedCgroup: func(path string) error {
+		removeManagedCgroup: func(path string) (cgroupRemovalResult, error) {
 			for _, name := range []string{"cgroup.procs", "io.stat", "cpu.weight"} {
 				if err := os.Remove(filepath.Join(path, name)); err != nil && !os.IsNotExist(err) {
-					return err
+					return cgroupRemovalResult{}, err
 				}
 			}
-			return os.Remove(path)
+			return cgroupRemovalResult{}, os.Remove(path)
 		},
 	}
 
