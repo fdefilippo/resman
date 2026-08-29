@@ -70,6 +70,7 @@ func main() {
 		checkConfigContracts(root, goFiles),
 		checkPrometheusCallSites(goFiles),
 		checkProductionSleeps(root, goFiles),
+		checkLockBoundaryInventory(root, goFiles),
 		checkCrossPackageMapKeys(root, goFiles),
 		checkMCPContracts(root, goFiles),
 		checkShippedAssets(root, goFiles),

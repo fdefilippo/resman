@@ -866,6 +866,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | No cross-package string-literal map keys for known contracts | 6 | AST scan of string map-index and composite-literal keys grouped by package |
 | Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
+| Every production named struct declaring `sync.Mutex`, `sync.RWMutex`, or `operationgate.Gate` is recorded exactly once in the lock-boundary inventory | 15 | AST field/import scan matched to machine-readable inventory identifiers; test and generated files excluded; no call-graph proof |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
 | Production comments, user-facing strings, build help, and current shipped documentation use English | 17 | conservative Italian-language lexical scan of production Go comments/string literals, the Makefile, and shipped assets, excluding test/checker fixtures and historical RPM/DEB changelogs |
