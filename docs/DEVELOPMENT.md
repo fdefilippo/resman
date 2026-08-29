@@ -50,14 +50,15 @@ make ci-quality    # the authoritative local, pull-request, main, and release ga
 ```
 
 `make ci-quality` verifies module tidiness, formatting, build, vet, the mechanical
-contracts, the final-matrix failure semantics, `go test -race -cover ./...`, and
-golangci-lint without a fallback to vet.
+contracts, every tracked shell script with ShellCheck, the final-matrix failure
+semantics, `go test -race -cover ./...`, and golangci-lint without a fallback to vet.
 It requires `promtool` and a locally available golangci-lint; `make lint-install` is a
 convenience for installing the project-tested version, not a local version constraint.
-The reusable workflow installs the pinned linter and passes that exact binary to the
-gate. The same `.github/workflows/quality.yml` definition runs on every pull request,
-push to `main`, and release tag, so release validation cannot drift from pull-request
-CI.
+A missing local ShellCheck binary produces a visible warning, while CI installs it and
+sets `REQUIRE_SHELLCHECK=1` so the gate fails closed if it is unavailable. The reusable
+workflow installs the pinned linter and passes that exact binary to the gate. The same
+`.github/workflows/quality.yml` definition runs on every pull request, push to `main`,
+and release tag, so release validation cannot drift from pull-request CI.
 
 The audit-level semantic closure gate is intentionally separate because it
 requires KVM and, when the SmolVM kernel lacks PSI or `io.max`, an explicitly
@@ -881,6 +882,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
 | Production comments, user-facing strings, build help, and current shipped documentation use English | 17 | conservative Italian-language lexical scan of production Go comments/string literals, the Makefile, and shipped assets, excluding test/checker fixtures and historical RPM/DEB changelogs |
 | `promtool check rules` / `check config` on shipped YAML | 13 | invoke promtool when available, skip with a warning otherwise |
+| Every tracked shell script is ShellCheck-clean at default severity | 13, 16 | discover `.sh` files and shell shebangs from the Git index; CI requires ShellCheck while local absence emits a warning |
 
 Every failure reports `file:line` and exits non-zero. `KNOWN` lines remain successful
 only because the named issue owns the violation; they are intentionally visible.

@@ -22,10 +22,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install promtool
+      - name: Install shipped-asset quality tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes prometheus
+          sudo apt-get install --yes prometheus shellcheck
 
       - name: Install pinned golangci-lint
         run: |
@@ -33,4 +33,6 @@ jobs:
           make lint-install
 
       - name: Run shared quality gates
+        env:
+          REQUIRE_SHELLCHECK: "1"
         run: make ci-quality GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"

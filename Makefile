@@ -10,12 +10,14 @@
 PROJECT_NAME = resman
 VERSION = 1.30.4
 RELEASE = 1
+PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
 GO = go
 GOLANGCI_LINT = golangci-lint
 GOLANGCI_LINT_VERSION = v2.12.2
 GORELEASER = goreleaser
+SHELLCHECK = shellcheck
 
 # Build directories
 BUILD_DIR = build
@@ -60,7 +62,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-sendmail test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
-	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -98,7 +100,7 @@ static: deps
 # ============================================================================
 
 # Run the authoritative quality-gate sequence used by pull requests and releases.
-ci-quality: verify-modules verify-format verify-promtool
+ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	@echo "Running CI quality gates..."
 	$(GO) build ./...
 	$(GO) vet ./...
@@ -132,6 +134,11 @@ verify-promtool:
 		echo "promtool is required by ci-quality but was not found" >&2; \
 		exit 1; \
 	}
+
+# Check every tracked shell script. CI sets REQUIRE_SHELLCHECK=1 so a missing
+# binary cannot silently disable the gate; local runs retain a visible warning.
+verify-shellcheck:
+	@SHELLCHECK="$(SHELLCHECK)" REQUIRE_SHELLCHECK="$(REQUIRE_SHELLCHECK)" $(PROJECT_ROOT)scripts/verify-shellcheck.sh
 
 # Run unit tests.
 test: deps

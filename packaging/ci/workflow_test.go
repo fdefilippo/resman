@@ -27,13 +27,14 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertContains(t, qualityWorkflow, "workflow_call:")
 	assertContains(t, qualityWorkflow, `CGO_ENABLED: "1"`)
 	assertContains(t, qualityWorkflow, "go-version-file: go.mod")
-	assertContains(t, qualityWorkflow, "sudo apt-get install --yes prometheus")
+	assertContains(t, qualityWorkflow, "sudo apt-get install --yes prometheus shellcheck")
 	assertContains(t, qualityWorkflow, "make lint-install")
+	assertContains(t, qualityWorkflow, `REQUIRE_SHELLCHECK: "1"`)
 	assertContains(t, qualityWorkflow, `run: make ci-quality GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"`)
 
 	qualityTarget := makeTarget(t, makefile, "ci-quality")
 	for _, required := range []string{
-		"verify-modules verify-format verify-promtool",
+		"verify-modules verify-format verify-promtool verify-shellcheck",
 		"$(GO) build ./...",
 		"$(GO) vet ./...",
 		"$(MAKE) verify-contracts",
@@ -190,6 +191,47 @@ func TestVerifyPromtoolRejectsMissingBinary(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "promtool is required by ci-quality") {
 		t.Fatalf("verify-promtool failure was not diagnostic; output=%s", output)
+	}
+}
+
+func TestVerifyShellcheckRejectsADeliberatelyDefectiveTrackedScript(t *testing.T) {
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Skip("ShellCheck is not installed; CI installs it before running this test")
+	}
+	root := repositoryRoot(t)
+	fixture := t.TempDir()
+	runCommand(t, fixture, nil, "git", "init", "--quiet")
+	defective := filepath.Join(fixture, "deliberate-defect")
+	if err := os.WriteFile(defective, []byte("#!/bin/sh\nprintf '%s\\n' $1\n"), 0700); err != nil {
+		t.Fatalf("write defective shell fixture: %v", err)
+	}
+	runCommand(t, fixture, nil, "git", "add", "deliberate-defect")
+
+	output, err := runMakeTarget(fixture, root, "verify-shellcheck", "REQUIRE_SHELLCHECK=1")
+	if err == nil {
+		t.Fatalf("verify-shellcheck accepted a deliberately defective tracked script; output=%s", output)
+	}
+	if !strings.Contains(output, "deliberate-defect") || !strings.Contains(output, "SC2086") {
+		t.Fatalf("verify-shellcheck did not preserve the ShellCheck evidence; output=%s", output)
+	}
+}
+
+func TestVerifyShellcheckFailsClosedWhenRequiredBinaryIsMissing(t *testing.T) {
+	root := repositoryRoot(t)
+	fixture := t.TempDir()
+	runCommand(t, fixture, nil, "git", "init", "--quiet")
+	output, err := runMakeTarget(
+		fixture,
+		root,
+		"verify-shellcheck",
+		"REQUIRE_SHELLCHECK=1",
+		"SHELLCHECK="+filepath.Join(fixture, "missing-shellcheck"),
+	)
+	if err == nil {
+		t.Fatalf("verify-shellcheck accepted a missing required binary; output=%s", output)
+	}
+	if !strings.Contains(output, "ShellCheck is required by ci-quality in CI") {
+		t.Fatalf("verify-shellcheck failure was not diagnostic; output=%s", output)
 	}
 }
 
