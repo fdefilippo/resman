@@ -10,7 +10,7 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.30.5
+Version: 1.30.7
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -61,8 +61,9 @@ v1.30.1: single-outcome configuration reload reporting without false error diagn
 v1.30.2: measured CPU-load attribution before suppressing enforcement.
 v1.30.4: authoritative systemd readiness and isolated packaged-service validation.
 v1.30.5: enforced ShellCheck coverage for every tracked shell script.
+v1.30.7: truthful cgroup telemetry, checked I/O counters and bounded fuzz gates.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.5.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.7.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -265,6 +266,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-1
+- FIX: reject malformed cpu.max observations instead of exporting false zero values
+- FIX: remove unavailable and stale cgroup-labelled Prometheus gauge series
+- FIX: reject raw and logical block I/O counter overflow before wrap
+- TEST: add bounded fuzz targets for parser and protocol boundaries
+
 * Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.5-1
 - CI: enforce ShellCheck across every tracked shell script
 - CI: fail closed when ShellCheck is unavailable in pull-request or release gates

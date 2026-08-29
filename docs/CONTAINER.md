@@ -50,7 +50,7 @@ sudo podman run --rm --name resman \
   -v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
   -v /var/lib/resman:/var/lib/resman:rw \
   -v /var/log/resman:/var/log/resman:rw \
-  resman:1.30.5
+  resman:1.30.7
 ```
 
 `--pid=host` makes `/proc` describe the processes resman controls.
