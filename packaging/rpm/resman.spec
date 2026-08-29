@@ -10,7 +10,7 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.25.1
+Version: 1.30.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -56,8 +56,9 @@ v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
 v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint gate.
 v1.25: architecture review remediation, dependency refresh and early systemd startup.
 v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
+v1.30.0: audited enforcement semantics, secure persistence, stateless MCP and release gates.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -260,6 +261,13 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.0-1
+- FIX: separate CPU, RAM and I/O eligibility, enforcement and observation contracts
+- FIX: reconcile active process membership and base IOPS decisions on block operations
+- SECURITY: harden configuration, SQLite, logging, MCP TLS and runtime filesystem layout
+- MCP: require stateless protocol revision 2026-07-28 with typed wire contracts
+- TEST: add shared CI contract checks and disposable functional regression gates
+
 * Sat Jul 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.25.1-1
 - FIX: empty USER_INCLUDE_LIST keeps monitoring active but disables CPU limiting
 - DOCS: clarify that USER_INCLUDE_LIST=.* enables all non-excluded users

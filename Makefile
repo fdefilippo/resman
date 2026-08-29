@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.25.1
+VERSION = 1.30.0
 RELEASE = 1
 
 # Paths

@@ -1,4 +1,4 @@
-.TH RESMAN 8 "July 2026" "v1.25.1" "System Administration"
+.TH RESMAN 8 "August 2026" "v1.30.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -648,11 +648,11 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x
+.B Upgrade from 1.25.x to 1.30.0
 .PP
-The post-1.25.1 audit remediation intentionally breaks filesystem, database,
+ResMan 1.30.0 intentionally breaks filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
-installing such a build, follow
+installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
 It lists the visible symptom, cause and required action for every known
 discontinuity; old schemas, keys and wire aliases are not preserved.

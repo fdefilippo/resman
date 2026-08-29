@@ -305,20 +305,20 @@ Follow [Semantic Versioning](https://semver.org/):
 
 For maintainers:
 
-1. Update CHANGELOG.md with release date
-2. Update version in main.go
-3. Create release branch
-4. Tag release:
+1. Run `make ci-quality` on `main`.
+2. Update the release version in `Makefile`, `main.go`, the RPM spec, the Debian
+   changelog, the man page, and current package/container examples. The version
+   contract tests must remain green.
+3. Create one release commit on `main`.
+4. Create an annotated tag using the project convention:
    ```bash
-   git tag -a v1.0.0 -m "Release v1.0.0"
-   git push origin v1.0.0
+   git tag -a v1.30.0 -m "Release 1.30.0"
    ```
-5. GitHub Actions will:
+5. Push `main` and the tag only when publication is intended.
+6. GitHub Actions will:
    - Run all tests
-   - Build binaries
-   - Create packages (RPM, DEB)
+   - Create packages (DEB, binary RPM, source RPM)
    - Create GitHub release
-   - Publish Docker images
 
 ### Post-Release
 
