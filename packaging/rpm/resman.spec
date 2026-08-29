@@ -11,7 +11,7 @@
 
 Name:    resman
 Version: 1.30.7
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -266,6 +266,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-2
+- CI: schedule weekly generated-input fuzzing with manual dispatch
+- CI: retain fuzz logs, generated crashers and the Go fuzz cache on failure
+
 * Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-1
 - FIX: reject malformed cpu.max observations instead of exporting false zero values
 - FIX: remove unavailable and stale cgroup-labelled Prometheus gauge series
