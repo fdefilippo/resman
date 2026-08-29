@@ -94,6 +94,18 @@ feature, controller, and interface named. The
 .B cpuset
 controller is optional for CPU quota and proportional-weight enforcement.
 .PP
+Capability discovery is a startup snapshot. If
+.B memory.max
+or
+.B io.max
+was unusable during that probe, a later reload that requests the corresponding
+feature reports the capability error and publishes the effective configuration with
+the feature still disabled. Fixing the host does not refresh the snapshot: restart
+resman to discover the repaired interface. By contrast, a feature that was merely
+disabled in the startup configuration can be enabled by reload without a restart when
+its interface was already found usable; failure to enable its controller in an
+existing shared cgroup is reported and leaves the feature disabled.
+.PP
 The published RPM is built with CGO on Enterprise Linux 8 and targets the EL8
 userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
 Enterprise Linux releases. The RPM is not statically linked because NSS, LDAP,

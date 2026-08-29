@@ -300,6 +300,16 @@ the error. Controllers for disabled RAM or I/O features may be absent. `cpuset`
 is optional because quota and proportional CPU enforcement use the `cpu`
 controller.
 
+Capability discovery is a startup snapshot. If `memory.max` or `io.max` was
+unusable during that probe, a reload that requests its feature reports the
+capability error and publishes the effective configuration with the feature
+still disabled. Repairing the host does not refresh the snapshot; resman must be
+restarted to discover the repaired interface. This differs from a feature that
+was merely disabled in the startup configuration: when its interface was found
+usable, a reload can enable the feature without a restart. If the controller
+cannot be enabled in an existing shared cgroup, the reload reports that failure
+and leaves the feature disabled.
+
 **Key Functions:**
 - `NewManager(cfg)`: Creates cgroup manager
 - `verifyCgroupSetup()`: Verifies cgroups v2 availability
@@ -593,6 +603,9 @@ only `scheme://host[:port]`, never URL userinfo, path, query values, or fragment
 - `LOG_LEVEL`: Applied immediately
 - `PSI_EVENT_DRIVEN`, PSI thresholds, and `PSI_WINDOW_US`: Rebuild the PSI watcher
 - `PSI_FALLBACK_INTERVAL`, `METRICS_REFRESH_INTERVAL`: Rebuild loop tickers immediately
+- `RAM_LIMIT_ENABLED`, `IO_LIMIT_ENABLED`: Applied only when startup capability
+  discovery found the required interface usable; otherwise the requested feature
+  remains disabled and the error requires a restart after repairing the host
 - `ENABLE_PROMETHEUS`, Prometheus listener, TLS, and authentication: Rejected until restart
 - Cgroup paths, created-cgroup state path, metrics database lifecycle/path/write interval,
   logging backend, and `SERVER_ROLE`: Rejected until restart
