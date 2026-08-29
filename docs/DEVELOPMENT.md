@@ -72,6 +72,12 @@ This gate writes a complete required-scenario matrix. Unsupported capabilities
 remain `BLOCKED` unless current-revision substitute evidence proves the same
 contract; a supported subset can never produce an overall PASS.
 
+Generated-input fuzzing is also separate from the deterministic pull-request gate.
+Committed seeds run under the ordinary Go suite, while `.github/workflows/fuzz.yml`
+runs `make fuzz FUZZTIME=2m` weekly and on explicit manual dispatch. A crasher fails
+that workflow, and the failure artifact retains the command log, generated corpus,
+and Go fuzz cache. The local `make fuzz` default remains 30 seconds per target.
+
 ---
 
 # Part 0 — Project policy

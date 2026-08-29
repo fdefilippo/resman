@@ -49,6 +49,32 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertNotContains(t, lintTarget, "version --short")
 }
 
+func TestFuzzWorkflowGeneratesInputsAndPreservesFailureEvidence(t *testing.T) {
+	root := repositoryRoot(t)
+	fuzzWorkflow := readFile(t, filepath.Join(root, ".github/workflows/fuzz.yml"))
+	ciWorkflow := readFile(t, filepath.Join(root, ".github/workflows/ci.yml"))
+	qualityWorkflow := readFile(t, filepath.Join(root, ".github/workflows/quality.yml"))
+
+	for _, required := range []string{
+		"schedule:",
+		"cron:",
+		"workflow_dispatch:",
+		"timeout-minutes: 30",
+		"FUZZTIME: 2m",
+		`make fuzz FUZZTIME="$FUZZTIME"`,
+		"set -o pipefail",
+		"if: failure()",
+		"uses: actions/upload-artifact@v4",
+		"fuzz.log",
+		"**/testdata/fuzz/**",
+		"resman-go-build/fuzz/**",
+	} {
+		assertContains(t, fuzzWorkflow, required)
+	}
+	assertNotContains(t, ciWorkflow, "make fuzz")
+	assertNotContains(t, qualityWorkflow, "make fuzz")
+}
+
 func TestReleaseRPMWorkflowUsesOneFreshAuthoritativeDirectory(t *testing.T) {
 	root := repositoryRoot(t)
 	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))

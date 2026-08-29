@@ -177,6 +177,22 @@ go test -v ./metrics/...
 sudo make test-integration
 ```
 
+### Fuzz Tests
+
+Committed fuzz seeds run with the ordinary Go test suite. Generate additional inputs
+locally with:
+
+```bash
+make fuzz                 # 30 seconds per target
+make fuzz FUZZTIME=2m     # custom budget per target
+```
+
+Generated-input fuzzing is deliberately separate from the deterministic pull-request
+gate. GitHub Actions runs `.github/workflows/fuzz.yml` every week with a two-minute
+budget per target; maintainers can also start that workflow manually. A crasher fails
+the workflow, which retains the command log, generated corpus, and Go fuzz cache as a
+failure artifact.
+
 ### Manual Testing
 
 1. Build the binary:
