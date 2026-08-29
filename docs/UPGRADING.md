@@ -440,6 +440,20 @@ incomplete rather than zero. If any eligible user lacks a baseline, available us
 can still prove activation but global release waits; continuous eligible-user churn can
 therefore prolong active I/O limits.
 
+### Byte-suffixed I/O bandwidth limits now reach the kernel
+
+**Visible change.** `IO_READ_BPS` and `IO_WRITE_BPS` values using the documented
+case-insensitive `K`, `M`, `G`, or `T` suffixes are converted to decimal byte counts
+before writing `io.max`. An unchanged configuration such as `IO_READ_BPS=100M` that
+previously failed every enforcement attempt can now apply its limit.
+
+**Cause.** Configuration validation accepted byte suffixes, but the cgroup writer
+forwarded the original string even though the kernel interface accepts only a decimal
+byte count.
+
+**Action.** No syntax conversion is required. Review suffixed bandwidth limits before
+upgrading because they now enforce the value the configuration already requested.
+
 ### Minimum active time protects the newest enforcement
 
 **Visible change.** Global release remains all-or-nothing, but `MIN_ACTIVE_TIME` starts

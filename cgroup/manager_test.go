@@ -898,7 +898,7 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	if err := manager.ApplyRAMLimitWithHigh(1000, "1048576", "524288"); err != nil {
 		t.Fatalf("ApplyRAMLimitWithHigh() error: %v", err)
 	}
-	if err := manager.ApplyIOLimit(1000, "1024", "2048", 10, 20, "8:0"); err != nil {
+	if err := manager.ApplyIOLimit(1000, "1M", "2m", 10, 20, "8:0"); err != nil {
 		t.Fatalf("ApplyIOLimit() error: %v", err)
 	}
 
@@ -906,7 +906,7 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	assertFileContent(t, filepath.Join(userPath, "cpu.max"), "50000 100000")
 	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
 	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
-	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20\n")
+	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1048576 wbps=2097152 riops=10 wiops=20\n")
 
 	if _, err := os.Stat(filepath.Join(legacyPath, "cpu.weight")); !os.IsNotExist(err) {
 		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)

@@ -186,6 +186,16 @@ grep -q 'podman tag.*container_image_cache_ref' "$script_dir/run.sh"
 grep -q 'SMOLVM_REQUIRE_PSI' "$script_dir/run.sh"
 grep -q 'SMOLVM_SCENARIO' "$script_dir/run.sh"
 grep -q 'pressure_summary cpu' "$script_dir/guest/run-functional.sh"
+grep -q 'memory-only' "$script_dir/guest/run-functional.sh"
+grep -q 'psi-refresh-neutrality' "$script_dir/guest/run-functional.sh"
+render_line=$(grep -n 'sed "s/@RUN_ID@/' "$script_dir/guest/run-functional.sh" | head -n 1 | cut -d: -f1)
+# shellcheck disable=SC2016 # Match the literal shell condition in the guest runner.
+memory_config_line=$(grep -n 'if \[\[ \$scenario == memory-only \]\]' \
+	"$script_dir/guest/run-functional.sh" | tail -n 1 | cut -d: -f1)
+[[ $render_line -lt $memory_config_line ]] || {
+	echo "memory-only config mutation precedes fixture rendering" >&2
+	exit 1
+}
 grep -q 'process-membership' "$script_dir/guest/run-functional.sh"
 grep -q 'cpu-without-cpuset' "$script_dir/guest/run-functional.sh"
 grep -q 'missing-io-startup' "$script_dir/guest/run-functional.sh"

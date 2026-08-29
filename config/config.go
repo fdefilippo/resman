@@ -1077,14 +1077,14 @@ func isValidByteQuota(quota string) bool {
 	if quota == "" {
 		return false
 	}
-	_, err := ParseRAMQuota(quota)
+	_, err := ParseByteQuota(quota)
 	return err == nil
 }
 
-// ParseRAMQuota converts a byte quota with an optional case-insensitive K/M/G/T suffix.
-func ParseRAMQuota(quota string) (uint64, error) {
+// ParseByteQuota converts a byte quota with an optional case-insensitive K/M/G/T suffix.
+func ParseByteQuota(quota string) (uint64, error) {
 	if quota == "" {
-		return 0, fmt.Errorf("empty RAM quota")
+		return 0, fmt.Errorf("empty byte quota")
 	}
 
 	multipliers := map[string]uint64{
@@ -1099,10 +1099,10 @@ func ParseRAMQuota(quota string) (uint64, error) {
 		number := quota[:len(quota)-1]
 		value, err := strconv.ParseUint(number, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid RAM quota number %q: %w", number, err)
+			return 0, fmt.Errorf("invalid byte quota number %q: %w", number, err)
 		}
 		if value > ^uint64(0)/multiplier {
-			return 0, fmt.Errorf("RAM quota %q overflows uint64 bytes", quota)
+			return 0, fmt.Errorf("byte quota %q overflows uint64", quota)
 		}
 		return value * multiplier, nil
 	}
@@ -1110,7 +1110,7 @@ func ParseRAMQuota(quota string) (uint64, error) {
 	// Plain bytes
 	val, err := strconv.ParseUint(quota, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid RAM quota format %q: %w", quota, err)
+		return 0, fmt.Errorf("invalid byte quota format %q: %w", quota, err)
 	}
 	return val, nil
 }

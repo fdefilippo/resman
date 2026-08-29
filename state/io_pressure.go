@@ -69,7 +69,7 @@ func byteRateLimit(value string) float64 {
 	if value == "" || value == "max" {
 		return 0
 	}
-	limit, err := config.ParseRAMQuota(value)
+	limit, err := config.ParseByteQuota(value)
 	if err != nil {
 		return 0
 	}

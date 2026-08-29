@@ -15,6 +15,7 @@ result_file=$artifact_dir/result
 mcp_pid=
 mcp_workload_pid=
 cpu_workload_pid=
+memory_workload_pid=
 io_workload_pid=
 io_anchor_pid=
 container_workload_pid=
@@ -38,7 +39,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops) ;;
+	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -81,6 +82,11 @@ finish() {
 		kill -TERM "$cpu_workload_pid" 2>/dev/null
 		wait "$cpu_workload_pid" 2>/dev/null
 		cpu_workload_pid=
+	fi
+	if [[ -n $memory_workload_pid ]]; then
+		kill -TERM "$memory_workload_pid" 2>/dev/null
+		wait "$memory_workload_pid" 2>/dev/null
+		memory_workload_pid=
 	fi
 	if [[ -n $io_workload_pid ]]; then
 		kill -TERM "$io_workload_pid" 2>/dev/null
@@ -170,6 +176,8 @@ controllers=$(< /sys/fs/cgroup/cgroup.controllers)
 required_controllers=(cpu)
 if [[ $scenario == resource-only || $scenario == missing-io-startup ]]; then
 	required_controllers+=(memory io)
+elif [[ $scenario == memory-only ]]; then
+	required_controllers+=(memory)
 elif [[ $scenario == block-iops ]]; then
 	required_controllers+=(io)
 fi
@@ -207,8 +215,10 @@ io_max_available=false
 [[ -e $controller_probe/io.max ]] && io_max_available=true
 rmdir "$controller_probe" || fail "cannot remove the controller-interface probe cgroup"
 [[ $cpu_max_available == true ]] || blocked "cpu controller is listed but cpu.max is unavailable"
-if [[ $scenario == resource-only ]]; then
+if [[ $scenario == resource-only || $scenario == memory-only ]]; then
 	[[ $memory_max_available == true ]] || blocked "memory controller is listed but memory.max is unavailable"
+fi
+if [[ $scenario == resource-only ]]; then
 	[[ $io_max_available == true ]] || blocked "io controller is listed but io.max is unavailable"
 fi
 if [[ $scenario == block-iops ]]; then
@@ -241,6 +251,11 @@ if [[ $scenario == block-iops ]]; then
 		-e 's/^IO_WRITE_BPS=.*/IO_WRITE_BPS=max/' \
 		-e 's/^IO_THRESHOLD=.*/IO_THRESHOLD=10/' \
 		-e 's/^IO_RELEASE_THRESHOLD=.*/IO_RELEASE_THRESHOLD=5/' \
+		"$config_file"
+fi
+if [[ $scenario == memory-only ]]; then
+	sed -i \
+		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
 		"$config_file"
 fi
 if [[ $scenario == process-membership || $scenario == cpu-without-cpuset \
@@ -277,6 +292,20 @@ if [[ $scenario == mcp-filter-reload ]]; then
 		-e 's/^MCP_ENABLED=.*/MCP_ENABLED=true/' \
 		-e 's/^MCP_TRANSPORT=.*/MCP_TRANSPORT=stdio/' \
 		"$config_file"
+fi
+if [[ $scenario == psi-refresh-neutrality ]]; then
+	sed -i \
+		-e 's/^POLLING_INTERVAL=.*/POLLING_INTERVAL=120/' \
+		-e 's/^METRICS_REFRESH_INTERVAL=.*/METRICS_REFRESH_INTERVAL=5/' \
+		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
+		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		-e 's/^PSI_EVENT_DRIVEN=.*/PSI_EVENT_DRIVEN=true/' \
+		"$config_file"
+	cat >>"$config_file" <<'EOF'
+PSI_CPU_STALL_THRESHOLD=999999
+PSI_IO_STALL_THRESHOLD=999999
+PSI_FALLBACK_INTERVAL=30
+EOF
 fi
 chmod 0600 "$config_file"
 printf 'RESMAN_CONFIG=%s\n' "$config_file" >"$runtime_dir/environment"
@@ -341,6 +370,11 @@ if [[ $scenario == missing-io-startup ]]; then
 	detail="startup rejected IO limiting because the real child cgroup lacked io.max"
 	echo "PASS: $detail"
 	exit 0
+fi
+if [[ $scenario == psi-refresh-neutrality ]]; then
+	[[ $psi_available == true ]] || blocked "PSI refresh neutrality requires CPU, memory, and I/O pressure data"
+	/opt/resman-functional/workload.sh cpu 90s &
+	cpu_workload_pid=$!
 fi
 if [[ $scenario == mcp-filter-reload ]]; then
 	mcp_stdout=$artifact_dir/mcp-filter-reload.jsonl
@@ -508,7 +542,7 @@ if [[ $scenario == container-runtime ]]; then
 	container_base_cgroup=/sys/fs/cgroup/resman-container-$run_id
 	container_limited_cgroup=$container_base_cgroup/limited/user_$cpu_uid
 	container_quota_ready=false
-	for _ in $(seq 1 30); do
+	for _ in $(seq 1 45); do
 		if [[ -r $container_base_cgroup/limited/cpu.max \
 			&& $(< "$container_base_cgroup/limited/cpu.max") != "max 100000" \
 			&& -r $container_limited_cgroup/cgroup.procs ]] \
@@ -576,6 +610,95 @@ sqlite3 "$state_dir/metrics.db" '.schema' >"$artifact_dir/database-schema.sql" \
     || fail "SQLite metrics database is unreadable"
 base_cgroup=$functional_cgroup_root/resman-functional-$run_id
 [[ -d $base_cgroup ]] || fail "isolated cgroup root was not created"
+
+metric_value() {
+	local metric=$1
+	local metrics_file=$2
+	awk -v metric="$metric" '$1 ~ ("^" metric "({|$)") { print $2; exit }' "$metrics_file"
+}
+
+user_metric_value() {
+	local metric=$1
+	local username=$2
+	local metrics_file=$3
+	awk -v metric="$metric" -v username="$username" \
+		'$1 ~ ("^" metric "{") && $1 ~ ("username=\"" username "\"") { print $2; exit }' \
+		"$metrics_file"
+}
+
+if [[ $scenario == psi-refresh-neutrality ]]; then
+	baseline_metrics=$artifact_dir/psi-baseline.prom
+	after_refresh_metrics=$artifact_dir/psi-after-refresh.prom
+	cycles_before=0
+	for _ in $(seq 1 30); do
+		curl --fail --silent --show-error --max-time 2 \
+			http://127.0.0.1:19100/metrics >"$baseline_metrics" \
+			|| fail "cannot scrape the PSI baseline"
+		cycles_before=$(metric_value resman_control_cycles_total "$baseline_metrics")
+		user_cpu_before=$(user_metric_value resman_user_cpu_usage_percent resman-cpu "$baseline_metrics")
+		if [[ ${cycles_before:-0} -ge 2 && -n ${user_cpu_before:-} ]]; then
+			break
+		fi
+		sleep 1
+	done
+	[[ ${cycles_before:-0} -ge 2 ]] || fail "the PSI fallback cycle did not establish a decision sample"
+	[[ -n ${user_cpu_before:-} ]] || fail "the PSI baseline lacks the decision-owned user CPU series"
+	user_ema_before=$(user_metric_value resman_user_cpu_usage_ema_percent resman-cpu "$baseline_metrics")
+	collection_before=$(metric_value resman_metrics_collection_duration_seconds_count "$baseline_metrics")
+	system_cpu_before=$(metric_value resman_cpu_total_usage_percent "$baseline_metrics")
+	[[ -n ${user_ema_before:-} && -n ${collection_before:-} && -n ${system_cpu_before:-} ]] \
+		|| fail "the PSI baseline lacks required decision or observation metrics"
+
+	kill -TERM "$cpu_workload_pid" 2>/dev/null || true
+	wait "$cpu_workload_pid" 2>/dev/null || true
+	cpu_workload_pid=
+	refresh_ready=false
+	for _ in $(seq 1 15); do
+		sleep 1
+		curl --fail --silent --show-error --max-time 2 \
+			http://127.0.0.1:19100/metrics >"$after_refresh_metrics" \
+			|| fail "cannot scrape after PSI observation refreshes"
+		cycles_after=$(metric_value resman_control_cycles_total "$after_refresh_metrics")
+		collection_after=$(metric_value resman_metrics_collection_duration_seconds_count "$after_refresh_metrics")
+		if [[ $cycles_after == "$cycles_before" \
+			&& ${collection_after:-0} -ge $((collection_before + 2)) ]]; then
+			refresh_ready=true
+			break
+		fi
+	done
+	[[ $refresh_ready == true ]] \
+		|| fail "two observation refreshes did not complete before another control cycle"
+	user_cpu_after=$(user_metric_value resman_user_cpu_usage_percent resman-cpu "$after_refresh_metrics")
+	user_ema_after=$(user_metric_value resman_user_cpu_usage_ema_percent resman-cpu "$after_refresh_metrics")
+	system_cpu_after=$(metric_value resman_cpu_total_usage_percent "$after_refresh_metrics")
+	[[ $user_cpu_after == "$user_cpu_before" ]] \
+		|| fail "an observation refresh changed decision-owned user CPU"
+	[[ $user_ema_after == "$user_ema_before" ]] \
+		|| fail "an observation refresh changed decision-owned user EMA"
+	[[ $system_cpu_after != "$system_cpu_before" ]] \
+		|| fail "the observation stream did not change after the workload stopped"
+	grep -Fq 'PSI event-driven mode enabled' "$state_dir/resman.log" \
+		|| fail "PSI was available but event-driven mode did not become active"
+	psi_events=$(metric_value resman_psi_events_total "$after_refresh_metrics")
+	[[ -z ${psi_events:-} || $psi_events == 0 ]] \
+		|| fail "a PSI event invalidated the refresh-only assertion window"
+	{
+		printf 'control_cycles_before=%s\n' "$cycles_before"
+		printf 'control_cycles_after=%s\n' "$cycles_after"
+		printf 'collections_before=%s\n' "$collection_before"
+		printf 'collections_after=%s\n' "$collection_after"
+		printf 'decision_cpu_before=%s\n' "$user_cpu_before"
+		printf 'decision_cpu_after=%s\n' "$user_cpu_after"
+		printf 'decision_ema_before=%s\n' "$user_ema_before"
+		printf 'decision_ema_after=%s\n' "$user_ema_after"
+		printf 'system_observation_before=%s\n' "$system_cpu_before"
+		printf 'system_observation_after=%s\n' "$system_cpu_after"
+	} >"$artifact_dir/psi-refresh-neutrality.txt"
+	result=PASS
+	detail="PSI observation refreshes changed observation state without advancing decision CPU or EMA"
+	echo "PASS: $detail"
+	exit 0
+fi
 
 if [[ $scenario == block-iops ]]; then
 	io_uid=$(id -u resman-io)
@@ -811,6 +934,46 @@ result=PASS
 detail="RAM-only and IO-only users were enforced in standalone CPU-unlimited cgroups"
 echo "PASS: $detail"
 exit 0
+fi
+
+if [[ $scenario == memory-only ]]; then
+	/opt/resman-functional/workload.sh cpu 30s &
+	cpu_workload_pid=$!
+	/opt/resman-functional/workload.sh memory 30s &
+	memory_workload_pid=$!
+	cpu_uid=$(id -u resman-cpu)
+	memory_uid=$(id -u resman-memory)
+	memory_cgroup=$base_cgroup/user_$memory_uid
+	memory_limit_ready=false
+	for _ in $(seq 1 25); do
+		if [[ -r $memory_cgroup/memory.max && -r $memory_cgroup/cpu.max ]] \
+			&& [[ $(< "$memory_cgroup/memory.max") == 134217728 ]] \
+			&& [[ $(< "$memory_cgroup/cpu.max") == "max 100000" ]]; then
+			memory_limit_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $memory_limit_ready == true ]] \
+		|| fail "the RAM-only limit was not observed in a standalone CPU-unlimited cgroup"
+	[[ ! -d $base_cgroup/limited ]] \
+		|| fail "memory-only enforcement unexpectedly created the finite shared CPU cgroup"
+	[[ ! -d $base_cgroup/user_$cpu_uid ]] \
+		|| fail "the CPU-ineligible fixture user unexpectedly received a standalone cgroup"
+	{
+		printf 'cpu_uid=%s\n' "$cpu_uid"
+		printf 'memory_uid=%s\n' "$memory_uid"
+		printf 'memory_cgroup=%s\n' "$memory_cgroup"
+		printf 'memory_cpu_max=%s\n' "$(< "$memory_cgroup/cpu.max")"
+		printf 'memory_max=%s\n' "$(< "$memory_cgroup/memory.max")"
+	} >"$artifact_dir/memory-only-cgroup.txt"
+	wait "$cpu_workload_pid" "$memory_workload_pid"
+	cpu_workload_pid=
+	memory_workload_pid=
+	result=PASS
+	detail="the RAM-only user was enforced in a standalone CPU-unlimited cgroup"
+	echo "PASS: $detail"
+	exit 0
 fi
 
 # Exercise sustained-active membership reconciliation without requiring memory

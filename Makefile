@@ -59,8 +59,8 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-preflight \
-	test-functional-smolvm-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
+.PHONY: all build clean test test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
+	test-functional-smolvm-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -103,6 +103,7 @@ ci-quality: verify-modules verify-format verify-promtool
 	$(GO) build ./...
 	$(GO) vet ./...
 	$(MAKE) verify-contracts GO="$(GO)"
+	$(MAKE) test-functional-final-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
@@ -147,6 +148,10 @@ test-cover: deps
 test-functional-smolvm:
 	test/functional/smolvm/run.sh run
 
+# Verify standalone RAM enforcement without requiring io.max.
+test-functional-smolvm-memory-only:
+	SMOLVM_SCENARIO=memory-only test/functional/smolvm/run.sh run
+
 # Run the sustained-active process-membership scenario independently.
 test-functional-smolvm-process-membership:
 	SMOLVM_SCENARIO=process-membership test/functional/smolvm/run.sh run
@@ -171,6 +176,10 @@ test-functional-smolvm-container-runtime:
 test-functional-smolvm-block-iops:
 	SMOLVM_SCENARIO=block-iops test/functional/smolvm/run.sh run
 
+# Verify PSI observation refresh neutrality, or return BLOCKED when PSI is absent.
+test-functional-smolvm-psi-refresh:
+	SMOLVM_SCENARIO=psi-refresh-neutrality SMOLVM_REQUIRE_PSI=1 test/functional/smolvm/run.sh run
+
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
 	test/functional/smolvm/run.sh preflight
@@ -178,6 +187,21 @@ test-functional-smolvm-preflight:
 # Exercise the host-side harness contract without requiring KVM.
 test-functional-smolvm-unit:
 	test/functional/smolvm/host_test.sh
+
+# Run current-revision evidence on an explicitly selected disposable real-kernel host.
+test-functional-real-kernel-psi:
+	test/functional/real-kernel/remote.sh psi-refresh-neutrality "$(RESMAN_REAL_KERNEL_HOST)"
+
+test-functional-real-kernel-block-io:
+	test/functional/real-kernel/remote.sh block-io-all-dimensions "$(RESMAN_REAL_KERNEL_HOST)"
+
+# Compose focused tests, SmolVM scenarios, and capability-specific real-kernel evidence.
+test-functional-final:
+	test/functional/final/run.sh
+
+# Prove that the final gate cannot turn missing or failed required rows into PASS.
+test-functional-final-unit:
+	test/functional/final/gate_test.sh
 
 # Verify mechanically checkable development-guide contracts.
 verify-contracts:
@@ -464,13 +488,19 @@ help:
 	@echo "    test         - Run unit tests"
 	@echo "    test-cover   - Run tests and generate a coverage report"
 	@echo "    test-functional-smolvm - Run isolated functional tests in SmolVM"
+	@echo "    test-functional-smolvm-memory-only - Run standalone RAM enforcement in SmolVM"
 	@echo "    test-functional-smolvm-process-membership - Run active process membership in SmolVM"
 	@echo "    test-functional-smolvm-cpu-without-cpuset - Run CPU enforcement without cpuset in SmolVM"
 	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
 	@echo "    test-functional-smolvm-container-runtime - Verify the shipped sudo podman runtime in SmolVM"
 	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
+	@echo "    test-functional-smolvm-psi-refresh - Verify PSI refresh neutrality or report BLOCKED"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
+	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
+	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
+	@echo "    test-functional-final - Run the final required semantic scenario matrix"
+	@echo "    test-functional-final-unit - Test final-matrix failure and capability semantics"
 	@echo "    ci-quality    - Run the quality gates shared by pull requests and releases"
 	@echo "    verify-format - Fail when tracked Go files are not gofmt-clean"
 	@echo "    verify-modules - Verify module files are tidy and unchanged"

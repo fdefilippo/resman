@@ -207,11 +207,11 @@ run_harness() {
 
 	[[ $require_psi == 0 || $require_psi == 1 ]] \
 		|| blocked "SMOLVM_REQUIRE_PSI must be 0 or 1"
-	[[ $scenario == resource-only || $scenario == process-membership \
+	[[ $scenario == resource-only || $scenario == memory-only || $scenario == process-membership \
 		|| $scenario == cpu-without-cpuset || $scenario == missing-io-startup \
 		|| $scenario == mcp-filter-reload || $scenario == container-runtime \
-		|| $scenario == block-iops ]] \
-		|| blocked "SMOLVM_SCENARIO must be resource-only, process-membership, cpu-without-cpuset, missing-io-startup, mcp-filter-reload, container-runtime, or block-iops"
+		|| $scenario == block-iops || $scenario == psi-refresh-neutrality ]] \
+		|| blocked "SMOLVM_SCENARIO must name a documented functional scenario"
 
     local smolvm_version base_image_id base_image_digest fixture_image_id
     local fixture_hash fixture_reused image_id container_image_id guest_status

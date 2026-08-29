@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fdefilippo/resman/config"
 )
 
 func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
@@ -17,12 +19,13 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 
 	ioMaxFile := filepath.Join(cgroupPath, "io.max")
 
-	// Normalize bandwidth values.
-	if readBPS == "" || readBPS == "0" {
-		readBPS = "max"
+	readBPS, err = normalizeBPSLimit(readBPS)
+	if err != nil {
+		return fmt.Errorf("invalid read BPS limit for UID %d: %w", uid, err)
 	}
-	if writeBPS == "" || writeBPS == "0" {
-		writeBPS = "max"
+	writeBPS, err = normalizeBPSLimit(writeBPS)
+	if err != nil {
+		return fmt.Errorf("invalid write BPS limit for UID %d: %w", uid, err)
 	}
 
 	// Normalize IOPS values.
@@ -57,6 +60,24 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 	)
 
 	return nil
+}
+
+// normalizeBPSLimit converts the configured byte-quota syntax into the decimal
+// byte count required by the cgroup v2 io.max interface.
+func normalizeBPSLimit(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" || value == "max" {
+		return "max", nil
+	}
+
+	bytes, err := config.ParseByteQuota(value)
+	if err != nil {
+		return "", err
+	}
+	if bytes == 0 {
+		return "max", nil
+	}
+	return strconv.FormatUint(bytes, 10), nil
 }
 
 // RemoveIOLimit removes I/O limits by setting every value to "max".
@@ -240,34 +261,9 @@ func applyMultiplierToBPS(bps string, multiplier float64) string {
 
 // parseBPSValue converts a BPS value into bytes.
 func parseBPSValue(s string) uint64 {
-	s = strings.TrimSpace(s)
-	if len(s) == 0 {
-		return 0
-	}
-
-	// Check for suffix
-	lastChar := strings.ToUpper(s[len(s)-1:])
-	multiplier := uint64(1)
-	numStr := s
-
-	switch lastChar {
-	case "K":
-		multiplier = 1024
-		numStr = s[:len(s)-1]
-	case "M":
-		multiplier = 1024 * 1024
-		numStr = s[:len(s)-1]
-	case "G":
-		multiplier = 1024 * 1024 * 1024
-		numStr = s[:len(s)-1]
-	case "T":
-		multiplier = 1024 * 1024 * 1024 * 1024
-		numStr = s[:len(s)-1]
-	}
-
-	val, err := strconv.ParseUint(numStr, 10, 64)
+	val, err := config.ParseByteQuota(strings.TrimSpace(s))
 	if err != nil {
 		return 0
 	}
-	return val * multiplier
+	return val
 }

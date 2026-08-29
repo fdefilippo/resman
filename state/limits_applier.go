@@ -812,7 +812,7 @@ func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota st
 	if !cfg.RAMEnabled || !eligible {
 		return nil
 	}
-	quotaBytes, err := config.ParseRAMQuota(ramQuota)
+	quotaBytes, err := config.ParseByteQuota(ramQuota)
 	if err != nil || quotaBytes == 0 {
 		return fmt.Errorf("invalid RAM quota %q for UID %d", ramQuota, uid)
 	}

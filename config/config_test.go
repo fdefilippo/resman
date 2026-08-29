@@ -307,7 +307,7 @@ func TestIsValidCPUQuota(t *testing.T) {
 	}
 }
 
-func TestParseRAMQuota(t *testing.T) {
+func TestParseByteQuota(t *testing.T) {
 	maxUint64 := ^uint64(0)
 	tests := []struct {
 		name    string
@@ -333,18 +333,18 @@ func TestParseRAMQuota(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseRAMQuota(tt.quota)
+			got, err := ParseByteQuota(tt.quota)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("ParseRAMQuota(%q) = %d, want error", tt.quota, got)
+					t.Fatalf("ParseByteQuota(%q) = %d, want error", tt.quota, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParseRAMQuota(%q) error: %v", tt.quota, err)
+				t.Fatalf("ParseByteQuota(%q) error: %v", tt.quota, err)
 			}
 			if got != tt.want {
-				t.Fatalf("ParseRAMQuota(%q) = %d, want %d", tt.quota, got, tt.want)
+				t.Fatalf("ParseByteQuota(%q) = %d, want %d", tt.quota, got, tt.want)
 			}
 		})
 	}

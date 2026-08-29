@@ -18,6 +18,14 @@ only the CPU interface:
 make test-functional-smolvm-process-membership
 ```
 
+The final gate does not let a missing `io.max` discard the RAM proof. The
+`memory-only` scenario requires only `cpu.max` and `memory.max`, then verifies a
+finite `memory.max` in a standalone cgroup whose `cpu.max` remains unlimited:
+
+```bash
+make test-functional-smolvm-memory-only
+```
+
 The CPU capability boundary builds a nested delegated cgroup root that exposes
 `cpu` but not `cpuset`, then proves that resman starts, emits the optional
 degradation diagnostic, moves the workload, and applies a finite `cpu.max`. It
@@ -112,6 +120,19 @@ SMOLVM_REQUIRE_PSI=1 make test-functional-smolvm
 If PSI is unavailable, that command is `BLOCKED`/77. The default fixture has
 `PSI_EVENT_DRIVEN=false`, so it records unavailable PSI without misclassifying
 the unrelated systemd/cgroup/Prometheus/database smoke test.
+
+The dedicated PSI contract scenario enables event-driven mode, establishes a
+decision sample, and then requires two observation refreshes to change the
+system snapshot without advancing the per-user decision CPU or EMA:
+
+```bash
+make test-functional-smolvm-psi-refresh
+```
+
+It returns `BLOCKED`/77 when the guest kernel lacks PSI. The final matrix may
+satisfy that same required contract with current-revision evidence from an
+explicit disposable real-kernel host, but retains the blocked SmolVM attempt as
+separate evidence.
 
 ## Isolation
 

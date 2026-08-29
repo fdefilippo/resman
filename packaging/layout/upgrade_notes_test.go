@@ -34,6 +34,7 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 		"`process_membership/origin_unavailable`",
 		"`PROCESS_EXCLUDE_LIST`",
 		"`POLLING_INTERVAL`",
+		"`IO_READ_BPS`",
 		"`IO_READ_IOPS`",
 		"continuous eligible-user churn",
 		"`MIN_ACTIVE_TIME`",

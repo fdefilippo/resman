@@ -50,13 +50,26 @@ make ci-quality    # the authoritative local, pull-request, main, and release ga
 ```
 
 `make ci-quality` verifies module tidiness, formatting, build, vet, the mechanical
-contracts, `go test -race -cover ./...`, and golangci-lint without a fallback to vet.
+contracts, the final-matrix failure semantics, `go test -race -cover ./...`, and
+golangci-lint without a fallback to vet.
 It requires `promtool` and a locally available golangci-lint; `make lint-install` is a
 convenience for installing the project-tested version, not a local version constraint.
 The reusable workflow installs the pinned linter and passes that exact binary to the
 gate. The same `.github/workflows/quality.yml` definition runs on every pull request,
 push to `main`, and release tag, so release validation cannot drift from pull-request
 CI.
+
+The audit-level semantic closure gate is intentionally separate because it
+requires KVM and, when the SmolVM kernel lacks PSI or `io.max`, an explicitly
+selected disposable real-kernel host:
+
+```bash
+RESMAN_REAL_KERNEL_HOST=root@disposable-test-host make test-functional-final
+```
+
+This gate writes a complete required-scenario matrix. Unsupported capabilities
+remain `BLOCKED` unless current-revision substitute evidence proves the same
+contract; a supported subset can never produce an overall PASS.
 
 ---
 
