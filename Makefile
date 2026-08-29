@@ -61,7 +61,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-sendmail test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
+.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
@@ -226,6 +226,27 @@ verify-contracts:
 	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath|TestPublicConfigReferenceMatchesRuntimeContract|TestExampleConfigMatchesRuntimeDefaults|TestEmptyIncludeListMeaningsMatchEligibility|TestSecondaryConfigurationReferencesStayFocusedAndSecure)$$'
 	$(MAKE) test-sendmail
 	$(GO) run ./scripts/verify-contracts
+
+# Fuzz the parsing and protocol boundaries for a bounded time. Go fuzzes one
+# target per invocation, so each is driven in turn; FUZZTIME sets the budget per
+# target. The seed corpora live in the targets themselves and run under `make
+# test`, so this gate adds generated inputs on top of the committed ones.
+FUZZTIME ?= 30s
+FUZZ_TARGETS = \
+	./config:FuzzLoadAndValidate \
+	./config:FuzzParseByteQuota \
+	./metrics:FuzzParseCPUQuota \
+	./cgroup:FuzzReadIOStatsFile \
+	./mcp:FuzzMCPHTTPHandler
+
+fuzz: deps
+	@set -eu; \
+	for target in $(FUZZ_TARGETS); do \
+		pkg="$${target%%:*}"; \
+		name="$${target##*:}"; \
+		echo "Fuzzing $$name in $$pkg for $(FUZZTIME)..."; \
+		$(GO) test "$$pkg" -run '^$$' -fuzz "^$$name$$" -fuzztime $(FUZZTIME); \
+	done
 
 # Lint the code. The unlimited issue flags disable golangci-lint's default
 # deduplication, which would otherwise hide repeated findings after the first three.

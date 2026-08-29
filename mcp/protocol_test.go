@@ -727,7 +727,7 @@ func sortedMapKeys(values map[string]any) []string {
 	return keys
 }
 
-func newProtocolTestServer(t *testing.T) *Server {
+func newProtocolTestServer(t testing.TB) *Server {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	configureMCPTestTLS(t, cfg)

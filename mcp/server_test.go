@@ -597,7 +597,7 @@ func TestMCPHTTPServerAllowsLongLivedResponses(t *testing.T) {
 	}
 }
 
-func configureMCPTestTLS(t *testing.T, cfg *config.Config) string {
+func configureMCPTestTLS(t testing.TB, cfg *config.Config) string {
 	t.Helper()
 	testServer := httptest.NewTLSServer(nil)
 	t.Cleanup(testServer.Close)
