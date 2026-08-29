@@ -45,4 +45,43 @@ assert_quiesce_case "failed but process-free after stop" failed 0 0
 assert_quiesce_case "stop failed" active 1 1
 assert_quiesce_case "unit remained active" active 0 1
 
+# cgroup_path_labels is what stands behind the series-lifecycle assertions, so a
+# blind extractor would make all three of them pass vacuously. These cases pin
+# the two states the scenario asserts (no series, one series) and the regression
+# it exists to catch (a stale path surviving alongside the enforcing one).
+scrape_fixture=$(mktemp -d)
+trap 'rm -rf "$scrape_fixture"' EXIT
+
+assert_path_labels() {
+	local name=$1 uid=$2 body=$3 want=$4 got rc=0
+	printf '%s' "$body" >"$scrape_fixture/scrape.prom"
+	got=$(cgroup_path_labels "$scrape_fixture/scrape.prom" "$uid" | tr '\n' ' ') || rc=$?
+	[[ $rc -eq 0 ]] \
+		|| { printf '%s: extractor exited %d, want 0\n' "$name" "$rc" >&2; exit 1; }
+	[[ ${got% } == "$want" ]] \
+		|| { printf '%s: paths %q, want %q\n' "$name" "${got% }" "$want" >&2; exit 1; }
+}
+
+idle_body='# HELP resman_control_cycles_total Control cycles
+resman_control_cycles_total 12
+resman_actively_limited_users_count 0
+'
+limited_body='resman_cgroup_cpu_period_microseconds{uid="1006",cgroup_path="/sys/fs/cgroup/resman/limited/user_1006"} 100000
+resman_cgroup_memory_usage_bytes{uid="1006",cgroup_path="/sys/fs/cgroup/resman/limited/user_1006"} 4096
+'
+stale_body='resman_cgroup_cpu_period_microseconds{uid="1006",cgroup_path="/sys/fs/cgroup/resman/limited/user_1006"} 100000
+resman_cgroup_cpu_period_microseconds{uid="1006",cgroup_path="/sys/fs/cgroup/resman/user_1006"} 100000
+'
+neighbour_body='resman_cgroup_cpu_period_microseconds{uid="10061",cgroup_path="/sys/fs/cgroup/resman/limited/user_10061"} 100000
+'
+
+# An idle daemon publishes no cgroup series at all. This must not abort the run:
+# the scenario asserts this state twice, before load and after release.
+assert_path_labels "idle publishes nothing" 1006 "$idle_body" ""
+assert_path_labels "enforced publishes one path" 1006 "$limited_body" \
+	"/sys/fs/cgroup/resman/limited/user_1006"
+assert_path_labels "a stale path is reported alongside the enforcing one" 1006 "$stale_body" \
+	"/sys/fs/cgroup/resman/limited/user_1006 /sys/fs/cgroup/resman/user_1006"
+assert_path_labels "a longer UID is not mistaken for this one" 1006 "$neighbour_body" ""
+
 printf 'PASS: real-kernel packaged-service host contract\n'

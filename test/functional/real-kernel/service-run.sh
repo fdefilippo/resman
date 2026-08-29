@@ -30,6 +30,23 @@ quiesce_installed_service() {
 	esac
 }
 
+# cgroup_path_labels prints the cgroup_path label of every resman_cgroup_* sample
+# published for one UID. The three cgroup gauges are the series that must follow
+# a user across placement changes instead of accumulating one entry per path.
+cgroup_path_labels() {
+	local scrape=$1 uid=$2
+	# awk rather than a grep pipeline: publishing no cgroup series is a state
+	# this scenario asserts twice, and under pipefail an empty grep would abort
+	# the run before the assertion that expects it.
+	awk -v uid="uid=\"$uid\"" '
+		/^resman_cgroup_(cpu_quota_microseconds|cpu_period_microseconds|memory_usage_bytes)\{/ \
+			&& index($0, uid) \
+			&& match($0, /cgroup_path="[^"]*"/) {
+			print substr($0, RSTART + 13, RLENGTH - 14)
+		}
+	' "$scrape" | sort -u
+}
+
 if [[ ${RESMAN_REAL_KERNEL_LIBRARY_ONLY:-0} == 1 ]]; then
 	if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
 		return 0
@@ -379,12 +396,17 @@ limited_cgroup_for() {
 	printf '%s/limited/user_%s' "$managed_cgroup_root" "$uid"
 }
 
+# Enforcement means the managed cgroup holds the user's processes, not merely
+# that the directory exists: the leaf is created a moment before the processes
+# are moved into it, and reading cgroup.procs in that window returns nothing.
 wait_for_limited_cgroup() {
 	local uid=$1 timeout=$2
 	local deadline=$((SECONDS + timeout)) path
 	path=$(limited_cgroup_for "$uid")
 	while (( SECONDS < deadline )); do
-		[[ -d $path ]] && return 0
+		if [[ -r $path/cgroup.procs && -n $(cat "$path/cgroup.procs" 2>/dev/null) ]]; then
+			return 0
+		fi
 		sleep 5
 	done
 	return 1
@@ -595,6 +617,17 @@ scenario_service_fatal_config() {
 # scenario_prometheus_scrape proves the exporter answers a real scrape over the
 # network with the series the shipped dashboards and alerts consume, after the
 # decision cycle has actually populated them.
+
+# scrape_metrics stores one scrape and fails the scenario if the endpoint does
+# not answer, so a later assertion can never pass against a stale or empty file.
+scrape_metrics() {
+	local port=$1 outfile=$2 status
+	rm -f "$outfile"
+	status=$(curl -s -o "$outfile" -w '%{http_code}' --max-time 20 "http://127.0.0.1:$port/metrics" || true)
+	[[ $status == 200 ]] || fail "the metrics endpoint answered HTTP $status instead of 200"
+	[[ -s $outfile ]] || fail "the metrics endpoint returned an empty body"
+}
+
 scenario_prometheus_scrape() {
 	local interval log_marker port=1974 status
 	write_scenario_configuration
@@ -643,6 +676,86 @@ scenario_prometheus_scrape() {
 
 	result=PASS
 	detail="a real scrape returned the decision-owned contract series with metadata after live control cycles"
+}
+
+# scenario_prometheus_user_series_lifecycle proves the per-user cgroup gauges
+# follow one account through a real placement change: absent while idle, carried
+# on the enforcing path while limited, and withdrawn from the old path once the
+# account is released. resman-ej0.3 was exactly this defect, and until now only
+# a unit test with a synthetic path stood behind it.
+scenario_prometheus_user_series_lifecycle() {
+	local log_marker port=1974 interval user=resman-t1 uid paths
+	uid=$(id -u "$user")
+	write_scenario_configuration
+	configure_enforcement
+	sed -i \
+		-e 's|^ENABLE_PROMETHEUS=.*|ENABLE_PROMETHEUS=true|' \
+		-e 's|^PROMETHEUS_METRICS_BIND_HOST=.*|PROMETHEUS_METRICS_BIND_HOST=127.0.0.1|' \
+		-e "s|^PROMETHEUS_METRICS_BIND_PORT=.*|PROMETHEUS_METRICS_BIND_PORT=$port|" \
+		"$config_path"
+	grep -q '^ENABLE_PROMETHEUS=true' "$config_path" \
+		|| fail "the scenario configuration does not enable the exporter"
+
+	interval=$(observed_polling_interval)
+	log_marker=$(daemon_log_lines)
+	systemctl start resman || fail "systemctl start failed for the series lifecycle scenario"
+	wait_for_daemon_log 'Control cycle completed' 2 $(( interval * 4 + 60 )) "$log_marker" >/dev/null \
+		|| fail "the daemon did not complete decision cycles before the first scrape"
+	daemon_log_since "$log_marker" | grep -q 'Prometheus exporter disabled by configuration' \
+		&& fail "the daemon started with the exporter disabled despite the scenario configuration"
+
+	scrape_metrics "$port" "$evidence_dir/metrics-idle.prom"
+	cgroup_path_labels "$evidence_dir/metrics-idle.prom" "$uid" >"$evidence_dir/paths-idle.txt"
+	if grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-idle.txt"; then
+		fail "UID $uid already carried enforcing-path series before any load was applied"
+	fi
+
+	saturate_host "$user" 2
+	wait_for_limited_cgroup "$uid" 360 \
+		|| fail "UID $uid was never moved into a managed cgroup under sustained load"
+	# The move and the scrape are independent: let the exporter publish the new
+	# placement before reading it, or the assertion races the control cycle.
+	log_marker=$(daemon_log_lines)
+	wait_for_daemon_log 'Control cycle completed' 2 $(( interval * 4 + 60 )) "$log_marker" >/dev/null \
+		|| fail "the daemon published no control cycle while the account was limited"
+
+	scrape_metrics "$port" "$evidence_dir/metrics-limited.prom"
+	cgroup_path_labels "$evidence_dir/metrics-limited.prom" "$uid" >"$evidence_dir/paths-limited.txt"
+	grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-limited.txt" \
+		|| fail "UID $uid was enforced but published no cgroup series for its enforcing path"
+	paths=$(grep -vF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-limited.txt" || true)
+	if [[ -n $paths ]]; then
+		printf '%s\n' "$paths" >"$evidence_dir/stale-paths-limited.txt"
+		fail "UID $uid published cgroup series for a path it no longer occupies"
+	fi
+	# resman-4pw.12 leaves the leaf at cpu.max=max, so the exporter owes a period
+	# sample and no finite quota sample for it.
+	grep -E "^resman_cgroup_cpu_period_microseconds\{" "$evidence_dir/metrics-limited.prom" \
+		| grep -qF "uid=\"$uid\"" \
+		|| fail "UID $uid published no CPU period while it was enforced"
+	if grep -E "^resman_cgroup_cpu_quota_microseconds\{" "$evidence_dir/metrics-limited.prom" \
+		| grep -qF "uid=\"$uid\""; then
+		fail "UID $uid published a finite CPU quota for a leaf whose cpu.max is unlimited"
+	fi
+
+	stop_user_load
+	wait_for_released_cgroup "$uid" 420 \
+		|| fail "UID $uid was still enforced long after its load stopped"
+	log_marker=$(daemon_log_lines)
+	wait_for_daemon_log 'Control cycle completed' 2 $(( interval * 4 + 60 )) "$log_marker" >/dev/null \
+		|| fail "the daemon published no control cycle after the account was released"
+
+	scrape_metrics "$port" "$evidence_dir/metrics-released.prom"
+	cgroup_path_labels "$evidence_dir/metrics-released.prom" "$uid" >"$evidence_dir/paths-released.txt"
+	if grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-released.txt"; then
+		fail "UID $uid still published series for the enforcing path it had already left"
+	fi
+
+	systemctl stop resman || fail "systemctl stop failed after the series lifecycle scenario"
+	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
+
+	result=PASS
+	detail="the per-user cgroup gauges followed one account onto its enforcing path and were withdrawn from it on release"
 }
 
 # scenario_mcp_https_endtoend proves the MCP endpoint serves only over HTTPS with
@@ -1010,6 +1123,7 @@ case "$scenario" in
 	service-reload-lifecycle) scenario_service_reload_lifecycle ;;
 	service-fatal-config) scenario_service_fatal_config ;;
 	prometheus-scrape) scenario_prometheus_scrape ;;
+	prometheus-user-series-lifecycle) scenario_prometheus_user_series_lifecycle ;;
 	mcp-https-endtoend) scenario_mcp_https_endtoend ;;
 	blackout-timeframe) scenario_blackout_timeframe ;;
 	metrics-database-lifecycle) scenario_metrics_database_lifecycle ;;
