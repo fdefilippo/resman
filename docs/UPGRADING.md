@@ -1,6 +1,6 @@
-# Upgrading from ResMan 1.25.x to ResMan 1.30.2
+# Upgrading from ResMan 1.25.x to ResMan 1.30.4
 
-This guide applies when moving from ResMan 1.25.x to ResMan 1.30.2. This release
+This guide applies when moving from ResMan 1.25.x to ResMan 1.30.4. This release
 contains the post-1.25.1 audit remediation and intentionally breaks incorrect or
 ambiguous contracts. It does not migrate old database schemas, accept removed
 configuration keys, preserve old MCP shapes, or alias renamed metrics.

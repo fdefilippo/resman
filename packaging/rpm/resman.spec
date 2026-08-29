@@ -10,7 +10,7 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.30.2
+Version: 1.30.4
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -59,8 +59,9 @@ v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
 v1.30.0: audited enforcement semantics, secure persistence, stateless MCP and release gates.
 v1.30.1: single-outcome configuration reload reporting without false error diagnostics.
 v1.30.2: measured CPU-load attribution before suppressing enforcement.
+v1.30.4: authoritative systemd readiness and isolated packaged-service validation.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.2.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.4.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -263,6 +264,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.4-1
+- FIX: notify systemd only after successful daemon bootstrap
+- FIX: make systemctl start fail synchronously for permanent startup rejection
+- TEST: quiesce packaged daemons before mutating restart-required configuration
+
 * Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.2-1
 - FIX: attribute system load before suppressing CPU enforcement
 - FIX: preserve threshold-duration progress during temporary suppression

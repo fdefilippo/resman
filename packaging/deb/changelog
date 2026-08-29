@@ -1,3 +1,11 @@
+resman (1.30.4-1) stable; urgency=medium
+
+  * Wait for explicit systemd readiness before reporting a successful start.
+  * Make permanently rejected startup fail synchronously through systemctl.
+  * Quiesce the installed daemon before real-host scenarios mutate static settings.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 15:09:47 +0200
+
 resman (1.30.2-1) stable; urgency=medium
 
   * Attribute high system load before suppressing CPU enforcement.
