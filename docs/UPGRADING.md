@@ -380,6 +380,13 @@ limited UID is constrained. A workload deliberately sharing the host PID namespa
 outside this protection and requires explicit exclusion until container-aware policy
 is available.
 
+Because observation remains UID-wide, a refused nested workload still contributes to
+activation and release decisions. For a mixed UID it can keep host processes limited
+while the nested workload runs, even though that restriction cannot reduce the nested
+workload's usage. Correlate the bounded `pid_namespace_boundary` warning, which names
+the UID and skip counts, with active-limit state. The Prometheus ingress-skip counter
+shows the host-level trend but intentionally carries no UID label.
+
 ### Limit-hook payloads and completion change
 
 **Visible change.** Webhook/script payload field `cpu_usage` becomes

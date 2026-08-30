@@ -48,6 +48,16 @@ or unreadable PID namespace is skipped, logged once per user operation, and coun
 without removing the process from observation or decision accounting. This guarantee
 requires resman to run on the host, or with the documented host PID namespace. Restore
 and recovery bypass the ingress guard because they remove an existing constraint.
+.IP
+Because decision accounting remains UID-wide, a refused nested workload can keep a
+mixed UID above the release threshold. Host-namespace processes already controlled by
+resman then remain constrained until total UID usage falls, even though their limit
+cannot reduce the nested workload's consumption. The
+.B pid_namespace_boundary
+warning identifies the UID and bounded skip counts; correlate it with active-limit
+state. The host-level
+.B resman_cgroup_ingress_skipped_total
+counter reports how often ingress was refused but deliberately has no UID label.
 .IP \(bu
 Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
 .IP \(bu

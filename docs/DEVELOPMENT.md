@@ -190,6 +190,12 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   an error fallback that moves the process anyway. Observation and decision accounting
   remain unchanged. Restore and recovery are exempt because they remove an existing
   ResMan constraint instead of acquiring a new process.
+- Because observation remains UID-wide, a nested workload refused at ingress still
+  contributes to activation and release inputs. If it keeps a mixed UID above the
+  release threshold, host-namespace processes already acquired by ResMan remain
+  constrained until that total usage falls. This is a deliberate conservative policy,
+  not evidence that the nested workload was constrained. Operator documentation
+  **MUST** identify the bounded ingress-skip warning and counter as the diagnostic.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
@@ -210,6 +216,10 @@ A rootful Podman process was observed being moved out of its runtime-owned
 runtime scope disappeared while Podman still reported the container running, and
 shutdown could restore the process only to a ResMan recovery leaf. PID-namespace
 ownership is therefore an ingress invariant, not a container-name heuristic.
+The same unchanged accounting means a dominant nested workload can prolong a mixed
+UID's active limit even though ResMan deliberately cannot reduce that workload's use.
+The per-operation warning identifies the UID and bounded skip counts; the Prometheus
+counter exposes the host-level trend without unbounded identity labels.
 
 *Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d*
 

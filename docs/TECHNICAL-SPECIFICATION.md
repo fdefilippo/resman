@@ -387,6 +387,13 @@ cgroup membership.
   written. Mismatched or unreadable namespace entries are skipped without changing
   observation or decision aggregation. Restore and recovery deliberately bypass this
   guard because they remove an existing ResMan constraint.
+- Keeping decision aggregation unchanged is conservative but asymmetric. A nested
+  process that ResMan refuses to acquire still contributes to its host UID's CPU, RAM,
+  and I/O totals. If that workload keeps a mixed UID above the release threshold,
+  host-namespace processes already in ResMan cgroups remain constrained even though
+  their restriction cannot reduce the nested workload's usage. The bounded
+  `pid_namespace_boundary` warning identifies the UID and skip counts;
+  `resman_cgroup_ingress_skipped_total` exposes the host-level occurrence trend.
 
 **Procfs decision coverage:**
 - Executable identity and I/O decision inputs carry explicit per-scan coverage.
