@@ -94,6 +94,7 @@ case "$scenario" in
 	service-start-stop|service-reload-lifecycle|service-fatal-config) scenario_family=package ;;
 	prometheus-scrape|mcp-https-endtoend) scenario_family=package ;;
 	prometheus-user-series-lifecycle) scenario_family=package ;;
+	pid-namespace-mixed-ingress|pid-namespace-container-only) scenario_family=package ;;
 	blackout-timeframe|metrics-database-lifecycle) scenario_family=package ;;
 	multi-user-enforcement|shutdown-restoration-under-load) scenario_family=package ;;
 	limit-hook-delivery) scenario_family=package ;;

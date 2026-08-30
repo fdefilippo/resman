@@ -66,6 +66,7 @@ config_saved=0
 tls_generated=0
 hook_installed=0
 load_pids=()
+container_names=()
 tls_snapshot=
 managed_cgroup_root=/sys/fs/cgroup/resman
 initial_active=
@@ -123,6 +124,11 @@ finish() {
 	if declare -F stop_user_load >/dev/null; then
 		stop_user_load
 	fi
+	local container
+	for container in "${container_names[@]:-}"; do
+		[[ -n $container ]] || continue
+		podman rm -f "$container" >>"$evidence_dir/cleanup.log" 2>&1 || cleanup_status=FAIL-container-cleanup
+	done
 	if [[ $hook_installed -eq 1 ]]; then
 		rm -f /usr/local/bin/resman-functional-hook /var/lib/resman/functional-hook.env \
 			>>"$evidence_dir/cleanup.log" 2>&1
@@ -628,6 +634,46 @@ scrape_metrics() {
 	[[ -s $outfile ]] || fail "the metrics endpoint returned an empty body"
 }
 
+# start_nested_namespace_load runs a CPU-burning workload for an eligible host
+# UID inside a rootful Podman container. The process is indistinguishable from a
+# host workload by UID alone, which is precisely the condition resman-54d
+# guards: it is a candidate for the same UID in a foreign PID namespace.
+start_nested_namespace_load() {
+	local user=$1 name=$2 uid image
+	uid=$(id -u "$user")
+	image=$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -v '^<none>' | head -1)
+	[[ -n $image ]] || return 1
+	local workers=${3:-1}
+	container_names+=("$name")
+	podman run -d --rm --name "$name" --user "$uid" "$image" \
+		sh -c "i=0; while [ \$i -lt $workers ]; do (while :; do :; done) & i=\$((i+1)); done; wait" \
+		>/dev/null 2>&1 || return 1
+}
+
+# nested_load_host_pid reports the host PID of a nested workload, which is what
+# ResMan sees through host procfs.
+nested_load_host_pid() {
+	podman inspect "$1" --format '{{.State.Pid}}' 2>/dev/null
+}
+
+# pid_namespace_identity prints the typed device:inode pair ResMan compares.
+pid_namespace_identity() {
+	stat -L -c '%d:%i' "/proc/$1/ns/pid" 2>/dev/null
+}
+
+# cgroup_of_pid prints the unified cgroup path of one PID.
+cgroup_of_pid() {
+	cut -d: -f3 "/proc/$1/cgroup" 2>/dev/null
+}
+
+# ingress_skipped_total reads the bounded skip counter for one closed reason.
+ingress_skipped_total() {
+	local scrape=$1 reason=$2
+	awk -v want="reason=\"$reason\"" '
+		/^resman_cgroup_ingress_skipped_total\{/ && index($0, want) { print $NF }
+	' "$scrape" | tail -1
+}
+
 scenario_prometheus_scrape() {
 	local interval log_marker port=1974 status
 	write_scenario_configuration
@@ -756,6 +802,177 @@ scenario_prometheus_user_series_lifecycle() {
 
 	result=PASS
 	detail="the per-user cgroup gauges followed one account onto its enforcing path and were withdrawn from it on release"
+}
+
+# managed_cgroup_holds_pid reports whether one PID sits anywhere inside a
+# ResMan-owned cgroup. It reads cgroup.procs rather than testing the file size,
+# because cgroupfs reports every control file as empty.
+managed_cgroup_holds_pid() {
+	local pid=$1 procs
+	while IFS= read -r procs; do
+		[[ -r $procs ]] || continue
+		grep -qx "$pid" "$procs" && return 0
+	done < <(find "$managed_cgroup_root" -name cgroup.procs 2>/dev/null)
+	return 1
+}
+
+# configure_ingress_observability enables the exporter the two PID-namespace
+# scenarios read their evidence from.
+configure_ingress_observability() {
+	local port=$1
+	sed -i \
+		-e 's|^ENABLE_PROMETHEUS=.*|ENABLE_PROMETHEUS=true|' \
+		-e 's|^PROMETHEUS_METRICS_BIND_HOST=.*|PROMETHEUS_METRICS_BIND_HOST=127.0.0.1|' \
+		-e "s|^PROMETHEUS_METRICS_BIND_PORT=.*|PROMETHEUS_METRICS_BIND_PORT=$port|" \
+		"$config_path"
+	grep -q '^ENABLE_PROMETHEUS=true' "$config_path" \
+		|| fail "the scenario configuration does not enable the exporter"
+}
+
+# scenario_pid_namespace_mixed_ingress proves resman-54d on real hardware: one
+# eligible UID owns a host workload and a workload in a container's PID
+# namespace, and only the host workload may enter a ResMan cgroup.
+scenario_pid_namespace_mixed_ingress() {
+	local log_marker interval port=1974 user=resman-t1 uid
+	local container=resman-54d-mixed nested_pid host_ns nested_ns nested_cgroup_before nested_cgroup_after
+	uid=$(id -u "$user")
+	write_scenario_configuration
+	configure_enforcement
+	configure_ingress_observability "$port"
+
+	interval=$(observed_polling_interval)
+	log_marker=$(daemon_log_lines)
+	systemctl start resman || fail "systemctl start failed for the mixed-ingress scenario"
+	wait_for_daemon_log 'Control cycle completed' 1 120 "$log_marker" >/dev/null \
+		|| fail "the daemon did not reach steady state before load was applied"
+
+	start_nested_namespace_load "$user" "$container" \
+		|| fail "could not start a nested-namespace workload for $user"
+	nested_pid=$(nested_load_host_pid "$container")
+	[[ -n $nested_pid && $nested_pid != 0 ]] || fail "the nested workload reported no host PID"
+	host_ns=$(pid_namespace_identity "$$")
+	nested_ns=$(pid_namespace_identity "$nested_pid")
+	nested_cgroup_before=$(cgroup_of_pid "$nested_pid")
+	printf 'host_ns=%s\nnested_pid=%s\nnested_ns=%s\nnested_cgroup=%s\nnested_host_uid=%s\n' \
+		"$host_ns" "$nested_pid" "$nested_ns" "$nested_cgroup_before" \
+		"$(stat -c %u "/proc/$nested_pid" 2>/dev/null)" >"$evidence_dir/namespaces.txt"
+	[[ -n $nested_ns && $nested_ns != "$host_ns" ]] \
+		|| fail "the nested workload shares the ResMan PID namespace, so it cannot exercise the guard"
+	[[ $(stat -c %u "/proc/$nested_pid" 2>/dev/null) == "$uid" ]] \
+		|| fail "the nested workload does not run as the eligible host UID"
+
+	saturate_host "$user" 2
+	wait_for_limited_cgroup "$uid" 360 \
+		|| fail "UID $uid was never moved into a managed cgroup under sustained load"
+
+	# The whole point of the guard: same UID, same eligibility, different PID
+	# namespace, and only the host processes may cross into ResMan ownership.
+	if managed_cgroup_holds_pid "$nested_pid"; then
+		find "$managed_cgroup_root" -name cgroup.procs -exec sh -c 'printf "%s: " "$1"; cat "$1"' _ {} \; \
+			>"$evidence_dir/managed-membership.txt" 2>&1
+		fail "the nested-namespace process entered a ResMan cgroup"
+	fi
+	nested_cgroup_after=$(cgroup_of_pid "$nested_pid")
+	[[ $nested_cgroup_after == "$nested_cgroup_before" ]] \
+		|| fail "the nested workload was moved out of its runtime-owned cgroup"
+	[[ -n $(cat "$(limited_cgroup_for "$uid")/cgroup.procs" 2>/dev/null) ]] \
+		|| fail "no host process entered the managed cgroup, so the scenario proved nothing"
+
+	daemon_log_since "$log_marker" | grep -F 'Skipped process ingress outside the ResMan PID namespace boundary' \
+		>"$evidence_dir/ingress-warning.txt" || true
+	[[ -s $evidence_dir/ingress-warning.txt ]] \
+		|| fail "the daemon logged no aggregated PID-namespace ingress warning"
+	grep -q 'pid_namespace_mismatch_count=[1-9]' "$evidence_dir/ingress-warning.txt" \
+		|| fail "the ingress warning reported no PID-namespace mismatch"
+
+	scrape_metrics "$port" "$evidence_dir/metrics-mixed.prom"
+	local skipped
+	skipped=$(ingress_skipped_total "$evidence_dir/metrics-mixed.prom" pid_namespace_mismatch)
+	printf 'pid_namespace_mismatch=%s\n' "${skipped:-<assente>}" >"$evidence_dir/ingress-counter.txt"
+	[[ -n $skipped ]] || fail "the exporter published no bounded ingress skip counter"
+	awk -v v="$skipped" 'BEGIN { exit !(v + 0 > 0) }' \
+		|| fail "the ingress skip counter did not record the refused nested candidate"
+
+	# The nested workload also counts toward this UID's measured usage, so the
+	# account cannot fall below the threshold while the container still runs.
+	# Releasing is a property of the host processes, so remove both loads.
+	podman rm -f "$container" >/dev/null 2>&1 || true
+	stop_user_load
+	if ! wait_for_released_cgroup "$uid" 420; then
+		daemon_log_since "$log_marker" | tail -60 >"$evidence_dir/decision-trail.txt"
+		fail "UID $uid was still enforced long after both its host and nested loads stopped"
+	fi
+	systemctl stop resman || fail "systemctl stop failed after the mixed-ingress scenario"
+	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
+
+	result=PASS
+	detail="one UID owned a host and a nested-namespace workload; only the host processes entered ResMan ownership and the refusal was reported once with a bounded counter"
+}
+
+# scenario_pid_namespace_container_only proves the no-op is honest: when every
+# candidate for an eligible UID lives in a foreign PID namespace, ResMan must
+# not report enforcement it did not perform.
+scenario_pid_namespace_container_only() {
+	local log_marker interval port=1974 user=resman-t2 uid
+	local container=resman-54d-only nested_pid nested_cgroup_before nested_cgroup_after cycles
+	uid=$(id -u "$user")
+	write_scenario_configuration
+	configure_enforcement
+	configure_ingress_observability "$port"
+
+	interval=$(observed_polling_interval)
+	log_marker=$(daemon_log_lines)
+	systemctl start resman || fail "systemctl start failed for the container-only scenario"
+	wait_for_daemon_log 'Control cycle completed' 1 120 "$log_marker" >/dev/null \
+		|| fail "the daemon did not reach steady state before load was applied"
+
+	start_nested_namespace_load "$user" "$container" 3 \
+		|| fail "could not start a nested-namespace workload for $user"
+	nested_pid=$(nested_load_host_pid "$container")
+	[[ -n $nested_pid && $nested_pid != 0 ]] || fail "the nested workload reported no host PID"
+	nested_cgroup_before=$(cgroup_of_pid "$nested_pid")
+
+	# The refusal itself is the precondition of this scenario. Waiting for a
+	# number of cycles would let it pass while the account never crossed the
+	# threshold, in which case "no active enforcement" would be true because
+	# nothing was ever attempted. Wait for the refusal, or fail.
+	wait_for_daemon_log 'Skipped process ingress outside the ResMan PID namespace boundary' 1 \
+		$(( interval * 8 + 240 )) "$log_marker" >/dev/null \
+		|| fail "the daemon never attempted and refused ingress, so the no-op proves nothing"
+
+	cycles=$evidence_dir/control-cycles.txt
+	daemon_log_since "$log_marker" | grep -F 'Control cycle completed' >"$cycles" || true
+	[[ -s $cycles ]] || fail "no control cycle was recorded"
+	daemon_log_since "$log_marker" | grep -F 'Skipped process ingress' >"$evidence_dir/ingress-warning.txt" || true
+	grep -q 'pid_namespace_mismatch_count=[1-9]' "$evidence_dir/ingress-warning.txt" \
+		|| fail "the refusal reported no PID-namespace mismatch"
+
+	if managed_cgroup_holds_pid "$nested_pid"; then
+		fail "the only candidate lived in a foreign PID namespace yet entered a ResMan cgroup"
+	fi
+	nested_cgroup_after=$(cgroup_of_pid "$nested_pid")
+	[[ $nested_cgroup_after == "$nested_cgroup_before" ]] \
+		|| fail "the nested workload was moved out of its runtime-owned cgroup"
+	grep -q 'active_limited_users=0' "$cycles" \
+		|| fail "the daemon reported active limited users while every candidate was refused"
+
+	scrape_metrics "$port" "$evidence_dir/metrics-container-only.prom"
+	grep -E '^resman_actively_limited_users_count' "$evidence_dir/metrics-container-only.prom" \
+		>"$evidence_dir/active-count.txt" || true
+	awk '{ if ($NF + 0 != 0) exit 1 }' "$evidence_dir/active-count.txt" \
+		|| fail "the exporter reported active enforcement that never happened"
+	local skipped
+	skipped=$(ingress_skipped_total "$evidence_dir/metrics-container-only.prom" pid_namespace_mismatch)
+	printf 'pid_namespace_mismatch=%s\n' "${skipped:-<assente>}" >"$evidence_dir/ingress-counter.txt"
+	awk -v v="${skipped:-0}" 'BEGIN { exit !(v + 0 > 0) }' \
+		|| fail "the exporter published no refused-ingress count for a refusal the log recorded"
+
+	podman rm -f "$container" >/dev/null 2>&1 || true
+	systemctl stop resman || fail "systemctl stop failed after the container-only scenario"
+	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
+
+	result=PASS
+	detail="every candidate for the UID lived in a foreign PID namespace; nothing entered ResMan ownership and no active enforcement was reported"
 }
 
 # scenario_mcp_https_endtoend proves the MCP endpoint serves only over HTTPS with
@@ -1124,6 +1341,8 @@ case "$scenario" in
 	service-fatal-config) scenario_service_fatal_config ;;
 	prometheus-scrape) scenario_prometheus_scrape ;;
 	prometheus-user-series-lifecycle) scenario_prometheus_user_series_lifecycle ;;
+	pid-namespace-mixed-ingress) scenario_pid_namespace_mixed_ingress ;;
+	pid-namespace-container-only) scenario_pid_namespace_container_only ;;
 	mcp-https-endtoend) scenario_mcp_https_endtoend ;;
 	blackout-timeframe) scenario_blackout_timeframe ;;
 	metrics-database-lifecycle) scenario_metrics_database_lifecycle ;;
