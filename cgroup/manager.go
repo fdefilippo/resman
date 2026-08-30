@@ -54,8 +54,10 @@ type Manager struct {
 	observeRemovalRetry func()
 	readBlockIOStats    func(string) (blockIOCounters, error)
 	readCgroupFile      func(string) ([]byte, error)
+	readPIDNamespace    func(int) (pidNamespaceIdentity, error)
 	moveUserProcesses   func(context.Context, int) error
 	operationTimeout    func() time.Duration
+	pidNamespace        pidNamespaceIdentity
 
 	// Cached verification state.
 	cgroupRootWritable         bool
@@ -94,6 +96,10 @@ func IsRequiredCapabilityError(err error) bool {
 // NewManager creates a cgroup v2 manager.
 func NewManager(cfg *config.Config) (*Manager, error) {
 	logger := logging.GetLogger()
+	pidNamespace, err := readPIDNamespaceIdentity("/proc/self/ns/pid")
+	if err != nil {
+		return nil, fmt.Errorf("failed to identify the ResMan PID namespace at /proc/self/ns/pid: %w", err)
+	}
 
 	mgr := &Manager{
 		cfg:                 cfg,
@@ -114,8 +120,12 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		},
 		readBlockIOStats: readBlockIOCounters,
 		readCgroupFile:   os.ReadFile,
+		pidNamespace:     pidNamespace,
 	}
-	mgr.moveUserProcesses = mgr.moveAllUserProcesses
+	mgr.moveUserProcesses = func(ctx context.Context, uid int) error {
+		_, err := mgr.moveAllUserProcesses(ctx, uid)
+		return err
+	}
 	mgr.operationTimeout = func() time.Duration {
 		return time.Duration(mgr.getConfig().GetCgroupOperationTimeout()) * time.Second
 	}

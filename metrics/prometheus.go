@@ -34,6 +34,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
@@ -156,6 +157,7 @@ type PrometheusExporter struct {
 	psiEventsTotal            *prometheus.CounterVec
 	psiLastEventTimestamp     *prometheus.GaugeVec
 	errorsTotal               *prometheus.CounterVec
+	cgroupIngressSkipped      *prometheus.CounterVec
 	limitHookExecutions       *prometheus.CounterVec
 
 	// Histograms record operation durations.
@@ -756,6 +758,16 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"component", "error_type"},
 	)
 
+	exp.cgroupIngressSkipped = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "cgroup_ingress_skipped_total",
+			Help:        "Total process ingress attempts skipped at the ResMan PID namespace boundary",
+			ConstLabels: staticLabels,
+		},
+		[]string{"reason"},
+	)
+
 	exp.limitHookExecutions = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -1223,6 +1235,19 @@ func (exp *PrometheusExporter) RecordError(component, errorType string) {
 		return
 	}
 	exp.errorsTotal.WithLabelValues(component, errorType).Inc()
+}
+
+// RecordCgroupIngressSkips records bounded PID namespace guard outcomes.
+func (exp *PrometheusExporter) RecordCgroupIngressSkips(result cgroup.ProcessMoveResult) {
+	if exp == nil {
+		return
+	}
+	if result.PIDNamespaceMismatches > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.PIDNamespaceMismatch)).Add(float64(result.PIDNamespaceMismatches))
+	}
+	if result.PIDNamespaceUnavailable > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.PIDNamespaceUnavailable)).Add(float64(result.PIDNamespaceUnavailable))
+	}
 }
 
 // RecordLimitHookExecution records one terminal hook outcome using bounded labels.

@@ -174,14 +174,14 @@ type CgroupManager interface {
 	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
 	RemoveIOLimit(uid int) error
 	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
-	EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, error)
+	EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error)
 	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
 	GetPSIStats(uid int) (cgroup.PSIStats, error)
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 	CleanupUserCgroup(uid int) error
-	MoveProcessToCgroup(pid int, uid int) error
-	MoveAllUserProcesses(uid int) error
-	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
+	MoveProcessToCgroup(pid int, uid int) (cgroup.ProcessMoveResult, error)
+	MoveAllUserProcesses(uid int) (cgroup.ProcessMoveResult, error)
+	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) (cgroup.ProcessMoveResult, error)
 	ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error)
 	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
 	CreateSharedCgroup() (string, error)
@@ -201,6 +201,7 @@ type PrometheusExporter interface {
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
+	RecordCgroupIngressSkips(result cgroup.ProcessMoveResult)
 	RecordLimitHookExecution(hookType resmanmetrics.LimitHookType, outcome resmanmetrics.LimitHookOutcome)
 	Start(ctx context.Context) error
 	Stop() error

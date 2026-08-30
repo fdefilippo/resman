@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
@@ -708,6 +709,50 @@ func TestRecordErrorPublishesOneBoundedSeries(t *testing.T) {
 		return
 	}
 	t.Fatal("resman_errors_total metric family not found")
+}
+
+func TestRecordCgroupIngressSkipsPublishesOnlyBoundedReasons(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{
+		PIDNamespaceMismatches:  2,
+		PIDNamespaceUnavailable: 1,
+	})
+	exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{PIDNamespaceMismatches: 3})
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "resman_cgroup_ingress_skipped_total" {
+			continue
+		}
+		if len(family.Metric) != 2 {
+			t.Fatalf("resman_cgroup_ingress_skipped_total series = %d, want 2", len(family.Metric))
+		}
+		values := make(map[string]float64, len(family.Metric))
+		for _, metric := range family.Metric {
+			if len(metric.Label) != 3 {
+				t.Fatalf("metric labels = %+v, want reason plus two static labels", metric.Label)
+			}
+			for _, label := range metric.Label {
+				if label.GetName() == "reason" {
+					values[label.GetValue()] = metric.Counter.GetValue()
+				}
+			}
+		}
+		if values[string(cgroup.PIDNamespaceMismatch)] != 5 || values[string(cgroup.PIDNamespaceUnavailable)] != 1 {
+			t.Fatalf("bounded ingress skip values = %v, want mismatch=5 unavailable=1", values)
+		}
+		return
+	}
+	t.Fatal("resman_cgroup_ingress_skipped_total metric family not found")
 }
 
 func TestOperationalMetricsPublishTruthfulBoundedSeries(t *testing.T) {

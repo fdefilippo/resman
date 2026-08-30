@@ -183,6 +183,13 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   move back only to an origin captured for the same PID start time. If that origin is
   unavailable, reconciliation fails visibly and leaves the process constrained; it
   **MUST NOT** guess an untracked destination or clear the user's active state.
+- Cgroup ingress **MUST NOT** cross the daemon's PID namespace boundary. The daemon
+  caches the device and inode of `/proc/self/ns/pid`, filters candidates against that
+  identity, and verifies it again immediately before every write to a ResMan-owned
+  `cgroup.procs`. A mismatch or unreadable namespace is a bounded, visible skip, not
+  an error fallback that moves the process anyway. Observation and decision accounting
+  remain unchanged. Restore and recovery are exempt because they remove an existing
+  ResMan constraint instead of acquiring a new process.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
@@ -198,7 +205,13 @@ the controlled cgroup indefinitely, and a reload that excluded a process left it
 constrained under stale policy. Bounded per-cycle reconciliation now makes membership
 eventually consistent and uses captured start times to avoid acting on reused PIDs.
 
-*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3*
+A rootful Podman process was observed being moved out of its runtime-owned
+`machine.slice/libpod-*.scope/container` leaf into `resman/limited/user_<uid>`. The
+runtime scope disappeared while Podman still reported the container running, and
+shutdown could restore the process only to a ResMan recovery leaf. PID-namespace
+ownership is therefore an ingress invariant, not a container-name heuristic.
+
+*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d*
 
 ## Rule 4 — Every configured decision dimension must be evaluated
 

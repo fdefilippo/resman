@@ -15,6 +15,7 @@ type ProcessMembershipResult struct {
 	MovedIn          int
 	RestoredExcluded int
 	SkippedReused    int
+	Ingress          ProcessMoveResult
 }
 
 type processMembershipCandidate struct {
@@ -86,6 +87,8 @@ func (m *Manager) reconcileUserProcessMembershipAt(
 		if !candidate.selected {
 			outgoing = append(outgoing, pid)
 			outgoingStarts[pid] = candidate.startTime
+		} else {
+			result.Ingress.AlreadyPresent++
 		}
 	}
 
@@ -123,13 +126,14 @@ func (m *Manager) reconcileUserProcessMembershipAt(
 	)
 	result.RestoredExcluded = restored
 
-	moved, moveErrors, moveReused, moveErr := m.moveProcessBatchExpected(
+	moved, ingress, moveErrors, moveReused, moveErr := m.moveProcessBatchExpected(
 		incoming,
 		uid,
 		target,
 		incomingStarts,
 	)
 	result.MovedIn = len(moved)
+	result.Ingress.add(ingress)
 	reused := make(map[int]bool, len(restoreReused)+len(moveReused))
 	for pid := range restoreReused {
 		reused[pid] = true

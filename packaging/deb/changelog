@@ -1,3 +1,10 @@
+resman (1.30.8-1) stable; urgency=medium
+
+  * Prevent UID enforcement from acquiring processes in nested PID namespaces.
+  * Report bounded cgroup-ingress skips in logs and Prometheus metrics.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sun, 30 Aug 2026 03:15:00 +0200
+
 resman (1.30.7-2) stable; urgency=medium
 
   * Schedule weekly generated-input fuzzing with manual dispatch.

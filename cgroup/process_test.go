@@ -66,7 +66,10 @@ func TestMoveAllUserProcessesHonorsCancellationAfterEmptyDiscovery(t *testing.T)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
-	go func() { result <- manager.moveAllUserProcesses(ctx, 1000) }()
+	go func() {
+		_, err := manager.moveAllUserProcesses(ctx, 1000)
+		result <- err
+	}()
 	<-started
 	cancel()
 	close(release)

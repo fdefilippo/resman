@@ -150,9 +150,10 @@ func (m *Manager) initializeBlockIOAccounting(uid int) (blockIOAccountingState, 
 // preserving a monotonic logical io.stat counter across placement changes.
 // An empty sharedPath selects the standalone observation cgroup; a non-empty
 // path selects that shared hierarchy's per-user child.
-func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, error) {
+func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	if uid == 0 {
-		return "", fmt.Errorf("refusing to place root processes in a managed cgroup")
+		return "", result, fmt.Errorf("refusing to place root processes in a managed cgroup")
 	}
 
 	desiredPath := m.getUserCgroupPath(uid)
@@ -162,30 +163,34 @@ func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota str
 
 	currentPath, exists := m.getCgroupPath(uid)
 	if exists && filepath.Clean(currentPath) == filepath.Clean(desiredPath) {
-		if _, err := m.ReconcileUserProcessMembership(uid, sharedPath, normalQuota); err != nil {
-			return "", err
+		reconcileResult, err := m.ReconcileUserProcessMembership(uid, sharedPath, normalQuota)
+		result = reconcileResult.Ingress
+		if err != nil {
+			return "", result, err
 		}
 		if err := m.cleanupAlternateUserCgroup(uid, desiredPath); err != nil {
-			return "", err
+			return "", result, err
 		}
-		return desiredPath, nil
+		return desiredPath, result, nil
 	}
 	if !exists {
-		if err := m.createAndPopulateUserCgroup(uid, sharedPath, desiredPath); err != nil {
-			return "", err
+		result, err := m.createAndPopulateUserCgroup(uid, sharedPath, desiredPath)
+		if err != nil {
+			return "", result, err
 		}
-		return desiredPath, nil
+		return desiredPath, result, nil
 	}
 
-	if err := m.transitionUserCgroup(uid, currentPath, desiredPath, normalQuota); err != nil {
-		return "", err
+	result, err := m.transitionUserCgroup(uid, currentPath, desiredPath, normalQuota)
+	if err != nil {
+		return "", result, err
 	}
-	return desiredPath, nil
+	return desiredPath, result, nil
 }
 
-func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath string) (retErr error) {
+func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath string) (result ProcessMoveResult, retErr error) {
 	if err := m.createUserCgroupDirectory(uid, desiredPath); err != nil {
-		return err
+		return result, err
 	}
 	defer func() {
 		if retErr == nil {
@@ -197,23 +202,27 @@ func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath s
 
 	initial, err := m.readManagedBlockIOCounters(desiredPath)
 	if err != nil {
-		return fmt.Errorf("read initial block I/O counters for UID %d: %w", uid, err)
+		return result, fmt.Errorf("read initial block I/O counters for UID %d: %w", uid, err)
 	}
 	if err := m.trackCgroupPath(uid, desiredPath); err != nil {
-		return fmt.Errorf("track cgroup placement for UID %d: %w", uid, err)
+		return result, fmt.Errorf("track cgroup placement for UID %d: %w", uid, err)
 	}
 	m.blockIOMu.Lock()
 	m.blockIOAccounting[uid] = blockIOAccountingState{path: desiredPath, base: initial}
 	m.blockIOMu.Unlock()
 
 	if sharedPath == "" {
-		if err := m.MoveAllUserProcesses(uid); err != nil {
-			return fmt.Errorf("populate standalone observation cgroup for UID %d: %w", uid, err)
+		result, err = m.MoveAllUserProcesses(uid)
+		if err != nil {
+			return result, fmt.Errorf("populate standalone observation cgroup for UID %d: %w", uid, err)
 		}
-	} else if err := m.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
-		return fmt.Errorf("populate shared cgroup for UID %d: %w", uid, err)
+	} else {
+		result, err = m.MoveAllUserProcessesToSharedCgroup(uid, sharedPath)
+		if err != nil {
+			return result, fmt.Errorf("populate shared cgroup for UID %d: %w", uid, err)
+		}
 	}
-	return nil
+	return result, nil
 }
 
 func (m *Manager) createUserCgroupDirectory(uid int, path string) error {
@@ -229,9 +238,9 @@ func (m *Manager) createUserCgroupDirectory(uid int, path string) error {
 	return nil
 }
 
-func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota string) (retErr error) {
+func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota string) (result ProcessMoveResult, retErr error) {
 	if err := m.createUserCgroupDirectory(uid, newPath); err != nil {
-		return err
+		return result, err
 	}
 	cleanupNew := true
 	defer func() {
@@ -241,27 +250,27 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 	}()
 
 	if _, err := m.reconcileUserProcessMembershipAt(uid, oldPath, normalQuota); err != nil {
-		return fmt.Errorf("reconcile source placement for UID %d: %w", uid, err)
+		return result, fmt.Errorf("reconcile source placement for UID %d: %w", uid, err)
 	}
 
 	accounting, err := m.initializeBlockIOAccounting(uid)
 	if err != nil {
-		return fmt.Errorf("initialize source block I/O accounting for UID %d: %w", uid, err)
+		return result, fmt.Errorf("initialize source block I/O accounting for UID %d: %w", uid, err)
 	}
 	if filepath.Clean(accounting.path) != filepath.Clean(oldPath) {
-		return fmt.Errorf("tracked block I/O source for UID %d is %s, expected %s", uid, accounting.path, oldPath)
+		return result, fmt.Errorf("tracked block I/O source for UID %d is %s, expected %s", uid, accounting.path, oldPath)
 	}
 	newBase, err := m.readManagedBlockIOCounters(newPath)
 	if err != nil {
-		return fmt.Errorf("read destination block I/O counters for UID %d: %w", uid, err)
+		return result, fmt.Errorf("read destination block I/O counters for UID %d: %w", uid, err)
 	}
 	oldPIDs, err := m.readPidsFromFile(filepath.Join(oldPath, "cgroup.procs"))
 	if err != nil {
-		return fmt.Errorf("read source cgroup processes for UID %d: %w", uid, err)
+		return result, fmt.Errorf("read source cgroup processes for UID %d: %w", uid, err)
 	}
-	moved, moveErrors, err := m.moveProcessBatch(oldPIDs, uid, newPath)
+	moved, result, moveErrors, err := m.moveProcessBatch(oldPIDs, uid, newPath)
 	if err != nil {
-		return fmt.Errorf("move UID %d between managed cgroups: %w", uid, err)
+		return result, fmt.Errorf("move UID %d between managed cgroups: %w", uid, err)
 	}
 	if len(moveErrors) > 0 {
 		var errs []error
@@ -269,25 +278,36 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 			errs = append(errs, fmt.Errorf("move PID %d: %w", pid, moveErr))
 		}
 		errs = append(errs, m.rollbackUserCgroupTransition(uid, moved, oldPath))
-		return errors.Join(errs...)
+		return result, errors.Join(errs...)
+	}
+	if result.NamespaceSkipped() > 0 {
+		rollbackErr := m.rollbackUserCgroupTransition(uid, moved, oldPath)
+		return result, errors.Join(
+			fmt.Errorf(
+				"cannot complete cgroup placement transition for UID %d: %d processes were outside the ResMan PID namespace boundary",
+				uid,
+				result.NamespaceSkipped(),
+			),
+			rollbackErr,
+		)
 	}
 	oldFinal, err := m.readManagedBlockIOCounters(oldPath)
 	if err != nil {
-		return errors.Join(
+		return result, errors.Join(
 			fmt.Errorf("read final source block I/O counters for UID %d: %w", uid, err),
 			m.rollbackUserCgroupTransition(uid, moved, oldPath),
 		)
 	}
 	logicalFinal, err := accounting.offset.add(oldFinal.delta(accounting.base))
 	if err != nil {
-		return errors.Join(
+		return result, errors.Join(
 			fmt.Errorf("calculate final logical block I/O counters for UID %d: %w", uid, err),
 			m.rollbackUserCgroupTransition(uid, moved, oldPath),
 		)
 	}
 
 	if err := m.trackCgroupPath(uid, newPath); err != nil {
-		return errors.Join(
+		return result, errors.Join(
 			fmt.Errorf("publish cgroup placement transition for UID %d: %w", uid, err),
 			m.rollbackUserCgroupTransition(uid, moved, oldPath),
 		)
@@ -308,7 +328,7 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 			"error", err,
 		)
 	}
-	return nil
+	return result, nil
 }
 
 func (m *Manager) cleanupAlternateUserCgroup(uid int, desiredPath string) error {
@@ -343,7 +363,7 @@ func (m *Manager) cleanupAlternateUserCgroup(uid int, desiredPath string) error 
 
 func (m *Manager) rollbackUserCgroupTransition(uid int, moved []int, oldPath string) error {
 	if len(moved) > 0 {
-		_, moveErrors, err := m.moveProcessBatch(moved, uid, oldPath)
+		_, _, moveErrors, err := m.moveProcessBatch(moved, uid, oldPath)
 		if err != nil {
 			return fmt.Errorf("rollback process placement for UID %d: %w", uid, err)
 		}

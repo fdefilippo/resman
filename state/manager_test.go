@@ -171,8 +171,8 @@ func (m *mockCgroupManager) RemoveIOLimit(uid int) error { return nil }
 func (m *mockCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
 	return 0, 0, 0, 0, nil
 }
-func (m *mockCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, error) {
-	return sharedPath, nil
+func (m *mockCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error) {
+	return sharedPath, cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
 }
 func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
 	return "", "", 0, 0, 0, 0, 0, nil
@@ -183,11 +183,15 @@ func (m *mockCgroupManager) GetPSIStats(uid int) (cgroup.PSIStats, error) {
 func (m *mockCgroupManager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
 	return nil
 }
-func (m *mockCgroupManager) CleanupUserCgroup(uid int) error            { return nil }
-func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) error { return nil }
-func (m *mockCgroupManager) MoveAllUserProcesses(uid int) error         { return nil }
-func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
-	return nil
+func (m *mockCgroupManager) CleanupUserCgroup(uid int) error { return nil }
+func (m *mockCgroupManager) MoveProcessToCgroup(pid int, uid int) (cgroup.ProcessMoveResult, error) {
+	return cgroup.ProcessMoveResult{Moved: 1}, nil
+}
+func (m *mockCgroupManager) MoveAllUserProcesses(uid int) (cgroup.ProcessMoveResult, error) {
+	return cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
+}
+func (m *mockCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) (cgroup.ProcessMoveResult, error) {
+	return cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
 }
 func (m *mockCgroupManager) ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error) {
 	return cgroup.ProcessMembershipResult{}, nil
@@ -206,7 +210,8 @@ func (m *mockCgroupManager) GetCreatedCgroups() []int { return nil }
 
 type moveResultCgroupManager struct {
 	mockCgroupManager
-	moveErr error
+	moveResult cgroup.ProcessMoveResult
+	moveErr    error
 }
 
 type membershipCall struct {
@@ -227,8 +232,14 @@ func (m *membershipCgroupManager) ReconcileUserProcessMembership(uid int, shared
 	return m.result, m.err
 }
 
-func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
-	return m.moveErr
+func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) (cgroup.ProcessMoveResult, error) {
+	if m.moveErr != nil {
+		return cgroup.ProcessMoveResult{}, m.moveErr
+	}
+	if m.moveResult == (cgroup.ProcessMoveResult{}) {
+		return cgroup.ProcessMoveResult{Moved: 1}, nil
+	}
+	return m.moveResult, nil
 }
 
 type resourceOnlyCgroupManager struct {
@@ -311,9 +322,9 @@ func (m *resourceOnlyCgroupManager) CreateUserCgroup(uid int) error {
 	return nil
 }
 
-func (m *resourceOnlyCgroupManager) MoveAllUserProcesses(uid int) error {
+func (m *resourceOnlyCgroupManager) MoveAllUserProcesses(uid int) (cgroup.ProcessMoveResult, error) {
 	m.movedStandalone = append(m.movedStandalone, uid)
-	return nil
+	return cgroup.ProcessMoveResult{Moved: 1}, nil
 }
 
 func (m *resourceOnlyCgroupManager) CleanupUserCgroup(uid int) error {
@@ -375,6 +386,7 @@ type mockPrometheusExporter struct {
 	userMetricCleanups         int
 	limitsActivated            int
 	limitsDeactivated          int
+	ingressSkips               []cgroup.ProcessMoveResult
 }
 
 func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
@@ -406,6 +418,12 @@ func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.errors = append(m.errors, prometheusErrorRecord{component: component, errorType: errorType})
+}
+
+func (m *mockPrometheusExporter) RecordCgroupIngressSkips(result cgroup.ProcessMoveResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ingressSkips = append(m.ingressSkips, result)
 }
 
 func (m *mockPrometheusExporter) RecordLimitHookExecution(hookType metrics.LimitHookType, outcome metrics.LimitHookOutcome) {
@@ -1604,6 +1622,69 @@ func TestActivationWithoutEligibleEnforcementReportsBoundedFailure(t *testing.T)
 	}
 }
 
+func TestActivationWithOnlyNestedNamespaceProcessesIsDegradedNoop(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroups := &moveResultCgroupManager{moveResult: cgroup.ProcessMoveResult{
+		Candidates:             1,
+		PIDNamespaceMismatches: 1,
+	}}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	err = manager.activateLimits(&SystemMetrics{
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 100},
+		CPUEligibleUsers: []int{1000},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "nested-user", EligibleForCPU: true},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no process entered the ResMan cgroup") {
+		t.Fatalf("activateLimits() error = %v, want namespace-boundary no-op", err)
+	}
+	if manager.activeUsers[1000] || manager.limitsActive {
+		t.Fatalf("nested-only enforcement reported active: user=%t aggregate=%t", manager.activeUsers[1000], manager.limitsActive)
+	}
+	if exporter.limitsActivated != 0 || len(exporter.ingressSkips) != 1 {
+		t.Fatalf("activation counter=%d ingress skip records=%+v", exporter.limitsActivated, exporter.ingressSkips)
+	}
+}
+
+func TestActivationWithHostAndNestedProcessesConfirmsOnlyMovedWork(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cgroups := &moveResultCgroupManager{moveResult: cgroup.ProcessMoveResult{
+		Candidates:             2,
+		Moved:                  1,
+		PIDNamespaceMismatches: 1,
+	}}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	err = manager.activateLimits(&SystemMetrics{
+		TotalCores:       4,
+		UserCPUUsage:     map[int]float64{1000: 100},
+		CPUEligibleUsers: []int{1000},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "mixed-user", EligibleForCPU: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("activateLimits() error = %v", err)
+	}
+	if !manager.activeUsers[1000] || !manager.limitsActive || exporter.limitsActivated != 1 {
+		t.Fatalf("mixed enforcement state: user=%t aggregate=%t activations=%d", manager.activeUsers[1000], manager.limitsActive, exporter.limitsActivated)
+	}
+	if len(exporter.ingressSkips) != 1 || exporter.ingressSkips[0].PIDNamespaceMismatches != 1 {
+		t.Fatalf("ingress skip records = %+v", exporter.ingressSkips)
+	}
+}
+
 func TestReconcileActiveProcessMembershipVisitsEachObservedTargetOnce(t *testing.T) {
 	cgroups := &membershipCgroupManager{}
 	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
@@ -2278,9 +2359,9 @@ func (m *deactivateCgroupManager) CreateUserSubCgroup(uid int, path string) (str
 	return filepath.Join(path, fmt.Sprintf("user_%d", uid)), nil
 }
 
-func (m *deactivateCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) error {
+func (m *deactivateCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, path string) (cgroup.ProcessMoveResult, error) {
 	m.movedSharedUsers = append(m.movedSharedUsers, uid)
-	return nil
+	return cgroup.ProcessMoveResult{Moved: 1}, nil
 }
 
 func (m *deactivateCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {

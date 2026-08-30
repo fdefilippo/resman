@@ -10,8 +10,8 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.30.7
-Release: 2%{?dist}
+Version: 1.30.8
+Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -62,8 +62,9 @@ v1.30.2: measured CPU-load attribution before suppressing enforcement.
 v1.30.4: authoritative systemd readiness and isolated packaged-service validation.
 v1.30.5: enforced ShellCheck coverage for every tracked shell script.
 v1.30.7: truthful cgroup telemetry, checked I/O counters and bounded fuzz gates.
+v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.7.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.8.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -266,6 +267,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sun Aug 30 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.8-1
+- FIX: prevent UID enforcement from acquiring nested PID namespace processes
+- OBSERVABILITY: report bounded cgroup-ingress skips in logs and Prometheus
+
 * Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-2
 - CI: schedule weekly generated-input fuzzing with manual dispatch
 - CI: retain fuzz logs, generated crashers and the Go fuzz cache on failure

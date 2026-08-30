@@ -381,6 +381,12 @@ cgroup membership.
   origins.
 - Origin restoration requires the same PID start time. A missing origin fails closed:
   the process remains constrained and the control cycle reports the error.
+- Every ingress into a ResMan-owned cgroup requires the candidate PID namespace to
+  equal the daemon's cached `/proc/self/ns/pid` device and inode. The identity is
+  checked before origin persistence and again immediately before `cgroup.procs` is
+  written. Mismatched or unreadable namespace entries are skipped without changing
+  observation or decision aggregation. Restore and recovery deliberately bypass this
+  guard because they remove an existing ResMan constraint.
 
 **Procfs decision coverage:**
 - Executable identity and I/O decision inputs carry explicit per-scan coverage.
@@ -1203,6 +1209,8 @@ defined sampling stream even when PSI event-driven refreshes run at another cade
 - `resman_errors_total{component, error_type}` (operational errors with bounded labels)
 - `resman_limit_hook_executions_total{hook_type, outcome}` (terminal script and HTTP
   hook outcomes using bounded labels)
+- `resman_cgroup_ingress_skipped_total{reason}` (processes not moved into ResMan-owned
+  cgroups; reason is `pid_namespace_mismatch` or `pid_namespace_unavailable`)
 - `resman_procfs_unavailable_processes{access}` (current missing executable-identity
   or I/O-decision procfs inputs)
 
@@ -1389,7 +1397,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.30.7-2'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.30.8-1'" -o resman .
 ```
 
 **Build RPM:**

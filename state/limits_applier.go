@@ -18,6 +18,22 @@ type idleReleaseResult struct {
 	err error
 }
 
+func (m *Manager) recordCgroupIngressSkips(result cgroup.ProcessMoveResult) {
+	if m.prometheusExporter != nil && result.NamespaceSkipped() > 0 {
+		m.prometheusExporter.RecordCgroupIngressSkips(result)
+	}
+}
+
+func cgroupIngressNoopError(uid int, result cgroup.ProcessMoveResult) error {
+	return fmt.Errorf(
+		"no process entered the ResMan cgroup for UID %d (candidates=%d, pid_namespace_mismatch=%d, pid_namespace_unavailable=%d)",
+		uid,
+		result.Candidates,
+		result.PIDNamespaceMismatches,
+		result.PIDNamespaceUnavailable,
+	)
+}
+
 func (m *Manager) setStandaloneResourceCgroup(uid int, active bool) {
 	m.mu.Lock()
 	state := m.resourceLimits[uid]
@@ -48,12 +64,18 @@ func (m *Manager) provisionStandaloneResourceUser(uid int, cfg *config.Config, e
 			cleanupErr,
 		)
 	}
-	if err := m.cgroupManager.MoveAllUserProcesses(uid); err != nil {
+	moveResult, err := m.cgroupManager.MoveAllUserProcesses(uid)
+	m.recordCgroupIngressSkips(moveResult)
+	if err != nil {
 		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
 		return false, errors.Join(
 			fmt.Errorf("move processes to standalone resource cgroup for UID %d: %w", uid, err),
 			cleanupErr,
 		)
+	}
+	if !moveResult.Applied() {
+		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
+		return false, errors.Join(cgroupIngressNoopError(uid, moveResult), cleanupErr)
 	}
 	m.setStandaloneResourceCgroup(uid, true)
 
@@ -307,7 +329,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				"cpu", userEnforceableCPUUsage(metrics, uid),
 			)
 
-			userCgroupPath, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
+			userCgroupPath, _, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
 			if err != nil {
 				m.logger.Warn("Failed to move processes for re-added user; user will not be marked limited",
 					"uid", uid, "error", err)
@@ -410,6 +432,10 @@ func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
 			target.sharedPath,
 			cfg.CPUQuotaNormal,
 		)
+		m.recordCgroupIngressSkips(result.Ingress)
+		if err == nil && result.Ingress.NamespaceSkipped() > 0 && !result.Ingress.Applied() {
+			err = cgroupIngressNoopError(target.uid, result.Ingress)
+		}
 		if err != nil {
 			if m.prometheusExporter != nil {
 				errorType := processMembershipReconcileFailure
@@ -467,21 +493,26 @@ func userEligibilityFromMetrics(metrics *SystemMetrics, uid int) config.UserElig
 	}
 }
 
-func (m *Manager) placeUserInSharedCgroup(uid int, sharedPath, normalQuota string) (string, error) {
+func (m *Manager) placeUserInSharedCgroup(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error) {
+	var result cgroup.ProcessMoveResult
 	m.mu.RLock()
 	observed := m.blockIOObservedUsers[uid]
 	wasStandalone := m.resourceLimits[uid].standalone
 	m.mu.RUnlock()
 	if observed {
-		path, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, sharedPath, normalQuota)
-		if err == nil {
+		path, result, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, sharedPath, normalQuota)
+		m.recordCgroupIngressSkips(result)
+		if err == nil && result.Applied() {
 			m.setStandaloneResourceCgroup(uid, false)
 		}
-		return path, err
+		if err == nil && !result.Applied() {
+			err = cgroupIngressNoopError(uid, result)
+		}
+		return path, result, err
 	}
 	if wasStandalone {
 		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
-			return "", fmt.Errorf("migrate standalone resource cgroup to shared CPU enforcement for UID %d: %w", uid, err)
+			return "", result, fmt.Errorf("migrate standalone resource cgroup to shared CPU enforcement for UID %d: %w", uid, err)
 		}
 		m.mu.Lock()
 		delete(m.resourceLimits, uid)
@@ -489,12 +520,18 @@ func (m *Manager) placeUserInSharedCgroup(uid int, sharedPath, normalQuota strin
 	}
 	path, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
 	if err != nil {
-		return "", err
+		return "", result, err
 	}
-	if err := m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath); err != nil {
-		return "", err
+	result, err = m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath)
+	m.recordCgroupIngressSkips(result)
+	if err != nil {
+		return "", result, err
 	}
-	return path, nil
+	if !result.Applied() {
+		cleanupErr := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
+		return "", result, errors.Join(cgroupIngressNoopError(uid, result), cleanupErr)
+	}
+	return path, result, nil
 }
 
 func (m *Manager) releaseTrackedUsers(users []int, sharedPath, normalQuota string) []idleReleaseResult {
@@ -513,7 +550,12 @@ func (m *Manager) releaseTrackedUsers(users []int, sharedPath, normalQuota strin
 			}
 			var err error
 			if observed[uid] {
-				_, err = m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalQuota)
+				_, result, placementErr := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalQuota)
+				m.recordCgroupIngressSkips(result)
+				err = placementErr
+				if err == nil && result.NamespaceSkipped() > 0 && !result.Applied() {
+					err = cgroupIngressNoopError(uid, result)
+				}
 			} else {
 				err = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
 			}
@@ -669,7 +711,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 			m.mu.RLock()
 			sharedPath := m.sharedCgroupPath
 			m.mu.RUnlock()
-			userCgroupPath, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
+			userCgroupPath, _, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
 			if err != nil {
 				m.logger.Error("Failed to place user in shared cgroup",
 					"user", userStr,
@@ -1110,7 +1152,12 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 			}
 			var releaseErr error
 			if observedForBlockIO {
-				_, releaseErr = m.cgroupManager.EnsureUserCgroupPlacement(uid, "", cfg.CPUQuotaNormal)
+				_, result, placementErr := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", cfg.CPUQuotaNormal)
+				m.recordCgroupIngressSkips(result)
+				releaseErr = placementErr
+				if releaseErr == nil && result.NamespaceSkipped() > 0 && !result.Applied() {
+					releaseErr = cgroupIngressNoopError(uid, result)
+				}
 			} else {
 				releaseErr = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
 			}

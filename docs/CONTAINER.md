@@ -10,6 +10,16 @@ The process runs as UID 0. Rootless Podman, a private PID or cgroup namespace,
 an unprivileged user, and a read-only cgroup mount are unsupported because they
 cannot satisfy the resource-manager contract.
 
+At startup resman records its own PID namespace identity from `/proc/self/ns/pid`.
+Before every move into a ResMan-owned cgroup it requires the candidate process to have
+the same namespace identity and verifies it again immediately before the kernel write.
+Processes in nested PID namespaces are still observed and included in policy inputs,
+but resman does not acquire them from their runtime-owned cgroups; the skip is logged
+once per user operation and counted by `resman_cgroup_ingress_skipped_total`. This
+boundary is guaranteed only when resman itself runs on the host, or in the supported
+container deployment below with `--pid=host` and the host `/proc`. A workload using
+the host PID namespace is not distinguishable by this guard and remains enforceable.
+
 ## Prepare the host
 
 Create a configuration whose persistent paths point at the mounted directories:
@@ -50,7 +60,7 @@ sudo podman run --rm --name resman \
   -v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
   -v /var/lib/resman:/var/lib/resman:rw \
   -v /var/log/resman:/var/log/resman:rw \
-  resman:1.30.7
+  resman:1.30.8
 ```
 
 `--pid=host` makes `/proc` describe the processes resman controls.

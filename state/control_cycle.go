@@ -674,7 +674,12 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 		if activeUsers[uid] {
 			placement = sharedPath
 		}
-		if _, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota); err != nil {
+		_, ingress, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota)
+		m.recordCgroupIngressSkips(ingress)
+		if err == nil && ingress.NamespaceSkipped() > 0 && !ingress.Applied() {
+			err = cgroupIngressNoopError(uid, ingress)
+		}
+		if err != nil {
 			metrics.IOBlockIOPSUnavailableUsers++
 			var incomplete *cgroup.UserCgroupPlacementIncompleteError
 			if errors.As(err, &incomplete) {

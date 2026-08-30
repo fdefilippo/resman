@@ -1,6 +1,6 @@
-# Upgrading from ResMan 1.25.x to ResMan 1.30.7
+# Upgrading from ResMan 1.25.x to ResMan 1.30.8
 
-This guide applies when moving from ResMan 1.25.x to ResMan 1.30.7. This release
+This guide applies when moving from ResMan 1.25.x to ResMan 1.30.8. This release
 contains the post-1.25.1 audit remediation and intentionally breaks incorrect or
 ambiguous contracts. It does not migrate old database schemas, accept removed
 configuration keys, preserve old MCP shapes, or alias renamed metrics.
@@ -359,6 +359,26 @@ model. A zero fallback silently disabled enforcement and allowed process-control
 **Action.** Restore rootful host-PID/cgroup access and verify both `/proc/PID/exe` and
 `/proc/PID/io`. Investigate persistent non-zero coverage before diagnosing limits that
 remain active.
+
+### Nested PID namespaces are no longer acquired by UID enforcement
+
+**Visible change.** Processes whose PID namespace differs from ResMan's namespace are
+still observed and included in user decision inputs, but are not moved into
+ResMan-owned cgroups. Mixed users can therefore have host processes constrained while
+their nested-namespace processes remain under the runtime's policy. Skips increment
+`resman_cgroup_ingress_skipped_total{reason="pid_namespace_mismatch"}`; an unreadable
+namespace uses reason `pid_namespace_unavailable`.
+
+**Cause.** UID-only placement could move a container process out of its runtime-owned
+cgroup, destroy the runtime's CPU and memory boundary, and leave no valid origin for
+shutdown restoration. ResMan now treats its own `/proc/self/ns/pid` identity as the
+mandatory cgroup-ingress boundary.
+
+**Action.** Run resman on the host or use the documented rootful Podman deployment with
+`--pid=host`. Investigate either skip reason before assuming that every process of a
+limited UID is constrained. A workload deliberately sharing the host PID namespace is
+outside this protection and requires explicit exclusion until container-aware policy
+is available.
 
 ### Limit-hook payloads and completion change
 

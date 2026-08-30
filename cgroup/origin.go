@@ -417,17 +417,6 @@ func (m *Manager) resolveInheritedOrigin(identity processIdentity, uid int, orig
 	return sessionPath, true
 }
 
-func (m *Manager) captureProcessOrigin(pid, uid int, destination string) (bool, error) {
-	pids, err := m.captureProcessOrigins([]int{pid}, uid, destination)
-	if err != nil {
-		return false, err
-	}
-	if len(pids) == 0 {
-		return false, nil
-	}
-	return true, nil
-}
-
 func (m *Manager) newProcessOrigin(identity processIdentity, uid int, cgroupPath string) processOrigin {
 	var sessionStartTime uint64
 	if sessionIdentity, err := m.readProcessIdentity(identity.SessionID); err == nil {
@@ -444,17 +433,12 @@ func (m *Manager) newProcessOrigin(identity processIdentity, uid int, cgroupPath
 	}
 }
 
-func (m *Manager) captureProcessOrigins(pids []int, uid int, destination string) ([]int, error) {
-	movable, _, err := m.captureProcessOriginsExpected(pids, uid, destination, nil)
-	return movable, err
-}
-
 func (m *Manager) captureProcessOriginsExpected(
 	pids []int,
 	uid int,
 	destination string,
 	expectedStartTimes map[int]uint64,
-) ([]int, map[int]bool, error) {
+) ([]int, map[int]uint64, map[int]bool, int, map[int]bool, error) {
 	leaveOperation := m.originGate.Enter()
 	defer leaveOperation()
 
@@ -465,11 +449,15 @@ func (m *Manager) captureProcessOriginsExpected(
 	}
 	pending := make([]pendingOrigin, 0)
 	movable := make([]int, 0, len(pids))
+	startTimes := make(map[int]uint64, len(pids))
 	reused := make(map[int]bool)
+	newlyCaptured := make(map[int]bool)
+	alreadyPresent := 0
 	basePath := m.getBaseCgroupPath()
 	changed := false
 	setOrigin := func(origin processOrigin) {
 		next[origin.PID] = origin
+		newlyCaptured[origin.PID] = true
 		changed = true
 	}
 
@@ -479,7 +467,7 @@ func (m *Manager) captureProcessOriginsExpected(
 			continue
 		}
 		if err != nil {
-			return nil, reused, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
+			return nil, nil, reused, alreadyPresent, newlyCaptured, fmt.Errorf("failed to identify PID %d before migration: %w", pid, err)
 		}
 		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
 			reused[pid] = true
@@ -490,13 +478,15 @@ func (m *Manager) captureProcessOriginsExpected(
 			continue
 		}
 		if err != nil {
-			return nil, reused, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
+			return nil, nil, reused, alreadyPresent, newlyCaptured, fmt.Errorf("failed to read cgroup for PID %d before migration: %w", pid, err)
 		}
 		currentFilesystemPath := m.cgroupPathOnFilesystem(currentPath)
 		if filepath.Clean(currentFilesystemPath) == filepath.Clean(destination) {
+			alreadyPresent++
 			continue
 		}
 		movable = append(movable, pid)
+		startTimes[pid] = identity.StartTime
 		if existing, ok := next[pid]; ok && existing.StartTime == identity.StartTime {
 			continue
 		}
@@ -516,18 +506,18 @@ func (m *Manager) captureProcessOriginsExpected(
 	}
 
 	if !changed {
-		return movable, reused, nil
+		return movable, startTimes, reused, alreadyPresent, newlyCaptured, nil
 	}
 	if err := m.flushProcessOrigins(next); err != nil {
-		return nil, reused, fmt.Errorf("failed to persist process origins before migration: %w", err)
+		return nil, nil, reused, alreadyPresent, nil, fmt.Errorf("failed to persist process origins before migration: %w", err)
 	}
 	m.replaceProcessOrigins(next)
-	return movable, reused, nil
+	return movable, startTimes, reused, alreadyPresent, newlyCaptured, nil
 }
 
-func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]int, map[int]error, error) {
-	moved, moveErrors, _, err := m.moveProcessBatchExpected(pids, uid, destination, nil)
-	return moved, moveErrors, err
+func (m *Manager) moveProcessBatch(pids []int, uid int, destination string) ([]int, ProcessMoveResult, map[int]error, error) {
+	moved, result, moveErrors, _, err := m.moveProcessBatchExpected(pids, uid, destination, nil)
+	return moved, result, moveErrors, err
 }
 
 func (m *Manager) moveProcessBatchExpected(
@@ -535,10 +525,14 @@ func (m *Manager) moveProcessBatchExpected(
 	uid int,
 	destination string,
 	expectedStartTimes map[int]uint64,
-) ([]int, map[int]error, map[int]bool, error) {
-	movable, reused, err := m.captureProcessOriginsExpected(pids, uid, destination, expectedStartTimes)
+) ([]int, ProcessMoveResult, map[int]error, map[int]bool, error) {
+	allowed, result := m.filterPIDNamespaceCandidates(pids)
+	movable, capturedStartTimes, reused, alreadyPresent, newlyCaptured, err := m.captureProcessOriginsExpected(allowed, uid, destination, expectedStartTimes)
+	result.AlreadyPresent = alreadyPresent
+	result.Reused = len(reused)
 	if err != nil {
-		return nil, nil, reused, err
+		m.logPIDNamespaceSkips(uid, result)
+		return nil, result, nil, reused, err
 	}
 
 	moved := make([]int, 0, len(movable))
@@ -546,33 +540,44 @@ func (m *Manager) moveProcessBatchExpected(
 	disappeared := make(map[int]bool)
 	cgroupProcsFile := filepath.Join(destination, "cgroup.procs")
 	for _, pid := range movable {
-		if expected, ok := expectedStartTimes[pid]; ok {
-			identity, identityErr := m.readProcessIdentity(pid)
-			switch {
-			case os.IsNotExist(identityErr):
+		identity, identityErr := m.readProcessIdentity(pid)
+		switch {
+		case os.IsNotExist(identityErr):
+			disappeared[pid] = true
+			result.Disappeared++
+			continue
+		case identityErr != nil:
+			moveErrors[pid] = fmt.Errorf("failed to revalidate process identity: %w", identityErr)
+			continue
+		case identity.StartTime != capturedStartTimes[pid]:
+			reused[pid] = true
+			disappeared[pid] = true
+			result.Reused++
+			continue
+		}
+		reason, namespaceErr := m.verifyPIDNamespaceIngress(pid)
+		if reason != "" || namespaceErr != nil {
+			mergePIDNamespaceSkip(&result, reason, namespaceErr)
+			if os.IsNotExist(namespaceErr) || newlyCaptured[pid] {
 				disappeared[pid] = true
-				continue
-			case identityErr != nil:
-				moveErrors[pid] = fmt.Errorf("failed to revalidate process identity: %w", identityErr)
-				continue
-			case identity.StartTime != expected:
-				reused[pid] = true
-				disappeared[pid] = true
-				continue
 			}
+			continue
 		}
 		if err := m.writePIDToCgroup(cgroupProcsFile, pid); errors.Is(err, syscall.ESRCH) {
 			disappeared[pid] = true
+			result.Disappeared++
 		} else if err != nil {
 			moveErrors[pid] = err
 		} else {
 			moved = append(moved, pid)
+			result.Moved++
 		}
 	}
+	m.logPIDNamespaceSkips(uid, result)
 	if err := m.removeProcessOrigins(disappeared); err != nil {
-		return moved, moveErrors, reused, fmt.Errorf("failed to remove origins for exited or reused processes: %w", err)
+		return moved, result, moveErrors, reused, fmt.Errorf("failed to remove origins for exited or reused processes: %w", err)
 	}
-	return moved, moveErrors, reused, nil
+	return moved, result, moveErrors, reused, nil
 }
 
 func (m *Manager) ensureRecoveryCgroup(uid int, normalQuota string) (string, error) {

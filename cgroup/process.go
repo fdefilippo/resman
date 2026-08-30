@@ -3,14 +3,12 @@ package cgroup
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
@@ -31,33 +29,25 @@ type processScanCache struct {
 	pidsByUID map[int][]int
 }
 
-func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
-	_, err := m.moveProcessToCgroup(pid, uid, nil)
-	return err
+func (m *Manager) MoveProcessToCgroup(pid int, uid int) (ProcessMoveResult, error) {
+	return m.moveProcessToCgroup(pid, uid, nil)
 }
 
-func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]string) (bool, error) {
+func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]string) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	// SECURITY: Never move any process to UID 0 cgroup
 	if uid == 0 {
 		m.logger.Warn("Refusing to move process to root (UID 0) cgroup - security boundary",
 			"pid", pid)
-		return false, fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
+		return result, fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
 	}
 
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
-		return false, fmt.Errorf("cgroup for UID %d does not exist", uid)
+		return result, fmt.Errorf("cgroup for UID %d does not exist", uid)
 	}
 
-	cgroupProcsFile := filepath.Join(cgroupPath, "cgroup.procs")
-	movable, err := m.captureProcessOrigin(pid, uid, cgroupPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
-	}
-	if !movable {
-		return false, nil
-	}
-
+	var err error
 	if processInfo == nil {
 		processInfo, err = m.getProcessInfo(pid)
 		if err != nil {
@@ -66,16 +56,18 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 	}
 	processName := processNameFromInfo(pid, processInfo)
 
-	// Write the PID to cgroup.procs.
-	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			_ = m.removeProcessOrigins(map[int]bool{pid: true})
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to move PID %d to cgroup for UID %d: %w", pid, uid, err)
+	_, result, moveErrors, err := m.moveProcessBatch([]int{pid}, uid, cgroupPath)
+	if err != nil {
+		return result, fmt.Errorf("prepare PID %d for cgroup ingress for UID %d: %w", pid, uid, err)
+	}
+	if moveErr := moveErrors[pid]; moveErr != nil {
+		return result, fmt.Errorf("failed to move PID %d to cgroup for UID %d: %w", pid, uid, moveErr)
+	}
+	if result.Moved == 0 {
+		return result, nil
 	}
 
-	// Log dettagliato
+	// Log the verified migration without changing the bounded warning contract.
 	m.logger.Debug("Process moved to cgroup",
 		"pid", pid,
 		"uid", uid,
@@ -85,42 +77,45 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 		"cgroup_path", cgroupPath,
 	)
 
-	return true, nil
+	return result, nil
 }
 
 // MoveAllUserProcesses moves every enforceable process owned by a user into its cgroup.
 // Uses gopsutil for efficient process discovery.
-func (m *Manager) MoveAllUserProcesses(uid int) error {
+func (m *Manager) MoveAllUserProcesses(uid int) (ProcessMoveResult, error) {
 	return m.moveAllUserProcesses(context.Background(), uid)
 }
 
-func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) error {
+func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
 
 	// SECURITY: Never move UID 0 (root) processes to user cgroups
 	if uid == 0 {
 		m.logger.Warn("Refusing to move root (UID 0) processes to cgroup - security boundary")
-		return fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
+		return result, fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("move processes for UID %d interrupted before discovery: %w", uid, err)
+		return result, fmt.Errorf("move processes for UID %d interrupted before discovery: %w", uid, err)
 	}
 
 	pids, err := m.processIDsForUID(uid)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("move processes for UID %d interrupted after discovery: %w", uid, err)
+		return result, fmt.Errorf("move processes for UID %d interrupted after discovery: %w", uid, err)
 	}
 
-	var movedCount, totalProcesses int
+	var totalProcesses int
 	var processNames, errors []string
+	var candidates []int
+	processNameByPID := make(map[int]string)
 	cfg := m.getConfig()
 
 	for _, pid := range pids {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
+			return result, fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
 		}
 		totalProcesses++
 		processInfo, infoErr := m.getProcessInfo(pid)
@@ -141,25 +136,33 @@ func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) error {
 			continue
 		}
 
-		// Move the selected process.
-		moved, err := m.moveProcessToCgroup(pid, uid, processInfo)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, ctxErr)
-		}
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", selection.Name, err))
-		} else if moved {
-			movedCount++
-			processNames = append(processNames, selection.Name)
-		}
+		candidates = append(candidates, pid)
+		processNameByPID[pid] = selection.Name
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
+	}
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return result, fmt.Errorf("cgroup for UID %d does not exist", uid)
+	}
+	moved, result, moveErrors, err := m.moveProcessBatch(candidates, uid, cgroupPath)
+	if err != nil {
+		errors = append(errors, err.Error())
+	}
+	for _, pid := range moved {
+		processNames = append(processNames, processNameByPID[pid])
+	}
+	for pid, moveErr := range moveErrors {
+		errors = append(errors, fmt.Sprintf("%s: %v", processNameByPID[pid], moveErr))
 	}
 
-	m.logProcessMoveSummary(uid, movedCount, totalProcesses, processNames, errors)
+	m.logProcessMoveSummary(uid, result.Moved, totalProcesses, processNames, errors)
 
 	if len(errors) > 0 {
-		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
+		return result, fmt.Errorf("some processes could not be moved: %d errors", len(errors))
 	}
-	return nil
+	return result, nil
 }
 
 func (m *Manager) processIDsForUID(uid int) ([]int, error) {

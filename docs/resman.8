@@ -1,4 +1,4 @@
-.TH RESMAN 8 "August 2026" "v1.30.7" "System Administration"
+.TH RESMAN 8 "August 2026" "v1.30.8" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -40,6 +40,14 @@ explicit error. Active limits reconcile membership every control
 cycle. Newly excluded processes return only to a captured origin for the same
 PID start time; without a safe origin they remain constrained and an error is
 reported.
+.IP (bu
+Process ingress into a ResMan-owned cgroup is allowed only when the process PID
+namespace equals the namespace cached from /proc/self/ns/pid at daemon startup.
+The identity is verified again immediately before the cgroup.procs write. A nested
+or unreadable PID namespace is skipped, logged once per user operation, and counted
+without removing the process from observation or decision accounting. This guarantee
+requires resman to run on the host, or with the documented host PID namespace. Restore
+and recovery bypass the ingress guard because they remove an existing constraint.
 .IP \(bu
 Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
 .IP \(bu
@@ -654,9 +662,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x to 1.30.7
+.B Upgrade from 1.25.x to 1.30.8
 .PP
-ResMan 1.30.7 intentionally breaks filesystem, database,
+ResMan 1.30.8 intentionally breaks filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
@@ -900,6 +908,8 @@ resman_metrics_collection_duration_seconds \- System metrics collection duration
 resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
 .IP \(bu
 resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, or cancelled (counter)
+.IP \(bu
+resman_cgroup_ingress_skipped_total{reason} \- Processes kept outside ResMan-owned cgroups because their PID namespace mismatched or was unavailable (counter)
 .IP \(bu
 resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP

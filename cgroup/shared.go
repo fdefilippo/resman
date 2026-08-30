@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/fdefilippo/resman/internal/processpolicy"
 )
@@ -113,41 +112,33 @@ func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error
 }
 
 // MoveProcessToSharedCgroup moves a process into the shared cgroup.
-func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int) error {
+func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	// Use the user's sub-cgroup.
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
 	// Ensure that the sub-cgroup exists.
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
-			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
+			return result, fmt.Errorf("failed to create user sub-cgroup: %w", err)
 		}
 	}
 
-	cgroupProcsFile := filepath.Join(userPath, "cgroup.procs")
-	movable, err := m.captureProcessOrigin(pid, uid, userPath)
+	_, result, moveErrors, err := m.moveProcessBatch([]int{pid}, uid, userPath)
 	if err != nil {
-		return fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
+		return result, fmt.Errorf("prepare PID %d for shared cgroup ingress for UID %d: %w", pid, uid, err)
 	}
-	if !movable {
-		return nil
+	if moveErr := moveErrors[pid]; moveErr != nil {
+		return result, fmt.Errorf("failed to move PID %d to shared cgroup for UID %d: %w", pid, uid, moveErr)
 	}
-
-	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			_ = m.removeProcessOrigins(map[int]bool{pid: true})
-			return nil
-		}
-		return fmt.Errorf("failed to move PID %d to shared cgroup for UID %d: %w", pid, uid, err)
-	}
-
-	return nil
+	return result, nil
 }
 
 // MoveAllUserProcessesToSharedCgroup moves every enforceable user process into
 // its shared-cgroup child.
 // Uses gopsutil for efficient process discovery.
-func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error {
+func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	m.logger.Debug("Moving all processes for user to shared cgroup",
 		"uid", uid,
 		"shared_path", sharedPath,
@@ -155,15 +146,15 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
-			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
+			return result, fmt.Errorf("failed to create user sub-cgroup: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
+		return result, fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
 	}
 
 	pidsForUID, err := m.processIDsForUID(uid)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	var movedCount int
@@ -190,7 +181,7 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 		pids = append(pids, pid)
 	}
 
-	moved, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
+	moved, result, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
 	if err != nil {
 		errors = append(errors, err.Error())
 	} else {
@@ -203,9 +194,9 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	m.logSharedProcessMoveSummary(uid, movedCount, len(pids), errors)
 
 	if len(errors) > 0 {
-		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
+		return result, fmt.Errorf("some processes could not be moved: %d errors", len(errors))
 	}
-	return nil
+	return result, nil
 }
 
 // ReleaseUserFromSharedCgroup restores processes from a shared child and removes it.

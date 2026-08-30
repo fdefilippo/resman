@@ -352,22 +352,27 @@ func TestByteRateLimitHandlesDisabledValuesPerDimension(t *testing.T) {
 
 type blockIOSequenceCgroupManager struct {
 	mockCgroupManager
-	samples         []blockIOCounterSample
-	index           int
-	placements      []string
-	placementErrors map[int]error
-	readErrors      map[int]error
-	cleanupErrors   map[int]error
-	cleanups        []int
-	sharedReleases  int
+	samples          []blockIOCounterSample
+	index            int
+	placements       []string
+	placementErrors  map[int]error
+	placementResults map[int]cgroup.ProcessMoveResult
+	readErrors       map[int]error
+	statsReads       int
+	cleanupErrors    map[int]error
+	cleanups         []int
+	sharedReleases   int
 }
 
-func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, _ string) (string, error) {
+func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, _ string) (string, cgroup.ProcessMoveResult, error) {
 	m.placements = append(m.placements, sharedPath)
 	if err := m.placementErrors[uid]; err != nil {
-		return "", err
+		return "", cgroup.ProcessMoveResult{}, err
 	}
-	return sharedPath, nil
+	if result := m.placementResults[uid]; result != (cgroup.ProcessMoveResult{}) {
+		return sharedPath, result, nil
+	}
+	return sharedPath, cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
 }
 
 func (m *blockIOSequenceCgroupManager) ReleaseUserFromSharedCgroup(_ int, _, _ string) error {
@@ -376,6 +381,7 @@ func (m *blockIOSequenceCgroupManager) ReleaseUserFromSharedCgroup(_ int, _, _ s
 }
 
 func (m *blockIOSequenceCgroupManager) GetIOStats(uid int) (uint64, uint64, uint64, uint64, error) {
+	m.statsReads++
 	if err := m.readErrors[uid]; err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -389,6 +395,38 @@ func (m *blockIOSequenceCgroupManager) GetIOStats(uid int) (uint64, uint64, uint
 	m.index++
 	sample := m.samples[index]
 	return 0, 0, sample.readOps, sample.writeOps, nil
+}
+
+func TestBlockIOObservationSkipsNestedNamespaceWithoutReadingManagedStats(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cfg.IOReadIOPS = 1000
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {UID: 1000, Username: "nested-user"},
+		},
+	}
+	cgroups := &blockIOSequenceCgroupManager{
+		placementResults: map[int]cgroup.ProcessMoveResult{
+			1000: {Candidates: 1, PIDNamespaceMismatches: 1},
+		},
+	}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(cfg, collector, cgroups, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sample, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("collectSystemMetrics() error: %v", err)
+	}
+	if sample.IOBlockIOPSUnavailableUsers != 1 || cgroups.statsReads != 0 {
+		t.Fatalf("unavailable users=%d stats reads=%d, want 1/0", sample.IOBlockIOPSUnavailableUsers, cgroups.statsReads)
+	}
+	if len(exporter.ingressSkips) != 1 || exporter.ingressSkips[0].PIDNamespaceMismatches != 1 {
+		t.Fatalf("ingress skip records = %+v", exporter.ingressSkips)
+	}
 }
 
 func (m *blockIOSequenceCgroupManager) CleanupUserCgroup(uid int) error {
@@ -712,7 +750,7 @@ func TestObservedStandaloneResourceStateBecomesSharedWithoutStaleStandaloneFlag(
 		ioApplied:  true,
 	}
 
-	if _, err := manager.placeUserInSharedCgroup(1000, "/limited", cfg.CPUQuotaNormal); err != nil {
+	if _, _, err := manager.placeUserInSharedCgroup(1000, "/limited", cfg.CPUQuotaNormal); err != nil {
 		t.Fatalf("placeUserInSharedCgroup() error: %v", err)
 	}
 	state := manager.resourceLimits[1000]

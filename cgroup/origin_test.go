@@ -39,6 +39,10 @@ func newOriginTestManager(t *testing.T) (*Manager, string) {
 		processOrigins:     make(map[int]processOrigin),
 		processOriginsFile: processOriginsPath(cfg.CreatedCgroupsFile),
 		procRoot:           filepath.Join(root, "proc"),
+		pidNamespace:       pidNamespaceIdentity{device: 1, inode: 1},
+		readPIDNamespace: func(int) (pidNamespaceIdentity, error) {
+			return pidNamespaceIdentity{device: 1, inode: 1}, nil
+		},
 	}
 	return manager, root
 }
@@ -96,7 +100,7 @@ func TestMoveProcessPersistsOriginBeforeMigration(t *testing.T) {
 		return nil
 	}
 
-	if err := manager.MoveProcessToSharedCgroup(101, filepath.Dir(sharedUserPath), 1000); err != nil {
+	if _, err := manager.MoveProcessToSharedCgroup(101, filepath.Dir(sharedUserPath), 1000); err != nil {
 		t.Fatalf("MoveProcessToSharedCgroup() error: %v", err)
 	}
 
@@ -156,7 +160,7 @@ func TestMoveProcessBatchPersistsAllOriginsOnceBeforeMigration(t *testing.T) {
 		return nil
 	}
 
-	moved, moveErrors, err := manager.moveProcessBatch(pids, 1000, destination)
+	moved, _, moveErrors, err := manager.moveProcessBatch(pids, 1000, destination)
 	if err != nil {
 		t.Fatalf("moveProcessBatch() error: %v", err)
 	}
@@ -188,7 +192,7 @@ func TestMoveProcessBatchRollsBackBeforeAnyMigration(t *testing.T) {
 		return nil
 	}
 
-	if _, _, err := manager.moveProcessBatch([]int{121}, 1000, destination); err == nil {
+	if _, _, _, err := manager.moveProcessBatch([]int{121}, 1000, destination); err == nil {
 		t.Fatal("moveProcessBatch() should fail when origin persistence fails")
 	}
 	if writeCalled {
@@ -215,7 +219,7 @@ func TestProcessOriginSnapshotRemainsAvailableWhilePersistenceBlocks(t *testing.
 	}
 	moveDone := make(chan error, 1)
 	go func() {
-		_, _, err := manager.moveProcessBatch([]int{122}, 1000, destination)
+		_, _, _, err := manager.moveProcessBatch([]int{122}, 1000, destination)
 		moveDone <- err
 	}()
 	<-started
@@ -253,18 +257,168 @@ func TestMoveProcessBatchSkipsProcessesAlreadyInDestination(t *testing.T) {
 		return nil
 	}
 
-	moved, moveErrors, err := manager.moveProcessBatch([]int{131}, 1000, destination)
+	moved, result, moveErrors, err := manager.moveProcessBatch([]int{131}, 1000, destination)
 	if err != nil {
 		t.Fatalf("moveProcessBatch() error: %v", err)
 	}
 	if len(moved) != 0 || len(moveErrors) != 0 {
 		t.Fatalf("moved=%v moveErrors=%v, want no migration", moved, moveErrors)
 	}
+	if result.AlreadyPresent != 1 || !result.Applied() {
+		t.Fatalf("move result = %+v, want one process already present", result)
+	}
 	if writeCalls != 0 {
 		t.Fatalf("cgroup.procs writes = %d, want 0", writeCalls)
 	}
 	if len(manager.snapshotProcessOrigins()) != 0 {
 		t.Fatal("process already in destination should not be recorded as its own origin")
+	}
+}
+
+func TestMoveProcessBatchEnforcesPIDNamespaceBoundary(t *testing.T) {
+	tests := []struct {
+		name            string
+		candidate       func(pidNamespaceIdentity) (pidNamespaceIdentity, error)
+		wantMoved       int
+		wantMismatch    int
+		wantUnavailable int
+		wantDisappeared int
+	}{
+		{
+			name:      "same namespace moves",
+			candidate: func(host pidNamespaceIdentity) (pidNamespaceIdentity, error) { return host, nil },
+			wantMoved: 1,
+		},
+		{
+			name: "different namespace is skipped",
+			candidate: func(pidNamespaceIdentity) (pidNamespaceIdentity, error) {
+				return pidNamespaceIdentity{device: 2, inode: 2}, nil
+			},
+			wantMismatch: 1,
+		},
+		{
+			name: "unavailable namespace is skipped",
+			candidate: func(pidNamespaceIdentity) (pidNamespaceIdentity, error) {
+				return pidNamespaceIdentity{}, syscall.EACCES
+			},
+			wantUnavailable: 1,
+		},
+		{
+			name: "disappeared namespace is not an ingress failure",
+			candidate: func(pidNamespaceIdentity) (pidNamespaceIdentity, error) {
+				return pidNamespaceIdentity{}, os.ErrNotExist
+			},
+			wantDisappeared: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, root := newOriginTestManager(t)
+			destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+			origin := "/user.slice/session-141.scope"
+			writeFakeProcess(t, manager, 141, 1, 141, 5400, 1000, origin)
+			createFakeCgroup(t, root, origin)
+
+			hostNamespace := manager.pidNamespace
+			manager.readPIDNamespace = func(int) (pidNamespaceIdentity, error) {
+				return tt.candidate(hostNamespace)
+			}
+			writeCalls := 0
+			manager.writePID = func(string, int) error {
+				writeCalls++
+				return nil
+			}
+
+			_, result, moveErrors, err := manager.moveProcessBatch([]int{141}, 1000, destination)
+			if err != nil {
+				t.Fatalf("moveProcessBatch() error: %v", err)
+			}
+			if len(moveErrors) != 0 {
+				t.Fatalf("move errors = %v, want none", moveErrors)
+			}
+			if result.Moved != tt.wantMoved ||
+				result.PIDNamespaceMismatches != tt.wantMismatch ||
+				result.PIDNamespaceUnavailable != tt.wantUnavailable ||
+				result.Disappeared != tt.wantDisappeared {
+				t.Fatalf("move result = %+v", result)
+			}
+			if writeCalls != tt.wantMoved {
+				t.Fatalf("cgroup.procs writes = %d, want %d", writeCalls, tt.wantMoved)
+			}
+			_, originRecorded := manager.snapshotProcessOrigins()[141]
+			if originRecorded != (tt.wantMoved == 1) {
+				t.Fatalf("origin recorded = %t, want %t", originRecorded, tt.wantMoved == 1)
+			}
+		})
+	}
+}
+
+func TestMoveProcessBatchAllowsHostAndSkipsNestedNamespaceForOneUID(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	for _, pid := range []int{151, 152} {
+		origin := fmt.Sprintf("/user.slice/session-%d.scope", pid)
+		writeFakeProcess(t, manager, pid, 1, pid, uint64(5500+pid), 1000, origin)
+		createFakeCgroup(t, root, origin)
+	}
+	manager.readPIDNamespace = func(pid int) (pidNamespaceIdentity, error) {
+		if pid == 152 {
+			return pidNamespaceIdentity{device: 2, inode: 2}, nil
+		}
+		return manager.pidNamespace, nil
+	}
+	var written []int
+	manager.writePID = func(_ string, pid int) error {
+		written = append(written, pid)
+		return nil
+	}
+
+	_, result, moveErrors, err := manager.moveProcessBatch([]int{151, 152}, 1000, destination)
+	if err != nil {
+		t.Fatalf("moveProcessBatch() error: %v", err)
+	}
+	if len(moveErrors) != 0 || !result.Applied() || result.Moved != 1 || result.PIDNamespaceMismatches != 1 {
+		t.Fatalf("move result = %+v, errors = %v", result, moveErrors)
+	}
+	if len(written) != 1 || written[0] != 151 {
+		t.Fatalf("written PIDs = %v, want [151]", written)
+	}
+	if _, ok := manager.snapshotProcessOrigins()[152]; ok {
+		t.Fatal("nested-namespace PID acquired an origin despite skipped ingress")
+	}
+}
+
+func TestMoveProcessBatchRechecksNamespaceImmediatelyBeforeWrite(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	origin := "/user.slice/session-161.scope"
+	writeFakeProcess(t, manager, 161, 1, 161, 5600, 1000, origin)
+	createFakeCgroup(t, root, origin)
+
+	reads := 0
+	manager.readPIDNamespace = func(int) (pidNamespaceIdentity, error) {
+		reads++
+		if reads == 1 {
+			return manager.pidNamespace, nil
+		}
+		return pidNamespaceIdentity{device: 2, inode: 2}, nil
+	}
+	writeCalled := false
+	manager.writePID = func(string, int) error {
+		writeCalled = true
+		return nil
+	}
+
+	_, result, _, err := manager.moveProcessBatch([]int{161}, 1000, destination)
+	if err != nil {
+		t.Fatalf("moveProcessBatch() error: %v", err)
+	}
+	if writeCalled || result.PIDNamespaceMismatches != 1 {
+		t.Fatalf("writeCalled=%t result=%+v", writeCalled, result)
+	}
+	if _, ok := manager.snapshotProcessOrigins()[161]; ok {
+		t.Fatal("origin persisted for a process rejected at the final namespace boundary")
 	}
 }
 
@@ -435,6 +589,11 @@ func TestRestoreProcessesTreatsESRCHAsSuccess(t *testing.T) {
 
 func TestRestoreProcessesRestoresExactCgroup(t *testing.T) {
 	manager, root := newOriginTestManager(t)
+	namespaceReads := 0
+	manager.readPIDNamespace = func(int) (pidNamespaceIdentity, error) {
+		namespaceReads++
+		return pidNamespaceIdentity{device: 2, inode: 2}, nil
+	}
 	originalPath := "/user.slice/user-1000.slice/session-13.scope"
 	originalFilesystemPath := createFakeCgroup(t, root, originalPath)
 	writeFakeProcess(t, manager, 901, 1, 901, 13000, 1000, "/resman/limited/user_1000")
@@ -464,6 +623,9 @@ func TestRestoreProcessesRestoresExactCgroup(t *testing.T) {
 	}
 	if usedRecovery {
 		t.Fatal("exact restore should not use recovery")
+	}
+	if namespaceReads != 0 {
+		t.Fatalf("restore performed %d PID namespace reads, want none", namespaceReads)
 	}
 	if _, ok := manager.snapshotProcessOrigins()[901]; ok {
 		t.Fatal("origin record should be removed after exact restore")
