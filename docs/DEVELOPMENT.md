@@ -634,12 +634,22 @@ These defects are cheap to prevent and expensive to find.
   substitute for a missing `/dev/kvm`.
 - Functional evidence **MUST** record the SmolVM version, guest image identity, kernel,
   cgroup mount and controllers, CPU/RAM allocation, and the exact command run.
+- A real-host functional runner **MUST** own the full lifetime of its remote scenario.
+  Interrupting the local runner must synchronously stop and drain that run before its
+  bundle is removed, and a host with another active or stale run bundle **MUST** return
+  a blocked result before any host state is snapshotted or changed.
 - New or modified packages **SHOULD** move coverage up, never down. Current floors, for
   reference (2026-08-21): `internal/app` 16.1%, `mcp` 29.6%, `cgroup` 42.7%,
   `config` 55.7%, `metrics` 57.2%, `database` 62.1%, `logging` 62.9%, `state` 66.6%,
   `reloader` 91.9%.
 
-*Findings: resman-4pw.16, resman-4pw.16.1, resman-4pw.16.2*
+**Why (remote ownership).** Before `resman-ej0.6`, terminating the local SSH driver
+left the remote scenario running. A second run could then snapshot the first run's
+temporary configuration as its baseline and later restore that configuration over the
+real baseline. Run-scoped remote termination and exclusive host ownership prevent the
+overlap instead of relying on the existing pollution guard to detect it afterwards.
+
+*Findings: resman-4pw.16, resman-4pw.16.1, resman-4pw.16.2, resman-ej0.6*
 
 ## Rule 17 — One language: English
 

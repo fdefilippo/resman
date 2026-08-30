@@ -84,4 +84,6 @@ assert_path_labels "a stale path is reported alongside the enforcing one" 1006 "
 	"/sys/fs/cgroup/resman/limited/user_1006 /sys/fs/cgroup/resman/user_1006"
 assert_path_labels "a longer UID is not mistaken for this one" 1006 "$neighbour_body" ""
 
+"$script_dir/remote-control_test.sh"
+
 printf 'PASS: real-kernel packaged-service host contract\n'

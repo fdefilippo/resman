@@ -1,16 +1,89 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-scenario=${1:?scenario is required}
-remote_host=${2:-${RESMAN_REAL_KERNEL_HOST:-}}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 go_bin=${GO_BIN:-go}
 evidence_root=${REAL_KERNEL_EVIDENCE_ROOT:-$repo_root/build/functional/real-kernel}
+scenario=
+remote_host=
 scratch_dir=
 remote_root=
 evidence_dir=
+run_id=
 remote_cleanup_done=0
+remote_execution_started=0
+remote_ssh_pid=
+
+safe_remove_scratch() {
+	[[ -n $scratch_dir ]] || return 0
+	case "$scratch_dir" in
+		"${TMPDIR:-/tmp}"/resman-real-kernel.*) rm -rf -- "$scratch_dir" ;;
+		*) echo "refusing to remove unexpected scratch path: $scratch_dir" >&2; return 1 ;;
+	esac
+}
+
+cleanup() {
+	local status=$?
+	local cleanup_log=/dev/null
+	local stop_ok=1
+	trap - EXIT INT TERM
+	set +e
+	[[ -z $evidence_dir ]] || cleanup_log=$evidence_dir/remote-cleanup.log
+	if [[ $remote_cleanup_done -eq 0 && -n $remote_root ]]; then
+		if [[ $remote_execution_started -eq 1 ]]; then
+			stop_remote_scenario >>"$cleanup_log" 2>&1 || stop_ok=0
+		fi
+		if [[ $stop_ok -eq 1 ]]; then
+			collect_remote_evidence >>"$cleanup_log" 2>&1 || true
+			ssh -q -o BatchMode=yes "$remote_host" "rm -rf -- '$remote_root'" \
+				>>"$cleanup_log" 2>&1 || status=1
+		else
+			echo "remote scenario could not be stopped; preserving $remote_root" \
+				>>"$cleanup_log"
+			status=1
+		fi
+	fi
+	if [[ -n $remote_ssh_pid ]]; then
+		kill -TERM "$remote_ssh_pid" 2>/dev/null || true
+		wait "$remote_ssh_pid" 2>/dev/null || true
+		remote_ssh_pid=
+	fi
+	safe_remove_scratch || status=1
+	exit "$status"
+}
+
+stop_remote_scenario() {
+	ssh -q -o BatchMode=yes "$remote_host" \
+		"'$remote_root/control.sh' stop '$run_id'"
+}
+
+collect_remote_evidence() {
+	[[ -n $evidence_dir && -d $evidence_dir ]] || return 0
+	ssh -q -o BatchMode=yes "$remote_host" \
+		"test ! -d '$remote_root/evidence' || tar -C '$remote_root' -cf - evidence" \
+		| tar -C "$evidence_dir" --strip-components=1 -xf -
+}
+
+run_remote_scenario() {
+	ssh -q -o BatchMode=yes "$remote_host" \
+		"'$remote_root/control.sh' start '$run_id' '$scenario' '$source_revision'" &
+	remote_ssh_pid=$!
+	wait "$remote_ssh_pid"
+	local status=$?
+	remote_ssh_pid=
+	return "$status"
+}
+
+if [[ ${RESMAN_REAL_KERNEL_REMOTE_LIBRARY_ONLY:-0} == 1 ]]; then
+	if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+		return 0
+	fi
+	exit 0
+fi
+
+scenario=${1:?scenario is required}
+remote_host=${2:-${RESMAN_REAL_KERNEL_HOST:-}}
 
 # Source-revision scenarios ship a binary built from the working tree. Packaged
 # scenarios exercise the installed unit instead and must not ship one, so that a
@@ -33,27 +106,6 @@ case "$remote_host" in
 		;;
 esac
 
-safe_remove_scratch() {
-	[[ -n $scratch_dir ]] || return 0
-	case "$scratch_dir" in
-		"${TMPDIR:-/tmp}"/resman-real-kernel.*) rm -rf -- "$scratch_dir" ;;
-		*) echo "refusing to remove unexpected scratch path: $scratch_dir" >&2; return 1 ;;
-	esac
-}
-
-cleanup() {
-	local status=$?
-	local cleanup_log=/dev/null
-	trap - EXIT INT TERM
-	set +e
-	[[ -z $evidence_dir ]] || cleanup_log=$evidence_dir/remote-cleanup.log
-	if [[ $remote_cleanup_done -eq 0 && -n $remote_root ]]; then
-		ssh -q -o BatchMode=yes "$remote_host" "rm -rf -- '$remote_root'" \
-			>>"$cleanup_log" 2>&1 || status=1
-	fi
-	safe_remove_scratch || status=1
-	exit "$status"
-}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -86,6 +138,7 @@ else
 		CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
 	)
 fi
+install -m 0755 "$script_dir/remote-control.sh" "$bundle_dir/control.sh"
 
 evidence_dir=$evidence_root/$run_id-$scenario
 mkdir "$evidence_dir"
@@ -96,7 +149,9 @@ commands_log=$evidence_dir/commands.log
 	printf 'tar -C %q -cf - . | ssh -q -o BatchMode=yes %q %q\n' \
 		"$bundle_dir" "$remote_host" "install -d -m 0700 '$remote_root' && tar -C '$remote_root' -xf -"
 	printf 'ssh -q -o BatchMode=yes %q %q\n' "$remote_host" \
-		"'$remote_root/run.sh' '$scenario' '$run_id' '$source_revision'"
+		"'$remote_root/control.sh' start '$run_id' '$scenario' '$source_revision'"
+	printf 'ssh -q -o BatchMode=yes %q %q\n' "$remote_host" \
+		"'$remote_root/control.sh' stop '$run_id'"
 	printf 'ssh -q -o BatchMode=yes %q %q | tar -C %q --strip-components=1 -xf -\n' \
 		"$remote_host" "tar -C '$remote_root' -cf - evidence" "$evidence_dir"
 } >"$commands_log"
@@ -106,13 +161,38 @@ tar -C "$bundle_dir" -cf - . \
 		"install -d -m 0700 '$remote_root' && tar -C '$remote_root' -xf -"
 
 set +e
-ssh -q -o BatchMode=yes "$remote_host" \
-	"'$remote_root/run.sh' '$scenario' '$run_id' '$source_revision'"
+remote_execution_started=1
+run_remote_scenario
 remote_status=$?
 set -e
 
-ssh -q -o BatchMode=yes "$remote_host" "tar -C '$remote_root' -cf - evidence" \
-	| tar -C "$evidence_dir" --strip-components=1 -xf -
+if [[ $remote_status -eq 255 ]]; then
+	stop_remote_scenario || {
+		echo "FAIL: SSH disconnected and remote run $run_id could not be stopped" >&2
+		exit 1
+	}
+fi
+remote_execution_started=0
+
+if [[ $remote_status -eq 77 ]]; then
+	printf 'BLOCKED\n' >"$evidence_dir/result"
+	{
+		printf 'requested_host=%s\n' "$remote_host"
+		printf 'local_source_revision=%s\n' "$source_revision"
+		printf 'remote_exit_code=%d\n' "$remote_status"
+		printf 'result=BLOCKED\n'
+		printf 'detail=another real-kernel scenario or bundle is active\n'
+	} >>"$evidence_dir/environment.txt"
+	ssh -q -o BatchMode=yes "$remote_host" "rm -rf -- '$remote_root'"
+	remote_cleanup_done=1
+	safe_remove_scratch
+	scratch_dir=
+	trap - EXIT INT TERM
+	echo "BLOCKED: real-kernel $scenario; evidence: $evidence_dir" >&2
+	exit 77
+fi
+
+collect_remote_evidence
 {
 	printf 'requested_host=%s\n' "$remote_host"
 	printf 'local_source_revision=%s\n' "$source_revision"
