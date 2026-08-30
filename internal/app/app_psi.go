@@ -96,12 +96,14 @@ func (a *App) applyReloadedConfig(cfg *config.Config) error {
 		previous.GetPSIWindowUs() != cfg.GetPSIWindowUs()
 	a.setCurrentConfig(cfg)
 	if !restartPSI {
+		a.publishFallbackCPUSamplingInterval(a.controlCycleInterval())
 		a.notifyConfigReloaded()
 		return nil
 	}
 
 	a.stopPSIWatcher()
 	a.startPSIWatcherWithConfig(cfg)
+	a.publishFallbackCPUSamplingInterval(a.controlCycleInterval())
 	a.notifyConfigReloaded()
 	return nil
 }

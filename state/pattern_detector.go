@@ -26,7 +26,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-// WorkloadPattern rappresenta il tipo di pattern riconosciuto per un utente.
+// WorkloadPattern represents the workload pattern recognized for a user.
 type WorkloadPattern string
 
 const (
@@ -49,20 +49,20 @@ type UserHourlyStats struct {
 	Buckets []hourlyPatternBucket
 }
 
-// PatternResult contiene il risultato della classificazione.
+// PatternResult contains the classification result.
 type PatternResult struct {
 	Pattern    WorkloadPattern
 	Confidence float64
 }
 
-// PatternDetector rileva i pattern di utilizzo per ogni utente.
+// PatternDetector detects usage patterns for each user.
 type PatternDetector struct {
 	mu        sync.RWMutex
 	logger    *logging.Logger
-	userStats map[int]*UserHourlyStats // uid -> statistiche orarie
+	userStats map[int]*UserHourlyStats // uid -> hourly statistics
 }
 
-// NewPatternDetector crea un nuovo PatternDetector.
+// NewPatternDetector creates a PatternDetector.
 func NewPatternDetector(logger *logging.Logger) *PatternDetector {
 	return &PatternDetector{
 		logger:    logger,
@@ -70,7 +70,7 @@ func NewPatternDetector(logger *logging.Logger) *PatternDetector {
 	}
 }
 
-// Update aggiorna le statistiche per un utente con un nuovo campione.
+// Update updates a user's statistics with a new sample.
 func (pd *PatternDetector) Update(uid int, cpuUsage float64) {
 	pd.updateAt(uid, cpuUsage, time.Now())
 }
@@ -100,14 +100,15 @@ func (pd *PatternDetector) updateAt(uid int, cpuUsage float64, now time.Time) {
 	})
 }
 
-// Analyze analizza i pattern per tutti gli utenti e restituisce i risultati.
+// Analyze classifies the retained workload history for every user.
 func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
+	minSamples := cfg.GetPatternMinSamples()
+	confidenceThreshold := cfg.GetPatternConfidenceThreshold()
+
 	pd.mu.RLock()
 	defer pd.mu.RUnlock()
 
 	results := make(map[int]PatternResult)
-	minSamples := cfg.GetPatternMinSamples()
-	confidenceThreshold := cfg.GetPatternConfidenceThreshold()
 
 	for uid, stats := range pd.userStats {
 		if len(stats.Buckets) < minSamples {
@@ -122,20 +123,20 @@ func (pd *PatternDetector) Analyze(cfg *config.Config) map[int]PatternResult {
 	return results
 }
 
-// classifyPattern classifica il pattern di un utente basandosi sulle statistiche orarie.
+// classifyPattern classifies a user's pattern from hourly statistics.
 func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) PatternResult {
 	hourlyCPU, hourlyCount := aggregateHourlyBuckets(stats.Buckets)
 
-	// Calcola varianza oraria
+	// Calculate hourly variance.
 	nightAvg, nightSamples := weightedAverage(hourlyCPU[:], hourlyCount[:], 22, 23, 0, 1, 2, 3, 4, 5, 6)
 	dayAvg, daySamples := weightedAverage(hourlyCPU[:], hourlyCount[:], 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 	overallAvg := overallAverage(hourlyCPU[:], hourlyCount[:])
 	variance := calculateVariance(hourlyCPU[:], hourlyCount[:])
 
-	// Normalizza varianza (0-1)
+	// Normalize variance to the 0-1 range.
 	normalizedVariance := math.Min(variance/50.0, 1.0)
 
-	// Ratio notte/giorno
+	// Calculate the night-to-day ratio.
 	nightDayRatio := 0.0
 	if dayAvg > 0 {
 		nightDayRatio = nightAvg / dayAvg
@@ -143,7 +144,7 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 		nightDayRatio = math.Inf(1)
 	}
 
-	// Classificazione
+	// Classify the workload.
 	var pattern WorkloadPattern
 	var confidence float64
 
@@ -154,27 +155,27 @@ func classifyPattern(stats *UserHourlyStats, confidenceThreshold float64) Patter
 		confidence = math.Min(0.8+math.Min(nightAvg/100.0, 1.0)*0.2, 1.0)
 
 	case nightDayRatio > 1.5 && normalizedVariance > 0.4:
-		// Alta CPU di notte, bassa di giorno, alta varianza
+		// High CPU at night, low CPU by day, and high variance.
 		pattern = PatternBatchNight
 		confidence = math.Min(nightDayRatio/3.0*0.6+normalizedVariance*0.4, 1.0)
 
 	case nightDayRatio < 0.5 && normalizedVariance < 0.3 && overallAvg > 5:
-		// CPU moderata di giorno, bassa di notte, varianza bassa
+		// Moderate daytime CPU, low nighttime CPU, and low variance.
 		pattern = PatternInteractiveDay
 		confidence = math.Min((1.0-nightDayRatio)*0.5+(1.0-normalizedVariance)*0.5, 1.0)
 
 	case normalizedVariance > 0.5 && nightDayRatio > 0.8 && nightDayRatio < 1.2:
-		// Alta varianza ma uso simile giorno/notte
+		// High variance with similar day and night usage.
 		pattern = PatternMixed
 		confidence = math.Min(normalizedVariance, 1.0)
 
 	case normalizedVariance < 0.2 && overallAvg > 10:
-		// Bassa varianza, uso costante alto
+		// Low variance with consistently high usage.
 		pattern = PatternAlwaysOn
 		confidence = math.Min(1.0-normalizedVariance, 1.0)
 
 	case overallAvg < 5 && normalizedVariance > 0.6:
-		// Uso medio basso ma con picchi
+		// Low average usage with occasional spikes.
 		pattern = PatternSporadic
 		confidence = math.Min(normalizedVariance*0.7+(1.0-overallAvg/5.0)*0.3, 1.0)
 
@@ -222,7 +223,7 @@ func weightedAverage(values []float64, counts []int, hours ...int) (float64, int
 	return total / float64(samples), samples
 }
 
-// overallAverage calcola la media ponderata su tutte le ore.
+// overallAverage calculates the weighted average across all hours.
 func overallAverage(values []float64, counts []int) float64 {
 	totalSum := 0.0
 	totalCount := 0
@@ -236,7 +237,7 @@ func overallAverage(values []float64, counts []int) float64 {
 	return totalSum / float64(totalCount)
 }
 
-// calculateVariance calcola la varianza ponderata delle CPU orarie.
+// calculateVariance calculates the weighted variance of hourly CPU usage.
 func calculateVariance(values []float64, counts []int) float64 {
 	mean := overallAverage(values, counts)
 	if mean == 0 {

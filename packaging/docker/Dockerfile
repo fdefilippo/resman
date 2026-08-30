@@ -1,46 +1,59 @@
-FROM golang:1.21-alpine AS builder
+ARG GO_VERSION=1.25.7
 
-WORKDIR /app
+FROM docker.io/library/golang:${GO_VERSION}-bookworm AS go-toolchain
 
-# Installa dipendenze necessarie
-RUN apk add --no-cache git ca-certificates tzdata
+FROM docker.io/library/oraclelinux:9 AS builder
 
-# Copia prima i file di modulo per caching
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /src
+
+RUN dnf install -y ca-certificates gcc git glibc-devel \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copia il resto del codice
-COPY . .
+COPY main.go ./
+COPY cgroup ./cgroup
+COPY config ./config
+COPY database ./database
+COPY internal ./internal
+COPY logging ./logging
+COPY mcp ./mcp
+COPY metrics ./metrics
+COPY reloader ./reloader
+COPY state ./state
 
-# Build del binario
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.version=docker'" -o resman
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X 'main.version=container'" \
+    -o /out/resman .
 
-# ============================================================================
-FROM alpine:3.18
+FROM docker.io/library/oraclelinux:9
 
-# Installa certificati SSL e fuso orario
-RUN apk add --no-cache ca-certificates tzdata
+RUN dnf install -y ca-certificates sssd-client tzdata \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf \
+    && install -d -m 0700 /etc/resman /etc/resman/tls \
+    && install -d -m 0700 /var/lib/resman \
+    && install -d -m 0750 /var/log/resman
 
-# Crea utente non-root per sicurezza
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+COPY --from=builder /out/resman /usr/local/bin/resman
+COPY config/resman.conf.example /etc/resman/resman.conf
 
-# Copia binario e configurazione
-COPY --from=builder /app/resman /usr/local/bin/resman
-COPY --from=builder /app/config/resman.conf.example /etc/resman.conf
+RUN chmod 0755 /usr/local/bin/resman \
+    && chmod 0600 /etc/resman/resman.conf \
+    && ldd /usr/local/bin/resman | grep -q 'libc\.so'
 
-# Configura permessi
-RUN mkdir -p /var/log /var/run/resman \
-    && chown -R appuser:appgroup /var/log /var/run/resman \
-    && chmod 755 /usr/local/bin/resman
+# The supported runtime requires host PID/cgroup namespaces and privileged
+# access. Running as another user would silently lose trustworthy foreign-user
+# process identity and cgroup write access.
+USER 0
+WORKDIR /var/lib/resman
 
-USER appuser
-WORKDIR /home/appuser
+EXPOSE 1974
+STOPSIGNAL SIGTERM
 
-# Esponi porta Prometheus
-EXPOSE 9101
-
-# Volume per configurazione esterna
-VOLUME ["/etc/resman.conf"]
-
-ENTRYPOINT ["resman"]
-CMD ["--config", "/etc/resman.conf"]
+ENTRYPOINT ["/usr/local/bin/resman"]
+CMD ["--config", "/etc/resman/resman.conf"]

@@ -2,12 +2,15 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -30,32 +33,55 @@ type controlCycleContext struct {
 	duration           time.Duration
 	activeLimitedUsers int
 	stopWithoutError   bool
+	deferredErrors     []error
+	degradedErrors     []error
+	degradedWarnings   []error
 }
 
-type controlCycleStage func(*Manager, *controlCycleContext) error
+type controlCycleStage struct {
+	name               string
+	run                func(*Manager, *controlCycleContext) error
+	continueAfterError bool
+}
+
+type patternPolicyError struct {
+	uid int
+	err error
+}
+
+func (e *patternPolicyError) Error() string {
+	return fmt.Sprintf("reconcile workload pattern policy for UID %d: %v", e.uid, e.err)
+}
+
+func (e *patternPolicyError) Unwrap() error {
+	return e.err
+}
 
 var defaultControlCyclePipeline = []controlCycleStage{
-	(*Manager).stageCheckBlackout,
-	(*Manager).stageCollectMetrics,
-	(*Manager).stageUpdatePrometheus,
-	(*Manager).stageWriteDatabase,
-	(*Manager).stageMakeDecision,
-	(*Manager).stageExecuteDecision,
-	(*Manager).stageRecordHistory,
-	(*Manager).stageIORemediation,
-	(*Manager).stageWorkloadPatternDetection,
-	(*Manager).stageRevertPSIBoosts,
-	(*Manager).stageLogCompletion,
+	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
+	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
+	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+	{name: "write_database", run: (*Manager).stageWriteDatabase},
+	{name: "make_decision", run: (*Manager).stageMakeDecision},
+	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+	{name: "record_history", run: (*Manager).stageRecordHistory},
+	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
+	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
+	{name: "revert_psi_boosts", run: (*Manager).stageRevertPSIBoosts},
+	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
 
 func (m *Manager) RunControlCycle(ctx context.Context) error {
 	return m.RunControlCycleWithTrigger(ctx, ControlCycleTriggerManual)
 }
 
-// RunMetricsRefresh aggiorna solo le metriche Prometheus/Grafana senza decisioni.
+// RunMetricsRefresh refreshes Prometheus metrics without running a decision cycle.
 func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	if trigger == "" {
 		trigger = "metrics_refresh"
@@ -72,21 +98,26 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	}
 
 	if m.prometheusExporter != nil {
-		m.updatePrometheusMetrics(metrics)
+		m.updatePrometheusSystemMetrics(metrics)
 	}
 
-	m.logger.Debug("Metrics refresh completed",
+	if err := m.logger.DebugChecked("Metrics refresh completed",
 		"trigger", trigger,
 		"duration_ms", time.Since(startTime).Milliseconds(),
-	)
+	); err != nil {
+		return fmt.Errorf("write metrics-refresh completion log: %w", err)
+	}
 
 	return nil
 }
 
-// RunControlCycleWithTrigger esegue un ciclo indicando il motivo che lo ha avviato.
+// RunControlCycleWithTrigger executes one control cycle for the supplied trigger.
 func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	leaveEpoch := m.epoch.Enter()
+	defer leaveEpoch()
+
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
 
 	if trigger == "" {
 		trigger = ControlCycleTriggerManual
@@ -100,26 +131,40 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 	}
 	run.cycleID = run.startTime.Unix()
 
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordControlCycleTrigger(trigger)
+	if exporter := m.prometheusExporter; exporter != nil {
+		exporter.RecordControlCycleTrigger(trigger)
+		defer func() {
+			exporter.RecordControlCycleDuration(time.Since(run.startTime))
+		}()
 	}
 
-	m.logger.Debug("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger)
+	if err := m.logger.DebugChecked("Starting control cycle", "cycle_id", run.cycleID, "trigger", trigger); err != nil {
+		run.degradedErrors = append(run.degradedErrors, fmt.Errorf("write control-cycle start log: %w", err))
+	}
 
-	for _, stage := range defaultControlCyclePipeline {
-		if err := stage(m, run); err != nil {
-			return err
+	return runControlCyclePipeline(m, run, defaultControlCyclePipeline)
+}
+
+func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []controlCycleStage) error {
+	var cycleErrors []error
+	for _, stage := range stages {
+		if err := stage.run(m, run); err != nil {
+			cycleErrors = append(cycleErrors, err)
+			if !stage.continueAfterError {
+				return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
+			}
+			run.deferredErrors = append(run.deferredErrors, err)
 		}
 		if run.stopWithoutError {
-			return nil
+			return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
 		}
 	}
 
-	return nil
+	return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
 }
 
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
-	// Controlla se siamo in un blackout timeframe
+	// Check whether the current time is within a blackout window.
 	nextEnd := run.cfg.GetNextBlackoutEnd()
 	if nextEnd != nil {
 		if err := m.revertAllPSIBoosts(); err != nil {
@@ -135,7 +180,7 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 		}
 
 		m.mu.RLock()
-		limitsNeedDeactivation := m.limitsActive || len(m.activeUsers) > 0 || m.sharedCgroupPath != ""
+		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0 || m.sharedCgroupPath != ""
 		m.mu.RUnlock()
 		if limitsNeedDeactivation {
 			if err := m.deactivateLimits(); err != nil {
@@ -155,7 +200,7 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 }
 
 func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
-	// 1. Raccogli metriche del sistema
+	// 1. Collect system metrics.
 	metrics, err := m.collectSystemMetrics()
 	if err != nil {
 		m.logger.Error("Failed to collect system metrics",
@@ -166,53 +211,50 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", run.cycleID, err)
 	}
 	run.metrics = metrics
+	run.degradedErrors = append(run.degradedErrors, metrics.blockIOObservationErrors...)
+	run.degradedWarnings = append(run.degradedWarnings, metrics.blockIOObservationWarnings...)
 	return nil
 }
 
 func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
-	// 2. Aggiorna le metriche Prometheus (se abilitato)
+	// Publish system observations and decision-owned per-user metrics.
 	if m.prometheusExporter != nil {
-		m.updatePrometheusMetrics(run.metrics)
+		m.updatePrometheusSystemMetrics(run.metrics)
+		m.updatePrometheusDecisionUserMetrics(run.metrics)
 	}
 	return nil
 }
 
 func (m *Manager) stageWriteDatabase(run *controlCycleContext) error {
-	// 3. Scrivi le metriche nel database (se abilitato)
+	// 3. Write metrics to the database when enabled.
 	m.writeDatabaseMetrics(run.metrics)
 	return nil
 }
 
 func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
-	// 4. Prendi decisione basata sulle metriche
+	// 4. Make a decision from the collected metrics.
 	run.decision, run.reason = m.makeDecision(run.metrics)
 	return nil
 }
 
 func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
-	// 4. Esegui l'azione corrispondente
+	// Execute the selected enforcement action. The application-level caller owns
+	// the single cycle failure log after protective stages have completed.
 	if err := m.executeDecision(run.decision, run.metrics); err != nil {
-		m.logger.Error("Failed to execute decision",
-			"decision", run.decision,
-			"reason", run.reason,
-			"cycle_id", run.cycleID,
-			"trigger", run.trigger,
-			"error", err,
-		)
 		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
 	}
 	return nil
 }
 
 func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
-	// 6. Registra lo storico del ciclo
+	// 6. Record the control-cycle history.
 	run.duration = time.Since(run.startTime)
 	m.recordControlCycle(run.decision, run.reason, run.metrics, run.duration)
 	return nil
 }
 
 func (m *Manager) stageIORemediation(run *controlCycleContext) error {
-	// 7. IO Starvation Auto-Remediation
+	// Run I/O starvation auto-remediation for observed active, I/O-eligible users.
 	if m.ioRemediation != nil {
 		var limitedUsers []int
 		if run.cfg.GetIOEnabled() {
@@ -222,12 +264,20 @@ func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 			}
 			m.mu.RUnlock()
 			limitedUsers = slices.DeleteFunc(limitedUsers, func(uid int) bool {
-				return !run.cfg.IsUserWhitelistedForIO(m.getUsername(uid))
+				return !run.cfg.EvaluateUserEligibility(m.getUsername(uid)).EligibleForIO
 			})
+			sort.Ints(limitedUsers)
 		}
-		m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
-		// Cleanup periodico stati vecchi
+		remediationErrors := m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
+		for _, err := range remediationErrors {
+			var remediationErr *ioRemediationError
+			if errors.As(err, &remediationErr) && m.prometheusExporter != nil {
+				m.prometheusExporter.RecordError(ioRemediationErrorComponent, remediationErr.operation)
+			}
+		}
+		// Remove stale remediation state periodically.
 		m.ioRemediation.Cleanup(24 * time.Hour)
+		return errors.Join(remediationErrors...)
 	}
 	return nil
 }
@@ -237,16 +287,19 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 	if m.patternDetector == nil || m.policyEngine == nil {
 		return nil
 	}
+	toReconcile := m.pendingPatternReconciliationSnapshot()
 
 	if !run.cfg.GetAutodetectPatterns() {
 		for _, uid := range m.policyEngine.Clear() {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
-		return nil
+		return m.reconcilePatternPolicies(toReconcile, run.cfg)
 	}
 
 	configuredEligible := make(map[int]bool)
-	allMetrics := m.metricsCollector.GetAllUserMetrics()
+	// Pattern detection is an enforcement input and must consume the control
+	// cycle's authoritative decision snapshot, not an observation-only re-read.
+	allMetrics := run.metrics.UserMetrics
 	for uid, um := range allMetrics {
 		if um == nil {
 			continue
@@ -259,7 +312,7 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 			continue
 		}
 		configuredEligible[uid] = true
-		m.patternDetector.Update(uid, um.CPUUsage)
+		m.patternDetector.Update(uid, um.EnforceableUsage.CPUUsage)
 	}
 
 	// Preserve history for configured users even when they have no live processes.
@@ -275,18 +328,18 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 
 	m.patternDetector.RetainUsers(configuredEligible)
 	for _, uid := range m.policyEngine.RetainUsers(configuredEligible) {
-		m.reconcilePatternPolicy(uid, run.cfg)
+		toReconcile[uid] = struct{}{}
 	}
 
-	// Analizza pattern ogni ora
+	// Analyze patterns once per hour.
 	if time.Since(m.lastPatternAnalysis) <= time.Hour {
-		return nil
+		return m.reconcilePatternPolicies(toReconcile, run.cfg)
 	}
 
 	m.lastPatternAnalysis = time.Now()
 	for _, uid := range m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour) {
 		if m.policyEngine.RemovePolicy(uid) {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
 	}
 	patterns := m.patternDetector.Analyze(run.cfg)
@@ -303,18 +356,67 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 			changed = m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg)
 		}
 		if changed {
-			m.reconcilePatternPolicy(uid, run.cfg)
+			toReconcile[uid] = struct{}{}
 		}
 	}
 
-	return nil
+	return m.reconcilePatternPolicies(toReconcile, run.cfg)
 }
 
-func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) {
-	if !m.isUserLimited(uid) {
-		return
+func (m *Manager) pendingPatternReconciliationSnapshot() map[int]struct{} {
+	m.mu.RLock()
+	pending := make(map[int]struct{}, len(m.pendingPatternReconciliations))
+	for uid := range m.pendingPatternReconciliations {
+		pending[uid] = struct{}{}
 	}
-	m.applyUserResourceLimits(uid, cfg)
+	m.mu.RUnlock()
+	return pending
+}
+
+func (m *Manager) reconcilePatternPolicies(uids map[int]struct{}, cfg *config.Config) error {
+	ordered := make([]int, 0, len(uids))
+	for uid := range uids {
+		ordered = append(ordered, uid)
+	}
+	sort.Ints(ordered)
+
+	var reconcileErrors []error
+	for _, uid := range ordered {
+		err := m.reconcilePatternPolicy(uid, cfg)
+		m.mu.Lock()
+		if err != nil {
+			if m.pendingPatternReconciliations == nil {
+				m.pendingPatternReconciliations = make(map[int]struct{})
+			}
+			m.pendingPatternReconciliations[uid] = struct{}{}
+		} else {
+			delete(m.pendingPatternReconciliations, uid)
+		}
+		m.mu.Unlock()
+		if err == nil {
+			continue
+		}
+		reconcileErrors = append(reconcileErrors, err)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(patternPolicyErrorComponent, patternPolicyApplicationFailure)
+		}
+	}
+	return errors.Join(reconcileErrors...)
+}
+
+func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) error {
+	if !m.isUserLimited(uid) {
+		return nil
+	}
+	err := m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid)))
+	m.mu.Lock()
+	m.refreshResourceLimitsActiveLocked(time.Now())
+	m.mu.Unlock()
+	if err != nil {
+		return &patternPolicyError{uid: uid, err: err}
+	}
+	m.logger.Info("Workload pattern resource limits reconciled", "uid", uid)
+	return nil
 }
 
 func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {
@@ -330,20 +432,30 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	run.activeLimitedUsers = len(m.activeUsers)
 	m.mu.RUnlock()
 
-	// 9. Logga il risultato del ciclo
-	m.logger.Info("Control cycle completed",
+	outcome := "success"
+	if len(run.deferredErrors) > 0 || len(run.degradedErrors) > 0 || len(run.degradedWarnings) > 0 {
+		outcome = "degraded"
+	}
+
+	// Log the complete cycle outcome after all protective stages have run.
+	if err := m.logger.InfoChecked("Control cycle completed",
 		"cycle_id", run.cycleID,
 		"trigger", run.trigger,
 		"decision", run.decision,
 		"reason", run.reason,
 		"total_cpu_usage", run.metrics.TotalCPUUsage,
-		"limited_users_cpu_usage", run.metrics.LimitedUsersCPUUsage,
-		"eligible_users", run.metrics.LimitedUsersCount,
+		"cpu_eligible_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
+		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
 		"system_under_load", run.metrics.SystemUnderLoad,
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
 		"duration_ms", run.duration.Milliseconds(),
-	)
+		"outcome", outcome,
+		"deferred_error_count", len(run.deferredErrors)+len(run.degradedErrors),
+		"degraded_warning_count", len(run.degradedWarnings),
+	); err != nil {
+		return fmt.Errorf("write control-cycle completion log: %w", err)
+	}
 
 	return nil
 }
@@ -351,48 +463,69 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 type SystemMetrics struct {
 	Timestamp     time.Time
 	TotalCores    int
-	TotalCPUUsage float64 // Percentuale
+	TotalCPUUsage float64 // Percentage
 
-	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64
 	AllUsersMemoryUsage uint64
 	AllUsersCount       int
 
-	// LIMITED USERS metrics (solo utenti che passano i filtri)
-	LimitedUsersCPUUsage    float64
-	LimitedUsersMemoryUsage uint64
-	LimitedUsersCount       int
+	// Per-resource eligible-user metrics.
+	CPUEligibleCPUUsage            float64
+	CPUEligibleMemoryUsage         uint64
+	CPUEligibleUsersCount          int
+	RAMEligibleUsersCount          int
+	IOEligibleUsersCount           int
+	RAMEligibleUsageBytes          uint64
+	IOEligibleReadBPS              float64
+	IOEligibleWriteBPS             float64
+	IOEligibleReadBlockIOPS        float64
+	IOEligibleWriteBlockIOPS       float64
+	IOBlockIOPSUnavailableUsers    int
+	IOEligibleUnavailableProcesses int
+	blockIOObservationErrors       []error
+	blockIOObservationWarnings     []error
 
-	// RAM/IO aggregates for limited users (for threshold decisions)
-	LimitedUsersRAMUsageBytes uint64
-	LimitedUsersIOWriteBytes  uint64
+	// Current procfs coverage failures across all observed processes.
+	ProcFSExecutableIdentityUnavailableProcesses int
+	ProcFSIOUnavailableProcesses                 int
 
-	MemoryUsage     float64 // MB
-	TotalMemoryMB   float64 // MB
-	CachedMemoryMB  float64 // MB
-	SystemLoad      float64
-	SystemUnderLoad bool
-	UserCPUUsage    map[int]float64                    // UID -> percentuale
-	UserMetrics     map[int]*resmanmetrics.UserMetrics // Metriche dettagliate per utente
-	EligibleUsers   []int                              // Users passing USER_INCLUDE/USER_EXCLUDE filters
+	MemoryUsage      float64 // MB
+	TotalMemoryMB    float64 // MB
+	CachedMemoryMB   float64 // MB
+	SystemLoad       float64
+	SystemUnderLoad  bool
+	UserCPUUsage     map[int]float64                    // UID to CPU percentage
+	UserMetrics      map[int]*resmanmetrics.UserMetrics // Detailed per-user metrics
+	CPUEligibleUsers []int
+	RAMEligibleUsers []int
+	IOEligibleUsers  []int
 }
 
 func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
-	return m.collectSystemMetricsWithIOState(true)
+	return m.collectSystemMetricsForPurpose(true)
 }
 
 func (m *Manager) collectSystemMetricsForRefresh() (*SystemMetrics, error) {
-	return m.collectSystemMetricsWithIOState(false)
+	return m.collectSystemMetricsForPurpose(false)
 }
 
-func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMetrics, error) {
+func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMetrics, error) {
+	collectionStarted := time.Now()
+	sampleTime := collectionStarted
+	if exporter := m.prometheusExporter; exporter != nil {
+		defer func() {
+			exporter.RecordMetricsCollectionDuration(time.Since(collectionStarted))
+		}()
+	}
+
 	metrics := &SystemMetrics{
-		Timestamp:    time.Now(),
+		Timestamp:    sampleTime,
 		UserCPUUsage: make(map[int]float64),
 		UserMetrics:  make(map[int]*resmanmetrics.UserMetrics),
 	}
 
-	// Raccogli metriche di base
+	// Collect base system metrics.
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
 	metrics.TotalCPUUsage = m.metricsCollector.GetTotalCPUUsage()
 
@@ -403,136 +536,307 @@ func (m *Manager) collectSystemMetricsWithIOState(updateIOState bool) (*SystemMe
 	systemLoad, err := m.metricsCollector.GetSystemLoad()
 	if err != nil {
 		m.logger.Warn("Failed to collect system load", "error", err)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(metricsCollectionErrorComponent, metricsCollectionSystemLoadError)
+		}
 	} else {
 		metrics.SystemLoad = systemLoad
 	}
 
-	// Raccogli metriche dettagliate per ogni utente (CPU, memoria, processi) in una sola chiamata
-	allUserMetrics := m.metricsCollector.GetAllUserMetrics()
+	// Decision samples own temporal enforcement state. Observation refreshes use
+	// a separate stream and cannot populate or advance the decision stream.
+	var allUserMetrics map[int]*resmanmetrics.UserMetrics
+	if decisionSample {
+		allUserMetrics = m.metricsCollector.GetAllUserMetricsForDecision()
+	} else {
+		allUserMetrics = m.metricsCollector.GetAllUserMetrics()
+	}
 
-	// Singola passata per calcolare tutti gli aggregati:
-	// - AllUsers (CPU, memory, count)
-	// - EligibleUsers (IsLimited == true dal collector)
-	// - LimitedUsers (runtime active)
-	// - UserMetrics e UserCPUUsage sovrascrivendo IsLimited con stato runtime
+	// Compute total and per-resource eligible-user aggregates in one pass.
 	for uid, um := range allUserMetrics {
 		metrics.AllUsersCPUUsage += um.CPUUsage
 		metrics.AllUsersMemoryUsage += um.MemoryUsage
 		metrics.AllUsersCount++
+		metrics.ProcFSExecutableIdentityUnavailableProcesses += um.ExecutableIdentityUnavailableProcesses
+		metrics.ProcFSIOUnavailableProcesses += um.IOUnavailableProcesses
 
 		metrics.UserCPUUsage[uid] = um.CPUUsage
 
-		// FIX M2: Override IsLimited based on actual runtime state, not config
-		m.mu.RLock()
-		actuallyLimited := m.activeUsers[uid]
-		m.mu.RUnlock()
+		limitState := m.GetUserLimitState(uid, um.Username)
 
 		corrected := &resmanmetrics.UserMetrics{
-			UID:             um.UID,
-			Username:        um.Username,
-			CPUUsage:        um.CPUUsage,
-			CPUUsageAverage: um.CPUUsageAverage,
-			CPUUsageEMA:     um.CPUUsageEMA,
-			MemoryUsage:     um.MemoryUsage,
-			ProcessCount:    um.ProcessCount,
-			IsLimited:       actuallyLimited,
-			IOReadBytes:     um.IOReadBytes,
-			IOWriteBytes:    um.IOWriteBytes,
-			IOReadOps:       um.IOReadOps,
-			IOWriteOps:      um.IOWriteOps,
+			UID:                                    um.UID,
+			Username:                               um.Username,
+			CPUUsage:                               um.CPUUsage,
+			CPUUsageAverage:                        um.CPUUsageAverage,
+			CPUUsageEMA:                            um.CPUUsageEMA,
+			MemoryUsage:                            um.MemoryUsage,
+			ProcessCount:                           um.ProcessCount,
+			EligibleForCPU:                         limitState.EligibleForCPU,
+			EligibleForRAM:                         limitState.EligibleForRAM,
+			EligibleForIO:                          limitState.EligibleForIO,
+			CPULimitRequested:                      limitState.CPULimitRequested,
+			CPULimitActive:                         limitState.CPULimitActive,
+			RAMLimitRequested:                      limitState.RAMLimitRequested,
+			RAMLimitActive:                         limitState.RAMLimitActive,
+			IOLimitRequested:                       limitState.IOLimitRequested,
+			IOLimitActive:                          limitState.IOLimitActive,
+			IOReadBytes:                            um.IOReadBytes,
+			IOWriteBytes:                           um.IOWriteBytes,
+			IOReadOps:                              um.IOReadOps,
+			IOWriteOps:                             um.IOWriteOps,
+			ExecutableIdentityUnavailableProcesses: um.ExecutableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 um.IOUnavailableProcesses,
+			EnforceableUsage:                       um.EnforceableUsage,
 		}
 		metrics.UserMetrics[uid] = corrected
 
-		// Eligible users: quelli che superano i filtri di configurazione
-		if um.IsLimited {
-			metrics.EligibleUsers = append(metrics.EligibleUsers, uid)
-			metrics.LimitedUsersCPUUsage += um.CPUUsage
-			metrics.LimitedUsersMemoryUsage += um.MemoryUsage
-			metrics.LimitedUsersRAMUsageBytes += um.MemoryUsage
-
-			if updateIOState {
-				// Calcola IO rate (bytes/sec) dal delta rispetto al ciclo decisionale precedente.
-				ioDelta := um.IOWriteBytes
-				if prev, ok := m.prevIOBytes[uid]; ok && !m.prevIOTime.IsZero() {
-					elapsed := time.Since(m.prevIOTime).Seconds()
-					if elapsed > 0 && ioDelta >= prev {
-						ioRate := float64(ioDelta-prev) / elapsed
-						metrics.LimitedUsersIOWriteBytes += uint64(ioRate)
-					}
+		if corrected.EligibleForCPU {
+			metrics.CPUEligibleUsers = append(metrics.CPUEligibleUsers, uid)
+			metrics.CPUEligibleCPUUsage += um.EnforceableUsage.CPUUsage
+			metrics.CPUEligibleMemoryUsage += um.EnforceableUsage.MemoryUsage
+		}
+		if corrected.EligibleForRAM {
+			metrics.RAMEligibleUsers = append(metrics.RAMEligibleUsers, uid)
+			metrics.RAMEligibleUsageBytes += um.EnforceableUsage.MemoryUsage
+		}
+		if corrected.EligibleForIO {
+			metrics.IOEligibleUsers = append(metrics.IOEligibleUsers, uid)
+			metrics.IOEligibleUnavailableProcesses += um.EnforceableUsage.IOUnavailableProcesses
+			if decisionSample && !m.prevIOTime.IsZero() {
+				if _, wasEligible := m.previousIOEligibleUsers[uid]; wasEligible {
+					rates := calculateIOByteRates(um.EnforceableUsage.IODelta, sampleTime.Sub(m.prevIOTime))
+					metrics.IOEligibleReadBPS += rates.readBytes
+					metrics.IOEligibleWriteBPS += rates.writeBytes
 				}
-				m.prevIOBytes[uid] = ioDelta
 			}
 		}
 	}
-	metrics.LimitedUsersCount = len(metrics.EligibleUsers)
+	metrics.CPUEligibleUsersCount = len(metrics.CPUEligibleUsers)
+	metrics.RAMEligibleUsersCount = len(metrics.RAMEligibleUsers)
+	metrics.IOEligibleUsersCount = len(metrics.IOEligibleUsers)
 
-	if updateIOState {
-		m.prevIOTime = time.Now()
-
-		// Pulisci prevIOBytes per utenti non più attivi
-		for uid := range m.prevIOBytes {
-			if _, exists := allUserMetrics[uid]; !exists {
-				delete(m.prevIOBytes, uid)
-			}
+	if decisionSample {
+		decisionConfig := m.GetConfig()
+		m.collectEligibleBlockIOPS(metrics, sampleTime, decisionConfig.GetIODecisionPolicy(), decisionConfig.CPUQuotaNormal)
+		m.prevIOTime = sampleTime
+		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
+		for _, uid := range metrics.IOEligibleUsers {
+			m.previousIOEligibleUsers[uid] = struct{}{}
 		}
 	}
 
 	return metrics, nil
 }
 
-func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
+type blockIOCounterSample struct {
+	readOps  uint64
+	writeOps uint64
+}
+
+func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy, normalQuota string) {
+	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
+	desired := make(map[int]bool)
+	if needsBlockIO {
+		for _, uid := range metrics.IOEligibleUsers {
+			desired[uid] = true
+		}
+	}
+
+	m.mu.RLock()
+	sharedPath := m.sharedCgroupPath
+	activeUsers := make(map[int]bool, len(m.activeUsers))
+	for uid := range m.activeUsers {
+		activeUsers[uid] = true
+	}
+	observedBefore := make(map[int]bool, len(m.blockIOObservedUsers))
+	for uid := range m.blockIOObservedUsers {
+		observedBefore[uid] = true
+	}
+	resourceStates := make(map[int]userResourceLimitState, len(m.resourceLimits))
+	for uid, state := range m.resourceLimits {
+		resourceStates[uid] = state
+	}
+	m.mu.RUnlock()
+
+	uids := append([]int(nil), metrics.IOEligibleUsers...)
+	sort.Ints(uids)
+	current := make(map[int]blockIOCounterSample, len(uids))
+	observedNext := make(map[int]bool, len(desired)+len(observedBefore))
+	for uid := range desired {
+		observedNext[uid] = true
+	}
+	for _, uid := range uids {
+		if !desired[uid] {
+			continue
+		}
+		placement := ""
+		if activeUsers[uid] {
+			placement = sharedPath
+		}
+		_, ingress, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota)
+		m.recordCgroupIngressSkips(ingress)
+		if err == nil && ingress.NamespaceSkipped() > 0 && !ingress.Applied() {
+			err = cgroupIngressNoopError(uid, ingress)
+		}
+		if err != nil {
+			metrics.IOBlockIOPSUnavailableUsers++
+			var incomplete *cgroup.UserCgroupPlacementIncompleteError
+			if errors.As(err, &incomplete) {
+				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementIncomplete, err, true)
+			} else {
+				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementFailure, err, false)
+			}
+			continue
+		}
+		_, _, readOps, writeOps, err := m.cgroupManager.GetIOStats(uid)
+		if err != nil {
+			metrics.IOBlockIOPSUnavailableUsers++
+			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCounterReadFailure, err, false)
+			continue
+		}
+		now := blockIOCounterSample{readOps: readOps, writeOps: writeOps}
+		current[uid] = now
+		previous, hadPrevious := m.previousBlockIOCounters[uid]
+		_, wasEligible := m.previousIOEligibleUsers[uid]
+		if hadPrevious && wasEligible && !m.prevIOTime.IsZero() {
+			seconds := sampleTime.Sub(m.prevIOTime).Seconds()
+			if seconds > 0 {
+				metrics.IOEligibleReadBlockIOPS += float64(monotonicUint64Delta(now.readOps, previous.readOps)) / seconds
+				metrics.IOEligibleWriteBlockIOPS += float64(monotonicUint64Delta(now.writeOps, previous.writeOps)) / seconds
+			} else {
+				metrics.IOBlockIOPSUnavailableUsers++
+			}
+		} else {
+			metrics.IOBlockIOPSUnavailableUsers++
+		}
+	}
+
+	for uid := range observedBefore {
+		if desired[uid] || activeUsers[uid] {
+			continue
+		}
+		state := resourceStates[uid]
+		if state.ramApplied || state.ioApplied || state.standalone {
+			continue
+		}
+		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
+			observedNext[uid] = true
+			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCleanupFailure, err, false)
+		}
+	}
+
+	m.previousBlockIOCounters = current
+	m.mu.Lock()
+	m.blockIOObservedUsers = observedNext
+	m.mu.Unlock()
+}
+
+func (m *Manager) recordBlockIOObservationIssue(metrics *SystemMetrics, uid int, errorType string, err error, warning bool) {
+	issue := fmt.Errorf("block I/O observation for UID %d (%s): %w", uid, errorType, err)
+	if warning {
+		metrics.blockIOObservationWarnings = append(metrics.blockIOObservationWarnings, issue)
+		m.logger.Warn("Block I/O observation placement remains split; retrying next cycle",
+			"uid", uid,
+			"error", err,
+		)
+	} else {
+		metrics.blockIOObservationErrors = append(metrics.blockIOObservationErrors, issue)
+	}
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.RecordError(blockIOObservationErrorComponent, errorType)
+	}
+}
+
+func monotonicUint64Delta(current, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
+}
+
+// calculateIOByteRates converts per-process counter growth into per-second rates.
+// Byte counters originate from per-process /proc/PID/io deltas. Block IOPS are
+// collected separately from the user's observation cgroup.
+func calculateIOByteRates(delta resmanmetrics.ProcessIODelta, elapsed time.Duration) ioByteRate {
+	seconds := elapsed.Seconds()
+	if seconds <= 0 {
+		return ioByteRate{}
+	}
+	return ioByteRate{
+		readBytes:  float64(delta.ReadBytes) / seconds,
+		writeBytes: float64(delta.WriteBytes) / seconds,
+	}
+}
+
+type ioByteRate struct {
+	readBytes  float64
+	writeBytes float64
+}
+
+func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	if m.prometheusExporter == nil {
 		return
 	}
 
-	m.mu.RLock()
-	limitedUsers := len(m.activeUsers)
-	limitsActive := m.limitsActive
-	m.mu.RUnlock()
+	summary := m.getEnforcementSummary()
 
-	// Metriche base per il metodo UpdateMetrics
-	promMetrics := map[string]float64{
-		// System metrics
-		"cpu_total_usage": metrics.TotalCPUUsage,
-		"total_cores":     float64(metrics.TotalCores),
+	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
+	if actionCores < 1 {
+		actionCores = 1
+	}
+	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		TotalCPUUsage:                                metrics.TotalCPUUsage,
+		TotalCores:                                   metrics.TotalCores,
+		ActionCores:                                  actionCores,
+		ObservedUsersCPUUsage:                        metrics.AllUsersCPUUsage,
+		ObservedUsersCount:                           metrics.AllUsersCount,
+		ObservedUsersMemoryUsage:                     metrics.AllUsersMemoryUsage,
+		CPUEligibleUsersCPUUsage:                     metrics.CPUEligibleCPUUsage,
+		CPUEligibleUsersCount:                        metrics.CPUEligibleUsersCount,
+		CPUEligibleUsersMemoryUsage:                  metrics.CPUEligibleMemoryUsage,
+		RAMEligibleUsersCount:                        metrics.RAMEligibleUsersCount,
+		RAMEligibleUsersMemoryUsage:                  metrics.RAMEligibleUsageBytes,
+		IOEligibleUsersCount:                         metrics.IOEligibleUsersCount,
+		IOEligibleUsersReadBytesPerSecond:            metrics.IOEligibleReadBPS,
+		IOEligibleUsersWriteBytesPerSecond:           metrics.IOEligibleWriteBPS,
+		IOEligibleUsersReadBlockOperationsPerSecond:  metrics.IOEligibleReadBlockIOPS,
+		IOEligibleUsersWriteBlockOperationsPerSecond: metrics.IOEligibleWriteBlockIOPS,
+		CPUActivelyLimitedUsersCount:                 len(summary.cpuUsers),
+		ActivelyLimitedUsersCount:                    len(summary.activelyLimitedUsers),
+		CPULimitsActive:                              summary.cpuLimitsActive,
+		ResourceLimitsActive:                         summary.resourceLimitsActive,
+		AnyLimitsActive:                              summary.cpuLimitsActive || summary.resourceLimitsActive,
+		MemoryUsageMB:                                metrics.MemoryUsage,
+		TotalMemoryMB:                                metrics.TotalMemoryMB,
+		CachedMemoryMB:                               metrics.CachedMemoryMB,
+		SystemLoad:                                   metrics.SystemLoad,
+		ProcFSExecutableIdentityUnavailableProcesses: metrics.ProcFSExecutableIdentityUnavailableProcesses,
+		ProcFSIOUnavailableProcesses:                 metrics.ProcFSIOUnavailableProcesses,
+	})
 
-		// ALL USERS metrics
-		"all_users_cpu_usage":    metrics.AllUsersCPUUsage,
-		"all_users_count":        float64(metrics.AllUsersCount),
-		"all_users_memory_usage": float64(metrics.AllUsersMemoryUsage),
+}
 
-		// LIMITED USERS metrics
-		"limited_users_cpu_usage":    metrics.LimitedUsersCPUUsage,
-		"limited_users_count":        float64(metrics.LimitedUsersCount),
-		"limited_users_memory_usage": float64(metrics.LimitedUsersMemoryUsage),
-
-		// Other metrics
-		"memory_usage_mb":  metrics.MemoryUsage,
-		"total_memory_mb":  metrics.TotalMemoryMB,
-		"cached_memory_mb": metrics.CachedMemoryMB,
-		"limited_users":    float64(limitedUsers),
-		"limits_active":    boolToFloat(limitsActive),
-		"system_load":      metrics.SystemLoad,
+func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
+	if m.prometheusExporter == nil {
+		return
 	}
 
-	m.prometheusExporter.UpdateMetrics(promMetrics)
-
-	// Aggiorna metriche specifiche per utente usando UserMetrics
+	// Per-user series are owned exclusively by the decision sample. Observation
+	// refreshes must not overwrite them with a different baseline or EMA history.
 	for uid, userMetrics := range metrics.UserMetrics {
 		username := userMetrics.Username
 		if username == "" || username == strconv.Itoa(uid) {
 			username = m.getUsername(uid)
 		}
 
-		isLimited := m.isUserLimited(uid)
-
 		// Batch cgroup reads: single call instead of 3 separate ones
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
-		var cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps uint64
+		var cgroupIOReadBytes, cgroupIOWriteBytes uint64
 		if m.cgroupManager != nil {
 			var err error
-			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, cgroupIOReadOps, cgroupIOWriteOps, err = m.cgroupManager.GetUserCgroupMetrics(uid)
+			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, _, _, err = m.cgroupManager.GetUserCgroupMetrics(uid)
 			if err != nil {
 				if isMissingUserCgroupError(err) {
 					m.logger.Debug("Cgroup metrics unavailable for user without cgroup", "uid", uid)
@@ -541,100 +845,123 @@ func (m *Manager) updatePrometheusMetrics(metrics *SystemMetrics) {
 				}
 			}
 		}
-
-		// Use per-user IO from GetAllUserMetrics
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
-		ioReadOps := userMetrics.IOReadOps
-		ioWriteOps := userMetrics.IOWriteOps
 		if ioReadBytes == 0 && ioWriteBytes == 0 && cgroupIOReadBytes > 0 {
 			ioReadBytes = cgroupIOReadBytes
 			ioWriteBytes = cgroupIOWriteBytes
-			ioReadOps = cgroupIOReadOps
-			ioWriteOps = cgroupIOWriteOps
 		}
 
-		// Usa UpdateUserMetrics con tutti i parametri
-		m.prometheusExporter.UpdateUserMetrics(
-			uid,
-			username,
-			userMetrics.CPUUsage,
-			userMetrics.CPUUsageAverage,
-			userMetrics.CPUUsageEMA,
-			userMetrics.MemoryUsage,
-			userMetrics.ProcessCount,
-			isLimited,
-			cgroupPath,
-			cpuQuota,
-			memoryHighEvents,
-			ioReadBytes,
-			ioWriteBytes,
-			ioReadOps,
-			ioWriteOps,
-		)
+		// Publish the explicit observed CPU enforcement state.
+		m.prometheusExporter.UpdateUserSnapshot(resmanmetrics.UserExporterMetrics{
+			UID:                  uid,
+			Username:             username,
+			CPUUsagePercent:      userMetrics.CPUUsage,
+			CPUUsageAverage:      userMetrics.CPUUsageAverage,
+			CPUUsageEMA:          userMetrics.CPUUsageEMA,
+			MemoryUsageBytes:     userMetrics.MemoryUsage,
+			ProcessCount:         userMetrics.ProcessCount,
+			CPULimitActive:       userMetrics.CPULimitActive,
+			CgroupPath:           cgroupPath,
+			CPUQuota:             cpuQuota,
+			MemoryHighEvents:     memoryHighEvents,
+			ObservedIOReadBytes:  ioReadBytes,
+			ObservedIOWriteBytes: ioWriteBytes,
+			ObservedIOReadOps:    userMetrics.IOReadOps,
+			ObservedIOWriteOps:   userMetrics.IOWriteOps,
+		})
 	}
 
-	// Pulisci metriche per utenti non più attivi
+	// Remove metric series for users absent from the current sample.
 	activeUids := make(map[int]bool)
 	for uid := range metrics.UserMetrics {
 		activeUids[uid] = true
 	}
 	m.prometheusExporter.CleanupUserMetrics(activeUids)
-
-	// Aggiorna metriche di sistema
-	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
-	if actionCores < 1 {
-		actionCores = 1
-	}
-	m.prometheusExporter.UpdateSystemMetrics(metrics.TotalCores, actionCores, metrics.SystemLoad)
 }
 
+const (
+	metricsCollectionErrorComponent       = "metrics_collection"
+	metricsCollectionSystemLoadError      = "system_load_failure"
+	metricsDatabaseErrorComponent         = "metrics_database"
+	metricsDatabaseWriteFailure           = "write_failure"
+	limitTransitionErrorComponent         = "limit_transition"
+	limitTransitionActivationFailure      = "activation_failure"
+	limitTransitionDeactivationFailure    = "deactivation_failure"
+	processMembershipErrorComponent       = "process_membership"
+	processMembershipReconcileFailure     = "reconciliation_failure"
+	processMembershipOriginUnavailable    = "origin_unavailable"
+	blockIOObservationErrorComponent      = "block_io_observation"
+	blockIOObservationPlacementFailure    = "placement_failure"
+	blockIOObservationPlacementIncomplete = "placement_incomplete"
+	blockIOObservationCounterReadFailure  = "counter_read_failure"
+	blockIOObservationCleanupFailure      = "cleanup_failure"
+	ioRemediationErrorComponent           = "io_remediation"
+	patternPolicyErrorComponent           = "pattern_policy"
+	patternPolicyApplicationFailure       = "application_failure"
+)
+
+// writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.
 func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	if m.metricsCollector == nil {
 		return
 	}
 
-	// Verifica se il DB writer è configurato
+	// Skip persistence when no database writer is configured.
 	writer := m.metricsCollector.GetDBWriter()
 	if writer == nil {
 		return
 	}
 
-	// Verifica se è il momento di scrivere
+	// Respect the configured persistence cadence.
 	if !writer.ShouldWrite() {
 		return
 	}
 
-	m.mu.RLock()
-	limitsActive := m.limitsActive
-	activeUsers := len(m.activeUsers)
-	m.mu.RUnlock()
+	summary := m.getEnforcementSummary()
 
-	// Scrivi le metriche
-	m.metricsCollector.WriteMetricsToDatabase(
+	if err := m.metricsCollector.WriteMetricsToDatabase(
 		metrics.UserMetrics,
-		metrics.TotalCPUUsage,
-		metrics.TotalCores,
-		metrics.SystemLoad,
-		limitsActive,
-		activeUsers,
-	)
+		resmanmetrics.SystemPersistenceMetrics{
+			TotalCPUUsagePercent:         metrics.TotalCPUUsage,
+			TotalCores:                   metrics.TotalCores,
+			SystemLoad:                   metrics.SystemLoad,
+			CPULimitsActive:              summary.cpuLimitsActive,
+			ResourceLimitsActive:         summary.resourceLimitsActive,
+			AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
+			CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
+			ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
+		},
+	); err != nil {
+		m.logger.Warn("Failed to write metrics to database",
+			"users", len(metrics.UserMetrics),
+			"cpu_limits_active", summary.cpuLimitsActive,
+			"resource_limits_active", summary.resourceLimitsActive,
+			"error", err,
+		)
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.RecordError(metricsDatabaseErrorComponent, metricsDatabaseWriteFailure)
+		}
+		return
+	}
 
 	m.logger.Debug("Metrics written to database",
 		"users", len(metrics.UserMetrics),
-		"limits_active", limitsActive,
+		"cpu_limits_active", summary.cpuLimitsActive,
+		"resource_limits_active", summary.resourceLimitsActive,
 	)
 }
 
 type ControlCycleEntry struct {
-	Timestamp     time.Time `json:"timestamp"`
-	Decision      string    `json:"decision"`
-	Reason        string    `json:"reason"`
-	TotalCPUUsage float64   `json:"total_cpu_usage"`
-	UserCPUUsage  float64   `json:"user_cpu_usage"`
-	ActiveUsers   int       `json:"active_users"`
-	LimitsActive  bool      `json:"limits_active"`
-	DurationMs    int64     `json:"duration_ms"`
+	Timestamp                    time.Time `json:"timestamp"`
+	Decision                     string    `json:"decision"`
+	Reason                       string    `json:"reason"`
+	TotalCPUUsage                float64   `json:"total_cpu_usage"`
+	CPUEligibleCPUUsage          float64   `json:"cpu_eligible_users_cpu_usage"`
+	ObservedUsersCount           int       `json:"observed_users_count"`
+	CPUActivelyLimitedUsersCount int       `json:"cpu_actively_limited_users_count"`
+	CPULimitsActive              bool      `json:"cpu_limits_active"`
+	DurationMs                   int64     `json:"duration_ms"`
 }
 
 // controlHistory stores recent control cycle entries
@@ -678,17 +1005,19 @@ func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
 func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMetrics, duration time.Duration) {
 	m.mu.RLock()
 	limitsActive := m.limitsActive
+	activelyLimitedUsers := len(m.activeUsers)
 	m.mu.RUnlock()
 
 	entry := ControlCycleEntry{
-		Timestamp:     time.Now(),
-		Decision:      decision,
-		Reason:        reason,
-		TotalCPUUsage: metrics.TotalCPUUsage,
-		UserCPUUsage:  metrics.LimitedUsersCPUUsage,
-		ActiveUsers:   len(metrics.UserCPUUsage),
-		LimitsActive:  limitsActive,
-		DurationMs:    duration.Milliseconds(),
+		Timestamp:                    time.Now(),
+		Decision:                     decision,
+		Reason:                       reason,
+		TotalCPUUsage:                metrics.TotalCPUUsage,
+		CPUEligibleCPUUsage:          metrics.CPUEligibleCPUUsage,
+		ObservedUsersCount:           len(metrics.UserMetrics),
+		CPUActivelyLimitedUsersCount: activelyLimitedUsers,
+		CPULimitsActive:              limitsActive,
+		DurationMs:                   duration.Milliseconds(),
 	}
 
 	m.addControlHistoryEntry(entry)

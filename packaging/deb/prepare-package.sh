@@ -12,8 +12,8 @@ release=$3
 arch=$4
 package_dir=$5
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+project_dir=$(CDPATH='' cd -- "$script_dir/../.." && pwd)
 
 case "$arch" in
     amd64|arm64) ;;
@@ -36,7 +36,7 @@ case "$package_dir" in
 esac
 
 mkdir -p "$(dirname -- "$package_dir")"
-package_parent=$(CDPATH= cd -- "$(dirname -- "$package_dir")" && pwd)
+package_parent=$(CDPATH='' cd -- "$(dirname -- "$package_dir")" && pwd)
 package_dir="$package_parent/$(basename -- "$package_dir")"
 shlibdeps_dir="${package_dir}.shlibdeps"
 
@@ -45,19 +45,20 @@ rm -rf -- "$package_dir" "$shlibdeps_dir"
 install -d -m 0755 \
     "$package_dir/DEBIAN" \
     "$package_dir/etc/logrotate.d" \
-    "$package_dir/etc/resman" \
     "$package_dir/etc/rsyslog.d" \
     "$package_dir/usr/bin" \
     "$package_dir/usr/lib/resman" \
     "$package_dir/usr/lib/systemd/system" \
     "$package_dir/usr/share/doc/resman" \
     "$package_dir/usr/share/lintian/overrides" \
-    "$package_dir/usr/share/man/man8" \
+    "$package_dir/usr/share/man/man8"
+install -d -m 0700 \
+    "$package_dir/etc/resman" \
+    "$package_dir/etc/resman/tls" \
     "$package_dir/var/lib/resman"
-install -d -m 0700 "$package_dir/etc/resman/tls"
 
 install -m 0755 "$binary" "$package_dir/usr/bin/resman"
-install -m 0644 "$project_dir/config/resman.conf.example" "$package_dir/etc/resman.conf"
+install -m 0600 "$project_dir/config/resman.conf.example" "$package_dir/etc/resman/resman.conf"
 install -m 0644 "$project_dir/packaging/systemd/resman.service" \
     "$package_dir/usr/lib/systemd/system/resman.service"
 install -m 0644 "$project_dir/packaging/syslog/resman" \
@@ -66,6 +67,10 @@ install -m 0644 "$project_dir/packaging/syslog/resman.conf" \
     "$package_dir/etc/rsyslog.d/resman.conf"
 
 install -m 0644 "$project_dir/README.md" "$package_dir/usr/share/doc/resman/README.md"
+install -m 0644 "$project_dir/docs/CONFIGURATION.md" \
+    "$package_dir/usr/share/doc/resman/CONFIGURATION.md"
+install -m 0644 "$project_dir/docs/UPGRADING.md" \
+    "$package_dir/usr/share/doc/resman/UPGRADING.md"
 install -m 0644 "$script_dir/copyright" "$package_dir/usr/share/doc/resman/copyright"
 install -m 0644 "$project_dir/docs/alerting-rules.yml" \
     "$package_dir/usr/share/doc/resman/alerting-rules.yml"

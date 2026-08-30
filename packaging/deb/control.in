@@ -13,3 +13,5 @@ Description: per-user CPU, memory and IO manager for cgroups v2
  .
  It provides Prometheus metrics, PSI event-driven control, configuration
  hot reload, SQLite history, limit notifications and an optional MCP server.
+ .
+ Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.8.

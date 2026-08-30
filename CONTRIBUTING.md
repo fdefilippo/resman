@@ -128,6 +128,12 @@ refactor: improve error handling in collector
 
 ### Code Style
 
+> **Read [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) before your first change.**
+> It defines the architectural invariants a change to resman must respect
+> (state model, configuration contracts, metric and error semantics, packaging)
+> and ends with a Definition of Done checklist that reviewers apply to every
+> pull request. This section covers only formatting and general hygiene.
+
 - Follow Go best practices
 - Run `go fmt` before committing
 - Run `go vet` to catch issues
@@ -141,7 +147,7 @@ When adding new Prometheus metrics:
 
 1. Add metric to `metrics/prometheus.go`
 2. Register in `registerMetrics()`
-3. Update in `UpdateMetrics()` or `UpdateUserMetrics()`
+3. Update through the typed `UpdateSystemSnapshot()` or `UpdateUserSnapshot()` contract
 4. Update documentation in `docs/`
 5. Add to Grafana dashboard
 6. Update man page
@@ -171,6 +177,22 @@ go test -v ./metrics/...
 sudo make test-integration
 ```
 
+### Fuzz Tests
+
+Committed fuzz seeds run with the ordinary Go test suite. Generate additional inputs
+locally with:
+
+```bash
+make fuzz                 # 30 seconds per target
+make fuzz FUZZTIME=2m     # custom budget per target
+```
+
+Generated-input fuzzing is deliberately separate from the deterministic pull-request
+gate. GitHub Actions runs `.github/workflows/fuzz.yml` every week with a two-minute
+budget per target; maintainers can also start that workflow manually. A crasher fails
+the workflow, which retains the command log, generated corpus, and Go fuzz cache as a
+failure artifact.
+
 ### Manual Testing
 
 1. Build the binary:
@@ -180,17 +202,18 @@ sudo make test-integration
 
 2. Create a test configuration:
    ```bash
-   cp config/resman.conf.example /etc/resman.conf
+   sudo install -d -m 0700 /etc/resman
+   sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
    ```
 
 3. Run in debug mode:
    ```bash
-   sudo ./resman --config /etc/resman.conf --log-level DEBUG
+   sudo ./resman --config /etc/resman/resman.conf --log-level DEBUG
    ```
 
 4. Check metrics:
    ```bash
-   curl http://localhost:9101/metrics
+   curl http://localhost:1974/metrics
    ```
 
 ### Test Coverage
@@ -298,20 +321,20 @@ Follow [Semantic Versioning](https://semver.org/):
 
 For maintainers:
 
-1. Update CHANGELOG.md with release date
-2. Update version in main.go
-3. Create release branch
-4. Tag release:
+1. Run `make ci-quality` on `main`.
+2. Update the release version in `Makefile`, `main.go`, the RPM spec, the Debian
+   changelog, the man page, and current package/container examples. The version
+   contract tests must remain green.
+3. Create one release commit on `main`.
+4. Create an annotated tag using the project convention:
    ```bash
-   git tag -a v1.0.0 -m "Release v1.0.0"
-   git push origin v1.0.0
+   git tag -a v1.30.8 -m "Release 1.30.8"
    ```
-5. GitHub Actions will:
+5. Push `main` and the tag only when publication is intended.
+6. GitHub Actions will:
    - Run all tests
-   - Build binaries
-   - Create packages (RPM, DEB)
+   - Create packages (DEB, binary RPM, source RPM)
    - Create GitHub release
-   - Publish Docker images
 
 ### Post-Release
 
@@ -332,7 +355,7 @@ When adding features or fixing bugs:
 2. **README.md** - Update features list
 3. **Man page** - Update `docs/resman.8`
 4. **Prometheus docs** - Update `docs/prometheus-queries.md`
-5. **Grafana** - Update `docs/dashboard-grafana.json`
+5. **Grafana** - Update `docs/dashboard-grafana-operations.json`
 
 ### Documentation Style
 

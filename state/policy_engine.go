@@ -25,7 +25,7 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-// UserPolicy contiene le policy applicate a un utente.
+// UserPolicy contains the policies applied to a user.
 type UserPolicy struct {
 	CPUQuota         int    // CPU quota in microseconds
 	RAMQuota         string // RAM quota string (e.g., "1G")
@@ -35,14 +35,14 @@ type UserPolicy struct {
 	PreviousRAMQuota string
 }
 
-// PolicyEngine applica policy basate sui pattern rilevati.
+// PolicyEngine applies policies based on detected patterns.
 type PolicyEngine struct {
 	mu           sync.RWMutex
 	logger       *logging.Logger
-	userPolicies map[int]*UserPolicy // uid -> policy corrente
+	userPolicies map[int]*UserPolicy // uid -> current policy
 }
 
-// NewPolicyEngine crea un nuovo PolicyEngine.
+// NewPolicyEngine creates a PolicyEngine.
 func NewPolicyEngine(logger *logging.Logger) *PolicyEngine {
 	return &PolicyEngine{
 		logger:       logger,
@@ -50,27 +50,26 @@ func NewPolicyEngine(logger *logging.Logger) *PolicyEngine {
 	}
 }
 
-// ApplyPolicy applica una policy a un utente basata sul pattern rilevato.
-// Restituisce true se la policy e' stata effettivamente cambiata.
+// ApplyPolicy updates one user's policy from a detected workload pattern.
+// It returns true only when the stored policy changes.
 func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *config.Config) bool {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	// Determina la policy target basata sul pattern
+	// Resolve the external configuration before locking policy state.
 	targetCPUQuota, targetRAMQuota := pe.getQuotasForPattern(pattern, cfg)
 
-	// Se non c'e' pattern riconosciuto, non applicare nulla
+	// An unknown pattern does not select a policy.
 	if pattern == PatternUnknown {
 		return false
 	}
 
+	pe.mu.Lock()
+
 	existing, exists := pe.userPolicies[uid]
 	if exists && existing.CPUQuota == targetCPUQuota && existing.RAMQuota == targetRAMQuota {
-		// Policy gia' applicata, nessun cambiamento
+		pe.mu.Unlock()
 		return false
 	}
 
-	// Applica nuova policy
+	// Store the newly selected policy before enforcement reconciliation.
 	now := time.Now()
 	if exists {
 		existing.PreviousCPUQuota = existing.CPUQuota
@@ -86,8 +85,9 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 			LastChanged: now,
 		}
 	}
+	pe.mu.Unlock()
 
-	pe.logger.Info("Workload pattern policy applied",
+	pe.logger.Info("Workload pattern policy selected",
 		"uid", uid,
 		"pattern", pattern,
 		"cpu_quota", targetCPUQuota,
@@ -97,7 +97,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	return true
 }
 
-// GetPolicy restituisce la policy corrente per un utente.
+// GetPolicy returns the current policy for a user.
 func (pe *PolicyEngine) GetPolicy(uid int) (*UserPolicy, bool) {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
@@ -149,7 +149,7 @@ func (pe *PolicyEngine) Clear() []int {
 	return removed
 }
 
-// getQuotasForPattern restituisce le quote CPU/RAM per un pattern.
+// getQuotasForPattern returns the CPU and RAM quotas for a pattern.
 func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config.Config) (int, string) {
 	switch pattern {
 	case PatternBatchNight:
@@ -157,15 +157,15 @@ func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config
 	case PatternInteractiveDay:
 		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
 	case PatternMixed:
-		// Per pattern misti, usa valori intermedi
+		// Use intermediate values for mixed patterns.
 		batchCPU := cfg.GetBatchNightCPUQuota()
 		interactiveCPU := cfg.GetInteractiveCPUQuota()
 		return (batchCPU + interactiveCPU) / 2, cfg.GetInteractiveRAMQuota()
 	case PatternAlwaysOn:
-		// Utenti sempre attivi: quota moderata
+		// Always-active users receive a moderate quota.
 		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
 	case PatternSporadic:
-		// Utenti sporadici: quota bassa di default
+		// Sporadic users receive a low quota by default.
 		return cfg.GetInteractiveCPUQuota() / 2, cfg.GetInteractiveRAMQuota()
 	default:
 		return 0, ""

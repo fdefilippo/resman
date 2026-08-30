@@ -1,6 +1,8 @@
 package cgroup
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processidentity"
+	"github.com/fdefilippo/resman/logging"
 )
 
 func TestProcessIDsForUIDReusesSingleScan(t *testing.T) {
@@ -48,6 +52,33 @@ func TestProcessIDsForUIDReusesSingleScan(t *testing.T) {
 	}
 }
 
+func TestMoveAllUserProcessesHonorsCancellationAfterEmptyDiscovery(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager := &Manager{
+		cfg:    config.DefaultConfig(),
+		logger: logging.GetLogger(),
+		scanProcessIDs: func() (map[int][]int, error) {
+			close(started)
+			<-release
+			return map[int][]int{}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.moveAllUserProcesses(ctx, 1000)
+		result <- err
+	}()
+	<-started
+	cancel()
+	close(release)
+
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("moveAllUserProcesses() error = %v, want context cancellation", err)
+	}
+}
+
 func TestGetProcessInfoCachesUsernameLookup(t *testing.T) {
 	procRoot := t.TempDir()
 	cfg := config.DefaultConfig()
@@ -71,11 +102,11 @@ func TestGetProcessInfoCachesUsernameLookup(t *testing.T) {
 		if err := os.MkdirAll(processPath, 0755); err != nil {
 			t.Fatalf("failed to create fake process path: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(processPath, "comm"), []byte("worker\n"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(processPath, "comm"), []byte("spoofed-name\n"), 0644); err != nil {
 			t.Fatalf("failed to write comm: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(processPath, "cmdline"), []byte("/usr/bin/worker\x00--serve\x00"), 0644); err != nil {
-			t.Fatalf("failed to write cmdline: %v", err)
+		if err := os.Symlink("/usr/bin/worker", filepath.Join(processPath, "exe")); err != nil {
+			t.Fatalf("failed to create exe symlink: %v", err)
 		}
 		status := "Name:\tworker\nState:\tS (sleeping)\nUid:\t1000\t1000\t1000\t1000\n"
 		if err := os.WriteFile(filepath.Join(processPath, "status"), []byte(status), 0644); err != nil {
@@ -86,16 +117,59 @@ func TestGetProcessInfoCachesUsernameLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("getProcessInfo(%d) error: %v", pid, err)
 		}
-		if info["username"] != "alice" || info["state"] != "S" {
+		if info["username"] != "alice" || info["state"] != "S" || info["executable"] != "/usr/bin/worker" {
 			t.Fatalf("getProcessInfo(%d) = %v", pid, info)
 		}
-		if got := processNameFromInfo(pid, info); got != fmt.Sprintf("worker[%d]", pid) {
+		if got := processNameFromInfo(pid, info); got != "worker" {
 			t.Fatalf("processNameFromInfo(%d) = %q", pid, got)
 		}
 	}
 
 	if lookupCalls != 1 {
 		t.Fatalf("username lookup calls = %d, want 1", lookupCalls)
+	}
+}
+
+func TestProcessSelectionFromInfoMatchesAnchoredPolicyWithoutPIDDecoration(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProcessExcludeList = []string{"^worker$"}
+	selection := processSelectionFromInfo(cfg, map[string]string{
+		"executable": "/usr/bin/worker",
+		"name":       "worker",
+	})
+	if selection.Name != "worker" || selection.Enforceable {
+		t.Fatalf("processSelectionFromInfo() = %+v, want worker excluded", selection)
+	}
+}
+
+func TestMissingExecutableIdentityCannotMatchProcessExclusion(t *testing.T) {
+	procRoot := t.TempDir()
+	processPath := filepath.Join(procRoot, "303")
+	if err := os.MkdirAll(processPath, 0755); err != nil {
+		t.Fatalf("create process fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(processPath, "comm"), []byte("systemd\n"), 0644); err != nil {
+		t.Fatalf("write comm fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(processPath, "status"), []byte("Uid:\t1000\t1000\t1000\t1000\n"), 0644); err != nil {
+		t.Fatalf("write status fixture: %v", err)
+	}
+
+	manager := &Manager{
+		cfg:             config.DefaultConfig(),
+		procRoot:        procRoot,
+		usernameCache:   make(map[string]cachedUsername),
+		resolveUsername: func(string) (string, error) { return "alice", nil },
+	}
+	manager.cfg.ProcessExcludeList = []string{"^systemd$"}
+	info, err := manager.getProcessInfo(303)
+	var unavailable *processidentity.ExecutableUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("getProcessInfo() error = %v, want ExecutableUnavailableError", err)
+	}
+	selection := processSelectionFromInfo(manager.cfg, info)
+	if selection.Name != "systemd" || !selection.Enforceable || selection.IdentityTrusted {
+		t.Fatalf("selection = %+v, want comm only for display and fail-closed enforcement", selection)
 	}
 }
 

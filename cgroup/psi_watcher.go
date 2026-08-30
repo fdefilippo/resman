@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,6 +34,7 @@ type psiMonitor struct {
 // can interrupt a blocking poll() immediately.
 type PSIWatcher struct {
 	mu         sync.Mutex
+	opGate     operationgate.Gate
 	monitors   []*psiMonitor
 	events     chan PSIEvent
 	thresholds map[string]uint64 // typ -> stall threshold in microseconds
@@ -41,6 +43,7 @@ type PSIWatcher struct {
 	wakeW      *os.File // write end (written to on AddMonitor/RemoveMonitor)
 	done       chan struct{}
 	wg         sync.WaitGroup
+	openFile   func(string, int, os.FileMode) (*os.File, error)
 }
 
 // NewPSIWatcher creates a watcher for pressure files.
@@ -71,31 +74,41 @@ func (w *PSIWatcher) Events() <-chan PSIEvent {
 // typ: "cpu" or "io"
 // pressurePath: full path to the pressure file
 func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	leaveOperation := w.opGate.Enter()
+	defer leaveOperation()
 
+	w.mu.Lock()
 	for _, m := range w.monitors {
 		if m.uid == uid && m.typ == typ && m.active {
+			w.mu.Unlock()
 			return nil
 		}
 	}
 
 	threshold, ok := w.thresholds[typ]
 	if !ok {
+		w.mu.Unlock()
 		return fmt.Errorf("no threshold configured for type %q", typ)
 	}
+	windowUs := w.windowUs
+	w.mu.Unlock()
 
-	fd, err := os.OpenFile(pressurePath, os.O_RDWR, 0)
+	openFile := w.openFile
+	if openFile == nil {
+		openFile = os.OpenFile
+	}
+	fd, err := openFile(pressurePath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", pressurePath, err)
 	}
 
-	thresholdLine := fmt.Sprintf("some %d %d", threshold, w.windowUs)
+	thresholdLine := fmt.Sprintf("some %d %d", threshold, windowUs)
 	if _, err := fd.WriteString(thresholdLine); err != nil {
 		_ = fd.Close()
 		return fmt.Errorf("write threshold to %s: %w", pressurePath, err)
 	}
 
+	w.mu.Lock()
 	w.monitors = append(w.monitors, &psiMonitor{
 		uid:    uid,
 		typ:    typ,
@@ -103,8 +116,9 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 		fd:     fd,
 		active: true,
 	})
+	w.mu.Unlock()
 
-	// Wake the poll loop so it picks up the new fd
+	// Wake the poll loop so it picks up the new fd.
 	w.wake()
 
 	return nil
@@ -112,28 +126,39 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 
 // RemoveMonitor unregisters a pressure file.
 func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	leaveOperation := w.opGate.Enter()
+	defer leaveOperation()
 
+	w.mu.Lock()
+	var closeFiles []*os.File
 	for _, m := range w.monitors {
 		if m.uid == uid && m.typ == typ && m.active {
 			m.active = false
-			_ = m.fd.Close()
+			closeFiles = append(closeFiles, m.fd)
 		}
 	}
 	w.compactInactiveMonitorsLocked()
+	w.mu.Unlock()
+	for _, fd := range closeFiles {
+		_ = fd.Close()
+	}
 
 	w.wake()
 }
 
 // Start launches the poll loop goroutine.
 func (w *PSIWatcher) Start() error {
+	leaveOperation := w.opGate.Enter()
+	defer leaveOperation()
+
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("create wake pipe: %w", err)
 	}
+	w.mu.Lock()
 	w.wakeR = pr
 	w.wakeW = pw
+	w.mu.Unlock()
 
 	w.wg.Add(1)
 	go w.pollLoop()
@@ -142,36 +167,42 @@ func (w *PSIWatcher) Start() error {
 
 // Stop terminates the poll loop and all monitoring.
 func (w *PSIWatcher) Stop() {
-	close(w.done)
+	leaveOperation := w.opGate.Enter()
+	defer leaveOperation()
 
-	w.mu.Lock()
+	close(w.done)
 	w.wake()
-	w.mu.Unlock()
 
 	w.wg.Wait()
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	var closeFiles []*os.File
 	for _, m := range w.monitors {
 		if m.active {
-			_ = m.fd.Close()
+			closeFiles = append(closeFiles, m.fd)
 			m.active = false
 		}
 	}
 	w.monitors = nil
 	if w.wakeW != nil {
-		_ = w.wakeW.Close()
+		closeFiles = append(closeFiles, w.wakeW)
 		w.wakeW = nil
+	}
+	w.mu.Unlock()
+	for _, fd := range closeFiles {
+		_ = fd.Close()
 	}
 }
 
 // wake writes a byte to the wake pipe to interrupt poll().
-// Must be called with w.mu held.
 func (w *PSIWatcher) wake() {
-	if w.wakeW == nil {
+	w.mu.Lock()
+	wakeW := w.wakeW
+	w.mu.Unlock()
+	if wakeW == nil {
 		return
 	}
-	_, _ = w.wakeW.Write([]byte{0})
+	_, _ = wakeW.Write([]byte{0})
 }
 
 func (w *PSIWatcher) pollLoop() {
@@ -303,14 +334,14 @@ func (w *PSIWatcher) deactivatePolledMonitor(fd int32, fdMonitors map[int32]*psi
 
 func (w *PSIWatcher) deactivateMonitor(mon *psiMonitor) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if !mon.active {
+		w.mu.Unlock()
 		return
 	}
 	mon.active = false
-	_ = mon.fd.Close()
 	w.compactInactiveMonitorsLocked()
+	w.mu.Unlock()
+	_ = mon.fd.Close()
 }
 
 func (w *PSIWatcher) compactInactiveMonitorsLocked() {

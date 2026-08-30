@@ -25,15 +25,15 @@ import (
 	"time"
 )
 
-// ParseTimeRange converte vari formati temporali in time.Time
-// Supporta: ISO 8601, relative (now-24h), predefined (today, yesterday, etc.)
+// ParseTimeRange converts supported time expressions into time.Time values.
+// It accepts ISO 8601, relative expressions such as now-24h, and predefined ranges.
 func ParseTimeRange(input string, defaultEnd time.Time) (time.Time, time.Time, error) {
 	if input == "" {
-		// Default: ultime 24 ore
+		// Default to the last 24 hours.
 		return defaultEnd.Add(-24 * time.Hour), defaultEnd, nil
 	}
 
-	// Controllo formati predefiniti
+	// Check predefined ranges.
 	switch strings.ToLower(input) {
 	case "today":
 		start := time.Date(defaultEnd.Year(), defaultEnd.Month(), defaultEnd.Day(), 0, 0, 0, 0, defaultEnd.Location())
@@ -50,20 +50,20 @@ func ParseTimeRange(input string, defaultEnd time.Time) (time.Time, time.Time, e
 	case "last_30_days", "last30d", "last_month":
 		return defaultEnd.Add(-30 * 24 * time.Hour), defaultEnd, nil
 	case "this_week":
-		// Lunedì della settimana corrente
+		// Start at Monday of the current week.
 		daysSinceMonday := int(defaultEnd.Weekday())
 		if daysSinceMonday == 0 {
-			daysSinceMonday = 7 // Domenica -> 7 giorni fa
+			daysSinceMonday = 7 // Sunday maps to seven days ago.
 		}
 		start := time.Date(defaultEnd.Year(), defaultEnd.Month(), defaultEnd.Day()-daysSinceMonday+1, 0, 0, 0, 0, defaultEnd.Location())
 		return start, defaultEnd, nil
 	case "this_month":
-		// Primo giorno del mese corrente
+		// Start at the first day of the current month.
 		start := time.Date(defaultEnd.Year(), defaultEnd.Month(), 1, 0, 0, 0, 0, defaultEnd.Location())
 		return start, defaultEnd, nil
 	}
 
-	// Controllo formato relative (now-24h, now-7d, etc.)
+	// Check relative formats such as now-24h and now-7d.
 	relativeMatch, err := regexp.MatchString(`^now-\d+[hd]$`, input)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("regexp error: %w", err)
@@ -76,22 +76,22 @@ func ParseTimeRange(input string, defaultEnd time.Time) (time.Time, time.Time, e
 		return defaultEnd.Add(-duration), defaultEnd, nil
 	}
 
-	// Controllo formato ISO 8601
+	// Check the ISO 8601 format.
 	t, err := time.Parse(time.RFC3339, input)
 	if err == nil {
 		return t, defaultEnd, nil
 	}
 
-	// Controllo formato ISO 8601 con timezone
+	// Check the ISO 8601 format with a timezone.
 	t, err = time.Parse("2006-01-02T15:04:05Z07:00", input)
 	if err == nil {
 		return t, defaultEnd, nil
 	}
 
-	// Controllo formato date-only (YYYY-MM-DD)
+	// Check the date-only format (YYYY-MM-DD).
 	t, err = time.Parse("2006-01-02", input)
 	if err == nil {
-		// Usa la timezone di defaultEnd
+		// Use the defaultEnd timezone.
 		start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, defaultEnd.Location())
 		end := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, defaultEnd.Location())
 		return start, end, nil
@@ -100,7 +100,7 @@ func ParseTimeRange(input string, defaultEnd time.Time) (time.Time, time.Time, e
 	return time.Time{}, time.Time{}, fmt.Errorf("unrecognized time format: %s (use ISO 8601, 'today', 'yesterday', 'last_24_hours', etc.)", input)
 }
 
-// ParseDuration converte stringhe come "24h", "7d", "30d" in time.Duration
+// ParseDuration converts values such as "24h", "7d", and "30d" into time.Duration.
 func ParseDuration(s string) (time.Duration, error) {
 	if len(s) < 2 {
 		return 0, fmt.Errorf("invalid duration format: %s", s)
@@ -122,9 +122,4 @@ func ParseDuration(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("invalid duration unit: %s (use 'h' for hours or 'd' for days)", unit)
 	}
-}
-
-// FormatISO8601 formatta un time.Time in ISO 8601
-func FormatISO8601(t time.Time) string {
-	return t.Format(time.RFC3339)
 }

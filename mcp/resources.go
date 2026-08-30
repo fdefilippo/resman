@@ -52,7 +52,7 @@ func (s *Server) registerResources() {
 	s.mcpServer.AddResource(&mcp.Resource{
 		URI:         "resman://config",
 		Name:        "Configuration",
-		Description: "Current Resource Manager configuration",
+		Description: "Current CPU, RAM, and I/O resource-policy configuration",
 		MIMEType:    "application/json",
 	}, s.handleConfigResource)
 
@@ -75,18 +75,8 @@ func (s *Server) registerResources() {
 // handleSystemStatusResource handles resman://system/status
 func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
-	metrics := s.metricsCollector.GetDetailedMetrics()
-
-	result := map[string]any{
-		"total_cpu_usage":     getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		"user_cpu_usage":      getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		"memory_usage_mb":     getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		"active_users_count":  getIntMetric(metrics, "active_users_count", 0),
-		"total_cores":         getIntMetric(metrics, "total_cores", 0),
-		"system_under_load":   getBoolMetric(metrics, "system_under_load", false),
-		"limits_active":       getBool(status, "limits_active", false),
-		"limits_applied_time": getString(status, "limits_applied_time", ""),
-	}
+	metrics := s.metricsCollector.GetObservationMetrics()
+	result := newSystemStatusPayload(getHostname(), s.stateManager.GetConfig().ServerRole, metrics, status)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
@@ -102,13 +92,12 @@ func (s *Server) handleSystemStatusResource(ctx context.Context, req *mcp.ReadRe
 // handleActiveUsersResource handles resman://users/active
 func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	activeUsers := s.metricsCollector.GetAllUsers()
-	result := make([]map[string]any, 0, len(activeUsers))
-
-	for _, uid := range activeUsers {
-		result = append(result, map[string]any{
-			"uid": uid,
-		})
-	}
+	result := newActiveUsersPayload(
+		getHostname(),
+		s.stateManager.GetConfig().ServerRole,
+		activeUsers,
+		s.metricsCollector.GetAllUserMetrics(),
+	)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
@@ -124,15 +113,7 @@ func (s *Server) handleActiveUsersResource(ctx context.Context, req *mcp.ReadRes
 // handleLimitsStatusResource handles resman://limits/status
 func (s *Server) handleLimitsStatusResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	status := s.stateManager.GetStatus()
-
-	result := map[string]any{
-		"limits_active":        getBool(status, "limits_active", false),
-		"limits_applied_time":  getString(status, "limits_applied_time", ""),
-		"active_users_count":   getInt(status, "active_users_count", 0),
-		"active_users":         getIntSlice(status, "active_users", []int{}),
-		"shared_cgroup_path":   getString(status, "shared_cgroup_path", ""),
-		"shared_cgroup_active": getBool(status, "shared_cgroup_active", false),
-	}
+	result := newLimitsStatusPayload(getHostname(), s.stateManager.GetConfig().ServerRole, status)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
@@ -148,39 +129,7 @@ func (s *Server) handleLimitsStatusResource(ctx context.Context, req *mcp.ReadRe
 // handleConfigResource handles resman://config
 func (s *Server) handleConfigResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	cfg := s.stateManager.GetConfig()
-
-	result := map[string]any{
-		"cpu_threshold":          cfg.CPUThreshold,
-		"cpu_release_threshold":  cfg.CPUReleaseThreshold,
-		"cpu_threshold_duration": cfg.CPUThresholdDuration,
-		"polling_interval":       cfg.PollingInterval,
-		"min_system_cores":       cfg.MinSystemCores,
-		"cpu_quota_normal":       cfg.CPUQuotaNormal,
-		"cpu_quota_limited":      cfg.CPUQuotaLimited,
-		"enable_prometheus":      cfg.EnablePrometheus,
-		"prometheus_port":        cfg.PrometheusMetricsBindPort,
-		"ignore_system_load":     cfg.IgnoreSystemLoad,
-		"system_uid_min":         cfg.SystemUIDMin,
-		"system_uid_max":         cfg.SystemUIDMax,
-		// RAM limits
-		"ram_enabled":           cfg.RAMEnabled,
-		"ram_threshold":         cfg.RAMThreshold,
-		"ram_release_threshold": cfg.RAMReleaseThreshold,
-		"ram_quota_limited":     cfg.RAMQuotaLimited,
-		"ram_quota_per_user":    cfg.RAMQuotaPerUser,
-		"disable_swap":          cfg.DisableSwap,
-		"ram_high_ratio":        cfg.RAMHighRatio,
-		// IO limits
-		"io_enabled":            cfg.IOEnabled,
-		"io_threshold":          cfg.IOThreshold,
-		"io_release_threshold":  cfg.IOReleaseThreshold,
-		"io_threshold_duration": cfg.IOThresholdDuration,
-		"io_read_bps":           cfg.IOReadBPS,
-		"io_write_bps":          cfg.IOWriteBPS,
-		"io_read_iops":          cfg.IOReadIOPS,
-		"io_write_iops":         cfg.IOWriteIOPS,
-		"io_device_filter":      cfg.IODeviceFilter,
-	}
+	result := newResourcePolicyConfigurationPayload(getHostname(), cfg)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
@@ -207,46 +156,16 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 		return nil, fmt.Errorf("no metrics found for UID %d", uid)
 	}
 
-	result := map[string]any{
-		"uid":           uid,
-		"username":      metrics.Username,
-		"cpu_usage":     metrics.CPUUsage,
-		"memory_usage":  metrics.MemoryUsage,
-		"process_count": metrics.ProcessCount,
-		"is_limited":    metrics.IsLimited,
-	}
+	result := s.newUserMetricPayload(uid, metrics)
 
-	// Add RAM cgroup metrics and limits.
-	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
-		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
-		if hasCurrent {
-			result["cgroup_memory_current_bytes"] = current
-		}
-		if max != "" {
-			result["memory_max"] = max
-		}
-		if high != "" {
-			result["memory_high"] = high
-		}
-	}
-	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
-		result["memory_high_events"] = highEvents
-	}
-
-	// Add IO cgroup metrics
-	if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
-		result["io_read_bytes"] = ioRead
-		result["io_write_bytes"] = ioWrite
-		result["io_read_ops"] = ioROps
-		result["io_write_ops"] = ioWOps
-	}
+	jsonData := toJSON(result)
 
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
 				URI:      req.Params.URI,
 				MIMEType: "application/json",
-				Text:     toJSON(result),
+				Text:     jsonData,
 			},
 		},
 	}, nil
@@ -270,7 +189,7 @@ func (s *Server) handleCgroupResource(ctx context.Context, req *mcp.ReadResource
 			{
 				URI:      req.Params.URI,
 				MIMEType: "application/json",
-				Text:     toJSON(info),
+				Text:     toJSON(newCgroupInfoResult(info)),
 			},
 		},
 	}, nil

@@ -10,6 +10,10 @@ import (
 
 const databaseRetentionInterval = 24 * time.Hour
 
+type cpuSamplingCadenceSink interface {
+	SetFallbackCPUSamplingInterval(time.Duration)
+}
+
 func (a *App) Run() error {
 	if a.err != nil {
 		return a.err
@@ -17,11 +21,19 @@ func (a *App) Run() error {
 
 	a.startSignalHandler()
 	a.startPSIWatcher()
+	if err := a.notifyReady(); err != nil {
+		return fmt.Errorf("notify service readiness: %w", err)
+	}
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {
+	if a.ctx.Err() != nil {
+		return a.shutdown()
+	}
+
 	cfg := a.currentConfig()
 	pollingInterval := a.controlCycleInterval()
+	a.publishFallbackCPUSamplingInterval(pollingInterval)
 	metricsRefreshInterval := a.metricsRefreshInterval()
 	a.logger.Info("Entering main control loop",
 		"polling_interval_seconds", pollingInterval,
@@ -68,8 +80,7 @@ func (a *App) runControlLoop() error {
 	for {
 		select {
 		case <-a.ctx.Done():
-			a.shutdown()
-			return nil
+			return a.shutdown()
 		case <-ticker.C:
 			ticker = a.handleTickerCycle(ticker, &pollingInterval, &cycleComplete)
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
@@ -152,6 +163,7 @@ func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *t
 		cfg := a.currentConfig()
 		ticker.Stop()
 		*pollingInterval = currentPollingInterval
+		a.publishFallbackCPUSamplingInterval(currentPollingInterval)
 		ticker = time.NewTicker(time.Duration(*pollingInterval) * time.Second)
 		a.logger.Info("Control loop interval updated",
 			"polling_interval_seconds", *pollingInterval,
@@ -160,6 +172,13 @@ func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *t
 		)
 	}
 	return ticker
+}
+
+func (a *App) publishFallbackCPUSamplingInterval(intervalSeconds int) {
+	if a.cpuSamplingCadence == nil {
+		return
+	}
+	a.cpuSamplingCadence.SetFallbackCPUSamplingInterval(time.Duration(intervalSeconds) * time.Second)
 }
 
 func (a *App) handleMetricsRefreshCycle() {

@@ -2,16 +2,18 @@ package cgroup
 
 import (
 	"bufio"
-	"errors"
+	"context"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/processidentity"
+	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
@@ -27,33 +29,25 @@ type processScanCache struct {
 	pidsByUID map[int][]int
 }
 
-func (m *Manager) MoveProcessToCgroup(pid int, uid int) error {
-	_, err := m.moveProcessToCgroup(pid, uid, nil)
-	return err
+func (m *Manager) MoveProcessToCgroup(pid int, uid int) (ProcessMoveResult, error) {
+	return m.moveProcessToCgroup(pid, uid, nil)
 }
 
-func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]string) (bool, error) {
+func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]string) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	// SECURITY: Never move any process to UID 0 cgroup
 	if uid == 0 {
 		m.logger.Warn("Refusing to move process to root (UID 0) cgroup - security boundary",
 			"pid", pid)
-		return false, fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
+		return result, fmt.Errorf("processes cannot be moved to UID 0 (root) cgroups")
 	}
 
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
-		return false, fmt.Errorf("cgroup for UID %d does not exist", uid)
+		return result, fmt.Errorf("cgroup for UID %d does not exist", uid)
 	}
 
-	cgroupProcsFile := filepath.Join(cgroupPath, "cgroup.procs")
-	movable, err := m.captureProcessOrigin(pid, uid, cgroupPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
-	}
-	if !movable {
-		return false, nil
-	}
-
+	var err error
 	if processInfo == nil {
 		processInfo, err = m.getProcessInfo(pid)
 		if err != nil {
@@ -62,16 +56,18 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 	}
 	processName := processNameFromInfo(pid, processInfo)
 
-	// Scrivi il PID nel file cgroup.procs
-	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			_ = m.removeProcessOrigins(map[int]bool{pid: true})
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to move PID %d to cgroup for UID %d: %w", pid, uid, err)
+	_, result, moveErrors, err := m.moveProcessBatch([]int{pid}, uid, cgroupPath)
+	if err != nil {
+		return result, fmt.Errorf("prepare PID %d for cgroup ingress for UID %d: %w", pid, uid, err)
+	}
+	if moveErr := moveErrors[pid]; moveErr != nil {
+		return result, fmt.Errorf("failed to move PID %d to cgroup for UID %d: %w", pid, uid, moveErr)
+	}
+	if result.Moved == 0 {
+		return result, nil
 	}
 
-	// Log dettagliato
+	// Log the verified migration without changing the bounded warning contract.
 	m.logger.Debug("Process moved to cgroup",
 		"pid", pid,
 		"uid", uid,
@@ -81,65 +77,97 @@ func (m *Manager) moveProcessToCgroup(pid int, uid int, processInfo map[string]s
 		"cgroup_path", cgroupPath,
 	)
 
-	return true, nil
+	return result, nil
 }
 
-// MoveAllUserProcesses sposta tutti i processi di un utente nel suo cgroup.
+// MoveAllUserProcesses moves every enforceable process owned by a user into its cgroup.
 // Uses gopsutil for efficient process discovery.
-func (m *Manager) MoveAllUserProcesses(uid int) error {
+func (m *Manager) MoveAllUserProcesses(uid int) (ProcessMoveResult, error) {
+	return m.moveAllUserProcesses(context.Background(), uid)
+}
+
+func (m *Manager) moveAllUserProcesses(ctx context.Context, uid int) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	m.logger.Debug("Moving all processes for user to cgroup", "uid", uid)
 
 	// SECURITY: Never move UID 0 (root) processes to user cgroups
 	if uid == 0 {
 		m.logger.Warn("Refusing to move root (UID 0) processes to cgroup - security boundary")
-		return fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
+		return result, fmt.Errorf("UID 0 (root) processes cannot be moved to user cgroups")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("move processes for UID %d interrupted before discovery: %w", uid, err)
 	}
 
 	pids, err := m.processIDsForUID(uid)
 	if err != nil {
-		return err
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("move processes for UID %d interrupted after discovery: %w", uid, err)
 	}
 
-	var movedCount, totalProcesses int
+	var totalProcesses int
 	var processNames, errors []string
+	var candidates []int
+	processNameByPID := make(map[int]string)
+	cfg := m.getConfig()
 
 	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return result, fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
+		}
 		totalProcesses++
 		processInfo, infoErr := m.getProcessInfo(pid)
+		if os.IsNotExist(infoErr) {
+			continue
+		}
 		if infoErr != nil {
-			m.logger.Debug("Failed to read process details before migration",
+			m.logger.Error("Trusted executable identity unavailable before migration; process remains enforceable",
 				"pid", pid,
 				"error", infoErr,
+				"policy", "fail_closed",
 			)
 		}
-		processName := processNameFromInfo(pid, processInfo)
+		selection := processSelectionFromInfo(cfg, processInfo)
 
-		// Salta processi esclusi
-		if m.getConfig().IsProcessExcluded(processName) {
+		// Excluded processes stay in their original cgroup and out of decision inputs.
+		if !selection.Enforceable {
 			continue
 		}
 
-		// Sposta il processo
-		moved, err := m.moveProcessToCgroup(pid, uid, processInfo)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", processName, err))
-		} else if moved {
-			movedCount++
-			processNames = append(processNames, processName)
-		}
+		candidates = append(candidates, pid)
+		processNameByPID[pid] = selection.Name
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("move processes for UID %d interrupted after %d candidates: %w", uid, totalProcesses, err)
+	}
+	cgroupPath, exists := m.getCgroupPath(uid)
+	if !exists {
+		return result, fmt.Errorf("cgroup for UID %d does not exist", uid)
+	}
+	moved, result, moveErrors, err := m.moveProcessBatch(candidates, uid, cgroupPath)
+	if err != nil {
+		errors = append(errors, err.Error())
+	}
+	for _, pid := range moved {
+		processNames = append(processNames, processNameByPID[pid])
+	}
+	for pid, moveErr := range moveErrors {
+		errors = append(errors, fmt.Sprintf("%s: %v", processNameByPID[pid], moveErr))
 	}
 
-	m.logProcessMoveSummary(uid, movedCount, totalProcesses, processNames, errors)
+	m.logProcessMoveSummary(uid, result.Moved, totalProcesses, processNames, errors)
 
 	if len(errors) > 0 {
-		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
+		return result, fmt.Errorf("some processes could not be moved: %d errors", len(errors))
 	}
-	return nil
+	return result, nil
 }
 
 func (m *Manager) processIDsForUID(uid int) ([]int, error) {
-	m.processScanMu.Lock()
-	defer m.processScanMu.Unlock()
+	leaveScan := m.processScanGate.Enter()
+	defer leaveScan()
 
 	now := time.Now()
 	if now.Sub(m.processScan.createdAt) <= processScanCacheTTL {
@@ -250,7 +278,7 @@ func (m *Manager) logProcessMoveSummary(uid, movedCount, totalProcesses int, pro
 	}
 }
 
-// CreateSharedCgroup crea un cgroup condiviso per tutti gli utenti limitati
+// CreateSharedCgroup creates a shared cgroup for all limited users.
 func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 	file, err := os.Open(statusFile)
 	if err != nil {
@@ -264,7 +292,7 @@ func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 		if strings.HasPrefix(line, "Uid:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				// Il primo campo dopo "Uid:" è l'UID reale
+				// The first field after "Uid:" is the real UID.
 				uid, err := strconv.Atoi(fields[1])
 				if err != nil {
 					return 0, err
@@ -277,31 +305,20 @@ func (m *Manager) getUIDFromStatusFile(statusFile string) (int, error) {
 	return 0, fmt.Errorf("UID not found in status file")
 }
 
-// CleanupUserCgroup rimuove il cgroup di un utente (dopo aver spostato i processi fuori).
+// getProcessInfo returns process identity and diagnostic fields from procfs.
 func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 	info := make(map[string]string)
 	processPath := filepath.Join(m.getProcRoot(), strconv.Itoa(pid))
 
-	// Nome del processo da /proc/[pid]/comm
-	commFile := filepath.Join(processPath, "comm")
-	if data, err := os.ReadFile(commFile); err == nil {
-		info["name"] = strings.TrimSpace(string(data))
-	} else {
+	identity, identityErr := processidentity.Read(m.getProcRoot(), pid)
+	info["name"] = strings.TrimSpace(identity.Comm)
+	if info["name"] == "" {
 		info["name"] = "unknown"
 	}
+	info["executable"] = identity.Executable
 
-	// Command line da /proc/[pid]/cmdline
-	cmdlineFile := filepath.Join(processPath, "cmdline")
-	if data, err := os.ReadFile(cmdlineFile); err == nil {
-		cmdline := strings.ReplaceAll(string(data), "\x00", " ")
-		cmdline = strings.TrimSpace(cmdline)
-		if cmdline != "" {
-			info["cmdline"] = cmdline
-		}
-	}
-
-	// Username da /proc/[pid]/status (campo Uid:) + cache lookup
-	// Evita exec.Command("ps") che è costoso (fork+exec per ogni processo)
+	// Resolve the username from the real UID and cache the lookup. This avoids
+	// spawning ps once per process.
 	statusFile := filepath.Join(processPath, "status")
 	if data, err := os.ReadFile(statusFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -320,36 +337,24 @@ func (m *Manager) getProcessInfo(pid int) (map[string]string, error) {
 		}
 	}
 
-	return info, nil
+	return info, identityErr
 }
 
-// getProcessName cerca di ottenere il nome migliore per un processo
+// getProcessName returns the normalized policy identity for a process.
 func (m *Manager) getProcessName(pid int) string {
 	info, err := m.getProcessInfo(pid)
-	if err != nil {
+	if err != nil && len(info) == 0 {
 		return fmt.Sprintf("PID-%d", pid)
 	}
 	return processNameFromInfo(pid, info)
 }
 
-func processNameFromInfo(pid int, info map[string]string) string {
-	// Preferisci cmdline se disponibile e non troppo lungo
-	if cmdline, ok := info["cmdline"]; ok && cmdline != "" && len(cmdline) < 100 {
-		// Prendi solo il primo comando (prima dello spazio)
-		parts := strings.Fields(cmdline)
-		if len(parts) > 0 {
-			// Estrai solo il nome del comando (senza path)
-			base := filepath.Base(parts[0])
-			return fmt.Sprintf("%s[%d]", base, pid)
-		}
-	}
+func processNameFromInfo(_ int, info map[string]string) string {
+	return processpolicy.CanonicalName(info["executable"], info["name"])
+}
 
-	// Altrimenti usa il nome dal comm
-	if name, ok := info["name"]; ok && name != "" {
-		return fmt.Sprintf("%s[%d]", name, pid)
-	}
-
-	return fmt.Sprintf("PID-%d", pid)
+func processSelectionFromInfo(cfg *config.Config, info map[string]string) processpolicy.Selection {
+	return processpolicy.Evaluate(cfg, info["executable"], info["name"])
 }
 
 func (m *Manager) usernameForUID(uid string) string {
@@ -381,7 +386,7 @@ func (m *Manager) usernameForUID(uid string) string {
 	return username
 }
 
-// ListProcessesInCgroup restituisce l'elenco dei processi in un cgroup
+// ListProcessesInCgroup returns the processes in a cgroup.
 func (m *Manager) ListProcessesInCgroup(uid int) ([]string, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -403,5 +408,5 @@ func (m *Manager) ListProcessesInCgroup(uid int) ([]string, error) {
 	return processes, nil
 }
 
-// ApplyRAMLimit applica un limite di RAM a un cgroup utente.
+// ApplyRAMLimit applies a RAM limit to a user cgroup.
 // limit: bytes (es. "536870912") o suffissi (es. "512M", "1G", "2T")

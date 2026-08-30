@@ -1,4 +1,11 @@
+# Validate with: promtool check config docs/prometheus.yml
+# Smoke test: curl -fsS http://localhost:1974/metrics | grep '^resman_'
+rule_files:
+  # Path is resolved relative to this file; adjust when installing under
+  # /etc/prometheus. Validate with: promtool check rules docs/alerting-rules.yml
+  - alerting-rules.yml
+
 scrape_configs:
   - job_name: 'resman'
     static_configs:
-      - targets: ['192.168.1.7:9100'] # Replace with your program's IP and port
+      - targets: ['192.168.1.7:1974'] # Replace with your program's IP and port

@@ -1,4 +1,4 @@
-.TH RESMAN 8 "July 2026" "v1.25.1" "System Administration"
+.TH RESMAN 8 "August 2026" "v1.30.8" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -31,7 +31,33 @@ Blackout timeframes support (BLACKOUT)
 .IP \(bu
 User filtering with regex support (USER_INCLUDE_LIST, USER_EXCLUDE_LIST)
 .IP \(bu
-Process exclusion list (PROCESS_EXCLUDE_LIST)
+Process exclusion list (PROCESS_EXCLUDE_LIST). Excluded processes remain in
+observed totals but do not contribute to CPU, RAM, or I/O decisions and are not
+moved into limited cgroups. Matching uses only the /proc/PID/exe basename;
+/proc/PID/comm is display-only because a process can rewrite it. If executable
+identity is unavailable, the process remains enforceable and resman reports an
+explicit error. Active limits reconcile membership every control
+cycle. Newly excluded processes return only to a captured origin for the same
+PID start time; without a safe origin they remain constrained and an error is
+reported.
+.IP (bu
+Process ingress into a ResMan-owned cgroup is allowed only when the process PID
+namespace equals the namespace cached from /proc/self/ns/pid at daemon startup.
+The identity is verified again immediately before the cgroup.procs write. A nested
+or unreadable PID namespace is skipped, logged once per user operation, and counted
+without removing the process from observation or decision accounting. This guarantee
+requires resman to run on the host, or with the documented host PID namespace. Restore
+and recovery bypass the ingress guard because they remove an existing constraint.
+.IP
+Because decision accounting remains UID-wide, a refused nested workload can keep a
+mixed UID above the release threshold. Host-namespace processes already controlled by
+resman then remain constrained until total UID usage falls, even though their limit
+cannot reduce the nested workload's consumption. The
+.B pid_namespace_boundary
+warning identifies the UID and bounded skip counts; correlate it with active-limit
+state. The host-level
+.B resman_cgroup_ingress_skipped_total
+counter reports how often ingress was refused but deliberately has no UID label.
 .IP \(bu
 Threshold time window to prevent false activations (CPU_THRESHOLD_DURATION)
 .IP \(bu
@@ -39,7 +65,7 @@ Username resolution cache for improved performance (USERNAME_CACHE_TTL)
 .IP \(bu
 SQLite metrics database for historical data (METRICS_DB_*)
 .IP \(bu
-MCP server with 15 tools for AI assistant integration
+MCP server with a mechanically verified tool inventory for AI assistant integration
 .IP \(bu
 Prometheus metrics export with hostname and server_role labels
 .IP \(bu
@@ -60,13 +86,43 @@ Graceful shutdown with proper resource cleanup
 .TP
 \fB\-\-config\fR \fIFILE\fR
 Specifies the configuration file path. Default:
-.I /etc/resman.conf
+.I /etc/resman/resman.conf
 .TP
 \fB\-\-version\fR
 Displays program version and exits.
 .SH PLATFORM REQUIREMENTS
 .B resman
 requires Linux kernel 4.18 or later with cgroups v2 enabled.
+.PP
+At startup, resman probes a real child cgroup for the interfaces required by the
+configured features. CPU limiting requires
+.BR cpu.max .
+When
+.B RAM_LIMIT_ENABLED=true
+is configured,
+.B memory.max
+is mandatory; when
+.B IO_LIMIT_ENABLED=true
+is configured,
+.B io.max
+is mandatory. A controller name in
+.B cgroup.controllers
+is not sufficient. A missing required interface causes startup to fail with the
+feature, controller, and interface named. The
+.B cpuset
+controller is optional for CPU quota and proportional-weight enforcement.
+.PP
+Capability discovery is a startup snapshot. If
+.B memory.max
+or
+.B io.max
+was unusable during that probe, a later reload that requests the corresponding
+feature reports the capability error and publishes the effective configuration with
+the feature still disabled. Fixing the host does not refresh the snapshot: restart
+resman to discover the repaired interface. By contrast, a feature that was merely
+disabled in the startup configuration can be enabled by reload without a restart when
+its interface was already found usable; failure to enable its controller in an
+existing shared cgroup is reported and leaves the feature disabled.
 .PP
 The published RPM is built with CGO on Enterprise Linux 8 and targets the EL8
 userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
@@ -77,6 +133,34 @@ PSI event\-driven operation additionally requires kernel PSI support. On
 Enterprise Linux systems where PSI is disabled at boot, enable it with
 .BR psi=1
 as described in the PSI section of this manual.
+.SH SYSTEMD RESTART CONTRACT
+The packaged systemd unit distinguishes failures that require operator action from
+failures that may be transient. Invalid configuration, unusable cgroup capabilities
+required by an enabled feature, and invalid MCP TLS credentials exit with status
+.BR 78 .
+The unit uses the systemd notification protocol and reports readiness only after
+configuration, capability, and configured listener initialization have completed.
+Consequently,
+.B systemctl start resman
+waits for that boundary and fails when startup is rejected instead of reporting an
+optimistic success for a process that immediately exits. The unit reports the service
+as failed and does not restart it automatically. Inspect
+.BR "systemctl status resman"
+and
+.BR "journalctl -u resman" ,
+correct the configuration or host capability, then start the service again.
+.PP
+An error reading or writing setup state for an otherwise present cgroup capability,
+including a failed write to
+.BR cgroup.subtree_control ,
+is treated as potentially transient rather than as proof that the capability is
+structurally absent. These and other non-zero exits are retried after 10 seconds. The
+unit permits at most three
+starts within 60 seconds; after that it remains failed with a start-limit result rather
+than retrying forever. After correcting the transient cause, run
+.B systemctl reset-failed resman
+before starting the service when the start limit was reached. A clean stop is not
+automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
 The system uses a cgroups v2 hierarchy to manage fair CPU resource distribution:
 .IP 1. 3
@@ -143,9 +227,6 @@ Configuration parameters:
 .B RAM_RELEASE_THRESHOLD
 - Deactivation threshold percentage
 .IP \(bu
-.B RAM_QUOTA_LIMITED
-- Total RAM limit when limits are active (bytes or K/M/G/T suffix)
-.IP \(bu
 .B RAM_QUOTA_PER_USER
 - Per\-user RAM limit (when limits active)
 .IP \(bu
@@ -166,6 +247,13 @@ When RAM limits are active, each user's cgroup receives both
 and
 .B memory.high
 limits according to the configured quotas and ratio.
+.PP
+A user eligible for RAM or I/O but not CPU limiting is moved to a standalone
+per\-user cgroup with
+.BR cpu.max="max 100000" .
+It does not inherit the finite shared CPU quota. Consequently,
+.B MIN_SYSTEM_CORES
+gates CPU enforcement only and cannot suppress RAM\-only or I/O\-only limits.
 .SH IO LIMITS
 When enabled, the daemon monitors I/O usage and applies bandwidth and IOPS limits via cgroups v2 io controller.
 .PP
@@ -177,10 +265,11 @@ Configuration parameters:
 - Enable IO limiting (true/false)
 .IP \(bu
 .B IO_THRESHOLD
-- Activation threshold percentage of total user I/O usage
+- Activation percentage applied independently to each configured I/O dimension;
+  any dimension at or above the threshold activates or maintains enforcement
 .IP \(bu
 .B IO_RELEASE_THRESHOLD
-- Deactivation threshold percentage
+- Release percentage; every configured I/O dimension must be below it
 .IP \(bu
 .B IO_READ_BPS
 - Read bandwidth limit (e.g., "100M", "1G")
@@ -193,6 +282,27 @@ Configuration parameters:
 .IP \(bu
 .B IO_WRITE_IOPS
 - Write IOPS limit (0 = unlimited)
+.PP
+Bandwidth values of "max" or an empty value and IOPS values of 0 disable only
+their own dimension. Bandwidth decisions use per-user /proc/PID/io byte rates.
+When either IOPS dimension is configured, ResMan places every I/O-eligible
+user's enforceable processes in an unlimited per-user observation cgroup and
+derives read/write IOPS from io.stat rios/wios. Page-cache hits, pipe traffic,
+and socket traffic therefore cannot trigger device-IOPS enforcement. The same
+logical counters continue across moves into and out of the shared CPU hierarchy.
+The first sample after observation begins or its process policy changes is
+unknown rather than zero. Available users remain a lower bound that may prove
+activation, but one eligible user without a baseline blocks the global release
+decision. Continuous eligible-user churn can therefore prolong active I/O
+limits. The activation rule is any-of across configured dimensions and the
+release rule is all-of.
+.PP
+An unavailable /proc/PID/io sample for an enforceable I/O-eligible process is
+unknown, not zero. Available rates remain a lower bound and may still prove an
+activation threshold exceeded. Otherwise resman maintains the current state;
+active limits are never released from an incomplete I/O sample. Current
+coverage failures are exported through
+.BR resman_procfs_unavailable_processes {access}.
 .IP \(bu
 .B IO_DEVICE_FILTER
 - Device specification. "all" enumerates all whole block devices in /sys/block;
@@ -241,8 +351,8 @@ the original limits are restored earlier when pressure returns to normal.
 .SH PROCESS CGROUP RESTORATION
 Before moving a process into the shared limited cgroup, resman persistently
 records its original cgroup together with the process start time. At release,
-the process is returned to that exact cgroup so systemd session and service
-membership are preserved.
+the process is returned to that exact cgroup when it can legally accept
+processes, so systemd session and service membership are preserved.
 .PP
 Processes whose original cgroup no longer exists, and descendants for which no
 unambiguous original destination can be resolved, are moved to
@@ -250,11 +360,36 @@ unambiguous original destination can be resolved, are moved to
 instead of the cgroup v2 root. This recovery hierarchy is owned by resman and is
 preserved while it contains live processes.
 .PP
+An existing origin that distributes controllers to child cgroups is an internal
+cgroup v2 node and cannot accept processes. Resman treats it like an unavailable
+origin and restores the process to the recovery leaf. The PID start time is
+revalidated immediately before each restore write. If any process cannot be
+restored safely during shutdown, the daemon exits non-zero and the service stop
+is not reported as successful.
+.PP
 .B CPU_QUOTA_NORMAL
 is never written into cgroups managed by systemd. In shared mode, a finite
 normal quota applies only to resman recovery cgroups. The default
 .B "max 100000"
 leaves recovered processes unlimited.
+.PP
+Live policy reconciliation remains fail-closed. If an excluded process has no
+same-start-time recorded or inherited origin, it remains constrained, the cycle
+reports an error, and the later history, I/O remediation, workload detection,
+and PSI-reversion stages still run. Prometheus reports this persistent condition
+through
+.B resman_errors_total
+with
+.B component="process_membership"
+and
+.BR error_type="origin_unavailable" ;
+other reconciliation failures use
+.BR error_type="reconciliation_failure" .
+.PP
+To clear an unavailable-origin condition, stop or restart the affected process
+under its owning service or session. If that cannot be done while resman is
+running, stop resman cleanly so shutdown can place the process in its recovery
+leaf, then restart the owning service or session before starting resman again.
 .PP
 .SH PSI EVENT-DRIVEN MODE
 When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
@@ -461,8 +596,8 @@ The daemon incorporates several performance optimizations to minimize overhead o
 .B Pre\-allocated slices
 - Estimated capacity allocation for dynamic slices to reduce heap allocations.
 .IP \(bu
-.B Intelligent cache invalidation
-- Adaptive cache TTL based on system activity and user churn.
+.B Per-entry cache retention
+- Each metric value retains its owning TTL, while completed process scans prune exited PID baselines.
 .RE
 .PP
 These optimizations ensure that monitoring overhead remains low even on systems with thousands of processes.
@@ -472,184 +607,106 @@ The configuration file supports key=value format. Full\-line comments start with
 whitespace.
 Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
 .PP
+.B METRICS_CACHE_TTL
+controls value reuse and must be at least one second. A value remains valid at the exact TTL boundary and expires
+after it; periodic cleanup does not shorten values above five minutes. CPU and I/O
+process baselines are independent of this TTL and remain valid for active PID and
+start-time identities until a completed scan proves that the process disappeared.
+.PP
 The active configuration path is selected by the
 .B \-\-config
 command\-line option (default:
-.IR /etc/resman.conf ).
+.IR /etc/resman/resman.conf ).
 It cannot be redirected by a key inside the configuration file or by an
 environment variable.
 .PP
-Example
+When the default path is selected, startup refuses any legacy
 .I /etc/resman.conf
-format:
-.nf
-.sp
-# =============================================
-# RESMAN CONFIGURATION
-# =============================================
-
-# PATHS
-CGROUP_ROOT="/sys/fs/cgroup"
-CGROUP_BASE="resman"
-LOG_FILE="/var/log/resman.log"
-CREATED_CGROUPS_FILE="/var/run/resman-cgroups.txt"
-METRICS_CACHE_FILE="/var/run/resman-metrics.cache"
-PROMETHEUS_FILE="/var/run/resman-metrics.prom"
-
-# TIMING (seconds)
-POLLING_INTERVAL=30          # Control cycle interval
-MIN_ACTIVE_TIME=60           # Global and per-user minimum activation time
-METRICS_CACHE_TTL=15         # Metrics cache duration
-METRICS_REFRESH_INTERVAL=30  # Prometheus/Grafana refresh interval
-PROCESS_MIN_AGE_SECONDS=60   # Minimum age for lifetime-average CPU metrics
-
-# TIMEOUT CONFIGURATION (seconds)
-# CGROUP_OPERATION_TIMEOUT=5      # Timeout for cgroup operations (seconds)
-# MCP_SHUTDOWN_TIMEOUT=10         # Timeout for MCP server shutdown (seconds)
-
-# CPU THRESHOLDS (percentage)
-CPU_THRESHOLD=75             # Activation threshold
-CPU_RELEASE_THRESHOLD=40     # Deactivation threshold
-CPU_THRESHOLD_DURATION=90    # Wait after threshold breach before activation
-
-# CPU LIMITS ("quota period" format in microseconds)
-CPU_QUOTA_NORMAL="max 100000"      # Recovery cgroups only; default is unlimited
-CPU_QUOTA_LIMITED="200000 100000"  # Limit: 2 core equivalents total
-
-# RAM LIMITS
-# RAM_LIMIT_ENABLED=false              # Enable RAM limiting via cgroups v2
-# RAM_THRESHOLD=75                     # Percentage of total user RAM to activate limits
-# RAM_RELEASE_THRESHOLD=40             # Percentage to release limits
-# RAM_QUOTA_LIMITED=2G                 # Total RAM limit (bytes or K/M/G/T suffix)
-# RAM_QUOTA_PER_USER=512M              # Per-user RAM limit (when limits active)
-# DISABLE_SWAP=false                   # Set memory.swap.max=0 to prevent swap usage
-# RAM_HIGH_RATIO=0.8                   # Ratio between memory.high and memory.max (0.0-1.0)
-
-# IO LIMITS
-# IO_LIMIT_ENABLED=false               # Enable IO limiting via cgroups v2 io controller
-# IO_THRESHOLD=75                      # Percentage of total user IO to activate limits
-# IO_RELEASE_THRESHOLD=40              # Percentage to release limits
-# IO_READ_BPS=100M                     # Per-user read bandwidth limit (bytes/s)
-# IO_WRITE_BPS=50M                     # Per-user write bandwidth limit
-# IO_READ_IOPS=1000                    # Per-user read IOPS limit (0 = unlimited)
-# IO_WRITE_IOPS=500                    # Per-user write IOPS limit
-# IO_DEVICE_FILTER=all                 # All /sys/block devices, or one "major:minor"
-# IO_THRESHOLD_DURATION=0              # Seconds to wait before activating IO limits
-
-# LIMIT HOOK
-LIMIT_HOOK_ENABLED=false               # Enable notification/action on newly limited users
-# LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
-# LIMIT_HOOK_URL=https://example.internal/resman/user-limited
-LIMIT_HOOK_TIMEOUT=10                  # Hook timeout in seconds
-
-# PROMETHEUS EXPORTER
-ENABLE_PROMETHEUS=false                  # Enable metrics export
-# PROMETHEUS_METRICS_BIND_HOST="0.0.0.0"   # Bind address (default: all interfaces)
-# PROMETHEUS_METRICS_BIND_PORT=1974        # Port for metrics (default: 1974)
-# Metrics available at: http://HOST:PORT/metrics
-
-# PROMETHEUS TLS/HTTPS (optional)
-PROMETHEUS_TLS_ENABLED=false            # Enable HTTPS/TLS
-PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt    # Server certificate
-PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key     # Server private key
-# PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt        # Client CA; enables mandatory mTLS
-PROMETHEUS_TLS_MIN_VERSION=1.2          # Minimum TLS version (1.0, 1.1, 1.2, 1.3)
-
-# PROMETHEUS AUTHENTICATION (optional)
-PROMETHEUS_AUTH_TYPE="none"          # Authentication: none, basic, jwt, both
-PROMETHEUS_AUTH_USERNAME="prometheus" # Username for Basic Auth
-PROMETHEUS_AUTH_PASSWORD_FILE="/etc/resman/prometheus_password"  # Password file path
-PROMETHEUS_JWT_SECRET_FILE="/etc/resman/jwt_secret"  # JWT secret file path
-PROMETHEUS_JWT_ISSUER="resman"   # JWT issuer claim
-PROMETHEUS_JWT_AUDIENCE="prometheus"  # JWT audience claim
-PROMETHEUS_JWT_EXPIRY=3600            # JWT token expiry in seconds
-
-# LOGGING
-LOG_LEVEL="INFO"             # DEBUG, INFO, WARN, ERROR
-LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
-USE_SYSLOG=true
-
-# SYSTEM
-MIN_SYSTEM_CORES=2           # Minimum cores reserved for system
-SYSTEM_UID_MIN=1000          # Minimum UID for non\-system users
-SYSTEM_UID_MAX=60000         # Maximum UID (default: pid_max)
-
-# USER INCLUDE LIST (regex patterns, comma-separated)
-# Empty means no CPU limits; metrics monitoring remains active
-# Use .* to make every non-excluded user eligible
-# USER_INCLUDE_LIST=^www.*,^apache.*    # Web users only
-# USER_INCLUDE_LIST=francesco,www-data  # Specific users
-
-# USER EXCLUDE LIST (usernames, comma-separated)
-# These users are excluded from CPU limits
-# USER_EXCLUDE_LIST=francesco,mysql     # Exclude specific users
-
-# BLACKOUT TIMEFRAMES (when ResMan should NOT apply limits)
-# Format: "days hours" (multiple timeframes separated by ;)
-# Days: 0=Sunday, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-#       Or: * (all), 1-5 (Mon-Fri), 0,6 (weekend)
-# Hours: half-open range start-end. Start is 00-23, end is 00-24.
-# The end is excluded; 08-18 means 08:00 through 17:59.
-# A range such as 22-06 crosses midnight; days identify the start day.
-#
-# Examples:
-# # Disable during business hours (Mon-Fri, 8-18)
-# BLACKOUT=1-5 08-18
-#
-# # Disable only in the morning (Mon-Fri, 8-12)
-# BLACKOUT=1-5 08-12
-#
-# # Disable on weekend (Sat-Sun, all day)
-# BLACKOUT=0,6 00-24
-#
-# # Disable business hours + weekend
-# BLACKOUT=1-5 08-18;0,6 00-24
-#
-# # Disable overnight, starting Mon-Fri at 22:00 until the following 06:00
-# BLACKOUT=1-5 22-06
-#
-# # Disable always (for testing)
-# BLACKOUT=* 00-24
-#
-# # No blackout (default - Resource Manager always active)
-BLACKOUT=
-
-# LOAD AVERAGE CHECKING
-IGNORE_SYSTEM_LOAD=false     # If true, ignores load average in decisions
-
-# SERVER ROLE (optional)
-SERVER_ROLE="database"       # Server role: database, web-frontend, batch, application, etc.
-
-# MCP SERVER (Model Context Protocol)
-MCP_ENABLED=false            # Enable MCP server for AI assistants
-MCP_TRANSPORT="stdio"        # Transport: stdio, http
-# MCP_HTTP_HOST="0.0.0.0"    # HTTP bind address (default: all interfaces)
-# MCP_HTTP_PORT=1969         # HTTP port (default: 1969)
-# MCP endpoint: http://HOST:PORT/mcp
-MCP_LOG_LEVEL="INFO"         # MCP log level
-MCP_AUTH_TOKEN="replace-with-long-random-token" # Required Bearer token for HTTP transport
-MCP_ALLOW_WRITE_OPS=false    # Allow write operations via MCP
-
-# USERNAME CACHE (improves performance with LDAP/NIS)
-# Cache TTL for UID to username resolution (minutes)
-# Default: 60 minutes, Minimum: 1 minute
-# Higher values reduce LDAP/NIS lookups but may delay username changes
-USERNAME_CACHE_TTL=60
-
-# METRICS DATABASE (SQLite for historical data via MCP)
-# Enable persistent storage of metrics for historical queries
-METRICS_DB_ENABLED=false
-METRICS_DB_PATH=/etc/resman/metrics.db
-METRICS_DB_RETENTION_DAYS=30      # How many days to keep data
-METRICS_DB_WRITE_INTERVAL=30      # Write interval in seconds
-.fi
+or RPM-saved
+.I /etc/resman.conf.rpmsave
+and the secret-bearing
+.I /etc/resman.conf.backup
+and
+.I /etc/resman.conf.tmp
+entries, plus every potential configuration copy matching
+.IR /etc/resman.conf.backup_* ,
+even when the new packaged configuration already exists. Stop resman,
+choose the authoritative authored contents from the legacy or RPM-saved file,
+install them as a regular file at
+.IR /etc/resman/resman.conf ,
+remove the legacy source files, move any needed operator-managed matching copies
+to a protected archive outside the legacy path, securely remove generated or
+unneeded matching copies and fixed-name orphaned artifacts, and restart. The
+read-only startup guard deliberately treats every matching name as potentially
+credential-bearing; automatic cleanup removes only exact historical generated
+names. An explicitly selected custom configuration path is not treated as a
+legacy fallback.
+.PP
+When metrics persistence is enabled at its default
+.I /var/lib/resman/metrics.db
+path, startup likewise refuses a legacy
+.IR /etc/resman/metrics.db .
+The 1.25.x database schema is incompatible: archive or delete the legacy database
+and restart so resman can create schema version 3. It is never migrated or opened
+under the new path.
+.PP
+Configuration updates initiated through MCP require this path to be a regular file.
+Symbolic links, including dangling links, are rejected without replacing the link or
+changing its target. Select the target itself with
+.B \-\-config
+or replace the link with a regular file. Atomic replacement preserves the source mode
+and ownership and fails before writing secret-bearing content if the service account
+cannot apply the required owner. In that case, grant the service permission to change
+file ownership or change the source ownership to the service account before retrying.
+If a failed atomic replacement cannot restore the rolling backup, stop resman, restore
+.IR /etc/resman/resman.conf.backup ,
+and restart before accepting another configuration write; the active file and runtime
+configuration may differ until recovery is complete. Resman rejects subsequent
+configuration persistence attempts until restart. If a newly created configuration has
+no rolling backup and its compensating removal fails, stop resman, remove the new file,
+and restart.
+.PP
+.B Authoritative configuration reference
+.PP
+The complete public-key inventory is generated from the runtime configuration,
+defaults, and lifecycle table. It is installed as
+.IR /usr/share/doc/resman/CONFIGURATION.md .
+.PP
+.B Upgrade from 1.25.x to 1.30.8
+.PP
+ResMan 1.30.8 intentionally breaks filesystem, database,
+configuration, MCP, Prometheus, hook, capability and container contracts. Before
+installing it, follow
+.IR /usr/share/doc/resman/UPGRADING.md .
+It lists the visible symptom, cause and required action for every known
+discontinuity; old schemas, keys and wire aliases are not preserved.
+.PP
+The copyable configuration remains
+.IR /etc/resman/resman.conf .
+.PP
+The default Prometheus bind is
+.IR 127.0.0.1 .
+A bind to
+.I 0.0.0.0
+is a non-default remote exposure and requires TLS, authentication, and firewall
+restrictions.
+.B SYSTEM_UID_MAX
+is normally derived from
+.I /proc/sys/kernel/pid_max
+at startup, with 60000 used only if that file cannot be read. An empty
+.B USER_INCLUDE_LIST
+makes nobody eligible for CPU limiting, while empty RAM and I/O include lists
+select every non-excluded user.
 .PP
 Idle user release is based on the per-user CPU exponential moving average.
 .B MIN_ACTIVE_TIME
-also acts as the minimum hold time after an individual user is first limited
-or re-added. Re-adding a user does not reset the activation time of the shared
-cgroup. Dynamic RAM and IO enable or user-filter changes are reconciled against
-already active user cgroups.
+protects the most recent active enforcement epoch across CPU and RAM or IO,
+because global deactivation releases every resource together. It also acts as
+the minimum hold time after an individual CPU user is first limited or re-added.
+Re-adding a user does not reset the CPU enforcement epoch. A future per-resource
+release model must define and test its own per-resource activation timestamps.
+Dynamic RAM and IO enable or user-filter changes are reconciled against already
+active user cgroups.
 .PP
 Database retention runs at startup and every 24 hours. File-backed databases
 use incremental auto-vacuum so periodic cleanup does not run a blocking full
@@ -659,6 +716,26 @@ additional time and temporary free disk space proportional to the database
 size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
+.PP
+For a file-backed
+.B METRICS_DB_PATH
+the immediate parent must be a real directory owned by the ResMan process UID
+with mode 0700. ResMan creates a missing parent with that mode, but refuses an
+existing directory with different ownership or permissions. A pre-existing
+database and its
+.B -wal
+and
+.B -shm
+sidecars must be regular, non-symbolic-link files owned by the same UID with
+mode 0600. Correct ownership and permissions explicitly before restarting;
+ResMan does not silently change operator-owned artifacts. The
+.B METRICS_DB_PATH
+ancestor chain must contain no symbolic links and no directory from which an
+untrusted owner, group, or other user can replace the checked child. A sticky
+temporary directory is accepted when it protects the process-owned child. The
+.B :memory:
+database is exempt. These checks occur before SQLite opens the path so a
+permissive service umask cannot expose history files.
 .nf
 
 # PSI EVENT-DRIVEN MODE (Linux >= 4.20, CONFIG_PSI=y)
@@ -706,6 +783,15 @@ polling alignment. Every process state is included in instantaneous CPU deltas.
 .B PROCESS_MIN_AGE_SECONDS
 only stabilizes the lifetime-average CPU metric and does not delay activation.
 .PP
+With
+.B IGNORE_SYSTEM_LOAD=false,
+a high load average suppresses activation only when CPU-eligible users account
+for less than half of measured aggregate host CPU activity. Host CPU is converted
+from normalized 0-100 percentage into aggregate per-core percentage before the
+comparison. An exact half remains actionable. If the host CPU sample is unavailable,
+activation is delayed without discarding threshold-duration progress or claiming an
+unmeasured external cause.
+.PP
 Global deactivation requires every actively limited user's CPU EMA to remain below
 .B CPU_RELEASE_THRESHOLD
 for three
@@ -716,14 +802,14 @@ cycles triggered by PSI events cannot shorten it.
 .B total_cpu_usage
 is the host-wide normalized CPU percentage (0-100). Activation decisions use
 per-user CPU usage
-.RB ( limited_users_cpu_usage ),
+.RB ( cpu_eligible_users_cpu_usage ),
 which is the sum of process CPU and can exceed 100 on multi-core systems.
 .SH ENVIRONMENT VARIABLES
 All configuration options can be overridden by environment variables
 with the same name. Example:
 .sp
 .nf
-LOG_LEVEL=DEBUG resman \-\-config /etc/resman.conf
+LOG_LEVEL=DEBUG resman \-\-config /etc/resman/resman.conf
 .fi
 .SH LOG FILES
 .I /var/log/resman.log
@@ -733,34 +819,68 @@ configured in
 .B LOG_MAX_SIZE,
 which must be greater than zero.
 Rotation creates a backup file with .1 extension.
+New log files are created mode 0600. When an existing regular log is opened,
+ResMan preserves only its owner/group read-write bits and removes all execute bits
+and all permissions for other users. The rotated backup and replacement inherit
+that sanitized access mode and ownership. The managed path must be a regular file;
+symbolic links are rejected without changing their target. Packaged rsyslog and
+logrotate defaults use 0600.
+.PP
+File and syslog writes, rotation steps, and sink close operations are checked. If the
+configured sink fails, ResMan writes a bounded diagnostic directly to standard error
+without recursively calling the failed logger. The failed record itself is not copied
+to the fallback because it can contain sensitive context.
+A later successful write marks the primary sink healthy again while retaining
+cumulative and last-failure diagnostics. A control cycle whose completion record
+cannot be written finishes its protective work and returns a degraded result instead
+of claiming a successful cycle log. Ordinary diagnostic call sites use the same
+health and fallback contract without changing their owning operation's result.
 .SH STATE FILES
-.I /var/run/resman-cgroups.txt
+.I /run/resman-cgroups.txt
 .br
 Tracks created cgroups to enable cleanup after restart.
 .br
-.I /var/run/resman-cgroups-origins.json
+.I /run/resman-cgroups-origins.json
 .br
 Stores the original cgroup, process start time, parent, and session identity
 needed to restore processes safely after limits are removed or the daemon
 restarts. The file is replaced atomically and is readable only by its owner.
 .SH PROMETHEUS METRICS
-When enabled, the daemon exposes metrics at http://HOST:PORT/metrics
+When enabled, the daemon exposes metrics at the configured
+.B /metrics
+endpoint over HTTP or HTTPS.
 .IP \(bu 2
 resman_cpu_total_usage_percent \- Total CPU usage
 .IP \(bu
-resman_cpu_user_usage_percent \- Non\-system user CPU usage
+resman_all_users_cpu_usage_percent \- Non\-system user CPU usage
 .IP \(bu
 resman_memory_usage_megabytes \- Total system memory usage
 .IP \(bu
-resman_active_users_count \- Number of active non\-system users
+resman_all_users_count \- Number of active non\-system users
 .IP \(bu
-resman_limited_users_count \- Users with active limits
+resman_cpu_eligible_users_count \- Users eligible under CPU policy
 .IP \(bu
-resman_limits_active \- Limits status (1=active, 0=inactive)
+resman_ram_eligible_users_count \- Users eligible under RAM policy
+.IP \(bu
+resman_io_eligible_users_count \- Users eligible under I/O policy
+.IP \(bu
+resman_cpu_actively_limited_users_count \- Users with observed CPU limits
+.IP \(bu
+resman_actively_limited_users_count \- Distinct users with observed CPU, RAM, or I/O limits
+.IP \(bu
+resman_cpu_limits_active \- CPU limit status (1=active, 0=inactive)
+.IP \(bu
+resman_resource_limits_active \- RAM or I/O limit status (1=active, 0=inactive)
+.IP \(bu
+resman_any_limits_active \- Any CPU, RAM, or I/O limit status (1=active, 0=inactive)
 .IP \(bu
 resman_system_load_average \- System load average (1 minute)
 .IP \(bu
 resman_user_cpu_usage_percent{uid, username} \- CPU usage per user
+.IP \(bu
+resman_user_cpu_usage_average_percent{uid, username} \- Average CPU usage per user
+.IP \(bu
+resman_user_cpu_usage_ema_percent{uid, username} \- Exponential moving average of CPU usage per user
 .IP \(bu
 resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (PSS in bytes, RSS fallback)
 .IP \(bu
@@ -774,11 +894,16 @@ resman_user_io_write_ops_total{uid, username} \- Write-family syscall count from
 .IP \(bu
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
-resman_user_cpu_limited{uid, username} \- User limit status (1=limited, 0=unlimited)
+resman_user_cpu_limit_active{uid, username} \- User limit status (1=limited, 0=unlimited)
+.PP
+All per-user series are published exclusively from the authoritative control-cycle
+sample. Observation-only refreshes update system-wide telemetry but do not write or
+remove per-user series, so CPU alerts and the exported EMA use the same sampling
+stream as enforcement.
 .IP \(bu
-resman_limits_activated_total \- Total limit activations (counter)
+resman_cpu_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu
-resman_limits_deactivated_total \- Total limit deactivations (counter)
+resman_cpu_limits_deactivated_total \- Confirmed active-to-inactive limit transitions (counter)
 .IP \(bu
 resman_control_cycle_triggers_total{trigger} \- Control cycles by trigger source
 .IP \(bu
@@ -786,18 +911,27 @@ resman_psi_events_total{type, scope} \- PSI pressure events received from the ke
 .IP \(bu
 resman_psi_last_event_timestamp_seconds{type, scope} \- Unix timestamp of last PSI event
 .IP \(bu
-resman_control_cycle_duration_seconds \- Control cycle duration (histogram)
+resman_control_cycle_duration_seconds \- Complete control cycle duration, including failed and suspended cycles (histogram)
 .IP \(bu
-resman_errors_total{component, error_type} \- Errors by component (counter)
+resman_metrics_collection_duration_seconds \- System metrics collection duration for control cycles and metrics-only refreshes (histogram)
+.IP \(bu
+resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
+.IP \(bu
+resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, or cancelled (counter)
+.IP \(bu
+resman_cgroup_ingress_skipped_total{reason} \- Processes kept outside ResMan-owned cgroups because their PID namespace mismatched or was unavailable (counter)
+.IP \(bu
+resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP
 All user-specific metrics include
 .B uid
 and
 .B username
 labels for easy filtering and aggregation in Grafana dashboards.
-Since v1.17.0, per-user metrics also include
-.B is_limited
-label to distinguish monitored vs limited users.
+The
+.B resman_user_cpu_limit_active
+gauge reports observed CPU enforcement state: 1 means the user is in the
+CPU-limited cgroup, while 0 means CPU enforcement is not observed.
 .PP
 Example queries:
 .RS
@@ -812,13 +946,28 @@ Processes per user:
 .I resman_user_process_count{username="francesco"}
 .IP \(bu
 Only limited users:
-.I resman_user_cpu_usage_percent{is_limited="true"}
+.I resman_user_cpu_limit_active == 1
 .RE
 .SH MCP SERVER (MODEL CONTEXT PROTOCOL)
 When enabled, the daemon exposes an MCP server for AI assistant integration.
 The MCP server provides tools and resources for querying system status and generating reports.
 .PP
-Available MCP tools:
+ResMan accepts only MCP revision 2026-07-28 over stdio or HTTP. The protocol is
+stateless: every request is self-describing, HTTP authentication is evaluated
+per request, and no MCP session identifier or initialization exchange is
+supported. Pre-2026 revisions and compatibility fallbacks are rejected.
+.PP
+MCP over HTTP is HTTPS-only and requires
+.B MCP_TLS_ENABLED=true,
+a server certificate, and a key. The default MCP certificate and key paths are
+the same literal paths used by Prometheus, but the MCP and Prometheus settings
+are independent. The default minimum version is TLS 1.3. Setting
+.B MCP_TLS_CA_FILE
+enables mutual TLS and makes a client certificate mandatory in addition to the
+per-request bearer token. The stdio transport does not require certificates.
+.PP
+Available MCP tools (this list is verified against the production discovery response):
+.\" BEGIN MCP TOOL INVENTORY
 .IP \(bu 2
 .B get_system_status
 \- Current CPU/memory status with hostname
@@ -847,6 +996,18 @@ Available MCP tools:
 .B get_mem_report
 \- Comprehensive memory usage report (formatted text)
 .IP \(bu
+.B set_user_exclude_list
+\- Persist and apply CPU exclusion patterns (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B set_user_include_list
+\- Persist and apply CPU eligibility patterns (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B get_user_filters
+\- Get current CPU include and exclude patterns
+.IP \(bu
+.B validate_user_filter_pattern
+\- Validate a user-filter regular expression
+.IP \(bu
 .B activate_limits
 \- Manually activate CPU limits (requires MCP_ALLOW_WRITE_OPS=true)
 .IP \(bu
@@ -864,24 +1025,93 @@ Available MCP tools:
 .IP \(bu
 .B get_metrics_database_info
 - Database status and information (requires METRICS_DB_ENABLED=true)
+.\" END MCP TOOL INVENTORY
 .PP
-All metric outputs include a
+System-wide payloads and the shared active-user and configuration schemas include a
 .B hostname
-field for multi-server environment identification.
+field for multi-server environment identification. Per-user entries are identified by
+uid and username inside those host-scoped responses.
 .PP
-MCP resources (URI-based access):
+Fixed MCP resources (this list is verified against the production discovery response):
+.\" BEGIN MCP FIXED RESOURCE INVENTORY
 .IP \(bu 2
-resman://system/status
+.B resman://system/status
+\- Real-time system status
 .IP \(bu
-resman://users/active
+.B resman://users/active
+\- List of active users
 .IP \(bu
-resman://limits/status
+.B resman://limits/status
+\- Current limits status
 .IP \(bu
-resman://config
+.B resman://config
+\- Current configuration
+.\" END MCP FIXED RESOURCE INVENTORY
+.PP
+MCP resource URI templates (this list is verified against the production discovery response):
+.\" BEGIN MCP RESOURCE TEMPLATE INVENTORY
 .IP \(bu
-resman://users/{uid}/metrics
+.B resman://users/{uid}/metrics
+\- Per-user metrics
 .IP \(bu
-resman://cgroups/{uid}
+.B resman://cgroups/{uid}
+\- Cgroup information
+.\" END MCP RESOURCE TEMPLATE INVENTORY
+.PP
+MCP prompts (this list is verified against the production discovery response):
+.\" BEGIN MCP PROMPT INVENTORY
+.IP \(bu 2
+.B system-health
+\- Quick system health check with assessment
+.IP \(bu
+.B user-analysis
+\- Analyze resource usage by user in table format
+.IP \(bu
+.B troubleshooting
+\- Diagnose CPU limit issues
+.\" END MCP PROMPT INVENTORY
+.PP
+The
+.B get_active_users
+tool and
+.B resman://users/active
+resource share one object schema with hostname, server_role, and user entries containing
+both uid and username. The
+.B get_configuration
+tool and
+.B resman://config
+resource share one resource-policy schema covering CPU, RAM, and I/O settings plus host
+identity. The payload deliberately excludes credentials and settings outside that scope.
+The per-user metrics tool and resource likewise share one typed projection. Historical
+user and system records use distinct schemas because their fields have different meanings.
+.PP
+The
+.B get_cgroup_info
+tool and the cgroup resource share one underscore-named JSON schema. They pair each CPU
+and memory cgroup interface value with an explicit
+.B *_available
+boolean. If an interface cannot be read, its value is omitted, availability is false,
+and
+.B *_unavailable_reason
+is one of the following bounded values:
+.IP \(bu 2
+.B not_present
+\- Verify that the managed cgroup still exists. If the interface is required by the
+enabled configuration, repair or enable the corresponding cpu or memory controller in
+the delegated hierarchy and restart ResMan; an interface for a disabled feature may
+legitimately be absent.
+.IP \(bu
+.B permission_denied
+\- Restore the documented root/delegation model and cgroup mount permissions; do not
+make individual interface files world-readable.
+.IP \(bu
+.B read_error
+\- Inspect the ResMan journal and kernel log, verify that the managed cgroup still
+exists, and investigate persistent cgroup-filesystem failures.
+.PP
+Available values omit the failure reason. The reason contains neither the attempted
+interface path nor raw error text; the existing path field still identifies the managed
+cgroup. Clients must not treat an empty value as an unlimited limit.
 .PP
 Example MCP configuration:
 .RS
@@ -895,7 +1125,12 @@ Transport mode:
 .IR http )
 .IP \(bu
 HTTP port (for http transport):
-.I MCP_HTTP_PORT=8080
+.I MCP_HTTP_PORT=1969
+.IP \(bu
+TLS certificate and key (mandatory for http transport):
+.I MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+and
+.I MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
 .IP \(bu
 Allow write operations:
 .I MCP_ALLOW_WRITE_OPS=false
@@ -915,9 +1150,9 @@ RESMAN_LIMIT_UID
 .IP \(bu
 RESMAN_LIMIT_USERNAME
 .IP \(bu
-RESMAN_LIMIT_CPU_USAGE
+RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT
 .IP \(bu
-RESMAN_LIMIT_LIMITED_USERS
+RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT
 .IP \(bu
 RESMAN_LIMIT_SHARED_CGROUP
 .IP \(bu
@@ -929,25 +1164,44 @@ RESMAN_LIMIT_SERVER_ROLE
 Webservice hooks are configured with
 .B LIMIT_HOOK_URL
 and receive an HTTP POST with a JSON payload containing uid, username,
-cpu_usage, limited_users, shared_cgroup, timestamp, source, and server_role.
+enforceable_cpu_usage_percent, cpu_eligible_users_count, shared_cgroup,
+timestamp, source, and server_role.
+.PP
+Hook script stdout and stderr are discarded and are never included in returned
+errors or daemon logs. Script failures retain a bounded reason such as timeout or
+exit status. Webservice failure logs identify only the URL scheme and host (including
+an explicit port); user information, path, query values, and fragments are omitted.
 .PP
 Hook execution is asynchronous and bounded by
 .B LIMIT_HOOK_TIMEOUT
-seconds.
+seconds. Every script and HTTP execution records one terminal success, failure,
+timeout, or cancellation outcome. On shutdown ResMan rejects new hook dispatch,
+cancels in-flight hooks, and waits for them to terminate before continuing cleanup.
+The control cycle does not wait for ordinary hook completion.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration
 .PP
 Runtime thresholds, filters, PSI settings, polling intervals, and
 .B LOG_LEVEL
-are applied dynamically. Cgroup paths, Prometheus listener and security
-settings,
+are applied dynamically. This includes
+.BR USERNAME_CACHE_TTL
+regardless of whether the metrics database is enabled, and
+.BR METRICS_DB_RETENTION_DAYS .
+Cgroup paths, created-cgroup state path, Prometheus listener and security settings,
 .BR LOG_FILE ,
 .BR LOG_MAX_SIZE ,
 .BR USE_SYSLOG ,
-and MCP enablement, transport, listener, authentication, and write permissions
+metrics database enablement, path and write interval, server role, and MCP
+enablement, transport, listener, authentication, and write permissions
 require a service restart. Requested changes to static fields are logged and
-deferred instead of being published as active runtime configuration.
+rejected with an error naming each key; their previous effective values remain
+active. Restart the service to apply those keys. Configuration values and
+credentials are not included in that error.
+.PP
+Reload is published as one configuration epoch. Control cycles and metrics
+refreshes finish entirely on the old epoch or wait until all runtime consumers
+hold the new epoch; they never observe a partial cross-component update.
 .br
 .B SIGINT, SIGTERM
 \- Graceful shutdown
@@ -983,13 +1237,13 @@ Go runtime (if running from source)
 .br
 1 \- Configuration or runtime error
 .SH FILES
-.I /etc/resman.conf
+.I /etc/resman/resman.conf
 \- Configuration file
 .br
 .I /var/log/resman.log
 \- Log file
 .br
-.I /var/run/resman\-*
+.I /run/resman\-*
 \- State and cache files
 .SH AUTHOR
 Francesco Defilippo <francesco@defilippo.org>

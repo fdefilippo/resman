@@ -21,14 +21,13 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestNewDatabaseManager(t *testing.T) {
-	// Crea un database temporaneo
-	tmpFile := "/tmp/test_metrics.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -36,14 +35,50 @@ func TestNewDatabaseManager(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Verifica health check
+	// Verify the health check.
 	if err := manager.HealthCheck(); err != nil {
 		t.Errorf("Health check failed: %v", err)
 	}
 }
 
+func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "metrics.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeOperation = func() {
+		close(started)
+		<-release
+	}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- manager.WriteMetricsBatch(nil, nil) }()
+	<-started
+
+	pathDone := make(chan string, 1)
+	go func() { pathDone <- manager.Path() }()
+	select {
+	case got := <-pathDone:
+		if got != dbPath {
+			t.Fatalf("Path() = %q, want %q", got, dbPath)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-writeDone
+		t.Fatal("Path() blocked behind database I/O")
+	}
+	close(release)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("WriteMetricsBatch() error: %v", err)
+	}
+}
+
 func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -59,7 +94,7 @@ func TestNewDatabaseManagerUsesIncrementalAutoVacuum(t *testing.T) {
 }
 
 func TestNewDatabaseManagerMigratesLegacyAutoVacuumDatabase(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	dbPath := privateTestDatabasePath(t, "legacy.db")
 	legacyDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("sql.Open() error: %v", err)
@@ -86,6 +121,9 @@ func TestNewDatabaseManagerMigratesLegacyAutoVacuumDatabase(t *testing.T) {
 	if err := legacyDB.Close(); err != nil {
 		t.Fatalf("failed to close legacy database: %v", err)
 	}
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
+	}
 
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
@@ -110,8 +148,94 @@ func TestNewDatabaseManagerMigratesLegacyAutoVacuumDatabase(t *testing.T) {
 	}
 }
 
+func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "legacy-metrics.db")
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	if _, err := legacyDB.Exec(`
+		CREATE TABLE user_metrics (
+			id INTEGER PRIMARY KEY,
+			uid INTEGER NOT NULL,
+			username TEXT NOT NULL,
+			is_limited BOOLEAN DEFAULT FALSE
+		);
+		INSERT INTO user_metrics(uid, username, is_limited) VALUES (1000, 'ambiguous', 1);
+	`); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to create legacy metrics database: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("legacy database close error: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
+	}
+
+	manager, err := NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("NewDatabaseManager() returned a manager for an incompatible schema")
+	}
+	if err == nil {
+		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
+	}
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 3"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
+		}
+	}
+
+	legacyDB, err = sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("reopen legacy database error: %v", err)
+	}
+	defer func() { _ = legacyDB.Close() }()
+	var username string
+	var limited bool
+	if err := legacyDB.QueryRow("SELECT username, is_limited FROM user_metrics WHERE uid = 1000").Scan(&username, &limited); err != nil {
+		t.Fatalf("legacy row was not preserved: %v", err)
+	}
+	if username != "ambiguous" || !limited {
+		t.Fatalf("legacy row changed after rejection: username=%q is_limited=%t", username, limited)
+	}
+}
+
+func TestNewDatabaseManagerRejectsVersionTwoWithoutMigration(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "version-two.db")
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	if _, err := legacyDB.Exec("PRAGMA user_version = 2"); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("set schema version 2: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("legacy database close error: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
+	}
+
+	manager, err := NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("NewDatabaseManager() returned a manager for schema version 2")
+	}
+	if err == nil {
+		t.Fatal("NewDatabaseManager() migrated schema version 2")
+	}
+	for _, fragment := range []string{dbPath, "schema version 2", "delete or move", "schema version 3"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
+		}
+	}
+}
+
 func TestNewDatabaseManagerUsesWALAndBusyTimeout(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -134,9 +258,30 @@ func TestNewDatabaseManagerUsesWALAndBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestNewDatabaseManagerCreatesRestrictiveStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", root, err)
+	}
+	dir := filepath.Join(root, "nested", "resman")
+	manager, err := NewDatabaseManager(filepath.Join(dir, "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("DatabaseManager.Close() error: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("os.Stat(%s) error: %v", dir, err)
+	}
+	if got := info.Mode().Perm(); got != 0700 {
+		t.Fatalf("state directory mode = %04o, want 0700", got)
+	}
+}
+
 func TestWriteAndReadUserMetrics(t *testing.T) {
-	tmpFile := "/tmp/test_metrics_write.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -144,18 +289,26 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Scrivi metriche
+	// Write metrics.
 	now := time.Now()
 	record := &UserMetricsRecord{
-		UID:              1000,
-		Username:         "testuser",
-		CPUUsagePercent:  45.5,
-		MemoryUsageBytes: 524288000,
-		ProcessCount:     15,
-		CgroupPath:       "/sys/fs/cgroup/user.slice/user-1000.slice",
-		CPUQuota:         "50000 100000",
-		IsLimited:        true,
-		Timestamp:        now,
+		UID:               1000,
+		Username:          "testuser",
+		CPUUsagePercent:   45.5,
+		MemoryUsageBytes:  524288000,
+		ProcessCount:      15,
+		CgroupPath:        "/sys/fs/cgroup/user.slice/user-1000.slice",
+		CPUQuota:          "50000 100000",
+		EligibleForCPU:    true,
+		EligibleForRAM:    false,
+		EligibleForIO:     true,
+		CPULimitRequested: true,
+		CPULimitActive:    false,
+		RAMLimitRequested: true,
+		RAMLimitActive:    true,
+		IOLimitRequested:  true,
+		IOLimitActive:     false,
+		Timestamp:         now,
 	}
 
 	err = manager.WriteUserMetrics(record)
@@ -163,7 +316,7 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 		t.Errorf("Failed to write user metrics: %v", err)
 	}
 
-	// Leggi metriche
+	// Read metrics.
 	startTime := now.Add(-1 * time.Hour)
 	endTime := now.Add(1 * time.Hour)
 	records, err := manager.GetUserHistory(1000, startTime, endTime, 100)
@@ -178,11 +331,18 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 	if records[0].CPUUsagePercent != 45.5 {
 		t.Errorf("Expected CPU usage 45.5, got %f", records[0].CPUUsagePercent)
 	}
+	if !records[0].EligibleForCPU || records[0].EligibleForRAM || !records[0].EligibleForIO {
+		t.Errorf("eligibility state was not preserved: %+v", records[0])
+	}
+	if !records[0].CPULimitRequested || records[0].CPULimitActive ||
+		!records[0].RAMLimitRequested || !records[0].RAMLimitActive ||
+		!records[0].IOLimitRequested || records[0].IOLimitActive {
+		t.Errorf("intent/observed state was not preserved: %+v", records[0])
+	}
 }
 
 func TestWriteAndReadSystemMetrics(t *testing.T) {
-	tmpFile := "/tmp/test_metrics_system.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -190,15 +350,18 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Scrivi metriche di sistema
+	// Write system metrics.
 	now := time.Now()
 	record := &SystemMetricsRecord{
-		TotalCPUUsagePercent: 75.2,
-		TotalCores:           4,
-		SystemLoad:           2.5,
-		LimitsActive:         true,
-		LimitedUsersCount:    3,
-		Timestamp:            now,
+		TotalCPUUsagePercent:         75.2,
+		TotalCores:                   4,
+		SystemLoad:                   2.5,
+		CPULimitsActive:              true,
+		ResourceLimitsActive:         true,
+		AnyLimitsActive:              true,
+		CPUActivelyLimitedUsersCount: 2,
+		ActivelyLimitedUsersCount:    3,
+		Timestamp:                    now,
 	}
 
 	err = manager.WriteSystemMetrics(record)
@@ -206,7 +369,7 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 		t.Errorf("Failed to write system metrics: %v", err)
 	}
 
-	// Leggi metriche
+	// Read metrics.
 	startTime := now.Add(-1 * time.Hour)
 	endTime := now.Add(1 * time.Hour)
 	records, err := manager.GetSystemHistory(startTime, endTime, 100)
@@ -221,10 +384,16 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	if records[0].TotalCores != 4 {
 		t.Errorf("Expected 4 cores, got %d", records[0].TotalCores)
 	}
+	if !records[0].CPULimitsActive || !records[0].ResourceLimitsActive || !records[0].AnyLimitsActive {
+		t.Errorf("system enforcement state = %+v, want all active", records[0])
+	}
+	if records[0].CPUActivelyLimitedUsersCount != 2 || records[0].ActivelyLimitedUsersCount != 3 {
+		t.Errorf("system enforcement counts = CPU %d, any %d; want 2, 3", records[0].CPUActivelyLimitedUsersCount, records[0].ActivelyLimitedUsersCount)
+	}
 }
 
 func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -265,7 +434,7 @@ func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
 }
 
 func TestDatabaseTimeRangesCompareUTCInstants(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -298,7 +467,7 @@ func TestDatabaseTimeRangesCompareUTCInstants(t *testing.T) {
 }
 
 func TestResolveUserUIDFromHistoricalMetrics(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -332,7 +501,7 @@ func TestResolveUserUIDFromHistoricalMetrics(t *testing.T) {
 }
 
 func TestResolveUserUIDRejectsAmbiguousHistoricalUsername(t *testing.T) {
-	manager, err := NewDatabaseManager(filepath.Join(t.TempDir(), "metrics.db"))
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
@@ -356,7 +525,7 @@ func TestResolveUserUIDRejectsAmbiguousHistoricalUsername(t *testing.T) {
 }
 
 func TestNewDatabaseManagerNormalizesLegacyTimestampOffsets(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "metrics.db")
+	dbPath := privateTestDatabasePath(t, "metrics.db")
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
@@ -399,8 +568,7 @@ func TestNewDatabaseManagerNormalizesLegacyTimestampOffsets(t *testing.T) {
 }
 
 func TestGetUserSummary(t *testing.T) {
-	tmpFile := "/tmp/test_metrics_summary.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -408,7 +576,7 @@ func TestGetUserSummary(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Scrivi multiple metriche
+	// Write multiple metrics samples.
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		record := &UserMetricsRecord{
@@ -417,7 +585,7 @@ func TestGetUserSummary(t *testing.T) {
 			CPUUsagePercent:  float64(i * 10),
 			MemoryUsageBytes: int64(500000000 + i*10000000),
 			ProcessCount:     10 + i,
-			IsLimited:        i%2 == 0,
+			CPULimitActive:   i%2 == 0,
 			Timestamp:        now.Add(time.Duration(i) * time.Minute),
 		}
 		if err := manager.WriteUserMetrics(record); err != nil {
@@ -425,7 +593,7 @@ func TestGetUserSummary(t *testing.T) {
 		}
 	}
 
-	// Ottieni summary
+	// Read the aggregate summary.
 	startTime := now.Add(-1 * time.Hour)
 	endTime := now.Add(1 * time.Hour)
 	summary, err := manager.GetUserSummary(1000, startTime, endTime)
@@ -441,20 +609,22 @@ func TestGetUserSummary(t *testing.T) {
 		t.Errorf("Expected 10 samples, got %d", summary.Samples)
 	}
 
-	// CPU avg dovrebbe essere 45 (media di 0,10,20,30,40,50,60,70,80,90)
+	// CPU average should be 45 (mean of 0,10,20,30,40,50,60,70,80,90).
 	if summary.CPUAvg != 45.0 {
 		t.Errorf("Expected CPU avg 45.0, got %f", summary.CPUAvg)
 	}
 
-	// Memory avg dovrebbe essere 545000000 (media di 500M, 510M, ... 590M)
+	// Memory average should be 545000000 (mean of 500M, 510M, ... 590M).
 	if summary.MemoryAvg != 545000000.0 {
 		t.Errorf("Expected Memory avg 545000000.0, got %f", summary.MemoryAvg)
+	}
+	if summary.CPULimitActiveTimePercent != 50 {
+		t.Errorf("CPU limit active time = %f, want 50", summary.CPULimitActiveTimePercent)
 	}
 }
 
 func TestCleanupOldData(t *testing.T) {
-	tmpFile := "/tmp/test_metrics_cleanup.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -462,10 +632,10 @@ func TestCleanupOldData(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Scrivi metriche vecchie e nuove
+	// Write old and current metrics.
 	now := time.Now()
 
-	// Metrica vecchia (35 giorni fa)
+	// Old metric (35 days ago).
 	oldRecord := &UserMetricsRecord{
 		UID:              1000,
 		Username:         "olduser",
@@ -478,7 +648,7 @@ func TestCleanupOldData(t *testing.T) {
 		t.Fatalf("Failed to write old user metrics: %v", err)
 	}
 
-	// Metrica nuova (oggi)
+	// Current metric (today).
 	newRecord := &UserMetricsRecord{
 		UID:              1001,
 		Username:         "newuser",
@@ -498,7 +668,7 @@ func TestCleanupOldData(t *testing.T) {
 		t.Fatalf("Failed to write old system metrics: %v", err)
 	}
 
-	// Cleanup con retention di 30 giorni
+	// Apply 30-day retention.
 	deleted, err := manager.CleanupOldData(30)
 	if err != nil {
 		t.Errorf("Cleanup failed: %v", err)
@@ -508,7 +678,7 @@ func TestCleanupOldData(t *testing.T) {
 		t.Errorf("Expected to delete 2 records, got %d", deleted)
 	}
 
-	// Verifica che rimanga solo la metrica nuova
+	// Verify that only the current metric remains.
 	startTime := now.AddDate(0, 0, -1)
 	endTime := now.AddDate(0, 0, 1)
 	records, _ := manager.GetUserHistory(1001, startTime, endTime, 100)
@@ -518,8 +688,7 @@ func TestCleanupOldData(t *testing.T) {
 }
 
 func TestGetDatabaseInfo(t *testing.T) {
-	tmpFile := "/tmp/test_metrics_info.db"
-	defer func() { _ = os.Remove(tmpFile) }()
+	tmpFile := privateTestDatabasePath(t, "metrics.db")
 
 	manager, err := NewDatabaseManager(tmpFile)
 	if err != nil {
@@ -527,7 +696,7 @@ func TestGetDatabaseInfo(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Scrivi alcune metriche
+	// Write sample metrics.
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		record := &UserMetricsRecord{
@@ -543,7 +712,7 @@ func TestGetDatabaseInfo(t *testing.T) {
 		}
 	}
 
-	// Ottieni info
+	// Read database information.
 	info, err := manager.GetDatabaseInfo(30)
 	if err != nil {
 		t.Errorf("Failed to get database info: %v", err)
@@ -565,7 +734,7 @@ func TestInMemoryDatabase(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 
-	// Verifica che funzioni
+	// Verify the database remains healthy.
 	err = manager.WriteUserMetrics(&UserMetricsRecord{
 		UID:              1000,
 		Username:         "test",
@@ -587,7 +756,7 @@ func TestConnectionMaxLifetime(t *testing.T) {
 		want   time.Duration
 	}{
 		{name: "in-memory database", dbPath: ":memory:", want: 0},
-		{name: "file database", dbPath: filepath.Join(t.TempDir(), "metrics.db"), want: time.Hour},
+		{name: "file database", dbPath: privateTestDatabasePath(t, "metrics.db"), want: time.Hour},
 	}
 
 	for _, tt := range tests {
@@ -597,4 +766,17 @@ func TestConnectionMaxLifetime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func privateTestDatabasePath(t *testing.T, name string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatalf("os.Chmod(%s) error = %v", root, err)
+	}
+	dir := filepath.Join(root, "private")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatalf("os.Mkdir(%s) error = %v", dir, err)
+	}
+	return filepath.Join(dir, name)
 }

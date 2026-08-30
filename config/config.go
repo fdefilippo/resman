@@ -25,23 +25,31 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
-// Timeframe rappresenta un intervallo di tempo per i blackout
+// Timeframe represents a blackout time interval.
 type Timeframe struct {
-	DaysOfWeek []int // Giorni della settimana (0-6, 0=Domenica)
+	DaysOfWeek []int // Days of the week (0-6, where 0 is Sunday)
 	HourStart  int   // Ora inizio (0-23)
 	HourEnd    int   // Ora fine esclusiva (0-24)
 }
 
-// Config contiene tutti i parametri configurabili dell'applicazione.
+// Config contains every public and derived runtime setting.
 type Config struct {
 	mu sync.RWMutex
+
+	// saveGate is shared across reload epochs and serializes config-file transactions.
+	saveGate *operationgate.Gate
+	// saveState is protected by saveGate and shared across reload epochs.
+	saveState *configPersistenceState
 
 	// Regex cache for pre-compiled patterns (performance optimization)
 	regexCache sync.Map // map[string]*regexp.Regexp
@@ -52,16 +60,14 @@ type Config struct {
 	ConfigFile         string `config:"-"` // Runtime path selected by the --config flag
 	LogFile            string `config:"LOG_FILE"`
 	CreatedCgroupsFile string `config:"CREATED_CGROUPS_FILE"`
-	MetricsCacheFile   string `config:"METRICS_CACHE_FILE"`
-	PrometheusFile     string `config:"PROMETHEUS_FILE"`
 
 	// Timing
 	PollingInterval int `config:"POLLING_INTERVAL"`
 	MinActiveTime   int `config:"MIN_ACTIVE_TIME"`
 	MetricsCacheTTL int `config:"METRICS_CACHE_TTL"`
-	// MetricsRefreshInterval aggiorna Prometheus/Grafana senza eseguire decisioni.
+	// MetricsRefreshInterval updates Prometheus and Grafana without making decisions.
 	MetricsRefreshInterval int `config:"METRICS_REFRESH_INTERVAL"`
-	// ProcessMinAgeSeconds evita che processi appena nati falsino il delta CPU.
+	// ProcessMinAgeSeconds prevents newly started processes from distorting the CPU delta.
 	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
 	// Timeouts (seconds)
@@ -76,14 +82,12 @@ type Config struct {
 	CPUThresholdDuration int `config:"CPU_THRESHOLD_DURATION"` // Seconds to wait before activating limits (0 = immediate)
 
 	// CPU limits (cpu.max format: "quota period")
-	CPUQuotaNormal  string `config:"CPU_QUOTA_NORMAL"`
-	CPUQuotaLimited string `config:"CPU_QUOTA_LIMITED"`
+	CPUQuotaNormal string `config:"CPU_QUOTA_NORMAL"`
 
 	// RAM limits
 	RAMEnabled          bool    `config:"RAM_LIMIT_ENABLED"`
 	RAMThreshold        int     `config:"RAM_THRESHOLD"`
 	RAMReleaseThreshold int     `config:"RAM_RELEASE_THRESHOLD"`
-	RAMQuotaLimited     string  `config:"RAM_QUOTA_LIMITED"`
 	RAMQuotaPerUser     string  `config:"RAM_QUOTA_PER_USER"`
 	DisableSwap         bool    `config:"DISABLE_SWAP"`
 	RAMHighRatio        float64 `config:"RAM_HIGH_RATIO"` // Ratio for memory.high (0.0-1.0, default 0.8)
@@ -121,14 +125,14 @@ type Config struct {
 
 	// Workload Pattern Detection (auto-detect user patterns)
 	AutodetectPatterns         bool    `config:"AUTODETECT_PATTERNS"`
-	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // Finestra storica (ore)
+	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // History window in hours
 	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
-	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Soglia confidenza (0.0-1.0)
-	// Policy per pattern
+	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Confidence threshold (0.0-1.0)
+	// Per-pattern policies
 	BatchNightCPUQuota  int    `config:"BATCH_NIGHT_CPU_QUOTA"` // CPU quota per batch (microseconds)
 	BatchNightRAMQuota  string `config:"BATCH_NIGHT_RAM_QUOTA"` // RAM quota per batch
-	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota per interattivo
-	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota per interattivo
+	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota for interactive workloads
+	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota for interactive workloads
 
 	// Hooks
 	LimitHookEnabled bool   `config:"LIMIT_HOOK_ENABLED"`
@@ -155,7 +159,6 @@ type Config struct {
 	PrometheusJWTSecretFile    string `config:"PROMETHEUS_JWT_SECRET_FILE"`
 	PrometheusJWTIssuer        string `config:"PROMETHEUS_JWT_ISSUER"`
 	PrometheusJWTAudience      string `config:"PROMETHEUS_JWT_AUDIENCE"`
-	PrometheusJWTExpiry        int    `config:"PROMETHEUS_JWT_EXPIRY"` // seconds
 
 	// Logging
 	LogLevel   string `config:"LOG_LEVEL"`
@@ -177,8 +180,8 @@ type Config struct {
 	// These processes are never limited, even if the user is in the include list
 	ProcessExcludeList []string `config:"PROCESS_EXCLUDE_LIST"`
 
-	// Blackout Timeframes (when CPU Manager should NOT apply limits)
-	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT_SPEC
+	// Blackout timeframes during which ResMan must not apply limits.
+	BlackoutTimeframes []Timeframe `config:"-"` // Parsed from BLACKOUT
 
 	// Blackout specification string (crontab-like format)
 	BlackoutSpec string `config:"BLACKOUT"` // e.g., "1-5 08-18;0,6 00-23"
@@ -194,6 +197,11 @@ type Config struct {
 	MCPTransport     string `config:"MCP_TRANSPORT"`
 	MCPHTTPPort      int    `config:"MCP_HTTP_PORT"`
 	MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
+	MCPTLSEnabled    bool   `config:"MCP_TLS_ENABLED"`
+	MCPTLSCertFile   string `config:"MCP_TLS_CERT_FILE"`
+	MCPTLSKeyFile    string `config:"MCP_TLS_KEY_FILE"`
+	MCPTLSCAFile     string `config:"MCP_TLS_CA_FILE"`
+	MCPTLSMinVersion string `config:"MCP_TLS_MIN_VERSION"`
 	MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
 	MCPAuthToken     string `config:"MCP_AUTH_TOKEN"`
 	MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
@@ -207,7 +215,7 @@ type Config struct {
 	// Username Cache TTL (minutes)
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 
-	// PSI Event-Driven mode (usa poll() sui pressure file invece del solo ticker)
+	// PSI event-driven mode uses poll() on pressure files instead of only a ticker.
 	PSIEventDriven       bool `config:"PSI_EVENT_DRIVEN"`        // Enable PSI event-driven control cycles
 	PSICPUStallThreshold int  `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
 	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
@@ -217,10 +225,23 @@ type Config struct {
 	PSIBoostDuration     int  `config:"PSI_BOOST_DURATION"`      // Seconds before reverting PSI boost (default 120)
 }
 
-// DefaultConfig restituisce la configurazione predefinita (come nel tuo script Bash).
+// IODecisionPolicy is an atomic snapshot of the configuration used to decide
+// whether I/O enforcement should be activated, maintained, or released.
+type IODecisionPolicy struct {
+	Enabled           bool
+	Threshold         int
+	ReleaseThreshold  int
+	ThresholdDuration int
+	ReadBPS           string
+	WriteBPS          string
+	ReadIOPS          int
+	WriteIOPS         int
+}
+
+// DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
-	// Lettura dinamica del pid_max per il default di SYSTEM_UID_MAX
-	pidMax := 60000 // valore di fallback
+	// Read pid_max dynamically for the SYSTEM_UID_MAX default.
+	pidMax := 60000 // Fallback value.
 	if data, err := os.ReadFile("/proc/sys/kernel/pid_max"); err == nil {
 		if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
 			pidMax = val
@@ -228,20 +249,20 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
+		saveGate:           &operationgate.Gate{},
+		saveState:          &configPersistenceState{},
 		CgroupRoot:         "/sys/fs/cgroup",
 		CgroupBase:         "resman",
-		ConfigFile:         "/etc/resman.conf",
+		ConfigFile:         DefaultConfigPath,
 		LogFile:            "/var/log/resman.log",
-		CreatedCgroupsFile: "/var/run/resman-cgroups.txt",
-		MetricsCacheFile:   "/var/run/resman-metrics.cache",
-		PrometheusFile:     "/var/run/resman-metrics.prom",
+		CreatedCgroupsFile: DefaultCreatedCgroupsPath,
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
 		MetricsCacheTTL: 15,
-		// Refresh Prometheus/Grafana separato dal control loop decisionale.
+		// Refresh Prometheus/Grafana independently from the decision control loop.
 		MetricsRefreshInterval: 30,
-		// Processi piu' giovani non contribuiscono alla CPU utente.
+		// Younger processes do not contribute to user CPU usage.
 		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
@@ -252,13 +273,11 @@ func DefaultConfig() *Config {
 		CPUReleaseThreshold:  40,
 		CPUThresholdDuration: 90, // Default: wait 90 seconds before activating limits
 
-		CPUQuotaNormal:  "max 100000",
-		CPUQuotaLimited: "50000 100000", // 0.5 core
+		CPUQuotaNormal: "max 100000",
 
 		RAMEnabled:          false,
 		RAMThreshold:        75,
 		RAMReleaseThreshold: 40,
-		RAMQuotaLimited:     "2G",
 		RAMQuotaPerUser:     "512M",
 		DisableSwap:         false,
 		RAMHighRatio:        0.8, // Default: memory.high = 80% of memory.max
@@ -323,7 +342,6 @@ func DefaultConfig() *Config {
 		PrometheusJWTSecretFile:    "",
 		PrometheusJWTIssuer:        "resman",
 		PrometheusJWTAudience:      "prometheus",
-		PrometheusJWTExpiry:        3600,
 
 		LogLevel:   "INFO",
 		LogMaxSize: 10 * 1024 * 1024, // 10MB
@@ -346,14 +364,19 @@ func DefaultConfig() *Config {
 		MCPEnabled:       false,
 		MCPTransport:     "stdio",
 		MCPHTTPPort:      1969,
-		MCPHTTPHost:      "", // Empty = use default 0.0.0.0
+		MCPHTTPHost:      "127.0.0.1",
+		MCPTLSEnabled:    true,
+		MCPTLSCertFile:   "/etc/resman/tls/server.crt",
+		MCPTLSKeyFile:    "/etc/resman/tls/server.key",
+		MCPTLSCAFile:     "",
+		MCPTLSMinVersion: "1.3",
 		MCPLogLevel:      "INFO",
 		MCPAuthToken:     "",
 		MCPAllowWriteOps: false,
 
 		// Metrics Database (SQLite)
 		MetricsDBEnabled:       false,
-		MetricsDBPath:          "/etc/resman/metrics.db",
+		MetricsDBPath:          DefaultMetricsDBPath,
 		MetricsDBRetentionDays: 30,
 		MetricsDBWriteInterval: 30, // Same as polling interval by default
 
@@ -371,22 +394,29 @@ func DefaultConfig() *Config {
 	}
 }
 
-// LoadAndValidate carica la configurazione da file e variabili d'ambiente,
-// sovrascrivendo i default, e poi la valida.
+// LoadAndValidate loads file and environment overrides over the defaults, then
+// validates the resulting configuration.
 func LoadAndValidate(configPath string) (*Config, error) {
+	return loadAndValidateWithLayout(configPath, defaultDiskLayout)
+}
+
+func loadAndValidateWithLayout(configPath string, layout diskLayout) (*Config, error) {
 	cfg := DefaultConfig()
 	resolvedConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config file path %s: %w", configPath, err)
 	}
 	resolvedConfigPath = filepath.Clean(resolvedConfigPath)
+	if err := rejectLegacyConfigAtDefault(resolvedConfigPath, layout); err != nil {
+		return nil, err
+	}
 
-	// 1. Carica dal file di configurazione (se esiste)
+	// 1. Load the configuration file when it exists.
 	if err := loadFromFile(resolvedConfigPath, cfg); err != nil {
 		return nil, fmt.Errorf("loading config file %s: %w", resolvedConfigPath, err)
 	}
 
-	// 2. Sovrascrivi con le variabili d'ambiente
+	// 2. Apply environment overrides.
 	if err := loadFromEnvironment(cfg); err != nil {
 		return nil, fmt.Errorf("loading environment overrides: %w", err)
 	}
@@ -394,9 +424,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	// The command-line path is authoritative for reloads and MCP writes.
 	cfg.ConfigFile = resolvedConfigPath
 
-	// 3. Valida
+	// 3. Validate the complete result.
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+	if err := rejectLegacyMetricsDBAtDefault(cfg, layout); err != nil {
+		return nil, err
 	}
 
 	// Warn when CPU limiting is disabled by an empty include list.
@@ -409,12 +442,12 @@ func LoadAndValidate(configPath string) (*Config, error) {
 	return cfg, nil
 }
 
-// loadFromFile legge un file di configurazione in formato chiave=valore.
+// loadFromFile reads a key=value configuration file.
 func loadFromFile(path string, cfg *Config) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File non esistente è ok, useremo default/env
+			// A missing file is allowed; defaults and environment still apply.
 			return nil
 		}
 		return err
@@ -423,7 +456,7 @@ func loadFromFile(path string, cfg *Config) error {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
-		// Salta commenti e righe vuote
+		// Skip comments and blank lines.
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -436,12 +469,12 @@ func loadFromFile(path string, cfg *Config) error {
 		key := strings.TrimSpace(parts[0])
 		value := stripInlineComment(parts[1])
 
-		// Rimuovi eventuali virgolette e spazi extra
+		// Remove surrounding quotes and whitespace.
 		value = strings.TrimSpace(value)
 		value = strings.TrimSpace(strings.Trim(value, `"'`))
 
 		if err := setConfigField(cfg, key, value); err != nil {
-			return fmt.Errorf("setting key %s on line %d: %w", key, i+1, err)
+			return fmt.Errorf("configuration file %s line %d key %s: %w", path, i+1, key, err)
 		}
 	}
 	return nil
@@ -482,10 +515,22 @@ func stripInlineComment(value string) string {
 	return value
 }
 
-// loadFromEnvironment sovrascrive i valori con le variabili d'ambiente.
+// loadFromEnvironment applies supported environment overrides and explicitly
+// rejects environment variables for removed public keys.
 func loadFromEnvironment(cfg *Config) error {
 	cfgType := reflect.TypeOf(cfg).Elem()
 	var errs []error
+
+	removedKeys := make([]string, 0, len(removedConfigKeys))
+	for key := range removedConfigKeys {
+		removedKeys = append(removedKeys, key)
+	}
+	sort.Strings(removedKeys)
+	for _, key := range removedKeys {
+		if value, ok := os.LookupEnv(key); ok {
+			errs = append(errs, fmt.Errorf("%s=%q: %w", key, value, removedConfigKeyError(key)))
+		}
+	}
 
 	for i := 0; i < cfgType.NumField(); i++ {
 		field := cfgType.Field(i)
@@ -505,37 +550,35 @@ func loadFromEnvironment(cfg *Config) error {
 		}
 	}
 
-	aliases := []struct {
-		key       string
-		canonical string
-	}{
-		{key: "PROMETHEUS_HOST", canonical: "PROMETHEUS_METRICS_BIND_HOST"},
-		{key: "PROMETHEUS_PORT", canonical: "PROMETHEUS_METRICS_BIND_PORT"},
-		{key: "USER_WHITELIST", canonical: "USER_EXCLUDE_LIST"},
-	}
-	for _, alias := range aliases {
-		if _, canonicalSet := os.LookupEnv(alias.canonical); canonicalSet {
-			continue
-		}
-		envValue, ok := os.LookupEnv(alias.key)
-		if !ok {
-			continue
-		}
-		if err := setConfigField(cfg, alias.key, envValue); err != nil {
-			errs = append(errs, fmt.Errorf("%s=%q: %w", alias.key, envValue, err))
-		}
-	}
-
 	return errors.Join(errs...)
 }
 
-// setConfigField imposta il valore di un campo nella struct Config basandosi sul tag `config`.
+// setConfigField applies one public key through its validated handler.
 func setConfigField(cfg *Config, key, value string) error {
 	handler, ok := configFieldHandlers[key]
 	if !ok {
-		return nil
+		if _, removed := removedConfigKeys[key]; removed {
+			return removedConfigKeyError(key)
+		}
+		return fmt.Errorf("unknown configuration key %q", key)
 	}
 	return handler(cfg, value)
+}
+
+var removedConfigKeys = map[string]string{
+	"CONFIG_FILE":           "select the active file with the --config command-line option",
+	"CPU_QUOTA_LIMITED":     "CPU enforcement is proportional and has no global limited quota",
+	"METRICS_CACHE_FILE":    "resman has no file-backed metrics cache",
+	"PROMETHEUS_FILE":       "resman exports metrics over HTTP and does not write a Prometheus textfile",
+	"PROMETHEUS_HOST":       "use PROMETHEUS_METRICS_BIND_HOST",
+	"PROMETHEUS_JWT_EXPIRY": "token lifetime is set by the signed exp claim at token issuance",
+	"PROMETHEUS_PORT":       "use PROMETHEUS_METRICS_BIND_PORT",
+	"RAM_QUOTA_LIMITED":     "RAM enforcement uses RAM_QUOTA_PER_USER",
+	"USER_WHITELIST":        "use USER_EXCLUDE_LIST",
+}
+
+func removedConfigKeyError(key string) error {
+	return fmt.Errorf("configuration key %s was removed: %s", key, removedConfigKeys[key])
 }
 
 type configFieldHandler func(*Config, string) error
@@ -545,8 +588,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CGROUP_BASE":          setCgroupBase,
 	"LOG_FILE":             setString(func(cfg *Config, value string) { cfg.LogFile = value }),
 	"CREATED_CGROUPS_FILE": setString(func(cfg *Config, value string) { cfg.CreatedCgroupsFile = value }),
-	"METRICS_CACHE_FILE":   setString(func(cfg *Config, value string) { cfg.MetricsCacheFile = value }),
-	"PROMETHEUS_FILE":      setString(func(cfg *Config, value string) { cfg.PrometheusFile = value }),
 	"POLLING_INTERVAL":     setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
 	"MIN_ACTIVE_TIME":      setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
 	"METRICS_CACHE_TTL":    setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
@@ -560,7 +601,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_RELEASE_THRESHOLD":  setInt(func(cfg *Config, value int) { cfg.CPUReleaseThreshold = value }),
 	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
 	"CPU_QUOTA_NORMAL":       setString(func(cfg *Config, value string) { cfg.CPUQuotaNormal = value }),
-	"CPU_QUOTA_LIMITED":      setString(func(cfg *Config, value string) { cfg.CPUQuotaLimited = value }),
 	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
 	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
 	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
@@ -570,12 +610,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 		cfg.PrometheusMetricsBindHost = value
 	}),
 	"PROMETHEUS_METRICS_BIND_PORT": setPort("PROMETHEUS_METRICS_BIND_PORT", func(cfg *Config, value int) {
-		cfg.PrometheusMetricsBindPort = value
-	}),
-	"PROMETHEUS_HOST": setString(func(cfg *Config, value string) {
-		cfg.PrometheusMetricsBindHost = value
-	}),
-	"PROMETHEUS_PORT": setPort("PROMETHEUS_PORT", func(cfg *Config, value int) {
 		cfg.PrometheusMetricsBindPort = value
 	}),
 	"PROMETHEUS_TLS_ENABLED":   setBool(func(cfg *Config, value bool) { cfg.PrometheusTLSEnabled = value }),
@@ -593,7 +627,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_JWT_SECRET_FILE":    setString(func(cfg *Config, value string) { cfg.PrometheusJWTSecretFile = value }),
 	"PROMETHEUS_JWT_ISSUER":         setString(func(cfg *Config, value string) { cfg.PrometheusJWTIssuer = value }),
 	"PROMETHEUS_JWT_AUDIENCE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
-	"PROMETHEUS_JWT_EXPIRY":         setInt(func(cfg *Config, value int) { cfg.PrometheusJWTExpiry = value }),
 	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
 	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
 	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
@@ -604,13 +637,17 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"USER_EXCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
 	"PROCESS_EXCLUDE_LIST":          setRegexList(" in PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
 	"BLACKOUT":                      setBlackout,
-	"USER_WHITELIST":                setPlainList(func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
 	"IGNORE_SYSTEM_LOAD":            setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
 	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
 	"MCP_ENABLED":                   setBool(func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
 	"MCP_TRANSPORT":                 setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
 	"MCP_HTTP_PORT":                 setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
 	"MCP_HTTP_HOST":                 setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
+	"MCP_TLS_ENABLED":               setBool(func(cfg *Config, value bool) { cfg.MCPTLSEnabled = value }),
+	"MCP_TLS_CERT_FILE":             setString(func(cfg *Config, value string) { cfg.MCPTLSCertFile = value }),
+	"MCP_TLS_KEY_FILE":              setString(func(cfg *Config, value string) { cfg.MCPTLSKeyFile = value }),
+	"MCP_TLS_CA_FILE":               setString(func(cfg *Config, value string) { cfg.MCPTLSCAFile = value }),
+	"MCP_TLS_MIN_VERSION":           setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPTLSMinVersion = value }),
 	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
 	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
 	"MCP_ALLOW_WRITE_OPS":           setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
@@ -624,7 +661,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
 	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
 	"RAM_RELEASE_THRESHOLD":         setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
-	"RAM_QUOTA_LIMITED":             setString(func(cfg *Config, value string) { cfg.RAMQuotaLimited = value }),
 	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
 	"DISABLE_SWAP":                  setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
 	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
@@ -801,34 +837,7 @@ func parseRegexList(value, errorContext string) ([]string, error) {
 	return patterns, nil
 }
 
-func setPlainList(assign func(*Config, []string)) configFieldHandler {
-	return func(cfg *Config, value string) error {
-		assign(cfg, parsePlainList(value))
-		return nil
-	}
-}
-
-func parsePlainList(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-
-	rawValues := strings.Split(value, ",")
-	values := make([]string, 0, len(rawValues))
-	for _, item := range rawValues {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			values = append(values, item)
-		}
-	}
-	if len(values) == 0 {
-		return nil
-	}
-	return values
-}
-
-// validateConfig esegue tutte le validazioni come nello script Bash.
+// validateConfig validates the complete runtime configuration.
 func validateConfig(cfg *Config) error {
 	var errors []string
 
@@ -867,6 +876,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.PollingInterval < 5 {
 		errors = append(errors, "POLLING_INTERVAL must be at least 5 seconds")
 	}
+	if cfg.MetricsCacheTTL < 1 {
+		errors = append(errors, "METRICS_CACHE_TTL must be at least 1 second")
+	}
 	if cfg.MetricsRefreshInterval < 5 {
 		errors = append(errors, "METRICS_REFRESH_INTERVAL must be at least 5 seconds")
 	}
@@ -886,12 +898,8 @@ func validateConfig(cfg *Config) error {
 		if cfg.PrometheusTLSEnabled {
 			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION is required when Prometheus TLS is enabled")
 		}
-	} else {
-		switch cfg.PrometheusTLSMinVersion {
-		case "1.0", "1.1", "1.2", "1.3":
-		default:
-			errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
-		}
+	} else if !isValidTLSVersion(cfg.PrometheusTLSMinVersion) {
+		errors = append(errors, "PROMETHEUS_TLS_MIN_VERSION must be one of: 1.0, 1.1, 1.2, 1.3")
 	}
 
 	// Validate PSI event-driven configuration
@@ -930,19 +938,16 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	if cfg.MCPEnabled && cfg.MCPTransport == "http" && strings.TrimSpace(cfg.MCPAuthToken) == "" {
-		errors = append(errors, "MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
+	if err := cfg.MCPServerConfig().Validate(); err != nil {
+		errors = append(errors, err.Error())
 	}
 
-	// Validate CPU quota format
-	if !isValidCPUQuota(cfg.CPUQuotaLimited) {
-		errors = append(errors, "CPU_QUOTA_LIMITED must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
-	}
+	// Validate CPU quota format.
 	if !isValidCPUQuota(cfg.CPUQuotaNormal) {
 		errors = append(errors, "CPU_QUOTA_NORMAL must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
 	}
 
-	// Validate RAM limits configuration
+	// Validate RAM limits configuration.
 	if cfg.RAMEnabled {
 		if cfg.RAMThreshold < 1 || cfg.RAMThreshold > 100 {
 			errors = append(errors, "RAM_THRESHOLD must be between 1 and 100")
@@ -952,9 +957,6 @@ func validateConfig(cfg *Config) error {
 		}
 		if cfg.RAMThreshold <= cfg.RAMReleaseThreshold {
 			errors = append(errors, "RAM_THRESHOLD must be greater than RAM_RELEASE_THRESHOLD")
-		}
-		if !isValidByteQuota(cfg.RAMQuotaLimited) {
-			errors = append(errors, "RAM_QUOTA_LIMITED must be a valid byte value (e.g., '1073741824', '512M', '1G')")
 		}
 		if !isValidByteQuota(cfg.RAMQuotaPerUser) {
 			errors = append(errors, "RAM_QUOTA_PER_USER must be a valid byte value (e.g., '536870912', '512M', '1G')")
@@ -1022,6 +1024,15 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
+func isValidTLSVersion(version string) bool {
+	switch strings.TrimSpace(version) {
+	case "1.0", "1.1", "1.2", "1.3":
+		return true
+	default:
+		return false
+	}
+}
+
 func isValidIODeviceFilter(filter string) bool {
 	filter = strings.TrimSpace(filter)
 	if filter == "" || filter == "all" {
@@ -1043,7 +1054,7 @@ func isValidIODeviceFilter(filter string) bool {
 	return true
 }
 
-// isValidCPUQuota verifica il formato "quota period" o "max period".
+// isValidCPUQuota validates the "quota period" or "max period" format.
 func isValidCPUQuota(quota string) bool {
 	parts := strings.Fields(quota)
 	if len(parts) != 2 {
@@ -1060,20 +1071,20 @@ func isValidCPUQuota(quota string) bool {
 	return err == nil && numericQuota >= 1000
 }
 
-// isValidByteQuota verifica il formato di una quota in byte.
-// Formati validi: bytes (es. "1073741824"), K/M/G/T case-insensitive (es. "512M", "1g")
+// isValidByteQuota validates a byte quota format.
+// Valid formats are bytes (for example, "1073741824") or case-insensitive K/M/G/T suffixes.
 func isValidByteQuota(quota string) bool {
 	if quota == "" {
 		return false
 	}
-	_, err := ParseRAMQuota(quota)
+	_, err := ParseByteQuota(quota)
 	return err == nil
 }
 
-// ParseRAMQuota converts a byte quota with an optional case-insensitive K/M/G/T suffix.
-func ParseRAMQuota(quota string) (uint64, error) {
+// ParseByteQuota converts a byte quota with an optional case-insensitive K/M/G/T suffix.
+func ParseByteQuota(quota string) (uint64, error) {
 	if quota == "" {
-		return 0, fmt.Errorf("empty RAM quota")
+		return 0, fmt.Errorf("empty byte quota")
 	}
 
 	multipliers := map[string]uint64{
@@ -1088,10 +1099,10 @@ func ParseRAMQuota(quota string) (uint64, error) {
 		number := quota[:len(quota)-1]
 		value, err := strconv.ParseUint(number, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid RAM quota number %q: %w", number, err)
+			return 0, fmt.Errorf("invalid byte quota number %q: %w", number, err)
 		}
 		if value > ^uint64(0)/multiplier {
-			return 0, fmt.Errorf("RAM quota %q overflows uint64 bytes", quota)
+			return 0, fmt.Errorf("byte quota %q overflows uint64", quota)
 		}
 		return value * multiplier, nil
 	}
@@ -1099,7 +1110,7 @@ func ParseRAMQuota(quota string) (uint64, error) {
 	// Plain bytes
 	val, err := strconv.ParseUint(quota, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid RAM quota format %q: %w", quota, err)
+		return 0, fmt.Errorf("invalid byte quota format %q: %w", quota, err)
 	}
 	return val, nil
 }
@@ -1155,12 +1166,12 @@ func (c *Config) IsUserExcluded(username string) bool {
 }
 
 func (c *Config) isUserExcludedLocked(username string) bool {
-	// Se la exclude list non è configurata o è vuota, nessun utente è escluso
+	// An unset or empty exclude list excludes no users.
 	if len(c.UserExcludeList) == 0 {
 		return false // No exclude list = no users excluded
 	}
 
-	// Altrimenti, controlla se lo username corrisponde a uno dei pattern regex
+	// Otherwise, check whether the username matches a configured regular expression.
 	for _, pattern := range c.UserExcludeList {
 		if c.matchPattern(pattern, username) {
 			return true // User matches exclude pattern
@@ -1177,11 +1188,35 @@ func (c *Config) IsUserWhitelisted(username string) bool {
 	return c.isUserIncludedLocked(username) && !c.isUserExcludedLocked(username)
 }
 
-// IsProcessExcluded verifica se un processo deve essere escluso dai limiti
-// I processi nella PROCESS_EXCLUDE_LIST non sono mai limitati (regex support)
+// UserEligibility describes whether one user may be limited for each resource.
+type UserEligibility struct {
+	EligibleForCPU bool
+	EligibleForRAM bool
+	EligibleForIO  bool
+}
+
+// EvaluateUserEligibility evaluates every resource policy from one config snapshot.
+func (c *Config) EvaluateUserEligibility(username string) UserEligibility {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return UserEligibility{
+		EligibleForCPU: c.isUserIncludedLocked(username) && !c.isUserExcludedLocked(username),
+		EligibleForRAM: c.isUserIncludedForRAMLocked(username) && !c.isUserExcludedForRAMLocked(username),
+		EligibleForIO:  c.isUserIncludedForIOLocked(username) && !c.isUserExcludedForIOLocked(username),
+	}
+}
+
+// IsProcessExcluded reports whether a canonical process name matches the
+// process exclusion policy.
 func (c *Config) IsProcessExcluded(processName string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isProcessExcludedLocked(processName)
+}
+
+func (c *Config) isProcessExcludedLocked(processName string) bool {
 	if len(c.ProcessExcludeList) == 0 {
-		return false // No processes excluded
+		return false
 	}
 	for _, pattern := range c.ProcessExcludeList {
 		if c.matchPattern(pattern, processName) {
@@ -1191,8 +1226,14 @@ func (c *Config) IsProcessExcluded(processName string) bool {
 	return false
 }
 
-// IsUserIncludedForRAM verifica se un utente è incluso per i limiti RAM (regex support)
+// IsUserIncludedForRAM reports whether a user matches the RAM include policy.
 func (c *Config) IsUserIncludedForRAM(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForRAMLocked(username)
+}
+
+func (c *Config) isUserIncludedForRAMLocked(username string) bool {
 	if len(c.RAMUserIncludeList) == 0 {
 		return true
 	}
@@ -1204,8 +1245,14 @@ func (c *Config) IsUserIncludedForRAM(username string) bool {
 	return false
 }
 
-// IsUserExcludedForRAM verifica se un utente è escluso dai limiti RAM (regex support)
+// IsUserExcludedForRAM reports whether a user matches the RAM exclude policy.
 func (c *Config) IsUserExcludedForRAM(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserExcludedForRAMLocked(username)
+}
+
+func (c *Config) isUserExcludedForRAMLocked(username string) bool {
 	if len(c.RAMUserExcludeList) == 0 {
 		return false
 	}
@@ -1217,14 +1264,22 @@ func (c *Config) IsUserExcludedForRAM(username string) bool {
 	return false
 }
 
-// IsUserWhitelistedForRAM verifica se un utente può essere limitato per RAM
+// IsUserWhitelistedForRAM reports whether a user is eligible for RAM limiting.
 func (c *Config) IsUserWhitelistedForRAM(username string) bool {
-	return c.IsUserIncludedForRAM(username) && !c.IsUserExcludedForRAM(username)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForRAMLocked(username) && !c.isUserExcludedForRAMLocked(username)
 }
 
-// IsUserIncludedForIO verifica se l'utente è nella IO include list.
-// Se la lista è vuota/nil, tutti sono inclusi.
+// IsUserIncludedForIO reports whether a user matches the I/O include policy.
+// An empty include list includes every user.
 func (c *Config) IsUserIncludedForIO(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserIncludedForIOLocked(username)
+}
+
+func (c *Config) isUserIncludedForIOLocked(username string) bool {
 	if len(c.IOUserIncludeList) == 0 {
 		return true
 	}
@@ -1236,9 +1291,15 @@ func (c *Config) IsUserIncludedForIO(username string) bool {
 	return false
 }
 
-// IsUserExcludedForIO verifica se l'utente è nella IO exclude list.
-// Se la lista è vuota/nil, nessuno è escluso.
+// IsUserExcludedForIO reports whether a user matches the I/O exclude policy.
+// An empty exclude list excludes no user.
 func (c *Config) IsUserExcludedForIO(username string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isUserExcludedForIOLocked(username)
+}
+
+func (c *Config) isUserExcludedForIOLocked(username string) bool {
 	if len(c.IOUserExcludeList) == 0 {
 		return false
 	}
@@ -1250,126 +1311,220 @@ func (c *Config) IsUserExcludedForIO(username string) bool {
 	return false
 }
 
-// IsUserWhitelistedForIO verifica se un utente può essere limitato per IO
+// IsUserWhitelistedForIO reports whether a user is eligible for I/O limiting.
 func (c *Config) IsUserWhitelistedForIO(username string) bool {
-	return c.IsUserIncludedForIO(username) && !c.IsUserExcludedForIO(username)
-}
-
-// SetUserExcludeList imposta la lista di utenti da escludere e salva su file
-func (c *Config) SetUserExcludeList(patterns []string, configPath string, reload bool) ([]string, error) {
-	// Valida tutti i pattern regex
-	for _, pattern := range patterns {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return c.GetUserExcludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
-		}
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Salva valore precedente
-	previousValue := make([]string, len(c.UserExcludeList))
-	copy(previousValue, c.UserExcludeList)
-
-	// Aggiorna configurazione in memoria
-	c.UserExcludeList = append([]string(nil), patterns...)
-
-	// Salva su file
-	if err := c.saveToFileLocked(configPath); err != nil {
-		// Ripristina valore precedente se salvataggio fallisce
-		c.UserExcludeList = previousValue
-		return previousValue, err
-	}
-
-	return previousValue, nil
-}
-
-// SetUserIncludeList imposta la lista di pattern include e salva su file
-func (c *Config) SetUserIncludeList(patterns []string, configPath string, reload bool) ([]string, error) {
-	// Valida tutti i pattern regex
-	for _, pattern := range patterns {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return c.GetUserIncludeList(), fmt.Errorf("invalid regex pattern '%s': %w", pattern, err)
-		}
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Salva valore precedente
-	previousValue := make([]string, len(c.UserIncludeList))
-	copy(previousValue, c.UserIncludeList)
-
-	// Aggiorna configurazione in memoria
-	c.UserIncludeList = append([]string(nil), patterns...)
-
-	// Salva su file
-	if err := c.saveToFileLocked(configPath); err != nil {
-		// Ripristina valore precedente se salvataggio fallisce
-		c.UserIncludeList = previousValue
-		return previousValue, err
-	}
-
-	return previousValue, nil
-}
-
-// SaveToFile salva la configurazione su file, creando backup automatico
-func (c *Config) SaveToFile(path string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.saveToFileLocked(path)
+	return c.isUserIncludedForIOLocked(username) && !c.isUserExcludedForIOLocked(username)
 }
 
-func (c *Config) saveToFileLocked(path string) error {
-	// 1. Crea backup del file esistente
-	if _, err := os.Stat(path); err == nil {
-		timestamp := time.Now().Format("20060102_150405")
-		backupPath := fmt.Sprintf("%s.backup_%s", path, timestamp)
+// PersistUserExcludeList writes a detached exclude-policy snapshot without
+// publishing it to live consumers. A watcher acknowledgement owns publication.
+func (c *Config) PersistUserExcludeList(patterns []string, configPath string) (UserFilterPersistenceResult, error) {
+	return c.persistUserFilterWithWriter(patterns, configPath, userFilterExclude, writeFileAtomically)
+}
 
-		// Leggi contenuto originale
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to read config file for backup: %w", err)
-		}
+// PersistUserIncludeList writes a detached include-policy snapshot without
+// publishing it to live consumers. A watcher acknowledgement owns publication.
+func (c *Config) PersistUserIncludeList(patterns []string, configPath string) (UserFilterPersistenceResult, error) {
+	return c.persistUserFilterWithWriter(patterns, configPath, userFilterInclude, writeFileAtomically)
+}
 
-		// Scrivi backup
-		if err := os.WriteFile(backupPath, content, 0644); err != nil {
-			return fmt.Errorf("failed to create backup: %w", err)
+type userFilterField uint8
+
+const (
+	userFilterInclude userFilterField = iota
+	userFilterExclude
+)
+
+type userFilterPersistenceSnapshot struct {
+	include      []string
+	exclude      []string
+	writeInclude bool
+	writeExclude bool
+}
+
+// UserFilterPersistenceResult reports the previous live value and any legacy
+// filesystem artifacts removed while persisting the detached filter update.
+type UserFilterPersistenceResult struct {
+	PreviousValue []string
+	PersistenceResult
+}
+
+func (c *Config) persistenceCoordinator() (*operationgate.Gate, *configPersistenceState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.saveGate == nil {
+		c.saveGate = &operationgate.Gate{}
+	}
+	if c.saveState == nil {
+		c.saveState = &configPersistenceState{}
+	}
+	return c.saveGate, c.saveState
+}
+
+func (c *Config) userFilterSnapshot() userFilterPersistenceSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return userFilterPersistenceSnapshot{
+		include: append([]string(nil), c.UserIncludeList...),
+		exclude: append([]string(nil), c.UserExcludeList...),
+	}
+}
+
+func (c *Config) persistUserFilterWithWriter(
+	patterns []string,
+	configPath string,
+	field userFilterField,
+	writer atomicFileWriter,
+) (UserFilterPersistenceResult, error) {
+	if err := validateUserFilterPatterns(patterns); err != nil {
+		snapshot := c.userFilterSnapshot()
+		switch field {
+		case userFilterInclude:
+			return UserFilterPersistenceResult{PreviousValue: snapshot.include}, err
+		case userFilterExclude:
+			return UserFilterPersistenceResult{PreviousValue: snapshot.exclude}, err
+		default:
+			return UserFilterPersistenceResult{}, fmt.Errorf("unknown user filter field %d: %w", field, err)
 		}
 	}
 
-	// 2. Leggi il file esistente e aggiorna le righe
-	lines, err := c.updateConfigLines(path)
+	saveGate, saveState := c.persistenceCoordinator()
+	leavePersistence := saveGate.Enter()
+	defer leavePersistence()
+
+	snapshot := c.userFilterSnapshot()
+	var previous []string
+	switch field {
+	case userFilterInclude:
+		previous = append([]string(nil), snapshot.include...)
+		snapshot.include = append([]string(nil), patterns...)
+		snapshot.writeInclude = true
+	case userFilterExclude:
+		previous = append([]string(nil), snapshot.exclude...)
+		snapshot.exclude = append([]string(nil), patterns...)
+		snapshot.writeExclude = true
+	default:
+		return UserFilterPersistenceResult{}, fmt.Errorf("unknown user filter field %d", field)
+	}
+	result := UserFilterPersistenceResult{PreviousValue: previous}
+	if saveState.unusableErr != nil {
+		return result, fmt.Errorf(
+			"configuration persistence is unavailable until resman restarts after operator recovery: %w",
+			saveState.unusableErr,
+		)
+	}
+
+	persistenceResult, err := saveUserFilterSnapshotWithWriter(configPath, snapshot, writer)
+	result.PersistenceResult = persistenceResult
 	if err != nil {
-		return err
+		var unusableErr *configPersistenceUnusableError
+		if errors.As(err, &unusableErr) {
+			saveState.unusableErr = err
+		}
+		return result, err
 	}
+	return result, nil
+}
 
-	// 3. Scrivi su file temporaneo
-	tmpPath := path + ".tmp"
-	content := strings.Join(lines, "\n")
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write temp config file: %w", err)
+func validateUserFilterPatterns(patterns []string) error {
+	for _, pattern := range patterns {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("invalid regex pattern %q: %w", pattern, err)
+		}
 	}
-
-	// 4. Rinomina atomico
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath) // Cleanup se rename fallisce
-		return fmt.Errorf("failed to rename config file: %w", err)
-	}
-
 	return nil
 }
 
-// updateConfigLines legge e aggiorna le righe della configurazione
-func (c *Config) updateConfigLines(path string) ([]string, error) {
-	// Leggi file esistente
-	content, err := os.ReadFile(path)
+func saveUserFilterSnapshotWithWriter(
+	path string,
+	snapshot userFilterPersistenceSnapshot,
+	writer atomicFileWriter,
+) (PersistenceResult, error) {
+	return saveUserFilterSnapshot(path, snapshot, writer, removeCommittedFile)
+}
+
+func saveUserFilterSnapshot(
+	path string,
+	snapshot userFilterPersistenceSnapshot,
+	writer atomicFileWriter,
+	remover committedFileRemover,
+) (PersistenceResult, error) {
+	result := PersistenceResult{}
+	metadata, original, exists, err := readConfigFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// File non esiste, crea nuovo
-			return c.generateConfigLines(), nil
+		return result, err
+	}
+
+	backupPath := path + configBackupSuffix
+	if exists {
+		if _, err := writer(backupPath, original, metadata); err != nil {
+			return result, fmt.Errorf("failed to create secure configuration backup: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	result, err = removeLegacyConfigArtifactsBeside(path)
+	if err != nil {
+		return result, err
+	}
+
+	// Preserve comments and unrelated settings from the exact version backed up
+	// above, avoiding a second read with different contents or metadata.
+	lines := snapshot.updateConfigLines(original, exists)
+	content := strings.Join(lines, "\n")
+	committed, err := writer(path, []byte(content), metadata)
+	if err == nil {
+		return result, nil
+	}
+
+	writeErr := fmt.Errorf("failed to persist configuration: %w", err)
+	if !committed {
+		return result, writeErr
+	}
+
+	// A parent-directory sync failure happens after rename. Restore the previous
+	// readable contents; live configuration publication remains a separate step.
+	if exists {
+		restored, restoreErr := writer(path, original, metadata)
+		if restoreErr != nil {
+			if restored {
+				return result, errors.Join(writeErr, fmt.Errorf(
+					"restored previous readable configuration at %s but failed to confirm rollback durability: %w",
+					path,
+					restoreErr,
+				))
+			}
+			return result, errors.Join(writeErr, &configPersistenceUnusableError{
+				detail:   fmt.Sprintf("failed to restore configuration at %s", path),
+				recovery: fmt.Sprintf("stop resman, restore %s, and restart before accepting further configuration writes", backupPath),
+				cause:    restoreErr,
+			})
+		}
+	} else {
+		removed, removeErr := remover(path)
+		if removeErr != nil {
+			if removed {
+				return result, errors.Join(writeErr, fmt.Errorf(
+					"removed newly created readable configuration at %s but failed to confirm removal durability: %w",
+					path,
+					removeErr,
+				))
+			}
+			return result, errors.Join(writeErr, &configPersistenceUnusableError{
+				detail:   fmt.Sprintf("failed to remove newly created configuration at %s", path),
+				recovery: fmt.Sprintf("stop resman, remove %s, and restart before accepting further configuration writes", path),
+				cause:    removeErr,
+			})
+		}
+	}
+	return result, writeErr
+}
+
+// updateConfigLines preserves existing content while updating selected managed fields.
+func (s userFilterPersistenceSnapshot) updateConfigLines(content []byte, exists bool) []string {
+	if !exists {
+		return s.generateConfigLines()
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -1381,68 +1536,72 @@ func (c *Config) updateConfigLines(path string) ([]string, error) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Salta commenti e righe vuote
+		// Preserve comments and blank lines.
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			updated = append(updated, line)
 			continue
 		}
 
-		// Controlla se è USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+		// Replace managed filter settings with their current values.
 		if strings.HasPrefix(trimmed, "USER_INCLUDE_LIST=") {
-			value := strings.Join(c.UserIncludeList, ",")
-			updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+			if s.writeInclude {
+				updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", strings.Join(s.include, ",")))
+			} else {
+				updated = append(updated, line)
+			}
 			includeListWritten = true
 			continue
 		}
 
 		if strings.HasPrefix(trimmed, "USER_EXCLUDE_LIST=") {
-			value := strings.Join(c.UserExcludeList, ",")
-			updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+			if s.writeExclude {
+				updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", strings.Join(s.exclude, ",")))
+			} else {
+				updated = append(updated, line)
+			}
 			excludeListWritten = true
 			continue
 		}
 
-		// Altre righe lasciate invariate
+		// Preserve all other settings verbatim.
 		updated = append(updated, line)
 	}
 
-	// Aggiungi righe mancanti
+	// Append managed settings that were absent from the source.
 	if !includeListWritten {
-		value := strings.Join(c.UserIncludeList, ",")
-		updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", value))
+		updated = append(updated, fmt.Sprintf("USER_INCLUDE_LIST=%s", strings.Join(s.include, ",")))
 	}
 	if !excludeListWritten {
-		value := strings.Join(c.UserExcludeList, ",")
-		updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", value))
+		updated = append(updated, fmt.Sprintf("USER_EXCLUDE_LIST=%s", strings.Join(s.exclude, ",")))
 	}
 
-	return updated, nil
+	return updated
 }
 
-// generateConfigLines genera linee di configurazione di base
-func (c *Config) generateConfigLines() []string {
+// generateConfigLines creates a minimal configuration for a new file.
+func (s userFilterPersistenceSnapshot) generateConfigLines() []string {
 	includeList := ""
-	if len(c.UserIncludeList) > 0 {
-		includeList = strings.Join(c.UserIncludeList, ",")
+	if len(s.include) > 0 {
+		includeList = strings.Join(s.include, ",")
 	}
 	excludeList := ""
-	if len(c.UserExcludeList) > 0 {
-		excludeList = strings.Join(c.UserExcludeList, ",")
+	if len(s.exclude) > 0 {
+		excludeList = strings.Join(s.exclude, ",")
 	}
 
 	return []string{
-		"# CPU Manager Configuration",
+		"# ResMan Configuration",
 		fmt.Sprintf("USER_INCLUDE_LIST=%s", includeList),
 		fmt.Sprintf("USER_EXCLUDE_LIST=%s", excludeList),
 		"",
 	}
 }
 
-// ParseTimeframe parsea una stringa nel formato "1-5 08-18" o multipli "1-5 08-18;0,6 00-24"
+// ParseTimeframe parses a string such as "1-5 08-18" or multiple ranges such as "1-5 08-18;0,6 00-24".
 func ParseTimeframe(spec string) ([]Timeframe, error) {
 	var timeframes []Timeframe
 
-	// Supporta multipli timeframe separati da ;
+	// Accept multiple timeframes separated by semicolons.
 	specs := strings.Split(spec, ";")
 
 	for _, s := range specs {
@@ -1456,13 +1615,13 @@ func ParseTimeframe(spec string) ([]Timeframe, error) {
 			return nil, fmt.Errorf("invalid timeframe format: %s (expected: days hours)", s)
 		}
 
-		// Parse giorni
+		// Parse days.
 		days, err := parseDays(parts[0])
 		if err != nil {
 			return nil, fmt.Errorf("invalid days spec '%s': %w", parts[0], err)
 		}
 
-		// Parse ore
+		// Parse hours.
 		hourStart, hourEnd, err := parseHours(parts[1])
 		if err != nil {
 			return nil, fmt.Errorf("invalid hours spec '%s': %w", parts[1], err)
@@ -1482,7 +1641,7 @@ func ParseTimeframe(spec string) ([]Timeframe, error) {
 	return timeframes, nil
 }
 
-// parseDays gestisce formati: 1-5, 0,6, *, 1
+// parseDays handles formats such as 1-5, 0,6, *, and 1.
 func parseDays(spec string) ([]int, error) {
 	if spec == "*" {
 		return []int{0, 1, 2, 3, 4, 5, 6}, nil
@@ -1518,7 +1677,7 @@ func parseDays(spec string) ([]int, error) {
 				days = append(days, i)
 			}
 		} else {
-			// Singolo: 1
+			// Single day: 1.
 			day, err := strconv.Atoi(part)
 			if err != nil {
 				return nil, err
@@ -1533,7 +1692,7 @@ func parseDays(spec string) ([]int, error) {
 	return days, nil
 }
 
-// parseHours gestisce formati: 08-18, 00-24, 22-06
+// parseHours handles formats such as 08-18, 00-24, and 22-06.
 func parseHours(spec string) (int, int, error) {
 	parts := strings.Split(spec, "-")
 	if len(parts) != 2 {
@@ -1561,14 +1720,13 @@ func parseHours(spec string) (int, int, error) {
 	return start, end, nil
 }
 
-// IsInBlackout verifica se l'orario corrente è in un blackout timeframe
-// Restituisce true se CPU Manager NON deve applicare limiti
+// IsInBlackout reports whether the current time is within a blackout timeframe.
 func (c *Config) IsInBlackout() bool {
 	_, active := c.blackoutEndAt(time.Now())
 	return active
 }
 
-// GetNextBlackoutEnd restituisce la prossima fine del blackout (se attivo)
+// GetNextBlackoutEnd returns the next blackout end when a blackout is active.
 func (c *Config) GetNextBlackoutEnd() *time.Time {
 	end, active := c.blackoutEndAt(time.Now())
 	if !active {
@@ -1728,6 +1886,22 @@ func (c *Config) GetIOEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IOEnabled
+}
+
+// GetIODecisionPolicy returns a consistent snapshot of every I/O decision knob.
+func (c *Config) GetIODecisionPolicy() IODecisionPolicy {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return IODecisionPolicy{
+		Enabled:           c.IOEnabled,
+		Threshold:         c.IOThreshold,
+		ReleaseThreshold:  c.IOReleaseThreshold,
+		ThresholdDuration: c.IOThresholdDuration,
+		ReadBPS:           c.IOReadBPS,
+		WriteBPS:          c.IOWriteBPS,
+		ReadIOPS:          c.IOReadIOPS,
+		WriteIOPS:         c.IOWriteIOPS,
+	}
 }
 
 // GetIOReadBPS returns the read bandwidth limit.

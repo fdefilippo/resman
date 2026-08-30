@@ -27,19 +27,19 @@ import (
 
 // PSIStats contains Pressure Stall Information statistics.
 type PSIStats struct {
-	SomeAvg10  float64 // % di tempo con almeno un task stallato (media 10s)
-	SomeAvg60  float64 // % di tempo con almeno un task stallato (media 60s)
-	SomeAvg300 float64 // % di tempo con almeno un task stallato (media 300s)
-	SomeTotal  uint64  // Microsecondi totali di stall (some)
-	FullAvg10  float64 // % di tempo con tutti i task stallati (media 10s)
-	FullAvg60  float64 // % di tempo con tutti i task stallati (media 60s)
-	FullAvg300 float64 // % di tempo con tutti i task stallati (media 300s)
-	FullTotal  uint64  // Microsecondi totali di stall (full)
+	SomeAvg10  float64 // Percentage of time with at least one stalled task over 10 seconds
+	SomeAvg60  float64 // Percentage of time with at least one stalled task over 60 seconds
+	SomeAvg300 float64 // Percentage of time with at least one stalled task over 300 seconds
+	SomeTotal  uint64  // Total microseconds stalled in some mode
+	FullAvg10  float64 // Percentage of time with all tasks stalled over 10 seconds
+	FullAvg60  float64 // Percentage of time with all tasks stalled over 60 seconds
+	FullAvg300 float64 // Percentage of time with all tasks stalled over 300 seconds
+	FullTotal  uint64  // Total microseconds stalled in full mode
 }
 
-// GetPSIStats legge le statistiche PSI per IO dal cgroup di un utente.
-// Restituisce un errore se il file io.pressure non esiste o non e' leggibile.
-// Se il kernel non supporta PSI (CONFIG_PSI=n), restituisce errore.
+// GetPSIStats reads I/O PSI statistics from a user's cgroup.
+// It returns an error when io.pressure does not exist or cannot be read.
+// It also returns an error when the kernel does not support PSI (CONFIG_PSI=n).
 func (m *Manager) GetPSIStats(uid int) (PSIStats, error) {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {

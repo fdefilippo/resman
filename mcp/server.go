@@ -20,41 +20,83 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
 
+const (
+	mcpProtocolVersion           = "2026-07-28"
+	mcpProtocolVersionHeader     = "Mcp-Protocol-Version"
+	mcpMethodHeader              = "Mcp-Method"
+	mcpSessionIDHeader           = "Mcp-Session-Id"
+	mcpLastEventIDHeader         = "Last-Event-ID"
+	mcpMethodInitialize          = "initialize"
+	mcpNotificationInitialized   = "notifications/initialized"
+	mcpMethodDiscover            = "server/discover"
+	mcpDefaultMaxRequestBodySize = 4 << 20
+)
+
+// ConfigurationReloader applies a persisted configuration and returns only
+// after its runtime outcome is known.
+type ConfigurationReloader interface {
+	Reload(context.Context) error
+}
+
+type serverLogger interface {
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+}
+
+type cgroupInfoReader interface {
+	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
+	GetMemoryHighEvents(uid int) (uint64, error)
+	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
+}
+
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
-	mcpServer        *mcp.Server
-	cfg              *Config
-	parentCfg        *config.Config
-	stateManager     *state.Manager
-	metricsCollector *metrics.Collector
-	cgroupManager    *cgroup.Manager
-	dbManager        *database.DatabaseManager
-	logger           *logging.Logger
-	httpServer       *http.Server
-	stdioTransport   mcp.Transport
-	transportCancel  context.CancelFunc
-	wg               sync.WaitGroup
-	stopOnce         sync.Once
-	stopErr          error
-	stopped          bool
-	mu               sync.RWMutex
+	mcpServer         *mcp.Server
+	cfg               *config.MCPServerConfig
+	stateManager      *state.Manager
+	metricsCollector  *metrics.Collector
+	cgroupManager     cgroupInfoReader
+	dbManager         *database.DatabaseManager
+	configReloader    ConfigurationReloader
+	logger            serverLogger
+	httpServer        *http.Server
+	tlsConfig         *tls.Config
+	httpListen        func(network, address string) (net.Listener, error)
+	stdioTransport    mcp.Transport
+	transportCancel   context.CancelFunc
+	wg                sync.WaitGroup
+	stopOnce          sync.Once
+	stopErr           error
+	stopped           bool
+	mu                sync.RWMutex
+	lifecycleGate     operationgate.Gate
+	configWriteActive atomic.Bool
 }
 
 // NewServer creates a new MCP server instance
@@ -64,22 +106,29 @@ func NewServer(
 	mc *metrics.Collector,
 	cg *cgroup.Manager,
 	dbm *database.DatabaseManager,
+	configReloader ConfigurationReloader,
 ) (*Server, error) {
 	logger := logging.GetLogger()
 
-	// Load MCP configuration
-	mcpCfg := &Config{
-		Enabled:       parentCfg.MCPEnabled,
-		Transport:     parentCfg.MCPTransport,
-		HTTPPort:      parentCfg.MCPHTTPPort,
-		HTTPHost:      parentCfg.MCPHTTPHost,
-		LogLevel:      parentCfg.MCPLogLevel,
-		AuthToken:     parentCfg.MCPAuthToken,
-		AllowWriteOps: parentCfg.MCPAllowWriteOps,
-	}
+	// Snapshot the shared, centrally parsed MCP configuration contract.
+	mcpCfg := parentCfg.MCPServerConfig()
 
 	if err := mcpCfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid MCP configuration: %w", err)
+	}
+
+	var serverTLSConfig *tls.Config
+	if mcpCfg.Enabled && mcpCfg.Transport == "http" {
+		var err error
+		serverTLSConfig, err = tlsconfig.BuildServer(tlsconfig.ServerOptions{
+			CertFile:   mcpCfg.TLSCertFile,
+			KeyFile:    mcpCfg.TLSKeyFile,
+			CAFile:     mcpCfg.TLSCAFile,
+			MinVersion: mcpCfg.TLSMinVersion,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("loading MCP TLS configuration: %w", err)
+		}
 	}
 
 	// Create MCP server
@@ -87,16 +136,18 @@ func NewServer(
 		Name:    "resman",
 		Version: getVersion(),
 	}, nil)
+	mcpServer.AddReceivingMiddleware(latestOnlyMCPMiddleware)
 
 	s := &Server{
 		mcpServer:        mcpServer,
-		cfg:              mcpCfg,
-		parentCfg:        parentCfg,
+		cfg:              &mcpCfg,
 		stateManager:     sm,
 		metricsCollector: mc,
 		cgroupManager:    cg,
 		dbManager:        dbm,
+		configReloader:   configReloader,
 		logger:           logger,
+		tlsConfig:        serverTLSConfig,
 	}
 
 	// Register tools and resources
@@ -120,17 +171,22 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
+	leaveLifecycle := s.lifecycleGate.Enter()
+	defer leaveLifecycle()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopped {
+		s.mu.Unlock()
 		return fmt.Errorf("MCP server cannot be started after it has been stopped")
 	}
 	if s.transportCancel != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("MCP server is already started")
 	}
 
 	transportCtx, cancel := context.WithCancel(ctx)
 	s.transportCancel = cancel
+	s.mu.Unlock()
 
 	s.logger.Info("Starting MCP server",
 		"transport", s.cfg.Transport,
@@ -147,7 +203,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	if err != nil {
 		cancel()
+		s.mu.Lock()
 		s.transportCancel = nil
+		s.mu.Unlock()
 	}
 	return err
 }
@@ -161,6 +219,9 @@ func (s *Server) Stop() error {
 }
 
 func (s *Server) stop() error {
+	leaveLifecycle := s.lifecycleGate.Enter()
+	defer leaveLifecycle()
+
 	s.logger.Info("Stopping MCP server")
 
 	s.mu.Lock()
@@ -215,53 +276,198 @@ func (s *Server) startStdioTransport(ctx context.Context) error {
 
 // startHTTPTransport starts the MCP server with HTTP transport using Streamable HTTP
 func (s *Server) startHTTPTransport(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.HTTPHost, s.cfg.HTTPPort)
-
-	// Check if port is available
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to bind to %s: %w", addr, err)
+	if s.tlsConfig == nil || len(s.tlsConfig.Certificates) == 0 {
+		return fmt.Errorf("MCP HTTPS transport requires a loaded TLS certificate")
 	}
 
-	// Create streamable HTTP handler for MCP
-	// This handler properly processes JSON-RPC messages over HTTP
+	addr := net.JoinHostPort(s.cfg.HTTPHost, strconv.Itoa(s.cfg.HTTPPort))
+
+	listen := s.httpListen
+	if listen == nil {
+		listen = net.Listen
+	}
+	listener, err := listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to bind MCP HTTPS to %s: %w", addr, err)
+	}
+
 	mux := http.NewServeMux()
-
-	// MCP streamable endpoint - handles all MCP JSON-RPC messages
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return s.mcpServer
-	}, nil)
-
-	// Wrap MCP handler with authentication and logging middleware
-	handler := s.authMiddleware(s.loggingMiddleware(mcpHandler.ServeHTTP))
-	mux.HandleFunc("/mcp", handler)
+	mux.Handle("/mcp", s.newMCPHTTPHandler())
 
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
 
-	s.httpServer = newMCPHTTPServer(addr, mux)
+	httpServer := newMCPHTTPServer(addr, mux, s.tlsConfig)
+	s.mu.Lock()
+	s.httpServer = httpServer
+	s.mu.Unlock()
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 
-		s.logger.Info("MCP HTTP streamable server started",
+		s.logger.Info("MCP HTTPS streamable server started",
 			"address", addr,
 			"endpoint", "/mcp",
+			"tls_min_version", s.cfg.TLSMinVersion,
+			"mtls_enabled", s.cfg.TLSCAFile != "",
 		)
 
-		if err := s.httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("MCP HTTP server error", "error", err)
+		if err := httpServer.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("MCP HTTPS server error", "error", err)
 		}
 	}()
 
 	return nil
 }
 
-func newMCPHTTPServer(addr string, handler http.Handler) *http.Server {
+// IsStarted reports lifecycle state without waiting for listener operations.
+func (s *Server) IsStarted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.transportCancel != nil && !s.stopped
+}
+
+func (s *Server) newMCPHTTPHandler() http.Handler {
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
+		return s.mcpServer
+	}, &mcp.StreamableHTTPOptions{
+		Stateless:                    true,
+		JSONResponse:                 true,
+		MaxRequestBodyBytes:          mcpDefaultMaxRequestBodySize,
+		PropagateRequestCancellation: true,
+	})
+
+	// Authentication stays outermost so unauthenticated callers cannot fingerprint
+	// the supported protocol revision.
+	return s.authMiddleware(s.loggingMiddleware(latestOnlyHTTPMiddleware(mcpHandler.ServeHTTP)))
+}
+
+type protocolVersionRequest interface {
+	ProtocolVersion() string
+}
+
+func latestOnlyMCPMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		version := ""
+		if versioned, ok := req.(protocolVersionRequest); ok {
+			version = versioned.ProtocolVersion()
+		}
+		if err := validateLatestOnlyMCPRequest(method, version); err != nil {
+			return nil, err
+		}
+
+		result, err := next(ctx, method, req)
+		if err != nil {
+			return nil, err
+		}
+		if method == mcpMethodDiscover {
+			if discovery, ok := result.(*mcp.DiscoverResult); ok {
+				discovery.SupportedVersions = []string{mcpProtocolVersion}
+			}
+		}
+		return result, nil
+	}
+}
+
+func validateLatestOnlyMCPRequest(method, version string) error {
+	switch method {
+	case mcpMethodInitialize, mcpNotificationInitialized:
+		return &sdkjsonrpc.Error{
+			Code:    sdkjsonrpc.CodeMethodNotFound,
+			Message: fmt.Sprintf("%q is not supported; use stateless MCP %s requests", method, mcpProtocolVersion),
+		}
+	}
+	if version != mcpProtocolVersion {
+		return unsupportedProtocolVersionError(version)
+	}
+	return nil
+}
+
+func unsupportedProtocolVersionError(requested string) error {
+	data, err := json.Marshal(mcp.UnsupportedProtocolVersionData{
+		Supported: []string{mcpProtocolVersion},
+		Requested: requested,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal static MCP protocol error data: %v", err))
+	}
+	return &sdkjsonrpc.Error{
+		Code:    mcp.CodeUnsupportedProtocolVersion,
+		Message: fmt.Sprintf("unsupported MCP protocol version %q; only %s is supported", requested, mcpProtocolVersion),
+		Data:    data,
+	}
+}
+
+func latestOnlyHTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeMCPHTTPError(w, http.StatusMethodNotAllowed, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "the MCP endpoint accepts POST requests only",
+			})
+			return
+		}
+		if r.Header.Get(mcpSessionIDHeader) != "" {
+			writeMCPHTTPError(w, http.StatusBadRequest, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "Mcp-Session-Id is not supported by the stateless MCP endpoint",
+			})
+			return
+		}
+		if r.Header.Get(mcpLastEventIDHeader) != "" {
+			writeMCPHTTPError(w, http.StatusBadRequest, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: "Last-Event-ID resumability is not supported by the stateless MCP endpoint",
+			})
+			return
+		}
+		version := r.Header.Get(mcpProtocolVersionHeader)
+		if version != mcpProtocolVersion {
+			writeMCPHTTPError(w, http.StatusBadRequest, unsupportedProtocolVersionError(version))
+			return
+		}
+		method := r.Header.Get(mcpMethodHeader)
+		if method == mcpMethodInitialize || method == mcpNotificationInitialized {
+			writeMCPHTTPError(w, http.StatusNotFound, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeMethodNotFound,
+				Message: fmt.Sprintf("%q is not supported; use stateless MCP %s requests", method, mcpProtocolVersion),
+			})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func writeMCPHTTPError(w http.ResponseWriter, status int, protocolErr error) {
+	var wireErr *sdkjsonrpc.Error
+	if !errors.As(protocolErr, &wireErr) {
+		wireErr = &sdkjsonrpc.Error{
+			Code:    sdkjsonrpc.CodeInternalError,
+			Message: protocolErr.Error(),
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(struct {
+		JSONRPC string            `json:"jsonrpc"`
+		ID      any               `json:"id"`
+		Error   *sdkjsonrpc.Error `json:"error"`
+	}{
+		JSONRPC: "2.0",
+		ID:      nil,
+		Error:   wireErr,
+	}); err != nil {
+		logging.GetLogger().Error("Failed to write MCP protocol error response", "error", err)
+	}
+}
+
+func newMCPHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 	}
@@ -398,39 +604,45 @@ func (s *Server) registerPrompts() {
 
 // handleSystemHealthPrompt handles the system-health prompt
 func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	metrics := s.metricsCollector.GetDetailedMetrics()
+	metrics := s.metricsCollector.GetObservationMetrics()
 	status := s.stateManager.GetStatus()
 
 	text := fmt.Sprintf(`# System Health Check
 
 ## CPU Usage
 - **Total CPU**: %.1f%%
-- **User CPU**: %.1f%%
+- **Observed Users CPU**: %.1f%%
 - **Total Cores**: %d
 
 ## Memory
 - **Usage**: %.1f MB
 
 ## Status
-- **Active Users**: %d
-- **Limits Active**: %v
+- **Observed Users**: %d
+- **Actively Limited Users**: %d
+- **Any Limits Active**: %v
+- **CPU Limits Active**: %v
+- **Resource Limits Active**: %v
 - **System Under Load**: %v
 
 ## Assessment
 `,
-		getFloatMetric(metrics, "total_cpu_usage", 0.0),
-		getFloatMetric(metrics, "total_user_cpu_usage", 0.0),
-		getIntMetric(metrics, "total_cores", 0),
-		getFloatMetric(metrics, "memory_usage_mb", 0.0),
-		getIntMetric(metrics, "active_users_count", 0),
-		getBool(status, "limits_active", false),
-		getBoolMetric(metrics, "system_under_load", false),
+		metrics.TotalCPUUsage,
+		metrics.ObservedUsersCPUUsage,
+		metrics.TotalCores,
+		metrics.MemoryUsageMB,
+		metrics.ObservedUsersCount,
+		status.ActivelyLimitedUsersCount,
+		status.AnyLimitsActive,
+		status.CPULimitsActive,
+		status.ResourceLimitsActive,
+		metrics.SystemUnderLoad,
 	)
 
 	// Add assessment
-	if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) > 70 {
+	if metrics.ObservedUsersCPUUsage > 70 {
 		text += "**HIGH CPU USAGE** - Consider activating CPU limits\n"
-	} else if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) < 30 {
+	} else if metrics.ObservedUsersCPUUsage < 30 {
 		text += "**LOW CPU USAGE** - System is running smoothly\n"
 	} else {
 		text += "**MODERATE CPU USAGE** - System is operating normally\n"
@@ -479,21 +691,24 @@ func (s *Server) handleUserAnalysisPrompt(ctx context.Context, req *mcp.GetPromp
 // handleTroubleshootingPrompt handles the troubleshooting prompt
 func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	status := s.stateManager.GetStatus()
-	metrics := s.metricsCollector.GetDetailedMetrics()
+	metrics := s.metricsCollector.GetObservationMetrics()
 
 	text := `# Resource Manager Troubleshooting
 
 ## Current Status
 `
-	text += fmt.Sprintf("- **Limits Active**: %v\n", getBool(status, "limits_active", false))
-	text += fmt.Sprintf("- **Total CPU Usage**: %.1f%%\n", getFloatMetric(metrics, "total_cpu_usage", 0.0))
-	text += fmt.Sprintf("- **User CPU Usage**: %.1f%%\n", getFloatMetric(metrics, "total_user_cpu_usage", 0.0))
-	text += fmt.Sprintf("- **Active Users**: %d\n", getIntMetric(metrics, "active_users_count", 0))
+	text += fmt.Sprintf("- **Any Limits Active**: %v\n", status.AnyLimitsActive)
+	text += fmt.Sprintf("- **CPU Limits Active**: %v\n", status.CPULimitsActive)
+	text += fmt.Sprintf("- **Resource Limits Active**: %v\n", status.ResourceLimitsActive)
+	text += fmt.Sprintf("- **Total CPU Usage**: %.1f%%\n", metrics.TotalCPUUsage)
+	text += fmt.Sprintf("- **Observed Users CPU Usage**: %.1f%%\n", metrics.ObservedUsersCPUUsage)
+	text += fmt.Sprintf("- **Observed Users**: %d\n", metrics.ObservedUsersCount)
+	text += fmt.Sprintf("- **Actively Limited Users**: %d\n", status.ActivelyLimitedUsersCount)
 
 	text += "\n## Diagnostic Steps\n\n"
 
 	// Check 1: CPU Usage
-	if getFloatMetric(metrics, "total_user_cpu_usage", 0.0) > 70 {
+	if metrics.ObservedUsersCPUUsage > 70 {
 		text += "1. **HIGH CPU USAGE DETECTED**\n"
 		text += "   - Check which users are consuming the most CPU\n"
 		text += "   - Consider running `activate_limits` if not already active\n"
@@ -502,13 +717,13 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	}
 
 	// Check 2: Limits Status
-	if getBool(status, "limits_active", false) {
-		text += "2. **CPU Limits Active** - Limits are being enforced\n"
-		if count := getInt(status, "active_users_count", 0); count > 0 {
+	if status.AnyLimitsActive {
+		text += "2. **Enforcement Active** - At least one resource limit is being enforced\n"
+		if count := status.ActivelyLimitedUsersCount; count > 0 {
 			text += fmt.Sprintf("   - %d users currently limited\n", count)
 		}
 	} else {
-		text += "2. **CPU Limits Inactive** - No limits currently enforced\n"
+		text += "2. **Enforcement Inactive** - No limits currently enforced\n"
 	}
 
 	text += "\n## Recommended Actions\n"

@@ -1,16 +1,16 @@
-# SPEC file per resman
-# Build con: rpmbuild -ba resman.spec
+# ResMan RPM spec file
+# Build with: rpmbuild -ba resman.spec
 #
-# Questo spec crea un UNICO pacchetto RPM contenente:
-# - Binario
-# - File di configurazione
-# - Systemd service
+# This spec creates one RPM package containing:
+# - Binary
+# - Configuration file
+# - systemd service
 # - Man page
-# - Documentazione
-# - Script generazione certificati TLS
+# - Documentation
+# - TLS certificate generation script
 
 Name:    resman
-Version: 1.25.1
+Version: 1.30.8
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -56,6 +56,15 @@ v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
 v1.24.2: full golangci-lint cleanup (errcheck, staticcheck, unused) and CI lint gate.
 v1.25: architecture review remediation, dependency refresh and early systemd startup.
 v1.25.1: fail-safe empty USER_INCLUDE_LIST semantics.
+v1.30.0: audited enforcement semantics, secure persistence, stateless MCP and release gates.
+v1.30.1: single-outcome configuration reload reporting without false error diagnostics.
+v1.30.2: measured CPU-load attribution before suppressing enforcement.
+v1.30.4: authoritative systemd readiness and isolated packaged-service validation.
+v1.30.5: enforced ShellCheck coverage for every tracked shell script.
+v1.30.7: truthful cgroup telemetry, checked I/O counters and bounded fuzz gates.
+v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
+
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x to 1.30.8.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -85,18 +94,18 @@ Features:
 - Server role identification for multi-server environments
 
 MCP Server Features (v1.3+):
-- 11 MCP tools for querying system status and generating reports
-- 6 MCP resources for URI-based data access
-- 3 pre-built prompts for common queries
+- MCP tools for status, reporting, configuration, enforcement, and metrics history
+- Fixed resources and URI templates for data access
+- Pre-built prompts for common queries
 - HTTP and stdio transport support
 - Hostname and server role in all metric outputs
 - Comprehensive logging middleware
 
-Latest Changes (v1.5.0):
+Current listener defaults:
 - Renamed Prometheus variables for clarity (PROMETHEUS_METRICS_BIND_HOST/PORT)
 - Default Prometheus port changed to 1974
 - Default MCP port changed to 1969
-- All bind addresses default to 0.0.0.0 for remote access
+- Prometheus and MCP bind to 127.0.0.1; remote exposure must be explicit
 - Added SERVER_ROLE configuration for server identification
 - Enhanced documentation with log level descriptions
 
@@ -112,13 +121,13 @@ export CGO_ENABLED=1
 # Build binario principale
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 
-# Prepara man page
+# Prepare the man page.
 mkdir -p %{_builddir}/%{name}-%{version}/man
 cp docs/resman.8 %{_builddir}/%{name}-%{version}/man/
 gzip -9 %{_builddir}/%{name}-%{version}/man/resman.8
 
 %install
-# Crea directory
+# Create package directories.
 mkdir -p %{buildroot}/%{_bindir}
 mkdir -p %{buildroot}/%{_sysconfdir}
 mkdir -p %{buildroot}/%{_unitdir}
@@ -127,52 +136,55 @@ mkdir -p %{buildroot}/%{_localstatedir}/log
 mkdir -p %{buildroot}/%{_mandir}/man8
 mkdir -p %{buildroot}/%{_docdir}/%{name}
 
-# Installa binario
+# Install the binary.
 install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 
-# Installa file di configurazione
-install -m 644 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman.conf
+# Install the operator-authored configuration restrictively.
+install -d -m 700 %{buildroot}/%{_sysconfdir}/resman
+install -m 600 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman/resman.conf
 
-# Installa service systemd
+# Install the systemd service.
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
 
-# Installa man page
+# Install the man page.
 install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_mandir}/man8/
 
-# Installa documentazione aggiuntiva
+# Install additional documentation.
 install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 
-# Installa documentazione TLS
+# Install TLS and monitoring documentation.
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 docs/dashboard-grafana-operations.json %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 
-# Installa script generazione certificati TLS
+# Install the TLS certificate generation script.
 install -d %{buildroot}/%{_docdir}/%{name}/scripts
 install -m 755 docs/generate-tls-certs.sh %{buildroot}/%{_docdir}/%{name}/scripts/ 2>/dev/null || true
 
-# Installazione file di configurazione syslog
+# Install the syslog configuration.
 install -d %{buildroot}%{_sysconfdir}/rsyslog.d
 install -p -m 0644 packaging/syslog/resman.conf %{buildroot}%{_sysconfdir}/rsyslog.d/resman.conf
 
-# Installazione file di configurazione logrotate
+# Install the logrotate configuration.
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
 install -p -m 0644 packaging/syslog/resman %{buildroot}%{_sysconfdir}/logrotate.d/resman
 
-# Crea directory per runtime files (buildroot)
-install -d -m 755 %{buildroot}/%{_sharedstatedir}/resman
+# Create the mutable-state directory restrictively.
+install -d -m 700 %{buildroot}/%{_sharedstatedir}/resman
 
-# Crea directory per certificati TLS (vuota, verrà popolata dall'admin)
+# Create the TLS certificate directory; the administrator populates it later.
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman/tls
 
 %pre
 # Pre-install script
 if [ $1 -eq 1 ]; then
-    # Nuova installazione
+    # New installation.
     echo "Preparing for Resource Manager installation..."
 
-    # Verifica cgroups v2
+    # Check for cgroups v2.
     if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
         echo "WARNING: cgroups v2 not detected. Please enable with:"
         echo "  grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1'"
@@ -184,19 +196,43 @@ fi
 # Post-install script
 %systemd_post resman.service
 
-# Crea file di log
-touch /var/log/resman.log
-chmod 644 /var/log/resman.log
+# Enforce the package-owned directory contract across upgrades as well as fresh installs.
+install -d -m 0700 -o root -g root /etc/resman /etc/resman/tls /var/lib/resman
+
+# Report legacy state without migrating or deleting operator data.
+legacy_config_found=false
+for legacy_path in /etc/resman.conf /etc/resman.conf.rpmsave /etc/resman.conf.backup /etc/resman.conf.tmp /etc/resman.conf.backup_*; do
+    if [ -e "$legacy_path" ] || [ -L "$legacy_path" ]; then
+        legacy_config_found=true
+        break
+    fi
+done
+if "$legacy_config_found"; then
+    echo "WARNING: legacy configuration artifacts detected." >&2
+    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, and remove the legacy source files. Move any needed operator-managed /etc/resman.conf.backup_* copies to a protected archive outside the legacy path; securely remove generated or unneeded matching copies plus /etc/resman.conf.backup and /etc/resman.conf.tmp before restarting resman." >&2
+fi
+if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
+    echo "WARNING: legacy metrics database detected at /etc/resman/metrics.db." >&2
+    echo "Archive or delete it; resman will create the current schema at /var/lib/resman/metrics.db." >&2
+fi
+
+# Create a missing default log restrictively. On upgrades, preserve deliberate
+# owner/group read-write access while removing execute and all access for others.
+if [ -f /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    chmod a-x,o-rwx /var/log/resman.log
+elif [ ! -e /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    install -m 0600 -o root -g root /dev/null /var/log/resman.log
+fi
 
 echo "Resource Manager installed successfully!"
 echo ""
-echo "Configuration file: /etc/resman.conf"
+echo "Configuration file: /etc/resman/resman.conf"
 echo "Log file: /var/log/resman.log"
-echo "Runtime directory: /var/run/resman"
+echo "Boot-scoped cgroup state: /run/resman-cgroups.txt"
 echo "Service: systemctl start resman"
 echo "Documentation: man resman"
 echo ""
-echo "Please review /etc/resman.conf before starting the service."
+echo "Please review /etc/resman/resman.conf before starting the service."
 
 %preun
 # Pre-uninstall script
@@ -206,28 +242,71 @@ echo "Please review /etc/resman.conf before starting the service."
 # Post-uninstall script
 %systemd_postun_with_restart resman.service
 
-# Aggiorna database man page
+# Update the man-page database.
 %{_bindir}/mandb -q 2>/dev/null || true
 
 %files
 %license LICENSE
 %{_bindir}/%{name}
-%config(noreplace) %{_sysconfdir}/resman.conf
+%dir %attr(0700,root,root) %{_sysconfdir}/resman
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf
 %{_unitdir}/resman.service
 %{_mandir}/man8/resman.8.gz
-%dir %{_sharedstatedir}/resman
-%dir %{_sysconfdir}/resman/tls
+%dir %attr(0700,root,root) %{_sharedstatedir}/resman
+%dir %attr(0700,root,root) %{_sysconfdir}/resman/tls
 %config(noreplace) %{_sysconfdir}/rsyslog.d/resman.conf
 %config %{_sysconfdir}/logrotate.d/resman
 %dir %{_docdir}/%{name}
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
+%doc %{_docdir}/%{name}/CONFIGURATION.md
+%doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sun Aug 30 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.8-1
+- FIX: prevent UID enforcement from acquiring nested PID namespace processes
+- OBSERVABILITY: report bounded cgroup-ingress skips in logs and Prometheus
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-2
+- CI: schedule weekly generated-input fuzzing with manual dispatch
+- CI: retain fuzz logs, generated crashers and the Go fuzz cache on failure
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.7-1
+- FIX: reject malformed cpu.max observations instead of exporting false zero values
+- FIX: remove unavailable and stale cgroup-labelled Prometheus gauge series
+- FIX: reject raw and logical block I/O counter overflow before wrap
+- TEST: add bounded fuzz targets for parser and protocol boundaries
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.5-1
+- CI: enforce ShellCheck across every tracked shell script
+- CI: fail closed when ShellCheck is unavailable in pull-request or release gates
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.4-1
+- FIX: notify systemd only after successful daemon bootstrap
+- FIX: make systemctl start fail synchronously for permanent startup rejection
+- TEST: quiesce packaged daemons before mutating restart-required configuration
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.2-1
+- FIX: attribute system load before suppressing CPU enforcement
+- FIX: preserve threshold-duration progress during temporary suppression
+- FIX: report measured external-majority attribution honestly
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.1-1
+- FIX: report each configuration reload outcome exactly once
+- FIX: keep pure restart-required rejections at warning level
+- FIX: preserve genuine failures joined with restart-required rejections
+
+* Sat Aug 29 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.0-1
+- FIX: separate CPU, RAM and I/O eligibility, enforcement and observation contracts
+- FIX: reconcile active process membership and base IOPS decisions on block operations
+- SECURITY: harden configuration, SQLite, logging, MCP TLS and runtime filesystem layout
+- MCP: require stateless protocol revision 2026-07-28 with typed wire contracts
+- TEST: add shared CI contract checks and disposable functional regression gates
+
 * Sat Jul 25 2026 Francesco Defilippo <francesco@defilippo.org> - 1.25.1-1
 - FIX: empty USER_INCLUDE_LIST keeps monitoring active but disables CPU limiting
 - DOCS: clarify that USER_INCLUDE_LIST=.* enables all non-excluded users

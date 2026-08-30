@@ -45,24 +45,18 @@ func (m *Manager) CleanupUserCgroup(uid int) error {
 			"process_count", len(pids),
 			"used_recovery", usedRecovery,
 		)
-		time.Sleep(100 * time.Millisecond)
 	}
 
-	if err := os.Remove(cgroupPath); err != nil {
-		m.logger.Warn("Failed to remove cgroup directory, retrying",
-			"uid", uid,
-			"path", cgroupPath,
-			"error", err,
-		)
-		time.Sleep(100 * time.Millisecond)
-		if err := os.Remove(cgroupPath); err != nil {
-			return fmt.Errorf("failed to remove cgroup for UID %d: %w", uid, err)
-		}
+	if err := m.removeManagedCgroupPath(cgroupPath); err != nil {
+		return fmt.Errorf("failed to remove cgroup for UID %d: %w", uid, err)
 	}
 
 	if err := m.untrackCgroupPath(uid); err != nil {
 		return fmt.Errorf("failed to untrack cleaned cgroup for UID %d: %w", uid, err)
 	}
+	m.blockIOMu.Lock()
+	delete(m.blockIOAccounting, uid)
+	m.blockIOMu.Unlock()
 	m.logger.Debug("Cgroup cleaned up for user",
 		"uid", uid,
 		"processes_moved", len(pids),
@@ -141,11 +135,37 @@ func (m *Manager) recoverSharedCgroup(sharedPath string) error {
 	if len(recoveryErrors) > 0 {
 		return errors.Join(recoveryErrors...)
 	}
-	if err := os.Remove(sharedPath); err != nil {
+	if err := m.removeManagedCgroupPath(sharedPath); err != nil {
 		return fmt.Errorf("failed to remove recovered shared cgroup %s: %w", sharedPath, err)
 	}
 	m.logger.Info("Recovered processes from existing shared cgroup", "path", sharedPath)
 	return nil
+}
+
+const cgroupRemovalRetryDelay = 25 * time.Millisecond
+
+type cgroupRemovalResult struct {
+	retried bool
+}
+
+func removeCgroupWithRetry(path string) (cgroupRemovalResult, error) {
+	return removeCgroupWithRetryUsing(path, os.Remove, waitBeforeCgroupRemovalRetry)
+}
+
+func removeCgroupWithRetryUsing(path string, remove func(string) error, backoff func()) (cgroupRemovalResult, error) {
+	if err := remove(path); err == nil || os.IsNotExist(err) {
+		return cgroupRemovalResult{}, nil
+	}
+	result := cgroupRemovalResult{retried: true}
+	backoff()
+	if err := remove(path); err != nil && !os.IsNotExist(err) {
+		return result, err
+	}
+	return result, nil
+}
+
+func waitBeforeCgroupRemovalRetry() {
+	time.Sleep(cgroupRemovalRetryDelay)
 }
 
 // CleanupAll removes empty managed cgroups while preserving populated recovery cgroups.

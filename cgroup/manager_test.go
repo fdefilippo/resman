@@ -17,10 +17,12 @@
 package cgroup
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
@@ -194,6 +196,299 @@ func TestHasControllerUsesExactTokenMatch(t *testing.T) {
 	}
 }
 
+func TestVerifyRequiredControllersMatchesEnabledFeatures(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*config.Config)
+		available  string
+		wantErrFor []string
+	}{
+		{
+			name:       "CPU controller is always mandatory",
+			available:  "memory io",
+			wantErrFor: []string{"CPU limiting", "cpu", "cpu.max"},
+		},
+		{
+			name: "RAM controller is mandatory when RAM limiting is enabled",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+			},
+			available:  "cpu io",
+			wantErrFor: []string{"RAM limiting", "memory", "memory.max"},
+		},
+		{
+			name: "IO controller is mandatory when IO limiting is enabled",
+			configure: func(cfg *config.Config) {
+				cfg.IOEnabled = true
+			},
+			available:  "cpu memory",
+			wantErrFor: []string{"I/O limiting", "io", "io.max"},
+		},
+		{
+			name:      "disabled RAM and IO features do not require their controllers",
+			available: "cpu",
+		},
+		{
+			name: "all enabled feature controllers are available",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+				cfg.IOEnabled = true
+			},
+			available: "cpu memory io",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			if tt.configure != nil {
+				tt.configure(cfg)
+			}
+			err := verifyRequiredControllers(tt.available, enabledControllerInterfaces(cfg))
+			if len(tt.wantErrFor) == 0 {
+				if err != nil {
+					t.Fatalf("verifyRequiredControllers() error = %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("verifyRequiredControllers() expected an error")
+			}
+			if !IsRequiredCapabilityError(err) {
+				t.Fatalf("verifyRequiredControllers() error = %v, want structural capability error", err)
+			}
+			for _, fragment := range tt.wantErrFor {
+				if !strings.Contains(err.Error(), fragment) {
+					t.Errorf("error %q does not name %q", err, fragment)
+				}
+			}
+		})
+	}
+}
+
+func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*config.Config)
+		interfaces []string
+		wantErrFor []string
+	}{
+		{
+			name:       "missing CPU interface",
+			wantErrFor: []string{"CPU limiting", "cpu", "cpu.max"},
+		},
+		{
+			name: "missing RAM interface",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+			},
+			interfaces: []string{"cpu.max"},
+			wantErrFor: []string{"RAM limiting", "memory", "memory.max"},
+		},
+		{
+			name: "missing IO interface",
+			configure: func(cfg *config.Config) {
+				cfg.IOEnabled = true
+			},
+			interfaces: []string{"cpu.max"},
+			wantErrFor: []string{"I/O limiting", "io", "io.max"},
+		},
+		{
+			name:       "disabled RAM and IO interfaces are not required",
+			interfaces: []string{"cpu.max"},
+		},
+		{
+			name: "all enabled interfaces exist",
+			configure: func(cfg *config.Config) {
+				cfg.RAMEnabled = true
+				cfg.IOEnabled = true
+			},
+			interfaces: []string{"cpu.max", "memory.max", "io.max"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			if tt.configure != nil {
+				tt.configure(cfg)
+			}
+			basePath := t.TempDir()
+			var probePath string
+			manager := &Manager{
+				cfg: cfg,
+				createCgroupProbe: func(base, pattern string) (string, error) {
+					path, err := os.MkdirTemp(base, pattern)
+					if err != nil {
+						return "", err
+					}
+					probePath = path
+					for _, interfaceFile := range tt.interfaces {
+						if err := os.WriteFile(filepath.Join(path, interfaceFile), nil, 0644); err != nil {
+							return "", err
+						}
+					}
+					return path, nil
+				},
+				removeCgroupProbe: func(path string) error {
+					for _, interfaceFile := range tt.interfaces {
+						if err := os.Remove(filepath.Join(path, interfaceFile)); err != nil {
+							return err
+						}
+					}
+					return os.Remove(path)
+				},
+			}
+
+			candidates := availableControllerInterfaces("cpu memory io", allControllerInterfaces())
+			usable, err := manager.probeControllerInterfaces(basePath, candidates)
+			if err == nil {
+				err = verifyUsableControllerInterfaces(usable, enabledControllerInterfaces(cfg))
+			}
+			if len(tt.wantErrFor) == 0 {
+				if err != nil {
+					t.Fatalf("probeControllerInterfaces() error = %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("probeControllerInterfaces() expected an error")
+				}
+				if !IsRequiredCapabilityError(err) {
+					t.Fatalf("probeControllerInterfaces() error = %v, want structural capability error", err)
+				}
+				for _, fragment := range tt.wantErrFor {
+					if !strings.Contains(err.Error(), fragment) {
+						t.Errorf("error %q does not name %q", err, fragment)
+					}
+				}
+			}
+			if _, statErr := os.Stat(probePath); !os.IsNotExist(statErr) {
+				t.Errorf("capability probe was not removed: stat error = %v", statErr)
+			}
+		})
+	}
+}
+
+func TestEnableRequiredControllerWriteFailureRemainsTransient(t *testing.T) {
+	injected := errors.New("transient subtree_control contention")
+	manager := &Manager{
+		logger: logging.GetLogger(),
+		writeController: func(string, string) error {
+			return injected
+		},
+	}
+	required := controllerRequirement{feature: "CPU limiting", controller: "cpu", interfaceFile: "cpu.max"}
+
+	_, err := manager.enableControllerInterfaces("/sys/fs/cgroup/cgroup.subtree_control", []controllerRequirement{required}, []controllerRequirement{required})
+	if !errors.Is(err, injected) {
+		t.Fatalf("enableControllerInterfaces() error = %v, want injected write failure", err)
+	}
+	if IsRequiredCapabilityError(err) {
+		t.Fatalf("enableControllerInterfaces() classified transient write failure as structural: %v", err)
+	}
+}
+
+func TestUpdateConfigDisablesFeaturesWithoutUsableInterfaces(t *testing.T) {
+	current := config.DefaultConfig()
+	manager := &Manager{
+		cfg: current,
+		usableControllerInterfaces: map[string]bool{
+			"cpu.max":    true,
+			"memory.max": false,
+			"io.max":     false,
+		},
+	}
+	requested := config.DefaultConfig()
+	requested.RAMEnabled = true
+	requested.IOEnabled = true
+
+	err := manager.UpdateConfig(requested)
+	if err == nil {
+		t.Fatal("UpdateConfig() expected a capability error")
+	}
+	for _, fragment := range []string{"RAM limiting", "memory", "memory.max", "I/O limiting", "io", "io.max"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error %q does not name %q", err, fragment)
+		}
+	}
+	if requested.RAMEnabled || requested.IOEnabled {
+		t.Fatalf("unsupported resource features remained enabled: RAM=%t IO=%t",
+			requested.RAMEnabled, requested.IOEnabled)
+	}
+	if manager.getConfig() != requested {
+		t.Fatal("manager did not publish the safe, capability-filtered configuration")
+	}
+}
+
+func TestUpdateConfigEnablesNewFeatureInExistingSharedCgroup(t *testing.T) {
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "resman", "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("create shared fixture: %v", err)
+	}
+	subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
+	if err := os.WriteFile(subtreeControl, []byte("cpu"), 0644); err != nil {
+		t.Fatalf("create subtree_control fixture: %v", err)
+	}
+	current := config.DefaultConfig()
+	current.CgroupRoot = root
+	current.CgroupBase = "resman"
+	manager := &Manager{
+		cfg: current,
+		usableControllerInterfaces: map[string]bool{
+			"cpu.max":    true,
+			"memory.max": true,
+		},
+	}
+	requested := config.DefaultConfig()
+	requested.CgroupRoot = root
+	requested.CgroupBase = "resman"
+	requested.RAMEnabled = true
+
+	if err := manager.UpdateConfig(requested); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	if !requested.RAMEnabled {
+		t.Fatal("RAM feature was disabled despite usable memory.max")
+	}
+	assertFileContent(t, subtreeControl, "+memory")
+}
+
+func TestUpdateConfigDoesNotPublishFeatureWhenSharedControllerCannotBeEnabled(t *testing.T) {
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "resman", "limited")
+	if err := os.MkdirAll(sharedPath, 0755); err != nil {
+		t.Fatalf("create shared fixture: %v", err)
+	}
+	current := config.DefaultConfig()
+	current.CgroupRoot = root
+	current.CgroupBase = "resman"
+	manager := &Manager{
+		cfg: current,
+		usableControllerInterfaces: map[string]bool{
+			"cpu.max": true,
+			"io.max":  true,
+		},
+	}
+	requested := config.DefaultConfig()
+	requested.CgroupRoot = root
+	requested.CgroupBase = "resman"
+	requested.IOEnabled = true
+
+	err := manager.UpdateConfig(requested)
+	if err == nil {
+		t.Fatal("UpdateConfig() expected an error for missing shared subtree_control")
+	}
+	for _, fragment := range []string{"I/O limiting", "io", "io.max", "shared cgroup"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error %q does not name %q", err, fragment)
+		}
+	}
+	if requested.IOEnabled {
+		t.Fatal("I/O feature remained enabled after shared-controller failure")
+	}
+}
+
 func TestVerifyCgroupRootWriteAccessDoesNotMoveProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	procsPath := filepath.Join(tmpDir, "cgroup.procs")
@@ -247,29 +542,6 @@ func TestRemoveRAMSwapLimitWritesMax(t *testing.T) {
 		t.Fatalf("RemoveRAMSwapLimit() error: %v", err)
 	}
 	assertFileContent(t, swapMaxPath, "max")
-}
-
-func TestEnableCPUControllers(t *testing.T) {
-	// This test requires root and cgroups
-	if os.Getuid() != 0 {
-		t.Skipf("Test requires root privileges")
-	}
-
-	if _, err := os.Stat("/sys/fs/cgroup"); os.IsNotExist(err) {
-		t.Skipf("Cgroups not available")
-	}
-
-	cfg := config.DefaultConfig()
-	manager, err := NewManager(cfg)
-	if err != nil {
-		t.Skipf("Cannot create manager: %v", err)
-	}
-
-	// This may fail in containerized environments
-	err = manager.enableCPUControllers()
-	if err != nil {
-		t.Logf("Note: enableCPUControllers failed (expected in containers): %v", err)
-	}
 }
 
 func TestManagerConcurrency(t *testing.T) {
@@ -391,8 +663,8 @@ func TestGetCgroupInfo(t *testing.T) {
 	if err == nil {
 		t.Log("GetCgroupInfo() should error for non-existent cgroup")
 	}
-	if info != nil {
-		t.Error("GetCgroupInfo() should return nil for non-existent cgroup")
+	if info != (CgroupInfo{}) {
+		t.Errorf("GetCgroupInfo() = %#v, want zero value for non-existent cgroup", info)
 	}
 }
 
@@ -422,10 +694,116 @@ func TestGetCgroupInfoIncludesMemoryValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCgroupInfo() error = %v", err)
 	}
-	for name, want := range values {
-		if got := info[name]; got != want {
-			t.Errorf("GetCgroupInfo()[%q] = %q, want %q", name, got, want)
-		}
+	if info.Path != cgroupPath {
+		t.Errorf("Path = %q, want %q", info.Path, cgroupPath)
+	}
+	tests := []struct {
+		name  string
+		value CgroupFileValue
+		want  string
+	}{
+		{name: "CPU quota", value: info.CPUQuota, want: values["cpu.max"]},
+		{name: "CPU weight", value: info.CPUWeight, want: values["cpu.weight"]},
+		{name: "memory current", value: info.MemoryCurrent, want: values["memory.current"]},
+		{name: "memory max", value: info.MemoryMax, want: values["memory.max"]},
+		{name: "memory high", value: info.MemoryHigh, want: values["memory.high"]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.value.Available || tt.value.Value != tt.want || tt.value.UnavailableReason != "" {
+				t.Errorf("value = %#v, want available value %q", tt.value, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetCgroupInfoReportsUnavailableInterfaces(t *testing.T) {
+	cgroupPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cgroupPath, "cpu.max"), []byte("max 100000"), 0644); err != nil {
+		t.Fatalf("write cpu.max fixture: %v", err)
+	}
+	manager := &Manager{
+		cfg:            config.DefaultConfig(),
+		createdCgroups: map[int]string{1000: cgroupPath},
+	}
+
+	info, err := manager.GetCgroupInfo(1000)
+	if err != nil {
+		t.Fatalf("GetCgroupInfo() error = %v", err)
+	}
+	if !info.CPUQuota.Available || info.CPUQuota.Value != "max 100000" {
+		t.Errorf("CPUQuota = %#v, want available fixture value", info.CPUQuota)
+	}
+	for _, tt := range []struct {
+		name  string
+		value CgroupFileValue
+	}{
+		{name: "CPU weight", value: info.CPUWeight},
+		{name: "memory current", value: info.MemoryCurrent},
+		{name: "memory max", value: info.MemoryMax},
+		{name: "memory high", value: info.MemoryHigh},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value.Available || tt.value.Value != "" || tt.value.UnavailableReason != CgroupFileNotPresent {
+				t.Errorf("value = %#v, want unavailable reason %q", tt.value, CgroupFileNotPresent)
+			}
+		})
+	}
+}
+
+func TestGetCgroupInfoClassifiesBoundedUnavailableReasons(t *testing.T) {
+	tests := []struct {
+		name string
+		read func(string) ([]byte, error)
+		want CgroupFileValue
+	}{
+		{
+			name: "available",
+			read: func(string) ([]byte, error) { return []byte("  max 100000\n"), nil },
+			want: CgroupFileValue{Value: "max 100000", Available: true},
+		},
+		{
+			name: "not present",
+			read: func(path string) ([]byte, error) {
+				return nil, &os.PathError{Op: "read", Path: path, Err: syscall.ENOENT}
+			},
+			want: CgroupFileValue{UnavailableReason: CgroupFileNotPresent},
+		},
+		{
+			name: "permission denied",
+			read: func(path string) ([]byte, error) {
+				return nil, &os.PathError{Op: "read", Path: path, Err: syscall.EACCES}
+			},
+			want: CgroupFileValue{UnavailableReason: CgroupFilePermissionDenied},
+		},
+		{
+			name: "other read error",
+			read: func(string) ([]byte, error) { return nil, errors.New("device read failed at a sensitive path") },
+			want: CgroupFileValue{UnavailableReason: CgroupFileReadError},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &Manager{
+				cfg:            config.DefaultConfig(),
+				createdCgroups: map[int]string{1000: "/sensitive/cgroup/path"},
+				readCgroupFile: tt.read,
+			}
+			info, err := manager.GetCgroupInfo(1000)
+			if err != nil {
+				t.Fatalf("GetCgroupInfo() error = %v", err)
+			}
+			for name, got := range map[string]CgroupFileValue{
+				"cpu.max": info.CPUQuota, "cpu.weight": info.CPUWeight,
+				"memory.current": info.MemoryCurrent, "memory.max": info.MemoryMax,
+				"memory.high": info.MemoryHigh,
+			} {
+				if got != tt.want {
+					t.Errorf("%s = %#v, want %#v", name, got, tt.want)
+				}
+			}
+		})
 	}
 }
 
@@ -520,7 +898,7 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	if err := manager.ApplyRAMLimitWithHigh(1000, "1048576", "524288"); err != nil {
 		t.Fatalf("ApplyRAMLimitWithHigh() error: %v", err)
 	}
-	if err := manager.ApplyIOLimit(1000, "1024", "2048", 10, 20, "8:0"); err != nil {
+	if err := manager.ApplyIOLimit(1000, "1M", "2m", 10, 20, "8:0"); err != nil {
 		t.Fatalf("ApplyIOLimit() error: %v", err)
 	}
 
@@ -528,7 +906,7 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 	assertFileContent(t, filepath.Join(userPath, "cpu.max"), "50000 100000")
 	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
 	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
-	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1024 wbps=2048 riops=10 wiops=20\n")
+	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1048576 wbps=2097152 riops=10 wiops=20\n")
 
 	if _, err := os.Stat(filepath.Join(legacyPath, "cpu.weight")); !os.IsNotExist(err) {
 		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)

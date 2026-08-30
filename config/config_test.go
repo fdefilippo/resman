@@ -17,12 +17,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -34,23 +35,30 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() returned nil")
 	}
 
-	// Verifica valori default principali
+	// Verify representative default values.
 	tests := []struct {
 		name     string
 		got      interface{}
 		expected interface{}
 	}{
 		{"CgroupRoot", cfg.CgroupRoot, "/sys/fs/cgroup"},
+		{"ConfigFile", cfg.ConfigFile, DefaultConfigPath},
+		{"CreatedCgroupsFile", cfg.CreatedCgroupsFile, DefaultCreatedCgroupsPath},
+		{"MetricsDBPath", cfg.MetricsDBPath, DefaultMetricsDBPath},
 		{"LogFile", cfg.LogFile, "/var/log/resman.log"},
 		{"PollingInterval", cfg.PollingInterval, 30},
 		{"MinActiveTime", cfg.MinActiveTime, 60},
 		{"CPUThreshold", cfg.CPUThreshold, 75},
 		{"CPUReleaseThreshold", cfg.CPUReleaseThreshold, 40},
 		{"CPUQuotaNormal", cfg.CPUQuotaNormal, "max 100000"},
-		{"CPUQuotaLimited", cfg.CPUQuotaLimited, "50000 100000"},
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
 		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"}, // Secure default
+		{"MCPHTTPHost", cfg.MCPHTTPHost, "127.0.0.1"},
+		{"MCPTLSEnabled", cfg.MCPTLSEnabled, true},
+		{"MCPTLSCertFile", cfg.MCPTLSCertFile, "/etc/resman/tls/server.crt"},
+		{"MCPTLSKeyFile", cfg.MCPTLSKeyFile, "/etc/resman/tls/server.key"},
+		{"MCPTLSMinVersion", cfg.MCPTLSMinVersion, "1.3"},
 		{"LogLevel", cfg.LogLevel, "INFO"},
 		{"SystemUIDMin", cfg.SystemUIDMin, 1000},
 		{"IgnoreSystemLoad", cfg.IgnoreSystemLoad, false},
@@ -62,6 +70,9 @@ func TestDefaultConfig(t *testing.T) {
 		if tt.got != tt.expected {
 			t.Errorf("%s: got %v, expected %v", tt.name, tt.got, tt.expected)
 		}
+	}
+	if cfg.MCPTLSCertFile != cfg.PrometheusTLSCertFile || cfg.MCPTLSKeyFile != cfg.PrometheusTLSKeyFile {
+		t.Fatal("MCP and Prometheus TLS defaults do not point to the same certificate and key files")
 	}
 }
 
@@ -77,11 +88,11 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:           75,
 				CPUReleaseThreshold:    40,
 				PollingInterval:        30,
+				MetricsCacheTTL:        15,
 				MetricsRefreshInterval: 30,
 				CgroupOperationTimeout: 5,
 				MCPShutdownTimeout:     10,
 				CPUQuotaNormal:         "max 100000",
-				CPUQuotaLimited:        "50000 100000",
 				BatchNightRAMQuota:     "4G",
 				InteractiveRAMQuota:    "1G",
 				LogLevel:               "INFO",
@@ -100,7 +111,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        0,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -113,7 +123,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        101,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -126,7 +135,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 0,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -139,7 +147,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        40,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -152,20 +159,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     4,
-				CPUQuotaLimited:     "50000 100000",
-				LogLevel:            "INFO",
-				SystemUIDMin:        1000,
-				SystemUIDMax:        60000,
-			},
-			expectError: true,
-		},
-		{
-			name: "invalid CPU_QUOTA_LIMITED format",
-			cfg: &Config{
-				CPUThreshold:        75,
-				CPUReleaseThreshold: 40,
-				PollingInterval:     30,
-				CPUQuotaLimited:     "invalid",
 				LogLevel:            "INFO",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -178,7 +171,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INVALID",
 				SystemUIDMin:        1000,
 				SystemUIDMax:        60000,
@@ -191,7 +183,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        -1,
 				SystemUIDMax:        60000,
@@ -204,7 +195,6 @@ func TestValidateConfig(t *testing.T) {
 				CPUThreshold:        75,
 				CPUReleaseThreshold: 40,
 				PollingInterval:     30,
-				CPUQuotaLimited:     "50000 100000",
 				LogLevel:            "INFO",
 				SystemUIDMin:        2000,
 				SystemUIDMax:        1000,
@@ -317,7 +307,7 @@ func TestIsValidCPUQuota(t *testing.T) {
 	}
 }
 
-func TestParseRAMQuota(t *testing.T) {
+func TestParseByteQuota(t *testing.T) {
 	maxUint64 := ^uint64(0)
 	tests := []struct {
 		name    string
@@ -343,18 +333,18 @@ func TestParseRAMQuota(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseRAMQuota(tt.quota)
+			got, err := ParseByteQuota(tt.quota)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("ParseRAMQuota(%q) = %d, want error", tt.quota, got)
+					t.Fatalf("ParseByteQuota(%q) = %d, want error", tt.quota, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParseRAMQuota(%q) error: %v", tt.quota, err)
+				t.Fatalf("ParseByteQuota(%q) error: %v", tt.quota, err)
 			}
 			if got != tt.want {
-				t.Fatalf("ParseRAMQuota(%q) = %d, want %d", tt.quota, got, tt.want)
+				t.Fatalf("ParseByteQuota(%q) = %d, want %d", tt.quota, got, tt.want)
 			}
 		})
 	}
@@ -371,7 +361,7 @@ CPU_RELEASE_THRESHOLD=50
 POLLING_INTERVAL=60
 LOG_LEVEL=DEBUG
 ENABLE_PROMETHEUS=true
-PROMETHEUS_PORT=9102
+PROMETHEUS_METRICS_BIND_PORT=9102
 `
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
@@ -384,7 +374,7 @@ PROMETHEUS_PORT=9102
 		t.Fatalf("loadFromFile() error: %v", err)
 	}
 
-	// Verifica i valori caricati
+	// Verify loaded values.
 	if cfg.CPUThreshold != 80 {
 		t.Errorf("CPUThreshold: got %d, expected 80", cfg.CPUThreshold)
 	}
@@ -502,7 +492,7 @@ func TestLoadFromFileRejectsInvalidPrimitiveValues(t *testing.T) {
 		{name: "positive integer", entry: "METRICS_REFRESH_INTERVAL=0"},
 		{name: "float", entry: "RAM_HIGH_RATIO=invalid"},
 		{name: "boolean", entry: "ENABLE_PROMETHEUS=invalid"},
-		{name: "port", entry: "PROMETHEUS_PORT=invalid"},
+		{name: "port", entry: "PROMETHEUS_METRICS_BIND_PORT=invalid"},
 	}
 
 	for _, tt := range tests {
@@ -594,24 +584,6 @@ func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvironmentSupportsPrometheusAliases(t *testing.T) {
-	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_HOST")
-	unsetEnvForTest(t, "PROMETHEUS_METRICS_BIND_PORT")
-	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
-	t.Setenv("PROMETHEUS_PORT", "9191")
-
-	cfg := DefaultConfig()
-	if err := loadFromEnvironment(cfg); err != nil {
-		t.Fatalf("loadFromEnvironment() error: %v", err)
-	}
-	if cfg.PrometheusMetricsBindHost != "192.0.2.10" {
-		t.Errorf("PrometheusMetricsBindHost = %q, want 192.0.2.10", cfg.PrometheusMetricsBindHost)
-	}
-	if cfg.PrometheusMetricsBindPort != 9191 {
-		t.Errorf("PrometheusMetricsBindPort = %d, want 9191", cfg.PrometheusMetricsBindPort)
-	}
-}
-
 func TestLoadFromEnvironmentAppliesEmptyOverrides(t *testing.T) {
 	t.Setenv("USER_EXCLUDE_LIST", "")
 	t.Setenv("BLACKOUT", "")
@@ -645,24 +617,6 @@ func TestEveryEnvironmentFieldUsesAValidatedHandler(t *testing.T) {
 		if _, ok := configFieldHandlers[key]; !ok {
 			t.Errorf("config field %s has no handler for %s", cfgType.Field(i).Name, key)
 		}
-	}
-}
-
-func TestLoadFromEnvironmentPrefersCanonicalPrometheusKeys(t *testing.T) {
-	t.Setenv("PROMETHEUS_METRICS_BIND_HOST", "127.0.0.2")
-	t.Setenv("PROMETHEUS_HOST", "192.0.2.10")
-	t.Setenv("PROMETHEUS_METRICS_BIND_PORT", "9192")
-	t.Setenv("PROMETHEUS_PORT", "9191")
-
-	cfg := DefaultConfig()
-	if err := loadFromEnvironment(cfg); err != nil {
-		t.Fatalf("loadFromEnvironment() error: %v", err)
-	}
-	if cfg.PrometheusMetricsBindHost != "127.0.0.2" {
-		t.Errorf("PrometheusMetricsBindHost = %q, want canonical value", cfg.PrometheusMetricsBindHost)
-	}
-	if cfg.PrometheusMetricsBindPort != 9192 {
-		t.Errorf("PrometheusMetricsBindPort = %d, want canonical value", cfg.PrometheusMetricsBindPort)
 	}
 }
 
@@ -708,6 +662,85 @@ func TestValidateConfigRequiresMCPAuthTokenForHTTP(t *testing.T) {
 	cfg.MCPAuthToken = "test-token"
 	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("validateConfig() rejected authenticated HTTP MCP transport: %v", err)
+	}
+}
+
+func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
+	t.Setenv("MCP_ENABLED", "yes")
+	t.Setenv("MCP_TRANSPORT", "HTTP")
+	t.Setenv("MCP_HTTP_PORT", "9090")
+	t.Setenv("MCP_HTTP_HOST", "192.0.2.10")
+	t.Setenv("MCP_TLS_ENABLED", "on")
+	t.Setenv("MCP_TLS_CERT_FILE", "/test/server.crt")
+	t.Setenv("MCP_TLS_KEY_FILE", "/test/server.key")
+	t.Setenv("MCP_TLS_CA_FILE", "/test/ca.crt")
+	t.Setenv("MCP_TLS_MIN_VERSION", "1.3")
+	t.Setenv("MCP_LOG_LEVEL", "debug")
+	t.Setenv("MCP_AUTH_TOKEN", "test-token")
+	t.Setenv("MCP_ALLOW_WRITE_OPS", "1")
+
+	cfg := DefaultConfig()
+	if err := loadFromEnvironment(cfg); err != nil {
+		t.Fatalf("loadFromEnvironment() error = %v", err)
+	}
+	got := cfg.MCPServerConfig()
+	want := MCPServerConfig{
+		Enabled:       true,
+		Transport:     "http",
+		HTTPPort:      9090,
+		HTTPHost:      "192.0.2.10",
+		TLSEnabled:    true,
+		TLSCertFile:   "/test/server.crt",
+		TLSKeyFile:    "/test/server.key",
+		TLSCAFile:     "/test/ca.crt",
+		TLSMinVersion: "1.3",
+		LogLevel:      "DEBUG",
+		AuthToken:     "test-token",
+		AllowWriteOps: true,
+	}
+	if got != want {
+		t.Fatalf("MCPServerConfig() = %+v, want %+v", got, want)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("MCPServerConfig.Validate() error = %v", err)
+	}
+}
+
+func TestValidateConfigRequiresTLSForMCPHTTP(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		tlsEnabled bool
+		certFile   string
+		keyFile    string
+		minVersion string
+		wantErr    bool
+	}{
+		{name: "default loopback TLS", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "1.3"},
+		{name: "non-loopback protected by TLS", host: "0.0.0.0", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "1.3"},
+		{name: "TLS disabled", host: "127.0.0.1", certFile: "server.crt", keyFile: "server.key", minVersion: "1.3", wantErr: true},
+		{name: "missing certificate", host: "127.0.0.1", tlsEnabled: true, keyFile: "server.key", minVersion: "1.3", wantErr: true},
+		{name: "missing key", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", minVersion: "1.3", wantErr: true},
+		{name: "invalid minimum version", host: "127.0.0.1", tlsEnabled: true, certFile: "server.crt", keyFile: "server.key", minVersion: "SSLv3", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MCPEnabled = true
+			cfg.MCPTransport = "http"
+			cfg.MCPAuthToken = "test-token"
+			cfg.MCPHTTPHost = tt.host
+			cfg.MCPTLSEnabled = tt.tlsEnabled
+			cfg.MCPTLSCertFile = tt.certFile
+			cfg.MCPTLSKeyFile = tt.keyFile
+			cfg.MCPTLSMinVersion = tt.minVersion
+
+			err := validateConfig(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateConfig() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -845,12 +878,6 @@ func TestValidateConfigRejectsInvalidCPUQuotaAndTimeouts(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid limited CPU quota",
-			mutate: func(cfg *Config) {
-				cfg.CPUQuotaLimited = "50000 0"
-			},
-		},
-		{
 			name: "zero cgroup operation timeout",
 			mutate: func(cfg *Config) {
 				cfg.CgroupOperationTimeout = 0
@@ -904,6 +931,35 @@ func TestValidateConfigRejectsInvalidPatternRAMQuotas(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRequiresPositiveMetricsCacheTTL(t *testing.T) {
+	tests := []struct {
+		name      string
+		ttl       int
+		wantError bool
+	}{
+		{name: "negative", ttl: -1, wantError: true},
+		{name: "zero", ttl: 0, wantError: true},
+		{name: "one second", ttl: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MetricsCacheTTL = tt.ttl
+			err := validateConfig(cfg)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "METRICS_CACHE_TTL must be at least 1 second") {
+					t.Fatalf("validateConfig() error = %v, want METRICS_CACHE_TTL minimum", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateConfig() error = %v, want accepted TTL", err)
+			}
+		})
+	}
+}
+
 func TestLoadAndValidate(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test.conf")
@@ -932,14 +988,263 @@ LOG_LEVEL=INFO
 	}
 }
 
+func TestLoadAndValidateRejectsLegacyConfigurationOnlyAtNewDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		selected     string
+		createNew    bool
+		createLegacy bool
+		createSaved  bool
+		createBackup bool
+		createTemp   bool
+		backupNames  []string
+		danglingLink string
+		wantError    bool
+	}{
+		{name: "legacy only", selected: "default", createLegacy: true, wantError: true},
+		{name: "RPM-saved legacy only", selected: "default", createSaved: true, wantError: true},
+		{name: "legacy backup only", selected: "default", createBackup: true, wantError: true},
+		{name: "legacy temporary only", selected: "default", createTemp: true, wantError: true},
+		{name: "multiple generated legacy backups", selected: "default", backupNames: []string{"20260822_020202", "20260822_010101"}, wantError: true},
+		{name: "many matching legacy backups", selected: "default", backupNames: []string{"20260822_000006", "20260822_000002", "20260822_000005", "20260822_000001", "20260822_000004", "20260822_000003"}, wantError: true},
+		{name: "operator-named legacy backup candidate", selected: "default", backupNames: []string{"prima_della_migrazione"}, wantError: true},
+		{name: "dangling legacy backup", selected: "default", danglingLink: "backup", wantError: true},
+		{name: "dangling matching legacy backup", selected: "default", danglingLink: "matching", wantError: true},
+		{name: "legacy artifacts and packaged default", selected: "default", createNew: true, createSaved: true, createBackup: true, createTemp: true, backupNames: []string{"20260822_030303"}, wantError: true},
+		{name: "new default only", selected: "default", createNew: true},
+		{name: "custom path with legacy artifacts present", selected: "custom", createLegacy: true, createBackup: true, createTemp: true, backupNames: []string{"20260822_040404"}},
+		{name: "explicit legacy path", selected: "legacy", createLegacy: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			layout := diskLayout{
+				defaultConfigPath:  filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:   filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:    filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:   filepath.Join(dir, "etc", "resman.conf.backup"),
+				legacyTempPath:     filepath.Join(dir, "etc", "resman.conf.tmp"),
+				legacyBackupPrefix: filepath.Join(dir, "etc", "resman.conf.backup_"),
+				defaultDBPath:      filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:       filepath.Join(dir, "etc", "resman", "metrics.db"),
+			}
+			customPath := filepath.Join(dir, "custom", "resman.conf")
+			if tt.createNew {
+				writeConfigFixture(t, layout.defaultConfigPath, "USER_INCLUDE_LIST=.*\n")
+			}
+			if tt.createLegacy {
+				writeConfigFixture(t, layout.legacyConfigPath, "USER_INCLUDE_LIST=^legacy$\n")
+			}
+			if tt.createSaved {
+				writeConfigFixture(t, layout.legacySavedPath, "USER_INCLUDE_LIST=^rpm-saved$\n")
+			}
+			if tt.createBackup {
+				writeConfigFixture(t, layout.legacyBackupPath, "MCP_AUTH_TOKEN=legacy-secret\n")
+			}
+			if tt.createTemp {
+				writeConfigFixture(t, layout.legacyTempPath, "MCP_AUTH_TOKEN=legacy-temp-secret\n")
+			}
+			for _, name := range tt.backupNames {
+				writeConfigFixture(t, layout.legacyBackupPrefix+name, "MCP_AUTH_TOKEN=legacy-backup-secret\n")
+			}
+			if tt.danglingLink == "backup" {
+				if err := os.MkdirAll(filepath.Dir(layout.legacyBackupPath), 0700); err != nil {
+					t.Fatalf("os.MkdirAll(legacy backup parent) error = %v", err)
+				}
+				if err := os.Symlink(filepath.Join(dir, "missing-backup-target"), layout.legacyBackupPath); err != nil {
+					t.Fatalf("os.Symlink(legacy backup) error = %v", err)
+				}
+			}
+			if tt.danglingLink == "matching" {
+				path := layout.legacyBackupPrefix + "20260822_050505"
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatalf("os.MkdirAll(matching backup parent) error = %v", err)
+				}
+				if err := os.Symlink(filepath.Join(dir, "missing-matching-backup-target"), path); err != nil {
+					t.Fatalf("os.Symlink(matching backup) error = %v", err)
+				}
+			}
+			selectedPath := layout.defaultConfigPath
+			switch tt.selected {
+			case "custom":
+				selectedPath = customPath
+				writeConfigFixture(t, selectedPath, "USER_INCLUDE_LIST=.*\n")
+			case "legacy":
+				selectedPath = layout.legacyConfigPath
+			}
+
+			cfg, err := loadAndValidateWithLayout(selectedPath, layout)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), layout.defaultConfigPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want both layout paths", err)
+				}
+				if tt.createLegacy && !strings.Contains(err.Error(), layout.legacyConfigPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy config path", err)
+				}
+				if tt.createSaved && (!strings.Contains(err.Error(), layout.legacySavedPath) ||
+					!strings.Contains(err.Error(), "authoritative authored contents")) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want RPM-saved recovery guidance", err)
+				}
+				if (tt.createBackup || tt.danglingLink == "backup") && (!strings.Contains(err.Error(), layout.legacyBackupPath) ||
+					!strings.Contains(err.Error(), "securely remove")) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want secure backup removal", err)
+				}
+				if tt.createBackup && len(tt.backupNames) == 0 && strings.Count(err.Error(), layout.legacyBackupPath) != 1 {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy backup path exactly once", err)
+				}
+				if tt.createTemp && !strings.Contains(err.Error(), layout.legacyTempPath) {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path", err)
+				}
+				if tt.createTemp && strings.Count(err.Error(), layout.legacyTempPath) != 1 {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want legacy temporary path exactly once", err)
+				}
+				if len(tt.backupNames) > 0 {
+					sortedNames := slices.Clone(tt.backupNames)
+					slices.Sort(sortedNames)
+					wantSummary := fmt.Sprintf("%d potential configuration-copy entries matching %s*", len(sortedNames), layout.legacyBackupPrefix)
+					if !strings.Contains(err.Error(), wantSummary) {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want bounded summary %q", err, wantSummary)
+					}
+					for _, required := range []string{"operator-managed copies", "protected archive", "securely remove generated or unneeded"} {
+						if !strings.Contains(err.Error(), required) {
+							t.Fatalf("loadAndValidateWithLayout() error = %v, want non-destructive backup-candidate remedy %q", err, required)
+						}
+					}
+					if strings.Contains(err.Error(), "timestamped backup entries") {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want no false timestamp claim", err)
+					}
+					previousIndex := -1
+					for i, name := range sortedNames {
+						path := layout.legacyBackupPrefix + name
+						index := strings.Index(err.Error(), path)
+						if i < legacyBackupExampleLimit {
+							if index <= previousIndex || strings.Count(err.Error(), path) != 1 {
+								t.Fatalf("loadAndValidateWithLayout() error = %v, want unique deterministic example %q", err, path)
+							}
+							previousIndex = index
+						} else if index >= 0 {
+							t.Fatalf("loadAndValidateWithLayout() error = %v, want examples capped before %q", err, path)
+						}
+					}
+					if remaining := len(sortedNames) - legacyBackupExampleLimit; remaining > 0 &&
+						!strings.Contains(err.Error(), fmt.Sprintf("%d more", remaining)) {
+						t.Fatalf("loadAndValidateWithLayout() error = %v, want omitted backup count %d", err, remaining)
+					}
+				}
+				if tt.danglingLink == "matching" && !strings.Contains(err.Error(), layout.legacyBackupPrefix+"20260822_050505") {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want dangling matching backup path", err)
+				}
+				if cfg != nil {
+					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadAndValidateWithLayout() error = %v", err)
+			}
+			if cfg.ConfigFile != filepath.Clean(selectedPath) {
+				t.Fatalf("ConfigFile = %q, want %q", cfg.ConfigFile, filepath.Clean(selectedPath))
+			}
+		})
+	}
+}
+
+func TestLoadAndValidateRejectsLegacyDatabaseOnlyWhenDefaultIsEnabled(t *testing.T) {
+	tests := []struct {
+		name         string
+		enabled      bool
+		selectedDB   string
+		createNew    bool
+		createLegacy bool
+		danglingLink bool
+		wantError    bool
+	}{
+		{name: "enabled default with legacy only", enabled: true, selectedDB: "default", createLegacy: true, wantError: true},
+		{name: "enabled default with dangling legacy", enabled: true, selectedDB: "default", danglingLink: true, wantError: true},
+		{name: "enabled default with both databases", enabled: true, selectedDB: "default", createNew: true, createLegacy: true, wantError: true},
+		{name: "enabled default with new database only", enabled: true, selectedDB: "default", createNew: true},
+		{name: "disabled default with legacy present", selectedDB: "default", createLegacy: true},
+		{name: "enabled memory database with legacy present", enabled: true, selectedDB: "memory", createLegacy: true},
+		{name: "enabled custom database with legacy present", enabled: true, selectedDB: "custom", createLegacy: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			layout := diskLayout{
+				defaultConfigPath:  filepath.Join(dir, "etc", "resman", "resman.conf"),
+				legacyConfigPath:   filepath.Join(dir, "etc", "resman.conf"),
+				legacySavedPath:    filepath.Join(dir, "etc", "resman.conf.rpmsave"),
+				legacyBackupPath:   filepath.Join(dir, "etc", "resman.conf.backup"),
+				legacyTempPath:     filepath.Join(dir, "etc", "resman.conf.tmp"),
+				legacyBackupPrefix: filepath.Join(dir, "etc", "resman.conf.backup_"),
+				defaultDBPath:      filepath.Join(dir, "var", "lib", "resman", "metrics.db"),
+				legacyDBPath:       filepath.Join(dir, "etc", "resman", "metrics.db"),
+			}
+			selectedDB := layout.defaultDBPath
+			switch tt.selectedDB {
+			case "memory":
+				selectedDB = ":memory:"
+			case "custom":
+				selectedDB = filepath.Join(dir, "custom", "metrics.db")
+			}
+			configContent := fmt.Sprintf(
+				"USER_INCLUDE_LIST=.*\nMETRICS_DB_ENABLED=%t\nMETRICS_DB_PATH=%s\n",
+				tt.enabled,
+				selectedDB,
+			)
+			writeConfigFixture(t, layout.defaultConfigPath, configContent)
+			if tt.createNew {
+				writeConfigFixture(t, layout.defaultDBPath, "new database marker")
+			}
+			if tt.createLegacy {
+				writeConfigFixture(t, layout.legacyDBPath, "legacy database marker")
+			}
+			if tt.danglingLink {
+				if err := os.Symlink(filepath.Join(dir, "missing-database-target"), layout.legacyDBPath); err != nil {
+					t.Fatalf("os.Symlink(legacy database) error = %v", err)
+				}
+			}
+
+			cfg, err := loadAndValidateWithLayout(layout.defaultConfigPath, layout)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), layout.legacyDBPath) ||
+					!strings.Contains(err.Error(), layout.defaultDBPath) ||
+					!strings.Contains(err.Error(), "archive or delete") {
+					t.Fatalf("loadAndValidateWithLayout() error = %v, want database reset guidance", err)
+				}
+				if cfg != nil {
+					t.Fatalf("loadAndValidateWithLayout() config = %+v, want nil after legacy refusal", cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadAndValidateWithLayout() error = %v", err)
+			}
+			if cfg.MetricsDBPath != selectedDB || cfg.MetricsDBEnabled != tt.enabled {
+				t.Fatalf("database config = enabled:%t path:%q, want enabled:%t path:%q", cfg.MetricsDBEnabled, cfg.MetricsDBPath, tt.enabled, selectedDB)
+			}
+		})
+	}
+}
+
+func writeConfigFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatalf("os.MkdirAll(%s) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("os.WriteFile(%s) error = %v", path, err)
+	}
+}
+
 func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "active.conf")
-	wrongPath := filepath.Join(t.TempDir(), "wrong.conf")
-	configContent := "CONFIG_FILE=" + wrongPath + "\nUSER_INCLUDE_LIST=.*\n"
+	configContent := "USER_INCLUDE_LIST=.*\n"
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
-	t.Setenv("CONFIG_FILE", wrongPath)
 
 	cfg, err := LoadAndValidate(configPath)
 	if err != nil {
@@ -953,8 +1258,8 @@ func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 		t.Fatalf("ConfigFile = %q, want active path %q", cfg.ConfigFile, resolvedPath)
 	}
 
-	if _, err := cfg.SetUserExcludeList([]string{"^service$"}, cfg.ConfigFile, false); err != nil {
-		t.Fatalf("SetUserExcludeList() error: %v", err)
+	if _, err := cfg.PersistUserExcludeList([]string{"^service$"}, cfg.ConfigFile); err != nil {
+		t.Fatalf("PersistUserExcludeList() error: %v", err)
 	}
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -963,8 +1268,50 @@ func TestLoadAndValidateUsesAuthoritativeConfigPathForWrites(t *testing.T) {
 	if !strings.Contains(string(content), "USER_EXCLUDE_LIST=^service$") {
 		t.Fatalf("active config was not updated: %q", content)
 	}
-	if _, err := os.Stat(wrongPath); !os.IsNotExist(err) {
-		t.Fatalf("non-authoritative config path was touched: %v", err)
+}
+
+func TestRemovedConfigurationKeysAreRejected(t *testing.T) {
+	for key := range removedConfigKeys {
+		unsetEnvForTest(t, key)
+	}
+
+	for key := range removedConfigKeys {
+		key := key
+		t.Run(key+" in file", func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "removed.conf")
+			if err := os.WriteFile(configPath, []byte(key+"=value\n"), 0600); err != nil {
+				t.Fatalf("write removed-key config: %v", err)
+			}
+			cfg, err := LoadAndValidate(configPath)
+			if err == nil || cfg != nil {
+				t.Fatalf("LoadAndValidate() = (%#v, %v), want removed-key error", cfg, err)
+			}
+			if !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), configPath) ||
+				!strings.Contains(err.Error(), "was removed") {
+				t.Fatalf("LoadAndValidate() error = %v, want key, file, and removal reason", err)
+			}
+		})
+
+		t.Run(key+" in environment", func(t *testing.T) {
+			t.Setenv(key, "value")
+			err := loadFromEnvironment(DefaultConfig())
+			if err == nil || !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "was removed") {
+				t.Fatalf("loadFromEnvironment() error = %v, want explicit removed-key error", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromFileRejectsUnknownKeyWithPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "unknown.conf")
+	if err := os.WriteFile(configPath, []byte("MISSPELLED_THRESHOLD=75\n"), 0600); err != nil {
+		t.Fatalf("write unknown-key config: %v", err)
+	}
+
+	err := loadFromFile(configPath, DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "MISSPELLED_THRESHOLD") ||
+		!strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "unknown configuration key") {
+		t.Fatalf("loadFromFile() error = %v, want unknown key and file path", err)
 	}
 }
 
@@ -1039,10 +1386,10 @@ func TestSetConfigField(t *testing.T) {
 			checkFunc:   func(c *Config) bool { return c.IgnoreSystemLoad == true },
 		},
 		{
-			name:        "unknown key (should not error)",
+			name:        "unknown key",
 			key:         "UNKNOWN_KEY",
 			value:       "value",
-			expectError: false,
+			expectError: true,
 			checkFunc:   func(c *Config) bool { return true },
 		},
 	}
@@ -1065,64 +1412,61 @@ func TestSetConfigField(t *testing.T) {
 	}
 }
 
-func TestUserFilterConcurrentAccess(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "resman.conf")
-	if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=.*\nUSER_EXCLUDE_LIST=\n"), 0644); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
+func TestPersistUserFiltersDoesNotPublishLiveState(t *testing.T) {
+	tests := []struct {
+		name     string
+		persist  func(*Config, []string, string) (UserFilterPersistenceResult, error)
+		fileKey  string
+		liveList func(*Config) []string
+	}{
+		{
+			name: "include",
+			persist: func(cfg *Config, patterns []string, path string) (UserFilterPersistenceResult, error) {
+				return cfg.PersistUserIncludeList(patterns, path)
+			},
+			fileKey:  "USER_INCLUDE_LIST=^new$",
+			liveList: (*Config).GetUserIncludeList,
+		},
+		{
+			name: "exclude",
+			persist: func(cfg *Config, patterns []string, path string) (UserFilterPersistenceResult, error) {
+				return cfg.PersistUserExcludeList(patterns, path)
+			},
+			fileKey:  "USER_EXCLUDE_LIST=^new$",
+			liveList: (*Config).GetUserExcludeList,
+		},
 	}
 
-	cfg := DefaultConfig()
-	const iterations = 25
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			patterns := []string{"^include$", "^shared$"}
-			if _, err := cfg.SetUserIncludeList(patterns, configPath, false); err != nil {
-				errs <- err
-				return
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=^old$\nUSER_EXCLUDE_LIST=^old$\n"), 0600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
 			}
-			patterns[0] = "^mutated$"
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			patterns := []string{"^exclude$"}
-			if _, err := cfg.SetUserExcludeList(patterns, configPath, false); err != nil {
-				errs <- err
-				return
+			cfg, err := LoadAndValidate(configPath)
+			if err != nil {
+				t.Fatalf("LoadAndValidate() error: %v", err)
 			}
-			patterns[0] = "^mutated$"
-		}
-	}()
-
-	for i := 0; i < iterations*4; i++ {
-		_ = cfg.IsUserIncluded("include")
-		_ = cfg.IsUserExcluded("exclude")
-		_ = cfg.IsUserWhitelisted("shared")
-		_ = cfg.GetUserIncludeList()
-		_ = cfg.GetUserExcludeList()
-	}
-
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Errorf("concurrent setter failed: %v", err)
-	}
-
-	for _, pattern := range cfg.GetUserIncludeList() {
-		if pattern == "^mutated$" {
-			t.Fatal("SetUserIncludeList retained caller-owned slice")
-		}
-	}
-	for _, pattern := range cfg.GetUserExcludeList() {
-		if pattern == "^mutated$" {
-			t.Fatal("SetUserExcludeList retained caller-owned slice")
-		}
+			patterns := []string{"^new$"}
+			result, err := tt.persist(cfg, patterns, configPath)
+			if err != nil {
+				t.Fatalf("persist() error: %v", err)
+			}
+			patterns[0] = "^caller-mutated$"
+			if !slices.Equal(result.PreviousValue, []string{"^old$"}) {
+				t.Fatalf("previous value = %v, want [^old$]", result.PreviousValue)
+			}
+			if !slices.Equal(tt.liveList(cfg), []string{"^old$"}) {
+				t.Fatalf("live configuration was published before acknowledgement: %v", tt.liveList(cfg))
+			}
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error: %v", err)
+			}
+			if !strings.Contains(string(content), tt.fileKey) || strings.Contains(string(content), "caller-mutated") {
+				t.Fatalf("persisted content = %q, want detached requested value", content)
+			}
+		})
 	}
 }
 
@@ -1196,6 +1540,58 @@ func TestEmptyRAMAndIOIncludeListsStillIncludeAllUsers(t *testing.T) {
 	}
 	if !cfg.IsUserIncludedForIO("alice") {
 		t.Fatal("empty IO_USER_INCLUDE_LIST excluded user")
+	}
+}
+
+func TestEvaluateUserEligibilityKeepsResourcePoliciesIndependent(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		username  string
+		want      UserEligibility
+	}{
+		{
+			name:     "empty lists disable CPU and include RAM and IO",
+			username: "alice",
+			want: UserEligibility{
+				EligibleForRAM: true,
+				EligibleForIO:  true,
+			},
+		},
+		{
+			name: "CPU include does not override RAM and IO excludes",
+			configure: func(cfg *Config) {
+				cfg.UserIncludeList = []string{"^alice$"}
+				cfg.RAMUserExcludeList = []string{"^alice$"}
+				cfg.IOUserExcludeList = []string{"^alice$"}
+			},
+			username: "alice",
+			want:     UserEligibility{EligibleForCPU: true},
+		},
+		{
+			name: "CPU exclude does not disable RAM and IO",
+			configure: func(cfg *Config) {
+				cfg.UserIncludeList = []string{".*"}
+				cfg.UserExcludeList = []string{"^alice$"}
+			},
+			username: "alice",
+			want: UserEligibility{
+				EligibleForRAM: true,
+				EligibleForIO:  true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			if tt.configure != nil {
+				tt.configure(cfg)
+			}
+			if got := cfg.EvaluateUserEligibility(tt.username); got != tt.want {
+				t.Fatalf("EvaluateUserEligibility(%q) = %+v, want %+v", tt.username, got, tt.want)
+			}
+		})
 	}
 }
 

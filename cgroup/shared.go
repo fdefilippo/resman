@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"syscall"
-	"time"
+
+	"github.com/fdefilippo/resman/internal/processpolicy"
 )
 
+// CreateSharedCgroup creates the shared hierarchy used for CPU-limited users.
 func (m *Manager) CreateSharedCgroup() (string, error) {
 	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
 
@@ -24,45 +24,44 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 		return "", fmt.Errorf("failed to inspect shared cgroup %s: %w", sharedPath, err)
 	}
 
-	// Crea la directory del cgroup condiviso
+	// Create the shared cgroup directory.
 	if err := os.MkdirAll(sharedPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create shared cgroup directory: %w", err)
 	}
 
-	// Abilita i controller nel cgroup condiviso
+	// A startup probe has already proved these interfaces are usable. Keep
+	// controller enablement fatal here so the decision engine cannot enter a
+	// permanent apply-fail loop if the hierarchy changes at runtime.
 	subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
-	controllersData, controllersErr := os.ReadFile(filepath.Join(sharedPath, "cgroup.controllers"))
-	if err := m.writeControllerIfMissing(subtreeControl, "+cpu"); err != nil {
-		m.logger.Warn("Failed to enable cpu controller in shared cgroup", "error", err)
+	requirements := enabledControllerInterfaces(m.getConfig())
+	if _, err := m.enableControllerInterfaces(subtreeControl, requirements, requirements); err != nil {
+		cleanupErr := os.Remove(sharedPath)
+		return "", errors.Join(err, cleanupErr)
 	}
-	if err := m.writeControllerIfMissing(subtreeControl, "+cpuset"); err != nil {
-		m.logger.Warn("Failed to enable cpuset controller in shared cgroup", "error", err)
-	}
-	if controllersErr == nil && strings.Contains(string(controllersData), "io") {
-		if err := m.writeControllerIfMissing(subtreeControl, "+io"); err != nil {
-			m.logger.Warn("Failed to enable io controller in shared cgroup", "error", err)
-		}
-	}
-	if controllersErr == nil && strings.Contains(string(controllersData), "memory") {
-		if err := m.writeControllerIfMissing(subtreeControl, "+memory"); err != nil {
-			m.logger.Warn("Failed to enable memory controller in shared cgroup", "error", err)
-		}
+	controllersData, err := os.ReadFile(filepath.Join(sharedPath, "cgroup.controllers"))
+	if err != nil {
+		m.logger.Warn("Could not inspect optional controllers in shared cgroup",
+			"path", sharedPath,
+			"error", err,
+		)
+	} else {
+		m.enableOptionalCPUSet(subtreeControl, string(controllersData), "shared cgroup")
 	}
 
 	m.logger.Info("Shared cgroup created and initialized", "path", sharedPath)
 	return sharedPath, nil
 }
 
-// ApplySharedCPULimit applica un limite di CPU al cgroup condiviso
+// ApplySharedCPULimit applies a CPU limit to the shared cgroup.
 func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
 	cpuMaxFile := filepath.Join(sharedPath, "cpu.max")
 
-	// Valida il formato della quota
+	// Validate the quota format.
 	if !isValidCPUQuotaFormat(quota) {
 		return fmt.Errorf("invalid CPU quota format: %s", quota)
 	}
 
-	// Applica il limite
+	// Apply the limit.
 	if err := os.WriteFile(cpuMaxFile, []byte(quota), 0644); err != nil {
 		return fmt.Errorf("failed to apply shared CPU limit: %w", err)
 	}
@@ -75,19 +74,19 @@ func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
 	return nil
 }
 
-// CreateUserSubCgroup crea un sottocgroup utente dentro il cgroup condiviso
+// CreateUserSubCgroup creates a user sub-cgroup inside the shared cgroup.
 func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error) {
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
-	// Crea la directory del sottocgroup
+	// Create the sub-cgroup directory.
 	if err := os.MkdirAll(userPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create user sub-cgroup directory: %w", err)
 	}
 
-	// Imposta peso di default (100)
+	// Set the default weight to 100.
 	weightFile := filepath.Join(userPath, "cpu.weight")
 	if err := os.WriteFile(weightFile, []byte("100"), 0644); err != nil {
-		// Non è fatale, logghiamo e continuiamo
+		// Treat this as non-fatal, log it, and continue.
 		m.logger.Warn("Failed to set default CPU weight",
 			"uid", uid,
 			"path", userPath,
@@ -112,41 +111,34 @@ func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error
 	return userPath, nil
 }
 
-// MoveProcessToSharedCgroup sposta un processo nel cgroup condiviso
-func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int) error {
-	// Usa il sottocgroup specifico dell'utente
+// MoveProcessToSharedCgroup moves a process into the shared cgroup.
+func (m *Manager) MoveProcessToSharedCgroup(pid int, sharedPath string, uid int) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
+	// Use the user's sub-cgroup.
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
-	// Assicurati che il sottocgroup esista
+	// Ensure that the sub-cgroup exists.
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
-			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
+			return result, fmt.Errorf("failed to create user sub-cgroup: %w", err)
 		}
 	}
 
-	cgroupProcsFile := filepath.Join(userPath, "cgroup.procs")
-	movable, err := m.captureProcessOrigin(pid, uid, userPath)
+	_, result, moveErrors, err := m.moveProcessBatch([]int{pid}, uid, userPath)
 	if err != nil {
-		return fmt.Errorf("failed to persist cgroup origin for PID %d: %w", pid, err)
+		return result, fmt.Errorf("prepare PID %d for shared cgroup ingress for UID %d: %w", pid, uid, err)
 	}
-	if !movable {
-		return nil
+	if moveErr := moveErrors[pid]; moveErr != nil {
+		return result, fmt.Errorf("failed to move PID %d to shared cgroup for UID %d: %w", pid, uid, moveErr)
 	}
-
-	if err := m.writePIDToCgroup(cgroupProcsFile, pid); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			_ = m.removeProcessOrigins(map[int]bool{pid: true})
-			return nil
-		}
-		return fmt.Errorf("failed to move PID %d to shared cgroup for UID %d: %w", pid, uid, err)
-	}
-
-	return nil
+	return result, nil
 }
 
-// MoveAllUserProcessesToSharedCgroup sposta tutti i processi di un utente nel cgroup condiviso
+// MoveAllUserProcessesToSharedCgroup moves every enforceable user process into
+// its shared-cgroup child.
 // Uses gopsutil for efficient process discovery.
-func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error {
+func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) (ProcessMoveResult, error) {
+	var result ProcessMoveResult
 	m.logger.Debug("Moving all processes for user to shared cgroup",
 		"uid", uid,
 		"shared_path", sharedPath,
@@ -154,31 +146,42 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		if _, err := m.CreateUserSubCgroup(uid, sharedPath); err != nil {
-			return fmt.Errorf("failed to create user sub-cgroup: %w", err)
+			return result, fmt.Errorf("failed to create user sub-cgroup: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
+		return result, fmt.Errorf("failed to inspect user sub-cgroup %s: %w", userPath, err)
 	}
 
 	pidsForUID, err := m.processIDsForUID(uid)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	var movedCount int
 	var errors []string
 	var pids []int
+	cfg := m.getConfig()
 
 	for _, pid := range pidsForUID {
-		processName := m.getProcessName(pid)
-
-		if m.getConfig().IsProcessExcluded(processName) {
+		processInfo, infoErr := m.getProcessInfo(pid)
+		if os.IsNotExist(infoErr) {
+			continue
+		}
+		if infoErr != nil {
+			m.logger.Error("Trusted executable identity unavailable before shared-cgroup migration; process remains enforceable",
+				"pid", pid,
+				"error", infoErr,
+				"policy", "fail_closed",
+			)
+		}
+		selection := processpolicy.Evaluate(cfg, processInfo["executable"], processInfo["name"])
+		if !selection.Enforceable {
 			continue
 		}
 		pids = append(pids, pid)
 	}
 
-	moved, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
+	moved, result, moveErrors, err := m.moveProcessBatch(pids, uid, userPath)
 	if err != nil {
 		errors = append(errors, err.Error())
 	} else {
@@ -191,12 +194,12 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 	m.logSharedProcessMoveSummary(uid, movedCount, len(pids), errors)
 
 	if len(errors) > 0 {
-		return fmt.Errorf("some processes could not be moved: %d errors", len(errors))
+		return result, fmt.Errorf("some processes could not be moved: %d errors", len(errors))
 	}
-	return nil
+	return result, nil
 }
 
-// ReleaseUserFromSharedCgroup sposta i processi fuori dal sottocgroup condiviso e lo rimuove.
+// ReleaseUserFromSharedCgroup restores processes from a shared child and removes it.
 func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	userProcsFile := filepath.Join(userPath, "cgroup.procs")
@@ -214,11 +217,7 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 	if err != nil {
 		return fmt.Errorf("failed to restore processes from shared cgroup for UID %d: %w", uid, err)
 	}
-	if len(pids) > 0 {
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if err := os.Remove(userPath); err != nil {
+	if err := m.removeManagedCgroupPath(userPath); err != nil {
 		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
 	}
 
@@ -229,6 +228,9 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 			"error", err,
 		)
 	}
+	m.blockIOMu.Lock()
+	delete(m.blockIOAccounting, uid)
+	m.blockIOMu.Unlock()
 	if usedRecovery {
 		recoveryPath := m.getRecoveryCgroupPath(uid)
 		if err := m.trackCgroupPath(uid, recoveryPath); err != nil {
@@ -278,4 +280,4 @@ func (m *Manager) logSharedProcessMoveSummary(uid, movedCount, candidateCount in
 	}
 }
 
-// getUIDFromStatusFile estrae il UID dal file /proc/[pid]/status.
+// getUIDFromStatusFile extracts the UID from /proc/[pid]/status.

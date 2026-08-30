@@ -14,29 +14,45 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
-// App contiene i componenti runtime del daemon.
+type appLogger interface {
+	Debug(string, ...interface{})
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+	Error(string, ...interface{})
+	InfoChecked(string, ...interface{}) error
+}
+
+type configWatcher interface {
+	Reload(context.Context) error
+	ForceReload(context.Context) error
+	Stop() error
+}
+
+// App contains the daemon runtime components.
 type App struct {
 	cfg        *config.Config
 	configPath string
 	ctx        context.Context
 	cancel     context.CancelFunc
 	sigChan    <-chan os.Signal
-	logger     *logging.Logger
+	logger     appLogger
 	err        error
 	cfgMu      sync.RWMutex
 	psiMu      sync.RWMutex
 
 	cgroupMgr          *cgroup.Manager
 	metricsCollector   *metrics.Collector
+	cpuSamplingCadence cpuSamplingCadenceSink
 	dbManager          *database.DatabaseManager
 	prometheusExporter *metrics.PrometheusExporter
 	stateManager       *state.Manager
-	configWatcher      *config.Watcher
+	configWatcher      configWatcher
 	mcpServer          *mcp.Server
 	psiWatcher         *cgroup.PSIWatcher
 	psiEvents          <-chan cgroup.PSIEvent
 	psiEventDriven     bool
 	configReloaded     chan struct{}
+	notifyReady        func() error
 }
 
 func (a *App) currentConfig() *config.Config {
@@ -51,7 +67,7 @@ func (a *App) setCurrentConfig(cfg *config.Config) {
 	a.cfgMu.Unlock()
 }
 
-// NewApp crea il builder dell'applicazione.
+// NewApp constructs the daemon application from its runtime dependencies.
 func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, logger *logging.Logger) *App {
 	return &App{
 		cfg:            cfg,
@@ -61,5 +77,6 @@ func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel c
 		sigChan:        sigChan,
 		logger:         logger,
 		configReloaded: make(chan struct{}, 1),
+		notifyReady:    notifySystemdReady,
 	}
 }

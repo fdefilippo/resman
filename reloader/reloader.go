@@ -18,14 +18,16 @@
 package reloader
 
 import (
+	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 )
 
 type stateConfigManager interface {
+	BeginConfigUpdate() func()
 	GetConfig() *config.Config
 	UpdateConfig(*config.Config)
 }
@@ -38,42 +40,34 @@ type metricsConfigCollector interface {
 	UpdateConfig(*config.Config)
 }
 
-type prometheusConfigExporter interface {
-	IsRunning() bool
-	GetMetricsEndpoint() string
-}
-
 type ConfigApplyHook func(*config.Config) error
 
-// Reloader gestisce il ricaricamento dinamico della configurazione per tutti i componenti.
+// Reloader applies one effective configuration epoch to every runtime component.
 type Reloader struct {
-	stateManager       stateConfigManager
-	cgroupManager      cgroupConfigManager
-	metricsCollector   metricsConfigCollector
-	prometheusExporter prometheusConfigExporter
-	applyHook          ConfigApplyHook
-	logger             *logging.Logger
+	stateManager     stateConfigManager
+	cgroupManager    cgroupConfigManager
+	metricsCollector metricsConfigCollector
+	applyHook        ConfigApplyHook
+	logger           *logging.Logger
 
-	mu sync.Mutex
+	applying atomic.Bool
 }
 
-// NewReloader crea un nuovo reloader.
+// NewReloader creates a configuration reloader.
 func NewReloader(
 	stateMgr stateConfigManager,
 	cgroupMgr cgroupConfigManager,
 	metricsCol metricsConfigCollector,
-	promExp prometheusConfigExporter,
 	hooks ...ConfigApplyHook,
 ) *Reloader {
 
 	logger := logging.GetLogger()
 
 	reloader := &Reloader{
-		stateManager:       stateMgr,
-		cgroupManager:      cgroupMgr,
-		metricsCollector:   metricsCol,
-		prometheusExporter: promExp,
-		logger:             logger,
+		stateManager:     stateMgr,
+		cgroupManager:    cgroupMgr,
+		metricsCollector: metricsCol,
+		logger:           logger,
 	}
 	if len(hooks) > 0 {
 		reloader.applyHook = hooks[0]
@@ -81,24 +75,37 @@ func NewReloader(
 	return reloader
 }
 
-// OnConfigChange gestisce il cambio di configurazione.
+// OnConfigChange validates and applies one configuration epoch.
 func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 	if newConfig == nil {
 		return fmt.Errorf("new config cannot be nil")
 	}
+	if !r.applying.CompareAndSwap(false, true) {
+		return fmt.Errorf("configuration reload already in progress")
+	}
+	defer r.applying.Store(false)
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	var finishEpochUpdate func()
+	if r.stateManager != nil {
+		finishEpochUpdate = r.stateManager.BeginConfigUpdate()
+		defer finishEpochUpdate()
+	}
 
 	r.logger.Info("Applying new configuration dynamically")
 
-	var errors []string
+	var applyErrors []error
 	var currentConfig *config.Config
 	if r.stateManager != nil {
 		currentConfig = r.stateManager.GetConfig()
 	}
 	if currentConfig != nil {
-		r.preserveRestartRequiredConfig(currentConfig, newConfig)
+		rejected, err := config.ApplyReloadLifecycle(currentConfig, newConfig)
+		if err != nil {
+			return fmt.Errorf("apply configuration lifecycle: %w", err)
+		}
+		if len(rejected) > 0 {
+			applyErrors = append(applyErrors, &config.RestartRequiredError{Fields: rejected})
+		}
 	}
 
 	if newConfig.LogLevel != "" {
@@ -108,7 +115,7 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 
 	if r.cgroupManager != nil {
 		if err := r.cgroupManager.UpdateConfig(newConfig); err != nil {
-			errors = append(errors, fmt.Sprintf("Cgroup manager: %v", err))
+			applyErrors = append(applyErrors, fmt.Errorf("cgroup manager: %w", err))
 		} else {
 			r.logger.Info("Cgroup manager configuration updated",
 				"cgroup_root", newConfig.CgroupRoot,
@@ -131,108 +138,9 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 
 	if r.applyHook != nil {
 		if err := r.applyHook(newConfig); err != nil {
-			errors = append(errors, fmt.Sprintf("Application runtime: %v", err))
+			applyErrors = append(applyErrors, fmt.Errorf("application runtime: %w", err))
 		}
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("errors applying new config: %v", errors)
-	}
-
-	return nil
-}
-
-func (r *Reloader) preserveRestartRequiredConfig(currentConfig, newConfig *config.Config) {
-	r.preserveRestartBool("ENABLE_PROMETHEUS", currentConfig.EnablePrometheus, &newConfig.EnablePrometheus)
-	r.preserveRestartString("PROMETHEUS_METRICS_BIND_HOST", currentConfig.PrometheusMetricsBindHost, &newConfig.PrometheusMetricsBindHost)
-	r.preserveRestartInt("PROMETHEUS_METRICS_BIND_PORT", currentConfig.PrometheusMetricsBindPort, &newConfig.PrometheusMetricsBindPort)
-	r.preserveRestartBool("PROMETHEUS_TLS_ENABLED", currentConfig.PrometheusTLSEnabled, &newConfig.PrometheusTLSEnabled)
-	r.preserveRestartString("PROMETHEUS_TLS_CERT_FILE", currentConfig.PrometheusTLSCertFile, &newConfig.PrometheusTLSCertFile)
-	r.preserveRestartString("PROMETHEUS_TLS_KEY_FILE", currentConfig.PrometheusTLSKeyFile, &newConfig.PrometheusTLSKeyFile)
-	r.preserveRestartString("PROMETHEUS_TLS_CA_FILE", currentConfig.PrometheusTLSCAFile, &newConfig.PrometheusTLSCAFile)
-	r.preserveRestartString("PROMETHEUS_TLS_MIN_VERSION", currentConfig.PrometheusTLSMinVersion, &newConfig.PrometheusTLSMinVersion)
-	r.preserveRestartString("PROMETHEUS_AUTH_TYPE", currentConfig.PrometheusAuthType, &newConfig.PrometheusAuthType)
-	r.preserveRestartString("PROMETHEUS_AUTH_USERNAME", currentConfig.PrometheusAuthUsername, &newConfig.PrometheusAuthUsername)
-	r.preserveRestartString("PROMETHEUS_AUTH_PASSWORD_FILE", currentConfig.PrometheusAuthPasswordFile, &newConfig.PrometheusAuthPasswordFile)
-	r.preserveRestartString("PROMETHEUS_JWT_SECRET_FILE", currentConfig.PrometheusJWTSecretFile, &newConfig.PrometheusJWTSecretFile)
-	r.preserveRestartString("PROMETHEUS_JWT_ISSUER", currentConfig.PrometheusJWTIssuer, &newConfig.PrometheusJWTIssuer)
-	r.preserveRestartString("PROMETHEUS_JWT_AUDIENCE", currentConfig.PrometheusJWTAudience, &newConfig.PrometheusJWTAudience)
-	r.preserveRestartInt("PROMETHEUS_JWT_EXPIRY", currentConfig.PrometheusJWTExpiry, &newConfig.PrometheusJWTExpiry)
-	r.preserveRestartString("CGROUP_ROOT", currentConfig.CgroupRoot, &newConfig.CgroupRoot)
-	r.preserveRestartString("CGROUP_BASE", currentConfig.CgroupBase, &newConfig.CgroupBase)
-	r.preserveRestartString("LOG_FILE", currentConfig.LogFile, &newConfig.LogFile)
-	r.preserveRestartInt("LOG_MAX_SIZE", currentConfig.LogMaxSize, &newConfig.LogMaxSize)
-	r.preserveRestartBool("USE_SYSLOG", currentConfig.UseSyslog, &newConfig.UseSyslog)
-	r.preserveRestartBool("MCP_ENABLED", currentConfig.MCPEnabled, &newConfig.MCPEnabled)
-	r.preserveRestartString("MCP_TRANSPORT", currentConfig.MCPTransport, &newConfig.MCPTransport)
-	r.preserveRestartString("MCP_HTTP_HOST", currentConfig.MCPHTTPHost, &newConfig.MCPHTTPHost)
-	r.preserveRestartInt("MCP_HTTP_PORT", currentConfig.MCPHTTPPort, &newConfig.MCPHTTPPort)
-	r.preserveRestartString("MCP_LOG_LEVEL", currentConfig.MCPLogLevel, &newConfig.MCPLogLevel)
-	r.preserveRestartSecretString("MCP_AUTH_TOKEN", currentConfig.MCPAuthToken, &newConfig.MCPAuthToken)
-	r.preserveRestartBool("MCP_ALLOW_WRITE_OPS", currentConfig.MCPAllowWriteOps, &newConfig.MCPAllowWriteOps)
-}
-
-func (r *Reloader) preserveRestartString(field, current string, requested *string) {
-	if *requested == current {
-		return
-	}
-	r.logRestartRequired(field, current, *requested)
-	*requested = current
-}
-
-func (r *Reloader) preserveRestartInt(field string, current int, requested *int) {
-	if *requested == current {
-		return
-	}
-	r.logRestartRequired(field, current, *requested)
-	*requested = current
-}
-
-func (r *Reloader) preserveRestartBool(field string, current bool, requested *bool) {
-	if *requested == current {
-		return
-	}
-	r.logRestartRequired(field, current, *requested)
-	*requested = current
-}
-
-func (r *Reloader) preserveRestartSecretString(field, current string, requested *string) {
-	if *requested == current {
-		return
-	}
-	r.logger.Warn("Configuration change deferred until restart",
-		"field", field,
-		"current", "[redacted]",
-		"requested", "[redacted]",
-	)
-	*requested = current
-}
-
-func (r *Reloader) logRestartRequired(field string, current, requested any) {
-	r.logger.Warn("Configuration change deferred until restart",
-		"field", field,
-		"current", current,
-		"requested", requested,
-	)
-}
-
-// SafeConfigUpdate applica i cambiamenti di configurazione in modo thread-safe.
-func (r *Reloader) SafeConfigUpdate(updateFunc func(*config.Config) *config.Config) error {
-	r.logger.Debug("Safe configuration update requested")
-
-	if r.stateManager == nil {
-		return fmt.Errorf("state manager not initialized")
-	}
-
-	// Ottieni la configurazione corrente dal state manager
-	currentCfg := r.stateManager.GetConfig()
-
-	// Applica la funzione di update
-	newCfg := updateFunc(currentCfg)
-	if newCfg == nil {
-		return fmt.Errorf("updateFunc returned nil config")
-	}
-
-	// Applica la nuova configurazione a tutti i componenti
-	return r.OnConfigChange(newCfg)
+	return errors.Join(applyErrors...)
 }

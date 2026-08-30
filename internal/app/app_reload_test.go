@@ -1,15 +1,114 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/state"
 )
+
+type recordingCPUSamplingCadence struct {
+	intervals []time.Duration
+}
+
+func (r *recordingCPUSamplingCadence) SetFallbackCPUSamplingInterval(interval time.Duration) {
+	r.intervals = append(r.intervals, interval)
+}
+
+func TestWithMetricsCollectorWiresCPUSamplingCadence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	application := NewApp(cfg, "", ctx, cancel, nil, logging.GetLogger()).WithMetricsCollector()
+	if application.err != nil {
+		t.Fatalf("WithMetricsCollector() error: %v", application.err)
+	}
+	if application.metricsCollector == nil {
+		t.Fatal("WithMetricsCollector() did not create a collector")
+	}
+	t.Cleanup(application.metricsCollector.Stop)
+	if application.cpuSamplingCadence != application.metricsCollector {
+		t.Fatal("WithMetricsCollector() did not wire the runtime cadence sink to the collector")
+	}
+}
+
+func TestApplyReloadedConfigPublishesEffectiveCPUSamplingCadence(t *testing.T) {
+	tests := []struct {
+		name             string
+		psiConfigured    bool
+		psiActive        bool
+		pollingInterval  int
+		fallbackInterval int
+		want             time.Duration
+	}{
+		{
+			name:             "normal polling",
+			pollingInterval:  45,
+			fallbackInterval: 10,
+			want:             45 * time.Second,
+		},
+		{
+			name:             "PSI configured but inactive",
+			psiConfigured:    true,
+			pollingInterval:  30,
+			fallbackInterval: 10,
+			want:             30 * time.Second,
+		},
+		{
+			name:             "PSI configured and active",
+			psiConfigured:    true,
+			psiActive:        true,
+			pollingInterval:  30,
+			fallbackInterval: 10,
+			want:             10 * time.Second,
+		},
+		{
+			name:             "stale runtime flag cannot enable unconfigured PSI",
+			psiActive:        true,
+			pollingInterval:  30,
+			fallbackInterval: 10,
+			want:             30 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.PSIEventDriven = tt.psiConfigured
+			cfg.PollingInterval = tt.pollingInterval
+			cfg.PSIFallbackInterval = tt.fallbackInterval
+			stateManager, err := state.NewManager(cfg, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("NewManager() error: %v", err)
+			}
+			recorder := &recordingCPUSamplingCadence{}
+			application := &App{
+				cfg:                cfg,
+				logger:             logging.GetLogger(),
+				stateManager:       stateManager,
+				psiEventDriven:     tt.psiActive,
+				cpuSamplingCadence: recorder,
+				configReloaded:     make(chan struct{}, 1),
+			}
+
+			if err := application.applyReloadedConfig(cfg); err != nil {
+				t.Fatalf("applyReloadedConfig() error: %v", err)
+			}
+			if len(recorder.intervals) != 1 {
+				t.Fatalf("published intervals = %v, want one interval", recorder.intervals)
+			}
+			if got := recorder.intervals[0]; got != tt.want {
+				t.Fatalf("published interval = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestApplyReloadedConfigReconfiguresPSIWatcher(t *testing.T) {
 	cgroupRoot := t.TempDir()

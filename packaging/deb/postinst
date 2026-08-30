@@ -1,6 +1,35 @@
 #!/bin/sh
 set -e
 
+# Package-owned configuration, credential and state directories have an exact
+# restrictive contract even when an upgrade reuses directories from an older package.
+install -d -m 0700 -o root -g root /etc/resman /etc/resman/tls /var/lib/resman
+
+# Report legacy state without migrating or deleting operator data.
+legacy_config_found=false
+for legacy_path in /etc/resman.conf /etc/resman.conf.rpmsave /etc/resman.conf.backup /etc/resman.conf.tmp /etc/resman.conf.backup_*; do
+    if [ -e "$legacy_path" ] || [ -L "$legacy_path" ]; then
+        legacy_config_found=true
+        break
+    fi
+done
+if "$legacy_config_found"; then
+    echo "WARNING: legacy configuration artifacts detected." >&2
+    echo "Choose the authoritative authored contents from /etc/resman.conf or RPM-saved /etc/resman.conf.rpmsave, install them as a regular /etc/resman/resman.conf, and remove the legacy source files. Move any needed operator-managed /etc/resman.conf.backup_* copies to a protected archive outside the legacy path; securely remove generated or unneeded matching copies plus /etc/resman.conf.backup and /etc/resman.conf.tmp before restarting resman." >&2
+fi
+if [ -e /etc/resman/metrics.db ] || [ -L /etc/resman/metrics.db ]; then
+    echo "WARNING: legacy metrics database detected at /etc/resman/metrics.db." >&2
+    echo "Archive or delete it; resman will create the current schema at /var/lib/resman/metrics.db." >&2
+fi
+
+# Create a missing default log restrictively. On upgrades, preserve deliberate
+# owner/group read-write access while removing execute and all access for others.
+if [ -f /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    chmod a-x,o-rwx /var/log/resman.log
+elif [ ! -e /var/log/resman.log ] && [ ! -L /var/log/resman.log ]; then
+    install -m 0600 -o root -g root /dev/null /var/log/resman.log
+fi
+
 # Automatically added by dh_installsystemd with --no-enable
 if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] ||
     [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then

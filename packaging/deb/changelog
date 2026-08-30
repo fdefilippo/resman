@@ -1,3 +1,69 @@
+resman (1.30.8-1) stable; urgency=medium
+
+  * Prevent UID enforcement from acquiring processes in nested PID namespaces.
+  * Report bounded cgroup-ingress skips in logs and Prometheus metrics.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sun, 30 Aug 2026 03:15:00 +0200
+
+resman (1.30.7-2) stable; urgency=medium
+
+  * Schedule weekly generated-input fuzzing with manual dispatch.
+  * Retain fuzz logs, generated crashers and the Go fuzz cache on failure.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 20:25:33 +0200
+
+resman (1.30.7-1) stable; urgency=medium
+
+  * Reject malformed cpu.max observations instead of exporting false zero values.
+  * Remove unavailable and stale cgroup-labelled Prometheus gauge series.
+  * Reject raw and logical block I/O counter overflow before it can wrap.
+  * Add bounded fuzz targets for configuration, metrics, cgroup and MCP boundaries.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 16:46:55 +0200
+
+resman (1.30.5-1) stable; urgency=medium
+
+  * Enforce ShellCheck across every tracked shell script in shared quality gates.
+  * Make missing ShellCheck fail closed in pull-request and release CI.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 15:57:06 +0200
+
+resman (1.30.4-1) stable; urgency=medium
+
+  * Wait for explicit systemd readiness before reporting a successful start.
+  * Make permanently rejected startup fail synchronously through systemctl.
+  * Quiesce the installed daemon before real-host scenarios mutate static settings.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 15:09:47 +0200
+
+resman (1.30.2-1) stable; urgency=medium
+
+  * Attribute high system load before suppressing CPU enforcement.
+  * Preserve CPU threshold-duration progress during temporary load suppression.
+  * Keep external-majority load protected with explicit measured diagnostics.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 14:29:27 +0200
+
+resman (1.30.1-1) stable; urgency=medium
+
+  * Report each configuration reload outcome exactly once.
+  * Keep restart-required rejections at warning level while preserving typed errors.
+  * Preserve genuine failures when they are joined with restart-required rejections.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 13:45:00 +0200
+
+resman (1.30.0-1) stable; urgency=medium
+
+  * Separate CPU, RAM and I/O eligibility, enforcement and observation contracts.
+  * Reconcile active process membership and base IOPS decisions on block operations.
+  * Require stateless MCP revision 2026-07-28 over HTTPS with TLS 1.3 by default.
+  * Harden configuration, SQLite, logging and runtime filesystem persistence.
+  * Add typed cross-package contracts, deterministic lifecycle handling and truthful
+    operational metrics and errors.
+  * Add shared CI contract checks and disposable functional regression gates.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sat, 29 Aug 2026 08:02:15 +0200
+
 resman (1.25.1-1) stable; urgency=medium
 
   * Make an empty USER_INCLUDE_LIST disable CPU limiting while retaining

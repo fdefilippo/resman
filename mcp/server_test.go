@@ -19,8 +19,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,12 +39,12 @@ import (
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     *Config
+		cfg     *config.MCPServerConfig
 		wantErr bool
 	}{
 		{
 			name: "valid stdio config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "stdio",
 				LogLevel:      "INFO",
@@ -47,11 +54,15 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "valid http config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:       true,
 				Transport:     "http",
 				HTTPPort:      8080,
 				HTTPHost:      "127.0.0.1",
+				TLSEnabled:    true,
+				TLSCertFile:   "server.crt",
+				TLSKeyFile:    "server.key",
+				TLSMinVersion: "1.3",
 				LogLevel:      "INFO",
 				AuthToken:     "test-token",
 				AllowWriteOps: false,
@@ -60,7 +71,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config without token",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  8080,
@@ -71,7 +82,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "http config with whitespace token",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  8080,
@@ -82,8 +93,39 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "http config with TLS-protected non-loopback bind",
+			cfg: &config.MCPServerConfig{
+				Enabled:       true,
+				Transport:     "http",
+				HTTPPort:      8080,
+				HTTPHost:      "0.0.0.0",
+				TLSEnabled:    true,
+				TLSCertFile:   "server.crt",
+				TLSKeyFile:    "server.key",
+				TLSMinVersion: "1.3",
+				LogLevel:      "INFO",
+				AuthToken:     "test-token",
+			},
+			wantErr: false,
+		},
+		{
+			name: "http config with TLS disabled",
+			cfg: &config.MCPServerConfig{
+				Enabled:       true,
+				Transport:     "http",
+				HTTPPort:      8080,
+				HTTPHost:      "127.0.0.1",
+				TLSCertFile:   "server.crt",
+				TLSKeyFile:    "server.key",
+				TLSMinVersion: "1.3",
+				LogLevel:      "INFO",
+				AuthToken:     "test-token",
+			},
+			wantErr: true,
+		},
+		{
 			name: "invalid transport",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "invalid",
 				LogLevel:  "INFO",
@@ -92,7 +134,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "invalid port",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "http",
 				HTTPPort:  70000,
@@ -103,7 +145,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "invalid log level",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   true,
 				Transport: "stdio",
 				LogLevel:  "INVALID",
@@ -112,7 +154,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "disabled config",
-			cfg: &Config{
+			cfg: &config.MCPServerConfig{
 				Enabled:   false,
 				Transport: "stdio",
 				LogLevel:  "INFO",
@@ -131,153 +173,13 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestConfigLoadFromEnv(t *testing.T) {
-	t.Setenv("MCP_ENABLED", "true")
-	t.Setenv("MCP_TRANSPORT", "http")
-	t.Setenv("MCP_HTTP_PORT", "9090")
-	t.Setenv("MCP_HTTP_HOST", "0.0.0.0")
-	t.Setenv("MCP_LOG_LEVEL", "DEBUG")
-	t.Setenv("MCP_ALLOW_WRITE_OPS", "true")
-
-	cfg := DefaultConfig()
-	if err := cfg.LoadFromEnv(); err != nil {
-		t.Fatalf("Config.LoadFromEnv() error = %v", err)
-	}
-
-	if !cfg.Enabled {
-		t.Error("Expected MCP_ENABLED to be true")
-	}
-	if cfg.Transport != "http" {
-		t.Errorf("Expected MCP_TRANSPORT to be http, got %s", cfg.Transport)
-	}
-	if cfg.HTTPPort != 9090 {
-		t.Errorf("Expected MCP_HTTP_PORT to be 9090, got %d", cfg.HTTPPort)
-	}
-	if cfg.HTTPHost != "0.0.0.0" {
-		t.Errorf("Expected MCP_HTTP_HOST to be 0.0.0.0, got %s", cfg.HTTPHost)
-	}
-	if cfg.LogLevel != "DEBUG" {
-		t.Errorf("Expected MCP_LOG_LEVEL to be DEBUG, got %s", cfg.LogLevel)
-	}
-	if !cfg.AllowWriteOps {
-		t.Error("Expected MCP_ALLOW_WRITE_OPS to be true")
-	}
-}
-
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if cfg.Enabled != false {
-		t.Error("Expected default Enabled to be false")
-	}
-	if cfg.Transport != "stdio" {
-		t.Errorf("Expected default Transport to be stdio, got %s", cfg.Transport)
-	}
-	if cfg.HTTPPort != 8080 {
-		t.Errorf("Expected default HTTPPort to be 8080, got %d", cfg.HTTPPort)
-	}
-	if cfg.HTTPHost != "127.0.0.1" {
-		t.Errorf("Expected default HTTPHost to be 127.0.0.1, got %s", cfg.HTTPHost)
-	}
-	if cfg.LogLevel != "INFO" {
-		t.Errorf("Expected default LogLevel to be INFO, got %s", cfg.LogLevel)
-	}
-	if cfg.AllowWriteOps != false {
-		t.Error("Expected default AllowWriteOps to be false")
-	}
-}
-
-func TestHelperFunctions(t *testing.T) {
-	tests := []struct {
-		name     string
-		m        map[string]any
-		key      string
-		defaultF float64
-		want     float64
-	}{
-		{
-			name:     "existing float key",
-			m:        map[string]any{"cpu": 45.5},
-			key:      "cpu",
-			defaultF: 0.0,
-			want:     45.5,
-		},
-		{
-			name:     "missing key",
-			m:        map[string]any{"other": 1},
-			key:      "cpu",
-			defaultF: 0.0,
-			want:     0.0,
-		},
-		{
-			name:     "wrong type",
-			m:        map[string]any{"cpu": "not a number"},
-			key:      "cpu",
-			defaultF: 0.0,
-			want:     0.0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := getFloatMetric(tt.m, tt.key, tt.defaultF)
-			if got != tt.want {
-				t.Errorf("getFloatMetric() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetBool(t *testing.T) {
-	m := map[string]any{
-		"active":   true,
-		"inactive": false,
-	}
-
-	if !getBool(m, "active", false) {
-		t.Error("Expected active to be true")
-	}
-	if getBool(m, "inactive", true) {
-		t.Error("Expected inactive to be false")
-	}
-	if getBool(m, "missing", true) != true {
-		t.Error("Expected missing to return default true")
-	}
-}
-
-func TestGetString(t *testing.T) {
-	m := map[string]any{
-		"path": "/test/path",
-	}
-
-	if getString(m, "path", "default") != "/test/path" {
-		t.Error("Expected to get test path")
-	}
-	if getString(m, "missing", "default") != "default" {
-		t.Error("Expected to get default value")
-	}
-}
-
-func TestGetInt(t *testing.T) {
-	m := map[string]any{
-		"count": 42,
-	}
-
-	if getInt(m, "count", 0) != 42 {
-		t.Error("Expected to get 42")
-	}
-	if getInt(m, "missing", 10) != 10 {
-		t.Error("Expected to get default 10")
-	}
-}
-
 func TestNewServer(t *testing.T) {
 	parentCfg := config.DefaultConfig()
 	parentCfg.MCPEnabled = false // Don't actually start the server
 
 	// Create mock dependencies (nil for this test)
 	// In a real test, you'd create proper mocks
-	server, err := NewServer(parentCfg, nil, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -291,18 +193,159 @@ func TestNewServer(t *testing.T) {
 
 func TestNewServerRejectsUnauthenticatedHTTP(t *testing.T) {
 	parentCfg := config.DefaultConfig()
+	configureMCPTestTLS(t, parentCfg)
 	parentCfg.MCPEnabled = true
 	parentCfg.MCPTransport = "http"
 	parentCfg.MCPHTTPHost = "127.0.0.1"
 	parentCfg.MCPAuthToken = ""
 
-	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err == nil {
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("NewServer() accepted HTTP transport without MCP_AUTH_TOKEN")
 	}
 
 	parentCfg.MCPAuthToken = "test-token"
-	if _, err := NewServer(parentCfg, nil, nil, nil, nil); err != nil {
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("NewServer() rejected authenticated HTTP transport: %v", err)
+	}
+}
+
+func TestNewServerRequiresTLSForHTTP(t *testing.T) {
+	parentCfg := config.DefaultConfig()
+	parentCfg.MCPEnabled = true
+	parentCfg.MCPTransport = "http"
+	parentCfg.MCPAuthToken = "test-token"
+	parentCfg.MCPTLSEnabled = false
+
+	if _, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("NewServer() accepted cleartext MCP HTTP transport")
+	}
+}
+
+func TestNewServerRejectsInvalidTLSCredentials(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T) (string, string)
+	}{
+		{
+			name: "missing files",
+			prepare: func(t *testing.T) (string, string) {
+				dir := t.TempDir()
+				return filepath.Join(dir, "missing.crt"), filepath.Join(dir, "missing.key")
+			},
+		},
+		{
+			name: "invalid keypair",
+			prepare: func(t *testing.T) (string, string) {
+				dir := t.TempDir()
+				certFile := filepath.Join(dir, "server.crt")
+				keyFile := filepath.Join(dir, "server.key")
+				if err := os.WriteFile(certFile, []byte("not a certificate"), 0600); err != nil {
+					t.Fatalf("write invalid certificate: %v", err)
+				}
+				if err := os.WriteFile(keyFile, []byte("not a key"), 0600); err != nil {
+					t.Fatalf("write invalid key: %v", err)
+				}
+				return certFile, keyFile
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certFile, keyFile := tt.prepare(t)
+			parentCfg := config.DefaultConfig()
+			parentCfg.MCPEnabled = true
+			parentCfg.MCPTransport = "http"
+			parentCfg.MCPAuthToken = "test-token"
+			parentCfg.MCPTLSCertFile = certFile
+			parentCfg.MCPTLSKeyFile = keyFile
+
+			if server, err := NewServer(parentCfg, nil, nil, nil, nil, nil); err == nil || server != nil {
+				t.Fatalf("NewServer() = (%v, %v), want nil server and TLS credential error", server, err)
+			}
+		})
+	}
+}
+
+func TestNewServerEnablesMutualTLSWhenClientCAConfigured(t *testing.T) {
+	parentCfg := config.DefaultConfig()
+	caFile := configureMCPTestTLS(t, parentCfg)
+	parentCfg.MCPEnabled = true
+	parentCfg.MCPTransport = "http"
+	parentCfg.MCPAuthToken = "test-token"
+	parentCfg.MCPTLSCAFile = caFile
+
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error: %v", err)
+	}
+	if server.tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || server.tlsConfig.ClientCAs == nil {
+		t.Fatal("MCP_TLS_CA_FILE did not enable required client-certificate authentication")
+	}
+	if server.tlsConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MCP TLS minimum version = %d, want TLS 1.3", server.tlsConfig.MinVersion)
+	}
+}
+
+func TestMCPHTTPServerProtectsNonLoopbackBindWithTLS(t *testing.T) {
+	parentCfg := config.DefaultConfig()
+	caFile := configureMCPTestTLS(t, parentCfg)
+	parentCfg.MCPEnabled = true
+	parentCfg.MCPTransport = "http"
+	parentCfg.MCPHTTPHost = "0.0.0.0"
+	parentCfg.MCPAuthToken = "test-token"
+
+	mcpServer, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewServer() error: %v", err)
+	}
+
+	mcpServer.cfg.HTTPPort = 0
+	var listener net.Listener
+	mcpServer.httpListen = func(network, address string) (net.Listener, error) {
+		var listenErr error
+		listener, listenErr = net.Listen(network, address)
+		return listener, listenErr
+	}
+	if err := mcpServer.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(func() { _ = mcpServer.Stop() })
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	plainURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/health"
+	plainClient := &http.Client{Timeout: time.Second}
+	response, _ := plainClient.Get(plainURL)
+	if response != nil {
+		_ = response.Body.Close()
+		if response.StatusCode == http.StatusOK {
+			t.Fatal("cleartext request reached the MCP health handler")
+		}
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatalf("read test CA: %v", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		t.Fatal("append test CA certificate")
+	}
+	httpsClient := &http.Client{
+		Timeout: time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			RootCAs:    roots,
+			ServerName: "example.com",
+		}},
+	}
+	httpsResponse, err := httpsClient.Get("https://127.0.0.1:" + strconv.Itoa(port) + "/health")
+	if err != nil {
+		t.Fatalf("TLS request: %v", err)
+	}
+	_ = httpsResponse.Body.Close()
+	if httpsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("TLS health request status = %d, want %d", httpsResponse.StatusCode, http.StatusOK)
 	}
 }
 
@@ -372,7 +415,7 @@ func TestServerStartStop(t *testing.T) {
 	parentCfg := config.DefaultConfig()
 	parentCfg.MCPEnabled = false
 
-	server, err := NewServer(parentCfg, nil, nil, nil, nil)
+	server, err := NewServer(parentCfg, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -390,6 +433,41 @@ func TestServerStartStop(t *testing.T) {
 	}
 	if err := server.Stop(); err != nil {
 		t.Errorf("second Server.Stop() error = %v", err)
+	}
+}
+
+func TestServerLifecycleStateRemainsAvailableWhileListenerCreationBlocks(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &Server{
+		cfg:       &config.MCPServerConfig{Enabled: true, Transport: "http", HTTPHost: "127.0.0.1", HTTPPort: 1969},
+		logger:    logging.GetLogger(),
+		tlsConfig: &tls.Config{Certificates: []tls.Certificate{{}}},
+		httpListen: func(string, string) (net.Listener, error) {
+			close(started)
+			<-release
+			return nil, os.ErrPermission
+		},
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- server.Start(context.Background()) }()
+	<-started
+
+	stateDone := make(chan bool, 1)
+	go func() { stateDone <- server.IsStarted() }()
+	select {
+	case running := <-stateDone:
+		if !running {
+			t.Fatal("IsStarted() = false while listener creation is in progress")
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-startDone
+		t.Fatal("IsStarted() blocked behind listener creation")
+	}
+	close(release)
+	if err := <-startDone; err == nil {
+		t.Fatal("Start() succeeded after listener creation failed")
 	}
 }
 
@@ -417,7 +495,7 @@ func TestServerStopTerminatesStdioTransport(t *testing.T) {
 			Name:    "resman-test",
 			Version: "test",
 		}, nil),
-		cfg:            &Config{Enabled: true, Transport: "stdio"},
+		cfg:            &config.MCPServerConfig{Enabled: true, Transport: "stdio"},
 		logger:         logging.GetLogger(),
 		stdioTransport: serverTransport,
 	}
@@ -482,7 +560,7 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &Server{
-				cfg:    &Config{AuthToken: tt.serverToken},
+				cfg:    &config.MCPServerConfig{AuthToken: tt.serverToken},
 				logger: logging.GetLogger(),
 			}
 			called := false
@@ -509,7 +587,7 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 }
 
 func TestMCPHTTPServerAllowsLongLivedResponses(t *testing.T) {
-	server := newMCPHTTPServer("127.0.0.1:0", http.NewServeMux())
+	server := newMCPHTTPServer("127.0.0.1:0", http.NewServeMux(), &tls.Config{MinVersion: tls.VersionTLS13})
 
 	if server.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %s, want 0 for streaming responses", server.WriteTimeout)
@@ -517,4 +595,33 @@ func TestMCPHTTPServerAllowsLongLivedResponses(t *testing.T) {
 	if server.ReadHeaderTimeout <= 0 {
 		t.Errorf("ReadHeaderTimeout = %s, want a positive slow-loris deadline", server.ReadHeaderTimeout)
 	}
+}
+
+func configureMCPTestTLS(t testing.TB, cfg *config.Config) string {
+	t.Helper()
+	testServer := httptest.NewTLSServer(nil)
+	t.Cleanup(testServer.Close)
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: testServer.Certificate().Raw})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(testServer.TLS.Certificates[0].PrivateKey)
+	if err != nil {
+		t.Fatalf("encode test TLS key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "server.crt")
+	keyFile := filepath.Join(dir, "server.key")
+	for path, contents := range map[string][]byte{certFile: certPEM, keyFile: keyPEM} {
+		if err := os.WriteFile(path, contents, 0600); err != nil {
+			t.Fatalf("write test TLS material %s: %v", path, err)
+		}
+	}
+
+	cfg.MCPTLSEnabled = true
+	cfg.MCPTLSCertFile = certFile
+	cfg.MCPTLSKeyFile = keyFile
+	cfg.MCPTLSCAFile = ""
+	cfg.MCPTLSMinVersion = "1.3"
+	return certFile
 }

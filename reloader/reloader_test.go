@@ -21,11 +21,17 @@ import (
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/configepoch"
 )
 
 type testStateConfigManager struct {
 	cfg     *config.Config
 	updates int
+	epoch   configepoch.Barrier
+}
+
+func (m *testStateConfigManager) BeginConfigUpdate() func() {
+	return m.epoch.BeginUpdate()
 }
 
 func (m *testStateConfigManager) GetConfig() *config.Config {
@@ -38,12 +44,20 @@ func (m *testStateConfigManager) UpdateConfig(cfg *config.Config) {
 }
 
 type testCgroupConfigManager struct {
-	cfg *config.Config
-	err error
+	cfg           *config.Config
+	err           error
+	updateEntered chan struct{}
+	releaseUpdate chan struct{}
 }
 
 func (m *testCgroupConfigManager) UpdateConfig(cfg *config.Config) error {
 	m.cfg = cfg
+	if m.updateEntered != nil {
+		close(m.updateEntered)
+	}
+	if m.releaseUpdate != nil {
+		<-m.releaseUpdate
+	}
 	return m.err
 }
 
@@ -56,7 +70,7 @@ func (c *testMetricsConfigCollector) UpdateConfig(cfg *config.Config) {
 }
 
 func TestNewReloader(t *testing.T) {
-	reloader := NewReloader(nil, nil, nil, nil)
+	reloader := NewReloader(nil, nil, nil)
 
 	if reloader == nil {
 		t.Fatal("NewReloader() returned nil")
@@ -71,13 +85,10 @@ func TestNewReloader(t *testing.T) {
 	if reloader.metricsCollector != nil {
 		t.Error("metricsCollector should be nil")
 	}
-	if reloader.prometheusExporter != nil {
-		t.Error("prometheusExporter should be nil")
-	}
 }
 
 func TestOnConfigChange(t *testing.T) {
-	reloader := NewReloader(nil, nil, nil, nil)
+	reloader := NewReloader(nil, nil, nil)
 
 	if reloader == nil {
 		t.Fatal("NewReloader() returned nil")
@@ -92,20 +103,7 @@ func TestOnConfigChange(t *testing.T) {
 	}
 }
 
-func TestSafeConfigUpdate(t *testing.T) {
-	reloader := NewReloader(nil, nil, nil, nil)
-
-	err := reloader.SafeConfigUpdate(func(c *config.Config) *config.Config {
-		c.PollingInterval = 60
-		return c
-	})
-
-	if err == nil {
-		t.Fatal("SafeConfigUpdate() expected error with nil state manager")
-	}
-}
-
-func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) {
+func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T) {
 	current := config.DefaultConfig()
 	current.EnablePrometheus = true
 	current.PrometheusMetricsBindHost = "127.0.0.1"
@@ -151,15 +149,16 @@ func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) 
 		stateManager,
 		cgroupManager,
 		metricsCollector,
-		nil,
 		func(cfg *config.Config) error {
 			hookConfig = cfg
 			return nil
 		},
 	)
 
-	if err := reloader.OnConfigChange(requested); err != nil {
-		t.Fatalf("OnConfigChange() error: %v", err)
+	err := reloader.OnConfigChange(requested)
+	var restartErr *config.RestartRequiredError
+	if !errors.As(err, &restartErr) {
+		t.Fatalf("OnConfigChange() error = %v, want RestartRequiredError", err)
 	}
 
 	if requested.CPUThreshold != 88 {
@@ -197,6 +196,56 @@ func TestOnConfigChangeDefersRestartFieldsAndAppliesRuntimeFields(t *testing.T) 
 	}
 }
 
+func TestOnConfigChangeBlocksCyclesUntilEveryConsumerHasOneEpoch(t *testing.T) {
+	current := config.DefaultConfig()
+	requested := config.DefaultConfig()
+	requested.ProcessExcludeList = []string{"new-policy"}
+
+	stateManager := &testStateConfigManager{cfg: current}
+	cgroupManager := &testCgroupConfigManager{
+		updateEntered: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	metricsCollector := &testMetricsConfigCollector{cfg: current}
+	reloader := NewReloader(stateManager, cgroupManager, metricsCollector)
+
+	reloadDone := make(chan error)
+	go func() {
+		reloadDone <- reloader.OnConfigChange(requested)
+	}()
+	<-cgroupManager.updateEntered
+
+	type observedEpoch struct {
+		state   *config.Config
+		cgroup  *config.Config
+		metrics *config.Config
+	}
+	cycleDone := make(chan observedEpoch)
+	go func() {
+		leaveEpoch := stateManager.epoch.Enter()
+		defer leaveEpoch()
+		cycleDone <- observedEpoch{
+			state:   stateManager.cfg,
+			cgroup:  cgroupManager.cfg,
+			metrics: metricsCollector.cfg,
+		}
+	}()
+
+	select {
+	case epoch := <-cycleDone:
+		t.Fatalf("cycle entered during a partial update: %+v", epoch)
+	default:
+	}
+	close(cgroupManager.releaseUpdate)
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("OnConfigChange() error: %v", err)
+	}
+	epoch := <-cycleDone
+	if epoch.state != requested || epoch.cgroup != requested || epoch.metrics != requested {
+		t.Fatalf("cycle observed mixed epoch: %+v", epoch)
+	}
+}
+
 func TestOnConfigChangeContinuesAfterComponentError(t *testing.T) {
 	current := config.DefaultConfig()
 	requested := config.DefaultConfig()
@@ -210,7 +259,6 @@ func TestOnConfigChangeContinuesAfterComponentError(t *testing.T) {
 		stateManager,
 		cgroupManager,
 		metricsCollector,
-		nil,
 		func(*config.Config) error {
 			hookCalled = true
 			return nil

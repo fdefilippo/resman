@@ -36,7 +36,7 @@ func (a *App) WithCgroupManager() *App {
 		fmt.Fprintf(os.Stderr, "  3. Reboot and verify: cat /sys/fs/cgroup/cgroup.controllers\n")
 		fmt.Fprintf(os.Stderr, "  4. Verify PSI if PSI_EVENT_DRIVEN=true: ls /proc/pressure\n")
 		fmt.Fprintf(os.Stderr, "  5. Check permissions on %s\n", a.cfg.CgroupRoot)
-		a.err = err
+		a.err = classifyCgroupStartupError(err)
 		return a
 	}
 	if err := cgroupMgr.RecoverExistingCgroups(); err != nil {
@@ -51,7 +51,15 @@ func (a *App) WithCgroupManager() *App {
 	return a
 }
 
-// WithMetricsCollector inizializza il collector delle metriche.
+func classifyCgroupStartupError(err error) error {
+	wrapped := fmt.Errorf("initialize cgroup manager: %w", err)
+	if cgroup.IsRequiredCapabilityError(err) {
+		return NewPermanentStartupError(wrapped)
+	}
+	return wrapped
+}
+
+// WithMetricsCollector initializes the metrics collector.
 func (a *App) WithMetricsCollector() *App {
 	if a.err != nil {
 		return a
@@ -65,10 +73,11 @@ func (a *App) WithMetricsCollector() *App {
 		return a
 	}
 	a.metricsCollector = metricsCollector
+	a.cpuSamplingCadence = metricsCollector
 	return a
 }
 
-// WithDatabase inizializza il database metriche se abilitato.
+// WithDatabase initializes metrics persistence when enabled.
 func (a *App) WithDatabase() *App {
 	if a.err != nil {
 		return a
@@ -91,8 +100,8 @@ func (a *App) WithDatabase() *App {
 		if idx := strings.LastIndex(a.cfg.MetricsDBPath, "/"); idx > 0 {
 			dbDir = a.cfg.MetricsDBPath[:idx]
 		}
-		fmt.Fprintf(os.Stderr, "  1. Ensure directory exists: mkdir -p %s\n", dbDir)
-		fmt.Fprintf(os.Stderr, "  2. Check write permissions\n")
+		fmt.Fprintf(os.Stderr, "  1. Ensure %s is owned by UID %d, writable, mode 0700, and below a stable non-symlink hierarchy\n", dbDir, os.Geteuid())
+		fmt.Fprintf(os.Stderr, "  2. Ensure the database and existing -wal/-shm sidecars are regular files owned by UID %d with mode 0600\n", os.Geteuid())
 		fmt.Fprintf(os.Stderr, "  3. Or disable with METRICS_DB_ENABLED=false\n")
 		a.cfg.MetricsDBEnabled = false
 		return a
@@ -108,11 +117,6 @@ func (a *App) WithDatabase() *App {
 		"write_interval", a.cfg.MetricsDBWriteInterval,
 	)
 
-	a.metricsCollector.SetUsernameCacheTTL(time.Duration(a.cfg.UsernameCacheTTL) * time.Minute)
-	a.logger.Info("Username cache configured",
-		"ttl_minutes", a.cfg.UsernameCacheTTL,
-	)
-
 	if deleted, err := dbManager.CleanupOldData(a.cfg.MetricsDBRetentionDays); err != nil {
 		a.logger.Warn("Failed to apply metrics database retention at startup",
 			"retention_days", a.cfg.MetricsDBRetentionDays,
@@ -125,7 +129,7 @@ func (a *App) WithDatabase() *App {
 	return a
 }
 
-// WithPrometheus inizializza l'exporter Prometheus se abilitato.
+// WithPrometheus initializes the Prometheus exporter when enabled.
 func (a *App) WithPrometheus() *App {
 	if a.err != nil {
 		return a
@@ -181,7 +185,7 @@ func (a *App) WithPrometheus() *App {
 	return a
 }
 
-// WithStateManager inizializza il decision engine.
+// WithStateManager initializes the decision engine.
 func (a *App) WithStateManager() *App {
 	if a.err != nil {
 		return a
@@ -198,13 +202,13 @@ func (a *App) WithStateManager() *App {
 	return a
 }
 
-// WithConfigWatcher abilita il reload automatico della configurazione.
+// WithConfigWatcher enables automatic configuration reloads.
 func (a *App) WithConfigWatcher() *App {
 	if a.err != nil || a.configPath == "" {
 		return a
 	}
 
-	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.prometheusExporter, a.applyReloadedConfig)
+	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.applyReloadedConfig)
 	configWatcher, err := config.NewWatcher(a.configPath, a.currentConfig(), reloader)
 	if err != nil {
 		a.logger.Warn("Failed to create config watcher, continuing without auto-reload",
@@ -228,7 +232,7 @@ func (a *App) WithConfigWatcher() *App {
 	return a
 }
 
-// WithMCPServer avvia il server MCP se abilitato.
+// WithMCPServer starts the MCP server when enabled.
 func (a *App) WithMCPServer() *App {
 	if a.err != nil {
 		return a
@@ -240,24 +244,26 @@ func (a *App) WithMCPServer() *App {
 		return a
 	}
 
-	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager)
+	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager, a.configWatcher)
 	if err != nil {
 		a.logger.Error("Failed to initialize MCP server", "error", err)
-		fmt.Fprintf(os.Stderr, "\nWarning: Failed to initialize MCP server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "MCP features disabled. To fix:\n")
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize MCP server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Daemon startup aborted. To fix:\n")
 		fmt.Fprintf(os.Stderr, "  1. Check configuration\n")
 		fmt.Fprintf(os.Stderr, "  2. Or disable: MCP_ENABLED=false\n")
+		a.err = NewPermanentStartupError(fmt.Errorf("initialize MCP server: %w", err))
 		return a
 	}
 
 	if err := mcpServer.Start(a.ctx); err != nil {
 		a.logger.Error("Failed to start MCP server", "error", err)
-		fmt.Fprintf(os.Stderr, "\nWarning: Failed to start MCP server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "MCP server unavailable. Check:\n")
+		fmt.Fprintf(os.Stderr, "\nFailed to start MCP server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Daemon startup aborted. Check:\n")
 		fmt.Fprintf(os.Stderr, "  1. Transport type: %s\n", cfg.MCPTransport)
 		if cfg.MCPTransport == "http" {
 			fmt.Fprintf(os.Stderr, "  2. Port availability: %d\n", cfg.MCPHTTPPort)
 		}
+		a.err = fmt.Errorf("start MCP server: %w", err)
 		return a
 	}
 

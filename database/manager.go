@@ -19,60 +19,72 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// UserMetricsRecord rappresenta un record delle metriche utente
+// UserMetricsRecord represents one persisted user metrics sample.
 type UserMetricsRecord struct {
-	UID              int
-	Username         string
-	CPUUsagePercent  float64
-	MemoryUsageBytes int64
-	ProcessCount     int
-	CgroupPath       string
-	CPUQuota         string
-	IsLimited        bool
-	Timestamp        time.Time
+	UID               int
+	Username          string
+	CPUUsagePercent   float64
+	MemoryUsageBytes  int64
+	ProcessCount      int
+	CgroupPath        string
+	CPUQuota          string
+	EligibleForCPU    bool
+	EligibleForRAM    bool
+	EligibleForIO     bool
+	CPULimitRequested bool
+	CPULimitActive    bool
+	RAMLimitRequested bool
+	RAMLimitActive    bool
+	IOLimitRequested  bool
+	IOLimitActive     bool
+	Timestamp         time.Time
 }
 
-// SystemMetricsRecord rappresenta un record delle metriche di sistema
+// SystemMetricsRecord represents one persisted system metrics sample.
 type SystemMetricsRecord struct {
-	TotalCPUUsagePercent float64
-	TotalCores           int
-	SystemLoad           float64
-	LimitsActive         bool
-	LimitedUsersCount    int
-	Timestamp            time.Time
+	TotalCPUUsagePercent         float64
+	TotalCores                   int
+	SystemLoad                   float64
+	CPULimitsActive              bool
+	ResourceLimitsActive         bool
+	AnyLimitsActive              bool
+	CPUActivelyLimitedUsersCount int
+	ActivelyLimitedUsersCount    int
+	Timestamp                    time.Time
 }
 
-// UserSummary rappresenta le statistiche aggregate per utente
+// UserSummary contains aggregate metrics for one user and time range.
 type UserSummary struct {
-	UID                int     `json:"uid"`
-	Username           string  `json:"username"`
-	PeriodStart        string  `json:"period_start"`
-	PeriodEnd          string  `json:"period_end"`
-	CPUAvg             float64 `json:"cpu_avg"`
-	CPUMin             float64 `json:"cpu_min"`
-	CPUMax             float64 `json:"cpu_max"`
-	MemoryAvg          float64 `json:"memory_avg"`
-	MemoryMin          float64 `json:"memory_min"`
-	MemoryMax          float64 `json:"memory_max"`
-	ProcessCountAvg    float64 `json:"process_count_avg"`
-	ProcessCountMin    float64 `json:"process_count_min"`
-	ProcessCountMax    float64 `json:"process_count_max"`
-	LimitedTimePercent float64 `json:"limited_time_percent"`
-	Samples            int     `json:"samples"`
+	UID                       int     `json:"uid"`
+	Username                  string  `json:"username"`
+	PeriodStart               string  `json:"period_start"`
+	PeriodEnd                 string  `json:"period_end"`
+	CPUAvg                    float64 `json:"cpu_avg"`
+	CPUMin                    float64 `json:"cpu_min"`
+	CPUMax                    float64 `json:"cpu_max"`
+	MemoryAvg                 float64 `json:"memory_avg"`
+	MemoryMin                 float64 `json:"memory_min"`
+	MemoryMax                 float64 `json:"memory_max"`
+	ProcessCountAvg           float64 `json:"process_count_avg"`
+	ProcessCountMin           float64 `json:"process_count_min"`
+	ProcessCountMax           float64 `json:"process_count_max"`
+	CPULimitActiveTimePercent float64 `json:"cpu_limit_active_time_percent"`
+	Samples                   int     `json:"samples"`
 }
 
-// DatabaseInfo rappresenta le informazioni sul database
+// DatabaseInfo describes the metrics database.
 type DatabaseInfo struct {
 	Path               string  `json:"path"`
 	SizeBytes          int64   `json:"size_bytes"`
@@ -85,34 +97,38 @@ type DatabaseInfo struct {
 	UsersTracked       int64   `json:"users_tracked"`
 }
 
-// DatabaseManager gestisce il database SQLite delle metriche
+// DatabaseManager manages the SQLite metrics database.
 type DatabaseManager struct {
-	db     *sql.DB
-	mu     sync.RWMutex
-	dbPath string
+	db              *sql.DB
+	dbGate          operationgate.Gate
+	dbPath          string
+	beforeOperation func()
 }
 
 const (
+	metricsSchemaVersion   = 3
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
-                              process_count, cgroup_path, cpu_quota, is_limited)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+							  process_count, cgroup_path, cpu_quota, eligible_for_cpu,
+							  eligible_for_ram, eligible_for_io, cpu_limit_requested,
+							  cpu_limit_active, ram_limit_requested, ram_limit_active,
+							  io_limit_requested, io_limit_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	insertSystemMetricsQuery = `
-    INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
-                                system_load, limits_active, limited_users_count)
-    VALUES (?, ?, ?, ?, ?, ?)
+	INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
+								system_load, cpu_limits_active, resource_limits_active,
+								any_limits_active, cpu_actively_limited_users_count,
+								actively_limited_users_count)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
 
-// NewDatabaseManager crea un nuovo DatabaseManager
+// NewDatabaseManager creates a metrics database manager.
 func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
-	// Assicura che la directory esista
-	dir := filepath.Dir(dbPath)
-	if dir != ":" { // Skip per :memory:
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
-		}
+	storage, err := prepareSQLiteStorage(dbPath)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("sqlite3", sqliteDSN(dbPath))
@@ -120,8 +136,8 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 		return nil, fmt.Errorf("failed to open SQLite database at %s: %w", dbPath, err)
 	}
 
-	// Configura il database per performance migliori
-	db.SetMaxOpenConns(1) // SQLite non supporta connessioni multiple in scrittura
+	// Configure SQLite for serialized writes and bounded connection reuse.
+	db.SetMaxOpenConns(1) // SQLite does not support concurrent writers here.
 	db.SetMaxIdleConns(1)
 	if lifetime := connectionMaxLifetime(dbPath); lifetime > 0 {
 		db.SetConnMaxLifetime(lifetime)
@@ -132,10 +148,22 @@ func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
 		dbPath: dbPath,
 	}
 
-	// Inizializza lo schema
+	// Initialize or validate the schema before publishing the manager.
 	if err := manager.InitSchema(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
+		startupErr := fmt.Errorf("failed to initialize database schema at %s: %w", dbPath, err)
+		if secureErr := storage.secureRuntimeArtifacts(); secureErr != nil {
+			startupErr = errors.Join(startupErr, secureErr)
+		}
+		if closeErr := db.Close(); closeErr != nil {
+			startupErr = errors.Join(startupErr, fmt.Errorf("failed to close database after startup rejection: %w", closeErr))
+		}
+		return nil, startupErr
+	}
+	if err := storage.secureRuntimeArtifacts(); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to close database after storage protection failure: %w", closeErr))
+		}
+		return nil, err
 	}
 
 	return manager, nil
@@ -166,17 +194,32 @@ func sqliteDSN(dbPath string) string {
 	return dsn.String()
 }
 
-// InitSchema crea le tabelle se non esistono
+// InitSchema creates or validates the current metrics schema.
 func (m *DatabaseManager) InitSchema() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
+
+	version, err := m.schemaVersion()
+	if err != nil {
+		return err
+	}
+	hasMetricsTables, err := m.hasMetricsTables()
+	if err != nil {
+		return err
+	}
+	if version == 0 && hasMetricsTables {
+		return m.incompatibleSchemaError("legacy unversioned schema")
+	}
+	if version != 0 && version != metricsSchemaVersion {
+		return m.incompatibleSchemaError(fmt.Sprintf("schema version %d", version))
+	}
 
 	if err := m.ensureIncrementalAutoVacuum(); err != nil {
 		return err
 	}
 
 	schema := `
-    -- Tabella per le metriche degli utenti
+    -- Per-user metrics and explicit policy/runtime state.
     CREATE TABLE IF NOT EXISTS user_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -187,21 +230,32 @@ func (m *DatabaseManager) InitSchema() error {
         process_count INTEGER NOT NULL,
         cgroup_path TEXT,
         cpu_quota TEXT,
-        is_limited BOOLEAN DEFAULT FALSE
+        eligible_for_cpu BOOLEAN NOT NULL,
+        eligible_for_ram BOOLEAN NOT NULL,
+        eligible_for_io BOOLEAN NOT NULL,
+        cpu_limit_requested BOOLEAN NOT NULL,
+        cpu_limit_active BOOLEAN NOT NULL,
+        ram_limit_requested BOOLEAN NOT NULL,
+        ram_limit_active BOOLEAN NOT NULL,
+        io_limit_requested BOOLEAN NOT NULL,
+        io_limit_active BOOLEAN NOT NULL
     );
 
-    -- Tabella per le metriche di sistema
+    -- System-wide observation and explicit enforcement state.
     CREATE TABLE IF NOT EXISTS system_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_cpu_usage_percent REAL NOT NULL,
         total_cores INTEGER NOT NULL,
         system_load REAL,
-        limits_active BOOLEAN DEFAULT FALSE,
-        limited_users_count INTEGER
+		cpu_limits_active BOOLEAN NOT NULL,
+		resource_limits_active BOOLEAN NOT NULL,
+		any_limits_active BOOLEAN NOT NULL,
+		cpu_actively_limited_users_count INTEGER NOT NULL,
+		actively_limited_users_count INTEGER NOT NULL
     );
 
-    -- Indici per performance
+    -- Query indexes.
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid ON user_metrics(uid);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid_timestamp ON user_metrics(uid, timestamp);
@@ -212,7 +266,117 @@ func (m *DatabaseManager) InitSchema() error {
 	if _, err := m.db.Exec(schema); err != nil {
 		return err
 	}
+	if version == 0 {
+		if _, err := m.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion)); err != nil {
+			return fmt.Errorf("failed to record metrics schema version %d: %w", metricsSchemaVersion, err)
+		}
+	}
+	if err := m.validateUserMetricsSchema(); err != nil {
+		return err
+	}
+	if err := m.validateSystemMetricsSchema(); err != nil {
+		return err
+	}
 	return m.normalizeStoredTimestamps()
+}
+
+func (m *DatabaseManager) schemaVersion() (int, error) {
+	var version int
+	if err := m.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, fmt.Errorf("failed to read metrics database schema version: %w", err)
+	}
+	return version, nil
+}
+
+func (m *DatabaseManager) hasMetricsTables() (bool, error) {
+	var count int
+	if err := m.db.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name IN ('user_metrics', 'system_metrics')
+	`).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to inspect metrics database tables: %w", err)
+	}
+	return count > 0, nil
+}
+
+func (m *DatabaseManager) validateUserMetricsSchema() error {
+	rows, err := m.db.Query("PRAGMA table_info(user_metrics)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect user_metrics schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("failed to scan user_metrics schema: %w", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed while inspecting user_metrics schema: %w", err)
+	}
+	if columns["is_limited"] {
+		return m.incompatibleSchemaError("ambiguous is_limited column")
+	}
+	for _, required := range []string{
+		"eligible_for_cpu", "eligible_for_ram", "eligible_for_io",
+		"cpu_limit_requested", "cpu_limit_active", "ram_limit_requested",
+		"ram_limit_active", "io_limit_requested", "io_limit_active",
+	} {
+		if !columns[required] {
+			return m.incompatibleSchemaError(fmt.Sprintf("missing required column %s", required))
+		}
+	}
+	return nil
+}
+
+func (m *DatabaseManager) validateSystemMetricsSchema() error {
+	rows, err := m.db.Query("PRAGMA table_info(system_metrics)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect system_metrics schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("failed to scan system_metrics schema: %w", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed while inspecting system_metrics schema: %w", err)
+	}
+	for _, ambiguous := range []string{"limits_active", "limited_users_count"} {
+		if columns[ambiguous] {
+			return m.incompatibleSchemaError(fmt.Sprintf("ambiguous %s column", ambiguous))
+		}
+	}
+	for _, required := range []string{
+		"cpu_limits_active", "resource_limits_active", "any_limits_active",
+		"cpu_actively_limited_users_count", "actively_limited_users_count",
+	} {
+		if !columns[required] {
+			return m.incompatibleSchemaError(fmt.Sprintf("missing required column %s", required))
+		}
+	}
+	return nil
+}
+
+func (m *DatabaseManager) incompatibleSchemaError(found string) error {
+	return fmt.Errorf(
+		"incompatible metrics database schema at %s: found %s; delete or move the database and restart to recreate schema version %d",
+		m.dbPath,
+		found,
+		metricsSchemaVersion,
+	)
 }
 
 func (m *DatabaseManager) ensureIncrementalAutoVacuum() error {
@@ -314,20 +478,23 @@ func (m *DatabaseManager) normalizeStoredTimestamps() error {
 	return nil
 }
 
-// WriteUserMetrics inserisce un record delle metriche utente
+// WriteUserMetrics inserts one per-user metrics record.
 func (m *DatabaseManager) WriteUserMetrics(record *UserMetricsRecord) error {
 	return m.WriteMetricsBatch(nil, []*UserMetricsRecord{record})
 }
 
-// WriteSystemMetrics inserisce un record delle metriche di sistema
+// WriteSystemMetrics inserts one system metrics record.
 func (m *DatabaseManager) WriteSystemMetrics(record *SystemMetricsRecord) error {
 	return m.WriteMetricsBatch(record, nil)
 }
 
 // WriteMetricsBatch writes one complete collection cycle in a single transaction.
 func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users []*UserMetricsRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
+	if m.beforeOperation != nil {
+		m.beforeOperation()
+	}
 
 	tx, err := m.db.Begin()
 	if err != nil {
@@ -344,8 +511,11 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 			system.TotalCPUUsagePercent,
 			system.TotalCores,
 			system.SystemLoad,
-			system.LimitsActive,
-			system.LimitedUsersCount,
+			system.CPULimitsActive,
+			system.ResourceLimitsActive,
+			system.AnyLimitsActive,
+			system.CPUActivelyLimitedUsersCount,
+			system.ActivelyLimitedUsersCount,
 		); err != nil {
 			rollback()
 			return fmt.Errorf("failed to insert system metrics batch record: %w", err)
@@ -373,7 +543,15 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 				record.ProcessCount,
 				record.CgroupPath,
 				record.CPUQuota,
-				record.IsLimited,
+				record.EligibleForCPU,
+				record.EligibleForRAM,
+				record.EligibleForIO,
+				record.CPULimitRequested,
+				record.CPULimitActive,
+				record.RAMLimitRequested,
+				record.RAMLimitActive,
+				record.IOLimitRequested,
+				record.IOLimitActive,
 			); err != nil {
 				_ = stmt.Close()
 				rollback()
@@ -392,14 +570,17 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 	return nil
 }
 
-// GetUserHistory recupera lo storico delle metriche per un utente
+// GetUserHistory returns persisted metrics for one user and time range.
 func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, limit int) ([]UserMetricsRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
-           process_count, cgroup_path, cpu_quota, is_limited
+		   process_count, cgroup_path, cpu_quota, eligible_for_cpu,
+		   eligible_for_ram, eligible_for_io, cpu_limit_requested,
+		   cpu_limit_active, ram_limit_requested, ram_limit_active,
+		   io_limit_requested, io_limit_active
     FROM user_metrics
     WHERE uid = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp DESC
@@ -417,7 +598,9 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 		var r UserMetricsRecord
 		err := rows.Scan(&r.Timestamp, &r.UID, &r.Username, &r.CPUUsagePercent,
 			&r.MemoryUsageBytes, &r.ProcessCount, &r.CgroupPath,
-			&r.CPUQuota, &r.IsLimited)
+			&r.CPUQuota, &r.EligibleForCPU, &r.EligibleForRAM, &r.EligibleForIO,
+			&r.CPULimitRequested, &r.CPULimitActive, &r.RAMLimitRequested,
+			&r.RAMLimitActive, &r.IOLimitRequested, &r.IOLimitActive)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user history record for UID %d: %w", uid, err)
 		}
@@ -429,8 +612,8 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 
 // ResolveUserUID finds the unique UID associated with a username in a time range.
 func (m *DatabaseManager) ResolveUserUID(username string, startTime, endTime time.Time) (int, bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	rows, err := m.db.Query(`
     SELECT DISTINCT uid
@@ -465,14 +648,15 @@ func (m *DatabaseManager) ResolveUserUID(username string, startTime, endTime tim
 	}
 }
 
-// GetSystemHistory recupera lo storico delle metriche di sistema
+// GetSystemHistory returns persisted system metrics for a time range.
 func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit int) ([]SystemMetricsRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT timestamp, total_cpu_usage_percent, total_cores, system_load,
-           limits_active, limited_users_count
+		   cpu_limits_active, resource_limits_active, any_limits_active,
+		   cpu_actively_limited_users_count, actively_limited_users_count
     FROM system_metrics
     WHERE timestamp BETWEEN ? AND ?
     ORDER BY timestamp DESC
@@ -489,7 +673,9 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	for rows.Next() {
 		var r SystemMetricsRecord
 		err := rows.Scan(&r.Timestamp, &r.TotalCPUUsagePercent, &r.TotalCores,
-			&r.SystemLoad, &r.LimitsActive, &r.LimitedUsersCount)
+			&r.SystemLoad, &r.CPULimitsActive, &r.ResourceLimitsActive,
+			&r.AnyLimitsActive, &r.CPUActivelyLimitedUsersCount,
+			&r.ActivelyLimitedUsersCount)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan system history record: %w", err)
 		}
@@ -499,10 +685,10 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	return records, rows.Err()
 }
 
-// GetUserSummary recupera le statistiche aggregate per un utente
+// GetUserSummary returns aggregate persisted metrics for one user and time range.
 func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) (*UserSummary, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	query := `
     SELECT
@@ -519,7 +705,7 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
         AVG(process_count) as process_count_avg,
         MIN(process_count) as process_count_min,
         MAX(process_count) as process_count_max,
-        CAST(SUM(CASE WHEN is_limited THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100 as limited_time_percent,
+		CAST(SUM(CASE WHEN cpu_limit_active THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100 as cpu_limit_active_time_percent,
         COUNT(*) as samples
     FROM user_metrics
     WHERE uid = ? AND timestamp BETWEEN ? AND ?
@@ -532,7 +718,7 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
 		&summary.CPUAvg, &summary.CPUMin, &summary.CPUMax,
 		&summary.MemoryAvg, &summary.MemoryMin, &summary.MemoryMax,
 		&summary.ProcessCountAvg, &summary.ProcessCountMin, &summary.ProcessCountMax,
-		&summary.LimitedTimePercent, &summary.Samples,
+		&summary.CPULimitActiveTimePercent, &summary.Samples,
 	)
 
 	if err == sql.ErrNoRows {
@@ -546,17 +732,17 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
 	return &summary, err
 }
 
-// GetDatabaseInfo recupera le informazioni sul database
+// GetDatabaseInfo returns database size and retained metrics statistics.
 func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	info := &DatabaseInfo{
 		Path:          m.dbPath,
 		RetentionDays: retentionDays,
 	}
 
-	// Dimensione del file
+	// Read the file size.
 	if m.dbPath != ":memory:" {
 		fileInfo, err := os.Stat(m.dbPath)
 		if err != nil {
@@ -601,10 +787,10 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
 	return info, nil
 }
 
-// CleanupOldData rimuove i dati più vecchi di retentionDays
+// CleanupOldData removes records older than retentionDays.
 func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	tx, err := m.db.Begin()
@@ -615,7 +801,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		_ = tx.Rollback()
 	}
 
-	// Rimuovi user metrics vecchi
+	// Remove old user metrics.
 	result, err := tx.Exec("DELETE FROM user_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
 		rollback()
@@ -628,7 +814,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		return 0, fmt.Errorf("failed to get rows affected for user metrics deletion: %w", err)
 	}
 
-	// Rimuovi system metrics vecchi
+	// Remove old system metrics.
 	result, err = tx.Exec("DELETE FROM system_metrics WHERE timestamp < ?", cutoff)
 	if err != nil {
 		rollback()
@@ -653,10 +839,10 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 	return totalDeleted, nil
 }
 
-// Close chiude la connessione al database
+// Close closes the database connection after preceding operations finish.
 func (m *DatabaseManager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	if m.db != nil {
 		if err := m.db.Close(); err != nil {
@@ -667,13 +853,18 @@ func (m *DatabaseManager) Close() error {
 	return nil
 }
 
-// HealthCheck verifica che il database sia accessibile
+// HealthCheck verifies that the database is reachable.
 func (m *DatabaseManager) HealthCheck() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	leaveOperation := m.dbGate.Enter()
+	defer leaveOperation()
 
 	if err := m.db.Ping(); err != nil {
 		return fmt.Errorf("database health check failed at %s: %w", m.dbPath, err)
 	}
 	return nil
+}
+
+// Path returns the configured database path without waiting for database I/O.
+func (m *DatabaseManager) Path() string {
+	return m.dbPath
 }

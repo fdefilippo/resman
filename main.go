@@ -30,11 +30,16 @@ import (
 	"github.com/fdefilippo/resman/logging"
 )
 
-var version = "1.25.1"
+var version = "1.30.8"
+
+const (
+	exitStatusFailure       = 1
+	exitStatusConfiguration = 78
+)
 
 func main() {
-	// Parsing dei flag
-	configPath := flag.String("config", "/etc/resman.conf", "Path to configuration file")
+	// Parse command-line flags.
+	configPath := flag.String("config", config.DefaultConfigPath, "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -43,18 +48,18 @@ func main() {
 		return
 	}
 
-	// Caricamento configurazione iniziale
+	// Load and validate the initial configuration.
 	cfg, err := config.LoadAndValidate(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration from %s: %v\n\n", *configPath, err)
 		fmt.Fprintf(os.Stderr, "Common issues:\n")
-		fmt.Fprintf(os.Stderr, "  - File does not exist: create /etc/resman.conf from example\n")
+		fmt.Fprintf(os.Stderr, "  - File does not exist: create %s from the example\n", config.DefaultConfigPath)
 		fmt.Fprintf(os.Stderr, "  - Invalid syntax: check key=value format\n")
 		fmt.Fprintf(os.Stderr, "  - Invalid values: verify thresholds, ports, and paths\n")
-		os.Exit(1)
+		os.Exit(exitStatusConfiguration)
 	}
 
-	// Inizializzazione logger con valori dalla configurazione
+	// Initialize logging from the effective configuration.
 	logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.UseSyslog)
 	logger := logging.GetLogger()
 
@@ -71,15 +76,15 @@ func main() {
 		logger.Debug("File logging enabled")
 	}
 
-	// Setup graceful shutdown
+	// Set up graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Canale per i segnali
+	// Receive process lifecycle signals.
 	sigChan := make(chan os.Signal, 2)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// Inizializzazione componenti
+	// Initialize application components.
 	logger.Info("Initializing components:")
 
 	err = app.NewApp(cfg, *configPath, ctx, cancel, sigChan, logger).
@@ -92,6 +97,13 @@ func main() {
 		WithMCPServer().
 		Run()
 	if err != nil {
-		os.Exit(1)
+		os.Exit(applicationExitCode(err))
 	}
+}
+
+func applicationExitCode(err error) int {
+	if app.IsPermanentStartupError(err) {
+		return exitStatusConfiguration
+	}
+	return exitStatusFailure
 }

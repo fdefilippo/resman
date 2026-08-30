@@ -22,7 +22,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,7 +34,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,7 +46,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// ioStatsSnapshot tiene traccia dei valori precedenti per calcolare i delta dei counter IO.
+// ioStatsSnapshot tracks previous values used to calculate I/O counter deltas.
 type ioStatsSnapshot struct {
 	ReadBytes  uint64
 	WriteBytes uint64
@@ -51,46 +54,83 @@ type ioStatsSnapshot struct {
 	WriteOps   uint64
 }
 
-// PrometheusExporter esporta metriche in formato Prometheus.
+type prometheusRun struct {
+	server    *http.Server
+	stop      chan struct{}
+	stopOnce  sync.Once
+	serveDone chan error
+	done      chan struct{}
+	err       error
+}
+
+// LimitHookType identifies one bounded limit-hook delivery mechanism.
+type LimitHookType string
+
+const (
+	LimitHookTypeScript LimitHookType = "script"
+	LimitHookTypeHTTP   LimitHookType = "http"
+)
+
+// LimitHookOutcome identifies one bounded terminal hook execution outcome.
+type LimitHookOutcome string
+
+const (
+	LimitHookOutcomeSuccess   LimitHookOutcome = "success"
+	LimitHookOutcomeFailure   LimitHookOutcome = "failure"
+	LimitHookOutcomeTimeout   LimitHookOutcome = "timeout"
+	LimitHookOutcomeCancelled LimitHookOutcome = "cancelled"
+)
+
+// PrometheusExporter exports metrics in Prometheus format.
 type PrometheusExporter struct {
 	cfg      *config.Config
 	logger   *logging.Logger
 	registry *prometheus.Registry
-	server   *http.Server
 
-	// Label fisse per tutte le metriche (da configurazione)
+	// Static labels for every metric (from configuration).
 	hostname   string
 	serverRole string
 
-	// Metriche base (con label hostname e server_role)
-	cpuTotalUsage  prometheus.Gauge
-	memoryUsage    prometheus.Gauge
-	totalMemoryMB  prometheus.Gauge
-	cachedMemoryMB prometheus.Gauge
-	limitedUsers   prometheus.Gauge
+	// Base metrics with hostname and server_role labels.
+	cpuTotalUsage           prometheus.Gauge
+	memoryUsage             prometheus.Gauge
+	totalMemoryMB           prometheus.Gauge
+	cachedMemoryMB          prometheus.Gauge
+	cpuActivelyLimitedUsers prometheus.Gauge
 
-	// ALL USERS metrics (tutti gli utenti non-system, UID >= SYSTEM_UID_MIN)
+	// ALL USERS metrics include every non-system user (UID >= SYSTEM_UID_MIN).
 	allUsersCPUUsage    prometheus.Gauge
 	allUsersMemoryUsage prometheus.Gauge
 	allUsersCount       prometheus.Gauge
 
-	// LIMITED USERS metrics (solo utenti che passano i filtri)
-	limitedUsersCPUUsage    prometheus.Gauge
-	limitedUsersMemoryUsage prometheus.Gauge
-	limitedUsersCount       prometheus.Gauge
+	// Per-resource eligibility metrics use the matching policy lists.
+	cpuEligibleUsersCPUUsage      prometheus.Gauge
+	cpuEligibleUsersMemoryUsage   prometheus.Gauge
+	cpuEligibleUsersCount         prometheus.Gauge
+	ramEligibleUsersMemoryUsage   prometheus.Gauge
+	ramEligibleUsersCount         prometheus.Gauge
+	ioEligibleUsersCount          prometheus.Gauge
+	ioEligibleUsersReadBPS        prometheus.Gauge
+	ioEligibleUsersWriteBPS       prometheus.Gauge
+	ioEligibleUsersReadBlockIOPS  prometheus.Gauge
+	ioEligibleUsersWriteBlockIOPS prometheus.Gauge
 
-	limitsActive prometheus.Gauge
-	systemLoad   prometheus.Gauge
-	totalCores   prometheus.Gauge
-	actionCores  prometheus.Gauge
+	activelyLimitedUsers       prometheus.Gauge
+	cpuLimitsActive            prometheus.Gauge
+	resourceLimitsActive       prometheus.Gauge
+	anyLimitsActive            prometheus.Gauge
+	systemLoad                 prometheus.Gauge
+	totalCores                 prometheus.Gauge
+	actionCores                prometheus.Gauge
+	procFSUnavailableProcesses *prometheus.GaugeVec
 
-	// Metriche con label aggiuntive
+	// Metrics with additional labels.
 	userCPUUsage         *prometheus.GaugeVec
 	userCPUUsageAverage  *prometheus.GaugeVec
 	userCPUUsageEMA      *prometheus.GaugeVec
 	userMemoryUsage      *prometheus.GaugeVec
 	userProcessCount     *prometheus.GaugeVec
-	userLimited          *prometheus.GaugeVec
+	userCPULimitActive   *prometheus.GaugeVec
 	userMemoryHighEvents *prometheus.CounterVec // NEW: memory.high breach events
 	userIOReadBytes      *prometheus.CounterVec
 	userIOWriteBytes     *prometheus.CounterVec
@@ -101,41 +141,49 @@ type PrometheusExporter struct {
 	cgroupCPUPeriod      *prometheus.GaugeVec
 	cgroupMemoryUsage    *prometheus.GaugeVec
 
-	// Track utenti attivi per cleanup metriche
+	// Track active users for metric cleanup.
 	activeUserMetrics    map[string]bool   // "uid_username" -> true
+	activeCgroupPaths    map[string]string // UID -> last published cgroup path
 	prevMemoryHighEvents map[string]uint64 // "uid_username" -> last known value
 	prevIOStats          map[string]ioStatsSnapshot
 	prevUserPatterns     map[string]string // "uid_username" -> previous pattern label
 	usernameResolver     atomic.Value      // func(int) string
 
-	// Metriche counter (solo incremento)
-	limitsActivatedTotal   prometheus.Counter
-	limitsDeactivatedTotal prometheus.Counter
-	controlCyclesTotal     prometheus.Counter
-	controlCycleTriggers   *prometheus.CounterVec
-	psiEventsTotal         *prometheus.CounterVec
-	psiLastEventTimestamp  *prometheus.GaugeVec
-	errorsTotal            *prometheus.CounterVec
+	// Counters are increment-only metrics.
+	cpuLimitsActivatedTotal   prometheus.Counter
+	cpuLimitsDeactivatedTotal prometheus.Counter
+	controlCyclesTotal        prometheus.Counter
+	controlCycleTriggers      *prometheus.CounterVec
+	psiEventsTotal            *prometheus.CounterVec
+	psiLastEventTimestamp     *prometheus.GaugeVec
+	errorsTotal               *prometheus.CounterVec
+	cgroupIngressSkipped      *prometheus.CounterVec
+	limitHookExecutions       *prometheus.CounterVec
 
-	// Metriche histogram per tempi di esecuzione
+	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
 	metricsCollectionDuration prometheus.Histogram
 
 	mu sync.RWMutex
+	// metricsGate serializes delta accounting and label cleanup without
+	// coupling Prometheus writes to the lifecycle state mutex.
+	metricsGate operationgate.Gate
 
-	// Stato interno
+	// Internal state.
 	isRunning bool
-	stopChan  chan struct{}
+	starting  bool
+	startDone chan struct{}
+	run       *prometheusRun
 
-	// Autenticazione
+	shutdownHTTPServer func(*http.Server, context.Context) error
+	closeHTTPServer    func(*http.Server) error
+
+	// Authentication.
 	basicAuthPassword string
 	jwtSecret         []byte
 
 	// TLS
-	tlsCertFile string
-	tlsKeyFile  string
-	tlsCAFile   string
-	tlsConfig   *tls.Config
+	tlsConfig *tls.Config
 }
 
 // SetUsernameResolver configures the shared UID-to-username resolver.
@@ -146,7 +194,7 @@ func (exp *PrometheusExporter) SetUsernameResolver(resolver func(int) string) {
 	exp.usernameResolver.Store(resolver)
 }
 
-// NewPrometheusExporter crea un nuovo esportatore Prometheus.
+// NewPrometheusExporter creates a Prometheus exporter.
 func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	logger := logging.GetLogger()
 
@@ -160,12 +208,12 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		"port", cfg.PrometheusMetricsBindPort,
 	)
 
-	// Verifica che la porta sia valida
+	// Validate the port.
 	if cfg.PrometheusMetricsBindPort <= 0 || cfg.PrometheusMetricsBindPort > 65535 {
 		return nil, fmt.Errorf("invalid Prometheus metrics bind port %d (must be 1-65535)", cfg.PrometheusMetricsBindPort)
 	}
 
-	// Ottieni hostname e server_role
+	// Resolve the hostname and server role.
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
@@ -181,11 +229,17 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		registry:             prometheus.NewRegistry(),
 		hostname:             hostname,
 		serverRole:           serverRole,
-		stopChan:             make(chan struct{}, 1),
 		activeUserMetrics:    make(map[string]bool),
+		activeCgroupPaths:    make(map[string]string),
 		prevMemoryHighEvents: make(map[string]uint64),
 		prevIOStats:          make(map[string]ioStatsSnapshot),
 		prevUserPatterns:     make(map[string]string),
+		shutdownHTTPServer: func(server *http.Server, ctx context.Context) error {
+			return server.Shutdown(ctx)
+		},
+		closeHTTPServer: func(server *http.Server) error {
+			return server.Close()
+		},
 	}
 
 	logger.Info("Prometheus exporter created",
@@ -193,17 +247,17 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 		"server_role", exp.serverRole,
 	)
 
-	// Carica credenziali di autenticazione e certificati TLS
+	// Load authentication credentials and TLS certificates.
 	if err := exp.loadCredentials(); err != nil {
 		return nil, fmt.Errorf("failed to load Prometheus security credentials: %w", err)
 	}
 
-	// Registra metriche
+	// Register application metrics.
 	if err := exp.registerMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to register metrics: %w", err)
 	}
 
-	// Registra metriche standard di Go
+	// Register standard Go metrics.
 	exp.registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -215,7 +269,7 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	return exp, nil
 }
 
-// loadAuthCredentials carica le credenziali di autenticazione e i certificati TLS
+// loadCredentials loads authentication credentials and TLS certificates.
 func (exp *PrometheusExporter) loadCredentials() error {
 	authType := exp.cfg.PrometheusAuthType
 	switch authType {
@@ -224,7 +278,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		return fmt.Errorf("unsupported Prometheus authentication type %q", authType)
 	}
 
-	// Carica password per Basic Auth
+	// Load the Basic Auth password.
 	if authType == "basic" || authType == "both" {
 		if strings.TrimSpace(exp.cfg.PrometheusAuthUsername) == "" {
 			return fmt.Errorf("prometheus basic authentication username is empty")
@@ -243,7 +297,7 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		exp.logger.Info("Basic authentication password loaded")
 	}
 
-	// Carica secret per JWT
+	// Load the JWT secret.
 	if authType == "jwt" || authType == "both" {
 		if exp.cfg.PrometheusJWTSecretFile == "" {
 			return fmt.Errorf("prometheus JWT secret file is not configured")
@@ -259,95 +313,43 @@ func (exp *PrometheusExporter) loadCredentials() error {
 		exp.logger.Info("JWT secret loaded",
 			"issuer", exp.cfg.PrometheusJWTIssuer,
 			"audience", exp.cfg.PrometheusJWTAudience,
-			"expiry_seconds", exp.cfg.PrometheusJWTExpiry,
 		)
 	}
 
-	// Carica certificati TLS
+	// Load TLS certificates.
 	if exp.cfg.PrometheusTLSEnabled {
-		if exp.cfg.PrometheusTLSCertFile == "" || exp.cfg.PrometheusTLSKeyFile == "" {
-			return fmt.Errorf("prometheus TLS certificate and key files must both be configured")
-		}
-		certificate, err := tls.LoadX509KeyPair(exp.cfg.PrometheusTLSCertFile, exp.cfg.PrometheusTLSKeyFile)
+		tlsConfig, err := tlsconfig.BuildServer(tlsconfig.ServerOptions{
+			CertFile:   exp.cfg.PrometheusTLSCertFile,
+			KeyFile:    exp.cfg.PrometheusTLSKeyFile,
+			CAFile:     exp.cfg.PrometheusTLSCAFile,
+			MinVersion: exp.cfg.PrometheusTLSMinVersion,
+		})
 		if err != nil {
-			return fmt.Errorf("failed to load Prometheus TLS certificate and key: %w", err)
+			return fmt.Errorf("loading Prometheus TLS configuration: %w", err)
 		}
-		exp.tlsCertFile = exp.cfg.PrometheusTLSCertFile
-		exp.tlsKeyFile = exp.cfg.PrometheusTLSKeyFile
+		exp.tlsConfig = tlsConfig
 		exp.logger.Info("TLS certificate and key loaded",
 			"cert_file", exp.cfg.PrometheusTLSCertFile,
 			"key_file", exp.cfg.PrometheusTLSKeyFile,
+			"ca_file", exp.cfg.PrometheusTLSCAFile,
 		)
-
-		if exp.cfg.PrometheusTLSCAFile != "" {
-			exp.tlsCAFile = exp.cfg.PrometheusTLSCAFile
-			exp.logger.Info("TLS CA file loaded",
-				"ca_file", exp.cfg.PrometheusTLSCAFile,
-			)
-		}
-
-		tlsConfig, err := buildPrometheusTLSConfig(exp.cfg.PrometheusTLSMinVersion, exp.tlsCAFile)
-		if err != nil {
-			return err
-		}
-		tlsConfig.Certificates = []tls.Certificate{certificate}
-		exp.tlsConfig = tlsConfig
 	}
 
 	return nil
 }
 
-func buildPrometheusTLSConfig(minVersion, caFile string) (*tls.Config, error) {
-	version, err := parseTLSVersion(minVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConfig := &tls.Config{MinVersion: version}
-	if caFile == "" {
-		return tlsConfig, nil
-	}
-
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read TLS CA file %s: %w", caFile, err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("TLS CA file %s does not contain a valid PEM certificate", caFile)
-	}
-	tlsConfig.ClientCAs = clientCAs
-	tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-	return tlsConfig, nil
-}
-
-func parseTLSVersion(version string) (uint16, error) {
-	switch strings.TrimSpace(version) {
-	case "1.0":
-		return tls.VersionTLS10, nil
-	case "1.1":
-		return tls.VersionTLS11, nil
-	case "1.2":
-		return tls.VersionTLS12, nil
-	case "1.3":
-		return tls.VersionTLS13, nil
-	default:
-		return 0, fmt.Errorf("invalid Prometheus TLS minimum version %q: expected 1.0, 1.1, 1.2, or 1.3", version)
-	}
-}
-
-// registerMetrics registra tutte le metriche Prometheus.
+// registerMetrics registers every Prometheus metric exposed by resman.
 func (exp *PrometheusExporter) registerMetrics() error {
-	// Namespace per tutte le metriche
+	// Use one namespace for all application metrics.
 	namespace := "resman"
 
-	// Label fisse per tutte le metriche
+	// Apply the same bounded identity labels to every application metric.
 	staticLabels := prometheus.Labels{
 		"hostname":    exp.hostname,
 		"server_role": exp.serverRole,
 	}
 
-	// === Metriche Gauge (valori correnti) ===
+	// === Gauges (current values) ===
 
 	exp.cpuTotalUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
@@ -377,9 +379,9 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuActivelyLimitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_count",
+		Name:        "cpu_actively_limited_users_count",
 		Help:        "Number of users with CPU limits currently applied",
 		ConstLabels: staticLabels,
 	})
@@ -407,33 +409,103 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	// === LIMITED USERS metrics (only users passing filters) ===
+	// === PER-RESOURCE ELIGIBILITY metrics ===
 
-	exp.limitedUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersCPUUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_cpu_usage_percent",
-		Help:        "Total CPU usage percentage by users passing filters (USER_INCLUDE_LIST && !USER_EXCLUDE_LIST)",
+		Name:        "cpu_eligible_users_cpu_usage_percent",
+		Help:        "Total enforceable CPU usage percentage by users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_memory_usage_bytes",
-		Help:        "Total memory usage in bytes by users passing filters",
+		Name:        "cpu_eligible_users_memory_usage_bytes",
+		Help:        "Total enforceable memory usage in bytes by users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitedUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.cpuEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limited_users_count_filtered",
-		Help:        "Number of users passing filters (can be limited)",
+		Name:        "cpu_eligible_users_count",
+		Help:        "Number of users eligible under CPU policy",
 		ConstLabels: staticLabels,
 	})
 
-	exp.limitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.ramEligibleUsersMemoryUsage = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
-		Name:        "limits_active",
+		Name:        "ram_eligible_users_memory_usage_bytes",
+		Help:        "Total enforceable memory usage in bytes by users eligible under RAM policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ramEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "ram_eligible_users_count",
+		Help:        "Number of users eligible under RAM policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersCount = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_count",
+		Help:        "Number of users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersReadBPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_read_bytes_per_second",
+		Help:        "Total enforceable read byte rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersWriteBPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_write_bytes_per_second",
+		Help:        "Total enforceable write byte rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersReadBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_read_block_operations_per_second",
+		Help:        "Total block-device read operation rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.ioEligibleUsersWriteBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "io_eligible_users_write_block_operations_per_second",
+		Help:        "Total block-device write operation rate by users eligible under I/O policy",
+		ConstLabels: staticLabels,
+	})
+
+	exp.activelyLimitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "actively_limited_users_count",
+		Help:        "Number of distinct users with observed CPU, RAM, or I/O enforcement",
+		ConstLabels: staticLabels,
+	})
+
+	exp.cpuLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "cpu_limits_active",
 		Help:        "Whether CPU limits are currently active (1) or not (0)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.resourceLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "resource_limits_active",
+		Help:        "Whether RAM or I/O limits are currently active (1) or not (0)",
+		ConstLabels: staticLabels,
+	})
+
+	exp.anyLimitsActive = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "any_limits_active",
+		Help:        "Whether CPU, RAM, or I/O limits are currently active (1) or not (0)",
 		ConstLabels: staticLabels,
 	})
 
@@ -458,7 +530,17 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	// === Metriche con label ===
+	exp.procFSUnavailableProcesses = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "procfs_unavailable_processes",
+			Help:        "Current number of observed processes without a required procfs decision input",
+			ConstLabels: staticLabels,
+		},
+		[]string{"access"},
+	)
+
+	// === Metrics with dynamic labels ===
 
 	exp.userCPUUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -490,7 +572,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	// NUOVA METRICA: Memoria per utente
+	// Per-user memory usage.
 	exp.userMemoryUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -501,7 +583,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	// NUOVA METRICA: Numero processi per utente
+	// Per-user process count.
 	exp.userProcessCount = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -512,10 +594,10 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"uid", "username"},
 	)
 
-	exp.userLimited = promauto.With(exp.registry).NewGaugeVec(
+	exp.userCPULimitActive = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
-			Name:        "user_cpu_limited",
+			Name:        "user_cpu_limit_active",
 			Help:        "Whether CPU limit is applied for user (1) or not (0)",
 			ConstLabels: staticLabels,
 		},
@@ -584,50 +666,56 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	exp.cgroupCPUQuota = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_cpu_quota_microseconds",
-			Help:      "CPU quota in microseconds per period (max = unlimited)",
+			Namespace:   namespace,
+			Name:        "cgroup_cpu_quota_microseconds",
+			Help:        "Finite CPU quota in microseconds per period; absent when cpu.max is unlimited or unavailable",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
 	exp.cgroupCPUPeriod = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_cpu_period_microseconds",
-			Help:      "CPU period in microseconds",
+			Namespace:   namespace,
+			Name:        "cgroup_cpu_period_microseconds",
+			Help:        "CPU period in microseconds; absent when cpu.max is unavailable",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
-	// NUOVA METRICA: Memoria cgroup per utente
+	// Per-user cgroup memory usage.
 	exp.cgroupMemoryUsage = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "cgroup_memory_usage_bytes",
-			Help:      "Memory usage in bytes per cgroup (user)",
+			Namespace:   namespace,
+			Name:        "cgroup_memory_usage_bytes",
+			Help:        "Observed memory.current usage in bytes per user cgroup; absent when unavailable",
+			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
 	)
 
-	// === Metriche Counter (solo incremento) ===
+	// === Counters ===
 
-	exp.limitsActivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "limits_activated_total",
-		Help:      "Total number of times CPU limits were activated",
+	exp.cpuLimitsActivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
+		Namespace:   namespace,
+		Name:        "cpu_limits_activated_total",
+		Help:        "Total confirmed transitions from inactive to active CPU limits",
+		ConstLabels: staticLabels,
 	})
 
-	exp.limitsDeactivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "limits_deactivated_total",
-		Help:      "Total number of times CPU limits were deactivated",
+	exp.cpuLimitsDeactivatedTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
+		Namespace:   namespace,
+		Name:        "cpu_limits_deactivated_total",
+		Help:        "Total confirmed transitions from active to inactive CPU limits",
+		ConstLabels: staticLabels,
 	})
 
 	exp.controlCyclesTotal = promauto.With(exp.registry).NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "control_cycles_total",
-		Help:      "Total number of control cycles executed",
+		Namespace:   namespace,
+		Name:        "control_cycles_total",
+		Help:        "Total number of control cycles started",
+		ConstLabels: staticLabels,
 	})
 
 	exp.controlCycleTriggers = promauto.With(exp.registry).NewCounterVec(
@@ -662,228 +750,271 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	exp.errorsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "errors_total",
-			Help:      "Total number of errors by type",
+			Namespace:   namespace,
+			Name:        "errors_total",
+			Help:        "Total number of operational errors by component and bounded error type",
+			ConstLabels: staticLabels,
 		},
 		[]string{"component", "error_type"},
 	)
 
-	// === Metriche Histogram (distribuzione) ===
+	exp.cgroupIngressSkipped = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "cgroup_ingress_skipped_total",
+			Help:        "Total process ingress attempts skipped at the ResMan PID namespace boundary",
+			ConstLabels: staticLabels,
+		},
+		[]string{"reason"},
+	)
+
+	exp.limitHookExecutions = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "limit_hook_executions_total",
+			Help:        "Total completed limit-hook executions by delivery mechanism and terminal outcome",
+			ConstLabels: staticLabels,
+		},
+		[]string{"hook_type", "outcome"},
+	)
+
+	// === Execution-time histograms ===
 
 	exp.controlCycleDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "control_cycle_duration_seconds",
-		Help:      "Duration of control cycles in seconds",
-		Buckets:   prometheus.DefBuckets,
+		Namespace:   namespace,
+		Name:        "control_cycle_duration_seconds",
+		Help:        "Duration of control cycles, including failed and suspended cycles, in seconds",
+		ConstLabels: staticLabels,
+		Buckets:     prometheus.DefBuckets,
 	})
 
 	exp.metricsCollectionDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "metrics_collection_duration_seconds",
-		Help:      "Duration of metrics collection in seconds",
-		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5},
+		Namespace:   namespace,
+		Name:        "metrics_collection_duration_seconds",
+		Help:        "Duration of system metrics collection for control cycles and metrics-only refreshes in seconds",
+		ConstLabels: staticLabels,
+		Buckets:     []float64{.001, .005, .01, .025, .05, .1, .25, .5},
 	})
 
 	return nil
 }
 
-// UpdateMetrics aggiorna i valori delle metriche.
-func (exp *PrometheusExporter) UpdateMetrics(metrics map[string]float64) {
+// SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
+type SystemExporterMetrics struct {
+	TotalCPUUsage                                float64
+	TotalCores                                   int
+	ActionCores                                  int
+	ObservedUsersCPUUsage                        float64
+	ObservedUsersCount                           int
+	ObservedUsersMemoryUsage                     uint64
+	CPUEligibleUsersCPUUsage                     float64
+	CPUEligibleUsersCount                        int
+	CPUEligibleUsersMemoryUsage                  uint64
+	RAMEligibleUsersCount                        int
+	RAMEligibleUsersMemoryUsage                  uint64
+	IOEligibleUsersCount                         int
+	IOEligibleUsersReadBytesPerSecond            float64
+	IOEligibleUsersWriteBytesPerSecond           float64
+	IOEligibleUsersReadBlockOperationsPerSecond  float64
+	IOEligibleUsersWriteBlockOperationsPerSecond float64
+	CPUActivelyLimitedUsersCount                 int
+	ActivelyLimitedUsersCount                    int
+	CPULimitsActive                              bool
+	ResourceLimitsActive                         bool
+	AnyLimitsActive                              bool
+	MemoryUsageMB                                float64
+	TotalMemoryMB                                float64
+	CachedMemoryMB                               float64
+	SystemLoad                                   float64
+	ProcFSExecutableIdentityUnavailableProcesses int
+	ProcFSIOUnavailableProcesses                 int
+}
+
+// UpdateSystemSnapshot publishes one typed system-wide gauge snapshot.
+func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetrics) {
 	if exp == nil {
 		return
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
-
-	// Aggiorna le metriche base
-	for key, value := range metrics {
-		switch {
-		case key == "cpu_total_usage":
-			exp.cpuTotalUsage.Set(value)
-
-		// ALL USERS metrics
-		case key == "all_users_cpu_usage":
-			exp.allUsersCPUUsage.Set(value)
-		case key == "all_users_count":
-			exp.allUsersCount.Set(value)
-
-		// LIMITED USERS metrics
-		case key == "limited_users":
-			exp.limitedUsers.Set(value)
-		case key == "limited_users_cpu_usage":
-			exp.limitedUsersCPUUsage.Set(value)
-		case key == "limited_users_count":
-			exp.limitedUsersCount.Set(value)
-
-		case key == "memory_usage_mb":
-			exp.memoryUsage.Set(value)
-		case key == "total_memory_mb":
-			exp.totalMemoryMB.Set(value)
-		case key == "cached_memory_mb":
-			exp.cachedMemoryMB.Set(value)
-		case key == "all_users_memory_usage":
-			exp.allUsersMemoryUsage.Set(value)
-		case key == "limited_users_memory_usage":
-			exp.limitedUsersMemoryUsage.Set(value)
-		case key == "limits_active":
-			exp.limitsActive.Set(value)
-		case key == "system_load":
-			exp.systemLoad.Set(value)
-		case key == "total_cores":
-			exp.totalCores.Set(value)
-		case strings.HasPrefix(key, "user_cpu_usage_"):
-			// Formato: user_cpu_usage_1000 (dove 1000 è l'UID)
-			parts := strings.Split(key, "_")
-			if len(parts) >= 4 {
-				uid := parts[3]
-				username := exp.getUsernameFromUID(uid)
-				exp.userCPUUsage.WithLabelValues(uid, username).Set(value)
-			}
-		case strings.HasPrefix(key, "user_memory_usage_"):
-			// Formato: user_memory_usage_1000 (dove 1000 è l'UID)
-			parts := strings.Split(key, "_")
-			if len(parts) >= 4 {
-				uid := parts[3]
-				username := exp.getUsernameFromUID(uid)
-				// Converti MB in bytes se necessario
-				bytesValue := value
-				if strings.HasSuffix(key, "_mb") {
-					bytesValue = value * 1024 * 1024
-				}
-				exp.userMemoryUsage.WithLabelValues(uid, username).Set(bytesValue)
-			}
-		case strings.HasPrefix(key, "user_limited_"):
-			// Formato: user_limited_1000
-			parts := strings.Split(key, "_")
-			if len(parts) >= 3 {
-				uid := parts[2]
-				username := exp.getUsernameFromUID(uid)
-				exp.userLimited.WithLabelValues(uid, username).Set(value)
-			}
-		case strings.HasPrefix(key, "cgroup_cpu_quota_"):
-			// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupCPUQuota)
-		case strings.HasPrefix(key, "cgroup_cpu_period_"):
-			// Formato: cgroup_cpu_period_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupCPUPeriod)
-		case strings.HasPrefix(key, "cgroup_memory_usage_"):
-			// Formato: cgroup_memory_usage_1000:/sys/fs/cgroup/...
-			exp.updateCgroupMetric(key, value, exp.cgroupMemoryUsage)
-		case key == "control_cycle_duration":
-			exp.controlCycleDuration.Observe(value)
-		case key == "metrics_collection_duration":
-			exp.metricsCollectionDuration.Observe(value)
-		}
-	}
+	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
+	exp.totalCores.Set(float64(metrics.TotalCores))
+	exp.actionCores.Set(float64(metrics.ActionCores))
+	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
+	exp.allUsersCount.Set(float64(metrics.ObservedUsersCount))
+	exp.allUsersMemoryUsage.Set(float64(metrics.ObservedUsersMemoryUsage))
+	exp.cpuEligibleUsersCPUUsage.Set(metrics.CPUEligibleUsersCPUUsage)
+	exp.cpuEligibleUsersCount.Set(float64(metrics.CPUEligibleUsersCount))
+	exp.cpuEligibleUsersMemoryUsage.Set(float64(metrics.CPUEligibleUsersMemoryUsage))
+	exp.ramEligibleUsersCount.Set(float64(metrics.RAMEligibleUsersCount))
+	exp.ramEligibleUsersMemoryUsage.Set(float64(metrics.RAMEligibleUsersMemoryUsage))
+	exp.ioEligibleUsersCount.Set(float64(metrics.IOEligibleUsersCount))
+	exp.ioEligibleUsersReadBPS.Set(metrics.IOEligibleUsersReadBytesPerSecond)
+	exp.ioEligibleUsersWriteBPS.Set(metrics.IOEligibleUsersWriteBytesPerSecond)
+	exp.ioEligibleUsersReadBlockIOPS.Set(metrics.IOEligibleUsersReadBlockOperationsPerSecond)
+	exp.ioEligibleUsersWriteBlockIOPS.Set(metrics.IOEligibleUsersWriteBlockOperationsPerSecond)
+	exp.cpuActivelyLimitedUsers.Set(float64(metrics.CPUActivelyLimitedUsersCount))
+	exp.activelyLimitedUsers.Set(float64(metrics.ActivelyLimitedUsersCount))
+	exp.cpuLimitsActive.Set(boolMetricValue(metrics.CPULimitsActive))
+	exp.resourceLimitsActive.Set(boolMetricValue(metrics.ResourceLimitsActive))
+	exp.anyLimitsActive.Set(boolMetricValue(metrics.AnyLimitsActive))
+	exp.memoryUsage.Set(metrics.MemoryUsageMB)
+	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
+	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)
+	exp.systemLoad.Set(metrics.SystemLoad)
+	exp.procFSUnavailableProcesses.WithLabelValues(procFSAccessExecutableIdentity).Set(
+		float64(metrics.ProcFSExecutableIdentityUnavailableProcesses),
+	)
+	exp.procFSUnavailableProcesses.WithLabelValues(procFSAccessIODecision).Set(
+		float64(metrics.ProcFSIOUnavailableProcesses),
+	)
 }
 
-// UpdateUserMetrics aggiorna le metriche specifiche per utente.
-func (exp *PrometheusExporter) UpdateUserMetrics(uid int, username string, cpuUsage float64, cpuUsageAverage float64, cpuUsageEMA float64, memoryUsage uint64, processCount int, isLimited bool, cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64) {
+func boolMetricValue(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// UserExporterMetrics contains one typed per-user observation and enforcement snapshot.
+type UserExporterMetrics struct {
+	UID                  int
+	Username             string
+	CPUUsagePercent      float64
+	CPUUsageAverage      float64
+	CPUUsageEMA          float64
+	MemoryUsageBytes     uint64
+	ProcessCount         int
+	CPULimitActive       bool
+	CgroupPath           string
+	CPUQuota             string
+	MemoryHighEvents     uint64
+	ObservedIOReadBytes  uint64
+	ObservedIOWriteBytes uint64
+	ObservedIOReadOps    uint64
+	ObservedIOWriteOps   uint64
+}
+
+// UpdateUserSnapshot updates per-user metrics from one typed snapshot.
+func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 	if exp == nil || exp.registry == nil {
 		return
 	}
 
-	uidStr := strconv.Itoa(uid)
+	uidStr := strconv.Itoa(metrics.UID)
+	username := metrics.Username
 
-	// Se username è vuoto, cerca di ottenerlo (before lock to minimize hold time)
+	// Resolve an empty or numeric username before taking the exporter lock.
 	if username == "" || username == uidStr {
 		username = exp.getUsernameFromUID(uidStr)
 	}
 
-	// Read cgroup memory before acquiring lock (fix #4: avoid file I/O under lock)
-	cgroupMemory := uint64(0)
-	if cgroupPath != "" {
-		cgroupMemory = uint64(exp.getCgroupMemoryUsage(cgroupPath))
+	// Read cgroup memory before acquiring the metrics gate: filesystem I/O must
+	// not delay other metric updates or cleanup.
+	cgroupMemory, cgroupMemoryAvailable := uint64(0), false
+	if metrics.CgroupPath != "" {
+		cgroupMemory, cgroupMemoryAvailable = exp.getCgroupMemoryUsage(metrics.CgroupPath)
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
-	// Marca utente come attivo
+	// Track the user as present in the current metrics set.
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
 	exp.activeUserMetrics[userKey] = true
 
-	// Aggiorna uso CPU dell'utente
-	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(cpuUsage)
-	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(cpuUsageAverage)
-	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(cpuUsageEMA)
+	// Update per-user CPU usage.
+	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(metrics.CPUUsagePercent)
+	exp.userCPUUsageAverage.WithLabelValues(uidStr, username).Set(metrics.CPUUsageAverage)
+	exp.userCPUUsageEMA.WithLabelValues(uidStr, username).Set(metrics.CPUUsageEMA)
 
-	// Aggiorna uso memoria dell'utente (in bytes)
-	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(memoryUsage))
+	// Update per-user memory usage in bytes.
+	exp.userMemoryUsage.WithLabelValues(uidStr, username).Set(float64(metrics.MemoryUsageBytes))
 
-	// Aggiorna numero processi dell'utente
-	exp.userProcessCount.WithLabelValues(uidStr, username).Set(float64(processCount))
+	// Update the per-user process count.
+	exp.userProcessCount.WithLabelValues(uidStr, username).Set(float64(metrics.ProcessCount))
 
-	// Aggiorna stato limite
+	// Publish observed CPU enforcement state.
 	limitedValue := 0.0
-	if isLimited {
+	if metrics.CPULimitActive {
 		limitedValue = 1.0
 	}
-	exp.userLimited.WithLabelValues(uidStr, username).Set(limitedValue)
+	exp.userCPULimitActive.WithLabelValues(uidStr, username).Set(limitedValue)
 
-	// Aggiorna eventi memory.high breach (counter con delta)
+	// Update memory.high breach events by delta.
 	memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 	prev := exp.prevMemoryHighEvents[memoryHighKey]
-	if memoryHighEvents > prev {
-		delta := memoryHighEvents - prev
+	if metrics.MemoryHighEvents > prev {
+		delta := metrics.MemoryHighEvents - prev
 		exp.userMemoryHighEvents.WithLabelValues(uidStr, username).Add(float64(delta))
 	}
-	exp.prevMemoryHighEvents[memoryHighKey] = memoryHighEvents
+	exp.prevMemoryHighEvents[memoryHighKey] = metrics.MemoryHighEvents
 
 	// Update IO statistics (counters with delta)
-	ioKey := fmt.Sprintf("%d_%s", uid, username)
+	ioKey := fmt.Sprintf("%d_%s", metrics.UID, username)
 	prevIO := exp.prevIOStats[ioKey]
-	if ioReadBytes >= prevIO.ReadBytes {
-		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(ioReadBytes - prevIO.ReadBytes))
+	if metrics.ObservedIOReadBytes >= prevIO.ReadBytes {
+		exp.userIOReadBytes.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOReadBytes - prevIO.ReadBytes))
 	}
-	if ioWriteBytes >= prevIO.WriteBytes {
-		exp.userIOWriteBytes.WithLabelValues(uidStr, username).Add(float64(ioWriteBytes - prevIO.WriteBytes))
+	if metrics.ObservedIOWriteBytes >= prevIO.WriteBytes {
+		exp.userIOWriteBytes.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOWriteBytes - prevIO.WriteBytes))
 	}
-	if ioReadOps >= prevIO.ReadOps {
-		exp.userIOReadOps.WithLabelValues(uidStr, username).Add(float64(ioReadOps - prevIO.ReadOps))
+	if metrics.ObservedIOReadOps >= prevIO.ReadOps {
+		exp.userIOReadOps.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOReadOps - prevIO.ReadOps))
 	}
-	if ioWriteOps >= prevIO.WriteOps {
-		exp.userIOWriteOps.WithLabelValues(uidStr, username).Add(float64(ioWriteOps - prevIO.WriteOps))
+	if metrics.ObservedIOWriteOps >= prevIO.WriteOps {
+		exp.userIOWriteOps.WithLabelValues(uidStr, username).Add(float64(metrics.ObservedIOWriteOps - prevIO.WriteOps))
 	}
 	exp.prevIOStats[ioKey] = ioStatsSnapshot{
-		ReadBytes:  ioReadBytes,
-		WriteBytes: ioWriteBytes,
-		ReadOps:    ioReadOps,
-		WriteOps:   ioWriteOps,
+		ReadBytes:  metrics.ObservedIOReadBytes,
+		WriteBytes: metrics.ObservedIOWriteBytes,
+		ReadOps:    metrics.ObservedIOReadOps,
+		WriteOps:   metrics.ObservedIOWriteOps,
 	}
 
-	// Se disponibile, aggiorna le metriche cgroup
-	if cgroupPath != "" {
-		// Aggiorna quota CPU
-		if cpuQuota != "" {
-			quota, period := parseCPUQuota(cpuQuota)
-			if quota >= 0 {
-				exp.cgroupCPUQuota.WithLabelValues(uidStr, cgroupPath).Set(float64(quota))
-			}
-			if period > 0 {
-				exp.cgroupCPUPeriod.WithLabelValues(uidStr, cgroupPath).Set(float64(period))
-			}
-		}
+	previousCgroupPath := exp.activeCgroupPaths[uidStr]
+	if previousCgroupPath != "" && previousCgroupPath != metrics.CgroupPath {
+		exp.deleteCgroupMetricSeries(uidStr, previousCgroupPath)
+	}
+	if metrics.CgroupPath == "" {
+		delete(exp.activeCgroupPaths, uidStr)
+		return
+	}
+	exp.activeCgroupPaths[uidStr] = metrics.CgroupPath
 
-		// Aggiorna uso memoria del cgroup (fix #6: use pre-read value, no redundant file read)
-		exp.cgroupMemoryUsage.WithLabelValues(uidStr, cgroupPath).Set(float64(cgroupMemory))
+	quota, period := parseCPUQuota(metrics.CPUQuota)
+	if period <= 0 {
+		exp.cgroupCPUQuota.DeleteLabelValues(uidStr, metrics.CgroupPath)
+		exp.cgroupCPUPeriod.DeleteLabelValues(uidStr, metrics.CgroupPath)
+	} else {
+		if quota >= 0 {
+			exp.cgroupCPUQuota.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(quota))
+		} else {
+			// A valid max record has a period but no finite quota sample.
+			exp.cgroupCPUQuota.DeleteLabelValues(uidStr, metrics.CgroupPath)
+		}
+		exp.cgroupCPUPeriod.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(period))
+	}
+
+	if cgroupMemoryAvailable {
+		exp.cgroupMemoryUsage.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(cgroupMemory))
+	} else {
+		exp.cgroupMemoryUsage.DeleteLabelValues(uidStr, metrics.CgroupPath)
 	}
 }
 
-// CleanupUserMetrics rimuove le metriche per gli utenti non più attivi.
+// CleanupUserMetrics removes series for users absent from the current snapshot.
 func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	if exp == nil {
 		return
 	}
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
-	// Itera su tutti gli utenti tracciati
+	// Iterate over every tracked user.
 	for userKey := range exp.activeUserMetrics {
-		// Controlla se l'utente è ancora attivo
+		// Validate whether the user remains active.
 		parts := strings.SplitN(userKey, "_", 2)
 		if len(parts) != 2 {
 			continue
@@ -897,15 +1028,15 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			continue
 		}
 
-		// Se l'utente non è più attivo, rimuovi le metriche
+		// Remove every series and local baseline for inactive users.
 		if !activeUids[uid] {
-			// Rimuovi dalle metriche
+			// Remove exported series.
 			exp.userCPUUsage.DeleteLabelValues(uidStr, username)
 			exp.userCPUUsageAverage.DeleteLabelValues(uidStr, username)
 			exp.userCPUUsageEMA.DeleteLabelValues(uidStr, username)
 			exp.userMemoryUsage.DeleteLabelValues(uidStr, username)
 			exp.userProcessCount.DeleteLabelValues(uidStr, username)
-			exp.userLimited.DeleteLabelValues(uidStr, username)
+			exp.userCPULimitActive.DeleteLabelValues(uidStr, username)
 			exp.userMemoryHighEvents.DeleteLabelValues(uidStr, username)
 			exp.userIOReadBytes.DeleteLabelValues(uidStr, username)
 			exp.userIOWriteBytes.DeleteLabelValues(uidStr, username)
@@ -914,14 +1045,18 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			if prevPattern, ok := exp.prevUserPatterns[userKey]; ok {
 				exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
 			}
+			if cgroupPath := exp.activeCgroupPaths[uidStr]; cgroupPath != "" {
+				exp.deleteCgroupMetricSeries(uidStr, cgroupPath)
+				delete(exp.activeCgroupPaths, uidStr)
+			}
 
-			// Rimuovi dalla mappa dei valori precedenti
+			// Remove previous-value baselines.
 			memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
 			delete(exp.prevMemoryHighEvents, memoryHighKey)
 			delete(exp.prevIOStats, memoryHighKey)
 			delete(exp.prevUserPatterns, userKey)
 
-			// Rimuovi dal tracking
+			// Remove presence tracking.
 			delete(exp.activeUserMetrics, userKey)
 
 			exp.logger.Debug("Removed metrics for inactive user",
@@ -932,34 +1067,32 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 	}
 }
 
-// getCgroupMemoryUsage legge l'uso memoria da un cgroup specifico
-func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) int64 {
+// getCgroupMemoryUsage reads memory.current for one cgroup.
+func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) (uint64, bool) {
 	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
-
-	if data, err := os.ReadFile(memoryCurrentFile); err == nil {
-		if usage, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
-			return usage
-		}
+	data, err := os.ReadFile(memoryCurrentFile)
+	if err != nil {
+		return 0, false
 	}
-
-	return 0
+	usage, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return usage, true
 }
 
-// UpdateSystemMetrics aggiorna le metriche di sistema.
-func (exp *PrometheusExporter) UpdateSystemMetrics(totalCores int, actionCores int, systemLoad float64) {
-	if exp == nil {
+// deleteCgroupMetricSeries removes every cgroup gauge for one UID/path tuple.
+// The caller must hold metricsGate.
+func (exp *PrometheusExporter) deleteCgroupMetricSeries(uidStr, cgroupPath string) {
+	if cgroupPath == "" {
 		return
 	}
-
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
-
-	exp.totalCores.Set(float64(totalCores))
-	exp.actionCores.Set(float64(actionCores))
-	exp.systemLoad.Set(systemLoad)
+	exp.cgroupCPUQuota.DeleteLabelValues(uidStr, cgroupPath)
+	exp.cgroupCPUPeriod.DeleteLabelValues(uidStr, cgroupPath)
+	exp.cgroupMemoryUsage.DeleteLabelValues(uidStr, cgroupPath)
 }
 
-// UpdateUserWorkloadPattern aggiorna il pattern rilevato per un utente.
+// UpdateUserWorkloadPattern publishes the detected pattern for one user.
 func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 	if exp == nil || exp.registry == nil || exp.userWorkloadPattern == nil {
 		return
@@ -971,8 +1104,8 @@ func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username strin
 	}
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
 
-	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	leaveMetrics := exp.metricsGate.Enter()
+	defer leaveMetrics()
 
 	if prevPattern, ok := exp.prevUserPatterns[userKey]; ok && prevPattern != pattern {
 		exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
@@ -982,29 +1115,28 @@ func (exp *PrometheusExporter) UpdateUserWorkloadPattern(uid int, username strin
 	exp.prevUserPatterns[userKey] = pattern
 }
 
-// parseCPUQuota estrae quota e period da una stringa "quota period".
+// parseCPUQuota extracts quota and period from a "quota period" value.
 func parseCPUQuota(quotaStr string) (quota int64, period int64) {
 	parts := strings.Fields(quotaStr)
 	if len(parts) != 2 {
 		return -1, -1
 	}
+	parsedPeriod, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || parsedPeriod <= 0 {
+		return -1, -1
+	}
 
 	if parts[0] == "max" {
-		quota = -1 // Indica "max" (illimitato)
-	} else {
-		if val, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
-			quota = val
-		}
+		return -1, parsedPeriod
 	}
-
-	if val, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-		period = val
+	parsedQuota, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || parsedQuota <= 0 {
+		return -1, -1
 	}
-
-	return quota, period
+	return parsedQuota, parsedPeriod
 }
 
-// getUsernameFromUID converte un UID in username.
+// getUsernameFromUID converts a UID into a username.
 func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	uid, err := strconv.Atoi(uidStr)
 	if err != nil {
@@ -1014,7 +1146,7 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 		return resolver(uid)
 	}
 
-	// Prova a leggere da /etc/passwd
+	// Fall back to /etc/passwd.
 	file, err := os.Open("/etc/passwd")
 	if err != nil {
 		return uidStr
@@ -1035,49 +1167,23 @@ func (exp *PrometheusExporter) getUsernameFromUID(uidStr string) string {
 	return uidStr
 }
 
-// updateCgroupMetric aggiorna una metrica cgroup con parsing delle label.
-func (exp *PrometheusExporter) updateCgroupMetric(key string, value float64, metric *prometheus.GaugeVec) {
-	// Formato: cgroup_cpu_quota_1000:/sys/fs/cgroup/resman/user_1000
-	if !strings.Contains(key, ":") {
-		return
-	}
-
-	// Rimuove il prefisso (es: "cgroup_cpu_quota_")
-	prefixEnd := strings.Index(key, "_")
-	if prefixEnd == -1 {
-		return
-	}
-
-	// Estrae UID e path
-	remaining := key[prefixEnd+1:]
-	colonIndex := strings.Index(remaining, ":")
-	if colonIndex == -1 {
-		return
-	}
-
-	uid := remaining[:colonIndex]
-	cgroupPath := remaining[colonIndex+1:]
-
-	metric.WithLabelValues(uid, cgroupPath).Set(value)
-}
-
-// IncrementLimitsActivated incrementa il contatore di attivazioni limiti.
-func (exp *PrometheusExporter) IncrementLimitsActivated() {
+// IncrementCPULimitsActivated records a confirmed inactive-to-active CPU transition.
+func (exp *PrometheusExporter) IncrementCPULimitsActivated() {
 	if exp == nil {
 		return
 	}
-	exp.limitsActivatedTotal.Inc()
+	exp.cpuLimitsActivatedTotal.Inc()
 }
 
-// IncrementLimitsDeactivated incrementa il contatore di disattivazioni limiti.
-func (exp *PrometheusExporter) IncrementLimitsDeactivated() {
+// IncrementCPULimitsDeactivated records a confirmed active-to-inactive CPU transition.
+func (exp *PrometheusExporter) IncrementCPULimitsDeactivated() {
 	if exp == nil {
 		return
 	}
-	exp.limitsDeactivatedTotal.Inc()
+	exp.cpuLimitsDeactivatedTotal.Inc()
 }
 
-// RecordControlCycleTrigger registra la causa che ha avviato un ciclo di controllo.
+// RecordControlCycleTrigger records the source that started a control cycle.
 func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	if exp == nil || exp.controlCycleTriggers == nil {
 		return
@@ -1089,7 +1195,7 @@ func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	exp.controlCycleTriggers.WithLabelValues(trigger).Inc()
 }
 
-// RecordPSIEvent registra un evento PSI ricevuto dal kernel.
+// RecordPSIEvent records a PSI event received from the kernel.
 func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.Time) {
 	if exp == nil || exp.psiEventsTotal == nil || exp.psiLastEventTimestamp == nil {
 		return
@@ -1107,7 +1213,7 @@ func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.
 	exp.psiLastEventTimestamp.WithLabelValues(typ, scope).Set(float64(timestamp.Unix()))
 }
 
-// RecordControlCycleDuration registra la durata di un ciclo di controllo.
+// RecordControlCycleDuration records the duration of one control cycle.
 func (exp *PrometheusExporter) RecordControlCycleDuration(duration time.Duration) {
 	if exp == nil {
 		return
@@ -1115,7 +1221,7 @@ func (exp *PrometheusExporter) RecordControlCycleDuration(duration time.Duration
 	exp.controlCycleDuration.Observe(duration.Seconds())
 }
 
-// RecordMetricsCollectionDuration registra la durata della raccolta metriche.
+// RecordMetricsCollectionDuration records one system metrics collection duration.
 func (exp *PrometheusExporter) RecordMetricsCollectionDuration(duration time.Duration) {
 	if exp == nil {
 		return
@@ -1123,7 +1229,7 @@ func (exp *PrometheusExporter) RecordMetricsCollectionDuration(duration time.Dur
 	exp.metricsCollectionDuration.Observe(duration.Seconds())
 }
 
-// RecordError incrementa il contatore errori per un componente specifico.
+// RecordError records one operational error using a bounded label pair.
 func (exp *PrometheusExporter) RecordError(component, errorType string) {
 	if exp == nil {
 		return
@@ -1131,10 +1237,51 @@ func (exp *PrometheusExporter) RecordError(component, errorType string) {
 	exp.errorsTotal.WithLabelValues(component, errorType).Inc()
 }
 
-// authMiddleware gestisce l'autenticazione per Basic Auth e JWT
+// RecordCgroupIngressSkips records bounded PID namespace guard outcomes.
+func (exp *PrometheusExporter) RecordCgroupIngressSkips(result cgroup.ProcessMoveResult) {
+	if exp == nil {
+		return
+	}
+	if result.PIDNamespaceMismatches > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.PIDNamespaceMismatch)).Add(float64(result.PIDNamespaceMismatches))
+	}
+	if result.PIDNamespaceUnavailable > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.PIDNamespaceUnavailable)).Add(float64(result.PIDNamespaceUnavailable))
+	}
+}
+
+// RecordLimitHookExecution records one terminal hook outcome using bounded labels.
+func (exp *PrometheusExporter) RecordLimitHookExecution(hookType LimitHookType, outcome LimitHookOutcome) {
+	if exp == nil {
+		return
+	}
+	if !validLimitHookType(hookType) || !validLimitHookOutcome(outcome) {
+		exp.logger.Error("Rejected invalid limit hook metric labels",
+			"hook_type", hookType,
+			"outcome", outcome,
+		)
+		return
+	}
+	exp.limitHookExecutions.WithLabelValues(string(hookType), string(outcome)).Inc()
+}
+
+func validLimitHookType(hookType LimitHookType) bool {
+	return hookType == LimitHookTypeScript || hookType == LimitHookTypeHTTP
+}
+
+func validLimitHookOutcome(outcome LimitHookOutcome) bool {
+	switch outcome {
+	case LimitHookOutcomeSuccess, LimitHookOutcomeFailure, LimitHookOutcomeTimeout, LimitHookOutcomeCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// authMiddleware handles Basic Auth and JWT authentication.
 func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Se l'autenticazione è disabilitata, passa direttamente
+		// Pass the request through when authentication is disabled.
 		if exp.cfg.PrometheusAuthType == "none" || exp.cfg.PrometheusAuthType == "" {
 			next.ServeHTTP(w, r)
 			return
@@ -1174,7 +1321,7 @@ func (exp *PrometheusExporter) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// checkBasicAuth verifica le credenziali Basic Auth
+// checkBasicAuth validates Basic Auth credentials.
 func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 	if exp.cfg.PrometheusAuthUsername == "" || exp.basicAuthPassword == "" {
 		return false
@@ -1184,12 +1331,12 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 		return false
 	}
 
-	// Verifica username
+	// Verify the username.
 	if subtle.ConstantTimeCompare([]byte(username), []byte(exp.cfg.PrometheusAuthUsername)) != 1 {
 		return false
 	}
 
-	// Verifica password
+	// Verify the password.
 	if subtle.ConstantTimeCompare([]byte(password), []byte(exp.basicAuthPassword)) != 1 {
 		return false
 	}
@@ -1197,7 +1344,7 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 	return true
 }
 
-// checkJWTAuth verifica il token JWT
+// checkJWTAuth validates a JWT.
 func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	if len(exp.jwtSecret) == 0 {
 		return false
@@ -1207,7 +1354,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 		return false
 	}
 
-	// Estrai il token Bearer
+	// Extract the bearer token.
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		return false
@@ -1215,9 +1362,9 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 
 	tokenString := parts[1]
 
-	// Parse e valida il token
+	// Parse and validate the token.
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Verifica l'algoritmo
+		// Verify the signing algorithm.
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -1230,14 +1377,14 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		// Verifica issuer
+		// Verify the issuer.
 		if exp.cfg.PrometheusJWTIssuer != "" {
 			if issuer, ok := claims["iss"].(string); !ok || issuer != exp.cfg.PrometheusJWTIssuer {
 				return false
 			}
 		}
 
-		// Verifica audience
+		// Verify the audience.
 		if exp.cfg.PrometheusJWTAudience != "" {
 			if audience, ok := claims["aud"].(string); !ok || audience != exp.cfg.PrometheusJWTAudience {
 				return false
@@ -1250,7 +1397,7 @@ func (exp *PrometheusExporter) checkJWTAuth(r *http.Request) bool {
 	return false
 }
 
-// healthHandler gestisce l'endpoint /health
+// healthHandler serves the /health endpoint.
 func (exp *PrometheusExporter) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1260,7 +1407,7 @@ func (exp *PrometheusExporter) healthHandler(w http.ResponseWriter, r *http.Requ
 	)
 }
 
-// rootHandler gestisce l'endpoint root
+// rootHandler serves the root endpoint.
 func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -1274,23 +1421,27 @@ func (exp *PrometheusExporter) rootHandler(w http.ResponseWriter, r *http.Reques
 	_, _ = fmt.Fprintf(w, `<html><body><h1>Resource Manager Metrics%s</h1><p><a href="/metrics">Metrics</a></p><p><a href="/health">Health</a></p></body></html>`, authInfo)
 }
 
-// Start avvia il server HTTP per Prometheus.
+// Start starts the Prometheus HTTP or HTTPS server.
 func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	if exp == nil {
 		return nil
 	}
 
 	exp.mu.Lock()
-	if exp.isRunning {
+	if exp.isRunning || exp.starting {
 		exp.mu.Unlock()
 		return fmt.Errorf("exporter already running")
 	}
-	exp.isRunning = true
+	exp.starting = true
+	exp.startDone = make(chan struct{})
+	// A failed restart must not expose the terminal result of an earlier run.
+	exp.run = nil
 	exp.mu.Unlock()
+	defer exp.finishStartAttempt()
 
 	mux := http.NewServeMux()
 
-	// Handler per le metriche con autenticazione
+	// Metrics handler with authentication.
 	mux.Handle("/metrics", exp.authMiddleware(promhttp.HandlerFor(
 		exp.registry,
 		promhttp.HandlerOpts{
@@ -1299,33 +1450,30 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 		},
 	)))
 
-	// Health check endpoint (senza autenticazione per monitoring)
+	// Health endpoint without authentication for monitoring.
 	mux.HandleFunc("/health", exp.healthHandler)
 
 	// Root endpoint
 	mux.HandleFunc("/", exp.rootHandler)
 
 	addr := fmt.Sprintf("%s:%d", exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
-	exp.server = &http.Server{
+	server := &http.Server{
 		Addr:      addr,
 		Handler:   mux,
 		TLSConfig: exp.tlsConfig,
 	}
 
-	// Configura TLS se abilitato
+	// Configure TLS when enabled.
 	if exp.cfg.PrometheusTLSEnabled {
-		if exp.tlsCertFile == "" || exp.tlsKeyFile == "" {
-			exp.mu.Lock()
-			exp.isRunning = false
-			exp.mu.Unlock()
-			return fmt.Errorf("TLS enabled but certificate or key file not configured")
+		if exp.tlsConfig == nil || len(exp.tlsConfig.Certificates) == 0 {
+			return fmt.Errorf("TLS enabled but server TLS configuration is not loaded")
 		}
 		exp.logger.Info("Starting Prometheus HTTPS server",
 			"address", addr,
 			"auth_type", exp.cfg.PrometheusAuthType,
 			"tls_enabled", exp.cfg.PrometheusTLSEnabled,
 			"tls_min_version", exp.cfg.PrometheusTLSMinVersion,
-			"mtls_enabled", exp.tlsCAFile != "",
+			"mtls_enabled", exp.cfg.PrometheusTLSCAFile != "",
 		)
 	} else {
 		exp.logger.Info("Starting Prometheus HTTP server",
@@ -1337,84 +1485,120 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		exp.mu.Lock()
-		exp.isRunning = false
-		exp.mu.Unlock()
 		return fmt.Errorf("failed to listen for Prometheus metrics on %s: %w", addr, err)
 	}
 
-	// Avvia il server in una goroutine
-	listenErr := make(chan error, 1)
+	run := &prometheusRun{
+		server:    server,
+		stop:      make(chan struct{}),
+		serveDone: make(chan error, 1),
+		done:      make(chan struct{}),
+	}
+	exp.mu.Lock()
+	exp.run = run
+	exp.isRunning = true
+	exp.mu.Unlock()
+
+	// Start the server and retain its terminal result for Stop.
 	go func() {
 		var err error
 		if exp.cfg.PrometheusTLSEnabled {
-			err = exp.server.ServeTLS(listener, exp.tlsCertFile, exp.tlsKeyFile)
+			err = server.ServeTLS(listener, "", "")
 		} else {
-			err = exp.server.Serve(listener)
+			err = server.Serve(listener)
 		}
-		if err != nil && err != http.ErrServerClosed {
-			exp.logger.Error("Prometheus server error", "error", err)
-			listenErr <- err
-		}
+		run.serveDone <- err
 	}()
 	exp.logger.Info("Prometheus server verified as listening", "address", listener.Addr().String())
 
-	// Gestione shutdown
-	go func() {
-		select {
-		case <-ctx.Done():
-			exp.logger.Info("Context cancelled, shutting down Prometheus server")
-			exp.shutdown()
-		case err := <-listenErr:
-			exp.logger.Error("Server listen error", "error", err)
-			exp.shutdown()
-		case <-exp.stopChan:
-			exp.logger.Info("Stop signal received")
-			exp.shutdown()
-		}
-	}()
+	go exp.monitorRun(ctx, run)
 
 	return nil
 }
 
-// shutdown esegue lo shutdown graceful del server.
-func (exp *PrometheusExporter) shutdown() {
+func (exp *PrometheusExporter) finishStartAttempt() {
 	exp.mu.Lock()
-	defer exp.mu.Unlock()
+	exp.starting = false
+	if exp.startDone != nil {
+		close(exp.startDone)
+	}
+	exp.mu.Unlock()
+}
 
-	if !exp.isRunning || exp.server == nil {
-		return
+func (exp *PrometheusExporter) monitorRun(ctx context.Context, run *prometheusRun) {
+	var shutdownErr error
+	var serveErr error
+	select {
+	case serveErr = <-run.serveDone:
+	case <-ctx.Done():
+		exp.logger.Info("Context cancelled, shutting down Prometheus server")
+		shutdownErr = exp.shutdownRun(run)
+		serveErr = <-run.serveDone
+	case <-run.stop:
+		exp.logger.Info("Stop signal received")
+		shutdownErr = exp.shutdownRun(run)
+		serveErr = <-run.serveDone
+	}
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	if serveErr != nil {
+		exp.logger.Error("Prometheus server error", "error", serveErr)
 	}
 
+	run.err = errors.Join(shutdownErr, serveErr)
+	exp.mu.Lock()
+	if exp.run == run {
+		exp.isRunning = false
+	}
+	exp.mu.Unlock()
+	close(run.done)
+}
+
+func (exp *PrometheusExporter) shutdownRun(run *prometheusRun) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	exp.logger.Info("Shutting down Prometheus HTTP server")
-	if err := exp.server.Shutdown(shutdownCtx); err != nil {
+	if err := exp.shutdownHTTPServer(run.server, shutdownCtx); err != nil {
 		exp.logger.Error("Error during Prometheus server shutdown", "error", err)
-		// Forza la chiusura se lo shutdown graceful fallisce
-		_ = exp.server.Close()
+		closeErr := exp.closeHTTPServer(run.server)
+		if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			return errors.Join(err, fmt.Errorf("force close Prometheus server: %w", closeErr))
+		}
+		return err
 	}
-
-	exp.isRunning = false
 	exp.logger.Info("Prometheus HTTP server stopped")
+	return nil
 }
 
-// Stop ferma il server Prometheus.
+// Stop waits for the Prometheus server goroutines and returns their terminal error.
 func (exp *PrometheusExporter) Stop() error {
 	if exp == nil {
 		return nil
 	}
 
-	select {
-	case exp.stopChan <- struct{}{}:
-		return nil
-	default:
-		return fmt.Errorf("stop already in progress")
+	for {
+		exp.mu.RLock()
+		starting := exp.starting
+		startDone := exp.startDone
+		run := exp.run
+		exp.mu.RUnlock()
+
+		if starting {
+			<-startDone
+			continue
+		}
+		if run == nil {
+			return nil
+		}
+		run.stopOnce.Do(func() { close(run.stop) })
+		<-run.done
+		return run.err
 	}
 }
 
-// IsRunning restituisce true se l'esportatore è in esecuzione.
+// IsRunning reports whether the exporter is running.
 func (exp *PrometheusExporter) IsRunning() bool {
 	if exp == nil {
 		return false
@@ -1425,7 +1609,7 @@ func (exp *PrometheusExporter) IsRunning() bool {
 	return exp.isRunning
 }
 
-// GetMetricsEndpoint restituisce l'endpoint delle metriche.
+// GetMetricsEndpoint returns the metrics endpoint.
 func (exp *PrometheusExporter) GetMetricsEndpoint() string {
 	if exp == nil {
 		return ""

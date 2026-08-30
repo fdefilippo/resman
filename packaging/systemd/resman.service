@@ -5,55 +5,31 @@ DefaultDependencies=no
 After=local-fs.target
 Before=sysinit.target systemd-user-sessions.service vcs.service shutdown.target
 Conflicts=shutdown.target
-RequiresMountsFor=/usr/bin/resman /etc/resman.conf /sys/fs/cgroup /var/log /run
+RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman /sys/fs/cgroup /var/log /run
 ConditionDirectoryNotEmpty=/sys/fs/cgroup
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=root
-RuntimeDirectory=resman
-RuntimeDirectoryMode=0755
-RuntimeDirectoryPreserve=restart
-ExecStartPre=/bin/sh -ec 'echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control; echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control'
-ExecStartPre=-/bin/sh -c 'echo "+io" > /sys/fs/cgroup/cgroup.subtree_control'
-ExecStartPre=-/bin/sh -c 'echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control'
-ExecStart=/usr/bin/resman --config /etc/resman.conf
+# ResMan discovers and enables the controllers required by the active features.
+# Keeping controller setup in the daemon preserves its mandatory/optional
+# diagnostics and lets CPU quota enforcement run without cpuset.
+ExecStart=/usr/bin/resman --config /etc/resman/resman.conf
 ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
+Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=78
 StandardOutput=journal
 StandardError=journal
-# Priorità CPU (da -20 a 19, dove -20 è la più alta)
+# CPU priority (-20 is the highest, 19 is the lowest)
 Nice=-10
 
-# Limiti di sicurezza
+# Resource limits
 LimitNOFILE=65536
 LimitNPROC=65536
-
-# Hardening
-#NoNewPrivileges=true
-#PrivateTmp=true
-#ProtectSystem=strict
-#ProtectHome=true
-#ProtectKernelTunables=true
-#ProtectKernelModules=true
-#ProtectControlGroups=true
-#RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-#RestrictNamespaces=true
-#RestrictRealtime=true
-#MemoryDenyWriteExecute=true
-#LockPersonality=true
-
-# Cgroups
-#Delegate=cpu cpuset
-#CPUAccounting=true
-#MemoryAccounting=true
-
-# Permessi di directory
-ReadWritePaths=/sys/fs/cgroup
-ReadWritePaths=/var/log
-ReadWritePaths=/var/run
-ReadWritePaths=/run
 
 [Install]
 WantedBy=multi-user.target

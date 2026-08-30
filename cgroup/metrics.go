@@ -13,20 +13,20 @@ func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, me
 		return "", "", 0, 0, 0, 0, 0, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
-	// Leggi cpu.max
+	// Read cpu.max.
 	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
 	if data, readErr := os.ReadFile(cpuMaxFile); readErr == nil {
 		cpuQuota = strings.TrimSpace(string(data))
 	}
 
-	// Leggi memory.high events
+	// Read memory.high events.
 	if memEvents, memErr := m.GetMemoryHighEvents(uid); memErr == nil {
 		memoryHighEvents = memEvents
 	} else {
 		m.logger.Debug("Failed to read memory high events (optional metric)", "uid", uid, "error", memErr)
 	}
 
-	// Leggi io.stat
+	// Read io.stat.
 	if rBytes, wBytes, rOps, wOps, ioErr := m.GetIOStats(uid); ioErr == nil {
 		ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps = rBytes, wBytes, rOps, wOps
 	} else {
@@ -36,4 +36,4 @@ func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, me
 	return cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, nil
 }
 
-// getProcessInfo restituisce informazioni dettagliate su un processo
+// getProcessInfo returns detailed information about a process.

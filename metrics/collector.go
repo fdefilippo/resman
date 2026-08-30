@@ -19,17 +19,22 @@ package metrics
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/processidentity"
+	"github.com/fdefilippo/resman/internal/processpolicy"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/host"
@@ -38,50 +43,220 @@ import (
 )
 
 const (
-	cpuPercentMultiplier = 100.0
+	cpuPercentMultiplier                  = 100.0
+	defaultFallbackCPUSamplingInterval    = 30 * time.Second
+	fallbackCPUSampleIntervalsBeforeStale = 2
 )
 
 // UserMetrics contains metrics for a single user.
 type UserMetrics struct {
-	UID             int
-	Username        string
-	CPUUsage        float64 // CPU percentage (instantaneous, last cycle)
-	CPUUsageAverage float64 // CPU percentage average since process start
-	CPUUsageEMA     float64 // CPU percentage exponential moving average (α=0.3)
-	MemoryUsage     uint64  // Memory in bytes (PSS when available, RSS fallback)
-	ProcessCount    int     // Number of processes
-	IsLimited       bool    // Whether user has CPU limits applied
-	IOReadBytes     uint64  // Total bytes read from block devices
-	IOWriteBytes    uint64  // Total bytes written to block devices
-	IOReadOps       uint64  // Total read-family syscalls reported by /proc/PID/io syscr
-	IOWriteOps      uint64  // Total write-family syscalls reported by /proc/PID/io syscw
+	UID                                    int
+	Username                               string
+	CPUUsage                               float64 // CPU percentage (instantaneous, last cycle)
+	CPUUsageAverage                        float64 // CPU percentage average since process start
+	CPUUsageEMA                            float64 // CPU percentage exponential moving average (α=0.3)
+	MemoryUsage                            uint64  // Memory in bytes (PSS when available, RSS fallback)
+	ProcessCount                           int     // Number of processes
+	EligibleForCPU                         bool    // Whether CPU policy may limit the user
+	EligibleForRAM                         bool    // Whether RAM policy may limit the user
+	EligibleForIO                          bool    // Whether I/O policy may limit the user
+	CPULimitRequested                      bool    // Whether the control cycle currently requests a CPU limit
+	CPULimitActive                         bool    // Whether CPU cgroup enforcement is observed as active
+	RAMLimitRequested                      bool    // Whether the control cycle currently requests a RAM limit
+	RAMLimitActive                         bool    // Whether RAM cgroup enforcement is observed as active
+	IOLimitRequested                       bool    // Whether the control cycle currently requests an I/O limit
+	IOLimitActive                          bool    // Whether I/O cgroup enforcement is observed as active
+	IOReadBytes                            uint64  // Total bytes read from block devices
+	IOWriteBytes                           uint64  // Total bytes written to block devices
+	IOReadOps                              uint64  // Total read-family syscalls reported by /proc/PID/io syscr
+	IOWriteOps                             uint64  // Total write-family syscalls reported by /proc/PID/io syscw
+	ExecutableIdentityUnavailableProcesses int     // Processes without a trustworthy /proc/PID/exe identity
+	IOUnavailableProcesses                 int     // Processes without a trustworthy I/O decision sample
+	EnforceableUsage                       ProcessSetMetrics
 }
 
-// procCache holds CPU timing data for all PIDs.
+// ProcessSetMetrics contains usage from processes selected for cgroup
+// enforcement. Observed UserMetrics fields continue to describe every process.
+type ProcessSetMetrics struct {
+	CPUUsage                               float64
+	CPUUsageAverage                        float64
+	CPUUsageEMA                            float64
+	MemoryUsage                            uint64
+	ProcessCount                           int
+	IOReadBytes                            uint64
+	IOWriteBytes                           uint64
+	IOReadOps                              uint64
+	IOWriteOps                             uint64
+	IODelta                                ProcessIODelta
+	ExecutableIdentityUnavailableProcesses int
+	IOUnavailableProcesses                 int
+}
+
+// ProcessIODelta contains the sum of per-process counter growth observed since
+// the previous sample from the same sampling stream.
+type ProcessIODelta struct {
+	ReadBytes  uint64
+	WriteBytes uint64
+}
+
+// ObservationMetrics is the typed observation snapshot consumed by external
+// status surfaces. It does not contain policy eligibility or runtime state.
+type ObservationMetrics struct {
+	TotalCores            int
+	TotalCPUUsage         float64
+	ObservedUsersCPUUsage float64
+	ObservedUsersCount    int
+	MemoryUsageMB         float64
+	TotalMemoryMB         float64
+	SystemUnderLoad       bool
+}
+
+type processIOCounters struct {
+	readBytes  uint64
+	writeBytes uint64
+	readOps    uint64
+	writeOps   uint64
+}
+
+type processIOSample struct {
+	startTime int64
+	counters  processIOCounters
+	sampledAt time.Time
+}
+
+// procCache holds temporal CPU and I/O data for all PIDs.
 // Uses single mutex instead of sharding for simplicity and deadlock safety.
 type procCache struct {
 	mu            sync.RWMutex
 	prevProcCPU   map[int32]cpu.TimesStat
 	prevProcTime  map[int32]time.Time
 	procStartTime map[int32]int64
+	prevProcIO    map[int32]processIOSample
 }
 
 // userData is a temporary structure for accumulating data per UID during /proc scan.
 type userData struct {
-	cpuUsage     float64
-	cpuUsageAvg  float64
-	processCount int
-	memoryUsage  uint64
-	ioReadBytes  uint64
-	ioWriteBytes uint64
-	ioReadOps    uint64
-	ioWriteOps   uint64
+	observed    processUsage
+	enforceable processUsage
+}
+
+type processUsage struct {
+	cpuUsage                               float64
+	cpuUsageAvg                            float64
+	processCount                           int
+	memoryUsage                            uint64
+	ioReadBytes                            uint64
+	ioWriteBytes                           uint64
+	ioReadOps                              uint64
+	ioWriteOps                             uint64
+	ioDelta                                ProcessIODelta
+	executableIdentityUnavailableProcesses int
+	ioUnavailableProcesses                 int
+}
+
+func (u *processUsage) add(sample processUsage) {
+	u.cpuUsage += sample.cpuUsage
+	u.cpuUsageAvg += sample.cpuUsageAvg
+	u.processCount += sample.processCount
+	u.memoryUsage += sample.memoryUsage
+	u.ioReadBytes += sample.ioReadBytes
+	u.ioWriteBytes += sample.ioWriteBytes
+	u.ioReadOps += sample.ioReadOps
+	u.ioWriteOps += sample.ioWriteOps
+	u.ioDelta.ReadBytes += sample.ioDelta.ReadBytes
+	u.ioDelta.WriteBytes += sample.ioDelta.WriteBytes
+	u.executableIdentityUnavailableProcesses += sample.executableIdentityUnavailableProcesses
+	u.ioUnavailableProcesses += sample.ioUnavailableProcesses
+}
+
+func addProcessSample(data *userData, cfg *config.Config, executable, comm string, sample processUsage) processpolicy.Selection {
+	selection := processpolicy.Evaluate(cfg, executable, comm)
+	data.observed.add(sample)
+	if selection.Enforceable {
+		data.enforceable.add(sample)
+	}
+	return selection
+}
+
+func processSetMetrics(usage processUsage, ema float64) ProcessSetMetrics {
+	return ProcessSetMetrics{
+		CPUUsage:                               usage.cpuUsage,
+		CPUUsageAverage:                        usage.cpuUsageAvg,
+		CPUUsageEMA:                            ema,
+		MemoryUsage:                            usage.memoryUsage,
+		ProcessCount:                           usage.processCount,
+		IOReadBytes:                            usage.ioReadBytes,
+		IOWriteBytes:                           usage.ioWriteBytes,
+		IOReadOps:                              usage.ioReadOps,
+		IOWriteOps:                             usage.ioWriteOps,
+		IODelta:                                usage.ioDelta,
+		ExecutableIdentityUnavailableProcesses: usage.executableIdentityUnavailableProcesses,
+		IOUnavailableProcesses:                 usage.ioUnavailableProcesses,
+	}
+}
+
+type procFSFailureSummary struct {
+	access   string
+	policy   string
+	count    int
+	firstPID int
+	firstErr error
+}
+
+func (s *procFSFailureSummary) record(pid int, err error) {
+	s.count++
+	if s.firstPID == 0 {
+		s.firstPID = pid
+		s.firstErr = err
+	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func reportableProcFSFailure(err error) bool {
+	return err != nil && !errors.Is(err, os.ErrNotExist)
 }
 
 // emaCache stores EMA values per UID between cycles.
 type emaCache struct {
-	mu     sync.RWMutex
-	values map[int]float64 // uid -> EMA value
+	mu                sync.RWMutex
+	values            map[int]float64 // uid -> observed EMA value
+	enforceableValues map[int]float64 // uid -> enforceable-process EMA value
+}
+
+// userMetricsSamplingState owns temporal data for one sampling purpose. The
+// observation and decision streams must never share baselines or smoothing.
+type userMetricsSamplingState struct {
+	process *procCache
+	ema     *emaCache
+}
+
+// metricCacheEntry binds a cached value to the retention contract that owned
+// the read which populated it.
+type metricCacheEntry struct {
+	value    interface{}
+	storedAt time.Time
+	ttl      time.Duration
+}
+
+func newUserMetricsSamplingState() *userMetricsSamplingState {
+	return &userMetricsSamplingState{
+		process: &procCache{
+			prevProcCPU:   make(map[int32]cpu.TimesStat),
+			prevProcTime:  make(map[int32]time.Time),
+			procStartTime: make(map[int32]int64),
+			prevProcIO:    make(map[int32]processIOSample),
+		},
+		ema: &emaCache{
+			values:            make(map[int]float64),
+			enforceableValues: make(map[int]float64),
+		},
+	}
 }
 
 type cpuJiffySample struct {
@@ -97,64 +272,63 @@ type Collector struct {
 	logger *logging.Logger
 	mu     sync.RWMutex
 
-	// Cache per le metriche
-	cache           map[string]interface{}
-	cacheTimestamps map[string]time.Time
+	// Shared metric-value cache.
+	cache           map[string]metricCacheEntry
 	cacheMutex      sync.RWMutex
-	userMetricsScan sync.Mutex
+	userMetricsScan operationgate.Gate
+	now             func() time.Time
 
 	// Previous /proc/stat sample. Values are raw kernel jiffies.
-	prevFallbackCPU cpuJiffySample
+	prevFallbackCPU             cpuJiffySample
+	fallbackCPUSamplingInterval time.Duration
 
-	// Cache per CPU usage per processo (necessaria per calcolo delta)
-	procCache *procCache // Single cache instead of sharding
+	// Observation refreshes and control decisions own independent temporal
+	// state so changing observability cadence cannot change enforcement.
+	observationState *userMetricsSamplingState
+	decisionState    *userMetricsSamplingState
 
-	// EMA cache for CPU usage smoothing between cycles
-	emaCache *emaCache
-
-	// Database writer (opzionale)
+	// Optional database writer.
 	dbWriter *DBWriter
 
-	// Cache per risoluzione UID -> username
+	// UID-to-username resolution cache.
 	usernameCache      map[int]string    // UID -> username
-	usernameCacheTime  map[int]time.Time // Timestamp ultima risoluzione
+	usernameCacheTime  map[int]time.Time // Last resolution timestamp
 	usernameCacheMutex sync.RWMutex
-	usernameCacheTTL   time.Duration // TTL della cache
+	usernameCacheTTL   time.Duration // Cache TTL
 
 	// Cleanup goroutine control
 	stopCleanup chan struct{}
 	cleanupDone chan struct{}
 }
 
-// Default Username Cache TTL
+// Default username cache TTL.
 const (
 	DEFAULT_USERNAME_CACHE_TTL = 60 * time.Minute
 	MAX_CACHE_SIZE             = 10000 // Maximum number of entries in general cache
 	MAX_USERNAME_CACHE_SIZE    = 10000 // Maximum number of entries in username cache
 )
 
-// NewCollector crea un nuovo collettore di metriche.
+// NewCollector creates a metrics collector using the initial configuration.
 func NewCollector(cfg *config.Config) (*Collector, error) {
 	logger := logging.GetLogger()
+	usernameCacheTTL := DEFAULT_USERNAME_CACHE_TTL
+	if cfg != nil && cfg.UsernameCacheTTL > 0 {
+		usernameCacheTTL = time.Duration(cfg.UsernameCacheTTL) * time.Minute
+	}
 
 	collector := &Collector{
-		cfg:               cfg,
-		logger:            logger,
-		cache:             make(map[string]interface{}),
-		cacheTimestamps:   make(map[string]time.Time),
-		usernameCache:     make(map[int]string),
-		usernameCacheTime: make(map[int]time.Time),
-		usernameCacheTTL:  DEFAULT_USERNAME_CACHE_TTL,
-		stopCleanup:       make(chan struct{}),
-		cleanupDone:       make(chan struct{}),
-		procCache: &procCache{
-			prevProcCPU:   make(map[int32]cpu.TimesStat),
-			prevProcTime:  make(map[int32]time.Time),
-			procStartTime: make(map[int32]int64),
-		},
-		emaCache: &emaCache{
-			values: make(map[int]float64),
-		},
+		cfg:                         cfg,
+		logger:                      logger,
+		cache:                       make(map[string]metricCacheEntry),
+		usernameCache:               make(map[int]string),
+		usernameCacheTime:           make(map[int]time.Time),
+		usernameCacheTTL:            usernameCacheTTL,
+		stopCleanup:                 make(chan struct{}),
+		cleanupDone:                 make(chan struct{}),
+		observationState:            newUserMetricsSamplingState(),
+		decisionState:               newUserMetricsSamplingState(),
+		fallbackCPUSamplingInterval: configuredPollingInterval(cfg),
+		now:                         time.Now,
 	}
 
 	go collector.periodicCleanup()
@@ -163,15 +337,15 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 	return collector, nil
 }
 
-// SetDBWriter imposta il DBWriter per la persistenza delle metriche
+// SetDBWriter replaces the optional metrics database writer.
 func (c *Collector) SetDBWriter(writer *DBWriter) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.dbWriter = writer
+	c.mu.Unlock()
 	c.logger.Info("Database writer configured", "enabled", writer != nil)
 }
 
-// GetDBWriter restituisce il DBWriter corrente
+// GetDBWriter returns the current DBWriter.
 func (c *Collector) GetDBWriter() *DBWriter {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -188,10 +362,17 @@ func (c *Collector) metricsCacheTTL() time.Duration {
 	return time.Duration(c.getConfig().GetMetricsCacheTTL()) * time.Second
 }
 
-// GetTotalCores restituisce il numero totale di core CPU.
+func (c *Collector) currentTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// GetTotalCores returns the total number of CPU cores.
 func (c *Collector) GetTotalCores() int {
 	cacheKey := "total_cores"
-	if val, valid := c.getFromCache(cacheKey, 3600*time.Second); valid { // Cache lunga per questa metrica
+	if val, valid := c.getFromCache(cacheKey); valid { // Core count changes rarely, so it owns a long TTL.
 		return val.(int)
 	}
 
@@ -200,15 +381,15 @@ func (c *Collector) GetTotalCores() int {
 		c.logger.Warn("Failed to get CPU core count via gopsutil, using /proc/cpuinfo fallback",
 			"error", err,
 		)
-		// Fallback: leggi da /proc/cpuinfo
+		// Fall back to /proc/cpuinfo.
 		cores = c.getTotalCoresFallback()
 	}
 
-	c.setInCache(cacheKey, cores)
+	c.setInCache(cacheKey, cores, time.Hour)
 	return cores
 }
 
-// getTotalCoresFallback è un fallback per ottenere il numero di core.
+// getTotalCoresFallback returns the core count without gopsutil.
 func (c *Collector) getTotalCoresFallback() int {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
@@ -237,17 +418,17 @@ func (c *Collector) getTotalCoresFallback() int {
 	return cores
 }
 
-// GetTotalCPUUsage restituisce l'uso totale della CPU in percentuale.
+// GetTotalCPUUsage returns host-wide CPU usage as a percentage.
 func (c *Collector) GetTotalCPUUsage() float64 {
 	cacheKey := "total_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
 	return c.getTotalCPUUsageFallback()
 }
 
-// getTotalCPUUsageFallback calcola l'uso CPU manualmente da /proc/stat.
+// getTotalCPUUsageFallback calculates host CPU usage from /proc/stat jiffies.
 func (c *Collector) getTotalCPUUsageFallback() float64 {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
@@ -269,13 +450,13 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 		return 0.0
 	}
 
-	// Parse della linea CPU
+	// Parse the aggregate CPU line.
 	fields := strings.Fields(line)
 	if len(fields) < 8 {
 		return 0.0
 	}
 
-	// Calcola i tempi totali
+	// Calculate total jiffies.
 	user, _ := strconv.ParseUint(fields[1], 10, 64)
 	nice, _ := strconv.ParseUint(fields[2], 10, 64)
 	system, _ := strconv.ParseUint(fields[3], 10, 64)
@@ -292,8 +473,8 @@ func (c *Collector) getTotalCPUUsageFallback() float64 {
 
 	usage := c.updateFallbackCPUSample(total, idle)
 
-	// Cache il risultato
-	c.setInCache("total_cpu_usage", usage)
+	// Cache the result under the configured value-reuse TTL.
+	c.setInCache("total_cpu_usage", usage, c.metricsCacheTTL())
 
 	return usage
 }
@@ -303,18 +484,13 @@ func (c *Collector) updateFallbackCPUSample(total, idle uint64) float64 {
 }
 
 func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time) float64 {
+	maxGap := c.fallbackCPUSampleMaxGap()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	previous := c.prevFallbackCPU
 	c.prevFallbackCPU = cpuJiffySample{total: total, idle: idle, sampledAt: now, valid: true}
-	maxGap := 30 * time.Second
-	if c.cfg != nil {
-		maxGap = 2 * time.Duration(c.cfg.GetMetricsCacheTTL()) * time.Second
-	}
-	if maxGap <= 0 {
-		maxGap = time.Second
-	}
 	if !previous.valid || now.Before(previous.sampledAt) || now.Sub(previous.sampledAt) > maxGap ||
 		total < previous.total || idle < previous.idle {
 		return 0
@@ -328,8 +504,37 @@ func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time)
 	return cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
 }
 
-// GetUserCPUUsage restituisce l'uso CPU per un utente specifico.
-// Esclude i processi di sistema dalla blacklist
+// SetFallbackCPUSamplingInterval records the control loop's effective runtime
+// cadence. Configuration intent alone cannot determine whether PSI monitoring
+// actually started.
+func (c *Collector) SetFallbackCPUSamplingInterval(interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultFallbackCPUSamplingInterval
+	}
+	c.mu.Lock()
+	c.fallbackCPUSamplingInterval = interval
+	c.mu.Unlock()
+}
+
+func (c *Collector) fallbackCPUSampleMaxGap() time.Duration {
+	c.mu.RLock()
+	samplingInterval := c.fallbackCPUSamplingInterval
+	c.mu.RUnlock()
+	if samplingInterval <= 0 {
+		samplingInterval = configuredPollingInterval(c.getConfig())
+	}
+	return fallbackCPUSampleIntervalsBeforeStale * samplingInterval
+}
+
+func configuredPollingInterval(cfg *config.Config) time.Duration {
+	if cfg != nil && cfg.GetPollingInterval() > 0 {
+		return time.Duration(cfg.GetPollingInterval()) * time.Second
+	}
+	return defaultFallbackCPUSamplingInterval
+}
+
+// GetUserCPUUsage returns CPU usage for a user.
+// It excludes configured system processes.
 func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	if !c.isMonitoredUserUID(uid) {
 		return 0.0
@@ -343,7 +548,7 @@ func (c *Collector) GetUserCPUUsage(uid int) float64 {
 	return 0
 }
 
-// getUIDFromStatusFile legge l'UID da /proc/[pid]/status.
+// getUIDFromStatusFile reads the UID from /proc/[pid]/status.
 // Used by fallback functions when gopsutil is unavailable.
 func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	file, err := os.Open(statusFile)
@@ -370,12 +575,12 @@ func (c *Collector) getUIDFromStatusFile(statusFile string) (int, error) {
 	return 0, fmt.Errorf("UID not found")
 }
 
-// GetAllUsersCPUUsage restituisce l'uso CPU totale di TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+// GetAllUsersCPUUsage returns total CPU usage for all non-system users.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
 func (c *Collector) GetAllUsersCPUUsage() float64 {
 	var totalUsage float64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
 		totalUsage += metrics.CPUUsage
@@ -384,27 +589,11 @@ func (c *Collector) GetAllUsersCPUUsage() float64 {
 	return totalUsage
 }
 
-// GetLimitedUsersCPUUsage restituisce l'uso CPU totale solo degli utenti che passano i filtri.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
-func (c *Collector) GetLimitedUsersCPUUsage() float64 {
-	var totalUsage float64
-
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
-	allMetrics := c.GetAllUserMetrics()
-	for _, metrics := range allMetrics {
-		if metrics.IsLimited {
-			totalUsage += metrics.CPUUsage
-		}
-	}
-
-	return totalUsage
-}
-
-// GetAllUsers restituisce la lista di TUTTI gli UID attivi non di sistema (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
-// Usato per metriche "all_users" (monitoraggio completo)
+// GetAllUsers returns all active non-system UIDs.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
+// It supports complete all_users monitoring.
 func (c *Collector) GetAllUsers() []int {
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	users := make([]int, 0, len(allMetrics))
 	for uid := range allMetrics {
@@ -414,53 +603,37 @@ func (c *Collector) GetAllUsers() []int {
 	return users
 }
 
-// GetLimitedUsers restituisce la lista degli UID che passano i filtri per i limiti CPU.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
-// Usato per metriche "limited_users" (sottoinsieme limitabile)
-func (c *Collector) GetLimitedUsers() []int {
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
-	allMetrics := c.GetAllUserMetrics()
-	users := make([]int, 0, len(allMetrics))
-	for uid, metrics := range allMetrics {
-		if metrics.IsLimited {
-			users = append(users, uid)
-		}
-	}
-
-	return users
-}
-
-// getUsername ritorna la username dato un UID
-// Usa os/user.LookupId() che supporta LDAP/NIS quando CGO è abilitato
-// Implementa cache con TTL per migliorare le performance
+// getUsername returns the username for a UID.
+// It uses os/user.LookupId, which supports LDAP and NIS when CGO is enabled,
+// and caches successful results for the configured TTL.
 func (c *Collector) getUsername(uid int) string {
-	// Controllo cache prima di tutto
+	// Check the cache first.
 	if cachedUsername, valid := c.getCachedUsername(uid); valid {
 		return cachedUsername
 	}
 
-	// Metodo 1: Usa os/user.LookupId() (supporta LDAP/NIS con CGO)
-	// Questo funziona solo se compilato con CGO_ENABLED=1
+	// Method 1 uses os/user.LookupId for LDAP and NIS support.
+	// This requires a build with CGO_ENABLED=1.
 	u, err := user.LookupId(fmt.Sprintf("%d", uid))
 	if err == nil && u.Username != "" {
-		c.cacheUsername(uid, u.Username) // Cache il risultato
+		c.cacheUsername(uid, u.Username) // Cache the result.
 		return u.Username
 	}
 
-	// Metodo 2: Fallback su /etc/passwd (solo utenti locali)
+	// Method 2 falls back to /etc/passwd for local users.
 	username, err := c.getUsernameFromPasswd(uid)
 	if err == nil && username != "" {
-		c.cacheUsername(uid, username) // Cache il risultato
+		c.cacheUsername(uid, username) // Cache the result.
 		return username
 	}
 
-	// Fallback finale: ritorna l'UID come stringa
+	// Finally, use the UID as a string.
 	username = strconv.Itoa(uid)
 	c.cacheUsername(uid, username)
 	return username
 }
 
-// getCachedUsername restituisce lo username dalla cache se valido
+// getCachedUsername returns a valid cached username.
 func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	c.usernameCacheMutex.RLock()
 	defer c.usernameCacheMutex.RUnlock()
@@ -470,7 +643,7 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 		return "", false
 	}
 
-	// Controllo se la cache è scaduta
+	// Check whether the cache entry has expired.
 	timestamp, exists := c.usernameCacheTime[uid]
 	if !exists || time.Since(timestamp) > c.usernameCacheTTL {
 		return "", false
@@ -479,7 +652,7 @@ func (c *Collector) getCachedUsername(uid int) (string, bool) {
 	return username, true
 }
 
-// cacheUsername memorizza lo username nella cache con LRU eviction.
+// cacheUsername stores a username in the cache with LRU eviction.
 func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheMutex.Lock()
 	defer c.usernameCacheMutex.Unlock()
@@ -511,22 +684,22 @@ func (c *Collector) cacheUsername(uid int, username string) {
 	c.usernameCacheTime[uid] = time.Now()
 }
 
-// SetUsernameCacheTTL imposta il TTL della cache username
+// SetUsernameCacheTTL updates the username cache lifetime.
 func (c *Collector) SetUsernameCacheTTL(ttl time.Duration) {
 	c.usernameCacheMutex.Lock()
-	defer c.usernameCacheMutex.Unlock()
 	c.usernameCacheTTL = ttl
+	c.usernameCacheMutex.Unlock()
 	c.logger.Debug("Username cache TTL updated", "ttl", ttl)
 }
 
-// GetUsernameCacheTTL restituisce il TTL corrente della cache username
+// GetUsernameCacheTTL returns the current username cache TTL.
 func (c *Collector) GetUsernameCacheTTL() time.Duration {
 	c.usernameCacheMutex.RLock()
 	defer c.usernameCacheMutex.RUnlock()
 	return c.usernameCacheTTL
 }
 
-// getUsernameFromPasswd legge il username da /etc/passwd senza usare CGO
+// getUsernameFromPasswd reads a username from /etc/passwd without CGO.
 func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	file, err := os.Open("/etc/passwd")
 	if err != nil {
@@ -538,13 +711,12 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "#") {
-			continue // Salta commenti
+			continue // Skip comments.
 		}
 
 		fields := strings.Split(line, ":")
 		if len(fields) >= 3 {
-			// Campo 0: username
-			// Campo 2: UID (come stringa)
+			// Field 0 is the username; field 2 is the UID string.
 			fileUID, err := strconv.Atoi(fields[2])
 			if err == nil && fileUID == uid {
 				return fields[0], nil
@@ -555,15 +727,15 @@ func (c *Collector) getUsernameFromPasswd(uid int) (string, error) {
 	return "", fmt.Errorf("UID %d not found in /etc/passwd", uid)
 }
 
-// GetUsernameFromUID ritorna la username dato un UID (public alias)
+// GetUsernameFromUID returns the username for a UID.
 func (c *Collector) GetUsernameFromUID(uid int) string {
 	return c.getUsername(uid)
 }
 
-// GetMemoryUsage restituisce l'uso della memoria in MB.
+// GetMemoryUsage returns memory usage in MB.
 func (c *Collector) GetMemoryUsage() float64 {
 	cacheKey := "memory_usage"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -575,13 +747,13 @@ func (c *Collector) GetMemoryUsage() float64 {
 		return c.getMemoryUsageFallback()
 	}
 
-	// Converti da byte a MB
+	// Convert bytes to MB.
 	usageMB := float64(vm.Used) / 1024 / 1024
-	c.setInCache(cacheKey, usageMB)
+	c.setInCache(cacheKey, usageMB, c.metricsCacheTTL())
 	return usageMB
 }
 
-// getMemoryUsageFallback legge l'uso memoria da /proc/meminfo.
+// getMemoryUsageFallback reads memory usage from /proc/meminfo.
 func (c *Collector) getMemoryUsageFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -619,21 +791,21 @@ func (c *Collector) getMemoryUsageFallback() float64 {
 		return 0.0
 	}
 
-	// Se memAvailable non è stato trovato, usa MemFree come fallback
+	// Fall back to MemFree when MemAvailable was not found.
 	if memAvailable == 0 {
-		// Dovremmo rileggere il file per MemFree, ma per semplicità usiamo 0
+		// Avoid a second read and report zero when MemFree was not retained.
 		memAvailable = 0
 	}
 
-	// MemTotal e MemAvailable sono in KB, converti a MB
+	// MemTotal and MemAvailable are in KiB; convert them to MiB.
 	usageMB := (memTotal - memAvailable) / 1024
 	return usageMB
 }
 
-// GetTotalMemoryMB restituisce la RAM fisica totale del sistema in MB.
+// GetTotalMemoryMB returns total physical RAM in MB.
 func (c *Collector) GetTotalMemoryMB() float64 {
 	cacheKey := "total_memory"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -646,11 +818,11 @@ func (c *Collector) GetTotalMemoryMB() float64 {
 	}
 
 	totalMB := float64(vm.Total) / 1024 / 1024
-	c.setInCache(cacheKey, totalMB)
+	c.setInCache(cacheKey, totalMB, c.metricsCacheTTL())
 	return totalMB
 }
 
-// getTotalMemoryFallback legge MemTotal da /proc/meminfo.
+// getTotalMemoryFallback reads MemTotal from /proc/meminfo.
 func (c *Collector) getTotalMemoryFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -676,10 +848,10 @@ func (c *Collector) getTotalMemoryFallback() float64 {
 	return 0.0
 }
 
-// GetCachedMemoryMB restituisce la memoria cache del sistema in MB.
+// GetCachedMemoryMB returns cached system memory in MB.
 func (c *Collector) GetCachedMemoryMB() float64 {
 	cacheKey := "cached_memory"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		return val.(float64)
 	}
 
@@ -692,11 +864,11 @@ func (c *Collector) GetCachedMemoryMB() float64 {
 	}
 
 	cachedMB := float64(vm.Cached) / 1024 / 1024
-	c.setInCache(cacheKey, cachedMB)
+	c.setInCache(cacheKey, cachedMB, c.metricsCacheTTL())
 	return cachedMB
 }
 
-// getCachedMemoryFallback legge Cached da /proc/meminfo.
+// getCachedMemoryFallback reads Cached from /proc/meminfo.
 func (c *Collector) getCachedMemoryFallback() float64 {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -722,14 +894,14 @@ func (c *Collector) getCachedMemoryFallback() float64 {
 	return 0.0
 }
 
-// IsSystemUnderLoad determina se il sistema è sotto carico.
+// IsSystemUnderLoad reports whether the system load exceeds the configured heuristic.
 func (c *Collector) IsSystemUnderLoad() bool {
 	cacheKey := "system_under_load"
-	if val, valid := c.getFromCache(cacheKey, 10*time.Second); valid { // Cache breve
+	if val, valid := c.getFromCache(cacheKey); valid { // Load detection owns a short TTL.
 		return val.(bool)
 	}
 
-	// Calcola load average
+	// Calculate the load average.
 	load, cores, err := c.getLoadAverage()
 	if err != nil {
 		c.logger.Warn("Failed to get load average, assuming system not under load",
@@ -738,14 +910,14 @@ func (c *Collector) IsSystemUnderLoad() bool {
 		return false
 	}
 
-	// Sistema è sotto carico se load > 0.7 * cores
+	// Treat the system as loaded when load exceeds 0.7 per core.
 	underLoad := load > float64(cores)*0.7
 
-	c.setInCache(cacheKey, underLoad)
+	c.setInCache(cacheKey, underLoad, 10*time.Second)
 	return underLoad
 }
 
-// getLoadAverage restituisce load average e numero di core.
+// getLoadAverage returns the load average and core count.
 func (c *Collector) getLoadAverage() (float64, int, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -772,56 +944,49 @@ func (c *Collector) isMonitoredUserUID(uid int) bool {
 	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax()
 }
 
-// getFromCache recupera un valore dalla cache se non è scaduto.
-func (c *Collector) getFromCache(key string, ttl time.Duration) (interface{}, bool) {
+// getFromCache returns a cached value while its owning TTL remains valid.
+func (c *Collector) getFromCache(key string) (interface{}, bool) {
 	c.cacheMutex.RLock()
 	defer c.cacheMutex.RUnlock()
 
-	val, exists := c.cache[key]
+	entry, exists := c.cache[key]
 	if !exists {
 		return nil, false
 	}
-
-	timestamp, timestampExists := c.cacheTimestamps[key]
-	if !timestampExists {
+	if entry.ttl <= 0 || c.currentTime().Sub(entry.storedAt) > entry.ttl {
 		return nil, false
 	}
-
-	if time.Since(timestamp) > ttl {
-		return nil, false
-	}
-
-	return val, true
+	return entry.value, true
 }
 
-// setInCache memorizza un valore nella cache con LRU eviction.
-func (c *Collector) setInCache(key string, value interface{}) {
+// setInCache stores a value with the TTL of the read that populated it.
+func (c *Collector) setInCache(key string, value interface{}, ttl time.Duration) {
+	now := c.currentTime()
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	// If cache is full, remove oldest entries (LRU eviction)
-	if len(c.cache) >= MAX_CACHE_SIZE {
+	if _, replacing := c.cache[key]; !replacing && len(c.cache) >= MAX_CACHE_SIZE {
 		oldestKey := ""
-		oldestTime := time.Now()
+		oldestTime := now
+		found := false
 
-		for k, ts := range c.cacheTimestamps {
-			if ts.Before(oldestTime) {
-				oldestTime = ts
+		for k, entry := range c.cache {
+			if !found || entry.storedAt.Before(oldestTime) {
+				oldestTime = entry.storedAt
 				oldestKey = k
+				found = true
 			}
 		}
 
-		if oldestKey != "" {
+		if found {
 			delete(c.cache, oldestKey)
-			delete(c.cacheTimestamps, oldestKey)
 			c.logger.Debug("Cache full - evicted oldest entry",
 				"evicted_key", oldestKey,
 				"cache_size", len(c.cache))
 		}
 	}
 
-	c.cache[key] = value
-	c.cacheTimestamps[key] = time.Now()
+	c.cache[key] = metricCacheEntry{value: value, storedAt: now, ttl: ttl}
 }
 
 // periodicCleanup runs cleanup periodically until stopped
@@ -841,33 +1006,21 @@ func (c *Collector) periodicCleanup() {
 	}
 }
 
-// cleanupCache rimuove le voci scadute dalla cache.
+// cleanupCache removes expired metric values and username resolutions.
 func (c *Collector) cleanupCache() {
+	c.cleanupCacheAt(c.currentTime())
+}
+
+func (c *Collector) cleanupCacheAt(now time.Time) {
 	c.cacheMutex.Lock()
-	defer c.cacheMutex.Unlock()
-
-	now := time.Now()
-	for key, timestamp := range c.cacheTimestamps {
-		if now.Sub(timestamp) > 5*time.Minute {
+	for key, entry := range c.cache {
+		if entry.ttl <= 0 || now.Sub(entry.storedAt) > entry.ttl {
 			delete(c.cache, key)
-			delete(c.cacheTimestamps, key)
 		}
 	}
+	c.cacheMutex.Unlock()
 
-	// Pulisci anche la cache dei processi CPU (processi vecchi > 5 minuti)
-	if c.procCache != nil {
-		c.procCache.mu.Lock()
-		for pid, timestamp := range c.procCache.prevProcTime {
-			if now.Sub(timestamp) > 5*time.Minute {
-				delete(c.procCache.prevProcCPU, pid)
-				delete(c.procCache.prevProcTime, pid)
-				delete(c.procCache.procStartTime, pid)
-			}
-		}
-		c.procCache.mu.Unlock()
-	}
-
-	// Pulisci anche la cache username (utenti non risolti da > TTL)
+	// Remove username cache entries that have exceeded their independent TTL.
 	c.usernameCacheMutex.Lock()
 	cleanedCount := 0
 	for uid, timestamp := range c.usernameCacheTime {
@@ -888,73 +1041,72 @@ func (c *Collector) cleanupCache() {
 	}
 }
 
-// ClearCache svuota la cache.
+// ClearCache removes every cached metric value.
 func (c *Collector) ClearCache() {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	c.cache = make(map[string]interface{})
-	c.cacheTimestamps = make(map[string]time.Time)
+	c.cache = make(map[string]metricCacheEntry)
 }
 
-// UpdateConfig aggiorna la configurazione del collector
+// UpdateConfig replaces the collector configuration used by subsequent scans.
 func (c *Collector) UpdateConfig(newConfig *config.Config) {
-	c.userMetricsScan.Lock()
-	defer c.userMetricsScan.Unlock()
+	leaveScan := c.userMetricsScan.Enter()
 
 	c.mu.Lock()
+	oldConfig := c.cfg
 	c.cfg = newConfig
 	c.mu.Unlock()
+	processPolicyChanged := oldConfig == nil || !slices.Equal(
+		oldConfig.GetProcessExcludeList(),
+		newConfig.GetProcessExcludeList(),
+	)
+	if processPolicyChanged {
+		resetEnforceableEMA(c.observationState)
+		resetEnforceableEMA(c.decisionState)
+	}
+	c.usernameCacheMutex.Lock()
+	c.usernameCacheTTL = time.Duration(newConfig.UsernameCacheTTL) * time.Minute
+	c.usernameCacheMutex.Unlock()
+	// Clear cached values so the new configuration takes effect immediately.
+	c.ClearCache()
+	leaveScan()
+
 	c.logger.Info("Metrics collector configuration updated",
 		"metrics_cache_ttl", newConfig.MetricsCacheTTL,
+		"username_cache_ttl_minutes", newConfig.UsernameCacheTTL,
 		"system_uid_min", newConfig.SystemUIDMin,
 		"system_uid_max", newConfig.SystemUIDMax,
 		"user_exclude_list", newConfig.GetUserExcludeList(),
 	)
-	// Pulisci la cache per applicare immediatamente i cambiamenti
-	c.ClearCache()
 }
 
-// GetDetailedMetrics restituisce metriche dettagliate per debugging.
-func (c *Collector) GetDetailedMetrics() map[string]interface{} {
-	metrics := make(map[string]interface{})
-
-	metrics["total_cores"] = c.GetTotalCores()
-	metrics["total_cpu_usage"] = c.GetTotalCPUUsage()
-
-	// ALL USERS metrics
-	metrics["all_users_cpu_usage"] = c.GetAllUsersCPUUsage()
-	metrics["all_users_memory_usage"] = c.GetAllUsersMemoryUsage()
-	allUsers := c.GetAllUsers()
-	metrics["all_users_count"] = len(allUsers)
-
-	// LIMITED USERS metrics
-	metrics["limited_users_cpu_usage"] = c.GetLimitedUsersCPUUsage()
-	metrics["limited_users_memory_usage"] = c.GetLimitedUsersMemoryUsage()
-	limitedUsers := c.GetLimitedUsers()
-	metrics["limited_users_count"] = len(limitedUsers)
-
-	metrics["memory_usage_mb"] = c.GetMemoryUsage()
-	metrics["total_memory_mb"] = c.GetTotalMemoryMB()
-	metrics["cached_memory_mb"] = c.GetCachedMemoryMB()
-	metrics["system_under_load"] = c.IsSystemUnderLoad()
-
-	// Uso CPU per utente (per ALL users)
-	userCPU := make(map[int]float64)
-	for _, uid := range allUsers {
-		userCPU[uid] = c.GetUserCPUUsage(uid)
+func resetEnforceableEMA(state *userMetricsSamplingState) {
+	if state == nil || state.ema == nil {
+		return
 	}
-	metrics["user_cpu_usage"] = userCPU
-
-	// Informazioni sulla cache
-	c.cacheMutex.RLock()
-	metrics["cache_size"] = len(c.cache)
-	c.cacheMutex.RUnlock()
-
-	return metrics
+	state.ema.mu.Lock()
+	state.ema.enforceableValues = make(map[int]float64)
+	state.ema.mu.Unlock()
 }
 
-// GetSystemLoad restituisce il load average di 1 minuto.
+// GetObservationMetrics returns a typed observation snapshot for diagnostics
+// and external status surfaces.
+func (c *Collector) GetObservationMetrics() ObservationMetrics {
+	allUsers := c.GetAllUsers()
+
+	return ObservationMetrics{
+		TotalCores:            c.GetTotalCores(),
+		TotalCPUUsage:         c.GetTotalCPUUsage(),
+		ObservedUsersCPUUsage: c.GetAllUsersCPUUsage(),
+		ObservedUsersCount:    len(allUsers),
+		MemoryUsageMB:         c.GetMemoryUsage(),
+		TotalMemoryMB:         c.GetTotalMemoryMB(),
+		SystemUnderLoad:       c.IsSystemUnderLoad(),
+	}
+}
+
+// GetSystemLoad returns the one-minute load average.
 func (c *Collector) GetSystemLoad() (float64, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -974,37 +1126,60 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 	return load1, nil
 }
 
-// GetAllUserMetrics returns metrics (CPU, memory, processes) for all active users.
-// Uses gopsutil for efficient process discovery with single-pass aggregation.
+const (
+	observationUserMetricsCacheKey = "all_user_metrics_observation"
+	decisionUserMetricsCacheKey    = "all_user_metrics_decision"
+)
+
+// GetAllUserMetrics returns an observation sample for all active users.
+// Observation samples never advance decision baselines or smoothing.
 func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
-	return c.getAllUserMetricsCached(c.collectAllUserMetrics)
+	return c.getAllUserMetricsCached(
+		observationUserMetricsCacheKey,
+		c.observationState,
+		c.collectAllUserMetrics,
+	)
 }
 
-func (c *Collector) getAllUserMetricsCached(collect func() map[int]*UserMetrics) map[int]*UserMetrics {
-	cacheKey := "all_user_metrics"
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+// GetAllUserMetricsForDecision returns the control cycle's authoritative sample.
+// Its temporal state and cache are independent from observation refreshes.
+func (c *Collector) GetAllUserMetricsForDecision() map[int]*UserMetrics {
+	return c.getAllUserMetricsCached(
+		decisionUserMetricsCacheKey,
+		c.decisionState,
+		c.collectAllUserMetrics,
+	)
+}
+
+func (c *Collector) getAllUserMetricsCached(
+	cacheKey string,
+	state *userMetricsSamplingState,
+	collect func(*userMetricsSamplingState) map[int]*UserMetrics,
+) map[int]*UserMetrics {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
 		}
 	}
 
-	c.userMetricsScan.Lock()
-	defer c.userMetricsScan.Unlock()
+	leaveScan := c.userMetricsScan.Enter()
+	defer leaveScan()
 
 	// Another caller may have populated the cache while this caller waited.
-	if val, valid := c.getFromCache(cacheKey, c.metricsCacheTTL()); valid {
+	if val, valid := c.getFromCache(cacheKey); valid {
 		if metrics, ok := val.(map[int]*UserMetrics); ok {
 			return metrics
 		}
 	}
 
-	userMetrics := collect()
-	c.setInCache(cacheKey, userMetrics)
+	userMetrics := collect(state)
+	c.setInCache(cacheKey, userMetrics, c.metricsCacheTTL())
 	return userMetrics
 }
 
-func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
+func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
+	sampleTime := time.Now()
 
 	// Use gopsutil for efficient process discovery
 	procs, err := process.Processes()
@@ -1012,7 +1187,7 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		c.logger.Warn("Failed to get processes via gopsutil, falling back to /proc scan",
 			"error", err,
 		)
-		return c.getAllUserMetricsFallback()
+		return c.getAllUserMetricsFallback(state)
 	}
 
 	c.logger.Debug("GetAllUserMetrics: using gopsutil path",
@@ -1024,8 +1199,17 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 
 	// Read system uptime once (needed for CPU average calculation)
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
+	cfg := c.getConfig()
 
 	seenPIDs := make(map[int32]struct{}, len(procs))
+	identityFailures := procFSFailureSummary{
+		access: procFSAccessExecutableIdentity,
+		policy: "process_remains_enforceable",
+	}
+	ioFailures := procFSFailureSummary{
+		access: procFSAccessIODecision,
+		policy: "unknown_is_not_zero",
+	}
 
 	for _, p := range procs {
 		// Get process UID
@@ -1038,6 +1222,10 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		if !c.isMonitoredUserUID(uid) {
 			continue
 		}
+		identity, identityErr := processidentity.Read("/proc", int(p.Pid))
+		if errors.Is(identityErr, os.ErrNotExist) {
+			continue
+		}
 		seenPIDs[p.Pid] = struct{}{}
 
 		// Initialize structure if it doesn't exist
@@ -1045,12 +1233,8 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 			tempData[uid] = &userData{}
 		}
 
-		// Count process
-		tempData[uid].processCount++
-
 		// Read CPU usage using gopsutil proc.Times()
-		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(p)
-		tempData[uid].cpuUsage += cpuUsage
+		cpuUsage := c.getProcessCPUUsageSimpleWithHandle(state, p)
 
 		// Prefer PSS so shared pages are divided among mappings instead of
 		// counted once per process. Fall back to RSS when smaps is unavailable.
@@ -1059,53 +1243,90 @@ func (c *Collector) collectAllUserMetrics() map[int]*UserMetrics {
 		if err == nil && memInfo != nil {
 			rss = memInfo.RSS
 		}
-		tempData[uid].memoryUsage += c.getProcessMemoryUsageWithFallback(int(p.Pid), rss)
+		memoryUsage := c.getProcessMemoryUsageWithFallback(int(p.Pid), rss)
 
 		// Calculate CPU average since process start
 		cpuAvg := c.getProcessCPUAverage(p, systemUptimeSeconds)
-		tempData[uid].cpuUsageAvg += cpuAvg
 
-		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(int(p.Pid))
-		tempData[uid].ioReadBytes += readBytes
-		tempData[uid].ioWriteBytes += writeBytes
-		tempData[uid].ioReadOps += readSyscalls
-		tempData[uid].ioWriteOps += writeSyscalls
+		ioCounters, ioErr := c.getProcessIO(int(p.Pid))
+		var ioDelta ProcessIODelta
+		ioUnavailable := false
+		if ioErr == nil {
+			if startTime, startErr := p.CreateTime(); startErr == nil {
+				ioDelta = updateProcessIOSample(state, p.Pid, startTime, ioCounters, sampleTime)
+			} else {
+				ioErr = fmt.Errorf("read process start time: %w", startErr)
+			}
+		}
+		if ioErr != nil {
+			if reportableProcFSFailure(ioErr) {
+				ioUnavailable = true
+				ioFailures.record(int(p.Pid), ioErr)
+			}
+			discardProcessIOBaseline(state, p.Pid)
+		}
+		sample := processUsage{
+			cpuUsage:                               cpuUsage,
+			cpuUsageAvg:                            cpuAvg,
+			processCount:                           1,
+			memoryUsage:                            memoryUsage,
+			ioReadBytes:                            ioCounters.readBytes,
+			ioWriteBytes:                           ioCounters.writeBytes,
+			ioReadOps:                              ioCounters.readOps,
+			ioWriteOps:                             ioCounters.writeOps,
+			ioDelta:                                ioDelta,
+			executableIdentityUnavailableProcesses: boolCount(identityErr != nil),
+			ioUnavailableProcesses:                 boolCount(ioUnavailable),
+		}
+		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
+		if !selection.IdentityTrusted {
+			identityFailures.record(int(p.Pid), identityErr)
+		}
 	}
+	c.reportProcFSFailures(identityFailures, ioFailures)
 
 	// Convert to UserMetrics with username
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
+		eligibility := cfg.EvaluateUserEligibility(username)
 
-		cpuUsage := data.cpuUsage
+		cpuUsage := data.observed.cpuUsage
 
-		// Calculate EMA for this user
-		ema := c.calculateEMA(uid, cpuUsage)
+		// Calculate observed and enforceable EMA values independently.
+		ema := calculateEMA(state, uid, cpuUsage)
+		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
 
 		userMetrics[uid] = &UserMetrics{
-			UID:             uid,
-			Username:        username,
-			CPUUsage:        cpuUsage,
-			CPUUsageAverage: data.cpuUsageAvg,
-			CPUUsageEMA:     ema,
-			MemoryUsage:     data.memoryUsage,
-			ProcessCount:    data.processCount,
-			IsLimited:       c.getConfig().IsUserWhitelisted(username),
-			IOReadBytes:     data.ioReadBytes,
-			IOWriteBytes:    data.ioWriteBytes,
-			IOReadOps:       data.ioReadOps,
-			IOWriteOps:      data.ioWriteOps,
+			UID:                                    uid,
+			Username:                               username,
+			CPUUsage:                               cpuUsage,
+			CPUUsageAverage:                        data.observed.cpuUsageAvg,
+			CPUUsageEMA:                            ema,
+			MemoryUsage:                            data.observed.memoryUsage,
+			ProcessCount:                           data.observed.processCount,
+			EligibleForCPU:                         eligibility.EligibleForCPU,
+			EligibleForRAM:                         eligibility.EligibleForRAM,
+			EligibleForIO:                          eligibility.EligibleForIO,
+			IOReadBytes:                            data.observed.ioReadBytes,
+			IOWriteBytes:                           data.observed.ioWriteBytes,
+			IOReadOps:                              data.observed.ioReadOps,
+			IOWriteOps:                             data.observed.ioWriteOps,
+			ExecutableIdentityUnavailableProcesses: data.observed.executableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 data.observed.ioUnavailableProcesses,
+			EnforceableUsage:                       processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
-	c.retainProcessCPUBaselines(seenPIDs)
-	c.retainEMAUsers(userMetrics)
+	retainProcessBaselines(state, seenPIDs)
+	retainEMAUsers(state, userMetrics)
 	return userMetrics
 }
 
 // getAllUserMetricsFallback scans /proc manually if gopsutil fails.
-func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
+func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) map[int]*UserMetrics {
 	userMetrics := make(map[int]*UserMetrics)
 	procDir := "/proc"
+	sampleTime := time.Now()
 
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
@@ -1119,9 +1340,18 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 	estimatedUIDs := len(entries) / 50
 	tempData := make(map[int]*userData, estimatedUIDs)
 	seenPIDs := make(map[int32]struct{}, len(entries))
+	identityFailures := procFSFailureSummary{
+		access: procFSAccessExecutableIdentity,
+		policy: "process_remains_enforceable",
+	}
+	ioFailures := procFSFailureSummary{
+		access: procFSAccessIODecision,
+		policy: "unknown_is_not_zero",
+	}
 
 	// Read system uptime once
 	systemUptimeSeconds := c.getSystemUptimeSeconds()
+	cfg := c.getConfig()
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1138,55 +1368,115 @@ func (c *Collector) getAllUserMetricsFallback() map[int]*UserMetrics {
 		if err != nil || !c.isMonitoredUserUID(uid) {
 			continue
 		}
+		identity, identityErr := processidentity.Read(procDir, pid)
+		if errors.Is(identityErr, os.ErrNotExist) {
+			continue
+		}
 		seenPIDs[int32(pid)] = struct{}{}
 
 		if tempData[uid] == nil {
 			tempData[uid] = &userData{}
 		}
 
-		tempData[uid].processCount++
-		cpuUsage := c.getProcessCPUUsageSimple(pid)
-		tempData[uid].cpuUsage += cpuUsage
+		cpuUsage := c.getProcessCPUUsageSimple(state, pid)
 		memoryUsage := c.getProcessMemoryUsage(pid)
-		tempData[uid].memoryUsage += memoryUsage
 
 		// CPU average
+		cpuAvg := 0.0
 		proc, err := process.NewProcess(int32(pid))
+		var startTime int64
+		var startTimeErr error
 		if err == nil {
-			cpuAvg := c.getProcessCPUAverage(proc, systemUptimeSeconds)
-			tempData[uid].cpuUsageAvg += cpuAvg
+			cpuAvg = c.getProcessCPUAverage(proc, systemUptimeSeconds)
+			startTime, startTimeErr = proc.CreateTime()
+		} else {
+			startTimeErr = err
 		}
 
 		// IO
-		readBytes, writeBytes, readSyscalls, writeSyscalls := c.getProcessIO(pid)
-		tempData[uid].ioReadBytes += readBytes
-		tempData[uid].ioWriteBytes += writeBytes
-		tempData[uid].ioReadOps += readSyscalls
-		tempData[uid].ioWriteOps += writeSyscalls
+		ioCounters, ioErr := c.getProcessIO(pid)
+		var ioDelta ProcessIODelta
+		ioUnavailable := false
+		if ioErr == nil && startTimeErr == nil && startTime != 0 {
+			ioDelta = updateProcessIOSample(state, int32(pid), startTime, ioCounters, sampleTime)
+		} else {
+			if ioErr == nil {
+				if startTimeErr != nil {
+					ioErr = fmt.Errorf("read process start time: %w", startTimeErr)
+				} else {
+					ioErr = fmt.Errorf("read process start time: unavailable zero value")
+				}
+			}
+			if reportableProcFSFailure(ioErr) {
+				ioUnavailable = true
+				ioFailures.record(pid, ioErr)
+			}
+			discardProcessIOBaseline(state, int32(pid))
+		}
+		sample := processUsage{
+			cpuUsage:                               cpuUsage,
+			cpuUsageAvg:                            cpuAvg,
+			processCount:                           1,
+			memoryUsage:                            memoryUsage,
+			ioReadBytes:                            ioCounters.readBytes,
+			ioWriteBytes:                           ioCounters.writeBytes,
+			ioReadOps:                              ioCounters.readOps,
+			ioWriteOps:                             ioCounters.writeOps,
+			ioDelta:                                ioDelta,
+			executableIdentityUnavailableProcesses: boolCount(identityErr != nil),
+			ioUnavailableProcesses:                 boolCount(ioUnavailable),
+		}
+		selection := addProcessSample(tempData[uid], cfg, identity.Executable, identity.Comm, sample)
+		if !selection.IdentityTrusted {
+			identityFailures.record(pid, identityErr)
+		}
 	}
+	c.reportProcFSFailures(identityFailures, ioFailures)
 
 	for uid, data := range tempData {
 		username := c.GetUsernameFromUID(uid)
-		ema := c.calculateEMA(uid, data.cpuUsage)
+		ema := calculateEMA(state, uid, data.observed.cpuUsage)
+		enforceableEMA := calculateEnforceableEMA(state, uid, data.enforceable.cpuUsage)
+		eligibility := cfg.EvaluateUserEligibility(username)
 		userMetrics[uid] = &UserMetrics{
-			UID:             uid,
-			Username:        username,
-			CPUUsage:        data.cpuUsage,
-			CPUUsageAverage: data.cpuUsageAvg,
-			CPUUsageEMA:     ema,
-			MemoryUsage:     data.memoryUsage,
-			ProcessCount:    data.processCount,
-			IsLimited:       c.getConfig().IsUserWhitelisted(username),
-			IOReadBytes:     data.ioReadBytes,
-			IOWriteBytes:    data.ioWriteBytes,
-			IOReadOps:       data.ioReadOps,
-			IOWriteOps:      data.ioWriteOps,
+			UID:                                    uid,
+			Username:                               username,
+			CPUUsage:                               data.observed.cpuUsage,
+			CPUUsageAverage:                        data.observed.cpuUsageAvg,
+			CPUUsageEMA:                            ema,
+			MemoryUsage:                            data.observed.memoryUsage,
+			ProcessCount:                           data.observed.processCount,
+			EligibleForCPU:                         eligibility.EligibleForCPU,
+			EligibleForRAM:                         eligibility.EligibleForRAM,
+			EligibleForIO:                          eligibility.EligibleForIO,
+			IOReadBytes:                            data.observed.ioReadBytes,
+			IOWriteBytes:                           data.observed.ioWriteBytes,
+			IOReadOps:                              data.observed.ioReadOps,
+			IOWriteOps:                             data.observed.ioWriteOps,
+			ExecutableIdentityUnavailableProcesses: data.observed.executableIdentityUnavailableProcesses,
+			IOUnavailableProcesses:                 data.observed.ioUnavailableProcesses,
+			EnforceableUsage:                       processSetMetrics(data.enforceable, enforceableEMA),
 		}
 	}
 
-	c.retainProcessCPUBaselines(seenPIDs)
-	c.retainEMAUsers(userMetrics)
+	retainProcessBaselines(state, seenPIDs)
+	retainEMAUsers(state, userMetrics)
 	return userMetrics
+}
+
+func (c *Collector) reportProcFSFailures(summaries ...procFSFailureSummary) {
+	for _, summary := range summaries {
+		if summary.count == 0 {
+			continue
+		}
+		c.logger.Error("Required procfs access unavailable; decision input remains conservative",
+			"access", summary.access,
+			"affected_processes", summary.count,
+			"first_pid", summary.firstPID,
+			"first_error", summary.firstErr,
+			"policy", summary.policy,
+		)
+	}
 }
 
 // GetUserMemoryUsage returns total memory used by a user in bytes.
@@ -1204,31 +1494,15 @@ func (c *Collector) GetUserMemoryUsage(uid int) uint64 {
 	return 0
 }
 
-// GetAllUsersMemoryUsage restituisce la memoria totale usata da TUTTI gli utenti (UID >= SYSTEM_UID_MIN).
-// NON applica filtri USER_INCLUDE_LIST o USER_EXCLUDE_LIST
+// GetAllUsersMemoryUsage returns total memory used by all non-system users.
+// It does not apply USER_INCLUDE_LIST or USER_EXCLUDE_LIST filters.
 func (c *Collector) GetAllUsersMemoryUsage() uint64 {
 	var totalMemory uint64
 
-	// Utilizza i dati già raccolti da GetAllUserMetrics per evitare scansioni ridondanti
+	// Reuse data already collected by GetAllUserMetrics to avoid redundant scans.
 	allMetrics := c.GetAllUserMetrics()
 	for _, metrics := range allMetrics {
 		totalMemory += metrics.MemoryUsage
-	}
-
-	return totalMemory
-}
-
-// GetLimitedUsersMemoryUsage restituisce la memoria totale usata solo dagli utenti che passano i filtri.
-// Applica USER_INCLUDE_LIST e USER_EXCLUDE_LIST
-func (c *Collector) GetLimitedUsersMemoryUsage() uint64 {
-	var totalMemory uint64
-
-	// Utilizza i dati già raccolti da GetAllUserMetrics e filtra per utenti limitabili
-	allMetrics := c.GetAllUserMetrics()
-	for _, metrics := range allMetrics {
-		if metrics.IsLimited {
-			totalMemory += metrics.MemoryUsage
-		}
 	}
 
 	return totalMemory
@@ -1288,7 +1562,7 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 		if strings.HasPrefix(line, "VmRSS:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				// VmRSS è in kB, converti in bytes
+				// VmRSS is measured in KiB; convert it to bytes.
 				kb, err := strconv.ParseUint(fields[1], 10, 64)
 				if err != nil {
 					return 0
@@ -1303,20 +1577,25 @@ func (c *Collector) getProcessRSS(pid int) uint64 {
 
 // getProcessIO reads /proc/[pid]/io. Byte counters describe storage traffic,
 // while syscall counters are syscr/syscw and do not represent block-device IOPS.
-// Returns 0 for all values if the file doesn't exist or can't be read.
-func (c *Collector) getProcessIO(pid int) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
+// An error means no reliable sample is available; callers must discard the
+// temporal baseline instead of advancing it.
+func (c *Collector) getProcessIO(pid int) (processIOCounters, error) {
 	ioFile := fmt.Sprintf("/proc/%d/io", pid)
 	data, err := os.ReadFile(ioFile)
 	if err != nil {
-		// Common errors: EACCES (ptrace restriction), ENOENT (process exited)
-		// Silently ignore - process may have exited or ptrace restriction applies
-		return 0, 0, 0, 0
+		return processIOCounters{}, fmt.Errorf("read %s: %w", ioFile, err)
 	}
 
-	return parseProcessIO(data)
+	counters, err := parseProcessIO(data)
+	if err != nil {
+		return processIOCounters{}, fmt.Errorf("parse %s: %w", ioFile, err)
+	}
+	return counters, nil
 }
 
-func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSyscalls uint64) {
+func parseProcessIO(data []byte) (processIOCounters, error) {
+	var counters processIOCounters
+	seen := make(map[string]bool, 4)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1329,24 +1608,44 @@ func parseProcessIO(data []byte) (readBytes, writeBytes, readSyscalls, writeSysc
 		}
 
 		key := strings.TrimSuffix(parts[0], ":")
-		val, parseErr := strconv.ParseUint(parts[1], 10, 64)
-		if parseErr != nil {
-			continue
-		}
-
 		switch key {
 		case "read_bytes":
-			readBytes = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse read_bytes: %w", err)
+			}
+			counters.readBytes = value
+			seen[key] = true
 		case "write_bytes":
-			writeBytes = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse write_bytes: %w", err)
+			}
+			counters.writeBytes = value
+			seen[key] = true
 		case "syscr":
-			readSyscalls = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse syscr: %w", err)
+			}
+			counters.readOps = value
+			seen[key] = true
 		case "syscw":
-			writeSyscalls = val
+			value, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return processIOCounters{}, fmt.Errorf("parse syscw: %w", err)
+			}
+			counters.writeOps = value
+			seen[key] = true
 		}
 	}
 
-	return readBytes, writeBytes, readSyscalls, writeSyscalls
+	for _, key := range []string{"read_bytes", "write_bytes", "syscr", "syscw"} {
+		if !seen[key] {
+			return processIOCounters{}, fmt.Errorf("required counter %q is missing", key)
+		}
+	}
+	return counters, nil
 }
 
 // getSystemUptimeSeconds reads /proc/uptime and returns system uptime in seconds.
@@ -1414,84 +1713,104 @@ func calculateProcessCPUAverage(totalCPUSeconds, processAgeSeconds float64) floa
 
 // calculateEMA calculates exponential moving average for CPU usage.
 // alpha = 0.3 (weight for new value, rest for previous EMA)
-func (c *Collector) calculateEMA(uid int, currentValue float64) float64 {
+func calculateEMA(state *userMetricsSamplingState, uid int, currentValue float64) float64 {
 	const alpha = 0.3
 
-	c.emaCache.mu.Lock()
-	defer c.emaCache.mu.Unlock()
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
 
-	prevEMA, exists := c.emaCache.values[uid]
+	prevEMA, exists := state.ema.values[uid]
 	if !exists {
 		// First value: EMA = currentValue
-		c.emaCache.values[uid] = currentValue
+		state.ema.values[uid] = currentValue
 		return currentValue
 	}
 
 	ema := alpha*currentValue + (1-alpha)*prevEMA
-	c.emaCache.values[uid] = ema
+	state.ema.values[uid] = ema
 	return ema
 }
 
-func (c *Collector) retainEMAUsers(active map[int]*UserMetrics) {
-	c.emaCache.mu.Lock()
-	defer c.emaCache.mu.Unlock()
+func calculateEnforceableEMA(state *userMetricsSamplingState, uid int, currentValue float64) float64 {
+	const alpha = 0.3
 
-	for uid := range c.emaCache.values {
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
+	if state.ema.enforceableValues == nil {
+		state.ema.enforceableValues = make(map[int]float64)
+	}
+	prevEMA, exists := state.ema.enforceableValues[uid]
+	if !exists {
+		state.ema.enforceableValues[uid] = currentValue
+		return currentValue
+	}
+	ema := alpha*currentValue + (1-alpha)*prevEMA
+	state.ema.enforceableValues[uid] = ema
+	return ema
+}
+
+func retainEMAUsers(state *userMetricsSamplingState, active map[int]*UserMetrics) {
+	state.ema.mu.Lock()
+	defer state.ema.mu.Unlock()
+
+	for uid := range state.ema.values {
 		if _, exists := active[uid]; !exists {
-			delete(c.emaCache.values, uid)
+			delete(state.ema.values, uid)
+		}
+	}
+	for uid := range state.ema.enforceableValues {
+		if _, exists := active[uid]; !exists {
+			delete(state.ema.enforceableValues, uid)
 		}
 	}
 }
 
-// getProcessCPUUsageSimple calcola l'uso CPU di un processo usando il delta tra due letture.
-func (c *Collector) getProcessCPUUsageSimple(pid int) float64 {
+// getProcessCPUUsageSimple calculates process CPU usage between two samples.
+func (c *Collector) getProcessCPUUsageSimple(state *userMetricsSamplingState, pid int) float64 {
 	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return 0
 	}
-	return c.getProcessCPUUsageSimpleWithHandle(proc)
+	return c.getProcessCPUUsageSimpleWithHandle(state, proc)
 }
 
 // getProcessCPUUsageSimpleWithHandle calculates CPU usage from consecutive samples.
 // Every process state contributes after the initial baseline sample.
-func (c *Collector) getProcessCPUUsageSimpleWithHandle(proc *process.Process) float64 {
+func (c *Collector) getProcessCPUUsageSimpleWithHandle(state *userMetricsSamplingState, proc *process.Process) float64 {
 	pid32 := proc.Pid
 
-	// Ottieni tempi CPU attuali
+	// Read current process CPU times.
 	times, err := proc.Times()
-	if err != nil || c.procCache == nil {
+	if err != nil || state == nil || state.process == nil {
 		return 0
 	}
 	startTime, _ := proc.CreateTime()
-	return c.updateProcessCPUSample(pid32, startTime, *times, time.Now())
+	return updateProcessCPUSample(state, pid32, startTime, *times, time.Now())
 }
 
-func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu.TimesStat, now time.Time) float64 {
-	c.procCache.mu.Lock()
-	defer c.procCache.mu.Unlock()
+func updateProcessCPUSample(state *userMetricsSamplingState, pid int32, startTime int64, times cpu.TimesStat, now time.Time) float64 {
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
 
-	if previousStart := c.procCache.procStartTime[pid]; previousStart != 0 && startTime != 0 && previousStart != startTime {
-		delete(c.procCache.prevProcCPU, pid)
-		delete(c.procCache.prevProcTime, pid)
+	if previousStart := state.process.procStartTime[pid]; previousStart != 0 && startTime != 0 && previousStart != startTime {
+		delete(state.process.prevProcCPU, pid)
+		delete(state.process.prevProcTime, pid)
 	}
 
-	// Controlla se abbiamo un campione precedente
-	if prevTimes, ok := c.procCache.prevProcCPU[pid]; ok {
-		if prevTime, ok := c.procCache.prevProcTime[pid]; ok {
-			// Calcola tempo trascorso in secondi
+	// Calculate usage only when a previous sample exists.
+	if prevTimes, ok := state.process.prevProcCPU[pid]; ok {
+		if prevTime, ok := state.process.prevProcTime[pid]; ok {
 			elapsed := now.Sub(prevTime).Seconds()
 			if elapsed < 1 {
 				return 0
 			}
 
-			// Calcola delta CPU (user + system)
 			delta := (times.User - prevTimes.User) + (times.System - prevTimes.System)
 
-			// Aggiorna campione corrente
-			c.procCache.prevProcCPU[pid] = times
-			c.procCache.prevProcTime[pid] = now
+			state.process.prevProcCPU[pid] = times
+			state.process.prevProcTime[pid] = now
 			if startTime != 0 {
-				c.procCache.procStartTime[pid] = startTime
+				state.process.procStartTime[pid] = startTime
 			}
 
 			if delta <= 0 {
@@ -1501,27 +1820,78 @@ func (c *Collector) updateProcessCPUSample(pid int32, startTime int64, times cpu
 		}
 	}
 
-	// Keep every recently observed process baseline. Completed scans and cleanupCache remove stale PIDs.
-	c.procCache.prevProcCPU[pid] = times
-	c.procCache.prevProcTime[pid] = now
-	c.procCache.procStartTime[pid] = startTime
+	// Keep every process baseline until a completed scan proves that its PID disappeared.
+	state.process.prevProcCPU[pid] = times
+	state.process.prevProcTime[pid] = now
+	state.process.procStartTime[pid] = startTime
 	return 0
 }
 
-// retainProcessCPUBaselines removes samples for PIDs absent from a completed scan.
-// Rebuilding the maps also releases bucket capacity retained after PID churn.
-func (c *Collector) retainProcessCPUBaselines(seen map[int32]struct{}) int {
-	if c.procCache == nil {
-		return 0
+func updateProcessIOSample(
+	state *userMetricsSamplingState,
+	pid int32,
+	startTime int64,
+	counters processIOCounters,
+	now time.Time,
+) ProcessIODelta {
+	if state == nil || state.process == nil || startTime == 0 {
+		return ProcessIODelta{}
 	}
 
-	c.procCache.mu.Lock()
-	defer c.procCache.mu.Unlock()
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
 
-	needsRebuild := len(c.procCache.prevProcCPU) != len(c.procCache.prevProcTime) ||
-		len(c.procCache.prevProcCPU) != len(c.procCache.procStartTime)
+	previous, exists := state.process.prevProcIO[pid]
+	state.process.prevProcIO[pid] = processIOSample{
+		startTime: startTime,
+		counters:  counters,
+		sampledAt: now,
+	}
+	if !exists || previous.startTime != startTime {
+		return ProcessIODelta{}
+	}
+
+	return ProcessIODelta{
+		ReadBytes:  monotonicCounterDelta(counters.readBytes, previous.counters.readBytes),
+		WriteBytes: monotonicCounterDelta(counters.writeBytes, previous.counters.writeBytes),
+	}
+}
+
+func discardProcessIOBaseline(state *userMetricsSamplingState, pid int32) {
+	if state == nil || state.process == nil {
+		return
+	}
+	state.process.mu.Lock()
+	delete(state.process.prevProcIO, pid)
+	state.process.mu.Unlock()
+}
+
+func monotonicCounterDelta(current, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
+}
+
+type processBaselinePruneResult struct {
+	cpu int
+	io  int
+}
+
+// retainProcessBaselines removes samples for PIDs absent from a completed scan.
+// Rebuilding the maps also releases bucket capacity retained after PID churn.
+func retainProcessBaselines(state *userMetricsSamplingState, seen map[int32]struct{}) processBaselinePruneResult {
+	if state == nil || state.process == nil {
+		return processBaselinePruneResult{}
+	}
+
+	state.process.mu.Lock()
+	defer state.process.mu.Unlock()
+
+	needsRebuild := len(state.process.prevProcCPU) != len(state.process.prevProcTime) ||
+		len(state.process.prevProcCPU) != len(state.process.procStartTime)
 	if !needsRebuild {
-		for pid := range c.procCache.prevProcCPU {
+		for pid := range state.process.prevProcCPU {
 			if _, ok := seen[pid]; !ok {
 				needsRebuild = true
 				break
@@ -1529,31 +1899,51 @@ func (c *Collector) retainProcessCPUBaselines(seen map[int32]struct{}) int {
 		}
 	}
 	if !needsRebuild {
-		return 0
+		for pid := range state.process.prevProcIO {
+			if _, ok := seen[pid]; !ok {
+				needsRebuild = true
+				break
+			}
+		}
+	}
+	if !needsRebuild {
+		return processBaselinePruneResult{}
 	}
 
-	oldSize := len(c.procCache.prevProcCPU)
-	capacity := min(oldSize, len(seen))
-	prevProcCPU := make(map[int32]cpu.TimesStat, capacity)
-	prevProcTime := make(map[int32]time.Time, capacity)
-	procStartTime := make(map[int32]int64, capacity)
-	for pid, times := range c.procCache.prevProcCPU {
+	oldCPUSize := len(state.process.prevProcCPU)
+	oldIOSize := len(state.process.prevProcIO)
+	cpuCapacity := min(oldCPUSize, len(seen))
+	prevProcCPU := make(map[int32]cpu.TimesStat, cpuCapacity)
+	prevProcTime := make(map[int32]time.Time, cpuCapacity)
+	procStartTime := make(map[int32]int64, cpuCapacity)
+	for pid, times := range state.process.prevProcCPU {
 		if _, ok := seen[pid]; !ok {
 			continue
 		}
-		sampledAt, ok := c.procCache.prevProcTime[pid]
+		sampledAt, ok := state.process.prevProcTime[pid]
 		if !ok {
 			continue
 		}
 		prevProcCPU[pid] = times
 		prevProcTime[pid] = sampledAt
-		procStartTime[pid] = c.procCache.procStartTime[pid]
+		procStartTime[pid] = state.process.procStartTime[pid]
+	}
+	ioCapacity := min(oldIOSize, len(seen))
+	prevProcIO := make(map[int32]processIOSample, ioCapacity)
+	for pid, sample := range state.process.prevProcIO {
+		if _, ok := seen[pid]; ok {
+			prevProcIO[pid] = sample
+		}
 	}
 
-	c.procCache.prevProcCPU = prevProcCPU
-	c.procCache.prevProcTime = prevProcTime
-	c.procCache.procStartTime = procStartTime
-	return oldSize - len(prevProcCPU)
+	state.process.prevProcCPU = prevProcCPU
+	state.process.prevProcTime = prevProcTime
+	state.process.procStartTime = procStartTime
+	state.process.prevProcIO = prevProcIO
+	return processBaselinePruneResult{
+		cpu: oldCPUSize - len(prevProcCPU),
+		io:  oldIOSize - len(prevProcIO),
+	}
 }
 
 // GetUserProcessCount returns the number of processes for a user.
@@ -1571,22 +1961,22 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 	return 0
 }
 
-// WriteMetricsToDatabase scrive le metriche nel database se il DBWriter è configurato
-func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, totalCPUUsage float64, totalCores int, systemLoad float64, limitsActive bool, limitedUsersCount int) {
+// WriteMetricsToDatabase writes one typed metrics batch when a database writer is configured.
+func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, system SystemPersistenceMetrics) error {
 	c.mu.RLock()
 	writer := c.dbWriter
 	c.mu.RUnlock()
 
 	if writer == nil {
-		return
+		return nil
 	}
 
-	if err := writer.WriteMetricsBatch(userMetrics, totalCPUUsage, totalCores, systemLoad, limitsActive, limitedUsersCount); err != nil {
-		c.logger.Debug("Failed to write metrics batch to database", "error", err)
-		return
+	if err := writer.WriteMetricsBatch(userMetrics, system); err != nil {
+		return fmt.Errorf("write metrics to database: %w", err)
 	}
 
 	writer.MarkWritten()
+	return nil
 }
 
 // Stop stops the collector and its background goroutines

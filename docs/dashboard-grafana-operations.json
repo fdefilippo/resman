@@ -23,7 +23,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Sintesi operativa",
+      "title": "Operational summary",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -40,8 +40,8 @@
     },
     {
       "type": "stat",
-      "title": "Host monitorati",
-      "description": "Numero di host resman visibili nel perimetro filtrato per cluster, ambiente e ruolo.",
+      "title": "Monitored hosts",
+      "description": "Number of ResMan hosts visible within the selected cluster, environment, and role scope.",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -107,8 +107,8 @@
     },
     {
       "type": "stat",
-      "title": "Utenti limitati",
-      "description": "Utenti attualmente soggetti a limite CPU nel perimetro filtrato.",
+      "title": "Users with CPU limits",
+      "description": "Users currently subject to CPU limits within the selected scope.",
       "gridPos": {
         "x": 4,
         "y": 1,
@@ -158,7 +158,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(resman_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) or vector(0)",
+          "expr": "sum(resman_cpu_actively_limited_users_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -174,8 +174,8 @@
     },
     {
       "type": "stat",
-      "title": "CPU media",
-      "description": "Media della percentuale CPU per ruolo e host. 100% indica tutta la CPU logica dell host.",
+      "title": "Average CPU",
+      "description": "Average CPU percentage by role and host. 100% represents all logical CPU capacity on the host.",
       "gridPos": {
         "x": 8,
         "y": 1,
@@ -249,8 +249,8 @@
     },
     {
       "type": "stat",
-      "title": "RAM media",
-      "description": "Media della RAM usata rispetto alla RAM totale dei ruoli e host filtrati.",
+      "title": "Average RAM",
+      "description": "Average used RAM relative to total RAM for the selected roles and hosts.",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -324,8 +324,8 @@
     },
     {
       "type": "stat",
-      "title": "Attivazioni 1h",
-      "description": "Numero di attivazioni limiti nell ultima ora.",
+      "title": "CPU limit activations - 1h",
+      "description": "Number of confirmed CPU limit activations during the last hour.",
       "gridPos": {
         "x": 16,
         "y": 1,
@@ -375,7 +375,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
+          "expr": "sum(increase(resman_cpu_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[1h])) or vector(0)",
           "legendFormat": "",
           "range": true,
           "refId": "A",
@@ -391,8 +391,8 @@
     },
     {
       "type": "stat",
-      "title": "Errori 1h",
-      "description": "Errori registrati da resman nell ultima ora.",
+      "title": "Errors - 1h",
+      "description": "Errors recorded by ResMan during the last hour.",
       "gridPos": {
         "x": 20,
         "y": 1,
@@ -466,7 +466,7 @@
     },
     {
       "type": "row",
-      "title": "Sistemi",
+      "title": "Systems",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -483,8 +483,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Load average per sistema",
-      "description": "Load average esposto da resman per ogni server_role e host.",
+      "title": "Load average by system",
+      "description": "Load average exported by ResMan for each server role and host.",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -580,8 +580,8 @@
     },
     {
       "type": "timeseries",
-      "title": "CPU per sistema",
-      "description": "Percentuale CPU totale per ruolo e host. Il 100% rappresenta tutti i core logici disponibili sull host.",
+      "title": "CPU by system",
+      "description": "Total CPU percentage by role and host. 100% represents all logical cores available on the host.",
       "gridPos": {
         "x": 12,
         "y": 6,
@@ -677,8 +677,8 @@
     },
     {
       "type": "timeseries",
-      "title": "RAM per sistema",
-      "description": "Percentuale RAM usata per ruolo e host.",
+      "title": "RAM by system",
+      "description": "Used RAM percentage by role and host.",
       "gridPos": {
         "x": 0,
         "y": 14,
@@ -774,8 +774,8 @@
     },
     {
       "type": "timeseries",
-      "title": "IO per sistema",
-      "description": "Throughput read/write per cluster, environment, server_role e host. Usa le label aggiunte da Prometheus allo scrape e mostra 0 quando il counter esiste ma non ha incremento recente.",
+      "title": "I/O by system",
+      "description": "Read and write throughput by cluster, environment, server role, and host. Uses labels added by Prometheus at scrape time and shows zero when the counter exists without recent growth.",
       "gridPos": {
         "x": 12,
         "y": 14,
@@ -884,7 +884,7 @@
     },
     {
       "type": "row",
-      "title": "Utenti e limitazioni",
+      "title": "Users and enforcement",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -901,8 +901,8 @@
     },
     {
       "type": "table",
-      "title": "Utenti limitati",
-      "description": "Elenco operativo degli utenti con limite CPU attivo.",
+      "title": "Users with CPU limits",
+      "description": "Operational list of users with active CPU limits.",
       "gridPos": {
         "x": 0,
         "y": 23,
@@ -965,7 +965,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_limited{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
+          "expr": "sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_limit_active{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"} == 1)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -981,8 +981,8 @@
     },
     {
       "type": "table",
-      "title": "Top utenti CPU",
-      "description": "Utenti con maggiore consumo CPU nel perimetro filtrato.",
+      "title": "Top CPU users",
+      "description": "Users with the highest CPU consumption within the selected scope.",
       "gridPos": {
         "x": 0,
         "y": 29,
@@ -1065,8 +1065,8 @@
     },
     {
       "type": "table",
-      "title": "Top utenti RAM",
-      "description": "Utenti con maggiore memoria residente aggregata.",
+      "title": "Top RAM users",
+      "description": "Users with the highest aggregate resident memory.",
       "gridPos": {
         "x": 8,
         "y": 29,
@@ -1149,8 +1149,8 @@
     },
     {
       "type": "table",
-      "title": "Top utenti IO",
-      "description": "Utenti con maggiore throughput IO read+write.",
+      "title": "Top I/O users",
+      "description": "Users with the highest combined read and write throughput.",
       "gridPos": {
         "x": 16,
         "y": 29,
@@ -1233,8 +1233,8 @@
     },
     {
       "type": "table",
-      "title": "Top utenti per processi",
-      "description": "Utenti con piu processi attivi. Verde sotto 10, arancione da 10 a 30, rosso sopra 30.",
+      "title": "Top users by process count",
+      "description": "Users with the most active processes. Green below 10, orange from 10 to 30, and red above 30.",
       "gridPos": {
         "x": 0,
         "y": 37,
@@ -1318,7 +1318,7 @@
     {
       "type": "table",
       "title": "Pattern autodetect",
-      "description": "Confidence dei pattern AUTODETECT_PATTERNS rilevati per utente.",
+      "description": "Confidence of AUTODETECT_PATTERNS classifications detected for each user.",
       "gridPos": {
         "x": 12,
         "y": 37,
@@ -1401,7 +1401,7 @@
     },
     {
       "type": "row",
-      "title": "Decisioni e pressione",
+      "title": "Decisions and pressure",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1418,8 +1418,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Attivazioni e rimozioni limiti",
-      "description": "Quando resman applica o rimuove limiti CPU.",
+      "title": "CPU limit activations and removals",
+      "description": "Confirmed transitions when ResMan applies or removes CPU limits.",
       "gridPos": {
         "x": 0,
         "y": 46,
@@ -1499,7 +1499,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_cpu_limits_activated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
           "legendFormat": "activate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "A",
@@ -1512,7 +1512,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_cpu_limits_deactivated_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
           "legendFormat": "deactivate {{cluster}}/{{environment}}/{{server_role}}/{{hostname}}",
           "range": true,
           "refId": "B",
@@ -1528,8 +1528,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Cicli di controllo per trigger",
-      "description": "Origine dei cicli di controllo: polling, PSI o altri trigger registrati.",
+      "title": "Control cycles by trigger",
+      "description": "Origin of control cycles: polling, PSI, or other recorded triggers.",
       "gridPos": {
         "x": 12,
         "y": 46,
@@ -1625,8 +1625,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Eventi PSI",
-      "description": "Eventi PSI ricevuti dal kernel, separati per tipo e scope.",
+      "title": "PSI events",
+      "description": "PSI events received from the kernel, separated by type and scope.",
       "gridPos": {
         "x": 0,
         "y": 54,
@@ -1722,8 +1722,8 @@
     },
     {
       "type": "table",
-      "title": "Ultimo evento PSI",
-      "description": "Timestamp Unix dell ultimo evento PSI ricevuto per tipo/scope.",
+      "title": "Last PSI event",
+      "description": "Unix timestamp of the last PSI event received for each type and scope.",
       "gridPos": {
         "x": 12,
         "y": 54,
@@ -1798,7 +1798,7 @@
     },
     {
       "type": "row",
-      "title": "Prestazioni resman",
+      "title": "ResMan performance",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1815,8 +1815,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Durata ciclo controllo p95",
-      "description": "Latenza p95 del ciclo di controllo resman.",
+      "title": "Control cycle duration p95",
+      "description": "P95 latency of the ResMan control cycle.",
       "gridPos": {
         "x": 0,
         "y": 63,
@@ -1912,8 +1912,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Durata raccolta metriche p95",
-      "description": "Latenza p95 della raccolta metriche.",
+      "title": "Metrics collection duration p95",
+      "description": "P95 latency of metrics collection.",
       "gridPos": {
         "x": 8,
         "y": 63,
@@ -2009,8 +2009,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Errori per componente",
-      "description": "Errori incrementali raggruppati per componente e tipo.",
+      "title": "Errors by component",
+      "description": "Incremental errors grouped by component and type.",
       "gridPos": {
         "x": 16,
         "y": 63,
@@ -2290,7 +2290,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "resman - Gestione Operativa",
+  "title": "ResMan - Operations",
   "uid": "resman-operations",
   "version": 1,
   "weekStart": ""

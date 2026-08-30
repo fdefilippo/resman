@@ -18,17 +18,22 @@
 package logging
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/syslog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
-// LogLevel rappresenta i livelli di log supportati.
+// LogLevel identifies a supported logging severity.
 type LogLevel int
 
 const (
@@ -36,10 +41,13 @@ const (
 	INFO
 	WARN
 	ERROR
+
+	defaultLogFileMode   = os.FileMode(0600)
+	permittedLogFileMode = os.FileMode(0660)
 )
 
 var (
-	// levelNames mappa i livelli di log alle loro stringhe.
+	// levelNames maps logging levels to their wire representation.
 	levelNames = map[LogLevel]string{
 		DEBUG: "DEBUG",
 		INFO:  "INFO",
@@ -47,19 +55,23 @@ var (
 		ERROR: "ERROR",
 	}
 
-	// currentLogger è il logger globale singleton.
+	// currentLogger is the process-wide logger singleton.
 	currentLogger *Logger
 	once          sync.Once
+
+	defaultFallbackWriter io.Writer = os.Stderr
 )
 
-// Logger è il nostro logger personalizzato con rotazione.
+// Logger writes structured records to one ordered sink with rotation support.
 type Logger struct {
 	state  *loggerState
-	fields map[string]interface{} // Campi contestuali per WithField
+	fields map[string]interface{}
 }
 
 type loggerState struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
+	healthMu     sync.RWMutex
+	writeGate    operationgate.Gate
 	level        LogLevel
 	file         *os.File
 	filePath     string
@@ -67,16 +79,75 @@ type loggerState struct {
 	logger       *log.Logger
 	lastRotation time.Time
 	useSyslog    bool
-	syslogWriter *syslog.Writer
+	syslogWriter syslogSink
+	fallback     io.Writer
+	fileOps      logFileOperations
+	reopenMeta   *logFileMetadata
+	health       Health
 }
 
-// InitLogger inizializza il logger globale con i parametri specificati.
-// Deve essere chiamato all'avvio dell'applicazione.
+type syslogSink interface {
+	Debug(string) error
+	Info(string) error
+	Warning(string) error
+	Err(string) error
+	Close() error
+}
+
+type logFileOperations struct {
+	stat   func(*os.File) (os.FileInfo, error)
+	close  func(*os.File) error
+	remove func(string) error
+	rename func(string, string) error
+	open   func(string, *logFileMetadata) (*os.File, error)
+}
+
+type logFileMetadata struct {
+	mode              os.FileMode
+	uid               int
+	gid               int
+	preserveOwnership bool
+}
+
+func defaultLogFileOperations() logFileOperations {
+	return logFileOperations{
+		stat:  func(file *os.File) (os.FileInfo, error) { return file.Stat() },
+		close: func(file *os.File) error { return file.Close() },
+		remove: func(path string) error {
+			return os.Remove(path)
+		},
+		rename: os.Rename,
+		open:   openSecureLogFile,
+	}
+}
+
+func (s *loggerState) operations() logFileOperations {
+	defaults := defaultLogFileOperations()
+	operations := s.fileOps
+	if operations.stat == nil {
+		operations.stat = defaults.stat
+	}
+	if operations.close == nil {
+		operations.close = defaults.close
+	}
+	if operations.remove == nil {
+		operations.remove = defaults.remove
+	}
+	if operations.rename == nil {
+		operations.rename = defaults.rename
+	}
+	if operations.open == nil {
+		operations.open = defaults.open
+	}
+	return operations
+}
+
+// InitLogger initializes the process-wide logger once.
 func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 	once.Do(func() {
 		logLevel := parseLogLevel(level)
 
-		// Se syslog è abilitato, crea logger syslog
+		// Syslog construction failure degrades directly to stderr.
 		if useSyslog {
 			syslogWriter, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "resman")
 			if err != nil {
@@ -86,19 +157,19 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 				return
 			}
 
-			// Crea logger con syslog
 			currentLogger = &Logger{
 				state: &loggerState{
 					level:        logLevel,
 					logger:       log.New(syslogWriter, "", 0),
 					useSyslog:    true,
 					syslogWriter: syslogWriter,
+					fallback:     os.Stderr,
+					health:       Health{Healthy: true},
 				},
 				fields: make(map[string]interface{}),
 			}
 
-			// Logga il primo messaggio via syslog
-			currentLogger.logInternal(INFO, "Logger initialized (syslog)",
+			_ = currentLogger.logInternal(INFO, "Logger initialized (syslog)",
 				"level", levelNames[logLevel],
 				"syslog", true,
 			)
@@ -114,8 +185,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 		}
 		currentLogger = fileLogger
 
-		// Logga il primo messaggio
-		currentLogger.logInternal(INFO, "Logger initialized",
+		_ = currentLogger.logInternal(INFO, "Logger initialized",
 			"level", levelNames[logLevel],
 			"file", filePath,
 			"max_size", fmt.Sprintf("%d bytes", maxSize),
@@ -131,9 +201,9 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 		return nil, fmt.Errorf("failed to create log directory %s: %w", filepath.Dir(filePath), err)
 	}
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := openSecureLogFile(filePath, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+		return nil, err
 	}
 
 	return &Logger{
@@ -144,12 +214,77 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 			maxSize:      maxSize,
 			logger:       log.New(file, "", 0),
 			lastRotation: time.Now(),
+			fallback:     os.Stderr,
+			health:       Health{Healthy: true},
 		},
 		fields: make(map[string]interface{}),
 	}, nil
 }
 
-// GetLogger restituisce il logger globale inizializzato.
+// openSecureLogFile opens a log without ever creating it more broadly than 0600.
+// Existing files preserve intentional owner/group read-write access while
+// removing execute and all access for other users. Symlinks and non-regular
+// destinations are rejected so permission changes apply to the managed inode.
+func openSecureLogFile(filePath string, metadata *logFileMetadata) (*os.File, error) {
+	if info, err := os.Lstat(filePath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symbolic link log file %s", filePath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to inspect log path %s: %w", filePath, err)
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	file, err := os.OpenFile(filePath, flags, defaultLogFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("failed to inspect log file %s: %w", filePath, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("log path %s must be a regular file", filePath)
+	}
+
+	if metadata == nil {
+		metadata = &logFileMetadata{mode: restrictiveLogFileMode(info.Mode())}
+	}
+	if metadata.preserveOwnership {
+		if err := file.Chown(metadata.uid, metadata.gid); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf(
+				"failed to preserve log ownership %d:%d for %s: %w",
+				metadata.uid,
+				metadata.gid,
+				filePath,
+				err,
+			)
+		}
+	}
+	if err := file.Chmod(metadata.mode); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("failed to secure log file %s with mode %04o: %w", filePath, metadata.mode, err)
+	}
+	return file, nil
+}
+
+func restrictiveLogFileMode(mode os.FileMode) os.FileMode {
+	return mode.Perm() & permittedLogFileMode
+}
+
+func metadataForLogRotation(info os.FileInfo) logFileMetadata {
+	metadata := logFileMetadata{mode: restrictiveLogFileMode(info.Mode())}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		metadata.uid = int(stat.Uid)
+		metadata.gid = int(stat.Gid)
+		metadata.preserveOwnership = true
+	}
+	return metadata
+}
+
+// GetLogger returns the initialized process-wide logger.
 func GetLogger() *Logger {
 	if currentLogger == nil {
 		// If uninitialized, create the default logger with stderr fallback.
@@ -158,7 +293,7 @@ func GetLogger() *Logger {
 	return currentLogger
 }
 
-// parseLogLevel converte una stringa in LogLevel.
+// parseLogLevel converts a configuration value to a LogLevel.
 func parseLogLevel(level string) LogLevel {
 	switch level {
 	case "DEBUG":
@@ -176,61 +311,95 @@ func parseLogLevel(level string) LogLevel {
 func createStderrLogger(level LogLevel) *Logger {
 	return &Logger{
 		state: &loggerState{
-			level:  level,
-			logger: log.New(os.Stderr, "", 0),
+			level:    level,
+			logger:   log.New(os.Stderr, "", 0),
+			fallback: os.Stderr,
+			health:   Health{Healthy: true},
 		},
 		fields: make(map[string]interface{}),
 	}
 }
 
-// logInternal è il metodo interno di logging che gestisce la formattazione e la scrittura.
-func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{}) {
-	l.state.mu.Lock()
-	defer l.state.mu.Unlock()
-
-	if level < l.state.level {
-		return
+// logInternal formats and writes one ordered log record.
+func (l *Logger) logInternal(level LogLevel, msg string, keyvals ...interface{}) error {
+	l.state.mu.RLock()
+	configuredLevel := l.state.level
+	l.state.mu.RUnlock()
+	if level < configuredLevel {
+		return nil
 	}
 
-	logMsg := l.formatMessageLocked(level, msg, keyvals...)
+	logMsg := l.formatMessage(level, msg, keyvals...)
+	leaveWrite := l.state.writeGate.Enter()
+	defer leaveWrite()
 
-	// Se usiamo syslog, gestiamo i livelli appropriati
-	if l.state.useSyslog && l.state.syslogWriter != nil {
-		// Best-effort syslog write; errors are ignored to avoid logger recursion.
-		switch level {
-		case DEBUG:
-			_ = l.state.syslogWriter.Debug(logMsg)
-		case INFO:
-			_ = l.state.syslogWriter.Info(logMsg)
-		case WARN:
-			_ = l.state.syslogWriter.Warning(logMsg)
-		case ERROR:
-			_ = l.state.syslogWriter.Err(logMsg)
-		default:
-			_ = l.state.syslogWriter.Info(logMsg)
-		}
-	} else {
-		// Write to the underlying file or stderr logger.
-		l.state.logger.Println(logMsg)
+	operation, err := l.writePrimaryRecord(level, logMsg)
+	if err != nil {
+		return l.reportSinkFailure(operation, err)
+	}
 
-		// Verifica e gestisci la rotazione del log (solo per file-based logger)
-		if l.state.file != nil {
-			l.checkAndRotateLocked()
+	if l.state.file != nil {
+		operation, err = l.checkAndRotate()
+		if err != nil {
+			return l.reportSinkFailure(operation, err)
 		}
 	}
+
+	l.recordSinkSuccess()
+	return nil
 }
 
-func (l *Logger) formatMessageLocked(level LogLevel, msg string, keyvals ...interface{}) string {
-	// Formatta il messaggio con timestamp e livello
+func (l *Logger) writePrimaryRecord(level LogLevel, logMsg string) (string, error) {
+	if l.state.useSyslog {
+		if l.state.syslogWriter == nil {
+			return "write", fmt.Errorf("syslog writer is unavailable")
+		}
+		switch level {
+		case DEBUG:
+			return "write", l.state.syslogWriter.Debug(logMsg)
+		case INFO:
+			return "write", l.state.syslogWriter.Info(logMsg)
+		case WARN:
+			return "write", l.state.syslogWriter.Warning(logMsg)
+		case ERROR:
+			return "write", l.state.syslogWriter.Err(logMsg)
+		default:
+			return "write", l.state.syslogWriter.Info(logMsg)
+		}
+	}
+
+	if l.state.filePath != "" && l.state.file == nil {
+		if err := l.reopenActiveLog(); err != nil {
+			return "reopen", err
+		}
+	}
+	if l.state.logger == nil {
+		return "write", fmt.Errorf("log writer is unavailable")
+	}
+	if err := l.state.logger.Output(2, logMsg); err != nil {
+		if l.state.file != nil {
+			closeErr := l.state.operations().close(l.state.file)
+			if closeErr == nil {
+				l.state.file = nil
+			}
+			return "write", errors.Join(err, closeErr)
+		}
+		return "write", err
+	}
+	return "write", nil
+}
+
+func (l *Logger) formatMessage(level LogLevel, msg string, keyvals ...interface{}) string {
+	// Prefix every record with its timestamp and severity.
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logMsg := fmt.Sprintf("[%s] [%s] %s", timestamp, levelNames[level], sanitizeLogValue(msg))
 
-	// Aggiungi i campi contestuali di WithField
+	// Add immutable contextual fields copied by WithField.
 	for k, v := range l.fields {
 		logMsg += fmt.Sprintf(" %s=%s", sanitizeLogValue(k), sanitizeLogValue(v))
 	}
 
-	// Aggiungi coppie chiave-valore se presenti
+	// Append per-record key-value pairs.
 	if len(keyvals) > 0 {
 		for i := 0; i < len(keyvals); i += 2 {
 			if i+1 < len(keyvals) {
@@ -248,122 +417,183 @@ func sanitizeLogValue(value interface{}) string {
 	return quoted[1 : len(quoted)-1]
 }
 
-// checkAndRotate verifica se è necessaria la rotazione e la esegue.
-func (l *Logger) checkAndRotateLocked() {
-	// Verifica solo una volta al secondo per performance
+// checkAndRotate rotates an oversized file while the write gate is held.
+func (l *Logger) checkAndRotate() (string, error) {
+	// Limit filesystem metadata checks to one per second.
 	if time.Since(l.state.lastRotation) < time.Second {
-		return
+		return "", nil
 	}
 
 	l.state.lastRotation = time.Now()
 
-	// Ottieni le dimensioni del file
-	info, err := l.state.file.Stat()
+	info, err := l.state.operations().stat(l.state.file)
 	if err != nil {
-		// Non possiamo verificare, uscire
-		return
+		return "rotation_stat", fmt.Errorf("inspect active log before rotation: %w", err)
 	}
 
-	// Se il file supera la dimensione massima, ruota
 	if info.Size() > l.state.maxSize {
-		l.rotateLogLocked()
+		return l.rotateLog()
 	}
+	return "", nil
 }
 
-// rotateLog esegue la rotazione del file di log.
-func (l *Logger) rotateLogLocked() {
-	// Chiudi il file corrente
-	_ = l.state.file.Close()
-
-	// Rinomina il file corrente (es. .log -> .log.1)
-	backupPath := l.state.filePath + ".1"
-
-	// Rimuovi il backup precedente se esiste
-	if _, err := os.Stat(backupPath); err == nil {
-		_ = os.Remove(backupPath)
-	}
-
-	// Rinomina il file corrente
-	if err := os.Rename(l.state.filePath, backupPath); err != nil {
-		// The standard logger reports rotation errors on stderr.
-		log.Printf("ERROR: Failed to rotate log file: %v", err)
-	}
-
-	// Riapri il nuovo file di log
-	file, err := os.OpenFile(l.state.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+// rotateLog rotates the log while preserving its restrictive owner/group access.
+func (l *Logger) rotateLog() (string, error) {
+	operations := l.state.operations()
+	info, err := operations.stat(l.state.file)
 	if err != nil {
-		// If the file cannot be reopened, use stderr to keep stdout clean.
-		log.Printf("ERROR: Failed to reopen log file after rotation: %v", err)
-		l.state.file = nil
-		l.state.logger = log.New(os.Stderr, "", 0)
-		return
+		return "rotation_stat", fmt.Errorf("inspect active log metadata before rotation: %w", err)
+	}
+	metadata := metadataForLogRotation(info)
+
+	if err := operations.close(l.state.file); err != nil {
+		// A failed Close has ambiguous descriptor state. Keep the existing handle
+		// so the next write can prove whether it remains usable instead of
+		// opening a second descriptor and potentially leaking the first one.
+		return "rotation_close", fmt.Errorf("close active log before rotation: %w", err)
+	}
+	l.state.file = nil
+
+	backupPath := l.state.filePath + ".1"
+	if err := operations.remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return "rotation_remove", errors.Join(
+			fmt.Errorf("remove previous rotated log %s: %w", backupPath, err),
+			l.reopenActiveLog(),
+		)
+	}
+
+	if err := operations.rename(l.state.filePath, backupPath); err != nil {
+		return "rotation_rename", errors.Join(
+			fmt.Errorf("rename active log to %s: %w", backupPath, err),
+			l.reopenActiveLog(),
+		)
+	}
+
+	file, err := operations.open(l.state.filePath, &metadata)
+	if err != nil {
+		l.state.reopenMeta = &metadata
+		return "rotation_reopen", fmt.Errorf("reopen active log after rotation: %w", err)
 	}
 
 	l.state.file = file
-	l.state.logger.SetOutput(file)
-
-	if INFO >= l.state.level {
-		l.state.logger.Println(l.formatMessageLocked(INFO, "Log rotated due to size limit"))
+	l.state.reopenMeta = nil
+	if l.state.logger == nil {
+		l.state.logger = log.New(file, "", 0)
+	} else {
+		l.state.logger.SetOutput(file)
 	}
+
+	l.state.mu.RLock()
+	configuredLevel := l.state.level
+	l.state.mu.RUnlock()
+	if INFO >= configuredLevel {
+		if err := l.state.logger.Output(2, l.formatMessage(INFO, "Log rotated due to size limit")); err != nil {
+			closeErr := operations.close(file)
+			l.state.file = nil
+			return "rotation_notice", errors.Join(err, closeErr)
+		}
+	}
+	return "", nil
 }
 
-// Metodi pubblici per i diversi livelli di log
+func (l *Logger) reopenActiveLog() error {
+	if l.state.filePath == "" {
+		return fmt.Errorf("active log path is unavailable")
+	}
+	file, err := l.state.operations().open(l.state.filePath, l.state.reopenMeta)
+	if err != nil {
+		return fmt.Errorf("reopen active log %s: %w", l.state.filePath, err)
+	}
+	l.state.file = file
+	l.state.reopenMeta = nil
+	if l.state.logger == nil {
+		l.state.logger = log.New(file, "", 0)
+	} else {
+		l.state.logger.SetOutput(file)
+	}
+	return nil
+}
 
-// Debug logga un messaggio a livello DEBUG.
+// Debug writes a best-effort DEBUG record and publishes failures through Health.
 func (l *Logger) Debug(msg string, keyvals ...interface{}) {
-	l.logInternal(DEBUG, msg, keyvals...)
+	_ = l.DebugChecked(msg, keyvals...)
 }
 
-// Info logga un messaggio a livello INFO.
+// DebugChecked writes a DEBUG record and returns any configured-sink failure.
+func (l *Logger) DebugChecked(msg string, keyvals ...interface{}) error {
+	return l.logInternal(DEBUG, msg, keyvals...)
+}
+
+// Info writes a best-effort INFO record and publishes failures through Health.
 func (l *Logger) Info(msg string, keyvals ...interface{}) {
-	l.logInternal(INFO, msg, keyvals...)
+	_ = l.InfoChecked(msg, keyvals...)
 }
 
-// Warn logga un messaggio a livello WARN.
+// InfoChecked writes an INFO record and returns any configured-sink failure.
+func (l *Logger) InfoChecked(msg string, keyvals ...interface{}) error {
+	return l.logInternal(INFO, msg, keyvals...)
+}
+
+// Warn writes a best-effort WARN record and publishes failures through Health.
 func (l *Logger) Warn(msg string, keyvals ...interface{}) {
-	l.logInternal(WARN, msg, keyvals...)
+	_ = l.WarnChecked(msg, keyvals...)
 }
 
-// Error logga un messaggio a livello ERROR.
+// WarnChecked writes a WARN record and returns any configured-sink failure.
+func (l *Logger) WarnChecked(msg string, keyvals ...interface{}) error {
+	return l.logInternal(WARN, msg, keyvals...)
+}
+
+// Error writes a best-effort ERROR record and publishes failures through Health.
 func (l *Logger) Error(msg string, keyvals ...interface{}) {
-	l.logInternal(ERROR, msg, keyvals...)
+	_ = l.ErrorChecked(msg, keyvals...)
 }
 
-// WithField crea un nuovo logger con un campo aggiuntivo.
+// ErrorChecked writes an ERROR record and returns any configured-sink failure.
+func (l *Logger) ErrorChecked(msg string, keyvals ...interface{}) error {
+	return l.logInternal(ERROR, msg, keyvals...)
+}
+
+// WithField returns a logger view with one additional immutable field.
 func (l *Logger) WithField(key string, value interface{}) *Logger {
 	newLogger := &Logger{
 		state:  l.state,
 		fields: make(map[string]interface{}, len(l.fields)+1),
 	}
 
-	// Copia i campi esistenti
+	// Copy existing fields so sibling views cannot mutate each other.
 	for k, v := range l.fields {
 		newLogger.fields[k] = v
 	}
-	// Aggiungi il nuovo campo
 	newLogger.fields[key] = value
 
 	return newLogger
 }
 
-// SetLevel cambia il livello di log a runtime.
+// SetLevel changes the runtime log level without waiting for sink I/O.
 func (l *Logger) SetLevel(level string) {
 	l.state.mu.Lock()
 	defer l.state.mu.Unlock()
 	l.state.level = parseLogLevel(level)
 }
 
-// Close chiude il file di log se aperto.
+// Close closes the active log sink after preceding writes finish.
 func (l *Logger) Close() error {
-	l.state.mu.Lock()
-	defer l.state.mu.Unlock()
+	leaveWrite := l.state.writeGate.Enter()
+	defer leaveWrite()
 
 	if l.state.useSyslog && l.state.syslogWriter != nil {
-		return l.state.syslogWriter.Close()
+		if err := l.state.syslogWriter.Close(); err != nil {
+			return l.reportSinkFailure("close", err)
+		}
+		return nil
 	}
 
 	if l.state.file != nil {
-		return l.state.file.Close()
+		if err := l.state.operations().close(l.state.file); err != nil {
+			return l.reportSinkFailure("close", err)
+		}
+		l.state.file = nil
 	}
 	return nil
 }

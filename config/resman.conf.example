@@ -1,50 +1,51 @@
 # ResMan Configuration File
-# Location: /etc/resman.conf
+# Location: /etc/resman/resman.conf
 #
-# Legend: [D] = Dynamic (hot reload) | [S] = Static (requires restart)
-#         [D/S] = Mixed; see the section comments
+# Complete defaults, lifecycle, and empty-value semantics: docs/CONFIGURATION.md
 
 # ========================
-# PATHS [S]
+# PATHS
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=resman
-CREATED_CGROUPS_FILE=/var/run/resman/cgroups.txt
-METRICS_CACHE_FILE=/var/run/resman/metrics.cache
+CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 
 # ========================
-# TIMING [D]
+# TIMING
 # ========================
 POLLING_INTERVAL=30
-# Minimum duration for global limits and each newly limited/re-added user.
-# Idle release uses the per-user CPU EMA after this hold time expires.
+# Global release waits from the most recent CPU or RAM/IO activation epoch.
+# Idle CPU-user release has its own hold from initial limit or re-addition.
 MIN_ACTIVE_TIME=60
+# Reuses recently collected values through the exact TTL boundary (minimum 1 second). Values expire
+# only after this interval; /proc/stat and per-process baseline retention follows
+# the effective sampling cadence instead.
 METRICS_CACHE_TTL=15
 METRICS_REFRESH_INTERVAL=30
 PROCESS_MIN_AGE_SECONDS=60
 
 # ========================
-# TIMEOUT CONFIGURATION [S]
+# TIMEOUT CONFIGURATION
 # ========================
 # Timeout for critical operations (v1.18.3+)
 #
 # CGROUP_OPERATION_TIMEOUT: Timeout for cgroup operations (process migration)
 # Default: 5 seconds
 # Increase on slow systems or with many processes
-# CGROUP_OPERATION_TIMEOUT=5
+CGROUP_OPERATION_TIMEOUT=5
 #
 #
 # MCP_SHUTDOWN_TIMEOUT: Timeout for MCP server shutdown
 # Default: 10 seconds
-# MCP_SHUTDOWN_TIMEOUT=10
+MCP_SHUTDOWN_TIMEOUT=10
 
 # ========================
-# THRESHOLDS (percentages) [D]
+# THRESHOLDS (percentages)
 # ========================
 CPU_THRESHOLD=75             # Activate limits if user CPU >= 75%
 CPU_RELEASE_THRESHOLD=40     # Release limits if user CPU < 40%
 
-# THRESHOLD TIME WINDOW (seconds) [D]
+# THRESHOLD TIME WINDOW (seconds)
 # CPU_THRESHOLD_DURATION: Wait time before activating limits after threshold breach
 # Useful to avoid activation for temporary spikes (e.g., deployments, backups)
 # Default: 90 seconds (3 cycles of 30s)
@@ -72,7 +73,7 @@ CPU_RELEASE_THRESHOLD=40     # Release limits if user CPU < 40%
 CPU_THRESHOLD_DURATION=90
 
 # ========================
-# CPU LIMITS [D]
+# CPU LIMITS
 # ========================
 # cpu.max format: "quota period"
 # total_cores = Quota / Period
@@ -83,10 +84,9 @@ CPU_THRESHOLD_DURATION=90
 # the process original cgroup no longer exists. resman does not modify
 # cpu.max in cgroups managed by systemd.
 CPU_QUOTA_NORMAL="max 100000"
-CPU_QUOTA_LIMITED="50000 100000"
 
 # ========================
-# RAM LIMITS [D]
+# RAM LIMITS
 # ========================
 # Enable/disable RAM limiting via cgroups v2
 # When enabled, memory.max limits are applied to user cgroups
@@ -95,9 +95,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_THRESHOLD: Percentage of total user RAM to activate limits
 # RAM_RELEASE_THRESHOLD: Percentage to release limits
 # Format: percentages 1-100
-#
-# RAM_QUOTA_LIMITED: Total RAM limit in bytes or with suffix (K/M/G/T)
-# Examples: "2147483648" (2GB in bytes), "2G", "512M"
 #
 # RAM_QUOTA_PER_USER: Per-user RAM limit (when limits are active)
 # Examples: "536870912" (512MB), "512M", "1G"
@@ -120,7 +117,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_LIMIT_ENABLED=true
 # RAM_THRESHOLD=75
 # RAM_RELEASE_THRESHOLD=40
-# RAM_QUOTA_LIMITED=2G
 # RAM_QUOTA_PER_USER=512M
 # DISABLE_SWAP=false
 # RAM_HIGH_RATIO=0.8
@@ -129,7 +125,6 @@ CPU_QUOTA_LIMITED="50000 100000"
 # RAM_LIMIT_ENABLED=true
 # RAM_THRESHOLD=80
 # RAM_RELEASE_THRESHOLD=50
-# RAM_QUOTA_LIMITED=4G
 # RAM_QUOTA_PER_USER=1G
 # DISABLE_SWAP=true
 # RAM_HIGH_RATIO=0.9
@@ -142,13 +137,12 @@ CPU_QUOTA_LIMITED="50000 100000"
 RAM_LIMIT_ENABLED=false
 RAM_THRESHOLD=75
 RAM_RELEASE_THRESHOLD=40
-RAM_QUOTA_LIMITED=2G
 RAM_QUOTA_PER_USER=512M
 DISABLE_SWAP=false
 RAM_HIGH_RATIO=0.8
 
 # ========================
-# RAM USER INCLUDE/EXCLUDE LISTS [D]
+# RAM USER INCLUDE/EXCLUDE LISTS
 # ========================
 # Separate lists for RAM limits (if different from CPU limits)
 # RAM_USER_INCLUDE_LIST: If specified, include ONLY matching users
@@ -162,21 +156,21 @@ RAM_HIGH_RATIO=0.8
 # # Exclude system users from RAM limits
 # RAM_USER_EXCLUDE_LIST=^mysql,^postgres,^redis
 #
-# # Empty = use default behavior (include all, exclude root)
+# # Empty = include every non-excluded user; exclude nobody
 # RAM_USER_INCLUDE_LIST=
-# RAM_USER_EXCLUDE_LIST=root
+# RAM_USER_EXCLUDE_LIST=
 #
 RAM_USER_INCLUDE_LIST=
-RAM_USER_EXCLUDE_LIST=root
+RAM_USER_EXCLUDE_LIST=
 
 # ========================
-# IO LIMITS [D]
+# IO LIMITS
 # ========================
 # Enable/disable IO limiting via cgroups v2 io controller
 # IO_LIMIT_ENABLED: true = enable IO limits, false = disable
 #
-# IO_THRESHOLD: Percentage of total user IO to activate limits
-# IO_RELEASE_THRESHOLD: Percentage to release limits
+# IO_THRESHOLD: Any configured IO dimension activates at this percentage
+# IO_RELEASE_THRESHOLD: Every configured IO dimension must fall below this percentage
 #
 # IO_READ_BPS: Per-user read bandwidth limit (bytes/s with K/M/G/T suffix)
 # IO_WRITE_BPS: Per-user write bandwidth limit
@@ -186,6 +180,12 @@ RAM_USER_EXCLUDE_LIST=root
 # IO_DEVICE_FILTER: "all" = enumerate all whole block devices from /sys/block,
 # or use a specific "major:minor" device such as "8:0"
 # IO_THRESHOLD_DURATION: Seconds to wait before activating IO limits (0 = immediate)
+# Unavailable /proc/PID/io samples are treated as unknown, never as zero traffic.
+# Partial rates may prove activation, but incomplete coverage prevents release.
+# Finite IOPS dimensions use io.stat rios/wios from unlimited per-user observation
+# cgroups; page-cache, pipe, and socket syscalls do not count as block IOPS.
+# A new eligible user's first baseline cannot release global I/O enforcement;
+# available users remain a lower bound that can still prove activation.
 #   Useful to avoid throttling on brief IO spikes (e.g., backups, builds, file copies)
 #
 # IO_USER_INCLUDE_LIST: If specified, include ONLY matching users for IO limits
@@ -225,7 +225,7 @@ IO_WRITE_IOPS=500
 IO_DEVICE_FILTER=all
 IO_THRESHOLD_DURATION=0
 IO_USER_INCLUDE_LIST=
-IO_USER_EXCLUDE_LIST=root
+IO_USER_EXCLUDE_LIST=
 
 # IO Starvation Auto-Remediation
 # Detects when a user is IO-throttled for too long and temporarily
@@ -251,7 +251,7 @@ IO_PSI_THRESHOLD=50
 IO_REVERT_ON_NORMAL=true
 
 # ========================
-# WORKLOAD PATTERN DETECTION [D]
+# WORKLOAD PATTERN DETECTION
 # ========================
 # Auto-detect eligible user workload patterns (batch/interactive/mixed) and
 # select CPU and RAM quotas based on historical usage.
@@ -312,26 +312,33 @@ INTERACTIVE_CPU_QUOTA=50000
 INTERACTIVE_RAM_QUOTA=1G
 
 # ========================
-# LIMIT HOOK [D]
+# LIMIT HOOK
 # ========================
 # Optional notification/action when a user is newly limited.
 # Script receives RESMAN_LIMIT_* environment variables.
-# URL receives a JSON POST with uid, username, cpu_usage, shared_cgroup, timestamp.
+# URL receives a JSON POST with uid, username, enforceable_cpu_usage_percent,
+# cpu_eligible_users_count, shared_cgroup, and timestamp.
+# Script stdout/stderr is discarded and never copied into daemon errors or logs.
+# URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
+# Shutdown cancels and drains in-flight hooks; each delivery exports one bounded outcome.
 LIMIT_HOOK_ENABLED=false
+LIMIT_HOOK_SCRIPT=
+LIMIT_HOOK_URL=
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
 LIMIT_HOOK_TIMEOUT=10
 
 # ========================
-# PROMETHEUS [S]
+# PROMETHEUS
 # ========================
 # Requires restart for: enable/disable, port, host, TLS, auth
 # Metrics are updated dynamically, but server configuration is not
 ENABLE_PROMETHEUS=false              # Enable metrics export
 # SECURITY: Default bind is 127.0.0.1 (localhost only)
-# Set to 0.0.0.0 to expose to all interfaces (NOT recommended without auth/TLS)
-# PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
-# PROMETHEUS_METRICS_BIND_PORT=1974     # Port for metrics endpoint
+# NON-DEFAULT REMOTE BIND: requires TLS, authentication, and firewall restrictions.
+# PROMETHEUS_METRICS_BIND_HOST=0.0.0.0
+PROMETHEUS_METRICS_BIND_HOST=127.0.0.1  # Default: localhost (secure)
+PROMETHEUS_METRICS_BIND_PORT=1974       # Port for metrics endpoint
 # Metrics available at: http://HOST:PORT/metrics
 
 # Prometheus TLS/HTTPS (optional)
@@ -339,21 +346,25 @@ PROMETHEUS_TLS_ENABLED=false
 PROMETHEUS_TLS_CERT_FILE=/etc/resman/tls/server.crt
 PROMETHEUS_TLS_KEY_FILE=/etc/resman/tls/server.key
 # Set a client CA only when Prometheus must authenticate with mTLS.
+PROMETHEUS_TLS_CA_FILE=
 # PROMETHEUS_TLS_CA_FILE=/etc/resman/tls/ca.crt
 PROMETHEUS_TLS_MIN_VERSION=1.2
 
 # Prometheus Authentication (optional)
 # Options: none, basic, jwt, both
 PROMETHEUS_AUTH_TYPE=none
-PROMETHEUS_AUTH_USERNAME=prometheus
-PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
-PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
+PROMETHEUS_AUTH_USERNAME=
+PROMETHEUS_AUTH_PASSWORD_FILE=
+PROMETHEUS_JWT_SECRET_FILE=
+# PROMETHEUS_AUTH_USERNAME=prometheus
+# PROMETHEUS_AUTH_PASSWORD_FILE=/etc/resman/prometheus_password
+# PROMETHEUS_JWT_SECRET_FILE=/etc/resman/jwt_secret
 PROMETHEUS_JWT_ISSUER=resman
 PROMETHEUS_JWT_AUDIENCE=prometheus
-PROMETHEUS_JWT_EXPIRY=3600
+# JWT tokens must contain a signed exp claim; the token issuer chooses its lifetime.
 
 # ========================
-# LOGGING [D/S]
+# LOGGING
 # ========================
 # LOG_LEVEL is dynamic. LOG_MAX_SIZE, USE_SYSLOG and LOG_FILE require restart.
 # Available log levels:
@@ -364,10 +375,15 @@ PROMETHEUS_JWT_EXPIRY=3600
 LOG_LEVEL=INFO
 LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
 USE_SYSLOG=false             # true: use system syslog, false: use file
+# New files use 0600. Existing files retain only owner/group read-write access;
+# execute bits and every permission for other users are removed at startup.
+# The managed path must be a regular file; symbolic links are rejected.
+# Runtime sink/rotation failures emit a bounded, non-secret stderr diagnostic;
+# the control-cycle owner reports a degraded result if its completion log fails.
 LOG_FILE=/var/log/resman.log
 
 # ========================
-# SYSTEM [S]
+# SYSTEM
 # ========================
 MIN_SYSTEM_CORES=1
 
@@ -397,7 +413,7 @@ SYSTEM_UID_MIN=1000
 # SYSTEM_UID_MAX=60000
 
 # ========================
-# USER INCLUDE LIST [D]
+# USER INCLUDE LIST
 # ========================
 # If specified, only users matching the listed regex patterns are eligible
 # for CPU limits. If empty or unspecified, NO users will be limited.
@@ -415,10 +431,10 @@ SYSTEM_UID_MIN=1000
 # but does NOT apply limits to anyone. To limit all users, set
 # USER_INCLUDE_LIST=.*
 #
-# USER_INCLUDE_LIST=
+USER_INCLUDE_LIST=
 
 # ========================
-# USER EXCLUDE LIST [D]
+# USER EXCLUDE LIST
 # ========================
 # If specified, exclude matching users from CPU limit application.
 # Metrics monitoring remains active. If empty or unspecified, eligibility
@@ -431,14 +447,20 @@ SYSTEM_UID_MIN=1000
 #   USER_EXCLUDE_LIST=francesco,www-data,mysql     # Specific excluded users
 #   USER_EXCLUDE_LIST=                             # Empty = NO users excluded (default)
 #
-# NOTE: If the line is absent or commented, all non-system users can be limited.
-USER_EXCLUDE_LIST=root
+# NOTE: If the line is absent or commented, no user is excluded.
+USER_EXCLUDE_LIST=
 
 # ========================
-# PROCESS EXCLUDE LIST [D]
+# PROCESS EXCLUDE LIST
 # ========================
-# List of processes to exclude from CPU limits (comma-separated)
-# These processes are NEVER limited, even if the user is in the INCLUDE_LIST
+# List of processes to exclude from every resource limit (comma-separated)
+# These processes remain visible in observed totals, but they do not contribute
+# to CPU, RAM, or IO decisions and are never moved into limited cgroups.
+# Matching uses only the /proc/PID/exe basename. /proc/PID/comm is display-only;
+# an unreadable executable identity remains enforceable and is reported explicitly.
+# Active limits reconcile membership every control cycle. A newly excluded
+# process is restored only to its captured origin for the same PID start time;
+# if no safe origin exists, it remains constrained and the cycle reports an error.
 # Useful for protecting critical processes that could cause instability
 # Supports regular expressions (regex) for advanced pattern matching
 #
@@ -468,7 +490,7 @@ USER_EXCLUDE_LIST=root
 PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 
 # ========================
-# BLACKOUT TIMEFRAMES [D]
+# BLACKOUT TIMEFRAMES
 # ========================
 # Specifies when ResMan should NOT apply CPU limits.
 # Format: "days hours" (multiple timeframes separated by ;)
@@ -503,23 +525,25 @@ PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$
 BLACKOUT=
 
 # ========================
-# LOAD AVERAGE HANDLING [D]
+# LOAD AVERAGE HANDLING
 # ========================
-# false: do not activate limits if the system is already under load (conservative default)
+# false: under high load, activate only when CPU-eligible users account for at least
+#        half of measured host CPU activity; unavailable attribution delays activation
 # true: activate limits even if the system is under load (guaranteed isolation)
-IGNORE_SYSTEM_LOAD=true
+IGNORE_SYSTEM_LOAD=false
 
 # ========================
-# SERVER ROLE [S]
+# SERVER ROLE
 # ========================
 # Optional: describes the role of this server for identification in MCP reports
 # and Prometheus labels (server_role).
 # Requires restart to apply to Prometheus metrics.
 # Examples: database, web-frontend, batch, application, cache, api-gateway, etc.
+SERVER_ROLE=
 # SERVER_ROLE=database
 
 # ========================
-# MCP SERVER (Model Context Protocol) [S]
+# MCP SERVER (Model Context Protocol)
 # ========================
 # Enable MCP server for AI assistant integration
 MCP_ENABLED=false
@@ -527,14 +551,28 @@ MCP_ENABLED=false
 # Transport: stdio, http
 # stdio: Standard input/output (for local MCP clients like Claude Desktop)
 # http: HTTP POST endpoint (for AnythingLLM and other remote clients)
+# Both transports accept only stateless MCP revision 2026-07-28 requests.
 MCP_TRANSPORT=stdio
 
-# HTTP transport settings (only for http transport)
-# MCP_HTTP_HOST=0.0.0.0      # Bind address (default: all interfaces)
-# MCP_HTTP_PORT=1969         # Port for MCP endpoint (default: 1969)
-# MCP endpoint available at: http://HOST:PORT/mcp
+# HTTPS transport settings (only for http transport)
+MCP_HTTP_HOST=127.0.0.1      # Bind address (default: loopback)
+MCP_HTTP_PORT=1969           # Port for MCP endpoint (default: 1969)
+# MCP endpoint available at: https://HOST:PORT/mcp
+# TLS is mandatory for the HTTP transport. These defaults intentionally point
+# at the same certificate files as Prometheus, without inheriting Prometheus
+# settings: MCP_TLS_* overrides are independent.
+MCP_TLS_ENABLED=true
+MCP_TLS_CERT_FILE=/etc/resman/tls/server.crt
+MCP_TLS_KEY_FILE=/etc/resman/tls/server.key
+# Setting a client CA enables mTLS and makes a client certificate mandatory in
+# addition to the per-request bearer token.
+MCP_TLS_CA_FILE=
+# MCP_TLS_CA_FILE=/etc/resman/tls/ca.crt
+MCP_TLS_MIN_VERSION=1.3
+# HTTP clients must send the MCP 2026-07-28 request headers and per-request
+# metadata. Authentication is evaluated independently for every request.
 
-# MCP log level [S]
+# MCP log level
 # Available levels: DEBUG, INFO, WARN, ERROR
 # If not specified, uses the same level as LOG_LEVEL
 MCP_LOG_LEVEL=INFO
@@ -544,10 +582,11 @@ MCP_LOG_LEVEL=INFO
 MCP_ALLOW_WRITE_OPS=false
 
 # Required authentication token for HTTP transport
+MCP_AUTH_TOKEN=
 # MCP_AUTH_TOKEN=your-secret-token-here
 
 # ========================
-# METRICS DATABASE (SQLite) [S]
+# METRICS DATABASE (SQLite)
 # ========================
 # Enable persistence of metrics in a local SQLite database
 # to expose metric history via MCP.
@@ -556,8 +595,15 @@ MCP_ALLOW_WRITE_OPS=false
 # Default: false (disabled)
 #
 # METRICS_DB_PATH: Path to the SQLite database
-# Default: /etc/resman/metrics.db
-# Ensure the directory exists and is writable
+# Default: /var/lib/resman/metrics.db
+# For a file-backed database, the immediate parent directory must be a real
+# directory owned by the resman process UID with mode 0700. ResMan creates a
+# missing directory with that mode but rejects unsafe existing permissions.
+# Ancestors must be real directories that cannot be replaced by untrusted users;
+# a sticky temporary directory is valid when it protects the private child.
+# Existing database, -wal, and -shm files must be regular, non-symlink files
+# owned by the same UID with mode 0600. Fix permissions explicitly; they are
+# never widened or silently rewritten. The :memory: database is exempt.
 #
 # METRICS_DB_RETENTION_DAYS: How many days to keep data in the database
 # Default: 30 days
@@ -572,7 +618,7 @@ MCP_ALLOW_WRITE_OPS=false
 # Examples:
 # # Enable database with 30-day retention
 # METRICS_DB_ENABLED=true
-# METRICS_DB_PATH=/etc/resman/metrics.db
+# METRICS_DB_PATH=/var/lib/resman/metrics.db
 # METRICS_DB_RETENTION_DAYS=30
 # METRICS_DB_WRITE_INTERVAL=30
 #
@@ -585,12 +631,12 @@ MCP_ALLOW_WRITE_OPS=false
 # METRICS_DB_RETENTION_DAYS=90
 #
 METRICS_DB_ENABLED=false
-METRICS_DB_PATH=/etc/resman/metrics.db
+METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
 
 # ========================
-# USERNAME CACHE TTL [D]
+# USERNAME CACHE TTL
 # ========================
 # Cache duration for UID -> username resolution (in minutes)
 # Useful for reducing LDAP/NIS calls in environments with many users
@@ -613,7 +659,7 @@ METRICS_DB_WRITE_INTERVAL=30
 USERNAME_CACHE_TTL=60
 
 # ========================
-# PSI EVENT-DRIVEN MODE [D]
+# PSI EVENT-DRIVEN MODE
 # ========================
 # Uses poll() on cpu.pressure and io.pressure to trigger control cycles
 # only when system pressure exceeds configured thresholds, instead of
@@ -680,10 +726,10 @@ USERNAME_CACHE_TTL=60
 # PSI_FALLBACK_INTERVAL=60        # 1 minute heartbeat
 #
 PSI_EVENT_DRIVEN=false
-# PSI_CPU_STALL_THRESHOLD=50000
-# PSI_IO_STALL_THRESHOLD=50000
-# PSI_WINDOW_US=1000000
-# PSI_FALLBACK_INTERVAL=300
+PSI_CPU_STALL_THRESHOLD=50000
+PSI_IO_STALL_THRESHOLD=50000
+PSI_WINDOW_US=1000000
+PSI_FALLBACK_INTERVAL=300
 # METRICS_REFRESH_INTERVAL=30
-# PSI_BOOST_WEIGHT=300
-# PSI_BOOST_DURATION=120
+PSI_BOOST_WEIGHT=300
+PSI_BOOST_DURATION=120

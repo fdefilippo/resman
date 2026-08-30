@@ -1,13 +1,26 @@
 package cgroup
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fdefilippo/resman/config"
 )
+
+var errCounterOverflow = errors.New("uint64 counter overflow")
+
+func checkedCounterAdd(current, value uint64) (uint64, error) {
+	if current > math.MaxUint64-value {
+		return 0, errCounterOverflow
+	}
+	return current + value, nil
+}
 
 func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error {
 	cgroupPath, err := m.ensureCgroupPath(uid)
@@ -17,15 +30,16 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 
 	ioMaxFile := filepath.Join(cgroupPath, "io.max")
 
-	// Normalizza valori bandwidth
-	if readBPS == "" || readBPS == "0" {
-		readBPS = "max"
+	readBPS, err = normalizeBPSLimit(readBPS)
+	if err != nil {
+		return fmt.Errorf("invalid read BPS limit for UID %d: %w", uid, err)
 	}
-	if writeBPS == "" || writeBPS == "0" {
-		writeBPS = "max"
+	writeBPS, err = normalizeBPSLimit(writeBPS)
+	if err != nil {
+		return fmt.Errorf("invalid write BPS limit for UID %d: %w", uid, err)
 	}
 
-	// Normalizza valori IOPS
+	// Normalize IOPS values.
 	readIOPSStr := "max"
 	if readIOPS > 0 {
 		readIOPSStr = strconv.Itoa(readIOPS)
@@ -59,7 +73,25 @@ func (m *Manager) ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writ
 	return nil
 }
 
-// RemoveIOLimit rimuove i limiti di IO (imposta tutti i valori a "max").
+// normalizeBPSLimit converts the configured byte-quota syntax into the decimal
+// byte count required by the cgroup v2 io.max interface.
+func normalizeBPSLimit(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" || value == "max" {
+		return "max", nil
+	}
+
+	bytes, err := config.ParseByteQuota(value)
+	if err != nil {
+		return "", err
+	}
+	if bytes == 0 {
+		return "max", nil
+	}
+	return strconv.FormatUint(bytes, 10), nil
+}
+
+// RemoveIOLimit removes I/O limits by setting every value to "max".
 func (m *Manager) RemoveIOLimit(uid int) error {
 	cgroupPath, exists := m.getCgroupPath(uid)
 	if !exists {
@@ -159,32 +191,31 @@ func ioMaxDevices(data []byte) []string {
 	return devices
 }
 
-// GetIOStats restituisce le statistiche di IO aggregate per tutti i dispositivi.
-// Legge da io.stat e somma rbytes, wbytes, rios, wios.
+// GetIOStats returns logical I/O counters aggregated across every block device.
+// The logical counters preserve continuity when a user changes managed cgroups.
 func (m *Manager) GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error) {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		return 0, 0, 0, 0, fmt.Errorf("cgroup for UID %d not found", uid)
+	counters, err := m.logicalBlockIOCounters(uid)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("read logical block I/O counters for UID %d: %w", uid, err)
 	}
+	return counters.readBytes, counters.writeBytes, counters.readOps, counters.writeOps, nil
+}
 
-	ioStatFile := filepath.Join(cgroupPath, "io.stat")
+func readIOStatsFile(ioStatFile string) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error) {
 	data, err := os.ReadFile(ioStatFile)
 	if err != nil {
-		// Se il file non esiste (nessun IO), restituisci zero
-		if os.IsNotExist(err) {
-			return 0, 0, 0, 0, nil
-		}
-		return 0, 0, 0, 0, fmt.Errorf("failed to read io.stat for UID %d: %w", uid, err)
+		return 0, 0, 0, 0, err
 	}
 
-	// Parse lines like: "8:0 rios=1234 wios=567 rbytes=104857600 wbytes=52428800"
+	// Parse lines like: "8:0 rios=1234 wios=567 rbytes=104857600 wbytes=52428800".
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Skip device prefix (e.g., "8:0"), parse key=value pairs
+		// Skip the device prefix (for example, "8:0") and parse key=value pairs.
 		parts := strings.Fields(line)
+		device := parts[0]
 		for _, part := range parts {
 			kv := strings.SplitN(part, "=", 2)
 			if len(kv) != 2 {
@@ -194,30 +225,41 @@ func (m *Manager) GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, wr
 			if parseErr != nil {
 				continue
 			}
+			var counter *uint64
 			switch kv[0] {
 			case "rios":
-				readOps += val
+				counter = &readOps
 			case "wios":
-				writeOps += val
+				counter = &writeOps
 			case "rbytes":
-				readBytes += val
+				counter = &readBytes
 			case "wbytes":
-				writeBytes += val
+				counter = &writeBytes
+			default:
+				continue
 			}
+			next, addErr := checkedCounterAdd(*counter, val)
+			if addErr != nil {
+				return 0, 0, 0, 0, fmt.Errorf(
+					"accumulate %s for device %s from %s: %w",
+					kv[0], device, ioStatFile, addErr,
+				)
+			}
+			*counter = next
 		}
 	}
 
 	return readBytes, writeBytes, readOps, writeOps, nil
 }
 
-// ApplyTemporaryIOLimit applica limiti IO temporanei con un moltiplicatore.
-// Salva i limiti originali per permettere il revert.
+// ApplyTemporaryIOLimit applies temporary I/O limits with a multiplier.
+// It preserves the original inputs so the caller can restore them later.
 func (m *Manager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error {
 	if _, exists := m.getCgroupPath(uid); !exists {
 		return fmt.Errorf("cgroup for UID %d not found", uid)
 	}
 
-	// Applica limiti boostati (moltiplicati)
+	// Apply the multiplied boost limits.
 	boostedReadBPS := applyMultiplierToBPS(readBPS, multiplier)
 	boostedWriteBPS := applyMultiplierToBPS(writeBPS, multiplier)
 	boostedReadIOPS := int(float64(readIOPS) * multiplier)
@@ -226,7 +268,7 @@ func (m *Manager) ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readI
 	return m.ApplyIOLimit(uid, boostedReadBPS, boostedWriteBPS, boostedReadIOPS, boostedWriteIOPS, deviceFilter)
 }
 
-// applyMultiplierToBPS applica un moltiplicatore a una stringa BPS.
+// applyMultiplierToBPS applies a multiplier to a BPS value.
 func applyMultiplierToBPS(bps string, multiplier float64) string {
 	if bps == "" || bps == "max" || bps == "0" {
 		return "max"
@@ -240,36 +282,11 @@ func applyMultiplierToBPS(bps string, multiplier float64) string {
 	return strconv.FormatUint(boosted, 10)
 }
 
-// parseBPSValue converte una stringa BPS in bytes.
+// parseBPSValue converts a BPS value into bytes.
 func parseBPSValue(s string) uint64 {
-	s = strings.TrimSpace(s)
-	if len(s) == 0 {
-		return 0
-	}
-
-	// Check for suffix
-	lastChar := strings.ToUpper(s[len(s)-1:])
-	multiplier := uint64(1)
-	numStr := s
-
-	switch lastChar {
-	case "K":
-		multiplier = 1024
-		numStr = s[:len(s)-1]
-	case "M":
-		multiplier = 1024 * 1024
-		numStr = s[:len(s)-1]
-	case "G":
-		multiplier = 1024 * 1024 * 1024
-		numStr = s[:len(s)-1]
-	case "T":
-		multiplier = 1024 * 1024 * 1024 * 1024
-		numStr = s[:len(s)-1]
-	}
-
-	val, err := strconv.ParseUint(numStr, 10, 64)
+	val, err := config.ParseByteQuota(strings.TrimSpace(s))
 	if err != nil {
 		return 0
 	}
-	return val * multiplier
+	return val
 }

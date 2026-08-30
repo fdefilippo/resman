@@ -78,7 +78,10 @@ done
 
 # Build the email MIME structure
 build_email() {
-    local boundary="==BOUNDARY_$(date +%s)_$$=="
+    local boundary
+    boundary="==BOUNDARY_$(date +%s)_$$=="
+    local message_date
+    message_date=$(date -R)
     local has_attach=$(( ${#ATTACHMENTS[@]} > 0 ? 1 : 0 ))
 
     # Headers
@@ -88,7 +91,7 @@ build_email() {
         echo "Cc: $c"
     done
     echo "Subject: $SUBJECT"
-    echo "Date: $(date -R)"
+    echo "Date: $message_date"
     echo "MIME-Version: 1.0"
     if [[ "$has_attach" -eq 1 ]]; then
         echo "Content-Type: multipart/mixed; boundary=\"$boundary\""
