@@ -32,6 +32,9 @@ type ParentPoolPoints struct{ value uint16 }
 // ConfiguredGuaranteePoints is a configured per-user minimum proportional entitlement.
 type ConfiguredGuaranteePoints struct{ value uint16 }
 
+// ConfiguredGuaranteeTotalPoints is the sum of every configured user guarantee.
+type ConfiguredGuaranteeTotalPoints struct{ value uint16 }
+
 // BestEffortPoints is the aggregate proportional entitlement of the best-effort domain.
 type BestEffortPoints struct{ value uint16 }
 
@@ -79,6 +82,14 @@ func NewConfiguredGuaranteePoints(value uint64) (ConfiguredGuaranteePoints, erro
 		return ConfiguredGuaranteePoints{}, err
 	}
 	return ConfiguredGuaranteePoints{value: uint16(value)}, nil
+}
+
+// NewConfiguredGuaranteeTotalPoints validates a complete configured guarantee sum.
+func NewConfiguredGuaranteeTotalPoints(value uint64) (ConfiguredGuaranteeTotalPoints, error) {
+	if err := validateRange("configured guarantee total points", value, 0, TotalPoints); err != nil {
+		return ConfiguredGuaranteeTotalPoints{}, err
+	}
+	return ConfiguredGuaranteeTotalPoints{value: uint16(value)}, nil
 }
 
 // NewBestEffortPoints validates an aggregate best-effort entitlement in the range 1 through 1000.
@@ -134,6 +145,9 @@ func (p ParentPoolPoints) Value() uint64 { return uint64(p.value) }
 
 // Value returns the configured guarantee value.
 func (p ConfiguredGuaranteePoints) Value() uint64 { return uint64(p.value) }
+
+// Value returns the sum of every configured guarantee.
+func (p ConfiguredGuaranteeTotalPoints) Value() uint64 { return uint64(p.value) }
 
 // Value returns the aggregate best-effort entitlement.
 func (p BestEffortPoints) Value() uint64 { return uint64(p.value) }

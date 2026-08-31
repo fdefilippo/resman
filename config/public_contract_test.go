@@ -165,6 +165,19 @@ func TestSecondaryConfigurationReferencesStayFocusedAndSecure(t *testing.T) {
 	}
 }
 
+func TestCPUPointsPublicKeysRemainAbsentUntilTheEnforcementCutover(t *testing.T) {
+	forbidden := map[string]bool{
+		"CPU_RESERVE_POINTS":     true,
+		"CPU_BEST_EFFORT_POINTS": true,
+		"CPU_POINTS_FILE":        true,
+	}
+	for _, contract := range PublicFieldContracts() {
+		if forbidden[contract.Key] {
+			t.Errorf("%s became public before resman-vcs.5 supplied its live enforcement consumer", contract.Key)
+		}
+	}
+}
+
 func activeExampleKeys(t *testing.T, path string) map[string]int {
 	t.Helper()
 	file, err := os.Open(path)
