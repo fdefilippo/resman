@@ -54,8 +54,9 @@ type resourcePolicyConfigurationPayload struct {
 	CPUReleaseThreshold  int     `json:"cpu_release_threshold"`
 	CPUThresholdDuration int     `json:"cpu_threshold_duration"`
 	PollingInterval      int     `json:"polling_interval"`
-	MinSystemCores       int     `json:"min_system_cores"`
-	CPUQuotaNormal       string  `json:"cpu_quota_normal"`
+	CPUReservePoints     int     `json:"cpu_reserve_points"`
+	CPUBestEffortPoints  int     `json:"cpu_best_effort_points"`
+	CPUPointsFile        string  `json:"cpu_points_file"`
 	EnablePrometheus     bool    `json:"enable_prometheus"`
 	PrometheusPort       int     `json:"prometheus_port"`
 	IgnoreSystemLoad     bool    `json:"ignore_system_load"`
@@ -86,8 +87,9 @@ func newResourcePolicyConfigurationPayload(hostname string, cfg *config.Config) 
 		CPUReleaseThreshold:  cfg.CPUReleaseThreshold,
 		CPUThresholdDuration: cfg.CPUThresholdDuration,
 		PollingInterval:      cfg.PollingInterval,
-		MinSystemCores:       cfg.MinSystemCores,
-		CPUQuotaNormal:       cfg.CPUQuotaNormal,
+		CPUReservePoints:     cfg.CPUReservePoints,
+		CPUBestEffortPoints:  cfg.CPUBestEffortPoints,
+		CPUPointsFile:        cfg.CPUPointsFile,
 		EnablePrometheus:     cfg.EnablePrometheus,
 		PrometheusPort:       cfg.PrometheusMetricsBindPort,
 		IgnoreSystemLoad:     cfg.IgnoreSystemLoad,

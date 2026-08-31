@@ -45,10 +45,10 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			name:  "resource policy configuration",
 			value: newResourcePolicyConfigurationPayload("host", config.DefaultConfig()),
 			keys: []string{
-				"cpu_quota_normal", "cpu_release_threshold", "cpu_threshold", "cpu_threshold_duration",
+				"cpu_best_effort_points", "cpu_points_file", "cpu_release_threshold", "cpu_reserve_points", "cpu_threshold", "cpu_threshold_duration",
 				"disable_swap", "enable_prometheus", "hostname", "ignore_system_load", "io_device_filter",
 				"io_enabled", "io_read_bps", "io_read_iops", "io_release_threshold", "io_threshold",
-				"io_threshold_duration", "io_write_bps", "io_write_iops", "min_system_cores", "polling_interval",
+				"io_threshold_duration", "io_write_bps", "io_write_iops", "polling_interval",
 				"prometheus_port", "ram_enabled", "ram_high_ratio", "ram_quota_per_user", "ram_release_threshold",
 				"ram_threshold", "server_role", "system_uid_max", "system_uid_min",
 			},

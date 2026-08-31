@@ -95,8 +95,10 @@ Displays program version and exits.
 requires Linux kernel 4.18 or later with cgroups v2 enabled.
 .PP
 At startup, resman probes a real child cgroup for the interfaces required by the
-configured features. CPU limiting requires
-.BR cpu.max .
+configured features. CPU Points enforcement requires both
+.B cpu.max
+and
+.BR cpu.weight .
 When
 .B RAM_LIMIT_ENABLED=true
 is configured,
@@ -110,7 +112,7 @@ is mandatory. A controller name in
 is not sufficient. A missing required interface causes startup to fail with the
 feature, controller, and interface named. The
 .B cpuset
-controller is optional for CPU quota and proportional-weight enforcement.
+controller is optional for CPU Points quota and proportional-weight enforcement.
 .PP
 Capability discovery is a startup snapshot. If
 .B memory.max
@@ -162,33 +164,49 @@ than retrying forever. After correcting the transient cause, run
 before starting the service when the start limit was reached. A clean stop is not
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
-The system uses a cgroups v2 hierarchy to manage fair CPU resource distribution:
+The system normalizes current online CPU capacity to 1000 CPU Points and uses a
+three-level cgroups v2 hierarchy:
 .IP 1. 3
-Calculates available cores for users:
-.I Total cores \- MIN_SYSTEM_CORES
+Keeps
+.B CPU_RESERVE_POINTS
+outside the finite parent; the parent pool is 1000 minus the reserve
 .IP 2.
-Creates a parent (shared) cgroup with the calculated total quota
+Creates
+.I limited/guaranteed
+and
+.I limited/best_effort
+internal domains below that parent
 .IP 3.
-For each active user, creates a sub\-cgroup with equal
-.B cpu.weight
+Places mapped eligible users in the guaranteed domain with their exact map weight;
+unmapped eligible users receive equal leaf weights inside the aggregate
+.B CPU_BEST_EFFORT_POINTS
+domain
 .IP 4.
-User processes are moved to their respective sub\-cgroups
+Keeps every user leaf unlimited by
+.BR cpu.max ;
+only the parent has a finite quota
 .PP
-Resource division occurs proportionally through cgroup
+The map named by
+.B CPU_POINTS_FILE
+must begin with
+.B [resman-cpu-points-map-v1]
+and then contain exact
+.I username=points
+assignments. Configured guarantees plus the best-effort entitlement must not
+exceed the pool. Resource division occurs proportionally through cgroup
 .B cpu.weight
-values. If a user doesn't use CPU, other users can utilize more than their
-fair share, up to the entire available quota.
+values. Unused mapped capacity is first borrowed by runnable mapped siblings;
+best effort borrows it only when the whole guaranteed domain is inactive.
 .PP
-Practical example with 4 total cores and MIN_SYSTEM_CORES=2:
+Practical example with four online CPUs, reserve 250, guarantees 300 and 300,
+and best effort 100:
 .RS
 .IP \(bu 2
-Available cores for users: 2
+The finite parent receives 750 points, or three nominal CPUs
 .IP \(bu
-2 active users \(-> each user gets weight 100
+The two mapped users have weight 300 each
 .IP \(bu
-If User1 uses 0.5 cores, User2 can use 1.5 cores
-.IP \(bu
-If User1 uses no CPU, User2 can use all 2 cores
+All unmapped eligible users share the best-effort domain weight 100
 .RE
 .PP
 CPU limit eligibility is controlled by
@@ -251,9 +269,8 @@ limits according to the configured quotas and ratio.
 A user eligible for RAM or I/O but not CPU limiting is moved to a standalone
 per\-user cgroup with
 .BR cpu.max="max 100000" .
-It does not inherit the finite shared CPU quota. Consequently,
-.B MIN_SYSTEM_CORES
-gates CPU enforcement only and cannot suppress RAM\-only or I/O\-only limits.
+It does not inherit the finite CPU Points parent quota. Consequently,
+the CPU Points parent cannot suppress RAM\-only or I/O\-only limits.
 .SH IO LIMITS
 When enabled, the daemon monitors I/O usage and applies bandwidth and IOPS limits via cgroups v2 io controller.
 .PP
@@ -367,11 +384,9 @@ revalidated immediately before each restore write. If any process cannot be
 restored safely during shutdown, the daemon exits non-zero and the service stop
 is not reported as successful.
 .PP
-.B CPU_QUOTA_NORMAL
-is never written into cgroups managed by systemd. In shared mode, a finite
-normal quota applies only to resman recovery cgroups. The default
-.B "max 100000"
-leaves recovered processes unlimited.
+Recovery leaves use the internal unlimited value
+.BR cpu.max="max 100000" .
+Resman never writes a recovery quota into cgroups managed by systemd.
 .PP
 Live policy reconciliation remains fail-closed. If an excluded process has no
 same-start-time recorded or inherited origin, it remains constrained, the cycle
@@ -462,15 +477,6 @@ take effect immediately.
 .IP \(bu
 .B METRICS_REFRESH_INTERVAL
 - Prometheus/Grafana refresh interval in seconds when event-driven (default: 30)
-.IP \(bu
-.B PSI_BOOST_WEIGHT
-- CPU weight applied when a limited user experiences PSI pressure (default: 300, normal is 100)
-When a user's cgroup is throttled by cpu.max, the adaptive fairness mechanism boosts
-their cpu.weight to grant more CPU time within the shared quota. Range: 1-10000.
-.IP \(bu
-.B PSI_BOOST_DURATION
-- Seconds before reverting the PSI boost if no further pressure events occur (default: 120)
-If the user is still under pressure after reversion, the next PSI event re-applies the boost.
 .PP
 Requirements:
 .IP \(bu 2
@@ -490,22 +496,25 @@ PSI_IO_STALL_THRESHOLD=50000     # 5% IO pressure
 PSI_WINDOW_US=1000000            # 1 second window
 PSI_FALLBACK_INTERVAL=300        # 5 minute heartbeat
 METRICS_REFRESH_INTERVAL=30      # Dashboard refresh interval
-PSI_BOOST_WEIGHT=300             # CPU weight on throttling (normal: 100)
-PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 .fi
 .sp
 .SH WORKLOAD PATTERN DETECTION
-When enabled, the daemon analyzes historical CPU usage to automatically classify eligible users as "batch" (night\-time high resource consumption) or "interactive" (day\-time moderate usage) and selects appropriate CPU and RAM quotas.
+When enabled, the daemon analyzes historical CPU usage to classify eligible users
+as "batch" or "interactive" and selects the corresponding RAM policy. CPU capacity
+remains owned exclusively by CPU Points.
 .PP
 Pattern detection respects
 .B USER_INCLUDE_LIST
 and
 .B USER_EXCLUDE_LIST
-and never applies policy to an excluded user. Pattern quotas are applied to the user's existing sub\-cgroup only while global limits are active; pattern analysis does not move processes or create a standalone per\-user cgroup.
+and never applies policy to an excluded user. Pattern RAM limits are applied to the
+user's existing sub\-cgroup only while global limits are active; pattern analysis
+does not move processes or change CPU weights.
 .PP
 When a classification becomes unknown, the user becomes ineligible, or
 .B AUTODETECT_PATTERNS
-is disabled, any active pattern policy is removed. A limited user then returns to the normal shared\-cgroup CPU quota and configured RAM limit.
+is disabled, any active pattern policy is removed. A limited user retains its CPU
+Points allocation and returns to the configured non-pattern RAM limit.
 .PP
 The pattern detection algorithm uses a sliding window of
 .B PATTERN_HISTORY_HOURS
@@ -523,16 +532,12 @@ Detected patterns influence resource allocation:
 .RS
 .IP \(bu 2
 .B Batch night
-- Users with high resource usage during night hours receive higher CPU quota (
-.B BATCH_NIGHT_CPU_QUOTA
-) and RAM quota (
+- Users with high resource usage during night hours receive the RAM quota (
 .B BATCH_NIGHT_RAM_QUOTA
 ).
 .IP \(bu
 .B Interactive day
-- Users with moderate daytime usage receive standard quotas (
-.B INTERACTIVE_CPU_QUOTA
-,
+- Users with moderate daytime usage receive the RAM quota (
 .B INTERACTIVE_RAM_QUOTA
 ).
 .RE
@@ -551,14 +556,8 @@ Configuration parameters:
 .B PATTERN_CONFIDENCE_THRESHOLD
 - Confidence threshold (0.0\-1.0)
 .IP \(bu
-.B BATCH_NIGHT_CPU_QUOTA
-- CPU quota for batch users (microseconds, e.g., 200000 = 2 cores)
-.IP \(bu
 .B BATCH_NIGHT_RAM_QUOTA
 - RAM quota for batch users (bytes or case\-insensitive K/M/G/T suffix)
-.IP \(bu
-.B INTERACTIVE_CPU_QUOTA
-- CPU quota for interactive users
 .IP \(bu
 .B INTERACTIVE_RAM_QUOTA
 - RAM quota for interactive users (bytes or case\-insensitive K/M/G/T suffix)
@@ -748,8 +747,6 @@ permissive service umask cannot expose history files.
 # PSI_WINDOW_US=1000000            # Tracking window (1 second)
 # PSI_FALLBACK_INTERVAL=300        # Heartbeat interval (5 minutes)
 # METRICS_REFRESH_INTERVAL=30      # Dashboard refresh interval
-# PSI_BOOST_WEIGHT=300             # CPU weight boost on throttling
-# PSI_BOOST_DURATION=120           # Boost reversion timeout (seconds)
 
 # MCP TOOLS FOR HISTORICAL METRICS (when METRICS_DB_ENABLED=true):
 # - get_user_history: Historical CPU/RAM for a user

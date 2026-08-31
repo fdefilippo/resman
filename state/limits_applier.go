@@ -3,7 +3,6 @@ package state
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -11,11 +10,231 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
+const normalCPUQuota = "max 100000"
+
 type idleReleaseResult struct {
-	uid int
-	err error
+	uid      int
+	released bool
+	err      error
+}
+
+func (m *Manager) ensureCPUPointsHierarchy() (cgroup.CPUPointsHierarchy, error) {
+	capacity, err := m.cpuCapacity.Refresh(m.cpuPointsPolicy.Pool())
+	if err != nil {
+		return cgroup.CPUPointsHierarchy{}, fmt.Errorf("refresh authoritative CPU Points capacity: %w", err)
+	}
+	bestEffortWeight, err := m.cpuPointsPolicy.BestEffort().KernelWeight()
+	if err != nil {
+		return cgroup.CPUPointsHierarchy{}, fmt.Errorf("convert best-effort points to kernel weight: %w", err)
+	}
+
+	m.mu.RLock()
+	hierarchy := m.cpuPointsHierarchy
+	m.mu.RUnlock()
+	if hierarchy.Parent == "" {
+		hierarchy, err = m.cgroupManager.EnsureCPUPointsHierarchy(capacity.LastVerified, bestEffortWeight)
+		if err != nil {
+			return cgroup.CPUPointsHierarchy{}, err
+		}
+		m.mu.Lock()
+		m.cpuPointsHierarchy = hierarchy
+		m.sharedCgroupPath = hierarchy.Parent
+		m.programmedGuaranteePoints = 1
+		m.mu.Unlock()
+		return hierarchy, nil
+	}
+	if err := m.cgroupManager.ApplyCPUPointsParentQuota(hierarchy, capacity.LastVerified); err != nil {
+		return cgroup.CPUPointsHierarchy{}, err
+	}
+	return hierarchy, nil
+}
+
+func (m *Manager) cpuPointsAllocationFor(uid int) (cpupoints.AllocationClass, cpupoints.KernelCPUWeight, uint64, error) {
+	if guarantee, ok := m.cpuPointsPolicy.GuaranteeForUID(uid); ok {
+		weight, err := guarantee.Points().KernelWeight()
+		return cpupoints.AllocationClassGuaranteed, weight, guarantee.Points().Value(), err
+	}
+	weight, err := cpupoints.NewKernelCPUWeight(100)
+	return cpupoints.AllocationClassBestEffort, weight, 0, err
+}
+
+func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarchy) (string, cgroup.ProcessMoveResult, error) {
+	class, leafWeight, guarantee, err := m.cpuPointsAllocationFor(uid)
+	if err != nil {
+		return "", cgroup.ProcessMoveResult{}, err
+	}
+	domainPath, err := hierarchy.DomainPath(class)
+	if err != nil {
+		return "", cgroup.ProcessMoveResult{}, err
+	}
+	m.mu.RLock()
+	resources := m.resourceLimits[uid]
+	_, alreadyAllocated := m.cpuAllocations[uid]
+	m.mu.RUnlock()
+	if !alreadyAllocated && resources.ramApplied && resources.standalone {
+		return "", cgroup.ProcessMoveResult{}, &RAMActiveCPUTransitionError{
+			UID:  uid,
+			From: "standalone",
+			To:   string(class),
+		}
+	}
+
+	if class == cpupoints.AllocationClassGuaranteed {
+		m.mu.RLock()
+		current := m.appliedGuaranteePoints.Value()
+		programmed := m.programmedGuaranteePoints
+		m.mu.RUnlock()
+		target := current + guarantee
+		if programmed > target {
+			target = programmed
+		}
+		next, err := cpupoints.NewAppliedGuaranteePoints(target)
+		if err != nil {
+			return "", cgroup.ProcessMoveResult{}, fmt.Errorf("compute acquired guarantee for UID %d: %w", uid, err)
+		}
+		domainWeight, err := next.KernelWeight()
+		if err != nil {
+			return "", cgroup.ProcessMoveResult{}, err
+		}
+		// Raising the aggregate first is mandatory: a participating leaf must
+		// never observe an underweight guaranteed domain.
+		m.mu.Lock()
+		if target > m.programmedGuaranteePoints {
+			// Record the conservative requested high-water mark before the
+			// write. If write verification fails after the kernel accepted the
+			// value, a later admission must not lower it accidentally.
+			m.programmedGuaranteePoints = target
+		}
+		m.mu.Unlock()
+		if err := m.cgroupManager.ApplyCPUPointsGuaranteedWeight(hierarchy, domainWeight); err != nil {
+			return "", cgroup.ProcessMoveResult{}, err
+		}
+	}
+
+	path, result, err := m.cgroupManager.EnsureCPUPointsUserPlacement(uid, domainPath, leafWeight)
+	m.recordCgroupIngressSkips(result)
+	if err == nil && !result.Applied() {
+		err = cgroupIngressNoopError(uid, result)
+	}
+	if err != nil {
+		// A prior domain-weight increase is intentionally retained: overweighting
+		// guaranteed users is conservative, while rolling it back could race a
+		// partially completed ingress and violate a guarantee.
+		return "", result, err
+	}
+	m.setStandaloneResourceCgroup(uid, false)
+
+	m.mu.Lock()
+	m.cpuAllocations[uid] = cpuPointsAllocation{class: class, weight: leafWeight, domainPath: domainPath, leafPath: path}
+	m.recordPartialRAMCoverageLocked(uid, result.MovedProcesses)
+	if class == cpupoints.AllocationClassGuaranteed {
+		next, _ := cpupoints.NewAppliedGuaranteePoints(m.appliedGuaranteePoints.Value() + guarantee)
+		m.appliedGuaranteePoints = next
+	}
+	m.mu.Unlock()
+	return path, result, nil
+}
+
+func (m *Manager) releaseCPUPointsUser(uid int, preserveObservation bool) (bool, error) {
+	m.mu.RLock()
+	allocation, exists := m.cpuAllocations[uid]
+	hierarchy := m.cpuPointsHierarchy
+	resources := m.resourceLimits[uid]
+	m.mu.RUnlock()
+	if !exists {
+		m.mu.RLock()
+		sharedPath := m.sharedCgroupPath
+		m.mu.RUnlock()
+		if sharedPath == "" {
+			return true, nil
+		}
+		if preserveObservation {
+			_, result, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalCPUQuota)
+			m.recordCgroupIngressSkips(result)
+			return err == nil, err
+		}
+		err := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalCPUQuota)
+		return err == nil, err
+	}
+	if resources.ramApplied {
+		destination := "origin"
+		if preserveObservation {
+			destination = "standalone"
+		}
+		return false, &RAMActiveCPUTransitionError{
+			UID:  uid,
+			From: string(allocation.class),
+			To:   destination,
+		}
+	}
+
+	var releaseErr error
+	if preserveObservation {
+		_, result, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalCPUQuota)
+		m.recordCgroupIngressSkips(result)
+		releaseErr = err
+		if releaseErr == nil && result.NamespaceSkipped() > 0 && !result.Applied() {
+			releaseErr = cgroupIngressNoopError(uid, result)
+		}
+	} else {
+		releaseErr = m.cgroupManager.ReleaseCPUPointsUser(uid, allocation.domainPath)
+	}
+	if releaseErr != nil {
+		return false, releaseErr
+	}
+
+	m.mu.Lock()
+	delete(m.cpuAllocations, uid)
+	delete(m.ramCoverage, uid)
+	current := m.appliedGuaranteePoints.Value()
+	if allocation.class == cpupoints.AllocationClassGuaranteed {
+		current -= uint64(allocation.weight.Value())
+		next, _ := cpupoints.NewAppliedGuaranteePoints(current)
+		m.appliedGuaranteePoints = next
+	}
+	m.mu.Unlock()
+
+	if allocation.class != cpupoints.AllocationClassGuaranteed {
+		return true, nil
+	}
+	weightValue := int(current)
+	if weightValue == 0 {
+		weightValue = 1
+	}
+	weight, err := cpupoints.NewKernelCPUWeight(weightValue)
+	if err != nil {
+		return true, err
+	}
+	// The leaf is gone before the aggregate is lowered. A failed lowering leaves
+	// a conservative overweight domain and is still reported to the caller.
+	if err := m.cgroupManager.ApplyCPUPointsGuaranteedWeight(hierarchy, weight); err != nil {
+		return true, err
+	}
+	m.mu.Lock()
+	m.programmedGuaranteePoints = current
+	if current == 0 {
+		m.programmedGuaranteePoints = 1
+	}
+	m.mu.Unlock()
+	return true, nil
+}
+
+func (m *Manager) recordPartialRAMCoverageLocked(uid int, processes []cgroup.ProcessReference) {
+	if len(processes) == 0 {
+		return
+	}
+	state := m.ramCoverage[uid]
+	if state.partial == nil {
+		state.partial = make(map[int]uint64)
+	}
+	for _, process := range processes {
+		state.partial[process.PID] = process.StartTime
+	}
+	state.coverage = RAMCoveragePartial
+	m.ramCoverage[uid] = state
 }
 
 func (m *Manager) recordCgroupIngressSkips(result cgroup.ProcessMoveResult) {
@@ -57,7 +276,7 @@ func (m *Manager) provisionStandaloneResourceUser(uid int, cfg *config.Config, e
 	if err := m.cgroupManager.CreateUserCgroup(uid); err != nil {
 		return false, fmt.Errorf("create standalone resource cgroup for UID %d: %w", uid, err)
 	}
-	if err := m.cgroupManager.ApplyCPUQuota(uid, "max 100000"); err != nil {
+	if err := m.cgroupManager.EnsureUnlimitedCPUQuota(uid); err != nil {
 		cleanupErr := m.cgroupManager.CleanupUserCgroup(uid)
 		return false, errors.Join(
 			fmt.Errorf("ensure unlimited CPU quota for standalone resource cgroup UID %d: %w", uid, err),
@@ -207,7 +426,6 @@ func (m *Manager) reconcileStandaloneResourceUsers(metrics *SystemMetrics, cfg *
 func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	cfg := m.GetConfig()
 	var reconcileErrors []error
-	cpuEnforcementAllowed := metrics.TotalCores > cfg.GetMinSystemCores()
 	m.mu.RLock()
 	limitsActive := m.limitsActive || m.resourceLimitsActive
 	sharedPath := m.sharedCgroupPath
@@ -215,21 +433,18 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	if !limitsActive {
 		return nil // No active enforcement needs reconciliation.
 	}
-	if sharedPath != "" && cpuEnforcementAllowed {
-		if _, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg); err != nil {
-			return fmt.Errorf("failed to reconcile shared CPU quota: %w", err)
+	if sharedPath != "" {
+		if _, err := m.ensureCPUPointsHierarchy(); err != nil {
+			return fmt.Errorf("failed to reconcile CPU Points hierarchy: %w", err)
 		}
 	}
 
 	const idleThreshold = 0.1
-	normalQuota := cfg.CPUQuotaNormal
 	now := time.Now()
 	minActiveTime := time.Duration(cfg.GetMinActiveTime()) * time.Second
 	eligible := make(map[int]bool, len(metrics.CPUEligibleUsers))
-	if cpuEnforcementAllowed {
-		for _, uid := range metrics.CPUEligibleUsers {
-			eligible[uid] = true
-		}
+	for _, uid := range metrics.CPUEligibleUsers {
+		eligible[uid] = true
 	}
 
 	m.mu.Lock()
@@ -274,17 +489,12 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		m.requestedCPUUsers[uid] = true
 	}
 	m.mu.Unlock()
-	if len(usersToAdd) > 0 && sharedPath == "" && metrics.TotalCores > cfg.GetMinSystemCores() {
-		createdSharedPath, err := m.cgroupManager.CreateSharedCgroup()
+	if len(usersToAdd) > 0 && sharedPath == "" {
+		hierarchy, err := m.ensureCPUPointsHierarchy()
 		if err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("create shared CPU cgroup during maintenance: %w", err))
-		} else if _, err := m.applySharedCPUQuota(createdSharedPath, metrics.TotalCores, cfg); err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("apply shared CPU quota during maintenance: %w", err))
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("create CPU Points hierarchy during maintenance: %w", err))
 		} else {
-			sharedPath = createdSharedPath
-			m.mu.Lock()
-			m.sharedCgroupPath = sharedPath
-			m.mu.Unlock()
+			sharedPath = hierarchy.Parent
 		}
 	}
 
@@ -294,15 +504,18 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 		}
 	}
 
-	results := m.releaseTrackedUsers(usersToRelease, sharedPath, normalQuota)
+	results := m.releaseTrackedUsers(usersToRelease)
 	releasedUsers := make([]int, 0, len(usersToRelease))
 	for _, result := range results {
+		if result.released {
+			releasedUsers = append(releasedUsers, result.uid)
+		}
 		if result.err != nil {
 			m.logger.Warn("Failed to release idle user from shared cgroup",
 				"uid", result.uid, "shared_path", sharedPath, "error", result.err)
+			reconcileErrors = append(reconcileErrors, result.err)
 			continue
 		}
-		releasedUsers = append(releasedUsers, result.uid)
 	}
 
 	m.commitReleasedUsers(releasedUsers)
@@ -329,10 +542,14 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 				"cpu", userEnforceableCPUUsage(metrics, uid),
 			)
 
-			userCgroupPath, _, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
+			m.mu.RLock()
+			hierarchy := m.cpuPointsHierarchy
+			m.mu.RUnlock()
+			userCgroupPath, _, err := m.admitCPUPointsUser(uid, hierarchy)
 			if err != nil {
 				m.logger.Warn("Failed to move processes for re-added user; user will not be marked limited",
 					"uid", uid, "error", err)
+				reconcileErrors = append(reconcileErrors, err)
 				continue
 			}
 			if err := m.applyUserResourceLimits(uid, cfg, userEligibilityFromMetrics(metrics, uid)); err != nil {
@@ -394,11 +611,7 @@ func (m *Manager) releaseIdleUsers(metrics *SystemMetrics) error {
 	if cpuActivated && m.stabilityTracker != nil {
 		m.stabilityTracker.Reset()
 	}
-	if cpuDeactivated && sharedPath != "" {
-		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, "max 100000"); err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("reset inactive shared CPU cgroup quota: %w", err))
-		}
-	}
+	_ = cpuDeactivated
 
 	return errors.Join(reconcileErrors...)
 }
@@ -410,11 +623,15 @@ type activeProcessMembership struct {
 
 func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
 	m.mu.RLock()
-	sharedPath := m.sharedCgroupPath
 	targets := make([]activeProcessMembership, 0, len(m.activeUsers)+len(m.resourceLimits))
 	tracked := make(map[int]bool, len(m.activeUsers))
 	for uid := range m.activeUsers {
-		targets = append(targets, activeProcessMembership{uid: uid, sharedPath: sharedPath})
+		allocation := m.cpuAllocations[uid]
+		targetPath := allocation.domainPath
+		if targetPath == "" {
+			targetPath = m.sharedCgroupPath
+		}
+		targets = append(targets, activeProcessMembership{uid: uid, sharedPath: targetPath})
 		tracked[uid] = true
 	}
 	for uid, state := range m.resourceLimits {
@@ -430,9 +647,12 @@ func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
 		result, err := m.cgroupManager.ReconcileUserProcessMembership(
 			target.uid,
 			target.sharedPath,
-			cfg.CPUQuotaNormal,
+			normalCPUQuota,
 		)
 		m.recordCgroupIngressSkips(result.Ingress)
+		m.mu.Lock()
+		m.recordPartialRAMCoverageLocked(target.uid, result.Ingress.MovedProcesses)
+		m.mu.Unlock()
 		if err == nil && result.Ingress.NamespaceSkipped() > 0 && !result.Ingress.Applied() {
 			err = cgroupIngressNoopError(target.uid, result.Ingress)
 		}
@@ -493,79 +713,18 @@ func userEligibilityFromMetrics(metrics *SystemMetrics, uid int) config.UserElig
 	}
 }
 
-func (m *Manager) placeUserInSharedCgroup(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error) {
-	var result cgroup.ProcessMoveResult
-	m.mu.RLock()
-	observed := m.blockIOObservedUsers[uid]
-	wasStandalone := m.resourceLimits[uid].standalone
-	m.mu.RUnlock()
-	if observed {
-		path, result, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, sharedPath, normalQuota)
-		m.recordCgroupIngressSkips(result)
-		if err == nil && result.Applied() {
-			m.setStandaloneResourceCgroup(uid, false)
-		}
-		if err == nil && !result.Applied() {
-			err = cgroupIngressNoopError(uid, result)
-		}
-		return path, result, err
-	}
-	if wasStandalone {
-		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
-			return "", result, fmt.Errorf("migrate standalone resource cgroup to shared CPU enforcement for UID %d: %w", uid, err)
-		}
-		m.mu.Lock()
-		delete(m.resourceLimits, uid)
-		m.mu.Unlock()
-	}
-	path, err := m.cgroupManager.CreateUserSubCgroup(uid, sharedPath)
-	if err != nil {
-		return "", result, err
-	}
-	result, err = m.cgroupManager.MoveAllUserProcessesToSharedCgroup(uid, sharedPath)
-	m.recordCgroupIngressSkips(result)
-	if err != nil {
-		return "", result, err
-	}
-	if !result.Applied() {
-		cleanupErr := m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
-		return "", result, errors.Join(cgroupIngressNoopError(uid, result), cleanupErr)
-	}
-	return path, result, nil
-}
-
-func (m *Manager) releaseTrackedUsers(users []int, sharedPath, normalQuota string) []idleReleaseResult {
+func (m *Manager) releaseTrackedUsers(users []int) []idleReleaseResult {
 	m.mu.RLock()
 	observed := make(map[int]bool, len(users))
 	for _, uid := range users {
 		observed[uid] = m.blockIOObservedUsers[uid]
 	}
 	m.mu.RUnlock()
-	results := make(chan idleReleaseResult, len(users))
-	for _, uid := range users {
-		go func(uid int) {
-			if sharedPath == "" {
-				results <- idleReleaseResult{uid: uid}
-				return
-			}
-			var err error
-			if observed[uid] {
-				_, result, placementErr := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", normalQuota)
-				m.recordCgroupIngressSkips(result)
-				err = placementErr
-				if err == nil && result.NamespaceSkipped() > 0 && !result.Applied() {
-					err = cgroupIngressNoopError(uid, result)
-				}
-			} else {
-				err = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, normalQuota)
-			}
-			results <- idleReleaseResult{uid: uid, err: err}
-		}(uid)
-	}
-
 	releases := make([]idleReleaseResult, 0, len(users))
-	for range users {
-		releases = append(releases, <-results)
+	sort.Ints(users)
+	for _, uid := range users {
+		released, err := m.releaseCPUPointsUser(uid, observed[uid])
+		releases = append(releases, idleReleaseResult{uid: uid, released: released, err: err})
 	}
 	return releases
 }
@@ -576,7 +735,7 @@ func (m *Manager) commitReleasedUsers(users []int) {
 		delete(m.activeUsers, uid)
 		delete(m.userLimitedAt, uid)
 		delete(m.resourceLimits, uid)
-		delete(m.psiBoostedAt, uid)
+		delete(m.cpuAllocations, uid)
 	}
 	m.mu.Unlock()
 
@@ -602,7 +761,6 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	}()
 
 	cfg := m.GetConfig()
-	cpuEnforcementAllowed := metrics.TotalCores > cfg.GetMinSystemCores()
 
 	// Snapshot the users that are currently limited.
 	m.mu.RLock()
@@ -618,10 +776,8 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		currentActiveSet[uid] = true
 	}
 	eligibleSet := make(map[int]bool, len(metrics.CPUEligibleUsers))
-	if cpuEnforcementAllowed {
-		for _, uid := range metrics.CPUEligibleUsers {
-			eligibleSet[uid] = true
-		}
+	for _, uid := range metrics.CPUEligibleUsers {
+		eligibleSet[uid] = true
 	}
 	m.mu.Lock()
 	m.requestedCPUUsers = eligibleSet
@@ -639,9 +795,12 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 			}
 		}
 	}
-	releaseResults := m.releaseTrackedUsers(usersToRelease, sharedPath, cfg.CPUQuotaNormal)
+	releaseResults := m.releaseTrackedUsers(usersToRelease)
 	releasedUsers := make([]int, 0, len(usersToRelease))
 	for _, result := range releaseResults {
+		if result.released {
+			releasedUsers = append(releasedUsers, result.uid)
+		}
 		if result.err != nil {
 			m.logger.Warn("Failed to release ineligible user from shared cgroup",
 				"uid", result.uid,
@@ -653,7 +812,6 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 			}
 			continue
 		}
-		releasedUsers = append(releasedUsers, result.uid)
 	}
 	m.commitReleasedUsers(releasedUsers)
 	removedCount := len(releasedUsers)
@@ -670,23 +828,14 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	}
 
 	// Phase 2: create or configure the shared cgroup.
-	if len(eligibleSet) > 0 && sharedPath == "" {
-		// Create the shared cgroup.
-		createdSharedPath, err := m.cgroupManager.CreateSharedCgroup()
-		if err != nil {
-			return fmt.Errorf("failed to create shared cgroup (min_system_cores=%d, total_cores=%d): %w", cfg.GetMinSystemCores(), metrics.TotalCores, err)
-		}
-		sharedPath = createdSharedPath
-		m.mu.Lock()
-		m.sharedCgroupPath = sharedPath
-		m.mu.Unlock()
-
-	}
+	var hierarchy cgroup.CPUPointsHierarchy
 	if len(eligibleSet) > 0 {
-		sharedQuota, err := m.applySharedCPUQuota(sharedPath, metrics.TotalCores, cfg)
+		var err error
+		hierarchy, err = m.ensureCPUPointsHierarchy()
 		if err != nil {
-			return fmt.Errorf("failed to apply shared CPU limit %s to %s: %w", sharedQuota, sharedPath, err)
+			return fmt.Errorf("failed to establish CPU Points hierarchy: %w", err)
 		}
+		sharedPath = hierarchy.Parent
 	}
 
 	// Phase 3: configure user sub-cgroups for the current users.
@@ -708,10 +857,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 		if !alreadyLimited {
 			// Move directly from an observation cgroup when one exists. The cgroup
 			// manager carries the logical block-I/O counter across the placement.
-			m.mu.RLock()
-			sharedPath := m.sharedCgroupPath
-			m.mu.RUnlock()
-			userCgroupPath, _, err := m.placeUserInSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
+			userCgroupPath, _, err := m.admitCPUPointsUser(uid, hierarchy)
 			if err != nil {
 				m.logger.Error("Failed to place user in shared cgroup",
 					"user", userStr,
@@ -738,10 +884,6 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 				}
 			}
 
-			// Set the same relative weight for every user. Idle users leave more CPU
-			// capacity available to the other users.
-			weight := 100
-
 			if err := m.applyUserResourceLimits(uid, cfg, eligibility); err != nil {
 				m.logger.Warn("CPU enforcement applied with partial RAM or IO failure", "uid", uid, "error", err)
 				if firstError == nil {
@@ -760,7 +902,7 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 
 			m.logger.Debug("User configured in shared cgroup",
 				"uid", uid,
-				"weight", weight,
+				"allocation_class", m.cpuPointsPolicy.ClassForUID(uid),
 				"shared_path", m.sharedCgroupPath,
 			)
 		}
@@ -812,42 +954,23 @@ func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 }
 
 func (m *Manager) applyUserResourceLimits(uid int, cfg *config.Config, eligibility config.UserEligibility) error {
-	username := m.metricsCollector.GetUsernameFromUID(uid)
 	m.setResourceLimitIntent(
 		uid,
 		cfg.RAMEnabled && eligibility.EligibleForRAM,
 		cfg.IOEnabled && eligibility.EligibleForIO,
 	)
 
-	if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
-		m.logger.Warn("Failed to set CPU weight for user, using default",
-			"uid", uid,
-			"username", username,
-			"weight", 100,
-			"error", err,
-		)
-	}
-
-	cpuQuota := "max 100000"
 	ramQuota := cfg.RAMQuotaPerUser
 	if cfg.GetAutodetectPatterns() && m.policyEngine != nil {
 		if policy, exists := m.policyEngine.GetPolicy(uid); exists {
-			if policy.CPUQuota > 0 {
-				cpuQuota = fmt.Sprintf("%d 100000", policy.CPUQuota)
-			}
 			if policy.RAMQuota != "" {
 				ramQuota = policy.RAMQuota
 			}
 		}
 	}
-	var cpuErr error
-	if err := m.cgroupManager.ApplyCPUQuota(uid, cpuQuota); err != nil {
-		cpuErr = fmt.Errorf("apply CPU quota %q for UID %d: %w", cpuQuota, uid, err)
-	}
-
 	ramErr := m.applyRAMResourceLimit(uid, cfg, ramQuota, eligibility.EligibleForRAM)
 	ioErr := m.applyIOResourceLimit(uid, cfg, eligibility.EligibleForIO)
-	return errors.Join(cpuErr, ramErr, ioErr)
+	return errors.Join(ramErr, ioErr)
 }
 
 func (m *Manager) applyRAMResourceLimit(uid int, cfg *config.Config, ramQuota string, eligible bool) error {
@@ -1061,25 +1184,6 @@ func (m *Manager) clearResourceLimitState(uid int, ram, io bool) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) applySharedCPUQuota(sharedPath string, totalCores int, cfg *config.Config) (string, error) {
-	availableCores := totalCores - cfg.GetMinSystemCores()
-	if availableCores < 1 {
-		availableCores = 1
-	}
-	sharedQuota := fmt.Sprintf("%d 100000", availableCores*100000)
-	if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, sharedQuota); err != nil {
-		return sharedQuota, err
-	}
-	m.logger.Debug("Shared cgroup CPU quota reconciled",
-		"path", sharedPath,
-		"total_quota", sharedQuota,
-		"available_cores", availableCores,
-		"min_system_cores", cfg.GetMinSystemCores(),
-		"total_cores", totalCores,
-	)
-	return sharedQuota, nil
-}
-
 func (m *Manager) deactivateLimits() (resultErr error) {
 	defer func() {
 		if resultErr != nil && m.prometheusExporter != nil {
@@ -1087,7 +1191,6 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		}
 	}()
 
-	cfg := m.GetConfig()
 	m.logger.Info("Deactivating resource limits")
 
 	m.mu.Lock()
@@ -1122,18 +1225,6 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 	deactivatedCount := 0
 	deactivatedUsers := make(map[int]bool, len(usersToCleanup))
 
-	if sharedPath != "" {
-		if err := m.cgroupManager.ApplySharedCPULimit(sharedPath, "max 100000"); err != nil {
-			m.logger.Warn("Failed to reset shared cgroup CPU quota before deactivation",
-				"path", sharedPath,
-				"error", err,
-			)
-			if firstError == nil {
-				firstError = err
-			}
-		}
-	}
-
 	// Remove limits for each tracked user.
 	for _, uid := range usersToCleanup {
 		username := m.metricsCollector.GetUsernameFromUID(uid)
@@ -1150,17 +1241,7 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 					"error", err,
 				)
 			}
-			var releaseErr error
-			if observedForBlockIO {
-				_, result, placementErr := m.cgroupManager.EnsureUserCgroupPlacement(uid, "", cfg.CPUQuotaNormal)
-				m.recordCgroupIngressSkips(result)
-				releaseErr = placementErr
-				if releaseErr == nil && result.NamespaceSkipped() > 0 && !result.Applied() {
-					releaseErr = cgroupIngressNoopError(uid, result)
-				}
-			} else {
-				releaseErr = m.cgroupManager.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal)
-			}
+			released, releaseErr := m.releaseCPUPointsUser(uid, observedForBlockIO)
 			if releaseErr != nil {
 				m.logger.Error("Failed to release user from shared cgroup",
 					"user", userStr,
@@ -1170,7 +1251,9 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 				if firstError == nil {
 					firstError = releaseErr
 				}
-				continue
+				if !released {
+					continue
+				}
 			}
 
 			deactivatedUsers[uid] = true
@@ -1182,31 +1265,9 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 			continue
 		}
 
-		// Restore the normal CPU quota.
-		if err := m.cgroupManager.ApplyCPULimit(uid, cfg.CPUQuotaNormal); err != nil {
-			m.logger.Error("Failed to restore normal CPU limit for user",
-				"user", userStr,
-				"error", err,
-			)
-			if firstError == nil {
-				firstError = err
-			}
-			continue
+		if firstError == nil {
+			firstError = fmt.Errorf("active CPU Points user %d has no hierarchy", uid)
 		}
-
-		deactivatedCount++
-		m.logger.Debug("CPU limit removed for user", "uid", uid)
-
-		if err := m.removeTrackedResourceLimits(uid, appliedResources.ramApplied, appliedResources.ioApplied); err != nil {
-			m.logger.Warn("Failed to remove tracked resource limits for user",
-				"user", userStr,
-				"error", err,
-			)
-			if firstError == nil {
-				firstError = err
-			}
-		}
-		deactivatedUsers[uid] = true
 	}
 
 	standaloneDeactivated := make(map[int]bool, len(standaloneToCleanup))
@@ -1240,8 +1301,11 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 
 	// Remove the shared cgroup when it exists.
 	sharedRemoved := sharedPath == ""
-	if sharedPath != "" {
-		if err := os.Remove(sharedPath); err != nil {
+	if sharedPath != "" && len(deactivatedUsers) == len(usersToCleanup) {
+		m.mu.RLock()
+		hierarchy := m.cpuPointsHierarchy
+		m.mu.RUnlock()
+		if err := m.cgroupManager.RemoveCPUPointsHierarchy(hierarchy); err != nil {
 			m.logger.Warn("Failed to remove shared cgroup",
 				"path", sharedPath,
 				"error", err,
@@ -1270,11 +1334,9 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		delete(m.activeUsers, uid)
 		delete(m.userLimitedAt, uid)
 		delete(m.resourceLimits, uid)
-		delete(m.psiBoostedAt, uid)
 	}
 	for uid := range standaloneDeactivated {
 		delete(m.resourceLimits, uid)
-		delete(m.psiBoostedAt, uid)
 	}
 	if len(m.activeUsers) == 0 {
 		m.limitsActive = false
@@ -1282,6 +1344,7 @@ func (m *Manager) deactivateLimits() (resultErr error) {
 		confirmedDeactivation = wasActive
 		if sharedRemoved {
 			m.sharedCgroupPath = ""
+			m.cpuPointsHierarchy = cgroup.CPUPointsHierarchy{}
 		}
 	}
 	m.refreshResourceLimitsActiveLocked(time.Now())

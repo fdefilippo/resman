@@ -33,6 +33,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	resmandatabase "github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
 )
@@ -140,10 +141,7 @@ func (m *mockMetricsCollector) GetUsernameFromUID(uid int) string {
 type mockCgroupManager struct{}
 
 func (m *mockCgroupManager) CreateUserCgroup(uid int) error                            { return nil }
-func (m *mockCgroupManager) ApplyCPULimit(uid int, quota string) error                 { return nil }
-func (m *mockCgroupManager) ApplyCPUQuota(uid int, quota string) error                 { return nil }
-func (m *mockCgroupManager) ApplyCPUWeight(uid int, weight int) error                  { return nil }
-func (m *mockCgroupManager) RemoveCPULimit(uid int) error                              { return nil }
+func (m *mockCgroupManager) EnsureUnlimitedCPUQuota(uid int) error                     { return nil }
 func (m *mockCgroupManager) ApplyRAMLimit(uid int, limit string) error                 { return nil }
 func (m *mockCgroupManager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error { return nil }
 func (m *mockCgroupManager) ApplyRAMHigh(uid int, limit string) error                  { return nil }
@@ -199,9 +197,20 @@ func (m *mockCgroupManager) ReconcileUserProcessMembership(uid int, sharedPath, 
 func (m *mockCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
 	return nil
 }
-func (m *mockCgroupManager) CreateSharedCgroup() (string, error)                      { return "", nil }
-func (m *mockCgroupManager) ApplySharedCPULimit(path string, quota string) error      { return nil }
-func (m *mockCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) { return "", nil }
+func (m *mockCgroupManager) EnsureCPUPointsHierarchy(quota cpupoints.ParentQuota, weight cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error) {
+	return cgroup.CPUPointsHierarchy{Parent: "/shared", Guaranteed: "/shared/guaranteed", BestEffort: "/shared/best_effort"}, nil
+}
+func (m *mockCgroupManager) ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy, cpupoints.ParentQuota) error {
+	return nil
+}
+func (m *mockCgroupManager) ApplyCPUPointsGuaranteedWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error {
+	return nil
+}
+func (m *mockCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, weight cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
+}
+func (m *mockCgroupManager) ReleaseCPUPointsUser(int, string) error                   { return nil }
+func (m *mockCgroupManager) RemoveCPUPointsHierarchy(cgroup.CPUPointsHierarchy) error { return nil }
 func (m *mockCgroupManager) CleanupAll() error                                        { return nil }
 func (m *mockCgroupManager) GetCgroupInfo(uid int) (cgroup.CgroupInfo, error) {
 	return cgroup.CgroupInfo{}, nil
@@ -212,6 +221,41 @@ type moveResultCgroupManager struct {
 	mockCgroupManager
 	moveResult cgroup.ProcessMoveResult
 	moveErr    error
+}
+
+type stateExactResolverFunc func(string) ([]cpupoints.ResolvedUserIdentity, error)
+
+func (f stateExactResolverFunc) ResolveExactUsername(username string) ([]cpupoints.ResolvedUserIdentity, error) {
+	return f(username)
+}
+
+type cpuPointsOrderingCgroupManager struct {
+	mockCgroupManager
+	events       []string
+	placementErr map[int]error
+	moveResults  map[int]cgroup.ProcessMoveResult
+}
+
+func (m *cpuPointsOrderingCgroupManager) ApplyCPUPointsGuaranteedWeight(_ cgroup.CPUPointsHierarchy, weight cpupoints.KernelCPUWeight) error {
+	m.events = append(m.events, fmt.Sprintf("domain:%d", weight.Value()))
+	return nil
+}
+
+func (m *cpuPointsOrderingCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, weight cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	m.events = append(m.events, fmt.Sprintf("leaf:%d:%s:%d", uid, filepath.Base(domain), weight.Value()))
+	if err := m.placementErr[uid]; err != nil {
+		return "", cgroup.ProcessMoveResult{}, err
+	}
+	result := m.moveResults[uid]
+	if !result.Applied() {
+		result.AlreadyPresent = 1
+	}
+	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), result, nil
+}
+
+func (m *cpuPointsOrderingCgroupManager) ReleaseCPUPointsUser(uid int, domain string) error {
+	m.events = append(m.events, fmt.Sprintf("release:%d:%s", uid, filepath.Base(domain)))
+	return nil
 }
 
 type membershipCall struct {
@@ -236,10 +280,15 @@ func (m *moveResultCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, pa
 	if m.moveErr != nil {
 		return cgroup.ProcessMoveResult{}, m.moveErr
 	}
-	if m.moveResult == (cgroup.ProcessMoveResult{}) {
+	if m.moveResult.Candidates == 0 && !m.moveResult.Applied() && m.moveResult.NamespaceSkipped() == 0 && m.moveResult.Disappeared == 0 && m.moveResult.Reused == 0 {
 		return cgroup.ProcessMoveResult{Moved: 1}, nil
 	}
 	return m.moveResult, nil
+}
+
+func (m *moveResultCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, _ cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	result, err := m.MoveAllUserProcessesToSharedCgroup(uid, domain)
+	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), result, err
 }
 
 type resourceOnlyCgroupManager struct {
@@ -250,7 +299,6 @@ type resourceOnlyCgroupManager struct {
 	cpuQuotas         map[int]string
 	sharedCreates     int
 	releasedShared    []int
-	sharedQuotas      []string
 	ramApplyErr       error
 	ioApplyErr        error
 	cleanupErr        error
@@ -283,24 +331,8 @@ func (m *remediationStageCgroupManager) ApplyTemporaryIOLimit(uid int, _ string,
 
 type patternPolicyCgroupManager struct {
 	mockCgroupManager
-	cpuErrors map[int][]error
-	cpuCalls  map[int]int
 	ramErrors map[int][]error
 	ramCalls  map[int]int
-}
-
-func (m *patternPolicyCgroupManager) ApplyCPUQuota(uid int, _ string) error {
-	if m.cpuCalls == nil {
-		m.cpuCalls = make(map[int]int)
-	}
-	m.cpuCalls[uid]++
-	errorsForUID := m.cpuErrors[uid]
-	if len(errorsForUID) == 0 {
-		return nil
-	}
-	err := errorsForUID[0]
-	m.cpuErrors[uid] = errorsForUID[1:]
-	return err
 }
 
 func (m *patternPolicyCgroupManager) ApplyRAMLimitWithHigh(uid int, _ string, _ string) error {
@@ -332,11 +364,11 @@ func (m *resourceOnlyCgroupManager) CleanupUserCgroup(uid int) error {
 	return m.cleanupErr
 }
 
-func (m *resourceOnlyCgroupManager) ApplyCPUQuota(uid int, quota string) error {
+func (m *resourceOnlyCgroupManager) EnsureUnlimitedCPUQuota(uid int) error {
 	if m.cpuQuotas == nil {
 		m.cpuQuotas = make(map[int]string)
 	}
-	m.cpuQuotas[uid] = quota
+	m.cpuQuotas[uid] = normalCPUQuota
 	return nil
 }
 
@@ -345,13 +377,23 @@ func (m *resourceOnlyCgroupManager) CreateSharedCgroup() (string, error) {
 	return "/shared", nil
 }
 
-func (m *resourceOnlyCgroupManager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
-	m.releasedShared = append(m.releasedShared, uid)
-	return nil
+func (m *resourceOnlyCgroupManager) EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error) {
+	path, err := m.CreateSharedCgroup()
+	return cgroup.CPUPointsHierarchy{Parent: path, Guaranteed: path + "/guaranteed", BestEffort: path + "/best_effort"}, err
 }
 
-func (m *resourceOnlyCgroupManager) ApplySharedCPULimit(sharedPath, quota string) error {
-	m.sharedQuotas = append(m.sharedQuotas, quota)
+func (m *resourceOnlyCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, _ cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	if _, standalone := m.cpuQuotas[uid]; standalone {
+		if err := m.CleanupUserCgroup(uid); err != nil {
+			return "", cgroup.ProcessMoveResult{}, err
+		}
+	}
+	result, err := m.MoveAllUserProcessesToSharedCgroup(uid, domain)
+	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), result, err
+}
+
+func (m *resourceOnlyCgroupManager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
+	m.releasedShared = append(m.releasedShared, uid)
 	return nil
 }
 
@@ -509,6 +551,175 @@ func TestNewManagerNilConfig(t *testing.T) {
 
 	if err == nil {
 		t.Error("NewManager() should error with nil config")
+	}
+}
+
+func testCPUPointsPolicy(t *testing.T, entries map[string]struct {
+	uid    int
+	points int
+}) cpupoints.PolicySnapshot {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(home, ".cpu-points-state-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var content strings.Builder
+	content.WriteString(cpupoints.PolicyMapMarker)
+	for _, name := range names {
+		fmt.Fprintf(&content, "\n%s=%d", name, entries[name].points)
+	}
+	path := filepath.Join(dir, "cpu-points.map")
+	path, err = filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reserve, _ := cpupoints.NewReservePoints(100)
+	bestEffort, _ := cpupoints.NewBestEffortPoints(100)
+	mapPath, err := cpupoints.NewPolicyMapPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := stateExactResolverFunc(func(username string) ([]cpupoints.ResolvedUserIdentity, error) {
+		entry, ok := entries[username]
+		if !ok {
+			return nil, nil
+		}
+		return []cpupoints.ResolvedUserIdentity{{Username: username, UID: entry.uid}}, nil
+	})
+	snapshot, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
+		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+	}, resolver)
+	if err != nil {
+		t.Fatalf("load CPU Points test policy: %v", err)
+	}
+	return snapshot
+}
+
+func TestCPUPointsAdmissionAndDeparturePreserveAggregateOrdering(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	cgroups := &cpuPointsOrderingCgroupManager{moveResults: map[int]cgroup.ProcessMoveResult{
+		1000: {Moved: 1, MovedProcesses: []cgroup.ProcessReference{{PID: 41, StartTime: 9001}}},
+	}}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.cpuPointsPolicy = policy
+	hierarchy := cgroup.CPUPointsHierarchy{Parent: "/limited", Guaranteed: "/limited/guaranteed", BestEffort: "/limited/best_effort"}
+	manager.cpuPointsHierarchy = hierarchy
+	manager.programmedGuaranteePoints = 1
+
+	if _, _, err := manager.admitCPUPointsUser(1000, hierarchy); err != nil {
+		t.Fatalf("admitCPUPointsUser(): %v", err)
+	}
+	if !reflect.DeepEqual(cgroups.events, []string{"domain:300", "leaf:1000:guaranteed:300"}) {
+		t.Fatalf("admission events = %v, want domain raise before leaf ingress", cgroups.events)
+	}
+	coverage := manager.ramCoverage[1000]
+	if coverage.coverage != RAMCoveragePartial || coverage.partial[41] != 9001 {
+		t.Fatalf("RAM coverage = %+v, want partial PID 41/start 9001", coverage)
+	}
+	if _, _, err := manager.admitCPUPointsUser(1001, hierarchy); err != nil {
+		t.Fatalf("best-effort admission: %v", err)
+	}
+	if got := cgroups.events[len(cgroups.events)-1]; got != "leaf:1001:best_effort:100" {
+		t.Fatalf("best-effort admission event = %q", got)
+	}
+
+	cgroups.events = nil
+	if released, err := manager.releaseCPUPointsUser(1000, false); err != nil || !released {
+		t.Fatalf("releaseCPUPointsUser() released=%t error=%v", released, err)
+	}
+	if !reflect.DeepEqual(cgroups.events, []string{"release:1000:guaranteed", "domain:1"}) {
+		t.Fatalf("departure events = %v, want leaf removal before domain lower", cgroups.events)
+	}
+}
+
+func TestCPUPointsFailedAdmissionRetainsConservativeHighWaterMark(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{
+		"alice": {uid: 1000, points: 300},
+		"bob":   {uid: 1001, points: 200},
+	})
+	injected := errors.New("leaf ingress rejected")
+	cgroups := &cpuPointsOrderingCgroupManager{placementErr: map[int]error{1000: injected}}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.cpuPointsPolicy = policy
+	hierarchy := cgroup.CPUPointsHierarchy{Parent: "/limited", Guaranteed: "/limited/guaranteed", BestEffort: "/limited/best_effort"}
+	manager.cpuPointsHierarchy = hierarchy
+	manager.programmedGuaranteePoints = 1
+
+	if _, _, err := manager.admitCPUPointsUser(1000, hierarchy); !errors.Is(err, injected) {
+		t.Fatalf("first admission error = %v, want injected failure", err)
+	}
+	delete(cgroups.placementErr, 1000)
+	if _, _, err := manager.admitCPUPointsUser(1001, hierarchy); err != nil {
+		t.Fatalf("second admission: %v", err)
+	}
+	if !reflect.DeepEqual(cgroups.events, []string{
+		"domain:300", "leaf:1000:guaranteed:300", "domain:300", "leaf:1001:guaranteed:200",
+	}) {
+		t.Fatalf("events = %v, want failed high-water mark retained", cgroups.events)
+	}
+	if manager.appliedGuaranteePoints.Value() != 200 || manager.programmedGuaranteePoints != 300 {
+		t.Fatalf("applied/programmed guarantees = %d/%d, want 200/300", manager.appliedGuaranteePoints.Value(), manager.programmedGuaranteePoints)
+	}
+}
+
+func TestCPUPointsRAMActiveTransitionsFailBeforeCgroupMutation(t *testing.T) {
+	cgroups := &cpuPointsOrderingCgroupManager{}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hierarchy := cgroup.CPUPointsHierarchy{Parent: "/limited", Guaranteed: "/limited/guaranteed", BestEffort: "/limited/best_effort"}
+	manager.cpuPointsHierarchy = hierarchy
+	manager.resourceLimits[1000] = userResourceLimitState{ram: true, ramApplied: true, standalone: true}
+
+	_, _, err = manager.admitCPUPointsUser(1000, hierarchy)
+	var transitionErr *RAMActiveCPUTransitionError
+	if !errors.As(err, &transitionErr) {
+		t.Fatalf("standalone-to-CPU error = %v, want typed transition refusal", err)
+	}
+	if len(cgroups.events) != 0 {
+		t.Fatalf("standalone-to-CPU refusal reached cgroup mutation: %v", cgroups.events)
+	}
+
+	manager.resourceLimits[1000] = userResourceLimitState{ram: true, ramApplied: true}
+	weight, _ := cpupoints.NewKernelCPUWeight(100)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{
+		class: cpupoints.AllocationClassBestEffort, weight: weight,
+		domainPath: hierarchy.BestEffort, leafPath: hierarchy.BestEffort + "/user_1000",
+	}
+	if released, err := manager.releaseCPUPointsUser(1000, false); released || !errors.As(err, &transitionErr) {
+		t.Fatalf("CPU-to-origin released=%t error=%v, want typed deferred transition", released, err)
+	}
+	if len(cgroups.events) != 0 {
+		t.Fatalf("CPU-to-origin refusal reached cgroup mutation: %v", cgroups.events)
 	}
 }
 
@@ -1288,7 +1499,7 @@ func TestMakeDecisionUsesIndependentResourceAggregates(t *testing.T) {
 	}
 }
 
-func TestMinSystemCoresGatesOnlyCPUEnforcement(t *testing.T) {
+func TestRAMAndIOPressureActivateIndependentlyOfCPUCapacity(t *testing.T) {
 	tests := []struct {
 		name      string
 		configure func(*config.Config)
@@ -1316,7 +1527,6 @@ func TestMinSystemCoresGatesOnlyCPUEnforcement(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.DefaultConfig()
-			cfg.MinSystemCores = 2
 			cfg.CPUThreshold = 100
 			cfg.IgnoreSystemLoad = true
 			tt.configure(cfg)
@@ -1364,7 +1574,6 @@ func TestResourceOnlyUsersUseStandaloneCgroupsWithoutCPUThrottle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.DefaultConfig()
-			cfg.MinSystemCores = 2
 			tt.configure(cfg)
 			cgroups := &resourceOnlyCgroupManager{}
 			exporter := &mockPrometheusExporter{}
@@ -1423,7 +1632,6 @@ func TestResourceOnlyUsersUseStandaloneCgroupsWithoutCPUThrottle(t *testing.T) {
 
 func TestStandalonePartialFailurePreservesIntentAndObservedSuccess(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MinSystemCores = 2
 	cfg.RAMEnabled = true
 	cfg.IOEnabled = true
 	cgroups := &resourceOnlyCgroupManager{ioApplyErr: errors.New("io controller rejected limit")}
@@ -1454,7 +1662,6 @@ func TestStandalonePartialFailurePreservesIntentAndObservedSuccess(t *testing.T)
 
 func TestStandaloneResourceLifecycleReconcilesReloadAndCleanupFailure(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MinSystemCores = 2
 	cfg.RAMEnabled = true
 	cfg.IOEnabled = false
 	cgroups := &resourceOnlyCgroupManager{}
@@ -1502,9 +1709,8 @@ func TestStandaloneResourceLifecycleReconcilesReloadAndCleanupFailure(t *testing
 	}
 }
 
-func TestMaintenanceMigratesStandaloneUserAfterCPUEligibilityReload(t *testing.T) {
+func TestMaintenanceRefusesStandaloneToCPUTransitionWhileRAMIsActive(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MinSystemCores = 2
 	cfg.RAMEnabled = true
 	cgroups := &resourceOnlyCgroupManager{}
 	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
@@ -1524,82 +1730,28 @@ func TestMaintenanceMigratesStandaloneUserAfterCPUEligibilityReload(t *testing.T
 
 	resourceMetrics.CPUEligibleUsers = []int{1000}
 	resourceMetrics.UserMetrics[1000].EligibleForCPU = true
-	if err := manager.releaseIdleUsers(resourceMetrics); err != nil {
-		t.Fatalf("releaseIdleUsers() error = %v", err)
+	err = manager.releaseIdleUsers(resourceMetrics)
+	var transitionErr *RAMActiveCPUTransitionError
+	if !errors.As(err, &transitionErr) || transitionErr.UID != 1000 {
+		t.Fatalf("releaseIdleUsers() error = %v, want typed RAM-active transition refusal", err)
 	}
 	if cgroups.sharedCreates != 1 {
 		t.Fatalf("shared CPU cgroup creations = %d, want 1", cgroups.sharedCreates)
 	}
-	if len(cgroups.cleanedStandalone) != 1 || !manager.activeUsers[1000] {
-		t.Fatalf("standalone cleanup/CPU state = %v/%t, want [1000]/true", cgroups.cleanedStandalone, manager.activeUsers[1000])
+	if len(cgroups.cleanedStandalone) != 0 || manager.activeUsers[1000] {
+		t.Fatalf("standalone cleanup/CPU state = %v/%t, want no mutation and no CPU claim", cgroups.cleanedStandalone, manager.activeUsers[1000])
 	}
-	if !manager.limitsActive {
-		t.Fatal("CPU aggregate state did not activate after standalone-to-shared migration")
-	}
-	if manager.resourceLimits[1000].standalone {
-		t.Fatal("user remained marked standalone after migration to shared CPU enforcement")
-	}
-}
-
-func TestMaintenanceMigratesCPUUserToStandaloneWhenMinSystemCoresBlocksCPU(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MinSystemCores = 2
-	cfg.RAMEnabled = true
-	cgroups := &resourceOnlyCgroupManager{}
-	exporter := &mockPrometheusExporter{}
-	manager, err := NewManager(cfg, &mockMetricsCollector{}, cgroups, exporter)
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
-	manager.limitsActive = true
-	manager.limitsAppliedTime = time.Now().Add(-time.Minute)
-	manager.activeUsers[1000] = true
-	manager.requestedCPUUsers[1000] = true
-	manager.sharedCgroupPath = "/shared"
-
-	sample := &SystemMetrics{
-		TotalCores:       2,
-		CPUEligibleUsers: []int{1000},
-		UserCPUUsage:     map[int]float64{1000: 1},
-		UserMetrics: map[int]*metrics.UserMetrics{
-			1000: {
-				UID:            1000,
-				Username:       "resource-user",
-				CPUUsageEMA:    1,
-				EligibleForCPU: true,
-				EligibleForRAM: true,
-			},
-		},
-	}
-	if err := manager.releaseIdleUsers(sample); err != nil {
-		t.Fatalf("releaseIdleUsers() error = %v", err)
-	}
-	if !reflect.DeepEqual(cgroups.releasedShared, []int{1000}) {
-		t.Fatalf("released shared users = %v, want [1000]", cgroups.releasedShared)
+	if manager.limitsActive {
+		t.Fatal("CPU aggregate state activated after RAM-active transition refusal")
 	}
 	state := manager.resourceLimits[1000]
-	if !state.standalone || !state.ram || !state.ramApplied {
-		t.Fatalf("resource state = %+v, want active standalone RAM", state)
-	}
-	if manager.limitsActive || manager.activeUsers[1000] || manager.requestedCPUUsers[1000] {
-		t.Fatalf("CPU state remained active: aggregate=%t active=%t requested=%t",
-			manager.limitsActive, manager.activeUsers[1000], manager.requestedCPUUsers[1000])
-	}
-	if !manager.resourceLimitsActive {
-		t.Fatal("RAM enforcement was not kept active during CPU release")
-	}
-	if !reflect.DeepEqual(cgroups.sharedQuotas, []string{"max 100000"}) {
-		t.Fatalf("shared CPU quotas = %v, want [max 100000]", cgroups.sharedQuotas)
-	}
-	if got := exporter.snapshot(); got.limitsDeactivated != 1 || got.limitsActivated != 0 {
-		t.Fatalf("CPU transition counters = activated %d deactivated %d, want 0/1",
-			got.limitsActivated, got.limitsDeactivated)
+	if !state.standalone || !state.ramApplied {
+		t.Fatalf("RAM-active standalone state changed after refusal: %+v", state)
 	}
 }
 
 func TestActivationWithoutEligibleEnforcementReportsBoundedFailure(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MinSystemCores = 2
 	exporter := &mockPrometheusExporter{}
 	manager, err := NewManager(cfg, &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
 	if err != nil {
@@ -1619,6 +1771,36 @@ func TestActivationWithoutEligibleEnforcementReportsBoundedFailure(t *testing.T)
 	recorded := exporter.recordedErrors()
 	if len(recorded) != 1 || recorded[0].component != limitTransitionErrorComponent || recorded[0].errorType != limitTransitionActivationFailure {
 		t.Fatalf("recorded errors = %+v, want one bounded activation failure", recorded)
+	}
+}
+
+func TestMappedIneligibleUserIsNotAcquiredByCPUPoints(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"mapped-but-ineligible": {uid: 1000, points: 300}})
+	cgroups := &cpuPointsOrderingCgroupManager{}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.cpuPointsPolicy = policy
+
+	err = manager.activateLimits(&SystemMetrics{
+		TotalCores:   2,
+		UserCPUUsage: map[int]float64{1000: 100},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {UID: 1000, Username: "mapped-but-ineligible", CPUUsageEMA: 100},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no CPU, RAM, or IO enforcement") {
+		t.Fatalf("activateLimits() error = %v, want explicit no-enforcement result", err)
+	}
+	if len(cgroups.events) != 0 {
+		t.Fatalf("mapped ineligible user reached CPU Points mutation: %v", cgroups.events)
+	}
+	if _, allocated := manager.cpuAllocations[1000]; allocated {
+		t.Fatal("mapped ineligible user acquired a CPU Points leaf")
 	}
 }
 
@@ -2192,20 +2374,17 @@ func TestForceDeactivateLimits(t *testing.T) {
 
 type deactivateCgroupManager struct {
 	mockCgroupManager
-	applyCPULimitCalls       []int
-	applyCPUQuotaCalls       []string
-	applyCPUWeightCalls      []int
-	applyRAMLimitCalls       []string
-	applyIOLimitCalls        []int
-	removeRAMHighCalls       []int
-	removeRAMLimitCalls      []int
-	removeRAMSwapLimitCalls  []int
-	removeIOLimitCalls       []int
-	applySharedCPULimitCalls []string
-	createdUserSubgroups     []int
-	movedSharedUsers         []int
-	releasedUsers            []int
-	releaseErrors            map[int]error
+	ensureUnlimitedCalls    []int
+	applyRAMLimitCalls      []string
+	applyIOLimitCalls       []int
+	removeRAMHighCalls      []int
+	removeRAMLimitCalls     []int
+	removeRAMSwapLimitCalls []int
+	removeIOLimitCalls      []int
+	createdUserSubgroups    []int
+	movedSharedUsers        []int
+	releasedUsers           []int
+	releaseErrors           map[int]error
 }
 
 type blockingReleaseCgroupManager struct {
@@ -2299,18 +2478,8 @@ func (m *blockingCleanupPrometheusExporter) Stop() error {
 	return nil
 }
 
-func (m *deactivateCgroupManager) ApplyCPULimit(uid int, quota string) error {
-	m.applyCPULimitCalls = append(m.applyCPULimitCalls, uid)
-	return nil
-}
-
-func (m *deactivateCgroupManager) ApplyCPUQuota(uid int, quota string) error {
-	m.applyCPUQuotaCalls = append(m.applyCPUQuotaCalls, fmt.Sprintf("%d:%s", uid, quota))
-	return nil
-}
-
-func (m *deactivateCgroupManager) ApplyCPUWeight(uid int, weight int) error {
-	m.applyCPUWeightCalls = append(m.applyCPUWeightCalls, uid)
+func (m *deactivateCgroupManager) EnsureUnlimitedCPUQuota(uid int) error {
+	m.ensureUnlimitedCalls = append(m.ensureUnlimitedCalls, uid)
 	return nil
 }
 
@@ -2349,11 +2518,6 @@ func (m *deactivateCgroupManager) RemoveIOLimit(uid int) error {
 	return nil
 }
 
-func (m *deactivateCgroupManager) ApplySharedCPULimit(path string, quota string) error {
-	m.applySharedCPULimitCalls = append(m.applySharedCPULimitCalls, fmt.Sprintf("%s:%s", path, quota))
-	return nil
-}
-
 func (m *deactivateCgroupManager) CreateUserSubCgroup(uid int, path string) (string, error) {
 	m.createdUserSubgroups = append(m.createdUserSubgroups, uid)
 	return filepath.Join(path, fmt.Sprintf("user_%d", uid)), nil
@@ -2364,9 +2528,25 @@ func (m *deactivateCgroupManager) MoveAllUserProcessesToSharedCgroup(uid int, pa
 	return cgroup.ProcessMoveResult{Moved: 1}, nil
 }
 
+func (m *deactivateCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, _ cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	if _, err := m.CreateUserSubCgroup(uid, domain); err != nil {
+		return "", cgroup.ProcessMoveResult{}, err
+	}
+	result, err := m.MoveAllUserProcessesToSharedCgroup(uid, domain)
+	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), result, err
+}
+
 func (m *deactivateCgroupManager) ReleaseUserFromSharedCgroup(uid int, path, normalQuota string) error {
 	m.releasedUsers = append(m.releasedUsers, uid)
 	return m.releaseErrors[uid]
+}
+
+func (m *deactivateCgroupManager) ReleaseCPUPointsUser(uid int, domain string) error {
+	return m.ReleaseUserFromSharedCgroup(uid, domain, normalCPUQuota)
+}
+
+func (m *blockingReleaseCgroupManager) ReleaseCPUPointsUser(uid int, domain string) error {
+	return m.ReleaseUserFromSharedCgroup(uid, domain, normalCPUQuota)
 }
 
 func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
@@ -2391,18 +2571,9 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	manager.activeUsers[1001] = true
 	manager.stabilityTracker.belowThresholdSince[999] = time.Now().Add(-time.Hour)
 	manager.stabilityTracker.belowThresholdSince[1000] = time.Now().Add(-time.Hour)
-	manager.psiBoostedAt[1000] = time.Now().Add(-time.Hour)
-	manager.psiBoostedAt[1001] = time.Now().Add(-time.Hour)
 
 	if err := manager.deactivateLimits(); err != nil {
 		t.Fatalf("deactivateLimits() error: %v", err)
-	}
-
-	if len(cgroupManager.applyCPULimitCalls) != 0 {
-		t.Fatalf("ApplyCPULimit should not be used for shared cgroup deactivation, got calls for %v", cgroupManager.applyCPULimitCalls)
-	}
-	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{sharedPath + ":max 100000"}) {
-		t.Fatalf("ApplySharedCPULimit calls = %v", cgroupManager.applySharedCPULimitCalls)
 	}
 
 	sort.Ints(cgroupManager.releasedUsers)
@@ -2418,17 +2589,10 @@ func TestDeactivateLimitsReleasesSharedCgroups(t *testing.T) {
 	if len(manager.activeUsers) != 0 {
 		t.Fatalf("activeUsers = %v, want empty", manager.activeUsers)
 	}
-	if len(manager.psiBoostedAt) != 0 {
-		t.Fatalf("psiBoostedAt = %v, want empty", manager.psiBoostedAt)
-	}
 	if len(manager.stabilityTracker.belowThresholdSince) != 0 {
 		t.Fatalf("stability state = %v, want empty", manager.stabilityTracker.belowThresholdSince)
 	}
 
-	manager.revertPSIBoosts()
-	if len(cgroupManager.applyCPUWeightCalls) != 0 {
-		t.Fatalf("expired PSI boosts attempted after deactivation: %v", cgroupManager.applyCPUWeightCalls)
-	}
 }
 
 func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
@@ -2453,8 +2617,6 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	manager.activeUsers[1001] = true
 	manager.stabilityTracker.belowThresholdSince[1000] = time.Now().Add(-time.Hour)
 	manager.stabilityTracker.belowThresholdSince[1001] = time.Now().Add(-time.Hour)
-	manager.psiBoostedAt[1000] = time.Now()
-	manager.psiBoostedAt[1001] = time.Now()
 
 	if err := manager.deactivateLimits(); err == nil {
 		t.Fatal("deactivateLimits() should report the failed user release")
@@ -2471,12 +2633,6 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 	if manager.sharedCgroupPath != sharedPath {
 		t.Fatalf("sharedCgroupPath = %q, want %q", manager.sharedCgroupPath, sharedPath)
 	}
-	if _, exists := manager.psiBoostedAt[1000]; exists {
-		t.Fatal("PSI boost state for released user 1000 should be removed")
-	}
-	if _, exists := manager.psiBoostedAt[1001]; !exists {
-		t.Fatal("PSI boost state for failed user 1001 should be retained")
-	}
 	if _, exists := manager.stabilityTracker.belowThresholdSince[1000]; exists {
 		t.Fatal("stability state for released user 1000 should be removed")
 	}
@@ -2484,19 +2640,14 @@ func TestDeactivateLimitsKeepsFailedSharedUsersActive(t *testing.T) {
 		t.Fatal("stability state for failed user 1001 should be retained for immediate retry")
 	}
 
-	cgroupManager.applySharedCPULimitCalls = nil
 	metrics := &SystemMetrics{
 		TotalCores: 4,
 		UserCPUUsage: map[int]float64{
 			1001: 10,
 		},
 	}
-	if err := manager.releaseIdleUsers(metrics); err != nil {
-		t.Fatalf("releaseIdleUsers() error: %v", err)
-	}
-	wantQuota := sharedPath + ":300000 100000"
-	if !reflect.DeepEqual(cgroupManager.applySharedCPULimitCalls, []string{wantQuota}) {
-		t.Fatalf("shared quota reconciliation calls = %v, want [%s]", cgroupManager.applySharedCPULimitCalls, wantQuota)
+	if err := manager.releaseIdleUsers(metrics); err == nil {
+		t.Fatal("releaseIdleUsers() should report the repeated failed release")
 	}
 }
 
@@ -2915,15 +3066,15 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			manager.limitsActive = true
 			manager.sharedCgroupPath = filepath.Join(t.TempDir(), "limited")
 			manager.activeUsers[1000] = true
-			manager.psiBoostedAt[1000] = time.Now()
 			manager.ioRemediation.boostStates[1000] = &IOBoostState{IsActive: true}
 
 			metrics := &SystemMetrics{
 				TotalCores:   4,
 				UserCPUUsage: map[int]float64{1000: 0},
 			}
-			if err := manager.releaseIdleUsers(metrics); err != nil {
-				t.Fatalf("releaseIdleUsers() error: %v", err)
+			err = manager.releaseIdleUsers(metrics)
+			if (err != nil) != (tt.releaseErr != nil) {
+				t.Fatalf("releaseIdleUsers() error = %v, want failure %t", err, tt.releaseErr != nil)
 			}
 
 			manager.ioRemediation.mu.RLock()
@@ -2937,12 +3088,6 @@ func TestReleaseIdleUsersForgetsIORemediationOnlyAfterSuccessfulRelease(t *testi
 			manager.mu.RUnlock()
 			if active != tt.wantActive {
 				t.Fatalf("activeUsers[1000] = %t, want %t", active, tt.wantActive)
-			}
-			manager.mu.RLock()
-			_, psiStateExists := manager.psiBoostedAt[1000]
-			manager.mu.RUnlock()
-			if psiStateExists != tt.wantActive {
-				t.Fatalf("PSI boost state exists = %t, want %t", psiStateExists, tt.wantActive)
 			}
 		})
 	}
@@ -3154,11 +3299,8 @@ func TestPatternDetectionFiltersUsersAndKeepsSharedProcessesInPlace(t *testing.T
 	if _, exists := manager.patternDetector.userStats[1001]; exists {
 		t.Fatal("excluded user 1001 remained in pattern statistics")
 	}
-	if len(cgroupManager.applyCPULimitCalls) != 0 {
-		t.Fatalf("pattern policy migrated processes through ApplyCPULimit: %v", cgroupManager.applyCPULimitCalls)
-	}
-	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:200000 100000"}) {
-		t.Fatalf("CPU quota calls = %v, want [1000:200000 100000]", cgroupManager.applyCPUQuotaCalls)
+	if len(cgroupManager.ensureUnlimitedCalls) != 0 {
+		t.Fatalf("pattern policy changed CPU capacity: %v", cgroupManager.ensureUnlimitedCalls)
 	}
 }
 
@@ -3235,8 +3377,8 @@ func TestPatternHistoryExpiryRemovesPolicy(t *testing.T) {
 	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
 		t.Fatal("policy survived after its pattern history expired")
 	}
-	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
-		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
+	if len(cgroupManager.ensureUnlimitedCalls) != 0 {
+		t.Fatalf("pattern expiry changed CPU capacity: %v", cgroupManager.ensureUnlimitedCalls)
 	}
 }
 
@@ -3275,8 +3417,8 @@ func TestPatternPolicyIsRevertedWhenClassificationDecays(t *testing.T) {
 	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
 		t.Fatal("unknown classification did not remove the existing policy")
 	}
-	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
-		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
+	if len(cgroupManager.ensureUnlimitedCalls) != 0 {
+		t.Fatalf("classification decay changed CPU capacity: %v", cgroupManager.ensureUnlimitedCalls)
 	}
 }
 
@@ -3299,8 +3441,8 @@ func TestPatternPolicyIsRevertedWhenAutodetectIsDisabled(t *testing.T) {
 	if _, exists := manager.policyEngine.GetPolicy(1000); exists {
 		t.Fatal("disabled autodetect did not clear the existing policy")
 	}
-	if !reflect.DeepEqual(cgroupManager.applyCPUQuotaCalls, []string{"1000:max 100000"}) {
-		t.Fatalf("CPU quota calls = %v, want [1000:max 100000]", cgroupManager.applyCPUQuotaCalls)
+	if len(cgroupManager.ensureUnlimitedCalls) != 0 {
+		t.Fatalf("disabling pattern detection changed CPU capacity: %v", cgroupManager.ensureUnlimitedCalls)
 	}
 }
 
@@ -3583,48 +3725,6 @@ func TestPatternPolicyFailedEnforcementRetriesNextCycle(t *testing.T) {
 	}
 }
 
-func TestPatternPolicyCPUQuotaFailureIsPartOfTheCycleOutcome(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.AutodetectPatterns = true
-	cfg.PatternMinSamples = 1
-	cfg.PatternConfidenceThreshold = 0.7
-	cfg.UserIncludeList = []string{".*"}
-	cpuErr := errors.New("CPU quota rejected")
-	cgroups := &patternPolicyCgroupManager{cpuErrors: map[int][]error{1000: {cpuErr}}}
-	collector := &mockMetricsCollector{
-		allUserMetrics: map[int]*metrics.UserMetrics{
-			1000: {UID: 1000, Username: "alice", EligibleForCPU: true},
-		},
-		usernames: map[int]string{1000: "alice"},
-	}
-	exporter := &mockPrometheusExporter{}
-	manager, err := NewManager(cfg, collector, cgroups, exporter)
-	if err != nil {
-		t.Fatalf("NewManager() error: %v", err)
-	}
-	manager.activeUsers[1000] = true
-	manager.patternDetector.userStats[1000] = batchNightStats()
-	run := &controlCycleContext{
-		cfg:     cfg,
-		metrics: &SystemMetrics{UserMetrics: collector.GetAllUserMetricsForDecision()},
-	}
-
-	err = manager.stageWorkloadPatternDetection(run)
-	if !errors.Is(err, cpuErr) || !strings.Contains(err.Error(), "CPU quota") || !strings.Contains(err.Error(), "UID 1000") {
-		t.Fatalf("stageWorkloadPatternDetection() error = %v, want UID and CPU quota context", err)
-	}
-	var patternErr *patternPolicyError
-	if !errors.As(err, &patternErr) || patternErr.uid != 1000 {
-		t.Fatalf("stageWorkloadPatternDetection() error = %v, want typed UID 1000 pattern failure", err)
-	}
-	if got := exporter.recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
-		component: patternPolicyErrorComponent,
-		errorType: patternPolicyApplicationFailure,
-	}}) {
-		t.Fatalf("Prometheus errors = %+v, want one bounded pattern-policy failure", got)
-	}
-}
-
 func batchNightStats() *UserHourlyStats {
 	return &UserHourlyStats{Buckets: []hourlyPatternBucket{{
 		Hour:        mostRecentHour(23),
@@ -3664,7 +3764,6 @@ func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {
 	manager.limitsActive = true
 	manager.sharedCgroupPath = sharedPath
 	manager.activeUsers[1000] = true
-	manager.psiBoostedAt[1000] = time.Now()
 	manager.ioRemediation.boostStates[1000] = &IOBoostState{
 		IsActive:        true,
 		StartTime:       time.Now(),
@@ -3686,14 +3785,8 @@ func TestBlackoutDeactivatesLimitsAndResetsBoosts(t *testing.T) {
 	if manager.limitsActive || len(manager.activeUsers) != 0 {
 		t.Fatalf("limits remained active during blackout: active=%v users=%v", manager.limitsActive, manager.activeUsers)
 	}
-	if !reflect.DeepEqual(cgroupManager.applyCPUWeightCalls, []int{1000}) {
-		t.Fatalf("ApplyCPUWeight calls = %v, want [1000]", cgroupManager.applyCPUWeightCalls)
-	}
 	if !reflect.DeepEqual(cgroupManager.releasedUsers, []int{1000}) {
 		t.Fatalf("released users = %v, want [1000]", cgroupManager.releasedUsers)
-	}
-	if len(manager.psiBoostedAt) != 0 {
-		t.Fatalf("PSI boost state remained after blackout: %v", manager.psiBoostedAt)
 	}
 	if _, exists := manager.ioRemediation.boostStates[1000]; exists {
 		t.Fatal("IO boost state remained after blackout released the user cgroup")

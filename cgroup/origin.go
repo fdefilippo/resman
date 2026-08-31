@@ -65,11 +65,6 @@ func processOriginsPath(createdCgroupsFile string) string {
 	return base + "-origins.json"
 }
 
-func isFiniteCPUQuota(quota string) bool {
-	fields := strings.Fields(quota)
-	return len(fields) == 2 && fields[0] != "max"
-}
-
 func (m *Manager) getProcRoot() string {
 	if m.procRoot == "" {
 		return "/proc"
@@ -571,6 +566,10 @@ func (m *Manager) moveProcessBatchExpected(
 		} else {
 			moved = append(moved, pid)
 			result.Moved++
+			result.MovedProcesses = append(result.MovedProcesses, ProcessReference{
+				PID:       pid,
+				StartTime: identity.StartTime,
+			})
 		}
 	}
 	m.logPIDNamespaceSkips(uid, result)
@@ -582,7 +581,7 @@ func (m *Manager) moveProcessBatchExpected(
 
 func (m *Manager) ensureRecoveryCgroup(uid int, normalQuota string) (string, error) {
 	if !isValidCPUQuotaFormat(normalQuota) {
-		return "", fmt.Errorf("invalid CPU_QUOTA_NORMAL %q for recovery cgroup", normalQuota)
+		return "", fmt.Errorf("invalid internal recovery CPU quota %q", normalQuota)
 	}
 
 	recoveryRoot := m.getRecoveryRootPath()

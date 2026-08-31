@@ -27,11 +27,9 @@ import (
 
 // UserPolicy contains the policies applied to a user.
 type UserPolicy struct {
-	CPUQuota         int    // CPU quota in microseconds
 	RAMQuota         string // RAM quota string (e.g., "1G")
 	AppliedAt        time.Time
 	LastChanged      time.Time
-	PreviousCPUQuota int
 	PreviousRAMQuota string
 }
 
@@ -54,7 +52,7 @@ func NewPolicyEngine(logger *logging.Logger) *PolicyEngine {
 // It returns true only when the stored policy changes.
 func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *config.Config) bool {
 	// Resolve the external configuration before locking policy state.
-	targetCPUQuota, targetRAMQuota := pe.getQuotasForPattern(pattern, cfg)
+	targetRAMQuota := pe.getRAMQuotaForPattern(pattern, cfg)
 
 	// An unknown pattern does not select a policy.
 	if pattern == PatternUnknown {
@@ -64,7 +62,7 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	pe.mu.Lock()
 
 	existing, exists := pe.userPolicies[uid]
-	if exists && existing.CPUQuota == targetCPUQuota && existing.RAMQuota == targetRAMQuota {
+	if exists && existing.RAMQuota == targetRAMQuota {
 		pe.mu.Unlock()
 		return false
 	}
@@ -72,14 +70,11 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	// Store the newly selected policy before enforcement reconciliation.
 	now := time.Now()
 	if exists {
-		existing.PreviousCPUQuota = existing.CPUQuota
 		existing.PreviousRAMQuota = existing.RAMQuota
-		existing.CPUQuota = targetCPUQuota
 		existing.RAMQuota = targetRAMQuota
 		existing.LastChanged = now
 	} else {
 		pe.userPolicies[uid] = &UserPolicy{
-			CPUQuota:    targetCPUQuota,
 			RAMQuota:    targetRAMQuota,
 			AppliedAt:   now,
 			LastChanged: now,
@@ -90,7 +85,6 @@ func (pe *PolicyEngine) ApplyPolicy(uid int, pattern WorkloadPattern, cfg *confi
 	pe.logger.Info("Workload pattern policy selected",
 		"uid", uid,
 		"pattern", pattern,
-		"cpu_quota", targetCPUQuota,
 		"ram_quota", targetRAMQuota,
 	)
 
@@ -149,25 +143,20 @@ func (pe *PolicyEngine) Clear() []int {
 	return removed
 }
 
-// getQuotasForPattern returns the CPU and RAM quotas for a pattern.
-func (pe *PolicyEngine) getQuotasForPattern(pattern WorkloadPattern, cfg *config.Config) (int, string) {
+// getRAMQuotaForPattern returns the RAM quota selected by a pattern.
+func (pe *PolicyEngine) getRAMQuotaForPattern(pattern WorkloadPattern, cfg *config.Config) string {
 	switch pattern {
 	case PatternBatchNight:
-		return cfg.GetBatchNightCPUQuota(), cfg.GetBatchNightRAMQuota()
+		return cfg.GetBatchNightRAMQuota()
 	case PatternInteractiveDay:
-		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
+		return cfg.GetInteractiveRAMQuota()
 	case PatternMixed:
-		// Use intermediate values for mixed patterns.
-		batchCPU := cfg.GetBatchNightCPUQuota()
-		interactiveCPU := cfg.GetInteractiveCPUQuota()
-		return (batchCPU + interactiveCPU) / 2, cfg.GetInteractiveRAMQuota()
+		return cfg.GetInteractiveRAMQuota()
 	case PatternAlwaysOn:
-		// Always-active users receive a moderate quota.
-		return cfg.GetInteractiveCPUQuota(), cfg.GetInteractiveRAMQuota()
+		return cfg.GetInteractiveRAMQuota()
 	case PatternSporadic:
-		// Sporadic users receive a low quota by default.
-		return cfg.GetInteractiveCPUQuota() / 2, cfg.GetInteractiveRAMQuota()
+		return cfg.GetInteractiveRAMQuota()
 	default:
-		return 0, ""
+		return ""
 	}
 }

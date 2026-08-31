@@ -37,6 +37,8 @@ const (
 	LegacyMetricsDBPath = "/etc/resman/metrics.db"
 	// DefaultCreatedCgroupsPath is boot-scoped runtime state under /run.
 	DefaultCreatedCgroupsPath = "/run/resman-cgroups.txt"
+	// DefaultCPUPointsMapPath is the authoritative direct username guarantee map.
+	DefaultCPUPointsMapPath = "/etc/resman/cpu-points.map"
 )
 
 type diskLayout struct {

@@ -26,6 +26,14 @@ type ProcessMoveResult struct {
 	PIDNamespaceUnavailable int
 	Disappeared             int
 	Reused                  int
+	MovedProcesses          []ProcessReference
+}
+
+// ProcessReference identifies one process lifetime that entered a managed
+// cgroup after it started. PID alone is not stable across reuse.
+type ProcessReference struct {
+	PID       int
+	StartTime uint64
 }
 
 // Applied reports whether at least one process is now known to be in the
@@ -48,6 +56,7 @@ func (r *ProcessMoveResult) add(other ProcessMoveResult) {
 	r.PIDNamespaceUnavailable += other.PIDNamespaceUnavailable
 	r.Disappeared += other.Disappeared
 	r.Reused += other.Reused
+	r.MovedProcesses = append(r.MovedProcesses, other.MovedProcesses...)
 }
 
 type pidNamespaceIdentity struct {

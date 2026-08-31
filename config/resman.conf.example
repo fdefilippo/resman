@@ -75,15 +75,13 @@ CPU_THRESHOLD_DURATION=90
 # ========================
 # CPU LIMITS
 # ========================
-# cpu.max format: "quota period"
-# total_cores = Quota / Period
-# Example:  50000 100000 -> 1/2 core
-# Example: 300000 100000 -> 3 cores
-# Example: 200000 100000 -> 2 full cores
-# In shared mode this quota is applied only to resman/recovery/user_UID when
-# the process original cgroup no longer exists. resman does not modify
-# cpu.max in cgroups managed by systemd.
-CPU_QUOTA_NORMAL="max 100000"
+# CPU Points normalize the current online host capacity to 1000 points.
+# CPU_RESERVE_POINTS stays outside the finite ResMan pool. Mapped users receive
+# proportional guarantees from CPU_POINTS_FILE; all other CPU-eligible users
+# share CPU_BEST_EFFORT_POINTS as one aggregate entitlement.
+CPU_RESERVE_POINTS=100
+CPU_BEST_EFFORT_POINTS=100
+CPU_POINTS_FILE=/etc/resman/cpu-points.map
 
 # ========================
 # RAM LIMITS
@@ -254,12 +252,13 @@ IO_REVERT_ON_NORMAL=true
 # WORKLOAD PATTERN DETECTION
 # ========================
 # Auto-detect eligible user workload patterns (batch/interactive/mixed) and
-# select CPU and RAM quotas based on historical usage.
+# select RAM policy based on historical usage. CPU Points remains authoritative
+# for CPU capacity.
 # Uses a sliding window of PATTERN_HISTORY_HOURS with hourly analysis.
-# Pattern quotas are applied only while the user is in resman's shared limited
-# cgroup. They never move excluded users or create standalone policy cgroups.
+# Pattern RAM policy is applied only while the user is in a managed CPU leaf.
+# It never moves excluded users or creates standalone policy cgroups.
 # When a pattern becomes unknown or this feature is disabled, active users are
-# restored to the normal shared-cgroup limits.
+# restored to the configured non-pattern RAM limit without changing CPU Points.
 #
 # AUTODETECT_PATTERNS: Enable pattern detection (true/false)
 # Default: false
@@ -275,13 +274,9 @@ IO_REVERT_ON_NORMAL=true
 # Default: 0.7
 # Higher values reduce false classifications but may leave users unclassified
 #
-# BATCH_NIGHT_CPU_QUOTA: CPU quota for batch night pattern (microseconds)
-# Default: 200000 (2 cores, used with 100000 period)
 # BATCH_NIGHT_RAM_QUOTA: RAM quota for batch night pattern (K/M/G/T, case-insensitive)
 # Default: 4G
 #
-# INTERACTIVE_CPU_QUOTA: CPU quota for interactive day pattern (microseconds)
-# Default: 50000 (0.5 core)
 # INTERACTIVE_RAM_QUOTA: RAM quota for interactive day pattern (K/M/G/T, case-insensitive)
 # Default: 1G
 #
@@ -295,20 +290,16 @@ IO_REVERT_ON_NORMAL=true
 # PATTERN_MIN_SAMPLES=12         # 12 hours minimum
 # PATTERN_CONFIDENCE_THRESHOLD=0.5  # Lower confidence requirement
 #
-# # Batch-optimized: high quotas for batch users
+# # Batch-optimized: high RAM quotas for batch users
 # AUTODETECT_PATTERNS=true
-# BATCH_NIGHT_CPU_QUOTA=400000   # 4 cores
 # BATCH_NIGHT_RAM_QUOTA=8G
-# INTERACTIVE_CPU_QUOTA=25000    # 0.25 core
 # INTERACTIVE_RAM_QUOTA=512M
 #
 AUTODETECT_PATTERNS=false
 PATTERN_HISTORY_HOURS=168
 PATTERN_MIN_SAMPLES=24
 PATTERN_CONFIDENCE_THRESHOLD=0.7
-BATCH_NIGHT_CPU_QUOTA=200000
 BATCH_NIGHT_RAM_QUOTA=4G
-INTERACTIVE_CPU_QUOTA=50000
 INTERACTIVE_RAM_QUOTA=1G
 
 # ========================
@@ -383,10 +374,6 @@ USE_SYSLOG=false             # true: use system syslog, false: use file
 LOG_FILE=/var/log/resman.log
 
 # ========================
-# SYSTEM
-# ========================
-MIN_SYSTEM_CORES=1
-
 # SYSTEM_UID_MIN: Minimum UID to monitor and include in metrics
 # Default: 1000
 #
@@ -692,18 +679,6 @@ USERNAME_CACHE_TTL=60
 # remove limits. Default: 30 seconds.
 # Fallback and metrics refresh interval changes update their tickers immediately.
 #
-# PSI_BOOST_WEIGHT: CPU weight to apply when a limited user experiences
-# PSI pressure. When a user's cgroup is throttled by cpu.max, their
-# cpu.pressure rises. The adaptive fairness mechanism boosts their
-# cpu.weight (default 300) to grant more CPU time within the shared quota.
-# Normal weight is 100. Higher values = more CPU priority.
-# Range: 1-10000. Default: 300.
-#
-# PSI_BOOST_DURATION: Seconds before reverting the PSI boost if no
-# further pressure events occur. Default: 120 (2 minutes).
-# If the user is still under pressure after reversion, the next PSI
-# event will re-apply the boost.
-#
 # Examples:
 # # Enable event-driven mode with default thresholds
 # PSI_EVENT_DRIVEN=true
@@ -731,5 +706,3 @@ PSI_IO_STALL_THRESHOLD=50000
 PSI_WINDOW_US=1000000
 PSI_FALLBACK_INTERVAL=300
 # METRICS_REFRESH_INTERVAL=30
-PSI_BOOST_WEIGHT=300
-PSI_BOOST_DURATION=120

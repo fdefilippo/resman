@@ -154,7 +154,7 @@ func TestTransitionUserCgroupRollsBackLogicalCounterOverflow(t *testing.T) {
 		},
 	}
 
-	_, err := manager.transitionUserCgroup(1000, oldPath, newPath, cfg.CPUQuotaNormal)
+	_, err := manager.transitionUserCgroup(1000, oldPath, newPath, normalCPUQuota, nil)
 	if !errors.Is(err, errCounterOverflow) {
 		t.Fatalf("transitionUserCgroup() error = %v, want %v", err, errCounterOverflow)
 	}
@@ -192,7 +192,7 @@ func TestTransitionUserCgroupCarriesFinalSourceCountersIntoDestination(t *testin
 		},
 	}
 
-	if _, err := manager.transitionUserCgroup(1000, oldPath, newPath, cfg.CPUQuotaNormal); err != nil {
+	if _, err := manager.transitionUserCgroup(1000, oldPath, newPath, normalCPUQuota, nil); err != nil {
 		t.Fatalf("transitionUserCgroup() error: %v", err)
 	}
 	if got, ok := manager.getCgroupPath(1000); !ok || got != newPath {

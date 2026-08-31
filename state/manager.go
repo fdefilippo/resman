@@ -33,6 +33,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/configepoch"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -67,6 +68,13 @@ type Manager struct {
 	userLimitedAt             map[int]time.Time
 	resourceLimits            map[int]userResourceLimitState
 	sharedCgroupPath          string // Shared CPU cgroup path
+	cpuPointsHierarchy        cgroup.CPUPointsHierarchy
+	cpuPointsPolicy           cpupoints.PolicySnapshot
+	cpuCapacity               CPUCapacityProvider
+	cpuAllocations            map[int]cpuPointsAllocation
+	appliedGuaranteePoints    cpupoints.AppliedGuaranteePoints
+	programmedGuaranteePoints uint64
+	ramCoverage               map[int]ramCoverageState
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -102,9 +110,8 @@ type Manager struct {
 	previousBlockIOCounters map[int]blockIOCounterSample
 	blockIOObservedUsers    map[int]bool
 
-	// PSI watcher for per-user adaptive CPU weight boosting
-	psiWatcher   *cgroup.PSIWatcher
-	psiBoostedAt map[int]time.Time // uid -> when last boosted
+	// PSI watcher triggers observation and control cycles; CPU Points exclusively owns weights.
+	psiWatcher *cgroup.PSIWatcher
 }
 
 type userResourceLimitState struct {
@@ -114,6 +121,61 @@ type userResourceLimitState struct {
 	io         bool
 	ioApplied  bool
 	standalone bool
+}
+
+type cpuPointsAllocation struct {
+	class      cpupoints.AllocationClass
+	weight     cpupoints.KernelCPUWeight
+	domainPath string
+	leafPath   string
+}
+
+// RAMCoverage describes whether a managed leaf accounts for the complete
+// memory footprint of one UID. Dynamic ingress can only provide post-ingress
+// coverage because cgroup v2 does not transfer existing page charges.
+type RAMCoverage string
+
+const (
+	RAMCoverageComplete RAMCoverage = "complete"
+	RAMCoveragePartial  RAMCoverage = "partial"
+)
+
+type ramCoverageState struct {
+	coverage RAMCoverage
+	partial  map[int]uint64 // PID -> start time
+}
+
+// RAMActiveCPUTransitionError reports a CPU placement transition refused to
+// preserve the authoritative cgroup for already-applied RAM enforcement.
+type RAMActiveCPUTransitionError struct {
+	UID  int
+	From string
+	To   string
+}
+
+func (e *RAMActiveCPUTransitionError) Error() string {
+	return fmt.Sprintf("refusing CPU cgroup transition for UID %d from %s to %s while RAM enforcement is active", e.UID, e.From, e.To)
+}
+
+// CPUCapacityProvider supplies a fresh authoritative CPU denominator for each reconciliation.
+type CPUCapacityProvider interface {
+	Refresh(cpupoints.ParentPoolPoints) (cpupoints.CapacityState, error)
+	State() cpupoints.CapacityState
+}
+
+// ManagerOption configures one state-manager dependency.
+type ManagerOption func(*Manager) error
+
+// WithCPUPointsRuntime installs the immutable policy and live-capacity provider.
+func WithCPUPointsRuntime(policy cpupoints.PolicySnapshot, capacity CPUCapacityProvider) ManagerOption {
+	return func(m *Manager) error {
+		if capacity == nil {
+			return fmt.Errorf("CPU Points live-capacity provider is required")
+		}
+		m.cpuPointsPolicy = policy
+		m.cpuCapacity = capacity
+		return nil
+	}
 }
 
 // UserLimitState separates policy eligibility, control intent, and observed enforcement.
@@ -157,10 +219,7 @@ type MetricsCollector interface {
 // CgroupManager defines the cgroup v2 operations used by the state manager.
 type CgroupManager interface {
 	CreateUserCgroup(uid int) error
-	ApplyCPULimit(uid int, quota string) error
-	ApplyCPUQuota(uid int, quota string) error
-	ApplyCPUWeight(uid int, weight int) error
-	RemoveCPULimit(uid int) error
+	EnsureUnlimitedCPUQuota(uid int) error
 	ApplyRAMLimit(uid int, limit string) error
 	ApplyRAMLimitWithSwapDisabled(uid int, limit string) error
 	ApplyRAMHigh(uid int, limit string) error
@@ -184,9 +243,12 @@ type CgroupManager interface {
 	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) (cgroup.ProcessMoveResult, error)
 	ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error)
 	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
-	CreateSharedCgroup() (string, error)
-	ApplySharedCPULimit(sharedPath string, quota string) error
-	CreateUserSubCgroup(uid int, sharedPath string) (string, error)
+	EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error)
+	ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy, cpupoints.ParentQuota) error
+	ApplyCPUPointsGuaranteedWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error
+	EnsureCPUPointsUserPlacement(int, string, cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error)
+	ReleaseCPUPointsUser(int, string) error
+	RemoveCPUPointsHierarchy(cgroup.CPUPointsHierarchy) error
 	CleanupAll() error
 	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
 	GetCreatedCgroups() []int
@@ -216,6 +278,7 @@ func NewManager(
 	metrics MetricsCollector,
 	cgroups CgroupManager,
 	prometheus PrometheusExporter,
+	options ...ManagerOption,
 ) (*Manager, error) {
 
 	if cfg == nil {
@@ -237,6 +300,8 @@ func NewManager(
 		userLimitedAt:                 make(map[int]time.Time),
 		resourceLimits:                make(map[int]userResourceLimitState),
 		sharedCgroupPath:              "",
+		cpuAllocations:                make(map[int]cpuPointsAllocation),
+		ramCoverage:                   make(map[int]ramCoverageState),
 		thresholdTracker:              &ThresholdTracker{},
 		stabilityTracker:              newUserStabilityTracker(),
 		ioThresholdTracker:            &ThresholdTracker{},
@@ -260,7 +325,33 @@ func NewManager(
 		previousIOEligibleUsers: make(map[int]struct{}),
 		previousBlockIOCounters: make(map[int]blockIOCounterSample),
 		blockIOObservedUsers:    make(map[int]bool),
-		psiBoostedAt:            make(map[int]time.Time),
+	}
+	reserve, err := cpupoints.NewReservePoints(uint64(cfg.GetCPUReservePoints()))
+	if err != nil {
+		return nil, fmt.Errorf("initialize CPU Points reserve: %w", err)
+	}
+	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(cfg.GetCPUBestEffortPoints()))
+	if err != nil {
+		return nil, fmt.Errorf("initialize CPU Points best-effort entitlement: %w", err)
+	}
+	mgr.cpuPointsPolicy, err = cpupoints.NewEmptyPolicySnapshot(reserve, bestEffort)
+	if err != nil {
+		return nil, fmt.Errorf("initialize empty CPU Points policy: %w", err)
+	}
+	oneCPU, _ := cpupoints.NewOnlineCPUCount(1)
+	mgr.cpuCapacity, err = cpupoints.NewLiveCapacityProvider(cpupoints.OnlineCPUSourceFunc(func() (cpupoints.OnlineCPUCount, error) {
+		return oneCPU, nil
+	}), mgr.cpuPointsPolicy.Pool())
+	if err != nil {
+		return nil, fmt.Errorf("initialize CPU Points test capacity: %w", err)
+	}
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		if err := option(mgr); err != nil {
+			return nil, err
+		}
 	}
 
 	logger.Info("State manager initialized",
@@ -414,15 +505,10 @@ func (m *Manager) GetStatus() RuntimeStatus {
 			status.SharedCgroupQuota = strings.TrimSpace(string(data))
 		}
 
-		if entries, err := os.ReadDir(summary.sharedCgroupPath); err == nil {
-			userCount := 0
-			for _, entry := range entries {
-				if entry.IsDir() && strings.HasPrefix(entry.Name(), "user_") {
-					userCount++
-				}
-			}
-			status.SharedCgroupUserCount = userCount
-		}
+		// The CPU Points hierarchy nests leaves below guaranteed and
+		// best_effort. The observed allocation snapshot is authoritative;
+		// counting only direct children of the parent would report zero.
+		status.SharedCgroupUserCount = len(summary.cpuUsers)
 	}
 
 	return status
@@ -521,7 +607,8 @@ func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
 	m.psiWatcher = w
 }
 
-// OnUserPSIEvent handles a per-user PSI pressure event by boosting CPU weight.
+// OnUserPSIEvent records pressure for an actively enforced user. CPU Points
+// remains the sole owner of cpu.weight; PSI never mutates allocation policy.
 func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
 	leaveEpoch := m.epoch.Enter()
 	defer leaveEpoch()
@@ -532,9 +619,6 @@ func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
 	if event.UID <= 0 {
 		return
 	}
-	cfg := m.GetConfig()
-	boostWeight := cfg.GetPSIBoostWeight()
-
 	m.mu.RLock()
 	active := m.activeUsers[event.UID]
 	m.mu.RUnlock()
@@ -544,90 +628,9 @@ func (m *Manager) OnUserPSIEvent(event cgroup.PSIEvent) {
 		return
 	}
 
-	if err := m.cgroupManager.ApplyCPUWeight(event.UID, boostWeight); err != nil {
-		m.logger.Warn("Failed to boost CPU weight on PSI event",
-			"uid", event.UID, "type", event.Type,
-			"weight", boostWeight, "error", err)
-		return
-	}
-
-	m.mu.Lock()
-	m.psiBoostedAt[event.UID] = time.Now()
-	m.mu.Unlock()
-
-	m.logger.Info("CPU weight boosted for user due to PSI pressure",
+	m.logger.Info("PSI pressure observed for actively enforced user",
 		"uid", event.UID, "type", event.Type,
-		"psi_avg10", event.SomeAvg10, "weight", boostWeight)
-}
-
-// revertPSIBoosts reverts CPU weight for users whose boost duration has expired.
-func (m *Manager) revertPSIBoosts() {
-	cfg := m.GetConfig()
-	duration := time.Duration(cfg.GetPSIBoostDuration()) * time.Second
-	now := time.Now()
-
-	// Collect expired UIDs under lock, do cgroup IO outside lock
-	m.mu.Lock()
-	var expired []int
-	for uid, boostedAt := range m.psiBoostedAt {
-		if now.Sub(boostedAt) >= duration {
-			expired = append(expired, uid)
-		}
-	}
-	m.mu.Unlock()
-
-	if len(expired) == 0 {
-		return
-	}
-
-	for _, uid := range expired {
-		if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
-			m.logger.Warn("Failed to revert CPU weight after PSI boost",
-				"uid", uid, "error", err)
-			continue
-		}
-		m.logger.Debug("CPU weight reverted to normal after PSI boost expired",
-			"uid", uid, "boost_duration_s", cfg.GetPSIBoostDuration())
-	}
-
-	// Clean up expired entries
-	m.mu.Lock()
-	for _, uid := range expired {
-		delete(m.psiBoostedAt, uid)
-	}
-	m.mu.Unlock()
-}
-
-func (m *Manager) revertAllPSIBoosts() error {
-	m.mu.RLock()
-	boosted := make([]int, 0, len(m.psiBoostedAt))
-	for uid := range m.psiBoostedAt {
-		boosted = append(boosted, uid)
-	}
-	m.mu.RUnlock()
-
-	var firstError error
-	var reverted []int
-	for _, uid := range boosted {
-		if err := m.cgroupManager.ApplyCPUWeight(uid, 100); err != nil {
-			m.logger.Warn("Failed to revert CPU weight while suspending limits",
-				"uid", uid,
-				"error", err,
-			)
-			if firstError == nil {
-				firstError = err
-			}
-			continue
-		}
-		reverted = append(reverted, uid)
-	}
-
-	m.mu.Lock()
-	for _, uid := range reverted {
-		delete(m.psiBoostedAt, uid)
-	}
-	m.mu.Unlock()
-	return firstError
+		"psi_avg10", event.SomeAvg10)
 }
 
 // GetConfig returns the current configuration

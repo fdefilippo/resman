@@ -399,7 +399,7 @@ stop_user_load() {
 # limited_cgroup_for reports the managed leaf of one user, if enforcement created it.
 limited_cgroup_for() {
 	local uid=$1
-	printf '%s/limited/user_%s' "$managed_cgroup_root" "$uid"
+	printf '%s/limited/best_effort/user_%s' "$managed_cgroup_root" "$uid"
 }
 
 # Enforcement means the managed cgroup holds the user's processes, not merely
@@ -774,8 +774,8 @@ scenario_prometheus_user_series_lifecycle() {
 		printf '%s\n' "$paths" >"$evidence_dir/stale-paths-limited.txt"
 		fail "UID $uid published cgroup series for a path it no longer occupies"
 	fi
-	# resman-4pw.12 leaves the leaf at cpu.max=max, so the exporter owes a period
-	# sample and no finite quota sample for it.
+	# CPU Points leaves cpu.max unlimited, so the exporter owes a period sample
+	# and no finite quota sample for the leaf.
 	grep -E "^resman_cgroup_cpu_period_microseconds\{" "$evidence_dir/metrics-limited.prom" \
 		| grep -qF "uid=\"$uid\"" \
 		|| fail "UID $uid published no CPU period while it was enforced"
@@ -1184,10 +1184,8 @@ scenario_multi_user_enforcement() {
 		fi
 	done
 
-	# After resman-4pw.12 removed the per-user limited quota knob, CPU enforcement
-	# is the collective ceiling on the shared parent plus per-user weights. The
-	# leaf legitimately keeps an unlimited cpu.max unless a workload policy sets
-	# one, so the parent is what must carry a finite quota.
+	# CPU Points applies one finite pool at the parent and keeps every leaf
+	# unlimited. Per-user capacity is represented only by verified weights.
 	local shared_quota
 	shared_quota=$(cat "$managed_cgroup_root/limited/cpu.max" 2>/dev/null)
 	printf 'shared cpu.max=%s\n' "$shared_quota" >"$evidence_dir/enforced-quotas.txt"

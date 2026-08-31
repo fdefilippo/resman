@@ -71,16 +71,19 @@ cat /sys/fs/cgroup/mygroup/cpu.stat
 
 ### ResMan Usage
 
-ResMan uses `cpu.max` with a **shared cgroup** approach:
-- CPU-limited users share a common cgroup under `/sys/fs/cgroup/resman/`
-- Total quota = `(TotalCores - MinSystemCores) * 100000`
-- Users get proportional `cpu.weight` (default: 100 each)
-- Processes are moved to the shared cgroup via `MoveAllUserProcessesToSharedCgroup()`
+ResMan uses one finite CPU Points parent and two proportional scheduling domains:
+
+- online CPU capacity is normalized to 1000 points;
+- `CPU_RESERVE_POINTS` stays outside the parent;
+- mapped users enter `guaranteed` with their exact configured weight;
+- unmapped eligible users enter `best_effort` with equal leaf weights while the
+  domain as a whole receives `CPU_BEST_EFFORT_POINTS`;
+- every user leaf keeps `cpu.max=max 100000`; only the parent has a finite quota.
 
 Users eligible only for RAM or I/O enforcement use standalone
 `/sys/fs/cgroup/resman/user_UID` cgroups. ResMan writes `max 100000` to their
-`cpu.max`, so `MIN_SYSTEM_CORES` and the shared CPU throttle do not gate or
-indirectly throttle memory-only and I/O-only enforcement.
+`cpu.max`, so the CPU Points parent does not indirectly throttle memory-only or
+I/O-only enforcement.
 
 ### Managed User Placement Contract
 
@@ -92,28 +95,20 @@ depends on observed CPU enforcement, not merely on whether the user is being obs
 ├── user_UID/                    # Finite-IOPS observation or standalone RAM/I/O
 │   └── cpu.max = max 100000     # No finite CPU quota
 └── limited/
-    ├── cpu.max = host capacity minus MIN_SYSTEM_CORES
-    └── user_UID/                # Observed CPU enforcement is active
-        ├── cpu.weight
-        └── cpu.max              # Per-user policy quota, otherwise unlimited
+    ├── cpu.max = online capacity × (1000 - CPU_RESERVE_POINTS) / 1000
+    ├── guaranteed/              # weight = sum of acquired mapped guarantees
+    │   └── user_UID/            # weight = exact configured guarantee
+    │       └── cpu.max = max 100000
+    └── best_effort/             # weight = CPU_BEST_EFFORT_POINTS
+        └── user_UID/            # equal leaf weight
+            └── cpu.max = max 100000
 ```
 
-The product decision recorded in `resman-4pw.56` keeps this migration-based layout.
-It preserves three properties that a flat cgroup v2 tree cannot provide together:
-
-1. `MIN_SYSTEM_CORES` remains a collective, kernel-enforced ceiling on all CPU-limited
-   users through `resman/limited/cpu.max`.
-2. Users managed only for finite-IOPS observation, or limited only for RAM or I/O,
-   remain outside that ceiling and keep an unlimited `cpu.max`.
-3. Only users with observed CPU enforcement are descendants of `resman/limited`.
-
-The cgroup v2 hierarchy defines controller effects by ancestry, and a cgroup cannot be
-renamed under a different parent. A stable per-user leaf can therefore retain the
-collective kernel ceiling only by placing every managed user below the capped parent,
-which would also throttle finite-IOPS-observation-only and RAM/I/O-only users. Removing
-migration while preserving those users' current unlimited CPU semantics would instead
-require computed per-user quotas and would give up the aggregate kernel boundary.
-ResMan chooses neither semantic change.
+The guaranteed-domain weight is raised before a mapped leaf can receive a PID and is
+lowered only after that leaf has been released. A failed transition may leave the
+domain conservatively overweight, but never silently underweight. Unused capacity of
+one mapped leaf is first available to runnable siblings in `guaranteed`; best effort
+borrows it only when the entire guaranteed domain is inactive.
 
 The resulting placement lifecycle is intentional:
 
@@ -122,7 +117,7 @@ original cgroup
       │
       ├─────────────── CPU enforcement activates ───────────────┐
       ▼                                                         ▼
-resman/user_UID  ───────────────────────────────►  resman/limited/user_UID
+resman/user_UID  ─────────────────────►  resman/limited/{guaranteed,best_effort}/user_UID
 finite-IOPS observation or RAM/I/O-only             CPU enforcement active
       ▲                                                         │
       └──── CPU enforcement releases while observation remains ┘
@@ -149,6 +144,12 @@ opportunities:
   CPU placement changes.
 - Process origins and start times remain authoritative for reconciliation and shutdown
   restoration.
+
+Moving a running process does not transfer its existing memory charges. First ingress
+therefore records post-ingress RAM coverage as partial for each PID/start-time. A later
+cross-parent move is refused while RAM enforcement is active; the old authoritative
+placement remains applied and the CPU transition is reported as degraded. I/O-only
+movement remains permitted through the logical `io.stat` ledger.
 
 At steady state, exactly one managed path is authoritative for each UID. A populated
 alternate path is a reported transient condition, never a second valid placement.
@@ -250,19 +251,16 @@ Scenario C: Process uses 100% CPU AND 600MB RAM
 
 ### CPU Management
 
-**Files:** `cgroup/cpu.go`, `cgroup/shared.go`
+**Files:** `cgroup/cpu_points.go`, `cgroup/io_accounting.go`
 
 ```go
-// ApplyCPULimit applies CPU quota via cpu.max
-func (m *Manager) ApplyCPULimit(uid int, quota string) error {
-    cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
-    return os.WriteFile(cpuMaxFile, []byte(quota), 0644)
-}
-
-// ApplySharedCPULimit sets quota on shared cgroup
-func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
-    cpuMaxFile := filepath.Join(sharedPath, "cpu.max")
-    return os.WriteFile(cpuMaxFile, []byte(quota), 0644)
+// EnsureCPUPointsHierarchy applies the finite parent pool and creates the
+// process-free guaranteed and best-effort scheduling domains.
+func (m *Manager) EnsureCPUPointsHierarchy(
+    quota cpupoints.ParentQuota,
+    bestEffort cpupoints.KernelCPUWeight,
+) (CPUPointsHierarchy, error) {
+    // Every value is written and read back before any leaf admits a PID.
 }
 ```
 

@@ -17,6 +17,7 @@ import (
 
 const (
 	defaultFilePerm = 0644
+	normalCPUQuota  = "max 100000"
 	// Note: cleanupRetryDelay, processMoveDelay, etc. are now configurable via config
 )
 
@@ -51,6 +52,7 @@ type Manager struct {
 	removeCgroupProbe   func(string) error
 	writeController     func(string, string) error
 	removeManagedCgroup func(string) (cgroupRemovalResult, error)
+	createManagedCgroup func(string) error
 	observeRemovalRetry func()
 	readBlockIOStats    func(string) (blockIOCounters, error)
 	readCgroupFile      func(string) ([]byte, error)
@@ -115,6 +117,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		createCgroupProbe:   os.MkdirTemp,
 		removeCgroupProbe:   os.Remove,
 		removeManagedCgroup: removeCgroupWithRetry,
+		createManagedCgroup: func(path string) error { return os.Mkdir(path, 0755) },
 		observeRemovalRetry: func() {
 			logger.Debug("Managed cgroup removal entered retry", "operation", "remove_managed_cgroup")
 		},
@@ -145,13 +148,6 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	if err := mgr.pruneInactiveProcessOrigins(-1); err != nil {
 		return nil, fmt.Errorf("failed to reconcile process origin state: %w", err)
 	}
-	if isFiniteCPUQuota(cfg.CPUQuotaNormal) {
-		logger.Warn("Finite CPU_QUOTA_NORMAL applies only to resman recovery cgroups",
-			"quota", cfg.CPUQuotaNormal,
-			"recovery_path", mgr.getRecoveryRootPath(),
-		)
-	}
-
 	logger.Info("Cgroup manager initialized",
 		"cgroup_root", cfg.CgroupRoot,
 		"base_cgroup", cfg.CgroupBase,
@@ -265,6 +261,7 @@ func hasController(controllers, wanted string) bool {
 func allControllerInterfaces() []controllerRequirement {
 	return []controllerRequirement{
 		{feature: "CPU limiting", controller: "cpu", interfaceFile: "cpu.max"},
+		{feature: "CPU Points scheduling", controller: "cpu", interfaceFile: "cpu.weight"},
 		{feature: "RAM limiting", controller: "memory", interfaceFile: "memory.max"},
 		{feature: "I/O limiting", controller: "io", interfaceFile: "io.max"},
 	}
@@ -272,12 +269,12 @@ func allControllerInterfaces() []controllerRequirement {
 
 func enabledControllerInterfaces(cfg *config.Config) []controllerRequirement {
 	all := allControllerInterfaces()
-	requirements := []controllerRequirement{all[0]}
+	requirements := []controllerRequirement{all[0], all[1]}
 	if cfg.RAMEnabled {
-		requirements = append(requirements, all[1])
+		requirements = append(requirements, all[2])
 	}
 	if cfg.IOEnabled {
-		requirements = append(requirements, all[2])
+		requirements = append(requirements, all[3])
 	}
 	return requirements
 }
@@ -309,11 +306,16 @@ func verifyRequiredControllers(available string, requirements []controllerRequir
 
 func (m *Manager) enableControllerInterfaces(subtreeControlFile string, candidates, requirements []controllerRequirement) ([]controllerRequirement, error) {
 	enabled := make([]controllerRequirement, 0, len(candidates))
+	enabledControllers := make(map[string]bool)
 	writeController := m.writeController
 	if writeController == nil {
 		writeController = m.writeControllerIfMissing
 	}
 	for _, candidate := range candidates {
+		if enabledControllers[candidate.controller] {
+			enabled = append(enabled, candidate)
+			continue
+		}
 		if err := writeController(subtreeControlFile, "+"+candidate.controller); err != nil {
 			if controllerInterfaceRequired(candidate, requirements) {
 				return nil, fmt.Errorf("enabled feature %s requires cgroup controller %q and interface %q: failed to enable the controller through %s: %w",
@@ -332,6 +334,7 @@ func (m *Manager) enableControllerInterfaces(subtreeControlFile string, candidat
 			)
 			continue
 		}
+		enabledControllers[candidate.controller] = true
 		enabled = append(enabled, candidate)
 	}
 	return enabled, nil
@@ -372,19 +375,55 @@ func (m *Manager) probeControllerInterfaces(baseCgroupPath string, candidates []
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cgroup capability probe below %s: %w", baseCgroupPath, err)
 	}
+	createdPaths := []string{probePath}
 	removeProbe := m.removeCgroupProbe
 	if removeProbe == nil {
 		removeProbe = os.Remove
 	}
 	defer func() {
-		if err := removeProbe(probePath); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("failed to remove cgroup capability probe %s: %w", probePath, err))
+		for index := len(createdPaths) - 1; index >= 0; index-- {
+			path := createdPaths[index]
+			if err := removeProbe(path); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("failed to remove cgroup capability probe %s: %w", path, err))
+			}
 		}
 	}()
 
+	requirements := enabledControllerInterfaces(m.getConfig())
+	parentEnabled, err := m.enableControllerInterfaces(
+		filepath.Join(probePath, "cgroup.subtree_control"),
+		candidates,
+		requirements,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("propagate controllers through CPU Points probe parent %s: %w", probePath, err)
+	}
+	createManagedCgroup := m.createManagedCgroup
+	if createManagedCgroup == nil {
+		createManagedCgroup = func(path string) error { return os.Mkdir(path, 0755) }
+	}
+	domainPath := filepath.Join(probePath, "domain")
+	if err := createManagedCgroup(domainPath); err != nil {
+		return nil, fmt.Errorf("create CPU Points capability domain %s: %w", domainPath, err)
+	}
+	createdPaths = append(createdPaths, domainPath)
+	domainEnabled, err := m.enableControllerInterfaces(
+		filepath.Join(domainPath, "cgroup.subtree_control"),
+		parentEnabled,
+		requirements,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("propagate controllers through CPU Points probe domain %s: %w", domainPath, err)
+	}
+	leafPath := filepath.Join(domainPath, "leaf")
+	if err := createManagedCgroup(leafPath); err != nil {
+		return nil, fmt.Errorf("create CPU Points capability leaf %s: %w", leafPath, err)
+	}
+	createdPaths = append(createdPaths, leafPath)
+
 	usable = make(map[string]bool, len(candidates))
-	for _, candidate := range candidates {
-		interfacePath := filepath.Join(probePath, candidate.interfaceFile)
+	for _, candidate := range domainEnabled {
+		interfacePath := filepath.Join(leafPath, candidate.interfaceFile)
 		_, err := os.Stat(interfacePath)
 		usable[candidate.interfaceFile] = err == nil
 	}
@@ -529,10 +568,10 @@ func newlyEnabledControllerInterfaces(currentConfig, newConfig *config.Config) [
 	all := allControllerInterfaces()
 	var requirements []controllerRequirement
 	if !currentConfig.RAMEnabled && newConfig.RAMEnabled {
-		requirements = append(requirements, all[1])
+		requirements = append(requirements, all[2])
 	}
 	if !currentConfig.IOEnabled && newConfig.IOEnabled {
-		requirements = append(requirements, all[2])
+		requirements = append(requirements, all[3])
 	}
 	return requirements
 }

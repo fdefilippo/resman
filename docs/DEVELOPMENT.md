@@ -212,7 +212,7 @@ constrained under stale policy. Bounded per-cycle reconciliation now makes membe
 eventually consistent and uses captured start times to avoid acting on reused PIDs.
 
 A rootful Podman process was observed being moved out of its runtime-owned
-`machine.slice/libpod-*.scope/container` leaf into `resman/limited/user_<uid>`. The
+`machine.slice/libpod-*.scope/container` leaf into a ResMan CPU-enforcement leaf. The
 runtime scope disappeared while Podman still reported the container running, and
 shutdown could restore the process only to a ResMan recovery leaf. PID-namespace
 ownership is therefore an ingress invariant, not a container-name heuristic.

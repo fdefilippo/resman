@@ -11,6 +11,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/mcp"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/reloader"
@@ -191,7 +192,35 @@ func (a *App) WithStateManager() *App {
 		return a
 	}
 
-	stateManager, err := state.NewManager(a.cfg, a.metricsCollector, a.cgroupMgr, a.prometheusExporter)
+	reserve, err := cpupoints.NewReservePoints(uint64(a.cfg.GetCPUReservePoints()))
+	if err != nil {
+		a.err = fmt.Errorf("invalid CPU Points reserve: %w", err)
+		return a
+	}
+	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(a.cfg.GetCPUBestEffortPoints()))
+	if err != nil {
+		a.err = fmt.Errorf("invalid CPU Points best-effort entitlement: %w", err)
+		return a
+	}
+	mapPath, err := cpupoints.NewPolicyMapPath(a.cfg.GetCPUPointsFile())
+	if err != nil {
+		a.err = fmt.Errorf("invalid CPU Points map path: %w", err)
+		return a
+	}
+	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
+		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+	}, cpupoints.NSSIdentityResolver{})
+	if err != nil {
+		a.err = fmt.Errorf("load CPU Points policy: %w", err)
+		return a
+	}
+	capacity, err := cpupoints.NewLiveCapacityProvider(cpupoints.NewSysfsOnlineCPUSource(), policy.Pool())
+	if err != nil {
+		a.err = fmt.Errorf("initialize CPU Points live capacity: %w", err)
+		return a
+	}
+
+	stateManager, err := state.NewManager(a.cfg, a.metricsCollector, a.cgroupMgr, a.prometheusExporter, state.WithCPUPointsRuntime(policy, capacity))
 	if err != nil {
 		a.logger.Error("Failed to initialize state manager", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)

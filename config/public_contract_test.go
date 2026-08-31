@@ -85,7 +85,7 @@ func TestEmptyIncludeListMeaningsMatchEligibility(t *testing.T) {
 		eligible bool
 		meaning  string
 	}{
-		{key: "USER_INCLUDE_LIST", eligible: cfg.IsUserWhitelisted("alice"), meaning: "Empty makes no user eligible for CPU limiting"},
+		{key: "USER_INCLUDE_LIST", eligible: cfg.IsUserWhitelisted("alice"), meaning: "Empty makes no user eligible for CPU Points enforcement"},
 		{key: "RAM_USER_INCLUDE_LIST", eligible: cfg.IsUserWhitelistedForRAM("alice"), meaning: "Empty includes every non-excluded user for RAM eligibility"},
 		{key: "IO_USER_INCLUDE_LIST", eligible: cfg.IsUserWhitelistedForIO("alice"), meaning: "Empty includes every non-excluded user for I/O eligibility"},
 	}
@@ -165,15 +165,96 @@ func TestSecondaryConfigurationReferencesStayFocusedAndSecure(t *testing.T) {
 	}
 }
 
-func TestCPUPointsPublicKeysRemainAbsentUntilTheEnforcementCutover(t *testing.T) {
-	forbidden := map[string]bool{
-		"CPU_RESERVE_POINTS":     true,
-		"CPU_BEST_EFFORT_POINTS": true,
-		"CPU_POINTS_FILE":        true,
+func TestCPUPointsPublicKeysLandTogetherAtTheEnforcementCutover(t *testing.T) {
+	want := map[string]bool{
+		"CPU_RESERVE_POINTS":     false,
+		"CPU_BEST_EFFORT_POINTS": false,
+		"CPU_POINTS_FILE":        false,
 	}
 	for _, contract := range PublicFieldContracts() {
-		if forbidden[contract.Key] {
-			t.Errorf("%s became public before resman-vcs.5 supplied its live enforcement consumer", contract.Key)
+		if _, exists := want[contract.Key]; exists {
+			want[contract.Key] = true
+		}
+	}
+	for key, present := range want {
+		if !present {
+			t.Errorf("%s is absent from the atomic CPU Points cutover", key)
+		}
+	}
+}
+
+func TestRemovedCPUAllocationContractsStayOutOfTheLiveTree(t *testing.T) {
+	root := filepath.Join("..")
+	removedCPUKeys := []string{
+		"MIN_SYSTEM_" + "CORES",
+		"CPU_QUOTA_" + "NORMAL",
+		"CPU_QUOTA_" + "LIMITED",
+		"CPU_DEFAULT_" + "POINTS",
+		"BATCH_NIGHT_CPU_" + "QUOTA",
+		"INTERACTIVE_CPU_" + "QUOTA",
+		"PSI_BOOST_" + "WEIGHT",
+		"PSI_BOOST_" + "DURATION",
+	}
+	allowedHistory := map[string]bool{
+		"docs/UPGRADING.md":         true,
+		"packaging/rpm/resman.spec": true,
+	}
+	allowedReferences := map[string]map[string]string{
+		"docs/DEVELOPMENT.md": {
+			"CPU_QUOTA_" + "LIMITED": "historical defect provenance for the normative no-inert-knob rules",
+		},
+		"packaging/layout/upgrade_notes_test.go": {
+			"CPU_QUOTA_" + "LIMITED": "assertion that the shipped breaking-change record retains the removed key",
+		},
+	}
+	observedTombstones := make(map[string]int, len(removedCPUKeys))
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if entry.IsDir() {
+			if rel == ".git" || rel == ".beads" || rel == "build" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.IndexByte(string(content), 0) >= 0 {
+			return nil
+		}
+		for _, key := range removedCPUKeys {
+			count := strings.Count(string(content), key)
+			if count == 0 {
+				continue
+			}
+			switch {
+			case rel == "config/config.go":
+				observedTombstones[key] += count
+			case allowedHistory[rel]:
+				// Historical upgrade records may name removed keys verbatim.
+			case strings.TrimSpace(allowedReferences[rel][key]) != "":
+				// Normative provenance and tests may name a removed key only
+				// through an exact, motivated entry above.
+			default:
+				t.Errorf("%s contains removed CPU allocation contract %s", rel, key)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan live tree for removed CPU allocation contracts: %v", err)
+	}
+	for _, key := range removedCPUKeys {
+		if observedTombstones[key] != 1 {
+			t.Errorf("%s tombstone occurrences in config/config.go = %d, want exactly 1", key, observedTombstones[key])
 		}
 	}
 }

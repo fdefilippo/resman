@@ -43,7 +43,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	minActiveTime := cfg.GetMinActiveTime()
 	cpuReleaseThreshold := cfg.GetCPUReleaseThreshold()
 	cpuThreshold := cfg.GetCPUThreshold()
-	minSystemCores := cfg.GetMinSystemCores()
 	ignoreSystemLoad := cfg.GetIgnoreSystemLoad()
 	cpuThresholdDuration := cfg.GetCPUThresholdDuration()
 
@@ -186,17 +185,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 	// When inactive, activate if any enabled resource exceeds its threshold.
 	if anyExceeded {
-		// MIN_SYSTEM_CORES protects only CPU enforcement. RAM or I/O may still
-		// activate in standalone user cgroups that retain an unlimited CPU quota.
-		if cpuExceeded && !ramExceeded && !ioExceeded && metrics.TotalCores <= minSystemCores {
-			m.thresholdTracker.Reset()
-			m.ioThresholdTracker.Reset()
-			return DecisionMaintain, fmt.Sprintf(
-				"Threshold exceeded but insufficient cores (%d <= %d)",
-				metrics.TotalCores, minSystemCores,
-			)
-		}
-
 		// Suppress only when measured CPU activity is primarily external to the
 		// population that CPU enforcement can affect. Load average alone cannot
 		// establish that attribution.

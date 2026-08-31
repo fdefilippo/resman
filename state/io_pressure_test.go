@@ -9,6 +9,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -369,10 +370,14 @@ func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(uid int, shared
 	if err := m.placementErrors[uid]; err != nil {
 		return "", cgroup.ProcessMoveResult{}, err
 	}
-	if result := m.placementResults[uid]; result != (cgroup.ProcessMoveResult{}) {
+	if result := m.placementResults[uid]; result.Candidates != 0 || result.Applied() || result.NamespaceSkipped() != 0 || result.Disappeared != 0 || result.Reused != 0 {
 		return sharedPath, result, nil
 	}
 	return sharedPath, cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
+}
+
+func (m *blockIOSequenceCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, _ cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
+	return m.EnsureUserCgroupPlacement(uid, domain, normalCPUQuota)
 }
 
 func (m *blockIOSequenceCgroupManager) ReleaseUserFromSharedCgroup(_ int, _, _ string) error {
@@ -750,8 +755,9 @@ func TestObservedStandaloneResourceStateBecomesSharedWithoutStaleStandaloneFlag(
 		ioApplied:  true,
 	}
 
-	if _, _, err := manager.placeUserInSharedCgroup(1000, "/limited", cfg.CPUQuotaNormal); err != nil {
-		t.Fatalf("placeUserInSharedCgroup() error: %v", err)
+	hierarchy := cgroup.CPUPointsHierarchy{Parent: "/limited", Guaranteed: "/limited/guaranteed", BestEffort: "/limited/best_effort"}
+	if _, _, err := manager.admitCPUPointsUser(1000, hierarchy); err != nil {
+		t.Fatalf("admitCPUPointsUser() error: %v", err)
 	}
 	state := manager.resourceLimits[1000]
 	if state.standalone || !state.io || !state.ioApplied {

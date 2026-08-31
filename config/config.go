@@ -32,6 +32,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
@@ -81,8 +82,11 @@ type Config struct {
 	// Threshold Time Window (seconds)
 	CPUThresholdDuration int `config:"CPU_THRESHOLD_DURATION"` // Seconds to wait before activating limits (0 = immediate)
 
-	// CPU limits (cpu.max format: "quota period")
-	CPUQuotaNormal string `config:"CPU_QUOTA_NORMAL"`
+	// CPU Points policy. The map is loaded as one immutable snapshot by the
+	// enforcement owner before the daemon can publish successful startup.
+	CPUReservePoints    int    `config:"CPU_RESERVE_POINTS"`
+	CPUBestEffortPoints int    `config:"CPU_BEST_EFFORT_POINTS"`
+	CPUPointsFile       string `config:"CPU_POINTS_FILE"`
 
 	// RAM limits
 	RAMEnabled          bool    `config:"RAM_LIMIT_ENABLED"`
@@ -128,10 +132,8 @@ type Config struct {
 	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // History window in hours
 	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
 	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Confidence threshold (0.0-1.0)
-	// Per-pattern policies
-	BatchNightCPUQuota  int    `config:"BATCH_NIGHT_CPU_QUOTA"` // CPU quota per batch (microseconds)
+	// Per-pattern RAM policies. CPU capacity is owned exclusively by CPU Points.
 	BatchNightRAMQuota  string `config:"BATCH_NIGHT_RAM_QUOTA"` // RAM quota per batch
-	InteractiveCPUQuota int    `config:"INTERACTIVE_CPU_QUOTA"` // CPU quota for interactive workloads
 	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota for interactive workloads
 
 	// Hooks
@@ -166,9 +168,8 @@ type Config struct {
 	UseSyslog  bool   `config:"USE_SYSLOG"`
 
 	// System
-	MinSystemCores int `config:"MIN_SYSTEM_CORES"`
-	SystemUIDMin   int `config:"SYSTEM_UID_MIN"`
-	SystemUIDMax   int `config:"SYSTEM_UID_MAX"`
+	SystemUIDMin int `config:"SYSTEM_UID_MIN"`
+	SystemUIDMax int `config:"SYSTEM_UID_MAX"`
 
 	// User Include List (users to INCLUDE in limiting, regex support)
 	UserIncludeList []string `config:"USER_INCLUDE_LIST"` // Comma-separated regex patterns
@@ -221,8 +222,6 @@ type Config struct {
 	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
 	PSIWindowUs          int  `config:"PSI_WINDOW_US"`           // PSI tracking window in microseconds (default 1000000 = 1s)
 	PSIFallbackInterval  int  `config:"PSI_FALLBACK_INTERVAL"`   // Fallback polling interval in seconds when event-driven (default 300 = 5min)
-	PSIBoostWeight       int  `config:"PSI_BOOST_WEIGHT"`        // CPU weight boost on PSI event (default 300, normal weight is 100)
-	PSIBoostDuration     int  `config:"PSI_BOOST_DURATION"`      // Seconds before reverting PSI boost (default 120)
 }
 
 // IODecisionPolicy is an atomic snapshot of the configuration used to decide
@@ -273,7 +272,9 @@ func DefaultConfig() *Config {
 		CPUReleaseThreshold:  40,
 		CPUThresholdDuration: 90, // Default: wait 90 seconds before activating limits
 
-		CPUQuotaNormal: "max 100000",
+		CPUReservePoints:    100,
+		CPUBestEffortPoints: 100,
+		CPUPointsFile:       DefaultCPUPointsMapPath,
 
 		RAMEnabled:          false,
 		RAMThreshold:        75,
@@ -313,9 +314,7 @@ func DefaultConfig() *Config {
 		PatternHistoryHours:        168, // 7 days
 		PatternMinSamples:          24,  // 24 distinct hourly buckets minimum
 		PatternConfidenceThreshold: 0.7,
-		BatchNightCPUQuota:         200000, // 200% (2 cores)
 		BatchNightRAMQuota:         "4G",
-		InteractiveCPUQuota:        50000, // 50%
 		InteractiveRAMQuota:        "1G",
 
 		// Limit hook
@@ -347,7 +346,6 @@ func DefaultConfig() *Config {
 		LogMaxSize: 10 * 1024 * 1024, // 10MB
 		UseSyslog:  false,
 
-		MinSystemCores:   1,
 		SystemUIDMin:     1000,
 		SystemUIDMax:     pidMax,
 		IgnoreSystemLoad: false,
@@ -389,8 +387,6 @@ func DefaultConfig() *Config {
 		PSIOStallThreshold:   50000,
 		PSIWindowUs:          1000000,
 		PSIFallbackInterval:  300,
-		PSIBoostWeight:       300,
-		PSIBoostDuration:     120,
 	}
 }
 
@@ -567,12 +563,19 @@ func setConfigField(cfg *Config, key, value string) error {
 
 var removedConfigKeys = map[string]string{
 	"CONFIG_FILE":           "select the active file with the --config command-line option",
+	"BATCH_NIGHT_CPU_QUOTA": "workload patterns no longer select CPU capacity; use CPU Points guarantees",
+	"CPU_DEFAULT_POINTS":    "unmapped eligible users share CPU_BEST_EFFORT_POINTS as one aggregate entitlement",
+	"CPU_QUOTA_NORMAL":      "recovery uses an internal unlimited cpu.max value",
 	"CPU_QUOTA_LIMITED":     "CPU enforcement is proportional and has no global limited quota",
+	"INTERACTIVE_CPU_QUOTA": "workload patterns no longer select CPU capacity; use CPU Points guarantees",
 	"METRICS_CACHE_FILE":    "resman has no file-backed metrics cache",
 	"PROMETHEUS_FILE":       "resman exports metrics over HTTP and does not write a Prometheus textfile",
 	"PROMETHEUS_HOST":       "use PROMETHEUS_METRICS_BIND_HOST",
 	"PROMETHEUS_JWT_EXPIRY": "token lifetime is set by the signed exp claim at token issuance",
 	"PROMETHEUS_PORT":       "use PROMETHEUS_METRICS_BIND_PORT",
+	"MIN_SYSTEM_CORES":      "use CPU_RESERVE_POINTS to define nominal capacity outside the ResMan pool",
+	"PSI_BOOST_DURATION":    "PSI observes pressure but no longer owns CPU allocation weights",
+	"PSI_BOOST_WEIGHT":      "CPU Points is the sole owner of policy cpu.weight",
 	"RAM_QUOTA_LIMITED":     "RAM enforcement uses RAM_QUOTA_PER_USER",
 	"USER_WHITELIST":        "use USER_EXCLUDE_LIST",
 }
@@ -600,7 +603,9 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.CPUThreshold = value }),
 	"CPU_RELEASE_THRESHOLD":  setInt(func(cfg *Config, value int) { cfg.CPUReleaseThreshold = value }),
 	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
-	"CPU_QUOTA_NORMAL":       setString(func(cfg *Config, value string) { cfg.CPUQuotaNormal = value }),
+	"CPU_RESERVE_POINTS":     setInt(func(cfg *Config, value int) { cfg.CPUReservePoints = value }),
+	"CPU_BEST_EFFORT_POINTS": setInt(func(cfg *Config, value int) { cfg.CPUBestEffortPoints = value }),
+	"CPU_POINTS_FILE":        setString(func(cfg *Config, value string) { cfg.CPUPointsFile = value }),
 	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
 	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
 	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
@@ -630,7 +635,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
 	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
 	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
-	"MIN_SYSTEM_CORES":              setInt(func(cfg *Config, value int) { cfg.MinSystemCores = value }),
 	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
 	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
 	"USER_INCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
@@ -689,17 +693,13 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PATTERN_HISTORY_HOURS":         setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
 	"PATTERN_MIN_SAMPLES":           setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
 	"PATTERN_CONFIDENCE_THRESHOLD":  setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
-	"BATCH_NIGHT_CPU_QUOTA":         setInt(func(cfg *Config, value int) { cfg.BatchNightCPUQuota = value }),
 	"BATCH_NIGHT_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.BatchNightRAMQuota = value }),
-	"INTERACTIVE_CPU_QUOTA":         setInt(func(cfg *Config, value int) { cfg.InteractiveCPUQuota = value }),
 	"INTERACTIVE_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.InteractiveRAMQuota = value }),
 	"PSI_EVENT_DRIVEN":              setBool(func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
 	"PSI_CPU_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
 	"PSI_IO_STALL_THRESHOLD":        setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
 	"PSI_WINDOW_US":                 setPositiveInt(func(cfg *Config, value int) { cfg.PSIWindowUs = value }),
 	"PSI_FALLBACK_INTERVAL":         setPositiveInt(func(cfg *Config, value int) { cfg.PSIFallbackInterval = value }),
-	"PSI_BOOST_WEIGHT":              setPositiveInt(func(cfg *Config, value int) { cfg.PSIBoostWeight = value }),
-	"PSI_BOOST_DURATION":            setPositiveInt(func(cfg *Config, value int) { cfg.PSIBoostDuration = value }),
 }
 
 func setString(assign func(*Config, string)) configFieldHandler {
@@ -915,11 +915,19 @@ func validateConfig(cfg *Config) error {
 	if cfg.PSIFallbackInterval < 0 || (cfg.PSIEventDriven && cfg.PSIFallbackInterval == 0) {
 		errors = append(errors, "PSI_FALLBACK_INTERVAL must be greater than 0")
 	}
-	if cfg.PSIBoostWeight < 0 || cfg.PSIBoostWeight > 10000 || (cfg.PSIEventDriven && cfg.PSIBoostWeight == 0) {
-		errors = append(errors, "PSI_BOOST_WEIGHT must be between 1 and 10000")
+	reserve, reserveErr := cpupoints.NewReservePoints(uint64(max(cfg.CPUReservePoints, 0)))
+	if cfg.CPUReservePoints < 0 || reserveErr != nil {
+		errors = append(errors, "CPU_RESERVE_POINTS must be between 0 and 990")
 	}
-	if cfg.PSIBoostDuration < 0 || (cfg.PSIEventDriven && cfg.PSIBoostDuration == 0) {
-		errors = append(errors, "PSI_BOOST_DURATION must be greater than 0")
+	bestEffort, bestEffortErr := cpupoints.NewBestEffortPoints(uint64(max(cfg.CPUBestEffortPoints, 0)))
+	if cfg.CPUBestEffortPoints < 0 || bestEffortErr != nil {
+		errors = append(errors, "CPU_BEST_EFFORT_POINTS must be between 1 and 1000")
+	}
+	if reserveErr == nil && bestEffortErr == nil && bestEffort.Value() > reserve.ParentPool().Value() {
+		errors = append(errors, "CPU_BEST_EFFORT_POINTS cannot exceed the nominal pool 1000-CPU_RESERVE_POINTS")
+	}
+	if _, err := cpupoints.NewPolicyMapPath(cfg.CPUPointsFile); err != nil {
+		errors = append(errors, fmt.Sprintf("CPU_POINTS_FILE is invalid: %v", err))
 	}
 
 	// Validate limit hook configuration
@@ -940,11 +948,6 @@ func validateConfig(cfg *Config) error {
 
 	if err := cfg.MCPServerConfig().Validate(); err != nil {
 		errors = append(errors, err.Error())
-	}
-
-	// Validate CPU quota format.
-	if !isValidCPUQuota(cfg.CPUQuotaNormal) {
-		errors = append(errors, "CPU_QUOTA_NORMAL must be 'max period' or 'quota period' with quota >= 1000 and period > 0")
 	}
 
 	// Validate RAM limits configuration.
@@ -1863,11 +1866,25 @@ func (c *Config) GetMCPShutdownTimeout() int {
 	return c.MCPShutdownTimeout
 }
 
-// GetMinSystemCores returns the minimum system cores to keep available.
-func (c *Config) GetMinSystemCores() int {
+// GetCPUReservePoints returns nominal capacity protected outside the ResMan pool.
+func (c *Config) GetCPUReservePoints() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.MinSystemCores
+	return c.CPUReservePoints
+}
+
+// GetCPUBestEffortPoints returns the aggregate entitlement for unmapped eligible users.
+func (c *Config) GetCPUBestEffortPoints() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.CPUBestEffortPoints
+}
+
+// GetCPUPointsFile returns the absolute direct guarantee-map path.
+func (c *Config) GetCPUPointsFile() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.CPUPointsFile
 }
 
 // GetRAMHighRatio returns the ratio for memory.high (0.0-1.0).
@@ -2030,25 +2047,11 @@ func (c *Config) GetPatternConfidenceThreshold() float64 {
 	return c.PatternConfidenceThreshold
 }
 
-// GetBatchNightCPUQuota returns the CPU quota for batch night pattern.
-func (c *Config) GetBatchNightCPUQuota() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.BatchNightCPUQuota
-}
-
 // GetBatchNightRAMQuota returns the RAM quota for batch night pattern.
 func (c *Config) GetBatchNightRAMQuota() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.BatchNightRAMQuota
-}
-
-// GetInteractiveCPUQuota returns the CPU quota for interactive pattern.
-func (c *Config) GetInteractiveCPUQuota() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.InteractiveCPUQuota
 }
 
 // GetInteractiveRAMQuota returns the RAM quota for interactive pattern.
@@ -2140,18 +2143,4 @@ func (c *Config) GetPSIFallbackInterval() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.PSIFallbackInterval
-}
-
-// GetPSIBoostWeight returns the CPU weight boost on PSI event.
-func (c *Config) GetPSIBoostWeight() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.PSIBoostWeight
-}
-
-// GetPSIBoostDuration returns the seconds before reverting a PSI boost.
-func (c *Config) GetPSIBoostDuration() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.PSIBoostDuration
 }

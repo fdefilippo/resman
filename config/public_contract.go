@@ -27,9 +27,12 @@ type PublicFieldContract struct {
 }
 
 var specialFieldMeanings = map[string]string{
-	"AUTODETECT_PATTERNS":    "false disables workload-pattern classification and quota selection.",
+	"AUTODETECT_PATTERNS":    "false disables workload-pattern classification and RAM policy selection.",
 	"BLACKOUT":               "Empty means no blackout; enforcement is always permitted by schedule.",
 	"CPU_THRESHOLD_DURATION": "0 makes CPU threshold activation immediate after a valid sample.",
+	"CPU_RESERVE_POINTS":     "0 removes nominal headroom outside the finite ResMan CPU parent; it does not create physical isolation.",
+	"CPU_BEST_EFFORT_POINTS": "One aggregate entitlement shared by every eligible username absent from CPU_POINTS_FILE.",
+	"CPU_POINTS_FILE":        "Absolute restart-required path to the strict direct username guarantee map.",
 	"ENABLE_PROMETHEUS":      "false creates no Prometheus listener.",
 	"IO_BOOST_DURATION":      "0 is rejected while I/O remediation is enabled.",
 	"IO_DEVICE_FILTER":       "all selects every eligible whole block device.",
@@ -60,7 +63,7 @@ var specialFieldMeanings = map[string]string{
 	"RAM_USER_INCLUDE_LIST":  "Empty includes every non-excluded user for RAM eligibility.",
 	"SERVER_ROLE":            "Empty omits an operator-defined role value.",
 	"USER_EXCLUDE_LIST":      "Empty excludes nobody from CPU eligibility.",
-	"USER_INCLUDE_LIST":      "Empty makes no user eligible for CPU limiting; observation remains active. Use .* for every non-excluded user.",
+	"USER_INCLUDE_LIST":      "Empty makes no user eligible for CPU Points enforcement; observation remains active. Use .* for every non-excluded user.",
 }
 
 // PublicFieldContracts returns the complete public key inventory in key order.

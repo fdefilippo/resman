@@ -282,7 +282,7 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 			configure: func(cfg *config.Config) {
 				cfg.RAMEnabled = true
 			},
-			interfaces: []string{"cpu.max"},
+			interfaces: []string{"cpu.max", "cpu.weight"},
 			wantErrFor: []string{"RAM limiting", "memory", "memory.max"},
 		},
 		{
@@ -290,12 +290,12 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 			configure: func(cfg *config.Config) {
 				cfg.IOEnabled = true
 			},
-			interfaces: []string{"cpu.max"},
+			interfaces: []string{"cpu.max", "cpu.weight"},
 			wantErrFor: []string{"I/O limiting", "io", "io.max"},
 		},
 		{
 			name:       "disabled RAM and IO interfaces are not required",
-			interfaces: []string{"cpu.max"},
+			interfaces: []string{"cpu.max", "cpu.weight"},
 		},
 		{
 			name: "all enabled interfaces exist",
@@ -303,7 +303,7 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 				cfg.RAMEnabled = true
 				cfg.IOEnabled = true
 			},
-			interfaces: []string{"cpu.max", "memory.max", "io.max"},
+			interfaces: []string{"cpu.max", "cpu.weight", "memory.max", "io.max"},
 		},
 	}
 
@@ -323,16 +323,30 @@ func TestProbeControllerInterfacesUsesRealChildFiles(t *testing.T) {
 						return "", err
 					}
 					probePath = path
-					for _, interfaceFile := range tt.interfaces {
-						if err := os.WriteFile(filepath.Join(path, interfaceFile), nil, 0644); err != nil {
-							return "", err
-						}
-					}
 					return path, nil
 				},
-				removeCgroupProbe: func(path string) error {
+				createManagedCgroup: func(path string) error {
+					if err := os.Mkdir(path, 0755); err != nil {
+						return err
+					}
+					if filepath.Base(path) != "leaf" {
+						return nil
+					}
 					for _, interfaceFile := range tt.interfaces {
-						if err := os.Remove(filepath.Join(path, interfaceFile)); err != nil {
+						if err := os.WriteFile(filepath.Join(path, interfaceFile), nil, 0644); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+				writeController: func(string, string) error { return nil },
+				removeCgroupProbe: func(path string) error {
+					entries, err := os.ReadDir(path)
+					if err != nil {
+						return err
+					}
+					for _, entry := range entries {
+						if err := os.Remove(filepath.Join(path, entry.Name())); err != nil {
 							return err
 						}
 					}
@@ -394,6 +408,7 @@ func TestUpdateConfigDisablesFeaturesWithoutUsableInterfaces(t *testing.T) {
 		cfg: current,
 		usableControllerInterfaces: map[string]bool{
 			"cpu.max":    true,
+			"cpu.weight": true,
 			"memory.max": false,
 			"io.max":     false,
 		},
@@ -437,6 +452,7 @@ func TestUpdateConfigEnablesNewFeatureInExistingSharedCgroup(t *testing.T) {
 		cfg: current,
 		usableControllerInterfaces: map[string]bool{
 			"cpu.max":    true,
+			"cpu.weight": true,
 			"memory.max": true,
 		},
 	}
@@ -466,8 +482,9 @@ func TestUpdateConfigDoesNotPublishFeatureWhenSharedControllerCannotBeEnabled(t 
 	manager := &Manager{
 		cfg: current,
 		usableControllerInterfaces: map[string]bool{
-			"cpu.max": true,
-			"io.max":  true,
+			"cpu.max":    true,
+			"cpu.weight": true,
+			"io.max":     true,
 		},
 	}
 	requested := config.DefaultConfig()
@@ -886,14 +903,11 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 		t.Fatalf("trackCgroupPath() error: %v", err)
 	}
 
-	if err := manager.ApplyCPUWeight(1000, 250); err != nil {
-		t.Fatalf("ApplyCPUWeight() error: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(userPath, "cpu.max"), nil, 0644); err != nil {
 		t.Fatalf("failed to create cpu.max fixture: %v", err)
 	}
-	if err := manager.ApplyCPUQuota(1000, "50000 100000"); err != nil {
-		t.Fatalf("ApplyCPUQuota() error: %v", err)
+	if err := manager.EnsureUnlimitedCPUQuota(1000); err != nil {
+		t.Fatalf("EnsureUnlimitedCPUQuota() error: %v", err)
 	}
 	if err := manager.ApplyRAMLimitWithHigh(1000, "1048576", "524288"); err != nil {
 		t.Fatalf("ApplyRAMLimitWithHigh() error: %v", err)
@@ -902,8 +916,7 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 		t.Fatalf("ApplyIOLimit() error: %v", err)
 	}
 
-	assertFileContent(t, filepath.Join(userPath, "cpu.weight"), "250")
-	assertFileContent(t, filepath.Join(userPath, "cpu.max"), "50000 100000")
+	assertFileContent(t, filepath.Join(userPath, "cpu.max"), normalCPUQuota)
 	assertFileContent(t, filepath.Join(userPath, "memory.high"), "524288")
 	assertFileContent(t, filepath.Join(userPath, "memory.max"), "1048576")
 	assertFileContent(t, filepath.Join(userPath, "io.max"), "8:0 rbps=1048576 wbps=2097152 riops=10 wiops=20\n")
@@ -912,11 +925,11 @@ func TestUIDOperationsUseTrackedSharedCgroupPath(t *testing.T) {
 		t.Fatalf("legacy cgroup path should not receive writes, stat err=%v", err)
 	}
 
-	if err := manager.ApplyCPUQuota(1001, "50000 100000"); err == nil {
-		t.Fatal("ApplyCPUQuota() should reject an untracked user")
+	if err := manager.EnsureUnlimitedCPUQuota(1001); err == nil {
+		t.Fatal("EnsureUnlimitedCPUQuota() should reject an untracked user")
 	}
 	if _, err := os.Stat(manager.getUserCgroupPath(1001)); !os.IsNotExist(err) {
-		t.Fatalf("ApplyCPUQuota() created a legacy cgroup for an untracked user, stat err=%v", err)
+		t.Fatalf("EnsureUnlimitedCPUQuota() created a legacy cgroup for an untracked user, stat err=%v", err)
 	}
 }
 

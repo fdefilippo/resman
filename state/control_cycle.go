@@ -12,6 +12,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -67,7 +68,6 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "record_history", run: (*Manager).stageRecordHistory},
 	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
 	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
-	{name: "revert_psi_boosts", run: (*Manager).stageRevertPSIBoosts},
 	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
 
@@ -167,13 +167,6 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	// Check whether the current time is within a blackout window.
 	nextEnd := run.cfg.GetNextBlackoutEnd()
 	if nextEnd != nil {
-		if err := m.revertAllPSIBoosts(); err != nil {
-			m.logger.Warn("Failed to revert all PSI boosts while entering blackout",
-				"cycle_id", run.cycleID,
-				"error", err,
-			)
-		}
-
 		ioBoostsReset := 0
 		if m.ioRemediation != nil {
 			ioBoostsReset = m.ioRemediation.ResetActiveBoosts()
@@ -419,14 +412,6 @@ func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) error {
 	return nil
 }
 
-func (m *Manager) stageRevertPSIBoosts(run *controlCycleContext) error {
-	// 9a. Revert PSI weight boosts that have expired
-	if m.psiWatcher != nil {
-		m.revertPSIBoosts()
-	}
-	return nil
-}
-
 func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	m.mu.RLock()
 	run.activeLimitedUsers = len(m.activeUsers)
@@ -618,7 +603,7 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 
 	if decisionSample {
 		decisionConfig := m.GetConfig()
-		m.collectEligibleBlockIOPS(metrics, sampleTime, decisionConfig.GetIODecisionPolicy(), decisionConfig.CPUQuotaNormal)
+		m.collectEligibleBlockIOPS(metrics, sampleTime, decisionConfig.GetIODecisionPolicy(), normalCPUQuota)
 		m.prevIOTime = sampleTime
 		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
 		for _, uid := range metrics.IOEligibleUsers {
@@ -644,10 +629,12 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 	}
 
 	m.mu.RLock()
-	sharedPath := m.sharedCgroupPath
+	legacySharedPath := m.sharedCgroupPath
 	activeUsers := make(map[int]bool, len(m.activeUsers))
+	activePlacements := make(map[int]string, len(m.activeUsers))
 	for uid := range m.activeUsers {
 		activeUsers[uid] = true
+		activePlacements[uid] = m.cpuAllocations[uid].domainPath
 	}
 	observedBefore := make(map[int]bool, len(m.blockIOObservedUsers))
 	for uid := range m.blockIOObservedUsers {
@@ -672,7 +659,12 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 		}
 		placement := ""
 		if activeUsers[uid] {
-			placement = sharedPath
+			placement = activePlacements[uid]
+			if placement == "" {
+				// Compatibility for enforcement state acquired before this
+				// process started the CPU Points epoch.
+				placement = legacySharedPath
+			}
 		}
 		_, ingress, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota)
 		m.recordCgroupIngressSkips(ingress)
@@ -781,7 +773,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 
 	summary := m.getEnforcementSummary()
 
-	actionCores := metrics.TotalCores - m.GetConfig().GetMinSystemCores()
+	actionCores := int((uint64(metrics.TotalCores) * m.cpuPointsPolicy.Pool().Value()) / cpupoints.TotalPoints)
 	if actionCores < 1 {
 		actionCores = 1
 	}

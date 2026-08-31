@@ -139,6 +139,9 @@ write_common_config() {
 	local cgroup_base=$2
 	local log_file=$3
 	local port=$4
+	local cpu_points_file=${config_file%.conf}.cpu-points.map
+	printf '%s\n' '[resman-cpu-points-map-v1]' >"$cpu_points_file"
+	chmod 0600 "$cpu_points_file"
 	cat >"$config_file" <<EOF
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=$(basename "$cgroup_base")
@@ -151,12 +154,13 @@ MIN_ACTIVE_TIME=1
 METRICS_CACHE_TTL=1
 METRICS_REFRESH_INTERVAL=5
 PROCESS_MIN_AGE_SECONDS=0
-MIN_SYSTEM_CORES=1
 IGNORE_SYSTEM_LOAD=true
 CPU_THRESHOLD=100
 CPU_RELEASE_THRESHOLD=99
 CPU_THRESHOLD_DURATION=0
-CPU_QUOTA_NORMAL="max 100000"
+CPU_RESERVE_POINTS=100
+CPU_BEST_EFFORT_POINTS=100
+CPU_POINTS_FILE=$cpu_points_file
 USER_INCLUDE_LIST=
 USER_EXCLUDE_LIST=root
 PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$

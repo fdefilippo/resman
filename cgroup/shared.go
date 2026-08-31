@@ -52,26 +52,9 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 	return sharedPath, nil
 }
 
-// ApplySharedCPULimit applies a CPU limit to the shared cgroup.
-func (m *Manager) ApplySharedCPULimit(sharedPath string, quota string) error {
+func (m *Manager) removeSharedCPUQuota(sharedPath string) error {
 	cpuMaxFile := filepath.Join(sharedPath, "cpu.max")
-
-	// Validate the quota format.
-	if !isValidCPUQuotaFormat(quota) {
-		return fmt.Errorf("invalid CPU quota format: %s", quota)
-	}
-
-	// Apply the limit.
-	if err := os.WriteFile(cpuMaxFile, []byte(quota), 0644); err != nil {
-		return fmt.Errorf("failed to apply shared CPU limit: %w", err)
-	}
-
-	m.logger.Debug("Shared CPU limit applied",
-		"path", sharedPath,
-		"quota", quota,
-	)
-
-	return nil
+	return writeCPUPointsValue(cpuMaxFile, normalCPUQuota)
 }
 
 // CreateUserSubCgroup creates a user sub-cgroup inside the shared cgroup.

@@ -6,22 +6,22 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 
 | Key | Runtime default | Lifecycle | Empty, disabled, or special value |
 |---|---|---|---|
-| `AUTODETECT_PATTERNS` | `false` | `dynamic` | false disables workload-pattern classification and quota selection. |
-| `BATCH_NIGHT_CPU_QUOTA` | `200000` | `dynamic` | — |
+| `AUTODETECT_PATTERNS` | `false` | `dynamic` | false disables workload-pattern classification and RAM policy selection. |
 | `BATCH_NIGHT_RAM_QUOTA` | `4G` | `dynamic` | — |
 | `BLACKOUT` | `(empty)` | `dynamic` | Empty means no blackout; enforcement is always permitted by schedule. |
 | `CGROUP_BASE` | `resman` | `restart-required` | — |
 | `CGROUP_OPERATION_TIMEOUT` | `5` | `dynamic` | — |
 | `CGROUP_ROOT` | `/sys/fs/cgroup` | `restart-required` | — |
-| `CPU_QUOTA_NORMAL` | `max 100000` | `dynamic` | — |
+| `CPU_BEST_EFFORT_POINTS` | `100` | `restart-required` | One aggregate entitlement shared by every eligible username absent from CPU_POINTS_FILE. |
+| `CPU_POINTS_FILE` | `/etc/resman/cpu-points.map` | `restart-required` | Absolute restart-required path to the strict direct username guarantee map. |
 | `CPU_RELEASE_THRESHOLD` | `40` | `dynamic` | — |
+| `CPU_RESERVE_POINTS` | `100` | `restart-required` | 0 removes nominal headroom outside the finite ResMan CPU parent; it does not create physical isolation. |
 | `CPU_THRESHOLD` | `75` | `dynamic` | — |
 | `CPU_THRESHOLD_DURATION` | `90` | `dynamic` | 0 makes CPU threshold activation immediate after a valid sample. |
 | `CREATED_CGROUPS_FILE` | `/run/resman-cgroups.txt` | `restart-required` | — |
 | `DISABLE_SWAP` | `false` | `dynamic` | — |
 | `ENABLE_PROMETHEUS` | `false` | `restart-required` | false creates no Prometheus listener. |
 | `IGNORE_SYSTEM_LOAD` | `false` | `dynamic` | — |
-| `INTERACTIVE_CPU_QUOTA` | `50000` | `dynamic` | — |
 | `INTERACTIVE_RAM_QUOTA` | `1G` | `dynamic` | — |
 | `IO_BOOST_DURATION` | `600` | `dynamic` | 0 is rejected while I/O remediation is enabled. |
 | `IO_BOOST_MAX_PER_HOUR` | `3` | `dynamic` | — |
@@ -69,7 +69,6 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `METRICS_DB_WRITE_INTERVAL` | `30` | `restart-required` | — |
 | `METRICS_REFRESH_INTERVAL` | `30` | `dynamic` | — |
 | `MIN_ACTIVE_TIME` | `60` | `dynamic` | — |
-| `MIN_SYSTEM_CORES` | `1` | `dynamic` | — |
 | `PATTERN_CONFIDENCE_THRESHOLD` | `0.7` | `dynamic` | — |
 | `PATTERN_HISTORY_HOURS` | `168` | `dynamic` | — |
 | `PATTERN_MIN_SAMPLES` | `24` | `dynamic` | — |
@@ -89,8 +88,6 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `PROMETHEUS_TLS_ENABLED` | `false` | `restart-required` | false serves plain HTTP when the exporter is enabled; keep the default loopback bind unless transport security is configured. |
 | `PROMETHEUS_TLS_KEY_FILE` | `/etc/resman/tls/server.key` | `restart-required` | — |
 | `PROMETHEUS_TLS_MIN_VERSION` | `1.2` | `restart-required` | — |
-| `PSI_BOOST_DURATION` | `120` | `dynamic` | — |
-| `PSI_BOOST_WEIGHT` | `300` | `dynamic` | — |
 | `PSI_CPU_STALL_THRESHOLD` | `50000` | `dynamic` | — |
 | `PSI_EVENT_DRIVEN` | `false` | `dynamic` | false uses the polling control loop instead of PSI-triggered cycles. |
 | `PSI_FALLBACK_INTERVAL` | `300` | `dynamic` | — |
@@ -108,5 +105,5 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `SYSTEM_UID_MIN` | `1000` | `dynamic` | — |
 | `USERNAME_CACHE_TTL` | `60` | `dynamic` | — |
 | `USER_EXCLUDE_LIST` | `(empty)` | `dynamic` | Empty excludes nobody from CPU eligibility. |
-| `USER_INCLUDE_LIST` | `(empty)` | `dynamic` | Empty makes no user eligible for CPU limiting; observation remains active. Use .* for every non-excluded user. |
+| `USER_INCLUDE_LIST` | `(empty)` | `dynamic` | Empty makes no user eligible for CPU Points enforcement; observation remains active. Use .* for every non-excluded user. |
 | `USE_SYSLOG` | `false` | `restart-required` | — |

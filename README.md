@@ -103,6 +103,12 @@ CPU_RELEASE_THRESHOLD=40
 CPU_THRESHOLD_DURATION=90
 PROCESS_MIN_AGE_SECONDS=60
 
+# CPU Points: reserve 100/1000 outside ResMan, share 100/1000 with
+# unmapped best-effort users, and load explicit guarantees separately.
+CPU_RESERVE_POINTS=100
+CPU_BEST_EFFORT_POINTS=100
+CPU_POINTS_FILE=/etc/resman/cpu-points.map
+
 # User filtering (empty = no users limited, .* = all users)
 USER_INCLUDE_LIST=.*
 USER_EXCLUDE_LIST=root,admin
@@ -167,8 +173,15 @@ Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
 are already active. Limits that are disabled or no longer applicable are reset
 and retried on later cycles if cleanup fails.
 RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
-`cpu.max`; they do not inherit the finite shared CPU quota, and
-`MIN_SYSTEM_CORES` gates CPU enforcement only.
+`cpu.max`; they do not inherit the finite CPU Points parent quota.
+
+CPU Points normalizes the online host capacity to 1000 points. The finite parent
+pool is `1000 - CPU_RESERVE_POINTS`. A mapped user receives at least its configured
+relative entitlement while the parent has usable CPU bandwidth and may borrow unused
+capacity from mapped peers; unmapped eligible users share the aggregate
+`CPU_BEST_EFFORT_POINTS` domain. The strict map begins with
+`[resman-cpu-points-map-v1]` and then contains exact `username=points` assignments.
+Configured guarantees plus the best-effort entitlement must not exceed the pool.
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of
@@ -211,8 +224,8 @@ An original cgroup that distributes controllers to children is an internal node
 under cgroup v2 and cannot accept the process; it therefore uses the same
 dedicated `resman/recovery/user_UID` leaf as a process whose original systemd
 scope disappeared. The PID start time is revalidated immediately before every
-restore write. A finite `CPU_QUOTA_NORMAL` is applied only to these resman-owned
-recovery cgroups; resman never writes it into cgroups managed by systemd. If any
+restore write. Recovery leaves use an internal unlimited `cpu.max`; resman never
+writes a recovery quota into cgroups managed by systemd. If any
 process cannot be restored safely during shutdown, the daemon exits non-zero
 instead of reporting a successful service stop.
 

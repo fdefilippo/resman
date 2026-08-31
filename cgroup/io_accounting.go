@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+
+	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
 type blockIOCounters struct {
@@ -151,6 +154,10 @@ func (m *Manager) initializeBlockIOAccounting(uid int) (blockIOAccountingState, 
 // An empty sharedPath selects the standalone observation cgroup; a non-empty
 // path selects that shared hierarchy's per-user child.
 func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, ProcessMoveResult, error) {
+	return m.ensureUserCgroupPlacement(uid, sharedPath, normalQuota, nil)
+}
+
+func (m *Manager) ensureUserCgroupPlacement(uid int, sharedPath, normalQuota string, weight *cpupoints.KernelCPUWeight) (string, ProcessMoveResult, error) {
 	var result ProcessMoveResult
 	if uid == 0 {
 		return "", result, fmt.Errorf("refusing to place root processes in a managed cgroup")
@@ -163,6 +170,17 @@ func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota str
 
 	currentPath, exists := m.getCgroupPath(uid)
 	if exists && filepath.Clean(currentPath) == filepath.Clean(desiredPath) {
+		if weight != nil {
+			if err := writeCPUPointsValue(filepath.Join(desiredPath, "cpu.weight"), strconv.Itoa(weight.Value())); err != nil {
+				return "", result, fmt.Errorf("verify CPU Points leaf weight for UID %d: %w", uid, err)
+			}
+			if err := writeCPUPointsValue(filepath.Join(desiredPath, "cpu.max"), normalCPUQuota); err != nil {
+				return "", result, fmt.Errorf("verify unlimited CPU Points leaf quota for UID %d: %w", uid, err)
+			}
+			if err := m.verifyCPUPointsLeafInterfaces(desiredPath); err != nil {
+				return "", result, fmt.Errorf("verify CPU Points leaf interfaces for UID %d: %w", uid, err)
+			}
+		}
 		reconcileResult, err := m.ReconcileUserProcessMembership(uid, sharedPath, normalQuota)
 		result = reconcileResult.Ingress
 		if err != nil {
@@ -174,22 +192,22 @@ func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota str
 		return desiredPath, result, nil
 	}
 	if !exists {
-		result, err := m.createAndPopulateUserCgroup(uid, sharedPath, desiredPath)
+		result, err := m.createAndPopulateUserCgroup(uid, sharedPath, desiredPath, weight)
 		if err != nil {
 			return "", result, err
 		}
 		return desiredPath, result, nil
 	}
 
-	result, err := m.transitionUserCgroup(uid, currentPath, desiredPath, normalQuota)
+	result, err := m.transitionUserCgroup(uid, currentPath, desiredPath, normalQuota, weight)
 	if err != nil {
 		return "", result, err
 	}
 	return desiredPath, result, nil
 }
 
-func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath string) (result ProcessMoveResult, retErr error) {
-	if err := m.createUserCgroupDirectory(uid, desiredPath); err != nil {
+func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath string, weight *cpupoints.KernelCPUWeight) (result ProcessMoveResult, retErr error) {
+	if err := m.createUserCgroupDirectory(uid, desiredPath, weight); err != nil {
 		return result, err
 	}
 	defer func() {
@@ -225,21 +243,52 @@ func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath s
 	return result, nil
 }
 
-func (m *Manager) createUserCgroupDirectory(uid int, path string) error {
+func (m *Manager) createUserCgroupDirectory(uid int, path string, weight *cpupoints.KernelCPUWeight) error {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return fmt.Errorf("create cgroup directory %s for UID %d: %w", path, uid, err)
 	}
 	if sharedRoot := filepath.Dir(path); filepath.Clean(sharedRoot) != filepath.Clean(m.getBaseCgroupPath()) {
+		weightValue := "100"
+		if weight != nil {
+			weightValue = strconv.Itoa(weight.Value())
+		}
 		weightPath := filepath.Join(path, "cpu.weight")
-		if err := os.WriteFile(weightPath, []byte("100"), 0644); err != nil {
+		if weight != nil {
+			if err := writeCPUPointsValue(weightPath, weightValue); err != nil {
+				return fmt.Errorf("verify CPU Points weight for UID %d: %w", uid, err)
+			}
+			if err := writeCPUPointsValue(filepath.Join(path, "cpu.max"), normalCPUQuota); err != nil {
+				return fmt.Errorf("verify unlimited CPU Points quota for UID %d: %w", uid, err)
+			}
+			if err := m.verifyCPUPointsLeafInterfaces(path); err != nil {
+				return fmt.Errorf("verify CPU Points leaf interfaces for UID %d: %w", uid, err)
+			}
+		} else if err := os.WriteFile(weightPath, []byte(weightValue), 0644); err != nil {
 			return fmt.Errorf("set default CPU weight for UID %d: %w", uid, err)
 		}
 	}
 	return nil
 }
 
-func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota string) (result ProcessMoveResult, retErr error) {
-	if err := m.createUserCgroupDirectory(uid, newPath); err != nil {
+func (m *Manager) verifyCPUPointsLeafInterfaces(path string) error {
+	for _, requirement := range enabledControllerInterfaces(m.getConfig()) {
+		interfacePath := filepath.Join(path, requirement.interfaceFile)
+		if _, err := os.Stat(interfacePath); err != nil {
+			return fmt.Errorf(
+				"enabled feature %s requires cgroup controller %q and interface %q at final leaf %s: %w",
+				requirement.feature,
+				requirement.controller,
+				requirement.interfaceFile,
+				path,
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota string, weight *cpupoints.KernelCPUWeight) (result ProcessMoveResult, retErr error) {
+	if err := m.createUserCgroupDirectory(uid, newPath, weight); err != nil {
 		return result, err
 	}
 	cleanupNew := true
@@ -333,30 +382,37 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 
 func (m *Manager) cleanupAlternateUserCgroup(uid int, desiredPath string) error {
 	standalonePath := m.getUserCgroupPath(uid)
-	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited", fmt.Sprintf("user_%d", uid))
-	alternatePath := standalonePath
-	if filepath.Clean(desiredPath) == filepath.Clean(standalonePath) {
-		alternatePath = sharedPath
+	limitedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
+	candidates := []string{
+		standalonePath,
+		filepath.Join(limitedPath, fmt.Sprintf("user_%d", uid)),
+		filepath.Join(limitedPath, cpuPointsGuaranteedDomain, fmt.Sprintf("user_%d", uid)),
+		filepath.Join(limitedPath, cpuPointsBestEffortDomain, fmt.Sprintf("user_%d", uid)),
 	}
-	if _, err := os.Stat(alternatePath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
-	}
-	pids, err := m.readPidsFromFile(filepath.Join(alternatePath, "cgroup.procs"))
-	if err != nil {
-		return fmt.Errorf("read alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
-	}
-	if len(pids) > 0 {
-		return &UserCgroupPlacementIncompleteError{
-			UID:           uid,
-			AlternatePath: alternatePath,
-			DesiredPath:   desiredPath,
-			Processes:     len(pids),
+	for _, alternatePath := range candidates {
+		if filepath.Clean(alternatePath) == filepath.Clean(desiredPath) {
+			continue
 		}
-	}
-	if err := m.removeManagedCgroupPath(alternatePath); err != nil {
-		return fmt.Errorf("remove stale alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
+		if _, err := os.Stat(alternatePath); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("inspect alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
+		}
+		pids, err := m.readPidsFromFile(filepath.Join(alternatePath, "cgroup.procs"))
+		if err != nil {
+			return fmt.Errorf("read alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
+		}
+		if len(pids) > 0 {
+			return &UserCgroupPlacementIncompleteError{
+				UID:           uid,
+				AlternatePath: alternatePath,
+				DesiredPath:   desiredPath,
+				Processes:     len(pids),
+			}
+		}
+		if err := m.removeManagedCgroupPath(alternatePath); err != nil {
+			return fmt.Errorf("remove stale alternate cgroup placement for UID %d at %s: %w", uid, alternatePath, err)
+		}
 	}
 	return nil
 }

@@ -179,8 +179,10 @@ type Config struct {
     CPUThreshold       int  // percentage
     CPUReleaseThreshold int // percentage
 
-    // CPU Limits
-    CPUQuotaNormal   string  // "max 100000"
+    // CPU Points
+    CPUReservePoints    int
+    CPUBestEffortPoints int
+    CPUPointsFile       string
 
     // Prometheus
     EnablePrometheus        bool
@@ -193,7 +195,6 @@ type Config struct {
     UseSyslog  bool
 
     // System
-    MinSystemCores int
     SystemUIDMin   int
     SystemUIDMax   int
 
@@ -260,9 +261,12 @@ type Config struct {
 /sys/fs/cgroup/
 └── resman/                  # Base cgroup (CgroupBase)
     ├── limited/              # Shared cgroup for limited users
-    │   ├── user_1000/        # Per-user sub-cgroup
-    │   ├── user_1001/
-    │   └── ...
+    │   ├── guaranteed/       # Aggregate mapped-user entitlement
+    │   │   ├── user_1000/    # Exact configured guarantee weight
+    │   │   └── ...
+    │   └── best_effort/      # Aggregate unmapped-user entitlement
+    │       ├── user_1001/    # Equal best-effort leaf weight
+    │       └── ...
     ├── user_1002/            # RAM/IO-only; cpu.max remains unlimited
     └── recovery/             # Processes whose original cgroup cannot accept them
         ├── user_1000/
@@ -276,8 +280,8 @@ internal cgroup v2 node with controllers delegated to children, the process
 enters the resman-owned recovery hierarchy. PID reuse is detected by
 revalidating the start time immediately before every restore write. Descendants
 inherit an unambiguous parent or session origin; otherwise they also use
-recovery. `CPU_QUOTA_NORMAL` applies only to recovery cgroups and is never
-written into systemd-managed cgroups. An incomplete shutdown restoration is
+recovery. Recovery leaves receive an internal unlimited `cpu.max`; no public
+normal-quota setting is written into systemd-managed cgroups. An incomplete shutdown restoration is
 returned from the application and produces a non-zero daemon exit status.
 
 Live reconciliation deliberately differs from shutdown recovery. It does not
@@ -285,7 +289,7 @@ guess or create a replacement destination for an excluded process without a
 same-start-time recorded or inherited origin: that process remains constrained.
 The restore planner reports the typed per-process failure and still executes
 valid peer restores. Enforcement errors are returned after history recording,
-I/O remediation, workload pattern detection, PSI boost reversion, and completion
+I/O remediation, workload pattern detection, and completion
 logging have run. `resman_errors_total` distinguishes the persistent
 `process_membership/origin_unavailable` outcome from transient
 `process_membership/reconciliation_failure` outcomes.
@@ -293,7 +297,7 @@ logging have run. `resman_errors_total` distinguishes the persistent
 At startup, the manager enables the controllers it may use and creates a
 temporary child below the resman base cgroup. Capability is determined from the
 interface files populated in that real child, not from controller names alone.
-CPU limiting always requires `cpu.max`; `RAM_LIMIT_ENABLED=true` additionally
+CPU Points always requires both `cpu.max` and `cpu.weight`; `RAM_LIMIT_ENABLED=true` additionally
 requires `memory.max`, and `IO_LIMIT_ENABLED=true` requires `io.max`. A missing
 required interface aborts startup with the feature, controller, and interface in
 the error. Controllers for disabled RAM or I/O features may be absent. `cpuset`
@@ -315,9 +319,11 @@ and leaves the feature disabled.
 - `verifyCgroupSetup()`: Verifies cgroups v2 availability
 - `CreateUserCgroup(uid)`: Creates cgroup for user
 - `CreateSharedCgroup()`: Creates shared "limited" cgroup
-- `ApplyCPULimit(uid, quota)`: Applies CPU limit to user
-- `ApplyCPUWeight(uid, weight)`: Applies CPU weight to user
-- `ApplySharedCPULimit(path, quota)`: Applies limit to shared cgroup
+- `EnsureCPUPointsHierarchy(quota, bestEffortWeight)`: Creates and verifies the finite pool and process-free domains
+- `ApplyCPUPointsParentQuota(hierarchy, quota)`: Reconciles the typed finite parent quota
+- `ApplyCPUPointsGuaranteedWeight(hierarchy, weight)`: Reconciles the active guaranteed entitlement
+- `EnsureCPUPointsUserPlacement(uid, domain, weight)`: Fully configures and verifies an unlimited leaf before ingress
+- `EnsureUnlimitedCPUQuota(uid)`: Keeps a RAM/I/O-only observation cgroup outside CPU allocation policy
 - `MoveProcessToCgroup(pid, uid)`: Moves process to user cgroup
 - `MoveAllUserProcesses(uid)`: Moves all user processes to a standalone cgroup
 - `MoveAllUserProcessesToSharedCgroup(uid, path)`: Moves all user processes
@@ -325,7 +331,7 @@ and leaves the feature disabled.
 - `CleanupAll()`: Removes all created cgroups
 - `GetCgroupInfo(uid)`: Returns cgroup information
 
-`ApplyCPULimit` owns process migration synchronously. `CGROUP_OPERATION_TIMEOUT`
+CPU Points ingress owns process migration synchronously. `CGROUP_OPERATION_TIMEOUT`
 cancels the scan between PID moves, but the call does not return until any in-flight
 move has completed. A blocked kernel operation can therefore make the call exceed the
 nominal timeout; after the returned error no background worker remains able to change
@@ -709,7 +715,6 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman/resman.conf
 
 **Activate Limits When:**
 - any independently eligible CPU, RAM, or I/O aggregate exceeds its threshold
-- `total_cores > MIN_SYSTEM_CORES` for CPU enforcement only
 - `system_load OK`, `IGNORE_SYSTEM_LOAD=true`, or CPU-eligible users account for at
   least 50% of measured aggregate host CPU activity
 
@@ -718,6 +723,12 @@ per-core percentage by multiplying it by `total_cores`, which is the unit used b
 eligible process sum. If the host sample is unavailable, activation is delayed without
 claiming that the load is external. Temporary external-load suppression preserves the
 CPU threshold-duration tracker.
+
+CPU activation refreshes the online CPU denominator and programs one finite parent
+quota from `1000 - CPU_RESERVE_POINTS`. Mapped eligible UIDs enter the guaranteed
+domain with their exact map weight; unmapped eligible UIDs share the aggregate
+`CPU_BEST_EFFORT_POINTS` domain. All leaves remain unlimited by `cpu.max`. The
+guaranteed-domain weight is raised before ingress and lowered only after departure.
 
 **Deactivate Limits When:**
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
@@ -1330,14 +1341,15 @@ type PrometheusExporter interface {
 // CgroupManager interface
 type CgroupManager interface {
     CreateUserCgroup(uid int) error
-    ApplyCPULimit(uid int, quota string) error
-    ApplyCPUWeight(uid int, weight int) error
-    RemoveCPULimit(uid int) error
+    EnsureUnlimitedCPUQuota(uid int) error
+    EnsureCPUPointsHierarchy(ParentQuota, KernelCPUWeight) (CPUPointsHierarchy, error)
+    ApplyCPUPointsParentQuota(CPUPointsHierarchy, ParentQuota) error
+    ApplyCPUPointsGuaranteedWeight(CPUPointsHierarchy, KernelCPUWeight) error
+    EnsureCPUPointsUserPlacement(uid int, domain string, weight KernelCPUWeight) (string, ProcessMoveResult, error)
+    ReleaseCPUPointsUser(uid int, domain string) error
     CleanupUserCgroup(uid int) error
     MoveProcessToCgroup(pid int, uid int) error
     MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
-    CreateSharedCgroup() (string, error)
-    ApplySharedCPULimit(sharedPath string, quota string) error
     CleanupAll() error
     GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
 }

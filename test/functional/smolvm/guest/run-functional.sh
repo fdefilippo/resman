@@ -244,6 +244,8 @@ if [[ $scenario == cpu-without-cpuset ]]; then
 fi
 
 sed "s/@RUN_ID@/$run_id/g" /opt/resman-functional/fixtures/resman.conf >"$config_file"
+printf '%s\n' '[resman-cpu-points-map-v1]' >"$runtime_dir/cpu-points.map"
+chmod 0600 "$runtime_dir/cpu-points.map"
 if [[ $scenario == block-iops ]]; then
 	sed -i \
 		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
@@ -263,7 +265,6 @@ if [[ $scenario == process-membership || $scenario == cpu-without-cpuset \
 	sed -i \
 		-e 's/^CPU_THRESHOLD=.*/CPU_THRESHOLD=10/' \
 		-e 's/^USER_INCLUDE_LIST=.*/USER_INCLUDE_LIST=^resman-cpu$/' \
-		-e 's/^MIN_SYSTEM_CORES=.*/MIN_SYSTEM_CORES=1/' \
 		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
 		"$config_file"
@@ -276,7 +277,7 @@ if [[ $scenario == container-runtime ]]; then
 	sed -i \
 		-e "s|^CGROUP_BASE=.*|CGROUP_BASE=resman-container-$run_id|" \
 		-e "s|^CREATED_CGROUPS_FILE=.*|CREATED_CGROUPS_FILE=/run/resman-cgroups.txt|" \
-		-e 's/^MIN_SYSTEM_CORES=.*/MIN_SYSTEM_CORES=1/' \
+		-e 's|^CPU_POINTS_FILE=.*|CPU_POINTS_FILE=/etc/resman/cpu-points.map|' \
 		-e 's/^METRICS_DB_ENABLED=.*/METRICS_DB_ENABLED=false/' \
 		-e 's|^LOG_FILE=.*|LOG_FILE=/var/log/resman/resman.log|' \
 		"$config_file"
@@ -540,7 +541,7 @@ if [[ $scenario == container-runtime ]]; then
 	done
 
 	container_base_cgroup=/sys/fs/cgroup/resman-container-$run_id
-	container_limited_cgroup=$container_base_cgroup/limited/user_$cpu_uid
+	container_limited_cgroup=$container_base_cgroup/limited/best_effort/user_$cpu_uid
 	container_quota_ready=false
 	for _ in $(seq 1 45); do
 		if [[ -r $container_base_cgroup/limited/cpu.max \
@@ -814,7 +815,7 @@ if [[ $scenario == cpu-without-cpuset ]]; then
 	/opt/resman-functional/workload.sh cpu 25s &
 	cpu_workload_pid=$!
 	cpu_uid=$(id -u resman-cpu)
-	limited_cgroup=$base_cgroup/limited/user_$cpu_uid
+	limited_cgroup=$base_cgroup/limited/best_effort/user_$cpu_uid
 	cpu_quota_ready=false
 	for _ in $(seq 1 30); do
 		if [[ -r $base_cgroup/limited/cpu.max \
@@ -981,7 +982,7 @@ fi
 # outside resman's subtree so origin restoration can be verified exactly.
 cpu_uid=$(id -u resman-cpu)
 origin_cgroup=/sys/fs/cgroup/resman-functional-origin-$run_id
-limited_cgroup=$base_cgroup/limited/user_$cpu_uid
+limited_cgroup=$base_cgroup/limited/best_effort/user_$cpu_uid
 mkdir "$origin_cgroup" || fail "cannot create process-membership origin cgroup"
 
 stress_pid_except() {

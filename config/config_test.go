@@ -50,7 +50,9 @@ func TestDefaultConfig(t *testing.T) {
 		{"MinActiveTime", cfg.MinActiveTime, 60},
 		{"CPUThreshold", cfg.CPUThreshold, 75},
 		{"CPUReleaseThreshold", cfg.CPUReleaseThreshold, 40},
-		{"CPUQuotaNormal", cfg.CPUQuotaNormal, "max 100000"},
+		{"CPUReservePoints", cfg.CPUReservePoints, 100},
+		{"CPUBestEffortPoints", cfg.CPUBestEffortPoints, 100},
+		{"CPUPointsFile", cfg.CPUPointsFile, DefaultCPUPointsMapPath},
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
 		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"}, // Secure default
@@ -92,7 +94,9 @@ func TestValidateConfig(t *testing.T) {
 				MetricsRefreshInterval: 30,
 				CgroupOperationTimeout: 5,
 				MCPShutdownTimeout:     10,
-				CPUQuotaNormal:         "max 100000",
+				CPUReservePoints:       100,
+				CPUBestEffortPoints:    100,
+				CPUPointsFile:          DefaultCPUPointsMapPath,
 				BatchNightRAMQuota:     "4G",
 				InteractiveRAMQuota:    "1G",
 				LogLevel:               "INFO",
@@ -866,15 +870,15 @@ func TestParseTimeframeRejectsReversedDayRange(t *testing.T) {
 	}
 }
 
-func TestValidateConfigRejectsInvalidCPUQuotaAndTimeouts(t *testing.T) {
+func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*Config)
 	}{
 		{
-			name: "invalid normal CPU quota",
+			name: "invalid best-effort points",
 			mutate: func(cfg *Config) {
-				cfg.CPUQuotaNormal = "0 100000"
+				cfg.CPUBestEffortPoints = 0
 			},
 		},
 		{

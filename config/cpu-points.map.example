@@ -1,0 +1,5 @@
+[resman-cpu-points-map-v1]
+# Exact NSS username=guaranteed points. Unlisted CPU-eligible users share the
+# aggregate CPU_BEST_EFFORT_POINTS entitlement.
+# alice=300
+# john.smith=200

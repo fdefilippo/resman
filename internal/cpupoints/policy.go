@@ -58,8 +58,6 @@ func NewPolicyMapPath(path string) (PolicyMapPath, error) {
 func (p PolicyMapPath) String() string { return p.value }
 
 // PolicyInputs are the complete typed inputs used to build one policy epoch.
-// Public configuration registration is deliberately deferred to resman-vcs.5,
-// where these inputs acquire their first live enforcement consumer.
 type PolicyInputs struct {
 	Reserve    ReservePoints
 	BestEffort BestEffortPoints
@@ -157,6 +155,27 @@ type PolicySnapshot struct {
 	entries         []UserGuarantee
 	guaranteesByUID map[int]UserGuarantee
 	source          PolicySource
+}
+
+// NewEmptyPolicySnapshot constructs a validated policy without mapped users.
+// It exists for dependency-injected consumers that do not load a policy file;
+// production startup must use PolicyLoader so file provenance is retained.
+func NewEmptyPolicySnapshot(reserve ReservePoints, bestEffort BestEffortPoints) (PolicySnapshot, error) {
+	pool := reserve.ParentPool()
+	if bestEffort.Value() > pool.Value() {
+		return PolicySnapshot{}, fmt.Errorf("CPU Points policy overcommits nominal pool %d: best effort %d", pool.Value(), bestEffort.Value())
+	}
+	total, err := NewConfiguredGuaranteeTotalPoints(0)
+	if err != nil {
+		return PolicySnapshot{}, err
+	}
+	return PolicySnapshot{
+		reserve:         reserve,
+		pool:            pool,
+		bestEffort:      bestEffort,
+		configuredTotal: total,
+		guaranteesByUID: make(map[int]UserGuarantee),
+	}, nil
 }
 
 // Reserve returns the nominal capacity kept outside the ResMan CPU parent.

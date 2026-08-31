@@ -35,8 +35,7 @@ func (m *Manager) CleanupUserCgroup(uid int) error {
 	}
 
 	if len(pids) > 0 {
-		cfg := m.getConfig()
-		usedRecovery, err := m.restoreProcesses(uid, pids, cfg.CPUQuotaNormal)
+		usedRecovery, err := m.restoreProcesses(uid, pids, normalCPUQuota)
 		if err != nil {
 			return fmt.Errorf("failed to restore processes before cleanup for UID %d: %w", uid, err)
 		}
@@ -76,28 +75,37 @@ func (m *Manager) RecoverExistingCgroups() error {
 }
 
 func (m *Manager) recoverSharedCgroup(sharedPath string) error {
-	cfg := m.getConfig()
-	if err := m.ApplySharedCPULimit(sharedPath, "max 100000"); err != nil {
+	if err := m.removeSharedCPUQuota(sharedPath); err != nil {
 		return fmt.Errorf("failed to remove shared CPU quota before recovery: %w", err)
 	}
 
-	entries, err := os.ReadDir(sharedPath)
-	if err != nil {
-		return fmt.Errorf("failed to list shared cgroup %s: %w", sharedPath, err)
-	}
-
 	var recoveryErrors []error
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "user_") {
+	parents := []string{
+		sharedPath,
+		filepath.Join(sharedPath, cpuPointsGuaranteedDomain),
+		filepath.Join(sharedPath, cpuPointsBestEffortDomain),
+	}
+	for _, parent := range parents {
+		entries, err := os.ReadDir(parent)
+		if os.IsNotExist(err) {
 			continue
 		}
-		uid, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "user_"))
 		if err != nil {
-			recoveryErrors = append(recoveryErrors, fmt.Errorf("invalid shared user cgroup %s", entry.Name()))
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("failed to list managed cgroup %s: %w", parent, err))
 			continue
 		}
-		if err := m.ReleaseUserFromSharedCgroup(uid, sharedPath, cfg.CPUQuotaNormal); err != nil {
-			recoveryErrors = append(recoveryErrors, err)
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "user_") {
+				continue
+			}
+			uid, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "user_"))
+			if err != nil {
+				recoveryErrors = append(recoveryErrors, fmt.Errorf("invalid managed user cgroup %s", entry.Name()))
+				continue
+			}
+			if err := m.ReleaseUserFromSharedCgroup(uid, parent, normalCPUQuota); err != nil {
+				recoveryErrors = append(recoveryErrors, err)
+			}
 		}
 	}
 
@@ -120,7 +128,7 @@ func (m *Manager) recoverSharedCgroup(sharedPath string) error {
 		pidsByUID[uid] = append(pidsByUID[uid], pid)
 	}
 	for uid, userPIDs := range pidsByUID {
-		usedRecovery, err := m.restoreProcesses(uid, userPIDs, cfg.CPUQuotaNormal)
+		usedRecovery, err := m.restoreProcesses(uid, userPIDs, normalCPUQuota)
 		if err != nil {
 			recoveryErrors = append(recoveryErrors, err)
 			continue
@@ -134,6 +142,11 @@ func (m *Manager) recoverSharedCgroup(sharedPath string) error {
 
 	if len(recoveryErrors) > 0 {
 		return errors.Join(recoveryErrors...)
+	}
+	for _, domain := range []string{filepath.Join(sharedPath, cpuPointsGuaranteedDomain), filepath.Join(sharedPath, cpuPointsBestEffortDomain)} {
+		if err := m.removeManagedCgroupPath(domain); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove recovered CPU Points domain %s: %w", domain, err)
+		}
 	}
 	if err := m.removeManagedCgroupPath(sharedPath); err != nil {
 		return fmt.Errorf("failed to remove recovered shared cgroup %s: %w", sharedPath, err)

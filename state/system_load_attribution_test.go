@@ -75,7 +75,6 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 			cfg.CPUThreshold = 75
 			cfg.CPUThresholdDuration = 0
 			cfg.IgnoreSystemLoad = false
-			cfg.MinSystemCores = 1
 			manager := &Manager{
 				cfg:                cfg,
 				thresholdTracker:   &ThresholdTracker{},
@@ -112,7 +111,6 @@ func TestTemporaryExternalLoadSuppressionPreservesCPUThresholdProgress(t *testin
 	cfg.CPUThreshold = 75
 	cfg.CPUThresholdDuration = 90
 	cfg.IgnoreSystemLoad = false
-	cfg.MinSystemCores = 1
 
 	firstCrossing := time.Now().Add(-45 * time.Second)
 	tracker := &ThresholdTracker{
