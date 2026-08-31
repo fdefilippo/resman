@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -353,6 +354,21 @@ func TestPolicyLoaderRejectsUnsafePathsAndOpenedObjects(t *testing.T) {
 		}
 	})
 
+	t.Run("opened path uses no-follow defense", func(t *testing.T) {
+		path := writePolicyMap(t, safeContent)
+		loader := newTestPolicyLoader()
+		productionOpen := loader.openFile
+		loader.openFile = func(name string, flags int, mode os.FileMode) (*os.File, error) {
+			if flags&syscall.O_NOFOLLOW == 0 {
+				t.Fatal("policy file opened without O_NOFOLLOW")
+			}
+			return productionOpen(name, flags, mode)
+		}
+		if _, err := loader.Load(policyInputs(t, path, 0, 1), resolver); err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+	})
+
 	t.Run("symlink ancestor", func(t *testing.T) {
 		root := privateTestDir(t)
 		realDir := filepath.Join(root, "real")
@@ -423,6 +439,32 @@ func TestPolicyLoaderRejectsUnsafePathsAndOpenedObjects(t *testing.T) {
 		}
 		if _, err := loader.Load(policyInputs(t, path, 0, 1), resolver); err == nil {
 			t.Fatal("untrusted file owner accepted")
+		}
+	})
+
+	t.Run("file modified between opened-object inspections", func(t *testing.T) {
+		path := writePolicyMap(t, safeContent)
+		loader := newTestPolicyLoader()
+		productionOwner := loader.ownerUID
+		modified := false
+		loader.ownerUID = func(info os.FileInfo) (int, error) {
+			owner, err := productionOwner(info)
+			if err != nil || modified || info.Name() != filepath.Base(path) {
+				return owner, err
+			}
+			modified = true
+			if err := os.WriteFile(path, []byte(PolicyMapMarker+"\nalice=1\n"), 0600); err != nil {
+				return 0, fmt.Errorf("mutate policy fixture: %w", err)
+			}
+			return owner, nil
+		}
+
+		_, err := loader.Load(policyInputs(t, path, 0, 1), resolver)
+		if !modified {
+			t.Fatal("test did not modify the policy file during loading")
+		}
+		if err == nil || !strings.Contains(err.Error(), "changed while it was being read") {
+			t.Fatalf("Load() error = %v, want concurrent-modification rejection", err)
 		}
 	})
 }
