@@ -81,3 +81,54 @@ func TestApplyCPULimitWaitsForTimedOutMoverToBecomeQuiescent(t *testing.T) {
 		t.Fatalf("mover mutations at return = %d, want completed value 1", got)
 	}
 }
+
+func TestApplyCPUWeightRejectsOutOfRangeWithoutCreatingACgroup(t *testing.T) {
+	tests := []int{-1, 0, 10001}
+	for _, weight := range tests {
+		t.Run(fmt.Sprintf("weight_%d", weight), func(t *testing.T) {
+			root := t.TempDir()
+			cfg := config.DefaultConfig()
+			cfg.CgroupRoot = root
+			cfg.CgroupBase = "resman"
+			manager := &Manager{
+				cfg:            cfg,
+				logger:         logging.GetLogger(),
+				createdCgroups: make(map[int]string),
+			}
+
+			if err := manager.ApplyCPUWeight(1001, weight); err == nil {
+				t.Fatalf("ApplyCPUWeight(%d) accepted", weight)
+			}
+			if _, err := os.Stat(manager.getUserCgroupPath(1001)); !os.IsNotExist(err) {
+				t.Fatalf("invalid weight created a cgroup, stat error = %v", err)
+			}
+		})
+	}
+}
+
+func TestApplyCPUWeightWritesExactKernelBoundaryValues(t *testing.T) {
+	for _, weight := range []int{1, 10000} {
+		t.Run(fmt.Sprintf("weight_%d", weight), func(t *testing.T) {
+			root := t.TempDir()
+			cfg := config.DefaultConfig()
+			cfg.CgroupRoot = root
+			cfg.CgroupBase = "resman"
+			manager := &Manager{
+				cfg:            cfg,
+				logger:         logging.GetLogger(),
+				createdCgroups: make(map[int]string),
+			}
+
+			if err := manager.ApplyCPUWeight(1001, weight); err != nil {
+				t.Fatalf("ApplyCPUWeight(%d): %v", weight, err)
+			}
+			data, err := os.ReadFile(filepath.Join(manager.getUserCgroupPath(1001), "cpu.weight"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := string(data), fmt.Sprint(weight); got != want {
+				t.Errorf("cpu.weight = %q, want %q", got, want)
+			}
+		})
+	}
+}

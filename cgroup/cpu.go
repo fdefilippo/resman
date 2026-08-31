@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
 func (m *Manager) CreateUserCgroup(uid int) error {
@@ -140,6 +142,11 @@ func (m *Manager) ApplyCPULimit(uid int, quota string) error {
 
 // ApplyCPUWeight applies a proportional CPU weight to a user cgroup.
 func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
+	kernelWeight, err := cpupoints.NewKernelCPUWeight(weight)
+	if err != nil {
+		return fmt.Errorf("invalid CPU weight for UID %d: %w", uid, err)
+	}
+
 	cgroupPath, err := m.ensureCgroupPath(uid)
 	if err != nil {
 		return fmt.Errorf("failed to resolve cgroup before applying weight: %w", err)
@@ -147,23 +154,15 @@ func (m *Manager) ApplyCPUWeight(uid int, weight int) error {
 
 	cpuWeightFile := filepath.Join(cgroupPath, "cpu.weight")
 
-	// Clamp the weight to the kernel-supported range of 1 through 10000.
-	if weight < 1 {
-		weight = 1
-	}
-	if weight > 10000 {
-		weight = 10000
-	}
-
 	// Apply the weight.
-	weightStr := strconv.Itoa(weight)
+	weightStr := strconv.Itoa(kernelWeight.Value())
 	if err := os.WriteFile(cpuWeightFile, []byte(weightStr), 0644); err != nil {
 		return fmt.Errorf("failed to apply CPU weight for UID %d: %w", uid, err)
 	}
 
 	m.logger.Debug("CPU weight applied",
 		"uid", uid,
-		"weight", weight,
+		"weight", kernelWeight.Value(),
 		"path", cpuWeightFile,
 	)
 
