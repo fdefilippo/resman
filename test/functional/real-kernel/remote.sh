@@ -138,6 +138,7 @@ else
 		install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
 		install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
 	fi
+	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/service-run.sh"
 	(
 		cd "$repo_root"
 		CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go

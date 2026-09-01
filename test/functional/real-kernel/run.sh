@@ -18,8 +18,14 @@ active_cgroup_base=
 active_log_file=
 active_work_root=
 selected_io_device=
+initial_service_active=
+service_quiesced=0
 result=FAIL
 detail="real-kernel scenario did not complete"
+
+# shellcheck disable=SC1091
+RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$bundle_dir/service-run.sh"
+unset RESMAN_REAL_KERNEL_LIBRARY_ONLY
 
 case "$run_id" in
 	*[!a-z0-9-]*|'') echo "invalid run id: $run_id" >&2; exit 2 ;;
@@ -78,6 +84,10 @@ finish() {
 			/tmp/resman-final-work-"$run_id") rm -rf -- "$active_work_root" ;;
 			*) cleanup_status=FAIL ;;
 		esac
+	fi
+	if [[ $service_quiesced -eq 1 && $initial_service_active == active ]]; then
+		systemctl start resman >>"$evidence_dir/cleanup.log" 2>&1 \
+			|| cleanup_status=FAIL
 	fi
 	if [[ -s $evidence_dir/daemon-errors.txt ]]; then
 		status=1
@@ -206,7 +216,7 @@ start_resman() {
 }
 
 preflight() {
-	local os_name
+	local os_name deadline
 	[[ $(id -u) -eq 0 ]] || fail "real-kernel scenarios must run as root"
 	[[ -x $binary ]] || fail "the staged resman binary is missing or not executable"
 	[[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]] || fail "cgroup v2 is not mounted"
@@ -214,9 +224,21 @@ preflight() {
 	command -v curl >/dev/null || fail "curl is required"
 	command -v python3 >/dev/null || fail "python3 is required"
 	command -v setpriv >/dev/null || fail "setpriv is required"
+	command -v systemctl >/dev/null || fail "systemctl is required"
 	id "$test_user" >/dev/null 2>&1 || fail "fixture user $test_user is unavailable"
+	initial_service_active=$(systemctl is-active resman 2>&1 || true)
 	if pgrep -x resman >/dev/null 2>&1; then
-		fail "another resman process is active; refusing to mutate a shared host"
+		[[ $initial_service_active == active ]] \
+			|| fail "an unowned resman process is active; refusing to mutate a shared host"
+		quiesce_installed_service \
+			|| fail "installed resman service could not be quiesced"
+		deadline=$((SECONDS + 30))
+		while (( SECONDS < deadline )); do
+			pgrep -x resman >/dev/null 2>&1 || break
+			sleep 1
+		done
+		pgrep -x resman >/dev/null 2>&1 \
+			&& fail "a resman process remains active after service quiescence"
 	fi
 	test_uid=$(id -u "$test_user")
 	test_gid=$(id -g "$test_user")
@@ -232,6 +254,7 @@ preflight() {
 		printf 'controllers=%s\n' "$(< /sys/fs/cgroup/cgroup.controllers)"
 		printf 'test_user=%s\n' "$test_user"
 		printf 'test_uid=%s\n' "$test_uid"
+		printf 'initial_service_active=%s\n' "$initial_service_active"
 	} >"$evidence_dir/environment.txt"
 }
 

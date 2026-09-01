@@ -35,6 +35,10 @@ load_cpu_ids=()
 last_started_pid=
 container_name=
 
+# shellcheck disable=SC1091
+RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$bundle_dir/service-run.sh"
+unset RESMAN_REAL_KERNEL_LIBRARY_ONLY
+
 case "$scenario" in
 	cpu-points-proportional) ;;
 	*) echo "invalid CPU Points scenario: $scenario" >&2; exit 2 ;;
@@ -643,8 +647,8 @@ PY
 		|| blocked "run-scoped CPU Points cgroup already exists"
 	initial_service_active=$(systemctl is-active resman 2>&1 || true)
 	if [[ $initial_service_active == active ]]; then
-		systemctl stop resman || fail "installed resman service could not be quiesced"
-		service_quiesced=1
+		quiesce_installed_service \
+			|| fail "installed resman service could not be quiesced"
 	fi
 	pgrep -x resman >/dev/null 2>&1 \
 		&& fail "a resman process remains active after service quiescence"
