@@ -468,33 +468,54 @@ assert_at_least() {
 
 create_reference_hierarchy() {
 	local root=$1 guaranteed_weight=$2 online=$3
+	local parent=$root/limited
 	local quota=$((online * 900 * 100))
 	mkdir "$root"
-	printf '%s 100000' "$quota" >"$root/cpu.max"
 	printf '+cpu' >"$root/cgroup.subtree_control"
-	mkdir "$root/guaranteed" "$root/best_effort"
-	printf '%s' "$guaranteed_weight" >"$root/guaranteed/cpu.weight"
-	printf '100' >"$root/best_effort/cpu.weight"
-	printf '+cpu' >"$root/guaranteed/cgroup.subtree_control"
-	printf '+cpu' >"$root/best_effort/cgroup.subtree_control"
+	mkdir "$parent"
+	printf '%s 100000' "$quota" >"$parent/cpu.max"
+	printf '+cpu' >"$parent/cgroup.subtree_control"
+	mkdir "$parent/guaranteed" "$parent/best_effort"
+	printf '%s' "$guaranteed_weight" >"$parent/guaranteed/cpu.weight"
+	printf '100' >"$parent/best_effort/cpu.weight"
+	printf '+cpu' >"$parent/guaranteed/cgroup.subtree_control"
+	printf '+cpu' >"$parent/best_effort/cgroup.subtree_control"
 	local leaf weight
 	for leaf in g1 g2 g3; do
 		case "$leaf" in g1|g2) weight=300 ;; g3) weight=200 ;; esac
-		mkdir "$root/guaranteed/$leaf"
-		printf '%s' "$weight" >"$root/guaranteed/$leaf/cpu.weight"
+		mkdir "$parent/guaranteed/$leaf"
+		printf '%s' "$weight" >"$parent/guaranteed/$leaf/cpu.weight"
 	done
 	for leaf in be1 be2; do
-		mkdir "$root/best_effort/$leaf"
-		printf '100' >"$root/best_effort/$leaf/cpu.weight"
+		mkdir "$parent/best_effort/$leaf"
+		printf '100' >"$parent/best_effort/$leaf/cpu.weight"
 	done
-	[[ ! -s $root/cgroup.procs && ! -s $root/guaranteed/cgroup.procs \
-		&& ! -s $root/best_effort/cgroup.procs ]] \
+	[[ ! -s $root/cgroup.procs && ! -s $parent/cgroup.procs \
+		&& ! -s $parent/guaranteed/cgroup.procs \
+		&& ! -s $parent/best_effort/cgroup.procs ]] \
 		|| fail "reference hierarchy contains processes in an internal node"
-	for leaf in "$root/guaranteed/g1" "$root/guaranteed/g2" "$root/guaranteed/g3" \
-		"$root/best_effort/be1" "$root/best_effort/be2"; do
+	for leaf in "$parent/guaranteed/g1" "$parent/guaranteed/g2" "$parent/guaranteed/g3" \
+		"$parent/best_effort/be1" "$parent/best_effort/be2"; do
 		[[ -w $leaf/cpu.weight && -w $leaf/cpu.max ]] \
 			|| fail "reference leaf lacks CPU controller interfaces: $leaf"
 	done
+}
+
+record_reference_topology() {
+	local root=$1 name=$2
+	local parent=$root/limited
+	local wrapper_max wrapper_weight
+	wrapper_max=$(< "$root/cpu.max")
+	wrapper_weight=$(< "$root/cpu.weight")
+	[[ $wrapper_max == "max 100000" && $wrapper_weight == 100 ]] \
+		|| fail "$name reference wrapper is not neutral: cpu.max=$wrapper_max cpu.weight=$wrapper_weight"
+	{
+		printf 'wrapper=%s\nwrapper_cpu_max=%s\nwrapper_cpu_weight=%s\n' \
+			"$root" "$wrapper_max" "$wrapper_weight"
+		printf 'finite_parent=%s\nfinite_parent_cpu_max=%s\n' "$parent" "$(< "$parent/cpu.max")"
+		printf 'wrapper_processes=0\nfinite_parent_processes=0\n'
+		printf 'guaranteed_domain_processes=0\nbest_effort_domain_processes=0\n'
+	} >"$evidence_dir/$name-reference-topology.txt"
 }
 
 start_raw_leaf_load() {
@@ -508,25 +529,25 @@ start_raw_leaf_load() {
 }
 
 load_reference() {
-	local root=$1
-	start_raw_leaf_load "$root/guaranteed/g1"
-	start_raw_leaf_load "$root/guaranteed/g2"
-	start_raw_leaf_load "$root/guaranteed/g3"
-	start_raw_leaf_load "$root/best_effort/be1"
-	start_raw_leaf_load "$root/best_effort/be2"
+	local parent=$1/limited
+	start_raw_leaf_load "$parent/guaranteed/g1"
+	start_raw_leaf_load "$parent/guaranteed/g2"
+	start_raw_leaf_load "$parent/guaranteed/g3"
+	start_raw_leaf_load "$parent/best_effort/be1"
+	start_raw_leaf_load "$parent/best_effort/be2"
 }
 
 reference_nodes() {
-	local root=$1
+	local parent=$1/limited
 	printf '%s\n' \
-		"parent=$root" \
-		"guaranteed=$root/guaranteed" \
-		"best_effort=$root/best_effort" \
-		"g1=$root/guaranteed/g1" \
-		"g2=$root/guaranteed/g2" \
-		"g3=$root/guaranteed/g3" \
-		"be1=$root/best_effort/be1" \
-		"be2=$root/best_effort/be2"
+		"parent=$parent" \
+		"guaranteed=$parent/guaranteed" \
+		"best_effort=$parent/best_effort" \
+		"g1=$parent/guaranteed/g1" \
+		"g2=$parent/guaranteed/g2" \
+		"g3=$parent/guaranteed/g3" \
+		"be1=$parent/best_effort/be1" \
+		"be2=$parent/best_effort/be2"
 }
 
 preflight() {
@@ -651,6 +672,7 @@ run_reference_oracles() {
 	local nodes=()
 	online=$(getconf _NPROCESSORS_ONLN)
 	create_reference_hierarchy "$correct_root" 800 "$online"
+	record_reference_topology "$correct_root" correct
 	mapfile -t nodes < <(reference_nodes "$correct_root")
 	load_reference "$correct_root"
 	sleep 2
@@ -659,6 +681,7 @@ run_reference_oracles() {
 	remove_cgroup_tree "$correct_root" || fail "correct reference hierarchy did not clean up"
 
 	create_reference_hierarchy "$stale_root" 600 "$online"
+	record_reference_topology "$stale_root" stale-low
 	mapfile -t nodes < <(reference_nodes "$stale_root")
 	load_reference "$stale_root"
 	sleep 2
