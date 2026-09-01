@@ -75,9 +75,30 @@ stop_loads() {
 		user=${load_users[$index]}
 		[[ -n $pid ]] || continue
 		[[ -z $wanted || $user == "$wanted" ]] || continue
+		kill -CONT "$pid" 2>/dev/null || true
 		kill -TERM "$pid" 2>/dev/null || true
 		wait "$pid" 2>/dev/null || true
 		load_pids[index]=
+	done
+}
+
+pause_loads() {
+	local wanted=$1 index pid user
+	for index in "${!load_pids[@]}"; do
+		pid=${load_pids[$index]}
+		user=${load_users[$index]}
+		[[ -n $pid && $user == "$wanted" ]] || continue
+		kill -STOP "$pid" || fail "could not make $wanted workload idle"
+	done
+}
+
+resume_loads() {
+	local wanted=$1 index pid user
+	for index in "${!load_pids[@]}"; do
+		pid=${load_pids[$index]}
+		user=${load_users[$index]}
+		[[ -n $pid && $user == "$wanted" ]] || continue
+		kill -CONT "$pid" || fail "could not resume $wanted workload"
 	done
 }
 
@@ -859,8 +880,8 @@ run_daemon_contract() {
 	# runnable, t2 and t3 stay acquired but have no runnable descendants, and
 	# best effort remains contended. The guaranteed domain must retain its
 	# same-run correct share and the runnable sibling consumes the domain.
-	stop_loads resman-t2
-	stop_loads resman-t3
+	pause_loads resman-t2
+	pause_loads resman-t3
 	measure_nodes actual-guaranteed-sibling-lending 60 "${nodes[@]}"
 	assert_within \
 		"$(measurement_value "$evidence_dir/actual-guaranteed-sibling-lending.txt" guaranteed_parent_share)" \
@@ -874,7 +895,7 @@ run_daemon_contract() {
 
 	# Only when the complete guaranteed domain is idle may best effort borrow
 	# the finite parent by kernel work conservation. No weight changes here.
-	stop_loads resman-t1
+	pause_loads resman-t1
 	measure_nodes actual-best-effort-borrowing 60 "${nodes[@]}"
 	assert_at_least \
 		"$(measurement_value "$evidence_dir/actual-best-effort-borrowing.txt" best_effort_parent_share)" \
@@ -883,9 +904,9 @@ run_daemon_contract() {
 		|| fail "best-effort borrowing was implemented by rewriting w_G"
 
 	# Restore contention before exercising live reload contracts.
-	start_user_cpu resman-t1 6
-	start_user_cpu resman-t2 6
-	start_user_cpu resman-t3 6
+	resume_loads resman-t1
+	resume_loads resman-t2
+	resume_loads resman-t3
 	for user in resman-t1 resman-t2 resman-t3; do
 		wait_for_leaf guaranteed "$user" 45 || fail "$user did not resume in its guaranteed leaf"
 	done
