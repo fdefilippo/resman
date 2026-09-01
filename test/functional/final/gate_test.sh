@@ -49,7 +49,7 @@ revision=\$(git -C "$repo_root" rev-parse HEAD)
 dir=\$REAL_KERNEL_EVIDENCE_ROOT/fake-\$scenario
 mkdir -p "\$dir"
 printf 'PASS\n' >"\$dir/result"
-printf 'scenario=%s\nsource_revision=%s\ncleanup=PASS\n' "\$scenario" "\$revision" >"\$dir/environment.txt"
+printf 'scenario=%s\nsource_revision=%s\ncleanup=PASS\nkernel=6.12.0-test\n' "\$scenario" "\$revision" >"\$dir/environment.txt"
 if [[ \$scenario == psi-refresh-neutrality ]]; then
 	cat >"\$dir/psi-refresh-neutrality.txt" <<'PROOF'
 psi_available=true
@@ -83,6 +83,10 @@ partial_coverage=PASS
 shutdown_restoration=PASS
 hotplug=BLOCKED
 PROOF
+	case \${FAKE_CPU_POINTS_PROOF_MUTATION:-} in
+		missing) sed -i '/^shutdown_restoration=/d' "\$dir/cpu-points-summary.txt" ;;
+		non-pass) sed -i 's/^shutdown_restoration=PASS\$/shutdown_restoration=FAIL/' "\$dir/cpu-points-summary.txt" ;;
+	esac
 fi
 EOF
 chmod 0755 "$tmp_dir/fake-go" "$tmp_dir/fake-smolvm" "$tmp_dir/fake-real-kernel"
@@ -105,6 +109,11 @@ pass_dir=$(find "$pass_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 grep -q $'^block-io\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
 grep -q $'^psi-refresh-neutrality\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
 grep -q $'^cpu-points-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
+grep -q $'^cpu-points-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/attempts.tsv"
+if grep -q '^cpu-points-real-kernel-real-kernel' "$pass_dir/attempts.tsv"; then
+	exit 1
+fi
+grep -q "CPU Points scheduler evidence scope: \`6.12.0-test\`" "$pass_dir/summary.md"
 grep -q $'^block-io-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
 grep -q $'^psi-refresh-neutrality-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
 
@@ -129,5 +138,19 @@ set -e
 failed_dir=$(find "$failed_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$failed_dir/result") == FAIL ]]
 grep -q $'^process-membership\tFAIL\t' "$failed_dir/matrix.tsv"
+
+for mutation in missing non-pass; do
+	proof_failure_root=$tmp_dir/proof-failure-$mutation
+	set +e
+	run_gate "$proof_failure_root" env RESMAN_REAL_KERNEL_HOST=fake.example \
+		FAKE_CPU_POINTS_PROOF_MUTATION=$mutation >/dev/null
+	proof_failure_status=$?
+	set -e
+	[[ $proof_failure_status -eq 1 ]]
+	proof_failure_dir=$(find "$proof_failure_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+	[[ $(< "$proof_failure_dir/result") == FAIL ]]
+	grep -q $'^cpu-points-real-kernel\tFAIL\treal-kernel\t' \
+		"$proof_failure_dir/matrix.tsv"
+done
 
 echo "PASS: final semantic gate contract"

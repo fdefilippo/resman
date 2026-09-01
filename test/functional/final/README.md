@@ -26,6 +26,9 @@ The last class is not a silent fallback. The SmolVM attempt remains in
 `attempts.tsv` as `BLOCKED`, while the required row names the substitute's host,
 kernel, source revision, isolation path, exact commands, and cleanup result.
 Evidence from another revision is rejected.
+The generated summary also names the exact kernel used for the CPU Points
+proportional measurement and scopes that scheduler result to the running kernel;
+it does not generalize the measurement to untested scheduler families.
 
 ## Running the complete gate
 

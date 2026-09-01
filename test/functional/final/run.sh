@@ -156,6 +156,7 @@ validate_external_evidence() {
 		cpu-points-proportional)
 			local proof=$dir/cpu-points-summary.txt
 			[[ -r $proof ]] || return 1
+			[[ -n $(field_value "$env_file" kernel) ]] || return 1
 			for key in policy_equality stale_low_separation full_contention \
 				class_priority_lending class_change_preservation partial_coverage \
 				shutdown_restoration; do
@@ -234,13 +235,17 @@ run_fallback_contract() {
 
 run_required_external() {
 	local id=$1 scenario=$2 supplied_dir=$3 reason=$4 status
+	local attempt_id=$id
+	if [[ $attempt_id != *-real-kernel ]]; then
+		attempt_id+=-real-kernel
+	fi
 	set +e
 	acquire_external_evidence "$scenario" "$supplied_dir"
 	status=$?
 	set -e
 	if [[ $status -eq 0 ]] \
 		&& validate_external_evidence "$scenario" "$EXTERNAL_EVIDENCE_DIR"; then
-		add_attempt "$id-real-kernel" PASS "$EXTERNAL_EVIDENCE_PROVENANCE" \
+		add_attempt "$attempt_id" PASS "$EXTERNAL_EVIDENCE_PROVENANCE" \
 			"$EXTERNAL_EVIDENCE_DIR" "$reason"
 		add_matrix_row "$id" PASS "$EXTERNAL_EVIDENCE_PROVENANCE" \
 			"$EXTERNAL_EVIDENCE_DIR" "$reason"
@@ -248,12 +253,12 @@ run_required_external() {
 	fi
 	local evidence=${EXTERNAL_EVIDENCE_DIR:-none}
 	if [[ $status -eq 77 ]]; then
-		add_attempt "$id-real-kernel" BLOCKED real-kernel "$evidence" \
+		add_attempt "$attempt_id" BLOCKED real-kernel "$evidence" \
 			"required real-kernel evidence was unavailable"
 		add_matrix_row "$id" BLOCKED real-kernel "$evidence" \
 			"$reason remains unproved"
 	else
-		add_attempt "$id-real-kernel" FAIL real-kernel "$evidence" \
+		add_attempt "$attempt_id" FAIL real-kernel "$evidence" \
 			"required real-kernel scenario failed or retained invalid evidence"
 		add_matrix_row "$id" FAIL real-kernel "$evidence" \
 			"$reason failed"
@@ -262,6 +267,11 @@ run_required_external() {
 
 write_summary() {
 	local overall=$1
+	local cpu_points_evidence cpu_points_kernel
+	cpu_points_evidence=$(awk -F '\t' '$1 == "cpu-points-real-kernel" { print $4 }' "$matrix_file")
+	if [[ -n $cpu_points_evidence && -r $cpu_points_evidence/environment.txt ]]; then
+		cpu_points_kernel=$(field_value "$cpu_points_evidence/environment.txt" kernel)
+	fi
 	{
 		printf '# ResMan final semantic regression gate\n\n'
 		printf -- '- Result: **%s**\n' "$overall"
@@ -269,6 +279,10 @@ write_summary() {
 		printf -- '- Required rows: %d\n' "$required_rows"
 		printf -- '- Failed rows: %d\n' "$failed_rows"
 		printf -- '- Blocked rows: %d\n\n' "$blocked_rows"
+		if [[ -n ${cpu_points_kernel:-} ]]; then
+			printf -- "- CPU Points scheduler evidence scope: \`%s\`; the proportional result applies to this running kernel and does not claim equivalent coverage for untested scheduler families.\n\n" \
+				"$cpu_points_kernel"
+		fi
 		printf '| Required contract | Status | Provenance | Evidence | Reason |\n'
 		printf '|---|---|---|---|---|\n'
 		while IFS=$'\t' read -r id status provenance evidence reason; do
