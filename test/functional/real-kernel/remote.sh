@@ -153,7 +153,7 @@ remote_root=/tmp/resman-final-$run_id
 commands_log=$evidence_dir/commands.log
 {
 	printf 'tar -C %q -cf - . | ssh -q -o BatchMode=yes %q %q\n' \
-		"$bundle_dir" "$remote_host" "install -d -m 0700 '$remote_root' && tar -C '$remote_root' -xf -"
+		"$bundle_dir" "$remote_host" "install -d -m 0700 '$remote_root' && tar --no-same-owner -C '$remote_root' -xf -"
 	printf 'ssh -q -o BatchMode=yes %q %q\n' "$remote_host" \
 		"'$remote_root/control.sh' start '$run_id' '$scenario' '$source_revision'"
 	printf 'ssh -q -o BatchMode=yes %q %q\n' "$remote_host" \
@@ -164,7 +164,7 @@ commands_log=$evidence_dir/commands.log
 
 tar -C "$bundle_dir" -cf - . \
 	| ssh -q -o BatchMode=yes "$remote_host" \
-		"install -d -m 0700 '$remote_root' && tar -C '$remote_root' -xf -"
+		"install -d -m 0700 '$remote_root' && tar --no-same-owner -C '$remote_root' -xf -"
 
 set +e
 remote_execution_started=1

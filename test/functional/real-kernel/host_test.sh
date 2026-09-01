@@ -5,6 +5,9 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 bash -n "$script_dir/cpu-points-run.sh"
 
+[[ $(grep -c 'tar --no-same-owner' "$script_dir/remote.sh") -eq 2 ]] \
+	|| { printf 'remote bundle transport must reject archived local ownership\n' >&2; exit 1; }
+
 # shellcheck disable=SC1091
 RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$script_dir/service-run.sh"
 

@@ -66,7 +66,7 @@ stop_children() {
 
 finish() {
 	local status=$?
-	local cleanup_status=PASS
+	local cleanup_status=PASS path
 	trap - EXIT INT TERM
 	set +e
 	stop_children
@@ -74,10 +74,13 @@ finish() {
 		grep ' \[ERROR\] ' "$active_log_file" >>"$evidence_dir/daemon-errors.txt" || true
 	fi
 	if [[ -n $active_cgroup_base && -e $active_cgroup_base ]]; then
-		cleanup_status=FAIL
 		find "$active_cgroup_base" -maxdepth 4 -type f -name cgroup.procs \
 			-exec sh -c 'printf "%s:" "$1"; tr "\n" "," <"$1"; echo' _ {} \; \
 			>"$evidence_dir/remaining-cgroup-processes.txt" 2>&1 || true
+		while IFS= read -r path; do
+			rmdir "$path" 2>/dev/null || true
+		done < <(find "$active_cgroup_base" -depth -type d 2>/dev/null)
+		[[ ! -e $active_cgroup_base ]] || cleanup_status=FAIL
 	fi
 	if [[ -n $active_work_root ]]; then
 		case "$active_work_root" in
