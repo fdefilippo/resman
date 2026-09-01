@@ -8,6 +8,7 @@ trap 'rm -rf -- "$tmp_dir"' EXIT
 
 for script in "$script_dir/run.sh" "$script_dir/gate_test.sh" \
 	"$repo_root/test/functional/real-kernel/run.sh" \
+	"$repo_root/test/functional/real-kernel/cpu-points-run.sh" \
 	"$repo_root/test/functional/real-kernel/remote.sh"; do
 	bash -n "$script"
 done
@@ -62,7 +63,7 @@ decision_ema_after=5
 system_observation_before=20
 system_observation_after=1
 PROOF
-else
+elif [[ \$scenario == block-io-all-dimensions ]]; then
 	cat >"\$dir/block-io-summary.txt" <<'PROOF'
 io_max_available=true
 cached_and_socket_false_activation=PASS
@@ -70,6 +71,17 @@ read_bps=PASS
 write_bps=PASS
 read_iops=PASS
 write_iops=PASS
+PROOF
+else
+	cat >"\$dir/cpu-points-summary.txt" <<'PROOF'
+policy_equality=PASS
+stale_low_separation=PASS
+full_contention=PASS
+class_priority_lending=PASS
+class_change_preservation=PASS
+partial_coverage=PASS
+shutdown_restoration=PASS
+hotplug=BLOCKED
 PROOF
 fi
 EOF
@@ -89,9 +101,10 @@ pass_root=$tmp_dir/pass
 run_gate "$pass_root" env RESMAN_REAL_KERNEL_HOST=fake.example >/dev/null
 pass_dir=$(find "$pass_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$pass_dir/result") == PASS ]]
-[[ $(wc -l <"$pass_dir/matrix.tsv") -eq 14 ]]
+[[ $(wc -l <"$pass_dir/matrix.tsv") -eq 16 ]]
 grep -q $'^block-io\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
 grep -q $'^psi-refresh-neutrality\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
+grep -q $'^cpu-points-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
 grep -q $'^block-io-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
 grep -q $'^psi-refresh-neutrality-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
 
@@ -103,8 +116,8 @@ set -e
 [[ $blocked_status -eq 77 ]]
 blocked_dir=$(find "$blocked_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$blocked_dir/result") == BLOCKED ]]
-grep -q '^blocked_rows=2$' "$blocked_dir/environment.txt"
-[[ $(wc -l <"$blocked_dir/matrix.tsv") -eq 14 ]]
+grep -q '^blocked_rows=3$' "$blocked_dir/environment.txt"
+[[ $(wc -l <"$blocked_dir/matrix.tsv") -eq 16 ]]
 
 failed_root=$tmp_dir/failed
 set +e

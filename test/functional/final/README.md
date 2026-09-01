@@ -18,8 +18,9 @@ cannot produce a whole-gate PASS.
 - `smolvm`: real cgroup membership, RAM and CPU quotas, process reconciliation,
   missing-controller startup, MCP reload, and the shipped rootful Podman
   contract in disposable 2-vCPU/2-GiB guests;
-- `remote-real-kernel`: an explicitly selected disposable test host used only
-  when the SmolVM kernel lacks PSI or `io.max`.
+- `remote-real-kernel`: an explicitly selected laboratory host used when the
+  SmolVM kernel lacks PSI or `io.max`, and for the mandatory CPU Points
+  proportional-allocation proof that needs synchronized 60-second windows.
 
 The last class is not a silent fallback. The SmolVM attempt remains in
 `attempts.tsv` as `BLOCKED`, while the required row names the substitute's host,
@@ -28,19 +29,33 @@ Evidence from another revision is rejected.
 
 ## Running the complete gate
 
-The current SmolVM 1.9.0 kernel lacks PSI and `io.max`, so provide a
-non-production root test host with both capabilities:
+The current SmolVM 1.9.0 kernel lacks PSI and `io.max`; CPU Points also needs a
+stable real scheduler. Provide a non-production root test host with those
+capabilities:
 
 ```bash
 RESMAN_REAL_KERNEL_HOST=root@terra make test-functional-final
 ```
 
-The remote runner refuses to start while another `resman` process is active. It
-copies the current clean revision's binary and runner into a unique directory
+The remote runner serializes ownership of the host. General source scenarios
+refuse to start while another `resman` process is active; the CPU Points
+scenario explicitly quiesces and later restores the installed unit. The runner
+copies the current clean revision's binary and script into a unique directory
 below `/tmp`, creates only uniquely named cgroups, retrieves the evidence, and
 removes the remote directory. Each scenario verifies that its cgroup is absent
 after shutdown. The configured fixture user defaults to `pippo` and can be
 overridden with `RESMAN_REAL_KERNEL_USER`.
+
+The CPU Points scenario is bound to the source revision rather than the
+installed RPM. It temporarily quiesces an active packaged service, restores it
+from the cleanup trap, and builds two independent raw-cgroup oracle hierarchies
+beside the ResMan-owned hierarchy. Its production-valid equality vector is 300,
+300 and 200 mapped points plus the aggregate 100-point best-effort entitlement
+inside a 900-point parent. Evidence contains the correct and deliberately
+stale-low 60-second samples, cross-cgroup read skew, parent throttling, live
+reload preservation, partial process coverage, release and shutdown recovery.
+CPU hotplug is reported as `BLOCKED` unless a separate run explicitly opts into
+that host mutation; it is never silently inferred from an unchanged topology.
 
 Previously collected evidence may be supplied explicitly instead:
 

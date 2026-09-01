@@ -62,7 +62,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # ============================================================================
 
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
-	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
+	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
 
@@ -210,6 +210,9 @@ test-functional-real-kernel-psi:
 
 test-functional-real-kernel-block-io:
 	test/functional/real-kernel/remote.sh block-io-all-dimensions "$(RESMAN_REAL_KERNEL_HOST)"
+
+test-functional-real-kernel-cpu-points:
+	test/functional/real-kernel/remote.sh cpu-points-proportional "$(RESMAN_REAL_KERNEL_HOST)"
 
 # Compose focused tests, SmolVM scenarios, and capability-specific real-kernel evidence.
 test-functional-final:
@@ -544,6 +547,7 @@ help:
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
+	@echo "    test-functional-real-kernel-cpu-points - Prove CPU Points on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-final - Run the final required semantic scenario matrix"
 	@echo "    test-functional-final-unit - Test final-matrix failure and capability semantics"
 	@echo "    ci-quality    - Run the quality gates shared by pull requests and releases"

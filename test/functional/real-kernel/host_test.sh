@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
+bash -n "$script_dir/cpu-points-run.sh"
+
 # shellcheck disable=SC1091
 RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$script_dir/service-run.sh"
 

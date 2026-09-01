@@ -153,6 +153,19 @@ validate_external_evidence() {
 				esac
 			done
 			;;
+		cpu-points-proportional)
+			local proof=$dir/cpu-points-summary.txt
+			[[ -r $proof ]] || return 1
+			for key in policy_equality stale_low_separation full_contention \
+				class_priority_lending class_change_preservation partial_coverage \
+				shutdown_restoration; do
+				[[ $(field_value "$proof" "$key") == PASS ]] || return 1
+			done
+			case "$(field_value "$proof" hotplug)" in
+				PASS|BLOCKED) ;;
+				*) return 1 ;;
+			esac
+			;;
 	esac
 }
 
@@ -216,6 +229,34 @@ run_fallback_contract() {
 			"no valid current-revision substitute evidence"
 		add_matrix_row "$id" BLOCKED combined "$SMOLVM_ATTEMPT_EVIDENCE" \
 			"$reason remains unproved: SmolVM was BLOCKED and no valid real-kernel evidence was available"
+	fi
+}
+
+run_required_external() {
+	local id=$1 scenario=$2 supplied_dir=$3 reason=$4 status
+	set +e
+	acquire_external_evidence "$scenario" "$supplied_dir"
+	status=$?
+	set -e
+	if [[ $status -eq 0 ]] \
+		&& validate_external_evidence "$scenario" "$EXTERNAL_EVIDENCE_DIR"; then
+		add_attempt "$id-real-kernel" PASS "$EXTERNAL_EVIDENCE_PROVENANCE" \
+			"$EXTERNAL_EVIDENCE_DIR" "$reason"
+		add_matrix_row "$id" PASS "$EXTERNAL_EVIDENCE_PROVENANCE" \
+			"$EXTERNAL_EVIDENCE_DIR" "$reason"
+		return
+	fi
+	local evidence=${EXTERNAL_EVIDENCE_DIR:-none}
+	if [[ $status -eq 77 ]]; then
+		add_attempt "$id-real-kernel" BLOCKED real-kernel "$evidence" \
+			"required real-kernel evidence was unavailable"
+		add_matrix_row "$id" BLOCKED real-kernel "$evidence" \
+			"$reason remains unproved"
+	else
+		add_attempt "$id-real-kernel" FAIL real-kernel "$evidence" \
+			"required real-kernel scenario failed or retained invalid evidence"
+		add_matrix_row "$id" FAIL real-kernel "$evidence" \
+			"$reason failed"
 	fi
 }
 
@@ -295,6 +336,10 @@ main() {
 		"Prometheus transitions count confirmed outcomes and SQLite failure cannot report success" \
 		"$go_bin" test -count=1 ./state -run \
 		'^(TestControlCycleRecordsOperationalOutcomes|TestDeactivationMetricsRequireConfirmedTransition|TestWriteDatabaseMetricsReportsTransactionFailureAndRetries)$'
+	run_local_contract cpu-points-invariants \
+		"CPU Points parsing, topology, mutation ordering, reload, capacity, persistence, and bounded observations agree" \
+		"$go_bin" test -count=1 ./internal/cpupoints ./cgroup ./config ./reloader ./state ./metrics ./database -run \
+		'^(TestCPUPointConstructorsEnforceDistinctRanges|TestPlanParentQuotaUsesLiveDenominatorAndExactFloor|TestKernelCPUWeightRejectsInsteadOfClamping|TestPolicyMapFirstEqualsPreservesCompleteUsername|TestPolicyLoaderValidatesTheCompleteCapacityInvariant|TestLiveCapacityProviderRequiresTrustworthyInitialRead|TestLiveCapacityProviderSeesTopologyChangesWithoutObservationCache|TestLiveCapacityProviderRetainsExactPlanAcrossFailureAndRetries|TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel|TestCPUPointsLeafIsFullyConfiguredBeforeIngress|TestCPUPointsReloadRejectsActiveClassChangeBeforeAnyKernelWrite|TestCPUPointsReloadFailureAtEveryMutationRetainsSafeRetryIntent|TestCPUPointsOnlineCPUChangeOnlyReprogramsParentQuota|TestCPUPointsAdmissionAndDeparturePreserveAggregateOrdering|TestCPUPointsFailedAdmissionRetainsConservativeHighWaterMark|TestCPUPointsRAMActiveTransitionsFailBeforeCgroupMutation|TestWatcherTreatsMainConfigAndCPUPointsMapAsOneCandidateEpoch|TestCompositeReloadRollsBackWhenMapChangesDuringApplicationBeforeAcknowledgement|TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting|TestOperationalCPUPointsStatesRequireCompleteComparableDeltas|TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesStaleValues)$'
 
 	run_required_smolvm memory-standalone memory-only \
 		"RAM eligibility creates a standalone CPU-unlimited cgroup"
@@ -314,6 +359,9 @@ main() {
 	run_fallback_contract psi-refresh-neutrality psi-refresh-neutrality 1 psi-refresh-neutrality \
 		"${FINAL_GATE_PSI_EVIDENCE:-}" \
 		"PSI observation refreshes do not advance decision CPU or EMA"
+	run_required_external cpu-points-real-kernel cpu-points-proportional \
+		"${FINAL_GATE_CPU_POINTS_EVIDENCE:-}" \
+		"production-valid CPU Points, independent same-run oracles, lending, reload, partial coverage, release, and shutdown are proved"
 
 	local overall exit_code
 	if [[ $failed_rows -gt 0 ]]; then

@@ -90,7 +90,7 @@ remote_host=${2:-${RESMAN_REAL_KERNEL_HOST:-}}
 # PASS can never be read as coverage of the wrong artifact.
 scenario_family=source
 case "$scenario" in
-	psi-refresh-neutrality|block-io-all-dimensions) ;;
+	psi-refresh-neutrality|block-io-all-dimensions|cpu-points-proportional) ;;
 	service-start-stop|service-reload-lifecycle|service-fatal-config) scenario_family=package ;;
 	prometheus-scrape|mcp-https-endtoend) scenario_family=package ;;
 	prometheus-user-series-lifecycle) scenario_family=package ;;
@@ -132,8 +132,12 @@ if [[ $scenario_family == package ]]; then
 	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/run.sh"
 	install -m 0755 "$repo_root/docs/generate-tls-certs.sh" "$bundle_dir/generate-tls-certs.sh"
 else
-	install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
-	install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
+	if [[ $scenario == cpu-points-proportional ]]; then
+		install -m 0755 "$script_dir/cpu-points-run.sh" "$bundle_dir/run.sh"
+	else
+		install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
+		install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
+	fi
 	(
 		cd "$repo_root"
 		CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
