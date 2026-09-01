@@ -51,6 +51,23 @@ func TestCurrentReleaseVersionSurfacesAgree(t *testing.T) {
 	}
 }
 
+func TestCPUPointsCutoverDoesNotReuseLegacyCPUModelVersion(t *testing.T) {
+	const lastLegacyCPUModelVersion = "1.30.8"
+
+	root := repositoryRoot(t)
+	makefile := readTextFile(t, filepath.Join(root, "Makefile"))
+	version := makeVariable(t, makefile, "VERSION")
+	if version == lastLegacyCPUModelVersion {
+		t.Fatalf("CPU Points cutover reuses released legacy CPU model version %s", version)
+	}
+
+	guide := readTextFile(t, filepath.Join(root, "docs/UPGRADING.md"))
+	required := "through " + lastLegacyCPUModelVersion + " to ResMan " + version
+	if !strings.Contains(guide, required) {
+		t.Errorf("upgrade guide does not connect the last legacy CPU model to the CPU Points release via %q", required)
+	}
+}
+
 func makeVariable(t *testing.T, makefile, name string) string {
 	t.Helper()
 	prefix := name + " = "
