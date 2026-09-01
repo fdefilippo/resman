@@ -18,9 +18,10 @@ type blockIOCounters struct {
 }
 
 type blockIOAccountingState struct {
-	path   string
-	base   blockIOCounters
-	offset blockIOCounters
+	path        string
+	base        blockIOCounters
+	offset      blockIOCounters
+	unavailable bool
 }
 
 // UserCgroupPlacementIncompleteError reports a transient split between the
@@ -107,11 +108,20 @@ func (m *Manager) logicalBlockIOCounters(uid int) (blockIOCounters, error) {
 			return blockIOCounters{}, err
 		}
 
+		wasUnavailable := state.unavailable
 		m.blockIOMu.Lock()
 		current, unchanged := m.blockIOAccounting[uid]
 		unchanged = unchanged && current == state
+		if unchanged && wasUnavailable {
+			state.base = raw
+			state.unavailable = false
+			m.blockIOAccounting[uid] = state
+		}
 		m.blockIOMu.Unlock()
 		if unchanged {
+			if wasUnavailable {
+				return state.offset, nil
+			}
 			logical, err := state.offset.add(raw.delta(state.base))
 			if err != nil {
 				return blockIOCounters{}, fmt.Errorf("calculate logical block I/O counters for UID %d: %w", uid, err)
@@ -130,7 +140,7 @@ func (m *Manager) initializeBlockIOAccounting(uid int) (blockIOAccountingState, 
 	if !exists {
 		return blockIOAccountingState{}, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
-	raw, err := m.readManagedBlockIOCounters(path)
+	raw, unavailable, err := m.readPlacementBlockIOCounters(path)
 	if err != nil {
 		return blockIOAccountingState{}, err
 	}
@@ -138,7 +148,7 @@ func (m *Manager) initializeBlockIOAccounting(uid int) (blockIOAccountingState, 
 		return blockIOAccountingState{}, fmt.Errorf("cgroup placement for UID %d changed while initializing block I/O counters", uid)
 	}
 
-	initialized := blockIOAccountingState{path: path, base: raw}
+	initialized := blockIOAccountingState{path: path, base: raw, unavailable: unavailable}
 	m.blockIOMu.Lock()
 	if current, alreadyInitialized := m.blockIOAccounting[uid]; alreadyInitialized {
 		initialized = current
@@ -218,7 +228,7 @@ func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath s
 		retErr = errors.Join(retErr, cleanupErr)
 	}()
 
-	initial, err := m.readManagedBlockIOCounters(desiredPath)
+	initial, unavailable, err := m.readPlacementBlockIOCounters(desiredPath)
 	if err != nil {
 		return result, fmt.Errorf("read initial block I/O counters for UID %d: %w", uid, err)
 	}
@@ -226,7 +236,7 @@ func (m *Manager) createAndPopulateUserCgroup(uid int, sharedPath, desiredPath s
 		return result, fmt.Errorf("track cgroup placement for UID %d: %w", uid, err)
 	}
 	m.blockIOMu.Lock()
-	m.blockIOAccounting[uid] = blockIOAccountingState{path: desiredPath, base: initial}
+	m.blockIOAccounting[uid] = blockIOAccountingState{path: desiredPath, base: initial, unavailable: unavailable}
 	m.blockIOMu.Unlock()
 
 	if sharedPath == "" {
@@ -309,7 +319,7 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 	if filepath.Clean(accounting.path) != filepath.Clean(oldPath) {
 		return result, fmt.Errorf("tracked block I/O source for UID %d is %s, expected %s", uid, accounting.path, oldPath)
 	}
-	newBase, err := m.readManagedBlockIOCounters(newPath)
+	newBase, newUnavailable, err := m.readPlacementBlockIOCounters(newPath)
 	if err != nil {
 		return result, fmt.Errorf("read destination block I/O counters for UID %d: %w", uid, err)
 	}
@@ -340,19 +350,22 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 			rollbackErr,
 		)
 	}
-	oldFinal, err := m.readManagedBlockIOCounters(oldPath)
+	oldFinal, oldFinalUnavailable, err := m.readPlacementBlockIOCounters(oldPath)
 	if err != nil {
 		return result, errors.Join(
 			fmt.Errorf("read final source block I/O counters for UID %d: %w", uid, err),
 			m.rollbackUserCgroupTransition(uid, moved, oldPath),
 		)
 	}
-	logicalFinal, err := accounting.offset.add(oldFinal.delta(accounting.base))
-	if err != nil {
-		return result, errors.Join(
-			fmt.Errorf("calculate final logical block I/O counters for UID %d: %w", uid, err),
-			m.rollbackUserCgroupTransition(uid, moved, oldPath),
-		)
+	logicalFinal := accounting.offset
+	if !accounting.unavailable && !oldFinalUnavailable {
+		logicalFinal, err = accounting.offset.add(oldFinal.delta(accounting.base))
+		if err != nil {
+			return result, errors.Join(
+				fmt.Errorf("calculate final logical block I/O counters for UID %d: %w", uid, err),
+				m.rollbackUserCgroupTransition(uid, moved, oldPath),
+			)
+		}
 	}
 
 	if err := m.trackCgroupPath(uid, newPath); err != nil {
@@ -363,9 +376,10 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 	}
 	m.blockIOMu.Lock()
 	m.blockIOAccounting[uid] = blockIOAccountingState{
-		path:   newPath,
-		base:   newBase,
-		offset: logicalFinal,
+		path:        newPath,
+		base:        newBase,
+		offset:      logicalFinal,
+		unavailable: newUnavailable,
 	}
 	m.blockIOMu.Unlock()
 	cleanupNew = false
@@ -467,4 +481,19 @@ func (m *Manager) readManagedBlockIOCounters(cgroupPath string) (blockIOCounters
 		return m.readBlockIOStats(cgroupPath)
 	}
 	return readBlockIOCounters(cgroupPath)
+}
+
+// readPlacementBlockIOCounters permits CPU/RAM placement to proceed when the
+// I/O controller is deliberately disabled. The unavailable marker keeps a
+// later first readable sample as a baseline instead of fabricating prior I/O.
+func (m *Manager) readPlacementBlockIOCounters(cgroupPath string) (blockIOCounters, bool, error) {
+	counters, err := m.readManagedBlockIOCounters(cgroupPath)
+	if err == nil {
+		return counters, false, nil
+	}
+	cfg := m.getConfig()
+	if cfg != nil && !cfg.GetIOEnabled() && errors.Is(err, os.ErrNotExist) {
+		return blockIOCounters{}, true, nil
+	}
+	return blockIOCounters{}, false, err
 }

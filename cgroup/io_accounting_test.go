@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
 func writeTestIOStat(t *testing.T, path string, readOps, writeOps uint64) {
@@ -71,6 +72,75 @@ func TestLogicalBlockIOCountersRemainMonotonicAcrossPlacementTransition(t *testi
 	}
 	if after.readOps != 12 || after.writeOps != 16 {
 		t.Fatalf("new logical counters = %+v, want 12/16 ops", after)
+	}
+}
+
+func TestCPUPointsIngressDoesNotRequireIOStatWhenIOLimitingIsDisabled(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	manager.cfg.IOEnabled = false
+	manager.blockIOAccounting = make(map[int]blockIOAccountingState)
+	manager.scanProcessIDs = func() (map[int][]int, error) { return map[int][]int{}, nil }
+	if err := os.MkdirAll(filepath.Dir(manager.createdCgroupsFile), 0700); err != nil {
+		t.Fatalf("create cgroup state directory: %v", err)
+	}
+
+	domain := filepath.Join(root, "resman", "limited", cpuPointsGuaranteedDomain)
+	leaf := filepath.Join(domain, "user_1000")
+	if err := os.MkdirAll(leaf, 0755); err != nil {
+		t.Fatalf("create CPU Points leaf fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "cgroup.procs"), nil, 0644); err != nil {
+		t.Fatalf("create cgroup.procs fixture: %v", err)
+	}
+	weight, err := cpupoints.NewKernelCPUWeight(300)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, result, err := manager.EnsureCPUPointsUserPlacement(1000, domain, weight)
+	if err != nil {
+		t.Fatalf("EnsureCPUPointsUserPlacement() error = %v", err)
+	}
+	if got != leaf || result.Applied() {
+		t.Fatalf("placement = %q result=%+v, want empty-workload leaf %q", got, result, leaf)
+	}
+	accounting, ok := manager.blockIOAccounting[1000]
+	if !ok || !accounting.unavailable || accounting.path != leaf {
+		t.Fatalf("block I/O accounting = %+v, %t; want unavailable state at %s", accounting, ok, leaf)
+	}
+	if _, _, _, _, err := manager.GetIOStats(1000); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GetIOStats() error = %v, want explicit unavailable io.stat", err)
+	}
+}
+
+func TestUnavailableBlockIOPlacementUsesFirstReadableSampleAsBaseline(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.IOEnabled = false
+	manager := &Manager{
+		cfg: cfg,
+		blockIOAccounting: map[int]blockIOAccountingState{
+			1000: {path: "/managed/user_1000", offset: blockIOCounters{readOps: 7}, unavailable: true},
+		},
+	}
+	current := uint64(100)
+	manager.readBlockIOStats = func(string) (blockIOCounters, error) {
+		return blockIOCounters{readOps: current}, nil
+	}
+
+	baseline, err := manager.logicalBlockIOCounters(1000)
+	if err != nil {
+		t.Fatalf("first readable logicalBlockIOCounters() error: %v", err)
+	}
+	if baseline.readOps != 7 {
+		t.Fatalf("first readable logical counter = %d, want preserved offset 7", baseline.readOps)
+	}
+	current = 105
+	measured, err := manager.logicalBlockIOCounters(1000)
+	if err != nil {
+		t.Fatalf("second logicalBlockIOCounters() error: %v", err)
+	}
+	if measured.readOps != 12 {
+		t.Fatalf("second logical counter = %d, want offset 7 plus measured delta 5", measured.readOps)
 	}
 }
 

@@ -532,13 +532,36 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) error {
 		if len(newRequirements) > 0 {
 			sharedPath := filepath.Join(currentConfig.CgroupRoot, currentConfig.CgroupBase, "limited")
 			if _, err := os.Stat(sharedPath); err == nil {
-				subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
-				for _, requirement := range newRequirements {
-					if _, err := m.enableControllerInterfaces(subtreeControl, []controllerRequirement{requirement}, []controllerRequirement{requirement}); err != nil {
-						disableControllerFeature(newConfig, requirement)
+				scopes := []string{sharedPath}
+				for _, domain := range []string{cpuPointsGuaranteedDomain, cpuPointsBestEffortDomain} {
+					domainPath := filepath.Join(sharedPath, domain)
+					if _, statErr := os.Stat(domainPath); statErr == nil {
+						scopes = append(scopes, domainPath)
+					} else if !os.IsNotExist(statErr) {
+						for _, requirement := range newRequirements {
+							disableControllerFeature(newConfig, requirement)
+						}
 						capabilityErrors = append(capabilityErrors,
-							fmt.Errorf("could not enable newly requested feature in existing shared cgroup %s: %w", sharedPath, err),
+							fmt.Errorf("could not inspect existing CPU Points domain %s before enabling resource features: %w", domainPath, statErr),
 						)
+						scopes = nil
+						break
+					}
+				}
+				for _, requirement := range newRequirements {
+					for _, scope := range scopes {
+						subtreeControl := filepath.Join(scope, "cgroup.subtree_control")
+						if _, enableErr := m.enableControllerInterfaces(subtreeControl, []controllerRequirement{requirement}, []controllerRequirement{requirement}); enableErr != nil {
+							scopeKind := "existing shared cgroup"
+							if scope != sharedPath {
+								scopeKind = "existing CPU Points domain"
+							}
+							disableControllerFeature(newConfig, requirement)
+							capabilityErrors = append(capabilityErrors,
+								fmt.Errorf("could not enable newly requested feature in %s %s: %w", scopeKind, scope, enableErr),
+							)
+							break
+						}
 					}
 				}
 			} else if !os.IsNotExist(err) {

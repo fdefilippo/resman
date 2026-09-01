@@ -470,6 +470,46 @@ func TestUpdateConfigEnablesNewFeatureInExistingSharedCgroup(t *testing.T) {
 	assertFileContent(t, subtreeControl, "+memory")
 }
 
+func TestUpdateConfigEnablesNewFeatureThroughExistingCPUPointsDomains(t *testing.T) {
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "resman", "limited")
+	scopes := []string{
+		sharedPath,
+		filepath.Join(sharedPath, cpuPointsGuaranteedDomain),
+		filepath.Join(sharedPath, cpuPointsBestEffortDomain),
+	}
+	for _, scope := range scopes {
+		if err := os.MkdirAll(scope, 0755); err != nil {
+			t.Fatalf("create CPU Points scope %s: %v", scope, err)
+		}
+		if err := os.WriteFile(filepath.Join(scope, "cgroup.subtree_control"), []byte("cpu"), 0644); err != nil {
+			t.Fatalf("create subtree_control fixture at %s: %v", scope, err)
+		}
+	}
+	current := config.DefaultConfig()
+	current.CgroupRoot = root
+	current.CgroupBase = "resman"
+	manager := &Manager{
+		cfg: current,
+		usableControllerInterfaces: map[string]bool{
+			"cpu.max":    true,
+			"cpu.weight": true,
+			"io.max":     true,
+		},
+	}
+	requested := config.DefaultConfig()
+	requested.CgroupRoot = root
+	requested.CgroupBase = "resman"
+	requested.IOEnabled = true
+
+	if err := manager.UpdateConfig(requested); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	for _, scope := range scopes {
+		assertFileContent(t, filepath.Join(scope, "cgroup.subtree_control"), "+io")
+	}
+}
+
 func TestUpdateConfigDoesNotPublishFeatureWhenSharedControllerCannotBeEnabled(t *testing.T) {
 	root := t.TempDir()
 	sharedPath := filepath.Join(root, "resman", "limited")
