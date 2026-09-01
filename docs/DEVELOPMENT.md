@@ -387,6 +387,11 @@ stderr without copying the potentially sensitive failed record.
   restart-required in practice, whatever the table says.
 - Published configuration and the effective state of constructed components **MUST NOT**
   be allowed to diverge silently. If they can, the divergence is surfaced.
+- When one runtime policy depends on multiple files, a reload **MUST** build one
+  detached candidate from the effective lifecycle values, confirm every source
+  before mutation and again before acknowledgement, and publish only after the
+  complete kernel/component state has been read back. A safe partial mutation
+  retains a typed runtime retry intent independently of watcher digest bookkeeping.
 
 **Why.** Before `resman-4pw.9`, `preserveRestartRequiredConfig` was a hand-written
 list that omitted `METRICS_DB_*` and `CREATED_CGROUPS_FILE`, while
@@ -394,7 +399,7 @@ list that omitted `METRICS_DB_*` and `CREATED_CGROUPS_FILE`, while
 remediation moved every public key into `config/lifecycle.go`, rejects static changes
 explicitly, and uses one configuration epoch across control-cycle consumers.
 
-*Finding: resman-4pw.9*
+*Findings: resman-4pw.9, resman-vcs.6*
 
 ## Rule 10 — Acknowledge, never sleep
 

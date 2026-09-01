@@ -2,6 +2,7 @@ package cpupoints
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os/user"
 	"path/filepath"
@@ -128,10 +129,11 @@ func (g UserGuarantee) SourceLine() int { return g.line }
 
 // PolicySource identifies the exact opened object from which a snapshot was built.
 type PolicySource struct {
-	path  PolicyMapPath
-	dev   uint64
-	inode uint64
-	size  int64
+	path   PolicyMapPath
+	dev    uint64
+	inode  uint64
+	size   int64
+	digest [sha256.Size]byte
 }
 
 // Path returns the validated source path.
@@ -145,6 +147,9 @@ func (s PolicySource) Inode() uint64 { return s.inode }
 
 // Size returns the verified source size in bytes.
 func (s PolicySource) Size() int64 { return s.size }
+
+// Digest returns the content identity validated while the policy was loaded.
+func (s PolicySource) Digest() [sha256.Size]byte { return s.digest }
 
 // PolicySnapshot is one immutable, completely resolved CPU Points policy epoch.
 type PolicySnapshot struct {

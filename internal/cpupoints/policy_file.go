@@ -1,6 +1,7 @@
 package cpupoints
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -175,11 +176,28 @@ func (l *PolicyLoader) readSafePolicyFile(path PolicyMapPath) ([]byte, PolicySou
 		return nil, PolicySource{}, fmt.Errorf("CPU Points map %s has unsupported file metadata type %T", path.String(), after.Sys())
 	}
 	return data, PolicySource{
-		path:  path,
-		dev:   uint64(stat.Dev),
-		inode: stat.Ino,
-		size:  after.Size(),
+		path:   path,
+		dev:    uint64(stat.Dev),
+		inode:  stat.Ino,
+		size:   after.Size(),
+		digest: sha256.Sum256(data),
 	}, nil
+}
+
+// ConfirmSource proves that the map path still names the exact safe object and
+// content from which a candidate snapshot was built.
+func (l *PolicyLoader) ConfirmSource(source PolicySource) error {
+	data, current, err := l.readSafePolicyFile(source.path)
+	if err != nil {
+		return fmt.Errorf("confirm CPU Points map source: %w", err)
+	}
+	if current.dev != source.dev || current.inode != source.inode || current.size != source.size || current.digest != source.digest {
+		return fmt.Errorf("CPU Points map %s changed after candidate validation", source.path.String())
+	}
+	if sha256.Sum256(data) != source.digest {
+		return fmt.Errorf("CPU Points map %s content changed after candidate validation", source.path.String())
+	}
+	return nil
 }
 
 func (l *PolicyLoader) validateOpenedFile(path PolicyMapPath, info os.FileInfo) (int, error) {

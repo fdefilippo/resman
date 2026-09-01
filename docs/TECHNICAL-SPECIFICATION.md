@@ -578,35 +578,55 @@ only `scheme://host[:port]`, never URL userinfo, path, query values, or fragment
 
 **Responsibilities:**
 - Apply configuration changes dynamically
+- Treat the main configuration and strict CPU Points map as one confirmed
+  candidate epoch while retaining independent content identities for both files
 - Classify every public configuration key in the authoritative lifecycle table
   in `config/lifecycle.go`
 - Reject restart-required changes explicitly while preserving their effective values
 - Publish one configuration epoch across cgroup, state, metrics, and application consumers
 
 **Reload Order:**
-1. Close the configuration epoch barrier to new control cycles and wait for old
+1. Read and validate the main configuration, apply lifecycle classification,
+   then safely load and resolve the effective CPU Points map outside runtime locks
+2. Confirm both source identities and content digests before kernel reconciliation
+3. Close the configuration epoch barrier to new control cycles and wait for old
    cycles to drain
-2. Compare all public keys with the lifecycle table and restore every
+4. Compare all public keys with the lifecycle table and restore every
    restart-required key to its effective value
-3. Apply dynamic values to logging, cgroup, state, metrics, and the application
+5. Reject an active guaranteed/best-effort class change before any cgroup write;
+   otherwise reconcile parent quota, domain weights, and existing leaf weights
+   with read-back verification and conservative ordering
+6. Apply dynamic values to logging, cgroup, state, metrics, and the application
    runtime hook, including PSI watcher reconciliation
-4. Publish the epoch only after every consumer has received the same effective
-   configuration
-5. Return component errors and an explicit restart-required error listing the
+7. Confirm both files again and publish only after every consumer and kernel
+   interface represent the same effective configuration and policy
+8. Return component errors and an explicit restart-required error listing the
    rejected key names; configuration values and credentials are never included
-6. Let the watcher classify the complete error tree and emit one terminal outcome
+9. Let the watcher classify the complete error tree and emit one terminal outcome
    record: pure restart-required rejection is `WARN`, while genuine and mixed
    failures are `ERROR`
+
+A safe partial kernel mutation never advances the public configuration or policy
+snapshot. It creates one typed internal reconciliation intent for the old
+authoritative epoch. The control-cycle owner retries that intent without waiting
+for another file event and reports a bounded degraded error until exact read-back
+convergence clears it. Class-change preflight failures remain unprocessed so the
+watcher retries them after the affected users have been released.
 
 **Key Functions:**
 - `NewReloader(state, cgroup, metrics, prometheus, hooks...)`: Creates reloader
 - `OnConfigChange(newConfig)`: Applies new configuration
+- `OnConfigCandidate(newConfig, confirm)`: Applies one confirmed main/map candidate
 - `config.ApplyReloadLifecycle(effective, requested)`: Enforces the lifecycle table
 - `state.Manager.BeginConfigUpdate()`: Starts the cross-component epoch barrier
 
 **Dynamic Updates:**
 - `USER_EXCLUDE_LIST`: Applied immediately, cache cleared
 - `CPU_THRESHOLD`: Applied on next control cycle
+- `CPU_RESERVE_POINTS`, `CPU_BEST_EFFORT_POINTS`, and map contents: Reconciled
+  dynamically as one CPU Points epoch
+- `CPU_POINTS_FILE`: Its active path is restart-required; a rejected new path is
+  never opened by the reload candidate
 - `POLLING_INTERVAL`: Applied on next cycle
 - `USERNAME_CACHE_TTL`: Applied by the collector regardless of database enablement
 - `METRICS_DB_RETENTION_DAYS`: Applied to cleanup and MCP database status
@@ -1147,17 +1167,19 @@ later record where recovery is possible.
 ### 11.2 Reload Process
 
 ```
-1. Config watcher detects change
+1. Config watcher detects a main-configuration or CPU Points map change
 2. Debounce (2 second delay)
 3. Serialize the reload with periodic and SIGHUP-triggered reloads
-4. Load new configuration
-5. Validate configuration
-6. Call reloader.OnConfigChange()
-7. Hold new control cycles outside the configuration epoch while every component updates
-8. Preserve static effective values and report every rejected restart-required key
-9. Record the processed file version even after a partial component failure
-10. Emit one terminal outcome record with deterministic rejected fields and whether
-    the file digest was recorded; lifecycle `INFO`/`DEBUG` records remain separate
+4. Capture independent content digests for both files
+5. Load the main configuration, apply lifecycle, and load the effective map
+6. Confirm both sources before and after kernel reconciliation
+7. Call `reloader.OnConfigCandidate()`
+8. Hold new control cycles outside the configuration epoch while every component updates
+9. Preserve static effective values and report every rejected restart-required key
+10. Record both processed digests after a partial kernel mutation, while leaving
+    publication to the explicit runtime retry owner
+11. Emit one terminal outcome record with deterministic rejected fields and whether
+    the composite source epoch was recorded; lifecycle `INFO`/`DEBUG` records remain separate
 ```
 
 ### 11.3 Component Updates
@@ -1167,6 +1189,7 @@ later record where recovery is possible.
 | Logging | Global variable | Yes |
 | Metrics | `UpdateConfig()` | Yes (cache cleared) |
 | State | Internal check | Next cycle |
+| CPU Points topology | Candidate reconciliation plus read-back | Before acknowledgement |
 | Cgroup | Internal check | Next activation |
 | Application/PSI | Runtime hook | Yes (watcher rebuilt when needed) |
 | Prometheus bind/lifecycle | Preserve active value | Restart required |

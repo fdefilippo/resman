@@ -98,6 +98,9 @@ func TestApplyReloadLifecycle(t *testing.T) {
 func TestRepresentativeFieldLifecycles(t *testing.T) {
 	tests := map[string]FieldLifecycle{
 		"PROCESS_EXCLUDE_LIST":      LifecycleDynamic,
+		"CPU_RESERVE_POINTS":        LifecycleDynamic,
+		"CPU_BEST_EFFORT_POINTS":    LifecycleDynamic,
+		"CPU_POINTS_FILE":           LifecycleRestartRequired,
 		"USERNAME_CACHE_TTL":        LifecycleDynamic,
 		"METRICS_DB_RETENTION_DAYS": LifecycleDynamic,
 		"CREATED_CGROUPS_FILE":      LifecycleRestartRequired,

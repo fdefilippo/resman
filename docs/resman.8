@@ -198,6 +198,14 @@ exceed the pool. Resource division occurs proportionally through cgroup
 values. Unused mapped capacity is first borrowed by runnable mapped siblings;
 best effort borrows it only when the whole guaranteed domain is inactive.
 .PP
+Changes to the reserve, best-effort entitlement, or map contents are applied as
+one composite hot-reload epoch. Both files are confirmed before and after kernel
+reconciliation. Changing
+.B CPU_POINTS_FILE
+itself requires a restart; a rejected path change never redirects the live reload.
+An active user's guaranteed/best-effort class cannot change until that user is
+released, while same-class weight changes and inactive membership changes are dynamic.
+.PP
 Practical example with four online CPUs, reserve 250, guarantees 300 and 300,
 and best effort 100:
 .RS

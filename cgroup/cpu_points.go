@@ -97,6 +97,25 @@ func (m *Manager) ApplyCPUPointsGuaranteedWeight(hierarchy CPUPointsHierarchy, w
 	return nil
 }
 
+// ApplyCPUPointsBestEffortWeight publishes the aggregate best-effort entitlement.
+func (m *Manager) ApplyCPUPointsBestEffortWeight(hierarchy CPUPointsHierarchy, weight cpupoints.KernelCPUWeight) error {
+	if err := writeCPUPointsValue(filepath.Join(hierarchy.BestEffort, "cpu.weight"), strconv.Itoa(weight.Value())); err != nil {
+		return fmt.Errorf("apply CPU Points best-effort domain weight: %w", err)
+	}
+	return nil
+}
+
+// ApplyCPUPointsUserWeight updates and verifies one existing leaf without moving processes.
+func (m *Manager) ApplyCPUPointsUserWeight(leafPath string, weight cpupoints.KernelCPUWeight) error {
+	if err := writeCPUPointsValue(filepath.Join(leafPath, "cpu.weight"), strconv.Itoa(weight.Value())); err != nil {
+		return fmt.Errorf("apply CPU Points leaf weight: %w", err)
+	}
+	if err := writeCPUPointsValue(filepath.Join(leafPath, "cpu.max"), normalCPUQuota); err != nil {
+		return fmt.Errorf("verify CPU Points leaf unlimited quota: %w", err)
+	}
+	return nil
+}
+
 // EnsureCPUPointsUserPlacement configures and verifies a leaf before any PID
 // may enter it. The caller must raise the guaranteed-domain weight first.
 func (m *Manager) EnsureCPUPointsUserPlacement(uid int, domainPath string, weight cpupoints.KernelCPUWeight) (string, ProcessMoveResult, error) {

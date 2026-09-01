@@ -40,6 +40,23 @@ type ConfigChangeHandler interface {
 	OnConfigChange(*Config) error
 }
 
+// ReloadSourceConfirmation proves that every file used by a composite reload
+// still has the content identity captured before candidate construction.
+type ReloadSourceConfirmation func() error
+
+// ReloadApplyOutcome separates runtime publication from watcher bookkeeping.
+// A partial kernel mutation may be processed while the public epoch remains old.
+type ReloadApplyOutcome struct {
+	Published bool
+	Processed bool
+	Err       error
+}
+
+// CompositeConfigChangeHandler applies a main-config plus CPU Points map epoch.
+type CompositeConfigChangeHandler interface {
+	OnConfigCandidate(*Config, ReloadSourceConfirmation) ReloadApplyOutcome
+}
+
 type watcherLogger interface {
 	Debug(string, ...interface{})
 	Info(string, ...interface{})
@@ -76,13 +93,16 @@ type Watcher struct {
 	onChange ConfigChangeHandler
 
 	// Internal lifecycle state.
-	isRunning    bool
-	isStopped    bool
-	stopChan     chan struct{}
-	lastModTime  time.Time
-	lastFileSize int64
-	lastDigest   [sha256.Size]byte
-	hasDigest    bool
+	isRunning     bool
+	isStopped     bool
+	stopChan      chan struct{}
+	lastModTime   time.Time
+	lastFileSize  int64
+	lastDigest    [sha256.Size]byte
+	hasDigest     bool
+	mapPath       string
+	lastMapDigest [sha256.Size]byte
+	hasMapDigest  bool
 }
 
 // Reload synchronously validates and applies a file version that has not
@@ -152,12 +172,28 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 		lastDigest:    sha256.Sum256(fileContent),
 		hasDigest:     true,
 	}
+	if _, composite := onChange.(CompositeConfigChangeHandler); composite && initialConfig != nil {
+		watcher.mapPath = filepath.Clean(initialConfig.GetCPUPointsFile())
+		if mapContent, mapErr := os.ReadFile(watcher.mapPath); mapErr == nil {
+			watcher.lastMapDigest = sha256.Sum256(mapContent)
+			watcher.hasMapDigest = true
+		}
+	}
 	watcher.reloadGate <- struct{}{}
 
 	watchPath := filepath.Dir(configPath)
 	if err := fswatcher.Add(watchPath); err != nil {
 		_ = fswatcher.Close()
 		return nil, fmt.Errorf("failed to watch config directory %s: %w", watchPath, err)
+	}
+	if watcher.mapPath != "" {
+		mapDirectory := filepath.Dir(watcher.mapPath)
+		if mapDirectory != watchPath {
+			if err := fswatcher.Add(mapDirectory); err != nil {
+				_ = fswatcher.Close()
+				return nil, fmt.Errorf("failed to watch CPU Points map directory %s: %w", mapDirectory, err)
+			}
+		}
 	}
 
 	logger.Info("Configuration watcher initialized", "file", configPath, "directory", watchPath)
@@ -241,7 +277,8 @@ func (w *Watcher) watchLoop() {
 
 			// Ignore unrelated directory events before logging. Logging them can
 			// feed back into fsnotify when the log shares the config directory.
-			if filepath.Clean(event.Name) != w.configPath {
+			eventPath := filepath.Clean(event.Name)
+			if eventPath != w.configPath && eventPath != w.mapPath {
 				continue
 			}
 
@@ -371,11 +408,22 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 		return fmt.Errorf("cannot read configuration file %s: %w", w.configPath, err)
 	}
 	digest := sha256.Sum256(fileContent)
+	var mapDigest [sha256.Size]byte
+	if w.mapPath != "" {
+		mapContent, mapErr := os.ReadFile(w.mapPath)
+		if mapErr != nil {
+			return fmt.Errorf("cannot read CPU Points map %s: %w", w.mapPath, mapErr)
+		}
+		mapDigest = sha256.Sum256(mapContent)
+	}
 
 	// Avoid processing the same content twice. Metadata alone is insufficient:
 	// atomic replacements can preserve both size and timestamp resolution.
 	w.mu.RLock()
 	sameContent := w.hasDigest && digest == w.lastDigest
+	if w.mapPath != "" {
+		sameContent = sameContent && w.hasMapDigest && mapDigest == w.lastMapDigest
+	}
 	w.mu.RUnlock()
 
 	if !force && sameContent {
@@ -402,12 +450,33 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 		return fmt.Errorf("configuration file %s changed while it was being validated", w.configPath)
 	}
 
-	var applyErr error
-	if w.onChange != nil {
-		if err := w.onChange.OnConfigChange(newConfig); err != nil {
-			applyErr = err
+	confirmSources := func() error {
+		currentContent, err := os.ReadFile(w.configPath)
+		if err != nil {
+			return fmt.Errorf("confirm configuration file %s: %w", w.configPath, err)
 		}
+		if sha256.Sum256(currentContent) != digest {
+			return fmt.Errorf("configuration file %s changed during composite reload", w.configPath)
+		}
+		if w.mapPath != "" {
+			currentMap, mapErr := os.ReadFile(w.mapPath)
+			if mapErr != nil {
+				return fmt.Errorf("confirm CPU Points map %s: %w", w.mapPath, mapErr)
+			}
+			if sha256.Sum256(currentMap) != mapDigest {
+				return fmt.Errorf("CPU Points map %s changed during composite reload", w.mapPath)
+			}
+		}
+		return nil
 	}
+
+	applyOutcome := ReloadApplyOutcome{Published: true, Processed: true}
+	if composite, ok := w.onChange.(CompositeConfigChangeHandler); ok {
+		applyOutcome = composite.OnConfigCandidate(newConfig, confirmSources)
+	} else if w.onChange != nil {
+		applyOutcome.Err = w.onChange.OnConfigChange(newConfig)
+	}
+	applyErr := applyOutcome.Err
 	var confirmationErr error
 	postApplyContent, err := os.ReadFile(w.configPath)
 	if err != nil {
@@ -417,12 +486,18 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	}
 
 	w.mu.Lock()
-	w.currentConfig = newConfig
-	if confirmationErr == nil {
+	if applyOutcome.Published {
+		w.currentConfig = newConfig
+	}
+	if confirmationErr == nil && applyOutcome.Processed {
 		w.lastModTime = fileInfo.ModTime()
 		w.lastFileSize = fileInfo.Size()
 		w.lastDigest = digest
 		w.hasDigest = true
+		if w.mapPath != "" {
+			w.lastMapDigest = mapDigest
+			w.hasMapDigest = true
+		}
 	}
 	w.mu.Unlock()
 
@@ -436,7 +511,7 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	if applyErr != nil {
 		return &reloadOutcomeError{
 			err:       fmt.Errorf("apply configuration from %s: %w", w.configPath, applyErr),
-			processed: true,
+			processed: applyOutcome.Processed,
 		}
 	}
 

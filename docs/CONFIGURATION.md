@@ -12,10 +12,10 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `CGROUP_BASE` | `resman` | `restart-required` | — |
 | `CGROUP_OPERATION_TIMEOUT` | `5` | `dynamic` | — |
 | `CGROUP_ROOT` | `/sys/fs/cgroup` | `restart-required` | — |
-| `CPU_BEST_EFFORT_POINTS` | `100` | `restart-required` | One aggregate entitlement shared by every eligible username absent from CPU_POINTS_FILE. |
+| `CPU_BEST_EFFORT_POINTS` | `100` | `dynamic` | One aggregate entitlement shared by every eligible username absent from CPU_POINTS_FILE. |
 | `CPU_POINTS_FILE` | `/etc/resman/cpu-points.map` | `restart-required` | Absolute restart-required path to the strict direct username guarantee map. |
 | `CPU_RELEASE_THRESHOLD` | `40` | `dynamic` | — |
-| `CPU_RESERVE_POINTS` | `100` | `restart-required` | 0 removes nominal headroom outside the finite ResMan CPU parent; it does not create physical isolation. |
+| `CPU_RESERVE_POINTS` | `100` | `dynamic` | 0 removes nominal headroom outside the finite ResMan CPU parent; it does not create physical isolation. |
 | `CPU_THRESHOLD` | `75` | `dynamic` | — |
 | `CPU_THRESHOLD_DURATION` | `90` | `dynamic` | 0 makes CPU threshold activation immediate after a valid sample. |
 | `CREATED_CGROUPS_FILE` | `/run/resman-cgroups.txt` | `restart-required` | — |

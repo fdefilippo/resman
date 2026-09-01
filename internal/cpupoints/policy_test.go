@@ -166,6 +166,26 @@ func TestPolicyLoaderBuildsOneResolvedImmutableSnapshot(t *testing.T) {
 	}
 }
 
+func TestPolicyLoaderConfirmsExactSourceIdentityAndContent(t *testing.T) {
+	path := writePolicyMap(t, PolicyMapMarker+"\nalice=300\n")
+	loader := newTestPolicyLoader()
+	policy, err := loader.Load(policyInputs(t, path, 100, 100), exactResolverFunc(func(username string) ([]ResolvedUserIdentity, error) {
+		return []ResolvedUserIdentity{{Username: username, UID: 1000}}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.ConfirmSource(policy.Source()); err != nil {
+		t.Fatalf("ConfirmSource() baseline: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(PolicyMapMarker+"\nalice=400\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.ConfirmSource(policy.Source()); err == nil || !strings.Contains(err.Error(), "changed after candidate validation") {
+		t.Fatalf("ConfirmSource() error = %v, want changed-source rejection", err)
+	}
+}
+
 func TestPolicyLoaderRejectsIdentityAmbiguityAtomically(t *testing.T) {
 	tests := []struct {
 		name     string

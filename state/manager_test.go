@@ -206,6 +206,12 @@ func (m *mockCgroupManager) ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy,
 func (m *mockCgroupManager) ApplyCPUPointsGuaranteedWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error {
 	return nil
 }
+func (m *mockCgroupManager) ApplyCPUPointsBestEffortWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error {
+	return nil
+}
+func (m *mockCgroupManager) ApplyCPUPointsUserWeight(string, cpupoints.KernelCPUWeight) error {
+	return nil
+}
 func (m *mockCgroupManager) EnsureCPUPointsUserPlacement(uid int, domain string, weight cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
 	return filepath.Join(domain, fmt.Sprintf("user_%d", uid)), cgroup.ProcessMoveResult{AlreadyPresent: 1}, nil
 }
@@ -235,6 +241,56 @@ type cpuPointsOrderingCgroupManager struct {
 	placementErr map[int]error
 	moveResults  map[int]cgroup.ProcessMoveResult
 }
+
+type cpuPointsReloadCgroupManager struct {
+	mockCgroupManager
+	events []string
+	failAt int
+}
+
+func (m *cpuPointsReloadCgroupManager) record(event string) error {
+	m.events = append(m.events, event)
+	if m.failAt > 0 && len(m.events) == m.failAt {
+		return errors.New("injected CPU Points reconciliation failure")
+	}
+	return nil
+}
+
+func (m *cpuPointsReloadCgroupManager) ApplyCPUPointsParentQuota(_ cgroup.CPUPointsHierarchy, quota cpupoints.ParentQuota) error {
+	return m.record("parent:" + quota.CPUmax())
+}
+
+func (m *cpuPointsReloadCgroupManager) ApplyCPUPointsGuaranteedWeight(_ cgroup.CPUPointsHierarchy, weight cpupoints.KernelCPUWeight) error {
+	return m.record(fmt.Sprintf("guaranteed:%d", weight.Value()))
+}
+
+func (m *cpuPointsReloadCgroupManager) ApplyCPUPointsBestEffortWeight(_ cgroup.CPUPointsHierarchy, weight cpupoints.KernelCPUWeight) error {
+	return m.record(fmt.Sprintf("best_effort:%d", weight.Value()))
+}
+
+func (m *cpuPointsReloadCgroupManager) ApplyCPUPointsUserWeight(path string, weight cpupoints.KernelCPUWeight) error {
+	return m.record(fmt.Sprintf("leaf:%s:%d", filepath.Base(path), weight.Value()))
+}
+
+type mutableCPUCapacityProvider struct {
+	state cpupoints.CapacityState
+	cpus  uint64
+}
+
+func (p *mutableCPUCapacityProvider) Refresh(pool cpupoints.ParentPoolPoints) (cpupoints.CapacityState, error) {
+	count, err := cpupoints.NewOnlineCPUCount(p.cpus)
+	if err != nil {
+		return p.state, err
+	}
+	quota, err := cpupoints.PlanParentQuota(count, pool)
+	if err != nil {
+		return p.state, err
+	}
+	p.state = cpupoints.CapacityState{Available: true, LastVerified: quota}
+	return p.state, nil
+}
+
+func (p *mutableCPUCapacityProvider) State() cpupoints.CapacityState { return p.state }
 
 func (m *cpuPointsOrderingCgroupManager) ApplyCPUPointsGuaranteedWeight(_ cgroup.CPUPointsHierarchy, weight cpupoints.KernelCPUWeight) error {
 	m.events = append(m.events, fmt.Sprintf("domain:%d", weight.Value()))
@@ -611,6 +667,255 @@ func testCPUPointsPolicy(t *testing.T, entries map[string]struct {
 	return snapshot
 }
 
+func testCPUPointsManagerForReload(t *testing.T, policy cpupoints.PolicySnapshot, cgroups CgroupManager) *Manager {
+	t.Helper()
+	cpus, _ := cpupoints.NewOnlineCPUCount(4)
+	quota, err := cpupoints.PlanParentQuota(cpus, policy.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := &mutableCPUCapacityProvider{state: cpupoints.CapacityState{Available: true, LastVerified: quota}, cpus: 4}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, cgroups, &mockPrometheusExporter{}, WithCPUPointsRuntime(policy, capacity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.cpuPointsHierarchy = cgroup.CPUPointsHierarchy{Parent: "/limited", Guaranteed: "/limited/guaranteed", BestEffort: "/limited/best_effort"}
+	return manager
+}
+
+func TestCPUPointsReloadRejectsActiveClassChangeBeforeAnyKernelWrite(t *testing.T) {
+	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	candidate := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cgroups := &cpuPointsReloadCgroupManager{}
+	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
+	weight, _ := cpupoints.NewKernelCPUWeight(300)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1000"}
+	manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(300)
+	manager.programmedGuaranteePoints = 300
+	manager.resourceLimits[1000] = userResourceLimitState{ram: true, ramApplied: true, io: true, ioApplied: true}
+
+	err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy)
+	var classErr *CPUPointsClassChangeError
+	if !errors.As(err, &classErr) {
+		t.Fatalf("ReconcileCPUPointsPolicy() error = %v, want CPUPointsClassChangeError", err)
+	}
+	if !reflect.DeepEqual(classErr.UIDs, []int{1000}) {
+		t.Fatalf("affected UIDs = %v, want [1000]", classErr.UIDs)
+	}
+	if len(cgroups.events) != 0 {
+		t.Fatalf("class-changing preflight performed kernel writes: %v", cgroups.events)
+	}
+	if manager.pendingCPUPointsPolicy != nil {
+		t.Fatal("preflight rejection created a partial-mutation retry intent")
+	}
+	if got := manager.CurrentCPUPointsPolicy().ClassForUID(1000); got != cpupoints.AllocationClassGuaranteed {
+		t.Fatalf("authoritative class = %s, want guaranteed", got)
+	}
+	if state := manager.resourceLimits[1000]; !state.ramApplied || !state.ioApplied {
+		t.Fatalf("RAM/IO state changed during preflight: %+v", state)
+	}
+
+	delete(manager.cpuAllocations, 1000)
+	delete(manager.resourceLimits, 1000)
+	cgroups.events = nil
+	if err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err != nil {
+		t.Fatalf("inactive membership reconciliation after release: %v", err)
+	}
+	manager.PublishCPUPointsPolicy(candidate)
+	if got := manager.CurrentCPUPointsPolicy().ClassForUID(1000); got != cpupoints.AllocationClassBestEffort {
+		t.Fatalf("class after release and retry = %s, want best_effort", got)
+	}
+}
+
+func TestCPUPointsReloadOrdersSameClassChangesAndConvergesExactly(t *testing.T) {
+	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}, "bob": {uid: 1001, points: 300}})
+	candidate := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+	cgroups := &cpuPointsReloadCgroupManager{}
+	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
+	weight, _ := cpupoints.NewKernelCPUWeight(300)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1000"}
+	manager.cpuAllocations[1001] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1001"}
+	manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(600)
+	manager.programmedGuaranteePoints = 600
+	manager.resourceLimits[1000] = userResourceLimitState{ram: true, ramApplied: true, io: true, ioApplied: true}
+
+	if err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err != nil {
+		t.Fatalf("ReconcileCPUPointsPolicy(): %v", err)
+	}
+	want := []string{
+		"parent:360000 100000",
+		"guaranteed:800",
+		"leaf:user_1000:400",
+		"leaf:user_1001:400",
+		"guaranteed:800",
+		"best_effort:100",
+	}
+	if !reflect.DeepEqual(cgroups.events, want) {
+		t.Fatalf("reconciliation events = %v, want %v", cgroups.events, want)
+	}
+	if got := manager.appliedGuaranteePoints.Value(); got != 800 {
+		t.Fatalf("applied guarantee = %d, want 800", got)
+	}
+	if got := manager.programmedGuaranteePoints; got != 800 {
+		t.Fatalf("programmed guarantee = %d, want 800", got)
+	}
+	if state := manager.resourceLimits[1000]; !state.ramApplied || !state.ioApplied {
+		t.Fatalf("same-class weight change lost RAM/IO state: %+v", state)
+	}
+}
+
+func TestCPUPointsReloadAppliesDecreasesBeforeIncreasesWhenAggregateIsStable(t *testing.T) {
+	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}, "bob": {uid: 1001, points: 300}})
+	candidate := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 200}})
+	cgroups := &cpuPointsReloadCgroupManager{}
+	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
+	weight, _ := cpupoints.NewKernelCPUWeight(300)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1000"}
+	manager.cpuAllocations[1001] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1001"}
+	manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(600)
+	manager.programmedGuaranteePoints = 600
+
+	if err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"parent:360000 100000",
+		"leaf:user_1001:200",
+		"leaf:user_1000:400",
+		"guaranteed:600",
+		"best_effort:100",
+	}
+	if !reflect.DeepEqual(cgroups.events, want) {
+		t.Fatalf("events = %v, want decreases-before-increases %v", cgroups.events, want)
+	}
+}
+
+func TestCPUPointsReloadFailureKeepsConservativeWeightAndRetriesOldEpoch(t *testing.T) {
+	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}, "bob": {uid: 1001, points: 300}})
+	candidate := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+	cgroups := &cpuPointsReloadCgroupManager{failAt: 4}
+	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
+	weight, _ := cpupoints.NewKernelCPUWeight(300)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1000"}
+	manager.cpuAllocations[1001] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1001"}
+	manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(600)
+	manager.programmedGuaranteePoints = 600
+
+	if err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err == nil {
+		t.Fatal("ReconcileCPUPointsPolicy() error = nil, want injected failure")
+	}
+	if manager.pendingCPUPointsPolicy == nil || !manager.cpuPointsDegraded {
+		t.Fatal("partial mutation did not persist an internal degraded retry intent")
+	}
+	if manager.programmedGuaranteePoints < manager.appliedGuaranteePoints.Value() {
+		t.Fatalf("programmed w_G %d is below applied sum %d", manager.programmedGuaranteePoints, manager.appliedGuaranteePoints.Value())
+	}
+	if got := manager.prometheusExporter.(*mockPrometheusExporter).recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
+		component: "cpu_points_reconciliation", errorType: "leaf_weight",
+	}}) {
+		t.Fatalf("bounded reconciliation errors = %+v", got)
+	}
+
+	cgroups.failAt = 0
+	cgroups.events = nil
+	if err := manager.retryCPUPointsPolicyLocked(); err != nil {
+		t.Fatalf("retryCPUPointsPolicyLocked(): %v", err)
+	}
+	if manager.pendingCPUPointsPolicy != nil || manager.cpuPointsDegraded {
+		t.Fatal("successful retry did not clear the degraded intent")
+	}
+	if got := manager.appliedGuaranteePoints.Value(); got != 600 {
+		t.Fatalf("retry restored applied sum %d, want 600", got)
+	}
+	if got := manager.programmedGuaranteePoints; got != 600 {
+		t.Fatalf("retry restored programmed w_G %d, want 600", got)
+	}
+}
+
+func TestCPUPointsReloadFailureAtEveryMutationRetainsSafeRetryIntent(t *testing.T) {
+	for failAt := 1; failAt <= 6; failAt++ {
+		t.Run(fmt.Sprintf("step_%d", failAt), func(t *testing.T) {
+			oldPolicy := testCPUPointsPolicy(t, map[string]struct {
+				uid    int
+				points int
+			}{"alice": {uid: 1000, points: 300}, "bob": {uid: 1001, points: 300}})
+			candidate := testCPUPointsPolicy(t, map[string]struct {
+				uid    int
+				points int
+			}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+			cgroups := &cpuPointsReloadCgroupManager{failAt: failAt}
+			manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
+			weight, _ := cpupoints.NewKernelCPUWeight(300)
+			manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1000"}
+			manager.cpuAllocations[1001] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, leafPath: "/limited/guaranteed/user_1001"}
+			manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(600)
+			manager.programmedGuaranteePoints = 600
+
+			if err := manager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err == nil {
+				t.Fatal("ReconcileCPUPointsPolicy() error = nil, want injected failure")
+			}
+			if manager.pendingCPUPointsPolicy == nil || !manager.cpuPointsDegraded {
+				t.Fatal("failed mutation did not retain a retry intent")
+			}
+			if manager.programmedGuaranteePoints < manager.appliedGuaranteePoints.Value() {
+				t.Fatalf("programmed w_G %d is below applied sum %d", manager.programmedGuaranteePoints, manager.appliedGuaranteePoints.Value())
+			}
+			cgroups.failAt = 0
+			cgroups.events = nil
+			if err := manager.retryCPUPointsPolicyLocked(); err != nil {
+				t.Fatalf("retryCPUPointsPolicyLocked(): %v", err)
+			}
+			if manager.pendingCPUPointsPolicy != nil || manager.cpuPointsDegraded {
+				t.Fatal("successful old-epoch retry did not clear degraded state")
+			}
+			if manager.programmedGuaranteePoints != 600 || manager.appliedGuaranteePoints.Value() != 600 {
+				t.Fatalf("retry state programmed=%d applied=%d, want 600/600", manager.programmedGuaranteePoints, manager.appliedGuaranteePoints.Value())
+			}
+		})
+	}
+}
+
+func TestCPUPointsOnlineCPUChangeOnlyReprogramsParentQuota(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	cgroups := &cpuPointsReloadCgroupManager{}
+	manager := testCPUPointsManagerForReload(t, policy, cgroups)
+	capacity := manager.cpuCapacity.(*mutableCPUCapacityProvider)
+	capacity.cpus = 2
+	if err := manager.retryCPUPointsPolicyLocked(); err != nil {
+		t.Fatalf("retryCPUPointsPolicyLocked(): %v", err)
+	}
+	if !reflect.DeepEqual(cgroups.events, []string{"parent:180000 100000"}) {
+		t.Fatalf("capacity reconciliation events = %v", cgroups.events)
+	}
+}
+
 func TestCPUPointsAdmissionAndDeparturePreserveAggregateOrdering(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
@@ -838,7 +1143,7 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 		{
 			name:         "collection failure remains fatal",
 			failingStage: "collect_metrics",
-			wantVisited:  []string{"check_blackout", "collect_metrics"},
+			wantVisited:  []string{"reconcile_cpu_points", "check_blackout", "collect_metrics"},
 		},
 	}
 

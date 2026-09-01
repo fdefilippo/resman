@@ -182,6 +182,10 @@ capacity from mapped peers; unmapped eligible users share the aggregate
 `CPU_BEST_EFFORT_POINTS` domain. The strict map begins with
 `[resman-cpu-points-map-v1]` and then contains exact `username=points` assignments.
 Configured guarantees plus the best-effort entitlement must not exceed the pool.
+Reserve, best-effort, and map-content changes form one atomic hot-reload epoch;
+`CPU_POINTS_FILE` path changes require a restart. A reload may change the weight
+of an active user within its current class, but changing an active user between
+guaranteed and best-effort is rejected until that user is released.
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of

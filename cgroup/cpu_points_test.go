@@ -125,6 +125,58 @@ func TestCPUPointsLeafIsFullyConfiguredBeforeIngress(t *testing.T) {
 	}
 }
 
+func TestCPUPointsReloadUpdatesAndVerifiesExistingDomainAndLeafWeights(t *testing.T) {
+	root := t.TempDir()
+	hierarchy := CPUPointsHierarchy{
+		Parent:     filepath.Join(root, "limited"),
+		Guaranteed: filepath.Join(root, "limited", "guaranteed"),
+		BestEffort: filepath.Join(root, "limited", "best_effort"),
+	}
+	leaf := filepath.Join(hierarchy.Guaranteed, "user_1000")
+	for _, path := range []string{hierarchy.Parent, hierarchy.Guaranteed, hierarchy.BestEffort, leaf} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(hierarchy.Guaranteed, "cpu.weight"),
+		filepath.Join(hierarchy.BestEffort, "cpu.weight"),
+		filepath.Join(leaf, "cpu.weight"),
+		filepath.Join(leaf, "cpu.max"),
+	} {
+		if err := os.WriteFile(path, nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{}
+	guaranteed, _ := cpupoints.NewKernelCPUWeight(450)
+	bestEffort, _ := cpupoints.NewKernelCPUWeight(75)
+	leafWeight, _ := cpupoints.NewKernelCPUWeight(225)
+	if err := manager.ApplyCPUPointsGuaranteedWeight(hierarchy, guaranteed); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyCPUPointsBestEffortWeight(hierarchy, bestEffort); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyCPUPointsUserWeight(leaf, leafWeight); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(hierarchy.Guaranteed, "cpu.weight"): "450",
+		filepath.Join(hierarchy.BestEffort, "cpu.weight"): "75",
+		filepath.Join(leaf, "cpu.weight"):                 "225",
+		filepath.Join(leaf, "cpu.max"):                    normalCPUQuota,
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Errorf("%s = %q, want %q", path, data, want)
+		}
+	}
+}
+
 func TestCPUPointsLeafRejectsMissingEnabledResourceInterfaceBeforeIngress(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.DefaultConfig()

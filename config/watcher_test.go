@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,6 +100,23 @@ type blockingConfigChangeHandler struct {
 	release chan struct{}
 	active  atomic.Int32
 	max     atomic.Int32
+}
+
+type compositeConfigChangeHandler struct {
+	calls      int
+	thresholds []int
+	outcome    ReloadApplyOutcome
+}
+
+func (h *compositeConfigChangeHandler) OnConfigChange(*Config) error { return nil }
+
+func (h *compositeConfigChangeHandler) OnConfigCandidate(cfg *Config, confirm ReloadSourceConfirmation) ReloadApplyOutcome {
+	h.calls++
+	h.thresholds = append(h.thresholds, cfg.CPUThreshold)
+	if err := confirm(); err != nil {
+		return ReloadApplyOutcome{Err: err}
+	}
+	return h.outcome
 }
 
 func (h *blockingConfigChangeHandler) OnConfigChange(*Config) error {
@@ -550,6 +568,108 @@ func TestWatcherReloadRejectsFileChangedDuringApplication(t *testing.T) {
 	}
 	if err := watcher.Stop(); err != nil {
 		t.Fatalf("Stop() error: %v", err)
+	}
+}
+
+func TestWatcherTreatsMainConfigAndCPUPointsMapAsOneCandidateEpoch(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "resman.conf")
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+	write(mapPath, "[resman-cpu-points-map-v1]\nalice=300\n")
+	write(configPath, fmt.Sprintf("CPU_THRESHOLD=80\nCPU_POINTS_FILE=%s\n", mapPath))
+	initial := DefaultConfig()
+	initial.CPUThreshold = 80
+	initial.CPUPointsFile = mapPath
+	handler := &compositeConfigChangeHandler{outcome: ReloadApplyOutcome{Published: true, Processed: true}}
+	watcher, err := NewWatcher(configPath, initial, handler)
+	if err != nil {
+		t.Fatalf("NewWatcher(): %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatalf("Start(): %v", err)
+	}
+	t.Cleanup(func() { _ = watcher.Stop() })
+
+	write(mapPath, "[resman-cpu-points-map-v1]\nalice=400\n")
+	if err := watcher.Reload(context.Background()); err != nil {
+		t.Fatalf("map-only Reload(): %v", err)
+	}
+	if handler.calls != 1 {
+		t.Fatalf("map-only candidate calls = %d, want 1", handler.calls)
+	}
+
+	write(configPath, fmt.Sprintf("CPU_THRESHOLD=81\nCPU_POINTS_FILE=%s\n", mapPath))
+	write(mapPath, "[resman-cpu-points-map-v1]\nalice=500\n")
+	if err := watcher.Reload(context.Background()); err != nil {
+		t.Fatalf("simultaneous Reload(): %v", err)
+	}
+	if !reflect.DeepEqual(handler.thresholds, []int{80, 81}) {
+		t.Fatalf("candidate thresholds = %v, want [80 81]", handler.thresholds)
+	}
+
+	if err := os.Remove(mapPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot read CPU Points map") {
+		t.Fatalf("deleted-map Reload() error = %v", err)
+	}
+	write(mapPath, "[resman-cpu-points-map-v1]\nalice=600\n")
+	if err := watcher.Reload(context.Background()); err != nil {
+		t.Fatalf("recreated-map Reload(): %v", err)
+	}
+	if handler.calls != 3 {
+		t.Fatalf("candidate calls after recreation = %d, want 3", handler.calls)
+	}
+}
+
+func TestWatcherSeparatesProcessedPartialMutationFromPublishedEpoch(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "resman.conf")
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nalice=300\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("CPU_THRESHOLD=80\nCPU_POINTS_FILE=%s\n", mapPath)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	initial := DefaultConfig()
+	initial.CPUThreshold = 80
+	initial.CPUPointsFile = mapPath
+	handler := &compositeConfigChangeHandler{outcome: ReloadApplyOutcome{
+		Published: false,
+		Processed: true,
+		Err:       errors.New("partial kernel mutation"),
+	}}
+	watcher, err := NewWatcher(configPath, initial, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Stop() })
+
+	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nalice=400\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = watcher.Reload(context.Background())
+	if err == nil || !reloadOutcomeWasProcessed(err) {
+		t.Fatalf("Reload() error = %v, want processed partial mutation", err)
+	}
+	if watcher.currentConfig != initial {
+		t.Fatal("partial mutation published a new configuration epoch")
+	}
+	if err := watcher.Reload(context.Background()); err != nil {
+		t.Fatalf("unchanged processed digest retried through watcher: %v", err)
+	}
+	if handler.calls != 1 {
+		t.Fatalf("handler calls = %d, want 1; runtime retry owns the partial mutation", handler.calls)
 	}
 }
 

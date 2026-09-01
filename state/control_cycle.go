@@ -59,6 +59,7 @@ func (e *patternPolicyError) Unwrap() error {
 }
 
 var defaultControlCyclePipeline = []controlCycleStage{
+	{name: "reconcile_cpu_points", run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
 	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
 	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
 	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
@@ -69,6 +70,13 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
 	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
 	{name: "log_completion", run: (*Manager).stageLogCompletion},
+}
+
+func (m *Manager) stageReconcileCPUPoints(*controlCycleContext) error {
+	if err := m.retryCPUPointsPolicyLocked(); err != nil {
+		return fmt.Errorf("CPU Points topology remains degraded: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) RunControlCycle(ctx context.Context) error {

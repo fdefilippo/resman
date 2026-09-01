@@ -18,10 +18,14 @@ package reloader
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/configepoch"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
 type testStateConfigManager struct {
@@ -29,6 +33,48 @@ type testStateConfigManager struct {
 	updates int
 	epoch   configepoch.Barrier
 }
+
+type testCPUPointsStateManager struct {
+	testStateConfigManager
+	policy       cpupoints.PolicySnapshot
+	reconciled   []cpupoints.PolicySnapshot
+	published    int
+	reconcileErr error
+	onReconcile  func()
+}
+
+func (m *testCPUPointsStateManager) CurrentCPUPointsPolicy() cpupoints.PolicySnapshot {
+	return m.policy
+}
+
+func (m *testCPUPointsStateManager) ReconcileCPUPointsPolicy(candidate, _ cpupoints.PolicySnapshot) error {
+	m.reconciled = append(m.reconciled, candidate)
+	if m.onReconcile != nil {
+		m.onReconcile()
+		m.onReconcile = nil
+	}
+	return m.reconcileErr
+}
+
+func (m *testCPUPointsStateManager) PublishCPUPointsPolicy(candidate cpupoints.PolicySnapshot) {
+	m.policy = candidate
+	m.published++
+}
+
+type reloaderResolver map[string]int
+
+func (r reloaderResolver) ResolveExactUsername(username string) ([]cpupoints.ResolvedUserIdentity, error) {
+	uid, ok := r[username]
+	if !ok {
+		return nil, fmt.Errorf("unknown test username %q", username)
+	}
+	return []cpupoints.ResolvedUserIdentity{{Username: username, UID: uid}}, nil
+}
+
+type testCPUPointsPreflightError struct{}
+
+func (*testCPUPointsPreflightError) Error() string       { return "active allocation class changed" }
+func (*testCPUPointsPreflightError) CPUPointsPreflight() {}
 
 func (m *testStateConfigManager) BeginConfigUpdate() func() {
 	return m.epoch.BeginUpdate()
@@ -100,6 +146,183 @@ func TestOnConfigChange(t *testing.T) {
 	// Should not error with nil components
 	if err != nil {
 		t.Logf("OnConfigChange returned: %v", err)
+	}
+}
+
+func loadReloaderPolicy(t *testing.T, path, content string) cpupoints.PolicySnapshot {
+	t.Helper()
+	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mapPath, err := cpupoints.NewPolicyMapPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve, _ := cpupoints.NewReservePoints(100)
+	bestEffort, _ := cpupoints.NewBestEffortPoints(100)
+	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
+		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+	}, reloaderResolver{"alice": 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestCompositeReloadAppliesLifecycleBeforeSelectingPolicyMap(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.map")
+	newPath := filepath.Join(dir, "new.map")
+	oldPolicy := loadReloaderPolicy(t, oldPath, cpupoints.PolicyMapMarker+"\nalice=300\n")
+	_ = loadReloaderPolicy(t, newPath, cpupoints.PolicyMapMarker+"\nalice=700\n")
+	current := config.DefaultConfig()
+	current.CPUPointsFile = oldPath
+	requested := config.DefaultConfig()
+	requested.CPUPointsFile = newPath
+	requested.CPUReservePoints = 200
+	stateManager := &testCPUPointsStateManager{
+		testStateConfigManager: testStateConfigManager{cfg: current},
+		policy:                 oldPolicy,
+	}
+	reloader := NewReloader(stateManager, nil, nil)
+	reloader.identityResolver = reloaderResolver{"alice": 1000}
+
+	outcome := reloader.OnConfigCandidate(requested, func() error { return nil })
+	var restartErr *config.RestartRequiredError
+	if !errors.As(outcome.Err, &restartErr) {
+		t.Fatalf("OnConfigCandidate() error = %v, want RestartRequiredError", outcome.Err)
+	}
+	if !outcome.Published || !outcome.Processed {
+		t.Fatalf("outcome = %+v, want published and processed", outcome)
+	}
+	if len(stateManager.reconciled) != 1 {
+		t.Fatalf("reconciled candidates = %d, want 1", len(stateManager.reconciled))
+	}
+	if got := stateManager.reconciled[0].Source().Path().String(); got != oldPath {
+		t.Fatalf("candidate map path = %s, want retained %s", got, oldPath)
+	}
+	if guarantee, ok := stateManager.reconciled[0].GuaranteeForUID(1000); !ok || guarantee.Points().Value() != 300 {
+		t.Fatalf("candidate guarantee = %+v, %t; want old-map 300", guarantee, ok)
+	}
+	if stateManager.cfg.GetCPUPointsFile() != oldPath || stateManager.cfg.GetCPUReservePoints() != 200 {
+		t.Fatalf("published config path/reserve = %s/%d", stateManager.cfg.GetCPUPointsFile(), stateManager.cfg.GetCPUReservePoints())
+	}
+}
+
+func TestCompositeReloadRollsBackWhenMapChangesAfterReconciliation(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	oldPolicy := loadReloaderPolicy(t, mapPath, cpupoints.PolicyMapMarker+"\nalice=300\n")
+	current := config.DefaultConfig()
+	current.CPUPointsFile = mapPath
+	requested := config.DefaultConfig()
+	requested.CPUPointsFile = mapPath
+	stateManager := &testCPUPointsStateManager{
+		testStateConfigManager: testStateConfigManager{cfg: current},
+		policy:                 oldPolicy,
+		onReconcile: func() {
+			if err := os.WriteFile(mapPath, []byte(cpupoints.PolicyMapMarker+"\nalice=400\n"), 0600); err != nil {
+				t.Error(err)
+			}
+		},
+	}
+	reloader := NewReloader(stateManager, nil, nil)
+	reloader.identityResolver = reloaderResolver{"alice": 1000}
+
+	outcome := reloader.OnConfigCandidate(requested, func() error { return nil })
+	if outcome.Err == nil || outcome.Published || outcome.Processed {
+		t.Fatalf("outcome = %+v, want unprocessed stale-source rejection", outcome)
+	}
+	if len(stateManager.reconciled) != 2 {
+		t.Fatalf("reconciliation calls = %d, want candidate plus old-epoch restore", len(stateManager.reconciled))
+	}
+	if stateManager.published != 0 || stateManager.cfg != current {
+		t.Fatal("stale source published candidate configuration or policy")
+	}
+}
+
+func TestCompositeReloadSeparatesPreflightFromPartialMutation(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	oldPolicy := loadReloaderPolicy(t, mapPath, cpupoints.PolicyMapMarker+"\nalice=300\n")
+	for _, test := range []struct {
+		name          string
+		err           error
+		wantProcessed bool
+	}{
+		{name: "preflight", err: &testCPUPointsPreflightError{}, wantProcessed: false},
+		{name: "partial mutation", err: errors.New("kernel readback failed"), wantProcessed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := config.DefaultConfig()
+			current.CPUPointsFile = mapPath
+			requested := config.DefaultConfig()
+			requested.CPUPointsFile = mapPath
+			stateManager := &testCPUPointsStateManager{
+				testStateConfigManager: testStateConfigManager{cfg: current},
+				policy:                 oldPolicy,
+				reconcileErr:           test.err,
+			}
+			reloader := NewReloader(stateManager, nil, nil)
+			reloader.identityResolver = reloaderResolver{"alice": 1000}
+			outcome := reloader.OnConfigCandidate(requested, func() error { return nil })
+			if outcome.Err == nil || outcome.Published || outcome.Processed != test.wantProcessed {
+				t.Fatalf("outcome = %+v, want processed=%t and unpublished error", outcome, test.wantProcessed)
+			}
+			if stateManager.updates != 0 || stateManager.published != 0 {
+				t.Fatal("failed reconciliation published configuration or policy")
+			}
+		})
+	}
+}
+
+func TestCompositeReloadBlocksControlReadersUntilPolicyAndComponentsShareOneEpoch(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	oldPolicy := loadReloaderPolicy(t, mapPath, cpupoints.PolicyMapMarker+"\nalice=300\n")
+	current := config.DefaultConfig()
+	current.CPUPointsFile = mapPath
+	requested := config.DefaultConfig()
+	requested.CPUPointsFile = mapPath
+	requested.CPUThreshold = 88
+	stateManager := &testCPUPointsStateManager{
+		testStateConfigManager: testStateConfigManager{cfg: current},
+		policy:                 oldPolicy,
+	}
+	cgroupManager := &testCgroupConfigManager{updateEntered: make(chan struct{}), releaseUpdate: make(chan struct{})}
+	metricsCollector := &testMetricsConfigCollector{cfg: current}
+	reloader := NewReloader(stateManager, cgroupManager, metricsCollector)
+	reloader.identityResolver = reloaderResolver{"alice": 1000}
+
+	reloadDone := make(chan config.ReloadApplyOutcome, 1)
+	go func() {
+		reloadDone <- reloader.OnConfigCandidate(requested, func() error { return nil })
+	}()
+	<-cgroupManager.updateEntered
+	readerDone := make(chan *config.Config, 1)
+	go func() {
+		leave := stateManager.epoch.Enter()
+		defer leave()
+		readerDone <- stateManager.cfg
+	}()
+	select {
+	case <-readerDone:
+		t.Fatal("control reader entered while composite epoch was partially applied")
+	default:
+	}
+	close(cgroupManager.releaseUpdate)
+	outcome := <-reloadDone
+	if outcome.Err != nil || !outcome.Published || !outcome.Processed {
+		t.Fatalf("OnConfigCandidate() outcome = %+v", outcome)
+	}
+	if observed := <-readerDone; observed != requested {
+		t.Fatalf("reader observed config %p, want published candidate %p", observed, requested)
+	}
+	if stateManager.published != 1 || cgroupManager.cfg != requested || metricsCollector.cfg != requested {
+		t.Fatal("components and CPU Points policy did not converge to one epoch")
 	}
 }
 

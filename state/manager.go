@@ -75,6 +75,8 @@ type Manager struct {
 	appliedGuaranteePoints    cpupoints.AppliedGuaranteePoints
 	programmedGuaranteePoints uint64
 	ramCoverage               map[int]ramCoverageState
+	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
+	cpuPointsDegraded         bool
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -246,6 +248,8 @@ type CgroupManager interface {
 	EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error)
 	ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy, cpupoints.ParentQuota) error
 	ApplyCPUPointsGuaranteedWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error
+	ApplyCPUPointsBestEffortWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error
+	ApplyCPUPointsUserWeight(string, cpupoints.KernelCPUWeight) error
 	EnsureCPUPointsUserPlacement(int, string, cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error)
 	ReleaseCPUPointsUser(int, string) error
 	RemoveCPUPointsHierarchy(cgroup.CPUPointsHierarchy) error

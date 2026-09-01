@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/logging"
 )
 
@@ -30,6 +31,12 @@ type stateConfigManager interface {
 	BeginConfigUpdate() func()
 	GetConfig() *config.Config
 	UpdateConfig(*config.Config)
+}
+
+type cpuPointsStateManager interface {
+	CurrentCPUPointsPolicy() cpupoints.PolicySnapshot
+	ReconcileCPUPointsPolicy(cpupoints.PolicySnapshot, cpupoints.PolicySnapshot) error
+	PublishCPUPointsPolicy(cpupoints.PolicySnapshot)
 }
 
 type cgroupConfigManager interface {
@@ -50,7 +57,9 @@ type Reloader struct {
 	applyHook        ConfigApplyHook
 	logger           *logging.Logger
 
-	applying atomic.Bool
+	applying         atomic.Bool
+	policyLoader     *cpupoints.PolicyLoader
+	identityResolver cpupoints.ExactIdentityResolver
 }
 
 // NewReloader creates a configuration reloader.
@@ -68,6 +77,8 @@ func NewReloader(
 		cgroupManager:    cgroupMgr,
 		metricsCollector: metricsCol,
 		logger:           logger,
+		policyLoader:     cpupoints.NewPolicyLoader(),
+		identityResolver: cpupoints.NSSIdentityResolver{},
 	}
 	if len(hooks) > 0 {
 		reloader.applyHook = hooks[0]
@@ -91,8 +102,6 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 		defer finishEpochUpdate()
 	}
 
-	r.logger.Info("Applying new configuration dynamically")
-
 	var applyErrors []error
 	var currentConfig *config.Config
 	if r.stateManager != nil {
@@ -107,6 +116,132 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 			applyErrors = append(applyErrors, &config.RestartRequiredError{Fields: rejected})
 		}
 	}
+	applyErrors = append(applyErrors, r.applyEffectiveConfig(newConfig)...)
+	return errors.Join(applyErrors...)
+}
+
+// OnConfigCandidate atomically reconciles one main-config and guarantee-map epoch.
+func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.ReloadSourceConfirmation) config.ReloadApplyOutcome {
+	outcome := config.ReloadApplyOutcome{}
+	if newConfig == nil {
+		outcome.Err = fmt.Errorf("new config cannot be nil")
+		return outcome
+	}
+	if !r.applying.CompareAndSwap(false, true) {
+		outcome.Err = fmt.Errorf("configuration reload already in progress")
+		return outcome
+	}
+	defer r.applying.Store(false)
+	if r.stateManager == nil {
+		outcome.Err = fmt.Errorf("state manager is required for composite CPU Points reload")
+		return outcome
+	}
+
+	currentConfig := r.stateManager.GetConfig()
+	if currentConfig == nil {
+		outcome.Err = fmt.Errorf("current configuration is required for composite CPU Points reload")
+		return outcome
+	}
+	rejected, err := config.ApplyReloadLifecycle(currentConfig, newConfig)
+	if err != nil {
+		outcome.Err = fmt.Errorf("apply configuration lifecycle: %w", err)
+		return outcome
+	}
+	var reloadErrors []error
+	if len(rejected) > 0 {
+		reloadErrors = append(reloadErrors, &config.RestartRequiredError{Fields: rejected})
+	}
+
+	reserve, err := cpupoints.NewReservePoints(uint64(newConfig.GetCPUReservePoints()))
+	if err != nil {
+		outcome.Err = fmt.Errorf("build CPU Points candidate reserve: %w", err)
+		return outcome
+	}
+	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(newConfig.GetCPUBestEffortPoints()))
+	if err != nil {
+		outcome.Err = fmt.Errorf("build CPU Points candidate best effort: %w", err)
+		return outcome
+	}
+	mapPath, err := cpupoints.NewPolicyMapPath(newConfig.GetCPUPointsFile())
+	if err != nil {
+		outcome.Err = fmt.Errorf("build CPU Points candidate map path: %w", err)
+		return outcome
+	}
+	candidate, err := r.policyLoader.Load(cpupoints.PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}, r.identityResolver)
+	if err != nil {
+		outcome.Err = fmt.Errorf("load composite CPU Points candidate: %w", err)
+		return outcome
+	}
+	if confirm != nil {
+		if err := confirm(); err != nil {
+			outcome.Err = fmt.Errorf("confirm composite reload sources before reconciliation: %w", err)
+			return outcome
+		}
+	}
+	if err := r.policyLoader.ConfirmSource(candidate.Source()); err != nil {
+		outcome.Err = err
+		return outcome
+	}
+
+	finishEpochUpdate := r.stateManager.BeginConfigUpdate()
+	defer finishEpochUpdate()
+	policyManager, ok := r.stateManager.(cpuPointsStateManager)
+	if !ok {
+		outcome.Err = fmt.Errorf("state manager does not support CPU Points policy reconciliation")
+		return outcome
+	}
+	oldPolicy := policyManager.CurrentCPUPointsPolicy()
+	if err := policyManager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err != nil {
+		outcome.Processed = !isCPUPointsPreflightError(err)
+		outcome.Err = err
+		return outcome
+	}
+
+	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source()); err != nil {
+		restoreErr := policyManager.ReconcileCPUPointsPolicy(oldPolicy, oldPolicy)
+		outcome.Processed = false
+		outcome.Err = errors.Join(err, restoreErr)
+		return outcome
+	}
+
+	applyErrors := r.applyEffectiveConfig(newConfig)
+	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source()); err != nil {
+		rollbackErrors := r.applyEffectiveConfig(currentConfig)
+		restoreErr := policyManager.ReconcileCPUPointsPolicy(oldPolicy, oldPolicy)
+		outcome.Processed = false
+		outcome.Err = errors.Join(err, errors.Join(applyErrors...), errors.Join(rollbackErrors...), restoreErr)
+		return outcome
+	}
+
+	policyManager.PublishCPUPointsPolicy(candidate)
+	outcome.Published = true
+	outcome.Processed = true
+	reloadErrors = append(reloadErrors, applyErrors...)
+	outcome.Err = errors.Join(reloadErrors...)
+	return outcome
+}
+
+func confirmCompositeSources(confirm config.ReloadSourceConfirmation, loader *cpupoints.PolicyLoader, source cpupoints.PolicySource) error {
+	var errs []error
+	if confirm != nil {
+		errs = append(errs, confirm())
+	}
+	errs = append(errs, loader.ConfirmSource(source))
+	return errors.Join(errs...)
+}
+
+func isCPUPointsPreflightError(err error) bool {
+	type preflightError interface {
+		error
+		CPUPointsPreflight()
+	}
+	var target preflightError
+	return errors.As(err, &target)
+}
+
+func (r *Reloader) applyEffectiveConfig(newConfig *config.Config) []error {
+	r.logger.Info("Applying new configuration dynamically")
+	var applyErrors []error
 
 	if newConfig.LogLevel != "" {
 		r.logger.SetLevel(newConfig.LogLevel)
@@ -142,5 +277,5 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 		}
 	}
 
-	return errors.Join(applyErrors...)
+	return applyErrors
 }
