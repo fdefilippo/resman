@@ -618,6 +618,7 @@ EOF
 	} >"$evidence_dir/overcommit-diagnostic.txt"
 	grep -qi 'overcommit' "$evidence_dir/overcommit-diagnostic.txt" \
 		|| fail "one-point overcommit failure did not name the cause"
+	: >"$daemon_log"
 
 	if ! getent passwd "$dotted_user" >/dev/null 2>&1; then
 		temporary_mailbox=/var/spool/mail/$dotted_user
@@ -671,9 +672,7 @@ run_reference_oracles() {
 	printf 'correct_guaranteed_parent_share=%s\nstale_guaranteed_parent_share=%s\nseparation_points=%s\n' \
 		"$correct_share" "$stale_share" "$separation" >"$evidence_dir/reference-comparison.txt"
 	if ! awk -v d="$separation" 'BEGIN { exit !(d>=2.0) }'; then
-		result=BLOCKED
-		detail="same-run stale-low oracle separation was $separation points, below 2.0"
-		exit 77
+		blocked "same-run stale-low oracle separation was $separation points, below 2.0"
 	fi
 }
 
