@@ -194,30 +194,25 @@ func (a *App) WithStateManager() *App {
 
 	reserve, err := cpupoints.NewReservePoints(uint64(a.cfg.GetCPUReservePoints()))
 	if err != nil {
-		a.err = fmt.Errorf("invalid CPU Points reserve: %w", err)
-		return a
+		return a.failCPUPointsStartup("invalid CPU Points reserve", err, true)
 	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(a.cfg.GetCPUBestEffortPoints()))
 	if err != nil {
-		a.err = fmt.Errorf("invalid CPU Points best-effort entitlement: %w", err)
-		return a
+		return a.failCPUPointsStartup("invalid CPU Points best-effort entitlement", err, true)
 	}
 	mapPath, err := cpupoints.NewPolicyMapPath(a.cfg.GetCPUPointsFile())
 	if err != nil {
-		a.err = fmt.Errorf("invalid CPU Points map path: %w", err)
-		return a
+		return a.failCPUPointsStartup("invalid CPU Points map path", err, true)
 	}
 	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
 		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
 	}, cpupoints.NSSIdentityResolver{})
 	if err != nil {
-		a.err = fmt.Errorf("load CPU Points policy: %w", err)
-		return a
+		return a.failCPUPointsStartup("load CPU Points policy", err, true)
 	}
 	capacity, err := cpupoints.NewLiveCapacityProvider(cpupoints.NewSysfsOnlineCPUSource(), policy.Pool())
 	if err != nil {
-		a.err = fmt.Errorf("initialize CPU Points live capacity: %w", err)
-		return a
+		return a.failCPUPointsStartup("initialize CPU Points live capacity", err, false)
 	}
 
 	stateManager, err := state.NewManager(a.cfg, a.metricsCollector, a.cgroupMgr, a.prometheusExporter, state.WithCPUPointsRuntime(policy, capacity))
@@ -228,6 +223,18 @@ func (a *App) WithStateManager() *App {
 		return a
 	}
 	a.stateManager = stateManager
+	return a
+}
+
+func (a *App) failCPUPointsStartup(operation string, err error, permanent bool) *App {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	a.logger.Error("Failed to initialize CPU Points", "operation", operation, "error", err)
+	fmt.Fprintf(os.Stderr, "\nFailed to initialize CPU Points: %v\n", wrapped)
+	if permanent {
+		a.err = NewPermanentStartupError(wrapped)
+	} else {
+		a.err = wrapped
+	}
 	return a
 }
 

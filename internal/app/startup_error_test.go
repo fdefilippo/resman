@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +12,18 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/logging"
 )
+
+type startupCaptureLogger struct {
+	errors []string
+}
+
+func (*startupCaptureLogger) Debug(string, ...interface{}) {}
+func (*startupCaptureLogger) Info(string, ...interface{})  {}
+func (*startupCaptureLogger) Warn(string, ...interface{})  {}
+func (l *startupCaptureLogger) Error(message string, fields ...interface{}) {
+	l.errors = append(l.errors, fmt.Sprint(append([]interface{}{message, " "}, fields...)...))
+}
+func (*startupCaptureLogger) InfoChecked(string, ...interface{}) error { return nil }
 
 func TestPermanentStartupErrorClassification(t *testing.T) {
 	sentinel := errors.New("sentinel")
@@ -81,5 +95,33 @@ func TestMCPMissingTLSCredentialsIsPermanent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loading MCP TLS configuration") {
 		t.Fatalf("Run() error = %v, want TLS diagnostic", err)
+	}
+}
+
+func TestCPUPointsPolicyRejectionIsPermanentAndOperatorVisible(t *testing.T) {
+	policyDir := t.TempDir()
+	if err := os.Chmod(policyDir, 0700); err != nil {
+		t.Fatalf("secure CPU Points policy directory: %v", err)
+	}
+	policyPath := filepath.Join(policyDir, "cpu-points.map")
+	if err := os.WriteFile(policyPath, []byte("[resman-cpu-points-map-v1]\nroot=801\n"), 0600); err != nil {
+		t.Fatalf("write CPU Points policy: %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.CPUReservePoints = 100
+	cfg.CPUBestEffortPoints = 100
+	cfg.CPUPointsFile = policyPath
+	logger := &startupCaptureLogger{}
+	application := &App{cfg: cfg, logger: logger}
+
+	err := application.WithStateManager().Run()
+	if !IsPermanentStartupError(err) {
+		t.Fatalf("Run() error = %v, want permanent CPU Points rejection", err)
+	}
+	if !strings.Contains(err.Error(), "configured guarantees 801 plus best effort 100") {
+		t.Fatalf("Run() error = %v, want overcommit diagnostic", err)
+	}
+	if len(logger.errors) != 1 || !strings.Contains(logger.errors[0], "configured guarantees 801 plus best effort 100") {
+		t.Fatalf("operator error records = %q, want one overcommit diagnostic", logger.errors)
 	}
 }

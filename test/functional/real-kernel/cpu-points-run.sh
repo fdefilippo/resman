@@ -601,8 +601,8 @@ EOF
 		2>"$evidence_dir/overcommit.stderr"
 	local bad_status=$?
 	set -e
-	[[ $bad_status -ne 0 && $bad_status -ne 124 ]] \
-		|| fail "one-point CPU Points overcommit did not fail startup"
+	[[ $bad_status -eq 78 ]] \
+		|| fail "one-point CPU Points overcommit exited $bad_status, want permanent-configuration status 78"
 	{
 		cat "$evidence_dir/overcommit.stderr"
 		[[ ! -f $daemon_log ]] || cat "$daemon_log"
