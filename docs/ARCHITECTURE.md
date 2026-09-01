@@ -102,6 +102,38 @@ class-prioritized: idle mapped capacity serves runnable guaranteed siblings firs
 best effort is reported as borrowing only while the complete guaranteed domain is
 inactive.
 
+CPU capacity is normalized to 1000 points. The finite parent pool is
+`P = 1000 - CPU_RESERVE_POINTS`; the reserve is nominal headroom outside the ResMan
+parent, not exclusive physical isolation from other host cgroups. Even `P = 1000`
+programs a finite `cpu.max`. Let `G` be the sum of acquired/applied mapped guarantees
+and `B = CPU_BEST_EFFORT_POINTS`. While both domains are runnable, the expected
+saturated ratios over one synchronized interval are:
+
+```text
+guaranteed_domain_usage_delta / parent_usage_delta = G / (G + B)
+mapped_leaf_usage_delta       / parent_usage_delta = user_points / (G + B)
+```
+
+These are relative shares of effective parent delivery, not absolute host CPU floors.
+CFS bandwidth can leave the parent below its nominal quota while reporting positive
+throttling. Functional evidence therefore uses a 60-second window, a measured
+same-host reference, tolerance of 0.5 percentage points for the aggregate guaranteed
+domain, and 1.0 point for a leaf. The configured pool, programmed quota, raw weights,
+and a short sample are not substitutes for delivered-bandwidth evidence.
+
+Hierarchical lending has a strict priority. If one acquired guaranteed leaf is idle,
+its runnable guaranteed siblings consume the unused domain capacity first. The
+best-effort domain can exceed its aggregate entitlement only when the entire
+guaranteed domain is idle. `G` and the guaranteed-domain weight follow acquired and
+applied leaves rather than instantaneous scheduler runnability; lowering that domain
+weight before a leaf departs could silently violate another guarantee.
+
+The guarantee scope is the host-enforceable subset acquired by ResMan while CPU
+enforcement is active. Process exclusions and PID-namespace rejections remain in
+observation and decision inputs but cannot be represented by the managed leaf, so
+coverage is reported as partial. CPU Points do not provide cpuset isolation from
+arbitrary host workloads, realtime tasks, or affinity constraints.
+
 ## Cgroup Hierarchy
 
 ```
@@ -119,6 +151,38 @@ inactive.
 - **CPU**: Uses the finite CPU Points parent and two class-priority scheduling domains
 - **RAM**: Applied directly to per-user cgroup (`memory.max`, `memory.high`)
 - **IO**: Observed and applied directly in the current per-user cgroup (`io.stat`, `io.max`)
+
+## Placement transitions and memory charges
+
+The CPU Points map is a separate strict text contract. Its first physical line is
+`[resman-cpu-points-map-v1]`; subsequent assignments are exact
+`username=points` records. The entire username is passed to NSS without escaping or
+normalization, so dotted identities such as `john.smith` are direct keys. The package
+installs `/etc/resman/cpu-points.map` as a root-owned regular mode-`0600` file below
+the private mode-`0700` configuration directory. Unsafe files or ancestors reject the
+complete composite configuration epoch.
+
+An active UID cannot change between guaranteed and best-effort because that requires
+a cross-domain move. Such a reload is rejected atomically and records no pending
+class. The operator must first wait for release or make the UID CPU-ineligible, reload
+and confirm release, then change the map and reload; eligibility may be restored only
+in a later epoch. Same-class weight changes and inactive membership changes remain
+dynamic.
+
+Linux does not transfer existing memory charges when a process moves. Dynamic first
+ingress therefore provides post-ingress `memory.high`/`memory.max` enforcement, while
+process-derived UID memory remains complete and the cgroup charge coverage is partial.
+A cross-parent CPU activation or release is refused while RAM enforcement is active;
+release or disable RAM, allow reconciliation to complete, and retry. I/O-only
+transitions are safe because the logical `io.stat` ledger preserves attribution.
+
+With the normal `memory.high < memory.max` composition and no swap or reclaimable
+pages, a process can remain alive but make negligible progress at high indefinitely.
+The observable signature is a plateau below max with rising high events and zero max,
+OOM, OOM-kill and OOM-group-kill events. This is expected high throttling, not proof
+that the max boundary failed. Raising or disabling high, providing reclaimable
+capacity or swap, or releasing RAM enforcement are the operator remedies. An explicit
+`memory.high = memory.max` control is a separate max/OOM experiment.
 
 ## Error Handling
 

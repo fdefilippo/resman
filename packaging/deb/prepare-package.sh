@@ -59,6 +59,7 @@ install -d -m 0700 \
 
 install -m 0755 "$binary" "$package_dir/usr/bin/resman"
 install -m 0600 "$project_dir/config/resman.conf.example" "$package_dir/etc/resman/resman.conf"
+install -m 0600 "$project_dir/config/cpu-points.map.example" "$package_dir/etc/resman/cpu-points.map"
 install -m 0644 "$project_dir/packaging/systemd/resman.service" \
     "$package_dir/usr/lib/systemd/system/resman.service"
 install -m 0644 "$project_dir/packaging/syslog/resman" \

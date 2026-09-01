@@ -19,7 +19,9 @@ func TestShippedContainerPreservesRuntimePrivilegeContract(t *testing.T) {
 		"install -d -m 0700 /etc/resman",
 		"/etc/resman/tls",
 		"COPY config/resman.conf.example /etc/resman/resman.conf",
+		"COPY config/cpu-points.map.example /etc/resman/cpu-points.map",
 		"chmod 0600 /etc/resman/resman.conf",
+		"chmod 0600 /etc/resman/cpu-points.map",
 		`CMD ["--config", "/etc/resman/resman.conf"]`,
 		"USER 0",
 	} {

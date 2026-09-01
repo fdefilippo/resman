@@ -11,7 +11,7 @@
 
 Name:    resman
 Version: 1.30.8
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -76,7 +76,7 @@ CGO is enabled by default in this RPM and is required for:
 Features:
 - Dynamic CPU limiting for non-system users (UID >=1000)
 - Configurable activation/release thresholds
-- Absolute CPU limits using cpu.max cgroup controller
+- Normalized CPU Points guarantees below one finite cpu.max parent
 - RAM limiting with memory.high (soft) and memory.max (hard) limits
 - Graceful memory throttling before OOM killer (v1.19.0+)
 - Block I/O limiting with io.max (bandwidth and IOPS) (v1.20.0+)
@@ -142,6 +142,7 @@ install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 # Install the operator-authored configuration restrictively.
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman
 install -m 600 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman/resman.conf
+install -m 600 config/cpu-points.map.example %{buildroot}/%{_sysconfdir}/resman/cpu-points.map
 
 # Install the systemd service.
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
@@ -153,6 +154,7 @@ install -m 644 %{_builddir}/%{name}-%{version}/man/resman.8.gz %{buildroot}/%{_m
 install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
+install -m 644 config/cpu-points.map.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 
@@ -250,6 +252,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %{_bindir}/%{name}
 %dir %attr(0700,root,root) %{_sysconfdir}/resman
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/cpu-points.map
 %{_unitdir}/resman.service
 %{_mandir}/man8/resman.8.gz
 %dir %attr(0700,root,root) %{_sharedstatedir}/resman
@@ -260,6 +263,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
+%doc %{_docdir}/%{name}/cpu-points.map.example
 %doc %{_docdir}/%{name}/CONFIGURATION.md
 %doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
@@ -267,6 +271,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.8-2
+- NEW: ship the secure CPU Points guarantee map across every installation layout
+- DOCS: define CPU Points migration, lending, measurement and RAM-transition contracts
+
 * Sun Aug 30 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.8-1
 - FIX: prevent UID enforcement from acquiring nested PID namespace processes
 - OBSERVABILITY: report bounded cgroup-ingress skips in logs and Prometheus

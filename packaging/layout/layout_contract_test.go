@@ -22,6 +22,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				`"$package_dir/etc/resman"`,
 				`"$package_dir/var/lib/resman"`,
 				`install -m 0600 "$project_dir/config/resman.conf.example" "$package_dir/etc/resman/resman.conf"`,
+				`install -m 0600 "$project_dir/config/cpu-points.map.example" "$package_dir/etc/resman/cpu-points.map"`,
 				`install -m 0644 "$project_dir/docs/CONFIGURATION.md"`,
 				`"$package_dir/usr/share/doc/resman/CONFIGURATION.md"`,
 				`install -m 0644 "$project_dir/docs/UPGRADING.md"`,
@@ -33,6 +34,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 			path: "packaging/deb/conffiles",
 			required: []string{
 				"/etc/resman/resman.conf",
+				"/etc/resman/cpu-points.map",
 			},
 		},
 		{
@@ -40,6 +42,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 			required: []string{
 				"%dir %attr(0700,root,root) %{_sysconfdir}/resman",
 				"%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf",
+				"%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/cpu-points.map",
 				"%dir %attr(0700,root,root) %{_sharedstatedir}/resman",
 				"chmod a-x,o-rwx /var/log/resman.log",
 				"install -m 0600 -o root -g root /dev/null /var/log/resman.log",
@@ -79,6 +82,8 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"STATE_DIR = /var/lib/resman",
 				"sudo install -d -m 0700 $(CONF_DIR) $(STATE_DIR)",
 				"sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf",
+				"sudo test -e $(CONF_DIR)/cpu-points.map || sudo test -L $(CONF_DIR)/cpu-points.map",
+				"sudo install -m 0600 config/cpu-points.map.example $(CONF_DIR)/cpu-points.map",
 			},
 		},
 		{
@@ -87,6 +92,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"dpkg-deb --fsys-tarfile",
 				"tar -tf -",
 				"assert_absent_path '/etc/" + "resman.conf' \"$paths\"",
+				"assert_entry '/etc/resman/cpu-points.map' '-rw-------' 'root/root' \"$listing\"",
 			},
 		},
 	}

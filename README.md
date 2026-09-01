@@ -38,7 +38,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.30.8-1_<architecture>.deb
+# Creates build/deb/resman_1.30.8-2_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -72,6 +72,7 @@ sudo apt install ./resman_*.deb
 sudo cp resman /usr/bin/
 sudo install -d -m 0700 /etc/resman /var/lib/resman
 sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
+sudo install -m 0600 config/cpu-points.map.example /etc/resman/cpu-points.map
 sudo cp packaging/systemd/resman.service /usr/lib/systemd/system/
 sudo systemctl enable --now resman
 ```
@@ -176,16 +177,57 @@ RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
 `cpu.max`; they do not inherit the finite CPU Points parent quota.
 
 CPU Points normalizes the online host capacity to 1000 points. The finite parent
-pool is `1000 - CPU_RESERVE_POINTS`. A mapped user receives at least its configured
-relative entitlement while the parent has usable CPU bandwidth and may borrow unused
-capacity from mapped peers; unmapped eligible users share the aggregate
-`CPU_BEST_EFFORT_POINTS` domain. The strict map begins with
-`[resman-cpu-points-map-v1]` and then contains exact `username=points` assignments.
-Configured guarantees plus the best-effort entitlement must not exceed the pool.
+pool is `1000 - CPU_RESERVE_POINTS`. The reserve is nominal headroom outside that
+parent, not exclusive isolation from arbitrary host workloads. Reserve zero still
+programs a finite full-capacity `cpu.max`, which can throttle and under-deliver under
+saturation. A mapped user receives its configured relative share of the bandwidth
+actually delivered to the parent while CPU enforcement is active and only for its
+acquired, enforceable processes; exclusions and PID-namespace rejections reduce that
+coverage. This is not an absolute host CPU floor or cpuset isolation.
+
+Mapped users may borrow idle capacity from mapped siblings. That lending stays in the
+guaranteed domain while any guaranteed sibling is runnable; the aggregate best-effort
+domain borrows beyond `CPU_BEST_EFFORT_POINTS` only when the complete guaranteed
+domain is idle. Unmapped eligible users divide that one aggregate entitlement with
+equal leaf weights. Active guarantees plus the domain weight are derived from
+acquired/applied leaves, not from instantaneous scheduler runnability.
+
+The strict map begins with `[resman-cpu-points-map-v1]` and then contains exact
+`username=points` assignments. A dot is part of the username, so
+`john.smith=200` maps the exact NSS identity `john.smith`. Configured guarantees plus
+the best-effort entitlement must not exceed the pool. The default package installs
+`/etc/resman/cpu-points.map` as a root-owned regular mode-`0600` file below the
+mode-`0700` configuration directory. Custom paths must satisfy the same regular-file,
+ownership, mode, trusted-ancestor, and no-symlink checks.
+
 Reserve, best-effort, and map-content changes form one atomic hot-reload epoch;
 `CPU_POINTS_FILE` path changes require a restart. A reload may change the weight
 of an active user within its current class, but changing an active user between
-guaranteed and best-effort is rejected until that user is released.
+guaranteed and best-effort is rejected atomically. Wait for normal release or first
+make the UID CPU-ineligible and reload, confirm it is released, change the map and
+reload, then restore eligibility in a later reload. No pending class state exists.
+
+For a saturated measurement window, compare synchronized `cpu.stat` deltas:
+`guaranteed_domain_usage_delta / parent_usage_delta` should follow
+`active_guarantee_points / (active_guarantee_points + best_effort_points)`, and a
+mapped leaf follows `user_points / (active_guarantee_points + best_effort_points)`.
+Use at least a 60-second observation window; the functional gate uses a measured
+same-host reference with tolerances of 0.5 percentage points for the domain and
+1.0 point for a leaf. Positive parent throttling and delivery below nominal quota are
+expected evidence that the finite CFS bandwidth boundary is active, not a failure.
+
+Moving a live process does not transfer existing cgroup v2 memory charges. The first
+dynamic ingress therefore applies `memory.high` and `memory.max` only to post-ingress
+charges; process-derived UID memory remains complete while cgroup RAM coverage is
+reported as partial. ResMan refuses CPU activation from a standalone RAM cgroup and
+defers CPU release to another parent while RAM enforcement is active. Release or
+disable RAM enforcement, let reconciliation complete, then retry the CPU transition.
+I/O-only transitions remain safe because ResMan carries a logical `io.stat` ledger
+across placements. With the normal `memory.high < memory.max` configuration and no
+swap or reclaimable pages, a process can stay alive but effectively stall at high:
+`high` events rise while `max`, `oom`, and `oom_kill` remain zero indefinitely. Raise
+or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
+limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
 When metrics persistence is enabled, SQLite schema version 4 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,

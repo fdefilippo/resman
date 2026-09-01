@@ -112,6 +112,36 @@ jobs:
           legacy_timestamped_backup=/etc/resman.conf.backup_ci_mutation
           install -m 0600 /dev/null "$mutation_dir/package$legacy_timestamped_backup"
           assert_mutation_rejected legacy-timestamped-backup "package layout retained a legacy path beginning with: /etc/resman.conf.backup_"
+          rm -f -- "$mutation_dir/package$legacy_timestamped_backup"
+
+          cpu_points_map="$mutation_dir/package/etc/resman/cpu-points.map"
+          saved_cpu_points_map="$mutation_dir/cpu-points.map"
+          conffiles="$mutation_dir/package/DEBIAN/conffiles"
+          saved_conffiles="$mutation_dir/conffiles"
+          install -m 0600 "$cpu_points_map" "$saved_cpu_points_map"
+          install -m 0644 "$conffiles" "$saved_conffiles"
+
+          rm -f -- "$cpu_points_map"
+          sed -i '\|^/etc/resman/cpu-points.map$|d' "$conffiles"
+          assert_mutation_rejected cpu-points-missing "package layout is missing: /etc/resman/cpu-points.map -rw------- root/root"
+          install -m 0600 "$saved_cpu_points_map" "$cpu_points_map"
+          install -m 0644 "$saved_conffiles" "$conffiles"
+
+          chmod 0644 "$cpu_points_map"
+          assert_mutation_rejected cpu-points-unsafe-mode "package layout is missing: /etc/resman/cpu-points.map -rw------- root/root"
+          chmod 0600 "$cpu_points_map"
+
+          rm -f -- "$cpu_points_map"
+          ln -s /etc/resman/resman.conf "$cpu_points_map"
+          sed -i '\|^/etc/resman/cpu-points.map$|d' "$conffiles"
+          assert_mutation_rejected cpu-points-symlink "package layout is missing: /etc/resman/cpu-points.map -rw------- root/root"
+          rm -f -- "$cpu_points_map"
+          install -m 0600 "$saved_cpu_points_map" "$cpu_points_map"
+          install -m 0644 "$saved_conffiles" "$conffiles"
+
+          mv "$cpu_points_map" "$mutation_dir/package/etc/resman/cpu-points.yaml"
+          sed -i '\|^/etc/resman/cpu-points.map$|d' "$conffiles"
+          assert_mutation_rejected cpu-points-divergent-path "package layout is missing: /etc/resman/cpu-points.map -rw------- root/root"
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v4

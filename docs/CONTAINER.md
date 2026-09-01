@@ -37,6 +37,7 @@ the image:
 ```bash
 sudo install -d -m 0700 /etc/resman
 sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
+sudo install -m 0600 config/cpu-points.map.example /etc/resman/cpu-points.map
 sudo install -d -m 0700 /var/lib/resman
 sudo install -d -m 0750 /var/log/resman
 make container-build

@@ -9,7 +9,7 @@
 # Project name
 PROJECT_NAME = resman
 VERSION = 1.30.8
-RELEASE = 1
+RELEASE = 2
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
@@ -294,6 +294,11 @@ install: build
 	sudo install -m 755 $(PROJECT_NAME) $(BIN_DIR)/
 	sudo install -d -m 0700 $(CONF_DIR) $(STATE_DIR)
 	sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf
+	@if sudo test -e $(CONF_DIR)/cpu-points.map || sudo test -L $(CONF_DIR)/cpu-points.map; then \
+		echo "Preserving existing $(CONF_DIR)/cpu-points.map"; \
+	else \
+		sudo install -m 0600 config/cpu-points.map.example $(CONF_DIR)/cpu-points.map; \
+	fi
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
@@ -305,6 +310,7 @@ uninstall:
 	@echo "Uninstalling $(PROJECT_NAME)..."
 	sudo rm -f $(BIN_DIR)/$(PROJECT_NAME)
 	sudo rm -f $(CONF_DIR)/resman.conf
+	sudo rm -f $(CONF_DIR)/cpu-points.map
 	sudo rm -f $(SYSTEMD_DIR)/resman.service
 	sudo systemctl daemon-reload
 	@echo "Uninstallation completed!"

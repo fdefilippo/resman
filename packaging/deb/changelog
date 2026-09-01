@@ -1,3 +1,10 @@
+resman (1.30.8-2) stable; urgency=medium
+
+  * Ship and preserve the secure CPU Points guarantee map.
+  * Document CPU Points migration, lending, measurement and RAM transitions.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 01 Sep 2026 12:00:00 +0200
+
 resman (1.30.8-1) stable; urgency=medium
 
   * Prevent UID enforcement from acquiring processes in nested PID namespaces.

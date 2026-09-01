@@ -1,3 +1,4 @@
 /etc/logrotate.d/resman
 /etc/resman/resman.conf
+/etc/resman/cpu-points.map
 /etc/rsyslog.d/resman.conf

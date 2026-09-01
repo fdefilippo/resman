@@ -803,18 +803,63 @@ successfully applied state for each resource.
 
 ### 5.3 Limit Application
 
-**Shared Cgroup Approach:**
-1. Create `/sys/fs/cgroup/resman/limited/`
-2. Apply total quota: `available_cores * 100000`
-3. For each active user:
-   - Create `user_{uid}/` sub-cgroup
-   - Apply equal weight (default: 100)
-   - Move all user processes to sub-cgroup
+**CPU Points hierarchy:**
 
-**Proportional Sharing:**
-- Users share total quota proportionally
-- Idle users don't consume their share
-- Active users can use more than their fair share
+1. Refresh the live online-CPU set from `/sys/devices/system/cpu/online`; the
+   observation cache is not an enforcement denominator.
+2. Create the finite `limited/` parent and program
+   `floor(online_cpus * period * (1000 - reserve) / 1000)` in `cpu.max`.
+   The kernel minimum quota is 1000 microseconds. A one-CPU host with period 100000
+   therefore requires a parent pool of at least 10 points.
+3. Create internal `guaranteed/` and `best_effort/` domains. Their weights are the
+   sum of acquired/applied mapped guarantees `G` and the configured aggregate
+   best-effort entitlement `B`.
+4. Place mapped UIDs in guaranteed leaves with their exact configured weight. Place
+   unmapped eligible UIDs in equal-weight leaves under best effort. Every leaf keeps
+   `cpu.max=max`; the parent alone owns the finite quota.
+5. Raise the guaranteed-domain weight before first ingress of a guaranteed leaf and
+   lower it only after successful departure. An error may retain a conservative high
+   weight but must never silently underweight an acquired guarantee.
+
+The invariant `sum(all configured guarantees) + B <= 1000 - reserve` rejects the
+complete policy atomically. With both domains saturated, synchronized `cpu.stat`
+deltas are evaluated against effective parent delivery:
+
+```text
+guaranteed_domain_usage_delta / parent_usage_delta = G / (G + B)
+mapped_leaf_usage_delta       / parent_usage_delta = user_points / (G + B)
+```
+
+Functional evidence uses a 60-second window and a same-kernel measured reference,
+with tolerance of 0.5 percentage points for the guaranteed domain and 1.0 point for a
+leaf. Positive parent throttling and nominal under-delivery are expected CFS bandwidth
+effects. Raw weights, nominal quota, and configured points are not evidence of
+delivered bandwidth.
+
+Lending remains inside the guaranteed domain while any guaranteed leaf is runnable:
+idle mapped capacity goes to runnable mapped siblings first. Best effort borrows the
+parent only when the entire guaranteed domain is idle. `G` represents acquired/applied
+leaves, not instantaneous scheduler runnability. CPU Points are relative guarantees
+for the acquired host-enforceable process subset while enforcement is active; they
+are not absolute host floors or cpuset isolation. Exclusions and PID-namespace
+rejections reduce process coverage and remain explicit in telemetry.
+
+The map is a root/daemon-owned regular mode-0600 file under trusted, non-writable,
+non-symlink ancestors. Its exact marker and line grammar are validated before exact
+NSS resolution. Main configuration and map content are one confirmed composite epoch.
+Changing the class of an active UID is rejected before cgroup mutation and creates no
+pending state. The UID must first be released; same-class guarantee changes and
+inactive membership changes remain dynamic.
+
+Dynamic process movement does not transfer cgroup v2 memory charges. First ingress
+therefore yields complete process-derived UID memory but partial post-ingress cgroup
+RAM coverage. A cross-parent CPU transition is refused while RAM enforcement is
+active; release or disable RAM and retry after reconciliation. I/O-only transitions
+remain permitted through the logical `io.stat` ledger. With `memory.high` below
+`memory.max`, no swap, and unreclaimable pages, a live workload can stall indefinitely
+at high with rising high events and zero max/OOM/kill events. An explicit
+high-equals-max control is a distinct max/OOM experiment; requested allocation size
+alone does not promise termination.
 
 ---
 
@@ -1483,7 +1528,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.30.8-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.30.8-2'" -o resman .
 ```
 
 **Build RPM:**

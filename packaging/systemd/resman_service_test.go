@@ -19,7 +19,7 @@ func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
 	if !strings.Contains(contents, start) {
 		t.Fatalf("resman.service does not start the capability-aware daemon with %q", start)
 	}
-	const mounts = "RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /var/lib/resman"
+	const mounts = "RequiresMountsFor=/usr/bin/resman /etc/resman/resman.conf /etc/resman/cpu-points.map /var/lib/resman"
 	if !strings.Contains(contents, mounts) {
 		t.Errorf("resman.service does not contain required layout contract %q", mounts)
 	}

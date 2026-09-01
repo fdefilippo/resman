@@ -15,7 +15,8 @@ operator-authored configuration has been recovered.
 2. Compare that configuration with [`CONFIGURATION.md`](CONFIGURATION.md), remove all
    rejected keys, and account for corrected defaults and list semantics.
 3. Install the authoritative configuration as a regular mode-`0600` file at
-   `/etc/resman/resman.conf` below a root-owned mode-`0700` `/etc/resman` directory.
+   `/etc/resman/resman.conf` and prepare the packaged regular mode-`0600`
+   `/etc/resman/cpu-points.map` below a root-owned mode-`0700` `/etc/resman` directory.
 4. Remove or securely archive every legacy configuration artifact described below.
 5. Archive or delete the 1.25.x metrics database. It cannot be opened by the new
    schema.
@@ -111,6 +112,79 @@ shared access must use an intended group and a group-only mode such as `0640`; a
 for other users is no longer supported.
 
 ## Configuration loading and reload
+
+### CPU capacity becomes a strict CPU Points policy
+
+**Visible change.** CPU capacity is normalized to 1000 points. The package now
+installs and preserves `/etc/resman/cpu-points.map` as a root-owned regular mode-`0600`
+configuration file below mode-`0700` `/etc/resman`. The main configuration selects
+the nominal reserve, the one aggregate best-effort entitlement, and that map path.
+The map starts with `[resman-cpu-points-map-v1]` and contains direct exact
+`username=points` records; `john.smith=200` refers to the complete dotted NSS name.
+The old keys `MIN_SYSTEM_CORES`, `CPU_QUOTA_NORMAL`, `CPU_QUOTA_LIMITED`,
+`CPU_DEFAULT_POINTS`, `BATCH_NIGHT_CPU_QUOTA`, `INTERACTIVE_CPU_QUOTA`,
+`PSI_BOOST_WEIGHT`, and `PSI_BOOST_DURATION` are rejected without aliases.
+
+**Cause.** The previous contract mixed a core reserve, raw quotas, pattern-selected
+ceilings, and PSI weight mutation. CPU Points instead programs one finite parent pool
+and gives acquired mapped users relative guarantees through a class-priority cgroup
+hierarchy. Unmapped eligible users share one aggregate best-effort domain. Idle mapped
+capacity goes to runnable mapped siblings first; best effort borrows beyond its class
+share only when the complete guaranteed domain is idle. The active guarantee sum and
+domain weight follow acquired/applied leaves, not instantaneous runnability.
+
+**Action.** Stop ResMan before conversion. For an old reserve of `m` cores on a host
+with `N` online CPUs and `m < N`, set
+`CPU_RESERVE_POINTS=ceil(1000*m/N)`. This is the only conversion that preserves at
+least the previous nominal headroom. For example, two reserved cores on an eight-CPU
+host become 250 points. When `m >= N`, no exact CPU Points equivalent exists: leave
+`USER_INCLUDE_LIST` empty to disable CPU enforcement, or deliberately select the
+minimum representable finite parent pool and accept the changed semantics. With the
+100000-microsecond period, that minimum is `ceil(10/N)` points, so the corresponding
+maximum reserve is `1000 - ceil(10/N)`.
+
+Choose a positive `CPU_BEST_EFFORT_POINTS`, populate the shipped map, and ensure
+`sum(all mapped guarantees) + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`.
+The newly shipped map file is a preserved operator configuration file, so package
+upgrades do not overwrite local assignments.
+There is no numeric conversion for the old normal quota, global limited quota,
+pattern quotas, default-points proposal, or PSI boost weight/duration: remove them and
+review the new behavioral contract. A zero reserve does not remove bandwidth control;
+it still programs a finite full-capacity `cpu.max`, which may throttle and deliver less
+than nominal capacity. The reserve is nominal headroom outside the ResMan parent, not
+exclusive physical isolation against arbitrary host workloads.
+
+CPU Points apply only while CPU enforcement is active and only to processes acquired
+by ResMan. Process exclusions and PID-namespace rejections reduce coverage. A mapped
+value is a relative share of effective parent delivery, not an absolute host CPU floor
+or cpuset reservation. Under saturation, evaluate synchronized `cpu.stat` deltas over
+at least 60 seconds: compare guaranteed-domain/parent use with `G/(G+B)` and mapped
+leaf/parent use with `g/(G+B)`, where `G` is the acquired guarantee sum, `B` is the
+best-effort entitlement, and `g` is the leaf guarantee. Allow a measured same-host
+tolerance of 0.5 percentage points for the domain and 1.0 point for a leaf. Positive
+parent throttling and nominal under-delivery are expected.
+
+Reserve, best-effort, and map-content reload as one confirmed epoch. A class change
+for an active UID is rejected atomically and no pending class state is retained. Wait
+for normal release or first remove that UID from CPU eligibility and reload, confirm
+release, then edit the map and reload; restore eligibility only in a later reload.
+Same-class guarantee changes and inactive membership changes remain dynamic. Changing
+the map path requires a restart. A custom map path must be absolute and clean, name a
+root/daemon-owned regular mode-`0600` file, and traverse only trusted non-symlink
+ancestors that are not group/other writable except for a root-owned sticky directory.
+
+Moving a live process does not transfer existing cgroup v2 memory charges. Dynamic
+first ingress therefore constrains post-ingress charges only: process-derived UID
+memory stays complete while managed-cgroup RAM coverage is partial. CPU activation
+from standalone RAM enforcement, and CPU release across a parent while RAM remains
+active, are refused. Release or disable RAM, let reconciliation complete, then retry.
+I/O-only placement changes remain safe through the logical `io.stat` ledger. With the
+normal `memory.high < memory.max` composition, no swap and no reclaimable pages can
+leave a process alive but effectively stalled at high indefinitely: high events rise
+while max, OOM, OOM-kill, and OOM-group-kill remain zero. Raise or disable high,
+provide reclaimable capacity or swap, or release RAM enforcement. An explicit
+high-equals-max control is a separate max/OOM experiment and requested allocation size
+alone never promises termination.
 
 ### Removed and unknown keys now fail startup
 

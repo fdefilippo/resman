@@ -186,17 +186,45 @@ Keeps every user leaf unlimited by
 .BR cpu.max ;
 only the parent has a finite quota
 .PP
+The reserve is nominal headroom outside the ResMan parent, not exclusive physical
+CPU reservation against arbitrary host workloads. A zero reserve still programs a
+finite full-capacity
+.B cpu.max
+on the parent. CFS may throttle that parent and deliver less than its nominal quota
+under saturation. CPU Points guarantees are relative shares of the bandwidth actually
+delivered to the parent, not absolute host CPU floors or cpuset isolation. They apply
+only while CPU enforcement is active and only to processes successfully acquired by
+ResMan; process exclusions and PID-namespace rejections reduce coverage.
+.PP
 The map named by
 .B CPU_POINTS_FILE
 must begin with
 .B [resman-cpu-points-map-v1]
 and then contain exact
 .I username=points
-assignments. Configured guarantees plus the best-effort entitlement must not
-exceed the pool. Resource division occurs proportionally through cgroup
+assignments. The marker must be the first physical line. UTF-8 with LF or CRLF is
+accepted without a BOM; empty lines and unindented full-line comments are allowed;
+an assignment has exactly one equals sign, no surrounding whitespace, and canonical
+decimal points from 1 through 1000. The complete username is passed byte-for-byte to
+NSS. Thus
+.B john.smith=200
+names the exact dotted identity rather than a nested key. Duplicate names, duplicate
+resolved UIDs, ambiguous or non-exact NSS results, unsafe ancestors, symbolic links,
+non-regular files, wrong ownership, or a mode other than 0600 reject the complete
+snapshot. The packaged default is the root-owned regular file
+.B /etc/resman/cpu-points.map
+below root-owned mode-0700
+.BR /etc/resman .
+Configured guarantees plus the best-effort entitlement must not exceed the pool.
+Resource division occurs proportionally through cgroup
 .B cpu.weight
 values. Unused mapped capacity is first borrowed by runnable mapped siblings;
-best effort borrows it only when the whole guaranteed domain is inactive.
+best effort borrows it only when the whole guaranteed domain is inactive. The active
+guarantee total and guaranteed-domain weight follow acquired/applied leaves, not
+instantaneous scheduler runnability. For example, with pool 900, mapped guarantees
+300 and 300, and best effort 100, either runnable mapped user can borrow its mapped
+sibling's idle capacity; best effort remains at its class share until both mapped
+leaves are idle, then it can use the parent.
 .PP
 Changes to the reserve, best-effort entitlement, or map contents are applied as
 one composite hot-reload epoch. Both files are confirmed before and after kernel
@@ -205,6 +233,9 @@ reconciliation. Changing
 itself requires a restart; a rejected path change never redirects the live reload.
 An active user's guaranteed/best-effort class cannot change until that user is
 released, while same-class weight changes and inactive membership changes are dynamic.
+The rejection is atomic and creates no pending class state. Wait for normal release or
+first make the UID CPU-ineligible and reload, confirm that it is released, change the
+map and reload, then restore eligibility with a later reload.
 .PP
 Practical example with four online CPUs, reserve 250, guarantees 300 and 300,
 and best effort 100:
@@ -216,6 +247,19 @@ The two mapped users have weight 300 each
 .IP \(bu
 All unmapped eligible users share the best-effort domain weight 100
 .RE
+.PP
+For a saturated observation window, use synchronized
+.B cpu.stat
+deltas. The guaranteed-domain ratio is
+.B guaranteed_domain_usage_delta / parent_usage_delta
+and should follow
+.BR active_guarantee_points / (active_guarantee_points + best_effort_points) .
+A mapped leaf follows
+.BR user_points / (active_guarantee_points + best_effort_points) .
+Use at least a 60-second window. The functional gate compares against a measured
+same-host reference with tolerances of 0.5 percentage points for the domain and 1.0
+point for a leaf rather than assuming the algebraic target is delivered exactly.
+Positive parent throttling and nominal under-delivery are expected under saturation.
 .PP
 CPU limit eligibility is controlled by
 .B USER_INCLUDE_LIST
@@ -236,7 +280,7 @@ RAM limiting uses cgroups v2 memory controller with two levels of control:
 .RS
 .IP \(bu 2
 .B memory.max
-- hard limit (processes will be OOM\-killed if exceeded)
+- hard accounting boundary at which the kernel attempts reclaim and may invoke cgroup OOM
 .IP \(bu
 .B memory.high
 - soft limit (memory pressure triggers reclaim, processes may throttle)
@@ -273,6 +317,26 @@ When RAM limits are active, each user's cgroup receives both
 and
 .B memory.high
 limits according to the configured quotas and ratio.
+.PP
+Moving a running process does not transfer its existing memory charges. Dynamic first
+ingress therefore constrains post-ingress charges only: process-derived UID memory
+remains complete while cgroup RAM coverage is reported as partial. ResMan refuses CPU
+activation from a standalone RAM cgroup and defers a CPU release that would cross a
+parent while RAM enforcement is active. Release or disable RAM enforcement, allow
+reconciliation to complete, and retry the CPU transition. I/O-only transitions remain
+permitted because the logical block-I/O ledger preserves counter continuity.
+.PP
+The normal composition places
+.B memory.high
+below
+.BR memory.max .
+Without swap or reclaimable pages, a process can remain alive but make negligible
+progress at high indefinitely: the memory-current value plateaus below max, high
+events continue rising, and max, OOM, OOM-kill and OOM-group-kill counters remain zero.
+Requested allocation size alone therefore does not promise termination. Raise or
+disable high, provide reclaimable capacity or swap, or release the RAM limit. An
+explicit high-equals-max control is a distinct diagnostic configuration that can
+exercise max/OOM behavior without the lower high boundary stalling progress first.
 .PP
 A user eligible for RAM or I/O but not CPU limiting is moved to a standalone
 per\-user cgroup with

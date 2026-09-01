@@ -1,5 +1,8 @@
 [resman-cpu-points-map-v1]
-# Exact NSS username=guaranteed points. Unlisted CPU-eligible users share the
-# aggregate CPU_BEST_EFFORT_POINTS entitlement.
+# Exact NSS username=guaranteed points, one assignment per line. Dots,
+# backslashes, at-signs, and hyphens are literal username characters.
+# Unlisted CPU-eligible users share one aggregate CPU_BEST_EFFORT_POINTS
+# entitlement. Configured guarantees plus that entitlement must not exceed
+# 1000 - CPU_RESERVE_POINTS.
 # alice=300
 # john.smith=200
