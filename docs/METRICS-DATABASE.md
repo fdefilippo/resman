@@ -104,6 +104,13 @@ period, throttled-period and throttled-time deltas explain the bandwidth actuall
 delivered by the kernel. Configured class-priority lending is distinct from measured
 use; history never claims that an idle domain was runnable.
 
+Every delta covers only the decision-sample interval named by its own
+`interval_start` and `interval_end`. Baselines advance on every control cycle even
+when `METRICS_DB_WRITE_INTERVAL` causes intermediate samples not to be stored. Derive
+a rate from a row by dividing its delta by that row's elapsed interval. Do not sum
+sparse stored deltas as a total: skipped intervals are not included and cannot be
+reconstructed from later rows.
+
 The schema is versioned with SQLite `PRAGMA user_version`. ResMan intentionally does
 not migrate an incompatible database. Version 3 and unversioned stores are rejected
 by the CPU Points cutover because they cannot express allocation class, guarantee,

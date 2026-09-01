@@ -135,6 +135,117 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 	}
 }
 
+func TestCgroupCounterDeltaRejectsIdentityChangeAndCounterResetIndependently(t *testing.T) {
+	identity := cgroup.CgroupIdentity{Device: 1, Inode: 10}
+	otherIdentity := cgroup.CgroupIdentity{Device: 1, Inode: 11}
+	for _, tt := range []struct {
+		name             string
+		currentIdentity  cgroup.CgroupIdentity
+		current          uint64
+		previousIdentity cgroup.CgroupIdentity
+		previous         uint64
+	}{
+		{
+			name:            "recreated identity with a higher counter",
+			currentIdentity: otherIdentity, current: 200,
+			previousIdentity: identity, previous: 100,
+		},
+		{
+			name:            "stable identity with a decreasing counter",
+			currentIdentity: identity, current: 50,
+			previousIdentity: identity, previous: 100,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if delta := cgroupCounterDelta(tt.currentIdentity, tt.current, tt.previousIdentity, tt.previous, true); delta != nil {
+				t.Fatalf("cgroupCounterDelta() = %d, want unavailable", *delta)
+			}
+		})
+	}
+}
+
+func TestPersistenceTopologyDistinguishesUnavailableCapacityFromVerifiedHistory(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cpus, err := cpupoints.NewOnlineCPUCount(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastVerified, err := cpupoints.PlanParentQuota(cpus, policy.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name           string
+		state          cpupoints.CapacityState
+		wantOnline     bool
+		wantProgrammed bool
+	}{
+		{
+			name:           "unavailable capacity retains only the last verified plan",
+			state:          cpupoints.CapacityState{Available: false, LastVerified: lastVerified},
+			wantProgrammed: true,
+		},
+		{
+			name:  "unavailable capacity without a verified plan remains nullable",
+			state: cpupoints.CapacityState{Available: false},
+		},
+		{
+			name:       "available capacity publishes denominator and plan",
+			state:      cpupoints.CapacityState{Available: true, LastVerified: lastVerified},
+			wantOnline: true, wantProgrammed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cgroups := &persistenceCgroupManager{cpu: make(map[string]cgroup.CPUPointsNodeSnapshot), memory: make(map[int]cgroup.MemoryAccountingSnapshot)}
+			manager := testCPUPointsManagerForReload(t, policy, cgroups)
+			manager.metricsCollector = &persistenceMetricsCollector{writer: resmanmetrics.NewDBWriter(nil, 0)}
+			manager.cpuCapacity = &mutableCPUCapacityProvider{state: tt.state}
+			identity := cgroup.CgroupIdentity{Device: 7, Inode: 70}
+			for _, path := range []string{manager.cpuPointsHierarchy.Parent, manager.cpuPointsHierarchy.Guaranteed, manager.cpuPointsHierarchy.BestEffort} {
+				cgroups.cpu[path] = cpuPersistenceSnapshot(identity, 1, 1, 0, 0, "max 100000", 100)
+			}
+
+			sample := persistenceSample(time.Now().UTC())
+			manager.collectPersistenceInterval(sample)
+			got := sample.PersistenceSystem
+			if got.CPUCapacityAvailable != tt.state.Available {
+				t.Fatalf("CPUCapacityAvailable = %t, want %t", got.CPUCapacityAvailable, tt.state.Available)
+			}
+			if (got.OnlineCPUs != nil) != tt.wantOnline {
+				t.Fatalf("OnlineCPUs = %v, want present=%t", got.OnlineCPUs, tt.wantOnline)
+			}
+			if (got.ProgrammedParentQuotaUsec != nil) != tt.wantProgrammed || (got.ProgrammedParentPeriodUsec != nil) != tt.wantProgrammed {
+				t.Fatalf("programmed plan = quota %v period %v, want present=%t", got.ProgrammedParentQuotaUsec, got.ProgrammedParentPeriodUsec, tt.wantProgrammed)
+			}
+		})
+	}
+}
+
+func TestPersistenceLifecycleDerivesCPUIneligibleFromTheDecisionSample(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cgroups := &persistenceCgroupManager{cpu: make(map[string]cgroup.CPUPointsNodeSnapshot), memory: make(map[int]cgroup.MemoryAccountingSnapshot)}
+	manager := testCPUPointsManagerForReload(t, policy, cgroups)
+	manager.metricsCollector = &persistenceMetricsCollector{writer: resmanmetrics.NewDBWriter(nil, 0)}
+	identity := cgroup.CgroupIdentity{Device: 8, Inode: 80}
+	for _, path := range []string{manager.cpuPointsHierarchy.Parent, manager.cpuPointsHierarchy.Guaranteed, manager.cpuPointsHierarchy.BestEffort} {
+		cgroups.cpu[path] = cpuPersistenceSnapshot(identity, 1, 1, 0, 0, "max 100000", 100)
+	}
+
+	sample := persistenceSample(time.Now().UTC())
+	sample.UserMetrics[1000].EligibleForCPU = false
+	manager.collectPersistenceInterval(sample)
+	if got := sample.PersistenceUsers[1000].LifecycleState; got != resmanmetrics.CPUPointsLifecycleIneligible {
+		t.Fatalf("LifecycleState = %q, want %q", got, resmanmetrics.CPUPointsLifecycleIneligible)
+	}
+}
+
 func TestRejectedActiveClassReloadKeepsCandidateOutOfPersistedState(t *testing.T) {
 	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int

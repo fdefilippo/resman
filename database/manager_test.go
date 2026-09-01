@@ -556,22 +556,49 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 	}
 }
 
-func TestWriteMetricsBatchRejectsMixedObservationEpochs(t *testing.T) {
-	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = manager.Close() }()
+func TestWriteMetricsBatchRejectsIncompleteOrMixedObservationIntervals(t *testing.T) {
 	now := time.Now().UTC()
-	err = manager.WriteMetricsBatch(
-		&SystemMetricsRecord{SampleEpochID: 10, IntervalEnd: now, Timestamp: now},
-		[]*UserMetricsRecord{{
-			SampleEpochID: 11, IntervalEnd: now, Timestamp: now, UID: 1000, Username: "alice",
-			ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
+	start := now.Add(-30 * time.Second)
+	for _, tt := range []struct {
+		name   string
+		mutate func(*SystemMetricsRecord, *UserMetricsRecord)
+		users  bool
+	}{
+		{name: "zero system sample epoch", mutate: func(system *SystemMetricsRecord, _ *UserMetricsRecord) { system.SampleEpochID = 0 }},
+		{name: "zero system interval end", mutate: func(system *SystemMetricsRecord, _ *UserMetricsRecord) { system.IntervalEnd = time.Time{} }},
+		{name: "zero system timestamp", mutate: func(system *SystemMetricsRecord, _ *UserMetricsRecord) { system.Timestamp = time.Time{} }},
+		{name: "mixed sample epoch", users: true, mutate: func(_ *SystemMetricsRecord, user *UserMetricsRecord) { user.SampleEpochID++ }},
+		{name: "mixed interval end", users: true, mutate: func(_ *SystemMetricsRecord, user *UserMetricsRecord) {
+			user.IntervalEnd = user.IntervalEnd.Add(time.Second)
 		}},
-	)
-	if err == nil || !strings.Contains(err.Error(), "does not belong to system sample epoch") {
-		t.Fatalf("WriteMetricsBatch() error = %v", err)
+		{name: "mixed timestamp", users: true, mutate: func(_ *SystemMetricsRecord, user *UserMetricsRecord) {
+			user.Timestamp = user.Timestamp.Add(time.Second)
+		}},
+		{name: "mixed interval start", users: true, mutate: func(_ *SystemMetricsRecord, user *UserMetricsRecord) {
+			other := start.Add(-time.Second)
+			user.IntervalStart = &other
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = manager.Close() }()
+			system := &SystemMetricsRecord{SampleEpochID: 10, IntervalStart: &start, IntervalEnd: now, Timestamp: now}
+			user := &UserMetricsRecord{
+				SampleEpochID: 10, IntervalStart: &start, IntervalEnd: now, Timestamp: now, UID: 1000, Username: "alice",
+				ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
+			}
+			tt.mutate(system, user)
+			var users []*UserMetricsRecord
+			if tt.users {
+				users = []*UserMetricsRecord{user}
+			}
+			if err := manager.WriteMetricsBatch(system, users); err == nil {
+				t.Fatal("WriteMetricsBatch() error = nil")
+			}
+		})
 	}
 }
 
