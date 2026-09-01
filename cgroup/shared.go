@@ -34,7 +34,8 @@ func (m *Manager) CreateSharedCgroup() (string, error) {
 	// permanent apply-fail loop if the hierarchy changes at runtime.
 	subtreeControl := filepath.Join(sharedPath, "cgroup.subtree_control")
 	requirements := enabledControllerInterfaces(m.getConfig())
-	if _, err := m.enableControllerInterfaces(subtreeControl, requirements, requirements); err != nil {
+	candidates := m.managedHierarchyControllerCandidates(requirements)
+	if _, err := m.enableControllerInterfaces(subtreeControl, candidates, requirements); err != nil {
 		cleanupErr := os.Remove(sharedPath)
 		return "", errors.Join(err, cleanupErr)
 	}

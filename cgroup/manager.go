@@ -279,6 +279,22 @@ func enabledControllerInterfaces(cfg *config.Config) []controllerRequirement {
 	return requirements
 }
 
+func (m *Manager) managedHierarchyControllerCandidates(requirements []controllerRequirement) []controllerRequirement {
+	candidates := append([]controllerRequirement(nil), requirements...)
+	seen := make(map[string]bool, len(candidates))
+	for _, requirement := range candidates {
+		seen[requirement.interfaceFile] = true
+	}
+	for _, candidate := range allControllerInterfaces() {
+		if seen[candidate.interfaceFile] || !m.usableControllerInterfaces[candidate.interfaceFile] {
+			continue
+		}
+		candidates = append(candidates, candidate)
+		seen[candidate.interfaceFile] = true
+	}
+	return candidates
+}
+
 func availableControllerInterfaces(available string, interfaces []controllerRequirement) []controllerRequirement {
 	result := make([]controllerRequirement, 0, len(interfaces))
 	for _, candidate := range interfaces {

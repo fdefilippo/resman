@@ -26,20 +26,28 @@ func TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel(t *test
 		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: filepath.Join(root, "created-cgroups"),
-		writeController: func(path, value string) error {
-			return os.WriteFile(path, []byte(value), 0644)
+		usableControllerInterfaces: map[string]bool{
+			"memory.max": true,
 		},
-		createManagedCgroup: func(path string) error {
-			if err := os.Mkdir(path, 0755); err != nil {
+	}
+	controllerWrites := make(map[string][]string)
+	manager.writeController = func(path, value string) error {
+		controllerWrites[path] = append(controllerWrites[path], value)
+		if len(controllerWrites[path]) == 1 {
+			return os.WriteFile(path, []byte(value), 0644)
+		}
+		return nil
+	}
+	manager.createManagedCgroup = func(path string) error {
+		if err := os.Mkdir(path, 0755); err != nil {
+			return err
+		}
+		for _, name := range []string{"cpu.max", "cpu.weight", "cgroup.procs", "cgroup.subtree_control"} {
+			if err := os.WriteFile(filepath.Join(path, name), nil, 0644); err != nil {
 				return err
 			}
-			for _, name := range []string{"cpu.max", "cpu.weight", "cgroup.procs", "cgroup.subtree_control"} {
-				if err := os.WriteFile(filepath.Join(path, name), nil, 0644); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
+		}
+		return nil
 	}
 	online, _ := cpupoints.NewOnlineCPUCount(2)
 	reserve, _ := cpupoints.NewReservePoints(100)
@@ -74,6 +82,12 @@ func TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel(t *test
 		}
 		if string(got) != want {
 			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+	for _, scope := range []string{hierarchy.Parent, hierarchy.Guaranteed, hierarchy.BestEffort} {
+		writes := strings.Join(controllerWrites[filepath.Join(scope, "cgroup.subtree_control")], " ")
+		if !strings.Contains(writes, "+cpu") || !strings.Contains(writes, "+memory") {
+			t.Errorf("controller propagation at %s = %q, want required CPU and optional available memory", scope, writes)
 		}
 	}
 }

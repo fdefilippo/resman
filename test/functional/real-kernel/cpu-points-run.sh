@@ -216,7 +216,7 @@ CPU_POINTS_FILE=$map_path
 USER_INCLUDE_LIST=^resman-t1$,^resman-t2$,^resman-t3$,^resman-t4$,^pippo$,^pluto$
 USER_EXCLUDE_LIST=root
 PROCESS_EXCLUDE_LIST=^systemd$,^dbus-daemon$,^dbus-broker$,^polkitd$,^resman-skip$
-RAM_LIMIT_ENABLED=true
+RAM_LIMIT_ENABLED=false
 RAM_USER_INCLUDE_LIST=
 RAM_USER_EXCLUDE_LIST=root
 IO_LIMIT_ENABLED=true
@@ -581,7 +581,7 @@ probe_kernel_boundaries() {
 
 prove_policy_edges() {
 	local bad_map=$work_root/overcommit.map dotted_map=$work_root/dotted.map dotted_config=$work_root/dotted.conf
-	local dotted_user=resman.point
+	local dotted_user=resman.p${run_id##*-}
 	write_map 300 300 200
 	write_config
 	# The equality vector is the actual daemon policy exercised below.
@@ -611,7 +611,7 @@ EOF
 		|| fail "one-point overcommit failure did not name the cause"
 
 	if ! getent passwd "$dotted_user" >/dev/null 2>&1; then
-		useradd --badname --no-create-home --shell /sbin/nologin "$dotted_user"
+		useradd --badname --no-create-home -K CREATE_MAIL_SPOOL=no --shell /sbin/nologin "$dotted_user"
 		temporary_user=$dotted_user
 	fi
 	cat >"$dotted_map" <<EOF

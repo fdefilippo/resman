@@ -52,6 +52,7 @@ func (m *Manager) EnsureCPUPointsHierarchy(parentQuota cpupoints.ParentQuota, be
 	}
 
 	requirements := enabledControllerInterfaces(m.getConfig())
+	candidates := m.managedHierarchyControllerCandidates(requirements)
 	for _, domain := range []string{hierarchy.Guaranteed, hierarchy.BestEffort} {
 		createManagedCgroup := m.createManagedCgroup
 		if createManagedCgroup == nil {
@@ -60,7 +61,7 @@ func (m *Manager) EnsureCPUPointsHierarchy(parentQuota cpupoints.ParentQuota, be
 		if err := createManagedCgroup(domain); err != nil && !os.IsExist(err) {
 			return CPUPointsHierarchy{}, fmt.Errorf("create CPU Points domain %s: %w", domain, err)
 		}
-		if _, err := m.enableControllerInterfaces(filepath.Join(domain, "cgroup.subtree_control"), requirements, requirements); err != nil {
+		if _, err := m.enableControllerInterfaces(filepath.Join(domain, "cgroup.subtree_control"), candidates, requirements); err != nil {
 			return CPUPointsHierarchy{}, fmt.Errorf("enable controllers in CPU Points domain %s: %w", domain, err)
 		}
 		if pids, err := m.readPidsFromFile(filepath.Join(domain, "cgroup.procs")); err != nil {
