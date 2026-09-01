@@ -158,12 +158,30 @@ exclusive physical isolation against arbitrary host workloads.
 CPU Points apply only while CPU enforcement is active and only to processes acquired
 by ResMan. Process exclusions and PID-namespace rejections reduce coverage. A mapped
 value is a relative share of effective parent delivery, not an absolute host CPU floor
-or cpuset reservation. Under saturation, evaluate synchronized `cpu.stat` deltas over
-at least 60 seconds: compare guaranteed-domain/parent use with `G/(G+B)` and mapped
-leaf/parent use with `g/(G+B)`, where `G` is the acquired guarantee sum, `B` is the
-best-effort entitlement, and `g` is the leaf guarantee. Allow a measured same-host
-tolerance of 0.5 percentage points for the domain and 1.0 point for a leaf. Positive
-parent throttling and nominal under-delivery are expected.
+or cpuset reservation. Under saturation, observe the synchronized values published by
+the daemon rather than sampling cgroup files independently:
+
+- divide `resman_cpu_points_guaranteed_domain_usage_microseconds_delta` and
+  `resman_cpu_points_best_effort_domain_usage_microseconds_delta` by
+  `resman_cpu_points_parent_usage_microseconds_delta`;
+- divide `resman_user_cpu_points_leaf_usage_microseconds_delta` by the same parent
+  denominator for a mapped user; and
+- require `resman_cpu_points_observation_interval_seconds` to describe the interval and
+  treat an absent delta or a zero parent denominator as unavailable, not as zero use.
+
+Compare several complete intervals with `G/(G+B)` for the guaranteed domain and
+`g/(G+B)` for a mapped leaf, where `G` is the acquired guarantee sum, `B` is the
+best-effort entitlement, and `g` is the leaf guarantee. These algebraic values are
+diagnostic expectations, not strict per-window operator thresholds: kernel scheduling
+introduces both jitter and a stable host-specific bias, so averaging reduces jitter but
+does not remove the bias. Establish an operational baseline on the actual host and
+investigate sustained departures from it together with runnable workload and parent
+throttling. Positive parent throttling and nominal under-delivery are expected.
+
+The final functional gate uses a separate known-correct hierarchy measured during the
+same execution. Its 0.5-percentage-point domain tolerance and 1.0-point leaf tolerance
+are reference-centred acceptance values; they do not apply to an operator comparing a
+single hierarchy directly with the algebraic ratios.
 
 Reserve, best-effort, and map-content reload as one confirmed epoch. A class change
 for an active UID is rejected atomically and no pending class state is retained. Wait

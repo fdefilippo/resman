@@ -89,6 +89,10 @@ func TestCPUPointsOperatorSurfacesCarryTheCompleteContract(t *testing.T) {
 			"CPU_DEFAULT_" + "POINTS",
 			"no pending class state",
 			"newly shipped map file",
+			"resman_cpu_points_parent_usage_microseconds_delta",
+			"resman_cpu_points_observation_interval_seconds",
+			"reference-centred acceptance values",
+			"do not apply to an operator",
 		},
 	}
 
