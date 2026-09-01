@@ -244,6 +244,69 @@ func TestCompositeReloadRollsBackWhenMapChangesAfterReconciliation(t *testing.T)
 	}
 }
 
+func TestCompositeReloadRollsBackWhenMapChangesDuringApplicationBeforeAcknowledgement(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "cpu-points.map")
+	oldPolicy := loadReloaderPolicy(t, mapPath, cpupoints.PolicyMapMarker+"\nalice=300\n")
+	if err := os.WriteFile(mapPath, []byte(cpupoints.PolicyMapMarker+"\nalice=400\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current := config.DefaultConfig()
+	current.CPUPointsFile = mapPath
+	requested := config.DefaultConfig()
+	requested.CPUPointsFile = mapPath
+	requested.CPUThreshold = 88
+	stateManager := &testCPUPointsStateManager{
+		testStateConfigManager: testStateConfigManager{cfg: current},
+		policy:                 oldPolicy,
+	}
+	cgroupManager := &testCgroupConfigManager{cfg: current}
+	metricsCollector := &testMetricsConfigCollector{cfg: current}
+	var applyCalls []*config.Config
+	reloader := NewReloader(
+		stateManager,
+		cgroupManager,
+		metricsCollector,
+		func(cfg *config.Config) error {
+			applyCalls = append(applyCalls, cfg)
+			if cfg != requested {
+				return nil
+			}
+			return os.WriteFile(mapPath, []byte(cpupoints.PolicyMapMarker+"\nalice=500\n"), 0600)
+		},
+	)
+	reloader.identityResolver = reloaderResolver{"alice": 1000}
+
+	outcome := reloader.OnConfigCandidate(requested, func() error { return nil })
+	if outcome.Err == nil || outcome.Published || outcome.Processed {
+		t.Fatalf("outcome = %+v, want unprocessed stale-source rejection after application", outcome)
+	}
+	if len(stateManager.reconciled) != 2 {
+		t.Fatalf("reconciliation calls = %d, want candidate plus old-epoch restore", len(stateManager.reconciled))
+	}
+	if guarantee, ok := stateManager.reconciled[0].GuaranteeForUID(1000); !ok || guarantee.Points().Value() != 400 {
+		t.Fatalf("candidate guarantee = %+v, %t; want 400", guarantee, ok)
+	}
+	if guarantee, ok := stateManager.reconciled[1].GuaranteeForUID(1000); !ok || guarantee.Points().Value() != 300 {
+		t.Fatalf("restored guarantee = %+v, %t; want 300", guarantee, ok)
+	}
+	if stateManager.published != 0 {
+		t.Fatal("stale source published the candidate policy")
+	}
+	if guarantee, ok := stateManager.policy.GuaranteeForUID(1000); !ok || guarantee.Points().Value() != 300 {
+		t.Fatalf("authoritative policy guarantee = %+v, %t; want old value 300", guarantee, ok)
+	}
+	if stateManager.updates != 2 || stateManager.cfg != current {
+		t.Fatalf("state configuration updates/final = %d/%p, want 2/%p", stateManager.updates, stateManager.cfg, current)
+	}
+	if cgroupManager.cfg != current || metricsCollector.cfg != current {
+		t.Fatal("component configuration was not rolled back to the previous epoch")
+	}
+	if len(applyCalls) != 2 || applyCalls[0] != requested || applyCalls[1] != current {
+		t.Fatalf("application calls = %v, want requested then current configuration", applyCalls)
+	}
+}
+
 func TestCompositeReloadSeparatesPreflightFromPartialMutation(t *testing.T) {
 	dir := t.TempDir()
 	mapPath := filepath.Join(dir, "cpu-points.map")
