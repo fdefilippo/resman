@@ -1,7 +1,9 @@
 package layout
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -112,6 +114,48 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLogrotateShellBlocksParse(t *testing.T) {
+	root := repositoryRoot(t)
+	content := readTextFile(t, filepath.Join(root, "packaging/syslog/resman"))
+	if err := validateLogrotateShellBlocks(content); err != nil {
+		t.Fatalf("packaging/syslog/resman contains invalid shell: %v", err)
+	}
+	if strings.Contains(content, "copytruncate") && strings.Contains(content, "postrotate") {
+		t.Fatal("copytruncate must not retain a redundant postrotate hook")
+	}
+}
+
+func TestLogrotateShellGateRejectsDanglingContinuation(t *testing.T) {
+	content := "/var/log/resman.log {\npostrotate\nsystemctl reload rsyslog || \\\n\nendscript\n}\n"
+	if err := validateLogrotateShellBlocks(content); err == nil {
+		t.Fatal("logrotate shell gate accepted a dangling continuation")
+	}
+}
+
+func validateLogrotateShellBlocks(content string) error {
+	lines := strings.Split(content, "\n")
+	for index := 0; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) != "postrotate" {
+			continue
+		}
+		start := index + 2
+		var script strings.Builder
+		for index++; index < len(lines) && strings.TrimSpace(lines[index]) != "endscript"; index++ {
+			script.WriteString(lines[index])
+			script.WriteByte('\n')
+		}
+		if index == len(lines) {
+			return fmt.Errorf("postrotate block at line %d has no endscript", start)
+		}
+		command := exec.Command("bash", "-n")
+		command.Stdin = strings.NewReader(script.String())
+		if output, err := command.CombinedOutput(); err != nil {
+			return fmt.Errorf("postrotate block at line %d: %w: %s", start, err, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
 }
 
 func TestPackagePostInstallMessagesNameEveryLegacyArtifactAndRemedy(t *testing.T) {

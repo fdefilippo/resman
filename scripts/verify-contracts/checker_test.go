@@ -536,6 +536,35 @@ func TestEnglishLanguageCheckerRejectsProductionCommentsAndCurrentDocumentation(
 	}
 }
 
+func TestEnglishLanguageCheckerScansPackagingSyslog(t *testing.T) {
+	root := newCheckerFixture(t)
+	writeFixture(t, root, "docs/empty", "")
+	writeFixture(t, root, "packaging/syslog/resman", "# Ricarica rsyslog dopo la rotazione")
+	writeFixture(t, root, "scripts/empty", "")
+	writeFixture(t, root, "README.md", "ResMan")
+	writeFixture(t, root, "CONTRIBUTING.md", "ResMan")
+	writeFixture(t, root, "Makefile", "help:\n\t@echo ResMan")
+	sources, parseFindings := loadGoFiles(root)
+	if len(parseFindings) != 0 {
+		t.Fatalf("parse findings: %v", parseFindings)
+	}
+	tracked := map[string]bool{
+		"docs/empty":              true,
+		"packaging/syslog/resman": true,
+		"scripts/empty":           true,
+		"README.md":               true,
+		"CONTRIBUTING.md":         true,
+		"Makefile":                true,
+	}
+	result := checkEnglishLanguageWithTrackedPaths(root, sources, tracked)
+	if len(result.findings) != 1 {
+		t.Fatalf("expected one Italian packaging finding, got %v", result.findings)
+	}
+	if result.findings[0].path != "packaging/syslog/resman" || result.findings[0].line != 1 {
+		t.Fatalf("unexpected finding location: %+v", result.findings[0])
+	}
+}
+
 func newCheckerFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

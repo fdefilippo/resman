@@ -14,7 +14,7 @@ import (
 )
 
 var obsoleteProductPattern = regexp.MustCompile(`(?i)cpu[ _-]*manager`)
-var nonEnglishItalianPattern = regexp.MustCompile(`(?i)\b(?:abilita|abilitato|aggiorna|ambiente|applica|attività|avvio|carica|calcola|chiude|configurazione|consumo|controlla|converte|crea|database\s+troppo|dati\s+storici|disabilita|esegue|gestisce|giorni|indica|inizializza|installa|lettura|legge|leggi|limite|limiti|memoria|memorizza|metriche|nessun[oa]|ottiene|percorso|predefinit[oa]|processi|processo|registr[ao]|restituisce|riavvia|rimuove|riscrive|risoluzione|ruolo|salva|scrittura|scrive|servizio|settimana|sistema|soglia|sposta|supporta|totale|ultima|ultimo|utente|utenti|utilizza|valori|verifica|vengono)\b`)
+var nonEnglishItalianPattern = regexp.MustCompile(`(?i)\b(?:abilita|abilitato|aggiorna|ambiente|applica|attività|avvio|carica|calcola|chiude|configurazione|consumo|controlla|converte|crea|database\s+troppo|dati\s+storici|disabilita|esegue|gestisce|giorni|indica|inizializza|installa|lettura|legge|leggi|limite|limiti|memoria|memorizza|metriche|nessun[oa]|ottiene|percorso|predefinit[oa]|processi|processo|registr[ao]|restituisce|riavvia|ricarica|rimuove|riscrive|risoluzione|ruolo|salva|scrittura|scrive|servizio|settimana|sistema|soglia|sposta|supporta|totale|ultima|ultimo|utente|utenti|utilizza|valori|verifica|vengono)\b`)
 
 type obsoleteTokenMatch struct {
 	token  string
