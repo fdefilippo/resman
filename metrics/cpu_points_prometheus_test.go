@@ -152,6 +152,65 @@ func TestCPUPointsPrometheusUserSnapshotDistinguishesPartialGuaranteeAndRemovesB
 	}
 	assertGaugeLabelValue(t, exporter, "resman_user_cpu_points_configured_class", "class", "best_effort", 1)
 	assertGaugeLabelValue(t, exporter, "resman_user_cpu_points_lifecycle_state", "state", "released", 1)
+	for _, stale := range []struct {
+		name, label, value string
+	}{
+		{"resman_user_cpu_points_configured_class", "class", "guaranteed"},
+		{"resman_user_cpu_points_applied_class", "class", "guaranteed"},
+		{"resman_user_cpu_points_lifecycle_state", "state", "applied"},
+		{"resman_user_cpu_points_process_coverage", "coverage", "partial"},
+		{"resman_user_ram_cgroup_coverage", "coverage", "partial"},
+	} {
+		if hasGaugeLabelValue(t, exporter, stale.name, stale.label, stale.value) {
+			t.Errorf("state transition retained stale %s{%s=%q}", stale.name, stale.label, stale.value)
+		}
+	}
+}
+
+func TestCPUPointsPrometheusCleanupRemovesEveryInactiveUserSeries(t *testing.T) {
+	exporter := newCPUPointsTestExporter(t)
+	guarantee, weight, delta, ramCurrent := uint64(300), uint64(300), uint64(10), uint64(32<<20)
+	class, ramCoverage := "guaranteed", "complete"
+	exporter.UpdateUserSnapshot(UserExporterMetrics{UID: 1000, Username: "alice", CPUPoints: CPUPointsUserSnapshot{
+		UID: 1000, Username: "alice", ConfiguredClass: class, ConfiguredGuaranteePoints: &guarantee,
+		CPUEnforcementRequested: true, LifecycleState: CPUPointsLifecycleApplied,
+		AppliedClass: &class, AppliedWeight: &weight, AppliedToProcesses: true,
+		CompleteUIDWorkloadGuaranteed: true, ProcessCoverage: CPUPointsCoverageComplete,
+		ObservedProcessCount: 2, EnforceableProcessCount: 2, LeafCPUUsageUsecDelta: &delta,
+		RAMCgroupUsageBytes: &ramCurrent, RAMCoverage: &ramCoverage,
+		MemoryHighEventsDelta: &delta, MemoryMaxEventsDelta: &delta,
+		MemoryOOMEventsDelta: &delta, MemoryOOMKillEventsDelta: &delta,
+	}})
+
+	exporter.CleanupUserMetrics(map[int]bool{})
+	for _, name := range []string{
+		"resman_user_cpu_points_configured_class",
+		"resman_user_cpu_points_configured_guarantee",
+		"resman_user_cpu_points_enforcement_requested",
+		"resman_user_cpu_points_lifecycle_state",
+		"resman_user_cpu_points_applied_class",
+		"resman_user_cpu_points_applied_weight",
+		"resman_user_cpu_points_applied_to_processes",
+		"resman_user_cpu_points_complete_uid_workload_guaranteed",
+		"resman_user_cpu_points_reconciliation_degraded",
+		"resman_user_cpu_points_process_coverage",
+		"resman_user_cpu_points_observed_processes",
+		"resman_user_cpu_points_enforceable_processes",
+		"resman_user_cpu_points_pid_namespace_mismatch_processes",
+		"resman_user_cpu_points_pid_namespace_unavailable_processes",
+		"resman_user_cpu_points_leaf_usage_microseconds_delta",
+		"resman_user_ram_cgroup_memory_current_bytes",
+		"resman_user_ram_cgroup_coverage",
+		"resman_user_ram_cgroup_coverage_incomplete_processes",
+		"resman_user_memory_high_events_delta",
+		"resman_user_memory_max_events_delta",
+		"resman_user_memory_oom_events_delta",
+		"resman_user_memory_oom_kill_events_delta",
+	} {
+		if hasMetricFamily(t, exporter, name) {
+			t.Errorf("inactive-user cleanup retained %s", name)
+		}
+	}
 }
 
 func TestCPUPointsPrometheusRejectsUnboundedSnapshotLabels(t *testing.T) {

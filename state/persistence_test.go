@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -467,6 +468,79 @@ func TestOperationalCPUPointsLendingStateDistinguishesEntitlementFromBorrowing(t
 	withoutMappedGuarantees.BestEffortDomainCPUUsageUsecDelta = &parent
 	if got := operationalCPUPointsSystemSnapshot(100, "", withoutMappedGuarantees).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortEntitled {
 		t.Fatalf("best-effort-only lending state = %q, want entitlement without borrowing", got)
+	}
+
+	atEntitlementBoundary := base
+	atEntitlementBoundary.GuaranteedDomainCPUUsageUsecDelta = &zero
+	entitledBestEffort := uint64(250)
+	atEntitlementBoundary.BestEffortDomainCPUUsageUsecDelta = &entitledBestEffort
+	if got := operationalCPUPointsSystemSnapshot(100, "", atEntitlementBoundary).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortEntitled {
+		t.Fatalf("best-effort lending state at exact entitlement = %q, want entitlement", got)
+	}
+
+	aboveEntitlementBoundary := atEntitlementBoundary
+	borrowedBestEffort := uint64(251)
+	aboveEntitlementBoundary.BestEffortDomainCPUUsageUsecDelta = &borrowedBestEffort
+	if got := operationalCPUPointsSystemSnapshot(100, "", aboveEntitlementBoundary).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortBorrowed {
+		t.Fatalf("best-effort lending state above entitlement = %q, want borrowed", got)
+	}
+}
+
+func TestOperationalCPUPointsStatesRequireCompleteComparableDeltas(t *testing.T) {
+	zero, parent, bestEffort := uint64(0), uint64(1000), uint64(900)
+	periods := uint64(10)
+	base := resmanmetrics.SystemPersistenceMetrics{
+		CPUCapacityAvailable: true, AppliedGuaranteePoints: 300,
+		ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
+	}
+
+	if got := operationalCPUPointsSystemSnapshot(100, "", base); got.DeliveryState != resmanmetrics.CPUPointsDeliveryUnavailable || got.LendingState != resmanmetrics.CPUPointsLendingUnavailable {
+		t.Fatalf("states without a comparable interval = delivery %q lending %q, want unavailable/unavailable", got.DeliveryState, got.LendingState)
+	}
+
+	missingGuaranteed := base
+	missingGuaranteed.ParentCPUUsageUsecDelta = &parent
+	missingGuaranteed.BestEffortDomainCPUUsageUsecDelta = &bestEffort
+	if got := operationalCPUPointsSystemSnapshot(100, "", missingGuaranteed).LendingState; got != resmanmetrics.CPUPointsLendingUnavailable {
+		t.Fatalf("lending state without guaranteed-domain delta = %q, want unavailable", got)
+	}
+
+	incompleteDelivery := base
+	incompleteDelivery.ParentCPUUsageUsecDelta = &parent
+	incompleteDelivery.ParentCPUPeriodsDelta = &periods
+	incompleteDelivery.ParentCPUThrottledPeriodsDelta = &zero
+	if got := operationalCPUPointsSystemSnapshot(100, "", incompleteDelivery).DeliveryState; got != resmanmetrics.CPUPointsDeliveryUnavailable {
+		t.Fatalf("delivery state without throttled-usec delta = %q, want unavailable", got)
+	}
+}
+
+func TestOptionalCPUPointsRAMObservationFailureIsCountedWithoutFabricatingUsage(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cgroups := &persistenceCgroupManager{cpu: make(map[string]cgroup.CPUPointsNodeSnapshot), memory: make(map[int]cgroup.MemoryAccountingSnapshot)}
+	manager := testCPUPointsManagerForReload(t, policy, cgroups)
+	hierarchy := manager.cpuPointsHierarchy
+	leaf := hierarchy.BestEffort + "/user_1000"
+	identity := cgroup.CgroupIdentity{Device: 9, Inode: 90}
+	for _, path := range []string{hierarchy.Parent, hierarchy.Guaranteed, hierarchy.BestEffort, leaf} {
+		cgroups.cpu[path] = cpuPersistenceSnapshot(identity, 1, 1, 0, 0, "max 100000", 100)
+	}
+	weight, _ := cpupoints.NewKernelCPUWeight(100)
+	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassBestEffort, weight: weight, domainPath: hierarchy.BestEffort, leafPath: leaf}
+
+	sample := persistenceSample(time.Now().UTC())
+	manager.collectPersistenceInterval(sample)
+	if sample.PersistenceUsers[1000].RAMCgroupUsageBytes != nil {
+		t.Fatalf("optional failed RAM observation fabricated usage: %v", sample.PersistenceUsers[1000].RAMCgroupUsageBytes)
+	}
+	exporter := manager.prometheusExporter.(*mockPrometheusExporter)
+	if got := exporter.recordedErrors(); !reflect.DeepEqual(got, []prometheusErrorRecord{{
+		component: typedEnforcementObservationComponent,
+		errorType: metricsDatabaseRAMReadFailure,
+	}}) {
+		t.Fatalf("optional RAM observation errors = %+v", got)
 	}
 }
 

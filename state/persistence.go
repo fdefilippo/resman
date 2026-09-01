@@ -181,7 +181,9 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		resource := resources[uid]
 		if _, cpuApplied := allocations[uid]; cpuApplied && !resource.ramApplied {
 			memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid)
-			if err == nil {
+			if err != nil {
+				m.recordOptionalPersistenceObservationGap(metricsDatabaseRAMReadFailure, uid, err)
+			} else {
 				user.CgroupPath = memory.Path
 				currentBytes := memory.CurrentBytes
 				user.RAMCgroupUsageBytes = &currentBytes
@@ -234,18 +236,18 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 
 func operationalCPUPointsSystemSnapshot(reserve uint64, capacityReason string, persisted resmanmetrics.SystemPersistenceMetrics) resmanmetrics.CPUPointsSystemSnapshot {
 	delivery := resmanmetrics.CPUPointsDeliveryUnavailable
-	if persisted.CPUCapacityAvailable {
+	if persisted.CPUCapacityAvailable && completeParentCPUPointsInterval(persisted) {
 		delivery = resmanmetrics.CPUPointsDeliveryAvailable
-		if persisted.ParentCPUThrottledPeriodsDelta != nil && *persisted.ParentCPUThrottledPeriodsDelta > 0 {
+		if *persisted.ParentCPUThrottledPeriodsDelta > 0 {
 			delivery = resmanmetrics.CPUPointsDeliveryThrottledParent
 		}
 	}
 	lending := resmanmetrics.CPUPointsLendingUnavailable
-	if persisted.CPUCapacityAvailable {
+	if persisted.CPUCapacityAvailable && completeCPUPointsLendingInterval(persisted) {
 		lending = resmanmetrics.CPUPointsLendingInactive
-		if persisted.GuaranteedDomainCPUUsageUsecDelta != nil && *persisted.GuaranteedDomainCPUUsageUsecDelta > 0 {
+		if *persisted.GuaranteedDomainCPUUsageUsecDelta > 0 {
 			lending = resmanmetrics.CPUPointsLendingGuaranteedPriority
-		} else if persisted.BestEffortDomainCPUUsageUsecDelta != nil && *persisted.BestEffortDomainCPUUsageUsecDelta > 0 {
+		} else if *persisted.BestEffortDomainCPUUsageUsecDelta > 0 {
 			lending = resmanmetrics.CPUPointsLendingBestEffortEntitled
 			if observedBestEffortBorrowing(persisted) {
 				lending = resmanmetrics.CPUPointsLendingBestEffortBorrowed
@@ -278,6 +280,19 @@ func operationalCPUPointsSystemSnapshot(reserve uint64, capacityReason string, p
 		DeliveryState:                     delivery,
 		LendingState:                      lending,
 	}
+}
+
+func completeParentCPUPointsInterval(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
+	return snapshot.ParentCPUUsageUsecDelta != nil &&
+		snapshot.ParentCPUPeriodsDelta != nil &&
+		snapshot.ParentCPUThrottledPeriodsDelta != nil &&
+		snapshot.ParentCPUThrottledUsecDelta != nil
+}
+
+func completeCPUPointsLendingInterval(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
+	return snapshot.ParentCPUUsageUsecDelta != nil &&
+		snapshot.GuaranteedDomainCPUUsageUsecDelta != nil &&
+		snapshot.BestEffortDomainCPUUsageUsecDelta != nil
 }
 
 func observedBestEffortBorrowing(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
@@ -361,6 +376,13 @@ func (m *Manager) recordPersistenceObservationError(errorType string, uid int, e
 	} else {
 		m.logger.Warn("Failed to collect typed enforcement accounting", "error_type", errorType, "error", err)
 	}
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
+	}
+}
+
+func (m *Manager) recordOptionalPersistenceObservationGap(errorType string, uid int, err error) {
+	m.logger.Debug("Optional typed enforcement accounting unavailable", "uid", uid, "error_type", errorType, "error", err)
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
 	}
