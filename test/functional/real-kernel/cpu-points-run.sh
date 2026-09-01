@@ -595,6 +595,7 @@ resman-t3=200
 EOF
 	chmod 0600 "$bad_map"
 	write_config "$bad_map"
+	: >"$daemon_log"
 	set +e
 	timeout 15 "$binary" --config "$config_file" >"$evidence_dir/overcommit.stdout" \
 		2>"$evidence_dir/overcommit.stderr"
@@ -602,7 +603,11 @@ EOF
 	set -e
 	[[ $bad_status -ne 0 && $bad_status -ne 124 ]] \
 		|| fail "one-point CPU Points overcommit did not fail startup"
-	grep -qi 'overcommit' "$evidence_dir/overcommit.stderr" \
+	{
+		cat "$evidence_dir/overcommit.stderr"
+		[[ ! -f $daemon_log ]] || cat "$daemon_log"
+	} >"$evidence_dir/overcommit-diagnostic.txt"
+	grep -qi 'overcommit' "$evidence_dir/overcommit-diagnostic.txt" \
 		|| fail "one-point overcommit failure did not name the cause"
 
 	if ! getent passwd "$dotted_user" >/dev/null 2>&1; then
