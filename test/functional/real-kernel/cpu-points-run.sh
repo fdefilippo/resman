@@ -142,6 +142,7 @@ finish() {
 		remove_cgroup_tree "$root" || cleanup_status=FAIL-cgroup-cleanup
 	done
 	if [[ -f $daemon_log ]]; then
+		cp -- "$daemon_log" "$evidence_dir/daemon.log"
 		grep ' \[ERROR\] ' "$daemon_log" \
 			| grep -v 'CPU Points policy changes the active allocation class' \
 			>"$evidence_dir/unexpected-daemon-errors.txt" || true
@@ -210,6 +211,31 @@ scrape_metrics() {
 		http://127.0.0.1:1976/metrics || true)
 	[[ $status == 200 && -s $output ]] \
 		|| fail "Prometheus scrape returned HTTP $status"
+}
+
+wait_for_partial_cpu_points_coverage() {
+	local uid=$1 output=$2 timeout=$3
+	local deadline=$((SECONDS + timeout))
+	while (( SECONDS < deadline )); do
+		scrape_metrics "$output"
+		if awk -v uid="$uid" '
+			/^resman_user_cpu_points_process_coverage\{/ \
+				&& index($0, "uid=\"" uid "\"") \
+				&& index($0, "coverage=\"partial\"") \
+				&& $NF == 1 { coverage=1 }
+			/^resman_user_cpu_points_applied_to_processes\{/ \
+				&& index($0, "uid=\"" uid "\"") \
+				&& $NF == 1 { applied=1 }
+			/^resman_user_cpu_points_pid_namespace_mismatch_processes\{/ \
+				&& index($0, "uid=\"" uid "\"") \
+				&& $NF > 0 { mismatch=1 }
+			END { exit !(coverage && applied && mismatch) }
+		' "$output"; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
 }
 
 write_map() {
@@ -822,7 +848,8 @@ run_partial_coverage_contract() {
 	start_user_cpu "$user" 2
 	wait_for_leaf best_effort "$user" 90 \
 		|| fail "mixed-coverage host processes were not admitted"
-	sleep 4
+	wait_for_partial_cpu_points_coverage "$uid" "$evidence_dir/metrics-partial-coverage.prom" 60 \
+		|| fail "mixed namespace/excluded workload did not converge to applied partial coverage"
 	nested_after=$(cut -d: -f3 "/proc/$nested_pid/cgroup")
 	[[ $nested_after == "$nested_before" ]] \
 		|| fail "nested PID-namespace process left its runtime-owned cgroup"
@@ -830,9 +857,12 @@ run_partial_coverage_contract() {
 		|| fail "process-excluded workload entered ResMan ownership"
 	[[ $(cut -d: -f3 "/proc/$nested_pid/cgroup") != *"$(basename "$managed_root")"* ]] \
 		|| fail "nested process entered the managed CPU Points hierarchy"
-	scrape_metrics "$evidence_dir/metrics-partial-coverage.prom"
-	coverage_line=$(grep -E "^resman_user_cpu_points_process_coverage\{.*uid=\"$uid\".*coverage=\"partial\".*\} 1$" \
-		"$evidence_dir/metrics-partial-coverage.prom" || true)
+	coverage_line=$(awk -v uid="$uid" '
+		/^resman_user_cpu_points_process_coverage\{/ \
+			&& index($0, "uid=\"" uid "\"") \
+			&& index($0, "coverage=\"partial\"") \
+			&& $NF == 1 { print }
+	' "$evidence_dir/metrics-partial-coverage.prom")
 	[[ -n $coverage_line ]] \
 		|| fail "mixed namespace/excluded workload was serialized as a whole-UID guarantee"
 	{
