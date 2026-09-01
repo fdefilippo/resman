@@ -254,7 +254,9 @@ backup or directory sync no longer blocks control-cycle getters. A pure restart-
 outcome now emits one structured `WARN` with `rejected_fields` and `processed=true`;
 the previous per-field warning, partial-apply warning, and duplicate error records are
 not emitted. A genuine or mixed failure emits one `ERROR` and is never downgraded merely
-because it also contains rejected restart-required fields.
+because it also contains rejected restart-required fields. Identical automatic failures
+for the same candidate are retried but logged only once; changed content, a changed cause,
+or an intervening successful reload makes the next terminal record visible again.
 
 **Cause.** Previous reloads could publish a new configuration while constructed
 components still used old listener, storage, logging, or security settings.
@@ -265,6 +267,12 @@ write interval, Prometheus or MCP listener/security settings, logging backend, o
 `METRICS_DB_RETENTION_DAYS` remains dynamic; `USERNAME_CACHE_TTL` applies at startup
 and reload even when the database is disabled. Log-based monitoring should match the
 single terminal record and consume `rejected_fields` instead of the former `field` key.
+`systemctl reload resman` confirms only that systemd delivered `SIGHUP`; its zero exit
+status does not acknowledge the candidate. Check the one-hot
+`resman_config_reload_state{state="never|applied|refused|failed"}` series and the
+`resman_config_reload_last_attempt_timestamp_seconds` and
+`resman_config_reload_last_success_timestamp_seconds` gauges instead. `refused` means
+the file on disk is pending while the previous acknowledged epoch remains active.
 
 ### Cache TTL validation and retention change
 

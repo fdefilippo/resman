@@ -52,6 +52,39 @@ type ReloadApplyOutcome struct {
 	Err       error
 }
 
+// ReloadState identifies one bounded terminal configuration-reload outcome.
+type ReloadState string
+
+const (
+	ReloadStateApplied ReloadState = "applied"
+	ReloadStateRefused ReloadState = "refused"
+	ReloadStateFailed  ReloadState = "failed"
+)
+
+// ReloadObservation describes one terminal reload attempt without exposing
+// configuration contents or unbounded error text as metric labels.
+type ReloadObservation struct {
+	State     ReloadState
+	Source    string
+	Processed bool
+	Timestamp time.Time
+}
+
+// ReloadObserver consumes bounded reload outcomes.
+type ReloadObserver interface {
+	ObserveConfigReload(ReloadObservation)
+}
+
+// WatcherOption configures one Watcher before it starts.
+type WatcherOption func(*Watcher)
+
+// WithReloadObserver publishes terminal reload outcomes to observer.
+func WithReloadObserver(observer ReloadObserver) WatcherOption {
+	return func(w *Watcher) {
+		w.reloadObserver = observer
+	}
+}
+
 // CompositeConfigChangeHandler applies a main-config plus CPU Points map epoch.
 type CompositeConfigChangeHandler interface {
 	OnConfigCandidate(*Config, ReloadSourceConfirmation) ReloadApplyOutcome
@@ -88,6 +121,7 @@ type Watcher struct {
 	reloadGate chan struct{}
 	loopWG     sync.WaitGroup
 	reloadWG   sync.WaitGroup
+	outcomeMu  sync.Mutex
 
 	// Callback invoked after the configuration has been validated.
 	onChange ConfigChangeHandler
@@ -103,6 +137,10 @@ type Watcher struct {
 	mapPath       string
 	lastMapDigest [sha256.Size]byte
 	hasMapDigest  bool
+
+	reloadObserver       ReloadObserver
+	lastAutomaticFailure [sha256.Size]byte
+	hasAutomaticFailure  bool
 }
 
 // Reload synchronously validates and applies a file version that has not
@@ -114,8 +152,10 @@ func (w *Watcher) Reload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Manual configuration reload triggered")
-	err := w.handleConfigChange(ctx, false)
-	w.reportReloadOutcome("manual", err)
+	attempted, err := w.handleConfigChangeResult(ctx, false)
+	if attempted || err != nil {
+		w.reportReloadOutcome("manual", err)
+	}
 	return err
 }
 
@@ -126,13 +166,15 @@ func (w *Watcher) ForceReload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Forced configuration reload triggered")
-	err := w.handleConfigChange(ctx, true)
-	w.reportReloadOutcome("forced", err)
+	attempted, err := w.handleConfigChangeResult(ctx, true)
+	if attempted || err != nil {
+		w.reportReloadOutcome("forced", err)
+	}
 	return err
 }
 
 // NewWatcher creates a watcher for one configuration file.
-func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeHandler) (*Watcher, error) {
+func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeHandler, options ...WatcherOption) (*Watcher, error) {
 	logger := logging.GetLogger()
 
 	absoluteConfigPath, err := filepath.Abs(configPath)
@@ -171,6 +213,11 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 		lastFileSize:  fileInfo.Size(),
 		lastDigest:    sha256.Sum256(fileContent),
 		hasDigest:     true,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(watcher)
+		}
 	}
 	if _, composite := onChange.(CompositeConfigChangeHandler); composite && initialConfig != nil {
 		watcher.mapPath = filepath.Clean(initialConfig.GetCPUPointsFile())
@@ -325,21 +372,34 @@ func (w *Watcher) checkConfigChange() {
 }
 
 func (w *Watcher) reloadFromEvent(force bool) {
-	err := w.handleConfigChange(context.Background(), force)
-	if err != nil && !errors.Is(err, ErrWatcherStopped) {
+	attempted, err := w.handleConfigChangeResult(context.Background(), force)
+	if (attempted || err != nil) && !errors.Is(err, ErrWatcherStopped) {
 		w.reportReloadOutcome("automatic", err)
 	}
 }
 
 func (w *Watcher) reportReloadOutcome(source string, err error) {
+	state := classifyReloadState(err)
+	processed := err == nil || reloadOutcomeWasProcessed(err)
+	if w.reloadObserver != nil {
+		w.reloadObserver.ObserveConfigReload(ReloadObservation{
+			State: state, Source: source, Processed: processed, Timestamp: time.Now(),
+		})
+	}
+
 	if err == nil {
+		w.clearAutomaticFailure()
+		w.logger.Info("Configuration reload applied", "source", source, "processed", true)
+		return
+	}
+	if source == "automatic" && !w.shouldReportAutomaticFailure(state, err) {
 		return
 	}
 
 	classification := ClassifyReloadError(err)
 	keyvals := []interface{}{
 		"source", source,
-		"processed", reloadOutcomeWasProcessed(err),
+		"processed", processed,
 	}
 	if len(classification.RestartRequiredFields) > 0 {
 		keyvals = append(keyvals, "rejected_fields", strings.Join(classification.RestartRequiredFields, ","))
@@ -353,6 +413,52 @@ func (w *Watcher) reportReloadOutcome(source string, err error) {
 	w.logger.Error("Configuration reload failed", keyvals...)
 }
 
+func classifyReloadState(err error) ReloadState {
+	if err == nil {
+		return ReloadStateApplied
+	}
+	classification := ClassifyReloadError(err)
+	var preflight interface{ CPUPointsPreflight() }
+	if classification.OnlyRestartRequired || errors.As(err, &preflight) {
+		return ReloadStateRefused
+	}
+	return ReloadStateFailed
+}
+
+func (w *Watcher) shouldReportAutomaticFailure(state ReloadState, err error) bool {
+	w.mu.RLock()
+	mapPath := w.mapPath
+	w.mu.RUnlock()
+	parts := []string{string(state), err.Error()}
+	for _, path := range []string{w.configPath, mapPath} {
+		if path == "" {
+			continue
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			parts = append(parts, path, readErr.Error())
+			continue
+		}
+		parts = append(parts, path, string(content))
+	}
+	fingerprint := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	w.outcomeMu.Lock()
+	defer w.outcomeMu.Unlock()
+	if w.hasAutomaticFailure && fingerprint == w.lastAutomaticFailure {
+		return false
+	}
+	w.lastAutomaticFailure = fingerprint
+	w.hasAutomaticFailure = true
+	return true
+}
+
+func (w *Watcher) clearAutomaticFailure() {
+	w.outcomeMu.Lock()
+	w.hasAutomaticFailure = false
+	w.lastAutomaticFailure = [sha256.Size]byte{}
+	w.outcomeMu.Unlock()
+}
+
 func reloadOutcomeWasProcessed(err error) bool {
 	var outcomeErr *reloadOutcomeError
 	return errors.As(err, &outcomeErr) && outcomeErr.processed
@@ -360,10 +466,15 @@ func reloadOutcomeWasProcessed(err error) bool {
 
 // handleConfigChange serializes, validates, and applies one file version.
 func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
+	_, err := w.handleConfigChangeResult(ctx, force)
+	return err
+}
+
+func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (bool, error) {
 	w.mu.Lock()
 	if !w.isRunning {
 		w.mu.Unlock()
-		return ErrWatcherStopped
+		return false, ErrWatcherStopped
 	}
 	if w.reloadGate == nil {
 		w.reloadGate = make(chan struct{}, 1)
@@ -377,9 +488,9 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("waiting to reload configuration: %w", ctx.Err())
+		return false, fmt.Errorf("waiting to reload configuration: %w", ctx.Err())
 	case <-stopChan:
-		return ErrWatcherStopped
+		return false, ErrWatcherStopped
 	case <-reloadGate:
 	}
 	defer func() { reloadGate <- struct{}{} }()
@@ -388,31 +499,31 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	running := w.isRunning
 	w.mu.RUnlock()
 	if !running {
-		return ErrWatcherStopped
+		return false, ErrWatcherStopped
 	}
 
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("before reading configuration: %w", err)
+		return false, fmt.Errorf("before reading configuration: %w", err)
 	}
 
 	// Verify that the file still exists.
 	fileInfo, err := os.Stat(w.configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("configuration file removed at %s: %w", w.configPath, err)
+			return false, fmt.Errorf("configuration file removed at %s: %w", w.configPath, err)
 		}
-		return fmt.Errorf("cannot stat configuration file %s: %w", w.configPath, err)
+		return false, fmt.Errorf("cannot stat configuration file %s: %w", w.configPath, err)
 	}
 	fileContent, err := os.ReadFile(w.configPath)
 	if err != nil {
-		return fmt.Errorf("cannot read configuration file %s: %w", w.configPath, err)
+		return false, fmt.Errorf("cannot read configuration file %s: %w", w.configPath, err)
 	}
 	digest := sha256.Sum256(fileContent)
 	var mapDigest [sha256.Size]byte
 	if w.mapPath != "" {
 		mapContent, mapErr := os.ReadFile(w.mapPath)
 		if mapErr != nil {
-			return fmt.Errorf("cannot read CPU Points map %s: %w", w.mapPath, mapErr)
+			return false, fmt.Errorf("cannot read CPU Points map %s: %w", w.mapPath, mapErr)
 		}
 		mapDigest = sha256.Sum256(mapContent)
 	}
@@ -428,26 +539,26 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 
 	if !force && sameContent {
 		w.logger.Debug("Config file content has not changed")
-		return nil
+		return false, nil
 	}
 	w.logger.Info("Configuration file changed, attempting to reload")
 
 	// Load and validate a detached configuration snapshot.
 	newConfig, err := LoadAndValidate(w.configPath)
 	if err != nil {
-		return fmt.Errorf("reload configuration from %s: %w", w.configPath, err)
+		return true, fmt.Errorf("reload configuration from %s: %w", w.configPath, err)
 	}
 
 	w.logger.Info("Configuration validated successfully")
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("before applying configuration: %w", err)
+		return true, fmt.Errorf("before applying configuration: %w", err)
 	}
 	currentContent, err := os.ReadFile(w.configPath)
 	if err != nil {
-		return fmt.Errorf("confirm configuration file %s before apply: %w", w.configPath, err)
+		return true, fmt.Errorf("confirm configuration file %s before apply: %w", w.configPath, err)
 	}
 	if currentDigest := sha256.Sum256(currentContent); currentDigest != digest {
-		return fmt.Errorf("configuration file %s changed while it was being validated", w.configPath)
+		return true, fmt.Errorf("configuration file %s changed while it was being validated", w.configPath)
 	}
 
 	confirmSources := func() error {
@@ -502,19 +613,18 @@ func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
 	w.mu.Unlock()
 
 	if confirmationErr != nil {
-		return &reloadOutcomeError{
+		return true, &reloadOutcomeError{
 			err:       errors.Join(applyErr, confirmationErr),
 			processed: false,
 		}
 	}
 
 	if applyErr != nil {
-		return &reloadOutcomeError{
+		return true, &reloadOutcomeError{
 			err:       fmt.Errorf("apply configuration from %s: %w", w.configPath, applyErr),
 			processed: applyOutcome.Processed,
 		}
 	}
 
-	w.logger.Info("New configuration applied successfully")
-	return nil
+	return true, nil
 }

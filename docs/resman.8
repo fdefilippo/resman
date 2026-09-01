@@ -982,6 +982,10 @@ resman_cpu_points_guaranteed_domain_usage_microseconds_delta and resman_cpu_poin
 .IP \(bu
 resman_cpu_points_parent_throttled_periods_delta and resman_cpu_points_parent_throttled_microseconds_delta \- CFS throttling in the common interval; positive values can be expected under saturation
 .IP \(bu
+resman_config_reload_state{state} \- One-hot terminal reload state: never, applied, refused, or failed; refused means the disk candidate is pending while the prior epoch remains active
+.IP \(bu
+resman_config_reload_last_attempt_timestamp_seconds and resman_config_reload_last_success_timestamp_seconds \- Timestamps that distinguish the latest terminal attempt from the latest acknowledged epoch
+.IP \(bu
 resman_user_cpu_points_configured_guarantee{uid, username} \- Optional mapped-user guarantee; absent for best-effort users
 .IP \(bu
 resman_user_cpu_points_applied_weight{uid, username} \- Raw verified leaf cpu.weight, not delivered CPU Points

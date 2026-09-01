@@ -122,6 +122,7 @@ type PrometheusExporter struct {
 	totalCores                 prometheus.Gauge
 	procFSUnavailableProcesses *prometheus.GaugeVec
 	cpuPoints                  cpuPointsPrometheusMetrics
+	configReload               configReloadPrometheusMetrics
 
 	// Metrics with additional labels.
 	userCPUUsage         *prometheus.GaugeVec
@@ -532,6 +533,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"access"},
 	)
 	exp.cpuPoints.register(exp.registry, namespace, staticLabels)
+	exp.configReload.register(exp.registry, namespace, staticLabels)
 
 	// === Metrics with dynamic labels ===
 
@@ -790,6 +792,14 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	})
 
 	return nil
+}
+
+// ObserveConfigReload publishes one bounded terminal reload result.
+func (exp *PrometheusExporter) ObserveConfigReload(observation config.ReloadObservation) {
+	if exp == nil {
+		return
+	}
+	exp.configReload.observe(observation)
 }
 
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.

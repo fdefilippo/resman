@@ -245,7 +245,11 @@ func (a *App) WithConfigWatcher() *App {
 	}
 
 	reloader := reloader.NewReloader(a.stateManager, a.cgroupMgr, a.metricsCollector, a.applyReloadedConfig)
-	configWatcher, err := config.NewWatcher(a.configPath, a.currentConfig(), reloader)
+	var watcherOptions []config.WatcherOption
+	if a.prometheusExporter != nil {
+		watcherOptions = append(watcherOptions, config.WithReloadObserver(a.prometheusExporter))
+	}
+	configWatcher, err := config.NewWatcher(a.configPath, a.currentConfig(), reloader, watcherOptions...)
 	if err != nil {
 		a.logger.Warn("Failed to create config watcher, continuing without auto-reload",
 			"error", err,

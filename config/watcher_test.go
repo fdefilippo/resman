@@ -62,7 +62,11 @@ type recordingWatcherLogger struct {
 }
 
 func (*recordingWatcherLogger) Debug(string, ...interface{}) {}
-func (*recordingWatcherLogger) Info(string, ...interface{})  {}
+func (l *recordingWatcherLogger) Info(message string, keyvals ...interface{}) {
+	if message == "Configuration reload applied" {
+		l.record("INFO", message, keyvals...)
+	}
+}
 func (l *recordingWatcherLogger) Warn(message string, keyvals ...interface{}) {
 	l.record("WARN", message, keyvals...)
 }
@@ -85,6 +89,28 @@ func (l *recordingWatcherLogger) snapshot() []watcherLogEntry {
 	defer l.mu.Unlock()
 	return append([]watcherLogEntry(nil), l.entries...)
 }
+
+type recordingReloadObserver struct {
+	mu           sync.Mutex
+	observations []ReloadObservation
+}
+
+func (o *recordingReloadObserver) ObserveConfigReload(observation ReloadObservation) {
+	o.mu.Lock()
+	o.observations = append(o.observations, observation)
+	o.mu.Unlock()
+}
+
+func (o *recordingReloadObserver) snapshot() []ReloadObservation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]ReloadObservation(nil), o.observations...)
+}
+
+type watcherCPUPointsPreflightError struct{}
+
+func (*watcherCPUPointsPreflightError) Error() string       { return "active CPU Points class changed" }
+func (*watcherCPUPointsPreflightError) CPUPointsPreflight() {}
 
 type channelConfigChangeHandler struct {
 	values chan int
@@ -356,6 +382,79 @@ func TestAutomaticWatcherReloadUsesTheSameSingleOutcomeRecord(t *testing.T) {
 	}
 	if entries[0].level != "WARN" || entries[0].fields["source"] != "automatic" {
 		t.Fatalf("automatic terminal log = %+v, want one automatic WARN", entries[0])
+	}
+}
+
+func TestReloadOutcomeObserverDistinguishesAppliedRefusedAndFailed(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantState ReloadState
+		processed bool
+	}{
+		{name: "applied", wantState: ReloadStateApplied, processed: true},
+		{name: "refused", err: &reloadOutcomeError{err: &watcherCPUPointsPreflightError{}, processed: false}, wantState: ReloadStateRefused},
+		{name: "failed", err: &reloadOutcomeError{err: errors.New("apply failed"), processed: true}, wantState: ReloadStateFailed, processed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := &recordingWatcherLogger{}
+			observer := &recordingReloadObserver{}
+			watcher := &Watcher{logger: logger, reloadObserver: observer}
+			watcher.reportReloadOutcome("forced", tt.err)
+
+			observations := observer.snapshot()
+			if len(observations) != 1 {
+				t.Fatalf("observations = %v, want one", observations)
+			}
+			observation := observations[0]
+			if observation.State != tt.wantState || observation.Source != "forced" || observation.Processed != tt.processed || observation.Timestamp.IsZero() {
+				t.Fatalf("observation = %+v, want state=%s source=forced processed=%t with timestamp", observation, tt.wantState, tt.processed)
+			}
+			if tt.err == nil {
+				entries := logger.snapshot()
+				if len(entries) != 1 || entries[0].level != "INFO" || entries[0].message != "Configuration reload applied" {
+					t.Fatalf("success terminal log = %v", entries)
+				}
+			}
+		})
+	}
+}
+
+func TestAutomaticReloadFailureLoggingIsBoundedByCandidateAndCause(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "resman.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=80\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logger := &recordingWatcherLogger{}
+	observer := &recordingReloadObserver{}
+	watcher := &Watcher{configPath: configPath, logger: logger, reloadObserver: observer}
+	firstErr := errors.New("candidate refused")
+
+	watcher.reportReloadOutcome("automatic", firstErr)
+	watcher.reportReloadOutcome("automatic", firstErr)
+	if entries := logger.snapshot(); len(entries) != 1 {
+		t.Fatalf("unchanged automatic failure logs = %v, want one", entries)
+	}
+	if observations := observer.snapshot(); len(observations) != 2 {
+		t.Fatalf("unchanged automatic failure observations = %d, want both attempts", len(observations))
+	}
+
+	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=81\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	watcher.reportReloadOutcome("automatic", firstErr)
+	watcher.reportReloadOutcome("automatic", errors.New("different refusal"))
+	if entries := logger.snapshot(); len(entries) != 3 {
+		t.Fatalf("changed candidate/cause logs = %v, want three total", entries)
+	}
+
+	watcher.reportReloadOutcome("automatic", nil)
+	watcher.reportReloadOutcome("automatic", firstErr)
+	entries := logger.snapshot()
+	if len(entries) != 5 || entries[3].level != "INFO" || entries[4].level != "ERROR" {
+		t.Fatalf("success must clear suppression: %v", entries)
 	}
 }
 
