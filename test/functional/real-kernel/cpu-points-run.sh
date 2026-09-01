@@ -24,6 +24,7 @@ daemon_pid=
 initial_service_active=
 service_quiesced=0
 temporary_user=
+temporary_mailbox=
 result=FAIL
 detail="CPU Points real-kernel scenario did not complete"
 cleanup_status=PASS
@@ -128,6 +129,14 @@ finish() {
 	if [[ -n $temporary_user ]]; then
 		userdel "$temporary_user" >>"$evidence_dir/cleanup.log" 2>&1 \
 			|| cleanup_status=FAIL-user-cleanup
+	fi
+	if [[ -n $temporary_mailbox ]]; then
+		case "$temporary_mailbox" in
+			/var/spool/mail/resman.p*) rm -f -- "$temporary_mailbox" ;;
+			*) cleanup_status=FAIL-mailbox-path ;;
+		esac
+		[[ ! -e $temporary_mailbox && ! -L $temporary_mailbox ]] \
+			|| cleanup_status=FAIL-mailbox-cleanup
 	fi
 	case "$work_root" in
 		/tmp/resman-cpu-points-r*) rm -rf -- "$work_root" ;;
@@ -611,7 +620,10 @@ EOF
 		|| fail "one-point overcommit failure did not name the cause"
 
 	if ! getent passwd "$dotted_user" >/dev/null 2>&1; then
-		useradd --badname --no-create-home -K CREATE_MAIL_SPOOL=no --shell /sbin/nologin "$dotted_user"
+		temporary_mailbox=/var/spool/mail/$dotted_user
+		[[ ! -e $temporary_mailbox && ! -L $temporary_mailbox ]] \
+			|| blocked "run-unique dotted identity mailbox already exists"
+		useradd --badname --no-create-home --shell /sbin/nologin "$dotted_user"
 		temporary_user=$dotted_user
 	fi
 	cat >"$dotted_map" <<EOF
