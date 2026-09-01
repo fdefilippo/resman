@@ -121,7 +121,7 @@ func (m *mockMetricsCollector) prepareUserMetrics(userMetrics map[int]*metrics.U
 	return userMetrics
 }
 func (m *mockMetricsCollector) GetDBWriter() *metrics.DBWriter { return nil }
-func (m *mockMetricsCollector) WriteMetricsToDatabase(userMetrics map[int]*metrics.UserMetrics, system metrics.SystemPersistenceMetrics) error {
+func (m *mockMetricsCollector) WriteMetricsToDatabase(batch metrics.PersistenceBatch) error {
 	return nil
 }
 
@@ -174,6 +174,12 @@ func (m *mockCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, norma
 }
 func (m *mockCgroupManager) GetUserCgroupMetrics(uid int) (string, string, uint64, uint64, uint64, uint64, uint64, error) {
 	return "", "", 0, 0, 0, 0, 0, nil
+}
+func (m *mockCgroupManager) GetCPUPointsNodeSnapshot(path string) (cgroup.CPUPointsNodeSnapshot, error) {
+	return cgroup.CPUPointsNodeSnapshot{}, nil
+}
+func (m *mockCgroupManager) GetMemoryAccountingSnapshot(uid int) (cgroup.MemoryAccountingSnapshot, error) {
+	return cgroup.MemoryAccountingSnapshot{}, nil
 }
 func (m *mockCgroupManager) GetPSIStats(uid int) (cgroup.PSIStats, error) {
 	return cgroup.PSIStats{}, nil
@@ -1339,12 +1345,14 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 	collector.SetDBWriter(writer)
 	exporter := &mockPrometheusExporter{}
 	manager := &Manager{
-		logger:             logging.GetLogger(),
-		metricsCollector:   collector,
-		prometheusExporter: exporter,
-		activeUsers:        map[int]bool{1001: true},
+		logger:                   logging.GetLogger(),
+		metricsCollector:         collector,
+		prometheusExporter:       exporter,
+		activeUsers:              map[int]bool{1001: true},
+		cpuPointsLifecycleEvents: map[int]cpuPointsLifecycleEvent{1001: {state: metrics.CPUPointsLifecycleFailed}},
 	}
 	sample := &SystemMetrics{
+		Timestamp:     time.Now().UTC(),
 		TotalCPUUsage: 50,
 		TotalCores:    4,
 		SystemLoad:    2.5,
@@ -1360,19 +1368,25 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 			},
 		},
 	}
-
-	err = collector.WriteMetricsToDatabase(
-		sample.UserMetrics,
-		metrics.SystemPersistenceMetrics{
-			TotalCPUUsagePercent:         sample.TotalCPUUsage,
-			TotalCores:                   sample.TotalCores,
-			SystemLoad:                   sample.SystemLoad,
-			CPULimitsActive:              true,
-			AnyLimitsActive:              true,
-			CPUActivelyLimitedUsersCount: 1,
-			ActivelyLimitedUsersCount:    1,
+	sample.PersistenceSystem = metrics.SystemPersistenceMetrics{
+		SampleEpochID:        sample.Timestamp.UnixNano(),
+		IntervalEnd:          sample.Timestamp,
+		TotalCPUUsagePercent: sample.TotalCPUUsage,
+		TotalCores:           sample.TotalCores,
+		SystemLoad:           sample.SystemLoad,
+	}
+	sample.PersistenceUsers = map[int]metrics.UserPersistenceMetrics{
+		1001: {
+			Metrics:         sample.UserMetrics[1001],
+			ConfiguredClass: "best_effort",
+			LifecycleState:  metrics.CPUPointsLifecycleApplied,
 		},
-	)
+	}
+
+	err = collector.WriteMetricsToDatabase(metrics.PersistenceBatch{
+		System: sample.PersistenceSystem,
+		Users:  sample.PersistenceUsers,
+	})
 	if err == nil {
 		t.Fatal("WriteMetricsToDatabase() expected a transaction error")
 	}
@@ -1388,17 +1402,19 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 	start := time.Now().Add(-time.Minute)
 	end := time.Now().Add(time.Minute)
 	tests := []struct {
-		name            string
-		prepare         func(t *testing.T)
-		wantErrors      []prometheusErrorRecord
-		wantShouldWrite bool
-		wantSystemRows  int
-		wantUserRows    int
+		name             string
+		prepare          func(t *testing.T)
+		wantErrors       []prometheusErrorRecord
+		wantShouldWrite  bool
+		wantSystemRows   int
+		wantUserRows     int
+		wantPendingEvent bool
 	}{
 		{
-			name:            "failed transaction remains retryable",
-			wantErrors:      []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
-			wantShouldWrite: true,
+			name:             "failed transaction remains retryable",
+			wantErrors:       []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
+			wantShouldWrite:  true,
+			wantPendingEvent: true,
 		},
 		{
 			name: "successful retry marks write",
@@ -1408,10 +1424,11 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 					t.Fatalf("failed to drop rejection trigger: %v", err)
 				}
 			},
-			wantErrors:      []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
-			wantShouldWrite: false,
-			wantSystemRows:  1,
-			wantUserRows:    1,
+			wantErrors:       []prometheusErrorRecord{{component: metricsDatabaseErrorComponent, errorType: metricsDatabaseWriteFailure}},
+			wantShouldWrite:  false,
+			wantSystemRows:   1,
+			wantUserRows:     1,
+			wantPendingEvent: false,
 		},
 	}
 
@@ -1428,6 +1445,10 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 			}
 			if got := writer.ShouldWrite(); got != tt.wantShouldWrite {
 				t.Errorf("DBWriter.ShouldWrite() = %t, want %t", got, tt.wantShouldWrite)
+			}
+			_, pendingEvent := manager.cpuPointsLifecycleEvents[1001]
+			if pendingEvent != tt.wantPendingEvent {
+				t.Errorf("pending lifecycle event = %t, want %t", pendingEvent, tt.wantPendingEvent)
 			}
 
 			systemHistory, err := dbManager.GetSystemHistory(start, end, 10)

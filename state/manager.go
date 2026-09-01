@@ -75,6 +75,10 @@ type Manager struct {
 	appliedGuaranteePoints    cpupoints.AppliedGuaranteePoints
 	programmedGuaranteePoints uint64
 	ramCoverage               map[int]ramCoverageState
+	persistencePreviousCPU    map[string]cgroup.CPUPointsNodeSnapshot
+	persistencePreviousRAM    map[int]cgroup.MemoryAccountingSnapshot
+	persistencePreviousTime   time.Time
+	cpuPointsLifecycleEvents  map[int]cpuPointsLifecycleEvent
 	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
 	cpuPointsDegraded         bool
 
@@ -130,6 +134,12 @@ type cpuPointsAllocation struct {
 	weight     cpupoints.KernelCPUWeight
 	domainPath string
 	leafPath   string
+}
+
+type cpuPointsLifecycleEvent struct {
+	state                   resmanmetrics.CPUPointsLifecycleState
+	pidNamespaceMismatches  int
+	pidNamespaceUnavailable int
 }
 
 // RAMCoverage describes whether a managed leaf accounts for the complete
@@ -214,7 +224,7 @@ type MetricsCollector interface {
 	// GetAllUserMetricsForDecision advances only the control cadence state.
 	GetAllUserMetricsForDecision() map[int]*resmanmetrics.UserMetrics
 	GetDBWriter() *resmanmetrics.DBWriter
-	WriteMetricsToDatabase(userMetrics map[int]*resmanmetrics.UserMetrics, system resmanmetrics.SystemPersistenceMetrics) error
+	WriteMetricsToDatabase(batch resmanmetrics.PersistenceBatch) error
 	GetUsernameFromUID(uid int) string
 }
 
@@ -237,6 +247,8 @@ type CgroupManager interface {
 	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
 	EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error)
 	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
+	GetCPUPointsNodeSnapshot(path string) (cgroup.CPUPointsNodeSnapshot, error)
+	GetMemoryAccountingSnapshot(uid int) (cgroup.MemoryAccountingSnapshot, error)
 	GetPSIStats(uid int) (cgroup.PSIStats, error)
 	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
 	CleanupUserCgroup(uid int) error
@@ -306,6 +318,9 @@ func NewManager(
 		sharedCgroupPath:              "",
 		cpuAllocations:                make(map[int]cpuPointsAllocation),
 		ramCoverage:                   make(map[int]ramCoverageState),
+		persistencePreviousCPU:        make(map[string]cgroup.CPUPointsNodeSnapshot),
+		persistencePreviousRAM:        make(map[int]cgroup.MemoryAccountingSnapshot),
+		cpuPointsLifecycleEvents:      make(map[int]cpuPointsLifecycleEvent),
 		thresholdTracker:              &ThresholdTracker{},
 		stabilityTracker:              newUserStabilityTracker(),
 		ioThresholdTracker:            &ThresholdTracker{},

@@ -158,23 +158,47 @@ type validateUserFilterResult struct {
 }
 
 type userHistoryRecord struct {
-	Timestamp         string  `json:"timestamp"`
-	UID               int     `json:"uid"`
-	Username          string  `json:"username"`
-	CPUUsage          float64 `json:"cpu_usage"`
-	MemoryUsage       int64   `json:"memory_usage"`
-	ProcessCount      int     `json:"process_count"`
-	CgroupPath        string  `json:"cgroup_path"`
-	CPUQuota          string  `json:"cpu_quota"`
-	EligibleForCPU    bool    `json:"eligible_for_cpu"`
-	EligibleForRAM    bool    `json:"eligible_for_ram"`
-	EligibleForIO     bool    `json:"eligible_for_io"`
-	CPULimitRequested bool    `json:"cpu_limit_requested"`
-	CPULimitActive    bool    `json:"cpu_limit_active"`
-	RAMLimitRequested bool    `json:"ram_limit_requested"`
-	RAMLimitActive    bool    `json:"ram_limit_active"`
-	IOLimitRequested  bool    `json:"io_limit_requested"`
-	IOLimitActive     bool    `json:"io_limit_active"`
+	Timestamp                         string  `json:"timestamp"`
+	SampleEpochID                     int64   `json:"sample_epoch_id"`
+	IntervalStart                     *string `json:"interval_start"`
+	IntervalEnd                       string  `json:"interval_end"`
+	UID                               int     `json:"uid"`
+	Username                          string  `json:"username"`
+	CPUUsage                          float64 `json:"cpu_usage"`
+	MemoryUsage                       int64   `json:"memory_usage"`
+	ProcessCount                      int     `json:"process_count"`
+	EnforceableProcessCount           int     `json:"enforceable_process_count"`
+	CgroupPath                        string  `json:"cgroup_path"`
+	CPUQuota                          string  `json:"cpu_quota"`
+	ConfiguredGuaranteePoints         *uint64 `json:"configured_guarantee_points"`
+	ConfiguredCPUClass                string  `json:"configured_cpu_class"`
+	CPUPointsLifecycleState           string  `json:"cpu_points_lifecycle_state"`
+	AppliedCPUClass                   *string `json:"applied_cpu_class"`
+	AppliedCPUWeight                  *uint64 `json:"applied_cpu_weight"`
+	CPUWeight                         *uint64 `json:"cpu_weight"`
+	LeafCPUUsageUsecDelta             *uint64 `json:"leaf_cpu_usage_usec_delta"`
+	PIDNamespaceMismatchCount         int     `json:"pid_namespace_mismatch_count"`
+	PIDNamespaceUnavailableCount      int     `json:"pid_namespace_unavailable_count"`
+	RAMCgroupUsageBytes               *uint64 `json:"ram_cgroup_usage_bytes"`
+	RAMCoverage                       *string `json:"ram_coverage"`
+	RAMCoverageIncompleteProcessCount int     `json:"ram_coverage_incomplete_process_count"`
+	RAMSwapDisabled                   *bool   `json:"ram_swap_disabled"`
+	MemoryHighLimit                   *string `json:"memory_high_limit"`
+	MemoryMaxLimit                    *string `json:"memory_max_limit"`
+	MemorySwapMax                     *string `json:"memory_swap_max"`
+	MemoryHighEventsDelta             *uint64 `json:"memory_high_events_delta"`
+	MemoryMaxEventsDelta              *uint64 `json:"memory_max_events_delta"`
+	MemoryOOMEventsDelta              *uint64 `json:"memory_oom_events_delta"`
+	MemoryOOMKillEventsDelta          *uint64 `json:"memory_oom_kill_events_delta"`
+	EligibleForCPU                    bool    `json:"eligible_for_cpu"`
+	EligibleForRAM                    bool    `json:"eligible_for_ram"`
+	EligibleForIO                     bool    `json:"eligible_for_io"`
+	CPULimitRequested                 bool    `json:"cpu_limit_requested"`
+	CPULimitActive                    bool    `json:"cpu_limit_active"`
+	RAMLimitRequested                 bool    `json:"ram_limit_requested"`
+	RAMLimitActive                    bool    `json:"ram_limit_active"`
+	IOLimitRequested                  bool    `json:"io_limit_requested"`
+	IOLimitActive                     bool    `json:"io_limit_active"`
 }
 
 type getUserHistoryResult struct {
@@ -186,36 +210,81 @@ type getUserHistoryResult struct {
 
 func newUserHistoryRecord(record database.UserMetricsRecord) userHistoryRecord {
 	return userHistoryRecord{
-		Timestamp:         record.Timestamp.Format(time.RFC3339),
-		UID:               record.UID,
-		Username:          record.Username,
-		CPUUsage:          record.CPUUsagePercent,
-		MemoryUsage:       record.MemoryUsageBytes,
-		ProcessCount:      record.ProcessCount,
-		CgroupPath:        record.CgroupPath,
-		CPUQuota:          record.CPUQuota,
-		EligibleForCPU:    record.EligibleForCPU,
-		EligibleForRAM:    record.EligibleForRAM,
-		EligibleForIO:     record.EligibleForIO,
-		CPULimitRequested: record.CPULimitRequested,
-		CPULimitActive:    record.CPULimitActive,
-		RAMLimitRequested: record.RAMLimitRequested,
-		RAMLimitActive:    record.RAMLimitActive,
-		IOLimitRequested:  record.IOLimitRequested,
-		IOLimitActive:     record.IOLimitActive,
+		Timestamp:                         record.Timestamp.Format(time.RFC3339),
+		SampleEpochID:                     record.SampleEpochID,
+		IntervalStart:                     formatOptionalHistoryTime(record.IntervalStart),
+		IntervalEnd:                       record.IntervalEnd.Format(time.RFC3339),
+		UID:                               record.UID,
+		Username:                          record.Username,
+		CPUUsage:                          record.CPUUsagePercent,
+		MemoryUsage:                       record.MemoryUsageBytes,
+		ProcessCount:                      record.ProcessCount,
+		EnforceableProcessCount:           record.EnforceableProcessCount,
+		CgroupPath:                        record.CgroupPath,
+		CPUQuota:                          record.CPUQuota,
+		ConfiguredGuaranteePoints:         record.ConfiguredGuaranteePoints,
+		ConfiguredCPUClass:                record.ConfiguredCPUClass,
+		CPUPointsLifecycleState:           record.CPUPointsLifecycleState,
+		AppliedCPUClass:                   record.AppliedCPUClass,
+		AppliedCPUWeight:                  record.AppliedCPUWeight,
+		CPUWeight:                         record.CPUWeight,
+		LeafCPUUsageUsecDelta:             record.LeafCPUUsageUsecDelta,
+		PIDNamespaceMismatchCount:         record.PIDNamespaceMismatchCount,
+		PIDNamespaceUnavailableCount:      record.PIDNamespaceUnavailableCount,
+		RAMCgroupUsageBytes:               record.RAMCgroupUsageBytes,
+		RAMCoverage:                       record.RAMCoverage,
+		RAMCoverageIncompleteProcessCount: record.RAMCoverageIncompleteProcessCount,
+		RAMSwapDisabled:                   record.RAMSwapDisabled,
+		MemoryHighLimit:                   record.MemoryHighLimit,
+		MemoryMaxLimit:                    record.MemoryMaxLimit,
+		MemorySwapMax:                     record.MemorySwapMax,
+		MemoryHighEventsDelta:             record.MemoryHighEventsDelta,
+		MemoryMaxEventsDelta:              record.MemoryMaxEventsDelta,
+		MemoryOOMEventsDelta:              record.MemoryOOMEventsDelta,
+		MemoryOOMKillEventsDelta:          record.MemoryOOMKillEventsDelta,
+		EligibleForCPU:                    record.EligibleForCPU,
+		EligibleForRAM:                    record.EligibleForRAM,
+		EligibleForIO:                     record.EligibleForIO,
+		CPULimitRequested:                 record.CPULimitRequested,
+		CPULimitActive:                    record.CPULimitActive,
+		RAMLimitRequested:                 record.RAMLimitRequested,
+		RAMLimitActive:                    record.RAMLimitActive,
+		IOLimitRequested:                  record.IOLimitRequested,
+		IOLimitActive:                     record.IOLimitActive,
 	}
 }
 
 type systemHistoryRecord struct {
-	Timestamp                    string  `json:"timestamp"`
-	TotalCPUUsage                float64 `json:"total_cpu_usage"`
-	TotalCores                   int     `json:"total_cores"`
-	SystemLoad                   float64 `json:"system_load"`
-	CPULimitsActive              bool    `json:"cpu_limits_active"`
-	ResourceLimitsActive         bool    `json:"resource_limits_active"`
-	AnyLimitsActive              bool    `json:"any_limits_active"`
-	CPUActivelyLimitedUsersCount int     `json:"cpu_actively_limited_users_count"`
-	ActivelyLimitedUsersCount    int     `json:"actively_limited_users_count"`
+	Timestamp                         string  `json:"timestamp"`
+	SampleEpochID                     int64   `json:"sample_epoch_id"`
+	IntervalStart                     *string `json:"interval_start"`
+	IntervalEnd                       string  `json:"interval_end"`
+	TotalCPUUsage                     float64 `json:"total_cpu_usage"`
+	TotalCores                        int     `json:"total_cores"`
+	SystemLoad                        float64 `json:"system_load"`
+	CPULimitsActive                   bool    `json:"cpu_limits_active"`
+	ResourceLimitsActive              bool    `json:"resource_limits_active"`
+	AnyLimitsActive                   bool    `json:"any_limits_active"`
+	CPUActivelyLimitedUsersCount      int     `json:"cpu_actively_limited_users_count"`
+	ActivelyLimitedUsersCount         int     `json:"actively_limited_users_count"`
+	NominalParentPoolPoints           uint64  `json:"nominal_parent_pool_points"`
+	CPUCapacityAvailable              bool    `json:"cpu_capacity_available"`
+	OnlineCPUs                        *uint64 `json:"online_cpus"`
+	ProgrammedParentQuotaUsec         *uint64 `json:"programmed_parent_quota_usec"`
+	ProgrammedParentPeriodUsec        *uint64 `json:"programmed_parent_period_usec"`
+	CPUPointsDegraded                 bool    `json:"cpu_points_degraded"`
+	AppliedGuaranteePoints            uint64  `json:"applied_guarantee_points"`
+	ProgrammedGuaranteeWeight         uint64  `json:"programmed_guarantee_weight"`
+	ConfiguredBestEffortWeight        uint64  `json:"configured_best_effort_weight"`
+	ParentCPUQuota                    *string `json:"parent_cpu_quota"`
+	GuaranteedDomainCPUWeight         *uint64 `json:"guaranteed_domain_cpu_weight"`
+	BestEffortDomainCPUWeight         *uint64 `json:"best_effort_domain_cpu_weight"`
+	ParentCPUUsageUsecDelta           *uint64 `json:"parent_cpu_usage_usec_delta"`
+	GuaranteedDomainCPUUsageUsecDelta *uint64 `json:"guaranteed_domain_cpu_usage_usec_delta"`
+	BestEffortDomainCPUUsageUsecDelta *uint64 `json:"best_effort_domain_cpu_usage_usec_delta"`
+	ParentCPUPeriodsDelta             *uint64 `json:"parent_cpu_periods_delta"`
+	ParentCPUThrottledPeriodsDelta    *uint64 `json:"parent_cpu_throttled_periods_delta"`
+	ParentCPUThrottledUsecDelta       *uint64 `json:"parent_cpu_throttled_usec_delta"`
 }
 
 type getSystemHistoryResult struct {
@@ -227,14 +296,43 @@ type getSystemHistoryResult struct {
 
 func newSystemHistoryRecord(record database.SystemMetricsRecord) systemHistoryRecord {
 	return systemHistoryRecord{
-		Timestamp:                    record.Timestamp.Format(time.RFC3339),
-		TotalCPUUsage:                record.TotalCPUUsagePercent,
-		TotalCores:                   record.TotalCores,
-		SystemLoad:                   record.SystemLoad,
-		CPULimitsActive:              record.CPULimitsActive,
-		ResourceLimitsActive:         record.ResourceLimitsActive,
-		AnyLimitsActive:              record.AnyLimitsActive,
-		CPUActivelyLimitedUsersCount: record.CPUActivelyLimitedUsersCount,
-		ActivelyLimitedUsersCount:    record.ActivelyLimitedUsersCount,
+		Timestamp:                         record.Timestamp.Format(time.RFC3339),
+		SampleEpochID:                     record.SampleEpochID,
+		IntervalStart:                     formatOptionalHistoryTime(record.IntervalStart),
+		IntervalEnd:                       record.IntervalEnd.Format(time.RFC3339),
+		TotalCPUUsage:                     record.TotalCPUUsagePercent,
+		TotalCores:                        record.TotalCores,
+		SystemLoad:                        record.SystemLoad,
+		CPULimitsActive:                   record.CPULimitsActive,
+		ResourceLimitsActive:              record.ResourceLimitsActive,
+		AnyLimitsActive:                   record.AnyLimitsActive,
+		CPUActivelyLimitedUsersCount:      record.CPUActivelyLimitedUsersCount,
+		ActivelyLimitedUsersCount:         record.ActivelyLimitedUsersCount,
+		NominalParentPoolPoints:           record.NominalParentPoolPoints,
+		CPUCapacityAvailable:              record.CPUCapacityAvailable,
+		OnlineCPUs:                        record.OnlineCPUs,
+		ProgrammedParentQuotaUsec:         record.ProgrammedParentQuotaUsec,
+		ProgrammedParentPeriodUsec:        record.ProgrammedParentPeriodUsec,
+		CPUPointsDegraded:                 record.CPUPointsDegraded,
+		AppliedGuaranteePoints:            record.AppliedGuaranteePoints,
+		ProgrammedGuaranteeWeight:         record.ProgrammedGuaranteeWeight,
+		ConfiguredBestEffortWeight:        record.ConfiguredBestEffortWeight,
+		ParentCPUQuota:                    record.ParentCPUQuota,
+		GuaranteedDomainCPUWeight:         record.GuaranteedDomainCPUWeight,
+		BestEffortDomainCPUWeight:         record.BestEffortDomainCPUWeight,
+		ParentCPUUsageUsecDelta:           record.ParentCPUUsageUsecDelta,
+		GuaranteedDomainCPUUsageUsecDelta: record.GuaranteedDomainCPUUsageUsecDelta,
+		BestEffortDomainCPUUsageUsecDelta: record.BestEffortDomainCPUUsageUsecDelta,
+		ParentCPUPeriodsDelta:             record.ParentCPUPeriodsDelta,
+		ParentCPUThrottledPeriodsDelta:    record.ParentCPUThrottledPeriodsDelta,
+		ParentCPUThrottledUsecDelta:       record.ParentCPUThrottledUsecDelta,
 	}
+}
+
+func formatOptionalHistoryTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.Format(time.RFC3339)
+	return &formatted
 }

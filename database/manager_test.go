@@ -19,12 +19,43 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func (m *DatabaseManager) writeUserMetricsForTest(record *UserMetricsRecord) error {
+	if record.Timestamp.IsZero() {
+		record.Timestamp = time.Now().UTC()
+	}
+	record.Timestamp = record.Timestamp.UTC()
+	record.SampleEpochID = record.Timestamp.UnixNano()
+	record.IntervalEnd = record.Timestamp
+	if record.ConfiguredCPUClass == "" {
+		record.ConfiguredCPUClass = "best_effort"
+	}
+	if record.CPUPointsLifecycleState == "" {
+		record.CPUPointsLifecycleState = "eligible_inactive"
+	}
+	return m.WriteMetricsBatch(&SystemMetricsRecord{
+		SampleEpochID: record.SampleEpochID,
+		IntervalEnd:   record.Timestamp,
+		Timestamp:     record.Timestamp,
+	}, []*UserMetricsRecord{record})
+}
+
+func (m *DatabaseManager) writeSystemMetricsForTest(record *SystemMetricsRecord) error {
+	if record.Timestamp.IsZero() {
+		record.Timestamp = time.Now().UTC()
+	}
+	record.Timestamp = record.Timestamp.UTC()
+	record.SampleEpochID = record.Timestamp.UnixNano()
+	record.IntervalEnd = record.Timestamp
+	return m.WriteMetricsBatch(record, nil)
+}
 
 func TestNewDatabaseManager(t *testing.T) {
 	tmpFile := privateTestDatabasePath(t, "metrics.db")
@@ -56,7 +87,14 @@ func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
 		<-release
 	}
 	writeDone := make(chan error, 1)
-	go func() { writeDone <- manager.WriteMetricsBatch(nil, nil) }()
+	now := time.Now().UTC()
+	go func() {
+		writeDone <- manager.WriteMetricsBatch(&SystemMetricsRecord{
+			SampleEpochID: now.UnixNano(),
+			IntervalEnd:   now,
+			Timestamp:     now,
+		}, nil)
+	}()
 	<-started
 
 	pathDone := make(chan string, 1)
@@ -181,7 +219,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 3"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 4"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -202,35 +240,39 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	}
 }
 
-func TestNewDatabaseManagerRejectsVersionTwoWithoutMigration(t *testing.T) {
-	dbPath := privateTestDatabasePath(t, "version-two.db")
-	legacyDB, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open() error: %v", err)
-	}
-	if _, err := legacyDB.Exec("PRAGMA user_version = 2"); err != nil {
-		_ = legacyDB.Close()
-		t.Fatalf("set schema version 2: %v", err)
-	}
-	if err := legacyDB.Close(); err != nil {
-		t.Fatalf("legacy database close error: %v", err)
-	}
-	if err := os.Chmod(dbPath, 0600); err != nil {
-		t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
-	}
+func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T) {
+	for _, version := range []int{2, 3} {
+		t.Run(fmt.Sprintf("schema version %d", version), func(t *testing.T) {
+			dbPath := privateTestDatabasePath(t, fmt.Sprintf("version-%d.db", version))
+			legacyDB, err := sql.Open("sqlite3", dbPath)
+			if err != nil {
+				t.Fatalf("sql.Open() error: %v", err)
+			}
+			if _, err := legacyDB.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+				_ = legacyDB.Close()
+				t.Fatalf("set schema version %d: %v", version, err)
+			}
+			if err := legacyDB.Close(); err != nil {
+				t.Fatalf("legacy database close error: %v", err)
+			}
+			if err := os.Chmod(dbPath, 0600); err != nil {
+				t.Fatalf("os.Chmod(%s) error = %v", dbPath, err)
+			}
 
-	manager, err := NewDatabaseManager(dbPath)
-	if manager != nil {
-		_ = manager.Close()
-		t.Fatal("NewDatabaseManager() returned a manager for schema version 2")
-	}
-	if err == nil {
-		t.Fatal("NewDatabaseManager() migrated schema version 2")
-	}
-	for _, fragment := range []string{dbPath, "schema version 2", "delete or move", "schema version 3"} {
-		if !strings.Contains(err.Error(), fragment) {
-			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
-		}
+			manager, err := NewDatabaseManager(dbPath)
+			if manager != nil {
+				_ = manager.Close()
+				t.Fatalf("NewDatabaseManager() returned a manager for schema version %d", version)
+			}
+			if err == nil {
+				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
+			}
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 4"} {
+				if !strings.Contains(err.Error(), fragment) {
+					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
+				}
+			}
+		})
 	}
 }
 
@@ -311,7 +353,7 @@ func TestWriteAndReadUserMetrics(t *testing.T) {
 		Timestamp:         now,
 	}
 
-	err = manager.WriteUserMetrics(record)
+	err = manager.writeUserMetricsForTest(record)
 	if err != nil {
 		t.Errorf("Failed to write user metrics: %v", err)
 	}
@@ -364,7 +406,7 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 		Timestamp:                    now,
 	}
 
-	err = manager.WriteSystemMetrics(record)
+	err = manager.writeSystemMetricsForTest(record)
 	if err != nil {
 		t.Errorf("Failed to write system metrics: %v", err)
 	}
@@ -412,10 +454,10 @@ func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
 
 	now := time.Now()
 	err = manager.WriteMetricsBatch(
-		&SystemMetricsRecord{Timestamp: now, TotalCores: 4},
+		&SystemMetricsRecord{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, TotalCores: 4},
 		[]*UserMetricsRecord{
-			{Timestamp: now, UID: 1000, Username: "accepted", ProcessCount: 1},
-			{Timestamp: now, UID: 1001, Username: "rejected", ProcessCount: 1},
+			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1000, Username: "accepted", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
+			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1001, Username: "rejected", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
 		},
 	)
 	if err == nil {
@@ -429,6 +471,134 @@ func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
 		}
 		if count != 0 {
 			t.Fatalf("%s rows after rollback = %d, want 0", table, count)
+		}
+	}
+}
+
+func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.T) {
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+	if err != nil {
+		t.Fatalf("NewDatabaseManager() error: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+
+	start := time.Date(2026, 9, 1, 5, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Second)
+	epoch := end.UnixNano()
+	u64 := func(value uint64) *uint64 { return &value }
+	text := func(value string) *string { return &value }
+	boolean := func(value bool) *bool { return &value }
+	system := &SystemMetricsRecord{
+		SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
+		TotalCPUUsagePercent: 82, TotalCores: 4, SystemLoad: 3.5,
+		CPULimitsActive: true, AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 2,
+		NominalParentPoolPoints: 900, CPUCapacityAvailable: true, OnlineCPUs: u64(4),
+		ProgrammedParentQuotaUsec: u64(360000), ProgrammedParentPeriodUsec: u64(100000),
+		AppliedGuaranteePoints: 300, ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
+		ParentCPUQuota: text("360000 100000"), GuaranteedDomainCPUWeight: u64(300), BestEffortDomainCPUWeight: u64(100),
+		ParentCPUUsageUsecDelta: u64(900000), GuaranteedDomainCPUUsageUsecDelta: u64(700000),
+		BestEffortDomainCPUUsageUsecDelta: u64(200000), ParentCPUPeriodsDelta: u64(300),
+		ParentCPUThrottledPeriodsDelta: u64(190), ParentCPUThrottledUsecDelta: u64(4590000),
+	}
+	users := []*UserMetricsRecord{
+		{
+			SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
+			UID: 1000, Username: "alice", CPUUsagePercent: 40, MemoryUsageBytes: 96 << 20, ProcessCount: 3,
+			ConfiguredGuaranteePoints: u64(300), ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
+			AppliedCPUClass: text("guaranteed"), AppliedCPUWeight: u64(300), CgroupPath: "/limited/guaranteed/user_1000",
+			CPUQuota: "max 100000", CPUWeight: u64(300), LeafCPUUsageUsecDelta: u64(290000),
+			PIDNamespaceMismatchCount: 1, EnforceableProcessCount: 2,
+			RAMCgroupUsageBytes: u64(8 << 20), RAMCoverage: text("partial"), RAMCoverageIncompleteProcessCount: 1,
+			RAMSwapDisabled: boolean(true), MemoryHighLimit: text("16M"), MemoryMaxLimit: text("48M"), MemorySwapMax: text("0"),
+			MemoryHighEventsDelta: u64(153), MemoryMaxEventsDelta: u64(0), MemoryOOMEventsDelta: u64(0),
+			MemoryOOMKillEventsDelta: u64(0), EligibleForCPU: true, EligibleForRAM: true,
+			CPULimitRequested: true, CPULimitActive: true, RAMLimitRequested: true, RAMLimitActive: true,
+		},
+		{
+			SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
+			UID: 1001, Username: "bob", CPUUsagePercent: 20, ProcessCount: 1,
+			ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "namespace_rejected",
+			PIDNamespaceMismatchCount: 1, EnforceableProcessCount: 0, EligibleForCPU: true,
+		},
+	}
+	if err := manager.WriteMetricsBatch(system, users); err != nil {
+		t.Fatalf("WriteMetricsBatch() error: %v", err)
+	}
+
+	systems, err := manager.GetSystemHistory(start.Add(-time.Second), end.Add(time.Second), 1)
+	if err != nil || len(systems) != 1 {
+		t.Fatalf("GetSystemHistory() records=%d error=%v", len(systems), err)
+	}
+	gotSystem := systems[0]
+	if gotSystem.SampleEpochID != epoch || gotSystem.IntervalStart == nil || !gotSystem.IntervalStart.Equal(start) || !gotSystem.IntervalEnd.Equal(end) {
+		t.Fatalf("system interval identity = %+v", gotSystem)
+	}
+	if gotSystem.ParentCPUUsageUsecDelta == nil || *gotSystem.ParentCPUUsageUsecDelta != 900000 || gotSystem.ParentCPUThrottledPeriodsDelta == nil || *gotSystem.ParentCPUThrottledPeriodsDelta != 190 {
+		t.Fatalf("system CPU accounting = %+v", gotSystem)
+	}
+
+	alice, err := manager.GetUserHistory(1000, start.Add(-time.Second), end.Add(time.Second), 1)
+	if err != nil || len(alice) != 1 {
+		t.Fatalf("GetUserHistory(alice) records=%d error=%v", len(alice), err)
+	}
+	if alice[0].ConfiguredGuaranteePoints == nil || *alice[0].ConfiguredGuaranteePoints != 300 || alice[0].AppliedCPUClass == nil || *alice[0].AppliedCPUClass != "guaranteed" {
+		t.Fatalf("mapped allocation = %+v", alice[0])
+	}
+	if alice[0].RAMCoverage == nil || *alice[0].RAMCoverage != "partial" || alice[0].MemoryHighEventsDelta == nil || *alice[0].MemoryHighEventsDelta != 153 || alice[0].MemoryOOMEventsDelta == nil || *alice[0].MemoryOOMEventsDelta != 0 {
+		t.Fatalf("RAM accounting = %+v", alice[0])
+	}
+	bob, err := manager.GetUserHistory(1001, start.Add(-time.Second), end.Add(time.Second), 1)
+	if err != nil || len(bob) != 1 {
+		t.Fatalf("GetUserHistory(bob) records=%d error=%v", len(bob), err)
+	}
+	if bob[0].ConfiguredGuaranteePoints != nil || bob[0].AppliedCPUClass != nil || bob[0].CPUPointsLifecycleState != "namespace_rejected" {
+		t.Fatalf("best-effort rejected allocation = %+v", bob[0])
+	}
+}
+
+func TestWriteMetricsBatchRejectsMixedObservationEpochs(t *testing.T) {
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	now := time.Now().UTC()
+	err = manager.WriteMetricsBatch(
+		&SystemMetricsRecord{SampleEpochID: 10, IntervalEnd: now, Timestamp: now},
+		[]*UserMetricsRecord{{
+			SampleEpochID: 11, IntervalEnd: now, Timestamp: now, UID: 1000, Username: "alice",
+			ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
+		}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not belong to system sample epoch") {
+		t.Fatalf("WriteMetricsBatch() error = %v", err)
+	}
+}
+
+func TestCPUPointsLifecycleStatesRemainDistinct(t *testing.T) {
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	now := time.Now().UTC()
+	states := []string{"ineligible", "eligible_inactive", "applied", "namespace_rejected", "failed", "released"}
+	users := make([]*UserMetricsRecord, 0, len(states))
+	for index, state := range states {
+		users = append(users, &UserMetricsRecord{
+			SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now,
+			UID: 2000 + index, Username: state, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: state,
+		})
+	}
+	if err := manager.WriteMetricsBatch(&SystemMetricsRecord{
+		SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now,
+	}, users); err != nil {
+		t.Fatalf("WriteMetricsBatch() error = %v", err)
+	}
+	for index, state := range states {
+		records, err := manager.GetUserHistory(2000+index, now.Add(-time.Second), now.Add(time.Second), 1)
+		if err != nil || len(records) != 1 || records[0].CPUPointsLifecycleState != state {
+			t.Fatalf("state %q round trip = %+v, error=%v", state, records, err)
 		}
 	}
 }
@@ -447,7 +617,7 @@ func TestDatabaseTimeRangesCompareUTCInstants(t *testing.T) {
 		{Timestamp: outside, UID: 1000, Username: "test", CPUUsagePercent: 7, ProcessCount: 1},
 		{Timestamp: inside, UID: 1000, Username: "test", CPUUsagePercent: 9, ProcessCount: 1},
 	} {
-		if err := manager.WriteUserMetrics(record); err != nil {
+		if err := manager.writeUserMetricsForTest(record); err != nil {
 			t.Fatalf("WriteUserMetrics() error: %v", err)
 		}
 	}
@@ -478,7 +648,7 @@ func TestResolveUserUIDFromHistoricalMetrics(t *testing.T) {
 		{Timestamp: now.Add(-2 * time.Hour), UID: 1000, Username: "offline-user", ProcessCount: 1},
 		{Timestamp: now.Add(-time.Hour), UID: 1000, Username: "offline-user", ProcessCount: 1},
 	} {
-		if err := manager.WriteUserMetrics(record); err != nil {
+		if err := manager.writeUserMetricsForTest(record); err != nil {
 			t.Fatalf("WriteUserMetrics() error: %v", err)
 		}
 	}
@@ -509,7 +679,7 @@ func TestResolveUserUIDRejectsAmbiguousHistoricalUsername(t *testing.T) {
 
 	now := time.Now().UTC()
 	for _, uid := range []int{1000, 2000} {
-		if err := manager.WriteUserMetrics(&UserMetricsRecord{
+		if err := manager.writeUserMetricsForTest(&UserMetricsRecord{
 			Timestamp:    now,
 			UID:          uid,
 			Username:     "reused-name",
@@ -530,7 +700,7 @@ func TestNewDatabaseManagerNormalizesLegacyTimestampOffsets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDatabaseManager() error: %v", err)
 	}
-	if err := manager.WriteUserMetrics(&UserMetricsRecord{
+	if err := manager.writeUserMetricsForTest(&UserMetricsRecord{
 		Timestamp:    time.Now(),
 		UID:          1000,
 		Username:     "legacy",
@@ -588,7 +758,7 @@ func TestGetUserSummary(t *testing.T) {
 			CPULimitActive:   i%2 == 0,
 			Timestamp:        now.Add(time.Duration(i) * time.Minute),
 		}
-		if err := manager.WriteUserMetrics(record); err != nil {
+		if err := manager.writeUserMetricsForTest(record); err != nil {
 			t.Fatalf("Failed to write user metrics: %v", err)
 		}
 	}
@@ -644,7 +814,7 @@ func TestCleanupOldData(t *testing.T) {
 		ProcessCount:     10,
 		Timestamp:        now.AddDate(0, 0, -35),
 	}
-	if err := manager.WriteUserMetrics(oldRecord); err != nil {
+	if err := manager.writeUserMetricsForTest(oldRecord); err != nil {
 		t.Fatalf("Failed to write old user metrics: %v", err)
 	}
 
@@ -657,10 +827,10 @@ func TestCleanupOldData(t *testing.T) {
 		ProcessCount:     12,
 		Timestamp:        now,
 	}
-	if err := manager.WriteUserMetrics(newRecord); err != nil {
+	if err := manager.writeUserMetricsForTest(newRecord); err != nil {
 		t.Fatalf("Failed to write new user metrics: %v", err)
 	}
-	if err := manager.WriteSystemMetrics(&SystemMetricsRecord{
+	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{
 		TotalCPUUsagePercent: 80,
 		TotalCores:           4,
 		Timestamp:            now.AddDate(0, 0, -35),
@@ -674,8 +844,8 @@ func TestCleanupOldData(t *testing.T) {
 		t.Errorf("Cleanup failed: %v", err)
 	}
 
-	if deleted != 2 {
-		t.Errorf("Expected to delete 2 records, got %d", deleted)
+	if deleted != 3 {
+		t.Errorf("Expected to delete 3 records, got %d", deleted)
 	}
 
 	// Verify that only the current metric remains.
@@ -707,7 +877,7 @@ func TestGetDatabaseInfo(t *testing.T) {
 			ProcessCount:     10,
 			Timestamp:        now,
 		}
-		if err := manager.WriteUserMetrics(record); err != nil {
+		if err := manager.writeUserMetricsForTest(record); err != nil {
 			t.Fatalf("Failed to write user metrics: %v", err)
 		}
 	}
@@ -735,7 +905,7 @@ func TestInMemoryDatabase(t *testing.T) {
 	defer func() { _ = manager.Close() }()
 
 	// Verify the database remains healthy.
-	err = manager.WriteUserMetrics(&UserMetricsRecord{
+	err = manager.writeUserMetricsForTest(&UserMetricsRecord{
 		UID:              1000,
 		Username:         "test",
 		CPUUsagePercent:  50.0,

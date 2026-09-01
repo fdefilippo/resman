@@ -61,7 +61,10 @@ func (m *Manager) cpuPointsAllocationFor(uid int) (cpupoints.AllocationClass, cp
 	return cpupoints.AllocationClassBestEffort, weight, 0, err
 }
 
-func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarchy) (string, cgroup.ProcessMoveResult, error) {
+func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarchy) (path string, result cgroup.ProcessMoveResult, err error) {
+	defer func() {
+		m.recordCPUPointsAdmissionOutcome(uid, result, err)
+	}()
 	class, leafWeight, guarantee, err := m.cpuPointsAllocationFor(uid)
 	if err != nil {
 		return "", cgroup.ProcessMoveResult{}, err
@@ -114,7 +117,7 @@ func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarch
 		}
 	}
 
-	path, result, err := m.cgroupManager.EnsureCPUPointsUserPlacement(uid, domainPath, leafWeight)
+	path, result, err = m.cgroupManager.EnsureCPUPointsUserPlacement(uid, domainPath, leafWeight)
 	m.recordCgroupIngressSkips(result)
 	if err == nil && !result.Applied() {
 		err = cgroupIngressNoopError(uid, result)
@@ -138,12 +141,17 @@ func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarch
 	return path, result, nil
 }
 
-func (m *Manager) releaseCPUPointsUser(uid int, preserveObservation bool) (bool, error) {
+func (m *Manager) releaseCPUPointsUser(uid int, preserveObservation bool) (released bool, err error) {
 	m.mu.RLock()
 	allocation, exists := m.cpuAllocations[uid]
 	hierarchy := m.cpuPointsHierarchy
 	resources := m.resourceLimits[uid]
 	m.mu.RUnlock()
+	if exists {
+		defer func() {
+			m.recordCPUPointsReleaseOutcome(uid, released, err)
+		}()
+	}
 	if !exists {
 		m.mu.RLock()
 		sharedPath := m.sharedCgroupPath

@@ -454,9 +454,11 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 }
 
 type SystemMetrics struct {
-	Timestamp     time.Time
-	TotalCores    int
-	TotalCPUUsage float64 // Percentage
+	Timestamp         time.Time
+	TotalCores        int
+	TotalCPUUsage     float64 // Percentage
+	PersistenceSystem resmanmetrics.SystemPersistenceMetrics
+	PersistenceUsers  map[int]resmanmetrics.UserPersistenceMetrics
 
 	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64
@@ -617,6 +619,7 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 		for _, uid := range metrics.IOEligibleUsers {
 			m.previousIOEligibleUsers[uid] = struct{}{}
 		}
+		m.collectPersistenceInterval(metrics)
 	}
 
 	return metrics, nil
@@ -920,19 +923,17 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 
 	summary := m.getEnforcementSummary()
 
-	if err := m.metricsCollector.WriteMetricsToDatabase(
-		metrics.UserMetrics,
-		resmanmetrics.SystemPersistenceMetrics{
-			TotalCPUUsagePercent:         metrics.TotalCPUUsage,
-			TotalCores:                   metrics.TotalCores,
-			SystemLoad:                   metrics.SystemLoad,
-			CPULimitsActive:              summary.cpuLimitsActive,
-			ResourceLimitsActive:         summary.resourceLimitsActive,
-			AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
-			CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
-			ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
-		},
-	); err != nil {
+	persistenceSystem := metrics.PersistenceSystem
+	persistenceSystem.CPULimitsActive = summary.cpuLimitsActive
+	persistenceSystem.ResourceLimitsActive = summary.resourceLimitsActive
+	persistenceSystem.AnyLimitsActive = summary.cpuLimitsActive || summary.resourceLimitsActive
+	persistenceSystem.CPUActivelyLimitedUsersCount = len(summary.cpuUsers)
+	persistenceSystem.ActivelyLimitedUsersCount = len(summary.activelyLimitedUsers)
+
+	if err := m.metricsCollector.WriteMetricsToDatabase(resmanmetrics.PersistenceBatch{
+		System: persistenceSystem,
+		Users:  metrics.PersistenceUsers,
+	}); err != nil {
 		m.logger.Warn("Failed to write metrics to database",
 			"users", len(metrics.UserMetrics),
 			"cpu_limits_active", summary.cpuLimitsActive,
@@ -944,6 +945,7 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 		}
 		return
 	}
+	m.clearPersistedCPUPointsLifecycleEvents()
 
 	m.logger.Debug("Metrics written to database",
 		"users", len(metrics.UserMetrics),

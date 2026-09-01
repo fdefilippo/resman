@@ -668,8 +668,12 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A pre-version-3 database must be archived or deleted so schema
-version 3 can be created; it is not moved or migrated.
+component construction. A pre-version-4 database must be archived or deleted so schema
+version 4 can be created; it is not moved or migrated. Version 4 persists one common
+sample epoch across system and user rows, typed CPU Points configured/applied state,
+nullable identity-safe cgroup deltas, PID-namespace and RAM-charge coverage, and
+distinct memory high/max/OOM/kill deltas. First baselines, counter resets and cgroup
+recreation remain NULL rather than being reinterpreted as zero or wrapped deltas.
 
 **Format:**
 ```ini

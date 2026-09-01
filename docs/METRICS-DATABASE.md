@@ -75,16 +75,40 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store contains `user_metrics` and `system_metrics` tables. User records
-include observed CPU, memory, process count, cgroup path, per-resource eligibility,
-requested limits, and observed active enforcement state. System records contain the
-host observation and the distinct CPU, resource, and combined enforcement states.
+The current store uses schema version 4 and contains `user_metrics` and
+`system_metrics` tables. Every transaction has one `sample_epoch_id` and common
+`interval_start`/`interval_end` boundary. A nullable start identifies the first
+baseline after daemon startup. User and system records in one transaction therefore
+describe the same decision-sample interval; history consumers must not combine rows
+from different epoch identifiers.
+
+User records separate process-derived CPU and memory observation; total and
+enforceable process counts; configured CPU class and nullable mapped guarantee;
+lifecycle outcome from applied class and weight; raw `cpu.max`/`cpu.weight`
+diagnostics; nullable leaf usage deltas; PID-namespace rejection counts; and cgroup
+RAM usage, charge coverage, limits, swap policy and distinct high/max/OOM/kill event
+deltas. Lifecycle is one of `ineligible`, `eligible_inactive`, `applied`,
+`namespace_rejected`, `failed`, or `released`.
+
+An absent guarantee never means zero: best-effort users have no synthetic per-user
+guarantee. An absent delta means no comparable baseline was available; numeric zero
+means two comparable observations produced no increase. Cgroup identity changes,
+counter decreases, read failures, and daemon restart create a nullable baseline
+instead of a wrapped or multi-lifetime delta. Rising `memory.high` with zero
+max/OOM/kill deltas represents throttling or a stall, not a kill.
+
+System records contain the nominal parent pool, live online-CPU denominator,
+programmed parent quota/period, configured and applied domain weights, degraded state,
+and synchronized parent/guaranteed-domain/best-effort-domain usage deltas. Parent
+period, throttled-period and throttled-time deltas explain the bandwidth actually
+delivered by the kernel. Configured class-priority lending is distinct from measured
+use; history never claims that an idle domain was runnable.
 
 The schema is versioned with SQLite `PRAGMA user_version`. ResMan intentionally does
-not migrate an incompatible database. If the on-disk version differs from the current
-schema, startup refuses to open it and tells the operator to move or delete the store
-before restarting. This prevents old columns from being silently reinterpreted under
-new semantics.
+not migrate an incompatible database. Version 3 and unversioned stores are rejected
+by the CPU Points cutover because they cannot express allocation class, guarantee,
+common sampling epochs, topology resets, or RAM charge coverage. Move or delete the
+store and restart to create version 4. No alias or dual-read path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
 values are stored in UTC and API responses use RFC 3339.

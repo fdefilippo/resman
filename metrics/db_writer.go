@@ -19,6 +19,7 @@ package metrics
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -43,20 +44,8 @@ func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) 
 	}
 }
 
-// SystemPersistenceMetrics contains one typed system sample for database persistence.
-type SystemPersistenceMetrics struct {
-	TotalCPUUsagePercent         float64
-	TotalCores                   int
-	SystemLoad                   float64
-	CPULimitsActive              bool
-	ResourceLimitsActive         bool
-	AnyLimitsActive              bool
-	CPUActivelyLimitedUsersCount int
-	ActivelyLimitedUsersCount    int
-}
-
 // WriteMetricsBatch writes one system sample and all user samples atomically.
-func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, system SystemPersistenceMetrics) error {
+func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) error {
 	w.mu.RLock()
 	enabled := w.enabled
 	w.mu.RUnlock()
@@ -64,39 +53,94 @@ func (w *DBWriter) WriteMetricsBatch(userMetrics map[int]*UserMetrics, system Sy
 		return nil
 	}
 
-	timestamp := time.Now().UTC()
+	system := batch.System
+	timestamp := system.IntervalEnd.UTC()
 	systemRecord := &database.SystemMetricsRecord{
-		TotalCPUUsagePercent:         system.TotalCPUUsagePercent,
-		TotalCores:                   system.TotalCores,
-		SystemLoad:                   system.SystemLoad,
-		CPULimitsActive:              system.CPULimitsActive,
-		ResourceLimitsActive:         system.ResourceLimitsActive,
-		AnyLimitsActive:              system.AnyLimitsActive,
-		CPUActivelyLimitedUsersCount: system.CPUActivelyLimitedUsersCount,
-		ActivelyLimitedUsersCount:    system.ActivelyLimitedUsersCount,
-		Timestamp:                    timestamp,
+		SampleEpochID:                     system.SampleEpochID,
+		IntervalStart:                     system.IntervalStart,
+		IntervalEnd:                       timestamp,
+		TotalCPUUsagePercent:              system.TotalCPUUsagePercent,
+		TotalCores:                        system.TotalCores,
+		SystemLoad:                        system.SystemLoad,
+		CPULimitsActive:                   system.CPULimitsActive,
+		ResourceLimitsActive:              system.ResourceLimitsActive,
+		AnyLimitsActive:                   system.AnyLimitsActive,
+		CPUActivelyLimitedUsersCount:      system.CPUActivelyLimitedUsersCount,
+		ActivelyLimitedUsersCount:         system.ActivelyLimitedUsersCount,
+		NominalParentPoolPoints:           system.NominalParentPoolPoints,
+		CPUCapacityAvailable:              system.CPUCapacityAvailable,
+		OnlineCPUs:                        system.OnlineCPUs,
+		ProgrammedParentQuotaUsec:         system.ProgrammedParentQuotaUsec,
+		ProgrammedParentPeriodUsec:        system.ProgrammedParentPeriodUsec,
+		CPUPointsDegraded:                 system.CPUPointsDegraded,
+		AppliedGuaranteePoints:            system.AppliedGuaranteePoints,
+		ProgrammedGuaranteeWeight:         system.ProgrammedGuaranteeWeight,
+		ConfiguredBestEffortWeight:        system.ConfiguredBestEffortWeight,
+		ParentCPUQuota:                    system.ParentCPUQuota,
+		GuaranteedDomainCPUWeight:         system.GuaranteedDomainCPUWeight,
+		BestEffortDomainCPUWeight:         system.BestEffortDomainCPUWeight,
+		ParentCPUUsageUsecDelta:           system.ParentCPUUsageUsecDelta,
+		GuaranteedDomainCPUUsageUsecDelta: system.GuaranteedDomainCPUUsageUsecDelta,
+		BestEffortDomainCPUUsageUsecDelta: system.BestEffortDomainCPUUsageUsecDelta,
+		ParentCPUPeriodsDelta:             system.ParentCPUPeriodsDelta,
+		ParentCPUThrottledPeriodsDelta:    system.ParentCPUThrottledPeriodsDelta,
+		ParentCPUThrottledUsecDelta:       system.ParentCPUThrottledUsecDelta,
+		Timestamp:                         timestamp,
 	}
-	userRecords := make([]*database.UserMetricsRecord, 0, len(userMetrics))
-	for uid, metrics := range userMetrics {
-		if metrics == nil {
+	uids := make([]int, 0, len(batch.Users))
+	for uid := range batch.Users {
+		uids = append(uids, uid)
+	}
+	sort.Ints(uids)
+	userRecords := make([]*database.UserMetricsRecord, 0, len(batch.Users))
+	for _, uid := range uids {
+		user := batch.Users[uid]
+		if user.Metrics == nil {
 			return fmt.Errorf("user metrics for UID %d are nil", uid)
 		}
+		metrics := user.Metrics
 		userRecords = append(userRecords, &database.UserMetricsRecord{
-			UID:               uid,
-			Username:          metrics.Username,
-			CPUUsagePercent:   metrics.CPUUsage,
-			MemoryUsageBytes:  int64(metrics.MemoryUsage),
-			ProcessCount:      metrics.ProcessCount,
-			EligibleForCPU:    metrics.EligibleForCPU,
-			EligibleForRAM:    metrics.EligibleForRAM,
-			EligibleForIO:     metrics.EligibleForIO,
-			CPULimitRequested: metrics.CPULimitRequested,
-			CPULimitActive:    metrics.CPULimitActive,
-			RAMLimitRequested: metrics.RAMLimitRequested,
-			RAMLimitActive:    metrics.RAMLimitActive,
-			IOLimitRequested:  metrics.IOLimitRequested,
-			IOLimitActive:     metrics.IOLimitActive,
-			Timestamp:         timestamp,
+			SampleEpochID:                     system.SampleEpochID,
+			IntervalStart:                     system.IntervalStart,
+			IntervalEnd:                       timestamp,
+			UID:                               uid,
+			Username:                          metrics.Username,
+			CPUUsagePercent:                   metrics.CPUUsage,
+			MemoryUsageBytes:                  int64(metrics.MemoryUsage),
+			ProcessCount:                      metrics.ProcessCount,
+			CgroupPath:                        user.CgroupPath,
+			CPUQuota:                          user.CPUQuota,
+			ConfiguredGuaranteePoints:         user.ConfiguredGuaranteePoints,
+			ConfiguredCPUClass:                user.ConfiguredClass,
+			CPUPointsLifecycleState:           string(user.LifecycleState),
+			AppliedCPUClass:                   user.AppliedClass,
+			AppliedCPUWeight:                  user.AppliedWeight,
+			CPUWeight:                         user.CPUWeight,
+			LeafCPUUsageUsecDelta:             user.LeafCPUUsageUsecDelta,
+			PIDNamespaceMismatchCount:         user.PIDNamespaceMismatchCount,
+			PIDNamespaceUnavailableCount:      user.PIDNamespaceUnavailableCount,
+			EnforceableProcessCount:           metrics.EnforceableUsage.ProcessCount,
+			RAMCgroupUsageBytes:               user.RAMCgroupUsageBytes,
+			RAMCoverage:                       user.RAMCoverage,
+			RAMCoverageIncompleteProcessCount: user.RAMCoverageIncompleteProcessCount,
+			RAMSwapDisabled:                   user.RAMSwapDisabled,
+			MemoryHighLimit:                   user.MemoryHighLimit,
+			MemoryMaxLimit:                    user.MemoryMaxLimit,
+			MemorySwapMax:                     user.MemorySwapMax,
+			MemoryHighEventsDelta:             user.MemoryHighEventsDelta,
+			MemoryMaxEventsDelta:              user.MemoryMaxEventsDelta,
+			MemoryOOMEventsDelta:              user.MemoryOOMEventsDelta,
+			MemoryOOMKillEventsDelta:          user.MemoryOOMKillEventsDelta,
+			EligibleForCPU:                    metrics.EligibleForCPU,
+			EligibleForRAM:                    metrics.EligibleForRAM,
+			EligibleForIO:                     metrics.EligibleForIO,
+			CPULimitRequested:                 metrics.CPULimitRequested,
+			CPULimitActive:                    metrics.CPULimitActive,
+			RAMLimitRequested:                 metrics.RAMLimitRequested,
+			RAMLimitActive:                    metrics.RAMLimitActive,
+			IOLimitRequested:                  metrics.IOLimitRequested,
+			IOLimitActive:                     metrics.IOLimitActive,
+			Timestamp:                         timestamp,
 		})
 	}
 

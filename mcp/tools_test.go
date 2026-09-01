@@ -35,6 +35,26 @@ import (
 	"github.com/fdefilippo/resman/state"
 )
 
+func writeUserHistoryFixture(manager *database.DatabaseManager, record *database.UserMetricsRecord) error {
+	if record.Timestamp.IsZero() {
+		record.Timestamp = time.Now().UTC()
+	}
+	record.Timestamp = record.Timestamp.UTC()
+	record.SampleEpochID = record.Timestamp.UnixNano()
+	record.IntervalEnd = record.Timestamp
+	if record.ConfiguredCPUClass == "" {
+		record.ConfiguredCPUClass = "best_effort"
+	}
+	if record.CPUPointsLifecycleState == "" {
+		record.CPUPointsLifecycleState = "eligible_inactive"
+	}
+	return manager.WriteMetricsBatch(&database.SystemMetricsRecord{
+		SampleEpochID: record.SampleEpochID,
+		IntervalEnd:   record.Timestamp,
+		Timestamp:     record.Timestamp,
+	}, []*database.UserMetricsRecord{record})
+}
+
 type configurationReloaderFunc func(context.Context) error
 
 func (f configurationReloaderFunc) Reload(ctx context.Context) error {
@@ -742,7 +762,7 @@ func TestResolveHistoricalUIDUsesDatabaseForInactiveUser(t *testing.T) {
 	defer func() { _ = dbManager.Close() }()
 
 	now := time.Now().UTC()
-	if err := dbManager.WriteUserMetrics(&database.UserMetricsRecord{
+	if err := writeUserHistoryFixture(dbManager, &database.UserMetricsRecord{
 		Timestamp:    now,
 		UID:          1000,
 		Username:     "offline-user",
@@ -773,7 +793,7 @@ func TestGetUserHistoryReturnsPersistedExplicitLimitState(t *testing.T) {
 	defer func() { _ = dbManager.Close() }()
 
 	now := time.Now().UTC()
-	if err := dbManager.WriteUserMetrics(&database.UserMetricsRecord{
+	if err := writeUserHistoryFixture(dbManager, &database.UserMetricsRecord{
 		Timestamp:         now,
 		UID:               1000,
 		Username:          "offline-user",

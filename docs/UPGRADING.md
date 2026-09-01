@@ -75,15 +75,17 @@ rollback.
 ### Metrics history moves and requires a reset
 
 **Visible change.** The default database moves from `/etc/resman/metrics.db` to
-`/var/lib/resman/metrics.db`. Unversioned, schema-version-2, and other incompatible
-stores are rejected; the current schema version is 3. The immediate parent must be a
+`/var/lib/resman/metrics.db`. Unversioned, schema-version-2, schema-version-3, and
+other incompatible stores are rejected; the current schema version is 4. The immediate parent must be a
 real, process-owned mode-`0700` directory. The database and pre-existing `-wal` and
 `-shm` sidecars must be regular, process-owned mode-`0600` files. Replaceable or
 symbolic-link ancestors are rejected. Failure disables historical persistence with an
 explicit remedy while resource enforcement remains active.
 
-**Cause.** Persisted fields now distinguish CPU enforcement, RAM/I/O enforcement, any
-enforcement, CPU-active users, and the active-user union. Reinterpreting old rows would
+**Cause.** Persisted fields now distinguish CPU Points configured guarantees, class,
+applied weight, common interval identity, delivered parent/domain bandwidth,
+throttling, topology resets, PID-namespace coverage, RAM cgroup charges and memory
+events in addition to CPU enforcement, RAM/I/O enforcement, and the active-user union. Reinterpreting old rows would
 silently corrupt history, and relying on SQLite defaults or the service umask could
 expose per-user data.
 
@@ -615,7 +617,7 @@ Verify all of the following before treating the upgrade as complete:
 - Prometheus exposes the renamed CPU, RAM, I/O, and union series with `hostname` and
   `server_role` labels.
 - Alertmanager routes and silences use the new CPU alert identifiers.
-- The metrics database reports schema version 3 or persistence is deliberately
+- The metrics database reports schema version 4 or persistence is deliberately
   disabled with its remedy understood.
 - Enabled RAM and I/O features passed their real-interface probes.
 - Procfs and block-I/O coverage metrics are zero or their conservative enforcement

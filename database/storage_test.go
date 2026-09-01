@@ -88,7 +88,7 @@ func TestNewDatabaseManagerProtectsFileBackedStorageWithPermissiveUmask(t *testi
 			}
 			defer func() { _ = manager.Close() }()
 
-			if err := manager.WriteSystemMetrics(&SystemMetricsRecord{
+			if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{
 				Timestamp:  time.Now().UTC(),
 				TotalCores: 1,
 			}); err != nil {

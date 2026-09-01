@@ -187,6 +187,14 @@ Reserve, best-effort, and map-content changes form one atomic hot-reload epoch;
 of an active user within its current class, but changing an active user between
 guaranteed and best-effort is rejected until that user is released.
 
+When metrics persistence is enabled, SQLite schema version 4 records each decision
+sample as one common system/user epoch. History distinguishes configured guarantee,
+applied CPU class and weight, delivered parent/domain bandwidth and throttling, raw
+cgroup diagnostics, PID-namespace coverage, and process-derived memory from cgroup
+RAM charges and high/max/OOM events. Missing comparable baselines are `null`, not
+zero; incompatible older databases must be archived or deleted before restart. See
+[`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md).
+
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.

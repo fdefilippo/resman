@@ -268,26 +268,11 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	collector := &Collector{
 		dbWriter: NewDBWriter(dbManager, 0),
 	}
-	if err := collector.WriteMetricsToDatabase(
-		map[int]*UserMetrics{
-			1000: {
-				UID:               1000,
-				Username:          "limited-user",
-				CPUUsage:          75,
-				MemoryUsage:       1024,
-				ProcessCount:      3,
-				EligibleForCPU:    true,
-				EligibleForRAM:    true,
-				EligibleForIO:     true,
-				CPULimitRequested: true,
-				CPULimitActive:    true,
-				RAMLimitRequested: true,
-				RAMLimitActive:    true,
-				IOLimitRequested:  true,
-				IOLimitActive:     true,
-			},
-		},
-		SystemPersistenceMetrics{
+	now := time.Now().UTC()
+	if err := collector.WriteMetricsToDatabase(PersistenceBatch{
+		System: SystemPersistenceMetrics{
+			SampleEpochID:                now.UnixNano(),
+			IntervalEnd:                  now,
 			TotalCPUUsagePercent:         50,
 			TotalCores:                   4,
 			SystemLoad:                   2.5,
@@ -296,7 +281,29 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 			CPUActivelyLimitedUsersCount: 1,
 			ActivelyLimitedUsersCount:    1,
 		},
-	); err != nil {
+		Users: map[int]UserPersistenceMetrics{
+			1000: {
+				ConfiguredClass: "best_effort",
+				LifecycleState:  CPUPointsLifecycleApplied,
+				Metrics: &UserMetrics{
+					UID:               1000,
+					Username:          "limited-user",
+					CPUUsage:          75,
+					MemoryUsage:       1024,
+					ProcessCount:      3,
+					EligibleForCPU:    true,
+					EligibleForRAM:    true,
+					EligibleForIO:     true,
+					CPULimitRequested: true,
+					CPULimitActive:    true,
+					RAMLimitRequested: true,
+					RAMLimitActive:    true,
+					IOLimitRequested:  true,
+					IOLimitActive:     true,
+				},
+			},
+		},
+	}); err != nil {
 		t.Fatalf("WriteMetricsToDatabase() error: %v", err)
 	}
 

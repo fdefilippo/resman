@@ -1962,7 +1962,7 @@ func (c *Collector) GetUserProcessCount(uid int) int {
 }
 
 // WriteMetricsToDatabase writes one typed metrics batch when a database writer is configured.
-func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, system SystemPersistenceMetrics) error {
+func (c *Collector) WriteMetricsToDatabase(batch PersistenceBatch) error {
 	c.mu.RLock()
 	writer := c.dbWriter
 	c.mu.RUnlock()
@@ -1971,7 +1971,7 @@ func (c *Collector) WriteMetricsToDatabase(userMetrics map[int]*UserMetrics, sys
 		return nil
 	}
 
-	if err := writer.WriteMetricsBatch(userMetrics, system); err != nil {
+	if err := writer.WriteMetricsBatch(batch); err != nil {
 		return fmt.Errorf("write metrics to database: %w", err)
 	}
 

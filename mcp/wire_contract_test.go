@@ -105,13 +105,24 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 	}
 
 	assertExactNestedJSONKeys(t, getUserHistoryResult{Records: []userHistoryRecord{{}}}, "records", []string{
-		"cgroup_path", "cpu_limit_active", "cpu_limit_requested", "cpu_quota", "cpu_usage", "eligible_for_cpu",
-		"eligible_for_io", "eligible_for_ram", "io_limit_active", "io_limit_requested", "memory_usage", "process_count",
-		"ram_limit_active", "ram_limit_requested", "timestamp", "uid", "username",
+		"applied_cpu_class", "applied_cpu_weight", "cgroup_path", "configured_cpu_class", "configured_guarantee_points",
+		"cpu_limit_active", "cpu_limit_requested", "cpu_points_lifecycle_state", "cpu_quota", "cpu_usage", "cpu_weight",
+		"eligible_for_cpu", "eligible_for_io", "eligible_for_ram", "enforceable_process_count", "interval_end", "interval_start",
+		"io_limit_active", "io_limit_requested", "leaf_cpu_usage_usec_delta", "memory_high_events_delta", "memory_high_limit",
+		"memory_max_events_delta", "memory_max_limit", "memory_oom_events_delta",
+		"memory_oom_kill_events_delta", "memory_swap_max", "memory_usage", "pid_namespace_mismatch_count",
+		"pid_namespace_unavailable_count", "process_count", "ram_cgroup_usage_bytes", "ram_coverage",
+		"ram_coverage_incomplete_process_count", "ram_limit_active", "ram_limit_requested", "ram_swap_disabled",
+		"sample_epoch_id", "timestamp", "uid", "username",
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
-		"actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users_count", "cpu_limits_active",
-		"resource_limits_active", "system_load", "timestamp", "total_cores", "total_cpu_usage",
+		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "best_effort_domain_cpu_usage_usec_delta",
+		"best_effort_domain_cpu_weight", "configured_best_effort_weight", "cpu_actively_limited_users_count", "cpu_capacity_available",
+		"cpu_limits_active", "cpu_points_degraded", "guaranteed_domain_cpu_usage_usec_delta", "guaranteed_domain_cpu_weight",
+		"interval_end", "interval_start", "nominal_parent_pool_points", "online_cpus", "parent_cpu_periods_delta",
+		"parent_cpu_quota", "parent_cpu_throttled_periods_delta", "parent_cpu_throttled_usec_delta", "parent_cpu_usage_usec_delta",
+		"programmed_guarantee_weight", "programmed_parent_period_usec", "programmed_parent_quota_usec", "resource_limits_active",
+		"sample_epoch_id", "system_load", "timestamp", "total_cores", "total_cpu_usage",
 	})
 	assertExactNestedJSONKeys(t, activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}}, "users", []string{"uid", "username"})
 }
@@ -125,15 +136,35 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 	}
 
 	now := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
-	userRecord := newUserHistoryRecord(database.UserMetricsRecord{Timestamp: now, UID: 1000, Username: "alice", MemoryUsageBytes: 42})
-	if userRecord.Timestamp != now.Format(time.RFC3339) || userRecord.MemoryUsage != 42 {
+	start := now.Add(-30 * time.Second)
+	guarantee, weight, delta := uint64(300), uint64(300), uint64(90)
+	class := "guaranteed"
+	userRecord := newUserHistoryRecord(database.UserMetricsRecord{
+		Timestamp: now, SampleEpochID: 7, IntervalStart: &start, IntervalEnd: now,
+		UID: 1000, Username: "alice", MemoryUsageBytes: 42,
+		ConfiguredGuaranteePoints: &guarantee, ConfiguredCPUClass: class,
+		CPUPointsLifecycleState: "applied", AppliedCPUClass: &class,
+		AppliedCPUWeight: &weight, LeafCPUUsageUsecDelta: &delta,
+	})
+	if userRecord.Timestamp != now.Format(time.RFC3339) || userRecord.MemoryUsage != 42 ||
+		userRecord.IntervalStart == nil || *userRecord.IntervalStart != start.Format(time.RFC3339) ||
+		userRecord.ConfiguredGuaranteePoints == nil || *userRecord.ConfiguredGuaranteePoints != 300 ||
+		userRecord.AppliedCPUClass == nil || *userRecord.AppliedCPUClass != class {
 		t.Fatalf("user history projection = %+v", userRecord)
 	}
+	bestEffort := newUserHistoryRecord(database.UserMetricsRecord{Timestamp: now, IntervalEnd: now, ConfiguredCPUClass: "best_effort"})
+	if bestEffort.ConfiguredGuaranteePoints != nil || bestEffort.AppliedCPUClass != nil {
+		t.Fatalf("best-effort projection fabricated allocation = %+v", bestEffort)
+	}
 	systemRecord := newSystemHistoryRecord(database.SystemMetricsRecord{
-		Timestamp: now, CPULimitsActive: true, ResourceLimitsActive: true,
+		Timestamp: now, SampleEpochID: 7, IntervalStart: &start, IntervalEnd: now,
+		CPULimitsActive: true, ResourceLimitsActive: true,
 		AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 3,
+		ParentCPUUsageUsecDelta: &delta,
 	})
-	if systemRecord.Timestamp != now.Format(time.RFC3339) || systemRecord.CPUActivelyLimitedUsersCount != 2 || systemRecord.ActivelyLimitedUsersCount != 3 {
+	if systemRecord.Timestamp != now.Format(time.RFC3339) || systemRecord.SampleEpochID != 7 ||
+		systemRecord.CPUActivelyLimitedUsersCount != 2 || systemRecord.ActivelyLimitedUsersCount != 3 ||
+		systemRecord.ParentCPUUsageUsecDelta == nil || *systemRecord.ParentCPUUsageUsecDelta != 90 {
 		t.Fatalf("system history projection = %+v", systemRecord)
 	}
 }

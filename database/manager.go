@@ -33,36 +33,81 @@ import (
 
 // UserMetricsRecord represents one persisted user metrics sample.
 type UserMetricsRecord struct {
-	UID               int
-	Username          string
-	CPUUsagePercent   float64
-	MemoryUsageBytes  int64
-	ProcessCount      int
-	CgroupPath        string
-	CPUQuota          string
-	EligibleForCPU    bool
-	EligibleForRAM    bool
-	EligibleForIO     bool
-	CPULimitRequested bool
-	CPULimitActive    bool
-	RAMLimitRequested bool
-	RAMLimitActive    bool
-	IOLimitRequested  bool
-	IOLimitActive     bool
-	Timestamp         time.Time
+	SampleEpochID                     int64
+	IntervalStart                     *time.Time
+	IntervalEnd                       time.Time
+	UID                               int
+	Username                          string
+	CPUUsagePercent                   float64
+	MemoryUsageBytes                  int64
+	ProcessCount                      int
+	CgroupPath                        string
+	CPUQuota                          string
+	ConfiguredGuaranteePoints         *uint64
+	ConfiguredCPUClass                string
+	CPUPointsLifecycleState           string
+	AppliedCPUClass                   *string
+	AppliedCPUWeight                  *uint64
+	CPUWeight                         *uint64
+	LeafCPUUsageUsecDelta             *uint64
+	PIDNamespaceMismatchCount         int
+	PIDNamespaceUnavailableCount      int
+	EnforceableProcessCount           int
+	RAMCgroupUsageBytes               *uint64
+	RAMCoverage                       *string
+	RAMCoverageIncompleteProcessCount int
+	RAMSwapDisabled                   *bool
+	MemoryHighLimit                   *string
+	MemoryMaxLimit                    *string
+	MemorySwapMax                     *string
+	MemoryHighEventsDelta             *uint64
+	MemoryMaxEventsDelta              *uint64
+	MemoryOOMEventsDelta              *uint64
+	MemoryOOMKillEventsDelta          *uint64
+	EligibleForCPU                    bool
+	EligibleForRAM                    bool
+	EligibleForIO                     bool
+	CPULimitRequested                 bool
+	CPULimitActive                    bool
+	RAMLimitRequested                 bool
+	RAMLimitActive                    bool
+	IOLimitRequested                  bool
+	IOLimitActive                     bool
+	Timestamp                         time.Time
 }
 
 // SystemMetricsRecord represents one persisted system metrics sample.
 type SystemMetricsRecord struct {
-	TotalCPUUsagePercent         float64
-	TotalCores                   int
-	SystemLoad                   float64
-	CPULimitsActive              bool
-	ResourceLimitsActive         bool
-	AnyLimitsActive              bool
-	CPUActivelyLimitedUsersCount int
-	ActivelyLimitedUsersCount    int
-	Timestamp                    time.Time
+	SampleEpochID                     int64
+	IntervalStart                     *time.Time
+	IntervalEnd                       time.Time
+	TotalCPUUsagePercent              float64
+	TotalCores                        int
+	SystemLoad                        float64
+	CPULimitsActive                   bool
+	ResourceLimitsActive              bool
+	AnyLimitsActive                   bool
+	CPUActivelyLimitedUsersCount      int
+	ActivelyLimitedUsersCount         int
+	NominalParentPoolPoints           uint64
+	CPUCapacityAvailable              bool
+	OnlineCPUs                        *uint64
+	ProgrammedParentQuotaUsec         *uint64
+	ProgrammedParentPeriodUsec        *uint64
+	CPUPointsDegraded                 bool
+	AppliedGuaranteePoints            uint64
+	ProgrammedGuaranteeWeight         uint64
+	ConfiguredBestEffortWeight        uint64
+	ParentCPUQuota                    *string
+	GuaranteedDomainCPUWeight         *uint64
+	BestEffortDomainCPUWeight         *uint64
+	ParentCPUUsageUsecDelta           *uint64
+	GuaranteedDomainCPUUsageUsecDelta *uint64
+	BestEffortDomainCPUUsageUsecDelta *uint64
+	ParentCPUPeriodsDelta             *uint64
+	ParentCPUThrottledPeriodsDelta    *uint64
+	ParentCPUThrottledUsecDelta       *uint64
+	Timestamp                         time.Time
 }
 
 // UserSummary contains aggregate metrics for one user and time range.
@@ -106,21 +151,40 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 3
+	metricsSchemaVersion   = 4
 	insertUserMetricsQuery = `
-    INSERT INTO user_metrics (timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
-							  process_count, cgroup_path, cpu_quota, eligible_for_cpu,
+    INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
+							  uid, username, cpu_usage_percent, memory_usage_bytes,
+							  process_count, cgroup_path, cpu_quota, configured_guarantee_points,
+							  configured_cpu_class, cpu_points_lifecycle_state, applied_cpu_class,
+							  applied_cpu_weight, cpu_weight, leaf_cpu_usage_usec_delta,
+							  pid_namespace_mismatch_count, pid_namespace_unavailable_count,
+							  enforceable_process_count, ram_cgroup_usage_bytes, ram_coverage,
+							  ram_coverage_incomplete_process_count, ram_swap_disabled,
+							  memory_high_limit, memory_max_limit, memory_swap_max,
+							  memory_high_events_delta, memory_max_events_delta,
+							  memory_oom_events_delta, memory_oom_kill_events_delta,
+							  eligible_for_cpu,
 							  eligible_for_ram, eligible_for_io, cpu_limit_requested,
 							  cpu_limit_active, ram_limit_requested, ram_limit_active,
 							  io_limit_requested, io_limit_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	insertSystemMetricsQuery = `
-	INSERT INTO system_metrics (timestamp, total_cpu_usage_percent, total_cores,
+	INSERT INTO system_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
+								total_cpu_usage_percent, total_cores,
 								system_load, cpu_limits_active, resource_limits_active,
 								any_limits_active, cpu_actively_limited_users_count,
-								actively_limited_users_count)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+								actively_limited_users_count, nominal_parent_pool_points,
+								cpu_capacity_available, online_cpus, programmed_parent_quota_usec,
+								programmed_parent_period_usec, cpu_points_degraded,
+								applied_guarantee_points, programmed_guarantee_weight,
+								configured_best_effort_weight, parent_cpu_quota,
+								guaranteed_domain_cpu_weight, best_effort_domain_cpu_weight,
+								parent_cpu_usage_usec_delta, guaranteed_domain_cpu_usage_usec_delta,
+								best_effort_domain_cpu_usage_usec_delta, parent_cpu_periods_delta,
+								parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
 
@@ -223,6 +287,9 @@ func (m *DatabaseManager) InitSchema() error {
     CREATE TABLE IF NOT EXISTS user_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		sample_epoch_id INTEGER NOT NULL,
+		interval_start DATETIME,
+		interval_end DATETIME NOT NULL,
         uid INTEGER NOT NULL,
         username TEXT NOT NULL,
         cpu_usage_percent REAL NOT NULL,
@@ -230,6 +297,27 @@ func (m *DatabaseManager) InitSchema() error {
         process_count INTEGER NOT NULL,
         cgroup_path TEXT,
         cpu_quota TEXT,
+		configured_guarantee_points INTEGER,
+		configured_cpu_class TEXT NOT NULL CHECK (configured_cpu_class IN ('guaranteed', 'best_effort')),
+		cpu_points_lifecycle_state TEXT NOT NULL CHECK (cpu_points_lifecycle_state IN ('ineligible', 'eligible_inactive', 'applied', 'namespace_rejected', 'failed', 'released')),
+		applied_cpu_class TEXT CHECK (applied_cpu_class IS NULL OR applied_cpu_class IN ('guaranteed', 'best_effort')),
+		applied_cpu_weight INTEGER,
+		cpu_weight INTEGER,
+		leaf_cpu_usage_usec_delta INTEGER,
+		pid_namespace_mismatch_count INTEGER NOT NULL,
+		pid_namespace_unavailable_count INTEGER NOT NULL,
+		enforceable_process_count INTEGER NOT NULL,
+		ram_cgroup_usage_bytes INTEGER,
+		ram_coverage TEXT CHECK (ram_coverage IS NULL OR ram_coverage IN ('complete', 'partial')),
+		ram_coverage_incomplete_process_count INTEGER NOT NULL,
+		ram_swap_disabled BOOLEAN,
+		memory_high_limit TEXT,
+		memory_max_limit TEXT,
+		memory_swap_max TEXT,
+		memory_high_events_delta INTEGER,
+		memory_max_events_delta INTEGER,
+		memory_oom_events_delta INTEGER,
+		memory_oom_kill_events_delta INTEGER,
         eligible_for_cpu BOOLEAN NOT NULL,
         eligible_for_ram BOOLEAN NOT NULL,
         eligible_for_io BOOLEAN NOT NULL,
@@ -245,6 +333,9 @@ func (m *DatabaseManager) InitSchema() error {
     CREATE TABLE IF NOT EXISTS system_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		sample_epoch_id INTEGER NOT NULL,
+		interval_start DATETIME,
+		interval_end DATETIME NOT NULL,
         total_cpu_usage_percent REAL NOT NULL,
         total_cores INTEGER NOT NULL,
         system_load REAL,
@@ -252,7 +343,25 @@ func (m *DatabaseManager) InitSchema() error {
 		resource_limits_active BOOLEAN NOT NULL,
 		any_limits_active BOOLEAN NOT NULL,
 		cpu_actively_limited_users_count INTEGER NOT NULL,
-		actively_limited_users_count INTEGER NOT NULL
+		actively_limited_users_count INTEGER NOT NULL,
+		nominal_parent_pool_points INTEGER NOT NULL,
+		cpu_capacity_available BOOLEAN NOT NULL,
+		online_cpus INTEGER,
+		programmed_parent_quota_usec INTEGER,
+		programmed_parent_period_usec INTEGER,
+		cpu_points_degraded BOOLEAN NOT NULL,
+		applied_guarantee_points INTEGER NOT NULL,
+		programmed_guarantee_weight INTEGER NOT NULL,
+		configured_best_effort_weight INTEGER NOT NULL,
+		parent_cpu_quota TEXT,
+		guaranteed_domain_cpu_weight INTEGER,
+		best_effort_domain_cpu_weight INTEGER,
+		parent_cpu_usage_usec_delta INTEGER,
+		guaranteed_domain_cpu_usage_usec_delta INTEGER,
+		best_effort_domain_cpu_usage_usec_delta INTEGER,
+		parent_cpu_periods_delta INTEGER,
+		parent_cpu_throttled_periods_delta INTEGER,
+		parent_cpu_throttled_usec_delta INTEGER
     );
 
     -- Query indexes.
@@ -323,6 +432,14 @@ func (m *DatabaseManager) validateUserMetricsSchema() error {
 		return m.incompatibleSchemaError("ambiguous is_limited column")
 	}
 	for _, required := range []string{
+		"sample_epoch_id", "interval_start", "interval_end",
+		"configured_guarantee_points", "configured_cpu_class", "cpu_points_lifecycle_state",
+		"applied_cpu_class", "applied_cpu_weight", "cpu_weight", "leaf_cpu_usage_usec_delta",
+		"pid_namespace_mismatch_count", "pid_namespace_unavailable_count", "enforceable_process_count",
+		"ram_cgroup_usage_bytes", "ram_coverage", "ram_coverage_incomplete_process_count",
+		"ram_swap_disabled", "memory_high_limit", "memory_max_limit", "memory_swap_max",
+		"memory_high_events_delta", "memory_max_events_delta", "memory_oom_events_delta",
+		"memory_oom_kill_events_delta",
 		"eligible_for_cpu", "eligible_for_ram", "eligible_for_io",
 		"cpu_limit_requested", "cpu_limit_active", "ram_limit_requested",
 		"ram_limit_active", "io_limit_requested", "io_limit_active",
@@ -360,6 +477,14 @@ func (m *DatabaseManager) validateSystemMetricsSchema() error {
 		}
 	}
 	for _, required := range []string{
+		"sample_epoch_id", "interval_start", "interval_end", "nominal_parent_pool_points",
+		"cpu_capacity_available", "online_cpus", "programmed_parent_quota_usec",
+		"programmed_parent_period_usec", "cpu_points_degraded", "applied_guarantee_points",
+		"programmed_guarantee_weight", "configured_best_effort_weight", "parent_cpu_quota",
+		"guaranteed_domain_cpu_weight", "best_effort_domain_cpu_weight",
+		"parent_cpu_usage_usec_delta", "guaranteed_domain_cpu_usage_usec_delta",
+		"best_effort_domain_cpu_usage_usec_delta", "parent_cpu_periods_delta",
+		"parent_cpu_throttled_periods_delta", "parent_cpu_throttled_usec_delta",
 		"cpu_limits_active", "resource_limits_active", "any_limits_active",
 		"cpu_actively_limited_users_count", "actively_limited_users_count",
 	} {
@@ -478,22 +603,30 @@ func (m *DatabaseManager) normalizeStoredTimestamps() error {
 	return nil
 }
 
-// WriteUserMetrics inserts one per-user metrics record.
-func (m *DatabaseManager) WriteUserMetrics(record *UserMetricsRecord) error {
-	return m.WriteMetricsBatch(nil, []*UserMetricsRecord{record})
-}
-
-// WriteSystemMetrics inserts one system metrics record.
-func (m *DatabaseManager) WriteSystemMetrics(record *SystemMetricsRecord) error {
-	return m.WriteMetricsBatch(record, nil)
-}
-
 // WriteMetricsBatch writes one complete collection cycle in a single transaction.
 func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users []*UserMetricsRecord) error {
 	leaveOperation := m.dbGate.Enter()
 	defer leaveOperation()
 	if m.beforeOperation != nil {
 		m.beforeOperation()
+	}
+
+	if system == nil {
+		return fmt.Errorf("metrics batch requires one system interval record")
+	}
+	if system.SampleEpochID == 0 || system.IntervalEnd.IsZero() || system.Timestamp.IsZero() {
+		return fmt.Errorf("metrics batch system interval identity is incomplete")
+	}
+	for _, record := range users {
+		if record == nil {
+			return fmt.Errorf("user metrics batch contains a nil record")
+		}
+		if record.SampleEpochID != system.SampleEpochID || !record.IntervalEnd.Equal(system.IntervalEnd) || !record.Timestamp.Equal(system.Timestamp) {
+			return fmt.Errorf("user metrics batch record for UID %d does not belong to system sample epoch %d", record.UID, system.SampleEpochID)
+		}
+		if !sameOptionalTime(record.IntervalStart, system.IntervalStart) {
+			return fmt.Errorf("user metrics batch record for UID %d has a different interval start", record.UID)
+		}
 	}
 
 	tx, err := m.db.Begin()
@@ -504,22 +637,41 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 		_ = tx.Rollback()
 	}
 
-	if system != nil {
-		if _, err := tx.Exec(
-			insertSystemMetricsQuery,
-			system.Timestamp.UTC(),
-			system.TotalCPUUsagePercent,
-			system.TotalCores,
-			system.SystemLoad,
-			system.CPULimitsActive,
-			system.ResourceLimitsActive,
-			system.AnyLimitsActive,
-			system.CPUActivelyLimitedUsersCount,
-			system.ActivelyLimitedUsersCount,
-		); err != nil {
-			rollback()
-			return fmt.Errorf("failed to insert system metrics batch record: %w", err)
-		}
+	if _, err := tx.Exec(
+		insertSystemMetricsQuery,
+		system.Timestamp.UTC(),
+		system.SampleEpochID,
+		utcOptionalTime(system.IntervalStart),
+		system.IntervalEnd.UTC(),
+		system.TotalCPUUsagePercent,
+		system.TotalCores,
+		system.SystemLoad,
+		system.CPULimitsActive,
+		system.ResourceLimitsActive,
+		system.AnyLimitsActive,
+		system.CPUActivelyLimitedUsersCount,
+		system.ActivelyLimitedUsersCount,
+		system.NominalParentPoolPoints,
+		system.CPUCapacityAvailable,
+		system.OnlineCPUs,
+		system.ProgrammedParentQuotaUsec,
+		system.ProgrammedParentPeriodUsec,
+		system.CPUPointsDegraded,
+		system.AppliedGuaranteePoints,
+		system.ProgrammedGuaranteeWeight,
+		system.ConfiguredBestEffortWeight,
+		system.ParentCPUQuota,
+		system.GuaranteedDomainCPUWeight,
+		system.BestEffortDomainCPUWeight,
+		system.ParentCPUUsageUsecDelta,
+		system.GuaranteedDomainCPUUsageUsecDelta,
+		system.BestEffortDomainCPUUsageUsecDelta,
+		system.ParentCPUPeriodsDelta,
+		system.ParentCPUThrottledPeriodsDelta,
+		system.ParentCPUThrottledUsecDelta,
+	); err != nil {
+		rollback()
+		return fmt.Errorf("failed to insert system metrics batch record: %w", err)
 	}
 
 	if len(users) > 0 {
@@ -529,13 +681,11 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 			return fmt.Errorf("failed to prepare user metrics batch insert: %w", err)
 		}
 		for _, record := range users {
-			if record == nil {
-				_ = stmt.Close()
-				rollback()
-				return fmt.Errorf("user metrics batch contains a nil record")
-			}
 			if _, err := stmt.Exec(
 				record.Timestamp.UTC(),
+				record.SampleEpochID,
+				utcOptionalTime(record.IntervalStart),
+				record.IntervalEnd.UTC(),
 				record.UID,
 				record.Username,
 				record.CPUUsagePercent,
@@ -543,6 +693,27 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 				record.ProcessCount,
 				record.CgroupPath,
 				record.CPUQuota,
+				record.ConfiguredGuaranteePoints,
+				record.ConfiguredCPUClass,
+				record.CPUPointsLifecycleState,
+				record.AppliedCPUClass,
+				record.AppliedCPUWeight,
+				record.CPUWeight,
+				record.LeafCPUUsageUsecDelta,
+				record.PIDNamespaceMismatchCount,
+				record.PIDNamespaceUnavailableCount,
+				record.EnforceableProcessCount,
+				record.RAMCgroupUsageBytes,
+				record.RAMCoverage,
+				record.RAMCoverageIncompleteProcessCount,
+				record.RAMSwapDisabled,
+				record.MemoryHighLimit,
+				record.MemoryMaxLimit,
+				record.MemorySwapMax,
+				record.MemoryHighEventsDelta,
+				record.MemoryMaxEventsDelta,
+				record.MemoryOOMEventsDelta,
+				record.MemoryOOMKillEventsDelta,
 				record.EligibleForCPU,
 				record.EligibleForRAM,
 				record.EligibleForIO,
@@ -570,14 +741,38 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 	return nil
 }
 
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func utcOptionalTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC()
+}
+
 // GetUserHistory returns persisted metrics for one user and time range.
 func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, limit int) ([]UserMetricsRecord, error) {
 	leaveOperation := m.dbGate.Enter()
 	defer leaveOperation()
 
 	query := `
-    SELECT timestamp, uid, username, cpu_usage_percent, memory_usage_bytes,
-		   process_count, cgroup_path, cpu_quota, eligible_for_cpu,
+	SELECT timestamp, sample_epoch_id, interval_start, interval_end,
+		   uid, username, cpu_usage_percent, memory_usage_bytes,
+		   process_count, cgroup_path, cpu_quota, configured_guarantee_points,
+		   configured_cpu_class, cpu_points_lifecycle_state, applied_cpu_class,
+		   applied_cpu_weight, cpu_weight, leaf_cpu_usage_usec_delta,
+		   pid_namespace_mismatch_count, pid_namespace_unavailable_count,
+		   enforceable_process_count, ram_cgroup_usage_bytes, ram_coverage,
+		   ram_coverage_incomplete_process_count, ram_swap_disabled,
+		   memory_high_limit, memory_max_limit, memory_swap_max,
+		   memory_high_events_delta, memory_max_events_delta,
+		   memory_oom_events_delta, memory_oom_kill_events_delta,
+		   eligible_for_cpu,
 		   eligible_for_ram, eligible_for_io, cpu_limit_requested,
 		   cpu_limit_active, ram_limit_requested, ram_limit_active,
 		   io_limit_requested, io_limit_active
@@ -596,9 +791,18 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 	var records []UserMetricsRecord
 	for rows.Next() {
 		var r UserMetricsRecord
-		err := rows.Scan(&r.Timestamp, &r.UID, &r.Username, &r.CPUUsagePercent,
+		err := rows.Scan(&r.Timestamp, &r.SampleEpochID, &r.IntervalStart, &r.IntervalEnd,
+			&r.UID, &r.Username, &r.CPUUsagePercent,
 			&r.MemoryUsageBytes, &r.ProcessCount, &r.CgroupPath,
-			&r.CPUQuota, &r.EligibleForCPU, &r.EligibleForRAM, &r.EligibleForIO,
+			&r.CPUQuota, &r.ConfiguredGuaranteePoints, &r.ConfiguredCPUClass,
+			&r.CPUPointsLifecycleState, &r.AppliedCPUClass, &r.AppliedCPUWeight,
+			&r.CPUWeight, &r.LeafCPUUsageUsecDelta, &r.PIDNamespaceMismatchCount,
+			&r.PIDNamespaceUnavailableCount, &r.EnforceableProcessCount,
+			&r.RAMCgroupUsageBytes, &r.RAMCoverage, &r.RAMCoverageIncompleteProcessCount,
+			&r.RAMSwapDisabled, &r.MemoryHighLimit, &r.MemoryMaxLimit, &r.MemorySwapMax,
+			&r.MemoryHighEventsDelta, &r.MemoryMaxEventsDelta, &r.MemoryOOMEventsDelta,
+			&r.MemoryOOMKillEventsDelta,
+			&r.EligibleForCPU, &r.EligibleForRAM, &r.EligibleForIO,
 			&r.CPULimitRequested, &r.CPULimitActive, &r.RAMLimitRequested,
 			&r.RAMLimitActive, &r.IOLimitRequested, &r.IOLimitActive)
 		if err != nil {
@@ -654,9 +858,18 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	defer leaveOperation()
 
 	query := `
-    SELECT timestamp, total_cpu_usage_percent, total_cores, system_load,
+	SELECT timestamp, sample_epoch_id, interval_start, interval_end,
+		   total_cpu_usage_percent, total_cores, system_load,
 		   cpu_limits_active, resource_limits_active, any_limits_active,
-		   cpu_actively_limited_users_count, actively_limited_users_count
+		   cpu_actively_limited_users_count, actively_limited_users_count,
+		   nominal_parent_pool_points, cpu_capacity_available, online_cpus,
+		   programmed_parent_quota_usec, programmed_parent_period_usec,
+		   cpu_points_degraded, applied_guarantee_points, programmed_guarantee_weight,
+		   configured_best_effort_weight, parent_cpu_quota,
+		   guaranteed_domain_cpu_weight, best_effort_domain_cpu_weight,
+		   parent_cpu_usage_usec_delta, guaranteed_domain_cpu_usage_usec_delta,
+		   best_effort_domain_cpu_usage_usec_delta, parent_cpu_periods_delta,
+		   parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta
     FROM system_metrics
     WHERE timestamp BETWEEN ? AND ?
     ORDER BY timestamp DESC
@@ -672,10 +885,19 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	var records []SystemMetricsRecord
 	for rows.Next() {
 		var r SystemMetricsRecord
-		err := rows.Scan(&r.Timestamp, &r.TotalCPUUsagePercent, &r.TotalCores,
+		err := rows.Scan(&r.Timestamp, &r.SampleEpochID, &r.IntervalStart, &r.IntervalEnd,
+			&r.TotalCPUUsagePercent, &r.TotalCores,
 			&r.SystemLoad, &r.CPULimitsActive, &r.ResourceLimitsActive,
 			&r.AnyLimitsActive, &r.CPUActivelyLimitedUsersCount,
-			&r.ActivelyLimitedUsersCount)
+			&r.ActivelyLimitedUsersCount, &r.NominalParentPoolPoints,
+			&r.CPUCapacityAvailable, &r.OnlineCPUs, &r.ProgrammedParentQuotaUsec,
+			&r.ProgrammedParentPeriodUsec, &r.CPUPointsDegraded,
+			&r.AppliedGuaranteePoints, &r.ProgrammedGuaranteeWeight,
+			&r.ConfiguredBestEffortWeight, &r.ParentCPUQuota,
+			&r.GuaranteedDomainCPUWeight, &r.BestEffortDomainCPUWeight,
+			&r.ParentCPUUsageUsecDelta, &r.GuaranteedDomainCPUUsageUsecDelta,
+			&r.BestEffortDomainCPUUsageUsecDelta, &r.ParentCPUPeriodsDelta,
+			&r.ParentCPUThrottledPeriodsDelta, &r.ParentCPUThrottledUsecDelta)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan system history record: %w", err)
 		}

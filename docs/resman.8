@@ -653,8 +653,8 @@ When metrics persistence is enabled at its default
 .I /var/lib/resman/metrics.db
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
-The 1.25.x database schema is incompatible: archive or delete the legacy database
-and restart so resman can create schema version 3. It is never migrated or opened
+Earlier database schemas are incompatible: archive or delete the database
+and restart so resman can create schema version 4. It is never migrated or opened
 under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
@@ -723,6 +723,17 @@ additional time and temporary free disk space proportional to the database
 size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
+.PP
+Schema version 4 commits one common sample epoch and interval boundary for every
+system and user row. CPU Points history separates configured class and optional
+guarantee from applied class and weight, raw cgroup diagnostics, nullable comparable
+usage deltas, the online-CPU denominator, programmed parent quota, domain use and
+parent throttling. RAM history separately reports process-derived memory,
+memory.current, applied state, complete or partial charge coverage, memory.high/max
+limits, swap policy, and high/max/OOM/kill event deltas. A NULL counter delta means
+that no comparable baseline exists after startup, a read failure, counter reset or
+cgroup recreation; zero means a comparable counter did not increase. A released
+state is emitted only for a user observed in that sample.
 .PP
 For a file-backed
 .B METRICS_DB_PATH
