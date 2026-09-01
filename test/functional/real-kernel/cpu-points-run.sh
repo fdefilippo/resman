@@ -203,7 +203,7 @@ EOF
 }
 
 write_config() {
-	local map_path=${1:-$map_file} min_active=${2:-180}
+	local map_path=${1:-$map_file} min_active=${2:-600}
 	cat >"$config_file" <<EOF
 CGROUP_ROOT=/sys/fs/cgroup
 CGROUP_BASE=$(basename "$managed_root")
@@ -334,6 +334,7 @@ snapshot_nodes() {
 	for item in "$@"; do
 		name=${item%%=*}
 		path=${item#*=}
+		[[ -r $path/cpu.stat ]] || fail "measurement node $name disappeared before its cpu.stat snapshot: $path"
 		start=$(date +%s%N)
 		usage=$(cpu_stat_value "$path" usage_usec)
 		periods=$(cpu_stat_value "$path" nr_periods)
