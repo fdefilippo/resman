@@ -498,7 +498,7 @@ create_reference_hierarchy() {
 }
 
 start_raw_leaf_load() {
-	local leaf=$1 count=${2:-2} i pid
+	local leaf=$1 count=${2:-6} i pid
 	for ((i = 0; i < count; i++)); do
 		sh -c 'exec sh -c "while :; do :; done"' >/dev/null 2>&1 &
 		pid=$!
@@ -769,10 +769,10 @@ run_daemon_contract() {
 	write_config "$map_file" 900
 	start_daemon
 
-	start_user_cpu resman-t1 2
-	start_user_cpu resman-t2 2
-	start_user_cpu pippo 2
-	start_user_cpu pluto 2
+	start_user_cpu resman-t1 6
+	start_user_cpu resman-t2 6
+	start_user_cpu pippo 6
+	start_user_cpu pluto 6
 	for user in resman-t1 resman-t2; do
 		wait_for_leaf guaranteed "$user" 90 || fail "$user was not admitted as guaranteed"
 	done
@@ -782,7 +782,7 @@ run_daemon_contract() {
 	mapfile -t nodes < <(actual_nodes | grep -v '^g3=')
 	measure_nodes actual-before-transition 60 "${nodes[@]}"
 
-	start_user_cpu resman-t3 2
+	start_user_cpu resman-t3 6
 	wait_for_leaf guaranteed resman-t3 90 || fail "third guaranteed user was not admitted"
 	weight=$(< "$managed_root/limited/guaranteed/cpu.weight")
 	[[ $weight == 800 ]] || fail "third ingress became visible while guaranteed-domain weight was $weight, want 800"
@@ -820,9 +820,9 @@ run_daemon_contract() {
 		|| fail "best-effort borrowing was implemented by rewriting w_G"
 
 	# Restore contention before exercising live reload contracts.
-	start_user_cpu resman-t1 2
-	start_user_cpu resman-t2 2
-	start_user_cpu resman-t3 2
+	start_user_cpu resman-t1 6
+	start_user_cpu resman-t2 6
+	start_user_cpu resman-t3 6
 	for user in resman-t1 resman-t2 resman-t3; do
 		wait_for_leaf guaranteed "$user" 45 || fail "$user did not resume in its guaranteed leaf"
 	done
