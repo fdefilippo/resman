@@ -31,6 +31,7 @@ cleanup_status=PASS
 load_pids=()
 load_users=()
 raw_pids=()
+load_cpu_ids=()
 last_started_pid=
 container_name=
 
@@ -253,12 +254,13 @@ start_daemon() {
 }
 
 start_user_cpu() {
-	local user=$1 count=${2:-1} uid gid i pid
+	local user=$1 count=${2:-1} uid gid i pid cpu
 	uid=$(id -u "$user")
 	gid=$(id -g "$user")
 	for ((i = 0; i < count; i++)); do
+		cpu=${load_cpu_ids[$((i % ${#load_cpu_ids[@]}))]}
 		setpriv --reuid="$uid" --regid="$gid" --clear-groups \
-			sh -c 'exec sh -c "while :; do :; done"' >/dev/null 2>&1 &
+			taskset -c "$cpu" sh -c 'exec sh -c "while :; do :; done"' >/dev/null 2>&1 &
 		pid=$!
 		load_pids+=("$pid")
 		load_users+=("$user")
@@ -378,6 +380,18 @@ measure_nodes() {
 	local before=$evidence_dir/$name-before.tsv after=$evidence_dir/$name-after.tsv
 	local summary=$evidence_dir/$name.txt item node before_usage after_usage delta
 	local min_start max_end skew parent guaranteed best_effort parent_path cpu_max quota period nominal
+	{
+		for item in "$@"; do
+			node=${item%%=*}
+			parent_path=${item#*=}
+			[[ -r $parent_path/cgroup.procs ]] || continue
+			while IFS= read -r pid; do
+				[[ -n $pid ]] || continue
+				printf '%s\tpid=%s\taffinity=%s\n' "$node" "$pid" \
+					"$(taskset -pc "$pid" | sed 's/^.*: //')"
+			done <"$parent_path/cgroup.procs"
+		done
+	} >"$evidence_dir/$name-membership.txt"
 	snapshot_nodes "$before" "$@"
 	sleep "$seconds"
 	snapshot_nodes "$after" "$@"
@@ -519,9 +533,10 @@ record_reference_topology() {
 }
 
 start_raw_leaf_load() {
-	local leaf=$1 count=${2:-6} i pid
+	local leaf=$1 count=${2:-6} i pid cpu
 	for ((i = 0; i < count; i++)); do
-		sh -c 'exec sh -c "while :; do :; done"' >/dev/null 2>&1 &
+		cpu=${load_cpu_ids[$((i % ${#load_cpu_ids[@]}))]}
+		taskset -c "$cpu" sh -c 'exec sh -c "while :; do :; done"' >/dev/null 2>&1 &
 		pid=$!
 		raw_pids+=("$pid")
 		printf '%s' "$pid" >"$leaf/cgroup.procs"
@@ -551,13 +566,28 @@ reference_nodes() {
 }
 
 preflight() {
-	local os_name
+	local os_name cpu
 	[[ $EUID -eq 0 ]] || fail "CPU Points real-kernel scenario requires root"
 	[[ -x $binary ]] || fail "staged source binary is missing"
 	[[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]] || blocked "cgroup v2 is unavailable"
-	for command in awk curl date find setpriv stat systemctl useradd userdel; do
+	for command in awk curl date find python3 setpriv stat systemctl taskset useradd userdel; do
 		command -v "$command" >/dev/null || blocked "$command is unavailable"
 	done
+	while IFS= read -r cpu; do
+		load_cpu_ids+=("$cpu")
+	done < <(python3 - <<'PY'
+with open("/sys/devices/system/cpu/online", encoding="ascii") as handle:
+    spec = handle.read().strip()
+for part in spec.split(","):
+    bounds = [int(value) for value in part.split("-", 1)]
+    start = bounds[0]
+    end = bounds[-1]
+    for cpu in range(start, end + 1):
+        print(cpu)
+PY
+	)
+	[[ ${#load_cpu_ids[@]} -eq $(getconf _NPROCESSORS_ONLN) ]] \
+		|| blocked "online CPU list could not be expanded exactly"
 	for user in resman-t1 resman-t2 resman-t3 resman-t4 pippo pluto; do
 		id "$user" >/dev/null 2>&1 || blocked "fixture user $user is unavailable"
 	done
@@ -581,6 +611,7 @@ preflight() {
 			"$(findmnt -n -o SOURCE,FSTYPE,OPTIONS /sys/fs/cgroup)" "$(< /sys/fs/cgroup/cgroup.controllers)"
 		printf 'online_cpu_list=%s\nonline_cpu_count=%s\n' \
 			"$(< /sys/devices/system/cpu/online)" "$(getconf _NPROCESSORS_ONLN)"
+		printf 'load_cpu_ids=%s\n' "${load_cpu_ids[*]}"
 		printf 'initial_service_active=%s\n' "$initial_service_active"
 	} >"$evidence_dir/environment.txt"
 }
@@ -713,18 +744,27 @@ actual_nodes() {
 
 verify_actual_against_reference() {
 	local actual=$evidence_dir/actual-full-contention.txt correct=$evidence_dir/reference-correct.txt
-	local stale=$evidence_dir/reference-stale-low.txt key got want
+	local stale=$evidence_dir/reference-stale-low.txt key got want equal_weight_reference
 	assert_within "$(measurement_value "$actual" guaranteed_parent_share)" \
 		"$(measurement_value "$correct" guaranteed_parent_share)" 0.5 \
 		"ResMan guaranteed-domain share diverged from the same-run correct oracle"
 	assert_within "$(measurement_value "$actual" best_effort_parent_share)" \
 		"$(measurement_value "$correct" best_effort_parent_share)" 0.5 \
 		"ResMan best-effort-domain share diverged from the same-run correct oracle"
-	for key in g1_guaranteed_share g2_guaranteed_share g3_guaranteed_share; do
+	equal_weight_reference=$(awk -F= '
+		$1 == "g1_guaranteed_share" { first=$2 }
+		$1 == "g2_guaranteed_share" { second=$2 }
+		END { if (first == "" || second == "") exit 1; printf "%.6f", (first+second)/2 }
+	' "$correct")
+	for key in g1_guaranteed_share g2_guaranteed_share; do
 		got=$(measurement_value "$actual" "$key")
-		want=$(measurement_value "$correct" "$key")
+		want=$equal_weight_reference
 		assert_within "$got" "$want" 1.0 "ResMan leaf ratio $key diverged from the correct oracle"
 	done
+	key=g3_guaranteed_share
+	got=$(measurement_value "$actual" "$key")
+	want=$(measurement_value "$correct" "$key")
+	assert_within "$got" "$want" 1.0 "ResMan leaf ratio $key diverged from the correct oracle"
 	local actual_share stale_share
 	actual_share=$(measurement_value "$actual" guaranteed_parent_share)
 	stale_share=$(measurement_value "$stale" guaranteed_parent_share)
