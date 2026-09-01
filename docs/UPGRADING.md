@@ -124,7 +124,10 @@ The map starts with `[resman-cpu-points-map-v1]` and contains direct exact
 `username=points` records; `john.smith=200` refers to the complete dotted NSS name.
 The old keys `MIN_SYSTEM_CORES`, `CPU_QUOTA_NORMAL`, `CPU_QUOTA_LIMITED`,
 `CPU_DEFAULT_POINTS`, `BATCH_NIGHT_CPU_QUOTA`, `INTERACTIVE_CPU_QUOTA`,
-`PSI_BOOST_WEIGHT`, and `PSI_BOOST_DURATION` are rejected without aliases.
+`PSI_BOOST_WEIGHT`, and `PSI_BOOST_DURATION` are rejected without aliases. One
+startup attempt reports every distinct removed key found in the file, in file order,
+with its first line number and replacement guidance; remove the complete reported set
+before restarting rather than discovering one key per service start.
 
 **Cause.** The previous contract mixed a core reserve, raw quotas, pattern-selected
 ceilings, and PSI weight mutation. CPU Points instead programs one finite parent pool

@@ -93,6 +93,8 @@ func TestCPUPointsOperatorSurfacesCarryTheCompleteContract(t *testing.T) {
 			"resman_cpu_points_observation_interval_seconds",
 			"reference-centred acceptance values",
 			"do not apply to an operator",
+			"startup attempt reports every distinct removed key",
+			"remove the complete reported set",
 		},
 	}
 

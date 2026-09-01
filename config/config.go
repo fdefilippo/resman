@@ -450,6 +450,9 @@ func loadFromFile(path string, cfg *Config) error {
 	}
 
 	lines := strings.Split(string(data), "\n")
+	if err := removedConfigFileKeyErrors(path, lines); err != nil {
+		return err
+	}
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		// Skip comments and blank lines.
@@ -474,6 +477,28 @@ func loadFromFile(path string, cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func removedConfigFileKeyErrors(path string, lines []string) error {
+	seen := make(map[string]bool)
+	var errs []error
+	for index, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if _, removed := removedConfigKeys[key]; !removed || seen[key] {
+			continue
+		}
+		seen[key] = true
+		errs = append(errs, fmt.Errorf("configuration file %s line %d key %s: %w", path, index+1, key, removedConfigKeyError(key)))
+	}
+	return errors.Join(errs...)
 }
 
 func stripInlineComment(value string) string {

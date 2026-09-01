@@ -1306,6 +1306,70 @@ func TestRemovedConfigurationKeysAreRejected(t *testing.T) {
 	}
 }
 
+func TestLoadFromFileReportsEveryRemovedKeyInOneDeterministicError(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "legacy.conf")
+	quotaNormal := "CPU_QUOTA_" + "NORMAL"
+	batchQuota := "BATCH_NIGHT_" + "CPU_QUOTA"
+	interactiveQuota := "INTERACTIVE_" + "CPU_QUOTA"
+	minimumCores := "MIN_SYSTEM_" + "CORES"
+	boostWeight := "PSI_BOOST_" + "WEIGHT"
+	boostDuration := "PSI_BOOST_" + "DURATION"
+	content := strings.Join([]string{
+		"CPU_THRESHOLD=80",
+		quotaNormal + "=max 100000",
+		batchQuota + "=50000 100000",
+		interactiveQuota + "=75000 100000",
+		minimumCores + "=1",
+		boostWeight + "=200",
+		boostDuration + "=30",
+		quotaNormal + "=duplicate",
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	err := loadFromFile(configPath, cfg)
+	if err == nil {
+		t.Fatal("loadFromFile() accepted removed CPU allocation keys")
+	}
+	wantInOrder := []string{
+		"line 2 key " + quotaNormal,
+		"line 3 key " + batchQuota,
+		"line 4 key " + interactiveQuota,
+		"line 5 key " + minimumCores,
+		"line 6 key " + boostWeight,
+		"line 7 key " + boostDuration,
+	}
+	message := err.Error()
+	previous := -1
+	for _, fragment := range wantInOrder {
+		index := strings.Index(message, fragment)
+		if index < 0 {
+			t.Errorf("combined removal error is missing %q: %v", fragment, err)
+		}
+		if index <= previous {
+			t.Errorf("combined removal error is not in file order at %q: %v", fragment, err)
+		}
+		previous = index
+	}
+	if strings.Contains(message, "line 8 key "+quotaNormal) {
+		t.Fatalf("duplicate removed key was reported more than once: %v", err)
+	}
+	if cfg.CPUThreshold != DefaultConfig().CPUThreshold {
+		t.Fatalf("removed-key preflight partially applied CPU_THRESHOLD=%d", cfg.CPUThreshold)
+	}
+	loaded, startupErr := LoadAndValidate(configPath)
+	if startupErr == nil || loaded != nil {
+		t.Fatalf("LoadAndValidate() = (%#v, %v), want combined startup rejection", loaded, startupErr)
+	}
+	for _, fragment := range wantInOrder {
+		if !strings.Contains(startupErr.Error(), fragment) {
+			t.Errorf("startup rejection is missing %q: %v", fragment, startupErr)
+		}
+	}
+}
+
 func TestLoadFromFileRejectsUnknownKeyWithPath(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "unknown.conf")
 	if err := os.WriteFile(configPath, []byte("MISSPELLED_THRESHOLD=75\n"), 0600); err != nil {
