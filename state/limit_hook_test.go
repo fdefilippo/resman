@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/cpupoints"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -57,6 +58,9 @@ func TestPostLimitHook(t *testing.T) {
 	}))
 	defer server.Close()
 
+	high, max, oom, kill := uint64(153), uint64(0), uint64(0), uint64(0)
+	memoryHigh, memoryMax, memorySwap := "16777216", "50331648", "0"
+	swapDisabled := true
 	event := limitHookEvent{
 		UID:                        1000,
 		Username:                   "app",
@@ -65,6 +69,17 @@ func TestPostLimitHook(t *testing.T) {
 		SharedCgroup:               "/sys/fs/cgroup/resman/limited",
 		Timestamp:                  time.Now().UTC(),
 		LimitHookSource:            "resman",
+		CPUPointsConfiguredClass:   "best_effort",
+		CPUPointsLifecycleState:    resmanmetrics.CPUPointsLifecycleFailed,
+		CPUPointsProcessCoverage:   resmanmetrics.CPUPointsCoverageNone,
+		RAMSwapDisabled:            &swapDisabled,
+		MemoryHighLimit:            &memoryHigh,
+		MemoryMaxLimit:             &memoryMax,
+		MemorySwapMax:              &memorySwap,
+		MemoryHighEventsDelta:      &high,
+		MemoryMaxEventsDelta:       &max,
+		MemoryOOMEventsDelta:       &oom,
+		MemoryOOMKillEventsDelta:   &kill,
 	}
 
 	if err := postLimitHook(t.Context(), server.URL, event); err != nil {
@@ -73,10 +88,24 @@ func TestPostLimitHook(t *testing.T) {
 	if received.UID != event.UID || received.Username != event.Username {
 		t.Fatalf("received event: got uid=%d username=%q", received.UID, received.Username)
 	}
-	for _, required := range []string{"enforceable_cpu_usage_percent", "cpu_eligible_users_count"} {
+	for _, required := range []string{
+		"enforceable_cpu_usage_percent", "cpu_eligible_users_count",
+		"cpu_points_configured_class", "cpu_points_lifecycle_state",
+		"cpu_points_applied_to_processes", "cpu_points_complete_uid_workload_guaranteed",
+		"cpu_points_reconciliation_degraded", "cpu_points_process_coverage",
+		"ram_coverage_incomplete_process_count",
+		"ram_swap_disabled", "memory_high_limit", "memory_max_limit", "memory_swap_max",
+		"memory_high_events_delta", "memory_max_events_delta", "memory_oom_events_delta", "memory_oom_kill_events_delta",
+	} {
 		if _, ok := receivedFields[required]; !ok {
 			t.Errorf("hook payload missing explicit field %q", required)
 		}
+	}
+	if received.MemoryHighEventsDelta == nil || *received.MemoryHighEventsDelta != 153 ||
+		received.MemoryMaxEventsDelta == nil || *received.MemoryMaxEventsDelta != 0 ||
+		received.MemoryOOMEventsDelta == nil || *received.MemoryOOMEventsDelta != 0 ||
+		received.MemoryOOMKillEventsDelta == nil || *received.MemoryOOMKillEventsDelta != 0 {
+		t.Fatalf("hook conflated memory.high with max/OOM/kill: %+v", received)
 	}
 	for _, removed := range []string{"cpu_usage", "limited_users"} {
 		if _, ok := receivedFields[removed]; ok {
@@ -271,11 +300,12 @@ func TestRunLimitHookScript(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "hook.out")
 	scriptPath := filepath.Join(tmpDir, "hook.sh")
 
-	script := "#!/bin/sh\nprintf '%s:%s:%s:%s' \"$RESMAN_LIMIT_UID\" \"$RESMAN_LIMIT_USERNAME\" \"$RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT\" \"$RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT\" > \"" + outputPath + "\"\n"
+	script := "#!/bin/sh\nprintf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s' \"$RESMAN_LIMIT_UID\" \"$RESMAN_LIMIT_USERNAME\" \"$RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT\" \"$RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT\" \"$RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS\" \"$RESMAN_LIMIT_CPU_POINTS_PROCESS_COVERAGE\" \"$RESMAN_LIMIT_MEMORY_HIGH_EVENTS_DELTA\" \"$RESMAN_LIMIT_MEMORY_MAX_EVENTS_DELTA\" \"$RESMAN_LIMIT_MEMORY_OOM_EVENTS_DELTA\" \"$RESMAN_LIMIT_MEMORY_OOM_KILL_EVENTS_DELTA\" > \"" + outputPath + "\"\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write hook script: %v", err)
 	}
 
+	high, zero := uint64(153), uint64(0)
 	event := limitHookEvent{
 		UID:                        1000,
 		Username:                   "app",
@@ -283,6 +313,12 @@ func TestRunLimitHookScript(t *testing.T) {
 		CPUEligibleUsersCount:      2,
 		Timestamp:                  time.Now().UTC(),
 		LimitHookSource:            "resman",
+		CPUPointsConfiguredClass:   "guaranteed",
+		CPUPointsProcessCoverage:   resmanmetrics.CPUPointsCoveragePartial,
+		MemoryHighEventsDelta:      &high,
+		MemoryMaxEventsDelta:       &zero,
+		MemoryOOMEventsDelta:       &zero,
+		MemoryOOMKillEventsDelta:   &zero,
 	}
 
 	if err := runLimitHookScript(t.Context(), scriptPath, event); err != nil {
@@ -293,8 +329,32 @@ func TestRunLimitHookScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hook output: %v", err)
 	}
-	if string(output) != "1000:app:82.50:2" {
-		t.Fatalf("script output: got %q, expected %q", string(output), "1000:app:82.50:2")
+	if string(output) != "1000:app:82.50:2:guaranteed:partial:153:0:0:0" {
+		t.Fatalf("script output: got %q, expected distinct high/max/OOM/kill fields", string(output))
+	}
+}
+
+func TestLimitHookSnapshotReportsAppliedHostSubsetWithoutCallingTheCompleteUIDGuaranteed(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	weight, err := cpupoints.NewKernelCPUWeight(300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		cpuPointsPolicy: policy, cpuAllocations: map[int]cpuPointsAllocation{1000: {class: cpupoints.AllocationClassGuaranteed, weight: weight}},
+		cpuPointsLifecycleEvents: map[int]cpuPointsLifecycleEvent{1000: {state: resmanmetrics.CPUPointsLifecycleApplied, pidNamespaceMismatches: 1}},
+		resourceLimits:           map[int]userResourceLimitState{}, ramCoverage: map[int]ramCoverageState{},
+	}
+	sample := &SystemMetrics{UserMetrics: map[int]*resmanmetrics.UserMetrics{1000: {
+		UID: 1000, Username: "alice", ProcessCount: 3, CPULimitRequested: true,
+		EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 2},
+	}}}
+	snapshot := manager.limitHookCPUPointsSnapshot(1000, "alice", sample)
+	if !snapshot.AppliedToProcesses || snapshot.CompleteUIDWorkloadGuaranteed || snapshot.ProcessCoverage != resmanmetrics.CPUPointsCoveragePartial {
+		t.Fatalf("limit-hook CPU Points snapshot = %+v", snapshot)
 	}
 }
 

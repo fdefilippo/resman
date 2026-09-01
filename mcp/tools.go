@@ -79,10 +79,11 @@ type UserMetric struct {
 	MemoryHigh               string `json:"memory_high,omitempty"`
 	MemoryHighEvents         uint64 `json:"memory_high_events,omitempty"`
 	// IO cgroup metrics
-	IOReadBytes  uint64 `json:"io_read_bytes,omitempty"`
-	IOWriteBytes uint64 `json:"io_write_bytes,omitempty"`
-	IOReadOps    uint64 `json:"io_read_ops,omitempty"`
-	IOWriteOps   uint64 `json:"io_write_ops,omitempty"`
+	IOReadBytes  uint64                `json:"io_read_bytes,omitempty"`
+	IOWriteBytes uint64                `json:"io_write_bytes,omitempty"`
+	IOReadOps    uint64                `json:"io_read_ops,omitempty"`
+	IOWriteOps   uint64                `json:"io_write_ops,omitempty"`
+	CPUPoints    *cpuPointsUserPayload `json:"cpu_points,omitempty"`
 }
 
 func newUserMetric(uid int, sample *resmanmetrics.UserMetrics, limitState state.UserLimitState) UserMetric {
@@ -217,39 +218,42 @@ type ActivateLimitsArgs struct {
 }
 
 type systemStatusPayload struct {
-	Hostname                  string  `json:"hostname"`
-	ServerRole                string  `json:"server_role"`
-	TotalCPUUsage             float64 `json:"total_cpu_usage"`
-	ObservedUsersCPUUsage     float64 `json:"observed_users_cpu_usage"`
-	MemoryUsageMB             float64 `json:"memory_usage_mb"`
-	ObservedUsersCount        int     `json:"observed_users_count"`
-	ActivelyLimitedUsersCount int     `json:"actively_limited_users_count"`
-	TotalCores                int     `json:"total_cores"`
-	SystemUnderLoad           bool    `json:"system_under_load"`
-	AnyLimitsActive           bool    `json:"any_limits_active"`
-	CPULimitsActive           bool    `json:"cpu_limits_active"`
-	ResourceLimitsActive      bool    `json:"resource_limits_active"`
-	CPULimitsAppliedTime      string  `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime string  `json:"resource_limits_applied_time"`
-	SharedCgroupActive        bool    `json:"shared_cgroup_active"`
+	Hostname                  string                 `json:"hostname"`
+	ServerRole                string                 `json:"server_role"`
+	TotalCPUUsage             float64                `json:"total_cpu_usage"`
+	ObservedUsersCPUUsage     float64                `json:"observed_users_cpu_usage"`
+	MemoryUsageMB             float64                `json:"memory_usage_mb"`
+	ObservedUsersCount        int                    `json:"observed_users_count"`
+	ActivelyLimitedUsersCount int                    `json:"actively_limited_users_count"`
+	TotalCores                int                    `json:"total_cores"`
+	SystemUnderLoad           bool                   `json:"system_under_load"`
+	AnyLimitsActive           bool                   `json:"any_limits_active"`
+	CPULimitsActive           bool                   `json:"cpu_limits_active"`
+	ResourceLimitsActive      bool                   `json:"resource_limits_active"`
+	CPULimitsAppliedTime      string                 `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime string                 `json:"resource_limits_applied_time"`
+	SharedCgroupActive        bool                   `json:"shared_cgroup_active"`
+	CPUPoints                 cpuPointsSystemPayload `json:"cpu_points"`
 }
 
 type limitsStatusPayload struct {
-	Hostname                     string `json:"hostname"`
-	ServerRole                   string `json:"server_role"`
-	AnyLimitsActive              bool   `json:"any_limits_active"`
-	CPULimitsActive              bool   `json:"cpu_limits_active"`
-	ResourceLimitsActive         bool   `json:"resource_limits_active"`
-	CPULimitsAppliedTime         string `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime    string `json:"resource_limits_applied_time"`
-	ActivelyLimitedUsersCount    int    `json:"actively_limited_users_count"`
-	ActivelyLimitedUsers         []int  `json:"actively_limited_users"`
-	CPUActivelyLimitedUsersCount int    `json:"cpu_actively_limited_users_count"`
-	CPUActivelyLimitedUsers      []int  `json:"cpu_actively_limited_users"`
-	SharedCgroupPath             string `json:"shared_cgroup_path"`
-	SharedCgroupActive           bool   `json:"shared_cgroup_active"`
-	SharedCgroupQuota            string `json:"shared_cgroup_quota,omitempty"`
-	SharedCgroupUserCount        int    `json:"shared_cgroup_user_count"`
+	Hostname                     string                 `json:"hostname"`
+	ServerRole                   string                 `json:"server_role"`
+	AnyLimitsActive              bool                   `json:"any_limits_active"`
+	CPULimitsActive              bool                   `json:"cpu_limits_active"`
+	ResourceLimitsActive         bool                   `json:"resource_limits_active"`
+	CPULimitsAppliedTime         string                 `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime    string                 `json:"resource_limits_applied_time"`
+	ActivelyLimitedUsersCount    int                    `json:"actively_limited_users_count"`
+	ActivelyLimitedUsers         []int                  `json:"actively_limited_users"`
+	CPUActivelyLimitedUsersCount int                    `json:"cpu_actively_limited_users_count"`
+	CPUActivelyLimitedUsers      []int                  `json:"cpu_actively_limited_users"`
+	SharedCgroupPath             string                 `json:"shared_cgroup_path"`
+	SharedCgroupActive           bool                   `json:"shared_cgroup_active"`
+	SharedCgroupQuota            string                 `json:"shared_cgroup_quota,omitempty"`
+	SharedCgroupUserCount        int                    `json:"shared_cgroup_user_count"`
+	CPUPoints                    cpuPointsSystemPayload `json:"cpu_points"`
+	CPUPointUsers                []cpuPointsUserPayload `json:"cpu_point_users"`
 }
 
 func newSystemStatusPayload(hostname, serverRole string, observation resmanmetrics.ObservationMetrics, runtime state.RuntimeStatus) systemStatusPayload {
@@ -269,11 +273,12 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		CPULimitsAppliedTime:      formatOptionalTime(runtime.CPULimitsAppliedTime),
 		ResourceLimitsAppliedTime: formatOptionalTime(runtime.ResourceLimitsAppliedTime),
 		SharedCgroupActive:        runtime.SharedCgroupActive,
+		CPUPoints:                 newCPUPointsSystemPayload(runtime.CPUPoints),
 	}
 }
 
 func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeStatus) limitsStatusPayload {
-	return limitsStatusPayload{
+	result := limitsStatusPayload{
 		Hostname:                     hostname,
 		ServerRole:                   serverRole,
 		AnyLimitsActive:              runtime.AnyLimitsActive,
@@ -289,7 +294,13 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 		SharedCgroupActive:           runtime.SharedCgroupActive,
 		SharedCgroupQuota:            runtime.SharedCgroupQuota,
 		SharedCgroupUserCount:        runtime.SharedCgroupUserCount,
+		CPUPoints:                    newCPUPointsSystemPayload(runtime.CPUPoints),
+		CPUPointUsers:                make([]cpuPointsUserPayload, 0, len(runtime.CPUPointUsers)),
 	}
+	for _, user := range runtime.CPUPointUsers {
+		result.CPUPointUsers = append(result.CPUPointUsers, newCPUPointsUserPayload(user))
+	}
+	return result
 }
 
 func formatOptionalTime(value time.Time) string {
@@ -429,10 +440,15 @@ func (s *Server) registerTools() {
 				limitStatus = "Active"
 			}
 
-			userLine := fmt.Sprintf("%s\n    CPU usage: %.1f%%\n    CPU limits: %s",
+			cpuPointsState := "unobserved"
+			if cpuPoints, ok := s.stateManager.GetCPUPointsUserStatus(uid); ok {
+				cpuPointsState = fmt.Sprintf("%s/%s/%s", cpuPoints.ConfiguredClass, cpuPoints.LifecycleState, cpuPoints.ProcessCoverage)
+			}
+			userLine := fmt.Sprintf("%s\n    CPU usage: %.1f%%\n    CPU limits: %s\n    CPU Points: %s",
 				userMetrics.Username,
 				userMetrics.CPUUsage,
 				limitStatus,
+				cpuPointsState,
 			)
 			users = append(users, userLine)
 
@@ -473,6 +489,9 @@ Average CPU usage: %.1f%%
 Peak CPU usage: %.1f%%
 CPU limits: %s
 CPU-limited users: %d of %d
+CPU Points nominal parent pool: %d
+CPU Points delivery state: %s
+CPU Points lending state: %s
 `,
 			hostname,
 			serverRole,
@@ -485,6 +504,9 @@ CPU-limited users: %d of %d
 			limitsStatus,
 			limitedCount,
 			len(allUserMetrics),
+			status.CPUPoints.NominalParentPoolPoints,
+			status.CPUPoints.DeliveryState,
+			status.CPUPoints.LendingState,
 		)
 
 		result := cpuReportPayload{
@@ -497,6 +519,7 @@ CPU-limited users: %d of %d
 			ObservedUsersCount:           len(allUserMetrics),
 			CPUActivelyLimitedUsersCount: limitedCount,
 			CPULimitsActive:              limitsActive,
+			CPUPoints:                    newCPUPointsSystemPayload(status.CPUPoints),
 		}
 
 		return &mcp.CallToolResult{
@@ -1004,6 +1027,10 @@ func (s *Server) handleGetUserMetrics(ctx context.Context, req *mcp.CallToolRequ
 
 func (s *Server) newUserMetricPayload(uid int, sample *resmanmetrics.UserMetrics) UserMetric {
 	result := newUserMetric(uid, sample, s.stateManager.GetUserLimitState(uid, sample.Username))
+	if cpuPoints, ok := s.stateManager.GetCPUPointsUserStatus(uid); ok {
+		payload := newCPUPointsUserPayload(cpuPoints)
+		result.CPUPoints = &payload
+	}
 
 	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
 		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)

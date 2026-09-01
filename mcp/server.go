@@ -624,6 +624,9 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 - **CPU Limits Active**: %v
 - **Resource Limits Active**: %v
 - **System Under Load**: %v
+- **CPU Points Nominal Parent Pool**: %d
+- **CPU Points Delivery State**: %s
+- **CPU Points Lending State**: %s
 
 ## Assessment
 `,
@@ -637,6 +640,9 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 		status.CPULimitsActive,
 		status.ResourceLimitsActive,
 		metrics.SystemUnderLoad,
+		status.CPUPoints.NominalParentPoolPoints,
+		status.CPUPoints.DeliveryState,
+		status.CPUPoints.LendingState,
 	)
 
 	// Add assessment
@@ -664,16 +670,25 @@ func (s *Server) handleUserAnalysisPrompt(ctx context.Context, req *mcp.GetPromp
 	allMetrics := s.metricsCollector.GetAllUserMetrics()
 
 	text := "# User Resource Analysis\n\n"
-	text += "| UID | Username | CPU % | Memory (MB) | Processes |\n"
-	text += "|-----|----------|-------|-------------|----------|\n"
+	text += "| UID | Username | CPU % | Memory (MB) | Processes | CPU Points class | Lifecycle | Coverage |\n"
+	text += "|-----|----------|-------|-------------|-----------|------------------|-----------|----------|\n"
 
 	for uid, metrics := range allMetrics {
-		text += fmt.Sprintf("| %d | %s | %.1f | %.1f | %d |\n",
+		class, lifecycle, coverage := "unobserved", "unobserved", "unavailable"
+		if cpuPoints, ok := s.stateManager.GetCPUPointsUserStatus(uid); ok {
+			class = cpuPoints.ConfiguredClass
+			lifecycle = string(cpuPoints.LifecycleState)
+			coverage = string(cpuPoints.ProcessCoverage)
+		}
+		text += fmt.Sprintf("| %d | %s | %.1f | %.1f | %d | %s | %s | %s |\n",
 			uid,
 			metrics.Username,
 			metrics.CPUUsage,
 			float64(metrics.MemoryUsage)/1024/1024,
 			metrics.ProcessCount,
+			class,
+			lifecycle,
+			coverage,
 		)
 	}
 
@@ -704,6 +719,9 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	text += fmt.Sprintf("- **Observed Users CPU Usage**: %.1f%%\n", metrics.ObservedUsersCPUUsage)
 	text += fmt.Sprintf("- **Observed Users**: %d\n", metrics.ObservedUsersCount)
 	text += fmt.Sprintf("- **Actively Limited Users**: %d\n", status.ActivelyLimitedUsersCount)
+	text += fmt.Sprintf("- **CPU Points Nominal Parent Pool**: %d\n", status.CPUPoints.NominalParentPoolPoints)
+	text += fmt.Sprintf("- **CPU Points Delivery State**: %s\n", status.CPUPoints.DeliveryState)
+	text += fmt.Sprintf("- **CPU Points Lending State**: %s\n", status.CPUPoints.LendingState)
 
 	text += "\n## Diagnostic Steps\n\n"
 

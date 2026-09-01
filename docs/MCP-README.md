@@ -126,6 +126,27 @@ Historical user and system records remain distinct typed schemas because their f
 have different meanings. Input JSON Schema maps used by MCP discovery are protocol
 metadata, not result payloads.
 
+Current system and limit status include a nested `cpu_points` contract. It separates
+reserve and nominal pool from effective parent-delivered CPU time, publishes the live
+online-CPU denominator and synchronized interval deltas, and reports bounded delivery
+and class-priority lending states. Current per-user status separates configured class
+and optional mapped guarantee from requested enforcement, applied class/raw weight,
+lifecycle, reconciliation state, and complete or partial process coverage. Best-effort
+users omit `configured_guarantee_points`; absence is not zero. `get_system_status` and
+`resman://system/status` use the same projection over HTTP and stdio.
+
+The status never calls raw `cpu.weight` CPU Points and never calls programmed
+`cpu.max` delivered bandwidth. A `throttled_parent` state can be normal evidence that
+the finite pool is active, because CFS can under-deliver its nominal quota. A
+`best_effort_borrowed` lending state means the complete guaranteed domain was inactive
+for the observed interval; ResMan does not estimate runnable points in userspace.
+
+`get_cpu_report` carries the same nested system CPU Points projection and includes each
+observed user's bounded configured-class, lifecycle, and process-coverage state in its text.
+The system-health, user-analysis, and troubleshooting prompts expose the corresponding bounded
+summary. The active-user inventory remains identity-only; the memory report remains scoped to
+process-derived memory and RAM-limit state rather than duplicating CPU Points status.
+
 #### Cgroup interface availability
 
 `get_cgroup_info` and `resman://cgroups/{uid}` share one JSON schema. They expose the

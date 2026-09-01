@@ -131,7 +131,10 @@ func (m *Manager) admitCPUPointsUser(uid int, hierarchy cgroup.CPUPointsHierarch
 	m.setStandaloneResourceCgroup(uid, false)
 
 	m.mu.Lock()
-	m.cpuAllocations[uid] = cpuPointsAllocation{class: class, weight: leafWeight, domainPath: domainPath, leafPath: path}
+	m.cpuAllocations[uid] = cpuPointsAllocation{
+		class: class, weight: leafWeight, domainPath: domainPath, leafPath: path,
+		pidNamespaceMismatches: result.PIDNamespaceMismatches, pidNamespaceUnavailable: result.PIDNamespaceUnavailable,
+	}
 	m.recordPartialRAMCoverageLocked(uid, result.MovedProcesses)
 	if class == cpupoints.AllocationClassGuaranteed {
 		next, _ := cpupoints.NewAppliedGuaranteePoints(m.appliedGuaranteePoints.Value() + guarantee)
@@ -660,6 +663,11 @@ func (m *Manager) reconcileActiveProcessMembership(cfg *config.Config) error {
 		m.recordCgroupIngressSkips(result.Ingress)
 		m.mu.Lock()
 		m.recordPartialRAMCoverageLocked(target.uid, result.Ingress.MovedProcesses)
+		if allocation, ok := m.cpuAllocations[target.uid]; ok {
+			allocation.pidNamespaceMismatches = result.Ingress.PIDNamespaceMismatches
+			allocation.pidNamespaceUnavailable = result.Ingress.PIDNamespaceUnavailable
+			m.cpuAllocations[target.uid] = allocation
+		}
 		m.mu.Unlock()
 		if err == nil && result.Ingress.NamespaceSkipped() > 0 && !result.Ingress.Applied() {
 			err = cgroupIngressNoopError(target.uid, result.Ingress)

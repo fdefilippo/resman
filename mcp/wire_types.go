@@ -17,6 +17,108 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
+type cpuPointsSystemPayload struct {
+	SampleEpochID                     int64   `json:"sample_epoch_id,omitempty"`
+	IntervalStart                     *string `json:"interval_start,omitempty"`
+	IntervalEnd                       string  `json:"interval_end,omitempty"`
+	ReservePoints                     uint64  `json:"reserve_points"`
+	NominalParentPoolPoints           uint64  `json:"nominal_parent_pool_points"`
+	ConfiguredBestEffortPoints        uint64  `json:"configured_best_effort_points"`
+	CapacityAvailable                 bool    `json:"capacity_available"`
+	CapacityUnavailableReason         string  `json:"capacity_unavailable_reason,omitempty"`
+	OnlineCPUs                        *uint64 `json:"online_cpus,omitempty"`
+	ProgrammedParentQuotaUsec         *uint64 `json:"programmed_parent_quota_usec,omitempty"`
+	ProgrammedParentPeriodUsec        *uint64 `json:"programmed_parent_period_usec,omitempty"`
+	ReconciliationDegraded            bool    `json:"reconciliation_degraded"`
+	AppliedGuaranteePoints            uint64  `json:"applied_guarantee_points"`
+	ProgrammedGuaranteeWeight         uint64  `json:"programmed_guarantee_weight"`
+	GuaranteedDomainWeight            *uint64 `json:"guaranteed_domain_weight,omitempty"`
+	BestEffortDomainWeight            *uint64 `json:"best_effort_domain_weight,omitempty"`
+	ParentCPUUsageUsecDelta           *uint64 `json:"parent_cpu_usage_usec_delta,omitempty"`
+	GuaranteedDomainCPUUsageUsecDelta *uint64 `json:"guaranteed_domain_cpu_usage_usec_delta,omitempty"`
+	BestEffortDomainCPUUsageUsecDelta *uint64 `json:"best_effort_domain_cpu_usage_usec_delta,omitempty"`
+	ParentCPUPeriodsDelta             *uint64 `json:"parent_cpu_periods_delta,omitempty"`
+	ParentCPUThrottledPeriodsDelta    *uint64 `json:"parent_cpu_throttled_periods_delta,omitempty"`
+	ParentCPUThrottledUsecDelta       *uint64 `json:"parent_cpu_throttled_usec_delta,omitempty"`
+	DeliveryState                     string  `json:"delivery_state"`
+	LendingState                      string  `json:"lending_state"`
+}
+
+type cpuPointsUserPayload struct {
+	UID                               int     `json:"uid"`
+	Username                          string  `json:"username"`
+	ConfiguredClass                   string  `json:"configured_class"`
+	ConfiguredGuaranteePoints         *uint64 `json:"configured_guarantee_points,omitempty"`
+	CPUEnforcementRequested           bool    `json:"cpu_enforcement_requested"`
+	LifecycleState                    string  `json:"lifecycle_state"`
+	AppliedClass                      *string `json:"applied_class,omitempty"`
+	AppliedWeight                     *uint64 `json:"applied_weight,omitempty"`
+	AppliedToProcesses                bool    `json:"applied_to_processes"`
+	CompleteUIDWorkloadGuaranteed     bool    `json:"complete_uid_workload_guaranteed"`
+	ReconciliationDegraded            bool    `json:"reconciliation_degraded"`
+	ProcessCoverage                   string  `json:"process_coverage"`
+	ObservedProcessCount              int     `json:"observed_process_count"`
+	EnforceableProcessCount           int     `json:"enforceable_process_count"`
+	PIDNamespaceMismatchCount         int     `json:"pid_namespace_mismatch_count"`
+	PIDNamespaceUnavailableCount      int     `json:"pid_namespace_unavailable_count"`
+	LeafCPUUsageUsecDelta             *uint64 `json:"leaf_cpu_usage_usec_delta,omitempty"`
+	RAMCgroupUsageBytes               *uint64 `json:"ram_cgroup_memory_current_bytes,omitempty"`
+	RAMCoverage                       *string `json:"ram_coverage,omitempty"`
+	RAMCoverageIncompleteProcessCount int     `json:"ram_coverage_incomplete_process_count"`
+	RAMSwapDisabled                   *bool   `json:"ram_swap_disabled,omitempty"`
+	MemoryHighLimit                   *string `json:"memory_high_limit,omitempty"`
+	MemoryMaxLimit                    *string `json:"memory_max_limit,omitempty"`
+	MemorySwapMax                     *string `json:"memory_swap_max,omitempty"`
+	MemoryHighEventsDelta             *uint64 `json:"memory_high_events_delta,omitempty"`
+	MemoryMaxEventsDelta              *uint64 `json:"memory_max_events_delta,omitempty"`
+	MemoryOOMEventsDelta              *uint64 `json:"memory_oom_events_delta,omitempty"`
+	MemoryOOMKillEventsDelta          *uint64 `json:"memory_oom_kill_events_delta,omitempty"`
+}
+
+func newCPUPointsSystemPayload(snapshot resmanmetrics.CPUPointsSystemSnapshot) cpuPointsSystemPayload {
+	result := cpuPointsSystemPayload{
+		SampleEpochID: snapshot.SampleEpochID, ReservePoints: snapshot.ReservePoints,
+		NominalParentPoolPoints: snapshot.NominalParentPoolPoints, ConfiguredBestEffortPoints: snapshot.ConfiguredBestEffortPoints,
+		CapacityAvailable: snapshot.CapacityAvailable, CapacityUnavailableReason: snapshot.CapacityUnavailableReason,
+		OnlineCPUs: snapshot.OnlineCPUs, ProgrammedParentQuotaUsec: snapshot.ProgrammedParentQuotaUsec,
+		ProgrammedParentPeriodUsec: snapshot.ProgrammedParentPeriodUsec, ReconciliationDegraded: snapshot.ReconciliationDegraded,
+		AppliedGuaranteePoints: snapshot.AppliedGuaranteePoints, ProgrammedGuaranteeWeight: snapshot.ProgrammedGuaranteeWeight,
+		GuaranteedDomainWeight: snapshot.GuaranteedDomainWeight, BestEffortDomainWeight: snapshot.BestEffortDomainWeight,
+		ParentCPUUsageUsecDelta:           snapshot.ParentCPUUsageUsecDelta,
+		GuaranteedDomainCPUUsageUsecDelta: snapshot.GuaranteedDomainCPUUsageUsecDelta,
+		BestEffortDomainCPUUsageUsecDelta: snapshot.BestEffortDomainCPUUsageUsecDelta,
+		ParentCPUPeriodsDelta:             snapshot.ParentCPUPeriodsDelta, ParentCPUThrottledPeriodsDelta: snapshot.ParentCPUThrottledPeriodsDelta,
+		ParentCPUThrottledUsecDelta: snapshot.ParentCPUThrottledUsecDelta,
+		DeliveryState:               string(snapshot.DeliveryState), LendingState: string(snapshot.LendingState),
+	}
+	if snapshot.IntervalStart != nil {
+		formatted := snapshot.IntervalStart.Format(time.RFC3339Nano)
+		result.IntervalStart = &formatted
+	}
+	if !snapshot.IntervalEnd.IsZero() {
+		result.IntervalEnd = snapshot.IntervalEnd.Format(time.RFC3339Nano)
+	}
+	return result
+}
+
+func newCPUPointsUserPayload(snapshot resmanmetrics.CPUPointsUserSnapshot) cpuPointsUserPayload {
+	return cpuPointsUserPayload{
+		UID: snapshot.UID, Username: snapshot.Username, ConfiguredClass: snapshot.ConfiguredClass,
+		ConfiguredGuaranteePoints: snapshot.ConfiguredGuaranteePoints, CPUEnforcementRequested: snapshot.CPUEnforcementRequested,
+		LifecycleState: string(snapshot.LifecycleState), AppliedClass: snapshot.AppliedClass, AppliedWeight: snapshot.AppliedWeight,
+		AppliedToProcesses: snapshot.AppliedToProcesses, CompleteUIDWorkloadGuaranteed: snapshot.CompleteUIDWorkloadGuaranteed,
+		ReconciliationDegraded: snapshot.ReconciliationDegraded, ProcessCoverage: string(snapshot.ProcessCoverage),
+		ObservedProcessCount: snapshot.ObservedProcessCount, EnforceableProcessCount: snapshot.EnforceableProcessCount,
+		PIDNamespaceMismatchCount: snapshot.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: snapshot.PIDNamespaceUnavailableCount,
+		LeafCPUUsageUsecDelta: snapshot.LeafCPUUsageUsecDelta, RAMCgroupUsageBytes: snapshot.RAMCgroupUsageBytes,
+		RAMCoverage: snapshot.RAMCoverage, RAMCoverageIncompleteProcessCount: snapshot.RAMCoverageIncompleteProcessCount,
+		RAMSwapDisabled: snapshot.RAMSwapDisabled, MemoryHighLimit: snapshot.MemoryHighLimit, MemoryMaxLimit: snapshot.MemoryMaxLimit,
+		MemorySwapMax: snapshot.MemorySwapMax, MemoryHighEventsDelta: snapshot.MemoryHighEventsDelta,
+		MemoryMaxEventsDelta: snapshot.MemoryMaxEventsDelta, MemoryOOMEventsDelta: snapshot.MemoryOOMEventsDelta,
+		MemoryOOMKillEventsDelta: snapshot.MemoryOOMKillEventsDelta,
+	}
+}
+
 type activeUserPayload struct {
 	UID      int    `json:"uid"`
 	Username string `json:"username"`
@@ -114,15 +216,16 @@ func newResourcePolicyConfigurationPayload(hostname string, cfg *config.Config) 
 }
 
 type cpuReportPayload struct {
-	Hostname                     string  `json:"hostname"`
-	ServerRole                   string  `json:"server_role"`
-	Report                       string  `json:"report"`
-	TotalCPU                     float64 `json:"total_cpu"`
-	AverageCPU                   float64 `json:"avg_cpu"`
-	PeakCPU                      float64 `json:"peak_cpu"`
-	ObservedUsersCount           int     `json:"observed_users_count"`
-	CPUActivelyLimitedUsersCount int     `json:"cpu_actively_limited_users_count"`
-	CPULimitsActive              bool    `json:"cpu_limits_active"`
+	Hostname                     string                 `json:"hostname"`
+	ServerRole                   string                 `json:"server_role"`
+	Report                       string                 `json:"report"`
+	TotalCPU                     float64                `json:"total_cpu"`
+	AverageCPU                   float64                `json:"avg_cpu"`
+	PeakCPU                      float64                `json:"peak_cpu"`
+	ObservedUsersCount           int                    `json:"observed_users_count"`
+	CPUActivelyLimitedUsersCount int                    `json:"cpu_actively_limited_users_count"`
+	CPULimitsActive              bool                   `json:"cpu_limits_active"`
+	CPUPoints                    cpuPointsSystemPayload `json:"cpu_points"`
 }
 
 type memoryReportPayload struct {

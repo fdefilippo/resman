@@ -104,6 +104,11 @@ period, throttled-period and throttled-time deltas explain the bandwidth actuall
 delivered by the kernel. Configured class-priority lending is distinct from measured
 use; history never claims that an idle domain was runnable.
 
+The current Prometheus and MCP projections use the same typed control-cycle snapshot
+as these history rows even when the database is disabled. Database cadence controls
+only which snapshots are persisted; it does not enable, disable, or advance a second
+CPU Points observation stream.
+
 Every delta covers only the decision-sample interval named by its own
 `interval_start` and `interval_end`. Baselines advance on every control cycle even
 when `METRICS_DB_WRITE_INTERVAL` causes intermediate samples not to be stored. Derive

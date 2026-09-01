@@ -911,11 +911,30 @@ resman_user_io_write_ops_total{uid, username} \- Write-family syscall count from
 resman_user_process_count{uid, username} \- Number of processes per user
 .IP \(bu
 resman_user_cpu_limit_active{uid, username} \- User limit status (1=limited, 0=unlimited)
+.IP \(bu
+resman_cpu_points_parent_usage_microseconds_delta \- Effective parent CPU time delivered during the common control-cycle interval; the allocation denominator
+.IP \(bu
+resman_cpu_points_guaranteed_domain_usage_microseconds_delta and resman_cpu_points_best_effort_domain_usage_microseconds_delta \- Synchronized class-domain CPU time
+.IP \(bu
+resman_cpu_points_parent_throttled_periods_delta and resman_cpu_points_parent_throttled_microseconds_delta \- CFS throttling in the common interval; positive values can be expected under saturation
+.IP \(bu
+resman_user_cpu_points_configured_guarantee{uid, username} \- Optional mapped-user guarantee; absent for best-effort users
+.IP \(bu
+resman_user_cpu_points_applied_weight{uid, username} \- Raw verified leaf cpu.weight, not delivered CPU Points
+.IP \(bu
+resman_user_cpu_points_process_coverage{uid, username, coverage} \- none, complete, partial, or unavailable host-process coverage
+.IP \(bu
+resman_user_ram_cgroup_memory_current_bytes{uid, username} \- Post-ingress cgroup memory.current accounting, not complete process-derived UID memory
 .PP
 All per-user series are published exclusively from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but do not write or
 remove per-user series, so CPU alerts and the exported EMA use the same sampling
 stream as enforcement.
+CPU Points usage and throttling deltas share one explicit interval. Compare domain or
+leaf delivery with effective parent usage, never with the nominal pool or programmed
+quota. CFS can under-deliver nominal quota. Idle mapped capacity serves runnable
+guaranteed siblings first; best effort borrows only when the complete guaranteed
+domain is inactive.
 .IP \(bu
 resman_cpu_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu
@@ -1175,13 +1194,62 @@ RESMAN_LIMIT_SHARED_CGROUP
 RESMAN_LIMIT_TIMESTAMP
 .IP \(bu
 RESMAN_LIMIT_SERVER_ROLE
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_CONFIGURED_GUARANTEE
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_LIFECYCLE_STATE
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_APPLIED_CLASS
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_APPLIED_WEIGHT
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_APPLIED_TO_PROCESSES
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_COMPLETE_UID_WORKLOAD_GUARANTEED
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_RECONCILIATION_DEGRADED
+.IP \(bu
+RESMAN_LIMIT_CPU_POINTS_PROCESS_COVERAGE
+.IP \(bu
+RESMAN_LIMIT_PID_NAMESPACE_MISMATCH_COUNT
+.IP \(bu
+RESMAN_LIMIT_PID_NAMESPACE_UNAVAILABLE_COUNT
+.IP \(bu
+RESMAN_LIMIT_RAM_CGROUP_MEMORY_CURRENT_BYTES
+.IP \(bu
+RESMAN_LIMIT_RAM_COVERAGE
+.IP \(bu
+RESMAN_LIMIT_RAM_COVERAGE_INCOMPLETE_PROCESS_COUNT
+.IP \(bu
+RESMAN_LIMIT_RAM_SWAP_DISABLED
+.IP \(bu
+RESMAN_LIMIT_MEMORY_HIGH
+.IP \(bu
+RESMAN_LIMIT_MEMORY_MAX
+.IP \(bu
+RESMAN_LIMIT_MEMORY_SWAP_MAX
+.IP \(bu
+RESMAN_LIMIT_MEMORY_HIGH_EVENTS_DELTA
+.IP \(bu
+RESMAN_LIMIT_MEMORY_MAX_EVENTS_DELTA
+.IP \(bu
+RESMAN_LIMIT_MEMORY_OOM_EVENTS_DELTA
+.IP \(bu
+RESMAN_LIMIT_MEMORY_OOM_KILL_EVENTS_DELTA
 .RE
 .PP
 Webservice hooks are configured with
 .B LIMIT_HOOK_URL
 and receive an HTTP POST with a JSON payload containing uid, username,
 enforceable_cpu_usage_percent, cpu_eligible_users_count, shared_cgroup,
-timestamp, source, and server_role.
+timestamp, source, server_role, the typed CPU Points configured/applied lifecycle,
+bounded process coverage, PID-namespace rejection counts, and post-ingress RAM cgroup
+coverage. RAM limits and interval `memory.high`, `memory.max`, OOM, and OOM-kill deltas
+remain distinct; growing high events with zero max/OOM/kill events can describe supported
+throttling or stall and does not imply absent enforcement. An absent mapped guarantee is
+not zero, and a partial host subset is never reported as the complete UID workload.
 .PP
 Hook script stdout and stderr are discarded and are never included in returned
 errors or daemon logs. Script failures retain a bounded reason such as timeout or

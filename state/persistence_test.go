@@ -67,7 +67,10 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 	cgroups.memory[1000] = memoryPersistenceSnapshot(identity, 8<<20, 7, 0, 0, 0)
 
 	weight, _ := cpupoints.NewKernelCPUWeight(300)
-	manager.cpuAllocations[1000] = cpuPointsAllocation{class: cpupoints.AllocationClassGuaranteed, weight: weight, domainPath: hierarchy.Guaranteed, leafPath: leaf}
+	manager.cpuAllocations[1000] = cpuPointsAllocation{
+		class: cpupoints.AllocationClassGuaranteed, weight: weight, domainPath: hierarchy.Guaranteed, leafPath: leaf,
+		pidNamespaceMismatches: 1,
+	}
 	manager.appliedGuaranteePoints, _ = cpupoints.NewAppliedGuaranteePoints(300)
 	manager.programmedGuaranteePoints = 300
 	manager.cpuPointsDegraded = true
@@ -99,6 +102,7 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 	if user1.PIDNamespaceMismatchCount != 1 || user1.Metrics.ProcessCount != 3 || user1.Metrics.EnforceableUsage.ProcessCount != 2 {
 		t.Fatalf("process coverage = %+v", user1)
 	}
+	manager.clearPersistedCPUPointsLifecycleEvents()
 
 	cgroups.cpu[hierarchy.Parent] = cpuPersistenceSnapshot(identity, 1900, 30, 14, 90, "360000 100000", 900)
 	cgroups.cpu[hierarchy.Guaranteed] = cpuPersistenceSnapshot(identity, 1400, 0, 0, 0, "max 100000", 300)
@@ -109,6 +113,9 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 	sample2 := persistenceSample(t2)
 	manager.collectPersistenceInterval(sample2)
 	user2 := sample2.PersistenceUsers[1000]
+	if user2.PIDNamespaceMismatchCount != 1 || sample2.CPUPointsUsers[1000].ProcessCoverage != resmanmetrics.CPUPointsCoveragePartial {
+		t.Fatalf("persistent allocation coverage was lost after lifecycle acknowledgement: %+v", sample2.CPUPointsUsers[1000])
+	}
 	if sample2.PersistenceSystem.IntervalStart == nil || !sample2.PersistenceSystem.IntervalStart.Equal(t1) {
 		t.Fatalf("interval start = %v, want %s", sample2.PersistenceSystem.IntervalStart, t1)
 	}
@@ -132,6 +139,90 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 	manager.collectPersistenceInterval(sample3)
 	if sample3.PersistenceSystem.ParentCPUUsageUsecDelta != nil || sample3.PersistenceUsers[1000].LeafCPUUsageUsecDelta != nil || sample3.PersistenceUsers[1000].MemoryHighEventsDelta != nil {
 		t.Fatalf("recreated cgroup produced a synthetic delta: user=%+v system=%+v", sample3.PersistenceUsers[1000], sample3.PersistenceSystem)
+	}
+}
+
+func TestOperationalCPUPointsSnapshotExistsWithoutDatabaseWriterAndUsesTheDecisionInterval(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cgroups := &persistenceCgroupManager{cpu: make(map[string]cgroup.CPUPointsNodeSnapshot), memory: make(map[int]cgroup.MemoryAccountingSnapshot)}
+	manager := testCPUPointsManagerForReload(t, policy, cgroups)
+	manager.metricsCollector = &persistenceMetricsCollector{}
+	hierarchy := manager.cpuPointsHierarchy
+	identity := cgroup.CgroupIdentity{Device: 1, Inode: 10}
+	cgroups.cpu[hierarchy.Parent] = cpuPersistenceSnapshot(identity, 1000, 10, 4, 20, "360000 100000", 900)
+	cgroups.cpu[hierarchy.Guaranteed] = cpuPersistenceSnapshot(identity, 700, 0, 0, 0, "max 100000", 1)
+	cgroups.cpu[hierarchy.BestEffort] = cpuPersistenceSnapshot(identity, 300, 0, 0, 0, "max 100000", 100)
+
+	t1 := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	manager.collectPersistenceInterval(persistenceSample(t1))
+	cgroups.cpu[hierarchy.Parent] = cpuPersistenceSnapshot(identity, 1900, 30, 14, 90, "360000 100000", 900)
+	cgroups.cpu[hierarchy.Guaranteed] = cpuPersistenceSnapshot(identity, 1400, 0, 0, 0, "max 100000", 1)
+	cgroups.cpu[hierarchy.BestEffort] = cpuPersistenceSnapshot(identity, 500, 0, 0, 0, "max 100000", 100)
+	sample := persistenceSample(t1.Add(30 * time.Second))
+	manager.collectPersistenceInterval(sample)
+
+	if sample.CPUPointsSystem.IntervalStart == nil || !sample.CPUPointsSystem.IntervalStart.Equal(t1) {
+		t.Fatalf("operational interval start = %v, want %s", sample.CPUPointsSystem.IntervalStart, t1)
+	}
+	assertUint64Pointer(t, "operational parent usage", sample.CPUPointsSystem.ParentCPUUsageUsecDelta, 900)
+	if sample.CPUPointsSystem.DeliveryState != resmanmetrics.CPUPointsDeliveryThrottledParent {
+		t.Fatalf("delivery state = %q, want throttled_parent", sample.CPUPointsSystem.DeliveryState)
+	}
+	if sample.CPUPointsSystem.LendingState != resmanmetrics.CPUPointsLendingGuaranteedPriority {
+		t.Fatalf("lending state = %q, want guaranteed_priority", sample.CPUPointsSystem.LendingState)
+	}
+	status := manager.GetStatus()
+	if status.CPUPoints.SampleEpochID != sample.Timestamp.UnixNano() || status.CPUPoints.ParentCPUUsageUsecDelta == nil {
+		t.Fatalf("runtime status did not publish decision snapshot: %+v", status.CPUPoints)
+	}
+}
+
+func TestOperationalCPUPointsUserSnapshotNeverCallsPartialOrZeroIngressACompleteGuarantee(t *testing.T) {
+	class := "guaranteed"
+	weight := uint64(300)
+	users := map[int]resmanmetrics.UserPersistenceMetrics{
+		1000: {
+			Metrics:         &resmanmetrics.UserMetrics{UID: 1000, Username: "alice", ProcessCount: 3, CPULimitRequested: true, EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 2}},
+			ConfiguredClass: "guaranteed", LifecycleState: resmanmetrics.CPUPointsLifecycleApplied,
+			AppliedClass: &class, AppliedWeight: &weight, PIDNamespaceMismatchCount: 1,
+		},
+		1001: {
+			Metrics:         &resmanmetrics.UserMetrics{UID: 1001, Username: "bob", ProcessCount: 1, CPULimitRequested: true},
+			ConfiguredClass: "guaranteed", LifecycleState: resmanmetrics.CPUPointsLifecycleApplied,
+			AppliedClass: &class, AppliedWeight: &weight,
+		},
+		1002: {
+			Metrics:         &resmanmetrics.UserMetrics{UID: 1002, Username: "carol", ProcessCount: 1, CPULimitRequested: true, EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 1}},
+			ConfiguredClass: "guaranteed", LifecycleState: resmanmetrics.CPUPointsLifecycleFailed,
+		},
+		1003: {
+			Metrics:         &resmanmetrics.UserMetrics{UID: 1003, Username: "dave", ProcessCount: 1, CPULimitRequested: true, EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 1}},
+			ConfiguredClass: "guaranteed", LifecycleState: resmanmetrics.CPUPointsLifecycleFailed,
+			AppliedClass: &class, AppliedWeight: &weight,
+		},
+	}
+	snapshots := operationalCPUPointsUserSnapshots(users, true)
+	partial := snapshots[1000]
+	if !partial.AppliedToProcesses || partial.CompleteUIDWorkloadGuaranteed || partial.ProcessCoverage != resmanmetrics.CPUPointsCoveragePartial {
+		t.Fatalf("partial snapshot = %+v", partial)
+	}
+	zero := snapshots[1001]
+	if zero.AppliedToProcesses || zero.CompleteUIDWorkloadGuaranteed || zero.ProcessCoverage != resmanmetrics.CPUPointsCoverageNone {
+		t.Fatalf("zero-ingress snapshot = %+v", zero)
+	}
+	refused := snapshots[1002]
+	if refused.AppliedToProcesses || refused.CompleteUIDWorkloadGuaranteed || refused.ProcessCoverage != resmanmetrics.CPUPointsCoverageNone {
+		t.Fatalf("RAM-active refused activation was reported applied: %+v", refused)
+	}
+	deferred := snapshots[1003]
+	if !deferred.AppliedToProcesses || !deferred.CompleteUIDWorkloadGuaranteed || deferred.ProcessCoverage != resmanmetrics.CPUPointsCoverageComplete {
+		t.Fatalf("deferred release lost the still-applied CPU allocation: %+v", deferred)
+	}
+	if !partial.ReconciliationDegraded || !zero.ReconciliationDegraded {
+		t.Fatal("degraded reconciliation state was not propagated to users")
 	}
 }
 
@@ -322,6 +413,10 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 	if user.LifecycleState != resmanmetrics.CPUPointsLifecycleFailed || user.AppliedClass == nil {
 		t.Fatalf("deferred release lost applied allocation: %+v", user)
 	}
+	operational := sample.CPUPointsUsers[1000]
+	if !operational.AppliedToProcesses || operational.ProcessCoverage == resmanmetrics.CPUPointsCoverageNone {
+		t.Fatalf("deferred release was not exposed as still CPU-applied: %+v", operational)
+	}
 
 	manager.resourceLimits[1000] = userResourceLimitState{}
 	if released, err := manager.releaseCPUPointsUser(1000, false); !released || err != nil {
@@ -339,6 +434,39 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 	manager.collectPersistenceInterval(disappeared)
 	if _, exists := disappeared.PersistenceUsers[2000]; exists {
 		t.Fatal("release for an unobserved UID fabricated a history row")
+	}
+}
+
+func TestOperationalCPUPointsLendingStateDistinguishesEntitlementFromBorrowing(t *testing.T) {
+	parent, guaranteed, bestEffort := uint64(1000), uint64(900), uint64(100)
+	base := resmanmetrics.SystemPersistenceMetrics{
+		CPUCapacityAvailable: true, AppliedGuaranteePoints: 300,
+		ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
+		ParentCPUUsageUsecDelta: &parent,
+	}
+
+	withGuaranteedActivity := base
+	withGuaranteedActivity.GuaranteedDomainCPUUsageUsecDelta = &guaranteed
+	withGuaranteedActivity.BestEffortDomainCPUUsageUsecDelta = &bestEffort
+	if got := operationalCPUPointsSystemSnapshot(100, "", withGuaranteedActivity).LendingState; got != resmanmetrics.CPUPointsLendingGuaranteedPriority {
+		t.Fatalf("active guaranteed domain lending state = %q", got)
+	}
+
+	zero := uint64(0)
+	withBorrowing := base
+	withBorrowing.GuaranteedDomainCPUUsageUsecDelta = &zero
+	withBorrowing.BestEffortDomainCPUUsageUsecDelta = &parent
+	if got := operationalCPUPointsSystemSnapshot(100, "", withBorrowing).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortBorrowed {
+		t.Fatalf("inactive guaranteed domain lending state = %q", got)
+	}
+
+	withoutMappedGuarantees := base
+	withoutMappedGuarantees.AppliedGuaranteePoints = 0
+	withoutMappedGuarantees.ProgrammedGuaranteeWeight = 0
+	withoutMappedGuarantees.GuaranteedDomainCPUUsageUsecDelta = &zero
+	withoutMappedGuarantees.BestEffortDomainCPUUsageUsecDelta = &parent
+	if got := operationalCPUPointsSystemSnapshot(100, "", withoutMappedGuarantees).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortEntitled {
+		t.Fatalf("best-effort-only lending state = %q, want entitlement without borrowing", got)
 	}
 }
 

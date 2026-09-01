@@ -464,20 +464,19 @@ func TestUpdateUserSnapshotRemovesUnavailableAndStaleCgroupSeries(t *testing.T) 
 	root := t.TempDir()
 	pathA := filepath.Join(root, "user_1000")
 	pathB := filepath.Join(root, "limited", "user_1000")
-	writeMemoryCurrent := func(path, value string) {
+	writeCgroupFixture := func(path string) {
 		t.Helper()
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatalf("create cgroup fixture %s: %v", path, err)
 		}
-		if err := os.WriteFile(filepath.Join(path, "memory.current"), []byte(value), 0644); err != nil {
-			t.Fatalf("write memory.current in %s: %v", path, err)
-		}
 	}
-	writeMemoryCurrent(pathA, "111\n")
+	writeCgroupFixture(pathA)
+	memory111 := uint64(111)
 
 	snapshot := UserExporterMetrics{
 		UID: 1000, Username: "alice", ProcessCount: 1,
 		CgroupPath: pathA, CPUQuota: "50000 100000",
+		CgroupMemoryCurrent: &memory111,
 	}
 	exporter.UpdateUserSnapshot(snapshot)
 	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", map[string]float64{pathA: 50000})
@@ -502,17 +501,17 @@ func TestUpdateUserSnapshotRemovesUnavailableAndStaleCgroupSeries(t *testing.T) 
 
 	// An unavailable memory.current removes the old value rather than
 	// publishing zero or retaining the last observation.
-	if err := os.Remove(filepath.Join(pathA, "memory.current")); err != nil {
-		t.Fatalf("remove memory.current fixture: %v", err)
-	}
+	snapshot.CgroupMemoryCurrent = nil
 	snapshot.CPUQuota = "50000 100000"
 	exporter.UpdateUserSnapshot(snapshot)
 	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_memory_usage_bytes", nil)
 
 	// A placement transition removes every series for the previous path.
-	writeMemoryCurrent(pathB, "222\n")
+	writeCgroupFixture(pathB)
+	memory222 := uint64(222)
 	snapshot.CgroupPath = pathB
 	snapshot.CPUQuota = "25000 100000"
+	snapshot.CgroupMemoryCurrent = &memory222
 	exporter.UpdateUserSnapshot(snapshot)
 	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_quota_microseconds", map[string]float64{pathB: 25000})
 	assertCgroupGaugeSeries(t, exporter, "resman_cgroup_cpu_period_microseconds", map[string]float64{pathB: 100000})
@@ -556,7 +555,6 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
 		TotalCPUUsage:                                25,
 		TotalCores:                                   8,
-		ActionCores:                                  6,
 		ObservedUsersCPUUsage:                        40,
 		ObservedUsersCount:                           5,
 		ObservedUsersMemoryUsage:                     1024,
@@ -586,7 +584,6 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 	wantMetrics := map[string]float64{
 		"resman_cpu_total_usage_percent":                             25,
 		"resman_cpu_total_cores":                                     8,
-		"resman_cpu_action_cores":                                    6,
 		"resman_all_users_cpu_usage_percent":                         40,
 		"resman_all_users_count":                                     5,
 		"resman_all_users_memory_usage_bytes":                        1024,

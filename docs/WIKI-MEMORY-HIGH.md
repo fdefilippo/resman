@@ -92,6 +92,14 @@ groups:
 Tune thresholds from observed workload behavior. A soft-limit event is not itself an
 OOM event.
 
+The CPU Points operational snapshot additionally exposes interval gauges for
+`memory.high`, `memory.max`, OOM, and OOM-kill events as four distinct values. A rising
+high delta with zero max/OOM/kill deltas can mean sustained throttling or an indefinite
+stall, especially for unreclaimable anonymous memory without swap; it is not evidence
+that RAM enforcement is absent and does not imply that the process will be killed.
+The accompanying cgroup memory-current gauge is post-ingress cgroup accounting, not
+the complete process-derived UID memory value.
+
 ## Verification
 
 For a limited UID, inspect the actual cgroup files:

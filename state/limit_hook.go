@@ -18,14 +18,36 @@ import (
 )
 
 type limitHookEvent struct {
-	UID                        int       `json:"uid"`
-	Username                   string    `json:"username"`
-	EnforceableCPUUsagePercent float64   `json:"enforceable_cpu_usage_percent"`
-	CPUEligibleUsersCount      int       `json:"cpu_eligible_users_count"`
-	SharedCgroup               string    `json:"shared_cgroup"`
-	Timestamp                  time.Time `json:"timestamp"`
-	ServerRole                 string    `json:"server_role,omitempty"`
-	LimitHookSource            string    `json:"source"`
+	UID                               int                                    `json:"uid"`
+	Username                          string                                 `json:"username"`
+	EnforceableCPUUsagePercent        float64                                `json:"enforceable_cpu_usage_percent"`
+	CPUEligibleUsersCount             int                                    `json:"cpu_eligible_users_count"`
+	SharedCgroup                      string                                 `json:"shared_cgroup"`
+	Timestamp                         time.Time                              `json:"timestamp"`
+	ServerRole                        string                                 `json:"server_role,omitempty"`
+	LimitHookSource                   string                                 `json:"source"`
+	CPUPointsConfiguredClass          string                                 `json:"cpu_points_configured_class"`
+	CPUPointsConfiguredGuarantee      *uint64                                `json:"cpu_points_configured_guarantee,omitempty"`
+	CPUPointsLifecycleState           resmanmetrics.CPUPointsLifecycleState  `json:"cpu_points_lifecycle_state"`
+	CPUPointsAppliedClass             *string                                `json:"cpu_points_applied_class,omitempty"`
+	CPUPointsAppliedWeight            *uint64                                `json:"cpu_points_applied_weight,omitempty"`
+	CPUPointsAppliedToProcesses       bool                                   `json:"cpu_points_applied_to_processes"`
+	CPUPointsCompleteUIDGuaranteed    bool                                   `json:"cpu_points_complete_uid_workload_guaranteed"`
+	CPUPointsReconciliationDegraded   bool                                   `json:"cpu_points_reconciliation_degraded"`
+	CPUPointsProcessCoverage          resmanmetrics.CPUPointsProcessCoverage `json:"cpu_points_process_coverage"`
+	PIDNamespaceMismatchCount         int                                    `json:"pid_namespace_mismatch_count"`
+	PIDNamespaceUnavailableCount      int                                    `json:"pid_namespace_unavailable_count"`
+	RAMCgroupMemoryCurrentBytes       *uint64                                `json:"ram_cgroup_memory_current_bytes,omitempty"`
+	RAMCoverage                       *string                                `json:"ram_coverage,omitempty"`
+	RAMCoverageIncompleteProcessCount int                                    `json:"ram_coverage_incomplete_process_count"`
+	RAMSwapDisabled                   *bool                                  `json:"ram_swap_disabled,omitempty"`
+	MemoryHighLimit                   *string                                `json:"memory_high_limit,omitempty"`
+	MemoryMaxLimit                    *string                                `json:"memory_max_limit,omitempty"`
+	MemorySwapMax                     *string                                `json:"memory_swap_max,omitempty"`
+	MemoryHighEventsDelta             *uint64                                `json:"memory_high_events_delta,omitempty"`
+	MemoryMaxEventsDelta              *uint64                                `json:"memory_max_events_delta,omitempty"`
+	MemoryOOMEventsDelta              *uint64                                `json:"memory_oom_events_delta,omitempty"`
+	MemoryOOMKillEventsDelta          *uint64                                `json:"memory_oom_kill_events_delta,omitempty"`
 }
 
 type sanitizedHookError struct {
@@ -51,19 +73,42 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		return
 	}
 
+	cpuPoints := m.limitHookCPUPointsSnapshot(uid, username, metrics)
 	m.mu.RLock()
 	sharedCgroup := m.sharedCgroupPath
 	m.mu.RUnlock()
 
 	event := limitHookEvent{
-		UID:                        uid,
-		Username:                   username,
-		EnforceableCPUUsagePercent: userEnforceableCPUUsage(metrics, uid),
-		CPUEligibleUsersCount:      metrics.CPUEligibleUsersCount,
-		SharedCgroup:               sharedCgroup,
-		Timestamp:                  time.Now().UTC(),
-		ServerRole:                 cfg.ServerRole,
-		LimitHookSource:            "resman",
+		UID:                               uid,
+		Username:                          username,
+		EnforceableCPUUsagePercent:        userEnforceableCPUUsage(metrics, uid),
+		CPUEligibleUsersCount:             metrics.CPUEligibleUsersCount,
+		SharedCgroup:                      sharedCgroup,
+		Timestamp:                         time.Now().UTC(),
+		ServerRole:                        cfg.ServerRole,
+		LimitHookSource:                   "resman",
+		CPUPointsConfiguredClass:          cpuPoints.ConfiguredClass,
+		CPUPointsConfiguredGuarantee:      cpuPoints.ConfiguredGuaranteePoints,
+		CPUPointsLifecycleState:           cpuPoints.LifecycleState,
+		CPUPointsAppliedClass:             cpuPoints.AppliedClass,
+		CPUPointsAppliedWeight:            cpuPoints.AppliedWeight,
+		CPUPointsAppliedToProcesses:       cpuPoints.AppliedToProcesses,
+		CPUPointsCompleteUIDGuaranteed:    cpuPoints.CompleteUIDWorkloadGuaranteed,
+		CPUPointsReconciliationDegraded:   cpuPoints.ReconciliationDegraded,
+		CPUPointsProcessCoverage:          cpuPoints.ProcessCoverage,
+		PIDNamespaceMismatchCount:         cpuPoints.PIDNamespaceMismatchCount,
+		PIDNamespaceUnavailableCount:      cpuPoints.PIDNamespaceUnavailableCount,
+		RAMCgroupMemoryCurrentBytes:       cpuPoints.RAMCgroupUsageBytes,
+		RAMCoverage:                       cpuPoints.RAMCoverage,
+		RAMCoverageIncompleteProcessCount: cpuPoints.RAMCoverageIncompleteProcessCount,
+		RAMSwapDisabled:                   cpuPoints.RAMSwapDisabled,
+		MemoryHighLimit:                   cpuPoints.MemoryHighLimit,
+		MemoryMaxLimit:                    cpuPoints.MemoryMaxLimit,
+		MemorySwapMax:                     cpuPoints.MemorySwapMax,
+		MemoryHighEventsDelta:             cpuPoints.MemoryHighEventsDelta,
+		MemoryMaxEventsDelta:              cpuPoints.MemoryMaxEventsDelta,
+		MemoryOOMEventsDelta:              cpuPoints.MemoryOOMEventsDelta,
+		MemoryOOMKillEventsDelta:          cpuPoints.MemoryOOMKillEventsDelta,
 	}
 
 	m.hookMu.Lock()
@@ -85,6 +130,65 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		defer m.hookWG.Done()
 		m.runLimitHook(parentCtx, cfg, event)
 	}()
+}
+
+func (m *Manager) limitHookCPUPointsSnapshot(uid int, username string, sample *SystemMetrics) resmanmetrics.CPUPointsUserSnapshot {
+	result := resmanmetrics.CPUPointsUserSnapshot{UID: uid, Username: username, ProcessCoverage: resmanmetrics.CPUPointsCoverageNone}
+	if sample != nil {
+		if observed, ok := sample.CPUPointsUsers[uid]; ok {
+			result = observed
+		}
+	}
+	m.mu.RLock()
+	policy := m.cpuPointsPolicy
+	allocation, applied := m.cpuAllocations[uid]
+	event := m.cpuPointsLifecycleEvents[uid]
+	resource := m.resourceLimits[uid]
+	ramCoverage := m.ramCoverage[uid]
+	result.ReconciliationDegraded = m.cpuPointsDegraded
+	m.mu.RUnlock()
+	result.UID, result.Username = uid, username
+	result.ConfiguredClass = string(policy.ClassForUID(uid))
+	if guarantee, ok := policy.GuaranteeForUID(uid); ok {
+		points := guarantee.Points().Value()
+		result.ConfiguredGuaranteePoints = &points
+	} else {
+		result.ConfiguredGuaranteePoints = nil
+	}
+	if sample != nil && sample.UserMetrics[uid] != nil {
+		observed := sample.UserMetrics[uid]
+		result.CPUEnforcementRequested = observed.CPULimitRequested
+		result.ObservedProcessCount = observed.ProcessCount
+		result.EnforceableProcessCount = observed.EnforceableUsage.ProcessCount
+	}
+	result.PIDNamespaceMismatchCount = event.pidNamespaceMismatches
+	result.PIDNamespaceUnavailableCount = event.pidNamespaceUnavailable
+	acquired := result.EnforceableProcessCount - event.pidNamespaceMismatches - event.pidNamespaceUnavailable
+	if applied && acquired > 0 {
+		class := string(allocation.class)
+		weight := uint64(allocation.weight.Value())
+		result.AppliedClass, result.AppliedWeight = &class, &weight
+		result.AppliedToProcesses = true
+		result.LifecycleState = resmanmetrics.CPUPointsLifecycleApplied
+		result.ProcessCoverage = resmanmetrics.CPUPointsCoverageComplete
+		if acquired != result.ObservedProcessCount || result.ObservedProcessCount != result.EnforceableProcessCount || event.pidNamespaceMismatches > 0 || event.pidNamespaceUnavailable > 0 {
+			result.ProcessCoverage = resmanmetrics.CPUPointsCoveragePartial
+		}
+		result.CompleteUIDWorkloadGuaranteed = result.ProcessCoverage == resmanmetrics.CPUPointsCoverageComplete
+	}
+	if resource.ramApplied {
+		coverage := string(RAMCoverageComplete)
+		if ramCoverage.coverage == RAMCoveragePartial {
+			coverage = string(RAMCoveragePartial)
+			result.RAMCoverageIncompleteProcessCount = len(ramCoverage.partial)
+		}
+		result.RAMCoverage = &coverage
+		if memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid); err == nil {
+			current := memory.CurrentBytes
+			result.RAMCgroupUsageBytes = &current
+		}
+	}
+	return result
 }
 
 func (m *Manager) runLimitHook(parentCtx context.Context, cfg *config.Config, event limitHookEvent) {
@@ -183,12 +287,55 @@ func runLimitHookScript(ctx context.Context, script string, event limitHookEvent
 		"RESMAN_LIMIT_SHARED_CGROUP="+event.SharedCgroup,
 		"RESMAN_LIMIT_TIMESTAMP="+event.Timestamp.Format(time.RFC3339),
 		"RESMAN_LIMIT_SERVER_ROLE="+event.ServerRole,
+		"RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS="+event.CPUPointsConfiguredClass,
+		"RESMAN_LIMIT_CPU_POINTS_CONFIGURED_GUARANTEE="+formatOptionalUint64(event.CPUPointsConfiguredGuarantee),
+		"RESMAN_LIMIT_CPU_POINTS_LIFECYCLE_STATE="+string(event.CPUPointsLifecycleState),
+		"RESMAN_LIMIT_CPU_POINTS_APPLIED_CLASS="+formatOptionalString(event.CPUPointsAppliedClass),
+		"RESMAN_LIMIT_CPU_POINTS_APPLIED_WEIGHT="+formatOptionalUint64(event.CPUPointsAppliedWeight),
+		"RESMAN_LIMIT_CPU_POINTS_APPLIED_TO_PROCESSES="+strconv.FormatBool(event.CPUPointsAppliedToProcesses),
+		"RESMAN_LIMIT_CPU_POINTS_COMPLETE_UID_WORKLOAD_GUARANTEED="+strconv.FormatBool(event.CPUPointsCompleteUIDGuaranteed),
+		"RESMAN_LIMIT_CPU_POINTS_RECONCILIATION_DEGRADED="+strconv.FormatBool(event.CPUPointsReconciliationDegraded),
+		"RESMAN_LIMIT_CPU_POINTS_PROCESS_COVERAGE="+string(event.CPUPointsProcessCoverage),
+		"RESMAN_LIMIT_PID_NAMESPACE_MISMATCH_COUNT="+strconv.Itoa(event.PIDNamespaceMismatchCount),
+		"RESMAN_LIMIT_PID_NAMESPACE_UNAVAILABLE_COUNT="+strconv.Itoa(event.PIDNamespaceUnavailableCount),
+		"RESMAN_LIMIT_RAM_CGROUP_MEMORY_CURRENT_BYTES="+formatOptionalUint64(event.RAMCgroupMemoryCurrentBytes),
+		"RESMAN_LIMIT_RAM_COVERAGE="+formatOptionalString(event.RAMCoverage),
+		"RESMAN_LIMIT_RAM_COVERAGE_INCOMPLETE_PROCESS_COUNT="+strconv.Itoa(event.RAMCoverageIncompleteProcessCount),
+		"RESMAN_LIMIT_RAM_SWAP_DISABLED="+formatOptionalBool(event.RAMSwapDisabled),
+		"RESMAN_LIMIT_MEMORY_HIGH="+formatOptionalString(event.MemoryHighLimit),
+		"RESMAN_LIMIT_MEMORY_MAX="+formatOptionalString(event.MemoryMaxLimit),
+		"RESMAN_LIMIT_MEMORY_SWAP_MAX="+formatOptionalString(event.MemorySwapMax),
+		"RESMAN_LIMIT_MEMORY_HIGH_EVENTS_DELTA="+formatOptionalUint64(event.MemoryHighEventsDelta),
+		"RESMAN_LIMIT_MEMORY_MAX_EVENTS_DELTA="+formatOptionalUint64(event.MemoryMaxEventsDelta),
+		"RESMAN_LIMIT_MEMORY_OOM_EVENTS_DELTA="+formatOptionalUint64(event.MemoryOOMEventsDelta),
+		"RESMAN_LIMIT_MEMORY_OOM_KILL_EVENTS_DELTA="+formatOptionalUint64(event.MemoryOOMKillEventsDelta),
 	)
 
 	if err := cmd.Run(); err != nil {
 		return sanitizeScriptHookError(ctx, err)
 	}
 	return nil
+}
+
+func formatOptionalUint64(value *uint64) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatUint(*value, 10)
+}
+
+func formatOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func formatOptionalBool(value *bool) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatBool(*value)
 }
 
 func postLimitHook(ctx context.Context, endpoint string, event limitHookEvent) error {

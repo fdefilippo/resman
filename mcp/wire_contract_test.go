@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		{
 			name:  "CPU report",
 			value: cpuReportPayload{},
-			keys:  []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"},
+			keys:  []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"},
 		},
 		{
 			name:  "memory report",
@@ -125,6 +126,103 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"sample_epoch_id", "system_load", "timestamp", "total_cores", "total_cpu_usage",
 	})
 	assertExactNestedJSONKeys(t, activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}}, "users", []string{"uid", "username"})
+}
+
+func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *testing.T) {
+	start := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Second)
+	online, quota, period := uint64(4), uint64(360000), uint64(100000)
+	parent, guaranteed, bestEffort := uint64(9000), uint64(0), uint64(9000)
+	guaranteedWeight, bestEffortWeight := uint64(300), uint64(100)
+	periods, throttled, throttledUsec := uint64(30), uint64(4), uint64(500)
+	system := newCPUPointsSystemPayload(resmanmetrics.CPUPointsSystemSnapshot{
+		SampleEpochID: 1, IntervalStart: &start, IntervalEnd: end,
+		ReservePoints: 100, NominalParentPoolPoints: 900, ConfiguredBestEffortPoints: 100,
+		CapacityAvailable: true, OnlineCPUs: &online, ProgrammedParentQuotaUsec: &quota,
+		ProgrammedParentPeriodUsec: &period, ParentCPUUsageUsecDelta: &parent,
+		GuaranteedDomainCPUUsageUsecDelta: &guaranteed, BestEffortDomainCPUUsageUsecDelta: &bestEffort,
+		GuaranteedDomainWeight: &guaranteedWeight, BestEffortDomainWeight: &bestEffortWeight,
+		ParentCPUPeriodsDelta: &periods, ParentCPUThrottledPeriodsDelta: &throttled, ParentCPUThrottledUsecDelta: &throttledUsec,
+		DeliveryState: resmanmetrics.CPUPointsDeliveryThrottledParent,
+		LendingState:  resmanmetrics.CPUPointsLendingBestEffortBorrowed,
+	})
+	assertExactJSONKeys(t, system, []string{
+		"applied_guarantee_points", "best_effort_domain_cpu_usage_usec_delta", "best_effort_domain_weight",
+		"capacity_available", "configured_best_effort_points", "delivery_state", "guaranteed_domain_cpu_usage_usec_delta",
+		"guaranteed_domain_weight", "interval_end", "interval_start", "lending_state", "nominal_parent_pool_points",
+		"online_cpus", "parent_cpu_periods_delta", "parent_cpu_throttled_periods_delta", "parent_cpu_throttled_usec_delta",
+		"parent_cpu_usage_usec_delta", "programmed_guarantee_weight", "programmed_parent_period_usec",
+		"programmed_parent_quota_usec", "reconciliation_degraded", "reserve_points", "sample_epoch_id",
+	})
+	encoded, err := json.Marshal(system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, fragment := range []string{`"delivery_state":"throttled_parent"`, `"lending_state":"best_effort_borrowed"`, `"online_cpus":4`} {
+		if !strings.Contains(text, fragment) {
+			t.Errorf("system CPU Points payload %s lacks %s", text, fragment)
+		}
+	}
+	for _, forbidden := range []string{"default_points", "ceiling", "action_cores", "delivered_guarantee_points"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("system CPU Points payload contains removed or misleading field %q: %s", forbidden, text)
+		}
+	}
+
+	guarantee, weight := uint64(300), uint64(300)
+	leafUsage, ramCurrent, high, max, oom, kill := uint64(100), uint64(64<<20), uint64(4), uint64(0), uint64(0), uint64(0)
+	ramCoverage, memoryHigh, memoryMax, memorySwap := "partial", "16777216", "50331648", "0"
+	swapDisabled := true
+	class := "guaranteed"
+	users := []cpuPointsUserPayload{
+		newCPUPointsUserPayload(resmanmetrics.CPUPointsUserSnapshot{
+			UID: 1000, Username: "alice", ConfiguredClass: "guaranteed", ConfiguredGuaranteePoints: &guarantee,
+			LifecycleState: resmanmetrics.CPUPointsLifecycleApplied, AppliedClass: &class, AppliedWeight: &weight,
+			AppliedToProcesses: true, ProcessCoverage: resmanmetrics.CPUPointsCoveragePartial,
+			ObservedProcessCount: 3, EnforceableProcessCount: 2, PIDNamespaceMismatchCount: 1,
+			LeafCPUUsageUsecDelta: &leafUsage, RAMCgroupUsageBytes: &ramCurrent, RAMCoverage: &ramCoverage,
+			RAMCoverageIncompleteProcessCount: 1, RAMSwapDisabled: &swapDisabled,
+			MemoryHighLimit: &memoryHigh, MemoryMaxLimit: &memoryMax, MemorySwapMax: &memorySwap,
+			MemoryHighEventsDelta: &high, MemoryMaxEventsDelta: &max, MemoryOOMEventsDelta: &oom, MemoryOOMKillEventsDelta: &kill,
+		}),
+		newCPUPointsUserPayload(resmanmetrics.CPUPointsUserSnapshot{UID: 1001, Username: "bob", ConfiguredClass: "best_effort", LifecycleState: resmanmetrics.CPUPointsLifecycleFailed, ProcessCoverage: resmanmetrics.CPUPointsCoverageNone}),
+		newCPUPointsUserPayload(resmanmetrics.CPUPointsUserSnapshot{UID: 1002, Username: "carol", ConfiguredClass: "best_effort", LifecycleState: resmanmetrics.CPUPointsLifecycleReleased, ProcessCoverage: resmanmetrics.CPUPointsCoverageNone}),
+	}
+	assertExactJSONKeys(t, users[0], []string{
+		"applied_class", "applied_to_processes", "applied_weight", "complete_uid_workload_guaranteed",
+		"configured_class", "configured_guarantee_points", "cpu_enforcement_requested", "enforceable_process_count",
+		"leaf_cpu_usage_usec_delta", "lifecycle_state", "memory_high_events_delta", "memory_high_limit",
+		"memory_max_events_delta", "memory_max_limit", "memory_oom_events_delta", "memory_oom_kill_events_delta",
+		"memory_swap_max", "observed_process_count", "pid_namespace_mismatch_count", "pid_namespace_unavailable_count",
+		"process_coverage", "ram_cgroup_memory_current_bytes", "ram_coverage", "ram_coverage_incomplete_process_count",
+		"ram_swap_disabled", "reconciliation_degraded", "uid", "username",
+	})
+	encoded, err = json.Marshal(users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(encoded)
+	for _, fragment := range []string{`"configured_class":"guaranteed"`, `"configured_class":"best_effort"`, `"lifecycle_state":"failed"`, `"lifecycle_state":"released"`, `"process_coverage":"partial"`} {
+		if !strings.Contains(text, fragment) {
+			t.Errorf("user CPU Points payload %s lacks %s", text, fragment)
+		}
+	}
+	if strings.Count(text, `"configured_guarantee_points"`) != 1 {
+		t.Fatalf("best-effort users received a fabricated guarantee: %s", text)
+	}
+
+	unavailable := newCPUPointsSystemPayload(resmanmetrics.CPUPointsSystemSnapshot{
+		DeliveryState: resmanmetrics.CPUPointsDeliveryUnavailable,
+		LendingState:  resmanmetrics.CPUPointsLendingUnavailable,
+	})
+	encoded, err = json.Marshal(unavailable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"delivery_state":"unavailable"`) {
+		t.Fatalf("unavailable state is not explicit: %s", encoded)
+	}
 }
 
 func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {

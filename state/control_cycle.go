@@ -12,7 +12,6 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
-	"github.com/fdefilippo/resman/internal/cpupoints"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -459,6 +458,8 @@ type SystemMetrics struct {
 	TotalCPUUsage     float64 // Percentage
 	PersistenceSystem resmanmetrics.SystemPersistenceMetrics
 	PersistenceUsers  map[int]resmanmetrics.UserPersistenceMetrics
+	CPUPointsSystem   resmanmetrics.CPUPointsSystemSnapshot
+	CPUPointsUsers    map[int]resmanmetrics.CPUPointsUserSnapshot
 
 	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64
@@ -783,15 +784,15 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	}
 
 	summary := m.getEnforcementSummary()
-
-	actionCores := int((uint64(metrics.TotalCores) * m.cpuPointsPolicy.Pool().Value()) / cpupoints.TotalPoints)
-	if actionCores < 1 {
-		actionCores = 1
+	var cpuPoints *resmanmetrics.CPUPointsSystemSnapshot
+	if metrics.CPUPointsUsers != nil {
+		cpuPoints = &metrics.CPUPointsSystem
 	}
+
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
 		TotalCPUUsage:                                metrics.TotalCPUUsage,
 		TotalCores:                                   metrics.TotalCores,
-		ActionCores:                                  actionCores,
+		CPUPoints:                                    cpuPoints,
 		ObservedUsersCPUUsage:                        metrics.AllUsersCPUUsage,
 		ObservedUsersCount:                           metrics.AllUsersCount,
 		ObservedUsersMemoryUsage:                     metrics.AllUsersMemoryUsage,
@@ -833,7 +834,9 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			username = m.getUsername(uid)
 		}
 
-		// Batch cgroup reads: single call instead of 3 separate ones
+		// Retain the legacy observation counters while CPU Points and RAM
+		// accounting are projected exclusively from the authoritative decision
+		// interval captured in collectPersistenceInterval.
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
 		var cgroupIOReadBytes, cgroupIOWriteBytes uint64
@@ -846,6 +849,15 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 				} else {
 					m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
 				}
+			}
+		}
+		cpuPoints := metrics.CPUPointsUsers[uid]
+		if persisted, ok := metrics.PersistenceUsers[uid]; ok {
+			if persisted.CgroupPath != "" {
+				cgroupPath = persisted.CgroupPath
+			}
+			if persisted.CPUQuota != "" {
+				cpuQuota = persisted.CPUQuota
 			}
 		}
 		ioReadBytes := userMetrics.IOReadBytes
@@ -867,11 +879,13 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			CPULimitActive:       userMetrics.CPULimitActive,
 			CgroupPath:           cgroupPath,
 			CPUQuota:             cpuQuota,
+			CgroupMemoryCurrent:  cpuPoints.RAMCgroupUsageBytes,
 			MemoryHighEvents:     memoryHighEvents,
 			ObservedIOReadBytes:  ioReadBytes,
 			ObservedIOWriteBytes: ioWriteBytes,
 			ObservedIOReadOps:    userMetrics.IOReadOps,
 			ObservedIOWriteOps:   userMetrics.IOWriteOps,
+			CPUPoints:            cpuPoints,
 		})
 	}
 

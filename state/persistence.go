@@ -9,14 +9,15 @@ import (
 )
 
 const (
-	metricsDatabaseCPUPointsReadFailure = "cpu_points_observation_failure"
-	metricsDatabaseRAMReadFailure       = "ram_observation_failure"
+	typedEnforcementObservationComponent = "enforcement_observation"
+	metricsDatabaseCPUPointsReadFailure  = "cpu_points_observation_failure"
+	metricsDatabaseRAMReadFailure        = "ram_observation_failure"
 )
 
 // collectPersistenceInterval captures kernel counters at the same decision
 // sample boundary as the process-derived user metrics.
 func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
-	if m.metricsCollector == nil || m.metricsCollector.GetDBWriter() == nil {
+	if m.cgroupManager == nil {
 		return
 	}
 
@@ -69,6 +70,7 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		ProgrammedGuaranteeWeight:  programmedGuarantees,
 		ConfiguredBestEffortWeight: policy.BestEffort().Value(),
 	}
+	capacityReason := string(capacity.UnavailableReason)
 	if !previousTime.IsZero() {
 		start := previousTime
 		system.IntervalStart = &start
@@ -149,6 +151,8 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 			weight := uint64(allocation.weight.Value())
 			user.AppliedClass = &class
 			user.AppliedWeight = &weight
+			user.PIDNamespaceMismatchCount = allocation.pidNamespaceMismatches
+			user.PIDNamespaceUnavailableCount = allocation.pidNamespaceUnavailable
 			user.CgroupPath = allocation.leafPath
 			if !hasEvent || event.state == resmanmetrics.CPUPointsLifecycleApplied {
 				user.LifecycleState = resmanmetrics.CPUPointsLifecycleApplied
@@ -175,6 +179,14 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		}
 
 		resource := resources[uid]
+		if _, cpuApplied := allocations[uid]; cpuApplied && !resource.ramApplied {
+			memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid)
+			if err == nil {
+				user.CgroupPath = memory.Path
+				currentBytes := memory.CurrentBytes
+				user.RAMCgroupUsageBytes = &currentBytes
+			}
+		}
 		if resource.ramApplied {
 			ramCoverage := RAMCoverageComplete
 			incomplete := 0
@@ -211,9 +223,128 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 	m.persistencePreviousCPU = currentCPU
 	m.persistencePreviousRAM = currentRAM
 	m.persistencePreviousTime = sample.Timestamp
+	sample.CPUPointsSystem = operationalCPUPointsSystemSnapshot(policy.Reserve().Value(), capacityReason, system)
+	sample.CPUPointsUsers = operationalCPUPointsUserSnapshots(users, degraded)
+	m.cpuPointsSystemSnapshot = sample.CPUPointsSystem
+	m.cpuPointsUserSnapshots = cloneCPUPointsUserSnapshots(sample.CPUPointsUsers)
 	m.mu.Unlock()
 	sample.PersistenceSystem = system
 	sample.PersistenceUsers = users
+}
+
+func operationalCPUPointsSystemSnapshot(reserve uint64, capacityReason string, persisted resmanmetrics.SystemPersistenceMetrics) resmanmetrics.CPUPointsSystemSnapshot {
+	delivery := resmanmetrics.CPUPointsDeliveryUnavailable
+	if persisted.CPUCapacityAvailable {
+		delivery = resmanmetrics.CPUPointsDeliveryAvailable
+		if persisted.ParentCPUThrottledPeriodsDelta != nil && *persisted.ParentCPUThrottledPeriodsDelta > 0 {
+			delivery = resmanmetrics.CPUPointsDeliveryThrottledParent
+		}
+	}
+	lending := resmanmetrics.CPUPointsLendingUnavailable
+	if persisted.CPUCapacityAvailable {
+		lending = resmanmetrics.CPUPointsLendingInactive
+		if persisted.GuaranteedDomainCPUUsageUsecDelta != nil && *persisted.GuaranteedDomainCPUUsageUsecDelta > 0 {
+			lending = resmanmetrics.CPUPointsLendingGuaranteedPriority
+		} else if persisted.BestEffortDomainCPUUsageUsecDelta != nil && *persisted.BestEffortDomainCPUUsageUsecDelta > 0 {
+			lending = resmanmetrics.CPUPointsLendingBestEffortEntitled
+			if observedBestEffortBorrowing(persisted) {
+				lending = resmanmetrics.CPUPointsLendingBestEffortBorrowed
+			}
+		}
+	}
+	return resmanmetrics.CPUPointsSystemSnapshot{
+		SampleEpochID:                     persisted.SampleEpochID,
+		IntervalStart:                     persisted.IntervalStart,
+		IntervalEnd:                       persisted.IntervalEnd,
+		ReservePoints:                     reserve,
+		NominalParentPoolPoints:           persisted.NominalParentPoolPoints,
+		ConfiguredBestEffortPoints:        persisted.ConfiguredBestEffortWeight,
+		CapacityAvailable:                 persisted.CPUCapacityAvailable,
+		CapacityUnavailableReason:         capacityReason,
+		OnlineCPUs:                        persisted.OnlineCPUs,
+		ProgrammedParentQuotaUsec:         persisted.ProgrammedParentQuotaUsec,
+		ProgrammedParentPeriodUsec:        persisted.ProgrammedParentPeriodUsec,
+		ReconciliationDegraded:            persisted.CPUPointsDegraded,
+		AppliedGuaranteePoints:            persisted.AppliedGuaranteePoints,
+		ProgrammedGuaranteeWeight:         persisted.ProgrammedGuaranteeWeight,
+		GuaranteedDomainWeight:            persisted.GuaranteedDomainCPUWeight,
+		BestEffortDomainWeight:            persisted.BestEffortDomainCPUWeight,
+		ParentCPUUsageUsecDelta:           persisted.ParentCPUUsageUsecDelta,
+		GuaranteedDomainCPUUsageUsecDelta: persisted.GuaranteedDomainCPUUsageUsecDelta,
+		BestEffortDomainCPUUsageUsecDelta: persisted.BestEffortDomainCPUUsageUsecDelta,
+		ParentCPUPeriodsDelta:             persisted.ParentCPUPeriodsDelta,
+		ParentCPUThrottledPeriodsDelta:    persisted.ParentCPUThrottledPeriodsDelta,
+		ParentCPUThrottledUsecDelta:       persisted.ParentCPUThrottledUsecDelta,
+		DeliveryState:                     delivery,
+		LendingState:                      lending,
+	}
+}
+
+func observedBestEffortBorrowing(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
+	if snapshot.AppliedGuaranteePoints == 0 || snapshot.ParentCPUUsageUsecDelta == nil || snapshot.BestEffortDomainCPUUsageUsecDelta == nil || *snapshot.ParentCPUUsageUsecDelta == 0 {
+		return false
+	}
+	totalWeight := snapshot.ProgrammedGuaranteeWeight + snapshot.ConfiguredBestEffortWeight
+	if totalWeight == 0 {
+		return false
+	}
+	observedShare := float64(*snapshot.BestEffortDomainCPUUsageUsecDelta) / float64(*snapshot.ParentCPUUsageUsecDelta)
+	entitledShare := float64(snapshot.ConfiguredBestEffortWeight) / float64(totalWeight)
+	return observedShare > entitledShare
+}
+
+func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersistenceMetrics, degraded bool) map[int]resmanmetrics.CPUPointsUserSnapshot {
+	result := make(map[int]resmanmetrics.CPUPointsUserSnapshot, len(persisted))
+	for uid, user := range persisted {
+		observedCount, enforceableCount := 0, 0
+		requested := false
+		username := ""
+		if user.Metrics != nil {
+			username = user.Metrics.Username
+			observedCount = user.Metrics.ProcessCount
+			enforceableCount = user.Metrics.EnforceableUsage.ProcessCount
+			requested = user.Metrics.CPULimitRequested
+		}
+		acquiredCount := enforceableCount - user.PIDNamespaceMismatchCount - user.PIDNamespaceUnavailableCount
+		if acquiredCount < 0 {
+			acquiredCount = 0
+		}
+		applied := user.AppliedClass != nil && user.AppliedWeight != nil && acquiredCount > 0
+		coverage := resmanmetrics.CPUPointsCoverageNone
+		if user.LifecycleState == resmanmetrics.CPUPointsLifecycleFailed && user.Metrics == nil {
+			coverage = resmanmetrics.CPUPointsCoverageUnavailable
+		} else if applied {
+			coverage = resmanmetrics.CPUPointsCoverageComplete
+			if acquiredCount != observedCount || observedCount != enforceableCount || user.PIDNamespaceMismatchCount > 0 || user.PIDNamespaceUnavailableCount > 0 {
+				coverage = resmanmetrics.CPUPointsCoveragePartial
+			}
+		}
+		result[uid] = resmanmetrics.CPUPointsUserSnapshot{
+			UID: uid, Username: username,
+			ConfiguredClass: user.ConfiguredClass, ConfiguredGuaranteePoints: user.ConfiguredGuaranteePoints,
+			CPUEnforcementRequested: requested, LifecycleState: user.LifecycleState,
+			AppliedClass: user.AppliedClass, AppliedWeight: user.AppliedWeight,
+			AppliedToProcesses: applied, CompleteUIDWorkloadGuaranteed: applied && coverage == resmanmetrics.CPUPointsCoverageComplete,
+			ReconciliationDegraded: degraded, ProcessCoverage: coverage,
+			ObservedProcessCount: observedCount, EnforceableProcessCount: enforceableCount,
+			PIDNamespaceMismatchCount: user.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: user.PIDNamespaceUnavailableCount,
+			CgroupPath: user.CgroupPath, LeafCPUUsageUsecDelta: user.LeafCPUUsageUsecDelta,
+			RAMCgroupUsageBytes: user.RAMCgroupUsageBytes, RAMCoverage: user.RAMCoverage,
+			RAMCoverageIncompleteProcessCount: user.RAMCoverageIncompleteProcessCount, RAMSwapDisabled: user.RAMSwapDisabled,
+			MemoryHighLimit: user.MemoryHighLimit, MemoryMaxLimit: user.MemoryMaxLimit, MemorySwapMax: user.MemorySwapMax,
+			MemoryHighEventsDelta: user.MemoryHighEventsDelta, MemoryMaxEventsDelta: user.MemoryMaxEventsDelta,
+			MemoryOOMEventsDelta: user.MemoryOOMEventsDelta, MemoryOOMKillEventsDelta: user.MemoryOOMKillEventsDelta,
+		}
+	}
+	return result
+}
+
+func cloneCPUPointsUserSnapshots(source map[int]resmanmetrics.CPUPointsUserSnapshot) map[int]resmanmetrics.CPUPointsUserSnapshot {
+	cloned := make(map[int]resmanmetrics.CPUPointsUserSnapshot, len(source))
+	for uid, snapshot := range source {
+		cloned[uid] = snapshot
+	}
+	return cloned
 }
 
 func cgroupCounterDelta(currentIdentity cgroup.CgroupIdentity, current uint64, previousIdentity cgroup.CgroupIdentity, previous uint64, available bool) *uint64 {
@@ -226,12 +357,12 @@ func cgroupCounterDelta(currentIdentity cgroup.CgroupIdentity, current uint64, p
 
 func (m *Manager) recordPersistenceObservationError(errorType string, uid int, err error) {
 	if uid > 0 {
-		m.logger.Warn("Failed to collect persisted cgroup accounting", "uid", uid, "error_type", errorType, "error", err)
+		m.logger.Warn("Failed to collect typed enforcement accounting", "uid", uid, "error_type", errorType, "error", err)
 	} else {
-		m.logger.Warn("Failed to collect persisted cgroup accounting", "error_type", errorType, "error", err)
+		m.logger.Warn("Failed to collect typed enforcement accounting", "error_type", errorType, "error", err)
 	}
 	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordError(metricsDatabaseErrorComponent, errorType)
+		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
 	}
 }
 

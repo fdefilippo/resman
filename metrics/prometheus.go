@@ -27,7 +27,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,8 +120,8 @@ type PrometheusExporter struct {
 	anyLimitsActive            prometheus.Gauge
 	systemLoad                 prometheus.Gauge
 	totalCores                 prometheus.Gauge
-	actionCores                prometheus.Gauge
 	procFSUnavailableProcesses *prometheus.GaugeVec
+	cpuPoints                  cpuPointsPrometheusMetrics
 
 	// Metrics with additional labels.
 	userCPUUsage         *prometheus.GaugeVec
@@ -523,13 +522,6 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	exp.actionCores = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
-		Namespace:   namespace,
-		Name:        "cpu_action_cores",
-		Help:        "Number of CPU cores resman uses for actions (total - min_system_cores)",
-		ConstLabels: staticLabels,
-	})
-
 	exp.procFSUnavailableProcesses = promauto.With(exp.registry).NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -539,6 +531,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"access"},
 	)
+	exp.cpuPoints.register(exp.registry, namespace, staticLabels)
 
 	// === Metrics with dynamic labels ===
 
@@ -689,7 +682,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "cgroup_memory_usage_bytes",
-			Help:        "Observed memory.current usage in bytes per user cgroup; absent when unavailable",
+			Help:        "memory.current charged to the managed user cgroup; post-ingress cgroup accounting rather than complete process-derived UID memory; absent when unavailable",
 			ConstLabels: staticLabels,
 		},
 		[]string{"uid", "cgroup_path"},
@@ -803,7 +796,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 type SystemExporterMetrics struct {
 	TotalCPUUsage                                float64
 	TotalCores                                   int
-	ActionCores                                  int
+	CPUPoints                                    *CPUPointsSystemSnapshot
 	ObservedUsersCPUUsage                        float64
 	ObservedUsersCount                           int
 	ObservedUsersMemoryUsage                     uint64
@@ -838,7 +831,9 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 
 	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
 	exp.totalCores.Set(float64(metrics.TotalCores))
-	exp.actionCores.Set(float64(metrics.ActionCores))
+	if metrics.CPUPoints != nil {
+		exp.cpuPoints.updateSystem(*metrics.CPUPoints)
+	}
 	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
 	exp.allUsersCount.Set(float64(metrics.ObservedUsersCount))
 	exp.allUsersMemoryUsage.Set(float64(metrics.ObservedUsersMemoryUsage))
@@ -888,11 +883,13 @@ type UserExporterMetrics struct {
 	CPULimitActive       bool
 	CgroupPath           string
 	CPUQuota             string
+	CgroupMemoryCurrent  *uint64
 	MemoryHighEvents     uint64
 	ObservedIOReadBytes  uint64
 	ObservedIOWriteBytes uint64
 	ObservedIOReadOps    uint64
 	ObservedIOWriteOps   uint64
+	CPUPoints            CPUPointsUserSnapshot
 }
 
 // UpdateUserSnapshot updates per-user metrics from one typed snapshot.
@@ -907,13 +904,6 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 	// Resolve an empty or numeric username before taking the exporter lock.
 	if username == "" || username == uidStr {
 		username = exp.getUsernameFromUID(uidStr)
-	}
-
-	// Read cgroup memory before acquiring the metrics gate: filesystem I/O must
-	// not delay other metric updates or cleanup.
-	cgroupMemory, cgroupMemoryAvailable := uint64(0), false
-	if metrics.CgroupPath != "" {
-		cgroupMemory, cgroupMemoryAvailable = exp.getCgroupMemoryUsage(metrics.CgroupPath)
 	}
 
 	leaveMetrics := exp.metricsGate.Enter()
@@ -940,6 +930,7 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 		limitedValue = 1.0
 	}
 	exp.userCPULimitActive.WithLabelValues(uidStr, username).Set(limitedValue)
+	exp.cpuPoints.updateUser(uidStr, username, metrics.CPUPoints)
 
 	// Update memory.high breach events by delta.
 	memoryHighKey := fmt.Sprintf("%s_%s", uidStr, username)
@@ -996,8 +987,8 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 		exp.cgroupCPUPeriod.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(period))
 	}
 
-	if cgroupMemoryAvailable {
-		exp.cgroupMemoryUsage.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(cgroupMemory))
+	if metrics.CgroupMemoryCurrent != nil {
+		exp.cgroupMemoryUsage.WithLabelValues(uidStr, metrics.CgroupPath).Set(float64(*metrics.CgroupMemoryCurrent))
 	} else {
 		exp.cgroupMemoryUsage.DeleteLabelValues(uidStr, metrics.CgroupPath)
 	}
@@ -1042,6 +1033,7 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			exp.userIOWriteBytes.DeleteLabelValues(uidStr, username)
 			exp.userIOReadOps.DeleteLabelValues(uidStr, username)
 			exp.userIOWriteOps.DeleteLabelValues(uidStr, username)
+			exp.cpuPoints.deleteUser(uidStr, username)
 			if prevPattern, ok := exp.prevUserPatterns[userKey]; ok {
 				exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, prevPattern)
 			}
@@ -1065,20 +1057,6 @@ func (exp *PrometheusExporter) CleanupUserMetrics(activeUids map[int]bool) {
 			)
 		}
 	}
-}
-
-// getCgroupMemoryUsage reads memory.current for one cgroup.
-func (exp *PrometheusExporter) getCgroupMemoryUsage(cgroupPath string) (uint64, bool) {
-	memoryCurrentFile := filepath.Join(cgroupPath, "memory.current")
-	data, err := os.ReadFile(memoryCurrentFile)
-	if err != nil {
-		return 0, false
-	}
-	usage, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return usage, true
 }
 
 // deleteCgroupMetricSeries removes every cgroup gauge for one UID/path tuple.

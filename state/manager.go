@@ -79,6 +79,8 @@ type Manager struct {
 	persistencePreviousRAM    map[int]cgroup.MemoryAccountingSnapshot
 	persistencePreviousTime   time.Time
 	cpuPointsLifecycleEvents  map[int]cpuPointsLifecycleEvent
+	cpuPointsSystemSnapshot   resmanmetrics.CPUPointsSystemSnapshot
+	cpuPointsUserSnapshots    map[int]resmanmetrics.CPUPointsUserSnapshot
 	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
 	cpuPointsDegraded         bool
 
@@ -130,10 +132,12 @@ type userResourceLimitState struct {
 }
 
 type cpuPointsAllocation struct {
-	class      cpupoints.AllocationClass
-	weight     cpupoints.KernelCPUWeight
-	domainPath string
-	leafPath   string
+	class                   cpupoints.AllocationClass
+	weight                  cpupoints.KernelCPUWeight
+	domainPath              string
+	leafPath                string
+	pidNamespaceMismatches  int
+	pidNamespaceUnavailable int
 }
 
 type cpuPointsLifecycleEvent struct {
@@ -321,6 +325,7 @@ func NewManager(
 		persistencePreviousCPU:        make(map[string]cgroup.CPUPointsNodeSnapshot),
 		persistencePreviousRAM:        make(map[int]cgroup.MemoryAccountingSnapshot),
 		cpuPointsLifecycleEvents:      make(map[int]cpuPointsLifecycleEvent),
+		cpuPointsUserSnapshots:        make(map[int]resmanmetrics.CPUPointsUserSnapshot),
 		thresholdTracker:              &ThresholdTracker{},
 		stabilityTracker:              newUserStabilityTracker(),
 		ioThresholdTracker:            &ThresholdTracker{},
@@ -453,6 +458,8 @@ type RuntimeStatus struct {
 	SharedCgroupActive           bool
 	SharedCgroupQuota            string
 	SharedCgroupUserCount        int
+	CPUPoints                    resmanmetrics.CPUPointsSystemSnapshot
+	CPUPointUsers                []resmanmetrics.CPUPointsUserSnapshot
 }
 
 type enforcementSummary struct {
@@ -516,6 +523,42 @@ func (m *Manager) GetStatus() RuntimeStatus {
 		SharedCgroupPath:             summary.sharedCgroupPath,
 		SharedCgroupActive:           summary.sharedCgroupPath != "" && summary.cpuLimitsActive,
 	}
+	m.mu.RLock()
+	status.CPUPoints = m.cpuPointsSystemSnapshot
+	status.CPUPointUsers = make([]resmanmetrics.CPUPointsUserSnapshot, 0, len(m.cpuPointsUserSnapshots))
+	for _, snapshot := range m.cpuPointsUserSnapshots {
+		status.CPUPointUsers = append(status.CPUPointUsers, snapshot)
+	}
+	policy := m.cpuPointsPolicy
+	degraded := m.cpuPointsDegraded
+	m.mu.RUnlock()
+	status.CPUPoints.ReservePoints = policy.Reserve().Value()
+	status.CPUPoints.NominalParentPoolPoints = policy.Pool().Value()
+	status.CPUPoints.ConfiguredBestEffortPoints = policy.BestEffort().Value()
+	status.CPUPoints.ReconciliationDegraded = degraded
+	if status.CPUPoints.IntervalEnd.IsZero() && m.cpuCapacity != nil {
+		capacity := m.cpuCapacity.State()
+		status.CPUPoints.CapacityAvailable = capacity.Available
+		status.CPUPoints.CapacityUnavailableReason = string(capacity.UnavailableReason)
+		if capacity.LastVerified.PeriodMicroseconds() != 0 {
+			quota := capacity.LastVerified.QuotaMicroseconds()
+			period := capacity.LastVerified.PeriodMicroseconds()
+			online := capacity.LastVerified.OnlineCPUs().Value()
+			status.CPUPoints.ProgrammedParentQuotaUsec = &quota
+			status.CPUPoints.ProgrammedParentPeriodUsec = &period
+			if capacity.Available {
+				status.CPUPoints.OnlineCPUs = &online
+			}
+		}
+		if capacity.Available {
+			status.CPUPoints.DeliveryState = resmanmetrics.CPUPointsDeliveryAvailable
+			status.CPUPoints.LendingState = resmanmetrics.CPUPointsLendingInactive
+		} else {
+			status.CPUPoints.DeliveryState = resmanmetrics.CPUPointsDeliveryUnavailable
+			status.CPUPoints.LendingState = resmanmetrics.CPUPointsLendingUnavailable
+		}
+	}
+	sort.Slice(status.CPUPointUsers, func(i, j int) bool { return status.CPUPointUsers[i].UID < status.CPUPointUsers[j].UID })
 
 	// Read shared cgroup details without holding the manager lock.
 	if summary.sharedCgroupPath != "" {
@@ -531,6 +574,15 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	}
 
 	return status
+}
+
+// GetCPUPointsUserStatus returns the latest authoritative decision-sample
+// status for one UID. The boolean is false before that UID has been observed.
+func (m *Manager) GetCPUPointsUserStatus(uid int) (resmanmetrics.CPUPointsUserSnapshot, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	snapshot, ok := m.cpuPointsUserSnapshots[uid]
+	return snapshot, ok
 }
 
 // Cleanup releases active enforcement and shuts down manager dependencies.

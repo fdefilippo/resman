@@ -87,19 +87,36 @@ enforcement placement changes.
 
 To show only limited users in dashboards, filter by `resman_user_cpu_limit_active{uid, username} == 1`.
 
+CPU Points observability is interval-based. The parent, guaranteed-domain,
+best-effort-domain, and per-leaf `*_usage_microseconds_delta` gauges all come from
+one control-cycle interval, whose duration is
+`resman_cpu_points_observation_interval_seconds`. Allocation ratios use effective
+parent usage as the denominator; the nominal pool and programmed `cpu.max` are not
+delivered guarantees. Positive parent throttling is expected under a saturated finite
+pool, and CFS can deliver less than the nominal quota.
+
+Mapped-user guarantees are optional values. A best-effort UID has no fabricated
+per-user guarantee. The applied-class, lifecycle, and process-coverage series separate
+a complete UID workload from a partial host-enforceable subset. Lending is
+class-prioritized: idle mapped capacity serves runnable guaranteed siblings first;
+best effort is reported as borrowing only while the complete guaranteed domain is
+inactive.
+
 ## Cgroup Hierarchy
 
 ```
 /sys/fs/cgroup/                     ← root (controllers: cpu, cpuset, io)
   └── resman/                       ← base cgroup
-        ├── limited/               ← shared cgroup (CPU only)
-        │     ├── user_1000/        ← per-user sub-cgroup
-        │     └── user_1001/
+        ├── limited/               ← finite CPU Points parent
+        │     ├── guaranteed/       ← aggregate acquired mapped guarantees
+        │     │     └── user_1000/  ← exact mapped weight
+        │     └── best_effort/      ← one aggregate best-effort entitlement
+        │           └── user_1001/  ← equal-share best-effort leaf
         ├── user_1000/              ← IOPS observation; RAM/IO when active
         └── user_1001/
 ```
 
-- **CPU**: Uses shared cgroup `limited/` with proportional `cpu.weight`
+- **CPU**: Uses the finite CPU Points parent and two class-priority scheduling domains
 - **RAM**: Applied directly to per-user cgroup (`memory.max`, `memory.high`)
 - **IO**: Observed and applied directly in the current per-user cgroup (`io.stat`, `io.max`)
 

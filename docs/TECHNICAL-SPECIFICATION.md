@@ -519,6 +519,18 @@ and system-history records intentionally remain distinct typed contracts. Dynami
 are limited to MCP input-schema metadata and decoded client arguments; they are never
 serialized as production result payloads.
 
+The shipped current-status inventory is explicit. Prometheus, `get_system_status`,
+`get_limits_status`, `get_user_metrics`, their matching resources, `get_cpu_report`,
+the system-health, user-analysis, and troubleshooting prompts, and limit-hook JSON/script
+payloads expose the typed CPU Points distinction appropriate to their surface. The active-user
+inventory remains identity-only, the memory report remains process-derived memory plus RAM-limit
+state, configuration remains policy rather than observed state, cgroup information remains raw
+kernel diagnostics, and the history tools retain the typed interval schema established by the
+metrics database. Those unchanged surfaces do not project a CPU ceiling or a delivered guarantee.
+Limit-hook RAM fields keep `memory.high` events, `memory.max` events, OOM attempts, and
+OOM kills separate; zero max/OOM/kill deltas never reinterpret high throttling or stall as
+absent enforcement.
+
 **Transports:**
 - **stdio**: For local MCP clients (Claude Desktop, etc.)
 - **HTTP**: For remote clients (AnythingLLM, etc.)
@@ -1111,6 +1123,11 @@ by the state manager. Every configured delivery terminates as `success`, `failur
 cancels the shared hook context, and waits for every in-flight script or HTTP request
 to become quiescent before state cleanup continues. Script output and secret-bearing
 URL components remain excluded from returned errors and logs.
+The transition payload also carries configured class and optional guarantee,
+requested/applied lifecycle and weight, reconciliation state, complete/partial process
+coverage, PID-namespace rejection counts, and post-ingress RAM cgroup coverage. It
+never calls a partial host subset the complete UID workload and never promises that a
+`memory.high` event will terminate a process.
 
 ---
 
@@ -1242,11 +1259,34 @@ decision policy.
 - `resman_user_process_count{uid, username}` (gauge)
 - `resman_user_cpu_limit_active{uid, username}` (gauge)
 
+**CPU Points operational metrics:**
+- configured reserve, nominal parent pool, aggregate best-effort entitlement, and
+  applied guarantee total;
+- verified live online-CPU denominator and programmed parent quota/period;
+- synchronized parent, guaranteed-domain, best-effort-domain, and leaf CPU usage
+  deltas plus the common interval duration;
+- parent period, throttled-period, and throttled-time deltas;
+- optional mapped-user guarantee, requested enforcement, bounded configured/applied
+  class, raw applied weight, lifecycle, reconciliation state, and complete/partial
+  process coverage;
+- cgroup `memory.current` explicitly labelled as post-ingress cgroup accounting,
+  bounded RAM coverage, and distinct high/max/OOM/OOM-kill event deltas.
+
+Effective parent CPU usage is the allocation denominator. The nominal pool and raw
+`cpu.max` are capacity configuration, not observed delivery; raw `cpu.weight` is a
+kernel scheduling value, not a second spelling of CPU Points. CFS can under-deliver
+the nominal parent quota under saturation. Idle mapped capacity serves runnable
+guaranteed siblings first; best effort borrows only when the complete guaranteed
+domain is inactive. ResMan does not derive runnable points in userspace.
+
 Every per-user series is published exclusively from the control-cycle decision
 sample. Its CPU delta and smoothing window therefore match the sample used by
 enforcement. Observation-only refreshes update system-wide gauges but do not write or
 remove per-user series. The shipped per-user alert rules consequently evaluate one
 defined sampling stream even when PSI event-driven refreshes run at another cadence.
+CPU Points parent/domain/leaf deltas and memory event deltas use that same stream;
+recreated cgroups, daemon restart, counter decrease, or an unavailable read removes
+the interval series instead of creating a wrapped delta.
 
 **Counters:**
 - `resman_cpu_limits_activated_total` (confirmed inactive-to-active transitions)

@@ -92,7 +92,7 @@ expose per-user data.
 **Action.** Stop ResMan and archive or delete the old database; it is not migrated.
 Create a stable, non-symlink hierarchy with a service-owned mode-`0700` immediate
 parent. Set any retained database and sidecars to the service UID and mode `0600`, or
-let ResMan create a new schema-3 store. The `:memory:` database is unchanged.
+let ResMan create a new schema-4 store. The `:memory:` database is unchanged.
 
 ### Runtime-state and log paths change
 
@@ -330,6 +330,28 @@ could not truthfully represent independent RAM and I/O state.
 and automation before upgrading. MCP system-history decoders must likewise replace
 the removed `limits_active` and `limited_users_count` fields with the five explicit
 resource and count fields.
+
+### CPU Points status replaces the action-core projection
+
+**Visible change.** `resman_cpu_action_cores` is removed without an alias. Prometheus
+now exposes the configured reserve and nominal parent pool, the verified live online-CPU
+denominator, programmed parent quota/period, synchronized parent/domain/leaf usage deltas,
+parent throttling, bounded delivery and class-priority lending states, optional mapped-user
+guarantees, applied class/raw weight, process coverage, and post-ingress RAM cgroup coverage.
+Current MCP system, limits, user-metrics and CPU-report payloads add the corresponding typed
+`cpu_points` objects; limits status also includes `cpu_point_users`. Limit-hook JSON and script
+environments add typed configured/applied CPU Points and RAM-coverage fields.
+
+**Cause.** The removed series derived a core count from the observation cache, silently clamped
+small results to one core, and described the rejected `MIN_SYSTEM_CORES` policy. A programmed
+quota or raw weight is not evidence of delivered CPU bandwidth, and an applied host-process
+subset is not a guarantee for the complete UID workload.
+
+**Action.** Remove every query for `resman_cpu_action_cores`. Compute allocation ratios from
+the synchronized domain or leaf CPU deltas divided by the effective parent usage delta, not
+from nominal quota or raw weights. Treat absent optional guarantees and unavailable/reset
+interval deltas as unknown rather than zero. Update MCP and hook decoders for the nested typed
+objects and bounded lifecycle/coverage states; no compatibility fields are provided.
 
 ### Per-user telemetry follows the decision sample
 

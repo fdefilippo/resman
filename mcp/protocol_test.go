@@ -487,10 +487,32 @@ func TestMCPStatusContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
 	}
 
 	promptText := callPromptOverHTTP(t, server, "system-health")
-	for _, term := range []string{"Observed Users CPU", "Observed Users", "Actively Limited Users", "CPU Limits Active", "Resource Limits Active"} {
+	for _, term := range []string{"Observed Users CPU", "Observed Users", "Actively Limited Users", "CPU Limits Active", "Resource Limits Active", "CPU Points Nominal Parent Pool", "CPU Points Delivery State", "CPU Points Lending State"} {
 		if !strings.Contains(promptText, term) {
 			t.Errorf("system-health prompt is missing %q: %s", term, promptText)
 		}
+	}
+}
+
+func TestMCPLimitsCPUPointsContractAgreesAcrossSurfacesAndTransports(t *testing.T) {
+	server := newStatusProtocolTestServer(t)
+	httpTool := callStatusOverHTTP(t, server, "tools/call", "get_limits_status", map[string]any{"name": "get_limits_status", "arguments": map[string]any{}})
+	stdioTool := callStatusOverStdio(t, server, "tools/call", map[string]any{"name": "get_limits_status", "arguments": map[string]any{}})
+	httpResource := callStatusOverHTTP(t, server, "resources/read", "resman://limits/status", map[string]any{"uri": "resman://limits/status"})
+	stdioResource := callStatusOverStdio(t, server, "resources/read", map[string]any{"uri": "resman://limits/status"})
+	for surface, payload := range map[string]map[string]any{
+		"HTTP tool": httpTool, "stdio tool": stdioTool,
+		"HTTP resource": httpResource, "stdio resource": stdioResource,
+	} {
+		if _, ok := payload["cpu_points"].(map[string]any); !ok {
+			t.Errorf("%s lacks typed cpu_points object: %+v", surface, payload)
+		}
+		if _, ok := payload["cpu_point_users"].([]any); !ok {
+			t.Errorf("%s lacks typed cpu_point_users array: %+v", surface, payload)
+		}
+	}
+	if !reflect.DeepEqual(httpTool, stdioTool) || !reflect.DeepEqual(httpTool, httpResource) || !reflect.DeepEqual(httpTool, stdioResource) {
+		t.Fatalf("limits CPU Points contract differs: HTTP tool=%+v stdio tool=%+v HTTP resource=%+v stdio resource=%+v", httpTool, stdioTool, httpResource, stdioResource)
 	}
 }
 
@@ -558,7 +580,7 @@ func TestMCPToolOnlyWireContractsAgreeAcrossTransports(t *testing.T) {
 		tool string
 		keys []string
 	}{
-		{tool: "get_cpu_report", keys: []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"}},
+		{tool: "get_cpu_report", keys: []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"}},
 		{tool: "get_mem_report", keys: []string{"avg_memory_mb", "hostname", "observed_users_count", "peak_memory_mb", "ram_actively_limited_users_count", "report", "resource_limits_active", "server_role", "total_memory_mb"}},
 		{tool: "get_user_filters", keys: []string{"config_file", "user_exclude_list", "user_include_list"}},
 	}
@@ -706,6 +728,7 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 		"actively_limited_users_count",
 		"cpu_limits_active",
 		"resource_limits_active",
+		"cpu_points",
 	} {
 		if _, exists := status[key]; !exists {
 			t.Errorf("status is missing %q: %+v", key, status)
