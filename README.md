@@ -146,6 +146,11 @@ MCP_TRANSPORT=stdio
 # METRICS_REFRESH_INTERVAL=30
 ```
 
+RPM and Debian packages also ship a no-argument email adapter example at
+`/usr/share/doc/resman/scripts/resman-sendmail-hook.sh`. Copy and configure it before
+use; the adjacent generic `sendmail.sh` requires command-line arguments and is not
+itself a ResMan hook. See [docs/scripts/README.md](docs/scripts/README.md).
+
 The MCP endpoint is protocol-stateless and accepts only revision `2026-07-28`
 over stdio or HTTP. HTTP authentication and protocol metadata are validated on
 every request; legacy initialization, sessions, and protocol fallbacks are not

@@ -82,6 +82,7 @@ assert_entry '/var/lib/resman' 'drwx------' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/UPGRADING.md' '-rw-r--r--' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/LIMIT-HOOKS.md' '-rw-r--r--' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/scripts/sendmail.sh' '-rwxr-xr-x' 'root/root' "$listing"
+assert_entry '/usr/share/doc/resman/scripts/resman-sendmail-hook.sh' '-rwxr-xr-x' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/scripts/README.md' '-rw-r--r--' 'root/root' "$listing"
 
 assert_absent_path '/etc/resman.conf' "$paths"

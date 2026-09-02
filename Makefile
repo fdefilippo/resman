@@ -346,7 +346,7 @@ rpm-source: build rpm-dirs
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/scripts
-	cp scripts/sendmail.sh $(PROJECT_NAME)-$(VERSION)/scripts/
+	cp scripts/sendmail.sh scripts/resman-sendmail-hook.sh $(PROJECT_NAME)-$(VERSION)/scripts/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/packaging/syslog
 	cp packaging/syslog/resman.conf $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
 	cp packaging/syslog/resman $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true

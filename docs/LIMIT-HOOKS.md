@@ -104,3 +104,15 @@ LIMIT_HOOK_QUEUE_CAPACITY=64
 
 Install the script and all of its non-system ancestors under the ownership and mode
 rules above before starting ResMan. A URL-only configuration needs no script identity.
+
+## Packaged email example
+
+The packages include `resman-sendmail-hook.sh`, a no-argument adapter for this hook
+contract, and `sendmail.sh`, a separate generic SMTP helper. ResMan must invoke the
+adapter, not the generic helper. The adapter reads the fixed `RESMAN_LIMIT_*`
+environment and converts it into a subject and text body before delegating delivery.
+
+Copy the adapter from `/usr/share/doc/resman/scripts/` to a trusted executable path
+and configure that copy; never edit the package-owned example in place. See
+`/usr/share/doc/resman/scripts/README.md` for the complete procedure and the explicit
+restriction against placing SMTP passwords on a command line.

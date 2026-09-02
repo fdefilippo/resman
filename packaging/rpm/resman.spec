@@ -169,6 +169,7 @@ install -m 644 docs/dashboard-grafana-operations.json %{buildroot}/%{_docdir}/%{
 install -d -m 755 %{buildroot}/%{_docdir}/%{name}/scripts
 install -m 755 docs/generate-tls-certs.sh %{buildroot}/%{_docdir}/%{name}/scripts/ 2>/dev/null || true
 install -m 755 scripts/sendmail.sh %{buildroot}/%{_docdir}/%{name}/scripts/sendmail.sh
+install -m 755 scripts/resman-sendmail-hook.sh %{buildroot}/%{_docdir}/%{name}/scripts/resman-sendmail-hook.sh
 install -m 644 docs/scripts/README.md %{buildroot}/%{_docdir}/%{name}/scripts/README.md
 
 # Install the syslog configuration.

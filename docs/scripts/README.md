@@ -1,16 +1,60 @@
 # ResMan operator helper scripts
 
-The scripts in this directory are optional operator utilities. ResMan does not invoke
-them automatically, and installing the package does not configure an SMTP server or
-mail credentials.
+The scripts in this directory are optional operator utilities. Installing the package
+does not configure an SMTP server, a recipient, or mail credentials.
+
+## `resman-sendmail-hook.sh`
+
+`resman-sendmail-hook.sh` is the example adapter that implements ResMan's no-argument
+limit-hook contract. It consumes the documented `RESMAN_LIMIT_*` environment,
+constructs a text notification, and delegates SMTP delivery to `sendmail.sh`.
+`sendmail.sh` remains a generic command-line helper and is not itself a ResMan hook.
+
+Do not edit or configure the copy under `/usr/share/doc`: a package upgrade can replace
+it. Copy it to a trusted path, edit the static sender and recipient, and protect it
+according to the limit-hook path rules:
+
+```bash
+sudo install -d -o root -g root -m 0755 /usr/local/libexec/resman
+sudo install -o root -g root -m 0755 \
+  /usr/share/doc/resman/scripts/resman-sendmail-hook.sh \
+  /usr/local/libexec/resman/resman-sendmail-hook.sh
+sudo editor /usr/local/libexec/resman/resman-sendmail-hook.sh
+```
+
+The example uses an unauthenticated SMTP relay. It contains no password option and
+does not place SMTP credentials on a process command line. Sites requiring
+authentication should treat the transport customization as operator-owned code and
+use a protected credential mechanism suitable for their mail system; do not add a
+password argument to the example adapter.
+
+Configure ResMan with the copied adapter and the dedicated non-root identity:
+
+```ini
+LIMIT_HOOK_ENABLED=true
+LIMIT_HOOK_SCRIPT=/usr/local/libexec/resman/resman-sendmail-hook.sh
+LIMIT_HOOK_SCRIPT_USER=resman-hook
+LIMIT_HOOK_SCRIPT_GROUP=resman-hook
+```
+
+ResMan passes no positional arguments. Event values such as the UID, username,
+timestamp, applied CPU Points class, and RAM coverage come from the fixed
+`RESMAN_LIMIT_*` environment. The adapter rejects unexpected arguments, missing or
+malformed required event fields, control characters in event data, unconfigured
+sender or recipient placeholders, an invalid SMTP port, and an unavailable helper.
+Delivery failures propagate to ResMan as a failed hook outcome without weakening the
+limit already applied.
 
 ## `sendmail.sh`
 
-`sendmail.sh` builds a MIME message and sends it directly to an SMTP server with
-`curl`. RPM and Debian packages install it at:
+`sendmail.sh` is a generic, freely provided example utility. It builds a MIME message
+and sends it directly to an SMTP server with `curl`. It requires command-line
+arguments and therefore must not be configured directly as `LIMIT_HOOK_SCRIPT`. RPM
+and Debian packages install both examples at:
 
 ```text
 /usr/share/doc/resman/scripts/sendmail.sh
+/usr/share/doc/resman/scripts/resman-sendmail-hook.sh
 ```
 
 ### Requirements

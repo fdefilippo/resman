@@ -33,6 +33,8 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				`"$package_dir/usr/share/doc/resman/LIMIT-HOOKS.md"`,
 				`install -m 0755 "$project_dir/scripts/sendmail.sh"`,
 				`"$package_dir/usr/share/doc/resman/scripts/sendmail.sh"`,
+				`install -m 0755 "$project_dir/scripts/resman-sendmail-hook.sh"`,
+				`"$package_dir/usr/share/doc/resman/scripts/resman-sendmail-hook.sh"`,
 				`install -m 0644 "$project_dir/docs/scripts/README.md"`,
 				`"$package_dir/usr/share/doc/resman/scripts/README.md"`,
 			},
@@ -62,6 +64,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/",
 				"%doc %{_docdir}/%{name}/LIMIT-HOOKS.md",
 				"install -m 755 scripts/sendmail.sh %{buildroot}/%{_docdir}/%{name}/scripts/sendmail.sh",
+				"install -m 755 scripts/resman-sendmail-hook.sh %{buildroot}/%{_docdir}/%{name}/scripts/resman-sendmail-hook.sh",
 				"install -m 644 docs/scripts/README.md %{buildroot}/%{_docdir}/%{name}/scripts/README.md",
 			},
 			forbidden: []string{"chmod 644 /var/log/resman.log"},
@@ -106,6 +109,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"assert_absent_path '/etc/" + "resman.conf' \"$paths\"",
 				"assert_entry '/etc/resman/cpu-points.map' '-rw-------' 'root/root' \"$listing\"",
 				"assert_entry '/usr/share/doc/resman/scripts/sendmail.sh' '-rwxr-xr-x' 'root/root' \"$listing\"",
+				"assert_entry '/usr/share/doc/resman/scripts/resman-sendmail-hook.sh' '-rwxr-xr-x' 'root/root' \"$listing\"",
 				"assert_entry '/usr/share/doc/resman/scripts/README.md' '-rw-r--r--' 'root/root' \"$listing\"",
 			},
 		},
@@ -132,10 +136,14 @@ func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
 	root := repositoryRoot(t)
 	guide := readTextFile(t, filepath.Join(root, "docs/scripts/README.md"))
 	helper := readTextFile(t, filepath.Join(root, "scripts/sendmail.sh"))
+	adapter := readTextFile(t, filepath.Join(root, "scripts/resman-sendmail-hook.sh"))
 
 	for _, required := range []string{
 		"/usr/share/doc/resman/scripts/sendmail.sh",
-		"ResMan does not invoke",
+		"/usr/share/doc/resman/scripts/resman-sendmail-hook.sh",
+		"generic command-line helper and is not itself a ResMan hook",
+		"ResMan passes no positional arguments",
+		"does not place SMTP credentials on a process command line",
 		"curl` built with SMTP support",
 		"`-f address`",
 		"`-t address`",
@@ -149,6 +157,19 @@ func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
 
 	if !strings.Contains(helper, "./sendmail.sh -f sender@example.com -t recipient@example.com [options]") {
 		t.Error("sendmail helper usage does not name its required sender and recipient options")
+	}
+	for _, required := range []string{
+		`readonly SENDMAIL_HELPER="/usr/share/doc/resman/scripts/sendmail.sh"`,
+		`RESMAN_LIMIT_UID`,
+		`RESMAN_LIMIT_USERNAME`,
+		`this adapter accepts no arguments`,
+	} {
+		if !strings.Contains(adapter, required) {
+			t.Errorf("sendmail adapter is missing %q", required)
+		}
+	}
+	if strings.Contains(adapter, "MAIL_PASSWORD") || strings.Contains(adapter, "-w ") {
+		t.Error("sendmail adapter must not place an SMTP password on argv")
 	}
 }
 

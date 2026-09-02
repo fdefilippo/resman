@@ -82,6 +82,8 @@ install -m 0644 "$project_dir/docs/dashboard-grafana-operations.json" \
     "$package_dir/usr/share/doc/resman/dashboard-grafana-operations.json"
 install -m 0755 "$project_dir/scripts/sendmail.sh" \
     "$package_dir/usr/share/doc/resman/scripts/sendmail.sh"
+install -m 0755 "$project_dir/scripts/resman-sendmail-hook.sh" \
+    "$package_dir/usr/share/doc/resman/scripts/resman-sendmail-hook.sh"
 install -m 0644 "$project_dir/docs/scripts/README.md" \
     "$package_dir/usr/share/doc/resman/scripts/README.md"
 install -m 0755 "$project_dir/docs/generate-tls-certs.sh" \
