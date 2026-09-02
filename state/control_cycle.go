@@ -219,6 +219,11 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
 	// Publish system observations and decision-owned per-user metrics.
 	if m.prometheusExporter != nil {
+		m.prometheusExporter.ObserveControlCycleHostCPUUsage(resmanmetrics.HostCPUUsageSample{
+			UsagePercent:      run.metrics.TotalCPUUsage,
+			Available:         run.metrics.HostCPUUsageAvailable,
+			UnavailableReason: run.metrics.HostCPUUsageUnavailableReason,
+		})
 		m.updatePrometheusSystemMetrics(run.metrics)
 		m.updatePrometheusDecisionUserMetrics(run.metrics)
 	}
@@ -453,13 +458,15 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 }
 
 type SystemMetrics struct {
-	Timestamp         time.Time
-	TotalCores        int
-	TotalCPUUsage     float64 // Percentage
-	PersistenceSystem resmanmetrics.SystemPersistenceMetrics
-	PersistenceUsers  map[int]resmanmetrics.UserPersistenceMetrics
-	CPUPointsSystem   resmanmetrics.CPUPointsSystemSnapshot
-	CPUPointsUsers    map[int]resmanmetrics.CPUPointsUserSnapshot
+	Timestamp                     time.Time
+	TotalCores                    int
+	TotalCPUUsage                 float64 // Percentage
+	HostCPUUsageAvailable         bool
+	HostCPUUsageUnavailableReason resmanmetrics.HostCPUUsageUnavailableReason
+	PersistenceSystem             resmanmetrics.SystemPersistenceMetrics
+	PersistenceUsers              map[int]resmanmetrics.UserPersistenceMetrics
+	CPUPointsSystem               resmanmetrics.CPUPointsSystemSnapshot
+	CPUPointsUsers                map[int]resmanmetrics.CPUPointsUserSnapshot
 
 	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64
@@ -523,7 +530,15 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 
 	// Collect base system metrics.
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
-	metrics.TotalCPUUsage = m.metricsCollector.GetTotalCPUUsage()
+	var hostCPU resmanmetrics.HostCPUUsageSample
+	if decisionSample {
+		hostCPU = m.metricsCollector.GetDecisionHostCPUUsage()
+	} else {
+		hostCPU = m.metricsCollector.GetObservationHostCPUUsage()
+	}
+	metrics.TotalCPUUsage = hostCPU.UsagePercent
+	metrics.HostCPUUsageAvailable = hostCPU.Available
+	metrics.HostCPUUsageUnavailableReason = hostCPU.UnavailableReason
 
 	metrics.MemoryUsage = m.metricsCollector.GetMemoryUsage()
 	metrics.TotalMemoryMB = m.metricsCollector.GetTotalMemoryMB()

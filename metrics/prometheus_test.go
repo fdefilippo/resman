@@ -202,6 +202,56 @@ func TestObserveLimitHookExecutorPublishesBoundedState(t *testing.T) {
 	}
 }
 
+func TestObserveControlCycleHostCPUUsageSeparatesAvailabilityFromMeasuredZero(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.ObserveControlCycleHostCPUUsage(unavailableHostCPUSample(HostCPUUsageUnavailableBaseline))
+	exporter.ObserveControlCycleHostCPUUsage(unavailableHostCPUSample(HostCPUUsageUnavailableBaseline))
+	exporter.ObserveControlCycleHostCPUUsage(unavailableHostCPUSample(HostCPUUsageUnavailableStale))
+	exporter.ObserveControlCycleHostCPUUsage(unavailableHostCPUSample(HostCPUUsageUnavailableReason("unbounded")))
+	exporter.ObserveControlCycleHostCPUUsage(HostCPUUsageSample{Available: true, UsagePercent: 0})
+
+	if got := gatheredMetricValue(t, exporter, "resman_control_cycle_host_cpu_sample_available"); got != 1 {
+		t.Fatalf("latest host CPU sample availability = %f, want 1 for measured zero", got)
+	}
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "resman_control_cycle_host_cpu_sample_unavailable_total" {
+			continue
+		}
+		if len(family.Metric) != 2 {
+			t.Fatalf("host CPU unavailable series = %d, want 2 bounded reasons", len(family.Metric))
+		}
+		got := make(map[string]float64, len(family.Metric))
+		for _, metric := range family.Metric {
+			reason := ""
+			for _, label := range metric.Label {
+				if label.GetName() == "reason" {
+					reason = label.GetValue()
+				}
+			}
+			got[reason] = metric.GetCounter().GetValue()
+		}
+		if got[string(HostCPUUsageUnavailableBaseline)] != 2 || got[string(HostCPUUsageUnavailableStale)] != 1 {
+			t.Fatalf("host CPU unavailable counters = %+v", got)
+		}
+		if _, exists := got["unbounded"]; exists {
+			t.Fatal("invalid unbounded host CPU reason reached Prometheus")
+		}
+		return
+	}
+	t.Fatal("resman_control_cycle_host_cpu_sample_unavailable_total metric not found")
+}
+
 func TestNewPrometheusExporterAppliesTLSAndClientCA(t *testing.T) {
 	certFile, keyFile, caFile := writeTestTLSMaterial(t)
 

@@ -71,8 +71,13 @@ func (l *failingCompletionLogger) InfoChecked(message string, _ ...interface{}) 
 	return nil
 }
 
-func (m *mockMetricsCollector) GetTotalCores() int              { return 4 }
-func (m *mockMetricsCollector) GetTotalCPUUsage() float64       { return 50.0 }
+func (m *mockMetricsCollector) GetTotalCores() int { return 4 }
+func (m *mockMetricsCollector) GetDecisionHostCPUUsage() metrics.HostCPUUsageSample {
+	return metrics.HostCPUUsageSample{UsagePercent: 50, Available: true}
+}
+func (m *mockMetricsCollector) GetObservationHostCPUUsage() metrics.HostCPUUsageSample {
+	return metrics.HostCPUUsageSample{UsagePercent: 50, Available: true}
+}
 func (m *mockMetricsCollector) GetUserCPUUsage(uid int) float64 { return 10.0 }
 func (m *mockMetricsCollector) GetMemoryUsage() float64         { return 1024.0 }
 func (m *mockMetricsCollector) GetTotalMemoryMB() float64       { return 16384.0 }
@@ -494,6 +499,8 @@ type mockPrometheusExporter struct {
 	limitHookInFlight          int
 	limitHookQueued            int
 	limitHookCapacity          int
+	lastHostCPUSample          metrics.HostCPUUsageSample
+	hostCPUSampleObservations  int
 }
 
 func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
@@ -511,6 +518,12 @@ func (m *mockPrometheusExporter) UpdateUserSnapshot(snapshot metrics.UserExporte
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 }
 func (m *mockPrometheusExporter) RecordControlCycleTrigger(trigger string) {}
+func (m *mockPrometheusExporter) ObserveControlCycleHostCPUUsage(sample metrics.HostCPUUsageSample) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastHostCPUSample = sample
+	m.hostCPUSampleObservations++
+}
 func (m *mockPrometheusExporter) RecordControlCycleDuration(duration time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -584,6 +597,8 @@ type prometheusMetricSnapshot struct {
 	userMetricCleanups        int
 	limitsActivated           int
 	limitsDeactivated         int
+	hostCPUSampleObservations int
+	lastHostCPUSample         metrics.HostCPUUsageSample
 }
 
 func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
@@ -598,6 +613,8 @@ func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
 		userMetricCleanups:        m.userMetricCleanups,
 		limitsActivated:           m.limitsActivated,
 		limitsDeactivated:         m.limitsDeactivated,
+		hostCPUSampleObservations: m.hostCPUSampleObservations,
+		lastHostCPUSample:         m.lastHostCPUSample,
 	}
 }
 
@@ -1254,6 +1271,43 @@ func TestMetricsRefreshRecordsCollectionWithoutControlCycle(t *testing.T) {
 	}
 	if got.controlCycleDurations != 0 {
 		t.Errorf("control cycle duration observations = %d, want 0", got.controlCycleDurations)
+	}
+	if got.hostCPUSampleObservations != 0 {
+		t.Errorf("control-cycle host CPU observations = %d, want 0", got.hostCPUSampleObservations)
+	}
+}
+
+func TestControlCyclePublishesTheExactDecisionHostCPUSample(t *testing.T) {
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(
+		config.DefaultConfig(),
+		&mockMetricsCollector{},
+		&mockCgroupManager{},
+		exporter,
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	want := metrics.HostCPUUsageSample{
+		UsagePercent:      37.5,
+		UnavailableReason: metrics.HostCPUUsageUnavailableStale,
+	}
+	run := &controlCycleContext{metrics: &SystemMetrics{
+		TotalCPUUsage:                 want.UsagePercent,
+		HostCPUUsageAvailable:         want.Available,
+		HostCPUUsageUnavailableReason: want.UnavailableReason,
+	}}
+	if err := manager.stageUpdatePrometheus(run); err != nil {
+		t.Fatalf("stageUpdatePrometheus() error: %v", err)
+	}
+
+	got := exporter.snapshot()
+	if got.hostCPUSampleObservations != 1 {
+		t.Fatalf("control-cycle host CPU observations = %d, want 1", got.hostCPUSampleObservations)
+	}
+	if got.lastHostCPUSample != want {
+		t.Fatalf("published host CPU sample = %+v, want %+v", got.lastHostCPUSample, want)
 	}
 }
 

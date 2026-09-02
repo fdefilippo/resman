@@ -191,7 +191,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		if !ignoreSystemLoad && metrics.SystemUnderLoad {
 			attribution := measureCPULoadAttribution(metrics)
 			if !attribution.measurable {
-				return DecisionMaintain, "Threshold exceeded while system load attribution is unavailable because the host CPU sample is empty"
+				return DecisionMaintain, "Threshold exceeded while system load attribution is unavailable because the host CPU sample is unavailable"
 			}
 			if attribution.eligibleShare < minimumEligibleCPUShareForLoadOwnership {
 				return DecisionMaintain, fmt.Sprintf(
@@ -248,11 +248,14 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 // sample slightly because the windows are not identical, so the eligible value
 // is clamped to the measured host total before calculating the share.
 func measureCPULoadAttribution(metrics *SystemMetrics) cpuLoadAttribution {
-	if metrics == nil || metrics.TotalCores <= 0 || metrics.TotalCPUUsage <= 0 {
+	if metrics == nil || metrics.TotalCores <= 0 || !metrics.HostCPUUsageAvailable {
 		return cpuLoadAttribution{}
 	}
 
 	hostAggregate := metrics.TotalCPUUsage * float64(metrics.TotalCores)
+	if hostAggregate == 0 {
+		return cpuLoadAttribution{measurable: true, eligibleShare: 1}
+	}
 	eligibleCPU := metrics.CPUEligibleCPUUsage
 	if eligibleCPU < 0 {
 		eligibleCPU = 0

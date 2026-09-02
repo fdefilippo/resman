@@ -67,7 +67,7 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `MCP_TLS_KEY_FILE` | `/etc/resman/tls/server.key` | `restart-required` | — |
 | `MCP_TLS_MIN_VERSION` | `1.3` | `restart-required` | — |
 | `MCP_TRANSPORT` | `stdio` | `restart-required` | stdio is local and creates no network listener. |
-| `METRICS_CACHE_TTL` | `15` | `dynamic` | — |
+| `METRICS_CACHE_TTL` | `15` | `dynamic` | Controls observation value reuse only; control-cycle host CPU decisions use an independent uncached /proc/stat stream. |
 | `METRICS_DB_ENABLED` | `false` | `restart-required` | false disables metrics persistence and database-backed MCP queries. |
 | `METRICS_DB_PATH` | `/var/lib/resman/metrics.db` | `restart-required` | — |
 | `METRICS_DB_RETENTION_DAYS` | `30` | `dynamic` | — |

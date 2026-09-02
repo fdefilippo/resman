@@ -92,11 +92,12 @@ type PrometheusExporter struct {
 	serverRole string
 
 	// Base metrics with hostname and server_role labels.
-	cpuTotalUsage           prometheus.Gauge
-	memoryUsage             prometheus.Gauge
-	totalMemoryMB           prometheus.Gauge
-	cachedMemoryMB          prometheus.Gauge
-	cpuActivelyLimitedUsers prometheus.Gauge
+	cpuTotalUsage                      prometheus.Gauge
+	controlCycleHostCPUSampleAvailable prometheus.Gauge
+	memoryUsage                        prometheus.Gauge
+	totalMemoryMB                      prometheus.Gauge
+	cachedMemoryMB                     prometheus.Gauge
+	cpuActivelyLimitedUsers            prometheus.Gauge
 
 	// ALL USERS metrics include every non-system user (UID >= SYSTEM_UID_MIN).
 	allUsersCPUUsage    prometheus.Gauge
@@ -151,18 +152,19 @@ type PrometheusExporter struct {
 	usernameResolver     atomic.Value      // func(int) string
 
 	// Counters are increment-only metrics.
-	cpuLimitsActivatedTotal   prometheus.Counter
-	cpuLimitsDeactivatedTotal prometheus.Counter
-	controlCyclesTotal        prometheus.Counter
-	controlCycleTriggers      *prometheus.CounterVec
-	psiEventsTotal            *prometheus.CounterVec
-	psiLastEventTimestamp     *prometheus.GaugeVec
-	errorsTotal               *prometheus.CounterVec
-	cgroupIngressSkipped      *prometheus.CounterVec
-	limitHookExecutions       *prometheus.CounterVec
-	limitHookInFlight         prometheus.Gauge
-	limitHookQueueDepth       prometheus.Gauge
-	limitHookQueueCapacity    prometheus.Gauge
+	cpuLimitsActivatedTotal        prometheus.Counter
+	cpuLimitsDeactivatedTotal      prometheus.Counter
+	controlCyclesTotal             prometheus.Counter
+	controlCycleTriggers           *prometheus.CounterVec
+	controlCycleHostCPUUnavailable *prometheus.CounterVec
+	psiEventsTotal                 *prometheus.CounterVec
+	psiLastEventTimestamp          *prometheus.GaugeVec
+	errorsTotal                    *prometheus.CounterVec
+	cgroupIngressSkipped           *prometheus.CounterVec
+	limitHookExecutions            *prometheus.CounterVec
+	limitHookInFlight              prometheus.Gauge
+	limitHookQueueDepth            prometheus.Gauge
+	limitHookQueueCapacity         prometheus.Gauge
 
 	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
@@ -359,6 +361,12 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Namespace:   namespace,
 		Name:        "cpu_total_usage_percent",
 		Help:        "Total CPU usage percentage across all cores",
+		ConstLabels: staticLabels,
+	})
+	exp.controlCycleHostCPUSampleAvailable = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "control_cycle_host_cpu_sample_available",
+		Help:        "Whether the latest control cycle had a comparable host CPU jiffy sample (1 available, 0 unavailable)",
 		ConstLabels: staticLabels,
 	})
 
@@ -725,6 +733,15 @@ func (exp *PrometheusExporter) registerMetrics() error {
 			ConstLabels: staticLabels,
 		},
 		[]string{"trigger"},
+	)
+	exp.controlCycleHostCPUUnavailable = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "control_cycle_host_cpu_sample_unavailable_total",
+			Help:        "Total unavailable host CPU samples consumed by control cycles, by bounded reason",
+			ConstLabels: staticLabels,
+		},
+		[]string{"reason"},
 	)
 
 	exp.psiEventsTotal = promauto.With(exp.registry).NewCounterVec(
@@ -1205,6 +1222,26 @@ func (exp *PrometheusExporter) RecordControlCycleTrigger(trigger string) {
 	exp.controlCycleTriggers.WithLabelValues(trigger).Inc()
 }
 
+// ObserveControlCycleHostCPUUsage publishes the availability of the exact host
+// CPU sample consumed by the latest decision cycle.
+func (exp *PrometheusExporter) ObserveControlCycleHostCPUUsage(sample HostCPUUsageSample) {
+	if exp == nil || exp.controlCycleHostCPUSampleAvailable == nil || exp.controlCycleHostCPUUnavailable == nil {
+		return
+	}
+	if sample.Available {
+		exp.controlCycleHostCPUSampleAvailable.Set(1)
+		return
+	}
+	if !validHostCPUUsageUnavailableReason(sample.UnavailableReason) {
+		exp.logger.Error("Rejected invalid host CPU sample metric label",
+			"reason", sample.UnavailableReason,
+		)
+		return
+	}
+	exp.controlCycleHostCPUSampleAvailable.Set(0)
+	exp.controlCycleHostCPUUnavailable.WithLabelValues(string(sample.UnavailableReason)).Inc()
+}
+
 // RecordPSIEvent records a PSI event received from the kernel.
 func (exp *PrometheusExporter) RecordPSIEvent(typ, scope string, timestamp time.Time) {
 	if exp == nil || exp.psiEventsTotal == nil || exp.psiLastEventTimestamp == nil {
@@ -1295,6 +1332,19 @@ func (exp *PrometheusExporter) ObserveLimitHookExecutor(inFlight, queued, capaci
 
 func validLimitHookType(hookType LimitHookType) bool {
 	return hookType == LimitHookTypeScript || hookType == LimitHookTypeHTTP
+}
+
+func validHostCPUUsageUnavailableReason(reason HostCPUUsageUnavailableReason) bool {
+	switch reason {
+	case HostCPUUsageUnavailableBaseline,
+		HostCPUUsageUnavailableRead,
+		HostCPUUsageUnavailableStale,
+		HostCPUUsageUnavailableCounterReset,
+		HostCPUUsageUnavailableNoDelta:
+		return true
+	default:
+		return false
+	}
 }
 
 func validLimitHookOutcome(outcome LimitHookOutcome) bool {

@@ -58,6 +58,7 @@ var specialFieldMeanings = map[string]string{
 	"MCP_ENABLED":                "false creates no MCP server.",
 	"MCP_TLS_CA_FILE":            "Empty disables client-certificate authentication; the bearer token is still required over HTTP.",
 	"MCP_TRANSPORT":              "stdio is local and creates no network listener.",
+	"METRICS_CACHE_TTL":          "Controls observation value reuse only; control-cycle host CPU decisions use an independent uncached /proc/stat stream.",
 	"METRICS_DB_ENABLED":         "false disables metrics persistence and database-backed MCP queries.",
 	"PROCESS_EXCLUDE_LIST":       "Empty excludes no process from enforcement.",
 	"PROMETHEUS_AUTH_TYPE":       "none disables Prometheus authentication.",

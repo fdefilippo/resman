@@ -211,7 +211,7 @@ run_harness() {
 		|| $scenario == cpu-without-cpuset || $scenario == missing-io-startup \
 		|| $scenario == mcp-filter-reload || $scenario == container-runtime \
 		|| $scenario == block-iops || $scenario == psi-refresh-neutrality \
-		|| $scenario == limit-hook-executor ]] \
+		|| $scenario == limit-hook-executor || $scenario == host-cpu-sampling-cadence ]] \
 		|| blocked "SMOLVM_SCENARIO must name a documented functional scenario"
 
     local smolvm_version base_image_id base_image_digest fixture_image_id

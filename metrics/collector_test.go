@@ -762,7 +762,7 @@ func TestUpdateProcessIOSampleGuardsCounterResetAndPIDReuse(t *testing.T) {
 	}
 }
 
-func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
+func TestDecisionHostCPUSampleUsesSamplingCadence(t *testing.T) {
 	normalConfig := func(cacheTTL int) *config.Config {
 		cfg := config.DefaultConfig()
 		cfg.PollingInterval = 30
@@ -791,6 +791,7 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 		secondIdle        uint64
 		want              float64
 		wantRecovery      bool
+		wantReason        HostCPUUsageUnavailableReason
 		effectiveInterval time.Duration
 	}{
 		{
@@ -831,6 +832,7 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			secondTotal:  1100,
 			secondIdle:   850,
 			wantRecovery: true,
+			wantReason:   HostCPUUsageUnavailableStale,
 		},
 		{
 			name:        "configured but inactive PSI uses polling cadence",
@@ -865,6 +867,7 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			secondTotal:       1100,
 			secondIdle:        850,
 			wantRecovery:      true,
+			wantReason:        HostCPUUsageUnavailableStale,
 			effectiveInterval: 300 * time.Second,
 		},
 		{
@@ -874,6 +877,7 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			secondTotal:  100,
 			secondIdle:   80,
 			wantRecovery: true,
+			wantReason:   HostCPUUsageUnavailableCounterReset,
 		},
 		{
 			name:         "clock regression resets baseline",
@@ -882,6 +886,7 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			secondTotal:  1100,
 			secondIdle:   850,
 			wantRecovery: true,
+			wantReason:   HostCPUUsageUnavailableStale,
 		},
 	}
 
@@ -891,22 +896,156 @@ func TestUpdateFallbackCPUSampleUsesSamplingCadence(t *testing.T) {
 			if tt.effectiveInterval > 0 {
 				collector.SetFallbackCPUSamplingInterval(tt.effectiveInterval)
 			}
+			state := &hostCPUSamplingState{}
 			now := time.Now()
-			if got := collector.updateFallbackCPUSampleAt(1000, 800, now); got != 0 {
-				t.Fatalf("first fallback CPU sample = %f, want 0", got)
+			first := state.update(1000, 800, now, collector.fallbackCPUSampleMaxGap())
+			if first.Available || first.UnavailableReason != HostCPUUsageUnavailableBaseline {
+				t.Fatalf("first decision CPU sample = %+v, want unavailable baseline", first)
 			}
 
 			secondAt := now.Add(tt.gap)
-			if got := collector.updateFallbackCPUSampleAt(tt.secondTotal, tt.secondIdle, secondAt); got != tt.want {
-				t.Fatalf("second fallback CPU sample = %f, want %f", got, tt.want)
+			second := state.update(tt.secondTotal, tt.secondIdle, secondAt, collector.fallbackCPUSampleMaxGap())
+			if tt.wantRecovery {
+				if second.Available || second.UnavailableReason != tt.wantReason {
+					t.Fatalf("second decision CPU sample = %+v, want unavailable %s", second, tt.wantReason)
+				}
+			} else if !second.Available || second.UsagePercent != tt.want {
+				t.Fatalf("second decision CPU sample = %+v, want available %f", second, tt.want)
 			}
 			if tt.wantRecovery {
-				got := collector.updateFallbackCPUSampleAt(tt.secondTotal+100, tt.secondIdle+50, secondAt.Add(time.Second))
-				if got != 50 {
-					t.Fatalf("fallback CPU sample after baseline reset = %f, want 50", got)
+				recovered := state.update(tt.secondTotal+100, tt.secondIdle+50, secondAt.Add(time.Second), collector.fallbackCPUSampleMaxGap())
+				if !recovered.Available || recovered.UsagePercent != 50 {
+					t.Fatalf("decision CPU sample after baseline reset = %+v, want available 50", recovered)
 				}
 			}
 		})
+	}
+}
+
+func TestDecisionHostCPUSamplesIgnoreObservationRefreshesAndMetricsCacheTTL(t *testing.T) {
+	tests := []struct {
+		name                string
+		observationsBefore  int
+		observationsBetween int
+	}{
+		{name: "zero observation refreshes"},
+		{name: "one interleaved observation refresh", observationsBetween: 1},
+		{name: "many observation refreshes before and between decisions", observationsBefore: 20, observationsBetween: 100},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.PollingInterval = 5
+			cfg.MetricsCacheTTL = 15
+			now := time.Unix(1_000, 0)
+			counter := uint64(0)
+			collector := &Collector{
+				cfg:                         cfg,
+				cache:                       make(map[string]metricCacheEntry),
+				fallbackCPUSamplingInterval: 5 * time.Second,
+				now:                         func() time.Time { return now },
+				hostCPUCounterReader: func() (uint64, uint64, error) {
+					counter++
+					return 1_000 + counter*100, 800 + counter*50, nil
+				},
+			}
+
+			for range tt.observationsBefore {
+				collector.GetObservationHostCPUUsage()
+			}
+			firstDecision := collector.GetDecisionHostCPUUsage()
+			if firstDecision.Available || firstDecision.UnavailableReason != HostCPUUsageUnavailableBaseline {
+				t.Fatalf("first decision sample = %+v, observation stream satisfied its baseline", firstDecision)
+			}
+
+			for range tt.observationsBetween {
+				collector.GetObservationHostCPUUsage()
+			}
+			now = now.Add(5 * time.Second)
+			secondDecision := collector.GetDecisionHostCPUUsage()
+			if !secondDecision.Available || secondDecision.UsagePercent != 50 {
+				t.Fatalf("second decision sample = %+v, want available 50 with TTL three times polling", secondDecision)
+			}
+		})
+	}
+}
+
+func TestHostCPUSampleDistinguishesMeasuredZeroFromUnavailable(t *testing.T) {
+	state := &hostCPUSamplingState{}
+	now := time.Now()
+	first := state.update(1_000, 800, now, time.Minute)
+	if first.Available {
+		t.Fatalf("first sample = %+v, want unavailable baseline", first)
+	}
+	zero := state.update(1_100, 900, now.Add(time.Second), time.Minute)
+	if !zero.Available || zero.UsagePercent != 0 || zero.UnavailableReason != HostCPUUsageUnavailableNone {
+		t.Fatalf("idle sample = %+v, want available zero", zero)
+	}
+	noDelta := state.update(1_100, 900, now.Add(2*time.Second), time.Minute)
+	if noDelta.Available || noDelta.UnavailableReason != HostCPUUsageUnavailableNoDelta {
+		t.Fatalf("unchanged counters = %+v, want unavailable no-delta", noDelta)
+	}
+}
+
+func TestHostCPUStreamsReportReadFailureWithoutSharingState(t *testing.T) {
+	cfg := config.DefaultConfig()
+	collector, err := NewCollector(cfg)
+	if err != nil {
+		t.Fatalf("NewCollector() error: %v", err)
+	}
+	collector.hostCPUCounterReader = func() (uint64, uint64, error) {
+		return 0, 0, os.ErrPermission
+	}
+
+	decision := collector.GetDecisionHostCPUUsage()
+	observation := collector.GetObservationHostCPUUsage()
+	for name, sample := range map[string]HostCPUUsageSample{
+		"decision": decision, "observation": observation,
+	} {
+		if sample.Available || sample.UnavailableReason != HostCPUUsageUnavailableRead {
+			t.Fatalf("%s read failure = %+v, want unavailable read_error", name, sample)
+		}
+	}
+	if collector.decisionHostCPU.previous.valid || collector.observationHostCPU.previous.valid {
+		t.Fatal("a failed read advanced a host CPU baseline")
+	}
+}
+
+func TestObservationHostCPUSampleStalenessUsesItsCacheTTL(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PollingInterval = 1
+	cfg.MetricsCacheTTL = 15
+	now := time.Unix(1_000, 0)
+	counter := uint64(0)
+	collector := &Collector{
+		cfg:                         cfg,
+		cache:                       make(map[string]metricCacheEntry),
+		fallbackCPUSamplingInterval: time.Second,
+		now:                         func() time.Time { return now },
+		hostCPUCounterReader: func() (uint64, uint64, error) {
+			counter++
+			return 1_000 + counter*100, 800 + counter*50, nil
+		},
+	}
+
+	first := collector.GetObservationHostCPUUsage()
+	if first.Available || first.UnavailableReason != HostCPUUsageUnavailableBaseline {
+		t.Fatalf("first observation = %+v, want unavailable baseline", first)
+	}
+	now = now.Add(15 * time.Second)
+	if cached := collector.GetObservationHostCPUUsage(); cached != first || counter != 1 {
+		t.Fatalf("exact-TTL observation = %+v reads=%d, want cached first sample", cached, counter)
+	}
+	now = now.Add(time.Nanosecond)
+	second := collector.GetObservationHostCPUUsage()
+	if !second.Available || second.UsagePercent != 50 || counter != 2 {
+		t.Fatalf("post-TTL observation = %+v reads=%d, want available 50", second, counter)
+	}
+	now = now.Add(30*time.Second + time.Nanosecond)
+	stale := collector.GetObservationHostCPUUsage()
+	if stale.Available || stale.UnavailableReason != HostCPUUsageUnavailableStale {
+		t.Fatalf("observation beyond two TTLs = %+v, want stale baseline", stale)
 	}
 }
 
@@ -983,17 +1122,20 @@ func TestGetTotalCores(t *testing.T) {
 	}
 }
 
-func TestGetTotalCPUUsage(t *testing.T) {
+func TestGetHostCPUUsageEstablishesIndependentBaselines(t *testing.T) {
 	cfg := config.DefaultConfig()
 	collector, err := NewCollector(cfg)
 	if err != nil {
 		t.Fatalf("NewCollector() error: %v", err)
 	}
 
-	usage := collector.GetTotalCPUUsage()
-	// CPU usage should be between 0 and 100+ (can exceed 100 on multi-core)
-	if usage < 0 {
-		t.Errorf("GetTotalCPUUsage() returned %f, expected >= 0", usage)
+	decision := collector.GetDecisionHostCPUUsage()
+	observation := collector.GetObservationHostCPUUsage()
+	if decision.Available || decision.UnavailableReason != HostCPUUsageUnavailableBaseline {
+		t.Errorf("first decision sample = %+v, want unavailable baseline", decision)
+	}
+	if observation.Available || observation.UnavailableReason != HostCPUUsageUnavailableBaseline {
+		t.Errorf("first observation sample = %+v, want independent unavailable baseline", observation)
 	}
 }
 

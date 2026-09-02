@@ -610,6 +610,27 @@ from configured PSI intent rather than observed runtime cadence.
 previously reported repeated zero CPU samples, especially where PSI is configured but
 unavailable.
 
+### Decision host CPU sampling is independent of the observation cache
+
+**Visible change.** `METRICS_CACHE_TTL` no longer controls the host CPU sample used by
+load attribution. A control cycle reads its own `/proc/stat` stream on every effective
+decision epoch. Its first sample is unavailable while establishing the baseline;
+later legitimate zero-percent samples remain available. Prometheus exposes the latest
+decision availability and bounded unavailable counts separately from the observational
+`resman_cpu_total_usage_percent` gauge.
+
+**Cause.** Host observation refreshes and decisions shared one cached value and one
+jiffy baseline. When the observation TTL exceeded the decision cadence, cache expiry
+could repeatedly invalidate the decision baseline and prevent enforcement under
+`IGNORE_SYSTEM_LOAD=false`.
+
+**Action.** No configuration change is required. Existing high
+`METRICS_CACHE_TTL` values still control observation reuse but no longer delay CPU
+enforcement. Alert on sustained
+`resman_control_cycle_host_cpu_sample_available == 0` and use the bounded
+`resman_control_cycle_host_cpu_sample_unavailable_total{reason=...}` counter to
+distinguish baseline, read, stale, counter-reset, and zero-delta causes.
+
 ### High system load is attributed before suppressing enforcement
 
 **Visible change.** With `IGNORE_SYSTEM_LOAD=false`, a host whose CPU-eligible users

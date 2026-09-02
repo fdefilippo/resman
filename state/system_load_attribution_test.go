@@ -21,6 +21,7 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 	tests := []struct {
 		name                string
 		totalCPUUsage       float64
+		hostCPUAvailable    bool
 		eligibleCPUUsage    float64
 		wantDecision        string
 		wantReasonSubstring string
@@ -30,6 +31,7 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 		{
 			name:             "eligible users own the measured load",
 			totalCPUUsage:    100,
+			hostCPUAvailable: true,
 			eligibleCPUUsage: 370,
 			wantDecision:     "ACTIVATE_LIMITS",
 			wantShare:        0.925,
@@ -38,6 +40,7 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 		{
 			name:                "external users own the measured load",
 			totalCPUUsage:       100,
+			hostCPUAvailable:    true,
 			eligibleCPUUsage:    80,
 			wantDecision:        "MAINTAIN_CURRENT_STATE",
 			wantReasonSubstring: "primarily external: CPU-eligible users account for 20.0%",
@@ -47,6 +50,7 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 		{
 			name:             "evenly mixed load remains actionable",
 			totalCPUUsage:    100,
+			hostCPUAvailable: true,
 			eligibleCPUUsage: 200,
 			wantDecision:     "ACTIVATE_LIMITS",
 			wantShare:        0.5,
@@ -55,6 +59,7 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 		{
 			name:                "mixed load with external majority is suppressed",
 			totalCPUUsage:       100,
+			hostCPUAvailable:    true,
 			eligibleCPUUsage:    180,
 			wantDecision:        "MAINTAIN_CURRENT_STATE",
 			wantReasonSubstring: "primarily external: CPU-eligible users account for 45.0%",
@@ -66,6 +71,14 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 			eligibleCPUUsage:    80,
 			wantDecision:        "MAINTAIN_CURRENT_STATE",
 			wantReasonSubstring: "system load attribution is unavailable",
+		},
+		{
+			name:             "available zero host usage is not an unavailable sample",
+			hostCPUAvailable: true,
+			eligibleCPUUsage: 80,
+			wantDecision:     "ACTIVATE_LIMITS",
+			wantShare:        1,
+			wantMeasurable:   true,
 		},
 	}
 
@@ -81,10 +94,11 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 				ioThresholdTracker: &ThresholdTracker{},
 			}
 			metrics := &SystemMetrics{
-				TotalCores:          4,
-				TotalCPUUsage:       tt.totalCPUUsage,
-				CPUEligibleCPUUsage: tt.eligibleCPUUsage,
-				SystemUnderLoad:     true,
+				TotalCores:            4,
+				TotalCPUUsage:         tt.totalCPUUsage,
+				HostCPUUsageAvailable: tt.hostCPUAvailable,
+				CPUEligibleCPUUsage:   tt.eligibleCPUUsage,
+				SystemUnderLoad:       true,
 			}
 
 			decision, reason := manager.makeDecision(metrics)
@@ -125,10 +139,11 @@ func TestTemporaryExternalLoadSuppressionPreservesCPUThresholdProgress(t *testin
 	}
 
 	decision, reason := manager.makeDecision(&SystemMetrics{
-		TotalCores:          4,
-		TotalCPUUsage:       100,
-		CPUEligibleCPUUsage: 80,
-		SystemUnderLoad:     true,
+		TotalCores:            4,
+		TotalCPUUsage:         100,
+		HostCPUUsageAvailable: true,
+		CPUEligibleCPUUsage:   80,
+		SystemUnderLoad:       true,
 	})
 	if decision != "MAINTAIN_CURRENT_STATE" || !strings.Contains(reason, "primarily external") {
 		t.Fatalf("decision = %s, reason = %q, want external-load suppression", decision, reason)

@@ -20,6 +20,7 @@ MIN_ACTIVE_TIME=60
 # Reuses recently collected values through the exact TTL boundary (minimum 1 second). Values expire
 # only after this interval; /proc/stat and per-process baseline retention follows
 # the effective sampling cadence instead.
+# Observation cache only; decision host CPU sampling is uncached and independent.
 METRICS_CACHE_TTL=15
 METRICS_REFRESH_INTERVAL=30
 PROCESS_MIN_AGE_SECONDS=60

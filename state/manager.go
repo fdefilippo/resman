@@ -220,7 +220,8 @@ type UserLimitState struct {
 // MetricsCollector defines the system metrics boundary used by the state manager.
 type MetricsCollector interface {
 	GetTotalCores() int
-	GetTotalCPUUsage() float64
+	GetDecisionHostCPUUsage() resmanmetrics.HostCPUUsageSample
+	GetObservationHostCPUUsage() resmanmetrics.HostCPUUsageSample
 	GetUserCPUUsage(uid int) float64
 
 	// All non-system users.
@@ -290,6 +291,7 @@ type PrometheusExporter interface {
 	UpdateUserSnapshot(metrics resmanmetrics.UserExporterMetrics)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
+	ObserveControlCycleHostCPUUsage(sample resmanmetrics.HostCPUUsageSample)
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)

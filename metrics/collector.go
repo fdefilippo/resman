@@ -266,6 +266,32 @@ type cpuJiffySample struct {
 	valid     bool
 }
 
+// HostCPUUsageUnavailableReason is the bounded reason why a host CPU sample
+// cannot be compared with a trustworthy baseline.
+type HostCPUUsageUnavailableReason string
+
+const (
+	HostCPUUsageUnavailableNone         HostCPUUsageUnavailableReason = ""
+	HostCPUUsageUnavailableBaseline     HostCPUUsageUnavailableReason = "baseline"
+	HostCPUUsageUnavailableRead         HostCPUUsageUnavailableReason = "read_error"
+	HostCPUUsageUnavailableStale        HostCPUUsageUnavailableReason = "stale_baseline"
+	HostCPUUsageUnavailableCounterReset HostCPUUsageUnavailableReason = "counter_reset"
+	HostCPUUsageUnavailableNoDelta      HostCPUUsageUnavailableReason = "no_delta"
+)
+
+// HostCPUUsageSample separates a legitimate zero-percent measurement from an
+// unavailable delta whose baseline cannot be used for a decision.
+type HostCPUUsageSample struct {
+	UsagePercent      float64
+	Available         bool
+	UnavailableReason HostCPUUsageUnavailableReason
+}
+
+type hostCPUSamplingState struct {
+	mu       sync.Mutex
+	previous cpuJiffySample
+}
+
 // Collector collects system metrics.
 type Collector struct {
 	cfg    *config.Config
@@ -278,9 +304,12 @@ type Collector struct {
 	userMetricsScan operationgate.Gate
 	now             func() time.Time
 
-	// Previous /proc/stat sample. Values are raw kernel jiffies.
-	prevFallbackCPU             cpuJiffySample
+	// Decision and observation /proc/stat baselines never satisfy or advance
+	// one another. Only observation values use the general metrics cache.
+	decisionHostCPU             hostCPUSamplingState
+	observationHostCPU          hostCPUSamplingState
 	fallbackCPUSamplingInterval time.Duration
+	hostCPUCounterReader        func() (uint64, uint64, error)
 
 	// Observation refreshes and control decisions own independent temporal
 	// state so changing observability cadence cannot change enforcement.
@@ -328,6 +357,7 @@ func NewCollector(cfg *config.Config) (*Collector, error) {
 		observationState:            newUserMetricsSamplingState(),
 		decisionState:               newUserMetricsSamplingState(),
 		fallbackCPUSamplingInterval: configuredPollingInterval(cfg),
+		hostCPUCounterReader:        readHostCPUCounters,
 		now:                         time.Now,
 	}
 
@@ -418,90 +448,124 @@ func (c *Collector) getTotalCoresFallback() int {
 	return cores
 }
 
-// GetTotalCPUUsage returns host-wide CPU usage as a percentage.
-func (c *Collector) GetTotalCPUUsage() float64 {
-	cacheKey := "total_cpu_usage"
-	if val, valid := c.getFromCache(cacheKey); valid {
-		return val.(float64)
-	}
-
-	return c.getTotalCPUUsageFallback()
+// GetDecisionHostCPUUsage returns the decision stream's host-wide CPU sample.
+// It deliberately bypasses the general metrics cache so every control-cycle
+// epoch advances only its own /proc/stat baseline.
+func (c *Collector) GetDecisionHostCPUUsage() HostCPUUsageSample {
+	return c.readHostCPUUsageSample(&c.decisionHostCPU, c.fallbackCPUSampleMaxGap())
 }
 
-// getTotalCPUUsageFallback calculates host CPU usage from /proc/stat jiffies.
-func (c *Collector) getTotalCPUUsageFallback() float64 {
+// GetObservationHostCPUUsage returns the observation stream's host-wide CPU
+// sample. Observation values may be reused for MetricsCacheTTL, but neither the
+// cached value nor its baseline is visible to the decision stream.
+func (c *Collector) GetObservationHostCPUUsage() HostCPUUsageSample {
+	const cacheKey = "observation_total_cpu_usage"
+	if value, valid := c.getFromCache(cacheKey); valid {
+		return value.(HostCPUUsageSample)
+	}
+
+	sample := c.readHostCPUUsageSample(&c.observationHostCPU, 2*c.metricsCacheTTL())
+	c.setInCache(cacheKey, sample, c.metricsCacheTTL())
+	return sample
+}
+
+func (c *Collector) readHostCPUUsageSample(state *hostCPUSamplingState, maxGap time.Duration) HostCPUUsageSample {
+	reader := c.hostCPUCounterReader
+	if reader == nil {
+		reader = readHostCPUCounters
+	}
+	total, idle, err := reader()
+	if err != nil {
+		c.logger.Error("Failed to read host CPU counters",
+			"error", err,
+			"fallback", "sample unavailable",
+		)
+		return unavailableHostCPUSample(HostCPUUsageUnavailableRead)
+	}
+	return state.update(total, idle, c.currentTime(), maxGap)
+}
+
+func readHostCPUCounters() (uint64, uint64, error) {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
-		c.logger.Error("Failed to open /proc/stat for CPU usage calculation",
-			"error", err,
-			"fallback", "returning 0.0",
-		)
-		return 0.0
+		return 0, 0, fmt.Errorf("open /proc/stat: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	if !scanner.Scan() {
-		return 0.0
+		if err := scanner.Err(); err != nil {
+			return 0, 0, fmt.Errorf("scan /proc/stat: %w", err)
+		}
+		return 0, 0, fmt.Errorf("read aggregate CPU line from /proc/stat: %w", io.ErrUnexpectedEOF)
 	}
 
 	line := scanner.Text()
 	if !strings.HasPrefix(line, "cpu ") {
-		return 0.0
+		return 0, 0, fmt.Errorf("unexpected aggregate CPU line in /proc/stat")
 	}
 
-	// Parse the aggregate CPU line.
 	fields := strings.Fields(line)
 	if len(fields) < 8 {
-		return 0.0
+		return 0, 0, fmt.Errorf("aggregate CPU line has %d fields, want at least 8", len(fields))
 	}
 
-	// Calculate total jiffies.
-	user, _ := strconv.ParseUint(fields[1], 10, 64)
-	nice, _ := strconv.ParseUint(fields[2], 10, 64)
-	system, _ := strconv.ParseUint(fields[3], 10, 64)
-	idle, _ := strconv.ParseUint(fields[4], 10, 64)
-	iowait, _ := strconv.ParseUint(fields[5], 10, 64)
-	irq, _ := strconv.ParseUint(fields[6], 10, 64)
-	softirq, _ := strconv.ParseUint(fields[7], 10, 64)
-	steal := uint64(0)
+	values := make([]uint64, 0, 8)
+	lastField := 7
 	if len(fields) > 8 {
-		steal, _ = strconv.ParseUint(fields[8], 10, 64)
+		lastField = 8
+	}
+	for index := 1; index <= lastField; index++ {
+		value, err := strconv.ParseUint(fields[index], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("parse aggregate CPU field %d: %w", index, err)
+		}
+		values = append(values, value)
 	}
 
-	total := user + nice + system + idle + iowait + irq + softirq + steal
-
-	usage := c.updateFallbackCPUSample(total, idle)
-
-	// Cache the result under the configured value-reuse TTL.
-	c.setInCache("total_cpu_usage", usage, c.metricsCacheTTL())
-
-	return usage
+	total := uint64(0)
+	for _, value := range values {
+		next := total + value
+		if next < total {
+			return 0, 0, fmt.Errorf("aggregate CPU counters overflow uint64")
+		}
+		total = next
+	}
+	return total, values[3], nil
 }
 
-func (c *Collector) updateFallbackCPUSample(total, idle uint64) float64 {
-	return c.updateFallbackCPUSampleAt(total, idle, time.Now())
+func unavailableHostCPUSample(reason HostCPUUsageUnavailableReason) HostCPUUsageSample {
+	return HostCPUUsageSample{UnavailableReason: reason}
 }
 
-func (c *Collector) updateFallbackCPUSampleAt(total, idle uint64, now time.Time) float64 {
-	maxGap := c.fallbackCPUSampleMaxGap()
+func (state *hostCPUSamplingState) update(total, idle uint64, now time.Time, maxGap time.Duration) HostCPUUsageSample {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	previous := c.prevFallbackCPU
-	c.prevFallbackCPU = cpuJiffySample{total: total, idle: idle, sampledAt: now, valid: true}
-	if !previous.valid || now.Before(previous.sampledAt) || now.Sub(previous.sampledAt) > maxGap ||
-		total < previous.total || idle < previous.idle {
-		return 0
+	previous := state.previous
+	state.previous = cpuJiffySample{total: total, idle: idle, sampledAt: now, valid: true}
+	if !previous.valid {
+		return unavailableHostCPUSample(HostCPUUsageUnavailableBaseline)
+	}
+	if now.Before(previous.sampledAt) || (maxGap > 0 && now.Sub(previous.sampledAt) > maxGap) {
+		return unavailableHostCPUSample(HostCPUUsageUnavailableStale)
+	}
+	if total < previous.total || idle < previous.idle {
+		return unavailableHostCPUSample(HostCPUUsageUnavailableCounterReset)
 	}
 
 	totalDelta := total - previous.total
 	idleDelta := idle - previous.idle
-	if totalDelta == 0 || idleDelta > totalDelta {
-		return 0
+	if totalDelta == 0 {
+		return unavailableHostCPUSample(HostCPUUsageUnavailableNoDelta)
 	}
-	return cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta)
+	if idleDelta > totalDelta {
+		return unavailableHostCPUSample(HostCPUUsageUnavailableCounterReset)
+	}
+	return HostCPUUsageSample{
+		UsagePercent: cpuPercentMultiplier * float64(totalDelta-idleDelta) / float64(totalDelta),
+		Available:    true,
+	}
 }
 
 // SetFallbackCPUSamplingInterval records the control loop's effective runtime
@@ -1094,10 +1158,11 @@ func resetEnforceableEMA(state *userMetricsSamplingState) {
 // and external status surfaces.
 func (c *Collector) GetObservationMetrics() ObservationMetrics {
 	allUsers := c.GetAllUsers()
+	hostCPU := c.GetObservationHostCPUUsage()
 
 	return ObservationMetrics{
 		TotalCores:            c.GetTotalCores(),
-		TotalCPUUsage:         c.GetTotalCPUUsage(),
+		TotalCPUUsage:         hostCPU.UsagePercent,
 		ObservedUsersCPUUsage: c.GetAllUsersCPUUsage(),
 		ObservedUsersCount:    len(allUsers),
 		MemoryUsageMB:         c.GetMemoryUsage(),

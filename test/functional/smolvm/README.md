@@ -134,6 +134,18 @@ satisfy that same required contract with current-revision evidence from an
 explicit disposable real-kernel host, but retains the blocked SmolVM attempt as
 separate evidence.
 
+The host CPU sampling scenario keeps `POLLING_INTERVAL=5` while raising
+`METRICS_CACHE_TTL` to 30 seconds. With system-load attribution enabled, it
+requires the decision-owned `/proc/stat` stream to remain available after its
+single baseline sample and to activate CPU enforcement under attributed load:
+
+```bash
+make test-functional-smolvm-host-cpu-sampling
+```
+
+The evidence records the availability gauge and bounded baseline/stale counters,
+the control-cycle count, the limited cgroup, and the applied parent quota.
+
 ## Isolation
 
 Each run gets a unique ID. The ID scopes all of the following:

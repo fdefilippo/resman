@@ -29,6 +29,17 @@ resman_cpu_total_usage_percent
 resman_cpu_total_usage_percent[1h]
 ```
 
+The total CPU gauge is the observation stream. Use the decision-owned availability
+series when diagnosing system-load attribution:
+
+```promql
+# Latest control cycle could compare the host CPU jiffy sample
+resman_control_cycle_host_cpu_sample_available
+
+# Bounded causes of unavailable decision samples
+sum by (reason) (increase(resman_control_cycle_host_cpu_sample_unavailable_total[1h]))
+```
+
 ### User CPU Usage vs Total
 ```promql
 # Compare total vs user CPU usage

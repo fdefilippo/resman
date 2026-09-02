@@ -802,6 +802,10 @@ release limits. They are not interchangeable.
 - Each sampling purpose **MUST** own its cache key and its complete temporal state. A
   sample cached for observation **MUST NOT** satisfy a decision read, and neither
   stream may share per-process baselines or smoothing state with the other.
+- Host CPU attribution follows the same rule: control cycles **MUST** use an uncached,
+  decision-owned `/proc/stat` baseline. `METRICS_CACHE_TTL` may reuse only the
+  observation stream, and an unavailable baseline **MUST NOT** be represented as a
+  measured zero.
 - A control decision **MUST** consume one authoritative decision sample. It **MUST NOT**
   re-read the collector partway through the decision or stability evaluation.
 - Tests **MUST** interleave zero, one, and multiple observation refreshes between equal
@@ -813,8 +817,10 @@ per-process baselines, fixed-alpha EMA, and cache entry. `METRICS_REFRESH_INTERV
 could therefore change enforcement while promising only fresher telemetry. The
 contract chosen in `resman-4pw.8` gives observation and decision two complete temporal
 streams and makes the control-cycle sample authoritative through the entire decision.
+`resman-3vr` extended the same boundary to host `/proc/stat` after the observation
+cache repeatedly reset decision attribution when its TTL exceeded the control cadence.
 
-*Finding: resman-4pw.8; historical provenance from resman-ne0.30*
+*Findings: resman-4pw.8, resman-3vr; historical provenance from resman-ne0.30*
 
 ## Rule 21 — Difference monotonic counters before aggregating dynamic identities
 

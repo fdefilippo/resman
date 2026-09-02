@@ -42,7 +42,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor) ;;
+	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor|host-cpu-sampling-cadence) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -322,6 +322,19 @@ PSI_CPU_STALL_THRESHOLD=999999
 PSI_IO_STALL_THRESHOLD=999999
 PSI_FALLBACK_INTERVAL=30
 EOF
+fi
+if [[ $scenario == host-cpu-sampling-cadence ]]; then
+	sed -i \
+		-e 's/^POLLING_INTERVAL=.*/POLLING_INTERVAL=5/' \
+		-e 's/^METRICS_CACHE_TTL=.*/METRICS_CACHE_TTL=30/' \
+		-e 's/^CPU_THRESHOLD=.*/CPU_THRESHOLD=10/' \
+		-e 's/^CPU_RELEASE_THRESHOLD=.*/CPU_RELEASE_THRESHOLD=1/' \
+		-e 's/^CPU_THRESHOLD_DURATION=.*/CPU_THRESHOLD_DURATION=0/' \
+		-e 's/^USER_INCLUDE_LIST=.*/USER_INCLUDE_LIST=^resman-cpu$/' \
+		-e 's/^IGNORE_SYSTEM_LOAD=.*/IGNORE_SYSTEM_LOAD=false/' \
+		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
+		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		"$config_file"
 fi
 if [[ $scenario == limit-hook-executor ]]; then
 	hook_output_dir=/tmp/resman-limit-hook-$run_id
@@ -692,6 +705,71 @@ user_metric_value() {
 		'$1 ~ ("^" metric "{") && $1 ~ ("username=\"" username "\"") { print $2; exit }' \
 		"$metrics_file"
 }
+
+host_cpu_unavailable_reason_value() {
+	local reason=$1
+	local metrics_file=$2
+	awk -v reason="reason=\"$reason\"" '
+		/^resman_control_cycle_host_cpu_sample_unavailable_total\{/ \
+			&& index($0, reason) { print $2; exit }
+	' "$metrics_file"
+}
+
+if [[ $scenario == host-cpu-sampling-cadence ]]; then
+	stress_workers=$((allocated_cpus * 2))
+	runuser -u resman-cpu -- stress --cpu "$stress_workers" --timeout 150s &
+	cpu_workload_pid=$!
+	cpu_uid=$(id -u resman-cpu)
+	limited_cgroup=$base_cgroup/limited/best_effort/user_$cpu_uid
+	host_cpu_metrics=$artifact_dir/host-cpu-sampling-cadence.prom
+	host_cpu_sampling_ready=false
+	for _ in $(seq 1 120); do
+		curl --fail --silent --show-error --max-time 2 \
+			http://127.0.0.1:19100/metrics >"$host_cpu_metrics" \
+			|| fail "cannot scrape host CPU sampling metrics"
+		availability=$(metric_value resman_control_cycle_host_cpu_sample_available "$host_cpu_metrics")
+		cycles=$(metric_value resman_control_cycles_total "$host_cpu_metrics")
+		if [[ $availability == 1 && ${cycles:-0} -ge 3 \
+			&& -r $limited_cgroup/cgroup.procs ]] \
+			&& grep -q . "$limited_cgroup/cgroup.procs" \
+			&& grep 'Control cycle completed' "$state_dir/resman.log" \
+				| grep -q 'decision=ACTIVATE_LIMITS.*system_under_load=true.*ignore_system_load=false'; then
+			host_cpu_sampling_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $host_cpu_sampling_ready == true ]] \
+		|| fail "decision-owned host CPU sampling did not activate enforcement under attributed system load"
+	baseline_unavailable=$(host_cpu_unavailable_reason_value baseline "$host_cpu_metrics")
+	stale_unavailable=$(host_cpu_unavailable_reason_value stale_baseline "$host_cpu_metrics")
+	unavailable_total=$(awk '
+		/^resman_control_cycle_host_cpu_sample_unavailable_total\{/ { total += $2 }
+		END { print total + 0 }
+	' "$host_cpu_metrics")
+	[[ ${baseline_unavailable:-0} -eq 1 ]] \
+		|| fail "decision host CPU baseline count is ${baseline_unavailable:-0}, want exactly one"
+	[[ ${stale_unavailable:-0} -eq 0 ]] \
+		|| fail "decision host CPU sampling became stale under the longer observation cache TTL"
+	[[ $unavailable_total -eq 1 ]] \
+		|| fail "decision host CPU sampling reported $unavailable_total unavailable samples after its baseline"
+	{
+		printf 'polling_interval_seconds=%s\n' 5
+		printf 'metrics_cache_ttl_seconds=%s\n' 30
+		printf 'stress_workers=%s\n' "$stress_workers"
+		printf 'control_cycles=%s\n' "$cycles"
+		printf 'latest_decision_host_cpu_available=%s\n' "$availability"
+		printf 'baseline_unavailable_samples=%s\n' "${baseline_unavailable:-0}"
+		printf 'stale_unavailable_samples=%s\n' "${stale_unavailable:-0}"
+		printf 'all_unavailable_samples=%s\n' "$unavailable_total"
+		printf 'limited_cgroup=%s\n' "$limited_cgroup"
+		printf 'limited_cpu_max=%s\n' "$(< "$base_cgroup/limited/cpu.max")"
+	} >"$artifact_dir/host-cpu-sampling-cadence.txt"
+	result=PASS
+	detail="host-load attribution activated CPU enforcement while the observation cache TTL exceeded the decision cadence"
+	echo "PASS: $detail"
+	exit 0
+fi
 
 if [[ $scenario == limit-hook-executor ]]; then
 	limit_hook_metric_value() {

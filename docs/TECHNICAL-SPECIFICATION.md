@@ -361,7 +361,8 @@ cgroup membership.
 **Key Functions:**
 - `NewCollector(cfg)`: Creates metrics collector
 - `GetTotalCores()`: Returns total CPU cores
-- `GetTotalCPUUsage()`: Returns total CPU usage percentage
+- `GetDecisionHostCPUUsage()`: Returns the uncached typed host CPU sample for a control epoch
+- `GetObservationHostCPUUsage()`: Returns the independently cached typed host CPU observation
 - `GetAllUsersCPUUsage()`: Returns observed CPU usage for all non-system users
 - `GetUserCPUUsage(uid)`: Returns CPU usage for specific user
 - `GetAllUsers()`: Returns observed non-system UIDs
@@ -908,7 +909,8 @@ single source of mandatory/optional capability diagnostics.
 | Metric | Source | Cache TTL |
 |--------|--------|-----------|
 | Total cores | `cpu.Counts()` | 1 hour |
-| Total CPU% | `/proc/stat` jiffy delta | `MetricsCacheTTL` |
+| Decision total CPU% | `/proc/stat` jiffy delta | Uncached, one independent sample per control epoch |
+| Observation total CPU% | `/proc/stat` jiffy delta | `MetricsCacheTTL`, independent baseline |
 | User CPU% | Per-process aggregation | 15 seconds |
 | Memory MB | `mem.VirtualMemory()` | 15 seconds |
 | Load average | `/proc/loadavg` | 10 seconds |
@@ -927,25 +929,29 @@ single source of mandatory/optional capability diagnostics.
 **Per-process method:** Use gopsutil process CPU times.
 
 **Host-total method:** Calculate the active/total jiffy delta between consecutive
-`/proc/stat` samples. The first sample establishes a baseline and returns zero. A
-baseline remains valid for up to two effective decision-loop intervals. The
+`/proc/stat` samples. Decision and observation own independent baselines and locks.
+The decision stream bypasses the general cache and advances once per control epoch;
+the observation stream may reuse its own sample for `MetricsCacheTTL`. The first
+sample in either stream establishes a baseline and is unavailable rather than a
+measured zero. A decision baseline remains valid for up to two effective control-loop intervals. The
 application publishes the runtime cadence to the collector: `POLLING_INTERVAL` while
 the PSI watcher is inactive, including when PSI is configured but unavailable, and
 `PSI_FALLBACK_INTERVAL` only after the watcher starts successfully. The exact boundary
 is valid; a longer gap, a clock regression, or regressed kernel counters resets the
-baseline and returns zero. The next valid sample resumes delta calculation immediately.
+baseline and reports a bounded unavailable reason. The next valid sample resumes delta
+calculation immediately. A legitimate zero active-jiffy delta remains available.
 
 **How it works:**
-1. First call: Records baseline, returns 0
-2. Second call: Calculates delta, returns percentage
+1. First call: Records baseline, reports unavailable
+2. Second call: Calculates delta, returns an available percentage including zero
 3. Subsequent calls: Continue delta calculation
 
 **Caching:**
-- Results are cached through the exact `MetricsCacheTTL` boundary and expire after it
+- Observation results are cached through the exact `MetricsCacheTTL` boundary and expire after it
 - Periodic cleanup uses each entry's owning TTL, including values above five minutes
 - Cache cleared on configuration reload
 - Prevents excessive `/proc` reads
-- Cache expiry does not define host-total CPU baseline staleness
+- Decision host-total CPU is uncached; cache expiry cannot define or reset its baseline
 - Observation and decision per-user samples have separate cache entries, per-process
   baselines, and EMA state
 - Active PID/start-time baselines are retained across every accepted sampling interval;
@@ -1292,6 +1298,8 @@ decision policy.
 
 **System Metrics:**
 - `resman_cpu_total_usage_percent` (gauge)
+- `resman_control_cycle_host_cpu_sample_available` (gauge)
+- `resman_control_cycle_host_cpu_sample_unavailable_total{reason}` (counter)
 - `resman_all_users_cpu_usage_percent` (gauge)
 - `resman_memory_usage_megabytes` (gauge)
 - `resman_system_load_average` (gauge)
@@ -1449,7 +1457,8 @@ type ControlCycleEntry struct {
 // MetricsCollector interface
 type MetricsCollector interface {
     GetTotalCores() int
-    GetTotalCPUUsage() float64
+    GetDecisionHostCPUUsage() HostCPUUsageSample
+    GetObservationHostCPUUsage() HostCPUUsageSample
     GetUserCPUUsage(uid int) float64
     GetAllUsers() []int
     GetAllUsersCPUUsage() float64

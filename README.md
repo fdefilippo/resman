@@ -170,7 +170,9 @@ activate about 120 seconds after the first observation, plus polling alignment.
 With `IGNORE_SYSTEM_LOAD=false`, a high load average suppresses activation only when
 CPU-eligible users account for less than half of measured aggregate host CPU activity.
 At least half remains actionable; an unavailable host CPU sample delays activation
-without discarding threshold-duration progress.
+without discarding threshold-duration progress. The control cycle owns an uncached
+`/proc/stat` baseline; `METRICS_CACHE_TTL` applies only to the independent observation
+stream used by status surfaces.
 Idle release uses each user's CPU EMA rather than a single instantaneous sample.
 Because deactivation releases every resource together, `MIN_ACTIVE_TIME` protects
 the most recent active enforcement epoch across CPU and RAM/I/O. It is also the
@@ -250,17 +252,21 @@ zero; incompatible older databases must be archived or deleted before restart. S
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
 activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of
 process CPU and can exceed 100 on multi-core systems.
-Host-wide CPU uses consecutive `/proc/stat` jiffy samples. Its baseline tolerates
-normal scheduling jitter and one missed decision-loop tick: it expires after two
-effective decision-loop intervals. That interval is `POLLING_INTERVAL` unless the PSI
-watcher is active at runtime; only an active watcher switches it to
-`PSI_FALLBACK_INTERVAL`. Configuring PSI when the watcher cannot start therefore keeps
-the polling cadence. `METRICS_CACHE_TTL` controls only value reuse and does not set
-this sampling window. The TTL must be at least one second. A cached value remains valid at the exact TTL boundary and
-expires immediately after it; values above five minutes are not shortened by the
-collector's periodic cleanup. Per-process CPU and I/O baselines remain attached to
-active PID/start-time identities regardless of the configured sampling interval and
-are pruned when a completed scan proves that the process disappeared.
+Host-wide CPU uses two independent streams of consecutive `/proc/stat` jiffy samples.
+The decision stream is read once per control epoch without the general metrics cache.
+Its first sample establishes a baseline and is explicitly unavailable; later samples
+distinguish a measured zero from an unreadable, stale, reset, or zero-delta sample.
+Its baseline tolerates normal scheduling jitter and one missed decision-loop tick: it
+expires after two effective decision-loop intervals. That interval is
+`POLLING_INTERVAL` unless the PSI watcher is active at runtime; only an active watcher
+switches it to `PSI_FALLBACK_INTERVAL`. The observation stream owns a separate baseline
+and may reuse its value for `METRICS_CACHE_TTL`; observation refreshes cannot satisfy or
+advance a decision sample. The TTL must be at least one second. A cached observation
+remains valid at the exact TTL boundary and expires immediately after it; values above
+five minutes are not shortened by periodic cleanup. Per-process CPU and I/O baselines
+remain attached to active PID/start-time identities regardless of the configured
+sampling interval and are pruned when a completed scan proves that the process
+disappeared.
 
 Prometheus per-user series are published only from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but never overwrite

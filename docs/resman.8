@@ -682,10 +682,12 @@ whitespace.
 Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be configured to improve reliability in high\-load scenarios.
 .PP
 .B METRICS_CACHE_TTL
-controls value reuse and must be at least one second. A value remains valid at the exact TTL boundary and expires
-after it; periodic cleanup does not shorten values above five minutes. CPU and I/O
-process baselines are independent of this TTL and remain valid for active PID and
-start-time identities until a completed scan proves that the process disappeared.
+controls observation value reuse and must be at least one second. A value remains
+valid at the exact TTL boundary and expires after it; periodic cleanup does not
+shorten values above five minutes. Control-cycle host CPU decisions use an independent,
+uncached /proc/stat baseline. CPU and I/O process baselines are also independent of
+this TTL and remain valid for active PID and start-time identities until a completed
+scan proves that the process disappeared.
 .PP
 The active configuration path is selected by the
 .B \-\-config
@@ -873,7 +875,9 @@ for less than half of measured aggregate host CPU activity. Host CPU is converte
 from normalized 0-100 percentage into aggregate per-core percentage before the
 comparison. An exact half remains actionable. If the host CPU sample is unavailable,
 activation is delayed without discarding threshold-duration progress or claiming an
-unmeasured external cause.
+unmeasured external cause. The first control-cycle sample establishes the independent
+/proc/stat baseline and is unavailable; a measured zero after that baseline remains a
+valid value. Observation refreshes and METRICS_CACHE_TTL do not advance this baseline.
 .PP
 Global deactivation requires every actively limited user's CPU EMA to remain below
 .B CPU_RELEASE_THRESHOLD
@@ -934,6 +938,10 @@ When enabled, the daemon exposes metrics at the configured
 endpoint over HTTP or HTTPS.
 .IP \(bu 2
 resman_cpu_total_usage_percent \- Total CPU usage
+.IP \(bu
+resman_control_cycle_host_cpu_sample_available \- Latest decision host CPU sample availability
+.IP \(bu
+resman_control_cycle_host_cpu_sample_unavailable_total \- Unavailable decision host CPU samples by bounded reason
 .IP \(bu
 resman_all_users_cpu_usage_percent \- Non\-system user CPU usage
 .IP \(bu
