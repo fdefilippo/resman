@@ -29,6 +29,10 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				`"$package_dir/usr/share/doc/resman/CONFIGURATION.md"`,
 				`install -m 0644 "$project_dir/docs/UPGRADING.md"`,
 				`"$package_dir/usr/share/doc/resman/UPGRADING.md"`,
+				`install -m 0755 "$project_dir/scripts/sendmail.sh"`,
+				`"$package_dir/usr/share/doc/resman/scripts/sendmail.sh"`,
+				`install -m 0644 "$project_dir/docs/scripts/README.md"`,
+				`"$package_dir/usr/share/doc/resman/scripts/README.md"`,
 			},
 			forbidden: []string{`"$package_dir/etc/` + `resman.conf"`},
 		},
@@ -53,6 +57,8 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"%doc %{_docdir}/%{name}/CONFIGURATION.md",
 				"install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/",
 				"%doc %{_docdir}/%{name}/UPGRADING.md",
+				"install -m 755 scripts/sendmail.sh %{buildroot}/%{_docdir}/%{name}/scripts/sendmail.sh",
+				"install -m 644 docs/scripts/README.md %{buildroot}/%{_docdir}/%{name}/scripts/README.md",
 			},
 			forbidden: []string{"chmod 644 /var/log/resman.log"},
 		},
@@ -95,6 +101,8 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				"tar -tf -",
 				"assert_absent_path '/etc/" + "resman.conf' \"$paths\"",
 				"assert_entry '/etc/resman/cpu-points.map' '-rw-------' 'root/root' \"$listing\"",
+				"assert_entry '/usr/share/doc/resman/scripts/sendmail.sh' '-rwxr-xr-x' 'root/root' \"$listing\"",
+				"assert_entry '/usr/share/doc/resman/scripts/README.md' '-rw-r--r--' 'root/root' \"$listing\"",
 			},
 		},
 	}
@@ -113,6 +121,30 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
+	root := repositoryRoot(t)
+	guide := readTextFile(t, filepath.Join(root, "docs/scripts/README.md"))
+	helper := readTextFile(t, filepath.Join(root, "scripts/sendmail.sh"))
+
+	for _, required := range []string{
+		"/usr/share/doc/resman/scripts/sendmail.sh",
+		"ResMan does not invoke",
+		"curl` built with SMTP support",
+		"`-f address`",
+		"`-t address`",
+		"`-T` requests STARTTLS",
+		"forwarded to `curl` on its command line",
+	} {
+		if !strings.Contains(guide, required) {
+			t.Errorf("sendmail guide is missing %q", required)
+		}
+	}
+
+	if !strings.Contains(helper, "./sendmail.sh -f sender@example.com -t recipient@example.com [options]") {
+		t.Error("sendmail helper usage does not name its required sender and recipient options")
 	}
 }
 

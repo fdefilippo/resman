@@ -2,7 +2,7 @@
 # sendmail.sh — Send email via SMTP using curl
 #
 # Usage:
-#   ./sendmail.sh [options] -a attachment.pdf recipient@example.com
+#   ./sendmail.sh -f sender@example.com -t recipient@example.com [options]
 #
 # Options:
 #   -f <email>       From address

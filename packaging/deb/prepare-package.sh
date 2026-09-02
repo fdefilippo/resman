@@ -50,6 +50,7 @@ install -d -m 0755 \
     "$package_dir/usr/lib/resman" \
     "$package_dir/usr/lib/systemd/system" \
     "$package_dir/usr/share/doc/resman" \
+    "$package_dir/usr/share/doc/resman/scripts" \
     "$package_dir/usr/share/lintian/overrides" \
     "$package_dir/usr/share/man/man8"
 install -d -m 0700 \
@@ -77,6 +78,10 @@ install -m 0644 "$project_dir/docs/alerting-rules.yml" \
     "$package_dir/usr/share/doc/resman/alerting-rules.yml"
 install -m 0644 "$project_dir/docs/dashboard-grafana-operations.json" \
     "$package_dir/usr/share/doc/resman/dashboard-grafana-operations.json"
+install -m 0755 "$project_dir/scripts/sendmail.sh" \
+    "$package_dir/usr/share/doc/resman/scripts/sendmail.sh"
+install -m 0644 "$project_dir/docs/scripts/README.md" \
+    "$package_dir/usr/share/doc/resman/scripts/README.md"
 install -m 0755 "$project_dir/docs/generate-tls-certs.sh" \
     "$package_dir/usr/lib/resman/generate-tls-certs"
 install -m 0644 "$script_dir/lintian-overrides" \

@@ -9,7 +9,7 @@
 # Project name
 PROJECT_NAME = resman
 VERSION = 1.31.1
-RELEASE = 1
+RELEASE = 2
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
@@ -341,6 +341,8 @@ rpm-source: build rpm-dirs
 		README.md LICENSE \
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
+	mkdir -p $(PROJECT_NAME)-$(VERSION)/scripts
+	cp scripts/sendmail.sh $(PROJECT_NAME)-$(VERSION)/scripts/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/packaging/syslog
 	cp packaging/syslog/resman.conf $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
 	cp packaging/syslog/resman $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true

@@ -8,10 +8,11 @@
 # - Man page
 # - Documentation
 # - TLS certificate generation script
+# - Standalone SMTP sendmail helper
 
 Name:    resman
 Version: 1.31.1
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -32,7 +33,7 @@ Provides:  cpu-manager-go = %{version}
 %define __brp_mangle_shebangs /usr/bin/true
 %endif
 
-# Dichiara che il package contiene una man page
+# Declare that the package contains a man page.
 %global _has_manpage 1
 
 BuildRequires:  golang >= 1.21
@@ -163,9 +164,11 @@ install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 docs/dashboard-grafana-operations.json %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 
-# Install the TLS certificate generation script.
-install -d %{buildroot}/%{_docdir}/%{name}/scripts
+# Install operator helper scripts and their documentation.
+install -d -m 755 %{buildroot}/%{_docdir}/%{name}/scripts
 install -m 755 docs/generate-tls-certs.sh %{buildroot}/%{_docdir}/%{name}/scripts/ 2>/dev/null || true
+install -m 755 scripts/sendmail.sh %{buildroot}/%{_docdir}/%{name}/scripts/sendmail.sh
+install -m 644 docs/scripts/README.md %{buildroot}/%{_docdir}/%{name}/scripts/README.md
 
 # Install the syslog configuration.
 install -d %{buildroot}%{_sysconfdir}/rsyslog.d
@@ -272,6 +275,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 02 2026 Francesco Defilippo <francesco@defilippo.org> - 1.31.1-2
+- PACKAGING: ship the standalone sendmail helper and its operator guide in RPM and DEB packages
+
 * Wed Sep 02 2026 Francesco Defilippo <francesco@defilippo.org> - 1.31.1-1
 - BREAKING: replace core, raw-quota, pattern and PSI CPU controls with normalized CPU Points
 - NEW: enforce one finite live-capacity parent with guaranteed and aggregate best-effort domains
