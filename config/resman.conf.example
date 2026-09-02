@@ -34,8 +34,11 @@ PROCESS_MIN_AGE_SECONDS=60
 # Increase on slow systems or with many processes
 CGROUP_OPERATION_TIMEOUT=5
 #
+# DAEMON_SHUTDOWN_TIMEOUT: Deadline for the complete daemon shutdown sequence
+# Default: 60 seconds
+DAEMON_SHUTDOWN_TIMEOUT=60
 #
-# MCP_SHUTDOWN_TIMEOUT: Timeout for MCP server shutdown
+# MCP_SHUTDOWN_TIMEOUT: Timeout for the MCP server shutdown step only
 # Default: 10 seconds
 MCP_SHUTDOWN_TIMEOUT=10
 

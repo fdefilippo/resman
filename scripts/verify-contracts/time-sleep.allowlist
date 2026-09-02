@@ -1,3 +1,2 @@
 # path | function | ordinal within function | call purpose | classification | reason
-internal/app/app_shutdown.go | startSignalHandler | 1 | shutdown deadline | allowed | Last-resort deadline, not synchronization or readiness polling.
 cgroup/cleanup.go | waitBeforeCgroupRemovalRetry | 1 | bounded retry backoff | allowed | Called only after the first managed cgroup removal attempt fails.

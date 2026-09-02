@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -49,6 +50,55 @@ type signalHandlerLogger struct {
 	errors chan string
 }
 
+type manualShutdownTimer struct {
+	ch       chan time.Time
+	stopped  chan struct{}
+	stopOnce sync.Once
+}
+
+func newManualShutdownTimer() *manualShutdownTimer {
+	return &manualShutdownTimer{
+		ch:      make(chan time.Time, 1),
+		stopped: make(chan struct{}),
+	}
+}
+
+func (t *manualShutdownTimer) C() <-chan time.Time { return t.ch }
+func (t *manualShutdownTimer) Stop() bool {
+	t.stopOnce.Do(func() { close(t.stopped) })
+	return true
+}
+
+type shutdownWarning struct {
+	message string
+	fields  []interface{}
+}
+
+type watchdogLogger struct {
+	warnings chan shutdownWarning
+	events   chan string
+}
+
+func (*watchdogLogger) Debug(string, ...interface{}) {}
+func (*watchdogLogger) Info(string, ...interface{})  {}
+func (l *watchdogLogger) Warn(message string, fields ...interface{}) {
+	l.warnings <- shutdownWarning{message: message, fields: append([]interface{}(nil), fields...)}
+	if l.events != nil {
+		l.events <- "warning"
+	}
+}
+func (*watchdogLogger) Error(string, ...interface{})             {}
+func (*watchdogLogger) InfoChecked(string, ...interface{}) error { return nil }
+
+func warningField(fields []interface{}, key string) (interface{}, bool) {
+	for i := 0; i+1 < len(fields); i += 2 {
+		if fields[i] == key {
+			return fields[i+1], true
+		}
+	}
+	return nil, false
+}
+
 func (*signalHandlerLogger) Debug(string, ...interface{}) {}
 func (*signalHandlerLogger) Info(string, ...interface{})  {}
 func (*signalHandlerLogger) Warn(string, ...interface{})  {}
@@ -59,6 +109,130 @@ func (*signalHandlerLogger) InfoChecked(string, ...interface{}) error { return n
 
 func (m *shutdownCgroupManager) CleanupAll() error {
 	return m.cleanupErr
+}
+
+func TestTerminationSignalUsesDaemonShutdownDeadlineWhenMCPIsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MCPEnabled = false
+	cfg.MCPShutdownTimeout = 1
+	cfg.DaemonShutdownTimeout = 11
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	timer := newManualShutdownTimer()
+	capturedTimeout := make(chan time.Duration, 1)
+	application := &App{
+		cfg:     cfg,
+		ctx:     ctx,
+		cancel:  cancel,
+		sigChan: signals,
+		logger:  &watchdogLogger{warnings: make(chan shutdownWarning, 1)},
+	}
+	application.shutdownDeadline.timerFactory = func(timeout time.Duration) shutdownTimer {
+		capturedTimeout <- timeout
+		return timer
+	}
+	application.shutdownDeadline.forceExit = func() error { return nil }
+	updated := config.DefaultConfig()
+	updated.MCPEnabled = false
+	updated.MCPShutdownTimeout = 1
+	updated.DaemonShutdownTimeout = 37
+	application.setCurrentConfig(updated)
+	application.startSignalHandler()
+
+	signals <- syscall.SIGTERM
+	select {
+	case timeout := <-capturedTimeout:
+		if timeout != 37*time.Second {
+			t.Fatalf("shutdown watchdog timeout = %s, want 37s", timeout)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("termination signal did not start the shutdown watchdog")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("termination signal did not cancel the application context")
+	}
+	application.finishShutdownWatchdog()
+}
+
+func TestShutdownCompletionCancelsWatchdog(t *testing.T) {
+	stateManager, err := state.NewManager(
+		config.DefaultConfig(),
+		nil,
+		&shutdownCgroupManager{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	timer := newManualShutdownTimer()
+	forced := make(chan struct{}, 1)
+	application := &App{
+		logger:       &shutdownLogger{},
+		stateManager: stateManager,
+	}
+	application.shutdownDeadline.timerFactory = func(time.Duration) shutdownTimer { return timer }
+	application.shutdownDeadline.forceExit = func() error {
+		forced <- struct{}{}
+		return nil
+	}
+	application.startShutdownWatchdog(time.Hour)
+
+	if err := application.shutdown(); err != nil {
+		t.Fatalf("shutdown() error: %v", err)
+	}
+	select {
+	case <-timer.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("completed shutdown did not stop its watchdog timer")
+	}
+	select {
+	case <-forced:
+		t.Fatal("completed shutdown invoked the forced-exit boundary")
+	default:
+	}
+}
+
+func TestShutdownDeadlineRecordsOutstandingStageBeforeForceExit(t *testing.T) {
+	timer := newManualShutdownTimer()
+	warnings := make(chan shutdownWarning, 1)
+	events := make(chan string, 2)
+	application := &App{
+		logger: &watchdogLogger{warnings: warnings, events: events},
+	}
+	application.shutdownDeadline.timerFactory = func(time.Duration) shutdownTimer { return timer }
+	application.shutdownDeadline.forceExit = func() error {
+		events <- "force_exit"
+		return nil
+	}
+	application.startShutdownWatchdog(47 * time.Second)
+	application.setShutdownStage("state_manager_cleanup")
+	timer.ch <- time.Now()
+
+	for _, want := range []string{"warning", "force_exit"} {
+		select {
+		case got := <-events:
+			if got != want {
+				t.Fatalf("shutdown deadline event = %q, want %q", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("expired shutdown deadline did not invoke the forced-exit boundary")
+		}
+	}
+	warning := <-warnings
+	if warning.message != "Daemon shutdown deadline exceeded; forcing exit" {
+		t.Fatalf("warning message = %q", warning.message)
+	}
+	stage, ok := warningField(warning.fields, "outstanding_stage")
+	if !ok || stage != "state_manager_cleanup" {
+		t.Fatalf("outstanding_stage = %v, present = %t", stage, ok)
+	}
+	timeout, ok := warningField(warning.fields, "timeout_seconds")
+	if !ok || timeout != int64(47) {
+		t.Fatalf("timeout_seconds = %v, present = %t", timeout, ok)
+	}
+	application.finishShutdownWatchdog()
 }
 
 func TestShutdownReportsIncompleteStateCleanup(t *testing.T) {

@@ -22,6 +22,9 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
 RestartPreventExitStatus=78
+# Keep the service manager's outer deadline above the default daemon deadline.
+# Override both values together when a deployment needs more shutdown time.
+TimeoutStopSec=75s
 StandardOutput=journal
 StandardError=journal
 # CPU priority (-20 is the highest, 19 is the lowest)

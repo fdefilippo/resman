@@ -143,7 +143,9 @@ resman/
 
 **Signal Handling:**
 - `SIGHUP`: Force configuration reload
-- `SIGINT/SIGTERM`: Graceful shutdown with 10-second timeout
+- `SIGINT/SIGTERM`: Graceful shutdown under the daemon-wide deadline configured by
+  `DAEMON_SHUTDOWN_TIMEOUT` (60 seconds by default). The MCP server retains its
+  independent `MCP_SHUTDOWN_TIMEOUT` step timeout.
 
 **Initialization Order:**
 1. Logger (default values)

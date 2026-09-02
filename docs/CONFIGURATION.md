@@ -19,6 +19,7 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `CPU_THRESHOLD` | `75` | `dynamic` | — |
 | `CPU_THRESHOLD_DURATION` | `90` | `dynamic` | 0 makes CPU threshold activation immediate after a valid sample. |
 | `CREATED_CGROUPS_FILE` | `/run/resman-cgroups.txt` | `restart-required` | — |
+| `DAEMON_SHUTDOWN_TIMEOUT` | `60` | `dynamic` | — |
 | `DISABLE_SWAP` | `false` | `dynamic` | — |
 | `ENABLE_PROMETHEUS` | `false` | `restart-required` | false creates no Prometheus listener. |
 | `IGNORE_SYSTEM_LOAD` | `false` | `dynamic` | — |
@@ -55,7 +56,7 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `MCP_HTTP_HOST` | `127.0.0.1` | `restart-required` | — |
 | `MCP_HTTP_PORT` | `1969` | `restart-required` | — |
 | `MCP_LOG_LEVEL` | `INFO` | `restart-required` | — |
-| `MCP_SHUTDOWN_TIMEOUT` | `10` | `dynamic` | — |
+| `MCP_SHUTDOWN_TIMEOUT` | `10` | `restart-required` | — |
 | `MCP_TLS_CA_FILE` | `(empty)` | `restart-required` | Empty disables client-certificate authentication; the bearer token is still required over HTTP. |
 | `MCP_TLS_CERT_FILE` | `/etc/resman/tls/server.crt` | `restart-required` | — |
 | `MCP_TLS_ENABLED` | `true` | `restart-required` | — |

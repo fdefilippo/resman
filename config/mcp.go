@@ -26,35 +26,37 @@ import (
 // server. Public MCP keys are parsed only by configFieldHandlers before this
 // snapshot is constructed.
 type MCPServerConfig struct {
-	Enabled       bool
-	Transport     string
-	HTTPPort      int
-	HTTPHost      string
-	TLSEnabled    bool
-	TLSCertFile   string
-	TLSKeyFile    string
-	TLSCAFile     string
-	TLSMinVersion string
-	LogLevel      string
-	AuthToken     string
-	AllowWriteOps bool
+	Enabled         bool
+	Transport       string
+	HTTPPort        int
+	HTTPHost        string
+	TLSEnabled      bool
+	TLSCertFile     string
+	TLSKeyFile      string
+	TLSCAFile       string
+	TLSMinVersion   string
+	LogLevel        string
+	AuthToken       string
+	AllowWriteOps   bool
+	ShutdownTimeout int
 }
 
 // MCPServerConfig returns the complete MCP server configuration snapshot.
 func (cfg *Config) MCPServerConfig() MCPServerConfig {
 	return MCPServerConfig{
-		Enabled:       cfg.MCPEnabled,
-		Transport:     cfg.MCPTransport,
-		HTTPPort:      cfg.MCPHTTPPort,
-		HTTPHost:      cfg.MCPHTTPHost,
-		TLSEnabled:    cfg.MCPTLSEnabled,
-		TLSCertFile:   cfg.MCPTLSCertFile,
-		TLSKeyFile:    cfg.MCPTLSKeyFile,
-		TLSCAFile:     cfg.MCPTLSCAFile,
-		TLSMinVersion: cfg.MCPTLSMinVersion,
-		LogLevel:      cfg.MCPLogLevel,
-		AuthToken:     cfg.MCPAuthToken,
-		AllowWriteOps: cfg.MCPAllowWriteOps,
+		Enabled:         cfg.MCPEnabled,
+		Transport:       cfg.MCPTransport,
+		HTTPPort:        cfg.MCPHTTPPort,
+		HTTPHost:        cfg.MCPHTTPHost,
+		TLSEnabled:      cfg.MCPTLSEnabled,
+		TLSCertFile:     cfg.MCPTLSCertFile,
+		TLSKeyFile:      cfg.MCPTLSKeyFile,
+		TLSCAFile:       cfg.MCPTLSCAFile,
+		TLSMinVersion:   cfg.MCPTLSMinVersion,
+		LogLevel:        cfg.MCPLogLevel,
+		AuthToken:       cfg.MCPAuthToken,
+		AllowWriteOps:   cfg.MCPAllowWriteOps,
+		ShutdownTimeout: cfg.MCPShutdownTimeout,
 	}
 }
 
@@ -63,6 +65,9 @@ func (cfg *Config) MCPServerConfig() MCPServerConfig {
 func (cfg MCPServerConfig) Validate() error {
 	if !cfg.Enabled {
 		return nil
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		return fmt.Errorf("MCP_SHUTDOWN_TIMEOUT must be greater than 0")
 	}
 	if cfg.Transport != "stdio" && cfg.Transport != "http" {
 		return fmt.Errorf("MCP_TRANSPORT must be stdio or http, got %q", cfg.Transport)

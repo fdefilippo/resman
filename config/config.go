@@ -73,6 +73,7 @@ type Config struct {
 
 	// Timeouts (seconds)
 	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
+	DaemonShutdownTimeout  int `config:"DAEMON_SHUTDOWN_TIMEOUT"`  // Deadline for the complete daemon shutdown sequence (seconds)
 	MCPShutdownTimeout     int `config:"MCP_SHUTDOWN_TIMEOUT"`     // Timeout for MCP server shutdown (seconds)
 
 	// Thresholds (percentages)
@@ -266,6 +267,7 @@ func DefaultConfig() *Config {
 
 		// Timeout defaults
 		CgroupOperationTimeout: 5,  // 5 seconds for cgroup operations
+		DaemonShutdownTimeout:  60, // 60 seconds for the complete daemon shutdown sequence
 		MCPShutdownTimeout:     10, // 10 seconds for MCP shutdown
 
 		CPUThreshold:         75,
@@ -686,6 +688,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
 	"USERNAME_CACHE_TTL":            setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
 	"CGROUP_OPERATION_TIMEOUT":      setInt(func(cfg *Config, value int) { cfg.CgroupOperationTimeout = value }),
+	"DAEMON_SHUTDOWN_TIMEOUT":       setInt(func(cfg *Config, value int) { cfg.DaemonShutdownTimeout = value }),
 	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
 	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
 	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
@@ -915,6 +918,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.CgroupOperationTimeout <= 0 {
 		errors = append(errors, "CGROUP_OPERATION_TIMEOUT must be greater than 0")
+	}
+	if cfg.DaemonShutdownTimeout <= 0 {
+		errors = append(errors, "DAEMON_SHUTDOWN_TIMEOUT must be greater than 0")
 	}
 	if cfg.MCPShutdownTimeout <= 0 {
 		errors = append(errors, "MCP_SHUTDOWN_TIMEOUT must be greater than 0")
@@ -1882,6 +1888,13 @@ func (c *Config) GetCgroupOperationTimeout() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.CgroupOperationTimeout
+}
+
+// GetDaemonShutdownTimeout returns the complete daemon shutdown deadline in seconds.
+func (c *Config) GetDaemonShutdownTimeout() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.DaemonShutdownTimeout
 }
 
 // GetMCPShutdownTimeout returns the MCP shutdown timeout in seconds.

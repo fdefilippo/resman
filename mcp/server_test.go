@@ -45,110 +45,128 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid stdio config",
 			cfg: &config.MCPServerConfig{
-				Enabled:       true,
-				Transport:     "stdio",
-				LogLevel:      "INFO",
-				AllowWriteOps: false,
+				Enabled:         true,
+				Transport:       "stdio",
+				LogLevel:        "INFO",
+				AllowWriteOps:   false,
+				ShutdownTimeout: 10,
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid http config",
 			cfg: &config.MCPServerConfig{
-				Enabled:       true,
-				Transport:     "http",
-				HTTPPort:      8080,
-				HTTPHost:      "127.0.0.1",
-				TLSEnabled:    true,
-				TLSCertFile:   "server.crt",
-				TLSKeyFile:    "server.key",
-				TLSMinVersion: "1.3",
-				LogLevel:      "INFO",
-				AuthToken:     "test-token",
-				AllowWriteOps: false,
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        8080,
+				HTTPHost:        "127.0.0.1",
+				TLSEnabled:      true,
+				TLSCertFile:     "server.crt",
+				TLSKeyFile:      "server.key",
+				TLSMinVersion:   "1.3",
+				LogLevel:        "INFO",
+				AuthToken:       "test-token",
+				AllowWriteOps:   false,
+				ShutdownTimeout: 10,
 			},
 			wantErr: false,
 		},
 		{
-			name: "http config without token",
+			name: "enabled config with invalid shutdown timeout",
 			cfg: &config.MCPServerConfig{
 				Enabled:   true,
-				Transport: "http",
-				HTTPPort:  8080,
-				HTTPHost:  "127.0.0.1",
+				Transport: "stdio",
 				LogLevel:  "INFO",
+			},
+			wantErr: true,
+		},
+		{
+			name: "http config without token",
+			cfg: &config.MCPServerConfig{
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        8080,
+				HTTPHost:        "127.0.0.1",
+				LogLevel:        "INFO",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
 		{
 			name: "http config with whitespace token",
 			cfg: &config.MCPServerConfig{
-				Enabled:   true,
-				Transport: "http",
-				HTTPPort:  8080,
-				HTTPHost:  "127.0.0.1",
-				LogLevel:  "INFO",
-				AuthToken: "   ",
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        8080,
+				HTTPHost:        "127.0.0.1",
+				LogLevel:        "INFO",
+				AuthToken:       "   ",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
 		{
 			name: "http config with TLS-protected non-loopback bind",
 			cfg: &config.MCPServerConfig{
-				Enabled:       true,
-				Transport:     "http",
-				HTTPPort:      8080,
-				HTTPHost:      "0.0.0.0",
-				TLSEnabled:    true,
-				TLSCertFile:   "server.crt",
-				TLSKeyFile:    "server.key",
-				TLSMinVersion: "1.3",
-				LogLevel:      "INFO",
-				AuthToken:     "test-token",
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        8080,
+				HTTPHost:        "0.0.0.0",
+				TLSEnabled:      true,
+				TLSCertFile:     "server.crt",
+				TLSKeyFile:      "server.key",
+				TLSMinVersion:   "1.3",
+				LogLevel:        "INFO",
+				AuthToken:       "test-token",
+				ShutdownTimeout: 10,
 			},
 			wantErr: false,
 		},
 		{
 			name: "http config with TLS disabled",
 			cfg: &config.MCPServerConfig{
-				Enabled:       true,
-				Transport:     "http",
-				HTTPPort:      8080,
-				HTTPHost:      "127.0.0.1",
-				TLSCertFile:   "server.crt",
-				TLSKeyFile:    "server.key",
-				TLSMinVersion: "1.3",
-				LogLevel:      "INFO",
-				AuthToken:     "test-token",
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        8080,
+				HTTPHost:        "127.0.0.1",
+				TLSCertFile:     "server.crt",
+				TLSKeyFile:      "server.key",
+				TLSMinVersion:   "1.3",
+				LogLevel:        "INFO",
+				AuthToken:       "test-token",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid transport",
 			cfg: &config.MCPServerConfig{
-				Enabled:   true,
-				Transport: "invalid",
-				LogLevel:  "INFO",
+				Enabled:         true,
+				Transport:       "invalid",
+				LogLevel:        "INFO",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid port",
 			cfg: &config.MCPServerConfig{
-				Enabled:   true,
-				Transport: "http",
-				HTTPPort:  70000,
-				HTTPHost:  "127.0.0.1",
-				LogLevel:  "INFO",
+				Enabled:         true,
+				Transport:       "http",
+				HTTPPort:        70000,
+				HTTPHost:        "127.0.0.1",
+				LogLevel:        "INFO",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid log level",
 			cfg: &config.MCPServerConfig{
-				Enabled:   true,
-				Transport: "stdio",
-				LogLevel:  "INVALID",
+				Enabled:         true,
+				Transport:       "stdio",
+				LogLevel:        "INVALID",
+				ShutdownTimeout: 10,
 			},
 			wantErr: true,
 		},
@@ -176,6 +194,7 @@ func TestConfigValidate(t *testing.T) {
 func TestNewServer(t *testing.T) {
 	parentCfg := config.DefaultConfig()
 	parentCfg.MCPEnabled = false // Don't actually start the server
+	parentCfg.MCPShutdownTimeout = 17
 
 	// Create mock dependencies (nil for this test)
 	// In a real test, you'd create proper mocks
@@ -188,6 +207,34 @@ func TestNewServer(t *testing.T) {
 	}
 	if server.cfg.Enabled != false {
 		t.Error("Expected server to be disabled")
+	}
+	if server.cfg.ShutdownTimeout != 17 {
+		t.Fatalf("MCP shutdown timeout = %d, want 17", server.cfg.ShutdownTimeout)
+	}
+}
+
+func TestStopUsesConfiguredMCPShutdownTimeout(t *testing.T) {
+	const timeout = 17 * time.Second
+	observed := make(chan time.Duration, 1)
+	server := &Server{
+		cfg:    &config.MCPServerConfig{ShutdownTimeout: int(timeout / time.Second)},
+		logger: &recordingServerLogger{},
+		httpShutdown: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("MCP HTTP shutdown context has no deadline")
+			}
+			observed <- time.Until(deadline)
+			return nil
+		},
+	}
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() error: %v", err)
+	}
+	remaining := <-observed
+	if remaining < timeout-time.Second || remaining > timeout {
+		t.Fatalf("MCP HTTP shutdown deadline = %s, want approximately %s", remaining, timeout)
 	}
 }
 

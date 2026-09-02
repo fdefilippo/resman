@@ -89,7 +89,7 @@ func (m *Manager) filterPIDNamespaceCandidates(pids []int) ([]int, ProcessMoveRe
 	for _, pid := range pids {
 		identity, err := m.candidatePIDNamespaceIdentity(pid)
 		switch {
-		case os.IsNotExist(err):
+		case errors.Is(err, os.ErrNotExist):
 			result.Disappeared++
 		case err != nil:
 			result.PIDNamespaceUnavailable++
@@ -105,7 +105,7 @@ func (m *Manager) filterPIDNamespaceCandidates(pids []int) ([]int, ProcessMoveRe
 func (m *Manager) verifyPIDNamespaceIngress(pid int) (PIDNamespaceSkipReason, error) {
 	identity, err := m.candidatePIDNamespaceIdentity(pid)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
 		return PIDNamespaceUnavailable, err

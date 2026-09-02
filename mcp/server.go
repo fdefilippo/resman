@@ -88,6 +88,7 @@ type Server struct {
 	httpServer        *http.Server
 	tlsConfig         *tls.Config
 	httpListen        func(network, address string) (net.Listener, error)
+	httpShutdown      func(context.Context) error
 	stdioTransport    mcp.Transport
 	transportCancel   context.CancelFunc
 	wg                sync.WaitGroup
@@ -235,11 +236,18 @@ func (s *Server) stop() error {
 	}
 
 	var shutdownErr error
-	if httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownHTTP := s.httpShutdown
+	if shutdownHTTP == nil && httpServer != nil {
+		shutdownHTTP = httpServer.Shutdown
+	}
+	if shutdownHTTP != nil {
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			time.Duration(s.cfg.ShutdownTimeout)*time.Second,
+		)
 		defer cancel()
 
-		if err := httpServer.Shutdown(ctx); err != nil {
+		if err := shutdownHTTP(ctx); err != nil {
 			s.logger.Error("Error shutting down HTTP server", "error", err)
 			shutdownErr = fmt.Errorf("failed to shut down MCP HTTP server: %w", err)
 		}

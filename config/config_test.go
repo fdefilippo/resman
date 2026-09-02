@@ -53,6 +53,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"CPUReservePoints", cfg.CPUReservePoints, 100},
 		{"CPUBestEffortPoints", cfg.CPUBestEffortPoints, 100},
 		{"CPUPointsFile", cfg.CPUPointsFile, DefaultCPUPointsMapPath},
+		{"DaemonShutdownTimeout", cfg.DaemonShutdownTimeout, 60},
 		{"EnablePrometheus", cfg.EnablePrometheus, false},
 		{"PrometheusMetricsBindPort", cfg.PrometheusMetricsBindPort, 1974},
 		{"PrometheusMetricsBindHost", cfg.PrometheusMetricsBindHost, "127.0.0.1"}, // Secure default
@@ -93,6 +94,7 @@ func TestValidateConfig(t *testing.T) {
 				MetricsCacheTTL:        15,
 				MetricsRefreshInterval: 30,
 				CgroupOperationTimeout: 5,
+				DaemonShutdownTimeout:  60,
 				MCPShutdownTimeout:     10,
 				CPUReservePoints:       100,
 				CPUBestEffortPoints:    100,
@@ -682,6 +684,7 @@ func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
 	t.Setenv("MCP_LOG_LEVEL", "debug")
 	t.Setenv("MCP_AUTH_TOKEN", "test-token")
 	t.Setenv("MCP_ALLOW_WRITE_OPS", "1")
+	t.Setenv("MCP_SHUTDOWN_TIMEOUT", "17")
 
 	cfg := DefaultConfig()
 	if err := loadFromEnvironment(cfg); err != nil {
@@ -689,18 +692,19 @@ func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
 	}
 	got := cfg.MCPServerConfig()
 	want := MCPServerConfig{
-		Enabled:       true,
-		Transport:     "http",
-		HTTPPort:      9090,
-		HTTPHost:      "192.0.2.10",
-		TLSEnabled:    true,
-		TLSCertFile:   "/test/server.crt",
-		TLSKeyFile:    "/test/server.key",
-		TLSCAFile:     "/test/ca.crt",
-		TLSMinVersion: "1.3",
-		LogLevel:      "DEBUG",
-		AuthToken:     "test-token",
-		AllowWriteOps: true,
+		Enabled:         true,
+		Transport:       "http",
+		HTTPPort:        9090,
+		HTTPHost:        "192.0.2.10",
+		TLSEnabled:      true,
+		TLSCertFile:     "/test/server.crt",
+		TLSKeyFile:      "/test/server.key",
+		TLSCAFile:       "/test/ca.crt",
+		TLSMinVersion:   "1.3",
+		LogLevel:        "DEBUG",
+		AuthToken:       "test-token",
+		AllowWriteOps:   true,
+		ShutdownTimeout: 17,
 	}
 	if got != want {
 		t.Fatalf("MCPServerConfig() = %+v, want %+v", got, want)
@@ -885,6 +889,12 @@ func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 			name: "zero cgroup operation timeout",
 			mutate: func(cfg *Config) {
 				cfg.CgroupOperationTimeout = 0
+			},
+		},
+		{
+			name: "zero daemon shutdown timeout",
+			mutate: func(cfg *Config) {
+				cfg.DaemonShutdownTimeout = 0
 			},
 		},
 		{

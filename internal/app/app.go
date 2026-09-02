@@ -30,15 +30,16 @@ type configWatcher interface {
 
 // App contains the daemon runtime components.
 type App struct {
-	cfg        *config.Config
-	configPath string
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sigChan    <-chan os.Signal
-	logger     appLogger
-	err        error
-	cfgMu      sync.RWMutex
-	psiMu      sync.RWMutex
+	cfg              *config.Config
+	configPath       string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	sigChan          <-chan os.Signal
+	logger           appLogger
+	err              error
+	cfgMu            sync.RWMutex
+	psiMu            sync.RWMutex
+	shutdownDeadline shutdownDeadlineState
 
 	cgroupMgr          *cgroup.Manager
 	metricsCollector   *metrics.Collector

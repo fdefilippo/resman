@@ -406,6 +406,7 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 	current.MCPLogLevel = "INFO"
 	current.MCPAuthToken = "current-token"
 	current.MCPAllowWriteOps = false
+	current.MCPShutdownTimeout = 10
 
 	requested := config.DefaultConfig()
 	requested.CPUThreshold = 88
@@ -426,6 +427,7 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 	requested.MCPLogLevel = "DEBUG"
 	requested.MCPAuthToken = "rotated-token"
 	requested.MCPAllowWriteOps = true
+	requested.MCPShutdownTimeout = 17
 
 	stateManager := &testStateConfigManager{cfg: current}
 	cgroupManager := &testCgroupConfigManager{}
@@ -473,7 +475,8 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 		requested.MCPHTTPPort != current.MCPHTTPPort ||
 		requested.MCPLogLevel != current.MCPLogLevel ||
 		requested.MCPAuthToken != current.MCPAuthToken ||
-		requested.MCPAllowWriteOps != current.MCPAllowWriteOps {
+		requested.MCPAllowWriteOps != current.MCPAllowWriteOps ||
+		requested.MCPShutdownTimeout != current.MCPShutdownTimeout {
 		t.Fatal("MCP restart-required fields were applied at runtime")
 	}
 	if stateManager.cfg != requested || cgroupManager.cfg != requested ||

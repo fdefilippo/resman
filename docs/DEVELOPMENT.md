@@ -327,6 +327,9 @@ maps required for MCP input-schema metadata never become output payloads.
   system that is idle.
 - Help text **MUST** match the semantics, including the unit and whether failures are
   included.
+- Error classification **MUST** use unwrapping-aware predicates when wrapped errors
+  affect distinct counters or outcomes. A disappeared process is not a namespace
+  availability failure merely because its `os.ErrNotExist` was wrapped.
 
 **Why.** Before `resman-4pw.10`, activation and deactivation counters were incremented
 before any cgroup operation, while the duration recorders had no production call sites
@@ -334,7 +337,7 @@ and `RecordError` initially had none. The remediation observes complete cycles a
 collection boundaries, records bounded operational failures, and increments transition
 counters only when runtime state actually changes.
 
-*Finding: resman-4pw.10*
+*Findings: resman-4pw.10, resman-bdh.2*
 
 ## Rule 8 — Never log a success you did not verify
 
@@ -415,6 +418,9 @@ explicitly, and uses one configuration epoch across control-cycle consumers.
   (Rule 1). A parameter kept for compatibility while meaning nothing is forbidden.
 - Persisted configuration and the published runtime snapshot are separate concepts;
   writing one **MUST NOT** implicitly publish the other.
+- A daemon-wide shutdown deadline **MUST** have its own configuration contract rather
+  than borrowing a component timeout. Normal completion **MUST** cancel and drain its
+  watchdog; expiry **MUST** record the outstanding stage before forced termination.
 
 **Why.** MCP filter setters previously slept one second while the config watcher
 debounced for two, so `reload=true` reported success before the reload could possibly
@@ -424,9 +430,11 @@ snapshot and wait for a concrete watcher result; the obsolete flag is rejected.
 The later `resman-4pw.58` sweep found the same false acknowledgement at three other
 boundaries: timed-out PID migration, untracked limit hooks, and asynchronous
 Prometheus shutdown. These operations now cancel and drain owned work before their
-public completion boundary and report terminal outcomes.
+public completion boundary and report terminal outcomes. `resman-bdh.1` separated the
+complete daemon shutdown deadline from the MCP server step timeout and made the
+watchdog cancellable while preserving an outstanding-stage diagnostic on expiry.
 
-*Findings: resman-4pw.7, resman-4pw.58*
+*Findings: resman-4pw.7, resman-4pw.58, resman-bdh.1*
 
 ## Rule 11 — MCP is latest-only and protocol-stateless
 
@@ -943,10 +951,10 @@ only because the named issue owns the violation; they are intentionally visible.
 | 4. All decision dimensions evaluated | `resman-4pw.4` |
 | 5. No knob without effect | `resman-4pw.12` |
 | 6. Typed contracts; metrics ≠ status | `resman-4pw.6` |
-| 7. Counter semantics | `resman-4pw.10` |
+| 7. Counter semantics | `resman-4pw.10`, `resman-bdh.2` |
 | 8. Truthful errors and logs | `resman-4pw.11`, `.60`, `.64` |
 | 9. Configuration lifecycle | `resman-4pw.9` |
-| 10. Acknowledge, never sleep | `resman-4pw.7`, `.58` |
+| 10. Acknowledge, never sleep | `resman-4pw.7`, `.58`, `resman-bdh.1` |
 | 11. MCP latest-only and stateless | `resman-4pw.18` |
 | 12. Capability requirements | `resman-4pw.14`, `.23`, `.46` |
 | 13. Shipped assets | `resman-4pw.13`, `.48` |

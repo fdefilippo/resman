@@ -59,12 +59,14 @@ func TestApplyReloadLifecycle(t *testing.T) {
 	effective.MCPAuthToken = "old-secret"
 	requested := DefaultConfig()
 	requested.CPUThreshold = 91
+	requested.DaemonShutdownTimeout = 75
 	requested.UsernameCacheTTL = 17
 	requested.MetricsDBRetentionDays = 12
 	requested.CreatedCgroupsFile = "/other/created-cgroups"
 	requested.MetricsDBPath = "/other/metrics.db"
 	requested.MCPTLSCertFile = "/other/server.crt"
 	requested.MCPAuthToken = "new-secret"
+	requested.MCPShutdownTimeout = 17
 	requested.ServerRole = "other-role"
 
 	rejected, err := ApplyReloadLifecycle(effective, requested)
@@ -72,19 +74,21 @@ func TestApplyReloadLifecycle(t *testing.T) {
 		t.Fatalf("ApplyReloadLifecycle() error: %v", err)
 	}
 	wantRejected := []string{
-		"CREATED_CGROUPS_FILE", "MCP_AUTH_TOKEN", "MCP_TLS_CERT_FILE",
+		"CREATED_CGROUPS_FILE", "MCP_AUTH_TOKEN", "MCP_SHUTDOWN_TIMEOUT", "MCP_TLS_CERT_FILE",
 		"METRICS_DB_PATH", "SERVER_ROLE",
 	}
 	if !slices.Equal(rejected, wantRejected) {
 		t.Fatalf("rejected fields = %v, want %v", rejected, wantRejected)
 	}
-	if requested.CPUThreshold != 91 || requested.UsernameCacheTTL != 17 || requested.MetricsDBRetentionDays != 12 {
+	if requested.CPUThreshold != 91 || requested.DaemonShutdownTimeout != 75 ||
+		requested.UsernameCacheTTL != 17 || requested.MetricsDBRetentionDays != 12 {
 		t.Fatal("dynamic fields were not preserved from the requested configuration")
 	}
 	if requested.CreatedCgroupsFile != effective.CreatedCgroupsFile ||
 		requested.MetricsDBPath != effective.MetricsDBPath ||
 		requested.MCPTLSCertFile != effective.MCPTLSCertFile ||
 		requested.MCPAuthToken != effective.MCPAuthToken ||
+		requested.MCPShutdownTimeout != effective.MCPShutdownTimeout ||
 		requested.ServerRole != effective.ServerRole {
 		t.Fatal("restart-required fields were not restored from the effective configuration")
 	}
@@ -101,11 +105,13 @@ func TestRepresentativeFieldLifecycles(t *testing.T) {
 		"CPU_RESERVE_POINTS":        LifecycleDynamic,
 		"CPU_BEST_EFFORT_POINTS":    LifecycleDynamic,
 		"CPU_POINTS_FILE":           LifecycleRestartRequired,
+		"DAEMON_SHUTDOWN_TIMEOUT":   LifecycleDynamic,
 		"USERNAME_CACHE_TTL":        LifecycleDynamic,
 		"METRICS_DB_RETENTION_DAYS": LifecycleDynamic,
 		"CREATED_CGROUPS_FILE":      LifecycleRestartRequired,
 		"METRICS_DB_PATH":           LifecycleRestartRequired,
 		"MCP_TLS_KEY_FILE":          LifecycleRestartRequired,
+		"MCP_SHUTDOWN_TIMEOUT":      LifecycleRestartRequired,
 		"SERVER_ROLE":               LifecycleRestartRequired,
 	}
 	for key, want := range tests {

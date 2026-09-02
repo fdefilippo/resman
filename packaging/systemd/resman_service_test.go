@@ -53,6 +53,7 @@ func TestServiceRestartContractDistinguishesPermanentAndTransientFailures(t *tes
 		{name: "retry failures only", section: "Service", directive: "Restart", want: "on-failure"},
 		{name: "retry delay", section: "Service", directive: "RestartSec", want: "10"},
 		{name: "permanent startup status", section: "Service", directive: "RestartPreventExitStatus", want: "78"},
+		{name: "outer shutdown deadline", section: "Service", directive: "TimeoutStopSec", want: "75s"},
 	}
 
 	for _, tt := range tests {

@@ -310,6 +310,13 @@ func TestMoveProcessBatchEnforcesPIDNamespaceBoundary(t *testing.T) {
 			},
 			wantDisappeared: 1,
 		},
+		{
+			name: "wrapped disappeared namespace is not an ingress failure",
+			candidate: func(pidNamespaceIdentity) (pidNamespaceIdentity, error) {
+				return pidNamespaceIdentity{}, fmt.Errorf("read PID namespace: %w", os.ErrNotExist)
+			},
+			wantDisappeared: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -411,6 +418,11 @@ func TestMoveProcessBatchRechecksNamespaceImmediatelyBeforeWrite(t *testing.T) {
 		{
 			name:            "process disappears before ingress",
 			finalErr:        os.ErrNotExist,
+			wantDisappeared: 1,
+		},
+		{
+			name:            "wrapped process disappears before ingress",
+			finalErr:        fmt.Errorf("recheck PID namespace: %w", os.ErrNotExist),
 			wantDisappeared: 1,
 		},
 	}

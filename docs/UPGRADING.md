@@ -715,6 +715,32 @@ inspect the cleanup log before restart. Allow shutdown automation for the config
 hook and HTTP bounds, and diagnose a cgroup write that exceeds the nominal operation
 timeout rather than assuming a worker was abandoned.
 
+### Daemon shutdown has its own deadline
+
+**Visible change.** `DAEMON_SHUTDOWN_TIMEOUT` now bounds the complete shutdown
+sequence and defaults to 60 seconds. `MCP_SHUTDOWN_TIMEOUT` continues to bound only
+the MCP server shutdown step and no longer affects the daemon-wide watchdog. When the
+daemon deadline expires, ResMan records the outstanding shutdown stage immediately
+before forcing exit. A completed shutdown cancels the watchdog.
+
+The packaged systemd unit sets `TimeoutStopSec=75s`, keeping the service manager's
+outer deadline above the default ResMan deadline. A deployment that raises
+`DAEMON_SHUTDOWN_TIMEOUT` to 75 seconds or more must also install a systemd drop-in
+with a larger `TimeoutStopSec`; otherwise systemd can terminate the service before
+ResMan records its own deadline diagnostic.
+
+**Cause.** The former daemon watchdog was derived from twice the MCP-specific
+timeout. It therefore applied even when MCP was disabled and could interrupt process
+restoration after 20 seconds without identifying the unfinished shutdown stage.
+
+**Action.** Set `DAEMON_SHUTDOWN_TIMEOUT` from the worst-case time needed to restore
+all acquired processes. Keep `MCP_SHUTDOWN_TIMEOUT` sized only for the configured MCP
+transport, and preserve the ordering `TimeoutStopSec > DAEMON_SHUTDOWN_TIMEOUT`.
+`DAEMON_SHUTDOWN_TIMEOUT` is dynamic because the signal handler reads the current
+configuration. `MCP_SHUTDOWN_TIMEOUT` is restart-required because the MCP server owns
+an immutable validated configuration snapshot; a reload reports and preserves its
+previous effective value until restart.
+
 ### The supported container is rootful Podman on Oracle Linux 9
 
 **Visible change.** The shipped image changes from static Alpine running as `appuser`
