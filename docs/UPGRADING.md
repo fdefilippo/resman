@@ -1,7 +1,7 @@
-# Upgrading from ResMan 1.25.x through 1.30.8 to ResMan 1.31.0
+# Upgrading from ResMan 1.25.x through 1.30.8 to ResMan 1.31.1
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.30.8 to
-ResMan 1.31.0. This release contains the post-1.25.1 audit remediation and the CPU
+ResMan 1.31.1. This release contains the post-1.25.1 audit remediation and the CPU
 Points cutover, and intentionally breaks incorrect or ambiguous contracts. It does
 not migrate old database schemas, accept removed configuration keys, preserve old MCP
 shapes, or alias renamed metrics.
@@ -19,7 +19,7 @@ operator-authored configuration has been recovered.
    `/etc/resman/resman.conf` and prepare the packaged regular mode-`0600`
    `/etc/resman/cpu-points.map` below a root-owned mode-`0700` `/etc/resman` directory.
 4. Remove or securely archive every legacy configuration artifact described below.
-5. Archive or delete the pre-1.31.0 metrics database. It cannot be opened by the new
+5. Archive or delete the pre-1.31.1 metrics database. It cannot be opened by the new
    schema.
 6. If MCP uses HTTP, provision its certificate and key, update clients to HTTPS and
    MCP revision 2026-07-28, and update the health probe.

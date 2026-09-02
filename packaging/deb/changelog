@@ -1,4 +1,4 @@
-resman (1.31.0-1) stable; urgency=medium
+resman (1.31.1-1) stable; urgency=medium
 
   * Replace core, raw-quota, pattern and PSI CPU controls with CPU Points.
   * Enforce one finite live-capacity parent with guaranteed and aggregate
@@ -11,8 +11,13 @@ resman (1.31.0-1) stable; urgency=medium
     history reset instead of reinterpreting incompatible rows.
   * Document migration arithmetic, measured delivery, RAM transitions and
     memory.high behavior.
+  * Expose bounded reload outcomes, suppress unchanged retry noise and report
+    every removed configuration key in one validation result.
+  * Separate the daemon shutdown deadline from MCP shutdown and harden CI
+    workflow failure controls.
+  * Remove the invalid logrotate postrotate hook.
 
- -- Francesco Defilippo <francesco@defilippo.org>  Tue, 01 Sep 2026 12:00:00 +0200
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 02 Sep 2026 05:45:20 +0200
 
 resman (1.30.8-1) stable; urgency=medium
 

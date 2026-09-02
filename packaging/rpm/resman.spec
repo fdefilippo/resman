@@ -10,7 +10,7 @@
 # - TLS certificate generation script
 
 Name:    resman
-Version: 1.31.0
+Version: 1.31.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -63,9 +63,9 @@ v1.30.4: authoritative systemd readiness and isolated packaged-service validatio
 v1.30.5: enforced ShellCheck coverage for every tracked shell script.
 v1.30.7: truthful cgroup telemetry, checked I/O counters and bounded fuzz gates.
 v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
-v1.31.0: normalized CPU Points guarantees, class-priority lending and typed delivery history.
+v1.31.1: normalized CPU Points guarantees, class-priority lending and typed delivery history.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.30.8 to 1.31.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.30.8 to 1.31.1.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -272,7 +272,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Tue Sep 01 2026 Francesco Defilippo <francesco@defilippo.org> - 1.31.0-1
+* Wed Sep 02 2026 Francesco Defilippo <francesco@defilippo.org> - 1.31.1-1
 - BREAKING: replace core, raw-quota, pattern and PSI CPU controls with normalized CPU Points
 - NEW: enforce one finite live-capacity parent with guaranteed and aggregate best-effort domains
 - NEW: implement class-priority lending and preserve a secure strict CPU guarantee map
@@ -280,6 +280,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 - OBSERVABILITY: publish and persist schema-4 CPU Points delivery, lending, lifecycle and coverage
 - COMPATIBILITY: reject removed CPU keys, remove action-cores metrics and require history reset
 - DOCS: define migration arithmetic, measured delivery, RAM-transition and memory.high behavior
+- RELOAD: expose bounded outcomes, suppress unchanged retry noise and report all removed keys
+- SERVICE: separate the daemon shutdown deadline from MCP shutdown
+- PACKAGING: remove the invalid logrotate postrotate hook
+- CI: parse workflow failure controls structurally and fail closed
 
 * Sun Aug 30 2026 Francesco Defilippo <francesco@defilippo.org> - 1.30.8-1
 - FIX: prevent UID enforcement from acquiring nested PID namespace processes
