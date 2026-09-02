@@ -56,6 +56,21 @@ type manualShutdownTimer struct {
 	stopOnce sync.Once
 }
 
+type lateFiringShutdownTimer struct {
+	ch       chan time.Time
+	stopOnce sync.Once
+}
+
+func newLateFiringShutdownTimer() *lateFiringShutdownTimer {
+	return &lateFiringShutdownTimer{ch: make(chan time.Time, 1)}
+}
+
+func (t *lateFiringShutdownTimer) C() <-chan time.Time { return t.ch }
+func (t *lateFiringShutdownTimer) Stop() bool {
+	t.stopOnce.Do(func() { t.ch <- time.Now() })
+	return false
+}
+
 func newManualShutdownTimer() *manualShutdownTimer {
 	return &manualShutdownTimer{
 		ch:      make(chan time.Time, 1),
@@ -191,6 +206,30 @@ func TestShutdownCompletionCancelsWatchdog(t *testing.T) {
 	case <-forced:
 		t.Fatal("completed shutdown invoked the forced-exit boundary")
 	default:
+	}
+}
+
+func TestShutdownCompletionWinsAgainstAlreadyExpiredWatchdog(t *testing.T) {
+	const attempts = 256
+	for attempt := 0; attempt < attempts; attempt++ {
+		timer := newLateFiringShutdownTimer()
+		forced := make(chan struct{}, 1)
+		application := &App{
+			logger: &watchdogLogger{warnings: make(chan shutdownWarning, 1)},
+		}
+		application.shutdownDeadline.timerFactory = func(time.Duration) shutdownTimer { return timer }
+		application.shutdownDeadline.forceExit = func() error {
+			forced <- struct{}{}
+			return nil
+		}
+		application.startShutdownWatchdog(time.Hour)
+
+		application.finishShutdownWatchdog()
+		select {
+		case <-forced:
+			t.Fatalf("attempt %d invoked forced exit after shutdown completion", attempt)
+		default:
+		}
 	}
 }
 
