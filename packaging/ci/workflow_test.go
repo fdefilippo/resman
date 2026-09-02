@@ -75,6 +75,32 @@ func TestFuzzWorkflowGeneratesInputsAndPreservesFailureEvidence(t *testing.T) {
 	assertNotContains(t, qualityWorkflow, "make fuzz")
 }
 
+func TestWorkflowGateStepsCannotIgnoreFailures(t *testing.T) {
+	root := repositoryRoot(t)
+	workflowDir := filepath.Join(root, ".github/workflows")
+	entries, err := os.ReadDir(workflowDir)
+	if err != nil {
+		t.Fatalf("read workflow directory: %v", err)
+	}
+
+	workflowCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext != ".yml" && ext != ".yaml" {
+			continue
+		}
+		workflowCount++
+		workflow := readFile(t, filepath.Join(workflowDir, entry.Name()))
+		assertNotContains(t, workflow, "continue-on-error:")
+	}
+	if workflowCount == 0 {
+		t.Fatal("no GitHub Actions workflows found")
+	}
+}
+
 func TestReleaseRPMWorkflowUsesOneFreshAuthoritativeDirectory(t *testing.T) {
 	root := repositoryRoot(t)
 	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))
