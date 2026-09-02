@@ -6,8 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
@@ -93,11 +96,53 @@ func TestWorkflowGateStepsCannotIgnoreFailures(t *testing.T) {
 			continue
 		}
 		workflowCount++
-		workflow := readFile(t, filepath.Join(workflowDir, entry.Name()))
-		assertNotContains(t, workflow, "continue-on-error:")
+		assertWorkflowHasNoContinueOnError(t, filepath.Join(workflowDir, entry.Name()))
 	}
 	if workflowCount == 0 {
 		t.Fatal("no GitHub Actions workflows found")
+	}
+}
+
+func TestWorkflowContinueOnErrorGuardParsesYAMLKeys(t *testing.T) {
+	tests := []struct {
+		name      string
+		workflow  string
+		wantLines []int
+	}{
+		{
+			name: "normally formatted step key",
+			workflow: "jobs:\n  test:\n    steps:\n      - continue-on-error: true\n" +
+				"        run: make test\n",
+			wantLines: []int{4},
+		},
+		{
+			name: "space before colon at job and step levels",
+			workflow: "jobs:\n  test:\n    continue-on-error : true\n    steps:\n" +
+				"      - continue-on-error : false\n        run: make test\n",
+			wantLines: []int{3, 5},
+		},
+		{
+			name:     "value and comment are not keys",
+			workflow: "name: \"continue-on-error:\"\n# continue-on-error: true\njobs: {}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines, err := workflowContinueOnErrorLines([]byte(tt.workflow))
+			if err != nil {
+				t.Fatalf("parse workflow: %v", err)
+			}
+			if !slices.Equal(lines, tt.wantLines) {
+				t.Fatalf("continue-on-error lines = %v, want %v", lines, tt.wantLines)
+			}
+		})
+	}
+}
+
+func TestWorkflowContinueOnErrorGuardRejectsMalformedYAML(t *testing.T) {
+	if _, err := workflowContinueOnErrorLines([]byte("jobs: [unterminated\n")); err == nil {
+		t.Fatal("workflow guard accepted malformed YAML")
 	}
 }
 
@@ -362,6 +407,49 @@ func assertNotContains(t *testing.T, content, forbidden string) {
 	if strings.Contains(content, forbidden) {
 		t.Fatalf("content unexpectedly contains %q", forbidden)
 	}
+}
+
+func assertWorkflowHasNoContinueOnError(t *testing.T, path string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	lines, err := workflowContinueOnErrorLines(content)
+	if err != nil {
+		t.Fatalf("parse workflow %s: %v", path, err)
+	}
+	if len(lines) > 0 {
+		t.Fatalf("workflow %s contains continue-on-error at lines %v", path, lines)
+	}
+}
+
+func workflowContinueOnErrorLines(content []byte) ([]int, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return nil, fmt.Errorf("decode YAML: %w", err)
+	}
+
+	var lines []int
+	var visit func(*yaml.Node)
+	visit = func(node *yaml.Node) {
+		if node.Kind == yaml.MappingNode {
+			for index := 0; index+1 < len(node.Content); index += 2 {
+				key := node.Content[index]
+				value := node.Content[index+1]
+				if key.Kind == yaml.ScalarNode && key.Value == "continue-on-error" {
+					lines = append(lines, key.Line)
+				}
+				visit(value)
+			}
+			return
+		}
+		for _, child := range node.Content {
+			visit(child)
+		}
+	}
+	visit(&document)
+	return lines, nil
 }
 
 func makeTarget(t *testing.T, makefile, target string) string {
