@@ -125,10 +125,14 @@ ENABLE_PROMETHEUS=true
 # Notify when a user is newly limited
 LIMIT_HOOK_ENABLED=false
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
+# LIMIT_HOOK_SCRIPT_USER=resman-hook
+# LIMIT_HOOK_SCRIPT_GROUP=resman-hook
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
 # Hook process output and URL credentials/paths are never copied into daemon logs.
-# Shutdown cancels and drains in-flight hooks; Prometheus records each terminal outcome.
+# Script and URL jobs receive independent deadlines. Shutdown cancels and drains them.
 LIMIT_HOOK_TIMEOUT=10
+LIMIT_HOOK_MAX_CONCURRENCY=2
+LIMIT_HOOK_QUEUE_CAPACITY=64
 
 # MCP server
 MCP_ENABLED=true
@@ -329,10 +333,14 @@ PSI mode, trigger thresholds, tracking window, fallback interval, and metrics
 refresh interval support hot reload. Changes that affect kernel PSI triggers
 rebuild the watcher; loop interval changes take effect immediately.
 
-Limit hook scripts receive `RESMAN_LIMIT_*` environment variables. Webhooks receive
-a JSON `POST` with `uid`, `username`, `enforceable_cpu_usage_percent`,
-`cpu_eligible_users_count`,
-`shared_cgroup`, `timestamp`, and `server_role`.
+Limit hook scripts run under an explicit non-root NSS user and group, without
+supplementary groups or the daemon environment. Script and webhook deliveries use a
+fixed worker pool and bounded queue; saturation never blocks enforcement. Webhooks
+receive a JSON `POST` with `uid`, `username`,
+`enforceable_cpu_usage_percent`, `cpu_eligible_users_count`, `shared_cgroup`,
+`timestamp`, and `server_role`. Each mechanism receives an independent
+`LIMIT_HOOK_TIMEOUT` deadline. See [Limit-hook execution](docs/LIMIT-HOOKS.md) for the
+complete security, shutdown, and observability contract.
 
 Dynamic fields are reloaded automatically. Restart the service after changing
 fields marked static in `config/resman.conf.example`, such as cgroup paths or

@@ -10,12 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/limithook"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -114,10 +117,54 @@ func TestPostLimitHook(t *testing.T) {
 	}
 }
 
+func TestPostLimitHookUsesItsOwnClientAndHonorsTheRequestDeadline(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+
+	originalDefault := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("http.DefaultClient must not be used")
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalDefault })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := postLimitHook(ctx, server.URL, limitHookEvent{UID: 1000, Username: "alice"})
+	close(release)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("postLimitHook() error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestPostLimitHookDoesNotRetryFailedRequests(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	err := postLimitHook(t.Context(), server.URL, limitHookEvent{UID: 1000, Username: "alice"})
+	if err == nil {
+		t.Fatal("postLimitHook() error = nil, want HTTP failure")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("HTTP delivery attempts = %d, want exactly one", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func TestCleanupCancelsAndWaitsForLimitHooks(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.LimitHookEnabled = true
-	cfg.LimitHookScript = "/test/hook"
 	cfg.LimitHookTimeout = 30
 
 	exporter := &mockPrometheusExporter{}
@@ -125,11 +172,12 @@ func TestCleanupCancelsAndWaitsForLimitHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
+	cfg.LimitHookScript = "/test/hook"
 
 	started := make(chan struct{})
 	cancelObserved := make(chan struct{})
 	release := make(chan struct{})
-	manager.executeHookScript = func(ctx context.Context, _ string, _ limitHookEvent) error {
+	manager.executeHookScript = func(ctx context.Context, _ hookScriptInvocation, _ limitHookEvent) error {
 		close(started)
 		<-ctx.Done()
 		close(cancelObserved)
@@ -173,7 +221,6 @@ func TestCleanupCancelsAndWaitsForLimitHooks(t *testing.T) {
 func TestRunLimitHookRecordsEachTerminalOutcome(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.LimitHookEnabled = true
-	cfg.LimitHookScript = "/test/hook"
 	cfg.LimitHookURL = "https://hooks.example.test/resman"
 
 	exporter := &mockPrometheusExporter{}
@@ -181,13 +228,16 @@ func TestRunLimitHookRecordsEachTerminalOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
 	}
+	cfg.LimitHookScript = "/test/hook"
 	t.Cleanup(manager.stopLimitHooks)
 
-	manager.executeHookScript = func(context.Context, string, limitHookEvent) error { return nil }
+	manager.executeHookScript = func(context.Context, hookScriptInvocation, limitHookEvent) error { return nil }
 	manager.executeHookRequest = func(context.Context, string, limitHookEvent) error {
 		return errors.New("delivery failed")
 	}
-	manager.runLimitHook(context.Background(), cfg, limitHookEvent{UID: 1000, Username: "alice"})
+	event := limitHookEvent{UID: 1000, Username: "alice"}
+	manager.runLimitHookJob(limitHookJob{hookType: resmanmetrics.LimitHookTypeScript, timeout: time.Second, event: event})
+	manager.runLimitHookJob(limitHookJob{hookType: resmanmetrics.LimitHookTypeHTTP, endpoint: cfg.LimitHookURL, timeout: time.Second, event: event})
 
 	records := exporter.recordedLimitHookExecutions()
 	want := []limitHookMetricRecord{
@@ -214,6 +264,7 @@ func TestLimitHookOutcomeUsesBoundedTerminalValues(t *testing.T) {
 		{name: "failure", err: errors.New("delivery failed"), want: resmanmetrics.LimitHookOutcomeFailure},
 		{name: "timeout", err: fmt.Errorf("hook: %w", context.DeadlineExceeded), want: resmanmetrics.LimitHookOutcomeTimeout},
 		{name: "cancelled", err: fmt.Errorf("hook: %w", context.Canceled), want: resmanmetrics.LimitHookOutcomeCancelled},
+		{name: "saturated", err: fmt.Errorf("hook: %w", errLimitHookSaturated), want: resmanmetrics.LimitHookOutcomeSaturated},
 	}
 
 	for _, tt := range tests {
@@ -297,6 +348,9 @@ func TestPostLimitHookInvalidEndpointDoesNotRetainSecrets(t *testing.T) {
 
 func TestRunLimitHookScript(t *testing.T) {
 	tmpDir := t.TempDir()
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		t.Fatalf("secure temporary hook directory: %v", err)
+	}
 	outputPath := filepath.Join(tmpDir, "hook.out")
 	scriptPath := filepath.Join(tmpDir, "hook.sh")
 
@@ -321,7 +375,7 @@ func TestRunLimitHookScript(t *testing.T) {
 		MemoryOOMKillEventsDelta:   &zero,
 	}
 
-	if err := runLimitHookScript(t.Context(), scriptPath, event); err != nil {
+	if err := runLimitHookScript(t.Context(), testHookScriptInvocation(scriptPath), event); err != nil {
 		t.Fatalf("runLimitHookScript() error: %v", err)
 	}
 
@@ -359,13 +413,17 @@ func TestLimitHookSnapshotReportsAppliedHostSubsetWithoutCallingTheCompleteUIDGu
 }
 
 func TestRunLimitHookScriptFailureDoesNotReturnProcessOutput(t *testing.T) {
-	scriptPath := filepath.Join(t.TempDir(), "failing-hook.sh")
+	tmpDir := t.TempDir()
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		t.Fatalf("secure temporary hook directory: %v", err)
+	}
+	scriptPath := filepath.Join(tmpDir, "failing-hook.sh")
 	script := "#!/bin/sh\nprintf '%s' 'stdout-canary'\nprintf '%s' 'stderr-canary' >&2\nexit 7\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write hook script: %v", err)
 	}
 
-	err := runLimitHookScript(t.Context(), scriptPath, limitHookEvent{UID: 1000, Username: "app"})
+	err := runLimitHookScript(t.Context(), testHookScriptInvocation(scriptPath), limitHookEvent{UID: 1000, Username: "app"})
 	if err == nil {
 		t.Fatal("runLimitHookScript() error = nil, want exit failure")
 	}
@@ -394,5 +452,17 @@ func TestRunLimitHookScriptFailureDoesNotReturnProcessOutput(t *testing.T) {
 		if strings.Contains(logged, secret) {
 			t.Fatalf("limit-hook warning exposed %q: %s", secret, logged)
 		}
+	}
+}
+
+func testHookScriptInvocation(path string) hookScriptInvocation {
+	return hookScriptInvocation{
+		path: path,
+		identity: limithook.ScriptIdentity{
+			Username: strconv.Itoa(os.Getuid()),
+			Group:    strconv.Itoa(os.Getgid()),
+			UID:      uint32(os.Getuid()),
+			GID:      uint32(os.Getgid()),
+		},
 	}
 }

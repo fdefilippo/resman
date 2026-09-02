@@ -28,12 +28,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/configepoch"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/limithook"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -101,7 +103,15 @@ type Manager struct {
 	hookCtx                       context.Context
 	hookCancel                    context.CancelFunc
 	hookClosed                    bool
-	executeHookScript             func(context.Context, string, limitHookEvent) error
+	hookQueue                     chan limitHookJob
+	hookWorkerCount               int
+	hookWorkersStarted            bool
+	hookInFlight                  atomic.Int64
+	hookScriptIdentity            limithook.ScriptIdentity
+	hookLastSaturationLog         time.Time
+	hookSaturationSuppressed      uint64
+	hookNow                       func() time.Time
+	executeHookScript             func(context.Context, hookScriptInvocation, limitHookEvent) error
 	executeHookRequest            func(context.Context, string, limitHookEvent) error
 
 	// Cached metrics state.
@@ -285,6 +295,7 @@ type PrometheusExporter interface {
 	RecordError(component, errorType string)
 	RecordCgroupIngressSkips(result cgroup.ProcessMoveResult)
 	RecordLimitHookExecution(hookType resmanmetrics.LimitHookType, outcome resmanmetrics.LimitHookOutcome)
+	ObserveLimitHookExecutor(inFlight, queued, capacity int)
 	Start(ctx context.Context) error
 	Stop() error
 	CleanupUserMetrics(activeUids map[int]bool)
@@ -303,6 +314,12 @@ func NewManager(
 
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil: required for state manager initialization")
+	}
+	if cfg.LimitHookMaxConcurrency < 1 {
+		return nil, fmt.Errorf("initialize limit-hook executor: LIMIT_HOOK_MAX_CONCURRENCY must be at least 1")
+	}
+	if cfg.LimitHookQueueCapacity < 1 {
+		return nil, fmt.Errorf("initialize limit-hook executor: LIMIT_HOOK_QUEUE_CAPACITY must be at least 1")
 	}
 
 	logger := logging.GetLogger()
@@ -338,8 +355,11 @@ func NewManager(
 		pendingPatternReconciliations: make(map[int]struct{}),
 		hookCtx:                       hookCtx,
 		hookCancel:                    hookCancel,
+		hookQueue:                     make(chan limitHookJob, cfg.LimitHookQueueCapacity),
+		hookWorkerCount:               cfg.LimitHookMaxConcurrency,
+		hookNow:                       time.Now,
 		executeHookScript:             runLimitHookScript,
-		executeHookRequest:            postLimitHook,
+		executeHookRequest:            newLimitHookHTTPRequestExecutor(),
 		metricsCache:                  make(map[string]interface{}),
 		metricsCacheTime:              make(map[string]time.Time),
 		controlHist: &controlHistory{
@@ -349,6 +369,19 @@ func NewManager(
 		previousIOEligibleUsers: make(map[int]struct{}),
 		previousBlockIOCounters: make(map[int]blockIOCounterSample),
 		blockIOObservedUsers:    make(map[int]bool),
+	}
+	if cfg.LimitHookScript != "" {
+		identity, identityErr := limithook.ResolveScriptIdentity(cfg.LimitHookScriptUser, cfg.LimitHookScriptGroup)
+		if identityErr != nil {
+			return nil, fmt.Errorf("initialize limit-hook script identity: %w", identityErr)
+		}
+		if pathErr := limithook.ValidateScriptPath(cfg.LimitHookScript, identity); pathErr != nil {
+			return nil, fmt.Errorf("initialize limit-hook script path: %w", pathErr)
+		}
+		mgr.hookScriptIdentity = identity
+	}
+	if prometheus != nil {
+		prometheus.ObserveLimitHookExecutor(0, 0, cfg.LimitHookQueueCapacity)
 	}
 	reserve, err := cpupoints.NewReservePoints(uint64(cfg.GetCPUReservePoints()))
 	if err != nil {

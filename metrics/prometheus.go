@@ -78,6 +78,7 @@ const (
 	LimitHookOutcomeFailure   LimitHookOutcome = "failure"
 	LimitHookOutcomeTimeout   LimitHookOutcome = "timeout"
 	LimitHookOutcomeCancelled LimitHookOutcome = "cancelled"
+	LimitHookOutcomeSaturated LimitHookOutcome = "saturated"
 )
 
 // PrometheusExporter exports metrics in Prometheus format.
@@ -159,6 +160,9 @@ type PrometheusExporter struct {
 	errorsTotal               *prometheus.CounterVec
 	cgroupIngressSkipped      *prometheus.CounterVec
 	limitHookExecutions       *prometheus.CounterVec
+	limitHookInFlight         prometheus.Gauge
+	limitHookQueueDepth       prometheus.Gauge
+	limitHookQueueCapacity    prometheus.Gauge
 
 	// Histograms record operation durations.
 	controlCycleDuration      prometheus.Histogram
@@ -772,6 +776,24 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"hook_type", "outcome"},
 	)
+	exp.limitHookInFlight = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limit_hook_in_flight",
+		Help:        "Current number of limit-hook deliveries executing in the bounded worker pool",
+		ConstLabels: staticLabels,
+	})
+	exp.limitHookQueueDepth = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limit_hook_queue_depth",
+		Help:        "Current number of accepted limit-hook deliveries waiting for a worker",
+		ConstLabels: staticLabels,
+	})
+	exp.limitHookQueueCapacity = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "limit_hook_queue_capacity",
+		Help:        "Configured maximum number of pending limit-hook deliveries",
+		ConstLabels: staticLabels,
+	})
 
 	// === Execution-time histograms ===
 
@@ -1253,13 +1275,31 @@ func (exp *PrometheusExporter) RecordLimitHookExecution(hookType LimitHookType, 
 	exp.limitHookExecutions.WithLabelValues(string(hookType), string(outcome)).Inc()
 }
 
+// ObserveLimitHookExecutor publishes the bounded worker-pool state.
+func (exp *PrometheusExporter) ObserveLimitHookExecutor(inFlight, queued, capacity int) {
+	if exp == nil {
+		return
+	}
+	if inFlight < 0 || queued < 0 || capacity < 1 || queued > capacity {
+		exp.logger.Error("Rejected invalid limit hook executor observation",
+			"in_flight", inFlight,
+			"queued", queued,
+			"capacity", capacity,
+		)
+		return
+	}
+	exp.limitHookInFlight.Set(float64(inFlight))
+	exp.limitHookQueueDepth.Set(float64(queued))
+	exp.limitHookQueueCapacity.Set(float64(capacity))
+}
+
 func validLimitHookType(hookType LimitHookType) bool {
 	return hookType == LimitHookTypeScript || hookType == LimitHookTypeHTTP
 }
 
 func validLimitHookOutcome(outcome LimitHookOutcome) bool {
 	switch outcome {
-	case LimitHookOutcomeSuccess, LimitHookOutcomeFailure, LimitHookOutcomeTimeout, LimitHookOutcomeCancelled:
+	case LimitHookOutcomeSuccess, LimitHookOutcomeFailure, LimitHookOutcomeTimeout, LimitHookOutcomeCancelled, LimitHookOutcomeSaturated:
 		return true
 	default:
 		return false

@@ -159,6 +159,7 @@ install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 config/cpu-points.map.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/
 
 # Install TLS and monitoring documentation.
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -270,6 +271,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/cpu-points.map.example
 %doc %{_docdir}/%{name}/CONFIGURATION.md
 %doc %{_docdir}/%{name}/UPGRADING.md
+%doc %{_docdir}/%{name}/LIMIT-HOOKS.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/

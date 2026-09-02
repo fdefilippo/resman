@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 // FieldLifecycle defines whether a configuration field may change while the
@@ -63,7 +64,8 @@ var restartRequiredConfigFields = []string{
 	"MCP_TLS_MIN_VERSION", "MCP_LOG_LEVEL", "MCP_AUTH_TOKEN", "MCP_ALLOW_WRITE_OPS",
 	"MCP_SHUTDOWN_TIMEOUT",
 	"METRICS_DB_ENABLED", "METRICS_DB_PATH", "METRICS_DB_WRITE_INTERVAL",
-	"CPU_POINTS_FILE",
+	"CPU_POINTS_FILE", "LIMIT_HOOK_SCRIPT_USER", "LIMIT_HOOK_SCRIPT_GROUP",
+	"LIMIT_HOOK_MAX_CONCURRENCY", "LIMIT_HOOK_QUEUE_CAPACITY",
 }
 
 var configFieldLifecycles = buildConfigFieldLifecycles()
@@ -122,6 +124,9 @@ func ApplyReloadLifecycle(effective, requested *Config) ([]string, error) {
 	effective.mu.RUnlock()
 	if err != nil {
 		return nil, err
+	}
+	if validationErrors := validateLimitHookConfig(requested); len(validationErrors) > 0 {
+		return nil, fmt.Errorf("restart-required preservation produced invalid limit-hook configuration: %s", strings.Join(validationErrors, "; "))
 	}
 	sort.Strings(rejected)
 	return rejected, nil

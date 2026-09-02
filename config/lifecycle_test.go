@@ -12,6 +12,7 @@ package config
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +97,22 @@ func TestApplyReloadLifecycle(t *testing.T) {
 		if field == "old-secret" || field == "new-secret" {
 			t.Fatal("secret value leaked in deferred field list")
 		}
+	}
+}
+
+func TestApplyReloadLifecycleRejectsDynamicScriptWithoutAnEffectiveStaticIdentity(t *testing.T) {
+	effective := DefaultConfig()
+	requested := DefaultConfig()
+	requested.LimitHookScript = "/bin/true"
+	requested.LimitHookScriptUser = "root"
+	requested.LimitHookScriptGroup = "root"
+
+	_, err := ApplyReloadLifecycle(effective, requested)
+	if err == nil || !strings.Contains(err.Error(), "invalid limit-hook configuration") {
+		t.Fatalf("ApplyReloadLifecycle() error = %v", err)
+	}
+	if requested.LimitHookScriptUser != "" || requested.LimitHookScriptGroup != "" {
+		t.Fatalf("restart-required identity was not preserved: user=%q group=%q", requested.LimitHookScriptUser, requested.LimitHookScriptGroup)
 	}
 }
 

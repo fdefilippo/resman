@@ -21,6 +21,9 @@ io_anchor_pid=
 container_workload_pid=
 container_name=
 container_log_dir=
+hook_workload_pids=()
+hook_output_dir=
+hook_script=/usr/local/bin/resman-functional-limit-hook
 functional_cgroup_root=/sys/fs/cgroup
 expected_daemon_error_patterns=()
 
@@ -39,7 +42,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality) ;;
+	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -107,6 +110,18 @@ finish() {
 		pkill -TERM -u resman-cpu -x stress >/dev/null 2>&1
 		wait "$container_workload_pid" 2>/dev/null
 		container_workload_pid=
+	fi
+	local hook_pid
+	for hook_pid in "${hook_workload_pids[@]:-}"; do
+		[[ -n $hook_pid ]] || continue
+		kill -TERM "$hook_pid" 2>/dev/null
+		wait "$hook_pid" 2>/dev/null
+	done
+	hook_workload_pids=()
+	if [[ $scenario == limit-hook-executor ]]; then
+		for hook_user in resman-cpu resman-memory resman-io; do
+			pkill -TERM -u "$hook_user" -x yes >/dev/null 2>&1 || true
+		done
 	fi
     ps -eo pid,ppid,uid,user,comm,args >"$artifact_dir/processes.txt" 2>&1
     find "$functional_cgroup_root/resman-functional-$run_id" -maxdepth 3 -type d -print \
@@ -308,8 +323,59 @@ PSI_IO_STALL_THRESHOLD=999999
 PSI_FALLBACK_INTERVAL=30
 EOF
 fi
+if [[ $scenario == limit-hook-executor ]]; then
+	hook_output_dir=/tmp/resman-limit-hook-$run_id
+	install -d -o resman-hook -g resman-hook -m 0700 "$hook_output_dir"
+	{
+		printf '%s\n' '#!/bin/sh'
+		printf "output_dir='%s'\n" "$hook_output_dir"
+		cat <<'HOOK'
+set -eu
+sequence_file=$output_dir/sequence
+sequence=1
+if [ -r "$sequence_file" ]; then
+	sequence=$(( $(cat "$sequence_file") + 1 ))
+fi
+printf '%s\n' "$sequence" >"$sequence_file"
+{
+	printf 'uid=%s\n' "$(id -u)"
+	printf 'gid=%s\n' "$(id -g)"
+	printf 'groups=%s\n' "$(id -G)"
+} >"$output_dir/identity.$sequence"
+tr '\0' '\n' <"/proc/$$/environ" | sort >"$output_dir/environment.$sequence"
+sleep 300 &
+child=$!
+pgid=$(ps -o pgid= -p "$child" | tr -d ' ')
+printf 'script_pid=%s\nchild_pid=%s\nprocess_group=%s\n' \
+	"$$" "$child" "$pgid" >"$output_dir/processes.$sequence"
+wait "$child"
+HOOK
+	} >"$hook_script"
+	chmod 0755 "$hook_script"
+	sed -i \
+		-e 's/^CPU_THRESHOLD=.*/CPU_THRESHOLD=10/' \
+		-e 's/^CPU_RELEASE_THRESHOLD=.*/CPU_RELEASE_THRESHOLD=1/' \
+		-e 's/^USER_INCLUDE_LIST=.*/USER_INCLUDE_LIST=^resman-cpu$,^resman-memory$,^resman-io$/' \
+		-e 's/^RAM_LIMIT_ENABLED=.*/RAM_LIMIT_ENABLED=false/' \
+		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=false/' \
+		"$config_file"
+	cat >>"$config_file" <<EOF
+LIMIT_HOOK_ENABLED=true
+LIMIT_HOOK_SCRIPT=$hook_script
+LIMIT_HOOK_SCRIPT_USER=resman-hook
+LIMIT_HOOK_SCRIPT_GROUP=resman-hook
+LIMIT_HOOK_TIMEOUT=2
+LIMIT_HOOK_MAX_CONCURRENCY=1
+LIMIT_HOOK_QUEUE_CAPACITY=1
+EOF
+fi
 chmod 0600 "$config_file"
 printf 'RESMAN_CONFIG=%s\n' "$config_file" >"$runtime_dir/environment"
+if [[ $scenario == limit-hook-executor ]]; then
+	printf '%s\n' 'MCP_AUTH_TOKEN=smolvm-parent-secret-canary' \
+		'RESMAN_PARENT_SECRET=smolvm-parent-environment-canary' \
+		>>"$runtime_dir/environment"
+fi
 chmod 0600 "$runtime_dir/environment"
 
 {
@@ -626,6 +692,179 @@ user_metric_value() {
 		'$1 ~ ("^" metric "{") && $1 ~ ("username=\"" username "\"") { print $2; exit }' \
 		"$metrics_file"
 }
+
+if [[ $scenario == limit-hook-executor ]]; then
+	limit_hook_metric_value() {
+		local outcome=$1 metrics_file=$2
+		awk -v outcome="outcome=\"$outcome\"" '
+			/^resman_limit_hook_executions_total\{/ \
+				&& index($0, "hook_type=\"script\"") \
+				&& index($0, outcome) { print $2; exit }
+		' "$metrics_file"
+	}
+
+	start_hook_cpu_load() {
+		local user=$1
+		runuser -u "$user" -- /usr/bin/yes >/dev/null &
+		hook_workload_pids+=("$!")
+	}
+
+	stop_hook_cpu_loads() {
+		local pid
+		for pid in "${hook_workload_pids[@]:-}"; do
+			[[ -n $pid ]] || continue
+			kill -TERM "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+		done
+		hook_workload_pids=()
+		for user in resman-cpu resman-memory resman-io; do
+			pkill -TERM -u "$user" -x yes >/dev/null 2>&1 || true
+		done
+	}
+
+	assert_hook_processes_gone() {
+		local process_file child_pid process_group
+		for process_file in "$hook_output_dir"/processes.*; do
+			[[ -e $process_file ]] || fail "the hook produced no process identity evidence"
+			child_pid=$(awk -F= '$1 == "child_pid" { print $2 }' "$process_file")
+			process_group=$(awk -F= '$1 == "process_group" { print $2 }' "$process_file")
+			[[ -n $child_pid && -n $process_group ]] \
+				|| fail "hook process evidence is incomplete: $process_file"
+			if kill -0 "$child_pid" 2>/dev/null; then
+				fail "limit-hook child PID $child_pid survived termination"
+			fi
+			if kill -0 -- "-$process_group" 2>/dev/null; then
+				fail "limit-hook process group $process_group survived termination"
+			fi
+		done
+	}
+
+	for user in resman-cpu resman-memory resman-io; do
+		start_hook_cpu_load "$user"
+	done
+	for user in resman-cpu resman-memory resman-io; do
+		uid=$(id -u "$user")
+		limited_cgroup=$base_cgroup/limited/best_effort/user_$uid
+		limited=false
+		for _ in $(seq 1 45); do
+			if [[ -r $limited_cgroup/cgroup.procs ]] && grep -q . "$limited_cgroup/cgroup.procs"; then
+				limited=true
+				break
+			fi
+			sleep 1
+		done
+		[[ $limited == true ]] || fail "$user was not limited during the hook burst"
+	done
+	ps -eo pid,ppid,pgid,uid,user,comm,args \
+		>"$artifact_dir/limit-hook-processes-during-burst.txt"
+
+	hook_metrics=$artifact_dir/limit-hook-burst.prom
+	hook_outcomes_ready=false
+	for _ in $(seq 1 30); do
+		curl --fail --silent --show-error --max-time 2 \
+			http://127.0.0.1:19100/metrics >"$hook_metrics" \
+			|| fail "cannot scrape limit-hook executor metrics"
+		timeout_count=$(limit_hook_metric_value timeout "$hook_metrics")
+		saturated_count=$(limit_hook_metric_value saturated "$hook_metrics")
+		if [[ ${timeout_count:-0} -ge 1 && ${saturated_count:-0} -ge 1 ]]; then
+			hook_outcomes_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $hook_outcomes_ready == true ]] \
+		|| fail "the hook burst did not produce both timeout and saturation outcomes"
+	hook_executor_drained=false
+	for _ in $(seq 1 10); do
+		curl --fail --silent --show-error --max-time 2 \
+			http://127.0.0.1:19100/metrics >"$hook_metrics" \
+			|| fail "cannot scrape limit-hook executor drain metrics"
+		if [[ $(metric_value resman_limit_hook_in_flight "$hook_metrics") == 0 \
+			&& $(metric_value resman_limit_hook_queue_depth "$hook_metrics") == 0 ]]; then
+			hook_executor_drained=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $hook_executor_drained == true ]] \
+		|| fail "the limit-hook executor did not drain after its timeout window"
+	[[ $(metric_value resman_limit_hook_in_flight "$hook_metrics") == 0 ]] \
+		|| fail "the hook worker remained in flight after the timeout window"
+	[[ $(metric_value resman_limit_hook_queue_depth "$hook_metrics") == 0 ]] \
+		|| fail "the hook queue did not drain after the timeout window"
+	[[ $(metric_value resman_limit_hook_queue_capacity "$hook_metrics") == 1 ]] \
+		|| fail "the hook queue capacity metric did not report the configured bound"
+
+	hook_uid=$(id -u resman-hook)
+	hook_gid=$(id -g resman-hook)
+	identity_files=("$hook_output_dir"/identity.*)
+	[[ -e ${identity_files[0]} ]] || fail "the limit hook recorded no execution identity"
+	for identity_file in "${identity_files[@]}"; do
+		grep -qx "uid=$hook_uid" "$identity_file" \
+			|| fail "the limit hook did not run under the configured UID"
+		grep -qx "gid=$hook_gid" "$identity_file" \
+			|| fail "the limit hook did not run under the configured GID"
+		grep -qx "groups=$hook_gid" "$identity_file" \
+			|| fail "the limit hook retained supplementary groups"
+	done
+	for environment_file in "$hook_output_dir"/environment.*; do
+		[[ -e $environment_file ]] || fail "the limit hook recorded no environment"
+		if grep -Eq 'MCP_AUTH_TOKEN|RESMAN_PARENT_SECRET|smolvm-parent-.*-canary' "$environment_file"; then
+			fail "the limit hook inherited a daemon secret"
+		fi
+		while IFS='=' read -r variable _; do
+			case "$variable" in
+				PATH|LANG|LC_ALL|HOME|PWD|USER|LOGNAME|RESMAN_LIMIT_UID|RESMAN_LIMIT_USERNAME|RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT|RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT|RESMAN_LIMIT_SHARED_CGROUP|RESMAN_LIMIT_TIMESTAMP|RESMAN_LIMIT_SERVER_ROLE|RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS|RESMAN_LIMIT_CPU_POINTS_CONFIGURED_GUARANTEE|RESMAN_LIMIT_CPU_POINTS_LIFECYCLE_STATE|RESMAN_LIMIT_CPU_POINTS_APPLIED_CLASS|RESMAN_LIMIT_CPU_POINTS_APPLIED_WEIGHT|RESMAN_LIMIT_CPU_POINTS_APPLIED_TO_PROCESSES|RESMAN_LIMIT_CPU_POINTS_COMPLETE_UID_WORKLOAD_GUARANTEED|RESMAN_LIMIT_CPU_POINTS_RECONCILIATION_DEGRADED|RESMAN_LIMIT_CPU_POINTS_PROCESS_COVERAGE|RESMAN_LIMIT_PID_NAMESPACE_MISMATCH_COUNT|RESMAN_LIMIT_PID_NAMESPACE_UNAVAILABLE_COUNT|RESMAN_LIMIT_RAM_CGROUP_MEMORY_CURRENT_BYTES|RESMAN_LIMIT_RAM_COVERAGE|RESMAN_LIMIT_RAM_COVERAGE_INCOMPLETE_PROCESS_COUNT|RESMAN_LIMIT_RAM_SWAP_DISABLED|RESMAN_LIMIT_MEMORY_HIGH|RESMAN_LIMIT_MEMORY_MAX|RESMAN_LIMIT_MEMORY_SWAP_MAX|RESMAN_LIMIT_MEMORY_HIGH_EVENTS_DELTA|RESMAN_LIMIT_MEMORY_MAX_EVENTS_DELTA|RESMAN_LIMIT_MEMORY_OOM_EVENTS_DELTA|RESMAN_LIMIT_MEMORY_OOM_KILL_EVENTS_DELTA) ;;
+				*) fail "the limit hook inherited unexpected environment variable $variable" ;;
+			esac
+		done <"$environment_file"
+	done
+	assert_hook_processes_gone
+	saturation_warnings=$(grep -c 'Limit hook queue saturated' "$state_dir/resman.log" || true)
+	[[ $saturation_warnings -eq 1 ]] \
+		|| fail "hook saturation emitted $saturation_warnings warnings instead of one rate-limited diagnostic"
+
+	stop_hook_cpu_loads
+	systemctl stop "$service" || fail "resman did not stop after the timeout phase"
+	phase_one_executions=${#identity_files[@]}
+	systemctl start "$service" || fail "resman did not restart for the shutdown phase"
+	start_hook_cpu_load resman-cpu
+	shutdown_hook_ready=false
+	for _ in $(seq 1 45); do
+		current_executions=$(find "$hook_output_dir" -maxdepth 1 -type f -name 'processes.*' | wc -l)
+		if (( current_executions > phase_one_executions )); then
+			shutdown_hook_ready=true
+			break
+		fi
+		sleep 1
+	done
+	[[ $shutdown_hook_ready == true ]] \
+		|| fail "a running hook was not established for the shutdown phase"
+	shutdown_started=$SECONDS
+	systemctl stop "$service" || fail "shutdown failed while a limit hook was running"
+	shutdown_duration=$((SECONDS - shutdown_started))
+	(( shutdown_duration < 30 )) \
+		|| fail "shutdown did not drain the limit-hook worker within the service deadline"
+	assert_hook_processes_gone
+	if pgrep -u resman-hook >/dev/null 2>&1; then
+		fail "a process owned by the limit-hook identity survived shutdown"
+	fi
+	stop_hook_cpu_loads
+	cp -R "$hook_output_dir" "$artifact_dir/limit-hook-executor"
+	{
+		printf 'hook_uid=%s\n' "$hook_uid"
+		printf 'hook_gid=%s\n' "$hook_gid"
+		printf 'timeout_outcomes=%s\n' "$timeout_count"
+		printf 'saturated_outcomes=%s\n' "$saturated_count"
+		printf 'saturation_warnings=%s\n' "$saturation_warnings"
+		printf 'shutdown_duration_seconds=%s\n' "$shutdown_duration"
+		printf 'process_groups_remaining=%s\n' none
+	} >"$artifact_dir/limit-hook-executor.txt"
+	result=PASS
+	detail="bounded non-root limit-hook execution saturated without blocking, timed out cleanly, and drained at shutdown"
+	echo "PASS: $detail"
+	exit 0
+fi
 
 if [[ $scenario == psi-refresh-neutrality ]]; then
 	baseline_metrics=$artifact_dir/psi-baseline.prom

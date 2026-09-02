@@ -139,6 +139,7 @@ func TestRecordLimitHookExecutionUsesBoundedLabels(t *testing.T) {
 	exporter.RecordLimitHookExecution(LimitHookTypeScript, LimitHookOutcomeSuccess)
 	exporter.RecordLimitHookExecution(LimitHookTypeScript, LimitHookOutcomeSuccess)
 	exporter.RecordLimitHookExecution(LimitHookTypeHTTP, LimitHookOutcomeFailure)
+	exporter.RecordLimitHookExecution(LimitHookTypeHTTP, LimitHookOutcomeSaturated)
 	exporter.RecordLimitHookExecution(LimitHookType("unbounded"), LimitHookOutcome("unbounded"))
 
 	families, err := exporter.registry.Gather()
@@ -149,8 +150,8 @@ func TestRecordLimitHookExecutionUsesBoundedLabels(t *testing.T) {
 		if family.GetName() != "resman_limit_hook_executions_total" {
 			continue
 		}
-		if len(family.Metric) != 2 {
-			t.Fatalf("limit-hook metric series = %d, want 2 bounded series", len(family.Metric))
+		if len(family.Metric) != 3 {
+			t.Fatalf("limit-hook metric series = %d, want 3 bounded series", len(family.Metric))
 		}
 		got := make(map[string]float64, len(family.Metric))
 		for _, metric := range family.Metric {
@@ -160,12 +161,45 @@ func TestRecordLimitHookExecutionUsesBoundedLabels(t *testing.T) {
 			}
 			got[labels["hook_type"]+"/"+labels["outcome"]] = metric.GetCounter().GetValue()
 		}
-		if got["script/success"] != 2 || got["http/failure"] != 1 {
-			t.Fatalf("limit-hook metric values = %+v, want script/success=2 and http/failure=1", got)
+		if got["script/success"] != 2 || got["http/failure"] != 1 || got["http/saturated"] != 1 {
+			t.Fatalf("limit-hook metric values = %+v", got)
 		}
 		return
 	}
 	t.Fatal("resman_limit_hook_executions_total metric not found")
+}
+
+func TestObserveLimitHookExecutorPublishesBoundedState(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+	exporter.ObserveLimitHookExecutor(2, 7, 64)
+
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	want := map[string]float64{
+		"resman_limit_hook_in_flight":      2,
+		"resman_limit_hook_queue_depth":    7,
+		"resman_limit_hook_queue_capacity": 64,
+	}
+	for _, family := range families {
+		value, ok := want[family.GetName()]
+		if !ok {
+			continue
+		}
+		if len(family.Metric) != 1 || family.Metric[0].GetGauge().GetValue() != value {
+			t.Errorf("%s = %+v, want %v", family.GetName(), family.Metric, value)
+		}
+		delete(want, family.GetName())
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing limit-hook executor metrics: %v", want)
+	}
 }
 
 func TestNewPrometheusExporterAppliesTLSAndClientCA(t *testing.T) {

@@ -1163,13 +1163,27 @@ type Manager struct {
 
 ### 9.4 Limit Hook Lifecycle
 
-Script and HTTP hooks are asynchronous relative to the control cycle, but are owned
-by the state manager. Every configured delivery terminates as `success`, `failure`,
-`timeout`, or `cancelled` and increments
-`resman_limit_hook_executions_total{hook_type,outcome}`. Shutdown closes dispatch,
-cancels the shared hook context, and waits for every in-flight script or HTTP request
-to become quiescent before state cleanup continues. Script output and secret-bearing
-URL components remain excluded from returned errors and logs.
+Script and HTTP hooks are independent jobs, asynchronous relative to the control
+cycle, and owned by one fixed state-manager worker pool and one bounded queue.
+Admission is non-blocking. A full queue terminates the rejected job as `saturated`
+without retry, durable spooling, or any change to enforcement. Every accepted job
+receives its own complete timeout and terminates as `success`, `failure`, `timeout`,
+or `cancelled`; all five outcomes increment
+`resman_limit_hook_executions_total{hook_type,outcome}` exactly once. Shutdown closes
+admission, cancels the executor context, drains queued jobs through the cancelled
+terminal path, and waits for the fixed workers before state cleanup continues.
+
+Script configuration resolves an exact non-root NSS UID and GID at startup. The
+absolute regular executable and each ancestor are checked for ownership, mode, and
+symbolic links both during validation and immediately before execution. The process
+receives no supplementary groups, starts in `/`, and inherits only the documented
+fixed base and `RESMAN_LIMIT_*` event environment. Each execution owns a process
+group; timeout and shutdown perform bounded TERM/KILL escalation and verify group
+drain. This is ordinary-descendant cleanup, not hard containment of a hostile process
+that deliberately creates a new session. HTTP uses a dedicated bounded client with
+no retry and no inherited proxy. Script output and secret-bearing URL components
+remain excluded from returned errors and logs. The complete operational contract is
+in [`LIMIT-HOOKS.md`](LIMIT-HOOKS.md).
 The transition payload also carries configured class and optional guarantee,
 requested/applied lifecycle and weight, reconciliation state, complete/partial process
 coverage, PID-namespace rejection counts, and post-ingress RAM cgroup coverage. It
@@ -1341,6 +1355,9 @@ the interval series instead of creating a wrapped delta.
 - `resman_errors_total{component, error_type}` (operational errors with bounded labels)
 - `resman_limit_hook_executions_total{hook_type, outcome}` (terminal script and HTTP
   hook outcomes using bounded labels)
+- `resman_limit_hook_in_flight` (current deliveries owned by workers)
+- `resman_limit_hook_queue_depth` (current pending deliveries)
+- `resman_limit_hook_queue_capacity` (configured pending-delivery bound)
 - `resman_cgroup_ingress_skipped_total{reason}` (processes not moved into ResMan-owned
   cgroups; reason is `pid_namespace_mismatch` or `pid_namespace_unavailable`)
 - `resman_procfs_unavailable_processes{access}` (current missing executable-identity

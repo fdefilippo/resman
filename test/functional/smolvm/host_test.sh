@@ -188,6 +188,7 @@ grep -q 'SMOLVM_SCENARIO' "$script_dir/run.sh"
 grep -q 'pressure_summary cpu' "$script_dir/guest/run-functional.sh"
 grep -q 'memory-only' "$script_dir/guest/run-functional.sh"
 grep -q 'psi-refresh-neutrality' "$script_dir/guest/run-functional.sh"
+grep -q 'limit-hook-executor' "$script_dir/guest/run-functional.sh"
 render_line=$(grep -n 'sed "s/@RUN_ID@/' "$script_dir/guest/run-functional.sh" | head -n 1 | cut -d: -f1)
 # shellcheck disable=SC2016 # Match the literal shell condition in the guest runner.
 memory_config_line=$(grep -n 'if \[\[ \$scenario == memory-only \]\]' \

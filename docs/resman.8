@@ -1023,7 +1023,13 @@ resman_metrics_collection_duration_seconds \- System metrics collection duration
 .IP \(bu
 resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
 .IP \(bu
-resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, or cancelled (counter)
+resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, cancelled, or saturated (counter)
+.IP \(bu
+resman_limit_hook_in_flight \- Current running limit-hook deliveries (gauge)
+.IP \(bu
+resman_limit_hook_queue_depth \- Current pending limit-hook deliveries (gauge)
+.IP \(bu
+resman_limit_hook_queue_capacity \- Configured pending-delivery bound (gauge)
 .IP \(bu
 resman_cgroup_ingress_skipped_total{reason} \- Processes kept outside ResMan-owned cgroups because their PID namespace mismatched or was unavailable (counter)
 .IP \(bu
@@ -1249,7 +1255,16 @@ a user is newly limited.
 .PP
 Script hooks are configured with
 .B LIMIT_HOOK_SCRIPT
-and receive the following environment variables:
+and require restart-only
+.B LIMIT_HOOK_SCRIPT_USER
+and
+.BR LIMIT_HOOK_SCRIPT_GROUP .
+The exact NSS user and group must be non-root. They are rejected when no script is
+configured. The script path must be absolute, regular, free of symbolic-link
+components, executable by that identity, and have no untrusted writable ancestor.
+ResMan starts it with that UID and GID, clears supplementary groups, sets the working
+directory to /, and supplies only PATH, LANG, LC_ALL, HOME, PWD, USER, LOGNAME, and
+the following event variables:
 .RS
 .IP \(bu 2
 RESMAN_LIMIT_UID
@@ -1327,12 +1342,29 @@ errors or daemon logs. Script failures retain a bounded reason such as timeout o
 exit status. Webservice failure logs identify only the URL scheme and host (including
 an explicit port); user information, path, query values, and fragments are omitted.
 .PP
-Hook execution is asynchronous and bounded by
+Hook execution uses a fixed worker pool selected by restart-only
+.B LIMIT_HOOK_MAX_CONCURRENCY
+and a fixed pending-delivery queue selected by restart-only
+.BR LIMIT_HOOK_QUEUE_CAPACITY .
+Admission never blocks enforcement. A full queue rejects the delivery without retry
+or durable spooling, records the terminal saturated outcome, and emits a rate-limited
+bounded warning.
+.PP
+Script and HTTP are separate jobs. Each receives its own complete
 .B LIMIT_HOOK_TIMEOUT
-seconds. Every script and HTTP execution records one terminal success, failure,
-timeout, or cancellation outcome. On shutdown ResMan rejects new hook dispatch,
-cancels in-flight hooks, and waits for them to terminate before continuing cleanup.
-The control cycle does not wait for ordinary hook completion.
+deadline, so one mechanism never consumes the other's budget. HTTP uses a dedicated
+client with bounded phases and no retry. Every accepted delivery records one terminal
+success, failure, timeout, or cancellation outcome; a rejected admission records
+saturated. On shutdown ResMan rejects new hook dispatch, cancels queued and in-flight
+hooks, and drains the workers before continuing cleanup. The control cycle does not
+wait for ordinary hook completion.
+.PP
+Scripts run in their own process group. Timeout and shutdown send TERM, escalate to
+KILL after a bounded grace period, and verify that the group has drained. This bounds
+ordinary descendants but does not claim hard containment of a malicious process that
+deliberately escapes the group; such containment requires a separate systemd
+transient-unit or cgroup TasksMax design. See docs/LIMIT-HOOKS.md in the source and
+documentation package for operational details.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration

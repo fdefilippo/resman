@@ -80,6 +80,7 @@ assert_entry '/etc/resman/cpu-points.map' '-rw-------' 'root/root' "$listing"
 assert_entry '/etc/resman/tls' 'drwx------' 'root/root' "$listing"
 assert_entry '/var/lib/resman' 'drwx------' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/UPGRADING.md' '-rw-r--r--' 'root/root' "$listing"
+assert_entry '/usr/share/doc/resman/LIMIT-HOOKS.md' '-rw-r--r--' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/scripts/sendmail.sh' '-rwxr-xr-x' 'root/root' "$listing"
 assert_entry '/usr/share/doc/resman/scripts/README.md' '-rw-r--r--' 'root/root' "$listing"
 

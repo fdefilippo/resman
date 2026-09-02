@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/limithook"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -111,25 +114,7 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		MemoryOOMKillEventsDelta:          cpuPoints.MemoryOOMKillEventsDelta,
 	}
 
-	m.hookMu.Lock()
-	if m.hookClosed {
-		m.hookMu.Unlock()
-		if cfg.LimitHookScript != "" {
-			m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeScript, "", context.Canceled)
-		}
-		if cfg.LimitHookURL != "" {
-			m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeHTTP, cfg.LimitHookURL, context.Canceled)
-		}
-		return
-	}
-	parentCtx := m.hookCtx
-	m.hookWG.Add(1)
-	m.hookMu.Unlock()
-
-	go func() {
-		defer m.hookWG.Done()
-		m.runLimitHook(parentCtx, cfg, event)
-	}()
+	m.dispatchLimitHookJobs(cfg, event)
 }
 
 func (m *Manager) limitHookCPUPointsSnapshot(uid int, username string, sample *SystemMetrics) resmanmetrics.CPUPointsUserSnapshot {
@@ -191,39 +176,6 @@ func (m *Manager) limitHookCPUPointsSnapshot(uid int, username string, sample *S
 	return result
 }
 
-func (m *Manager) runLimitHook(parentCtx context.Context, cfg *config.Config, event limitHookEvent) {
-	timeout := time.Duration(cfg.LimitHookTimeout) * time.Second
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
-
-	if cfg.LimitHookScript != "" {
-		err := m.executeHookScript(ctx, cfg.LimitHookScript, event)
-		m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeScript, "", err)
-	}
-
-	if cfg.LimitHookURL != "" {
-		err := m.executeHookRequest(ctx, cfg.LimitHookURL, event)
-		m.recordLimitHookResult(event, resmanmetrics.LimitHookTypeHTTP, cfg.LimitHookURL, err)
-	}
-}
-
-func (m *Manager) stopLimitHooks() {
-	m.hookMu.Lock()
-	if m.hookClosed {
-		m.hookMu.Unlock()
-		m.hookWG.Wait()
-		return
-	}
-	m.hookClosed = true
-	cancel := m.hookCancel
-	m.hookMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	m.hookWG.Wait()
-}
-
 func (m *Manager) recordLimitHookResult(event limitHookEvent, hookType resmanmetrics.LimitHookType, endpoint string, err error) {
 	outcome := limitHookOutcome(err)
 	if m.prometheusExporter != nil {
@@ -236,6 +188,10 @@ func (m *Manager) recordLimitHookResult(event limitHookEvent, hookType resmanmet
 			"hook_type", hookType,
 			"outcome", outcome,
 		)
+		return
+	}
+	if errors.Is(err, errLimitHookSaturated) {
+		m.reportLimitHookSaturation(hookType)
 		return
 	}
 	if hookType == resmanmetrics.LimitHookTypeHTTP {
@@ -253,6 +209,8 @@ func limitHookOutcome(err error) resmanmetrics.LimitHookOutcome {
 		return resmanmetrics.LimitHookOutcomeTimeout
 	case errors.Is(err, context.Canceled):
 		return resmanmetrics.LimitHookOutcomeCancelled
+	case errors.Is(err, errLimitHookSaturated):
+		return resmanmetrics.LimitHookOutcomeSaturated
 	default:
 		return resmanmetrics.LimitHookOutcomeFailure
 	}
@@ -277,9 +235,22 @@ func reportLimitHookURLFailure(logger hookOutcomeLogger, event limitHookEvent, e
 	)
 }
 
-func runLimitHookScript(ctx context.Context, script string, event limitHookEvent) error {
-	cmd := exec.CommandContext(ctx, script)
-	cmd.Env = append(os.Environ(),
+func runLimitHookScript(ctx context.Context, invocation hookScriptInvocation, event limitHookEvent) error {
+	if err := limithook.ValidateScriptPath(invocation.path, invocation.identity); err != nil {
+		return fmt.Errorf("validate limit hook script: %w", err)
+	}
+
+	cmd := exec.Command(invocation.path)
+	cmd.Dir = "/"
+	cmd.Env = append([]string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"LANG=C",
+		"LC_ALL=C",
+		"HOME=/",
+		"PWD=/",
+		"USER=" + invocation.identity.Username,
+		"LOGNAME=" + invocation.identity.Username,
+	},
 		"RESMAN_LIMIT_UID="+strconv.Itoa(event.UID),
 		"RESMAN_LIMIT_USERNAME="+event.Username,
 		"RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT="+strconv.FormatFloat(event.EnforceableCPUUsagePercent, 'f', 2, 64),
@@ -310,11 +281,134 @@ func runLimitHookScript(ctx context.Context, script string, event limitHookEvent
 		"RESMAN_LIMIT_MEMORY_OOM_EVENTS_DELTA="+formatOptionalUint64(event.MemoryOOMEventsDelta),
 		"RESMAN_LIMIT_MEMORY_OOM_KILL_EVENTS_DELTA="+formatOptionalUint64(event.MemoryOOMKillEventsDelta),
 	)
-
-	if err := cmd.Run(); err != nil {
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if invocation.dropPrivileges {
+		cmd.SysProcAttr.Credential = &syscall.Credential{
+			Uid:    invocation.identity.UID,
+			Gid:    invocation.identity.GID,
+			Groups: []uint32{},
+		}
+	}
+	if err := cmd.Start(); err != nil {
 		return sanitizeScriptHookError(ctx, err)
 	}
-	return nil
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	select {
+	case err := <-waitDone:
+		cleanupErr := cleanupCompletedLimitHookProcessGroup(cmd.Process.Pid)
+		if err != nil {
+			return sanitizeScriptHookError(ctx, err)
+		}
+		if cleanupErr != nil {
+			return cleanupErr
+		}
+		return nil
+	case <-ctx.Done():
+		select {
+		case err := <-waitDone:
+			cleanupErr := cleanupCompletedLimitHookProcessGroup(cmd.Process.Pid)
+			if err != nil {
+				return sanitizeScriptHookError(ctx, err)
+			}
+			if cleanupErr != nil {
+				return cleanupErr
+			}
+			return nil
+		default:
+		}
+		terminationErr := terminateLimitHookProcessGroup(cmd.Process.Pid, waitDone)
+		return sanitizeScriptHookError(ctx, terminationErr)
+	}
+}
+
+func cleanupCompletedLimitHookProcessGroup(pgid int) error {
+	err := syscall.Kill(-pgid, 0)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("inspect completed limit hook process group: %w", err)
+	}
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("terminate background limit hook processes: %w", err)
+	}
+	if waitForLimitHookProcessGroupExitWithin(pgid, 500*time.Millisecond) == nil {
+		return fmt.Errorf("limit hook script left background processes after exit")
+	}
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("kill background limit hook processes: %w", err)
+	}
+	if err := waitForLimitHookProcessGroupExit(pgid); err != nil {
+		return err
+	}
+	return fmt.Errorf("limit hook script left background processes after exit")
+}
+
+func terminateLimitHookProcessGroup(pgid int, waitDone <-chan error) error {
+	termErr := syscall.Kill(-pgid, syscall.SIGTERM)
+	if termErr != nil && !errors.Is(termErr, syscall.ESRCH) {
+		return fmt.Errorf("terminate limit hook process group: %w", termErr)
+	}
+
+	grace := time.NewTimer(500 * time.Millisecond)
+	defer grace.Stop()
+	var waitErr error
+	waited := false
+	select {
+	case waitErr = <-waitDone:
+		waited = true
+	case <-grace.C:
+	}
+	if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		return fmt.Errorf("kill limit hook process group: %w", killErr)
+	}
+	if !waited {
+		waitErr = waitForLimitHookProcess(waitDone)
+	}
+	if err := waitForLimitHookProcessGroupExit(pgid); err != nil {
+		return err
+	}
+	return waitErr
+}
+
+func waitForLimitHookProcess(waitDone <-chan error) error {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-waitDone:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("limit hook process did not exit after SIGKILL")
+	}
+}
+
+func waitForLimitHookProcessGroupExit(pgid int) error {
+	return waitForLimitHookProcessGroupExitWithin(pgid, 2*time.Second)
+}
+
+func waitForLimitHookProcessGroupExitWithin(pgid int, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		err := syscall.Kill(-pgid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if err != nil && !errors.Is(err, syscall.EPERM) {
+			return fmt.Errorf("inspect limit hook process group: %w", err)
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			return fmt.Errorf("limit hook process group %d did not drain after SIGKILL", pgid)
+		}
+	}
 }
 
 func formatOptionalUint64(value *uint64) string {
@@ -338,7 +432,23 @@ func formatOptionalBool(value *bool) string {
 	return strconv.FormatBool(*value)
 }
 
+func newLimitHookHTTPRequestExecutor() func(context.Context, string, limitHookEvent) error {
+	client := &http.Client{Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}}
+	return func(ctx context.Context, endpoint string, event limitHookEvent) error {
+		return postLimitHookWithClient(ctx, client, endpoint, event)
+	}
+}
+
 func postLimitHook(ctx context.Context, endpoint string, event limitHookEvent) error {
+	return newLimitHookHTTPRequestExecutor()(ctx, endpoint, event)
+}
+
+func postLimitHookWithClient(ctx context.Context, client *http.Client, endpoint string, event limitHookEvent) error {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal hook event: %w", err)
@@ -351,7 +461,7 @@ func postLimitHook(ctx context.Context, endpoint string, event limitHookEvent) e
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "resman-limit-hook")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return newSanitizedHookError("post hook request", endpoint, err)
 	}

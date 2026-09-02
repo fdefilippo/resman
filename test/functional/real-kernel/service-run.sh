@@ -130,7 +130,7 @@ finish() {
 		podman rm -f "$container" >>"$evidence_dir/cleanup.log" 2>&1 || cleanup_status=FAIL-container-cleanup
 	done
 	if [[ $hook_installed -eq 1 ]]; then
-		rm -f /usr/local/bin/resman-functional-hook /var/lib/resman/functional-hook.env \
+		rm -f /usr/local/bin/resman-functional-hook /home/resman-t2/resman-functional-hook.env \
 			>>"$evidence_dir/cleanup.log" 2>&1
 	fi
 
@@ -1267,7 +1267,7 @@ scenario_shutdown_restoration_under_load() {
 # with the field names of resman-4pw.61 and without leaking secrets.
 scenario_limit_hook_delivery() {
 	local log_marker uid hook=/usr/local/bin/resman-functional-hook
-	local record=/var/lib/resman/functional-hook.env
+	local record=/home/resman-t2/resman-functional-hook.env
 	write_scenario_configuration
 	configure_enforcement
 
@@ -1281,14 +1281,18 @@ scenario_limit_hook_delivery() {
 	echo "eligible=$RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT"
 	echo "shared=$RESMAN_LIMIT_SHARED_CGROUP"
 	echo "timestamp=$RESMAN_LIMIT_TIMESTAMP"
-} >>/var/lib/resman/functional-hook.env
+		printf 'effective_uid=%s\n' "$(id -u)"
+		printf 'effective_gid=%s\n' "$(id -g)"
+	} >>/home/resman-t2/resman-functional-hook.env
 HOOK
-	chmod 0700 "$hook"
+	chmod 0755 "$hook"
 	hook_installed=1
-	# The hook needs both its enable flag and a script path.
+	# Script delivery also requires an explicit non-root restart identity.
 	sed -i \
 		-e 's|^LIMIT_HOOK_ENABLED=.*|LIMIT_HOOK_ENABLED=true|' \
 		-e "s|^LIMIT_HOOK_SCRIPT=.*|LIMIT_HOOK_SCRIPT=$hook|" \
+		-e 's|^LIMIT_HOOK_SCRIPT_USER=.*|LIMIT_HOOK_SCRIPT_USER=resman-t2|' \
+		-e 's|^LIMIT_HOOK_SCRIPT_GROUP=.*|LIMIT_HOOK_SCRIPT_GROUP=resman-t2|' \
 		"$config_path"
 
 	log_marker=$(daemon_log_lines)
@@ -1319,6 +1323,10 @@ HOOK
 		|| fail "the hook did not receive the eligible user count"
 	grep -q '^shared=/sys/fs/cgroup/resman/limited$' "$record" \
 		|| fail "the hook did not receive the shared cgroup path"
+	grep -q "^effective_uid=$(id -u resman-t2)$" "$record" \
+		|| fail "the hook did not run as the configured user"
+	grep -q "^effective_gid=$(id -g resman-t2)$" "$record" \
+		|| fail "the hook did not run as the configured group"
 
 	# resman-4pw.62: the daemon log must not carry hook internals.
 	daemon_log_since "$log_marker" | grep -F "$hook" >"$evidence_dir/hook-log-leak.txt" || true

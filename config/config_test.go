@@ -67,6 +67,8 @@ func TestDefaultConfig(t *testing.T) {
 		{"IgnoreSystemLoad", cfg.IgnoreSystemLoad, false},
 		{"LimitHookEnabled", cfg.LimitHookEnabled, false},
 		{"LimitHookTimeout", cfg.LimitHookTimeout, 10},
+		{"LimitHookMaxConcurrency", cfg.LimitHookMaxConcurrency, 2},
+		{"LimitHookQueueCapacity", cfg.LimitHookQueueCapacity, 64},
 	}
 
 	for _, tt := range tests {
@@ -88,26 +90,29 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: &Config{
-				CPUThreshold:           75,
-				CPUReleaseThreshold:    40,
-				PollingInterval:        30,
-				MetricsCacheTTL:        15,
-				MetricsRefreshInterval: 30,
-				CgroupOperationTimeout: 5,
-				DaemonShutdownTimeout:  60,
-				MCPShutdownTimeout:     10,
-				CPUReservePoints:       100,
-				CPUBestEffortPoints:    100,
-				CPUPointsFile:          DefaultCPUPointsMapPath,
-				BatchNightRAMQuota:     "4G",
-				InteractiveRAMQuota:    "1G",
-				LogLevel:               "INFO",
-				LogMaxSize:             10 * 1024 * 1024,
-				SystemUIDMin:           1000,
-				SystemUIDMax:           60000,
-				MetricsDBRetentionDays: 30,
-				MetricsDBWriteInterval: 30,
-				UsernameCacheTTL:       60,
+				CPUThreshold:            75,
+				CPUReleaseThreshold:     40,
+				PollingInterval:         30,
+				MetricsCacheTTL:         15,
+				MetricsRefreshInterval:  30,
+				CgroupOperationTimeout:  5,
+				DaemonShutdownTimeout:   60,
+				MCPShutdownTimeout:      10,
+				CPUReservePoints:        100,
+				CPUBestEffortPoints:     100,
+				CPUPointsFile:           DefaultCPUPointsMapPath,
+				BatchNightRAMQuota:      "4G",
+				InteractiveRAMQuota:     "1G",
+				LogLevel:                "INFO",
+				LogMaxSize:              10 * 1024 * 1024,
+				SystemUIDMin:            1000,
+				SystemUIDMax:            60000,
+				MetricsDBRetentionDays:  30,
+				MetricsDBWriteInterval:  30,
+				UsernameCacheTTL:        60,
+				LimitHookTimeout:        10,
+				LimitHookMaxConcurrency: 2,
+				LimitHookQueueCapacity:  64,
 			},
 			expectError: false,
 		},
@@ -219,6 +224,70 @@ func TestValidateConfig(t *testing.T) {
 				t.Errorf("expected no error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateLimitHookContract(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*Config)
+		wantMessage string
+	}{
+		{
+			name: "zero concurrency",
+			mutate: func(cfg *Config) {
+				cfg.LimitHookMaxConcurrency = 0
+			},
+			wantMessage: "LIMIT_HOOK_MAX_CONCURRENCY must be at least 1",
+		},
+		{
+			name: "zero queue capacity",
+			mutate: func(cfg *Config) {
+				cfg.LimitHookQueueCapacity = 0
+			},
+			wantMessage: "LIMIT_HOOK_QUEUE_CAPACITY must be at least 1",
+		},
+		{
+			name: "identity without script",
+			mutate: func(cfg *Config) {
+				cfg.LimitHookScriptUser = "nobody"
+				cfg.LimitHookScriptGroup = "nobody"
+			},
+			wantMessage: "must be empty when LIMIT_HOOK_SCRIPT is empty",
+		},
+		{
+			name: "script without identity",
+			mutate: func(cfg *Config) {
+				cfg.LimitHookScript = "/bin/true"
+			},
+			wantMessage: "script user and group must both be set",
+		},
+		{
+			name: "root script identity",
+			mutate: func(cfg *Config) {
+				cfg.LimitHookScript = "/bin/true"
+				cfg.LimitHookScriptUser = "root"
+				cfg.LimitHookScriptGroup = "root"
+			},
+			wantMessage: "must not use root UID or GID",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.mutate(cfg)
+			err := validateConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), tt.wantMessage) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tt.wantMessage)
+			}
+		})
+	}
+
+	urlOnly := DefaultConfig()
+	urlOnly.LimitHookEnabled = true
+	urlOnly.LimitHookURL = "https://hooks.example.test/resman"
+	if err := validateConfig(urlOnly); err != nil {
+		t.Fatalf("validateConfig() rejected URL-only hook: %v", err)
 	}
 }
 

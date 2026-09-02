@@ -323,18 +323,28 @@ INTERACTIVE_RAM_QUOTA=1G
 # LIMIT HOOK
 # ========================
 # Optional notification/action when a user is newly limited.
-# Script receives RESMAN_LIMIT_* environment variables.
+# Script runs as the required non-root user/group with no supplementary groups.
+# It receives only the documented fixed environment and RESMAN_LIMIT_* variables.
 # URL receives a JSON POST with uid, username, enforceable_cpu_usage_percent,
 # cpu_eligible_users_count, shared_cgroup, and timestamp.
 # Script stdout/stderr is discarded and never copied into daemon errors or logs.
 # URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
-# Shutdown cancels and drains in-flight hooks; each delivery exports one bounded outcome.
+# Script and URL are independent jobs and each receives the full timeout below.
+# The fixed worker pool admits without blocking; a full queue records saturated.
+# Shutdown cancels and drains accepted jobs. Process-group cleanup is not hard
+# containment for a malicious descendant that deliberately escapes with setsid.
 LIMIT_HOOK_ENABLED=false
 LIMIT_HOOK_SCRIPT=
+LIMIT_HOOK_SCRIPT_USER=
+LIMIT_HOOK_SCRIPT_GROUP=
 LIMIT_HOOK_URL=
 # LIMIT_HOOK_SCRIPT=/usr/local/bin/resman-user-limited
+# LIMIT_HOOK_SCRIPT_USER=resman-hook
+# LIMIT_HOOK_SCRIPT_GROUP=resman-hook
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
 LIMIT_HOOK_TIMEOUT=10
+LIMIT_HOOK_MAX_CONCURRENCY=2
+LIMIT_HOOK_QUEUE_CAPACITY=64
 
 # ========================
 # PROMETHEUS

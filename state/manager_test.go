@@ -491,6 +491,9 @@ type mockPrometheusExporter struct {
 	limitsActivated            int
 	limitsDeactivated          int
 	ingressSkips               []cgroup.ProcessMoveResult
+	limitHookInFlight          int
+	limitHookQueued            int
+	limitHookCapacity          int
 }
 
 func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
@@ -534,6 +537,13 @@ func (m *mockPrometheusExporter) RecordLimitHookExecution(hookType metrics.Limit
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.limitHookExecutions = append(m.limitHookExecutions, limitHookMetricRecord{hookType: hookType, outcome: outcome})
+}
+func (m *mockPrometheusExporter) ObserveLimitHookExecutor(inFlight, queued, capacity int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.limitHookInFlight = inFlight
+	m.limitHookQueued = queued
+	m.limitHookCapacity = capacity
 }
 func (m *mockPrometheusExporter) Start(ctx context.Context) error { return nil }
 func (m *mockPrometheusExporter) Stop() error                     { return nil }

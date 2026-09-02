@@ -44,9 +44,13 @@ This file is generated from `config.Config`, `DefaultConfig`, and the authoritat
 | `IO_WRITE_BPS` | `50M` | `dynamic` | max disables the write-bandwidth decision and limit dimension. |
 | `IO_WRITE_IOPS` | `500` | `dynamic` | 0 disables the write-IOPS decision and limit dimension. |
 | `LIMIT_HOOK_ENABLED` | `false` | `dynamic` | false disables script and URL hook delivery. |
-| `LIMIT_HOOK_SCRIPT` | `(empty)` | `dynamic` | — |
-| `LIMIT_HOOK_TIMEOUT` | `10` | `dynamic` | — |
-| `LIMIT_HOOK_URL` | `(empty)` | `dynamic` | — |
+| `LIMIT_HOOK_MAX_CONCURRENCY` | `2` | `restart-required` | Fixed number of delivery workers; changing it requires restart. |
+| `LIMIT_HOOK_QUEUE_CAPACITY` | `64` | `restart-required` | Fixed pending-delivery capacity; saturation is reported and never blocks enforcement. |
+| `LIMIT_HOOK_SCRIPT` | `(empty)` | `dynamic` | Empty disables script delivery and requires script user and group to be empty. |
+| `LIMIT_HOOK_SCRIPT_GROUP` | `(empty)` | `restart-required` | Required non-root NSS group whenever LIMIT_HOOK_SCRIPT is set. |
+| `LIMIT_HOOK_SCRIPT_USER` | `(empty)` | `restart-required` | Required non-root NSS username whenever LIMIT_HOOK_SCRIPT is set. |
+| `LIMIT_HOOK_TIMEOUT` | `10` | `dynamic` | Full timeout in seconds applied independently to every script or HTTP delivery. |
+| `LIMIT_HOOK_URL` | `(empty)` | `dynamic` | Empty disables HTTP delivery; configured requests use a dedicated no-retry client. |
 | `LOG_FILE` | `/var/log/resman.log` | `restart-required` | — |
 | `LOG_LEVEL` | `INFO` | `dynamic` | — |
 | `LOG_MAX_SIZE` | `10485760` | `restart-required` | — |

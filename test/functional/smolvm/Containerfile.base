@@ -10,6 +10,7 @@ RUN dnf install -y oracle-epel-release-el9 \
  && useradd --create-home --shell /bin/bash resman-cpu \
  && useradd --create-home --shell /bin/bash resman-memory \
  && useradd --create-home --shell /bin/bash resman-io \
+ && useradd --create-home --shell /sbin/nologin resman-hook \
  && systemctl mask systemd-networkd-wait-online.service
 
 STOPSIGNAL SIGRTMIN+3

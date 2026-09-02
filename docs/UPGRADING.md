@@ -523,13 +523,26 @@ shows the host-level trend but intentionally carries no UID label.
 `RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT` and
 `RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT`. Script stdout/stderr is discarded, and URL
 failures expose only `scheme://host[:port]`. Hook deliveries are cancelled and drained
-during shutdown and export bounded terminal outcomes.
+during shutdown and export bounded terminal outcomes. Script delivery now requires an
+explicit non-root `LIMIT_HOOK_SCRIPT_USER` and `LIMIT_HOOK_SCRIPT_GROUP`. A fixed
+worker pool and bounded queue replace one goroutine per activation; a full queue
+reports `saturated` without blocking enforcement. Script and HTTP mechanisms are
+separate jobs and each receives its own complete `LIMIT_HOOK_TIMEOUT` deadline.
 
 **Cause.** The old names described generic runtime state while carrying CPU decision
-inputs, and hook output or full URLs could leak secrets into logs.
+inputs, and hook output or full URLs could leak secrets into logs. Scripts also ran as
+the daemon identity, inherited its environment, left descendants behind when only the
+direct child was killed, and had no admission bound.
 
-**Action.** Update hook consumers before upgrade. Do not rely on script output in the
-daemon log; send intended diagnostics to an independently protected sink.
+**Action.** Update hook consumers before upgrade. Before enabling a script, create a
+dedicated non-root account, install the executable below trusted non-writable
+ancestors, and set both identity keys. Select worker and queue bounds for the expected
+burst rate and monitor `resman_limit_hook_executions_total{outcome="saturated"}` plus
+the three executor gauges. Size `DAEMON_SHUTDOWN_TIMEOUT` for process-group drain. Do
+not rely on script output in the daemon log; send intended diagnostics to an
+independently protected sink. The executor cleans ordinary descendants with process-
+group TERM/KILL escalation but does not claim hard containment of a malicious child
+that deliberately escapes the group; see [`LIMIT-HOOKS.md`](LIMIT-HOOKS.md).
 
 ### More failures produce degraded or non-zero outcomes
 

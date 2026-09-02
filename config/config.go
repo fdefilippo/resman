@@ -33,6 +33,7 @@ import (
 	"unicode"
 
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/limithook"
 	"github.com/fdefilippo/resman/internal/operationgate"
 )
 
@@ -138,10 +139,14 @@ type Config struct {
 	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota for interactive workloads
 
 	// Hooks
-	LimitHookEnabled bool   `config:"LIMIT_HOOK_ENABLED"`
-	LimitHookScript  string `config:"LIMIT_HOOK_SCRIPT"`
-	LimitHookURL     string `config:"LIMIT_HOOK_URL"`
-	LimitHookTimeout int    `config:"LIMIT_HOOK_TIMEOUT"` // seconds
+	LimitHookEnabled        bool   `config:"LIMIT_HOOK_ENABLED"`
+	LimitHookScript         string `config:"LIMIT_HOOK_SCRIPT"`
+	LimitHookScriptUser     string `config:"LIMIT_HOOK_SCRIPT_USER"`
+	LimitHookScriptGroup    string `config:"LIMIT_HOOK_SCRIPT_GROUP"`
+	LimitHookURL            string `config:"LIMIT_HOOK_URL"`
+	LimitHookTimeout        int    `config:"LIMIT_HOOK_TIMEOUT"` // seconds per delivery
+	LimitHookMaxConcurrency int    `config:"LIMIT_HOOK_MAX_CONCURRENCY"`
+	LimitHookQueueCapacity  int    `config:"LIMIT_HOOK_QUEUE_CAPACITY"`
 
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
@@ -320,10 +325,14 @@ func DefaultConfig() *Config {
 		InteractiveRAMQuota:        "1G",
 
 		// Limit hook
-		LimitHookEnabled: false,
-		LimitHookScript:  "",
-		LimitHookURL:     "",
-		LimitHookTimeout: 10,
+		LimitHookEnabled:        false,
+		LimitHookScript:         "",
+		LimitHookScriptUser:     "",
+		LimitHookScriptGroup:    "",
+		LimitHookURL:            "",
+		LimitHookTimeout:        10,
+		LimitHookMaxConcurrency: 2,
+		LimitHookQueueCapacity:  64,
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -635,9 +644,19 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_POINTS_FILE":        setString(func(cfg *Config, value string) { cfg.CPUPointsFile = value }),
 	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
 	"LIMIT_HOOK_SCRIPT":      setString(func(cfg *Config, value string) { cfg.LimitHookScript = value }),
-	"LIMIT_HOOK_URL":         setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
-	"LIMIT_HOOK_TIMEOUT":     setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
-	"ENABLE_PROMETHEUS":      setBool(func(cfg *Config, value bool) { cfg.EnablePrometheus = value }),
+	"LIMIT_HOOK_SCRIPT_USER": setString(func(cfg *Config, value string) { cfg.LimitHookScriptUser = value }),
+	"LIMIT_HOOK_SCRIPT_GROUP": setString(func(cfg *Config, value string) {
+		cfg.LimitHookScriptGroup = value
+	}),
+	"LIMIT_HOOK_URL":     setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
+	"LIMIT_HOOK_TIMEOUT": setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
+	"LIMIT_HOOK_MAX_CONCURRENCY": setInt(func(cfg *Config, value int) {
+		cfg.LimitHookMaxConcurrency = value
+	}),
+	"LIMIT_HOOK_QUEUE_CAPACITY": setInt(func(cfg *Config, value int) {
+		cfg.LimitHookQueueCapacity = value
+	}),
+	"ENABLE_PROMETHEUS": setBool(func(cfg *Config, value bool) { cfg.EnablePrometheus = value }),
 	"PROMETHEUS_METRICS_BIND_HOST": setString(func(cfg *Config, value string) {
 		cfg.PrometheusMetricsBindHost = value
 	}),
@@ -865,6 +884,41 @@ func parseRegexList(value, errorContext string) ([]string, error) {
 	return patterns, nil
 }
 
+func validateLimitHookConfig(cfg *Config) []string {
+	var validationErrors []string
+	if cfg.LimitHookTimeout < 1 {
+		validationErrors = append(validationErrors, "LIMIT_HOOK_TIMEOUT must be at least 1 second")
+	}
+	if cfg.LimitHookMaxConcurrency < 1 {
+		validationErrors = append(validationErrors, "LIMIT_HOOK_MAX_CONCURRENCY must be at least 1")
+	}
+	if cfg.LimitHookQueueCapacity < 1 {
+		validationErrors = append(validationErrors, "LIMIT_HOOK_QUEUE_CAPACITY must be at least 1")
+	}
+	if cfg.LimitHookEnabled && cfg.LimitHookScript == "" && cfg.LimitHookURL == "" {
+		validationErrors = append(validationErrors, "LIMIT_HOOK_SCRIPT or LIMIT_HOOK_URL must be set when LIMIT_HOOK_ENABLED=true")
+	}
+	if cfg.LimitHookScript == "" {
+		if cfg.LimitHookScriptUser != "" || cfg.LimitHookScriptGroup != "" {
+			validationErrors = append(validationErrors, "LIMIT_HOOK_SCRIPT_USER and LIMIT_HOOK_SCRIPT_GROUP must be empty when LIMIT_HOOK_SCRIPT is empty")
+		}
+	} else {
+		identity, err := limithook.ResolveScriptIdentity(cfg.LimitHookScriptUser, cfg.LimitHookScriptGroup)
+		if err != nil {
+			validationErrors = append(validationErrors, fmt.Sprintf("LIMIT_HOOK_SCRIPT identity is invalid: %v", err))
+		} else if err := limithook.ValidateScriptPath(cfg.LimitHookScript, identity); err != nil {
+			validationErrors = append(validationErrors, fmt.Sprintf("LIMIT_HOOK_SCRIPT is unsafe: %v", err))
+		}
+	}
+	if cfg.LimitHookURL != "" {
+		parsedURL, err := url.Parse(cfg.LimitHookURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+			validationErrors = append(validationErrors, "LIMIT_HOOK_URL must be a valid http or https URL")
+		}
+	}
+	return validationErrors
+}
+
 // validateConfig validates the complete runtime configuration.
 func validateConfig(cfg *Config) error {
 	var errors []string
@@ -961,21 +1015,7 @@ func validateConfig(cfg *Config) error {
 		errors = append(errors, fmt.Sprintf("CPU_POINTS_FILE is invalid: %v", err))
 	}
 
-	// Validate limit hook configuration
-	if cfg.LimitHookEnabled {
-		if cfg.LimitHookTimeout < 1 {
-			errors = append(errors, "LIMIT_HOOK_TIMEOUT must be at least 1 second")
-		}
-		if cfg.LimitHookScript == "" && cfg.LimitHookURL == "" {
-			errors = append(errors, "LIMIT_HOOK_SCRIPT or LIMIT_HOOK_URL must be set when LIMIT_HOOK_ENABLED=true")
-		}
-		if cfg.LimitHookURL != "" {
-			parsedURL, err := url.Parse(cfg.LimitHookURL)
-			if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
-				errors = append(errors, "LIMIT_HOOK_URL must be a valid http or https URL")
-			}
-		}
-	}
+	errors = append(errors, validateLimitHookConfig(cfg)...)
 
 	if err := cfg.MCPServerConfig().Validate(); err != nil {
 		errors = append(errors, err.Error())

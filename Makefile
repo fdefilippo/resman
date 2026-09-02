@@ -61,7 +61,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
+.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 all: clean test lint build
@@ -191,6 +191,10 @@ test-functional-smolvm-block-iops:
 # Verify PSI observation refresh neutrality, or return BLOCKED when PSI is absent.
 test-functional-smolvm-psi-refresh:
 	SMOLVM_SCENARIO=psi-refresh-neutrality SMOLVM_REQUIRE_PSI=1 test/functional/smolvm/run.sh run
+
+# Verify bounded non-root limit-hook execution, saturation, timeout, and shutdown.
+test-functional-smolvm-limit-hook:
+	SMOLVM_SCENARIO=limit-hook-executor test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
@@ -544,6 +548,7 @@ help:
 	@echo "    test-functional-smolvm-container-runtime - Verify the shipped sudo podman runtime in SmolVM"
 	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
 	@echo "    test-functional-smolvm-psi-refresh - Verify PSI refresh neutrality or report BLOCKED"
+	@echo "    test-functional-smolvm-limit-hook - Verify bounded non-root limit-hook execution"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
