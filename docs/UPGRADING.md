@@ -31,6 +31,25 @@ operator-authored configuration has been recovered.
    systemd start limit is reached, repair the reported cause before running
    `systemctl reset-failed resman` and starting it again.
 
+### MCP write credentials are separated
+
+**Visible change.** HTTP deployments with `MCP_ALLOW_WRITE_OPS=true` must configure
+a non-empty `MCP_EDITOR_AUTH_TOKEN` distinct from `MCP_AUTH_TOKEN`. The existing
+operator token retains enabled control tools. The editor token is restricted to
+revision-bound configuration editing and observed-state reads, and cannot activate
+or deactivate limits or invoke the user-filter setters.
+
+**Cause.** An independent operator console needs enough authority to edit the two
+configuration sources without inheriting every MCP control capability. A positive
+allowlist also prevents future tools from becoming reachable through that credential
+by default.
+
+**Action.** Generate a separate high-entropy editor token, store both tokens only in
+the protected configuration or its authoritative environment source, restart ResMan,
+and configure the independent editor client with only `MCP_EDITOR_AUTH_TOKEN`. Do not
+reuse the operator token in a browser-facing client. Stdio remains a local operator
+transport and does not use bearer authentication.
+
 ## Filesystem layout and persisted state
 
 ### Configuration moves below `/etc/resman`

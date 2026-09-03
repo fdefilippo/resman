@@ -316,6 +316,7 @@ func newToolInventoryTestServer(t *testing.T, allowWriteOps bool) *Server {
 	cfg.MCPTransport = "http"
 	cfg.MCPHTTPHost = "127.0.0.1"
 	cfg.MCPAuthToken = protocolTestToken
+	cfg.MCPEditorAuthToken = "editor-inventory-token"
 	cfg.MCPAllowWriteOps = allowWriteOps
 	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
 	if err != nil {

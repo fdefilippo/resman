@@ -247,6 +247,64 @@ func TestPolicyLoaderRejectsIdentityAmbiguityAtomically(t *testing.T) {
 	}
 }
 
+func TestPolicyLoaderReturnsTypedEditorSafeRejectionCauses(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		resolver ExactIdentityResolver
+		assert   func(*testing.T, error)
+	}{
+		{
+			name: "malformed map", content: "missing-marker\nalice=1", resolver: resolverByNumericSuffix,
+			assert: func(t *testing.T, err error) {
+				var typed *PolicySyntaxError
+				if !errors.As(err, &typed) {
+					t.Fatalf("error = %T %v, want PolicySyntaxError", err, err)
+				}
+			},
+		},
+		{
+			name: "unresolved username", content: PolicyMapMarker + "\nalice=1",
+			resolver: exactResolverFunc(func(string) ([]ResolvedUserIdentity, error) { return nil, nil }),
+			assert: func(t *testing.T, err error) {
+				var typed *PolicyIdentityError
+				if !errors.As(err, &typed) || typed.Username != "alice" {
+					t.Fatalf("error = %T %v, username = %q, want PolicyIdentityError for alice", err, err, typedUsername(typed))
+				}
+			},
+		},
+		{
+			name: "overcommitted guarantees", content: PolicyMapMarker + "\nalice=900",
+			resolver: exactResolverFunc(func(username string) ([]ResolvedUserIdentity, error) {
+				return []ResolvedUserIdentity{{Username: username, UID: 1001}}, nil
+			}),
+			assert: func(t *testing.T, err error) {
+				var typed *PolicyOvercommitError
+				if !errors.As(err, &typed) || typed.Pool != 900 || typed.Guarantees != 900 || typed.BestEffort != 100 {
+					t.Fatalf("error = %T %+v, want typed 900+100 overcommit of pool 900", err, typed)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writePolicyMap(t, tt.content)
+			_, err := newTestPolicyLoader().Load(policyInputs(t, path, 100, 100), tt.resolver)
+			if err == nil {
+				t.Fatal("Load() accepted rejected policy")
+			}
+			tt.assert(t, err)
+		})
+	}
+}
+
+func typedUsername(err *PolicyIdentityError) string {
+	if err == nil {
+		return ""
+	}
+	return err.Username
+}
+
 func TestPolicyLoaderValidatesTheCompleteCapacityInvariant(t *testing.T) {
 	tests := []struct {
 		name       string

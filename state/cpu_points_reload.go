@@ -62,6 +62,14 @@ func (m *Manager) CurrentCPUPointsPolicy() cpupoints.PolicySnapshot {
 	return m.cpuPointsPolicy
 }
 
+// ValidateCPUPointsPolicyTransition runs the active-allocation preflight
+// without mutating cgroups or publishing the candidate.
+func (m *Manager) ValidateCPUPointsPolicyTransition(candidate cpupoints.PolicySnapshot) error {
+	leaveOperation := m.opGate.Enter()
+	defer leaveOperation()
+	return m.preflightCPUPointsPolicyLocked(candidate)
+}
+
 // ReconcileCPUPointsPolicy verifies and safely programs a detached candidate.
 // The caller publishes it separately only after both source files are confirmed.
 func (m *Manager) ReconcileCPUPointsPolicy(candidate, fallback cpupoints.PolicySnapshot) error {

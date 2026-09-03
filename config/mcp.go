@@ -18,6 +18,7 @@
 package config
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"strings"
 )
@@ -37,6 +38,7 @@ type MCPServerConfig struct {
 	TLSMinVersion   string
 	LogLevel        string
 	AuthToken       string
+	EditorAuthToken string
 	AllowWriteOps   bool
 	ShutdownTimeout int
 }
@@ -55,6 +57,7 @@ func (cfg *Config) MCPServerConfig() MCPServerConfig {
 		TLSMinVersion:   cfg.MCPTLSMinVersion,
 		LogLevel:        cfg.MCPLogLevel,
 		AuthToken:       cfg.MCPAuthToken,
+		EditorAuthToken: cfg.MCPEditorAuthToken,
 		AllowWriteOps:   cfg.MCPAllowWriteOps,
 		ShutdownTimeout: cfg.MCPShutdownTimeout,
 	}
@@ -78,6 +81,12 @@ func (cfg MCPServerConfig) Validate() error {
 		}
 		if strings.TrimSpace(cfg.AuthToken) == "" {
 			return fmt.Errorf("MCP_AUTH_TOKEN must be set when MCP_ENABLED=true and MCP_TRANSPORT=http")
+		}
+		if cfg.AllowWriteOps && strings.TrimSpace(cfg.EditorAuthToken) == "" {
+			return fmt.Errorf("MCP_EDITOR_AUTH_TOKEN must be set when MCP_ALLOW_WRITE_OPS=true over HTTP")
+		}
+		if cfg.EditorAuthToken != "" && subtle.ConstantTimeCompare([]byte(cfg.EditorAuthToken), []byte(cfg.AuthToken)) == 1 {
+			return fmt.Errorf("MCP_EDITOR_AUTH_TOKEN must differ from MCP_AUTH_TOKEN")
 		}
 		if !cfg.TLSEnabled {
 			return fmt.Errorf("MCP_TLS_ENABLED must be true when MCP_ENABLED=true and MCP_TRANSPORT=http")

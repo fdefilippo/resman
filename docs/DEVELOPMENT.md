@@ -862,6 +862,33 @@ the bounded identity-based pruning required by this rule.
 
 ---
 
+## Rule 22 — The daemon exports a client-neutral contract, not a console
+
+- ResMan **MUST** remain fully operable without an external operator console.
+- Public configuration editing **MUST** remain daemon-owned: safe source reads,
+  validation, NSS resolution, optimistic concurrency, atomic persistence,
+  synchronous reload and terminal outcomes belong behind typed MCP operations.
+- A client **MUST NOT** need to import the ResMan Go module or read daemon files.
+  Versioned schemas and compatibility fixtures intended for independent clients
+  **MUST** contain no daemon implementation logic and carry an explicit permissive
+  licence.
+- This repository and its RPM, DEB and privileged container image **MUST NOT**
+  contain a console executable, PAM service, HTML template, browser runtime,
+  proprietary entitlement check or package-owned console state.
+- The least-privilege editor credential **MUST** be distinct from the operator
+  credential and guarded by a positive tool allowlist. It cannot acquire a future
+  tool merely because that tool was registered.
+
+**Why.** `resman-5nx` separated the GPL daemon from an independently packaged
+operator application. Keeping policy authority in ResMan preserves one enforcement
+contract, while keeping presentation, browser authentication and commercial
+entitlements outside this repository prevents the core daemon from becoming coupled
+to one client or licence model.
+
+*Finding: resman-5nx*
+
+---
+
 ## Definition of Done
 
 A change is not done until every line is true:
@@ -900,6 +927,9 @@ A change is not done until every line is true:
       each decision consumes one authoritative sample (Rule 20).
 - [ ] Rates from cumulative counters are differenced at their stable identity before
       aggregation; resets, reuse, and disappearance are isolated (Rule 21).
+- [ ] Public client contracts remain typed and client-neutral; no console executable,
+      PAM/browser stack, proprietary check, or console-owned state entered the core
+      repository or packages (Rule 22).
 - [ ] Any operator-visible discontinuity introduced by this change has its entry in the
       upgrade notes, in this commit (Rule 1, `resman-4pw.32`).
 
@@ -972,6 +1002,7 @@ only because the named issue owns the violation; they are intentionally visible.
 | 19. Anomalies tracked or refuted | `resman-4pw.31`, `.32`, `.33`; epic `resman-ne0` provenance |
 | 20. Observation cadence is decision-neutral | `resman-4pw.8`; `resman-ne0.30` provenance |
 | 21. Difference before aggregating | `resman-4pw.30`, `.57` |
+| 22. Client-neutral daemon boundary | `resman-5nx` |
 
 Finding `resman-4pw.15` chose `POLLING_INTERVAL` as the normal host-CPU baseline
 contract. Its rule-level provenance is recorded under Rule 18.2 because the defect was

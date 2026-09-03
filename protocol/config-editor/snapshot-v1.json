@@ -1,0 +1,23 @@
+{
+  "schema_version": "resman.config-editor.v1",
+  "source_precedence": ["default", "file", "environment"],
+  "revision": {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "config": {"path": "/etc/resman/resman.conf", "device": "1", "inode": "2", "size": "100", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "cpu_points": {"path": "/etc/resman/cpu-points.map", "device": "1", "inode": "3", "size": "40", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    "public_values": {"CPU_THRESHOLD": "75"}
+  },
+  "fields": [
+    {
+      "contract": {"key": "CPU_THRESHOLD", "kind": "integer", "default": "75", "lifecycle": "dynamic", "sensitive": false, "editable": true, "constraint": {"minimum": 1, "maximum": 100}, "empty_or_disabled_meaning": "—", "remedy": "Correct the authored value and submit the complete candidate for validation."},
+      "authored_value": "75", "effective_value": "75", "source": "file", "application_state": "effective", "secret_set": false,
+      "remedy": "Correct the authored value and submit the complete candidate for validation."
+    },
+    {
+      "contract": {"key": "MCP_AUTH_TOKEN", "kind": "string", "default": "(empty)", "lifecycle": "restart-required", "sensitive": true, "editable": true, "constraint": {}, "empty_or_disabled_meaning": "Empty is valid only for stdio; HTTP transport requires a token.", "remedy": "Persist the value and restart resman for it to become effective."},
+      "source": "file", "application_state": "effective", "secret_set": true,
+      "remedy": "Persist the value and restart resman for it to become effective."
+    }
+  ],
+  "cpu_points": [{"username": "alice", "uid": 1000, "points": 300}]
+}

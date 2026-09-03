@@ -46,6 +46,18 @@ func FuzzLoadAndValidate(f *testing.F) {
 	})
 }
 
+func FuzzMergePublicConfigValues(f *testing.F) {
+	f.Add("CPU_THRESHOLD", "75")
+	f.Add("MCP_AUTH_TOKEN", "opaque-secret")
+	f.Fuzz(func(t *testing.T, key, value string) {
+		original := []byte("# preserved\nCPU_THRESHOLD=70\nMCP_AUTH_TOKEN=unchanged-secret\n")
+		if strings.ContainsAny(key, "=\r\n\x00") || strings.ContainsAny(value, "\r\n\x00") {
+			return
+		}
+		_, _ = mergePublicConfigValues(original, map[string]string{key: value})
+	})
+}
+
 // FuzzParseByteQuota exercises the byte-suffix parser that resman-4pw.16.2 found
 // silently unenforced. A rejected value must produce an error, and an accepted
 // value must never yield a zero byte count from a non-zero request.

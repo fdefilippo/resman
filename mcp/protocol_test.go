@@ -379,6 +379,41 @@ func TestLatestOnlyHTTPPropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestHTTPEditorCredentialCannotReachOperatorMutationTools(t *testing.T) {
+	cfg := config.DefaultConfig()
+	configureMCPTestTLS(t, cfg)
+	cfg.MCPEnabled = true
+	cfg.MCPTransport = "http"
+	cfg.MCPHTTPHost = "127.0.0.1"
+	cfg.MCPAuthToken = protocolTestToken
+	cfg.MCPEditorAuthToken = "editor-protocol-token"
+	cfg.MCPAllowWriteOps = true
+	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(name string, arguments map[string]any) *httptest.ResponseRecorder {
+		t.Helper()
+		request := newProtocolHTTPRequest(t, "tools/call", latestProtocolParams(map[string]any{
+			"name": name, "arguments": arguments,
+		}))
+		request.Header.Set("Authorization", "Bearer "+cfg.MCPEditorAuthToken)
+		request.Header.Set("Mcp-Name", name)
+		recorder := httptest.NewRecorder()
+		server.newMCPHTTPHandler().ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	denied := call("activate_limits", map[string]any{"force": true})
+	if denied.Code != http.StatusOK || !strings.Contains(denied.Body.String(), "editor principal is not authorized") {
+		t.Fatalf("operator mutation response = status %d body %s", denied.Code, denied.Body.String())
+	}
+	allowed := call("validate_user_filter_pattern", map[string]any{"pattern": "^alice$"})
+	if allowed.Code != http.StatusOK || strings.Contains(allowed.Body.String(), "not authorized") {
+		t.Fatalf("allowlisted editor response = status %d body %s", allowed.Code, allowed.Body.String())
+	}
+}
+
 func TestLatestOnlyStdioConformance(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -48,6 +48,9 @@ requirement" controls whether a registered tool can complete successfully.
 | `get_limits_status` | Get current resource-limit status | Always | None |
 | `get_cgroup_info` | Get cgroup details for a user | Always | None |
 | `get_configuration` | Get current CPU, RAM, and I/O resource-policy configuration | Always | None |
+| `get_configuration_editor` | Get the redacted versioned editor snapshot | Always | None |
+| `update_configuration` | Apply a revision-bound partial configuration update | Always | `MCP_ALLOW_WRITE_OPS=true` |
+| `update_cpu_points` | Apply revision-bound CPU Points map changes | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `get_cpu_report` | Generate a CPU usage report | Always | None |
 | `get_mem_report` | Generate a memory usage report | Always | None |
 | `get_control_history` | Get recent control-cycle history | Always | None |
@@ -69,6 +72,26 @@ client receives an explicit `metrics database is not enabled` error instead of a
 different discovery schema. The two user-filter setters are also always visible, but
 reject invocation while write operations are disabled. Only manual activation and
 deactivation are omitted from discovery unless write operations are enabled.
+
+HTTP supports two deliberately separate bearer principals. `MCP_AUTH_TOKEN` is the
+full operator credential. `MCP_EDITOR_AUTH_TOKEN` is a distinct least-privilege
+credential accepted only for the configuration-editor tools and observed-state
+reads in ResMan's positive allowlist; it cannot activate or deactivate limits, use
+the legacy filter setters, or acquire access to a future tool by default. Both
+editor update tools also require `MCP_ALLOW_WRITE_OPS=true`. Stdio remains a local
+operator transport and does not use bearer authentication.
+
+`get_configuration_editor` returns typed field metadata, redacted authored and
+effective values, CPU Points entries and one composite revision for the two source
+files. It never returns a complete configuration file or secret value. Updates are
+partial and revision-bound: omitted values, comments and secret bytes are preserved;
+a stale source is refused with a bounded non-sensitive conflict description. A
+terminal result distinguishes `applied`, `pending_restart`, `refused` and `failed`.
+Mutation completion logs contain only the bounded principal, operation, terminal state
+and requested/persisted/applied revision digests, allowing correlation with a client
+audit record without treating the service credential as a human identity.
+The versioned client schema and compatibility fixtures are shipped under an Apache
+2.0 grant in `protocol/config-editor/`; daemon code remains GPL-3.0-or-later.
 
 System-wide payloads and the shared active-user/configuration schemas include
 `hostname` for multi-server identification. Per-user entries are identified by `uid`
@@ -189,12 +212,14 @@ MCP_TLS_MIN_VERSION=1.3
 # Log level
 MCP_LOG_LEVEL=INFO
 
-# Allow write operations (activate/deactivate limits)
-# WARNING: Enable only if you trust all MCP clients
+# Allow operator control tools and revision-bound configuration editor writes
 MCP_ALLOW_WRITE_OPS=false
 
-# Required authentication token for HTTP
+# Full-privilege operator token required for HTTP
 # MCP_AUTH_TOKEN=your-secret-token
+
+# Distinct least-privilege editor token, required when HTTP writes are enabled
+# MCP_EDITOR_AUTH_TOKEN=your-independent-editor-token
 ```
 
 ## Usage
@@ -354,10 +379,10 @@ AI: "CPU limits have been activated successfully. 2 users are now being limited.
 
 ### Write Operations
 
-By default, write operations (`activate_limits`, `deactivate_limits`) are **disabled**. Enable them only if:
-- You trust all MCP clients with access
-- You understand the security implications
-- You have additional authentication in place
+By default, write operations are **disabled**. Enabling them exposes manual control
+tools to the operator credential and allows the independently scoped editor
+credential to submit revision-bound configuration changes. The editor credential
+cannot invoke manual activation, deactivation, or user-filter setter tools.
 
 Enable with:
 ```bash
@@ -370,6 +395,7 @@ HTTP transport requires token-based authentication:
 
 ```bash
 MCP_AUTH_TOKEN=your-secret-token
+MCP_EDITOR_AUTH_TOKEN=your-distinct-editor-token # Required with HTTP writes
 ```
 
 Clients must then include:

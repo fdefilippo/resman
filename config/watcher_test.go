@@ -134,6 +134,24 @@ type compositeConfigChangeHandler struct {
 	outcome    ReloadApplyOutcome
 }
 
+type blockingCompositeConfigChangeHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (h *blockingCompositeConfigChangeHandler) OnConfigChange(*Config) error { return nil }
+
+func (h *blockingCompositeConfigChangeHandler) OnConfigCandidate(_ *Config, confirm ReloadSourceConfirmation) ReloadApplyOutcome {
+	h.calls.Add(1)
+	if err := confirm(); err != nil {
+		return ReloadApplyOutcome{Err: err}
+	}
+	h.entered <- struct{}{}
+	<-h.release
+	return ReloadApplyOutcome{Published: true, Processed: true}
+}
+
 func (h *compositeConfigChangeHandler) OnConfigChange(*Config) error { return nil }
 
 func (h *compositeConfigChangeHandler) OnConfigCandidate(cfg *Config, confirm ReloadSourceConfirmation) ReloadApplyOutcome {
@@ -724,6 +742,73 @@ func TestWatcherTreatsMainConfigAndCPUPointsMapAsOneCandidateEpoch(t *testing.T)
 	}
 	if handler.calls != 3 {
 		t.Fatalf("candidate calls after recreation = %d, want 3", handler.calls)
+	}
+}
+
+func TestWatcherRevisionBoundReloadRejectsEitherSourceBeforeAndDuringApply(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "resman.conf")
+	mapPath := filepath.Join(directory, "cpu-points.map")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+	write(mapPath, "[resman-cpu-points-map-v1]\nroot=100\n")
+	write(configPath, fmt.Sprintf("CPU_THRESHOLD=80\nCPU_POINTS_FILE=%s\n", mapPath))
+	initial := DefaultConfig()
+	initial.ConfigFile = configPath
+	initial.CPUThreshold = 80
+	initial.CPUPointsFile = mapPath
+	handler := &blockingCompositeConfigChangeHandler{entered: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+	watcher, err := NewWatcher(configPath, initial, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Stop() })
+
+	configIdentity, _, err := readEditorSource(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapIdentity, _, err := readEditorSource(mapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := newEditorCompositeRevision(configIdentity, mapIdentity, map[string]string{})
+
+	write(configPath, fmt.Sprintf("CPU_THRESHOLD=81\nCPU_POINTS_FILE=%s\n", mapPath))
+	err = watcher.ReloadEditorRevision(context.Background(), expected)
+	var conflict *EditorRevisionConflictError
+	if !errors.As(err, &conflict) || conflict.Source != "configuration" {
+		t.Fatalf("stale configuration error = %v, want typed configuration conflict", err)
+	}
+	if handler.calls.Load() != 0 {
+		t.Fatalf("handler calls after pre-apply conflict = %d, want 0", handler.calls.Load())
+	}
+
+	configIdentity, _, err = readEditorSource(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapIdentity, _, err = readEditorSource(mapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected = newEditorCompositeRevision(configIdentity, mapIdentity, map[string]string{})
+	done := make(chan error, 1)
+	go func() { done <- watcher.ReloadEditorRevision(context.Background(), expected) }()
+	<-handler.entered
+	write(mapPath, "[resman-cpu-points-map-v1]\nroot=101\n")
+	handler.release <- struct{}{}
+	err = <-done
+	conflict = nil
+	if !errors.As(err, &conflict) || conflict.Source != "cpu_points" {
+		t.Fatalf("during-apply map error = %v, want typed CPU Points conflict", err)
 	}
 }
 

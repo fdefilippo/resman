@@ -72,6 +72,34 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid http editor principal",
+			cfg: &config.MCPServerConfig{
+				Enabled: true, Transport: "http", HTTPPort: 8080, TLSEnabled: true,
+				TLSCertFile: "server.crt", TLSKeyFile: "server.key", TLSMinVersion: "1.3",
+				LogLevel: "INFO", AuthToken: "operator-token", EditorAuthToken: "editor-token",
+				AllowWriteOps: true, ShutdownTimeout: 10,
+			},
+		},
+		{
+			name: "write-enabled HTTP without editor token",
+			cfg: &config.MCPServerConfig{
+				Enabled: true, Transport: "http", HTTPPort: 8080, TLSEnabled: true,
+				TLSCertFile: "server.crt", TLSKeyFile: "server.key", TLSMinVersion: "1.3",
+				LogLevel: "INFO", AuthToken: "operator-token", AllowWriteOps: true, ShutdownTimeout: 10,
+			},
+			wantErr: true,
+		},
+		{
+			name: "editor token equals operator token",
+			cfg: &config.MCPServerConfig{
+				Enabled: true, Transport: "http", HTTPPort: 8080, TLSEnabled: true,
+				TLSCertFile: "server.crt", TLSKeyFile: "server.key", TLSMinVersion: "1.3",
+				LogLevel: "INFO", AuthToken: "same-token", EditorAuthToken: "same-token",
+				AllowWriteOps: true, ShutdownTimeout: 10,
+			},
+			wantErr: true,
+		},
+		{
 			name: "enabled config with invalid shutdown timeout",
 			cfg: &config.MCPServerConfig{
 				Enabled:   true,
@@ -568,11 +596,13 @@ func TestServerStopTerminatesStdioTransport(t *testing.T) {
 
 func TestAuthMiddlewareFailsClosed(t *testing.T) {
 	tests := []struct {
-		name        string
-		serverToken string
-		authHeader  string
-		wantStatus  int
-		wantCalled  bool
+		name          string
+		serverToken   string
+		editorToken   string
+		authHeader    string
+		wantStatus    int
+		wantCalled    bool
+		wantPrincipal principalKind
 	}{
 		{
 			name:       "authentication not configured",
@@ -596,23 +626,36 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 			wantStatus:  http.StatusUnauthorized,
 		},
 		{
-			name:        "valid token",
-			serverToken: "test-token",
-			authHeader:  "Bearer test-token",
-			wantStatus:  http.StatusNoContent,
-			wantCalled:  true,
+			name:          "valid token",
+			serverToken:   "test-token",
+			authHeader:    "Bearer test-token",
+			wantStatus:    http.StatusNoContent,
+			wantCalled:    true,
+			wantPrincipal: principalOperator,
+		},
+		{
+			name:          "valid editor token",
+			serverToken:   "test-token",
+			editorToken:   "editor-token",
+			authHeader:    "Bearer editor-token",
+			wantStatus:    http.StatusNoContent,
+			wantCalled:    true,
+			wantPrincipal: principalEditor,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &Server{
-				cfg:    &config.MCPServerConfig{AuthToken: tt.serverToken},
+				cfg:    &config.MCPServerConfig{AuthToken: tt.serverToken, EditorAuthToken: tt.editorToken},
 				logger: logging.GetLogger(),
 			}
 			called := false
-			handler := server.authMiddleware(func(w http.ResponseWriter, _ *http.Request) {
+			handler := server.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				called = true
+				if principal, _ := r.Context().Value(principalContextKey{}).(principalKind); principal != tt.wantPrincipal {
+					t.Errorf("principal = %v, want %v", principal, tt.wantPrincipal)
+				}
 				w.WriteHeader(http.StatusNoContent)
 			})
 			request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -628,6 +671,52 @@ func TestAuthMiddlewareFailsClosed(t *testing.T) {
 			}
 			if called != tt.wantCalled {
 				t.Fatalf("next handler called = %t, want %t", called, tt.wantCalled)
+			}
+		})
+	}
+}
+
+func TestEditorPrincipalUsesPositiveToolAllowlist(t *testing.T) {
+	expectedAllowlist := map[string]struct{}{
+		"get_system_status": {}, "get_user_metrics": {}, "get_active_users": {}, "get_limits_status": {},
+		"get_cgroup_info": {}, "get_configuration": {}, "get_configuration_editor": {},
+		"update_configuration": {}, "update_cpu_points": {}, "get_cpu_report": {}, "get_mem_report": {},
+		"get_control_history": {}, "get_user_filters": {}, "validate_user_filter_pattern": {},
+		"get_user_history": {}, "get_system_history": {}, "get_user_summary": {}, "get_metrics_database_info": {},
+	}
+	if len(editorToolAllowlist) != len(expectedAllowlist) {
+		t.Fatalf("editor allowlist size = %d, want %d", len(editorToolAllowlist), len(expectedAllowlist))
+	}
+	for name := range expectedAllowlist {
+		if _, ok := editorToolAllowlist[name]; !ok {
+			t.Errorf("editor allowlist omits %s", name)
+		}
+	}
+	for _, name := range []string{"get_configuration_editor", "update_configuration", "get_system_status"} {
+		t.Run("allowed_"+name, func(t *testing.T) {
+			called := false
+			handler := authorizeEditorPrincipalMiddleware(func(_ context.Context, _ string, _ sdkmcp.Request) (sdkmcp.Result, error) {
+				called = true
+				return &sdkmcp.CallToolResult{}, nil
+			})
+			ctx := context.WithValue(context.Background(), principalContextKey{}, principalEditor)
+			_, err := handler(ctx, "tools/call", &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{Name: name}})
+			if err != nil || !called {
+				t.Fatalf("allowed tool = (%t, %v), want true, nil", called, err)
+			}
+		})
+	}
+	for _, name := range []string{"activate_limits", "deactivate_limits", "set_user_include_list", "future_write_tool"} {
+		t.Run("denied_"+name, func(t *testing.T) {
+			called := false
+			handler := authorizeEditorPrincipalMiddleware(func(_ context.Context, _ string, _ sdkmcp.Request) (sdkmcp.Result, error) {
+				called = true
+				return &sdkmcp.CallToolResult{}, nil
+			})
+			ctx := context.WithValue(context.Background(), principalContextKey{}, principalEditor)
+			_, err := handler(ctx, "tools/call", &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{Name: name}})
+			if err == nil || called {
+				t.Fatalf("denied tool = (%t, %v), want false, error", called, err)
 			}
 		})
 	}

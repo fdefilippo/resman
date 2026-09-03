@@ -1,0 +1,7 @@
+{
+  "state": "applied",
+  "requested_revision": "7bb58a1d3ea168ba6c953dcaad04b7624c7dd5baf758c5c1c9e05cb817d8ce51",
+  "persisted_revision": "882532715f2258c5a35e18d278194d667683352651edecf9e6e1cb10e47f5405",
+  "applied_revision": "882532715f2258c5a35e18d278194d667683352651edecf9e6e1cb10e47f5405",
+  "applied_dynamic_fields": ["CPU_THRESHOLD"]
+}

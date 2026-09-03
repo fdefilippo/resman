@@ -752,6 +752,7 @@ func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
 	t.Setenv("MCP_TLS_MIN_VERSION", "1.3")
 	t.Setenv("MCP_LOG_LEVEL", "debug")
 	t.Setenv("MCP_AUTH_TOKEN", "test-token")
+	t.Setenv("MCP_EDITOR_AUTH_TOKEN", "editor-token")
 	t.Setenv("MCP_ALLOW_WRITE_OPS", "1")
 	t.Setenv("MCP_SHUTDOWN_TIMEOUT", "17")
 
@@ -772,6 +773,7 @@ func TestMCPServerConfigUsesValidatedEnvironmentHandlers(t *testing.T) {
 		TLSMinVersion:   "1.3",
 		LogLevel:        "DEBUG",
 		AuthToken:       "test-token",
+		EditorAuthToken: "editor-token",
 		AllowWriteOps:   true,
 		ShutdownTimeout: 17,
 	}

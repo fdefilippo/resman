@@ -1,0 +1,25 @@
+{
+  "revision": {
+    "value": "7bb58a1d3ea168ba6c953dcaad04b7624c7dd5baf758c5c1c9e05cb817d8ce51",
+    "config": {
+      "path": "/etc/resman/resman.conf",
+      "device": "64768",
+      "inode": "12345",
+      "size": "4096",
+      "sha256": "c73c3e57ff9781e9f90fa8647e4a02a51be9fb36fc75ce70d687867b14650aee"
+    },
+    "cpu_points": {
+      "path": "/etc/resman/cpu-points.map",
+      "device": "64768",
+      "inode": "12346",
+      "size": "96",
+      "sha256": "e9fd554c037fe91e0d36760ea36555960a2f0d97fbcbf97c81006c4f40a607a7"
+    },
+    "public_values": {
+      "CPU_THRESHOLD": "75"
+    }
+  },
+  "changes": [
+    {"key": "CPU_THRESHOLD", "value": "80"}
+  ]
+}

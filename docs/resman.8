@@ -1107,6 +1107,15 @@ Available MCP tools (this list is verified against the production discovery resp
 .B get_configuration
 \- Current daemon configuration
 .IP \(bu
+.B get_configuration_editor
+\- Redacted versioned configuration-editor snapshot
+.IP \(bu
+.B update_configuration
+\- Revision-bound partial configuration update (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
+.B update_cpu_points
+\- Revision-bound CPU Points map update (requires MCP_ALLOW_WRITE_OPS=true)
+.IP \(bu
 .B get_control_history
 \- Recent control cycle history
 .IP \(bu
@@ -1254,7 +1263,21 @@ and
 .IP \(bu
 Allow write operations:
 .I MCP_ALLOW_WRITE_OPS=false
+.IP \(bu
+Full operator credential for HTTP:
+.I MCP_AUTH_TOKEN
+.IP \(bu
+Distinct least-privilege editor credential required with HTTP writes:
+.I MCP_EDITOR_AUTH_TOKEN
 .RE
+.PP
+The operator credential retains every enabled MCP tool. The editor credential is
+restricted by a positive allowlist to configuration-editor operations and observed-state
+reads; it cannot activate or deactivate limits, use the user-filter setters, or gain
+access to future tools by default. Editor reads are redacted and return one composite
+revision for the configuration and CPU Points files. Partial updates preserve omitted
+values, comments, ownership, mode, and secret bytes, then return exactly one terminal
+state: applied, pending_restart, refused, or failed.
 .SH LIMIT HOOKS
 When
 .B LIMIT_HOOK_ENABLED

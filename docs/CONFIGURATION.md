@@ -62,6 +62,7 @@ Environment-shadowing remedy: Inspect the running service with `systemctl show r
 | `LOG_MAX_SIZE` | `integer` | `10485760` | `restart-required` | `false` | `true` | min 1 | — | Persist the value and restart resman for it to become effective. |
 | `MCP_ALLOW_WRITE_OPS` | `boolean` | `false` | `restart-required` | `false` | `true` | — | false omits manual limit tools and rejects configuration writes. | Persist the value and restart resman for it to become effective. |
 | `MCP_AUTH_TOKEN` | `string` | `(redacted)` | `restart-required` | `true` | `true` | — | Empty is valid only for stdio; HTTP transport requires a token. | Persist the value and restart resman for it to become effective. |
+| `MCP_EDITOR_AUTH_TOKEN` | `string` | `(redacted)` | `restart-required` | `true` | `true` | — | Dedicated least-privilege HTTP credential for independent configuration editors; required when write operations are enabled. | Persist the value and restart resman for it to become effective. |
 | `MCP_ENABLED` | `boolean` | `false` | `restart-required` | `false` | `true` | — | false creates no MCP server. | Persist the value and restart resman for it to become effective. |
 | `MCP_HTTP_HOST` | `string` | `127.0.0.1` | `restart-required` | `false` | `true` | — | — | Persist the value and restart resman for it to become effective. |
 | `MCP_HTTP_PORT` | `integer` | `1969` | `restart-required` | `false` | `true` | min 1; max 65535 | — | Persist the value and restart resman for it to become effective. |

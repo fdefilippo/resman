@@ -200,18 +200,19 @@ type Config struct {
 	ServerRole string `config:"SERVER_ROLE"` // e.g., database, web-frontend, batch, application, etc.
 
 	// MCP Server
-	MCPEnabled       bool   `config:"MCP_ENABLED"`
-	MCPTransport     string `config:"MCP_TRANSPORT"`
-	MCPHTTPPort      int    `config:"MCP_HTTP_PORT"`
-	MCPHTTPHost      string `config:"MCP_HTTP_HOST"`
-	MCPTLSEnabled    bool   `config:"MCP_TLS_ENABLED"`
-	MCPTLSCertFile   string `config:"MCP_TLS_CERT_FILE"`
-	MCPTLSKeyFile    string `config:"MCP_TLS_KEY_FILE"`
-	MCPTLSCAFile     string `config:"MCP_TLS_CA_FILE"`
-	MCPTLSMinVersion string `config:"MCP_TLS_MIN_VERSION"`
-	MCPLogLevel      string `config:"MCP_LOG_LEVEL"`
-	MCPAuthToken     string `config:"MCP_AUTH_TOKEN"`
-	MCPAllowWriteOps bool   `config:"MCP_ALLOW_WRITE_OPS"`
+	MCPEnabled         bool   `config:"MCP_ENABLED"`
+	MCPTransport       string `config:"MCP_TRANSPORT"`
+	MCPHTTPPort        int    `config:"MCP_HTTP_PORT"`
+	MCPHTTPHost        string `config:"MCP_HTTP_HOST"`
+	MCPTLSEnabled      bool   `config:"MCP_TLS_ENABLED"`
+	MCPTLSCertFile     string `config:"MCP_TLS_CERT_FILE"`
+	MCPTLSKeyFile      string `config:"MCP_TLS_KEY_FILE"`
+	MCPTLSCAFile       string `config:"MCP_TLS_CA_FILE"`
+	MCPTLSMinVersion   string `config:"MCP_TLS_MIN_VERSION"`
+	MCPLogLevel        string `config:"MCP_LOG_LEVEL"`
+	MCPAuthToken       string `config:"MCP_AUTH_TOKEN"`
+	MCPEditorAuthToken string `config:"MCP_EDITOR_AUTH_TOKEN"`
+	MCPAllowWriteOps   bool   `config:"MCP_ALLOW_WRITE_OPS"`
 
 	// Metrics Database (SQLite)
 	MetricsDBEnabled       bool   `config:"METRICS_DB_ENABLED"`
@@ -370,18 +371,19 @@ func DefaultConfig() *Config {
 		BlackoutTimeframes: nil,
 
 		// MCP Server
-		MCPEnabled:       false,
-		MCPTransport:     "stdio",
-		MCPHTTPPort:      1969,
-		MCPHTTPHost:      "127.0.0.1",
-		MCPTLSEnabled:    true,
-		MCPTLSCertFile:   "/etc/resman/tls/server.crt",
-		MCPTLSKeyFile:    "/etc/resman/tls/server.key",
-		MCPTLSCAFile:     "",
-		MCPTLSMinVersion: "1.3",
-		MCPLogLevel:      "INFO",
-		MCPAuthToken:     "",
-		MCPAllowWriteOps: false,
+		MCPEnabled:         false,
+		MCPTransport:       "stdio",
+		MCPHTTPPort:        1969,
+		MCPHTTPHost:        "127.0.0.1",
+		MCPTLSEnabled:      true,
+		MCPTLSCertFile:     "/etc/resman/tls/server.crt",
+		MCPTLSKeyFile:      "/etc/resman/tls/server.key",
+		MCPTLSCAFile:       "",
+		MCPTLSMinVersion:   "1.3",
+		MCPLogLevel:        "INFO",
+		MCPAuthToken:       "",
+		MCPEditorAuthToken: "",
+		MCPAllowWriteOps:   false,
 
 		// Metrics Database (SQLite)
 		MetricsDBEnabled:       false,
@@ -460,6 +462,10 @@ func loadFromFile(path string, cfg *Config) error {
 		return err
 	}
 
+	return loadFromData(path, data, cfg)
+}
+
+func loadFromData(path string, data []byte, cfg *Config) error {
 	lines := strings.Split(string(data), "\n")
 	if err := removedConfigFileKeyErrors(path, lines); err != nil {
 		return err
@@ -703,6 +709,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"MCP_TLS_MIN_VERSION":           setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPTLSMinVersion = value }),
 	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
 	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
+	"MCP_EDITOR_AUTH_TOKEN":         setString(func(cfg *Config, value string) { cfg.MCPEditorAuthToken = value }),
 	"MCP_ALLOW_WRITE_OPS":           setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
 	"METRICS_DB_ENABLED":            setBool(func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
 	"METRICS_DB_PATH":               setString(func(cfg *Config, value string) { cfg.MetricsDBPath = value }),

@@ -11,6 +11,34 @@ import (
 
 const policyMapFileMode = os.FileMode(0600)
 
+// PolicySyntaxError identifies malformed policy-map content.
+type PolicySyntaxError struct{ Cause error }
+
+func (e *PolicySyntaxError) Error() string { return e.Cause.Error() }
+func (e *PolicySyntaxError) Unwrap() error { return e.Cause }
+
+// PolicyIdentityError identifies a username whose exact NSS identity cannot be
+// used by the policy. Username is safe to return to the submitting editor.
+type PolicyIdentityError struct {
+	Username string
+	Cause    error
+}
+
+func (e *PolicyIdentityError) Error() string { return e.Cause.Error() }
+func (e *PolicyIdentityError) Unwrap() error { return e.Cause }
+
+// PolicyOvercommitError identifies a candidate whose configured guarantees
+// and best-effort entitlement exceed its nominal pool.
+type PolicyOvercommitError struct {
+	Pool       uint64
+	Guarantees uint64
+	BestEffort uint64
+}
+
+func (e *PolicyOvercommitError) Error() string {
+	return fmt.Sprintf("CPU Points policy overcommits nominal pool %d: configured guarantees %d plus best effort %d", e.Pool, e.Guarantees, e.BestEffort)
+}
+
 // PolicyLoader builds an immutable snapshot using filesystem and NSS I/O before
 // any caller publishes it. The production file contract is an absolute clean
 // path, a non-symlink regular file owned by root or the daemon EUID with exact
@@ -41,14 +69,6 @@ func (l *PolicyLoader) Load(inputs PolicyInputs, resolver ExactIdentityResolver)
 	if resolver == nil {
 		return PolicySnapshot{}, fmt.Errorf("exact username resolver is required")
 	}
-	reserve, err := NewReservePoints(inputs.Reserve.Value())
-	if err != nil {
-		return PolicySnapshot{}, fmt.Errorf("validate policy reserve: %w", err)
-	}
-	bestEffort, err := NewBestEffortPoints(inputs.BestEffort.Value())
-	if err != nil {
-		return PolicySnapshot{}, fmt.Errorf("validate policy best-effort entitlement: %w", err)
-	}
 	mapPath, err := NewPolicyMapPath(inputs.MapPath.String())
 	if err != nil {
 		return PolicySnapshot{}, fmt.Errorf("validate policy map path: %w", err)
@@ -58,9 +78,34 @@ func (l *PolicyLoader) Load(inputs PolicyInputs, resolver ExactIdentityResolver)
 	if err != nil {
 		return PolicySnapshot{}, err
 	}
+	return l.loadContent(inputs, mapPath, data, source, resolver)
+}
+
+// LoadContent validates detached editor content through the same parser, NSS
+// resolver, and overcommit checks as a live policy source.
+func (l *PolicyLoader) LoadContent(inputs PolicyInputs, data []byte, resolver ExactIdentityResolver) (PolicySnapshot, error) {
+	if l == nil || resolver == nil {
+		return PolicySnapshot{}, fmt.Errorf("initialized policy loader and exact username resolver are required")
+	}
+	mapPath, err := NewPolicyMapPath(inputs.MapPath.String())
+	if err != nil {
+		return PolicySnapshot{}, fmt.Errorf("validate policy map path: %w", err)
+	}
+	return l.loadContent(inputs, mapPath, data, PolicySource{path: mapPath, size: int64(len(data)), digest: sha256.Sum256(data)}, resolver)
+}
+
+func (l *PolicyLoader) loadContent(inputs PolicyInputs, mapPath PolicyMapPath, data []byte, source PolicySource, resolver ExactIdentityResolver) (PolicySnapshot, error) {
+	reserve, err := NewReservePoints(inputs.Reserve.Value())
+	if err != nil {
+		return PolicySnapshot{}, fmt.Errorf("validate policy reserve: %w", err)
+	}
+	bestEffort, err := NewBestEffortPoints(inputs.BestEffort.Value())
+	if err != nil {
+		return PolicySnapshot{}, fmt.Errorf("validate policy best-effort entitlement: %w", err)
+	}
 	rawEntries, err := parsePolicyMap(data)
 	if err != nil {
-		return PolicySnapshot{}, fmt.Errorf("parse CPU Points map %s: %w", mapPath.String(), err)
+		return PolicySnapshot{}, fmt.Errorf("parse CPU Points map %s: %w", mapPath.String(), &PolicySyntaxError{Cause: err})
 	}
 
 	pool := reserve.ParentPool()
@@ -70,28 +115,34 @@ func (l *PolicyLoader) Load(inputs PolicyInputs, resolver ExactIdentityResolver)
 	for _, raw := range rawEntries {
 		identities, err := resolver.ResolveExactUsername(raw.username)
 		if err != nil {
-			return PolicySnapshot{}, fmt.Errorf("resolve CPU Points map %s line %d username %q: %w", mapPath.String(), raw.line, raw.username, err)
+			cause := fmt.Errorf("resolve CPU Points map %s line %d username %q: %w", mapPath.String(), raw.line, raw.username, err)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 		if len(identities) == 0 {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points map %s line %d username %q did not resolve through NSS", mapPath.String(), raw.line, raw.username)
+			cause := fmt.Errorf("CPU Points map %s line %d username %q did not resolve through NSS", mapPath.String(), raw.line, raw.username)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 		if len(identities) != 1 {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points map %s line %d username %q resolved to %d identities; exactly one is required", mapPath.String(), raw.line, raw.username, len(identities))
+			cause := fmt.Errorf("CPU Points map %s line %d username %q resolved to %d identities; exactly one is required", mapPath.String(), raw.line, raw.username, len(identities))
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 		identity := identities[0]
 		if identity.Username != raw.username {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points map %s line %d username %q resolved as non-exact identity %q", mapPath.String(), raw.line, raw.username, identity.Username)
+			cause := fmt.Errorf("CPU Points map %s line %d username %q resolved as non-exact identity %q", mapPath.String(), raw.line, raw.username, identity.Username)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 		if identity.UID < 0 {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points map %s line %d username %q resolved to unrepresentable UID %d", mapPath.String(), raw.line, raw.username, identity.UID)
+			cause := fmt.Errorf("CPU Points map %s line %d username %q resolved to unrepresentable UID %d", mapPath.String(), raw.line, raw.username, identity.UID)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 		if previous, duplicate := guaranteesByUID[identity.UID]; duplicate {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points map %s usernames %q and %q resolve to duplicate UID %d", mapPath.String(), previous.Username(), raw.username, identity.UID)
+			cause := fmt.Errorf("CPU Points map %s usernames %q and %q resolve to duplicate UID %d", mapPath.String(), previous.Username(), raw.username, identity.UID)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 
 		configuredTotal += raw.points.Value()
 		if configuredTotal+bestEffort.Value() > pool.Value() {
-			return PolicySnapshot{}, fmt.Errorf("CPU Points policy overcommits nominal pool %d: configured guarantees %d plus best effort %d", pool.Value(), configuredTotal, bestEffort.Value())
+			return PolicySnapshot{}, &PolicyOvercommitError{Pool: pool.Value(), Guarantees: configuredTotal, BestEffort: bestEffort.Value()}
 		}
 		guarantee := UserGuarantee{
 			username: raw.username,

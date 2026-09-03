@@ -7,7 +7,7 @@ unrelated state access. A gate may span I/O; a `sync.Mutex` or `sync.RWMutex` ma
 
 | Component | Synchronization-bearing types | State synchronization | Ordered-operation gate | Reviewed boundary |
 | --- | --- | --- | --- | --- |
-| `config.Config` | `config.Config` | `mu`, `regexCache` | `saveGate` | Config snapshots are copied under `mu`; atomic file persistence runs only under `saveGate`. |
+| `config.Config` | `config.Config`<br>`config.EditorConfigCandidate` | `mu`, `regexCache` | shared `saveGate` | Config snapshots are copied under `mu`; legacy setters and revision-bound editor writes share `saveGate`, and source confirmation plus atomic persistence run while it is held. |
 | `config.Watcher` | `config.Watcher` | `mu`, wait groups | `reloadGate` | Lifecycle/digest state is copied under `mu`; file reads and the apply callback run after unlock. |
 | `internal/configepoch.Barrier` | `internal/configepoch.Barrier` | `mu` and `sync.Cond` | epoch admission itself | The barrier unlocks before returning control to component callbacks. |
 | `internal/app.App` | `internal/app.App`<br>`internal/app.shutdownDeadlineState` | `cfgMu`, `psiMu`, shutdown deadline mutex and wait group | component gates | Component start/stop and filesystem probes run after snapshotting pointers. The shutdown mutex protects only deadline ownership and the current stage; timer waits, logging and forced exit run after unlock. |

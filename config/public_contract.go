@@ -20,15 +20,15 @@ import (
 // PublicFieldContract describes one public configuration key from the runtime
 // default and lifecycle sources of truth.
 type PublicFieldContract struct {
-	Key                    string
-	Kind                   PublicFieldKind
-	Default                string
-	Lifecycle              FieldLifecycle
-	Sensitive              bool
-	Editable               bool
-	Constraint             PublicFieldConstraint
-	EmptyOrDisabledMeaning string
-	Remedy                 string
+	Key                    string                `json:"key"`
+	Kind                   PublicFieldKind       `json:"kind"`
+	Default                string                `json:"default"`
+	Lifecycle              FieldLifecycle        `json:"lifecycle"`
+	Sensitive              bool                  `json:"sensitive"`
+	Editable               bool                  `json:"editable"`
+	Constraint             PublicFieldConstraint `json:"constraint"`
+	EmptyOrDisabledMeaning string                `json:"empty_or_disabled_meaning"`
+	Remedy                 string                `json:"remedy"`
 }
 
 // PublicFieldKind is the closed wire vocabulary for editor value types.
@@ -46,10 +46,10 @@ const (
 // independent editors. Cross-field validation remains authoritative in
 // ValidateCandidate and is always run before persistence.
 type PublicFieldConstraint struct {
-	Minimum *float64
-	Maximum *float64
-	Enum    []string
-	Format  string
+	Minimum *float64 `json:"minimum,omitempty"`
+	Maximum *float64 `json:"maximum,omitempty"`
+	Enum    []string `json:"enum,omitempty"`
+	Format  string   `json:"format,omitempty"`
 }
 
 // ConfigSource is one member of the authoritative source-precedence order.
@@ -148,8 +148,9 @@ func validateStructuredFieldConstraint(cfg *Config, key string) error {
 }
 
 var sensitivePublicFields = map[string]bool{
-	"LIMIT_HOOK_URL": true,
-	"MCP_AUTH_TOKEN": true,
+	"LIMIT_HOOK_URL":        true,
+	"MCP_AUTH_TOKEN":        true,
+	"MCP_EDITOR_AUTH_TOKEN": true,
 }
 
 var nonEditablePublicFields = map[string]string{
@@ -257,6 +258,7 @@ var specialFieldMeanings = map[string]string{
 	"LIMIT_HOOK_URL":             "Empty disables HTTP delivery; configured requests use a dedicated no-retry client.",
 	"MCP_ALLOW_WRITE_OPS":        "false omits manual limit tools and rejects configuration writes.",
 	"MCP_AUTH_TOKEN":             "Empty is valid only for stdio; HTTP transport requires a token.",
+	"MCP_EDITOR_AUTH_TOKEN":      "Dedicated least-privilege HTTP credential for independent configuration editors; required when write operations are enabled.",
 	"MCP_ENABLED":                "false creates no MCP server.",
 	"MCP_TLS_CA_FILE":            "Empty disables client-certificate authentication; the bearer token is still required over HTTP.",
 	"MCP_TRANSPORT":              "stdio is local and creates no network listener.",

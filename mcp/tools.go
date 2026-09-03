@@ -312,6 +312,7 @@ func formatOptionalTime(value time.Time) string {
 
 // registerTools registers all MCP tools
 func (s *Server) registerTools() {
+	s.registerConfigurationEditorTools()
 	// get_system_status - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_system_status",

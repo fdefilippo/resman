@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.defilippo.org/resman/protocol/config-editor/v1",
+  "title": "ResMan configuration editor snapshot v1",
+  "type": "object",
+  "required": ["schema_version", "source_precedence", "revision", "fields", "cpu_points"],
+  "properties": {
+    "schema_version": {"const": "resman.config-editor.v1"},
+    "source_precedence": {
+      "type": "array",
+      "prefixItems": [{"const": "default"}, {"const": "file"}, {"const": "environment"}],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "revision": {"$ref": "#/$defs/revision"},
+    "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}},
+    "cpu_points": {"type": "array", "items": {"$ref": "#/$defs/cpuPoint"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sourceIdentity": {
+      "type": "object",
+      "required": ["path", "device", "inode", "size", "sha256"],
+      "properties": {
+        "path": {"type": "string"}, "device": {"type": "string", "pattern": "^[0-9]+$"},
+        "inode": {"type": "string", "pattern": "^[0-9]+$"}, "size": {"type": "string", "pattern": "^[0-9]+$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "object",
+      "required": ["value", "config", "cpu_points", "public_values"],
+      "properties": {
+        "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "config": {"$ref": "#/$defs/sourceIdentity"},
+        "cpu_points": {"$ref": "#/$defs/sourceIdentity"},
+        "public_values": {"type": "object", "additionalProperties": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "field": {
+      "type": "object",
+      "required": ["contract", "source", "application_state", "secret_set", "remedy"],
+      "properties": {
+        "contract": {"$ref": "#/$defs/fieldContract"},
+        "authored_value": {"type": "string"},
+        "effective_value": {"type": "string"},
+        "source": {"enum": ["default", "file", "environment"]},
+        "application_state": {"enum": ["effective", "pending_restart", "environment_shadowed"]},
+        "secret_set": {"type": "boolean"},
+        "remedy": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fieldContract": {
+      "type": "object",
+      "required": ["key", "kind", "default", "lifecycle", "sensitive", "editable", "constraint", "empty_or_disabled_meaning", "remedy"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["boolean", "integer", "number", "string", "string_list"]},
+        "default": {"type": "string"},
+        "lifecycle": {"enum": ["dynamic", "restart-required"]},
+        "sensitive": {"type": "boolean"},
+        "editable": {"type": "boolean"},
+        "constraint": {
+          "type": "object",
+          "properties": {
+            "minimum": {"type": "number"},
+            "maximum": {"type": "number"},
+            "enum": {"type": "array", "items": {"type": "string"}},
+            "format": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "empty_or_disabled_meaning": {"type": "string"},
+        "remedy": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "cpuPoint": {
+      "type": "object",
+      "required": ["username", "uid", "points"],
+      "properties": {
+        "username": {"type": "string"}, "uid": {"type": "integer", "minimum": 0},
+        "points": {"type": "integer", "minimum": 1, "maximum": 1000}
+      },
+      "additionalProperties": false
+    },
+    "fieldChange": {
+      "type": "object",
+      "required": ["key", "value"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "cpuPointChange": {
+      "type": "object",
+      "required": ["username"],
+      "properties": {
+        "username": {"type": "string", "minLength": 1},
+        "points": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000}
+      },
+      "additionalProperties": false
+    },
+    "updateConfigurationRequest": {
+      "type": "object",
+      "required": ["revision", "changes"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/fieldChange"}}
+      },
+      "additionalProperties": false
+    },
+    "updateCPUPointsRequest": {
+      "type": "object",
+      "required": ["revision", "changes"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/cpuPointChange"}}
+      },
+      "additionalProperties": false
+    },
+    "updateResult": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["applied", "pending_restart", "refused", "failed"]},
+        "requested_revision": {"type": "string"},
+        "persisted_revision": {"type": "string"},
+        "applied_revision": {"type": "string"},
+        "applied_dynamic_fields": {"type": "array", "items": {"type": "string"}},
+        "pending_restart_fields": {"type": "array", "items": {"type": "string"}},
+        "snapshot": {"type": "object"},
+        "refusal": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {
+            "reason": {"enum": ["revision_conflict", "write_operations_disabled", "update_in_progress", "empty_patch", "removed_or_unknown_key", "non_editable_key", "duplicate_key", "invalid_value", "invalid_source", "no_change", "environment_invalid", "invalid_candidate", "invalid_cpu_points_patch", "malformed_cpu_points_map", "unresolved_username", "cpu_points_overcommit", "active_uid_class_change"]},
+            "keys": {"type": "array", "items": {"type": "string"}},
+            "usernames": {"type": "array", "items": {"type": "string"}},
+            "uids": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            "changed_sources": {"type": "array", "items": {"enum": ["configuration", "cpu_points"]}, "maxItems": 2},
+            "changed_fields": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+            "current_revision": {"$ref": "#/$defs/revision"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

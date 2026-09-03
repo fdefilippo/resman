@@ -57,6 +57,37 @@ const (
 	mcpDefaultMaxRequestBodySize = 4 << 20
 )
 
+type principalKind uint8
+
+const (
+	principalLocal principalKind = iota
+	principalOperator
+	principalEditor
+)
+
+type principalContextKey struct{}
+
+var editorToolAllowlist = map[string]struct{}{
+	"get_system_status":            {},
+	"get_user_metrics":             {},
+	"get_active_users":             {},
+	"get_limits_status":            {},
+	"get_cgroup_info":              {},
+	"get_configuration":            {},
+	"get_configuration_editor":     {},
+	"update_configuration":         {},
+	"update_cpu_points":            {},
+	"get_cpu_report":               {},
+	"get_mem_report":               {},
+	"get_control_history":          {},
+	"get_user_filters":             {},
+	"validate_user_filter_pattern": {},
+	"get_user_history":             {},
+	"get_system_history":           {},
+	"get_user_summary":             {},
+	"get_metrics_database_info":    {},
+}
+
 // ConfigurationReloader applies a persisted configuration and returns only
 // after its runtime outcome is known.
 type ConfigurationReloader interface {
@@ -138,6 +169,7 @@ func NewServer(
 		Version: getVersion(),
 	}, nil)
 	mcpServer.AddReceivingMiddleware(latestOnlyMCPMiddleware)
+	mcpServer.AddReceivingMiddleware(authorizeEditorPrincipalMiddleware)
 
 	s := &Server{
 		mcpServer:        mcpServer,
@@ -378,6 +410,26 @@ func latestOnlyMCPMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
+func authorizeEditorPrincipalMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		principal, _ := ctx.Value(principalContextKey{}).(principalKind)
+		if principal != principalEditor || method != "tools/call" {
+			return next(ctx, method, req)
+		}
+		call, ok := req.(*mcp.CallToolRequest)
+		if !ok {
+			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidRequest, Message: "invalid tools/call request"}
+		}
+		if _, allowed := editorToolAllowlist[call.Params.Name]; !allowed {
+			return nil, &sdkjsonrpc.Error{
+				Code:    sdkjsonrpc.CodeInvalidRequest,
+				Message: fmt.Sprintf("editor principal is not authorized to invoke tool %q", call.Params.Name),
+			}
+		}
+		return next(ctx, method, req)
+	}
+}
+
 func validateLatestOnlyMCPRequest(method, version string) error {
 	switch method {
 	case mcpMethodInitialize, mcpNotificationInitialized:
@@ -546,17 +598,21 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
+		principal := principalOperator
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AuthToken)) != 1 {
-			http.Error(w, `{"error": "Invalid authentication token"}`, http.StatusUnauthorized)
-			s.logger.Warn("MCP request rejected: invalid token",
-				"remote_addr", r.RemoteAddr,
-				"path", r.URL.Path,
-			)
-			return
+			if s.cfg.EditorAuthToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.EditorAuthToken)) != 1 {
+				http.Error(w, `{"error": "Invalid authentication token"}`, http.StatusUnauthorized)
+				s.logger.Warn("MCP request rejected: invalid token",
+					"remote_addr", r.RemoteAddr,
+					"path", r.URL.Path,
+				)
+				return
+			}
+			principal = principalEditor
 		}
 
 		// Token valid, proceed
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 	}
 }
 

@@ -35,6 +35,19 @@ import (
 // ErrWatcherStopped reports that a reload cannot start after watcher shutdown.
 var ErrWatcherStopped = errors.New("configuration watcher is stopped")
 
+// EditorRevisionConflictError reports that a revision-bound reload no longer
+// observes the two exact source objects persisted by the editor request.
+type EditorRevisionConflictError struct {
+	Source string
+}
+
+func (e *EditorRevisionConflictError) Error() string {
+	return fmt.Sprintf("editor %s source revision changed before reload", e.Source)
+}
+
+// EditorRevisionConflict marks an optimistic-concurrency refusal.
+func (e *EditorRevisionConflictError) EditorRevisionConflict() {}
+
 // ConfigChangeHandler applies one validated configuration snapshot.
 type ConfigChangeHandler interface {
 	OnConfigChange(*Config) error
@@ -152,9 +165,31 @@ func (w *Watcher) Reload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Manual configuration reload triggered")
-	attempted, err := w.handleConfigChangeResult(ctx, false)
+	attempted, err := w.handleConfigChangeResult(ctx, false, nil)
 	if attempted || err != nil {
 		w.reportReloadOutcome("manual", err)
+	}
+	return err
+}
+
+// ReloadEditorRevision synchronously applies only the exact composite source
+// revision supplied by a configuration-editor request.
+func (w *Watcher) ReloadEditorRevision(ctx context.Context, expected EditorCompositeRevision) error {
+	if ctx == nil {
+		return fmt.Errorf("reload context cannot be nil")
+	}
+	if expected.Value == "" {
+		return fmt.Errorf("editor composite revision cannot be empty")
+	}
+	if rebuilt := newEditorCompositeRevision(expected.Config, expected.CPUPoints, expected.PublicValues); rebuilt.Value != expected.Value {
+		return fmt.Errorf("editor composite revision is internally inconsistent")
+	}
+	w.logger.Info("Revision-bound editor configuration reload triggered")
+	// Reapply even when an automatic event won the race and already recorded the
+	// digest; the editor response still needs its own terminal lifecycle result.
+	attempted, err := w.handleConfigChangeResult(ctx, true, &expected)
+	if attempted || err != nil {
+		w.reportReloadOutcome("editor", err)
 	}
 	return err
 }
@@ -166,7 +201,7 @@ func (w *Watcher) ForceReload(ctx context.Context) error {
 		return fmt.Errorf("reload context cannot be nil")
 	}
 	w.logger.Info("Forced configuration reload triggered")
-	attempted, err := w.handleConfigChangeResult(ctx, true)
+	attempted, err := w.handleConfigChangeResult(ctx, true, nil)
 	if attempted || err != nil {
 		w.reportReloadOutcome("forced", err)
 	}
@@ -372,7 +407,7 @@ func (w *Watcher) checkConfigChange() {
 }
 
 func (w *Watcher) reloadFromEvent(force bool) {
-	attempted, err := w.handleConfigChangeResult(context.Background(), force)
+	attempted, err := w.handleConfigChangeResult(context.Background(), force, nil)
 	if (attempted || err != nil) && !errors.Is(err, ErrWatcherStopped) {
 		w.reportReloadOutcome("automatic", err)
 	}
@@ -419,7 +454,8 @@ func classifyReloadState(err error) ReloadState {
 	}
 	classification := ClassifyReloadError(err)
 	var preflight interface{ CPUPointsPreflight() }
-	if classification.OnlyRestartRequired || errors.As(err, &preflight) {
+	var revisionConflict interface{ EditorRevisionConflict() }
+	if classification.OnlyRestartRequired || errors.As(err, &preflight) || errors.As(err, &revisionConflict) {
 		return ReloadStateRefused
 	}
 	return ReloadStateFailed
@@ -466,11 +502,11 @@ func reloadOutcomeWasProcessed(err error) bool {
 
 // handleConfigChange serializes, validates, and applies one file version.
 func (w *Watcher) handleConfigChange(ctx context.Context, force bool) error {
-	_, err := w.handleConfigChangeResult(ctx, force)
+	_, err := w.handleConfigChangeResult(ctx, force, nil)
 	return err
 }
 
-func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (bool, error) {
+func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expected *EditorCompositeRevision) (bool, error) {
 	w.mu.Lock()
 	if !w.isRunning {
 		w.mu.Unlock()
@@ -506,7 +542,8 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (boo
 		return false, fmt.Errorf("before reading configuration: %w", err)
 	}
 
-	// Verify that the file still exists.
+	// Capture both source files before candidate construction. Editor reloads
+	// additionally bind the capture to the exact post-persistence objects.
 	fileInfo, err := os.Stat(w.configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -514,18 +551,39 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (boo
 		}
 		return false, fmt.Errorf("cannot stat configuration file %s: %w", w.configPath, err)
 	}
-	fileContent, err := os.ReadFile(w.configPath)
+	var configIdentity EditorSourceIdentity
+	var fileContent []byte
+	if expected != nil {
+		configIdentity, fileContent, err = readEditorSource(w.configPath)
+	} else {
+		fileContent, err = os.ReadFile(w.configPath)
+	}
 	if err != nil {
 		return false, fmt.Errorf("cannot read configuration file %s: %w", w.configPath, err)
 	}
+	if expected != nil && configIdentity != expected.Config {
+		return false, &EditorRevisionConflictError{Source: "configuration"}
+	}
 	digest := sha256.Sum256(fileContent)
 	var mapDigest [sha256.Size]byte
+	var mapIdentity EditorSourceIdentity
 	if w.mapPath != "" {
-		mapContent, mapErr := os.ReadFile(w.mapPath)
+		var mapContent []byte
+		var mapErr error
+		if expected != nil {
+			mapIdentity, mapContent, mapErr = readEditorSource(w.mapPath)
+		} else {
+			mapContent, mapErr = os.ReadFile(w.mapPath)
+		}
 		if mapErr != nil {
 			return false, fmt.Errorf("cannot read CPU Points map %s: %w", w.mapPath, mapErr)
 		}
+		if expected != nil && mapIdentity != expected.CPUPoints {
+			return false, &EditorRevisionConflictError{Source: "cpu_points"}
+		}
 		mapDigest = sha256.Sum256(mapContent)
+	} else if expected != nil {
+		return false, fmt.Errorf("revision-bound reload requires a CPU Points map")
 	}
 
 	// Avoid processing the same content twice. Metadata alone is insufficient:
@@ -562,6 +620,23 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (boo
 	}
 
 	confirmSources := func() error {
+		if expected != nil {
+			currentConfig, readErr := ReadEditorSourceIdentity(w.configPath)
+			if readErr != nil {
+				return fmt.Errorf("confirm configuration file %s: %w", w.configPath, readErr)
+			}
+			if currentConfig != configIdentity {
+				return &EditorRevisionConflictError{Source: "configuration"}
+			}
+			currentMap, readErr := ReadEditorSourceIdentity(w.mapPath)
+			if readErr != nil {
+				return fmt.Errorf("confirm CPU Points map %s: %w", w.mapPath, readErr)
+			}
+			if currentMap != mapIdentity {
+				return &EditorRevisionConflictError{Source: "cpu_points"}
+			}
+			return nil
+		}
 		currentContent, err := os.ReadFile(w.configPath)
 		if err != nil {
 			return fmt.Errorf("confirm configuration file %s: %w", w.configPath, err)
@@ -589,11 +664,18 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool) (boo
 	}
 	applyErr := applyOutcome.Err
 	var confirmationErr error
-	postApplyContent, err := os.ReadFile(w.configPath)
-	if err != nil {
-		confirmationErr = fmt.Errorf("confirm configuration file %s after apply: %w", w.configPath, err)
-	} else if postApplyDigest := sha256.Sum256(postApplyContent); postApplyDigest != digest {
-		confirmationErr = fmt.Errorf("configuration file %s changed while runtime application was in progress", w.configPath)
+	if expected != nil {
+		confirmationErr = confirmSources()
+		if confirmationErr != nil {
+			confirmationErr = fmt.Errorf("confirm composite sources after runtime application: %w", confirmationErr)
+		}
+	} else {
+		postApplyContent, readErr := os.ReadFile(w.configPath)
+		if readErr != nil {
+			confirmationErr = fmt.Errorf("confirm configuration file %s after apply: %w", w.configPath, readErr)
+		} else if postApplyDigest := sha256.Sum256(postApplyContent); postApplyDigest != digest {
+			confirmationErr = fmt.Errorf("configuration file %s changed while runtime application was in progress", w.configPath)
+		}
 	}
 
 	w.mu.Lock()

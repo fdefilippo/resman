@@ -592,13 +592,18 @@ MCP_TLS_MIN_VERSION=1.3
 # If not specified, uses the same level as LOG_LEVEL
 MCP_LOG_LEVEL=INFO
 
-# Allow write operations (activate/deactivate limits via MCP)
-# WARNING: Enable only if you trust all MCP clients
+# Allow privileged operator writes and revision-bound editor writes. The
+# operator token retains all enabled tools; the editor token below is limited
+# to configuration editing and observed-state reads by a positive allowlist.
 MCP_ALLOW_WRITE_OPS=false
 
-# Required authentication token for HTTP transport
+# Full-privilege operator authentication token required by HTTP transport.
 MCP_AUTH_TOKEN=
 # MCP_AUTH_TOKEN=your-secret-token-here
+# Dedicated least-privilege HTTP token for independent configuration editors.
+# It is mandatory when HTTP write operations are enabled and must differ from
+# MCP_AUTH_TOKEN. Omitting a sensitive field in an editor patch preserves it.
+MCP_EDITOR_AUTH_TOKEN=
 
 # ========================
 # METRICS DATABASE (SQLite)
