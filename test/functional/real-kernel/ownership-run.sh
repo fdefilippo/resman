@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Remote non-interactive root shells may omit administrative directories even
+# though the packaged tools are installed there (runuser is /usr/sbin on EL9).
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 scenario=${1:?scenario is required}
 run_id=${2:?run id is required}
 source_revision=${3:?source revision is required}
