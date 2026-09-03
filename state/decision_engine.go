@@ -327,7 +327,7 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 	}
 }
 
-func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMetrics) {
+func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMetrics) int {
 	m.mu.Lock()
 	refusedTotal := 0
 
@@ -382,6 +382,7 @@ func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMe
 	if exporter != nil && refusedTotal > 0 {
 		exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{SystemdOwnershipRefused: refusedTotal})
 	}
+	return refusedTotal
 }
 
 func newUserStabilityTracker() *UserStabilityTracker {

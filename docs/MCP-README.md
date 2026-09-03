@@ -493,6 +493,8 @@ The MCP server runs with the same permissions as ResMan. Ensure:
 {
   "hostname": "server-web01",
   "total_cpu_usage": 45.5,
+  "total_cpu_usage_available": true,
+  "total_cpu_usage_unavailable_reason": "",
   "observed_users_cpu_usage": 12.3,
   "memory_usage_mb": 2345.6,
   "observed_users_count": 5,
@@ -507,6 +509,10 @@ The MCP server runs with the same permissions as ResMan. Ensure:
   "shared_cgroup_active": true
 }
 ```
+
+When `total_cpu_usage_available` is false, `total_cpu_usage` is not a measured zero
+and must not be interpreted as one. The bounded reason identifies a missing baseline,
+read failure, stale baseline, counter reset, or zero-delta sample.
 
 ### Tool: get_cpu_report ⭐ NEW
 

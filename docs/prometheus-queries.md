@@ -29,8 +29,20 @@ resman_cpu_total_usage_percent
 resman_cpu_total_usage_percent[1h]
 ```
 
-The total CPU gauge is the observation stream. Use the decision-owned availability
-series when diagnosing system-load attribution:
+The total CPU gauge is the observation stream. An unavailable refresh preserves its
+last valid value; it is never overwritten with a fabricated zero. Check the
+observation-owned availability before treating the value as fresh:
+
+```promql
+# Latest observation refresh produced a comparable host CPU sample
+resman_observation_host_cpu_sample_available
+
+# Bounded causes of unavailable observation samples
+sum by (reason) (increase(resman_observation_host_cpu_sample_unavailable_total[1h]))
+```
+
+Use the separate decision-owned availability series when diagnosing system-load
+attribution:
 
 ```promql
 # Latest control cycle could compare the host CPU jiffy sample

@@ -22,20 +22,21 @@ const (
 )
 
 type controlCycleContext struct {
-	ctx                context.Context
-	cfg                *config.Config
-	trigger            string
-	startTime          time.Time
-	cycleID            int64
-	metrics            *SystemMetrics
-	decision           string
-	reason             string
-	duration           time.Duration
-	activeLimitedUsers int
-	stopWithoutError   bool
-	deferredErrors     []error
-	degradedErrors     []error
-	degradedWarnings   []error
+	ctx                 context.Context
+	cfg                 *config.Config
+	trigger             string
+	startTime           time.Time
+	cycleID             int64
+	metrics             *SystemMetrics
+	decision            string
+	reason              string
+	duration            time.Duration
+	activeLimitedUsers  int
+	ingressRefusedCount int
+	stopWithoutError    bool
+	deferredErrors      []error
+	degradedErrors      []error
+	degradedWarnings    []error
 }
 
 type controlCycleStage struct {
@@ -105,6 +106,11 @@ func (m *Manager) RunMetricsRefresh(ctx context.Context, trigger string) error {
 	}
 
 	if m.prometheusExporter != nil {
+		m.prometheusExporter.ObserveObservationHostCPUUsage(resmanmetrics.HostCPUUsageSample{
+			UsagePercent:      metrics.TotalCPUUsage,
+			Available:         metrics.HostCPUUsageAvailable,
+			UnavailableReason: metrics.HostCPUUsageUnavailableReason,
+		})
 		m.updatePrometheusSystemMetrics(metrics)
 	}
 
@@ -245,6 +251,10 @@ func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
 func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 	// Execute the selected enforcement action. The application-level caller owns
 	// the single cycle failure log after protective stages have completed.
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+		run.ingressRefusedCount = m.recordObservationOnlyIntent(run.decision, run.metrics)
+		return nil
+	}
 	if err := m.executeDecision(run.decision, run.metrics); err != nil {
 		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
 	}
@@ -444,6 +454,9 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"cpu_eligible_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
 		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
+		"enforcement_mode", m.enforcementStatus.Mode,
+		"migration_enforcement_available", m.enforcementStatus.Mode == cgroup.EnforcementModeMigrationEnabled,
+		"ingress_refused_count", run.ingressRefusedCount,
 		"system_under_load", run.metrics.SystemUnderLoad,
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
 		"duration_ms", run.duration.Milliseconds(),
@@ -819,6 +832,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		EnforcementMode:                              m.enforcementStatus.Mode,
 		RecoveryStrandedProcesses:                    recoveryStrandedProcesses,
 		TotalCPUUsage:                                metrics.TotalCPUUsage,
+		TotalCPUUsageAvailable:                       metrics.HostCPUUsageAvailable,
 		TotalCores:                                   metrics.TotalCores,
 		CPUPoints:                                    cpuPoints,
 		ObservedUsersCPUUsage:                        metrics.AllUsersCPUUsage,

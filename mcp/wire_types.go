@@ -227,6 +227,8 @@ type cpuReportPayload struct {
 	ServerRole                   string                 `json:"server_role"`
 	Report                       string                 `json:"report"`
 	TotalCPU                     float64                `json:"total_cpu"`
+	TotalCPUAvailable            bool                   `json:"total_cpu_available"`
+	TotalCPUUnavailableReason    string                 `json:"total_cpu_unavailable_reason"`
 	AverageCPU                   float64                `json:"avg_cpu"`
 	PeakCPU                      float64                `json:"peak_cpu"`
 	ObservedUsersCount           int                    `json:"observed_users_count"`

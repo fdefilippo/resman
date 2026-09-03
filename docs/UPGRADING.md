@@ -27,6 +27,10 @@ Confirm the mode after startup with the `resman_enforcement_mode` metric or the 
 system/limits status. A value of `observation_only_systemd` means that policy actions
 are intent and observation only. The startup warning is bounded and carries no PID,
 UID, cgroup path, or raw error text.
+Every completed control-cycle log also records `enforcement_mode`,
+`migration_enforcement_available`, and the bounded `ingress_refused_count`; therefore
+`decision=ACTIVATE_LIMITS outcome=success` describes a successfully completed cycle,
+not enforcement, when the mode is observation-only.
 
 An upgrade can find processes that an earlier release already placed below
 `resman/recovery`. Their original systemd ownership cannot be reconstructed. They
@@ -681,6 +685,15 @@ enforcement. Alert on sustained
 `resman_control_cycle_host_cpu_sample_available == 0` and use the bounded
 `resman_control_cycle_host_cpu_sample_unavailable_total{reason=...}` counter to
 distinguish baseline, read, stale, counter-reset, and zero-delta causes.
+
+The observation stream derives baseline validity from the slower of
+`METRICS_CACHE_TTL` and `METRICS_REFRESH_INTERVAL`. An unavailable refresh preserves
+the last valid `resman_cpu_total_usage_percent` value instead of fabricating zero.
+Use `resman_observation_host_cpu_sample_available` to distinguish that retained value
+from a fresh sample, and
+`resman_observation_host_cpu_sample_unavailable_total{reason=...}` to diagnose the
+bounded cause. MCP status surfaces expose the same distinction through
+`total_cpu_usage_available` and `total_cpu_usage_unavailable_reason`.
 
 ### High system load is attributed before suppressing enforcement
 

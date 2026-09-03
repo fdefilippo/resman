@@ -94,6 +94,7 @@ type PrometheusExporter struct {
 	// Base metrics with hostname and server_role labels.
 	cpuTotalUsage                      prometheus.Gauge
 	controlCycleHostCPUSampleAvailable prometheus.Gauge
+	observationHostCPUSampleAvailable  prometheus.Gauge
 	memoryUsage                        prometheus.Gauge
 	totalMemoryMB                      prometheus.Gauge
 	cachedMemoryMB                     prometheus.Gauge
@@ -159,6 +160,7 @@ type PrometheusExporter struct {
 	controlCyclesTotal             prometheus.Counter
 	controlCycleTriggers           *prometheus.CounterVec
 	controlCycleHostCPUUnavailable *prometheus.CounterVec
+	observationHostCPUUnavailable  *prometheus.CounterVec
 	psiEventsTotal                 *prometheus.CounterVec
 	psiLastEventTimestamp          *prometheus.GaugeVec
 	errorsTotal                    *prometheus.CounterVec
@@ -370,6 +372,12 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Namespace:   namespace,
 		Name:        "control_cycle_host_cpu_sample_available",
 		Help:        "Whether the latest control cycle had a comparable host CPU jiffy sample (1 available, 0 unavailable)",
+		ConstLabels: staticLabels,
+	})
+	exp.observationHostCPUSampleAvailable = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "observation_host_cpu_sample_available",
+		Help:        "Whether the latest observation refresh had a comparable host CPU jiffy sample (1 available, 0 unavailable)",
 		ConstLabels: staticLabels,
 	})
 
@@ -762,6 +770,15 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"reason"},
 	)
+	exp.observationHostCPUUnavailable = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "observation_host_cpu_sample_unavailable_total",
+			Help:        "Total unavailable host CPU samples consumed by observation refreshes, by bounded reason",
+			ConstLabels: staticLabels,
+		},
+		[]string{"reason"},
+	)
 
 	exp.psiEventsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
@@ -874,6 +891,7 @@ type SystemExporterMetrics struct {
 	EnforcementMode                              cgroup.EnforcementMode
 	RecoveryStrandedProcesses                    int
 	TotalCPUUsage                                float64
+	TotalCPUUsageAvailable                       bool
 	TotalCores                                   int
 	CPUPoints                                    *CPUPointsSystemSnapshot
 	ObservedUsersCPUUsage                        float64
@@ -908,7 +926,9 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 		return
 	}
 
-	exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
+	if metrics.TotalCPUUsageAvailable {
+		exp.cpuTotalUsage.Set(metrics.TotalCPUUsage)
+	}
 	exp.totalCores.Set(float64(metrics.TotalCores))
 	if metrics.CPUPoints != nil {
 		exp.cpuPoints.updateSystem(*metrics.CPUPoints)
@@ -1281,6 +1301,26 @@ func (exp *PrometheusExporter) ObserveControlCycleHostCPUUsage(sample HostCPUUsa
 	}
 	exp.controlCycleHostCPUSampleAvailable.Set(0)
 	exp.controlCycleHostCPUUnavailable.WithLabelValues(string(sample.UnavailableReason)).Inc()
+}
+
+// ObserveObservationHostCPUUsage publishes the availability of the exact host
+// CPU sample consumed by the latest observation refresh.
+func (exp *PrometheusExporter) ObserveObservationHostCPUUsage(sample HostCPUUsageSample) {
+	if exp == nil || exp.observationHostCPUSampleAvailable == nil || exp.observationHostCPUUnavailable == nil {
+		return
+	}
+	if sample.Available {
+		exp.observationHostCPUSampleAvailable.Set(1)
+		return
+	}
+	if !validHostCPUUsageUnavailableReason(sample.UnavailableReason) {
+		exp.logger.Error("Rejected invalid observation host CPU sample metric label",
+			"reason", sample.UnavailableReason,
+		)
+		return
+	}
+	exp.observationHostCPUSampleAvailable.Set(0)
+	exp.observationHostCPUUnavailable.WithLabelValues(string(sample.UnavailableReason)).Inc()
 }
 
 // RecordPSIEvent records a PSI event received from the kernel.

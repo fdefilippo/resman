@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.32.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -280,6 +280,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Sep 03 2026 Francesco Defilippo <francesco@defilippo.org> - 1.32.0-2
+- METRICS: preserve the last valid observation CPU gauge and expose bounded sample availability
+- OBSERVABILITY: report observation-only enforcement refusal on every completed activation cycle
+- TESTS: make systemd containment dispositions executable across retained and displaced scenarios
+- TESTS: preserve genuine remote BLOCKED evidence separately from exclusion-lock contention
+
 * Thu Sep 03 2026 Francesco Defilippo <francesco@defilippo.org> - 1.32.0-1
 - BREAKING: preserve systemd workload ownership by making CPU, RAM and I/O policy observation-only on systemd hosts
 - OBSERVABILITY: report ownership rejection, recovery and stranded-process lifecycle without claiming false enforcement

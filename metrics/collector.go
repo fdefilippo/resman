@@ -102,13 +102,15 @@ type ProcessIODelta struct {
 // ObservationMetrics is the typed observation snapshot consumed by external
 // status surfaces. It does not contain policy eligibility or runtime state.
 type ObservationMetrics struct {
-	TotalCores            int
-	TotalCPUUsage         float64
-	ObservedUsersCPUUsage float64
-	ObservedUsersCount    int
-	MemoryUsageMB         float64
-	TotalMemoryMB         float64
-	SystemUnderLoad       bool
+	TotalCores                     int
+	TotalCPUUsage                  float64
+	TotalCPUUsageAvailable         bool
+	TotalCPUUsageUnavailableReason HostCPUUsageUnavailableReason
+	ObservedUsersCPUUsage          float64
+	ObservedUsersCount             int
+	MemoryUsageMB                  float64
+	TotalMemoryMB                  float64
+	SystemUnderLoad                bool
 }
 
 type processIOCounters struct {
@@ -464,9 +466,18 @@ func (c *Collector) GetObservationHostCPUUsage() HostCPUUsageSample {
 		return value.(HostCPUUsageSample)
 	}
 
-	sample := c.readHostCPUUsageSample(&c.observationHostCPU, 2*c.metricsCacheTTL())
+	sample := c.readHostCPUUsageSample(&c.observationHostCPU, c.observationCPUSampleMaxGap())
 	c.setInCache(cacheKey, sample, c.metricsCacheTTL())
 	return sample
+}
+
+func (c *Collector) observationCPUSampleMaxGap() time.Duration {
+	cacheTTL := c.metricsCacheTTL()
+	refreshInterval := time.Duration(c.getConfig().GetMetricsRefreshInterval()) * time.Second
+	if refreshInterval < cacheTTL {
+		refreshInterval = cacheTTL
+	}
+	return 2 * refreshInterval
 }
 
 func (c *Collector) readHostCPUUsageSample(state *hostCPUSamplingState, maxGap time.Duration) HostCPUUsageSample {
@@ -1161,13 +1172,15 @@ func (c *Collector) GetObservationMetrics() ObservationMetrics {
 	hostCPU := c.GetObservationHostCPUUsage()
 
 	return ObservationMetrics{
-		TotalCores:            c.GetTotalCores(),
-		TotalCPUUsage:         hostCPU.UsagePercent,
-		ObservedUsersCPUUsage: c.GetAllUsersCPUUsage(),
-		ObservedUsersCount:    len(allUsers),
-		MemoryUsageMB:         c.GetMemoryUsage(),
-		TotalMemoryMB:         c.GetTotalMemoryMB(),
-		SystemUnderLoad:       c.IsSystemUnderLoad(),
+		TotalCores:                     c.GetTotalCores(),
+		TotalCPUUsage:                  hostCPU.UsagePercent,
+		TotalCPUUsageAvailable:         hostCPU.Available,
+		TotalCPUUsageUnavailableReason: hostCPU.UnavailableReason,
+		ObservedUsersCPUUsage:          c.GetAllUsersCPUUsage(),
+		ObservedUsersCount:             len(allUsers),
+		MemoryUsageMB:                  c.GetMemoryUsage(),
+		TotalMemoryMB:                  c.GetTotalMemoryMB(),
+		SystemUnderLoad:                c.IsSystemUnderLoad(),
 	}
 }
 

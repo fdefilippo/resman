@@ -15,6 +15,7 @@ state_file=${RESMAN_REAL_KERNEL_STATE_FILE:-/run/lock/resman-real-kernel.state}
 stop_timeout=${RESMAN_REAL_KERNEL_STOP_TIMEOUT:-30}
 bundle_parent=${RESMAN_REAL_KERNEL_BUNDLE_PARENT:-/tmp}
 controlled_child_pgid=0
+lock_blocked_exit=75
 
 case "$stop_timeout" in
 	''|*[!0-9]*) echo "invalid stop timeout: $stop_timeout" >&2; exit 2 ;;
@@ -51,6 +52,21 @@ remove_owned_state() {
 	fi
 }
 
+record_preflight_blocked() {
+	local scenario=$1 source_revision=$2 message=$3
+	local evidence_dir=$bundle_dir/evidence
+	mkdir -p "$evidence_dir"
+	chmod 0700 "$evidence_dir"
+	printf 'BLOCKED\n' >"$evidence_dir/result"
+	{
+		printf 'scenario=%s\n' "$scenario"
+		printf 'run_id=%s\n' "$run_id"
+		printf 'source_revision=%s\n' "$source_revision"
+		printf 'result=BLOCKED\n'
+		printf 'detail=%s\n' "$message"
+	} >"$evidence_dir/environment.txt"
+}
+
 terminate_child_group() {
 	local child_pgid=$1 deadline
 	(( child_pgid > 0 )) || return 0
@@ -83,10 +99,18 @@ start_scenario() {
 	local runner=$bundle_dir/run.sh
 	local child_status=1
 
-	command -v flock >/dev/null 2>&1 \
-		|| { echo "BLOCKED: flock is required for real-kernel scenario exclusion" >&2; return 77; }
-	command -v setsid >/dev/null 2>&1 \
-		|| { echo "BLOCKED: setsid is required for remote scenario ownership" >&2; return 77; }
+	if ! command -v flock >/dev/null 2>&1; then
+		record_preflight_blocked "$scenario" "$source_revision" \
+			"flock is required for real-kernel scenario exclusion"
+		echo "BLOCKED: flock is required for real-kernel scenario exclusion" >&2
+		return 77
+	fi
+	if ! command -v setsid >/dev/null 2>&1; then
+		record_preflight_blocked "$scenario" "$source_revision" \
+			"setsid is required for remote scenario ownership"
+		echo "BLOCKED: setsid is required for remote scenario ownership" >&2
+		return 77
+	fi
 	[[ -x $runner ]] || { echo "remote scenario runner is missing: $runner" >&2; return 1; }
 
 	umask 077
@@ -97,13 +121,13 @@ start_scenario() {
 		else
 			echo "BLOCKED: another real-kernel run holds the host lock" >&2
 		fi
-		return 77
+		return "$lock_blocked_exit"
 	fi
 	for candidate in "$bundle_parent"/resman-final-r*; do
 		[[ -e $candidate || -L $candidate ]] || continue
 		[[ $candidate == "$bundle_dir" ]] && continue
 		echo "BLOCKED: another real-kernel bundle exists: $(basename "$candidate")" >&2
-		return 77
+		return "$lock_blocked_exit"
 	done
 
 	trap finish_control EXIT

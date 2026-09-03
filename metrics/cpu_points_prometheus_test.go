@@ -67,7 +67,7 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 
 	// Observation-only refreshes have no CPU Points pointer and must not erase
 	// or advance the decision-owned interval.
-	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 42})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 42, TotalCPUUsageAvailable: true})
 	if got := gatheredMetricValue(t, exporter, "resman_cpu_points_parent_usage_microseconds_delta"); got != 9_000_000 {
 		t.Fatalf("observation refresh replaced CPU Points interval: %v", got)
 	}

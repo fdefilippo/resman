@@ -1,3 +1,16 @@
+resman (1.32.0-2) stable; urgency=medium
+
+  * Preserve the last valid observation CPU gauge and expose bounded sample
+    availability instead of publishing missing data as zero.
+  * Report observation-only enforcement refusal on every completed activation
+    cycle.
+  * Make systemd containment dispositions executable across retained and
+    displaced real-kernel scenarios.
+  * Preserve genuine remote BLOCKED evidence separately from exclusion-lock
+    contention.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 03 Sep 2026 20:58:00 +0200
+
 resman (1.32.0-1) stable; urgency=medium
 
   * BREAKING: preserve systemd workload ownership by making CPU, RAM and I/O

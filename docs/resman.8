@@ -919,7 +919,12 @@ periods. This cool-down uses elapsed wall-clock time, so additional control
 cycles triggered by PSI events cannot shorten it.
 .PP
 .B total_cpu_usage
-is the host-wide normalized CPU percentage (0-100). Activation decisions use
+is the last valid host-wide normalized CPU percentage (0-100). The
+.B total_cpu_usage_available
+field says whether the latest observation refresh produced that value, while
+.B total_cpu_usage_unavailable_reason
+contains a bounded reason when it did not. An unavailable refresh retains the last
+valid value instead of representing missing data as zero. Activation decisions use
 per-user CPU usage
 .RB ( cpu_eligible_users_cpu_usage ),
 which is the sum of process CPU and can exceed 100 on multi-core systems.
@@ -974,6 +979,10 @@ resman_cpu_total_usage_percent \- Total CPU usage
 resman_control_cycle_host_cpu_sample_available \- Latest decision host CPU sample availability
 .IP \(bu
 resman_control_cycle_host_cpu_sample_unavailable_total \- Unavailable decision host CPU samples by bounded reason
+.IP \(bu
+resman_observation_host_cpu_sample_available \- Latest observation host CPU sample availability
+.IP \(bu
+resman_observation_host_cpu_sample_unavailable_total \- Unavailable observation host CPU samples by bounded reason
 .IP \(bu
 resman_all_users_cpu_usage_percent \- Non\-system user CPU usage
 .IP \(bu

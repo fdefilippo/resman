@@ -253,6 +253,39 @@ func TestObserveControlCycleHostCPUUsageSeparatesAvailabilityFromMeasuredZero(t 
 	t.Fatal("resman_control_cycle_host_cpu_sample_unavailable_total metric not found")
 }
 
+func TestObservationHostCPUAvailabilityDoesNotReplaceTheLastMeasuredGaugeWithZero(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 42, TotalCPUUsageAvailable: true})
+	exporter.ObserveObservationHostCPUUsage(unavailableHostCPUSample(HostCPUUsageUnavailableStale))
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
+		TotalCPUUsage:          0,
+		TotalCPUUsageAvailable: false,
+	})
+
+	if got := gatheredMetricValue(t, exporter, "resman_cpu_total_usage_percent"); got != 42 {
+		t.Fatalf("total CPU gauge = %v, want retained measured value 42", got)
+	}
+	if got := gatheredMetricValue(t, exporter, "resman_observation_host_cpu_sample_available"); got != 0 {
+		t.Fatalf("observation availability = %v, want 0", got)
+	}
+	assertCounterLabelValue(t, exporter, "resman_observation_host_cpu_sample_unavailable_total", "reason", string(HostCPUUsageUnavailableStale), 1)
+
+	exporter.ObserveObservationHostCPUUsage(HostCPUUsageSample{UsagePercent: 0, Available: true})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 0, TotalCPUUsageAvailable: true})
+	if got := gatheredMetricValue(t, exporter, "resman_cpu_total_usage_percent"); got != 0 {
+		t.Fatalf("measured idle CPU gauge = %v, want 0", got)
+	}
+	if got := gatheredMetricValue(t, exporter, "resman_observation_host_cpu_sample_available"); got != 1 {
+		t.Fatalf("observation availability = %v, want 1", got)
+	}
+}
+
 func TestNewPrometheusExporterAppliesTLSAndClientCA(t *testing.T) {
 	certFile, keyFile, caFile := writeTestTLSMaterial(t)
 
@@ -636,11 +669,12 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 10})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 10, TotalCPUUsageAvailable: true})
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
 		EnforcementMode:                              cgroup.EnforcementModeObservationOnlySystemd,
 		RecoveryStrandedProcesses:                    4,
 		TotalCPUUsage:                                25,
+		TotalCPUUsageAvailable:                       true,
 		TotalCores:                                   8,
 		ObservedUsersCPUUsage:                        40,
 		ObservedUsersCount:                           5,
@@ -1074,6 +1108,30 @@ func gatheredMetricValue(t *testing.T, exporter *PrometheusExporter, name string
 	}
 	t.Fatalf("metric %s not found", name)
 	return 0
+}
+
+func assertCounterLabelValue(t *testing.T, exporter *PrometheusExporter, name, labelName, labelValue string, want float64) {
+	t.Helper()
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == labelName && label.GetValue() == labelValue {
+					if got := metric.GetCounter().GetValue(); got != want {
+						t.Fatalf("%s{%s=%q} = %v, want %v", name, labelName, labelValue, got, want)
+					}
+					return
+				}
+			}
+		}
+	}
+	t.Fatalf("metric %s{%s=%q} not found", name, labelName, labelValue)
 }
 
 func assertCgroupGaugeSeries(t *testing.T, exporter *PrometheusExporter, name string, expected map[string]float64) {

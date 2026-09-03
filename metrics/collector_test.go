@@ -1012,10 +1012,11 @@ func TestHostCPUStreamsReportReadFailureWithoutSharingState(t *testing.T) {
 	}
 }
 
-func TestObservationHostCPUSampleStalenessUsesItsCacheTTL(t *testing.T) {
+func TestObservationHostCPUSampleStalenessUsesItsEffectiveRefreshCadence(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.PollingInterval = 1
 	cfg.MetricsCacheTTL = 15
+	cfg.MetricsRefreshInterval = 30
 	now := time.Unix(1_000, 0)
 	counter := uint64(0)
 	collector := &Collector{
@@ -1043,9 +1044,38 @@ func TestObservationHostCPUSampleStalenessUsesItsCacheTTL(t *testing.T) {
 		t.Fatalf("post-TTL observation = %+v reads=%d, want available 50", second, counter)
 	}
 	now = now.Add(30*time.Second + time.Nanosecond)
+	delayed := collector.GetObservationHostCPUUsage()
+	if !delayed.Available || delayed.UsagePercent != 50 {
+		t.Fatalf("slightly delayed refresh = %+v, want available 50", delayed)
+	}
+	now = now.Add(60*time.Second + time.Nanosecond)
 	stale := collector.GetObservationHostCPUUsage()
-	if stale.Available || stale.UnavailableReason != HostCPUUsageUnavailableStale {
-		t.Fatalf("observation beyond two TTLs = %+v, want stale baseline", stale)
+	if stale.Available || stale.UnavailableReason != HostCPUUsageUnavailableStale || counter != 4 {
+		t.Fatalf("observation beyond two refresh intervals = %+v reads=%d, want stale baseline", stale, counter)
+	}
+}
+
+func TestObservationHostCPUMaxGapUsesTheSlowerCacheOrRefreshCadence(t *testing.T) {
+	tests := []struct {
+		name            string
+		cacheTTL        int
+		refreshInterval int
+		want            time.Duration
+	}{
+		{name: "refresh slower than cache", cacheTTL: 15, refreshInterval: 30, want: 60 * time.Second},
+		{name: "cache slower than refresh", cacheTTL: 60, refreshInterval: 30, want: 120 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.MetricsCacheTTL = tt.cacheTTL
+			cfg.MetricsRefreshInterval = tt.refreshInterval
+			collector := &Collector{cfg: cfg}
+			if got := collector.observationCPUSampleMaxGap(); got != tt.want {
+				t.Fatalf("observationCPUSampleMaxGap() = %s, want %s", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1555,6 +1585,9 @@ func TestGetObservationMetricsReturnsTypedSnapshot(t *testing.T) {
 	}
 	if observation.ObservedUsersCount < 0 {
 		t.Errorf("ObservedUsersCount = %d, want non-negative value", observation.ObservedUsersCount)
+	}
+	if observation.TotalCPUUsageAvailable || observation.TotalCPUUsageUnavailableReason != HostCPUUsageUnavailableBaseline {
+		t.Errorf("first total CPU observation = %+v, want unavailable baseline", observation)
 	}
 }
 

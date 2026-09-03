@@ -65,6 +65,14 @@ collect_remote_evidence() {
 		| tar -C "$evidence_dir" --strip-components=1 -xf -
 }
 
+remote_blocked_kind() {
+	case "$1" in
+		75) printf 'exclusion-lock\n' ;;
+		77) printf 'scenario-preflight\n' ;;
+		*) return 1 ;;
+	esac
+}
+
 run_remote_scenario() {
 	ssh -q -o BatchMode=yes "$remote_host" \
 		"'$remote_root/control.sh' start '$run_id' '$scenario' '$source_revision'" &
@@ -128,6 +136,8 @@ scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-real-kernel.XXXXXX")
 bundle_dir=$scratch_dir/bundle
 mkdir -p "$bundle_dir" "$evidence_root"
 chmod 0700 "$scratch_dir" "$bundle_dir"
+install -m 0644 "$script_dir/../final/systemd-containment-dispositions.tsv" \
+	"$bundle_dir/systemd-containment-dispositions.tsv"
 if [[ $scenario_family == package ]]; then
 	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/run.sh"
 	install -m 0755 "$repo_root/docs/generate-tls-certs.sh" "$bundle_dir/generate-tls-certs.sh"
@@ -182,7 +192,7 @@ if [[ $remote_status -eq 255 ]]; then
 fi
 remote_execution_started=0
 
-if [[ $remote_status -eq 77 ]]; then
+if [[ $(remote_blocked_kind "$remote_status" 2>/dev/null || true) == exclusion-lock ]]; then
 	printf 'BLOCKED\n' >"$evidence_dir/result"
 	{
 		printf 'requested_host=%s\n' "$remote_host"
@@ -197,6 +207,26 @@ if [[ $remote_status -eq 77 ]]; then
 	scratch_dir=
 	trap - EXIT INT TERM
 	echo "BLOCKED: real-kernel $scenario; evidence: $evidence_dir" >&2
+	exit 77
+fi
+
+if [[ $(remote_blocked_kind "$remote_status" 2>/dev/null || true) == scenario-preflight ]]; then
+	collect_remote_evidence
+	[[ -r $evidence_dir/result && $(< "$evidence_dir/result") == BLOCKED ]] \
+		|| { printf 'BLOCKED\n' >"$evidence_dir/result"; }
+	{
+		printf 'requested_host=%s\n' "$remote_host"
+		printf 'local_source_revision=%s\n' "$source_revision"
+		printf 'remote_exit_code=%d\n' "$remote_status"
+	} >>"$evidence_dir/environment.txt"
+	remote_detail=$(sed -n 's/^detail=//p' "$evidence_dir/environment.txt" | tail -n 1)
+	[[ -n $remote_detail ]] || remote_detail="remote scenario reported BLOCKED without detail"
+	ssh -q -o BatchMode=yes "$remote_host" "rm -rf -- '$remote_root'"
+	remote_cleanup_done=1
+	safe_remove_scratch
+	scratch_dir=
+	trap - EXIT INT TERM
+	echo "BLOCKED: real-kernel $scenario: $remote_detail; evidence: $evidence_dir" >&2
 	exit 77
 fi
 

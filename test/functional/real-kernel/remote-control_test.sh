@@ -70,8 +70,8 @@ set +e
 	>"$test_root/second.log" 2>&1
 second_status=$?
 set -e
-[[ $second_status -eq 77 ]] \
-	|| { echo "overlapping run exited $second_status, want BLOCKED/77" >&2; exit 1; }
+[[ $second_status -eq 75 ]] \
+	|| { echo "overlapping run exited $second_status, want exclusion-lock/75" >&2; exit 1; }
 grep -q '^BLOCKED:' "$test_root/second.log" \
 	|| { echo "overlapping run did not report BLOCKED" >&2; exit 1; }
 
@@ -96,8 +96,8 @@ set +e
 	>"$test_root/stale-bundle.log" 2>&1
 stale_status=$?
 set -e
-[[ $stale_status -eq 77 ]] \
-	|| { echo "stale overlapping bundle exited $stale_status, want BLOCKED/77" >&2; exit 1; }
+[[ $stale_status -eq 75 ]] \
+	|| { echo "stale overlapping bundle exited $stale_status, want exclusion-lock/75" >&2; exit 1; }
 grep -q '^BLOCKED: another real-kernel bundle exists:' "$test_root/stale-bundle.log" \
 	|| { echo "stale overlapping bundle did not report BLOCKED" >&2; exit 1; }
 
@@ -107,6 +107,10 @@ grep -q '^BLOCKED: another real-kernel bundle exists:' "$test_root/stale-bundle.
 # runs its cleanup trap.
 # shellcheck disable=SC1091
 RESMAN_REAL_KERNEL_REMOTE_LIBRARY_ONLY=1 source "$script_dir/remote.sh"
+[[ $(remote_blocked_kind 75) == exclusion-lock ]] \
+	|| { echo "remote status 75 was not classified as exclusion lock" >&2; exit 1; }
+[[ $(remote_blocked_kind 77) == scenario-preflight ]] \
+	|| { echo "remote status 77 was not classified as scenario preflight" >&2; exit 1; }
 calls_file=$test_root/local-cleanup.calls
 start_marker=$test_root/local-start.marker
 stop_marker=$test_root/local-stop.marker

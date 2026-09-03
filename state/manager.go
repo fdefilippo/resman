@@ -319,6 +319,7 @@ type PrometheusExporter interface {
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)
 	RecordControlCycleTrigger(trigger string)
 	ObserveControlCycleHostCPUUsage(sample resmanmetrics.HostCPUUsageSample)
+	ObserveObservationHostCPUUsage(sample resmanmetrics.HostCPUUsageSample)
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)

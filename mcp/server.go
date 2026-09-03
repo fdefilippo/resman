@@ -675,7 +675,7 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 	text := fmt.Sprintf(`# System Health Check
 
 ## CPU Usage
-- **Total CPU**: %.1f%%
+- **Total CPU**: %s
 - **Observed Users CPU**: %.1f%%
 - **Total Cores**: %d
 
@@ -695,7 +695,7 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 
 ## Assessment
 `,
-		metrics.TotalCPUUsage,
+		formatHostCPUUsage(metrics),
 		metrics.ObservedUsersCPUUsage,
 		metrics.TotalCores,
 		metrics.MemoryUsageMB,
@@ -780,7 +780,7 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	text += fmt.Sprintf("- **Any Limits Active**: %v\n", status.AnyLimitsActive)
 	text += fmt.Sprintf("- **CPU Limits Active**: %v\n", status.CPULimitsActive)
 	text += fmt.Sprintf("- **Resource Limits Active**: %v\n", status.ResourceLimitsActive)
-	text += fmt.Sprintf("- **Total CPU Usage**: %.1f%%\n", metrics.TotalCPUUsage)
+	text += fmt.Sprintf("- **Total CPU Usage**: %s\n", formatHostCPUUsage(metrics))
 	text += fmt.Sprintf("- **Observed Users CPU Usage**: %.1f%%\n", metrics.ObservedUsersCPUUsage)
 	text += fmt.Sprintf("- **Observed Users**: %d\n", metrics.ObservedUsersCount)
 	text += fmt.Sprintf("- **Actively Limited Users**: %d\n", status.ActivelyLimitedUsersCount)

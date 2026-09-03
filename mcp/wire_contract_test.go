@@ -36,7 +36,8 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
 				"migration_enforcement_available", "observed_users_count", "observed_users_cpu_usage", "recovery_occupants",
 				"resource_limits_active", "resource_limits_applied_time", "server_role", "shared_cgroup_active",
-				"system_under_load", "total_cores", "total_cpu_usage",
+				"system_under_load", "total_cores", "total_cpu_usage", "total_cpu_usage_available",
+				"total_cpu_usage_unavailable_reason",
 			},
 		},
 		{
@@ -85,7 +86,11 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		{
 			name:  "CPU report",
 			value: cpuReportPayload{},
-			keys:  []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"},
+			keys: []string{
+				"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname",
+				"observed_users_count", "peak_cpu", "report", "server_role", "total_cpu", "total_cpu_available",
+				"total_cpu_unavailable_reason",
+			},
 		},
 		{
 			name:  "memory report",

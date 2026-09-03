@@ -47,6 +47,31 @@ cgroup_path_labels() {
 	' "$scrape" | sort -u
 }
 
+# containment_disposition_for returns the authoritative disposition attached
+# to one packaged-service scenario. The remote bundle carries the same table
+# embedded by the final gate, so execution and review cannot read different
+# containment contracts.
+containment_disposition_for() {
+	local file=$1 scenario_name=$2
+	awk -F '\t' -v scenario="$scenario_name" '
+		NR > 1 && $1 == scenario { print $3; found++ }
+		END { if (found != 1) exit 1 }
+	' "$file"
+}
+
+# containment_requirement_for maps each supported disposition to the runtime
+# assertion token that a PASS must verify, or to the explicit displaced state.
+containment_requirement_for() {
+	case "$1" in
+		"retained without migration") printf 'none\n' ;;
+		"retained with containment-mode assertions") printf 'containment-mode\n' ;;
+		"retained with ownership-refusal lifecycle") printf 'ownership-refusal\n' ;;
+		"retained with schema-5 lifecycle") printf 'schema-5\n' ;;
+		displaced:*|superseded\ *) printf 'displaced\n' ;;
+		*) return 1 ;;
+	esac
+}
+
 if [[ ${RESMAN_REAL_KERNEL_LIBRARY_ONLY:-0} == 1 ]]; then
 	if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
 		return 0
@@ -74,6 +99,9 @@ initial_enabled=
 result=FAIL
 detail=
 cleanup_status=PASS
+containment_disposition_file=$bundle_dir/systemd-containment-dispositions.tsv
+containment_assertion_required=
+containment_assertion_verified=
 
 # Accounts that no scenario may ever move into a ResMan cgroup.
 protected_users=(root dbacro1 dbacro2 crm francesco)
@@ -188,6 +216,12 @@ if [[ $initial_active == active ]]; then
 	fi
 
 	assert_no_protected_process || cleanup_status=FAIL-protected-user
+	if [[ $result == PASS && -n $containment_assertion_required \
+		&& $containment_assertion_verified != "$containment_assertion_required" ]]; then
+		result=FAIL
+		status=1
+		detail="required containment assertion $containment_assertion_required was not verified"
+	fi
 
 	if [[ $cleanup_status != PASS ]]; then
 		status=1
@@ -225,6 +259,13 @@ fail() {
 	result=FAIL
 	detail=$1
 	exit 1
+}
+
+verify_containment_assertion() {
+	local assertion=$1
+	[[ $containment_assertion_required == "$assertion" ]] \
+		|| fail "scenario verified containment assertion $assertion but $containment_assertion_required was required"
+	containment_assertion_verified=$assertion
 }
 
 [[ $EUID -eq 0 ]] || fail "the packaged-service family requires root on the test host"
@@ -267,6 +308,21 @@ config_saved=1
 quiesce_installed_service \
 	|| fail "the installed service did not become quiescent before configuration mutation"
 printf 'pre_scenario_service_quiesced=true\n' >>"$evidence_dir/environment.txt"
+
+[[ -r $containment_disposition_file ]] \
+	|| fail "the systemd containment disposition inventory is missing from the remote bundle"
+containment_disposition=$(containment_disposition_for "$containment_disposition_file" "$scenario") \
+	|| fail "the scenario has no unique systemd containment disposition"
+printf 'containment_disposition=%s\n' "$containment_disposition" >>"$evidence_dir/environment.txt"
+containment_requirement=$(containment_requirement_for "$containment_disposition") \
+	|| fail "unsupported systemd containment disposition: $containment_disposition"
+case "$containment_requirement" in
+	none) ;;
+	containment-mode|ownership-refusal|schema-5) containment_assertion_required=$containment_requirement ;;
+	displaced)
+		blocked "scenario displaced by systemd containment: $containment_disposition"
+		;;
+esac
 
 # write_scenario_configuration installs a configuration whose eligibility is
 # restricted to the dedicated accounts. Excluded identities are named in both
@@ -710,6 +766,10 @@ scenario_prometheus_scrape() {
 		printf '%s\n' "${missing[@]}" >"$evidence_dir/missing-series.txt"
 		fail "the live scrape omitted ${#missing[@]} contract series"
 	fi
+	grep -q 'resman_enforcement_mode{[^}]*mode="observation_only_systemd"[^}]*} 1$' \
+		"$evidence_dir/metrics.prom" \
+		|| fail "the live scrape did not expose observation_only_systemd containment"
+	verify_containment_assertion containment-mode
 
 	# Every exposed series must carry HELP and TYPE, which is what makes the
 	# output consumable by promtool and by Prometheus itself.
@@ -724,13 +784,11 @@ scenario_prometheus_scrape() {
 	detail="a real scrape returned the decision-owned contract series with metadata after live control cycles"
 }
 
-# scenario_prometheus_user_series_lifecycle proves the per-user cgroup gauges
-# follow one account through a real placement change: absent while idle, carried
-# on the enforcing path while limited, and withdrawn from the old path once the
-# account is released. resman-ej0.3 was exactly this defect, and until now only
-# a unit test with a synthetic path stood behind it.
+# scenario_prometheus_user_series_lifecycle proves that an observed user gains
+# ownership-refusal lifecycle series without acquiring a managed cgroup, and
+# that those per-user series disappear after the workload exits.
 scenario_prometheus_user_series_lifecycle() {
-	local log_marker port=1974 interval user=resman-t1 uid paths
+	local log_marker port=1974 interval user=resman-t1 uid deadline
 	uid=$(id -u "$user")
 	write_scenario_configuration
 	configure_enforcement
@@ -750,58 +808,53 @@ scenario_prometheus_user_series_lifecycle() {
 	daemon_log_since "$log_marker" | grep -q 'Prometheus exporter disabled by configuration' \
 		&& fail "the daemon started with the exporter disabled despite the scenario configuration"
 
-	scrape_metrics "$port" "$evidence_dir/metrics-idle.prom"
-	cgroup_path_labels "$evidence_dir/metrics-idle.prom" "$uid" >"$evidence_dir/paths-idle.txt"
-	if grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-idle.txt"; then
-		fail "UID $uid already carried enforcing-path series before any load was applied"
-	fi
-
 	saturate_host "$user" 2
-	wait_for_limited_cgroup "$uid" 360 \
-		|| fail "UID $uid was never moved into a managed cgroup under sustained load"
-	# The move and the scrape are independent: let the exporter publish the new
-	# placement before reading it, or the assertion races the control cycle.
-	log_marker=$(daemon_log_lines)
-	wait_for_daemon_log 'Control cycle completed' 2 $(( interval * 4 + 60 )) "$log_marker" >/dev/null \
-		|| fail "the daemon published no control cycle while the account was limited"
-
-	scrape_metrics "$port" "$evidence_dir/metrics-limited.prom"
-	cgroup_path_labels "$evidence_dir/metrics-limited.prom" "$uid" >"$evidence_dir/paths-limited.txt"
-	grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-limited.txt" \
-		|| fail "UID $uid was enforced but published no cgroup series for its enforcing path"
-	paths=$(grep -vF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-limited.txt" || true)
-	if [[ -n $paths ]]; then
-		printf '%s\n' "$paths" >"$evidence_dir/stale-paths-limited.txt"
-		fail "UID $uid published cgroup series for a path it no longer occupies"
-	fi
-	# CPU Points leaves cpu.max unlimited, so the exporter owes a period sample
-	# and no finite quota sample for the leaf.
-	grep -E "^resman_cgroup_cpu_period_microseconds\{" "$evidence_dir/metrics-limited.prom" \
-		| grep -qF "uid=\"$uid\"" \
-		|| fail "UID $uid published no CPU period while it was enforced"
-	if grep -E "^resman_cgroup_cpu_quota_microseconds\{" "$evidence_dir/metrics-limited.prom" \
-		| grep -qF "uid=\"$uid\""; then
-		fail "UID $uid published a finite CPU quota for a leaf whose cpu.max is unlimited"
-	fi
+	deadline=$((SECONDS + 360))
+	while (( SECONDS < deadline )); do
+		scrape_metrics "$port" "$evidence_dir/metrics-refused.prom"
+		if awk -v uid="uid=\"$uid\"" -v state='state="ownership_rejected"' '
+				/^resman_user_cpu_points_lifecycle_state\{/ \
+					&& index($0, uid) && index($0, state) && $NF == 1 { found=1 }
+				END { exit !found }
+			' "$evidence_dir/metrics-refused.prom" \
+			&& awk -v uid="uid=\"$uid\"" '
+				/^resman_user_cpu_points_systemd_ownership_refused_processes\{/ \
+					&& index($0, uid) && $NF > 0 { found=1 }
+				END { exit !found }
+			' "$evidence_dir/metrics-refused.prom"; then
+			break
+		fi
+		sleep 5
+	done
+	(( SECONDS < deadline )) \
+		|| fail "UID $uid published no ownership-refusal lifecycle under sustained load"
+	grep -q 'resman_enforcement_mode{[^}]*mode="observation_only_systemd"[^}]*} 1$' \
+		"$evidence_dir/metrics-refused.prom" \
+		|| fail "the ownership-refusal scrape did not expose observation_only_systemd containment"
+	grep -q '^resman_actively_limited_users_count{.*} 0$' "$evidence_dir/metrics-refused.prom" \
+		|| fail "ownership refusal reported an actively limited user"
+	cgroup_path_labels "$evidence_dir/metrics-refused.prom" "$uid" >"$evidence_dir/paths-refused.txt"
+	[[ ! -s $evidence_dir/paths-refused.txt ]] \
+		|| fail "ownership refusal published managed-cgroup series for UID $uid"
+	verify_containment_assertion ownership-refusal
 
 	stop_user_load
-	wait_for_released_cgroup "$uid" 420 \
-		|| fail "UID $uid was still enforced long after its load stopped"
-	log_marker=$(daemon_log_lines)
-	wait_for_daemon_log 'Control cycle completed' 2 $(( interval * 4 + 60 )) "$log_marker" >/dev/null \
-		|| fail "the daemon published no control cycle after the account was released"
-
-	scrape_metrics "$port" "$evidence_dir/metrics-released.prom"
-	cgroup_path_labels "$evidence_dir/metrics-released.prom" "$uid" >"$evidence_dir/paths-released.txt"
-	if grep -qF "$(limited_cgroup_for "$uid")" "$evidence_dir/paths-released.txt"; then
-		fail "UID $uid still published series for the enforcing path it had already left"
-	fi
+	deadline=$((SECONDS + 420))
+	while (( SECONDS < deadline )); do
+		scrape_metrics "$port" "$evidence_dir/metrics-workload-gone.prom"
+		if ! grep -q "^resman_user_cpu_points_.*uid=\"$uid\"" "$evidence_dir/metrics-workload-gone.prom"; then
+			break
+		fi
+		sleep 5
+	done
+	(( SECONDS < deadline )) \
+		|| fail "UID $uid per-user CPU Points series survived after its workload exited"
 
 	systemctl stop resman || fail "systemctl stop failed after the series lifecycle scenario"
 	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
 
 	result=PASS
-	detail="the per-user cgroup gauges followed one account onto its enforcing path and were withdrawn from it on release"
+	detail="ownership refusal created bounded per-user lifecycle series without migration and removed them after workload exit"
 }
 
 # managed_cgroup_holds_pid reports whether one PID sits anywhere inside a
@@ -979,7 +1032,7 @@ scenario_pid_namespace_container_only() {
 # a bearer token, and that an unauthenticated request is refused before any
 # protocol detail is disclosed.
 scenario_mcp_https_endtoend() {
-	local interval log_marker port=1969 token status
+	local interval log_marker port=1969 token editor_token status
 	local mcp_revision=2026-07-28
 	write_scenario_configuration
 
@@ -993,6 +1046,7 @@ scenario_mcp_https_endtoend() {
 		|| blocked "the generated TLS material is incomplete"
 
 	token=$(openssl rand -hex 24)
+	editor_token=$(openssl rand -hex 24)
 	sed -i \
 		-e 's|^MCP_ENABLED=.*|MCP_ENABLED=true|' \
 		-e 's|^MCP_TRANSPORT=.*|MCP_TRANSPORT=http|' \
@@ -1000,10 +1054,13 @@ scenario_mcp_https_endtoend() {
 		-e "s|^MCP_HTTP_PORT=.*|MCP_HTTP_PORT=$port|" \
 		-e 's|^MCP_TLS_ENABLED=.*|MCP_TLS_ENABLED=true|' \
 		-e "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$token|" \
+		-e "s|^MCP_EDITOR_AUTH_TOKEN=.*|MCP_EDITOR_AUTH_TOKEN=$editor_token|" \
 		-e 's|^MCP_ALLOW_WRITE_OPS=.*|MCP_ALLOW_WRITE_OPS=true|' \
 		"$config_path"
 	grep -q "^MCP_AUTH_TOKEN=$token$" "$config_path" \
 		|| printf 'MCP_AUTH_TOKEN=%s\n' "$token" >>"$config_path"
+	grep -q "^MCP_EDITOR_AUTH_TOKEN=$editor_token$" "$config_path" \
+		|| printf 'MCP_EDITOR_AUTH_TOKEN=%s\n' "$editor_token" >>"$config_path"
 
 	interval=$(observed_polling_interval)
 	log_marker=$(daemon_log_lines)
@@ -1054,6 +1111,10 @@ scenario_mcp_https_endtoend() {
 		|| fail "an authenticated get_system_status answered HTTP $status instead of 200"
 	grep -q '"observed_users_count"' "$evidence_dir/mcp-get-system-status.json" \
 		|| fail "get_system_status did not return the observation contract fields"
+	grep -q '"enforcement_mode":"observation_only_systemd"' \
+		"$evidence_dir/mcp-get-system-status.json" \
+		|| fail "get_system_status did not expose observation_only_systemd containment"
+	verify_containment_assertion containment-mode
 
 	systemctl stop resman || fail "systemctl stop failed after the MCP scenario"
 	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
@@ -1137,15 +1198,13 @@ scenario_metrics_database_lifecycle() {
 	mode=$(stat -c '%a' /var/lib/resman)
 	[[ $mode == 700 ]] || fail "the state directory has mode $mode instead of 700"
 
-	# resman-4pw.61: the shipped schema is version 3.
-	if command -v sqlite3 >/dev/null 2>&1; then
-		sqlite3 "$db" 'PRAGMA user_version;' >"$evidence_dir/schema-version.txt" 2>&1
-		[[ $(< "$evidence_dir/schema-version.txt") == 3 ]] \
-			|| fail "the metrics database reports schema version $(< "$evidence_dir/schema-version.txt") instead of 3"
-	else
-		printf 'sqlite3 unavailable; schema version not inspected\n' \
-			>"$evidence_dir/schema-version.txt"
-	fi
+	# The schema is part of the release contract and cannot pass unmeasured.
+	command -v sqlite3 >/dev/null 2>&1 \
+		|| blocked "sqlite3 is required to verify the packaged metrics schema"
+	sqlite3 "$db" 'PRAGMA user_version;' >"$evidence_dir/schema-version.txt" 2>&1
+	[[ $(< "$evidence_dir/schema-version.txt") == 5 ]] \
+		|| fail "the metrics database reports schema version $(< "$evidence_dir/schema-version.txt") instead of 5"
+	verify_containment_assertion schema-5
 
 	stat -c '%n %a %U:%G' "$db"* >"$evidence_dir/database-modes.txt" 2>&1
 	systemctl stop resman || fail "systemctl stop failed after the database scenario"

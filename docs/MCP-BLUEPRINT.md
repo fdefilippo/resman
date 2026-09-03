@@ -159,6 +159,8 @@ func (s *Server) handleGetSystemStatus(ctx context.Context, req mcp.Request) (mc
     return mcp.Response{
         Content: map[string]interface{}{
             "total_cpu_usage":                 observation.TotalCPUUsage,
+            "total_cpu_usage_available":       observation.TotalCPUUsageAvailable,
+            "total_cpu_usage_unavailable_reason": observation.TotalCPUUsageUnavailableReason,
             "observed_users_cpu_usage":        observation.ObservedUsersCPUUsage,
             "memory_usage_mb":                 observation.MemoryUsageMB,
             "observed_users_count":            observation.ObservedUsersCount,

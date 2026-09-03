@@ -54,6 +54,7 @@ type mockMetricsCollector struct {
 type failingCompletionLogger struct {
 	err      error
 	messages []string
+	fields   []interface{}
 }
 
 func (l *failingCompletionLogger) Debug(string, ...interface{}) {}
@@ -63,8 +64,9 @@ func (l *failingCompletionLogger) Info(string, ...interface{})  {}
 func (l *failingCompletionLogger) DebugChecked(string, ...interface{}) error {
 	return nil
 }
-func (l *failingCompletionLogger) InfoChecked(message string, _ ...interface{}) error {
+func (l *failingCompletionLogger) InfoChecked(message string, fields ...interface{}) error {
 	l.messages = append(l.messages, message)
+	l.fields = append([]interface{}(nil), fields...)
 	if message == "Control cycle completed" {
 		return l.err
 	}
@@ -518,25 +520,27 @@ type limitHookMetricRecord struct {
 }
 
 type mockPrometheusExporter struct {
-	mu                         sync.Mutex
-	errors                     []prometheusErrorRecord
-	limitHookExecutions        []limitHookMetricRecord
-	controlCycleDurations      []time.Duration
-	metricsCollectionDurations []time.Duration
-	lastSystemSnapshot         metrics.SystemExporterMetrics
-	lastUserSnapshot           metrics.UserExporterMetrics
-	systemSnapshots            int
-	userMetricUpdates          int
-	userMetricCleanups         int
-	limitsActivated            int
-	limitsDeactivated          int
-	ingressSkips               []cgroup.ProcessMoveResult
-	limitHookInFlight          int
-	limitHookQueued            int
-	limitHookCapacity          int
-	lastHostCPUSample          metrics.HostCPUUsageSample
-	hostCPUSampleObservations  int
-	restoreResults             []cgroup.ProcessRestoreResult
+	mu                           sync.Mutex
+	errors                       []prometheusErrorRecord
+	limitHookExecutions          []limitHookMetricRecord
+	controlCycleDurations        []time.Duration
+	metricsCollectionDurations   []time.Duration
+	lastSystemSnapshot           metrics.SystemExporterMetrics
+	lastUserSnapshot             metrics.UserExporterMetrics
+	systemSnapshots              int
+	userMetricUpdates            int
+	userMetricCleanups           int
+	limitsActivated              int
+	limitsDeactivated            int
+	ingressSkips                 []cgroup.ProcessMoveResult
+	limitHookInFlight            int
+	limitHookQueued              int
+	limitHookCapacity            int
+	lastHostCPUSample            metrics.HostCPUUsageSample
+	hostCPUSampleObservations    int
+	lastObservationHostCPUSample metrics.HostCPUUsageSample
+	observationHostCPUSamples    int
+	restoreResults               []cgroup.ProcessRestoreResult
 }
 
 func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
@@ -559,6 +563,12 @@ func (m *mockPrometheusExporter) ObserveControlCycleHostCPUUsage(sample metrics.
 	defer m.mu.Unlock()
 	m.lastHostCPUSample = sample
 	m.hostCPUSampleObservations++
+}
+func (m *mockPrometheusExporter) ObserveObservationHostCPUUsage(sample metrics.HostCPUUsageSample) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastObservationHostCPUSample = sample
+	m.observationHostCPUSamples++
 }
 func (m *mockPrometheusExporter) RecordControlCycleDuration(duration time.Duration) {
 	m.mu.Lock()
@@ -631,32 +641,36 @@ func (m *mockPrometheusExporter) recordedLimitHookExecutions() []limitHookMetric
 }
 
 type prometheusMetricSnapshot struct {
-	errors                    []prometheusErrorRecord
-	controlCycleDurations     int
-	metricsCollectionDuration int
-	systemSnapshots           int
-	userMetricUpdates         int
-	userMetricCleanups        int
-	limitsActivated           int
-	limitsDeactivated         int
-	hostCPUSampleObservations int
-	lastHostCPUSample         metrics.HostCPUUsageSample
+	errors                       []prometheusErrorRecord
+	controlCycleDurations        int
+	metricsCollectionDuration    int
+	systemSnapshots              int
+	userMetricUpdates            int
+	userMetricCleanups           int
+	limitsActivated              int
+	limitsDeactivated            int
+	hostCPUSampleObservations    int
+	lastHostCPUSample            metrics.HostCPUUsageSample
+	observationHostCPUSamples    int
+	lastObservationHostCPUSample metrics.HostCPUUsageSample
 }
 
 func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return prometheusMetricSnapshot{
-		errors:                    append([]prometheusErrorRecord(nil), m.errors...),
-		controlCycleDurations:     len(m.controlCycleDurations),
-		metricsCollectionDuration: len(m.metricsCollectionDurations),
-		systemSnapshots:           m.systemSnapshots,
-		userMetricUpdates:         m.userMetricUpdates,
-		userMetricCleanups:        m.userMetricCleanups,
-		limitsActivated:           m.limitsActivated,
-		limitsDeactivated:         m.limitsDeactivated,
-		hostCPUSampleObservations: m.hostCPUSampleObservations,
-		lastHostCPUSample:         m.lastHostCPUSample,
+		errors:                       append([]prometheusErrorRecord(nil), m.errors...),
+		controlCycleDurations:        len(m.controlCycleDurations),
+		metricsCollectionDuration:    len(m.metricsCollectionDurations),
+		systemSnapshots:              m.systemSnapshots,
+		userMetricUpdates:            m.userMetricUpdates,
+		userMetricCleanups:           m.userMetricCleanups,
+		limitsActivated:              m.limitsActivated,
+		limitsDeactivated:            m.limitsDeactivated,
+		hostCPUSampleObservations:    m.hostCPUSampleObservations,
+		lastHostCPUSample:            m.lastHostCPUSample,
+		observationHostCPUSamples:    m.observationHostCPUSamples,
+		lastObservationHostCPUSample: m.lastObservationHostCPUSample,
 	}
 }
 
@@ -1317,6 +1331,9 @@ func TestMetricsRefreshRecordsCollectionWithoutControlCycle(t *testing.T) {
 	if got.hostCPUSampleObservations != 0 {
 		t.Errorf("control-cycle host CPU observations = %d, want 0", got.hostCPUSampleObservations)
 	}
+	if got.observationHostCPUSamples != 1 || !got.lastObservationHostCPUSample.Available {
+		t.Errorf("observation host CPU samples = %d last=%+v, want one available sample", got.observationHostCPUSamples, got.lastObservationHostCPUSample)
+	}
 }
 
 func TestControlCyclePublishesTheExactDecisionHostCPUSample(t *testing.T) {
@@ -1350,6 +1367,64 @@ func TestControlCyclePublishesTheExactDecisionHostCPUSample(t *testing.T) {
 	}
 	if got.lastHostCPUSample != want {
 		t.Fatalf("published host CPU sample = %+v, want %+v", got.lastHostCPUSample, want)
+	}
+}
+
+func TestObservationOnlyCycleCompletionReportsModeAndRefusedIngress(t *testing.T) {
+	logger := &failingCompletionLogger{}
+	manager, err := NewManager(
+		config.DefaultConfig(),
+		&mockMetricsCollector{},
+		&mockCgroupManager{},
+		&mockPrometheusExporter{},
+		WithEnforcementStatus(cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+			Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.logger = logger
+	run := &controlCycleContext{
+		cfg:      config.DefaultConfig(),
+		cycleID:  1,
+		trigger:  ControlCycleTriggerManual,
+		decision: "ACTIVATE_LIMITS",
+		reason:   "test activation",
+		metrics: &SystemMetrics{
+			CPUEligibleUsers: []int{1000},
+			UserMetrics: map[int]*metrics.UserMetrics{
+				1000: {EnforceableUsage: metrics.ProcessSetMetrics{ProcessCount: 3}},
+			},
+		},
+	}
+	if err := manager.stageExecuteDecision(run); err != nil {
+		t.Fatalf("stageExecuteDecision() error: %v", err)
+	}
+	if err := manager.stageLogCompletion(run); err != nil {
+		t.Fatalf("stageLogCompletion() error: %v", err)
+	}
+
+	fields := make(map[string]interface{}, len(logger.fields)/2)
+	for index := 0; index+1 < len(logger.fields); index += 2 {
+		key, ok := logger.fields[index].(string)
+		if !ok {
+			t.Fatalf("log field key %d = %#v, want string", index, logger.fields[index])
+		}
+		fields[key] = logger.fields[index+1]
+	}
+	if fields["enforcement_mode"] != cgroup.EnforcementModeObservationOnlySystemd {
+		t.Fatalf("enforcement_mode = %#v", fields["enforcement_mode"])
+	}
+	if fields["migration_enforcement_available"] != false {
+		t.Fatalf("migration_enforcement_available = %#v", fields["migration_enforcement_available"])
+	}
+	if fields["ingress_refused_count"] != 3 {
+		t.Fatalf("ingress_refused_count = %#v, want 3", fields["ingress_refused_count"])
+	}
+	if fields["outcome"] != "success" {
+		t.Fatalf("outcome = %#v, want pipeline success with explicit refusal fields", fields["outcome"])
 	}
 }
 

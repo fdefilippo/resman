@@ -197,6 +197,15 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if [[ -d /run/systemd/system ]]; then
+	containment_disposition=$(containment_disposition_for \
+		"$bundle_dir/systemd-containment-dispositions.tsv" "$scenario") \
+		|| fail "the scenario has no unique systemd containment disposition"
+	if [[ $(containment_requirement_for "$containment_disposition") == displaced ]]; then
+		blocked "scenario displaced by systemd containment: $containment_disposition"
+	fi
+fi
+
 wait_for_log() {
 	local pattern=$1 timeout=$2
 	local deadline=$((SECONDS + timeout))

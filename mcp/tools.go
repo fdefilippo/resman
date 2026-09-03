@@ -226,6 +226,8 @@ type systemStatusPayload struct {
 	MigrationAvailable        bool                      `json:"migration_enforcement_available"`
 	RecoveryOccupants         []recoveryOccupantPayload `json:"recovery_occupants"`
 	TotalCPUUsage             float64                   `json:"total_cpu_usage"`
+	TotalCPUUsageAvailable    bool                      `json:"total_cpu_usage_available"`
+	TotalCPUUnavailableReason string                    `json:"total_cpu_usage_unavailable_reason"`
 	ObservedUsersCPUUsage     float64                   `json:"observed_users_cpu_usage"`
 	MemoryUsageMB             float64                   `json:"memory_usage_mb"`
 	ObservedUsersCount        int                       `json:"observed_users_count"`
@@ -274,6 +276,8 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		MigrationAvailable:        runtime.MigrationEnforcementAvailable,
 		RecoveryOccupants:         newRecoveryOccupantPayloads(runtime.RecoveryOccupants),
 		TotalCPUUsage:             observation.TotalCPUUsage,
+		TotalCPUUsageAvailable:    observation.TotalCPUUsageAvailable,
+		TotalCPUUnavailableReason: string(observation.TotalCPUUsageUnavailableReason),
 		ObservedUsersCPUUsage:     observation.ObservedUsersCPUUsage,
 		MemoryUsageMB:             observation.MemoryUsageMB,
 		ObservedUsersCount:        observation.ObservedUsersCount,
@@ -343,6 +347,13 @@ func formatOptionalTime(value time.Time) string {
 		return ""
 	}
 	return value.Format(time.RFC3339)
+}
+
+func formatHostCPUUsage(metrics resmanmetrics.ObservationMetrics) string {
+	if !metrics.TotalCPUUsageAvailable {
+		return fmt.Sprintf("unavailable (%s)", metrics.TotalCPUUsageUnavailableReason)
+	}
+	return fmt.Sprintf("%.1f%%", metrics.TotalCPUUsage)
 }
 
 // registerTools registers all MCP tools
@@ -509,13 +520,15 @@ func (s *Server) registerTools() {
 			limitsStatus = "Active"
 		}
 
+		currentUsage := formatHostCPUUsage(metrics)
+
 		// Build the report text.
 		report := fmt.Sprintf(`CPU Usage Report
 Hostname: %s
 Server Role: %s
 Date: %s
 Total CPU capacity: %.1f%%
-Current usage: %.1f%%
+Current usage: %s
 
 Observed Users:
 %s
@@ -533,7 +546,7 @@ CPU Points lending state: %s
 			serverRole,
 			time.Now().Format("2006-01-02 15:04:05"),
 			totalCPUCapacityPercent(metrics),
-			metrics.TotalCPUUsage,
+			currentUsage,
 			joinStrings(users, "\n"),
 			avgCPU,
 			peakCPU,
@@ -550,6 +563,8 @@ CPU Points lending state: %s
 			ServerRole:                   serverRole,
 			Report:                       report,
 			TotalCPU:                     metrics.TotalCPUUsage,
+			TotalCPUAvailable:            metrics.TotalCPUUsageAvailable,
+			TotalCPUUnavailableReason:    string(metrics.TotalCPUUsageUnavailableReason),
 			AverageCPU:                   avgCPU,
 			PeakCPU:                      peakCPU,
 			ObservedUsersCount:           len(allUserMetrics),

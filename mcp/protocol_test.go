@@ -616,7 +616,11 @@ func TestMCPToolOnlyWireContractsAgreeAcrossTransports(t *testing.T) {
 		tool string
 		keys []string
 	}{
-		{tool: "get_cpu_report", keys: []string{"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname", "observed_users_count", "peak_cpu", "report", "server_role", "total_cpu"}},
+		{tool: "get_cpu_report", keys: []string{
+			"avg_cpu", "cpu_actively_limited_users_count", "cpu_limits_active", "cpu_points", "hostname",
+			"observed_users_count", "peak_cpu", "report", "server_role", "total_cpu", "total_cpu_available",
+			"total_cpu_unavailable_reason",
+		}},
 		{tool: "get_mem_report", keys: []string{"avg_memory_mb", "hostname", "observed_users_count", "peak_memory_mb", "ram_actively_limited_users_count", "report", "resource_limits_active", "server_role", "total_memory_mb"}},
 		{tool: "get_user_filters", keys: []string{"config_file", "user_exclude_list", "user_include_list"}},
 	}
@@ -768,6 +772,8 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 		"recovery_occupants",
 		"observed_users_cpu_usage",
 		"observed_users_count",
+		"total_cpu_usage_available",
+		"total_cpu_usage_unavailable_reason",
 		"actively_limited_users_count",
 		"cpu_limits_active",
 		"resource_limits_active",

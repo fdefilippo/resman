@@ -1316,6 +1316,8 @@ decision policy.
 - `resman_cpu_total_usage_percent` (gauge)
 - `resman_control_cycle_host_cpu_sample_available` (gauge)
 - `resman_control_cycle_host_cpu_sample_unavailable_total{reason}` (counter)
+- `resman_observation_host_cpu_sample_available` (gauge)
+- `resman_observation_host_cpu_sample_unavailable_total{reason}` (counter)
 - `resman_all_users_cpu_usage_percent` (gauge)
 - `resman_memory_usage_megabytes` (gauge)
 - `resman_system_load_average` (gauge)
@@ -1577,7 +1579,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.32.0-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.32.0-2'" -o resman .
 ```
 
 **Build RPM:**

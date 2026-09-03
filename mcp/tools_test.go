@@ -55,6 +55,37 @@ func writeUserHistoryFixture(manager *database.DatabaseManager, record *database
 	}, []*database.UserMetricsRecord{record})
 }
 
+func TestFormatHostCPUUsageDistinguishesUnavailableFromMeasuredZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics resmanmetrics.ObservationMetrics
+		want    string
+	}{
+		{
+			name: "unavailable stale observation",
+			metrics: resmanmetrics.ObservationMetrics{
+				TotalCPUUsageUnavailableReason: resmanmetrics.HostCPUUsageUnavailableStale,
+			},
+			want: "unavailable (stale_baseline)",
+		},
+		{
+			name: "measured zero",
+			metrics: resmanmetrics.ObservationMetrics{
+				TotalCPUUsageAvailable: true,
+			},
+			want: "0.0%",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatHostCPUUsage(tt.metrics); got != tt.want {
+				t.Fatalf("formatHostCPUUsage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type configurationReloaderFunc func(context.Context) error
 
 func (f configurationReloaderFunc) Reload(ctx context.Context) error {
@@ -559,12 +590,14 @@ func TestReportMetricExtraction(t *testing.T) {
 
 func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) {
 	observation := resmanmetrics.ObservationMetrics{
-		TotalCores:            8,
-		TotalCPUUsage:         71.5,
-		ObservedUsersCPUUsage: 54.25,
-		ObservedUsersCount:    7,
-		MemoryUsageMB:         2048,
-		SystemUnderLoad:       true,
+		TotalCores:                     8,
+		TotalCPUUsage:                  71.5,
+		TotalCPUUsageAvailable:         false,
+		TotalCPUUsageUnavailableReason: resmanmetrics.HostCPUUsageUnavailableStale,
+		ObservedUsersCPUUsage:          54.25,
+		ObservedUsersCount:             7,
+		MemoryUsageMB:                  2048,
+		SystemUnderLoad:                true,
 	}
 	runtime := state.RuntimeStatus{
 		AnyLimitsActive:              true,
@@ -587,11 +620,13 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 			name:    "system status",
 			payload: newSystemStatusPayload("host-a", "worker", observation, runtime),
 			want: map[string]any{
-				"observed_users_cpu_usage":     54.25,
-				"observed_users_count":         float64(7),
-				"actively_limited_users_count": float64(2),
-				"cpu_limits_active":            true,
-				"resource_limits_active":       true,
+				"observed_users_cpu_usage":           54.25,
+				"observed_users_count":               float64(7),
+				"total_cpu_usage_available":          false,
+				"total_cpu_usage_unavailable_reason": string(resmanmetrics.HostCPUUsageUnavailableStale),
+				"actively_limited_users_count":       float64(2),
+				"cpu_limits_active":                  true,
+				"resource_limits_active":             true,
 			},
 		},
 		{

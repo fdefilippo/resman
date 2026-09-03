@@ -124,6 +124,22 @@ fail() {
 	exit 1
 }
 
+blocked() {
+	detail=$1
+	result=BLOCKED
+	echo "BLOCKED: $detail" >&2
+	exit 77
+}
+
+if [[ -d /run/systemd/system ]]; then
+	containment_disposition=$(containment_disposition_for \
+		"$bundle_dir/systemd-containment-dispositions.tsv" "$scenario") \
+		|| fail "the scenario has no unique systemd containment disposition"
+	if [[ $(containment_requirement_for "$containment_disposition") == displaced ]]; then
+		blocked "scenario displaced by systemd containment: $containment_disposition"
+	fi
+fi
+
 metric_value() {
 	local metric=$1
 	local metrics_file=$2

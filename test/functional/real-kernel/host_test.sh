@@ -11,6 +11,24 @@ bash -n "$script_dir/cpu-points-run.sh"
 # shellcheck disable=SC1091
 RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$script_dir/service-run.sh"
 
+dispositions_file=$script_dir/../final/systemd-containment-dispositions.tsv
+mapfile -t disposition_rows <"$dispositions_file"
+for disposition_row in "${disposition_rows[@]}"; do
+	IFS=$'\t' read -r scenario _ disposition _ <<<"$disposition_row"
+	[[ $scenario != scenario ]] || continue
+	[[ $(containment_disposition_for "$dispositions_file" "$scenario") == "$disposition" ]] \
+		|| { printf '%s: runtime disposition does not match inventory\n' "$scenario" >&2; exit 1; }
+	containment_requirement_for "$disposition" >/dev/null \
+		|| { printf '%s: unsupported containment disposition %q\n' "$scenario" "$disposition" >&2; exit 1; }
+done
+
+grep -q 'systemd-containment-dispositions.tsv' "$script_dir/remote.sh" \
+	|| { printf 'remote bundles do not carry the containment disposition inventory\n' >&2; exit 1; }
+for runner in run.sh cpu-points-run.sh service-run.sh; do
+	grep -q 'containment_requirement_for' "$script_dir/$runner" \
+		|| { printf '%s does not enforce its containment disposition\n' "$runner" >&2; exit 1; }
+done
+
 calls=()
 stop_status=0
 reported_state=inactive
