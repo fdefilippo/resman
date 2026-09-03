@@ -1,10 +1,12 @@
-# Upgrading from ResMan 1.25.x through 1.30.8 to ResMan 1.31.1
+# Upgrading from ResMan 1.25.x through 1.31.1 to ResMan 1.32.0
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.30.8 to
-ResMan 1.31.1. This release contains the post-1.25.1 audit remediation and the CPU
-Points cutover, and intentionally breaks incorrect or ambiguous contracts. It does
-not migrate old database schemas, accept removed configuration keys, preserve old MCP
-shapes, or alias renamed metrics.
+This guide applies when moving from any ResMan release from 1.25.x through 1.31.1 to
+ResMan 1.32.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+cutover and the systemd ownership-preservation change, and intentionally breaks
+incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
+from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 builds on that contract.
+It does not migrate old database schemas, accept removed configuration keys, preserve
+old MCP shapes, or alias renamed metrics.
 
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
@@ -12,7 +14,7 @@ operator-authored configuration has been recovered.
 
 ## BREAKING: systemd hosts are observation-only
 
-The containment release after 1.31.1 disables migration-based CPU, RAM, and I/O
+ResMan 1.32.0 disables migration-based CPU, RAM, and I/O
 enforcement on every host booted with systemd. ResMan still observes workloads,
 evaluates policy, records requested intent, exports metrics, and writes history, but
 it does not move a candidate process into a ResMan-owned cgroup and does not count a
@@ -48,7 +50,7 @@ release; in-place schema migration is not supported.
    `/etc/resman/resman.conf` and prepare the packaged regular mode-`0600`
    `/etc/resman/cpu-points.map` below a root-owned mode-`0700` `/etc/resman` directory.
 4. Remove or securely archive every legacy configuration artifact described below.
-5. Archive or delete the pre-1.31.1 metrics database. It cannot be opened by the new
+5. Archive or delete the pre-1.32.0 metrics database. It cannot be opened by the new
    schema.
 6. If MCP uses HTTP, provision its certificate and key, update clients to HTTPS and
    MCP revision 2026-07-28, and update the health probe.

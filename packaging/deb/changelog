@@ -1,3 +1,19 @@
+resman (1.32.0-1) stable; urgency=medium
+
+  * BREAKING: preserve systemd workload ownership by making CPU, RAM and I/O
+    policy observation-only on systemd hosts.
+  * Report ownership rejection, recovery and stranded-process lifecycle without
+    claiming false enforcement.
+  * Expose least-privilege revision-bound configuration editing and an
+    Apache-2.0 public wire contract.
+  * Bound hook process groups, publish fixed event context and ship the
+    no-argument email adapter.
+  * Read SMTP credentials from a protected netrc file without exposing secrets
+    in process arguments, and bound connection and transfer time.
+  * Sample decision CPU capacity independently from the observational cache.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 03 Sep 2026 19:05:31 +0200
+
 resman (1.31.1-2) stable; urgency=medium
 
   * Ship the standalone sendmail helper and its operator guide under

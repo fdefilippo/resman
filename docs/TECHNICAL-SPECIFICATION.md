@@ -1577,7 +1577,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.31.1-2'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.32.0-1'" -o resman .
 ```
 
 **Build RPM:**

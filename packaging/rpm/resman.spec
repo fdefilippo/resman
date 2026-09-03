@@ -11,8 +11,8 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.31.1
-Release: 2%{?dist}
+Version: 1.32.0
+Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -66,8 +66,9 @@ v1.30.5: enforced ShellCheck coverage for every tracked shell script.
 v1.30.7: truthful cgroup telemetry, checked I/O counters and bounded fuzz gates.
 v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
 v1.31.1: normalized CPU Points guarantees, class-priority lending and typed delivery history.
+v1.32.0: systemd ownership preservation, public editor protocol and bounded hooks.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.30.8 to 1.31.1.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.31.1 to 1.32.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -279,6 +280,14 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Sep 03 2026 Francesco Defilippo <francesco@defilippo.org> - 1.32.0-1
+- BREAKING: preserve systemd workload ownership by making CPU, RAM and I/O policy observation-only on systemd hosts
+- OBSERVABILITY: report ownership rejection, recovery and stranded-process lifecycle without claiming false enforcement
+- MCP: expose least-privilege revision-bound configuration editing and an Apache-2.0 public wire contract
+- HOOKS: bound script process groups, publish fixed event context and ship the no-argument email adapter
+- SECURITY: read SMTP credentials from a protected netrc file without placing secrets in process arguments
+- RELIABILITY: bound SMTP connection and transfer time and sample decision CPU capacity independently
+
 * Wed Sep 02 2026 Francesco Defilippo <francesco@defilippo.org> - 1.31.1-2
 - PACKAGING: ship the standalone sendmail helper and its operator guide in RPM and DEB packages
 
