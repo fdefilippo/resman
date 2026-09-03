@@ -15,26 +15,26 @@ cannot produce a whole-gate PASS.
 - `local-focused-test`: deterministic cross-package tests for resource state,
   every I/O decision dimension, sampling/cache ownership, reload publication,
   MCP 2026-07-28 stateless HTTP, Prometheus transitions, and database errors;
-- `smolvm`: real cgroup membership, RAM and CPU quotas, process reconciliation,
-  missing-controller startup, MCP reload, and the shipped rootful Podman
-  contract in disposable 2-vCPU/2-GiB guests;
+- `smolvm`: missing-controller startup, MCP reload, and other contracts that do
+  not claim migration enforcement on a systemd host, in disposable
+  2-vCPU/2-GiB guests;
 - `remote-real-kernel`: an explicitly selected laboratory host used when the
-  SmolVM kernel lacks PSI or `io.max`, and for the mandatory CPU Points
-  proportional-allocation proof that needs synchronized 60-second windows.
+  SmolVM kernel lacks PSI and for the mandatory systemd ownership-preservation
+  proof using a genuine PAM/logind session and representative unit types.
 
 The last class is not a silent fallback. The SmolVM attempt remains in
 `attempts.tsv` as `BLOCKED`, while the required row names the substitute's host,
 kernel, source revision, isolation path, exact commands, and cleanup result.
 Evidence from another revision is rejected.
-The generated summary also names the exact kernel used for the CPU Points
-proportional measurement and scopes that scheduler result to the running kernel;
-it does not generalize the measurement to untested scheduler families.
+The generated summary embeds `systemd-containment-dispositions.tsv`. That inventory
+accounts for every former real-kernel or migration-dependent scenario. Assertions
+that require systemd-native enforcement are visibly displaced to `resman-nq6`; they
+cannot be cited as current containment evidence.
 
 ## Running the complete gate
 
-The current SmolVM 1.9.0 kernel lacks PSI and `io.max`; CPU Points also needs a
-stable real scheduler. Provide a non-production root test host with those
-capabilities:
+The current SmolVM 1.9.0 kernel lacks PSI. Provide a non-production root test host
+with working PAM/logind session scopes:
 
 ```bash
 RESMAN_REAL_KERNEL_HOST=root@terra make test-functional-final
@@ -49,22 +49,19 @@ removes the remote directory. Each scenario verifies that its cgroup is absent
 after shutdown. The configured fixture user defaults to `pippo` and can be
 overridden with `RESMAN_REAL_KERNEL_USER`.
 
-The CPU Points scenario is bound to the source revision rather than the
-installed RPM. It temporarily quiesces an active packaged service, restores it
-from the cleanup trap, and builds two independent raw-cgroup oracle hierarchies
-beside the ResMan-owned hierarchy. Its production-valid equality vector is 300,
-300 and 200 mapped points plus the aggregate 100-point best-effort entitlement
-inside a 900-point parent. Evidence contains the correct and deliberately
-stale-low 60-second samples, cross-cgroup read skew, parent throttling, live
-reload preservation, partial process coverage, release and shutdown recovery.
-CPU hotplug is reported as `BLOCKED` unless a separate run explicitly opts into
-that host mutation; it is never silently inferred from an unchanged topology.
+The systemd ownership scenario is bound to the source revision rather than the
+installed RPM. It temporarily quiesces an active packaged service and restores it
+from the cleanup trap. It creates a genuine cron/PAM login session, a user service,
+a transient unit, and a system service, then proves unchanged membership, continued
+observation, zero active-limit state, and `loginctl terminate-session` reachability.
+It also begins with a live historical recovery occupant and proves that the process
+remains stranded and is never silently admitted again.
 
 Previously collected evidence may be supplied explicitly instead:
 
 ```bash
 FINAL_GATE_PSI_EVIDENCE=/path/to/current/psi \
-FINAL_GATE_BLOCK_IO_EVIDENCE=/path/to/current/block-io \
+FINAL_GATE_SYSTEMD_OWNERSHIP_EVIDENCE=/path/to/current/systemd-ownership \
 make test-functional-final
 ```
 

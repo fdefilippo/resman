@@ -1,9 +1,12 @@
 # Supported container deployment
 
 resman supports one container runtime contract: a rootful Podman container that
-manages the host. It is not an isolated or rootless workload. The daemon must see
+observes the host. It is not an isolated or rootless workload. The daemon must see
 host PIDs, resolve host users through NSS, read trustworthy `/proc/PID/exe` and
-`/proc/PID/io` entries for foreign users, and write the host cgroup v2 hierarchy.
+`/proc/PID/io` entries for foreign users, and inspect the host cgroup v2 hierarchy.
+The containment release is observation-only when the visible host PID 1 is systemd,
+even if the container does not mount the host `/run/systemd/system`. It does not
+migrate processes or claim active CPU, RAM, or I/O limits.
 
 The image is built with CGO on Oracle Linux 9 and includes the SSSD NSS client.
 The process runs as UID 0. Rootless Podman, a private PID or cgroup namespace,
@@ -18,7 +21,8 @@ but resman does not acquire them from their runtime-owned cgroups; the skip is l
 once per user operation and counted by `resman_cgroup_ingress_skipped_total`. This
 boundary is guaranteed only when resman itself runs on the host, or in the supported
 container deployment below with `--pid=host` and the host `/proc`. A workload using
-the host PID namespace is not distinguishable by this guard and remains enforceable.
+the host PID namespace is not distinguishable by this guard; the systemd ownership
+boundary still refuses migration for the complete host.
 
 ## Prepare the host
 

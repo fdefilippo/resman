@@ -24,6 +24,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,48 +219,60 @@ type ActivateLimitsArgs struct {
 }
 
 type systemStatusPayload struct {
-	Hostname                  string                 `json:"hostname"`
-	ServerRole                string                 `json:"server_role"`
-	TotalCPUUsage             float64                `json:"total_cpu_usage"`
-	ObservedUsersCPUUsage     float64                `json:"observed_users_cpu_usage"`
-	MemoryUsageMB             float64                `json:"memory_usage_mb"`
-	ObservedUsersCount        int                    `json:"observed_users_count"`
-	ActivelyLimitedUsersCount int                    `json:"actively_limited_users_count"`
-	TotalCores                int                    `json:"total_cores"`
-	SystemUnderLoad           bool                   `json:"system_under_load"`
-	AnyLimitsActive           bool                   `json:"any_limits_active"`
-	CPULimitsActive           bool                   `json:"cpu_limits_active"`
-	ResourceLimitsActive      bool                   `json:"resource_limits_active"`
-	CPULimitsAppliedTime      string                 `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime string                 `json:"resource_limits_applied_time"`
-	SharedCgroupActive        bool                   `json:"shared_cgroup_active"`
-	CPUPoints                 cpuPointsSystemPayload `json:"cpu_points"`
+	Hostname                  string                    `json:"hostname"`
+	ServerRole                string                    `json:"server_role"`
+	EnforcementMode           string                    `json:"enforcement_mode"`
+	EnforcementReason         string                    `json:"enforcement_reason"`
+	MigrationAvailable        bool                      `json:"migration_enforcement_available"`
+	RecoveryOccupants         []recoveryOccupantPayload `json:"recovery_occupants"`
+	TotalCPUUsage             float64                   `json:"total_cpu_usage"`
+	ObservedUsersCPUUsage     float64                   `json:"observed_users_cpu_usage"`
+	MemoryUsageMB             float64                   `json:"memory_usage_mb"`
+	ObservedUsersCount        int                       `json:"observed_users_count"`
+	ActivelyLimitedUsersCount int                       `json:"actively_limited_users_count"`
+	TotalCores                int                       `json:"total_cores"`
+	SystemUnderLoad           bool                      `json:"system_under_load"`
+	AnyLimitsActive           bool                      `json:"any_limits_active"`
+	CPULimitsActive           bool                      `json:"cpu_limits_active"`
+	ResourceLimitsActive      bool                      `json:"resource_limits_active"`
+	CPULimitsAppliedTime      string                    `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime string                    `json:"resource_limits_applied_time"`
+	SharedCgroupActive        bool                      `json:"shared_cgroup_active"`
+	CPUPoints                 cpuPointsSystemPayload    `json:"cpu_points"`
 }
 
 type limitsStatusPayload struct {
-	Hostname                     string                 `json:"hostname"`
-	ServerRole                   string                 `json:"server_role"`
-	AnyLimitsActive              bool                   `json:"any_limits_active"`
-	CPULimitsActive              bool                   `json:"cpu_limits_active"`
-	ResourceLimitsActive         bool                   `json:"resource_limits_active"`
-	CPULimitsAppliedTime         string                 `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime    string                 `json:"resource_limits_applied_time"`
-	ActivelyLimitedUsersCount    int                    `json:"actively_limited_users_count"`
-	ActivelyLimitedUsers         []int                  `json:"actively_limited_users"`
-	CPUActivelyLimitedUsersCount int                    `json:"cpu_actively_limited_users_count"`
-	CPUActivelyLimitedUsers      []int                  `json:"cpu_actively_limited_users"`
-	SharedCgroupPath             string                 `json:"shared_cgroup_path"`
-	SharedCgroupActive           bool                   `json:"shared_cgroup_active"`
-	SharedCgroupQuota            string                 `json:"shared_cgroup_quota,omitempty"`
-	SharedCgroupUserCount        int                    `json:"shared_cgroup_user_count"`
-	CPUPoints                    cpuPointsSystemPayload `json:"cpu_points"`
-	CPUPointUsers                []cpuPointsUserPayload `json:"cpu_point_users"`
+	Hostname                     string                    `json:"hostname"`
+	ServerRole                   string                    `json:"server_role"`
+	EnforcementMode              string                    `json:"enforcement_mode"`
+	EnforcementReason            string                    `json:"enforcement_reason"`
+	MigrationAvailable           bool                      `json:"migration_enforcement_available"`
+	RecoveryOccupants            []recoveryOccupantPayload `json:"recovery_occupants"`
+	AnyLimitsActive              bool                      `json:"any_limits_active"`
+	CPULimitsActive              bool                      `json:"cpu_limits_active"`
+	ResourceLimitsActive         bool                      `json:"resource_limits_active"`
+	CPULimitsAppliedTime         string                    `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime    string                    `json:"resource_limits_applied_time"`
+	ActivelyLimitedUsersCount    int                       `json:"actively_limited_users_count"`
+	ActivelyLimitedUsers         []int                     `json:"actively_limited_users"`
+	CPUActivelyLimitedUsersCount int                       `json:"cpu_actively_limited_users_count"`
+	CPUActivelyLimitedUsers      []int                     `json:"cpu_actively_limited_users"`
+	SharedCgroupPath             string                    `json:"shared_cgroup_path"`
+	SharedCgroupActive           bool                      `json:"shared_cgroup_active"`
+	SharedCgroupQuota            string                    `json:"shared_cgroup_quota,omitempty"`
+	SharedCgroupUserCount        int                       `json:"shared_cgroup_user_count"`
+	CPUPoints                    cpuPointsSystemPayload    `json:"cpu_points"`
+	CPUPointUsers                []cpuPointsUserPayload    `json:"cpu_point_users"`
 }
 
 func newSystemStatusPayload(hostname, serverRole string, observation resmanmetrics.ObservationMetrics, runtime state.RuntimeStatus) systemStatusPayload {
 	return systemStatusPayload{
 		Hostname:                  hostname,
 		ServerRole:                serverRole,
+		EnforcementMode:           string(runtime.EnforcementMode),
+		EnforcementReason:         runtime.EnforcementReason,
+		MigrationAvailable:        runtime.MigrationEnforcementAvailable,
+		RecoveryOccupants:         newRecoveryOccupantPayloads(runtime.RecoveryOccupants),
 		TotalCPUUsage:             observation.TotalCPUUsage,
 		ObservedUsersCPUUsage:     observation.ObservedUsersCPUUsage,
 		MemoryUsageMB:             observation.MemoryUsageMB,
@@ -281,6 +294,10 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 	result := limitsStatusPayload{
 		Hostname:                     hostname,
 		ServerRole:                   serverRole,
+		EnforcementMode:              string(runtime.EnforcementMode),
+		EnforcementReason:            runtime.EnforcementReason,
+		MigrationAvailable:           runtime.MigrationEnforcementAvailable,
+		RecoveryOccupants:            newRecoveryOccupantPayloads(runtime.RecoveryOccupants),
 		AnyLimitsActive:              runtime.AnyLimitsActive,
 		CPULimitsActive:              runtime.CPULimitsActive,
 		ResourceLimitsActive:         runtime.ResourceLimitsActive,
@@ -299,6 +316,24 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 	}
 	for _, user := range runtime.CPUPointUsers {
 		result.CPUPointUsers = append(result.CPUPointUsers, newCPUPointsUserPayload(user))
+	}
+	return result
+}
+
+type recoveryOccupantPayload struct {
+	UID       int    `json:"uid"`
+	PID       int    `json:"pid"`
+	StartTime string `json:"start_time"`
+}
+
+func newRecoveryOccupantPayloads(occupants []cgroup.RecoveryOccupant) []recoveryOccupantPayload {
+	result := make([]recoveryOccupantPayload, 0, len(occupants))
+	for _, occupant := range occupants {
+		result = append(result, recoveryOccupantPayload{
+			UID:       occupant.UID,
+			PID:       occupant.PID,
+			StartTime: strconv.FormatUint(occupant.StartTime, 10),
+		})
 	}
 	return result
 }

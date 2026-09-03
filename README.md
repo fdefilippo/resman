@@ -2,11 +2,21 @@
 
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
-ResMan monitors system resources and automatically applies limits to users when load exceeds configurable thresholds. It exposes Prometheus metrics, supports hot-reload configuration, and includes an MCP server for AI assistant integration.
+ResMan monitors system resources and applies limits to users when the active host
+ownership model permits safe enforcement. It exposes Prometheus metrics, supports
+hot-reload configuration, and includes an MCP server for AI assistant integration.
+
+> **Breaking containment mode:** on hosts booted with systemd, ResMan currently runs
+> in `observation_only_systemd` mode for CPU, RAM, and I/O. It continues collecting,
+> deciding, persisting, and reporting policy intent, but it does not move processes or
+> claim an active limit. This preserves the authoritative session/service owner until
+> the systemd-native design tracked by `resman-nq6` is delivered. Check
+> `resman_enforcement_mode` or the MCP status before assuming that enforcement is
+> available.
 
 ## Features
 
-- Dynamic CPU, RAM, and IO limiting via cgroups v2
+- Dynamic CPU, RAM, and IO limiting via cgroups v2 on supported non-systemd ownership models
 - PSI event-driven mode: uses poll() on cpu.pressure/io.pressure to trigger control cycles when the kernel reports real pressure/stall, while keeping polling as a heartbeat
 - Per-user resource tracking with Prometheus metrics
 - Configurable thresholds with time-window delay to prevent false activations
@@ -230,7 +240,7 @@ swap or reclaimable pages, a process can stay alive but effectively stall at hig
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 4 records each decision
+When metrics persistence is enabled, SQLite schema version 5 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
 applied CPU class and weight, delivered parent/domain bandwidth and throttling, raw
 cgroup diagnostics, PID-namespace coverage, and process-derived memory from cgroup
@@ -272,17 +282,18 @@ sidecars are regular, non-symlink mode `0600` files. Unsafe existing custom
 paths or replaceable/symlinked ancestors are refused before SQLite opens them
 rather than relying on the umask or a check-then-open race.
 
-Before moving a process into the shared limited cgroup, resman persistently
-records its original cgroup together with its PID start time. On release, the
-process is restored to that exact cgroup when it can legally accept processes.
-An original cgroup that distributes controllers to children is an internal node
-under cgroup v2 and cannot accept the process; it therefore uses the same
-dedicated `resman/recovery/user_UID` leaf as a process whose original systemd
-scope disappeared. The PID start time is revalidated immediately before every
-restore write. Recovery leaves use an internal unlimited `cpu.max`; resman never
-writes a recovery quota into cgroups managed by systemd. If any
-process cannot be restored safely during shutdown, the daemon exits non-zero
-instead of reporting a successful service stop.
+On a systemd host ResMan refuses new migration-based ingress before the first
+cgroup mutation. Existing process-origin records from an older release are still
+used during release and shutdown so the containment release can remove inherited
+constraints. Every restore is classified as `exact_origin`, `recovery`,
+`disappeared`, or `failed`; only `exact_origin` is an ordinary successful release.
+
+If the recorded origin no longer exists or cannot accept processes, the process is
+placed in `resman/recovery/user_UID` and remains visibly `stranded`. A recovery leaf
+is never accepted as a new authoritative origin and its occupants are never silently
+admitted again. Stop or restart each stranded process under its service or session;
+once it exits, an empty recovery leaf may be removed. If restoration is incomplete
+during shutdown, the daemon exits non-zero rather than reporting a successful stop.
 
 Live policy reconciliation remains fail-closed: if an excluded process has no
 same-start-time recorded or inherited origin, it stays constrained while the

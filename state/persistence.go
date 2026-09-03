@@ -53,6 +53,20 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 	programmedGuarantees := m.programmedGuaranteePoints
 	m.mu.RUnlock()
 
+	recovery := cgroup.RecoverySnapshot{}
+	if provider, ok := m.cgroupManager.(interface {
+		RecoverySnapshot() (cgroup.RecoverySnapshot, error)
+	}); ok {
+		var err error
+		recovery, err = provider.RecoverySnapshot()
+		if err != nil {
+			m.recordPersistenceObservationError("recovery_snapshot_failure", 0, err)
+		}
+		m.mu.Lock()
+		m.recoverySnapshot = recovery
+		m.mu.Unlock()
+	}
+
 	capacity := cpupoints.CapacityState{}
 	if m.cpuCapacity != nil {
 		capacity = m.cpuCapacity.State()
@@ -126,6 +140,10 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 	}
 
 	users := make(map[int]resmanmetrics.UserPersistenceMetrics, len(sample.UserMetrics))
+	strandedByUID := make(map[int]int)
+	for _, occupant := range recovery.Occupants {
+		strandedByUID[occupant.UID]++
+	}
 	currentRAM := make(map[int]cgroup.MemoryAccountingSnapshot)
 	for uid, observed := range sample.UserMetrics {
 		user := resmanmetrics.UserPersistenceMetrics{
@@ -145,6 +163,13 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 			user.LifecycleState = event.state
 			user.PIDNamespaceMismatchCount = event.pidNamespaceMismatches
 			user.PIDNamespaceUnavailableCount = event.pidNamespaceUnavailable
+			user.SystemdOwnershipRefusedCount = event.systemdOwnershipRefused
+			user.RecoveryProcessCount = event.recoveryProcesses
+			user.RestoreFailedProcessCount = event.restoreFailedProcesses
+		}
+		if strandedByUID[uid] > 0 {
+			user.LifecycleState = resmanmetrics.CPUPointsLifecycleStranded
+			user.StrandedProcessCount = strandedByUID[uid]
 		}
 		if allocation, ok := allocations[uid]; ok {
 			class := string(allocation.class)
@@ -320,7 +345,7 @@ func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersi
 			enforceableCount = user.Metrics.EnforceableUsage.ProcessCount
 			requested = user.Metrics.CPULimitRequested
 		}
-		acquiredCount := enforceableCount - user.PIDNamespaceMismatchCount - user.PIDNamespaceUnavailableCount
+		acquiredCount := enforceableCount - user.PIDNamespaceMismatchCount - user.PIDNamespaceUnavailableCount - user.SystemdOwnershipRefusedCount
 		if acquiredCount < 0 {
 			acquiredCount = 0
 		}
@@ -343,7 +368,11 @@ func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersi
 			ReconciliationDegraded: degraded, ProcessCoverage: coverage,
 			ObservedProcessCount: observedCount, EnforceableProcessCount: enforceableCount,
 			PIDNamespaceMismatchCount: user.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: user.PIDNamespaceUnavailableCount,
-			CgroupPath: user.CgroupPath, LeafCPUUsageUsecDelta: user.LeafCPUUsageUsecDelta,
+			SystemdOwnershipRefusedCount: user.SystemdOwnershipRefusedCount,
+			RecoveryProcessCount:         user.RecoveryProcessCount,
+			RestoreFailedProcessCount:    user.RestoreFailedProcessCount,
+			StrandedProcessCount:         user.StrandedProcessCount,
+			CgroupPath:                   user.CgroupPath, LeafCPUUsageUsecDelta: user.LeafCPUUsageUsecDelta,
 			RAMCgroupUsageBytes: user.RAMCgroupUsageBytes, RAMCoverage: user.RAMCoverage,
 			RAMCoverageIncompleteProcessCount: user.RAMCoverageIncompleteProcessCount, RAMSwapDisabled: user.RAMSwapDisabled,
 			MemoryHighLimit: user.MemoryHighLimit, MemoryMaxLimit: user.MemoryMaxLimit, MemorySwapMax: user.MemorySwapMax,
@@ -392,33 +421,49 @@ func (m *Manager) recordCPUPointsAdmissionOutcome(uid int, result cgroup.Process
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err == nil && result.Applied() {
-		if result.NamespaceSkipped() == 0 {
+		if result.IngressSkipped() == 0 {
 			delete(m.cpuPointsLifecycleEvents, uid)
 			return
 		}
 		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-			state: resmanmetrics.CPUPointsLifecycleApplied, pidNamespaceMismatches: result.PIDNamespaceMismatches, pidNamespaceUnavailable: result.PIDNamespaceUnavailable,
+			state: resmanmetrics.CPUPointsLifecycleApplied, pidNamespaceMismatches: result.PIDNamespaceMismatches,
+			pidNamespaceUnavailable: result.PIDNamespaceUnavailable, systemdOwnershipRefused: result.SystemdOwnershipRefused,
 		}
 		return
 	}
 	state := resmanmetrics.CPUPointsLifecycleFailed
-	if !result.Applied() && result.NamespaceSkipped() > 0 {
+	if !result.Applied() && result.SystemdOwnershipRefused > 0 {
+		state = resmanmetrics.CPUPointsLifecycleOwnershipRejected
+	} else if !result.Applied() && result.RecoveryStranded > 0 {
+		state = resmanmetrics.CPUPointsLifecycleStranded
+	} else if !result.Applied() && result.NamespaceSkipped() > 0 {
 		state = resmanmetrics.CPUPointsLifecycleNamespaceRejected
 	}
 	m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-		state: state, pidNamespaceMismatches: result.PIDNamespaceMismatches, pidNamespaceUnavailable: result.PIDNamespaceUnavailable,
+		state: state, pidNamespaceMismatches: result.PIDNamespaceMismatches,
+		pidNamespaceUnavailable: result.PIDNamespaceUnavailable, systemdOwnershipRefused: result.SystemdOwnershipRefused,
 	}
 }
 
-func (m *Manager) recordCPUPointsReleaseOutcome(uid int, released bool, err error) {
+func (m *Manager) recordCPUPointsReleaseOutcome(uid int, released bool, result cgroup.ProcessRestoreResult, err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err != nil {
-		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{state: resmanmetrics.CPUPointsLifecycleFailed}
-		return
-	}
-	if released {
+		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
+			state:                  resmanmetrics.CPUPointsLifecycleFailed,
+			recoveryProcesses:      result.Count(cgroup.ProcessRestoreRecovery),
+			restoreFailedProcesses: result.Count(cgroup.ProcessRestoreFailed),
+		}
+	} else if result.Count(cgroup.ProcessRestoreRecovery) > 0 {
+		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
+			state:             resmanmetrics.CPUPointsLifecycleRecovery,
+			recoveryProcesses: result.Count(cgroup.ProcessRestoreRecovery),
+		}
+	} else if released {
 		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{state: resmanmetrics.CPUPointsLifecycleReleased}
+	}
+	m.mu.Unlock()
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.RecordProcessRestoreResult(result)
 	}
 }
 

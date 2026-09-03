@@ -11,6 +11,9 @@ import (
 
 // CreateSharedCgroup creates the shared hierarchy used for CPU-limited users.
 func (m *Manager) CreateSharedCgroup() (string, error) {
+	if err := m.requireMigrationEnforcement(0); err != nil {
+		return "", err
+	}
 	sharedPath := filepath.Join(m.getBaseCgroupPath(), "limited")
 
 	if _, err := os.Stat(sharedPath); err == nil {
@@ -60,6 +63,9 @@ func (m *Manager) removeSharedCPUQuota(sharedPath string) error {
 
 // CreateUserSubCgroup creates a user sub-cgroup inside the shared cgroup.
 func (m *Manager) CreateUserSubCgroup(uid int, sharedPath string) (string, error) {
+	if err := m.requireMigrationEnforcement(0); err != nil {
+		return "", err
+	}
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 
 	// Create the sub-cgroup directory.
@@ -185,24 +191,32 @@ func (m *Manager) MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string)
 
 // ReleaseUserFromSharedCgroup restores processes from a shared child and removes it.
 func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error {
+	_, err := m.ReleaseUserFromSharedCgroupWithResult(uid, sharedPath, normalQuota)
+	return err
+}
+
+// ReleaseUserFromSharedCgroupWithResult restores processes and preserves each
+// terminal placement instead of collapsing recovery into ordinary success.
+func (m *Manager) ReleaseUserFromSharedCgroupWithResult(uid int, sharedPath, normalQuota string) (ProcessRestoreResult, error) {
+	var result ProcessRestoreResult
 	userPath := filepath.Join(sharedPath, fmt.Sprintf("user_%d", uid))
 	userProcsFile := filepath.Join(userPath, "cgroup.procs")
 
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
-		return m.untrackCgroupPathIf(uid, userPath)
+		return result, m.untrackCgroupPathIf(uid, userPath)
 	}
 
 	pids, err := m.readPidsFromFile(userProcsFile)
 	if err != nil {
-		return fmt.Errorf("failed to read user shared cgroup processes for UID %d: %w", uid, err)
+		return result, fmt.Errorf("failed to read user shared cgroup processes for UID %d: %w", uid, err)
 	}
 
-	usedRecovery, err := m.restoreProcesses(uid, pids, normalQuota)
+	result, _, err = m.restoreProcessesExpectedResult(uid, pids, normalQuota, nil, "", true)
 	if err != nil {
-		return fmt.Errorf("failed to restore processes from shared cgroup for UID %d: %w", uid, err)
+		return result, fmt.Errorf("failed to restore processes from shared cgroup for UID %d: %w", uid, err)
 	}
 	if err := m.removeManagedCgroupPath(userPath); err != nil {
-		return fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
+		return result, fmt.Errorf("failed to remove user shared cgroup for UID %d: %w", uid, err)
 	}
 
 	if err := m.untrackCgroupPathIf(uid, userPath); err != nil {
@@ -215,10 +229,10 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 	m.blockIOMu.Lock()
 	delete(m.blockIOAccounting, uid)
 	m.blockIOMu.Unlock()
-	if usedRecovery {
+	if result.Count(ProcessRestoreRecovery) > 0 {
 		recoveryPath := m.getRecoveryCgroupPath(uid)
 		if err := m.trackCgroupPath(uid, recoveryPath); err != nil {
-			return fmt.Errorf("failed to track recovery cgroup for UID %d: %w", uid, err)
+			return result, fmt.Errorf("failed to track recovery cgroup for UID %d: %w", uid, err)
 		}
 		m.logger.Warn("Processes restored to resman recovery cgroup because their original cgroup was unavailable",
 			"uid", uid,
@@ -232,7 +246,7 @@ func (m *Manager) ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota s
 		"path", userPath,
 		"processes_moved", len(pids),
 	)
-	return nil
+	return result, nil
 }
 
 // logSharedProcessMoveSummary logs a summary of shared cgroup process movement.

@@ -44,6 +44,51 @@ type processRestore struct {
 	Recovery    bool
 }
 
+// ProcessRestoreDisposition describes the terminal placement of one process lifetime.
+type ProcessRestoreDisposition string
+
+const (
+	ProcessRestoreExactOrigin ProcessRestoreDisposition = "exact_origin"
+	ProcessRestoreRecovery    ProcessRestoreDisposition = "recovery"
+	ProcessRestoreDisappeared ProcessRestoreDisposition = "disappeared"
+	ProcessRestoreFailed      ProcessRestoreDisposition = "failed"
+)
+
+// ProcessRestoreOutcome records one terminal restore disposition.
+type ProcessRestoreOutcome struct {
+	PID         int
+	StartTime   uint64
+	Disposition ProcessRestoreDisposition
+}
+
+// ProcessRestoreResult aggregates terminal restore dispositions without
+// collapsing recovery placement into ordinary success.
+type ProcessRestoreResult struct {
+	Outcomes []ProcessRestoreOutcome
+}
+
+// Add appends another restore result without collapsing per-process outcomes.
+func (r *ProcessRestoreResult) Add(other ProcessRestoreResult) {
+	r.Outcomes = append(r.Outcomes, other.Outcomes...)
+}
+
+// Count reports the number of outcomes with the requested disposition.
+func (r ProcessRestoreResult) Count(disposition ProcessRestoreDisposition) int {
+	count := 0
+	for _, outcome := range r.Outcomes {
+		if outcome.Disposition == disposition {
+			count++
+		}
+	}
+	return count
+}
+
+// HasIncompleteRestore reports whether any live process failed to return to
+// its exact recorded origin.
+func (r ProcessRestoreResult) HasIncompleteRestore() bool {
+	return r.Count(ProcessRestoreRecovery)+r.Count(ProcessRestoreFailed) > 0
+}
+
 // ProcessOriginUnavailableError reports a process that reconciliation cannot
 // restore without guessing a destination. The process remains constrained.
 type ProcessOriginUnavailableError struct {
@@ -480,12 +525,15 @@ func (m *Manager) captureProcessOriginsExpected(
 			alreadyPresent++
 			continue
 		}
+		if m.isRecoveryPath(currentFilesystemPath) {
+			continue
+		}
 		movable = append(movable, pid)
 		startTimes[pid] = identity.StartTime
 		if existing, ok := next[pid]; ok && existing.StartTime == identity.StartTime {
 			continue
 		}
-		if !pathWithin(currentFilesystemPath, basePath) || m.isRecoveryPath(currentFilesystemPath) {
+		if !pathWithin(currentFilesystemPath, basePath) {
 			setOrigin(m.newProcessOrigin(identity, uid, currentPath))
 			continue
 		}
@@ -521,7 +569,19 @@ func (m *Manager) moveProcessBatchExpected(
 	destination string,
 	expectedStartTimes map[int]uint64,
 ) ([]int, ProcessMoveResult, map[int]error, map[int]bool, error) {
+	if !m.EnforcementStatus().migrationAllowed() {
+		result := ProcessMoveResult{
+			Candidates:              len(pids),
+			SystemdOwnershipRefused: len(pids),
+		}
+		return nil, result, nil, nil, &SystemdOwnershipPreservationError{CandidateCount: len(pids)}
+	}
 	allowed, result := m.filterPIDNamespaceCandidates(pids)
+	allowed, stranded, err := m.filterRecoveryIngressCandidates(allowed)
+	result.RecoveryStranded += stranded
+	if err != nil {
+		return nil, result, nil, nil, err
+	}
 	movable, capturedStartTimes, reused, alreadyPresent, newlyCaptured, err := m.captureProcessOriginsExpected(allowed, uid, destination, expectedStartTimes)
 	result.AlreadyPresent = alreadyPresent
 	result.Reused = len(reused)
@@ -548,6 +608,20 @@ func (m *Manager) moveProcessBatchExpected(
 			reused[pid] = true
 			disappeared[pid] = true
 			result.Reused++
+			continue
+		}
+		currentPath, currentPathErr := m.readUnifiedCgroupPath(pid)
+		if currentPathErr != nil {
+			if os.IsNotExist(currentPathErr) {
+				disappeared[pid] = true
+				result.Disappeared++
+			} else {
+				moveErrors[pid] = fmt.Errorf("failed to revalidate cgroup before ingress: %w", currentPathErr)
+			}
+			continue
+		}
+		if m.isRecoveryPath(m.cgroupPathOnFilesystem(currentPath)) {
+			result.RecoveryStranded++
 			continue
 		}
 		reason, namespaceErr := m.verifyPIDNamespaceIngress(pid)
@@ -577,6 +651,25 @@ func (m *Manager) moveProcessBatchExpected(
 		return moved, result, moveErrors, reused, fmt.Errorf("failed to remove origins for exited or reused processes: %w", err)
 	}
 	return moved, result, moveErrors, reused, nil
+}
+
+func (m *Manager) filterRecoveryIngressCandidates(pids []int) ([]int, int, error) {
+	allowed := make([]int, 0, len(pids))
+	stranded := 0
+	for _, pid := range pids {
+		currentPath, err := m.readUnifiedCgroupPath(pid)
+		switch {
+		case os.IsNotExist(err):
+			allowed = append(allowed, pid)
+		case err != nil:
+			return nil, stranded, fmt.Errorf("failed to resolve current cgroup for PID %d before ingress: %w", pid, err)
+		case m.isRecoveryPath(m.cgroupPathOnFilesystem(currentPath)):
+			stranded++
+		default:
+			allowed = append(allowed, pid)
+		}
+	}
+	return allowed, stranded, nil
 }
 
 func (m *Manager) ensureRecoveryCgroup(uid int, normalQuota string) (string, error) {
@@ -610,7 +703,7 @@ func (m *Manager) writePIDToCgroup(cgroupProcsFile string, pid int) error {
 }
 
 func (m *Manager) buildRestorePlan(uid int, pids []int, normalQuota string) ([]processRestore, map[int]bool, error) {
-	plans, processedOrigins, _, err := m.buildRestorePlanExpected(uid, pids, normalQuota, nil, "", true)
+	plans, processedOrigins, _, _, err := m.buildRestorePlanExpected(uid, pids, normalQuota, nil, "", true)
 	return plans, processedOrigins, err
 }
 
@@ -621,10 +714,11 @@ func (m *Manager) buildRestorePlanExpected(
 	expectedStartTimes map[int]uint64,
 	expectedSource string,
 	allowRecovery bool,
-) ([]processRestore, map[int]bool, map[int]bool, error) {
+) ([]processRestore, map[int]bool, map[int]bool, map[int]ProcessRestoreOutcome, error) {
 	origins := m.snapshotProcessOrigins()
 	processedOrigins := make(map[int]bool)
 	reused := make(map[int]bool)
+	preliminary := make(map[int]ProcessRestoreOutcome)
 	plans := make([]processRestore, 0, len(pids))
 	var recoveryPath string
 	var planErrors []error
@@ -633,27 +727,33 @@ func (m *Manager) buildRestorePlanExpected(
 		identity, err := m.readProcessIdentity(pid)
 		if os.IsNotExist(err) {
 			processedOrigins[pid] = true
+			preliminary[pid] = ProcessRestoreOutcome{PID: pid, Disposition: ProcessRestoreDisappeared}
 			continue
 		}
 		if err != nil {
+			preliminary[pid] = ProcessRestoreOutcome{PID: pid, Disposition: ProcessRestoreFailed}
 			planErrors = append(planErrors, fmt.Errorf("failed to identify PID %d before restore: %w", pid, err))
 			continue
 		}
 		if expected, ok := expectedStartTimes[pid]; ok && identity.StartTime != expected {
 			reused[pid] = true
+			preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: expected, Disposition: ProcessRestoreDisappeared}
 			continue
 		}
 		if expectedSource != "" {
 			currentPath, currentErr := m.readUnifiedCgroupPath(pid)
 			if os.IsNotExist(currentErr) {
 				processedOrigins[pid] = true
+				preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreDisappeared}
 				continue
 			}
 			if currentErr != nil {
+				preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreFailed}
 				planErrors = append(planErrors, fmt.Errorf("failed to read cgroup for PID %d before restore: %w", pid, currentErr))
 				continue
 			}
 			if filepath.Clean(m.cgroupPathOnFilesystem(currentPath)) != filepath.Clean(expectedSource) {
+				preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreDisappeared}
 				continue
 			}
 		}
@@ -678,6 +778,7 @@ func (m *Manager) buildRestorePlanExpected(
 			if _, err := os.Stat(originFilesystemPath); err == nil {
 				destination = originFilesystemPath
 			} else if !os.IsNotExist(err) {
+				preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreFailed}
 				planErrors = append(planErrors, fmt.Errorf("failed to stat original cgroup %s for PID %d: %w", originFilesystemPath, pid, err))
 				continue
 			}
@@ -686,12 +787,14 @@ func (m *Manager) buildRestorePlanExpected(
 		recovery := destination == ""
 		if recovery {
 			if !allowRecovery {
+				preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreFailed}
 				planErrors = append(planErrors, &ProcessOriginUnavailableError{PID: pid, UID: uid})
 				continue
 			}
 			if recoveryPath == "" {
 				recoveryPath, err = m.ensureRecoveryCgroup(uid, normalQuota)
 				if err != nil {
+					preliminary[pid] = ProcessRestoreOutcome{PID: pid, StartTime: identity.StartTime, Disposition: ProcessRestoreFailed}
 					planErrors = append(planErrors, fmt.Errorf("prepare recovery cgroup for PID %d: %w", pid, err))
 					continue
 				}
@@ -706,12 +809,12 @@ func (m *Manager) buildRestorePlanExpected(
 			Recovery:    recovery || m.isRecoveryPath(destination),
 		})
 	}
-	return plans, processedOrigins, reused, errors.Join(planErrors...)
+	return plans, processedOrigins, reused, preliminary, errors.Join(planErrors...)
 }
 
 func (m *Manager) restoreProcesses(uid int, pids []int, normalQuota string) (bool, error) {
-	_, usedRecovery, _, err := m.restoreProcessesExpected(uid, pids, normalQuota, nil, "", true)
-	return usedRecovery, err
+	result, _, err := m.restoreProcessesExpectedResult(uid, pids, normalQuota, nil, "", true)
+	return result.Count(ProcessRestoreRecovery) > 0, err
 }
 
 func (m *Manager) restoreProcessesExpected(
@@ -722,7 +825,7 @@ func (m *Manager) restoreProcessesExpected(
 	expectedSource string,
 	allowRecovery bool,
 ) (int, bool, map[int]bool, error) {
-	plans, processedOrigins, reused, planErr := m.buildRestorePlanExpected(
+	result, reused, err := m.restoreProcessesExpectedResult(
 		uid,
 		pids,
 		normalQuota,
@@ -730,8 +833,38 @@ func (m *Manager) restoreProcessesExpected(
 		expectedSource,
 		allowRecovery,
 	)
-	restored := 0
-	usedRecovery := false
+	return result.Count(ProcessRestoreExactOrigin) + result.Count(ProcessRestoreRecovery),
+		result.Count(ProcessRestoreRecovery) > 0,
+		reused,
+		err
+}
+
+func (m *Manager) restoreProcessesExpectedResult(
+	uid int,
+	pids []int,
+	normalQuota string,
+	expectedStartTimes map[int]uint64,
+	expectedSource string,
+	allowRecovery bool,
+) (ProcessRestoreResult, map[int]bool, error) {
+	plans, processedOrigins, reused, preliminary, planErr := m.buildRestorePlanExpected(
+		uid,
+		pids,
+		normalQuota,
+		expectedStartTimes,
+		expectedSource,
+		allowRecovery,
+	)
+	result := ProcessRestoreResult{Outcomes: make([]ProcessRestoreOutcome, 0, len(pids))}
+	planned := make(map[int]bool, len(plans))
+	for _, plan := range plans {
+		planned[plan.PID] = true
+	}
+	for _, pid := range pids {
+		if outcome, ok := preliminary[pid]; ok && !planned[pid] {
+			result.Outcomes = append(result.Outcomes, outcome)
+		}
+	}
 	recoveryPath := ""
 	var restoreErrors []error
 	if planErr != nil {
@@ -742,8 +875,10 @@ func (m *Manager) restoreProcessesExpected(
 		switch {
 		case os.IsNotExist(identityErr):
 			processedOrigins[plan.PID] = true
+			result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreDisappeared})
 			continue
 		case identityErr != nil:
+			result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreFailed})
 			restoreErrors = append(restoreErrors, fmt.Errorf(
 				"failed to revalidate PID %d before restore: %w",
 				plan.PID,
@@ -753,15 +888,18 @@ func (m *Manager) restoreProcessesExpected(
 		case identity.StartTime != plan.StartTime:
 			reused[plan.PID] = true
 			processedOrigins[plan.PID] = true
+			result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreDisappeared})
 			continue
 		}
 		if expectedSource != "" {
 			currentPath, currentErr := m.readUnifiedCgroupPath(plan.PID)
 			if os.IsNotExist(currentErr) {
 				processedOrigins[plan.PID] = true
+				result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreDisappeared})
 				continue
 			}
 			if currentErr != nil {
+				result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreFailed})
 				restoreErrors = append(restoreErrors, fmt.Errorf(
 					"failed to revalidate cgroup for PID %d before restore: %w",
 					plan.PID,
@@ -770,6 +908,8 @@ func (m *Manager) restoreProcessesExpected(
 				continue
 			}
 			if filepath.Clean(m.cgroupPathOnFilesystem(currentPath)) != filepath.Clean(expectedSource) {
+				processedOrigins[plan.PID] = true
+				result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreDisappeared})
 				continue
 			}
 		}
@@ -789,15 +929,20 @@ func (m *Manager) restoreProcessesExpected(
 		}
 		if errors.Is(err, syscall.ESRCH) {
 			processedOrigins[plan.PID] = true
+			result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreDisappeared})
 			continue
 		}
 		if err != nil {
+			result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: ProcessRestoreFailed})
 			restoreErrors = append(restoreErrors, fmt.Errorf("failed to restore PID %d to %s: %w", plan.PID, destination, err))
 			continue
 		}
 		processedOrigins[plan.PID] = true
-		restored++
-		usedRecovery = usedRecovery || plan.Recovery
+		disposition := ProcessRestoreExactOrigin
+		if plan.Recovery {
+			disposition = ProcessRestoreRecovery
+		}
+		result.Outcomes = append(result.Outcomes, ProcessRestoreOutcome{PID: plan.PID, StartTime: plan.StartTime, Disposition: disposition})
 	}
 
 	if err := m.removeProcessOrigins(processedOrigins); err != nil {
@@ -807,7 +952,7 @@ func (m *Manager) restoreProcessesExpected(
 		restoreErrors = append(restoreErrors, fmt.Errorf("failed to prune process origin state after restore: %w", err))
 	}
 	if len(restoreErrors) > 0 {
-		return restored, usedRecovery, reused, errors.Join(restoreErrors...)
+		return result, reused, errors.Join(restoreErrors...)
 	}
-	return restored, usedRecovery, reused, nil
+	return result, reused, nil
 }

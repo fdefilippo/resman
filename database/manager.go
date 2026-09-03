@@ -52,6 +52,10 @@ type UserMetricsRecord struct {
 	LeafCPUUsageUsecDelta             *uint64
 	PIDNamespaceMismatchCount         int
 	PIDNamespaceUnavailableCount      int
+	SystemdOwnershipRefusedCount      int
+	RecoveryProcessCount              int
+	RestoreFailedProcessCount         int
+	StrandedProcessCount              int
 	EnforceableProcessCount           int
 	RAMCgroupUsageBytes               *uint64
 	RAMCoverage                       *string
@@ -151,7 +155,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 4
+	metricsSchemaVersion   = 5
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
 							  uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -159,6 +163,8 @@ const (
 							  configured_cpu_class, cpu_points_lifecycle_state, applied_cpu_class,
 							  applied_cpu_weight, cpu_weight, leaf_cpu_usage_usec_delta,
 							  pid_namespace_mismatch_count, pid_namespace_unavailable_count,
+							  systemd_ownership_refused_count, recovery_process_count,
+							  restore_failed_process_count, stranded_process_count,
 							  enforceable_process_count, ram_cgroup_usage_bytes, ram_coverage,
 							  ram_coverage_incomplete_process_count, ram_swap_disabled,
 							  memory_high_limit, memory_max_limit, memory_swap_max,
@@ -168,7 +174,7 @@ const (
 							  eligible_for_ram, eligible_for_io, cpu_limit_requested,
 							  cpu_limit_active, ram_limit_requested, ram_limit_active,
 							  io_limit_requested, io_limit_active)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	insertSystemMetricsQuery = `
 	INSERT INTO system_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
@@ -299,13 +305,17 @@ func (m *DatabaseManager) InitSchema() error {
         cpu_quota TEXT,
 		configured_guarantee_points INTEGER,
 		configured_cpu_class TEXT NOT NULL CHECK (configured_cpu_class IN ('guaranteed', 'best_effort')),
-		cpu_points_lifecycle_state TEXT NOT NULL CHECK (cpu_points_lifecycle_state IN ('ineligible', 'eligible_inactive', 'applied', 'namespace_rejected', 'failed', 'released')),
+		cpu_points_lifecycle_state TEXT NOT NULL CHECK (cpu_points_lifecycle_state IN ('ineligible', 'eligible_inactive', 'applied', 'namespace_rejected', 'ownership_rejected', 'recovery', 'stranded', 'failed', 'released')),
 		applied_cpu_class TEXT CHECK (applied_cpu_class IS NULL OR applied_cpu_class IN ('guaranteed', 'best_effort')),
 		applied_cpu_weight INTEGER,
 		cpu_weight INTEGER,
 		leaf_cpu_usage_usec_delta INTEGER,
 		pid_namespace_mismatch_count INTEGER NOT NULL,
 		pid_namespace_unavailable_count INTEGER NOT NULL,
+		systemd_ownership_refused_count INTEGER NOT NULL,
+		recovery_process_count INTEGER NOT NULL,
+		restore_failed_process_count INTEGER NOT NULL,
+		stranded_process_count INTEGER NOT NULL,
 		enforceable_process_count INTEGER NOT NULL,
 		ram_cgroup_usage_bytes INTEGER,
 		ram_coverage TEXT CHECK (ram_coverage IS NULL OR ram_coverage IN ('complete', 'partial')),
@@ -435,7 +445,9 @@ func (m *DatabaseManager) validateUserMetricsSchema() error {
 		"sample_epoch_id", "interval_start", "interval_end",
 		"configured_guarantee_points", "configured_cpu_class", "cpu_points_lifecycle_state",
 		"applied_cpu_class", "applied_cpu_weight", "cpu_weight", "leaf_cpu_usage_usec_delta",
-		"pid_namespace_mismatch_count", "pid_namespace_unavailable_count", "enforceable_process_count",
+		"pid_namespace_mismatch_count", "pid_namespace_unavailable_count",
+		"systemd_ownership_refused_count", "recovery_process_count",
+		"restore_failed_process_count", "stranded_process_count", "enforceable_process_count",
 		"ram_cgroup_usage_bytes", "ram_coverage", "ram_coverage_incomplete_process_count",
 		"ram_swap_disabled", "memory_high_limit", "memory_max_limit", "memory_swap_max",
 		"memory_high_events_delta", "memory_max_events_delta", "memory_oom_events_delta",
@@ -702,6 +714,10 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 				record.LeafCPUUsageUsecDelta,
 				record.PIDNamespaceMismatchCount,
 				record.PIDNamespaceUnavailableCount,
+				record.SystemdOwnershipRefusedCount,
+				record.RecoveryProcessCount,
+				record.RestoreFailedProcessCount,
+				record.StrandedProcessCount,
 				record.EnforceableProcessCount,
 				record.RAMCgroupUsageBytes,
 				record.RAMCoverage,
@@ -767,6 +783,8 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 		   configured_cpu_class, cpu_points_lifecycle_state, applied_cpu_class,
 		   applied_cpu_weight, cpu_weight, leaf_cpu_usage_usec_delta,
 		   pid_namespace_mismatch_count, pid_namespace_unavailable_count,
+		   systemd_ownership_refused_count, recovery_process_count,
+		   restore_failed_process_count, stranded_process_count,
 		   enforceable_process_count, ram_cgroup_usage_bytes, ram_coverage,
 		   ram_coverage_incomplete_process_count, ram_swap_disabled,
 		   memory_high_limit, memory_max_limit, memory_swap_max,
@@ -797,7 +815,9 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 			&r.CPUQuota, &r.ConfiguredGuaranteePoints, &r.ConfiguredCPUClass,
 			&r.CPUPointsLifecycleState, &r.AppliedCPUClass, &r.AppliedCPUWeight,
 			&r.CPUWeight, &r.LeafCPUUsageUsecDelta, &r.PIDNamespaceMismatchCount,
-			&r.PIDNamespaceUnavailableCount, &r.EnforceableProcessCount,
+			&r.PIDNamespaceUnavailableCount, &r.SystemdOwnershipRefusedCount,
+			&r.RecoveryProcessCount, &r.RestoreFailedProcessCount,
+			&r.StrandedProcessCount, &r.EnforceableProcessCount,
 			&r.RAMCgroupUsageBytes, &r.RAMCoverage, &r.RAMCoverageIncompleteProcessCount,
 			&r.RAMSwapDisabled, &r.MemoryHighLimit, &r.MemoryMaxLimit, &r.MemorySwapMax,
 			&r.MemoryHighEventsDelta, &r.MemoryMaxEventsDelta, &r.MemoryOOMEventsDelta,

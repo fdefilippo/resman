@@ -229,6 +229,41 @@ func (m *mockCgroupManager) GetCgroupInfo(uid int) (cgroup.CgroupInfo, error) {
 }
 func (m *mockCgroupManager) GetCreatedCgroups() []int { return nil }
 
+type observationOnlyMutationCgroupManager struct {
+	mockCgroupManager
+	mutations []string
+}
+
+func (m *observationOnlyMutationCgroupManager) EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error) {
+	m.mutations = append(m.mutations, "ensure CPU Points hierarchy")
+	return cgroup.CPUPointsHierarchy{}, nil
+}
+
+func (m *observationOnlyMutationCgroupManager) CreateUserCgroup(int) error {
+	m.mutations = append(m.mutations, "create user cgroup")
+	return nil
+}
+
+func (m *observationOnlyMutationCgroupManager) EnsureUserCgroupPlacement(int, string, string) (string, cgroup.ProcessMoveResult, error) {
+	m.mutations = append(m.mutations, "ensure user placement")
+	return "", cgroup.ProcessMoveResult{}, nil
+}
+
+func (m *observationOnlyMutationCgroupManager) ApplyRAMLimitWithHigh(int, string, string) error {
+	m.mutations = append(m.mutations, "apply RAM limit")
+	return nil
+}
+
+func (m *observationOnlyMutationCgroupManager) ApplyRAMLimitWithHighAndSwapDisabled(int, string, string) error {
+	m.mutations = append(m.mutations, "apply RAM and swap limit")
+	return nil
+}
+
+func (m *observationOnlyMutationCgroupManager) ApplyIOLimit(int, string, string, int, int, string) error {
+	m.mutations = append(m.mutations, "apply IO limit")
+	return nil
+}
+
 type moveResultCgroupManager struct {
 	mockCgroupManager
 	moveResult cgroup.ProcessMoveResult
@@ -491,6 +526,7 @@ type mockPrometheusExporter struct {
 	limitsActivated            int
 	limitsDeactivated          int
 	ingressSkips               []cgroup.ProcessMoveResult
+	restoreResults             []cgroup.ProcessRestoreResult
 }
 
 func (m *mockPrometheusExporter) UpdateSystemSnapshot(snapshot metrics.SystemExporterMetrics) {
@@ -528,6 +564,12 @@ func (m *mockPrometheusExporter) RecordCgroupIngressSkips(result cgroup.ProcessM
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ingressSkips = append(m.ingressSkips, result)
+}
+
+func (m *mockPrometheusExporter) RecordProcessRestoreResult(result cgroup.ProcessRestoreResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.restoreResults = append(m.restoreResults, result)
 }
 
 func (m *mockPrometheusExporter) RecordLimitHookExecution(hookType metrics.LimitHookType, outcome metrics.LimitHookOutcome) {
@@ -957,7 +999,7 @@ func TestCPUPointsAdmissionAndDeparturePreserveAggregateOrdering(t *testing.T) {
 	}
 
 	cgroups.events = nil
-	if released, err := manager.releaseCPUPointsUser(1000, false); err != nil || !released {
+	if released, _, err := manager.releaseCPUPointsUser(1000, false); err != nil || !released {
 		t.Fatalf("releaseCPUPointsUser() released=%t error=%v", released, err)
 	}
 	if !reflect.DeepEqual(cgroups.events, []string{"release:1000:guaranteed", "domain:1"}) {
@@ -1026,7 +1068,7 @@ func TestCPUPointsRAMActiveTransitionsFailBeforeCgroupMutation(t *testing.T) {
 		class: cpupoints.AllocationClassBestEffort, weight: weight,
 		domainPath: hierarchy.BestEffort, leafPath: hierarchy.BestEffort + "/user_1000",
 	}
-	if released, err := manager.releaseCPUPointsUser(1000, false); released || !errors.As(err, &transitionErr) {
+	if released, _, err := manager.releaseCPUPointsUser(1000, false); released || !errors.As(err, &transitionErr) {
 		t.Fatalf("CPU-to-origin released=%t error=%v, want typed deferred transition", released, err)
 	}
 	if len(cgroups.events) != 0 {
@@ -2381,6 +2423,68 @@ func TestUserLimitStateSeparatesRequestedFromObservedEnforcement(t *testing.T) {
 			t.Fatalf("RAM state = %+v, want requested=true active=false", state)
 		}
 	})
+}
+
+func TestSystemdObservationOnlyModePreservesIntentWithoutAnyCgroupMutation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.IOEnabled = true
+	cgroups := &observationOnlyMutationCgroupManager{}
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(
+		cfg,
+		&mockMetricsCollector{},
+		cgroups,
+		exporter,
+		WithEnforcementStatus(cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+			Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	sample := &SystemMetrics{
+		CPUEligibleUsers: []int{1000},
+		RAMEligibleUsers: []int{1000},
+		IOEligibleUsers:  []int{1000},
+		UserMetrics: map[int]*metrics.UserMetrics{
+			1000: {
+				UID:      1000,
+				Username: "alice",
+				EnforceableUsage: metrics.ProcessSetMetrics{
+					ProcessCount: 3,
+				},
+			},
+		},
+	}
+
+	if err := manager.executeDecision("ACTIVATE_LIMITS", sample); err != nil {
+		t.Fatalf("executeDecision() error: %v", err)
+	}
+	if len(cgroups.mutations) != 0 {
+		t.Fatalf("observation-only activation performed cgroup mutations: %v", cgroups.mutations)
+	}
+	if !manager.requestedCPUUsers[1000] || manager.activeUsers[1000] {
+		t.Fatalf("CPU requested=%t active=%t, want true/false", manager.requestedCPUUsers[1000], manager.activeUsers[1000])
+	}
+	resourceState := manager.resourceLimits[1000]
+	if !resourceState.ram || resourceState.ramApplied || !resourceState.io || resourceState.ioApplied {
+		t.Fatalf("resource state = %+v, want RAM/IO requested but unapplied", resourceState)
+	}
+	event := manager.cpuPointsLifecycleEvents[1000]
+	if event.state != metrics.CPUPointsLifecycleOwnershipRejected || event.systemdOwnershipRefused != 3 {
+		t.Fatalf("lifecycle event = %+v", event)
+	}
+	if len(exporter.ingressSkips) != 1 || exporter.ingressSkips[0].SystemdOwnershipRefused != 3 {
+		t.Fatalf("ingress accounting = %+v", exporter.ingressSkips)
+	}
+	status := manager.GetStatus()
+	if status.EnforcementMode != cgroup.EnforcementModeObservationOnlySystemd ||
+		status.EnforcementReason != cgroup.EnforcementReasonSystemdOwnsHostWorkloads ||
+		status.MigrationEnforcementAvailable || status.AnyLimitsActive || status.ActivelyLimitedUsersCount != 0 {
+		t.Fatalf("runtime status = %+v", status)
+	}
 }
 
 func TestMakeDecisionDeactivate(t *testing.T) {

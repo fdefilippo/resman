@@ -21,8 +21,13 @@ func (c *persistenceMetricsCollector) GetDBWriter() *resmanmetrics.DBWriter { re
 
 type persistenceCgroupManager struct {
 	mockCgroupManager
-	cpu    map[string]cgroup.CPUPointsNodeSnapshot
-	memory map[int]cgroup.MemoryAccountingSnapshot
+	cpu      map[string]cgroup.CPUPointsNodeSnapshot
+	memory   map[int]cgroup.MemoryAccountingSnapshot
+	recovery cgroup.RecoverySnapshot
+}
+
+func (m *persistenceCgroupManager) RecoverySnapshot() (cgroup.RecoverySnapshot, error) {
+	return m.recovery, nil
 }
 
 func (m *persistenceCgroupManager) GetCPUPointsNodeSnapshot(path string) (cgroup.CPUPointsNodeSnapshot, error) {
@@ -338,6 +343,40 @@ func TestPersistenceLifecycleDerivesCPUIneligibleFromTheDecisionSample(t *testin
 	}
 }
 
+func TestPersistenceAndRuntimeStatusKeepRecoveryOccupantsStranded(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{})
+	cgroups := &persistenceCgroupManager{
+		cpu:    make(map[string]cgroup.CPUPointsNodeSnapshot),
+		memory: make(map[int]cgroup.MemoryAccountingSnapshot),
+		recovery: cgroup.RecoverySnapshot{Occupants: []cgroup.RecoveryOccupant{
+			{UID: 1000, PID: 42, StartTime: 9001},
+		}},
+	}
+	manager := testCPUPointsManagerForReload(t, policy, cgroups)
+	manager.metricsCollector = &persistenceMetricsCollector{writer: resmanmetrics.NewDBWriter(nil, 0)}
+	identity := cgroup.CgroupIdentity{Device: 8, Inode: 80}
+	for _, path := range []string{manager.cpuPointsHierarchy.Parent, manager.cpuPointsHierarchy.Guaranteed, manager.cpuPointsHierarchy.BestEffort} {
+		cgroups.cpu[path] = cpuPersistenceSnapshot(identity, 1, 1, 0, 0, "max 100000", 100)
+	}
+
+	sample := persistenceSample(time.Now().UTC())
+	manager.collectPersistenceInterval(sample)
+	if got := sample.PersistenceUsers[1000]; got.LifecycleState != resmanmetrics.CPUPointsLifecycleStranded || got.StrandedProcessCount != 1 {
+		t.Fatalf("persisted recovery state = %+v", got)
+	}
+	user := sample.CPUPointsUsers[1000]
+	if user.LifecycleState != resmanmetrics.CPUPointsLifecycleStranded || user.AppliedToProcesses || user.StrandedProcessCount != 1 {
+		t.Fatalf("public CPU Points user = %+v", user)
+	}
+	status := manager.GetStatus()
+	if len(status.RecoveryOccupants) != 1 || status.RecoveryOccupants[0] != cgroups.recovery.Occupants[0] || status.AnyLimitsActive {
+		t.Fatalf("runtime recovery status = %+v", status)
+	}
+}
+
 func TestRejectedActiveClassReloadKeepsCandidateOutOfPersistedState(t *testing.T) {
 	oldPolicy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
@@ -405,7 +444,7 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 	manager.programmedGuaranteePoints = 300
 	manager.resourceLimits[1000] = userResourceLimitState{ramApplied: true}
 	cgroups.memory[1000] = memoryPersistenceSnapshot(identity, 8<<20, 0, 0, 0, 0)
-	if released, err := manager.releaseCPUPointsUser(1000, false); released || err == nil {
+	if released, _, err := manager.releaseCPUPointsUser(1000, false); released || err == nil {
 		t.Fatalf("RAM-active release = %t, %v; want deferred failure", released, err)
 	}
 	sample := persistenceSample(time.Now().UTC())
@@ -420,7 +459,7 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 	}
 
 	manager.resourceLimits[1000] = userResourceLimitState{}
-	if released, err := manager.releaseCPUPointsUser(1000, false); !released || err != nil {
+	if released, _, err := manager.releaseCPUPointsUser(1000, false); !released || err != nil {
 		t.Fatalf("release retry = %t, %v; want success", released, err)
 	}
 	retried := persistenceSample(sample.Timestamp.Add(time.Second))
@@ -430,7 +469,17 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 		t.Fatalf("successful retry did not round-trip as released: %+v", releasedUser)
 	}
 
-	manager.recordCPUPointsReleaseOutcome(2000, true, nil)
+	recoveryResult := cgroup.ProcessRestoreResult{Outcomes: []cgroup.ProcessRestoreOutcome{{
+		PID: 42, StartTime: 9001, Disposition: cgroup.ProcessRestoreRecovery,
+	}}}
+	manager.recordCPUPointsReleaseOutcome(1000, true, recoveryResult, nil)
+	recovered := persistenceSample(retried.Timestamp.Add(time.Second))
+	manager.collectPersistenceInterval(recovered)
+	if got := recovered.PersistenceUsers[1000]; got.LifecycleState != resmanmetrics.CPUPointsLifecycleRecovery || got.RecoveryProcessCount != 1 {
+		t.Fatalf("recovery placement state = %+v", got)
+	}
+
+	manager.recordCPUPointsReleaseOutcome(2000, true, cgroup.ProcessRestoreResult{}, nil)
 	disappeared := &SystemMetrics{Timestamp: sample.Timestamp.Add(2 * time.Second), UserMetrics: map[int]*resmanmetrics.UserMetrics{}}
 	manager.collectPersistenceInterval(disappeared)
 	if _, exists := disappeared.PersistenceUsers[2000]; exists {
@@ -560,6 +609,22 @@ func TestCPUPointsAdmissionLifecyclePreservesBoundedNamespaceCoverage(t *testing
 	event = manager.cpuPointsLifecycleEvents[1001]
 	if event.state != resmanmetrics.CPUPointsLifecycleNamespaceRejected || event.pidNamespaceUnavailable != 1 {
 		t.Fatalf("namespace-rejected event = %+v", event)
+	}
+
+	manager.recordCPUPointsAdmissionOutcome(1002, cgroup.ProcessMoveResult{
+		Candidates: 1, SystemdOwnershipRefused: 1,
+	}, fmt.Errorf("ownership preserved"))
+	event = manager.cpuPointsLifecycleEvents[1002]
+	if event.state != resmanmetrics.CPUPointsLifecycleOwnershipRejected || event.systemdOwnershipRefused != 1 {
+		t.Fatalf("ownership-rejected event = %+v", event)
+	}
+
+	manager.recordCPUPointsAdmissionOutcome(1003, cgroup.ProcessMoveResult{
+		Candidates: 1, RecoveryStranded: 1,
+	}, nil)
+	event = manager.cpuPointsLifecycleEvents[1003]
+	if event.state != resmanmetrics.CPUPointsLifecycleStranded {
+		t.Fatalf("stranded event = %+v", event)
 	}
 
 	manager.recordCPUPointsAdmissionOutcome(1000, cgroup.ProcessMoveResult{AlreadyPresent: 2}, nil)

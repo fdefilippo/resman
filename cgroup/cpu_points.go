@@ -37,6 +37,9 @@ func (h CPUPointsHierarchy) DomainPath(class cpupoints.AllocationClass) (string,
 // EnsureCPUPointsHierarchy creates and verifies the finite parent and its two
 // internal scheduling domains. No process is ever placed in an internal node.
 func (m *Manager) EnsureCPUPointsHierarchy(parentQuota cpupoints.ParentQuota, bestEffortWeight cpupoints.KernelCPUWeight) (CPUPointsHierarchy, error) {
+	if err := m.requireMigrationEnforcement(0); err != nil {
+		return CPUPointsHierarchy{}, err
+	}
 	parent, err := m.CreateSharedCgroup()
 	if err != nil {
 		return CPUPointsHierarchy{}, err
@@ -126,6 +129,12 @@ func (m *Manager) EnsureCPUPointsUserPlacement(uid int, domainPath string, weigh
 // ReleaseCPUPointsUser restores one leaf's processes and removes the leaf.
 func (m *Manager) ReleaseCPUPointsUser(uid int, domainPath string) error {
 	return m.ReleaseUserFromSharedCgroup(uid, domainPath, normalCPUQuota)
+}
+
+// ReleaseCPUPointsUserWithResult releases a CPU Points leaf while preserving
+// the per-process restore disposition.
+func (m *Manager) ReleaseCPUPointsUserWithResult(uid int, domainPath string) (ProcessRestoreResult, error) {
+	return m.ReleaseUserFromSharedCgroupWithResult(uid, domainPath, normalCPUQuota)
 }
 
 // RemoveCPUPointsHierarchy removes empty domains and then the empty parent.

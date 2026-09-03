@@ -633,6 +633,14 @@ type blockIOCounterSample struct {
 
 func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy, normalQuota string) {
 	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
+	if needsBlockIO && m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+		metrics.IOBlockIOPSUnavailableUsers += len(metrics.IOEligibleUsers)
+		m.mu.Lock()
+		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)
+		m.blockIOObservedUsers = make(map[int]bool)
+		m.mu.Unlock()
+		return
+	}
 	desired := make(map[int]bool)
 	if needsBlockIO {
 		for _, uid := range metrics.IOEligibleUsers {
@@ -680,7 +688,7 @@ func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime ti
 		}
 		_, ingress, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota)
 		m.recordCgroupIngressSkips(ingress)
-		if err == nil && ingress.NamespaceSkipped() > 0 && !ingress.Applied() {
+		if err == nil && ingress.IngressSkipped() > 0 && !ingress.Applied() {
 			err = cgroupIngressNoopError(uid, ingress)
 		}
 		if err != nil {
@@ -784,12 +792,17 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	}
 
 	summary := m.getEnforcementSummary()
+	m.mu.RLock()
+	recoveryStrandedProcesses := len(m.recoverySnapshot.Occupants)
+	m.mu.RUnlock()
 	var cpuPoints *resmanmetrics.CPUPointsSystemSnapshot
 	if metrics.CPUPointsUsers != nil {
 		cpuPoints = &metrics.CPUPointsSystem
 	}
 
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		EnforcementMode:                              m.enforcementStatus.Mode,
+		RecoveryStrandedProcesses:                    recoveryStrandedProcesses,
 		TotalCPUUsage:                                metrics.TotalCPUUsage,
 		TotalCores:                                   metrics.TotalCores,
 		CPUPoints:                                    cpuPoints,

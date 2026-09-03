@@ -13,8 +13,10 @@ import (
 type PIDNamespaceSkipReason string
 
 const (
-	PIDNamespaceMismatch    PIDNamespaceSkipReason = "pid_namespace_mismatch"
-	PIDNamespaceUnavailable PIDNamespaceSkipReason = "pid_namespace_unavailable"
+	PIDNamespaceMismatch      PIDNamespaceSkipReason = "pid_namespace_mismatch"
+	PIDNamespaceUnavailable   PIDNamespaceSkipReason = "pid_namespace_unavailable"
+	SystemdOwnershipPreserved PIDNamespaceSkipReason = "systemd_ownership_preserved"
+	RecoveryProcessStranded   PIDNamespaceSkipReason = "recovery_process_stranded"
 )
 
 // ProcessMoveResult describes one bounded ResMan-owned cgroup ingress operation.
@@ -24,6 +26,8 @@ type ProcessMoveResult struct {
 	AlreadyPresent          int
 	PIDNamespaceMismatches  int
 	PIDNamespaceUnavailable int
+	SystemdOwnershipRefused int
+	RecoveryStranded        int
 	Disappeared             int
 	Reused                  int
 	MovedProcesses          []ProcessReference
@@ -48,12 +52,19 @@ func (r ProcessMoveResult) NamespaceSkipped() int {
 	return r.PIDNamespaceMismatches + r.PIDNamespaceUnavailable
 }
 
+// IngressSkipped reports every process kept outside ResMan-owned cgroups.
+func (r ProcessMoveResult) IngressSkipped() int {
+	return r.NamespaceSkipped() + r.SystemdOwnershipRefused + r.RecoveryStranded
+}
+
 func (r *ProcessMoveResult) add(other ProcessMoveResult) {
 	r.Candidates += other.Candidates
 	r.Moved += other.Moved
 	r.AlreadyPresent += other.AlreadyPresent
 	r.PIDNamespaceMismatches += other.PIDNamespaceMismatches
 	r.PIDNamespaceUnavailable += other.PIDNamespaceUnavailable
+	r.SystemdOwnershipRefused += other.SystemdOwnershipRefused
+	r.RecoveryStranded += other.RecoveryStranded
 	r.Disappeared += other.Disappeared
 	r.Reused += other.Reused
 	r.MovedProcesses = append(r.MovedProcesses, other.MovedProcesses...)

@@ -83,6 +83,8 @@ type Manager struct {
 	cpuPointsUserSnapshots    map[int]resmanmetrics.CPUPointsUserSnapshot
 	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
 	cpuPointsDegraded         bool
+	enforcementStatus         cgroup.EnforcementStatus
+	recoverySnapshot          cgroup.RecoverySnapshot
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -144,6 +146,9 @@ type cpuPointsLifecycleEvent struct {
 	state                   resmanmetrics.CPUPointsLifecycleState
 	pidNamespaceMismatches  int
 	pidNamespaceUnavailable int
+	systemdOwnershipRefused int
+	recoveryProcesses       int
+	restoreFailedProcesses  int
 }
 
 // RAMCoverage describes whether a managed leaf accounts for the complete
@@ -190,6 +195,28 @@ func WithCPUPointsRuntime(policy cpupoints.PolicySnapshot, capacity CPUCapacityP
 		}
 		m.cpuPointsPolicy = policy
 		m.cpuCapacity = capacity
+		return nil
+	}
+}
+
+// WithEnforcementStatus installs the immutable host ownership decision.
+func WithEnforcementStatus(status cgroup.EnforcementStatus) ManagerOption {
+	return func(m *Manager) error {
+		switch status.Mode {
+		case cgroup.EnforcementModeMigrationEnabled, cgroup.EnforcementModeObservationOnlySystemd:
+			m.enforcementStatus = status
+			return nil
+		default:
+			return fmt.Errorf("unsupported enforcement mode %q", status.Mode)
+		}
+	}
+}
+
+// WithRecoverySnapshot installs the startup view of processes already stranded
+// in recovery so public status is truthful before the first control cycle.
+func WithRecoverySnapshot(snapshot cgroup.RecoverySnapshot) ManagerOption {
+	return func(m *Manager) error {
+		m.recoverySnapshot = snapshot
 		return nil
 	}
 }
@@ -284,6 +311,7 @@ type PrometheusExporter interface {
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
 	RecordCgroupIngressSkips(result cgroup.ProcessMoveResult)
+	RecordProcessRestoreResult(result cgroup.ProcessRestoreResult)
 	RecordLimitHookExecution(hookType resmanmetrics.LimitHookType, outcome resmanmetrics.LimitHookOutcome)
 	Start(ctx context.Context) error
 	Stop() error
@@ -309,23 +337,27 @@ func NewManager(
 	hookCtx, hookCancel := context.WithCancel(context.Background())
 
 	mgr := &Manager{
-		cfg:                           cfg,
-		logger:                        logger,
-		limitsActive:                  false,
-		limitsAppliedTime:             time.Time{},
-		resourceLimitsActive:          false,
-		resourceLimitsAppliedTime:     time.Time{},
-		requestedCPUUsers:             make(map[int]bool),
-		activeUsers:                   make(map[int]bool),
-		userLimitedAt:                 make(map[int]time.Time),
-		resourceLimits:                make(map[int]userResourceLimitState),
-		sharedCgroupPath:              "",
-		cpuAllocations:                make(map[int]cpuPointsAllocation),
-		ramCoverage:                   make(map[int]ramCoverageState),
-		persistencePreviousCPU:        make(map[string]cgroup.CPUPointsNodeSnapshot),
-		persistencePreviousRAM:        make(map[int]cgroup.MemoryAccountingSnapshot),
-		cpuPointsLifecycleEvents:      make(map[int]cpuPointsLifecycleEvent),
-		cpuPointsUserSnapshots:        make(map[int]resmanmetrics.CPUPointsUserSnapshot),
+		cfg:                       cfg,
+		logger:                    logger,
+		limitsActive:              false,
+		limitsAppliedTime:         time.Time{},
+		resourceLimitsActive:      false,
+		resourceLimitsAppliedTime: time.Time{},
+		requestedCPUUsers:         make(map[int]bool),
+		activeUsers:               make(map[int]bool),
+		userLimitedAt:             make(map[int]time.Time),
+		resourceLimits:            make(map[int]userResourceLimitState),
+		sharedCgroupPath:          "",
+		cpuAllocations:            make(map[int]cpuPointsAllocation),
+		ramCoverage:               make(map[int]ramCoverageState),
+		persistencePreviousCPU:    make(map[string]cgroup.CPUPointsNodeSnapshot),
+		persistencePreviousRAM:    make(map[int]cgroup.MemoryAccountingSnapshot),
+		cpuPointsLifecycleEvents:  make(map[int]cpuPointsLifecycleEvent),
+		cpuPointsUserSnapshots:    make(map[int]resmanmetrics.CPUPointsUserSnapshot),
+		enforcementStatus: cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeMigrationEnabled,
+			Reason: cgroup.EnforcementReasonNoSystemdRuntime,
+		},
 		thresholdTracker:              &ThresholdTracker{},
 		stabilityTracker:              newUserStabilityTracker(),
 		ioThresholdTracker:            &ThresholdTracker{},
@@ -445,21 +477,25 @@ func (m *Manager) isUserLimited(uid int) bool {
 
 // RuntimeStatus is an observed snapshot of current enforcement state.
 type RuntimeStatus struct {
-	CPULimitsActive              bool
-	ResourceLimitsActive         bool
-	AnyLimitsActive              bool
-	CPULimitsAppliedTime         time.Time
-	ResourceLimitsAppliedTime    time.Time
-	ActivelyLimitedUsers         []int
-	ActivelyLimitedUsersCount    int
-	CPUActivelyLimitedUsers      []int
-	CPUActivelyLimitedUsersCount int
-	SharedCgroupPath             string
-	SharedCgroupActive           bool
-	SharedCgroupQuota            string
-	SharedCgroupUserCount        int
-	CPUPoints                    resmanmetrics.CPUPointsSystemSnapshot
-	CPUPointUsers                []resmanmetrics.CPUPointsUserSnapshot
+	EnforcementMode               cgroup.EnforcementMode
+	EnforcementReason             string
+	MigrationEnforcementAvailable bool
+	RecoveryOccupants             []cgroup.RecoveryOccupant
+	CPULimitsActive               bool
+	ResourceLimitsActive          bool
+	AnyLimitsActive               bool
+	CPULimitsAppliedTime          time.Time
+	ResourceLimitsAppliedTime     time.Time
+	ActivelyLimitedUsers          []int
+	ActivelyLimitedUsersCount     int
+	CPUActivelyLimitedUsers       []int
+	CPUActivelyLimitedUsersCount  int
+	SharedCgroupPath              string
+	SharedCgroupActive            bool
+	SharedCgroupQuota             string
+	SharedCgroupUserCount         int
+	CPUPoints                     resmanmetrics.CPUPointsSystemSnapshot
+	CPUPointUsers                 []resmanmetrics.CPUPointsUserSnapshot
 }
 
 type enforcementSummary struct {
@@ -511,20 +547,24 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	summary := m.getEnforcementSummary()
 
 	status := RuntimeStatus{
-		CPULimitsActive:              summary.cpuLimitsActive,
-		ResourceLimitsActive:         summary.resourceLimitsActive,
-		AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
-		CPULimitsAppliedTime:         summary.cpuLimitsAppliedTime,
-		ResourceLimitsAppliedTime:    summary.resourceLimitsAppliedTime,
-		ActivelyLimitedUsers:         summary.activelyLimitedUsers,
-		ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
-		CPUActivelyLimitedUsers:      summary.cpuUsers,
-		CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
-		SharedCgroupPath:             summary.sharedCgroupPath,
-		SharedCgroupActive:           summary.sharedCgroupPath != "" && summary.cpuLimitsActive,
+		EnforcementMode:               m.enforcementStatus.Mode,
+		EnforcementReason:             m.enforcementStatus.Reason,
+		MigrationEnforcementAvailable: m.enforcementStatus.Mode == cgroup.EnforcementModeMigrationEnabled,
+		CPULimitsActive:               summary.cpuLimitsActive,
+		ResourceLimitsActive:          summary.resourceLimitsActive,
+		AnyLimitsActive:               summary.cpuLimitsActive || summary.resourceLimitsActive,
+		CPULimitsAppliedTime:          summary.cpuLimitsAppliedTime,
+		ResourceLimitsAppliedTime:     summary.resourceLimitsAppliedTime,
+		ActivelyLimitedUsers:          summary.activelyLimitedUsers,
+		ActivelyLimitedUsersCount:     len(summary.activelyLimitedUsers),
+		CPUActivelyLimitedUsers:       summary.cpuUsers,
+		CPUActivelyLimitedUsersCount:  len(summary.cpuUsers),
+		SharedCgroupPath:              summary.sharedCgroupPath,
+		SharedCgroupActive:            summary.sharedCgroupPath != "" && summary.cpuLimitsActive,
 	}
 	m.mu.RLock()
 	status.CPUPoints = m.cpuPointsSystemSnapshot
+	status.RecoveryOccupants = append([]cgroup.RecoveryOccupant(nil), m.recoverySnapshot.Occupants...)
 	status.CPUPointUsers = make([]resmanmetrics.CPUPointsUserSnapshot, 0, len(m.cpuPointsUserSnapshots))
 	for _, snapshot := range m.cpuPointsUserSnapshots {
 		status.CPUPointUsers = append(status.CPUPointUsers, snapshot)
