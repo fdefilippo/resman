@@ -98,6 +98,11 @@ finish() {
 	local status=$? cleanup_status=PASS
 	trap - EXIT INT TERM
 	set +e
+	for diagnostic in stdout stderr resman.log; do
+		if [[ -f $work_root/$diagnostic ]]; then
+			cp -- "$work_root/$diagnostic" "$evidence_dir/$diagnostic"
+		fi
+	done
 	[[ -z $resman_pid ]] || kill -TERM "$resman_pid" >/dev/null 2>&1
 	[[ -z $resman_pid ]] || wait "$resman_pid" >/dev/null 2>&1
 	resman_pid=
