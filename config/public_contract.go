@@ -21,9 +21,211 @@ import (
 // default and lifecycle sources of truth.
 type PublicFieldContract struct {
 	Key                    string
+	Kind                   PublicFieldKind
 	Default                string
 	Lifecycle              FieldLifecycle
+	Sensitive              bool
+	Editable               bool
+	Constraint             PublicFieldConstraint
 	EmptyOrDisabledMeaning string
+	Remedy                 string
+}
+
+// PublicFieldKind is the closed wire vocabulary for editor value types.
+type PublicFieldKind string
+
+const (
+	PublicFieldBoolean    PublicFieldKind = "boolean"
+	PublicFieldInteger    PublicFieldKind = "integer"
+	PublicFieldNumber     PublicFieldKind = "number"
+	PublicFieldString     PublicFieldKind = "string"
+	PublicFieldStringList PublicFieldKind = "string_list"
+)
+
+// PublicFieldConstraint describes the scalar parser constraint exposed to
+// independent editors. Cross-field validation remains authoritative in
+// ValidateCandidate and is always run before persistence.
+type PublicFieldConstraint struct {
+	Minimum *float64
+	Maximum *float64
+	Enum    []string
+	Format  string
+}
+
+// ConfigSource is one member of the authoritative source-precedence order.
+type ConfigSource string
+
+const (
+	ConfigSourceDefault     ConfigSource = "default"
+	ConfigSourceFile        ConfigSource = "file"
+	ConfigSourceEnvironment ConfigSource = "environment"
+)
+
+const environmentShadowingRemedy = "Inspect the running service with `systemctl show resman --property=Environment --property=EnvironmentFiles --property=DropInPaths` and `systemctl cat resman`. Modify the authoritative drop-in with `systemctl edit resman`, or modify the referenced environment file or configuration-management source. Reload the systemd unit definition where required, then restart `resman`; `systemctl reload resman` alone cannot change the environment of the running process."
+
+// PublicConfigSourcePrecedence returns the single ordered source contract.
+func PublicConfigSourcePrecedence() []ConfigSource {
+	return []ConfigSource{ConfigSourceDefault, ConfigSourceFile, ConfigSourceEnvironment}
+}
+
+// EnvironmentShadowingRemedy returns the operator procedure shared by the
+// generated reference and MCP editor snapshots.
+func EnvironmentShadowingRemedy() string { return environmentShadowingRemedy }
+
+// ValidatePublicFieldValue parses one serialized editor value with the same
+// handler used by file and environment loading, then runs complete daemon
+// validation. Editors must treat the structured constraint as presentation
+// metadata and this function as the acceptance authority.
+func ValidatePublicFieldValue(key, value string) error {
+	contract, ok := publicFieldContractByKey(key)
+	if !ok {
+		return fmt.Errorf("unknown public configuration key %q", key)
+	}
+	if !contract.Editable {
+		return fmt.Errorf("configuration key %s is not editable through the public editor contract", key)
+	}
+	candidate := DefaultConfig()
+	if err := setConfigField(candidate, key, value); err != nil {
+		return err
+	}
+	return validateConfig(candidate)
+}
+
+func publicFieldContractByKey(key string) (PublicFieldContract, bool) {
+	for _, contract := range PublicFieldContracts() {
+		if contract.Key == key {
+			return contract, true
+		}
+	}
+	return PublicFieldContract{}, false
+}
+
+func validateStructuredFieldConstraint(cfg *Config, key string) error {
+	contract, ok := publicFieldContractByKey(key)
+	if !ok {
+		return fmt.Errorf("configuration key %s has no public contract", key)
+	}
+	typeOfConfig := reflect.TypeOf(cfg).Elem()
+	valueOfConfig := reflect.ValueOf(cfg).Elem()
+	var value reflect.Value
+	for index := 0; index < typeOfConfig.NumField(); index++ {
+		if typeOfConfig.Field(index).Tag.Get("config") == key {
+			value = valueOfConfig.Field(index)
+			break
+		}
+	}
+	if !value.IsValid() {
+		return fmt.Errorf("configuration key %s has no backing field", key)
+	}
+	constraint := contract.Constraint
+	if len(constraint.Enum) > 0 {
+		serialized := formatPublicDefault(value)
+		for _, allowed := range constraint.Enum {
+			if serialized == allowed {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s must be one of: %s", key, strings.Join(constraint.Enum, ", "))
+	}
+	var numeric float64
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		numeric = float64(value.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		numeric = float64(value.Uint())
+	case reflect.Float32, reflect.Float64:
+		numeric = value.Float()
+	default:
+		return nil
+	}
+	if constraint.Minimum != nil && numeric < *constraint.Minimum {
+		return fmt.Errorf("%s must be at least %g", key, *constraint.Minimum)
+	}
+	if constraint.Maximum != nil && numeric > *constraint.Maximum {
+		return fmt.Errorf("%s must be at most %g", key, *constraint.Maximum)
+	}
+	return nil
+}
+
+var sensitivePublicFields = map[string]bool{
+	"LIMIT_HOOK_URL": true,
+	"MCP_AUTH_TOKEN": true,
+}
+
+var nonEditablePublicFields = map[string]string{
+	"CPU_POINTS_FILE": "Change the policy-map path in the configuration file and restart resman; MCP map updates target the currently authoritative path only.",
+}
+
+func number(value float64) *float64 { return &value }
+
+var publicFieldConstraints = map[string]PublicFieldConstraint{
+	"CGROUP_BASE":                  {Format: "relative-cgroup-path"},
+	"POLLING_INTERVAL":             {Minimum: number(5)},
+	"METRICS_CACHE_TTL":            {Minimum: number(1)},
+	"METRICS_REFRESH_INTERVAL":     {Minimum: number(5)},
+	"PROCESS_MIN_AGE_SECONDS":      {Minimum: number(0)},
+	"CPU_THRESHOLD":                {Minimum: number(1), Maximum: number(100)},
+	"CPU_RELEASE_THRESHOLD":        {Minimum: number(1), Maximum: number(100)},
+	"CPU_THRESHOLD_DURATION":       {Minimum: number(0)},
+	"CPU_RESERVE_POINTS":           {Minimum: number(0), Maximum: number(990)},
+	"CPU_BEST_EFFORT_POINTS":       {Minimum: number(1), Maximum: number(1000)},
+	"CPU_POINTS_FILE":              {Format: "absolute-clean-path"},
+	"LIMIT_HOOK_SCRIPT":            {Format: "safe-executable-path"},
+	"LIMIT_HOOK_URL":               {Format: "http-or-https-url"},
+	"LIMIT_HOOK_TIMEOUT":           {Minimum: number(1)},
+	"LIMIT_HOOK_MAX_CONCURRENCY":   {Minimum: number(1)},
+	"LIMIT_HOOK_QUEUE_CAPACITY":    {Minimum: number(1)},
+	"PROMETHEUS_METRICS_BIND_PORT": {Minimum: number(1), Maximum: number(65535)},
+	"PROMETHEUS_TLS_MIN_VERSION":   {Enum: []string{"1.0", "1.1", "1.2", "1.3"}},
+	"PROMETHEUS_AUTH_TYPE":         {Enum: []string{"none", "basic", "jwt", "both"}},
+	"LOG_LEVEL":                    {Enum: []string{"DEBUG", "INFO", "WARN", "ERROR"}},
+	"LOG_MAX_SIZE":                 {Minimum: number(1)},
+	"SYSTEM_UID_MIN":               {Minimum: number(0)},
+	"USER_INCLUDE_LIST":            {Format: "comma-separated-regex-list"},
+	"USER_EXCLUDE_LIST":            {Format: "comma-separated-regex-list"},
+	"PROCESS_EXCLUDE_LIST":         {Format: "comma-separated-regex-list"},
+	"BLACKOUT":                     {Format: "blackout-timeframes"},
+	"MCP_TRANSPORT":                {Enum: []string{"stdio", "http"}},
+	"MCP_HTTP_PORT":                {Minimum: number(1), Maximum: number(65535)},
+	"MCP_TLS_MIN_VERSION":          {Enum: []string{"1.0", "1.1", "1.2", "1.3"}},
+	"MCP_LOG_LEVEL":                {Enum: []string{"DEBUG", "INFO", "WARN", "ERROR"}},
+	"MCP_SHUTDOWN_TIMEOUT":         {Minimum: number(1)},
+	"METRICS_DB_RETENTION_DAYS":    {Minimum: number(1)},
+	"METRICS_DB_WRITE_INTERVAL":    {Minimum: number(5)},
+	"USERNAME_CACHE_TTL":           {Minimum: number(1)},
+	"CGROUP_OPERATION_TIMEOUT":     {Minimum: number(1)},
+	"DAEMON_SHUTDOWN_TIMEOUT":      {Minimum: number(1)},
+	"RAM_THRESHOLD":                {Minimum: number(1), Maximum: number(100)},
+	"RAM_RELEASE_THRESHOLD":        {Minimum: number(1), Maximum: number(100)},
+	"RAM_QUOTA_PER_USER":           {Format: "byte-quota"},
+	"RAM_HIGH_RATIO":               {Minimum: number(0), Maximum: number(1)},
+	"RAM_USER_INCLUDE_LIST":        {Format: "comma-separated-regex-list"},
+	"RAM_USER_EXCLUDE_LIST":        {Format: "comma-separated-regex-list"},
+	"IO_THRESHOLD":                 {Minimum: number(1), Maximum: number(100)},
+	"IO_RELEASE_THRESHOLD":         {Minimum: number(1), Maximum: number(100)},
+	"IO_READ_BPS":                  {Format: "byte-quota-or-max"},
+	"IO_WRITE_BPS":                 {Format: "byte-quota-or-max"},
+	"IO_READ_IOPS":                 {Minimum: number(0)},
+	"IO_WRITE_IOPS":                {Minimum: number(0)},
+	"IO_DEVICE_FILTER":             {Format: "all-or-device-number"},
+	"IO_THRESHOLD_DURATION":        {Minimum: number(0)},
+	"IO_USER_INCLUDE_LIST":         {Format: "comma-separated-regex-list"},
+	"IO_USER_EXCLUDE_LIST":         {Format: "comma-separated-regex-list"},
+	"IO_STARVATION_THRESHOLD":      {Minimum: number(1)},
+	"IO_STARVATION_CHECK_INTERVAL": {Minimum: number(1)},
+	"IO_BOOST_MULTIPLIER":          {Minimum: number(0)},
+	"IO_BOOST_DURATION":            {Minimum: number(1)},
+	"IO_BOOST_MAX_PER_HOUR":        {Minimum: number(0)},
+	"IO_PSI_THRESHOLD":             {Minimum: number(0), Maximum: number(100)},
+	"PATTERN_HISTORY_HOURS":        {Minimum: number(1)},
+	"PATTERN_MIN_SAMPLES":          {Minimum: number(1)},
+	"PATTERN_CONFIDENCE_THRESHOLD": {Minimum: number(0), Maximum: number(1)},
+	"BATCH_NIGHT_RAM_QUOTA":        {Format: "byte-quota"},
+	"INTERACTIVE_RAM_QUOTA":        {Format: "byte-quota"},
+	"PSI_CPU_STALL_THRESHOLD":      {Minimum: number(0)},
+	"PSI_IO_STALL_THRESHOLD":       {Minimum: number(0)},
+	"PSI_WINDOW_US":                {Minimum: number(0)},
+	"PSI_FALLBACK_INTERVAL":        {Minimum: number(0)},
 }
 
 var specialFieldMeanings = map[string]string{
@@ -99,11 +301,23 @@ func PublicFieldContracts() []PublicFieldContract {
 		if meaning == "" {
 			meaning = "—"
 		}
+		remedy := "Correct the authored value and submit the complete candidate for validation."
+		if lifecycle == LifecycleRestartRequired {
+			remedy = "Persist the value and restart resman for it to become effective."
+		}
+		if specific := nonEditablePublicFields[key]; specific != "" {
+			remedy = specific
+		}
 		contracts = append(contracts, PublicFieldContract{
 			Key:                    key,
+			Kind:                   publicFieldKind(field.Type),
 			Default:                defaultValue,
 			Lifecycle:              lifecycle,
+			Sensitive:              sensitivePublicFields[key],
+			Editable:               nonEditablePublicFields[key] == "",
+			Constraint:             publicFieldConstraints[key],
 			EmptyOrDisabledMeaning: meaning,
+			Remedy:                 remedy,
 		})
 	}
 	sort.Slice(contracts, func(i, j int) bool { return contracts[i].Key < contracts[j].Key })
@@ -119,17 +333,68 @@ func RenderPublicConfigReference() string {
 	output.WriteString("`dynamic` keys are applied by hot reload. `restart-required` keys keep their effective value and report a rejected reload until the daemon restarts. ")
 	output.WriteString("An em dash means the key has no special empty or disabled contract beyond its literal value. ")
 	output.WriteString("The copyable, commented configuration is [`config/resman.conf.example`](../config/resman.conf.example).\n\n")
-	output.WriteString("| Key | Runtime default | Lifecycle | Empty, disabled, or special value |\n")
-	output.WriteString("|---|---|---|---|\n")
+	output.WriteString("## Source precedence\n\n")
+	output.WriteString("The authoritative order is `default < file < environment`: runtime defaults are loaded first, the authored configuration file overrides them, and environment variables override both. Editing a file value while an environment override exists does not change the effective value.\n\n")
+	output.WriteString("Environment-shadowing remedy: " + environmentShadowingRemedy + "\n\n")
+	output.WriteString("| Key | Kind | Runtime default | Lifecycle | Sensitive | Editable | Constraint | Empty, disabled, or special value | Remedy |\n")
+	output.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 	for _, contract := range PublicFieldContracts() {
-		fmt.Fprintf(&output, "| `%s` | `%s` | `%s` | %s |\n",
+		defaultValue := contract.Default
+		if contract.Sensitive {
+			defaultValue = "(redacted)"
+		}
+		fmt.Fprintf(&output, "| `%s` | `%s` | `%s` | `%s` | `%t` | `%t` | %s | %s | %s |\n",
 			contract.Key,
-			escapeMarkdownTable(contract.Default),
+			contract.Kind,
+			escapeMarkdownTable(defaultValue),
 			contract.Lifecycle,
+			contract.Sensitive,
+			contract.Editable,
+			escapeMarkdownTable(formatPublicConstraint(contract.Constraint)),
 			escapeMarkdownTable(contract.EmptyOrDisabledMeaning),
+			escapeMarkdownTable(contract.Remedy),
 		)
 	}
 	return output.String()
+}
+
+func publicFieldKind(fieldType reflect.Type) PublicFieldKind {
+	switch fieldType.Kind() {
+	case reflect.Bool:
+		return PublicFieldBoolean
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return PublicFieldInteger
+	case reflect.Float32, reflect.Float64:
+		return PublicFieldNumber
+	case reflect.String:
+		return PublicFieldString
+	case reflect.Slice:
+		if fieldType.Elem().Kind() == reflect.String {
+			return PublicFieldStringList
+		}
+	}
+	panic(fmt.Sprintf("unsupported public configuration field type %s", fieldType))
+}
+
+func formatPublicConstraint(constraint PublicFieldConstraint) string {
+	parts := make([]string, 0, 3)
+	if constraint.Minimum != nil {
+		parts = append(parts, fmt.Sprintf("min %g", *constraint.Minimum))
+	}
+	if constraint.Maximum != nil {
+		parts = append(parts, fmt.Sprintf("max %g", *constraint.Maximum))
+	}
+	if len(constraint.Enum) > 0 {
+		parts = append(parts, "one of "+strings.Join(constraint.Enum, ", "))
+	}
+	if constraint.Format != "" {
+		parts = append(parts, "format "+constraint.Format)
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func formatPublicDefault(value reflect.Value) string {

@@ -594,7 +594,10 @@ func setConfigField(cfg *Config, key, value string) error {
 		}
 		return fmt.Errorf("unknown configuration key %q", key)
 	}
-	return handler(cfg, value)
+	if err := handler(cfg, value); err != nil {
+		return err
+	}
+	return validateStructuredFieldConstraint(cfg, key)
 }
 
 var removedConfigKeys = map[string]string{

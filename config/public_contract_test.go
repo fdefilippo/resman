@@ -23,6 +23,15 @@ func TestPublicConfigReferenceMatchesRuntimeContract(t *testing.T) {
 		if want, ok := LifecycleForField(contract.Key); !ok || contract.Lifecycle != want {
 			t.Errorf("%s lifecycle = %q, want %q", contract.Key, contract.Lifecycle, want)
 		}
+		if contract.Kind == "" {
+			t.Errorf("%s has no public value kind", contract.Key)
+		}
+		if contract.Remedy == "" {
+			t.Errorf("%s has no operator remedy", contract.Key)
+		}
+		if contract.Sensitive && contract.Default != "(empty)" {
+			t.Errorf("%s sensitive metadata retains non-empty default", contract.Key)
+		}
 	}
 
 	referencePath := filepath.Join("..", "docs", "CONFIGURATION.md")
@@ -32,6 +41,71 @@ func TestPublicConfigReferenceMatchesRuntimeContract(t *testing.T) {
 	}
 	if got, want := string(tracked), RenderPublicConfigReference(); got != want {
 		t.Fatalf("%s is stale; run go run ./scripts/generate-config-reference", referencePath)
+	}
+}
+
+func TestPublicSourcePrecedenceAndEnvironmentRemedyAreAuthoritative(t *testing.T) {
+	want := []ConfigSource{ConfigSourceDefault, ConfigSourceFile, ConfigSourceEnvironment}
+	if got := PublicConfigSourcePrecedence(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("source precedence = %v, want %v", got, want)
+	}
+	reference := RenderPublicConfigReference()
+	ordered := "`default < file < environment`"
+	if !strings.Contains(reference, ordered) {
+		t.Fatalf("generated reference omits ordered precedence %s", ordered)
+	}
+	for _, required := range []string{
+		"systemctl show resman --property=Environment --property=EnvironmentFiles --property=DropInPaths",
+		"systemctl cat resman",
+		"systemctl edit resman",
+		"restart `resman`",
+		"`systemctl reload resman` alone",
+	} {
+		if !strings.Contains(EnvironmentShadowingRemedy(), required) || !strings.Contains(reference, required) {
+			t.Errorf("environment remedy omits %q", required)
+		}
+	}
+}
+
+func TestStructuredConstraintsUseProductionParsingAndValidation(t *testing.T) {
+	tests := []struct {
+		key     string
+		valid   string
+		invalid string
+	}{
+		{key: "CPU_RESERVE_POINTS", valid: "100", invalid: "991"},
+		{key: "CPU_BEST_EFFORT_POINTS", valid: "100", invalid: "0"},
+		{key: "CPU_THRESHOLD", valid: "75", invalid: "101"},
+		{key: "MCP_TRANSPORT", valid: "stdio", invalid: "websocket"},
+		{key: "PROMETHEUS_METRICS_BIND_PORT", valid: "1974", invalid: "65536"},
+		{key: "LOG_LEVEL", valid: "warn", invalid: "verbose"},
+		{key: "USER_INCLUDE_LIST", valid: "^alice$", invalid: "["},
+	}
+	contracts := make(map[string]PublicFieldContract)
+	for _, contract := range PublicFieldContracts() {
+		contracts[contract.Key] = contract
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if constraint := contracts[tt.key].Constraint; constraint.Minimum == nil && constraint.Maximum == nil && len(constraint.Enum) == 0 && constraint.Format == "" {
+				t.Fatal("representative validated field has no structured constraint")
+			}
+			if err := ValidatePublicFieldValue(tt.key, tt.valid); err != nil {
+				t.Fatalf("valid production value rejected: %v", err)
+			}
+			if err := ValidatePublicFieldValue(tt.key, tt.invalid); err == nil {
+				t.Fatal("invalid production value accepted")
+			}
+		})
+	}
+}
+
+func TestRemovedAndNonEditableFieldsCannotBeValidatedAsEditorValues(t *testing.T) {
+	if err := ValidatePublicFieldValue("MIN_SYSTEM_"+"CORES", "1"); err == nil {
+		t.Fatal("removed key remained renderable through editor validation")
+	}
+	if err := ValidatePublicFieldValue("CPU_POINTS_FILE", "/tmp/points"); err == nil {
+		t.Fatal("non-editable policy-map path accepted through editor validation")
 	}
 }
 
