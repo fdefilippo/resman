@@ -170,8 +170,8 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 func (m *Manager) EnforcementStatus() EnforcementStatus {
 	if m.enforcementStatus.Mode == "" {
 		return EnforcementStatus{
-			Mode:   EnforcementModeMigrationEnabled,
-			Reason: EnforcementReasonNoSystemdRuntime,
+			Mode:   EnforcementModeObservationOnlySystemd,
+			Reason: EnforcementReasonAuthorityUnverifiable,
 		}
 	}
 	return m.enforcementStatus

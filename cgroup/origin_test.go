@@ -31,7 +31,7 @@ func newOriginTestManager(t *testing.T) (*Manager, string) {
 		t.Fatalf("failed to create recovery subtree control: %v", err)
 	}
 
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
@@ -43,7 +43,7 @@ func newOriginTestManager(t *testing.T) (*Manager, string) {
 		readPIDNamespace: func(int) (pidNamespaceIdentity, error) {
 			return pidNamespaceIdentity{device: 1, inode: 1}, nil
 		},
-	}
+	})
 	return manager, root
 }
 

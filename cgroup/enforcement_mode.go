@@ -88,7 +88,7 @@ func detectEnforcementStatus(systemdRuntimePath, procRoot string) EnforcementSta
 }
 
 func (s EnforcementStatus) migrationAllowed() bool {
-	return s.Mode == "" || s.Mode == EnforcementModeMigrationEnabled
+	return s.Mode == EnforcementModeMigrationEnabled
 }
 
 func (m *Manager) requireMigrationEnforcement(candidateCount int) error {

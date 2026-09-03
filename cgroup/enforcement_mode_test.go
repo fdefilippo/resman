@@ -91,6 +91,26 @@ func writePIDOneComm(t *testing.T, procRoot, comm string) {
 	}
 }
 
+func TestZeroEnforcementStatusFailsClosed(t *testing.T) {
+	manager := &Manager{}
+	status := manager.EnforcementStatus()
+	if status.Mode != EnforcementModeObservationOnlySystemd || status.Reason != EnforcementReasonAuthorityUnverifiable {
+		t.Fatalf("EnforcementStatus() = %+v, want fail-closed observation-only status", status)
+	}
+	var ownershipErr *SystemdOwnershipPreservationError
+	if err := manager.requireMigrationEnforcement(1); !errors.As(err, &ownershipErr) {
+		t.Fatalf("zero-value manager migration error = %v, want typed ownership-preservation refusal", err)
+	}
+}
+
+func migrationEnabledTestManager(manager *Manager) *Manager {
+	manager.enforcementStatus = EnforcementStatus{
+		Mode:   EnforcementModeMigrationEnabled,
+		Reason: EnforcementReasonNoSystemdRuntime,
+	}
+	return manager
+}
+
 func TestObservationOnlyBarrierRefusesBeforeManagedHierarchyMutation(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.DefaultConfig()
