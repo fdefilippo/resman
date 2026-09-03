@@ -383,8 +383,18 @@ prove_containment() {
 		|| fail "live recovery occupant was not reported as stranded"
 	awk -v value="${observed:-0}" 'BEGIN { exit !(value > 0) }' \
 		|| fail "user observation did not continue"
-	if find "$cgroup_root" -path '*/limited/*' -o -path '*/user_*' \
-		| grep -v "/recovery/user_$test_uid$" | grep -q .; then
+	membership_file=$evidence_dir/resman-membership.txt
+	: >"$membership_file"
+	while IFS= read -r -d '' processes_file; do
+		relative_path=${processes_file#"$cgroup_root"/}
+		cgroup_path=${relative_path%/cgroup.procs}
+		while IFS= read -r member_pid; do
+			[[ -n $member_pid ]] || continue
+			printf '%s pid=%s\n' "$cgroup_path" "$member_pid" >>"$membership_file"
+		done <"$processes_file"
+	done < <(find "$cgroup_root" -type f -name cgroup.procs -print0)
+	if awk -v allowed="recovery/user_$test_uid" '$1 != allowed { found = 1 } END { exit !found }' \
+		"$membership_file"; then
 		fail "new enforcement membership was created"
 	fi
 
