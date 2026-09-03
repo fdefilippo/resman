@@ -61,7 +61,7 @@ and Debian packages install both examples at:
 
 - Bash
 - `curl` built with SMTP support
-- the standard `base64`, `basename`, `cat`, and `date` utilities
+- the standard `base64`, `basename`, `cat`, `date`, and `stat` utilities
 - network access to the selected SMTP server
 
 The helper does not install these programs or validate the SMTP server configuration.
@@ -93,14 +93,28 @@ Read the body from a file and attach a report:
 Use authenticated SMTP with mandatory STARTTLS:
 
 ```bash
+sudo install -o root -g root -m 0600 /dev/null /etc/resman/sendmail.netrc
+sudo editor /etc/resman/sendmail.netrc
+```
+
+The protected file uses curl's netrc syntax:
+
+```text
+machine smtp.example.com
+login smtp-user
+password replace-with-the-smtp-password
+```
+
+Then pass only its path to the helper:
+
+```bash
 /usr/share/doc/resman/scripts/sendmail.sh \
   -f sender@example.com \
   -t operator@example.com \
   -s 'ResMan notification' \
   -S smtp.example.com \
   -P 587 \
-  -u smtp-user \
-  -w 'smtp-password' \
+  -N /etc/resman/sendmail.netrc \
   -A plain \
   -T \
   -b /path/to/body.txt
@@ -119,9 +133,8 @@ helper uses plain SMTP. Certificate verification follows the local `curl` defaul
 | `-s subject` | Message subject. |
 | `-S server` | SMTP server; defaults to `localhost`. |
 | `-P port` | SMTP port; defaults to `25`. |
-| `-u user` | SMTP authentication username. Authentication is enabled when this is set. |
-| `-w password` | SMTP authentication password. |
-| `-A type` | Authentication mechanism: `plain` or `login`; defaults to `plain`. |
+| `-N file` | Authenticate with a protected netrc file. The path, never its contents, is passed to `curl`. |
+| `-A type` | Authentication mechanism used with `-N`: `plain` or `login`; defaults to `plain`. |
 | `-T` | Require STARTTLS. |
 | `-a file` | Attach a file; repeat for multiple attachments. |
 | `-b file` | Read the text body from a file instead of standard input. |
@@ -132,13 +145,22 @@ succeed. Missing required addresses, an invalid authentication type, missing
 attachments, unreadable input, utility failures, TLS failures, and SMTP failures
 produce a non-zero status.
 
+Every invocation is bounded by a 10-second connection timeout and a 60-second total
+transfer timeout. Set `SENDMAIL_CONNECT_TIMEOUT_SECONDS` and
+`SENDMAIL_MAX_TIME_SECONDS` to positive integer seconds to override them; the
+connection timeout must not exceed the total timeout. A timeout is a delivery
+failure and produces a non-zero status.
+
 ### Security notes
 
 - Treat sender, recipient, subject, body, and attachment names as trusted operator
   input. The helper does not sanitize untrusted text for use in mail headers.
-- The value passed with `-w` is forwarded to `curl` on its command line. It can appear
-  in shell history and may be visible to privileged local processes. Use a dedicated,
-  least-privilege SMTP credential and avoid shared interactive shells.
+- The helper deliberately has no username or password option. It rejects the former
+  `-u` and `-w` interface so credentials cannot enter shell history or a process
+  argument list. `-N` accepts only a readable regular file owned by the effective
+  user, rejects symbolic links, and rejects any group or other permission bits. Use a
+  dedicated, least-privilege SMTP credential and keep the file at mode `0600` or
+  stricter.
 - Prefer `-T` whenever the SMTP server supports STARTTLS. Without it, message contents
   and credentials can cross the network without transport encryption.
 - Protect body and attachment files according to their contents. The helper does not

@@ -11,8 +11,7 @@
 #   -s <subject>     Email subject
 #   -S <server>      SMTP server (default: localhost)
 #   -P <port>        SMTP port (default: 25)
-#   -u <user>        SMTP auth username
-#   -w <password>    SMTP auth password
+#   -N <file>        SMTP credentials in a protected netrc file
 #   -A <type>        Auth type: plain|login (default: plain)
 #   -T               Enable TLS/STARTTLS
 #   -a <file>        Attachment (can be repeated)
@@ -22,9 +21,13 @@
 # Examples:
 #   echo "test" | ./sendmail.sh -f me@ex.com -t you@ex.com -s "hello"
 #   ./sendmail.sh -f me@ex.com -t you@ex.com -c cc@ex.com -s "subject" \
-#                 -S smtp.ex.com -P 587 -u user -w pass -T < body.txt
+#                 -S smtp.ex.com -P 587 -N /secure/sendmail.netrc -T < body.txt
 #
-# Requires: curl (with SMTP support), base64
+# Environment:
+#   SENDMAIL_CONNECT_TIMEOUT_SECONDS  Connection timeout (default: 10)
+#   SENDMAIL_MAX_TIME_SECONDS         Total transfer timeout (default: 60)
+#
+# Requires: curl (with SMTP support), base64, stat
 
 set -euo pipefail
 
@@ -34,19 +37,21 @@ CC=()
 SUBJECT=""
 SERVER="localhost"
 PORT=25
-AUTH_USER=""
-AUTH_PASS=""
+NETRC_FILE=""
 AUTH_TYPE="plain"
+AUTH_TYPE_SET=false
 USE_TLS=false
 ATTACHMENTS=()
 BODY_FILE=""
+CONNECT_TIMEOUT_SECONDS="${SENDMAIL_CONNECT_TIMEOUT_SECONDS-10}"
+MAX_TIME_SECONDS="${SENDMAIL_MAX_TIME_SECONDS-60}"
 
 usage() {
     sed -n '/^# sendmail.sh/,/^Requires/p; /^$/q' "$0" | sed 's/^# //; s/^#$//'
-    exit 0
+    exit "${1:-0}"
 }
 
-while getopts "f:t:c:s:S:P:u:w:A:Ta:b:h" opt; do
+while getopts "f:t:c:s:S:P:N:A:Ta:b:h" opt; do
     case "$opt" in
         f) FROM="$OPTARG" ;;
         t) TO="$OPTARG" ;;
@@ -54,14 +59,13 @@ while getopts "f:t:c:s:S:P:u:w:A:Ta:b:h" opt; do
         s) SUBJECT="$OPTARG" ;;
         S) SERVER="$OPTARG" ;;
         P) PORT="$OPTARG" ;;
-        u) AUTH_USER="$OPTARG" ;;
-        w) AUTH_PASS="$OPTARG" ;;
-        A) AUTH_TYPE="$OPTARG" ;;
+        N) NETRC_FILE="$OPTARG" ;;
+        A) AUTH_TYPE="$OPTARG"; AUTH_TYPE_SET=true ;;
         T) USE_TLS=true ;;
         a) ATTACHMENTS+=("$OPTARG") ;;
         b) BODY_FILE="$OPTARG" ;;
         h) usage ;;
-        *) usage ;;
+        *) usage 2 ;;
     esac
 done
 
@@ -71,6 +75,47 @@ done
     echo "ERROR: invalid auth type '$AUTH_TYPE' (use plain|login)" >&2
     exit 1
 }
+[[ "$AUTH_TYPE_SET" == true && -z "$NETRC_FILE" ]] && {
+    echo "ERROR: -A requires -N with a protected netrc file" >&2
+    exit 1
+}
+
+validate_positive_timeout() {
+    local name="$1"
+    local value="$2"
+    if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: $name must be a positive integer number of seconds" >&2
+        exit 1
+    fi
+}
+
+validate_positive_timeout SENDMAIL_CONNECT_TIMEOUT_SECONDS "$CONNECT_TIMEOUT_SECONDS"
+validate_positive_timeout SENDMAIL_MAX_TIME_SECONDS "$MAX_TIME_SECONDS"
+if (( CONNECT_TIMEOUT_SECONDS > MAX_TIME_SECONDS )); then
+    echo "ERROR: SENDMAIL_CONNECT_TIMEOUT_SECONDS must not exceed SENDMAIL_MAX_TIME_SECONDS" >&2
+    exit 1
+fi
+
+if [[ -n "$NETRC_FILE" ]]; then
+    [[ -L "$NETRC_FILE" ]] && {
+        echo "ERROR: SMTP credential file must not be a symbolic link: $NETRC_FILE" >&2
+        exit 1
+    }
+    [[ ! -f "$NETRC_FILE" || ! -r "$NETRC_FILE" ]] && {
+        echo "ERROR: SMTP credential file must be a readable regular file: $NETRC_FILE" >&2
+        exit 1
+    }
+    netrc_owner=$(stat -c '%u' -- "$NETRC_FILE")
+    netrc_mode=$(stat -c '%a' -- "$NETRC_FILE")
+    if [[ "$netrc_owner" != "$EUID" ]]; then
+        echo "ERROR: SMTP credential file must be owned by effective UID $EUID: $NETRC_FILE" >&2
+        exit 1
+    fi
+    if (( (8#$netrc_mode & 077) != 0 )); then
+        echo "ERROR: SMTP credential file must not grant permissions to group or others: $NETRC_FILE" >&2
+        exit 1
+    fi
+fi
 
 for a in "${ATTACHMENTS[@]}"; do
     [[ ! -f "$a" ]] && { echo "ERROR: attachment not found: $a" >&2; exit 1; }
@@ -145,6 +190,8 @@ fi
 
 curl_args=(
     --url "$url"
+    --connect-timeout "$CONNECT_TIMEOUT_SECONDS"
+    --max-time "$MAX_TIME_SECONDS"
     --mail-from "$FROM"
     --mail-rcpt "$TO"
     "${rcpt_args[@]}"
@@ -154,8 +201,8 @@ if [[ "$USE_TLS" == true ]]; then
     curl_args+=(--ssl-reqd)
 fi
 
-if [[ -n "$AUTH_USER" ]]; then
-    curl_args+=(--user "${AUTH_USER}:${AUTH_PASS}")
+if [[ -n "$NETRC_FILE" ]]; then
+    curl_args+=(--netrc-file "$NETRC_FILE")
     if [[ "$AUTH_TYPE" == "login" ]]; then
         curl_args+=(--login-options "AUTH=LOGIN")
     else

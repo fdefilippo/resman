@@ -147,7 +147,7 @@ test: deps
 
 # Exercise the sendmail helper with deterministic external commands.
 test-sendmail:
-	scripts/sendmail_test.sh
+	GO="$(GO)" scripts/sendmail_test.sh
 
 # Run tests with coverage.
 test-cover: deps

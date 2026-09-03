@@ -147,8 +147,11 @@ func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
 		"curl` built with SMTP support",
 		"`-f address`",
 		"`-t address`",
+		"`-N file`",
 		"`-T` requests STARTTLS",
-		"forwarded to `curl` on its command line",
+		"SENDMAIL_CONNECT_TIMEOUT_SECONDS",
+		"SENDMAIL_MAX_TIME_SECONDS",
+		"deliberately has no username or password option",
 	} {
 		if !strings.Contains(guide, required) {
 			t.Errorf("sendmail guide is missing %q", required)
@@ -157,6 +160,18 @@ func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
 
 	if !strings.Contains(helper, "./sendmail.sh -f sender@example.com -t recipient@example.com [options]") {
 		t.Error("sendmail helper usage does not name its required sender and recipient options")
+	}
+	for _, required := range []string{
+		`--netrc-file "$NETRC_FILE"`,
+		`--connect-timeout "$CONNECT_TIMEOUT_SECONDS"`,
+		`--max-time "$MAX_TIME_SECONDS"`,
+	} {
+		if !strings.Contains(helper, required) {
+			t.Errorf("sendmail helper is missing %q", required)
+		}
+	}
+	if strings.Contains(helper, `--user`) || strings.Contains(helper, `AUTH_PASS`) {
+		t.Error("sendmail helper must not place SMTP credentials on argv")
 	}
 	for _, required := range []string{
 		`readonly SENDMAIL_HELPER="/usr/share/doc/resman/scripts/sendmail.sh"`,
