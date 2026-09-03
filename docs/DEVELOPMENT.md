@@ -872,6 +872,10 @@ the bounded identity-based pruning required by this rule.
 A change is not done until every line is true:
 
 - [ ] `make fmt`, `make lint`, `make test`, `go vet ./...`, `go test -race ./...` pass.
+- [ ] Every newly produced RPM or DEB has a fresh package identity: for an unchanged
+      `VERSION`, `RELEASE` is incremented by exactly one in both `Makefile` and the
+      RPM spec (for example, `1.31.1-1` is followed by `1.31.1-2`). `RELEASE` returns
+      to `1` only when `VERSION` changes, and the RPM and DEB identities agree.
 - [ ] Nothing was kept for compatibility; anything removed is rejected loudly, not
       ignored (Rule 1).
 - [ ] No field carries more than one of eligibility / intent / observation (Rule 2).
