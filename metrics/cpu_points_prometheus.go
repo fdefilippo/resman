@@ -6,49 +6,53 @@ import (
 )
 
 type cpuPointsPrometheusMetrics struct {
-	reservePoints              *prometheus.GaugeVec
-	nominalPoolPoints          *prometheus.GaugeVec
-	bestEffortPoints           *prometheus.GaugeVec
-	capacityAvailable          *prometheus.GaugeVec
-	onlineCPUs                 *prometheus.GaugeVec
-	parentQuotaUsec            *prometheus.GaugeVec
-	parentPeriodUsec           *prometheus.GaugeVec
-	reconciliationDegraded     *prometheus.GaugeVec
-	appliedGuaranteePoints     *prometheus.GaugeVec
-	programmedGuaranteeWeight  *prometheus.GaugeVec
-	guaranteedDomainWeight     *prometheus.GaugeVec
-	bestEffortDomainWeight     *prometheus.GaugeVec
-	intervalSeconds            *prometheus.GaugeVec
-	parentUsageUsecDelta       *prometheus.GaugeVec
-	guaranteedUsageUsecDelta   *prometheus.GaugeVec
-	bestEffortUsageUsecDelta   *prometheus.GaugeVec
-	parentPeriodsDelta         *prometheus.GaugeVec
-	parentThrottledDelta       *prometheus.GaugeVec
-	parentThrottledUsecDelta   *prometheus.GaugeVec
-	deliveryState              *prometheus.GaugeVec
-	lendingState               *prometheus.GaugeVec
-	userConfiguredClass        *prometheus.GaugeVec
-	userConfiguredGuarantee    *prometheus.GaugeVec
-	userRequested              *prometheus.GaugeVec
-	userLifecycle              *prometheus.GaugeVec
-	userAppliedClass           *prometheus.GaugeVec
-	userAppliedWeight          *prometheus.GaugeVec
-	userAppliedToProcesses     *prometheus.GaugeVec
-	userCompleteUIDGuaranteed  *prometheus.GaugeVec
-	userReconciliationDegraded *prometheus.GaugeVec
-	userProcessCoverage        *prometheus.GaugeVec
-	userObservedProcesses      *prometheus.GaugeVec
-	userEnforceableProcesses   *prometheus.GaugeVec
-	userNamespaceMismatch      *prometheus.GaugeVec
-	userNamespaceUnavailable   *prometheus.GaugeVec
-	userLeafUsageUsecDelta     *prometheus.GaugeVec
-	userRAMCgroupUsage         *prometheus.GaugeVec
-	userRAMCoverage            *prometheus.GaugeVec
-	userRAMIncompleteProcesses *prometheus.GaugeVec
-	userMemoryHighEventsDelta  *prometheus.GaugeVec
-	userMemoryMaxEventsDelta   *prometheus.GaugeVec
-	userMemoryOOMEventsDelta   *prometheus.GaugeVec
-	userMemoryOOMKillsDelta    *prometheus.GaugeVec
+	reservePoints               *prometheus.GaugeVec
+	nominalPoolPoints           *prometheus.GaugeVec
+	bestEffortPoints            *prometheus.GaugeVec
+	capacityAvailable           *prometheus.GaugeVec
+	onlineCPUs                  *prometheus.GaugeVec
+	parentQuotaUsec             *prometheus.GaugeVec
+	parentPeriodUsec            *prometheus.GaugeVec
+	reconciliationDegraded      *prometheus.GaugeVec
+	appliedGuaranteePoints      *prometheus.GaugeVec
+	programmedGuaranteeWeight   *prometheus.GaugeVec
+	guaranteedDomainWeight      *prometheus.GaugeVec
+	bestEffortDomainWeight      *prometheus.GaugeVec
+	intervalSeconds             *prometheus.GaugeVec
+	parentUsageUsecDelta        *prometheus.GaugeVec
+	guaranteedUsageUsecDelta    *prometheus.GaugeVec
+	bestEffortUsageUsecDelta    *prometheus.GaugeVec
+	parentPeriodsDelta          *prometheus.GaugeVec
+	parentThrottledDelta        *prometheus.GaugeVec
+	parentThrottledUsecDelta    *prometheus.GaugeVec
+	deliveryState               *prometheus.GaugeVec
+	lendingState                *prometheus.GaugeVec
+	userConfiguredClass         *prometheus.GaugeVec
+	userConfiguredGuarantee     *prometheus.GaugeVec
+	userRequested               *prometheus.GaugeVec
+	userLifecycle               *prometheus.GaugeVec
+	userAppliedClass            *prometheus.GaugeVec
+	userAppliedWeight           *prometheus.GaugeVec
+	userAppliedToProcesses      *prometheus.GaugeVec
+	userCompleteUIDGuaranteed   *prometheus.GaugeVec
+	userReconciliationDegraded  *prometheus.GaugeVec
+	userProcessCoverage         *prometheus.GaugeVec
+	userObservedProcesses       *prometheus.GaugeVec
+	userEnforceableProcesses    *prometheus.GaugeVec
+	userNamespaceMismatch       *prometheus.GaugeVec
+	userNamespaceUnavailable    *prometheus.GaugeVec
+	userSystemdOwnershipRefused *prometheus.GaugeVec
+	userRecoveryProcesses       *prometheus.GaugeVec
+	userRestoreFailedProcesses  *prometheus.GaugeVec
+	userStrandedProcesses       *prometheus.GaugeVec
+	userLeafUsageUsecDelta      *prometheus.GaugeVec
+	userRAMCgroupUsage          *prometheus.GaugeVec
+	userRAMCoverage             *prometheus.GaugeVec
+	userRAMIncompleteProcesses  *prometheus.GaugeVec
+	userMemoryHighEventsDelta   *prometheus.GaugeVec
+	userMemoryMaxEventsDelta    *prometheus.GaugeVec
+	userMemoryOOMEventsDelta    *prometheus.GaugeVec
+	userMemoryOOMKillsDelta     *prometheus.GaugeVec
 }
 
 func (m *cpuPointsPrometheusMetrics) register(registry prometheus.Registerer, namespace string, labels prometheus.Labels) {
@@ -94,6 +98,10 @@ func (m *cpuPointsPrometheusMetrics) register(registry prometheus.Registerer, na
 	m.userEnforceableProcesses = user("user_cpu_points_enforceable_processes", "Host-enforceable process count before PID-namespace ingress results")
 	m.userNamespaceMismatch = user("user_cpu_points_pid_namespace_mismatch_processes", "Processes rejected because their PID namespace differs from ResMan")
 	m.userNamespaceUnavailable = user("user_cpu_points_pid_namespace_unavailable_processes", "Processes rejected because PID-namespace identity was unavailable")
+	m.userSystemdOwnershipRefused = user("user_cpu_points_systemd_ownership_refused_processes", "Processes kept in their authoritative systemd units instead of entering ResMan-owned cgroups")
+	m.userRecoveryProcesses = user("user_cpu_points_recovery_processes", "Processes placed in recovery instead of their recorded authoritative origin during the latest release outcome")
+	m.userRestoreFailedProcesses = user("user_cpu_points_restore_failed_processes", "Processes whose latest restore attempt failed")
+	m.userStrandedProcesses = user("user_cpu_points_stranded_processes", "Current live processes in the user's ResMan recovery leaf")
 	m.userLeafUsageUsecDelta = user("user_cpu_points_leaf_usage_microseconds_delta", "Effective leaf CPU time during the same authoritative interval as the parent denominator")
 	m.userRAMCgroupUsage = user("user_ram_cgroup_memory_current_bytes", "memory.current charged to the managed cgroup; this is post-ingress cgroup accounting, not complete process-derived UID memory")
 	m.userRAMCoverage = user("user_ram_cgroup_coverage", "Bounded post-ingress RAM coverage; partial means pre-ingress page charges can remain outside memory.high and memory.max", "coverage")
@@ -170,6 +178,10 @@ func (m *cpuPointsPrometheusMetrics) updateUser(uid, username string, snapshot C
 	m.userEnforceableProcesses.WithLabelValues(uid, username).Set(float64(snapshot.EnforceableProcessCount))
 	m.userNamespaceMismatch.WithLabelValues(uid, username).Set(float64(snapshot.PIDNamespaceMismatchCount))
 	m.userNamespaceUnavailable.WithLabelValues(uid, username).Set(float64(snapshot.PIDNamespaceUnavailableCount))
+	m.userSystemdOwnershipRefused.WithLabelValues(uid, username).Set(float64(snapshot.SystemdOwnershipRefusedCount))
+	m.userRecoveryProcesses.WithLabelValues(uid, username).Set(float64(snapshot.RecoveryProcessCount))
+	m.userRestoreFailedProcesses.WithLabelValues(uid, username).Set(float64(snapshot.RestoreFailedProcessCount))
+	m.userStrandedProcesses.WithLabelValues(uid, username).Set(float64(snapshot.StrandedProcessCount))
 	setOptionalUserGauge(m.userLeafUsageUsecDelta, uid, username, snapshot.LeafCPUUsageUsecDelta)
 	setOptionalUserGauge(m.userRAMCgroupUsage, uid, username, snapshot.RAMCgroupUsageBytes)
 	for _, coverage := range []string{"complete", "partial"} {
@@ -190,7 +202,7 @@ func (m *cpuPointsPrometheusMetrics) deleteUserStateLabels(uid, username string)
 		m.userConfiguredClass.DeleteLabelValues(uid, username, class)
 		m.userAppliedClass.DeleteLabelValues(uid, username, class)
 	}
-	for _, state := range []CPUPointsLifecycleState{CPUPointsLifecycleIneligible, CPUPointsLifecycleEligibleInactive, CPUPointsLifecycleApplied, CPUPointsLifecycleNamespaceRejected, CPUPointsLifecycleFailed, CPUPointsLifecycleReleased} {
+	for _, state := range []CPUPointsLifecycleState{CPUPointsLifecycleIneligible, CPUPointsLifecycleEligibleInactive, CPUPointsLifecycleApplied, CPUPointsLifecycleNamespaceRejected, CPUPointsLifecycleOwnershipRejected, CPUPointsLifecycleRecovery, CPUPointsLifecycleStranded, CPUPointsLifecycleFailed, CPUPointsLifecycleReleased} {
 		m.userLifecycle.DeleteLabelValues(uid, username, string(state))
 	}
 	for _, coverage := range []CPUPointsProcessCoverage{CPUPointsCoverageUnavailable, CPUPointsCoverageNone, CPUPointsCoverageComplete, CPUPointsCoveragePartial} {
@@ -204,7 +216,8 @@ func (m *cpuPointsPrometheusMetrics) deleteUser(uid, username string) {
 		m.userConfiguredGuarantee, m.userRequested, m.userAppliedWeight,
 		m.userAppliedToProcesses, m.userCompleteUIDGuaranteed, m.userReconciliationDegraded,
 		m.userObservedProcesses, m.userEnforceableProcesses, m.userNamespaceMismatch,
-		m.userNamespaceUnavailable, m.userLeafUsageUsecDelta, m.userRAMCgroupUsage,
+		m.userNamespaceUnavailable, m.userSystemdOwnershipRefused, m.userRecoveryProcesses,
+		m.userRestoreFailedProcesses, m.userStrandedProcesses, m.userLeafUsageUsecDelta, m.userRAMCgroupUsage,
 		m.userRAMIncompleteProcesses, m.userMemoryHighEventsDelta, m.userMemoryMaxEventsDelta,
 		m.userMemoryOOMEventsDelta, m.userMemoryOOMKillsDelta,
 	} {
@@ -246,7 +259,7 @@ func validCPUPointsLendingState(state CPUPointsLendingState) bool {
 func validCPUPointsLifecycleState(state CPUPointsLifecycleState) bool {
 	switch state {
 	case CPUPointsLifecycleIneligible, CPUPointsLifecycleEligibleInactive, CPUPointsLifecycleApplied,
-		CPUPointsLifecycleNamespaceRejected, CPUPointsLifecycleFailed, CPUPointsLifecycleReleased:
+		CPUPointsLifecycleNamespaceRejected, CPUPointsLifecycleOwnershipRejected, CPUPointsLifecycleRecovery, CPUPointsLifecycleStranded, CPUPointsLifecycleFailed, CPUPointsLifecycleReleased:
 		return true
 	default:
 		return false

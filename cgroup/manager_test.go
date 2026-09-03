@@ -887,12 +887,12 @@ func TestCreateUserSubCgroupTracksSharedPath(t *testing.T) {
 	cfg.CgroupBase = "resman"
 	cfg.CreatedCgroupsFile = filepath.Join(tmpDir, "created-cgroups")
 
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
 		createdCgroupsFile: cfg.CreatedCgroupsFile,
-	}
+	})
 
 	sharedPath := filepath.Join(tmpDir, "resman", "limited")
 	if err := os.MkdirAll(sharedPath, 0755); err != nil {

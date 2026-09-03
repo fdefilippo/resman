@@ -204,7 +204,7 @@ func TestTransitionUserCgroupRollsBackLogicalCounterOverflow(t *testing.T) {
 	writeFakeCgroupFiles(t, oldPath, 1, 0)
 	writeFakeCgroupFiles(t, newPath, 100, 0)
 
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		createdCgroups:     map[int]string{1000: oldPath},
 		createdCgroupsFile: filepath.Join(root, "cgroups.txt"),
@@ -222,7 +222,7 @@ func TestTransitionUserCgroupRollsBackLogicalCounterOverflow(t *testing.T) {
 			}
 			return cgroupRemovalResult{}, os.Remove(path)
 		},
-	}
+	})
 
 	_, err := manager.transitionUserCgroup(1000, oldPath, newPath, normalCPUQuota, nil)
 	if !errors.Is(err, errCounterOverflow) {
@@ -244,7 +244,7 @@ func TestTransitionUserCgroupCarriesFinalSourceCountersIntoDestination(t *testin
 	writeFakeCgroupFiles(t, oldPath, 15, 25)
 	writeFakeCgroupFiles(t, newPath, 100, 200)
 
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		createdCgroups:     map[int]string{1000: oldPath},
 		createdCgroupsFile: filepath.Join(root, "cgroups.txt"),
@@ -260,7 +260,7 @@ func TestTransitionUserCgroupCarriesFinalSourceCountersIntoDestination(t *testin
 			}
 			return cgroupRemovalResult{}, os.Remove(path)
 		},
-	}
+	})
 
 	if _, err := manager.transitionUserCgroup(1000, oldPath, newPath, normalCPUQuota, nil); err != nil {
 		t.Fatalf("transitionUserCgroup() error: %v", err)

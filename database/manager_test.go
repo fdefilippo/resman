@@ -219,7 +219,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 4"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 5"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -241,7 +241,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 }
 
 func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T) {
-	for _, version := range []int{2, 3} {
+	for _, version := range []int{2, 3, 4} {
 		t.Run(fmt.Sprintf("schema version %d", version), func(t *testing.T) {
 			dbPath := privateTestDatabasePath(t, fmt.Sprintf("version-%d.db", version))
 			legacyDB, err := sql.Open("sqlite3", dbPath)
@@ -267,7 +267,7 @@ func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T)
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 4"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 5"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -507,8 +507,10 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 			ConfiguredGuaranteePoints: u64(300), ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
 			AppliedCPUClass: text("guaranteed"), AppliedCPUWeight: u64(300), CgroupPath: "/limited/guaranteed/user_1000",
 			CPUQuota: "max 100000", CPUWeight: u64(300), LeafCPUUsageUsecDelta: u64(290000),
-			PIDNamespaceMismatchCount: 1, EnforceableProcessCount: 2,
-			RAMCgroupUsageBytes: u64(8 << 20), RAMCoverage: text("partial"), RAMCoverageIncompleteProcessCount: 1,
+			PIDNamespaceMismatchCount: 1, SystemdOwnershipRefusedCount: 2,
+			RecoveryProcessCount: 1, RestoreFailedProcessCount: 1, StrandedProcessCount: 1,
+			EnforceableProcessCount: 2,
+			RAMCgroupUsageBytes:     u64(8 << 20), RAMCoverage: text("partial"), RAMCoverageIncompleteProcessCount: 1,
 			RAMSwapDisabled: boolean(true), MemoryHighLimit: text("16M"), MemoryMaxLimit: text("48M"), MemorySwapMax: text("0"),
 			MemoryHighEventsDelta: u64(153), MemoryMaxEventsDelta: u64(0), MemoryOOMEventsDelta: u64(0),
 			MemoryOOMKillEventsDelta: u64(0), EligibleForCPU: true, EligibleForRAM: true,
@@ -546,6 +548,9 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 	}
 	if alice[0].RAMCoverage == nil || *alice[0].RAMCoverage != "partial" || alice[0].MemoryHighEventsDelta == nil || *alice[0].MemoryHighEventsDelta != 153 || alice[0].MemoryOOMEventsDelta == nil || *alice[0].MemoryOOMEventsDelta != 0 {
 		t.Fatalf("RAM accounting = %+v", alice[0])
+	}
+	if alice[0].SystemdOwnershipRefusedCount != 2 || alice[0].RecoveryProcessCount != 1 || alice[0].RestoreFailedProcessCount != 1 || alice[0].StrandedProcessCount != 1 {
+		t.Fatalf("ownership and restoration accounting = %+v", alice[0])
 	}
 	bob, err := manager.GetUserHistory(1001, start.Add(-time.Second), end.Add(time.Second), 1)
 	if err != nil || len(bob) != 1 {
@@ -609,7 +614,7 @@ func TestCPUPointsLifecycleStatesRemainDistinct(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 	now := time.Now().UTC()
-	states := []string{"ineligible", "eligible_inactive", "applied", "namespace_rejected", "failed", "released"}
+	states := []string{"ineligible", "eligible_inactive", "applied", "namespace_rejected", "ownership_rejected", "recovery", "stranded", "failed", "released"}
 	users := make([]*UserMetricsRecord, 0, len(states))
 	for index, state := range states {
 		users = append(users, &UserMetricsRecord{

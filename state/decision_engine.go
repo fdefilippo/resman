@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -309,6 +310,10 @@ func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metric
 }
 
 func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+		m.recordObservationOnlyIntent(decision, metrics)
+		return nil
+	}
 	switch decision {
 	case "ACTIVATE_LIMITS":
 		return m.activateLimits(metrics)
@@ -319,6 +324,63 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 		return m.releaseIdleUsers(metrics)
 	default:
 		return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
+	}
+}
+
+func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMetrics) {
+	m.mu.Lock()
+	refusedTotal := 0
+
+	switch decision {
+	case "ACTIVATE_LIMITS":
+		m.requestedCPUUsers = make(map[int]bool, len(metrics.CPUEligibleUsers))
+		for _, uid := range metrics.CPUEligibleUsers {
+			m.requestedCPUUsers[uid] = true
+			refused := 0
+			if observed := metrics.UserMetrics[uid]; observed != nil {
+				refused = observed.EnforceableUsage.ProcessCount
+			}
+			refusedTotal += refused
+			m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
+				state:                   resmanmetrics.CPUPointsLifecycleOwnershipRejected,
+				systemdOwnershipRefused: refused,
+			}
+		}
+		ramEligible := make(map[int]bool, len(metrics.RAMEligibleUsers))
+		for _, uid := range metrics.RAMEligibleUsers {
+			ramEligible[uid] = true
+		}
+		ioEligible := make(map[int]bool, len(metrics.IOEligibleUsers))
+		for _, uid := range metrics.IOEligibleUsers {
+			ioEligible[uid] = true
+		}
+		for uid := range metrics.UserMetrics {
+			current := m.resourceLimits[uid]
+			current.ram = m.cfg.RAMEnabled && ramEligible[uid]
+			current.io = m.cfg.IOEnabled && ioEligible[uid]
+			if !current.ram && !current.io && !current.ramApplied && !current.ioApplied && !current.swap && !current.standalone {
+				delete(m.resourceLimits, uid)
+			} else {
+				m.resourceLimits[uid] = current
+			}
+		}
+	case "DEACTIVATE_LIMITS":
+		m.requestedCPUUsers = make(map[int]bool)
+		for uid, current := range m.resourceLimits {
+			current.ram = false
+			current.io = false
+			if !current.ramApplied && !current.ioApplied && !current.swap && !current.standalone {
+				delete(m.resourceLimits, uid)
+			} else {
+				m.resourceLimits[uid] = current
+			}
+		}
+	}
+	exporter := m.prometheusExporter
+	m.mu.Unlock()
+
+	if exporter != nil && refusedTotal > 0 {
+		exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{SystemdOwnershipRefused: refusedTotal})
 	}
 }
 

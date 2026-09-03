@@ -21,7 +21,7 @@ func TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel(t *test
 	if err := os.MkdirAll(base, 0755); err != nil {
 		t.Fatal(err)
 	}
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
@@ -29,7 +29,7 @@ func TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel(t *test
 		usableControllerInterfaces: map[string]bool{
 			"memory.max": true,
 		},
-	}
+	})
 	controllerWrites := make(map[string][]string)
 	manager.writeController = func(path, value string) error {
 		controllerWrites[path] = append(controllerWrites[path], value)

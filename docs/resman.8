@@ -440,17 +440,40 @@ the original limits are restored earlier when pressure returns to normal.
 .B IO_REVERT_ON_NORMAL
 - Revert limits when I/O returns to normal (true/false)
 .PP
+.SH SYSTEMD OWNERSHIP CONTAINMENT
+On a host booted with systemd, ResMan runs in
+.B observation_only_systemd
+mode for CPU, RAM, and I/O. It observes workloads, evaluates policy, records
+requested intent, exports metrics, and writes history, but refuses every new
+migration-based ingress before the first cgroup mutation. It never represents a
+refused PID or UID as actively limited. This breaking containment mode preserves
+authoritative systemd ownership of login sessions, user and system services, and
+transient units until the ownership-preserving design tracked by resman-nq6 is
+available.
+.PP
+Inspect
+.B resman_enforcement_mode
+or the MCP system and limits status before assuming that enforcement is available.
+There is no configuration override for the systemd containment decision.
+.PP
 .SH PROCESS CGROUP RESTORATION
-Before moving a process into the shared limited cgroup, resman persistently
-records its original cgroup together with the process start time. At release,
-the process is returned to that exact cgroup when it can legally accept
-processes, so systemd session and service membership are preserved.
+New ingress is refused on a systemd host. Existing process-origin state from an
+earlier release is still consumed during release and shutdown so inherited ResMan
+constraints can be removed. Every restore candidate has exactly one disposition:
+.BR exact_origin ,
+.BR recovery ,
+.BR disappeared ,
+or
+.BR failed .
+Only exact restoration is an ordinary successful release.
 .PP
 Processes whose original cgroup no longer exists, and descendants for which no
 unambiguous original destination can be resolved, are moved to
 .I CGROUP_BASE/recovery/user_UID
 instead of the cgroup v2 root. This recovery hierarchy is owned by resman and is
-preserved while it contains live processes.
+preserved while it contains live processes. Recovery placement is reported as
+.B recovery
+rather than released.
 .PP
 An existing origin that distributes controllers to child cgroups is an internal
 cgroup v2 node and cannot accept processes. Resman treats it like an unavailable
@@ -462,6 +485,13 @@ is not reported as successful.
 Recovery leaves use the internal unlimited value
 .BR cpu.max="max 100000" .
 Resman never writes a recovery quota into cgroups managed by systemd.
+.PP
+A recovery leaf is never accepted as an authoritative origin. A process already
+found there is persistently classified as
+.BR stranded ,
+is not silently acquired again, and remains in place until it exits or the operator
+terminates or restarts it under a fresh service or session. Only then may the empty
+recovery leaf be removed.
 .PP
 Live policy reconciliation remains fail-closed. If an excluded process has no
 same-start-time recorded or inherited origin, it remains constrained, the cycle
@@ -723,7 +753,7 @@ When metrics persistence is enabled at its default
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
 Earlier database schemas are incompatible: archive or delete the database
-and restart so resman can create schema version 4. It is never migrated or opened
+and restart so resman can create schema version 5. It is never migrated or opened
 under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
@@ -793,7 +823,7 @@ size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
 .PP
-Schema version 4 commits one common sample epoch and interval boundary for every
+Schema version 5 commits one common sample epoch and interval boundary for every
 system and user row. CPU Points history separates configured class and optional
 guarantee from applied class and weight, raw cgroup diagnostics, nullable comparable
 usage deltas, the online-CPU denominator, programmed parent quota, domain use and
@@ -801,8 +831,10 @@ parent throttling. RAM history separately reports process-derived memory,
 memory.current, applied state, complete or partial charge coverage, memory.high/max
 limits, swap policy, and high/max/OOM/kill event deltas. A NULL counter delta means
 that no comparable baseline exists after startup, a read failure, counter reset or
-cgroup recreation; zero means a comparable counter did not increase. A released
-state is emitted only for a user observed in that sample.
+cgroup recreation; zero means a comparable counter did not increase. Lifecycle
+also distinguishes systemd ownership refusal, recovery placement, and a persistently
+stranded recovery occupant. A released state is emitted only for a user observed in
+that sample.
 .PP
 For a file-backed
 .B METRICS_DB_PATH
@@ -1040,6 +1072,12 @@ resman_limit_hook_queue_depth \- Current pending limit-hook deliveries (gauge)
 resman_limit_hook_queue_capacity \- Configured pending-delivery bound (gauge)
 .IP \(bu
 resman_cgroup_ingress_skipped_total{reason} \- Processes kept outside ResMan-owned cgroups because their PID namespace mismatched or was unavailable (counter)
+.IP \(bu
+resman_enforcement_mode{mode} \- Current bounded migration-enforcement mode (gauge)
+.IP \(bu
+resman_recovery_stranded_processes \- Current live processes in recovery leaves (gauge)
+.IP \(bu
+resman_process_restore_total{disposition} \- Typed process restore outcomes (counter)
 .IP \(bu
 resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP

@@ -60,6 +60,7 @@ type Manager struct {
 	moveUserProcesses   func(context.Context, int) error
 	operationTimeout    func() time.Duration
 	pidNamespace        pidNamespaceIdentity
+	enforcementStatus   EnforcementStatus
 
 	// Cached verification state.
 	cgroupRootWritable         bool
@@ -121,9 +122,10 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		observeRemovalRetry: func() {
 			logger.Debug("Managed cgroup removal entered retry", "operation", "remove_managed_cgroup")
 		},
-		readBlockIOStats: readBlockIOCounters,
-		readCgroupFile:   os.ReadFile,
-		pidNamespace:     pidNamespace,
+		readBlockIOStats:  readBlockIOCounters,
+		readCgroupFile:    os.ReadFile,
+		pidNamespace:      pidNamespace,
+		enforcementStatus: DetectEnforcementStatus(defaultSystemdRuntimePath),
 	}
 	mgr.moveUserProcesses = func(ctx context.Context, uid int) error {
 		_, err := mgr.moveAllUserProcesses(ctx, uid)
@@ -151,9 +153,28 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	logger.Info("Cgroup manager initialized",
 		"cgroup_root", cfg.CgroupRoot,
 		"base_cgroup", cfg.CgroupBase,
+		"enforcement_mode", mgr.enforcementStatus.Mode,
+		"enforcement_reason", mgr.enforcementStatus.Reason,
 	)
+	if !mgr.enforcementStatus.migrationAllowed() {
+		logger.Warn("ResMan is running in observation-only mode; systemd-owned processes will not be migrated",
+			"enforcement_mode", mgr.enforcementStatus.Mode,
+			"reason", mgr.enforcementStatus.Reason,
+		)
+	}
 
 	return mgr, nil
+}
+
+// EnforcementStatus returns the immutable host ownership decision made at startup.
+func (m *Manager) EnforcementStatus() EnforcementStatus {
+	if m.enforcementStatus.Mode == "" {
+		return EnforcementStatus{
+			Mode:   EnforcementModeObservationOnlySystemd,
+			Reason: EnforcementReasonAuthorityUnverifiable,
+		}
+	}
+	return m.enforcementStatus
 }
 
 // verifyCgroupSetup verifies and prepares the cgroup v2 hierarchy.

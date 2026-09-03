@@ -9,6 +9,7 @@ trap 'rm -rf -- "$tmp_dir"' EXIT
 for script in "$script_dir/run.sh" "$script_dir/gate_test.sh" \
 	"$repo_root/test/functional/real-kernel/run.sh" \
 	"$repo_root/test/functional/real-kernel/cpu-points-run.sh" \
+	"$repo_root/test/functional/real-kernel/ownership-run.sh" \
 	"$repo_root/test/functional/real-kernel/remote.sh"; do
 	bash -n "$script"
 done
@@ -72,6 +73,23 @@ write_bps=PASS
 read_iops=PASS
 write_iops=PASS
 PROOF
+elif [[ \$scenario == systemd-ownership-preservation ]]; then
+	cat >"\$dir/systemd-ownership-summary.txt" <<'PROOF'
+pam_session=PASS
+user_service=PASS
+transient_unit=PASS
+system_service=PASS
+unchanged_membership=PASS
+terminate_session=PASS
+observation_continues=PASS
+zero_active_limits=PASS
+recovery_upgrade=PASS
+enforcement_mode=observation_only_systemd
+PROOF
+	case \${FAKE_OWNERSHIP_PROOF_MUTATION:-} in
+		missing) sed -i '/^recovery_upgrade=/d' "\$dir/systemd-ownership-summary.txt" ;;
+		non-pass) sed -i 's/^recovery_upgrade=PASS\$/recovery_upgrade=FAIL/' "\$dir/systemd-ownership-summary.txt" ;;
+	esac
 else
 	cat >"\$dir/cpu-points-summary.txt" <<'PROOF'
 policy_equality=PASS
@@ -105,17 +123,37 @@ pass_root=$tmp_dir/pass
 run_gate "$pass_root" env RESMAN_REAL_KERNEL_HOST=fake.example >/dev/null
 pass_dir=$(find "$pass_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$pass_dir/result") == PASS ]]
-[[ $(wc -l <"$pass_dir/matrix.tsv") -eq 16 ]]
-grep -q $'^block-io\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
+[[ $(wc -l <"$pass_dir/matrix.tsv") -eq 11 ]]
 grep -q $'^psi-refresh-neutrality\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
-grep -q $'^cpu-points-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
-grep -q $'^cpu-points-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/attempts.tsv"
-if grep -q '^cpu-points-real-kernel-real-kernel' "$pass_dir/attempts.tsv"; then
-	exit 1
-fi
-grep -q "CPU Points scheduler evidence scope: \`6.12.0-test\`" "$pass_dir/summary.md"
-grep -q $'^block-io-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
+grep -q $'^systemd-ownership-preservation\tPASS\tremote-real-kernel\t' "$pass_dir/matrix.tsv"
+grep -q $'^systemd-ownership-preservation-real-kernel\tPASS\tremote-real-kernel\t' "$pass_dir/attempts.tsv"
+[[ $(wc -l <"$pass_dir/systemd-containment-dispositions.tsv") -eq 21 ]]
+grep -q $'^cpu-points-proportional\t.*\tdisplaced:.*\tresman-nq6$' \
+	"$pass_dir/systemd-containment-dispositions.tsv"
 grep -q $'^psi-refresh-neutrality-smolvm\tBLOCKED\t' "$pass_dir/attempts.tsv"
+expected_dispositions='blackout-timeframe
+block-io-all-dimensions
+container-runtime
+cpu-points-proportional
+cpu-without-cpuset
+limit-hook-delivery
+mcp-https-endtoend
+memory-standalone
+metrics-database-lifecycle
+multi-user-enforcement
+pid-namespace-container-only
+pid-namespace-mixed-ingress
+process-membership
+prometheus-scrape
+prometheus-user-series-lifecycle
+psi-refresh-neutrality
+service-fatal-config
+service-reload-lifecycle
+service-start-stop
+shutdown-restoration-under-load'
+actual_dispositions=$(tail -n +2 "$pass_dir/systemd-containment-dispositions.tsv" \
+	| cut -f1 | sort)
+[[ $actual_dispositions == "$expected_dispositions" ]]
 
 blocked_root=$tmp_dir/blocked
 set +e
@@ -125,31 +163,31 @@ set -e
 [[ $blocked_status -eq 77 ]]
 blocked_dir=$(find "$blocked_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$blocked_dir/result") == BLOCKED ]]
-grep -q '^blocked_rows=3$' "$blocked_dir/environment.txt"
-[[ $(wc -l <"$blocked_dir/matrix.tsv") -eq 16 ]]
+grep -q '^blocked_rows=2$' "$blocked_dir/environment.txt"
+[[ $(wc -l <"$blocked_dir/matrix.tsv") -eq 11 ]]
 
 failed_root=$tmp_dir/failed
 set +e
 run_gate "$failed_root" env RESMAN_REAL_KERNEL_HOST=fake.example \
-	FAKE_FAIL_SCENARIO=process-membership >/dev/null
+	FAKE_FAIL_SCENARIO=mcp-filter-reload >/dev/null
 failed_status=$?
 set -e
 [[ $failed_status -eq 1 ]]
 failed_dir=$(find "$failed_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 [[ $(< "$failed_dir/result") == FAIL ]]
-grep -q $'^process-membership\tFAIL\t' "$failed_dir/matrix.tsv"
+grep -q $'^mcp-filter-reload\tFAIL\t' "$failed_dir/matrix.tsv"
 
 for mutation in missing non-pass; do
 	proof_failure_root=$tmp_dir/proof-failure-$mutation
 	set +e
 	run_gate "$proof_failure_root" env RESMAN_REAL_KERNEL_HOST=fake.example \
-		FAKE_CPU_POINTS_PROOF_MUTATION=$mutation >/dev/null
+		FAKE_OWNERSHIP_PROOF_MUTATION=$mutation >/dev/null
 	proof_failure_status=$?
 	set -e
 	[[ $proof_failure_status -eq 1 ]]
 	proof_failure_dir=$(find "$proof_failure_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 	[[ $(< "$proof_failure_dir/result") == FAIL ]]
-	grep -q $'^cpu-points-real-kernel\tFAIL\treal-kernel\t' \
+	grep -q $'^systemd-ownership-preservation\tFAIL\treal-kernel\t' \
 		"$proof_failure_dir/matrix.tsv"
 done
 

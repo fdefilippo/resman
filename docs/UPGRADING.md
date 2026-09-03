@@ -10,6 +10,35 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## BREAKING: systemd hosts are observation-only
+
+The containment release after 1.31.1 disables migration-based CPU, RAM, and I/O
+enforcement on every host booted with systemd. ResMan still observes workloads,
+evaluates policy, records requested intent, exports metrics, and writes history, but
+it does not move a candidate process into a ResMan-owned cgroup and does not count a
+PID or UID as actively limited. This deliberately preserves authoritative systemd
+session, service, transient-unit, and system-service ownership. There is no
+configuration switch that restores safe enforcement; the planned
+ownership-preserving replacement is tracked by `resman-nq6`.
+
+Confirm the mode after startup with the `resman_enforcement_mode` metric or the MCP
+system/limits status. A value of `observation_only_systemd` means that policy actions
+are intent and observation only. The startup warning is bounded and carries no PID,
+UID, cgroup path, or raw error text.
+
+An upgrade can find processes that an earlier release already placed below
+`resman/recovery`. Their original systemd ownership cannot be reconstructed. They
+remain in place and are reported as `stranded`; they are never re-admitted and the
+recovery path never becomes their authoritative origin. Stop or restart each process
+under its owning service or session. After it exits, remove only the empty recovery
+leaf. A release that falls back to recovery is reported as `recovery`, not
+`released`; restore results distinguish `exact_origin`, `recovery`, `disappeared`,
+and `failed`.
+
+Schema version 5 adds the lifecycle values `ownership_rejected`, `recovery`, and
+`stranded`. Archive or delete a schema-version-4 database before starting this
+release; in-place schema migration is not supported.
+
 ## Pre-upgrade checklist
 
 1. Stop ResMan and retain a protected copy of the operator-authored configuration.
@@ -96,8 +125,9 @@ rollback.
 ### Metrics history moves and requires a reset
 
 **Visible change.** The default database moves from `/etc/resman/metrics.db` to
-`/var/lib/resman/metrics.db`. Unversioned, schema-version-2, schema-version-3, and
-other incompatible stores are rejected; the current schema version is 4. The immediate parent must be a
+`/var/lib/resman/metrics.db`. Unversioned, schema-version-2, schema-version-3,
+schema-version-4, and other incompatible stores are rejected; the current schema version is 5.
+The immediate parent must be a
 real, process-owned mode-`0700` directory. The database and pre-existing `-wal` and
 `-shm` sidecars must be regular, process-owned mode-`0600` files. Replaceable or
 symbolic-link ancestors are rejected. Failure disables historical persistence with an
@@ -113,7 +143,7 @@ expose per-user data.
 **Action.** Stop ResMan and archive or delete the old database; it is not migrated.
 Create a stable, non-symlink hierarchy with a service-owned mode-`0700` immediate
 parent. Set any retained database and sidecars to the service UID and mode `0600`, or
-let ResMan create a new schema-4 store. The `:memory:` database is unchanged.
+let ResMan create a new schema-5 store. The `:memory:` database is unchanged.
 
 ### Runtime-state and log paths change
 
@@ -822,7 +852,7 @@ Verify all of the following before treating the upgrade as complete:
 - Prometheus exposes the renamed CPU, RAM, I/O, and union series with `hostname` and
   `server_role` labels.
 - Alertmanager routes and silences use the new CPU alert identifiers.
-- The metrics database reports schema version 4 or persistence is deliberately
+- The metrics database reports schema version 5 or persistence is deliberately
   disabled with its remedy understood.
 - Enabled RAM and I/O features passed their real-interface probes.
 - Procfs and block-I/O coverage metrics are zero or their conservative enforcement

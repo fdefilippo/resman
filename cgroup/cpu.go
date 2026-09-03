@@ -9,6 +9,9 @@ import (
 )
 
 func (m *Manager) CreateUserCgroup(uid int) error {
+	if err := m.requireMigrationEnforcement(0); err != nil {
+		return err
+	}
 	// Check whether the cgroup already exists.
 	if existingPath, exists := m.getCgroupPath(uid); exists {
 		if _, err := os.Stat(existingPath); err == nil {

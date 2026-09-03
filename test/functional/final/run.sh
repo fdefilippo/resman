@@ -8,6 +8,7 @@ smolvm_runner=${FINAL_GATE_SMOLVM_RUNNER:-$repo_root/test/functional/smolvm/run.
 real_kernel_runner=${FINAL_GATE_REAL_KERNEL_RUNNER:-$repo_root/test/functional/real-kernel/remote.sh}
 real_kernel_host=${RESMAN_REAL_KERNEL_HOST:-}
 evidence_root=${FINAL_GATE_EVIDENCE_ROOT:-$repo_root/build/functional/final}
+dispositions_source=$script_dir/systemd-containment-dispositions.tsv
 run_id=
 evidence_dir=
 matrix_file=
@@ -119,6 +120,19 @@ field_value() {
 	sed -n "s/^${key}=//p" "$file" | tail -n 1
 }
 
+validate_disposition_inventory() {
+	local file=$1
+	[[ $(head -n 1 "$file") == $'scenario\tprevious_contract\tcontainment_disposition\towner' ]] \
+		|| return 1
+	awk -F '\t' '
+		NR == 1 { next }
+		NF != 4 || $1 == "" || $2 == "" || $3 == "" { exit 1 }
+		$4 != "resman-yom" && $4 != "resman-nq6" { exit 1 }
+		seen[$1]++ { exit 1 }
+		END { if (NR != 21) exit 1 }
+	' "$file"
+}
+
 validate_external_evidence() {
 	local scenario=$1 dir=$2
 	local env_file=$dir/environment.txt
@@ -166,6 +180,17 @@ validate_external_evidence() {
 				PASS|BLOCKED) ;;
 				*) return 1 ;;
 			esac
+			;;
+		systemd-ownership-preservation)
+			local proof=$dir/systemd-ownership-summary.txt
+			[[ -r $proof ]] || return 1
+			for key in pam_session user_service transient_unit system_service \
+				unchanged_membership terminate_session observation_continues \
+				zero_active_limits recovery_upgrade; do
+				[[ $(field_value "$proof" "$key") == PASS ]] || return 1
+			done
+			[[ $(field_value "$proof" enforcement_mode) == observation_only_systemd ]] \
+				|| return 1
 			;;
 	esac
 }
@@ -296,6 +321,15 @@ write_summary() {
 			printf "| \`%s\` | %s | %s | \`%s\` | %s |\n" \
 				"$id" "$status" "$provenance" "$evidence" "$reason"
 		done <"$attempts_file"
+		printf '\n## Systemd containment dispositions\n\n'
+		printf "This table accounts for every former real-kernel and migration-dependent scenario; displaced enforcement claims belong to \`resman-nq6\`.\n\n"
+		printf '| Scenario | Previous contract | Containment disposition | Owner |\n'
+		printf '|---|---|---|---|\n'
+		tail -n +2 "$evidence_dir/systemd-containment-dispositions.tsv" \
+			| while IFS=$'\t' read -r scenario contract disposition owner; do
+				printf "| \`%s\` | %s | %s | \`%s\` |\n" \
+					"$scenario" "$contract" "$disposition" "$owner"
+			done
 	} >"$evidence_dir/summary.md"
 }
 
@@ -316,6 +350,15 @@ main() {
 	: >"$matrix_file"
 	: >"$attempts_file"
 	: >"$commands_log"
+	[[ -r $dispositions_source ]] || {
+		echo "systemd containment disposition inventory is missing" >&2
+		return 1
+	}
+	validate_disposition_inventory "$dispositions_source" || {
+		echo "systemd containment disposition inventory is malformed or incomplete" >&2
+		return 1
+	}
+	cp "$dispositions_source" "$evidence_dir/systemd-containment-dispositions.tsv"
 	source_revision=${FINAL_GATE_SOURCE_REVISION:-$(git -C "$repo_root" rev-parse HEAD)}
 	{
 		printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -355,27 +398,16 @@ main() {
 		"$go_bin" test -count=1 ./internal/cpupoints ./cgroup ./config ./reloader ./state ./metrics ./database -run \
 		'^(TestCPUPointConstructorsEnforceDistinctRanges|TestPlanParentQuotaUsesLiveDenominatorAndExactFloor|TestKernelCPUWeightRejectsInsteadOfClamping|TestPolicyMapFirstEqualsPreservesCompleteUsername|TestPolicyLoaderValidatesTheCompleteCapacityInvariant|TestLiveCapacityProviderRequiresTrustworthyInitialRead|TestLiveCapacityProviderSeesTopologyChangesWithoutObservationCache|TestLiveCapacityProviderRetainsExactPlanAcrossFailureAndRetries|TestEnsureCPUPointsHierarchyProgramsAndVerifiesEverySchedulingLevel|TestCPUPointsLeafIsFullyConfiguredBeforeIngress|TestCPUPointsReloadRejectsActiveClassChangeBeforeAnyKernelWrite|TestCPUPointsReloadFailureAtEveryMutationRetainsSafeRetryIntent|TestCPUPointsOnlineCPUChangeOnlyReprogramsParentQuota|TestCPUPointsAdmissionAndDeparturePreserveAggregateOrdering|TestCPUPointsFailedAdmissionRetainsConservativeHighWaterMark|TestCPUPointsRAMActiveTransitionsFailBeforeCgroupMutation|TestWatcherTreatsMainConfigAndCPUPointsMapAsOneCandidateEpoch|TestCompositeReloadRollsBackWhenMapChangesDuringApplicationBeforeAcknowledgement|TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting|TestOperationalCPUPointsStatesRequireCompleteComparableDeltas|TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesStaleValues)$'
 
-	run_required_smolvm memory-standalone memory-only \
-		"RAM eligibility creates a standalone CPU-unlimited cgroup"
-	run_required_smolvm process-membership process-membership \
-		"active membership reconciliation moves, restores, and fails closed per process"
-	run_required_smolvm cpu-without-cpuset cpu-without-cpuset \
-		"CPU quota and shutdown recovery work without optional cpuset"
 	run_required_smolvm missing-io-startup missing-io-startup \
 		"enabled I/O fails startup when a real child lacks io.max"
 	run_required_smolvm mcp-filter-reload mcp-filter-reload \
 		"MCP 2026-07-28 acknowledges persisted and effective filter reload"
-	run_required_smolvm container-runtime container-runtime \
-		"the shipped rootful Podman contract resolves and limits foreign host users"
-	run_fallback_contract block-io block-iops 0 block-io-all-dimensions \
-		"${FINAL_GATE_BLOCK_IO_EVIDENCE:-}" \
-		"cached/socket syscalls stay observational and all four real block-I/O dimensions activate"
 	run_fallback_contract psi-refresh-neutrality psi-refresh-neutrality 1 psi-refresh-neutrality \
 		"${FINAL_GATE_PSI_EVIDENCE:-}" \
 		"PSI observation refreshes do not advance decision CPU or EMA"
-	run_required_external cpu-points-real-kernel cpu-points-proportional \
-		"${FINAL_GATE_CPU_POINTS_EVIDENCE:-}" \
-		"production-valid CPU Points, independent same-run oracles, lending, reload, partial coverage, release, and shutdown are proved"
+	run_required_external systemd-ownership-preservation systemd-ownership-preservation \
+		"${FINAL_GATE_SYSTEMD_OWNERSHIP_EVIDENCE:-}" \
+		"PAM session, user service, transient unit, and system service ownership remain authoritative while observation continues and inherited recovery stays stranded"
 
 	local overall exit_code
 	if [[ $failed_rows -gt 0 ]]; then

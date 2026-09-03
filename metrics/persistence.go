@@ -10,6 +10,9 @@ const (
 	CPUPointsLifecycleEligibleInactive  CPUPointsLifecycleState = "eligible_inactive"
 	CPUPointsLifecycleApplied           CPUPointsLifecycleState = "applied"
 	CPUPointsLifecycleNamespaceRejected CPUPointsLifecycleState = "namespace_rejected"
+	CPUPointsLifecycleOwnershipRejected CPUPointsLifecycleState = "ownership_rejected"
+	CPUPointsLifecycleRecovery          CPUPointsLifecycleState = "recovery"
+	CPUPointsLifecycleStranded          CPUPointsLifecycleState = "stranded"
 	CPUPointsLifecycleFailed            CPUPointsLifecycleState = "failed"
 	CPUPointsLifecycleReleased          CPUPointsLifecycleState = "released"
 )
@@ -29,6 +32,10 @@ type UserPersistenceMetrics struct {
 	LeafCPUUsageUsecDelta             *uint64
 	PIDNamespaceMismatchCount         int
 	PIDNamespaceUnavailableCount      int
+	SystemdOwnershipRefusedCount      int
+	RecoveryProcessCount              int
+	RestoreFailedProcessCount         int
+	StrandedProcessCount              int
 	RAMCgroupUsageBytes               *uint64
 	RAMCoverage                       *string
 	RAMCoverageIncompleteProcessCount int

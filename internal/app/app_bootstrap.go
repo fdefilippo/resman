@@ -40,7 +40,8 @@ func (a *App) WithCgroupManager() *App {
 		a.err = classifyCgroupStartupError(err)
 		return a
 	}
-	if err := cgroupMgr.RecoverExistingCgroups(); err != nil {
+	restoreResult, err := cgroupMgr.RecoverExistingCgroupsWithResult()
+	if err != nil {
 		a.logger.Error("Failed to recover cgroups left by a previous daemon instance",
 			"error", err,
 		)
@@ -48,6 +49,7 @@ func (a *App) WithCgroupManager() *App {
 		a.err = err
 		return a
 	}
+	a.startupRestore = restoreResult
 	a.cgroupMgr = cgroupMgr
 	return a
 }
@@ -179,6 +181,7 @@ func (a *App) WithPrometheus() *App {
 	}
 
 	a.prometheusExporter = prometheusExporter
+	prometheusExporter.RecordProcessRestoreResult(a.startupRestore)
 	a.logger.Info("Prometheus exporter started",
 		"host", a.cfg.PrometheusMetricsBindHost,
 		"port", a.cfg.PrometheusMetricsBindPort,
@@ -214,8 +217,20 @@ func (a *App) WithStateManager() *App {
 	if err != nil {
 		return a.failCPUPointsStartup("initialize CPU Points live capacity", err, false)
 	}
+	recoverySnapshot, recoveryErr := a.cgroupMgr.RecoverySnapshot()
+	if recoveryErr != nil {
+		a.logger.Warn("Failed to inspect recovery occupants during state initialization", "error", recoveryErr)
+	}
 
-	stateManager, err := state.NewManager(a.cfg, a.metricsCollector, a.cgroupMgr, a.prometheusExporter, state.WithCPUPointsRuntime(policy, capacity))
+	stateManager, err := state.NewManager(
+		a.cfg,
+		a.metricsCollector,
+		a.cgroupMgr,
+		a.prometheusExporter,
+		state.WithCPUPointsRuntime(policy, capacity),
+		state.WithEnforcementStatus(a.cgroupMgr.EnforcementStatus()),
+		state.WithRecoverySnapshot(recoverySnapshot),
+	)
 	if err != nil {
 		a.logger.Error("Failed to initialize state manager", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)

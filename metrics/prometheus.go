@@ -120,6 +120,8 @@ type PrometheusExporter struct {
 	cpuLimitsActive            prometheus.Gauge
 	resourceLimitsActive       prometheus.Gauge
 	anyLimitsActive            prometheus.Gauge
+	enforcementMode            *prometheus.GaugeVec
+	recoveryStrandedProcesses  prometheus.Gauge
 	systemLoad                 prometheus.Gauge
 	totalCores                 prometheus.Gauge
 	procFSUnavailableProcesses *prometheus.GaugeVec
@@ -161,6 +163,7 @@ type PrometheusExporter struct {
 	psiLastEventTimestamp          *prometheus.GaugeVec
 	errorsTotal                    *prometheus.CounterVec
 	cgroupIngressSkipped           *prometheus.CounterVec
+	processRestores                *prometheus.CounterVec
 	limitHookExecutions            *prometheus.CounterVec
 	limitHookInFlight              prometheus.Gauge
 	limitHookQueueDepth            prometheus.Gauge
@@ -521,6 +524,22 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
+	exp.enforcementMode = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "enforcement_mode",
+			Help:        "Bounded host enforcement mode: migration_enabled or observation_only_systemd",
+			ConstLabels: staticLabels,
+		},
+		[]string{"mode"},
+	)
+	exp.recoveryStrandedProcesses = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Name:        "recovery_stranded_processes",
+		Help:        "Current processes stranded in ResMan recovery cgroups rather than restored to their authoritative origin",
+		ConstLabels: staticLabels,
+	})
+
 	exp.systemLoad = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "system_load_average",
@@ -778,10 +797,19 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Name:        "cgroup_ingress_skipped_total",
-			Help:        "Total process ingress attempts skipped at the ResMan PID namespace boundary",
+			Help:        "Total process ingress attempts skipped at a bounded ResMan ownership boundary",
 			ConstLabels: staticLabels,
 		},
 		[]string{"reason"},
+	)
+	exp.processRestores = promauto.With(exp.registry).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Name:        "process_restore_total",
+			Help:        "Terminal process restore outcomes by bounded disposition",
+			ConstLabels: staticLabels,
+		},
+		[]string{"disposition"},
 	)
 
 	exp.limitHookExecutions = promauto.With(exp.registry).NewCounterVec(
@@ -843,6 +871,8 @@ func (exp *PrometheusExporter) ObserveConfigReload(observation config.ReloadObse
 
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
+	EnforcementMode                              cgroup.EnforcementMode
+	RecoveryStrandedProcesses                    int
 	TotalCPUUsage                                float64
 	TotalCores                                   int
 	CPUPoints                                    *CPUPointsSystemSnapshot
@@ -901,6 +931,17 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 	exp.cpuLimitsActive.Set(boolMetricValue(metrics.CPULimitsActive))
 	exp.resourceLimitsActive.Set(boolMetricValue(metrics.ResourceLimitsActive))
 	exp.anyLimitsActive.Set(boolMetricValue(metrics.AnyLimitsActive))
+	exp.recoveryStrandedProcesses.Set(float64(metrics.RecoveryStrandedProcesses))
+	for _, mode := range []cgroup.EnforcementMode{
+		cgroup.EnforcementModeMigrationEnabled,
+		cgroup.EnforcementModeObservationOnlySystemd,
+	} {
+		value := 0.0
+		if metrics.EnforcementMode == mode {
+			value = 1
+		}
+		exp.enforcementMode.WithLabelValues(string(mode)).Set(value)
+	}
 	exp.memoryUsage.Set(metrics.MemoryUsageMB)
 	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
 	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)
@@ -1294,6 +1335,29 @@ func (exp *PrometheusExporter) RecordCgroupIngressSkips(result cgroup.ProcessMov
 	}
 	if result.PIDNamespaceUnavailable > 0 {
 		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.PIDNamespaceUnavailable)).Add(float64(result.PIDNamespaceUnavailable))
+	}
+	if result.SystemdOwnershipRefused > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.SystemdOwnershipPreserved)).Add(float64(result.SystemdOwnershipRefused))
+	}
+	if result.RecoveryStranded > 0 {
+		exp.cgroupIngressSkipped.WithLabelValues(string(cgroup.RecoveryProcessStranded)).Add(float64(result.RecoveryStranded))
+	}
+}
+
+// RecordProcessRestoreResult records each terminal restore disposition once.
+func (exp *PrometheusExporter) RecordProcessRestoreResult(result cgroup.ProcessRestoreResult) {
+	if exp == nil {
+		return
+	}
+	for _, disposition := range []cgroup.ProcessRestoreDisposition{
+		cgroup.ProcessRestoreExactOrigin,
+		cgroup.ProcessRestoreRecovery,
+		cgroup.ProcessRestoreDisappeared,
+		cgroup.ProcessRestoreFailed,
+	} {
+		if count := result.Count(disposition); count > 0 {
+			exp.processRestores.WithLabelValues(string(disposition)).Add(float64(count))
+		}
 	}
 }
 

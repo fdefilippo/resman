@@ -258,6 +258,17 @@ type Config struct {
 - Track created cgroups in file
 - Clean up cgroups on shutdown
 
+**Systemd ownership boundary:**
+
+When `/run/systemd/system` identifies a systemd-booted host, the containment
+architecture is explicitly observation-only. The collector and decision engine keep
+running, but CPU, RAM, and I/O intent cannot authorize a process migration or active
+limit. The mode is exposed by typed runtime/MCP state and bounded Prometheus labels.
+This preserves ownership by login sessions, user services, transient units, and
+system services. The hierarchy below is therefore an enforcement topology only for a
+separately supported non-systemd ownership model; it is not created for new systemd
+workloads. The systemd-native replacement is specified by `resman-nq6`.
+
 **Cgroup Hierarchy:**
 ```
 /sys/fs/cgroup/
@@ -275,7 +286,7 @@ type Config struct {
         └── ...
 ```
 
-Before migration, resman atomically persists PID, process start time, parent,
+Where migration is supported, resman atomically persists PID, process start time, parent,
 session ID, and original cgroup. Release restores the exact original cgroup
 when it can legally accept processes. If that cgroup disappeared or is an
 internal cgroup v2 node with controllers delegated to children, the process
@@ -283,8 +294,12 @@ enters the resman-owned recovery hierarchy. PID reuse is detected by
 revalidating the start time immediately before every restore write. Descendants
 inherit an unambiguous parent or session origin; otherwise they also use
 recovery. Recovery leaves receive an internal unlimited `cpu.max`; no public
-normal-quota setting is written into systemd-managed cgroups. An incomplete shutdown restoration is
-returned from the application and produces a non-zero daemon exit status.
+normal-quota setting is written into systemd-managed cgroups. Every attempted
+restore returns one typed disposition: exact origin, recovery, disappeared, or
+failed. Recovery is not successful release. Its occupants remain visibly stranded,
+are never admitted again, and the recovery path is never recorded as a new origin.
+An incomplete shutdown restoration is returned from the application and produces a
+non-zero daemon exit status.
 
 Live reconciliation deliberately differs from shutdown recovery. It does not
 guess or create a replacement destination for an excluded process without a
@@ -683,11 +698,12 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A pre-version-4 database must be archived or deleted so schema
-version 4 can be created; it is not moved or migrated. Version 4 persists one common
+component construction. A pre-version-5 database must be archived or deleted so schema
+version 5 can be created; it is not moved or migrated. Version 5 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
-nullable identity-safe cgroup deltas, PID-namespace and RAM-charge coverage, and
-distinct memory high/max/OOM/kill deltas. First baselines, counter resets and cgroup
+nullable identity-safe cgroup deltas, PID-namespace and systemd-ownership refusal,
+typed recovery lifecycle, RAM-charge coverage, and distinct memory high/max/OOM/kill
+deltas. First baselines, counter resets and cgroup
 recreation remain NULL rather than being reinterpreted as zero or wrapped deltas.
 
 **Format:**
@@ -1319,6 +1335,8 @@ decision policy.
 - `resman_cpu_limits_active` (gauge)
 - `resman_resource_limits_active` (gauge)
 - `resman_any_limits_active` (gauge)
+- `resman_enforcement_mode{mode}` (one bounded active mode)
+- `resman_recovery_stranded_processes` (current live recovery occupants)
 
 **Per-User Metrics:**
 - `resman_user_cpu_usage_percent{uid, username}` (gauge)
@@ -1367,7 +1385,10 @@ the interval series instead of creating a wrapped delta.
 - `resman_limit_hook_queue_depth` (current pending deliveries)
 - `resman_limit_hook_queue_capacity` (configured pending-delivery bound)
 - `resman_cgroup_ingress_skipped_total{reason}` (processes not moved into ResMan-owned
-  cgroups; reason is `pid_namespace_mismatch` or `pid_namespace_unavailable`)
+  cgroups; reason is `pid_namespace_mismatch`, `pid_namespace_unavailable`,
+  `systemd_ownership_preserved`, or `recovery_process_stranded`)
+- `resman_process_restore_total{disposition}` (exact-origin, recovery,
+  disappearance, and failure outcomes with bounded labels)
 - `resman_procfs_unavailable_processes{access}` (current missing executable-identity
   or I/O-decision procfs inputs)
 

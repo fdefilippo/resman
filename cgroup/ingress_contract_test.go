@@ -18,8 +18,8 @@ func TestManagedCgroupIngressWritesHaveOneNamespaceGuardedBoundary(t *testing.T)
 	}
 
 	allowed := map[string]string{
-		"moveProcessBatchExpected": "guarded ingress",
-		"restoreProcessesExpected": "restore and recovery bypass ingress guard",
+		"moveProcessBatchExpected":       "guarded ingress",
+		"restoreProcessesExpectedResult": "restore and recovery bypass ingress guard",
 	}
 	found := make(map[string]int)
 	fset := token.NewFileSet()

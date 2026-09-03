@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
 
 func TestMCPWireDTOJSONContracts(t *testing.T) {
@@ -24,6 +26,32 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		value any
 		keys  []string
 	}{
+		{
+			name: "system status",
+			value: newSystemStatusPayload("host", "role", resmanmetrics.ObservationMetrics{}, state.RuntimeStatus{
+				EnforcementMode: cgroup.EnforcementModeObservationOnlySystemd,
+			}),
+			keys: []string{
+				"actively_limited_users_count", "any_limits_active", "cpu_limits_active", "cpu_limits_applied_time",
+				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
+				"migration_enforcement_available", "observed_users_count", "observed_users_cpu_usage", "recovery_occupants",
+				"resource_limits_active", "resource_limits_applied_time", "server_role", "shared_cgroup_active",
+				"system_under_load", "total_cores", "total_cpu_usage",
+			},
+		},
+		{
+			name: "limits status",
+			value: newLimitsStatusPayload("host", "role", state.RuntimeStatus{
+				EnforcementMode: cgroup.EnforcementModeObservationOnlySystemd,
+			}),
+			keys: []string{
+				"actively_limited_users", "actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users",
+				"cpu_actively_limited_users_count", "cpu_limits_active", "cpu_limits_applied_time", "cpu_point_users",
+				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "migration_enforcement_available",
+				"recovery_occupants", "resource_limits_active", "resource_limits_applied_time", "server_role",
+				"shared_cgroup_active", "shared_cgroup_path", "shared_cgroup_user_count",
+			},
+		},
 		{
 			name:  "active users",
 			value: activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}},
@@ -114,7 +142,8 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"memory_oom_kill_events_delta", "memory_swap_max", "memory_usage", "pid_namespace_mismatch_count",
 		"pid_namespace_unavailable_count", "process_count", "ram_cgroup_usage_bytes", "ram_coverage",
 		"ram_coverage_incomplete_process_count", "ram_limit_active", "ram_limit_requested", "ram_swap_disabled",
-		"sample_epoch_id", "timestamp", "uid", "username",
+		"recovery_process_count", "restore_failed_process_count", "sample_epoch_id", "stranded_process_count",
+		"systemd_ownership_refused_count", "timestamp", "uid", "username",
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
 		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "best_effort_domain_cpu_usage_usec_delta",
@@ -126,6 +155,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"sample_epoch_id", "system_load", "timestamp", "total_cores", "total_cpu_usage",
 	})
 	assertExactNestedJSONKeys(t, activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}}, "users", []string{"uid", "username"})
+	assertExactNestedJSONKeys(t, systemStatusPayload{RecoveryOccupants: []recoveryOccupantPayload{{UID: 1000, PID: 123, StartTime: "456"}}}, "recovery_occupants", []string{"pid", "start_time", "uid"})
 }
 
 func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *testing.T) {
@@ -196,7 +226,8 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 		"memory_max_events_delta", "memory_max_limit", "memory_oom_events_delta", "memory_oom_kill_events_delta",
 		"memory_swap_max", "observed_process_count", "pid_namespace_mismatch_count", "pid_namespace_unavailable_count",
 		"process_coverage", "ram_cgroup_memory_current_bytes", "ram_coverage", "ram_coverage_incomplete_process_count",
-		"ram_swap_disabled", "reconciliation_degraded", "uid", "username",
+		"ram_swap_disabled", "reconciliation_degraded", "recovery_process_count", "restore_failed_process_count",
+		"stranded_process_count", "systemd_ownership_refused_count", "uid", "username",
 	})
 	encoded, err = json.Marshal(users)
 	if err != nil {

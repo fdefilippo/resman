@@ -190,6 +190,17 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   an error fallback that moves the process anyway. Observation and decision accounting
   remain unchanged. Restore and recovery are exempt because they remove an existing
   ResMan constraint instead of acquiring a new process.
+- A host booted with systemd **MUST** preserve systemd as the authoritative owner of
+  every session, service, transient-unit, and system-service workload. Until an
+  ownership-preserving adapter implements the complete resource contract, the daemon
+  runs in an explicit observation-only mode and **MUST NOT** migrate any new process
+  for CPU, RAM, or I/O enforcement. A refusal is typed and bounded, leaves requested
+  intent observable, and never creates active-limit state. Restore remains permitted
+  only to remove a constraint inherited from an earlier release.
+- A ResMan recovery leaf is never an authoritative process origin. Every restore
+  candidate **MUST** end in exactly one typed disposition: exact origin, recovery,
+  disappeared, or failed. Recovery occupants remain persistently stranded, cannot be
+  admitted again, and are removed only after exit or deliberate operator disposition.
 - Because observation remains UID-wide, a nested workload refused at ingress still
   contributes to activation and release inputs. If it keeps a mixed UID above the
   release threshold, host-namespace processes already acquired by ResMan remain
@@ -221,7 +232,7 @@ UID's active limit even though ResMan deliberately cannot reduce that workload's
 The per-operation warning identifies the UID and bounded skip counts; the Prometheus
 counter exposes the host-level trend without unbounded identity labels.
 
-*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d*
+*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d, resman-yom*
 
 ## Rule 4 — Every configured decision dimension must be evaluated
 
@@ -894,6 +905,10 @@ to one client or licence model.
 A change is not done until every line is true:
 
 - [ ] `make fmt`, `make lint`, `make test`, `go vet ./...`, `go test -race ./...` pass.
+- [ ] Every newly produced RPM or DEB has a fresh package identity: for an unchanged
+      `VERSION`, `RELEASE` is incremented by exactly one in both `Makefile` and the
+      RPM spec (for example, `1.31.1-1` is followed by `1.31.1-2`). `RELEASE` returns
+      to `1` only when `VERSION` changes, and the RPM and DEB identities agree.
 - [ ] Nothing was kept for compatibility; anything removed is rejected loudly, not
       ignored (Rule 1).
 - [ ] No field carries more than one of eligibility / intent / observation (Rule 2).

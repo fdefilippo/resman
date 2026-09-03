@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
@@ -651,7 +652,10 @@ func newStatusProtocolTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("NewCollector() error = %v", err)
 	}
-	manager, err := state.NewManager(cfg, collector, nil, nil)
+	manager, err := state.NewManager(cfg, collector, nil, nil, state.WithEnforcementStatus(cgroup.EnforcementStatus{
+		Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+		Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
+	}))
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -758,6 +762,10 @@ func callPromptOverHTTP(t *testing.T, server *Server, name string) string {
 func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 	t.Helper()
 	for _, key := range []string{
+		"enforcement_mode",
+		"enforcement_reason",
+		"migration_enforcement_available",
+		"recovery_occupants",
 		"observed_users_cpu_usage",
 		"observed_users_count",
 		"actively_limited_users_count",
@@ -768,6 +776,12 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 		if _, exists := status[key]; !exists {
 			t.Errorf("status is missing %q: %+v", key, status)
 		}
+	}
+	if got := status["enforcement_mode"]; got != string(cgroup.EnforcementModeObservationOnlySystemd) {
+		t.Errorf("enforcement_mode = %v", got)
+	}
+	if got := status["migration_enforcement_available"]; got != false {
+		t.Errorf("migration_enforcement_available = %v", got)
 	}
 	for _, key := range []string{"total_user_cpu_usage", "user_cpu_usage", "active_users_count", "limits_active", "limits_applied_time"} {
 		if _, exists := status[key]; exists {

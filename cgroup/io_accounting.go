@@ -169,6 +169,9 @@ func (m *Manager) EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota str
 
 func (m *Manager) ensureUserCgroupPlacement(uid int, sharedPath, normalQuota string, weight *cpupoints.KernelCPUWeight) (string, ProcessMoveResult, error) {
 	var result ProcessMoveResult
+	if err := m.requireMigrationEnforcement(0); err != nil {
+		return "", result, err
+	}
 	if uid == 0 {
 		return "", result, fmt.Errorf("refusing to place root processes in a managed cgroup")
 	}
@@ -339,13 +342,13 @@ func (m *Manager) transitionUserCgroup(uid int, oldPath, newPath, normalQuota st
 		errs = append(errs, m.rollbackUserCgroupTransition(uid, moved, oldPath))
 		return result, errors.Join(errs...)
 	}
-	if result.NamespaceSkipped() > 0 {
+	if result.IngressSkipped() > 0 {
 		rollbackErr := m.rollbackUserCgroupTransition(uid, moved, oldPath)
 		return result, errors.Join(
 			fmt.Errorf(
-				"cannot complete cgroup placement transition for UID %d: %d processes were outside the ResMan PID namespace boundary",
+				"cannot complete cgroup placement transition for UID %d: %d processes were refused at an ingress boundary",
 				uid,
-				result.NamespaceSkipped(),
+				result.IngressSkipped(),
 			),
 			rollbackErr,
 		)

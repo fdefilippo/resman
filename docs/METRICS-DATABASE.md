@@ -75,7 +75,7 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 4 and contains `user_metrics` and
+The current store uses schema version 5 and contains `user_metrics` and
 `system_metrics` tables. Every transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
@@ -85,10 +85,14 @@ from different epoch identifiers.
 User records separate process-derived CPU and memory observation; total and
 enforceable process counts; configured CPU class and nullable mapped guarantee;
 lifecycle outcome from applied class and weight; raw `cpu.max`/`cpu.weight`
-diagnostics; nullable leaf usage deltas; PID-namespace rejection counts; and cgroup
+diagnostics; nullable leaf usage deltas; PID-namespace and systemd-ownership
+rejection counts; and cgroup
 RAM usage, charge coverage, limits, swap policy and distinct high/max/OOM/kill event
 deltas. Lifecycle is one of `ineligible`, `eligible_inactive`, `applied`,
-`namespace_rejected`, `failed`, or `released`.
+`namespace_rejected`, `ownership_rejected`, `recovery`, `stranded`, `failed`, or
+`released`. `recovery` means that an attempted release could not return every
+process to its recorded origin. `stranded` persists while a process is found in a
+ResMan recovery leaf; neither state is ordinary successful release.
 
 An absent guarantee never means zero: best-effort users have no synthetic per-user
 guarantee. An absent delta means no comparable baseline was available; numeric zero
@@ -119,8 +123,10 @@ reconstructed from later rows.
 The schema is versioned with SQLite `PRAGMA user_version`. ResMan intentionally does
 not migrate an incompatible database. Version 3 and unversioned stores are rejected
 by the CPU Points cutover because they cannot express allocation class, guarantee,
-common sampling epochs, topology resets, or RAM charge coverage. Move or delete the
-store and restart to create version 4. No alias or dual-read path exists.
+common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
+rejected by the ownership-containment release because its lifecycle vocabulary cannot
+represent ownership refusal, recovery, or stranded occupants. Move or delete the
+store and restart to create version 5. No alias or dual-read path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
 values are stored in UTC and API responses use RFC 3339.

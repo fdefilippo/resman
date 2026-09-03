@@ -61,6 +61,10 @@ type cpuPointsUserPayload struct {
 	EnforceableProcessCount           int     `json:"enforceable_process_count"`
 	PIDNamespaceMismatchCount         int     `json:"pid_namespace_mismatch_count"`
 	PIDNamespaceUnavailableCount      int     `json:"pid_namespace_unavailable_count"`
+	SystemdOwnershipRefusedCount      int     `json:"systemd_ownership_refused_count"`
+	RecoveryProcessCount              int     `json:"recovery_process_count"`
+	RestoreFailedProcessCount         int     `json:"restore_failed_process_count"`
+	StrandedProcessCount              int     `json:"stranded_process_count"`
 	LeafCPUUsageUsecDelta             *uint64 `json:"leaf_cpu_usage_usec_delta,omitempty"`
 	RAMCgroupUsageBytes               *uint64 `json:"ram_cgroup_memory_current_bytes,omitempty"`
 	RAMCoverage                       *string `json:"ram_coverage,omitempty"`
@@ -110,6 +114,9 @@ func newCPUPointsUserPayload(snapshot resmanmetrics.CPUPointsUserSnapshot) cpuPo
 		ReconciliationDegraded: snapshot.ReconciliationDegraded, ProcessCoverage: string(snapshot.ProcessCoverage),
 		ObservedProcessCount: snapshot.ObservedProcessCount, EnforceableProcessCount: snapshot.EnforceableProcessCount,
 		PIDNamespaceMismatchCount: snapshot.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: snapshot.PIDNamespaceUnavailableCount,
+		SystemdOwnershipRefusedCount: snapshot.SystemdOwnershipRefusedCount,
+		RecoveryProcessCount:         snapshot.RecoveryProcessCount, RestoreFailedProcessCount: snapshot.RestoreFailedProcessCount,
+		StrandedProcessCount:  snapshot.StrandedProcessCount,
 		LeafCPUUsageUsecDelta: snapshot.LeafCPUUsageUsecDelta, RAMCgroupUsageBytes: snapshot.RAMCgroupUsageBytes,
 		RAMCoverage: snapshot.RAMCoverage, RAMCoverageIncompleteProcessCount: snapshot.RAMCoverageIncompleteProcessCount,
 		RAMSwapDisabled: snapshot.RAMSwapDisabled, MemoryHighLimit: snapshot.MemoryHighLimit, MemoryMaxLimit: snapshot.MemoryMaxLimit,
@@ -282,6 +289,10 @@ type userHistoryRecord struct {
 	LeafCPUUsageUsecDelta             *uint64 `json:"leaf_cpu_usage_usec_delta"`
 	PIDNamespaceMismatchCount         int     `json:"pid_namespace_mismatch_count"`
 	PIDNamespaceUnavailableCount      int     `json:"pid_namespace_unavailable_count"`
+	SystemdOwnershipRefusedCount      int     `json:"systemd_ownership_refused_count"`
+	RecoveryProcessCount              int     `json:"recovery_process_count"`
+	RestoreFailedProcessCount         int     `json:"restore_failed_process_count"`
+	StrandedProcessCount              int     `json:"stranded_process_count"`
 	RAMCgroupUsageBytes               *uint64 `json:"ram_cgroup_usage_bytes"`
 	RAMCoverage                       *string `json:"ram_coverage"`
 	RAMCoverageIncompleteProcessCount int     `json:"ram_coverage_incomplete_process_count"`
@@ -334,6 +345,10 @@ func newUserHistoryRecord(record database.UserMetricsRecord) userHistoryRecord {
 		LeafCPUUsageUsecDelta:             record.LeafCPUUsageUsecDelta,
 		PIDNamespaceMismatchCount:         record.PIDNamespaceMismatchCount,
 		PIDNamespaceUnavailableCount:      record.PIDNamespaceUnavailableCount,
+		SystemdOwnershipRefusedCount:      record.SystemdOwnershipRefusedCount,
+		RecoveryProcessCount:              record.RecoveryProcessCount,
+		RestoreFailedProcessCount:         record.RestoreFailedProcessCount,
+		StrandedProcessCount:              record.StrandedProcessCount,
 		RAMCgroupUsageBytes:               record.RAMCgroupUsageBytes,
 		RAMCoverage:                       record.RAMCoverage,
 		RAMCoverageIncompleteProcessCount: record.RAMCoverageIncompleteProcessCount,

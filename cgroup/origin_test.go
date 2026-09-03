@@ -31,7 +31,7 @@ func newOriginTestManager(t *testing.T) (*Manager, string) {
 		t.Fatalf("failed to create recovery subtree control: %v", err)
 	}
 
-	manager := &Manager{
+	manager := migrationEnabledTestManager(&Manager{
 		cfg:                cfg,
 		logger:             logging.GetLogger(),
 		createdCgroups:     make(map[int]string),
@@ -43,7 +43,7 @@ func newOriginTestManager(t *testing.T) (*Manager, string) {
 		readPIDNamespace: func(int) (pidNamespaceIdentity, error) {
 			return pidNamespaceIdentity{device: 1, inode: 1}, nil
 		},
-	}
+	})
 	return manager, root
 }
 
@@ -466,6 +466,110 @@ func TestMoveProcessBatchRechecksNamespaceImmediatelyBeforeWrite(t *testing.T) {
 				t.Fatal("origin persisted for a process rejected at the final namespace boundary")
 			}
 		})
+	}
+}
+
+func TestRecoveryProcessIsStrandedAndNeverReadmittedOrRecordedAsOrigin(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	recoveryPath := "/resman/recovery/user_1000"
+	writeFakeProcess(t, manager, 171, 1, 171, 5700, 1000, recoveryPath)
+	createFakeCgroup(t, root, recoveryPath)
+	destination := createFakeCgroup(t, root, "/resman/limited/user_1000")
+	writeCalled := false
+	manager.writePID = func(string, int) error {
+		writeCalled = true
+		return nil
+	}
+
+	moved, result, moveErrors, err := manager.moveProcessBatch([]int{171}, 1000, destination)
+	if err != nil || len(moveErrors) != 0 {
+		t.Fatalf("moveProcessBatch() moved=%v result=%+v errors=%v err=%v", moved, result, moveErrors, err)
+	}
+	if writeCalled || len(moved) != 0 || result.RecoveryStranded != 1 || result.Applied() {
+		t.Fatalf("recovery ingress result = %+v moved=%v write=%t", result, moved, writeCalled)
+	}
+	if _, ok := manager.snapshotProcessOrigins()[171]; ok {
+		t.Fatal("recovery cgroup became an authoritative process origin")
+	}
+}
+
+func TestRestoreProcessesReportsEveryTypedDisposition(t *testing.T) {
+	t.Run("exact recorded origin", func(t *testing.T) {
+		manager, root := newOriginTestManager(t)
+		origin := "/user.slice/user-1000.slice/session-8.scope"
+		originPath := createFakeCgroup(t, root, origin)
+		writeFakeProcess(t, manager, 181, 1, 181, 5800, 1000, "/resman/limited/user_1000")
+		manager.processOrigins[181] = processOrigin{PID: 181, UID: 1000, StartTime: 5800, CgroupPath: origin}
+		manager.writePID = func(path string, pid int) error {
+			if path != filepath.Join(originPath, "cgroup.procs") || pid != 181 {
+				t.Fatalf("restore target = %s PID=%d", path, pid)
+			}
+			return nil
+		}
+
+		result, _, err := manager.restoreProcessesExpectedResult(1000, []int{181}, normalCPUQuota, nil, "", true)
+		if err != nil || result.Count(ProcessRestoreExactOrigin) != 1 || len(result.Outcomes) != 1 {
+			t.Fatalf("restore result = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("recovery", func(t *testing.T) {
+		manager, _ := newOriginTestManager(t)
+		writeFakeProcess(t, manager, 182, 1, 182, 5801, 1000, "/resman/limited/user_1000")
+		manager.writePID = func(string, int) error { return nil }
+
+		result, _, err := manager.restoreProcessesExpectedResult(1000, []int{182}, normalCPUQuota, nil, "", true)
+		if err != nil || result.Count(ProcessRestoreRecovery) != 1 || len(result.Outcomes) != 1 {
+			t.Fatalf("restore result = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("disappeared", func(t *testing.T) {
+		manager, _ := newOriginTestManager(t)
+		result, _, err := manager.restoreProcessesExpectedResult(1000, []int{183}, normalCPUQuota, nil, "", true)
+		if err != nil || result.Count(ProcessRestoreDisappeared) != 1 || len(result.Outcomes) != 1 {
+			t.Fatalf("restore result = %+v err=%v", result, err)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		manager, _ := newOriginTestManager(t)
+		procPath := filepath.Join(manager.getProcRoot(), "184")
+		if err := os.MkdirAll(procPath, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(procPath, "stat"), []byte("invalid\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		result, _, err := manager.restoreProcessesExpectedResult(1000, []int{184}, normalCPUQuota, nil, "", true)
+		if err == nil || result.Count(ProcessRestoreFailed) != 1 || len(result.Outcomes) != 1 {
+			t.Fatalf("restore result = %+v err=%v", result, err)
+		}
+	})
+}
+
+func TestRecoverySnapshotReportsLiveStrandedProcessesAndEmptyLeaves(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	occupied := createFakeCgroup(t, root, "/resman/recovery/user_1000")
+	empty := createFakeCgroup(t, root, "/resman/recovery/user_1001")
+	writeFakeProcess(t, manager, 191, 1, 191, 5900, 1000, "/resman/recovery/user_1000")
+	if err := os.WriteFile(filepath.Join(occupied, "cgroup.procs"), []byte("191\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(empty, "cgroup.procs"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := manager.RecoverySnapshot()
+	if err != nil {
+		t.Fatalf("RecoverySnapshot() error: %v", err)
+	}
+	if len(snapshot.Occupants) != 1 || snapshot.Occupants[0] != (RecoveryOccupant{UID: 1000, PID: 191, StartTime: 5900}) {
+		t.Fatalf("recovery occupants = %+v", snapshot.Occupants)
+	}
+	if len(snapshot.EmptyUIDs) != 1 || snapshot.EmptyUIDs[0] != 1001 {
+		t.Fatalf("empty recovery UIDs = %v", snapshot.EmptyUIDs)
 	}
 }
 

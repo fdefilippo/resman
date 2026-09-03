@@ -52,6 +52,7 @@ type App struct {
 	psiWatcher         *cgroup.PSIWatcher
 	psiEvents          <-chan cgroup.PSIEvent
 	psiEventDriven     bool
+	startupRestore     cgroup.ProcessRestoreResult
 	configReloaded     chan struct{}
 	notifyReady        func() error
 }

@@ -49,8 +49,9 @@ Requires(preun): systemd-units
 Requires(postun): systemd-units
 
 %description
-Enterprise-grade CPU, RAM and IO resource management tool with cgroups v2 support.
-Automatically limits CPU, memory and block I/O for non-system users based on configurable thresholds.
+Enterprise-grade CPU, RAM and IO resource observation and management tool with cgroups v2 support.
+On systemd hosts this containment build observes and reports policy intent without
+migrating processes or claiming active CPU, memory or block-I/O limits.
 v1.20.0: IO limits via cgroups v2 io controller.
 v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
 v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
@@ -76,9 +77,9 @@ CGO is enabled by default in this RPM and is required for:
 - Proper integration with system authentication services
 
 Features:
-- Dynamic CPU limiting for non-system users (UID >=1000)
+- Dynamic CPU limiting on supported non-systemd ownership models
 - Configurable activation/release thresholds
-- Normalized CPU Points guarantees below one finite cpu.max parent
+- Normalized CPU Points guarantees where migration enforcement is available
 - RAM limiting with memory.high (soft) and memory.max (hard) limits
 - Graceful memory throttling before OOM killer (v1.19.0+)
 - Block I/O limiting with io.max (bandwidth and IOPS) (v1.20.0+)

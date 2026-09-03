@@ -365,6 +365,42 @@ type blockIOSequenceCgroupManager struct {
 	sharedReleases   int
 }
 
+func TestObservationOnlyBlockIOAccountingDoesNotCreatePlacement(t *testing.T) {
+	cfg := ioDecisionConfig()
+	cfg.IOReadIOPS = 1000
+	collector := &mockMetricsCollector{
+		preserveExplicitEnforceableUsage: true,
+		allUserMetrics: map[int]*resmanmetrics.UserMetrics{
+			1000: {UID: 1000, Username: "alice", EligibleForIO: true},
+		},
+	}
+	cgroups := &blockIOSequenceCgroupManager{}
+	manager, err := NewManager(
+		cfg,
+		collector,
+		cgroups,
+		&mockPrometheusExporter{},
+		WithEnforcementStatus(cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+			Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+
+	sample, err := manager.collectSystemMetrics()
+	if err != nil {
+		t.Fatalf("collectSystemMetrics() error: %v", err)
+	}
+	if len(cgroups.placements) != 0 || cgroups.statsReads != 0 {
+		t.Fatalf("observation-only I/O accounting placements=%v reads=%d", cgroups.placements, cgroups.statsReads)
+	}
+	if sample.IOBlockIOPSUnavailableUsers != 1 {
+		t.Fatalf("unavailable block-I/O users = %d, want 1", sample.IOBlockIOPSUnavailableUsers)
+	}
+}
+
 func (m *blockIOSequenceCgroupManager) EnsureUserCgroupPlacement(uid int, sharedPath, _ string) (string, cgroup.ProcessMoveResult, error) {
 	m.placements = append(m.placements, sharedPath)
 	if err := m.placementErrors[uid]; err != nil {
