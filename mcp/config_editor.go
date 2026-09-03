@@ -217,7 +217,7 @@ func (s *Server) handleUpdateCPUPoints(ctx context.Context, _ *mcp.CallToolReque
 	if err := s.stateManager.ValidateCPUPointsPolicyTransition(candidate.Policy()); err != nil {
 		return &mcp.CallToolResult{}, classifyEditorPreflight(err, nil), nil
 	}
-	fresh, err := config.BuildEditorSnapshot(applied)
+	fresh, err := s.buildEditorPrePersistSnapshot(applied)
 	if err != nil || fresh.Revision.Value != args.Revision.Value {
 		return &mcp.CallToolResult{}, s.revisionConflict(args.Revision), nil
 	}
@@ -230,6 +230,13 @@ func (s *Server) handleUpdateCPUPoints(ctx context.Context, _ *mcp.CallToolReque
 	return &mcp.CallToolResult{}, s.finishEditorPersistence(
 		ctx, args.Revision, nil, args.Revision.Config, persistedCPU, rollback,
 	), nil
+}
+
+func (s *Server) buildEditorPrePersistSnapshot(applied *config.Config) (config.EditorSnapshot, error) {
+	if s.revisionConfirm != nil {
+		return s.revisionConfirm(applied)
+	}
+	return config.BuildEditorSnapshot(applied)
 }
 
 func (s *Server) beginEditorUpdate(expected config.EditorCompositeRevision) (editorUpdateResult, bool) {

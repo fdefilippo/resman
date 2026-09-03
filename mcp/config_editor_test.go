@@ -20,9 +20,11 @@ type editorTestReloader struct {
 	path      string
 	manager   *state.Manager
 	reloadErr error
+	reloads   int
 }
 
 func (r *editorTestReloader) Reload(context.Context) error {
+	r.reloads++
 	if r.reloadErr != nil {
 		return r.reloadErr
 	}
@@ -32,6 +34,70 @@ func (r *editorTestReloader) Reload(context.Context) error {
 	}
 	r.manager.UpdateConfig(loaded)
 	return nil
+}
+
+func TestCPUPointsEditorReconfirmsCompositeRevisionAfterPreflightBeforePersistence(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mapPath := filepath.Join(directory, "cpu-points.map")
+	originalMap := []byte("[resman-cpu-points-map-v1]\nroot=100\n")
+	if err := os.WriteFile(mapPath, originalMap, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "resman.conf")
+	if err := os.WriteFile(configPath, []byte("CPU_POINTS_FILE="+mapPath+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := state.NewManager(applied, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloader := &editorTestReloader{path: configPath, manager: manager}
+	server := &Server{
+		cfg: &config.MCPServerConfig{AllowWriteOps: true}, stateManager: manager, configReloader: reloader,
+	}
+
+	request, err := config.BuildEditorSnapshot(manager.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.revisionConfirm = func(current *config.Config) (config.EditorSnapshot, error) {
+		if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nroot=101\n"), 0600); err != nil {
+			return config.EditorSnapshot{}, err
+		}
+		fresh, snapshotErr := config.BuildEditorSnapshot(current)
+		if err := os.WriteFile(mapPath, originalMap, 0600); err != nil {
+			return config.EditorSnapshot{}, err
+		}
+		return fresh, snapshotErr
+	}
+
+	points := uint64(120)
+	_, result, err := server.handleUpdateCPUPoints(context.Background(), nil, updateCPUPointsArgs{
+		Revision: request.Revision, Changes: []cpuPointsEditorChange{{Username: "root", Points: &points}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != editorUpdateRefused || result.Refusal == nil || result.Refusal.Reason != editorRefusalRevisionConflict {
+		t.Fatalf("update result = %+v, want revision conflict after preflight", result)
+	}
+	if reloader.reloads != 0 {
+		t.Fatalf("reload calls = %d, want none after pre-persistence conflict", reloader.reloads)
+	}
+	content, err := os.ReadFile(mapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(originalMap) {
+		t.Fatalf("CPU Points map = %q, want original source unchanged", content)
+	}
 }
 
 func (r *editorTestReloader) ReloadEditorRevision(ctx context.Context, expected config.EditorCompositeRevision) error {

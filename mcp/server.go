@@ -115,6 +115,7 @@ type Server struct {
 	cgroupManager     cgroupInfoReader
 	dbManager         *database.DatabaseManager
 	configReloader    ConfigurationReloader
+	revisionConfirm   func(*config.Config) (config.EditorSnapshot, error)
 	logger            serverLogger
 	httpServer        *http.Server
 	tlsConfig         *tls.Config
