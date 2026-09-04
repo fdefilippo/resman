@@ -20,13 +20,14 @@ type cgroupVerifier struct {
 	root     string
 	readFile func(string) ([]byte, error)
 	stat     func(string) (os.FileInfo, error)
+	pageSize uint64
 }
 
 func newCgroupVerifier(root string) cgroupVerifier {
 	if root == "" {
 		root = defaultCgroupRoot
 	}
-	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat}
+	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat, pageSize: uint64(os.Getpagesize())}
 }
 
 func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
@@ -146,11 +147,20 @@ func (v cgroupVerifier) verifyScalarFile(path string, snapshot UnitSnapshot, pro
 	}
 	if expected == SystemdUnset {
 		expected = defaultWhenUnset
+	} else if property == PropertyMemoryHigh || property == PropertyMemoryMax || property == PropertyMemorySwapMax {
+		expected = pageAlignedMemoryLimit(expected, v.pageSize)
 	}
 	if actual != expected {
 		return fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", property, snapshot.Identity.Name, expected, actual)
 	}
 	return nil
+}
+
+func pageAlignedMemoryLimit(value, pageSize uint64) uint64 {
+	if value == SystemdUnset || pageSize == 0 {
+		return value
+	}
+	return value - value%pageSize
 }
 
 func (v cgroupVerifier) verifyIOWeight(path string, snapshot UnitSnapshot) error {

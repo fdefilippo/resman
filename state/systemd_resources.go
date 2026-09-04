@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -97,6 +98,14 @@ func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *System
 		}
 	}
 	var reconcileErrors []error
+	type plannedResource struct {
+		uid         int
+		identity    systemdunit.UnitIdentity
+		resource    systemdunit.ResourceKind
+		assignments []systemdunit.PropertyAssignment
+		swap        bool
+	}
+	planned := make([]plannedResource, 0, len(desiredUIDs)*2)
 	for _, uid := range desiredUIDs {
 		identity, present := units[uid]
 		if !present {
@@ -112,14 +121,36 @@ func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *System
 			assignments, err := m.systemdMemoryAssignments(uid, cfg)
 			if err != nil {
 				reconcileErrors = append(reconcileErrors, &SystemdResourceReconciliationError{UID: uid, Resource: systemdunit.ResourceMemory, Step: "plan", Err: err})
-			} else if err := m.applySystemdResource(ctx, uid, identity, systemdunit.ResourceMemory, assignments, cfg.DisableSwap); err != nil {
-				reconcileErrors = append(reconcileErrors, err)
+			} else {
+				planned = append(planned, plannedResource{uid: uid, identity: identity, resource: systemdunit.ResourceMemory, assignments: assignments, swap: cfg.DisableSwap})
 			}
 		}
 		if ioDesired[uid] {
-			if err := m.applySystemdResource(ctx, uid, identity, systemdunit.ResourceIO, ioAssignments, false); err != nil {
-				reconcileErrors = append(reconcileErrors, err)
+			planned = append(planned, plannedResource{uid: uid, identity: identity, resource: systemdunit.ResourceIO, assignments: ioAssignments})
+		}
+	}
+	requests := make([]systemdunit.ResourceAuthorityRequest, len(planned))
+	for index, plan := range planned {
+		requests[index] = systemdunit.ResourceAuthorityRequest{Identity: plan.identity, UID: uint32(plan.uid), Resource: plan.resource, Assignments: plan.assignments}
+	}
+	authorities, err := m.systemdUnits.CheckResourceAuthorities(ctx, requests)
+	if err != nil {
+		return fmt.Errorf("inspect systemd resource authority: %w", err)
+	}
+	if len(authorities) != len(planned) {
+		return fmt.Errorf("inspect systemd resource authority: adapter returned %d results for %d requests", len(authorities), len(planned))
+	}
+	for index, plan := range planned {
+		result := authorities[index]
+		if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
+			if result.Err == nil {
+				result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not confirm complete resource authority")}
 			}
+			reconcileErrors = append(reconcileErrors, m.refuseSystemdResource(ctx, plan.uid, plan.identity, plan.resource, result.Authority, result.Err))
+			continue
+		}
+		if err := m.applySystemdResource(ctx, plan.uid, plan.identity, plan.resource, plan.assignments, plan.swap, result.Authority); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
 		}
 	}
 
@@ -246,12 +277,23 @@ func (m *Manager) systemdMemoryAssignments(uid int, cfg *config.Config) ([]syste
 		return nil, fmt.Errorf("invalid RAM quota %q", quota)
 	}
 	highBytes := uint64(float64(maxBytes) * cfg.GetRAMHighRatio())
+	pageSize := uint64(os.Getpagesize())
+	maxBytes -= maxBytes % pageSize
+	highBytes -= highBytes % pageSize
+	if maxBytes == 0 {
+		return nil, fmt.Errorf("RAM quota %q is smaller than the host page size %d", quota, pageSize)
+	}
 	values := []struct {
 		name  systemdunit.PropertyName
 		value uint64
 	}{
-		{name: systemdunit.PropertyMemoryHigh, value: highBytes},
 		{name: systemdunit.PropertyMemoryMax, value: maxBytes},
+	}
+	if cfg.GetRAMHighRatio() > 0 {
+		values = append([]struct {
+			name  systemdunit.PropertyName
+			value uint64
+		}{{name: systemdunit.PropertyMemoryHigh, value: highBytes}}, values...)
 	}
 	if cfg.DisableSwap {
 		values = append(values, struct {
@@ -326,12 +368,7 @@ func (m *Manager) systemdIOAssignments(cfg *config.Config, multiplier float64) (
 	return result, nil
 }
 
-func (m *Manager) applySystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, assignments []systemdunit.PropertyAssignment, swap bool) error {
-	authority, err := m.systemdUnits.CheckResourceAuthority(ctx, identity, uint32(uid), resource, assignments)
-	m.recordSystemdResourceAuthority(uid, resource, authority)
-	if err != nil {
-		return &SystemdResourceReconciliationError{UID: uid, Resource: resource, Step: "authority", Err: err}
-	}
+func (m *Manager) applySystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, assignments []systemdunit.PropertyAssignment, swap bool, authority systemdunit.ResourceAuthority) error {
 	if _, err := m.systemdUnits.Apply(ctx, identity, assignments); err != nil {
 		return &SystemdResourceReconciliationError{UID: uid, Resource: resource, Step: "apply", Err: err}
 	}
@@ -351,6 +388,28 @@ func (m *Manager) applySystemdResource(ctx context.Context, uid int, identity sy
 	m.systemdResourceUnits[uid] = identity
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) refuseSystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, authority systemdunit.ResourceAuthority, authorityErr error) error {
+	m.mu.RLock()
+	state := m.resourceLimits[uid]
+	trackedIdentity, tracked := m.systemdResourceUnits[uid]
+	applied := state.ramApplied
+	if resource == systemdunit.ResourceIO {
+		applied = state.ioApplied
+	}
+	m.mu.RUnlock()
+	var restoreErr error
+	if applied && tracked && trackedIdentity == identity {
+		restoreErr = m.restoreSystemdResource(ctx, uid, identity, resource)
+	}
+	// Retain the refusal after a successful release so every observation
+	// surface explains why the resource is not currently applied.
+	m.recordSystemdResourceAuthority(uid, resource, authority)
+	return errors.Join(
+		&SystemdResourceReconciliationError{UID: uid, Resource: resource, Step: "authority", Err: authorityErr},
+		restoreErr,
+	)
 }
 
 func (m *Manager) recordMissingSystemdResourceAuthority(uid int, resource systemdunit.ResourceKind) error {

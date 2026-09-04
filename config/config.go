@@ -1990,11 +1990,11 @@ func (c *Config) GetCPUPointsFile() string {
 }
 
 // GetRAMHighRatio returns the ratio for memory.high (0.0-1.0).
-// Default is 0.8 (80% of memory.max). Invalid values are clamped to 0.8.
+// Default is 0.8 (80% of memory.max). Zero disables memory.high.
 func (c *Config) GetRAMHighRatio() float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.RAMHighRatio <= 0 || c.RAMHighRatio > 1 {
+	if c.RAMHighRatio < 0 || c.RAMHighRatio > 1 {
 		return 0.8
 	}
 	return c.RAMHighRatio

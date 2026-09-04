@@ -46,6 +46,20 @@ type ResourceAuthority struct {
 	Reason   ResourceCoverageReason
 }
 
+// ResourceAuthorityRequest describes one resource-specific authority check.
+type ResourceAuthorityRequest struct {
+	Identity    UnitIdentity
+	UID         uint32
+	Resource    ResourceKind
+	Assignments []PropertyAssignment
+}
+
+// ResourceAuthorityResult is one result from a batched authority inspection.
+type ResourceAuthorityResult struct {
+	Authority ResourceAuthority
+	Err       error
+}
+
 // ResourceAuthorityError reports a refusal made before resource mutation.
 type ResourceAuthorityError struct {
 	UID       uint32
@@ -65,11 +79,21 @@ func (e *ResourceAuthorityError) Error() string {
 func (e *ResourceAuthorityError) Unwrap() error { return e.Err }
 
 type resourceCoverageInspector interface {
-	inspect(context.Context, uint32, string) (ResourceAuthority, error)
+	inspectMany(context.Context, []resourceCoverageTarget) []resourceCoverageInspection
 }
 
-func inspectResourceCoverage(inspector resourceCoverageInspector, ctx context.Context, uid uint32, snapshot UnitSnapshot) (ResourceAuthority, error) {
-	return inspector.inspect(ctx, uid, snapshot.ControlGroup)
+type resourceCoverageTarget struct {
+	uid          uint32
+	controlGroup string
+}
+
+type resourceCoverageInspection struct {
+	authority ResourceAuthority
+	err       error
+}
+
+func coverageTargetFor(uid uint32, snapshot UnitSnapshot) resourceCoverageTarget {
+	return resourceCoverageTarget{uid: uid, controlGroup: snapshot.ControlGroup}
 }
 
 type procCoverageInspector struct {
@@ -88,18 +112,35 @@ func newProcCoverageInspector(root string) procCoverageInspector {
 }
 
 func (i procCoverageInspector) inspect(ctx context.Context, uid uint32, controlGroup string) (ResourceAuthority, error) {
-	complete := ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}
+	results := i.inspectMany(ctx, []resourceCoverageTarget{{uid: uid, controlGroup: controlGroup}})
+	return results[0].authority, results[0].err
+}
+
+func (i procCoverageInspector) inspectMany(ctx context.Context, targets []resourceCoverageTarget) []resourceCoverageInspection {
+	results := make([]resourceCoverageInspection, len(targets))
+	for index := range results {
+		results[index].authority = ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}
+	}
+	refuseAll := func(reason ResourceCoverageReason, err error) []resourceCoverageInspection {
+		for index := range results {
+			results[index].authority, results[index].err = refusedAuthority(reason, err)
+		}
+		return results
+	}
+	if len(targets) == 0 {
+		return results
+	}
 	entries, err := i.readDir(i.root)
 	if err != nil {
-		return refusedAuthority(ResourceCoverageInspectionFailed, err)
+		return refuseAll(ResourceCoverageInspectionFailed, err)
 	}
 	hostNamespace, err := i.stat(filepath.Join(i.root, "1", "ns", "pid"))
 	if err != nil {
-		return refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect host PID namespace: %w", err))
+		return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("inspect host PID namespace: %w", err))
 	}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return refusedAuthority(ResourceCoverageInspectionFailed, err)
+			return refuseAll(ResourceCoverageInspectionFailed, err)
 		}
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid <= 0 || !entry.IsDir() {
@@ -111,41 +152,54 @@ func (i procCoverageInspector) inspect(ctx context.Context, uid uint32, controlG
 			continue
 		}
 		if err != nil {
-			return refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d: %w", pid, err))
+			return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d: %w", pid, err))
 		}
 		processCgroup, err := readUnifiedProcessCgroup(i.readFile, filepath.Join(processRoot, "cgroup"))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d cgroup: %w", pid, err))
+			return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d cgroup: %w", pid, err))
 		}
-		inside := controlGroupContains(controlGroup, processCgroup)
-		if !inside {
-			ownerUID := i.ownerUID
-			if ownerUID == nil {
-				ownerUID = processOwnerUID
+		ownerUID := i.ownerUID
+		if ownerUID == nil {
+			ownerUID = processOwnerUID
+		}
+		uid := ownerUID(processInfo)
+		var processNamespace os.FileInfo
+		var namespaceErr error
+		namespaceRead := false
+		for index, target := range targets {
+			if results[index].authority.State != ResourceCoverageComplete {
+				continue
 			}
-			if ownerUID(processInfo) == uid {
-				return ResourceAuthority{State: ResourceCoveragePartial, Reason: ResourceCoverageAuthoritySplit}, nil
+			if !controlGroupContains(target.controlGroup, processCgroup) {
+				if uid == target.uid {
+					results[index].authority = ResourceAuthority{State: ResourceCoveragePartial, Reason: ResourceCoverageAuthoritySplit}
+				}
+				continue
 			}
-			continue
-		}
-		if runtimeOwnedCgroupPath(processCgroup) {
-			return refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
-		}
-		processNamespace, err := i.stat(filepath.Join(processRoot, "ns", "pid"))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d PID namespace: %w", pid, err))
-		}
-		if !os.SameFile(hostNamespace, processNamespace) {
-			return refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
+			if runtimeOwnedCgroupPath(processCgroup) {
+				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
+				continue
+			}
+			if !namespaceRead {
+				processNamespace, namespaceErr = i.stat(filepath.Join(processRoot, "ns", "pid"))
+				namespaceRead = true
+			}
+			if errors.Is(namespaceErr, os.ErrNotExist) {
+				continue
+			}
+			if namespaceErr != nil {
+				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d PID namespace: %w", pid, namespaceErr))
+				continue
+			}
+			if !os.SameFile(hostNamespace, processNamespace) {
+				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
+			}
 		}
 	}
-	return complete, nil
+	return results
 }
 
 func runtimeOwnedCgroupPath(path string) bool {

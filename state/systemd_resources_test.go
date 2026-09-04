@@ -3,10 +3,18 @@ package state
 import (
 	"context"
 	"errors"
+	"os"
+	"reflect"
 	"testing"
 
 	"github.com/fdefilippo/resman/internal/systemdunit"
 )
+
+var expectedMemorySystemdProperties = []systemdunit.PropertyName{
+	systemdunit.PropertyMemoryHigh,
+	systemdunit.PropertyMemoryMax,
+	systemdunit.PropertyMemorySwapMax,
+}
 
 func TestSystemdNativeMemoryAndIOPlansAreIndependentFromCPUEligibility(t *testing.T) {
 	policy := testCPUPointsPolicy(t, nil)
@@ -57,11 +65,9 @@ func TestSystemdNativeResourceRefusalDoesNotDisableCPUPlan(t *testing.T) {
 		State:    systemdunit.ResourceCoverageRefused,
 		Reason:   systemdunit.ResourceCoverageRuntimeDescendant,
 	}
-	authorityErr := &systemdunit.ResourceAuthorityError{UID: 1000, Authority: authority}
 	adapter := &fakeSystemdCPUUnitAdapter{
-		topology:       testSystemdTopology(0, 1000),
-		authority:      map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceMemory: authority},
-		authorityError: map[systemdunit.ResourceKind]error{systemdunit.ResourceMemory: authorityErr},
+		topology:  testSystemdTopology(0, 1000),
+		authority: map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceMemory: authority},
 	}
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.UserIncludeList = []string{"alice"}
@@ -81,6 +87,49 @@ func TestSystemdNativeResourceRefusalDoesNotDisableCPUPlan(t *testing.T) {
 	}
 	if manager.resourceLimits[1000].ramAuthority.Reason != systemdunit.ResourceCoverageRuntimeDescendant {
 		t.Fatalf("refusal reason was not retained: %+v", manager.resourceLimits[1000])
+	}
+}
+
+func TestSystemdNativeAuthorityLossReleasesOnlyTheRefusedResource(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{"alice"}
+	manager.cfg.RAMEnabled = true
+	manager.cfg.RAMUserIncludeList = []string{"alice"}
+	metrics := &SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}}
+	if err := manager.activateLimits(metrics); err != nil {
+		t.Fatal(err)
+	}
+	memoryAppliesBefore := countSystemdPropertyApplications(adapter.applies, systemdunit.PropertyMemoryHigh)
+	authority := systemdunit.ResourceAuthority{Resource: systemdunit.ResourceMemory, State: systemdunit.ResourceCoveragePartial, Reason: systemdunit.ResourceCoverageAuthoritySplit}
+	adapter.authority = map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceMemory: authority}
+	adapter.authorityError = map[systemdunit.ResourceKind]error{systemdunit.ResourceMemory: &systemdunit.ResourceAuthorityError{UID: 1000, Authority: authority}}
+
+	err := manager.activateLimits(metrics)
+	var reconciliationErr *SystemdResourceReconciliationError
+	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "authority" {
+		t.Fatalf("activateLimits() error = %v, want typed authority refusal", err)
+	}
+	if got := countSystemdPropertyApplications(adapter.applies, systemdunit.PropertyMemoryHigh); got != memoryAppliesBefore {
+		t.Fatalf("authority refusal performed a new memory apply: before=%d after=%d", memoryAppliesBefore, got)
+	}
+	want := append([]systemdunit.PropertyName(nil), expectedMemorySystemdProperties...)
+	memoryRestore, ok := findPropertyRestore(adapter.propertyRestores, systemdunit.PropertyMemoryHigh)
+	if !ok || !reflect.DeepEqual(memoryRestore.properties, want) {
+		t.Fatalf("memory restore = %+v, want only %v (all calls: %+v)", memoryRestore, want, adapter.propertyRestores)
+	}
+	for _, property := range memoryRestore.properties {
+		if property.IsCPU() {
+			t.Fatalf("resource refusal restored CPU property %s", property)
+		}
+	}
+	state := manager.resourceLimits[1000]
+	if state.ramApplied || state.ramAuthority.Reason != systemdunit.ResourceCoverageAuthoritySplit || !manager.limitsActive {
+		t.Fatalf("post-refusal state = %+v CPU active=%t", state, manager.limitsActive)
 	}
 }
 
@@ -137,6 +186,54 @@ func TestSystemdNativeResourceReleaseDoesNotRemoveActiveCPUWeight(t *testing.T) 
 	if !containsString(adapter.restores, "user-1000.slice") {
 		t.Fatalf("RAM release did not use selected property restoration: %v", adapter.restores)
 	}
+	memoryRestore, ok := findPropertyRestore(adapter.propertyRestores, systemdunit.PropertyMemoryHigh)
+	if !ok || !reflect.DeepEqual(memoryRestore.properties, expectedMemorySystemdProperties) {
+		t.Fatalf("RAM release restored %v, want a memory-only call with %v", adapter.propertyRestores, expectedMemorySystemdProperties)
+	}
+}
+
+func TestSystemdMemoryAssignmentsUseConfiguredRatioAndHostPageGranularity(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	manager := testSystemdCPUPointsManager(t, policy, &fakeSystemdCPUUnitAdapter{}, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMQuotaPerUser = "512M"
+	manager.cfg.RAMHighRatio = 0.8
+	assignments, err := manager.systemdMemoryAssignments(1000, manager.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[systemdunit.PropertyName]uint64{}
+	for _, assignment := range assignments {
+		values[assignment.Name()] = assignment.Value()
+	}
+	pageSize := uint64(os.Getpagesize())
+	const maxBytes = uint64(512 << 20)
+	wantHigh := (maxBytes * 8 / 10) / pageSize * pageSize
+	if values[systemdunit.PropertyMemoryHigh] != wantHigh || values[systemdunit.PropertyMemoryMax] != maxBytes {
+		t.Fatalf("memory assignments = %v, want high=%d max=%d", values, wantHigh, maxBytes)
+	}
+	if values[systemdunit.PropertyMemoryHigh] == values[systemdunit.PropertyMemoryMax] {
+		t.Fatal("RAM_HIGH_RATIO was ignored")
+	}
+
+	manager.cfg.RAMHighRatio = 0
+	assignments, err = manager.systemdMemoryAssignments(1000, manager.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, assignment := range assignments {
+		if assignment.Name() == systemdunit.PropertyMemoryHigh {
+			t.Fatal("RAM_HIGH_RATIO=0 did not disable MemoryHigh")
+		}
+	}
+}
+
+func TestDesiredResourceUsersRequiresTheResourceToBeEnabled(t *testing.T) {
+	if got := desiredResourceUsers(false, []int{1000, 1001}); len(got) != 0 {
+		t.Fatalf("disabled resource users = %v, want none", got)
+	}
+	if got := desiredResourceUsers(true, []int{1000, 1001}); !got[1000] || !got[1001] || len(got) != 2 {
+		t.Fatalf("enabled resource users = %v", got)
+	}
 }
 
 func hasSystemdProperty(calls []systemdCPUApplyCall, property systemdunit.PropertyName) bool {
@@ -158,4 +255,28 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func countSystemdPropertyApplications(calls []systemdCPUApplyCall, property systemdunit.PropertyName) int {
+	count := 0
+	for _, call := range calls {
+		if _, ok := call.assignments[property]; ok {
+			count++
+		}
+		if _, ok := call.devices[property]; ok {
+			count++
+		}
+	}
+	return count
+}
+
+func findPropertyRestore(calls []systemdPropertyRestoreCall, property systemdunit.PropertyName) (systemdPropertyRestoreCall, bool) {
+	for _, call := range calls {
+		for _, candidate := range call.properties {
+			if candidate == property {
+				return call, true
+			}
+		}
+	}
+	return systemdPropertyRestoreCall{}, false
 }

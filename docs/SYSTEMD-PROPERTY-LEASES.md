@@ -35,8 +35,17 @@ that every process already below it shares the host PID namespace. A UID split a
 another parent is reported as partial `authority_split` coverage. A rootless-container
 descendant is reported as refused `runtime_owned_descendant` coverage. In both cases
 CPU scheduling may continue, but ResMan does not claim or apply a complete memory or
-I/O policy. Failure to inspect the process set or the required controller also refuses
-that resource before mutation.
+I/O policy. If authority is lost after a resource was applied, ResMan restores only
+that resource's owned properties before publishing the refusal; CPU and the other
+independently authorized resource remain untouched. Failure to inspect the process set
+or the required controller also refuses that resource before mutation.
+
+One immutable `/proc` observation is shared by every user and both resource checks in
+one reconciliation pass. This keeps the authority decision consistent across memory
+and I/O and prevents inspection cost from multiplying by the number of users. Finite
+memory values are rounded down to the host page size before they are written. The
+systemd readback remains exact, while kernel verification compares the corresponding
+page-normalized value exposed by `memory.high`, `memory.max`, or `memory.swap.max`.
 
 This conservative rule avoids presenting a leaf-only memory or I/O limit as coverage
 of a workload whose runtime owns a nested resource boundary. It does not provide a

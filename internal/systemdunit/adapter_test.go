@@ -302,6 +302,82 @@ func TestReconcileOwnedCleansAUnitThatDepartedAfterApplication(t *testing.T) {
 	}
 }
 
+func TestReconcileOwnedCleansAUnitThatDepartsBetweenListAndRead(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+	path := managedRuntimeDropInPath(identity.Name, PropertyCPUWeight)
+	transport.diskPaths = map[string][]string{identity.Name: {path}}
+	transport.onUnitRead = func(f *fakeUnitTransport, unit string, _ int) {
+		if unit == identity.Name {
+			delete(f.units, unit)
+		}
+	}
+
+	if err := adapter.ReconcileOwned(context.Background()); err != nil {
+		t.Fatalf("ReconcileOwned() error: %v", err)
+	}
+	if got := adapter.OwnedUnits(); len(got) != 0 {
+		t.Fatalf("OwnedUnits() = %+v, want empty after list/read departure", got)
+	}
+	if !reflect.DeepEqual(transport.revertCalls, []string{identity.Name}) || transport.reloadCalls != 1 {
+		t.Fatalf("inactive cleanup calls = revert %v reload %d", transport.revertCalls, transport.reloadCalls)
+	}
+}
+
+func TestReconcileOwnedReevaluatesAPriorConflict(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatal(err)
+	}
+	transport.units[identity.Name].slice[string(PropertyCPUWeight)] = uint64(123)
+	if err := adapter.ReconcileOwned(context.Background()); err == nil {
+		t.Fatal("ReconcileOwned() accepted an external property conflict")
+	}
+	transport.units[identity.Name].slice[string(PropertyCPUWeight)] = uint64(321)
+	if err := adapter.ReconcileOwned(context.Background()); err != nil {
+		t.Fatalf("ReconcileOwned() retained a stale conflict: %v", err)
+	}
+}
+
+func TestStartupCleansAUnitThatDepartsBetweenListAndRead(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatal(err)
+	}
+	path := managedRuntimeDropInPath(identity.Name, PropertyCPUWeight)
+	transport.diskPaths = map[string][]string{identity.Name: {path}}
+	transport.onUnitRead = func(f *fakeUnitTransport, unit string, _ int) {
+		if unit == identity.Name {
+			delete(f.units, unit)
+		}
+	}
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if got := restarted.OwnedUnits(); len(got) != 0 {
+		t.Fatalf("OwnedUnits() = %+v, want empty after startup list/read departure", got)
+	}
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("durable lease remained after inactive startup cleanup: %+v", store.journal)
+	}
+}
+
 func TestReconcileOwnedRebindsAnExactlyRecreatedActiveUnit(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
@@ -1077,7 +1153,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "CheckResourceAuthority", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
+	want := []string{"Apply", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}

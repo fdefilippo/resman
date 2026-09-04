@@ -1,6 +1,7 @@
 package systemdunit
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -96,6 +97,28 @@ func TestReadOnlyKernelVerifierRejectsDivergentMemoryHighAndMax(t *testing.T) {
 				t.Fatalf("verify() accepted divergent %s", test.property)
 			}
 		})
+	}
+}
+
+func TestReadOnlyKernelVerifierAcceptsKernelPageRoundingForMemoryLimits(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const requested = uint64(429_496_729)
+	pageSize := uint64(os.Getpagesize())
+	effective := requested - requested%pageSize
+	if err := os.WriteFile(filepath.Join(path, "memory.high"), []byte(fmt.Sprintf("%d\n", effective)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{
+		Identity:     UnitIdentity{Name: "user-1000.slice"},
+		ControlGroup: "/user.slice/user-1000.slice",
+		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyMemoryHigh: requested}),
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyMemoryHigh, requested)}); err != nil {
+		t.Fatalf("verify() rejected kernel page rounding: %v", err)
 	}
 }
 

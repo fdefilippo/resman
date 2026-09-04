@@ -113,38 +113,71 @@ func newAdapter(ctx context.Context, transport unitTransport, verifier kernelVer
 // CheckResourceAuthority confirms that one complete user workload can be
 // governed for a specific resource before the first property mutation.
 func (a *Adapter) CheckResourceAuthority(ctx context.Context, identity UnitIdentity, uid uint32, resource ResourceKind, assignments []PropertyAssignment) (ResourceAuthority, error) {
-	leave := a.opGate.Enter()
-	defer leave()
-	if err := a.requireOpen("check_resource_authority"); err != nil {
-		return ResourceAuthority{}, err
-	}
-	validated, err := validateResourceAssignments(resource, assignments)
+	results, err := a.CheckResourceAuthorities(ctx, []ResourceAuthorityRequest{{Identity: identity, UID: uid, Resource: resource, Assignments: assignments}})
 	if err != nil {
 		return ResourceAuthority{}, err
+	}
+	return results[0].Authority, results[0].Err
+}
+
+// CheckResourceAuthorities confirms multiple resource plans against one
+// immutable /proc observation so cost does not multiply by user or resource.
+func (a *Adapter) CheckResourceAuthorities(ctx context.Context, requests []ResourceAuthorityRequest) ([]ResourceAuthorityResult, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("check_resource_authorities"); err != nil {
+		return nil, err
+	}
+	results := make([]ResourceAuthorityResult, len(requests))
+	if len(requests) == 0 {
+		return results, nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	snapshot, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
-	if err != nil {
-		return ResourceAuthority{}, err
+	type preparedRequest struct {
+		index     int
+		request   ResourceAuthorityRequest
+		validated []PropertyAssignment
+		snapshot  UnitSnapshot
 	}
-	if err := requireSameIdentity("check_resource_authority", identity, snapshot.Identity); err != nil {
-		return ResourceAuthority{}, err
+	prepared := make([]preparedRequest, 0, len(requests))
+	targets := make([]resourceCoverageTarget, 0, len(requests))
+	for index, request := range requests {
+		validated, err := validateResourceAssignments(request.Resource, request.Assignments)
+		if err != nil {
+			results[index].Err = err
+			continue
+		}
+		snapshot, err := a.readUnit(callCtx, request.Identity.Name, request.Identity.ObjectPath)
+		if err == nil {
+			err = requireSameIdentity("check_resource_authorities", request.Identity, snapshot.Identity)
+		}
+		if err != nil {
+			results[index].Err = err
+			continue
+		}
+		prepared = append(prepared, preparedRequest{index: index, request: request, validated: validated, snapshot: snapshot})
+		targets = append(targets, coverageTargetFor(request.UID, snapshot))
 	}
-	authority, inspectErr := inspectResourceCoverage(a.coverage, callCtx, uid, snapshot)
-	authority.Resource = resource
-	if inspectErr != nil || authority.State != ResourceCoverageComplete {
-		return authority, &ResourceAuthorityError{UID: uid, Authority: authority, Err: inspectErr}
-	}
-	if verifier, ok := a.verifier.(interface {
-		preflight(UnitSnapshot, []PropertyAssignment) error
-	}); ok {
-		if err := verifier.preflight(snapshot, validated); err != nil {
-			authority = ResourceAuthority{Resource: resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
-			return authority, &ResourceAuthorityError{UID: uid, Authority: authority, Err: err}
+	inspections := a.coverage.inspectMany(callCtx, targets)
+	for preparedIndex, item := range prepared {
+		authority := inspections[preparedIndex].authority
+		authority.Resource = item.request.Resource
+		results[item.index].Authority = authority
+		if inspections[preparedIndex].err != nil || authority.State != ResourceCoverageComplete {
+			results[item.index].Err = &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: inspections[preparedIndex].err}
+			continue
+		}
+		if verifier, ok := a.verifier.(interface {
+			preflight(UnitSnapshot, []PropertyAssignment) error
+		}); ok {
+			if err := verifier.preflight(item.snapshot, item.validated); err != nil {
+				authority = ResourceAuthority{Resource: item.request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
+				results[item.index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: err}}
+			}
 		}
 	}
-	return authority, nil
+	return results, nil
 }
 
 // Close closes the D-Bus connection. Callers must restore owned properties first.

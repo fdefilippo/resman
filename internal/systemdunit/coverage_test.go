@@ -98,13 +98,66 @@ func TestCheckResourceAuthorityRejectsMissingControllerBeforeMutation(t *testing
 	}
 }
 
+func TestCheckResourceAuthoritiesUsesOneProcSnapshotForAllUsersAndResources(t *testing.T) {
+	root := t.TempDir()
+	hostNS := filepath.Join(root, "host-pid-ns")
+	if err := os.WriteFile(hostNS, []byte("host"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	makeProcFixture(t, root, "1", "/", hostNS)
+	inspector := newProcCoverageInspector(root)
+	inspector.ownerUID = func(os.FileInfo) uint32 { return 0 }
+	readDir := inspector.readDir
+	readDirCalls := 0
+	inspector.readDir = func(path string) ([]os.DirEntry, error) {
+		readDirCalls++
+		return readDir(path)
+	}
+
+	transport := newFakeUnitTransport(1000, 1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	adapter.coverage = inspector
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := map[uint32]UnitIdentity{}
+	for _, user := range topology.Users {
+		identities[user.UID] = user.Unit.Identity
+	}
+	memory := mustAssignment(t, PropertyMemoryHigh, 64<<20)
+	ioWeight := mustAssignment(t, PropertyIOWeight, 100)
+	requests := []ResourceAuthorityRequest{
+		{Identity: identities[1000], UID: 1000, Resource: ResourceMemory, Assignments: []PropertyAssignment{memory}},
+		{Identity: identities[1000], UID: 1000, Resource: ResourceIO, Assignments: []PropertyAssignment{ioWeight}},
+		{Identity: identities[1001], UID: 1001, Resource: ResourceMemory, Assignments: []PropertyAssignment{memory}},
+		{Identity: identities[1001], UID: 1001, Resource: ResourceIO, Assignments: []PropertyAssignment{ioWeight}},
+	}
+	results, err := adapter.CheckResourceAuthorities(context.Background(), requests)
+	if err != nil {
+		t.Fatalf("CheckResourceAuthorities() error: %v", err)
+	}
+	for index, result := range results {
+		if result.Err != nil || result.Authority.State != ResourceCoverageComplete {
+			t.Fatalf("result %d = %+v", index, result)
+		}
+	}
+	if readDirCalls != 1 {
+		t.Fatalf("/proc snapshots = %d, want one for all authority requests", readDirCalls)
+	}
+}
+
 type staticCoverageInspector struct {
 	authority ResourceAuthority
 	err       error
 }
 
-func (i staticCoverageInspector) inspect(context.Context, uint32, string) (ResourceAuthority, error) {
-	return i.authority, i.err
+func (i staticCoverageInspector) inspectMany(_ context.Context, targets []resourceCoverageTarget) []resourceCoverageInspection {
+	results := make([]resourceCoverageInspection, len(targets))
+	for index := range results {
+		results[index] = resourceCoverageInspection(i)
+	}
+	return results
 }
 
 func makeProcFixture(t *testing.T, root, pid, cgroup, namespaceTarget string) {

@@ -43,10 +43,10 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 
 	var reconcileErrors []error
 	for _, unit := range units {
-		if blocked := a.blocked[unit]; blocked != nil {
-			reconcileErrors = append(reconcileErrors, blocked)
-			continue
-		}
+		// A prior conflict blocks mutations between reconciliation passes, but
+		// it is not permanent state. Re-evaluate it so unit departure, recreation
+		// or an operator correction can make progress without a daemon restart.
+		delete(a.blocked, unit)
 		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 		listedUnit, ok := active[unit]
 		if !ok {
@@ -70,12 +70,23 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 			continue
 		}
 		current, err := a.readUnit(callCtx, unit, listedUnit.objectPath)
-		cancel()
 		if err != nil {
+			var adapterErr *AdapterError
+			if errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
+				err = a.recoverInactive(callCtx, unit)
+				cancel()
+				if err != nil {
+					a.recordInactiveRecoveryFailure(unit, err)
+					reconcileErrors = append(reconcileErrors, err)
+				}
+				continue
+			}
+			cancel()
 			a.recordRecoveryConflict(unit, err)
 			reconcileErrors = append(reconcileErrors, err)
 			continue
 		}
+		cancel()
 		identity, override, _, exists := a.unitLeaseState(unit)
 		if phase == leasePhaseApplied && exists && identity == current.Identity {
 			actual, footprintErr := a.captureFootprint(current)
@@ -142,6 +153,14 @@ func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 		}
 		current, err := a.readUnit(callCtx, record.Unit, listedUnit.objectPath)
 		if err != nil {
+			var adapterErr *AdapterError
+			if errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
+				if err := a.recoverInactive(callCtx, record.Unit); err != nil {
+					a.recordInactiveRecoveryFailure(record.Unit, err)
+				}
+				cancel()
+				continue
+			}
 			a.recordRecoveryConflict(record.Unit, err)
 			cancel()
 			continue

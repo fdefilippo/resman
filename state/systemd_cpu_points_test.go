@@ -26,19 +26,26 @@ type systemdResourceCheckCall struct {
 	resource systemdunit.ResourceKind
 }
 
+type systemdPropertyRestoreCall struct {
+	unit       string
+	properties []systemdunit.PropertyName
+}
+
 type fakeSystemdCPUUnitAdapter struct {
-	topology       systemdunit.TopologySnapshot
-	applies        []systemdCPUApplyCall
-	restores       []string
-	inactiveClean  []string
-	owned          map[string]systemdunit.UnitIdentity
-	failApplyUnit  string
-	reconcileError error
-	discoverError  error
-	authority      map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
-	authorityError map[systemdunit.ResourceKind]error
-	resourceChecks []systemdResourceCheckCall
-	closed         bool
+	topology         systemdunit.TopologySnapshot
+	applies          []systemdCPUApplyCall
+	restores         []string
+	propertyRestores []systemdPropertyRestoreCall
+	inactiveClean    []string
+	owned            map[string]systemdunit.UnitIdentity
+	activeProperties map[string]map[systemdunit.PropertyName]bool
+	failApplyUnit    string
+	reconcileError   error
+	discoverError    error
+	authority        map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
+	authorityError   map[systemdunit.ResourceKind]error
+	resourceChecks   []systemdResourceCheckCall
+	closed           bool
 }
 
 type systemdPlanCaptureLogger struct {
@@ -76,28 +83,47 @@ func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemduni
 		a.owned = make(map[string]systemdunit.UnitIdentity)
 	}
 	a.owned[identity.Name] = identity
+	if a.activeProperties == nil {
+		a.activeProperties = make(map[string]map[systemdunit.PropertyName]bool)
+	}
+	if a.activeProperties[identity.Name] == nil {
+		a.activeProperties[identity.Name] = make(map[systemdunit.PropertyName]bool)
+	}
+	for _, assignment := range assignments {
+		a.activeProperties[identity.Name][assignment.Name()] = true
+	}
 	if identity.Name == a.failApplyUnit {
 		return systemdunit.UnitSnapshot{}, errors.New("injected systemd apply failure")
 	}
 	return systemdunit.UnitSnapshot{Identity: identity}, nil
 }
 
-func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthority(_ context.Context, _ systemdunit.UnitIdentity, uid uint32, resource systemdunit.ResourceKind, _ []systemdunit.PropertyAssignment) (systemdunit.ResourceAuthority, error) {
-	a.resourceChecks = append(a.resourceChecks, systemdResourceCheckCall{uid: uid, resource: resource})
-	if authority, ok := a.authority[resource]; ok {
-		return authority, a.authorityError[resource]
+func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthorities(_ context.Context, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
+	results := make([]systemdunit.ResourceAuthorityResult, len(requests))
+	for index, request := range requests {
+		a.resourceChecks = append(a.resourceChecks, systemdResourceCheckCall{uid: request.UID, resource: request.Resource})
+		authority, ok := a.authority[request.Resource]
+		if !ok {
+			authority = systemdunit.ResourceAuthority{Resource: request.Resource, State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}
+		}
+		results[index] = systemdunit.ResourceAuthorityResult{Authority: authority, Err: a.authorityError[request.Resource]}
 	}
-	return systemdunit.ResourceAuthority{Resource: resource, State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}, a.authorityError[resource]
+	return results, nil
 }
 
 func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdunit.UnitIdentity) (systemdunit.RestoreResult, error) {
 	a.restores = append(a.restores, identity.Name)
 	delete(a.owned, identity.Name)
+	delete(a.activeProperties, identity.Name)
 	return systemdunit.RestoreResult{}, nil
 }
 
 func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identity systemdunit.UnitIdentity, properties []systemdunit.PropertyName) (systemdunit.RestoreResult, error) {
 	a.restores = append(a.restores, identity.Name)
+	a.propertyRestores = append(a.propertyRestores, systemdPropertyRestoreCall{unit: identity.Name, properties: append([]systemdunit.PropertyName(nil), properties...)})
+	for _, property := range properties {
+		delete(a.activeProperties[identity.Name], property)
+	}
 	return systemdunit.RestoreResult{Restored: append([]systemdunit.PropertyName(nil), properties...)}, nil
 }
 
@@ -136,11 +162,20 @@ func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []
 	if _, ok := a.owned[identity.Name]; !ok {
 		return nil
 	}
-	property := systemdunit.PropertyCPUWeight
-	if identity.Name == "user.slice" {
-		property = systemdunit.PropertyCPUQuotaPerSecUSec
+	properties := a.activeProperties[identity.Name]
+	if len(properties) == 0 {
+		property := systemdunit.PropertyCPUWeight
+		if identity.Name == "user.slice" {
+			property = systemdunit.PropertyCPUQuotaPerSecUSec
+		}
+		return []systemdunit.PropertyLease{{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1}}
 	}
-	return []systemdunit.PropertyLease{{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1}}
+	result := make([]systemdunit.PropertyLease, 0, len(properties))
+	for property := range properties {
+		result = append(result, systemdunit.PropertyLease{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Property < result[right].Property })
+	return result
 }
 
 func (a *fakeSystemdCPUUnitAdapter) Close() { a.closed = true }

@@ -18,7 +18,7 @@ import (
 // the state manager. It intentionally exposes no process-management method.
 type SystemdCPUUnitAdapter interface {
 	Discover(context.Context) (systemdunit.TopologySnapshot, error)
-	CheckResourceAuthority(context.Context, systemdunit.UnitIdentity, uint32, systemdunit.ResourceKind, []systemdunit.PropertyAssignment) (systemdunit.ResourceAuthority, error)
+	CheckResourceAuthorities(context.Context, []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error)
 	Apply(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
 	Restore(context.Context, systemdunit.UnitIdentity) (systemdunit.RestoreResult, error)
 	RestoreProperties(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyName) (systemdunit.RestoreResult, error)
