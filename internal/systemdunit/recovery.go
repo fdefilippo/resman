@@ -47,6 +47,14 @@ func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 			cancel()
 			continue
 		}
+		phase := a.phases[record.Unit]
+		if phase == leasePhaseRestoring || phase == leasePhaseReloading {
+			if err := a.recoverActiveRestore(callCtx, record.Unit, listedUnit.objectPath); err != nil {
+				a.recordRecoveryConflict(record.Unit, err)
+			}
+			cancel()
+			continue
+		}
 		current, err := a.readUnit(callCtx, record.Unit, listedUnit.objectPath)
 		if err != nil {
 			a.recordRecoveryConflict(record.Unit, err)
@@ -109,11 +117,41 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 			return a.rollbackUndispatchedApply(unit)
 		}
 		return externalRecoveryConflict(unit, "uncertain apply cannot be resolved from current values and footprint")
-	case leasePhaseRestoring, leasePhaseReloading:
-		return a.resumeRestore(ctx, unit, current, actual)
 	default:
 		return fmt.Errorf("unit %s has unsupported recovery phase %q", unit, phase)
 	}
+}
+
+func (a *Adapter) recoverActiveRestore(ctx context.Context, unit, objectPath string) error {
+	actual, err := a.captureDiskFootprint(unit)
+	if err != nil {
+		return err
+	}
+	if len(actual) == 0 {
+		// RevertUnitFiles updates the filesystem before systemd refreshes its
+		// in-memory DropInPaths and normalized property values. Reload first so
+		// the first D-Bus snapshot consulted at this recovery boundary is current.
+		if err := a.transport.reload(ctx); err != nil {
+			return classifyTransportError("recover_restore_reload", unit, err)
+		}
+		refreshed, err := a.readUnit(ctx, unit, objectPath)
+		if err != nil {
+			return err
+		}
+		if !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.Baseline }, refreshed) {
+			return externalRecoveryConflict(unit, "post-revert properties do not match the recorded baselines")
+		}
+		if err := a.removeUnitLeaseDurably(unit); err != nil {
+			return err
+		}
+		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryReclaimed})
+		return nil
+	}
+	current, err := a.readUnit(ctx, unit, objectPath)
+	if err != nil {
+		return err
+	}
+	return a.resumeRestore(ctx, unit, current, actual)
 }
 
 func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
@@ -192,23 +230,6 @@ func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
 
 func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSnapshot, actual []unitFileFingerprint) error {
 	_, override, phase, _ := a.unitLeaseState(unit)
-	if len(actual) == 0 {
-		if err := a.transport.reload(ctx); err != nil {
-			return classifyTransportError("recover_restore_reload", unit, err)
-		}
-		refreshed, err := a.readUnit(ctx, unit, current.Identity.ObjectPath)
-		if err != nil {
-			return err
-		}
-		if !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.Baseline }, refreshed) {
-			return externalRecoveryConflict(unit, "post-revert properties do not match the recorded baselines")
-		}
-		if err := a.removeUnitLeaseDurably(unit); err != nil {
-			return err
-		}
-		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryReclaimed})
-		return nil
-	}
 	if phase != leasePhaseRestoring || !equalFingerprints(actual, override.fingerprints) || !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.previousApplied }, current) {
 		return externalRecoveryConflict(unit, "uncertain restore cannot be resolved from current values and footprint")
 	}
@@ -236,6 +257,18 @@ func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSn
 	}
 	a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryReclaimed})
 	return nil
+}
+
+func (a *Adapter) captureDiskFootprint(unit string) ([]unitFileFingerprint, error) {
+	paths, err := a.unitFiles.mutablePaths(unit)
+	if err != nil {
+		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "inspect_unit_files", Unit: unit, Err: err}
+	}
+	result, err := a.unitFiles.fingerprints(paths)
+	if err != nil {
+		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "fingerprint_unit_files", Unit: unit, Err: err}
+	}
+	return result, nil
 }
 
 func (a *Adapter) importJournal(journal durableLeaseJournal) error {

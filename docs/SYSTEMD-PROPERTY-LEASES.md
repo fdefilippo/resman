@@ -34,7 +34,10 @@ with authoritative systemd state and with the files on disk:
   footprint can be reverted and followed by one daemon reload before the record is
   removed. ResMan never calls `LoadUnit` to manufacture an identity for this purpose.
 - A crash after `RevertUnitFiles` but before `Reload` is a benign recorded phase:
-  ResMan completes the reload, verifies the baseline, and then removes the record.
+  ResMan decides from the on-disk footprint, completes the reload, verifies the
+  baseline, and then removes the record. The pre-reload D-Bus `DropInPaths` and
+  normalized property values are intentionally not consulted because systemd keeps
+  them stale until the reload.
 - Any missing, additional, or changed file, changed property, unsafe journal, or
   incompatible identity fails closed. The record is retained and no property is
   overwritten or reverted.

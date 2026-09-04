@@ -121,10 +121,13 @@ func (f *fakeUnitTransport) revertUnitFiles(_ context.Context, unit string) erro
 
 func (f *fakeUnitTransport) reload(context.Context) error {
 	f.reloadCalls++
+	if f.reloadErr != nil {
+		return f.reloadErr
+	}
 	if f.onReload != nil {
 		f.onReload(f)
 	}
-	return f.reloadErr
+	return nil
 }
 
 func (f *fakeUnitTransport) applyAssignments(unit string, assignments []PropertyAssignment) {
@@ -635,24 +638,31 @@ func TestStartupCompletesCrashBetweenRevertUnitFilesAndReload(t *testing.T) {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	transport.skipRevertEffect = true
+	transport.diskPaths = map[string][]string{identity.Name: nil}
 	transport.onRevert = func(f *fakeUnitTransport, unit string) {
-		f.units[unit].unit["DropInPaths"] = []string{}
+		// Real systemd removes the files but keeps DropInPaths and normalized
+		// property values stale until Reload completes.
+		f.diskPaths[unit] = nil
 	}
 	transport.onReload = func(f *fakeUnitTransport) {
+		f.units[identity.Name].unit["DropInPaths"] = []string{}
 		f.units[identity.Name].slice[string(PropertyCPUWeight)] = uint64(SystemdUnset)
 	}
-	store.saveErr = errors.New("simulated crash after RevertUnitFiles")
-	store.failSave = 4
+	transport.reloadErr = errors.New("simulated crash before Reload completes")
 	if _, err := first.Restore(context.Background(), identity); err == nil {
-		t.Fatal("Restore() error = nil, want midpoint persistence failure")
+		t.Fatal("Restore() error = nil, want interrupted reload")
 	}
-	if store.journal.Units[0].Phase != leasePhaseRestoring {
-		t.Fatalf("durable phase = %q, want %q", store.journal.Units[0].Phase, leasePhaseRestoring)
+	if store.journal.Units[0].Phase != leasePhaseReloading {
+		t.Fatalf("durable phase = %q, want %q", store.journal.Units[0].Phase, leasePhaseReloading)
 	}
 	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(321) {
 		t.Fatalf("pre-reload CPUWeight = %v, want last applied value", got)
 	}
+	if got := transport.units[identity.Name].unit["DropInPaths"].([]string); len(got) != 1 {
+		t.Fatalf("pre-reload D-Bus DropInPaths = %v, want stale managed path", got)
+	}
 
+	transport.reloadErr = nil
 	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	if len(store.journal.Units) != 0 {
 		t.Fatalf("midpoint lease remained after startup recovery: %+v", store.journal)
@@ -662,6 +672,53 @@ func TestStartupCompletesCrashBetweenRevertUnitFilesAndReload(t *testing.T) {
 	}
 	if got := restarted.RecoveryReport(); len(got) != 1 || got[0].State != LeaseRecoveryReclaimed {
 		t.Fatalf("RecoveryReport() = %+v", got)
+	}
+}
+
+func TestStartupDoesNotRevertADivergentInactiveFootprint(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	paths := append([]string(nil), transport.units[identity.Name].unit["DropInPaths"].([]string)...)
+	transport.diskPaths = map[string][]string{identity.Name: paths}
+	transport.fingerprintSalt = map[string]string{paths[0]: "operator-content"}
+	delete(transport.units, identity.Name)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryConflict}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+	if len(transport.revertCalls) != 0 {
+		t.Fatalf("divergent inactive footprint was reverted: %v", transport.revertCalls)
+	}
+	if len(store.journal.Units) != 1 {
+		t.Fatal("divergent inactive lease was deleted")
+	}
+}
+
+func TestApplyRefusesAUnitBlockedDuringStartupRecovery(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	setCalls := len(transport.setCalls)
+	transport.unitErr = errors.New("temporary read failure during startup recovery")
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	transport.unitErr = nil
+
+	if _, err := restarted.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 400)}); err == nil {
+		t.Fatal("Apply() accepted a unit blocked during startup recovery")
+	}
+	if len(transport.setCalls) != setCalls {
+		t.Fatalf("blocked Apply reached D-Bus: calls=%d, want %d", len(transport.setCalls), setCalls)
 	}
 }
 
