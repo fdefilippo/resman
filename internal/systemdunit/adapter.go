@@ -56,7 +56,7 @@ type Adapter struct {
 }
 
 // New opens the authoritative system bus and a read-only cgroup verifier. The
-// supplied context owns the connection lifetime and must remain live until Close.
+// supplied context bounds startup recovery only; Close owns the connection lifetime.
 func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapter, error) {
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
@@ -216,6 +216,18 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		if !equalFingerprints(fingerprints, currentOverride.fingerprints) {
 			return UnitSnapshot{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed after application")
 		}
+		if a.propertiesMatch(identity.Name, func(state propertyLeaseState) uint64 {
+			return state.lease.LastApplied
+		}, before) && a.appliedAssignmentsMatch(identity, before, validated) {
+			// Reconciliation is deliberately read-only when the durable lease,
+			// systemd properties, runtime drop-ins, and effective kernel values
+			// still agree. This keeps verification periodic without rewriting the
+			// unit or fsyncing an identical journal every control cycle.
+			if err := a.verifier.verify(before, validated); err != nil {
+				return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "apply_readback", Unit: identity.Name, Err: err}
+			}
+			return before, nil
+		}
 	}
 
 	staged := make(map[propertyLeaseKey]propertyLeaseState, len(validated))
@@ -286,6 +298,20 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		return UnitSnapshot{}, err
 	}
 	return after, nil
+}
+
+func (a *Adapter) appliedAssignmentsMatch(identity UnitIdentity, snapshot UnitSnapshot, assignments []PropertyAssignment) bool {
+	for _, assignment := range assignments {
+		state, ok := a.leases[propertyLeaseKey{identity: identity, property: assignment.name}]
+		if !ok || state.uncertain || state.lease.LastApplied != assignment.value {
+			return false
+		}
+		current, ok := snapshot.Properties.Value(assignment.name)
+		if !ok || current != assignment.value {
+			return false
+		}
+	}
+	return len(assignments) > 0
 }
 
 // Restore restores every still-owned property for one unit. Externally changed

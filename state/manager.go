@@ -92,6 +92,7 @@ type Manager struct {
 	systemdCPUComplete        bool
 	systemdCPUParent          systemdunit.UnitIdentity
 	systemdCPUSlices          map[int]systemdunit.UnitIdentity
+	systemdCPUPlanSignature   string
 	recoverySnapshot          cgroup.RecoverySnapshot
 
 	// Threshold monitoring

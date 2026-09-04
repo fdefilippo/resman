@@ -157,8 +157,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		"enforcement_reason", mgr.enforcementStatus.Reason,
 	)
 	if !mgr.enforcementStatus.migrationAllowed() {
-		logger.Warn("ResMan-owned PID migration is disabled on this systemd host",
-			"enforcement_mode", mgr.enforcementStatus.Mode,
+		logger.Warn("ResMan-owned PID migration is disabled while the authoritative systemd adapter is selected",
 			"reason", mgr.enforcementStatus.Reason,
 		)
 	}

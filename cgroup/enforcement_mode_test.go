@@ -196,3 +196,33 @@ func TestObservationOnlyIngressRefusesBeforeOriginCaptureOrPIDWrite(t *testing.T
 		t.Fatalf("refusal mutated ingress state: persist=%t write=%t origins=%d", persistCalled, writeCalled, len(manager.snapshotProcessOrigins()))
 	}
 }
+
+func TestSystemdNativeModeStillForbidsManagedCgroupCreationAndPIDIngress(t *testing.T) {
+	manager, root := newOriginTestManager(t)
+	manager.enforcementStatus = EnforcementStatus{
+		Mode:   EnforcementModeSystemdNative,
+		Reason: EnforcementReasonSystemdNativeAdapter,
+	}
+
+	var ownershipErr *SystemdOwnershipPreservationError
+	if err := manager.CreateUserCgroup(1000); !errors.As(err, &ownershipErr) {
+		t.Fatalf("CreateUserCgroup() error = %v, want systemd ownership refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "resman", "user_1000")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("systemd-native cgroup creation mutated the managed hierarchy: %v", err)
+	}
+
+	writeCalled := false
+	manager.writePID = func(string, int) error {
+		writeCalled = true
+		return nil
+	}
+	_, result, _, _, err := manager.moveProcessBatchExpected([]int{101}, 1000, "/resman/limited/user_1000", nil)
+	ownershipErr = nil
+	if !errors.As(err, &ownershipErr) || result.SystemdOwnershipRefused != 1 {
+		t.Fatalf("moveProcessBatchExpected() result=%+v error=%v, want one systemd ownership refusal", result, err)
+	}
+	if writeCalled {
+		t.Fatal("systemd-native ingress reached cgroup.procs")
+	}
+}

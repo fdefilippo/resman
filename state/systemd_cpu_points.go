@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/fdefilippo/resman/cgroup"
@@ -68,20 +69,30 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 	if err != nil {
 		return m.deferSystemdCPUPointsError("discover", err)
 	}
+	participants := make([]cpupoints.ActiveUserSlice, 0, len(topology.Users))
+	units := make(map[int]systemdunit.UnitIdentity, len(topology.Users))
+	eligibleUsers := 0
+	for _, user := range topology.Users {
+		uid := int(user.UID)
+		eligible := m.GetConfig().EvaluateUserEligibility(m.getUsername(uid)).EligibleForCPU
+		participants = append(participants, cpupoints.ActiveUserSlice{
+			UID:      uid,
+			Eligible: eligible,
+		})
+		if uid != 0 && eligible {
+			eligibleUsers++
+		}
+		units[uid] = user.Unit.Identity
+	}
+	if eligibleUsers == 0 {
+		// Root participates in the flat scheduler only while at least one
+		// eligible non-root workload is governed. It cannot keep the finite
+		// parent quota alive by itself.
+		return m.restoreSystemdCPUPoints(ctx)
+	}
 	capacity, err := m.cpuCapacity.Refresh(policy.Pool())
 	if err != nil {
 		return m.deferSystemdCPUPointsError("capacity", err)
-	}
-
-	participants := make([]cpupoints.ActiveUserSlice, 0, len(topology.Users))
-	units := make(map[int]systemdunit.UnitIdentity, len(topology.Users))
-	for _, user := range topology.Users {
-		uid := int(user.UID)
-		participants = append(participants, cpupoints.ActiveUserSlice{
-			UID:      uid,
-			Eligible: m.GetConfig().EvaluateUserEligibility(m.getUsername(uid)).EligibleForCPU,
-		})
-		units[uid] = user.Unit.Identity
 	}
 	plan, err := cpupoints.PlanFlatTopology(policy, capacity.LastVerified.OnlineCPUs(), participants)
 	if err != nil {
@@ -115,6 +126,7 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 
 func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, units map[int]systemdunit.UnitIdentity, plan cpupoints.FlatPlan) {
 	now := time.Now()
+	signature, guaranteedSlices, bestEffortSlices, rootSlices := systemdCPUPointsPlanSummary(parent, units, plan)
 	m.mu.Lock()
 	wasActive := m.limitsActive
 	previouslyActive := m.activeUsers
@@ -140,6 +152,8 @@ func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, u
 	for uid, identity := range units {
 		m.systemdCPUSlices[uid] = identity
 	}
+	planChanged := m.systemdCPUPlanSignature != signature
+	m.systemdCPUPlanSignature = signature
 	m.systemdCPUComplete = true
 	m.cpuPointsDegraded = false
 	m.pendingCPUPointsPolicy = nil
@@ -154,6 +168,38 @@ func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, u
 	deactivated := !m.limitsActive && wasActive
 	m.mu.Unlock()
 	m.recordCPUTransitions(activated, deactivated)
+	if planChanged {
+		m.logger.Info("Systemd-native CPU Points plan published",
+			"parent_quota_usec", plan.ParentQuota().QuotaMicroseconds(),
+			"parent_period_usec", plan.ParentQuota().PeriodMicroseconds(),
+			"online_cpus", plan.ParentQuota().OnlineCPUs().Value(),
+			"scale", plan.Scale(),
+			"slice_count", len(plan.Slices()),
+			"root_slices", rootSlices,
+			"guaranteed_slices", guaranteedSlices,
+			"best_effort_slices", bestEffortSlices,
+		)
+	}
+}
+
+func systemdCPUPointsPlanSummary(parent systemdunit.UnitIdentity, units map[int]systemdunit.UnitIdentity, plan cpupoints.FlatPlan) (string, int, int, int) {
+	var signature strings.Builder
+	fmt.Fprintf(&signature, "%s:%s:%d:%d:%d:%d", parent.Name, parent.InvocationIDString(), parent.ControlGroupID,
+		plan.ParentQuota().QuotaMicroseconds(), plan.ParentQuota().PeriodMicroseconds(), plan.Scale())
+	guaranteedSlices, bestEffortSlices, rootSlices := 0, 0, 0
+	for _, slice := range plan.Slices() {
+		identity := units[slice.UID()]
+		fmt.Fprintf(&signature, "|%d:%s:%s:%d:%s:%d", slice.UID(), identity.Name, identity.InvocationIDString(), identity.ControlGroupID, slice.Class(), slice.Weight().Value())
+		switch slice.Class() {
+		case cpupoints.FlatAllocationRoot:
+			rootSlices++
+		case cpupoints.FlatAllocationGuaranteed:
+			guaranteedSlices++
+		case cpupoints.FlatAllocationBestEffort:
+			bestEffortSlices++
+		}
+	}
+	return signature.String(), guaranteedSlices, bestEffortSlices, rootSlices
 }
 
 func (m *Manager) deferSystemdCPUPointsError(step string, err error) error {
@@ -208,10 +254,12 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 
 	m.mu.Lock()
 	wasActive := m.limitsActive
+	hadPlan := m.systemdCPUPlanSignature != ""
 	m.systemdCPURequested = false
 	m.systemdCPUComplete = false
 	m.systemdCPUParent = systemdunit.UnitIdentity{}
 	m.systemdCPUSlices = make(map[int]systemdunit.UnitIdentity)
+	m.systemdCPUPlanSignature = ""
 	m.requestedCPUUsers = make(map[int]bool)
 	m.activeUsers = make(map[int]bool)
 	m.userLimitedAt = make(map[int]time.Time)
@@ -220,5 +268,8 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 	m.cpuPointsDegraded = false
 	m.mu.Unlock()
 	m.recordCPUTransitions(false, wasActive)
+	if hadPlan {
+		m.logger.Info("Systemd-native CPU Points plan released")
+	}
 	return nil
 }

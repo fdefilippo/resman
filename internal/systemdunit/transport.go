@@ -33,8 +33,11 @@ type dbusTransport struct {
 	cancel     context.CancelFunc
 }
 
-func openDBusTransport(ctx context.Context) (*dbusTransport, error) {
-	lifecycleCtx, cancel := context.WithCancel(ctx)
+func openDBusTransport(runCtx context.Context) (*dbusTransport, error) {
+	// The transport owns its connection lifetime. Operation contexts may be
+	// cancelled to stop the control loop, but Close is the only event that may
+	// tear down the bus while shutdown restoration is still in progress.
+	lifecycleCtx, cancel := newDBusTransportLifecycle(runCtx)
 	conn, err := systemdbus.NewSystemConnectionContext(lifecycleCtx)
 	if err != nil {
 		cancel()
@@ -64,6 +67,10 @@ func openDBusTransport(ctx context.Context) (*dbusTransport, error) {
 		revertObj:  revertConn.Object("org.freedesktop.systemd1", godbus.ObjectPath("/org/freedesktop/systemd1")),
 		cancel:     cancel,
 	}, nil
+}
+
+func newDBusTransportLifecycle(_ context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.Background())
 }
 
 func (t *dbusTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {

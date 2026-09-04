@@ -242,6 +242,7 @@ func (a *App) WithStateManager() *App {
 				"error", err,
 			)
 		} else {
+			logSystemdLeaseRecovery(a.logger, systemdAdapter.RecoveryReport())
 			options = append(options, state.WithSystemdCPUEnforcement(systemdAdapter))
 			a.logger.Info("Systemd-native CPU enforcement selected",
 				"enforcement_mode", cgroup.EnforcementModeSystemdNative,
@@ -268,6 +269,32 @@ func (a *App) WithStateManager() *App {
 	}
 	a.stateManager = stateManager
 	return a
+}
+
+func logSystemdLeaseRecovery(logger appLogger, report []systemdunit.LeaseRecoveryOutcome) {
+	if logger == nil || len(report) == 0 {
+		return
+	}
+	counts := map[systemdunit.LeaseRecoveryState]int{
+		systemdunit.LeaseRecoveryReclaimed: 0,
+		systemdunit.LeaseRecoveryOrphaned:  0,
+		systemdunit.LeaseRecoveryInactive:  0,
+		systemdunit.LeaseRecoveryPending:   0,
+		systemdunit.LeaseRecoveryConflict:  0,
+	}
+	for _, outcome := range report {
+		if _, known := counts[outcome.State]; known {
+			counts[outcome.State]++
+		}
+	}
+	logger.Info("Systemd property lease recovery completed",
+		"total_units", len(report),
+		"reclaimed_units", counts[systemdunit.LeaseRecoveryReclaimed],
+		"orphaned_units", counts[systemdunit.LeaseRecoveryOrphaned],
+		"inactive_cleaned_units", counts[systemdunit.LeaseRecoveryInactive],
+		"pending_units", counts[systemdunit.LeaseRecoveryPending],
+		"conflicted_units", counts[systemdunit.LeaseRecoveryConflict],
+	)
 }
 
 func (a *App) failCPUPointsStartup(operation string, err error, permanent bool) *App {

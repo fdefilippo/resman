@@ -339,6 +339,45 @@ func TestCPUQuotaAssignmentsPreserveExactCgroupMaxMeaning(t *testing.T) {
 	}
 }
 
+func TestApplyRevalidatesAnUnchangedLeaseWithoutDBusOrJournalWrites(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	verifier := &fakeKernelVerifier{}
+	store := newMemoryLeaseJournalStore()
+	adapter, err := newAdapter(context.Background(), transport, verifier, transport, store, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	assignments := []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}
+	if _, err := adapter.Apply(context.Background(), identity, assignments); err != nil {
+		t.Fatalf("initial Apply() error: %v", err)
+	}
+	setCalls := len(transport.setCalls)
+	saveCalls := store.saveCalls
+	verifyCalls := verifier.calls
+	unitReads := transport.unitReads
+
+	if _, err := adapter.Apply(context.Background(), identity, assignments); err != nil {
+		t.Fatalf("unchanged Apply() error: %v", err)
+	}
+	if len(transport.setCalls) != setCalls {
+		t.Fatalf("unchanged Apply() D-Bus writes = %d, want %d", len(transport.setCalls), setCalls)
+	}
+	if store.saveCalls != saveCalls {
+		t.Fatalf("unchanged Apply() journal writes = %d, want %d", store.saveCalls, saveCalls)
+	}
+	if verifier.calls != verifyCalls+1 {
+		t.Fatalf("unchanged Apply() kernel verifications = %d, want %d", verifier.calls, verifyCalls+1)
+	}
+	if transport.unitReads <= unitReads {
+		t.Fatalf("unchanged Apply() unit reads = %d, want more than %d", transport.unitReads, unitReads)
+	}
+}
+
 func TestApplyUsesRuntimeOnlyReadbackAndKernelVerification(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	verifier := &fakeKernelVerifier{}

@@ -32,6 +32,19 @@ type fakeSystemdCPUUnitAdapter struct {
 	closed         bool
 }
 
+type systemdPlanCaptureLogger struct {
+	infos []string
+}
+
+func (*systemdPlanCaptureLogger) Debug(string, ...interface{}) {}
+func (l *systemdPlanCaptureLogger) Info(message string, _ ...interface{}) {
+	l.infos = append(l.infos, message)
+}
+func (*systemdPlanCaptureLogger) Warn(string, ...interface{})               {}
+func (*systemdPlanCaptureLogger) Error(string, ...interface{})              {}
+func (*systemdPlanCaptureLogger) DebugChecked(string, ...interface{}) error { return nil }
+func (*systemdPlanCaptureLogger) InfoChecked(string, ...interface{}) error  { return nil }
+
 func (a *fakeSystemdCPUUnitAdapter) Discover(context.Context) (systemdunit.TopologySnapshot, error) {
 	if a.discoverError != nil {
 		return systemdunit.TopologySnapshot{}, a.discoverError
@@ -236,11 +249,45 @@ func TestSystemdNativeMaintainDoesNotRepeatTheStageReconciliation(t *testing.T) 
 		t.Fatalf("stageReconcileCPUPoints() error: %v", err)
 	}
 	stageCalls := len(adapter.applies)
-	if err := manager.executeDecision("MAINTAIN_CURRENT_STATE", &SystemMetrics{}); err != nil {
+	restoresBefore := len(adapter.restores)
+	metrics := &SystemMetrics{CPUEligibleUsers: []int{1000}}
+	if err := manager.executeDecision("MAINTAIN_CURRENT_STATE", metrics); err != nil {
 		t.Fatalf("executeDecision() error: %v", err)
 	}
 	if len(adapter.applies) != stageCalls {
 		t.Fatalf("maintain repeated systemd writes: before=%d after=%d", stageCalls, len(adapter.applies))
+	}
+	if len(adapter.restores) != restoresBefore {
+		t.Fatalf("maintain unexpectedly restored systemd properties: before=%d after=%d", restoresBefore, len(adapter.restores))
+	}
+}
+
+func TestSystemdNativeReconciliationReleasesThePlanWhenOnlyRootRemains(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter.applies = nil
+	adapter.restores = nil
+	adapter.topology = testSystemdTopology(0)
+	if err := manager.stageReconcileCPUPoints(nil); err != nil {
+		t.Fatalf("stageReconcileCPUPoints() error: %v", err)
+	}
+	if len(adapter.applies) != 0 {
+		t.Fatalf("root-only topology was reapplied: %+v", adapter.applies)
+	}
+	if !reflect.DeepEqual(adapter.restores, []string{"user-0.slice", "user.slice"}) {
+		t.Fatalf("root-only restore order = %v, want root then parent", adapter.restores)
+	}
+	if manager.systemdCPURequested || manager.limitsActive || manager.systemdCPUComplete || len(adapter.OwnedUnits()) != 0 {
+		t.Fatalf("root-only release requested=%t active=%t complete=%t owned=%v", manager.systemdCPURequested, manager.limitsActive, manager.systemdCPUComplete, adapter.OwnedUnits())
 	}
 }
 
@@ -282,6 +329,45 @@ func TestSystemdNativeReconciliationTracksArrivalDepartureAndLiveCapacity(t *tes
 	}
 	if manager.activeUsers[1000] || !manager.activeUsers[1001] || len(manager.systemdCPUSlices) != 2 {
 		t.Fatalf("published users=%v slices=%v after departure", manager.activeUsers, manager.systemdCPUSlices)
+	}
+}
+
+func TestSystemdNativePlanLoggingOccursOnlyOnPublishChangeAndRelease(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	logger := &systemdPlanCaptureLogger{}
+	manager.logger = logger
+
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(logger.infos, []string{"Systemd-native CPU Points plan published"}) {
+		t.Fatalf("initial plan log = %v", logger.infos)
+	}
+	if err := manager.stageReconcileCPUPoints(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(logger.infos) != 1 {
+		t.Fatalf("unchanged plan emitted another log: %v", logger.infos)
+	}
+
+	adapter.topology = testSystemdTopology(0, 1000, 1001)
+	if err := manager.stageReconcileCPUPoints(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(logger.infos) != 2 || logger.infos[1] != "Systemd-native CPU Points plan published" {
+		t.Fatalf("changed plan log = %v", logger.infos)
+	}
+	if err := manager.ForceDeactivateLimits(); err != nil {
+		t.Fatal(err)
+	}
+	if len(logger.infos) != 3 || logger.infos[2] != "Systemd-native CPU Points plan released" {
+		t.Fatalf("released plan log = %v", logger.infos)
 	}
 }
 
