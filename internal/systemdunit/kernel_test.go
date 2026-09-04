@@ -64,6 +64,45 @@ func TestReadOnlyKernelVerifierRejectsDivergentEffectiveValue(t *testing.T) {
 	}
 }
 
+func TestReadOnlyKernelVerifierRejectsDivergentCPUQuotaAndPeriod(t *testing.T) {
+	tests := []struct {
+		name   string
+		cpuMax string
+		perSec uint64
+		period uint64
+	}{
+		{name: "quota", cpuMax: "80000 100000\n", perSec: 900_000, period: 100_000},
+		{name: "period", cpuMax: "225000 250000\n", perSec: 900_000, period: 100_000},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "user.slice")
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "cpu.max"), []byte(test.cpuMax), 0600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			snapshot := UnitSnapshot{
+				Identity:     UnitIdentity{Name: parentUserSlice},
+				ControlGroup: "/user.slice",
+				Properties: newPropertySet(map[PropertyName]uint64{
+					PropertyCPUQuotaPerSecUSec: test.perSec,
+					PropertyCPUQuotaPeriodUSec: test.period,
+				}),
+			}
+			assignments := []PropertyAssignment{
+				mustAssignment(t, PropertyCPUQuotaPerSecUSec, test.perSec),
+				mustAssignment(t, PropertyCPUQuotaPeriodUSec, test.period),
+			}
+			if err := newCgroupVerifier(root).verify(snapshot, assignments); err == nil {
+				t.Fatal("verify() error = nil, want cpu.max mismatch")
+			}
+		})
+	}
+}
+
 func TestReadOnlyKernelVerifierAcceptsMissingControllerOnlyForUnsetProperty(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "user.slice")

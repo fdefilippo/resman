@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,10 @@ type propertyLeaseKey struct {
 	property PropertyName
 }
 
+type unitOverrideLease struct {
+	managedPaths []string
+}
+
 type kernelVerifier interface {
 	verify(UnitSnapshot, []PropertyAssignment) error
 }
@@ -34,9 +39,11 @@ type kernelVerifier interface {
 type Adapter struct {
 	transport unitTransport
 	verifier  kernelVerifier
+	unitFiles unitFileInspector
 	timeout   time.Duration
 	opGate    operationgate.Gate
 	leases    map[propertyLeaseKey]propertyLeaseState
+	overrides map[UnitIdentity]unitOverrideLease
 	closed    bool
 }
 
@@ -50,7 +57,7 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapte
 	if err != nil {
 		return nil, classifyTransportError("connect", "", err)
 	}
-	adapter, err := newAdapter(transport, newCgroupVerifier(cgroupRoot), timeout)
+	adapter, err := newAdapter(transport, newCgroupVerifier(cgroupRoot), localUnitFileInspector{}, timeout)
 	if err != nil {
 		transport.close()
 		return nil, err
@@ -58,12 +65,15 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapte
 	return adapter, nil
 }
 
-func newAdapter(transport unitTransport, verifier kernelVerifier, timeout time.Duration) (*Adapter, error) {
+func newAdapter(transport unitTransport, verifier kernelVerifier, unitFiles unitFileInspector, timeout time.Duration) (*Adapter, error) {
 	if transport == nil {
 		return nil, &AdapterError{Reason: ReasonBusUnavailable, Operation: "construct", Err: fmt.Errorf("systemd transport is required")}
 	}
 	if verifier == nil {
 		return nil, &AdapterError{Reason: ReasonKernelVerification, Operation: "construct", Err: fmt.Errorf("read-only cgroup verifier is required")}
+	}
+	if unitFiles == nil {
+		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "construct", Err: fmt.Errorf("unit-file inspector is required")}
 	}
 	if timeout <= 0 {
 		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "construct", Err: fmt.Errorf("call timeout must be positive")}
@@ -71,8 +81,10 @@ func newAdapter(transport unitTransport, verifier kernelVerifier, timeout time.D
 	return &Adapter{
 		transport: transport,
 		verifier:  verifier,
+		unitFiles: unitFiles,
 		timeout:   timeout,
 		leases:    make(map[propertyLeaseKey]propertyLeaseState),
+		overrides: make(map[UnitIdentity]unitOverrideLease),
 	}, nil
 }
 
@@ -164,6 +176,10 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	if err := requireSameIdentity("apply", identity, before.Identity); err != nil {
 		return UnitSnapshot{}, err
 	}
+	currentOverride, trackedOverride := a.overrides[identity]
+	if err := a.requireManagedUnitFileFootprint("apply", before, currentOverride, trackedOverride); err != nil {
+		return UnitSnapshot{}, err
+	}
 
 	staged := make(map[propertyLeaseKey]propertyLeaseState, len(validated))
 	for _, assignment := range validated {
@@ -176,7 +192,6 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		if tracked {
 			owned, resolved := resolveUncertainOwnership(current, state)
 			if !owned {
-				delete(a.leases, key)
 				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lease.LastApplied, current)
 			}
 			state = resolved
@@ -191,6 +206,8 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	for key, state := range staged {
 		a.leases[key] = state
 	}
+	stagedOverride := extendManagedUnitFileFootprint(identity.Name, currentOverride, validated)
+	a.overrides[identity] = stagedOverride
 
 	// runtime=true is deliberately fixed here. The public adapter cannot persist unit changes.
 	if err := a.transport.setUnitProperties(callCtx, identity.Name, true, validated); err != nil {
@@ -204,6 +221,9 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		return UnitSnapshot{}, err
 	}
 	if err := verifyReadback("apply_readback", after, validated); err != nil {
+		return UnitSnapshot{}, err
+	}
+	if err := a.requireManagedUnitFileFootprint("apply_readback", after, stagedOverride, true); err != nil {
 		return UnitSnapshot{}, err
 	}
 	if err := a.verifier.verify(after, validated); err != nil {
@@ -234,10 +254,19 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 	if err := requireSameIdentity("restore", identity, current.Identity); err != nil {
 		return RestoreResult{}, err
 	}
+	override, trackedOverride := a.overrides[identity]
+	currentMutablePaths, err := a.combinedMutableUnitFilePaths(current)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if err := requireRestorableUnitFileFootprint(identity.Name, currentMutablePaths, override, trackedOverride); err != nil {
+		return RestoreResult{}, err
+	}
 
 	var result RestoreResult
 	var restore []PropertyAssignment
 	var restoreKeys []propertyLeaseKey
+	allAtBaseline := true
 	for key, state := range a.leases {
 		if key.identity != identity {
 			continue
@@ -249,14 +278,11 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		owned, resolved := resolveUncertainOwnership(value, state)
 		if !owned {
 			result.Conflicts = append(result.Conflicts, PropertyConflict{Property: key.property, LastApplied: state.lease.LastApplied, Current: value})
-			delete(a.leases, key)
 			continue
 		}
 		a.leases[key] = resolved
-		if value == resolved.lease.Baseline {
-			result.Restored = append(result.Restored, key.property)
-			delete(a.leases, key)
-			continue
+		if value != resolved.lease.Baseline {
+			allAtBaseline = false
 		}
 		restore = append(restore, PropertyAssignment{name: key.property, value: resolved.lease.Baseline})
 		restoreKeys = append(restoreKeys, key)
@@ -266,8 +292,36 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 	sort.Slice(restore, func(i, j int) bool { return restore[i].name < restore[j].name })
 	sort.Slice(restoreKeys, func(i, j int) bool { return restoreKeys[i].property < restoreKeys[j].property })
 
+	if len(result.Conflicts) > 0 {
+		return result, conflictError(identity.Name, result.Conflicts)
+	}
+	if len(restoreKeys) > 0 && allAtBaseline && len(currentMutablePaths) == 0 {
+		if err := verifyReadback("restore_recovered_readback", current, restore); err != nil {
+			return result, err
+		}
+		if err := a.verifier.verify(current, restore); err != nil {
+			return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_recovered_readback", Unit: identity.Name, Err: err}
+		}
+		for _, key := range restoreKeys {
+			result.Restored = append(result.Restored, key.property)
+			delete(a.leases, key)
+		}
+		delete(a.overrides, identity)
+		sortPropertyNames(result.Restored)
+		return result, nil
+	}
 	if len(restore) > 0 {
-		if err := a.transport.setUnitProperties(callCtx, identity.Name, true, restore); err != nil {
+		if len(override.managedPaths) == 0 {
+			return result, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")}
+		}
+		for _, key := range restoreKeys {
+			state := a.leases[key]
+			state.previousApplied = state.lease.LastApplied
+			state.lease.LastApplied = state.lease.Baseline
+			state.uncertain = true
+			a.leases[key] = state
+		}
+		if err := a.transport.revertUnitFiles(callCtx, identity.Name); err != nil {
 			return result, errors.Join(classifyTransportError("restore", identity.Name, err), conflictError(identity.Name, result.Conflicts))
 		}
 		after, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
@@ -280,6 +334,9 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		if err := verifyReadback("restore_readback", after, restore); err != nil {
 			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
 		}
+		if err := a.requireManagedUnitFileFootprint("restore_readback", after, unitOverrideLease{}, false); err != nil {
+			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+		}
 		if err := a.verifier.verify(after, restore); err != nil {
 			verificationErr := &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_readback", Unit: identity.Name, Err: err}
 			return result, errors.Join(verificationErr, conflictError(identity.Name, result.Conflicts))
@@ -288,6 +345,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 			result.Restored = append(result.Restored, key.property)
 			delete(a.leases, key)
 		}
+		delete(a.overrides, identity)
 		sortPropertyNames(result.Restored)
 	}
 	return result, conflictError(identity.Name, result.Conflicts)
@@ -346,7 +404,164 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 		}
 		properties[property] = value
 	}
-	return UnitSnapshot{Identity: beforeIdentity, ControlGroup: controlGroup, Properties: newPropertySet(properties)}, nil
+	unitFiles, err := parseUnitFileSnapshot(unit, unitAfter)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	return UnitSnapshot{Identity: beforeIdentity, ControlGroup: controlGroup, Properties: newPropertySet(properties), unitFiles: unitFiles}, nil
+}
+
+func parseUnitFileSnapshot(unit string, properties map[string]any) (unitFileSnapshot, error) {
+	fragmentPath, ok := properties["FragmentPath"].(string)
+	if !ok || (fragmentPath != "" && !validAbsolutePath(fragmentPath)) {
+		return unitFileSnapshot{}, malformedReply("read_unit", unit, "FragmentPath is absent or invalid")
+	}
+	dropInPaths, ok := properties["DropInPaths"].([]string)
+	if !ok {
+		return unitFileSnapshot{}, malformedReply("read_unit", unit, "DropInPaths is absent or malformed")
+	}
+	result := unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: append([]string(nil), dropInPaths...)}
+	for _, path := range result.dropInPaths {
+		if !validAbsolutePath(path) {
+			return unitFileSnapshot{}, malformedReply("read_unit", unit, fmt.Sprintf("DropInPaths contains invalid path %q", path))
+		}
+	}
+	sort.Strings(result.dropInPaths)
+	return result, nil
+}
+
+func validAbsolutePath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.Contains(path, "//")
+}
+
+func extendManagedUnitFileFootprint(unit string, current unitOverrideLease, assignments []PropertyAssignment) unitOverrideLease {
+	paths := make(map[string]bool, len(current.managedPaths)+len(assignments))
+	for _, path := range current.managedPaths {
+		paths[path] = true
+	}
+	for _, assignment := range assignments {
+		paths[managedRuntimeDropInPath(unit, assignment.name)] = true
+	}
+	result := unitOverrideLease{managedPaths: make([]string, 0, len(paths))}
+	for path := range paths {
+		result.managedPaths = append(result.managedPaths, path)
+	}
+	sort.Strings(result.managedPaths)
+	return result
+}
+
+func managedRuntimeDropInPath(unit string, property PropertyName) string {
+	filename := map[PropertyName]string{
+		PropertyCPUWeight:          "50-CPUWeight.conf",
+		PropertyCPUQuotaPerSecUSec: "50-CPUQuota.conf",
+		PropertyCPUQuotaPeriodUSec: "50-CPUQuotaPeriodSec.conf",
+		PropertyMemoryHigh:         "50-MemoryHigh.conf",
+		PropertyMemoryMax:          "50-MemoryMax.conf",
+		PropertyMemorySwapMax:      "50-MemorySwapMax.conf",
+		PropertyIOWeight:           "50-IOWeight.conf",
+	}[property]
+	return filepath.Join("/run/systemd/system.control", unit+".d", filename)
+}
+
+func (a *Adapter) requireManagedUnitFileFootprint(operation string, snapshot UnitSnapshot, expected unitOverrideLease, tracked bool) error {
+	actual, err := a.combinedMutableUnitFilePaths(snapshot)
+	if err != nil {
+		return err
+	}
+	want := expected.managedPaths
+	if !tracked {
+		want = nil
+	}
+	if equalStrings(actual, want) {
+		return nil
+	}
+	return &AdapterError{
+		Reason:    ReasonExternalConflict,
+		Operation: operation,
+		Unit:      snapshot.Identity.Name,
+		Err:       fmt.Errorf("mutable unit-file footprint is %v, expected %v", actual, want),
+	}
+}
+
+func requireRestorableUnitFileFootprint(unit string, actual []string, expected unitOverrideLease, tracked bool) error {
+	if tracked && (equalStrings(actual, expected.managedPaths) || len(actual) == 0) {
+		return nil
+	}
+	if !tracked && len(actual) == 0 {
+		return nil
+	}
+	return &AdapterError{
+		Reason:    ReasonExternalConflict,
+		Operation: "restore",
+		Unit:      unit,
+		Err:       fmt.Errorf("mutable unit-file footprint is %v, expected the recorded ResMan footprint %v or an empty post-revert footprint", actual, expected.managedPaths),
+	}
+}
+
+func (a *Adapter) combinedMutableUnitFilePaths(snapshot UnitSnapshot) ([]string, error) {
+	dbusPaths := mutableUnitFilePaths(snapshot.unitFiles)
+	diskPaths, err := a.unitFiles.mutablePaths(snapshot.Identity.Name)
+	if err != nil {
+		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "inspect_unit_files", Unit: snapshot.Identity.Name, Err: err}
+	}
+	paths := make(map[string]bool, len(dbusPaths)+len(diskPaths))
+	for _, path := range dbusPaths {
+		paths[path] = true
+	}
+	for _, path := range diskPaths {
+		paths[path] = true
+	}
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func mutableUnitFilePaths(snapshot unitFileSnapshot) []string {
+	var result []string
+	if pathIsRevertableLocalConfiguration(snapshot.fragmentPath) {
+		result = append(result, snapshot.fragmentPath)
+	}
+	for _, path := range snapshot.dropInPaths {
+		if pathIsRevertableLocalConfiguration(path) {
+			result = append(result, path)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func pathIsRevertableLocalConfiguration(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, root := range []string{
+		"/etc/systemd/system",
+		"/run/systemd/system",
+		"/etc/systemd/system.control",
+		"/run/systemd/system.control",
+		"/run/systemd/transient",
+	} {
+		relative, err := filepath.Rel(root, path)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func parseUnitIdentity(unit, objectPath string, unitProperties, sliceProperties map[string]any) (UnitIdentity, error) {

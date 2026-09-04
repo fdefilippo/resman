@@ -21,12 +21,15 @@ type unitTransport interface {
 	unitProperties(context.Context, string) (map[string]any, error)
 	sliceProperties(context.Context, string) (map[string]any, error)
 	setUnitProperties(context.Context, string, bool, []PropertyAssignment) error
+	revertUnitFiles(context.Context, string) error
 	close()
 }
 
 type dbusTransport struct {
-	conn   *systemdbus.Conn
-	cancel context.CancelFunc
+	conn       *systemdbus.Conn
+	revertConn *godbus.Conn
+	revertObj  godbus.BusObject
+	cancel     context.CancelFunc
 }
 
 func openDBusTransport(ctx context.Context) (*dbusTransport, error) {
@@ -36,7 +39,30 @@ func openDBusTransport(ctx context.Context) (*dbusTransport, error) {
 		cancel()
 		return nil, fmt.Errorf("connect to the system bus: %w", err)
 	}
-	return &dbusTransport{conn: conn, cancel: cancel}, nil
+	revertConn, err := godbus.SystemBusPrivate()
+	if err != nil {
+		conn.Close()
+		cancel()
+		return nil, fmt.Errorf("open private system bus connection for guarded unit-file cleanup: %w", err)
+	}
+	if err := revertConn.Auth(nil); err != nil {
+		_ = revertConn.Close()
+		conn.Close()
+		cancel()
+		return nil, fmt.Errorf("authenticate private system bus connection for guarded unit-file cleanup: %w", err)
+	}
+	if err := revertConn.Hello(); err != nil {
+		_ = revertConn.Close()
+		conn.Close()
+		cancel()
+		return nil, fmt.Errorf("initialize private system bus connection for guarded unit-file cleanup: %w", err)
+	}
+	return &dbusTransport{
+		conn:       conn,
+		revertConn: revertConn,
+		revertObj:  revertConn.Object("org.freedesktop.systemd1", godbus.ObjectPath("/org/freedesktop/systemd1")),
+		cancel:     cancel,
+	}, nil
 }
 
 func (t *dbusTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {
@@ -77,7 +103,15 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 	return t.conn.SetUnitPropertiesContext(ctx, unit, runtime, properties...)
 }
 
+func (t *dbusTransport) revertUnitFiles(ctx context.Context, unit string) error {
+	if err := t.revertObj.CallWithContext(ctx, "org.freedesktop.systemd1.Manager.RevertUnitFiles", 0, []string{unit}).Err; err != nil {
+		return err
+	}
+	return t.conn.ReloadContext(ctx)
+}
+
 func (t *dbusTransport) close() {
 	t.cancel()
+	_ = t.revertConn.Close()
 	t.conn.Close()
 }

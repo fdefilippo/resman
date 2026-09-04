@@ -12,18 +12,19 @@ import (
 type ErrorReason string
 
 const (
-	ReasonBusUnavailable      ErrorReason = "bus_unavailable"
-	ReasonUnitMissing         ErrorReason = "unit_missing"
-	ReasonAuthorizationDenied ErrorReason = "authorization_denied"
-	ReasonUnitRecreated       ErrorReason = "unit_recreated"
-	ReasonMalformedReply      ErrorReason = "malformed_reply"
-	ReasonPropertyNotAllowed  ErrorReason = "property_not_allowed"
-	ReasonInvalidValue        ErrorReason = "invalid_value"
-	ReasonReadbackMismatch    ErrorReason = "readback_mismatch"
-	ReasonKernelVerification  ErrorReason = "kernel_verification_failed"
-	ReasonExternalConflict    ErrorReason = "external_property_conflict"
-	ReasonTimeout             ErrorReason = "timeout"
-	ReasonClosed              ErrorReason = "adapter_closed"
+	ReasonBusUnavailable       ErrorReason = "bus_unavailable"
+	ReasonUnitMissing          ErrorReason = "unit_missing"
+	ReasonAuthorizationDenied  ErrorReason = "authorization_denied"
+	ReasonUnitRecreated        ErrorReason = "unit_recreated"
+	ReasonMalformedReply       ErrorReason = "malformed_reply"
+	ReasonPropertyNotAllowed   ErrorReason = "property_not_allowed"
+	ReasonInvalidValue         ErrorReason = "invalid_value"
+	ReasonReadbackMismatch     ErrorReason = "readback_mismatch"
+	ReasonKernelVerification   ErrorReason = "kernel_verification_failed"
+	ReasonUnitFileVerification ErrorReason = "unit_file_verification_failed"
+	ReasonExternalConflict     ErrorReason = "external_property_conflict"
+	ReasonTimeout              ErrorReason = "timeout"
+	ReasonClosed               ErrorReason = "adapter_closed"
 )
 
 // AdapterError carries a bounded reason while retaining the underlying error for diagnosis.
@@ -74,12 +75,22 @@ func classifyTransportError(operation, unit string, err error) error {
 	}
 	var dbusErr *godbus.Error
 	if errors.As(err, &dbusErr) {
-		switch dbusErr.Name {
-		case "org.freedesktop.systemd1.NoSuchUnit", "org.freedesktop.DBus.Error.UnknownObject":
-			return &AdapterError{Reason: ReasonUnitMissing, Operation: operation, Unit: unit, Err: err}
-		case "org.freedesktop.DBus.Error.AccessDenied", "org.freedesktop.DBus.Error.AuthFailed", "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired", "org.freedesktop.PolicyKit1.Error.Failed":
-			return &AdapterError{Reason: ReasonAuthorizationDenied, Operation: operation, Unit: unit, Err: err}
-		}
+		return classifyDBusErrorName(operation, unit, err, dbusErr.Name)
+	}
+	var dbusValue godbus.Error
+	if errors.As(err, &dbusValue) {
+		return classifyDBusErrorName(operation, unit, err, dbusValue.Name)
 	}
 	return &AdapterError{Reason: ReasonBusUnavailable, Operation: operation, Unit: unit, Err: err}
+}
+
+func classifyDBusErrorName(operation, unit string, err error, name string) error {
+	switch name {
+	case "org.freedesktop.systemd1.NoSuchUnit", "org.freedesktop.DBus.Error.UnknownObject", "org.freedesktop.DBus.Error.NoSuchObject":
+		return &AdapterError{Reason: ReasonUnitMissing, Operation: operation, Unit: unit, Err: err}
+	case "org.freedesktop.DBus.Error.AccessDenied", "org.freedesktop.DBus.Error.AuthFailed", "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired", "org.freedesktop.PolicyKit1.Error.Failed":
+		return &AdapterError{Reason: ReasonAuthorizationDenied, Operation: operation, Unit: unit, Err: err}
+	default:
+		return &AdapterError{Reason: ReasonBusUnavailable, Operation: operation, Unit: unit, Err: err}
+	}
 }

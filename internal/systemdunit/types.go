@@ -139,6 +139,12 @@ type UnitSnapshot struct {
 	Identity     UnitIdentity
 	ControlGroup string
 	Properties   PropertySet
+	unitFiles    unitFileSnapshot
+}
+
+type unitFileSnapshot struct {
+	fragmentPath string
+	dropInPaths  []string
 }
 
 // UserSliceSnapshot binds an active user slice to its numeric UID.

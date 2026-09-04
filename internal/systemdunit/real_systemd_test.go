@@ -31,6 +31,9 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 	defer adapter.Close()
 
 	unit := findUserSlice(t, ctx, adapter, uint32(uid64))
+	if paths := mutableUnitFilePaths(unit.unitFiles); len(paths) != 0 {
+		t.Fatalf("disposable slice has preexisting mutable unit files: %v", paths)
+	}
 	baselines := make(map[PropertyName]uint64)
 	probeValues := map[PropertyName]uint64{
 		PropertyCPUWeight:          321,
@@ -51,8 +54,12 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 		}
 		assignments = append(assignments, mustAssignment(t, property, probeValue))
 	}
-	if _, err := adapter.Apply(ctx, unit.Identity, assignments); err != nil {
+	applied, err := adapter.Apply(ctx, unit.Identity, assignments)
+	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
+	}
+	if paths := mutableUnitFilePaths(applied.unitFiles); len(paths) != len(assignments) {
+		t.Fatalf("managed runtime drop-ins after Apply() = %v, want %d", paths, len(assignments))
 	}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -81,6 +88,9 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 		t.Fatalf("Restore() result = %+v", result)
 	}
 	restored := findUserSlice(t, ctx, adapter, uint32(uid64))
+	if paths := mutableUnitFilePaths(restored.unitFiles); len(paths) != 0 {
+		t.Fatalf("mutable unit files after Restore() = %v, want none", paths)
+	}
 	for property, want := range baselines {
 		if got, _ := restored.Properties.Value(property); got != want {
 			t.Fatalf("restored %s = %d, want baseline %d", property, got, want)

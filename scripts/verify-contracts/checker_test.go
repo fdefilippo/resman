@@ -590,6 +590,47 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			wantFailed: true,
 		},
 		{
+			name:       "deprecated direct systemd mutation outside adapter",
+			path:       "state/apply.go",
+			content:    `package state; type connection struct{}; func (connection) SetUnitProperties(...any){}; func apply(c connection){ c.SetUnitProperties("unit", true) }`,
+			wantFailed: true,
+		},
+		{
+			name:       "process attachment through systemd",
+			path:       "state/apply.go",
+			content:    `package state; type connection struct{}; func (connection) AttachProcessesToUnit(...any){}; func apply(c connection){ c.AttachProcessesToUnit(nil, "unit", "/", []uint32{1}) }`,
+			wantFailed: true,
+		},
+		{
+			name:       "authoritative control group used outside verifier",
+			path:       "state/apply.go",
+			content:    `package state; import ("os"; "path/filepath"); type unit struct{ ControlGroup string }; func apply(u unit){ _ = os.WriteFile(filepath.Join("/sys/fs/cgroup", u.ControlGroup, "cpu.weight"), nil, 0600) }`,
+			wantFailed: true,
+		},
+		{
+			name:       "raw manager mutation over D-Bus",
+			path:       "state/apply.go",
+			content:    `package state; type object struct{}; func (object) Call(...any){}; func apply(o object){ o.Call("org.freedesktop.systemd1.Manager.SetUnitProperties", "unit") }`,
+			wantFailed: true,
+		},
+		{
+			name:       "raw D-Bus dependency outside adapter",
+			path:       "state/apply.go",
+			content:    `package state; import _ "github.com/godbus/dbus/v5"`,
+			wantFailed: true,
+		},
+		{
+			name:       "go-systemd dependency outside adapter",
+			path:       "state/apply.go",
+			content:    `package state; import _ "github.com/coreos/go-systemd/v22/dbus"`,
+			wantFailed: true,
+		},
+		{
+			name:    "guarded raw revert inside transport",
+			path:    systemdUnitAdapterPath,
+			content: `package systemdunit; type object struct{}; func (object) CallWithContext(...any){}; func restore(o object){ o.CallWithContext(nil, "org.freedesktop.systemd1.Manager.RevertUnitFiles", 0, []string{"unit"}) }`,
+		},
+		{
 			name:       "general unit lifecycle method",
 			path:       systemdUnitAdapterPath,
 			content:    `package systemdunit; type connection struct{}; func (connection) StartUnitContext(...any){}; func apply(c connection){ c.StartUnitContext(nil, "unit") }`,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -31,11 +32,15 @@ type fakeUnitTransport struct {
 	unitErr      error
 	sliceErr     error
 	setErr       error
+	revertErr    error
 	ignoreWrites bool
 	blockList    bool
 	unitReads    int
 	onUnitRead   func(*fakeUnitTransport, string, int)
 	onSet        func(*fakeUnitTransport, string, []PropertyAssignment)
+	onRevert     func(*fakeUnitTransport, string)
+	revertCalls  []string
+	diskPaths    map[string][]string
 	closed       bool
 }
 
@@ -89,14 +94,64 @@ func (f *fakeUnitTransport) setUnitProperties(_ context.Context, unit string, ru
 		return f.setErr
 	}
 	if !f.ignoreWrites {
-		for _, assignment := range assignments {
-			f.units[unit].slice[string(assignment.name)] = assignment.value
-		}
+		f.applyAssignments(unit, assignments)
 	}
 	return nil
 }
 
+func (f *fakeUnitTransport) revertUnitFiles(_ context.Context, unit string) error {
+	f.revertCalls = append(f.revertCalls, unit)
+	if f.onRevert != nil {
+		f.onRevert(f, unit)
+	}
+	if f.revertErr != nil {
+		return f.revertErr
+	}
+	f.applyRevert(unit)
+	return nil
+}
+
+func (f *fakeUnitTransport) applyAssignments(unit string, assignments []PropertyAssignment) {
+	state := f.units[unit]
+	paths, _ := state.unit["DropInPaths"].([]string)
+	seen := make(map[string]bool, len(paths)+len(assignments))
+	for _, path := range paths {
+		seen[path] = true
+	}
+	for _, assignment := range assignments {
+		state.slice[string(assignment.name)] = assignment.value
+		seen[managedRuntimeDropInPath(unit, assignment.name)] = true
+	}
+	paths = paths[:0]
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	state.unit["DropInPaths"] = paths
+}
+
+func (f *fakeUnitTransport) applyRevert(unit string) {
+	state := f.units[unit]
+	for property := range approvedScalarProperties {
+		state.slice[string(property)] = uint64(SystemdUnset)
+	}
+	state.unit["DropInPaths"] = []string{}
+}
+
 func (f *fakeUnitTransport) close() { f.closed = true }
+
+func (f *fakeUnitTransport) mutablePaths(unit string) ([]string, error) {
+	if paths, ok := f.diskPaths[unit]; ok {
+		return append([]string(nil), paths...), nil
+	}
+	state, ok := f.units[unit]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	fragmentPath, _ := state.unit["FragmentPath"].(string)
+	dropInPaths, _ := state.unit["DropInPaths"].([]string)
+	return mutableUnitFilePaths(unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: dropInPaths}), nil
+}
 
 type fakeKernelVerifier struct {
 	calls int
@@ -198,7 +253,7 @@ func TestReadConfirmsOneUnitLifetimeAroundPropertySnapshot(t *testing.T) {
 	assertAdapterReason(t, err, ReasonUnitRecreated)
 }
 
-func TestRestoreRestoresOnlyStillOwnedProperties(t *testing.T) {
+func TestRestorePreservesTheWholeUnitWhenOnePropertyChangedExternally(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	identity := identityFor(t, adapter, 1001)
@@ -214,7 +269,7 @@ func TestRestoreRestoresOnlyStillOwnedProperties(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Restore() error = %v, want RestoreConflictError", err)
 	}
-	if len(result.Restored) != 1 || result.Restored[0] != PropertyMemoryHigh {
+	if len(result.Restored) != 0 {
 		t.Fatalf("restored = %v", result.Restored)
 	}
 	if len(result.Conflicts) != 1 || result.Conflicts[0].Property != PropertyCPUWeight || result.Conflicts[0].Current != 777 {
@@ -223,11 +278,23 @@ func TestRestoreRestoresOnlyStillOwnedProperties(t *testing.T) {
 	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(777) {
 		t.Fatalf("external CPUWeight was overwritten: %v", got)
 	}
-	if got := transport.units[identity.Name].slice[string(PropertyMemoryHigh)]; got != uint64(SystemdUnset) {
-		t.Fatalf("MemoryHigh = %v, want restored unset sentinel", got)
+	if got := transport.units[identity.Name].slice[string(PropertyMemoryHigh)]; got != uint64(64<<20) {
+		t.Fatalf("MemoryHigh = %v, want ResMan value preserved until safe unit-wide cleanup", got)
 	}
-	if leases := adapter.Leases(identity); len(leases) != 0 {
-		t.Fatalf("leases after restore = %+v", leases)
+	if len(transport.revertCalls) != 0 {
+		t.Fatalf("revert calls = %v, want none", transport.revertCalls)
+	}
+	if leases := adapter.Leases(identity); len(leases) != 2 {
+		t.Fatalf("leases after conflict = %+v, want both retained", leases)
+	}
+	beforeCalls := len(transport.setCalls)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight}); err == nil {
+		t.Fatal("Apply() after external conflict error = nil")
+	} else {
+		assertAdapterReason(t, err, ReasonExternalConflict)
+	}
+	if len(transport.setCalls) != beforeCalls {
+		t.Fatalf("set calls after repeated conflict = %d, want %d", len(transport.setCalls), beforeCalls)
 	}
 }
 
@@ -237,9 +304,7 @@ func TestFailedMutationRetainsEnoughStateForExactRestoration(t *testing.T) {
 	identity := identityFor(t, adapter, 1001)
 	transport.setErr = errors.New("connection lost after dispatch")
 	transport.onSet = func(f *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
-		for _, assignment := range assignments {
-			f.units[unit].slice[string(assignment.name)] = assignment.value
-		}
+		f.applyAssignments(unit, assignments)
 	}
 	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 500)}); err == nil {
 		t.Fatal("Apply() error = nil, want transport failure")
@@ -257,6 +322,88 @@ func TestFailedMutationRetainsEnoughStateForExactRestoration(t *testing.T) {
 	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(SystemdUnset) {
 		t.Fatalf("CPUWeight = %v, want restored unset sentinel", got)
 	}
+}
+
+func TestRestoreLostReplyIsResolvedWithoutAFalseExternalConflict(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 500)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	transport.revertErr = errors.New("connection lost after revert dispatch")
+	transport.onRevert = func(f *fakeUnitTransport, unit string) { f.applyRevert(unit) }
+	if _, err := adapter.Restore(context.Background(), identity); err == nil {
+		t.Fatal("first Restore() error = nil, want lost-reply error")
+	}
+	transport.revertErr = nil
+	transport.onRevert = nil
+
+	result, err := adapter.Restore(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("second Restore() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Restored, []PropertyName{PropertyCPUWeight}) || len(result.Conflicts) != 0 {
+		t.Fatalf("second Restore() result = %+v", result)
+	}
+	if len(transport.revertCalls) != 1 {
+		t.Fatalf("revert calls = %v, want no duplicate after the lost reply", transport.revertCalls)
+	}
+	if leases := adapter.Leases(identity); len(leases) != 0 {
+		t.Fatalf("leases after resolved restoration = %+v", leases)
+	}
+}
+
+func TestApplyAndRestoreGuardTheCompleteMutableUnitFileFootprint(t *testing.T) {
+	t.Run("preexisting operator drop-in prevents the first mutation", func(t *testing.T) {
+		transport := newFakeUnitTransport(1001)
+		transport.units["user-1001.slice"].unit["DropInPaths"] = []string{"/etc/systemd/system/user-1001.slice.d/10-operator.conf"}
+		adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+		identity := identityFor(t, adapter, 1001)
+
+		_, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 500)})
+		assertAdapterReason(t, err, ReasonExternalConflict)
+		if len(transport.setCalls) != 0 {
+			t.Fatalf("set calls = %d, want zero", len(transport.setCalls))
+		}
+	})
+
+	t.Run("operator drop-in not yet loaded by systemd prevents mutation", func(t *testing.T) {
+		transport := newFakeUnitTransport(1001)
+		transport.diskPaths = map[string][]string{
+			"user-1001.slice": {"/etc/systemd/system/user-1001.slice.d/10-unloaded.conf"},
+		}
+		adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+		identity := identityFor(t, adapter, 1001)
+
+		_, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 500)})
+		assertAdapterReason(t, err, ReasonExternalConflict)
+		if len(transport.setCalls) != 0 {
+			t.Fatalf("set calls = %d, want zero", len(transport.setCalls))
+		}
+	})
+
+	t.Run("operator drop-in added after apply prevents cleanup", func(t *testing.T) {
+		transport := newFakeUnitTransport(1001)
+		adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+		identity := identityFor(t, adapter, 1001)
+		if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 500)}); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		paths := transport.units[identity.Name].unit["DropInPaths"].([]string)
+		operatorPath := "/etc/systemd/system/user-1001.slice.d/90-operator.conf"
+		transport.units[identity.Name].unit["DropInPaths"] = append(paths, operatorPath)
+
+		_, err := adapter.Restore(context.Background(), identity)
+		assertAdapterReason(t, err, ReasonExternalConflict)
+		if len(transport.revertCalls) != 0 {
+			t.Fatalf("revert calls = %v, want none", transport.revertCalls)
+		}
+		if got := transport.units[identity.Name].unit["DropInPaths"].([]string); !slicesContain(got, operatorPath) {
+			t.Fatalf("operator drop-in was not preserved: %v", got)
+		}
+	})
 }
 
 func TestRepeatedApplyPreservesTheFirstBaseline(t *testing.T) {
@@ -305,6 +452,9 @@ func TestMalformedRepliesAndTransportFailuresAreTyped(t *testing.T) {
 			f.listErr = godbus.NewError("org.freedesktop.DBus.Error.AccessDenied", nil)
 		}, want: ReasonAuthorizationDenied},
 		{name: "bus loss", mutate: func(f *fakeUnitTransport) { f.listErr = errors.New("disconnected") }, want: ReasonBusUnavailable},
+		{name: "missing unit value error", mutate: func(f *fakeUnitTransport) {
+			f.listErr = godbus.MakeNoObjectError(godbus.ObjectPath("/org/freedesktop/systemd1/unit/user_2d1001_2eslice"))
+		}, want: ReasonUnitMissing},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -320,7 +470,7 @@ func TestMalformedRepliesAndTransportFailuresAreTyped(t *testing.T) {
 func TestCallsAreBoundedByAdapterTimeout(t *testing.T) {
 	transport := newFakeUnitTransport()
 	transport.blockList = true
-	adapter, err := newAdapter(transport, &fakeKernelVerifier{}, 10*time.Millisecond)
+	adapter, err := newAdapter(transport, &fakeKernelVerifier{}, transport, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("newAdapter() error = %v", err)
 	}
@@ -391,6 +541,8 @@ func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 			"Id":           name,
 			"ActiveState":  "active",
 			"InvocationID": invocationBytes(seed),
+			"FragmentPath": "",
+			"DropInPaths":  []string{},
 		},
 		slice: properties,
 	}
@@ -411,14 +563,31 @@ func cloneAnyMap(input map[string]any) map[string]any {
 			result[key] = append([]byte(nil), bytes...)
 			continue
 		}
+		if strings, ok := value.([]string); ok {
+			result[key] = append([]string(nil), strings...)
+			continue
+		}
 		result[key] = value
 	}
 	return result
 }
 
+func slicesContain(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func mustTestAdapter(t *testing.T, transport unitTransport, verifier kernelVerifier) *Adapter {
 	t.Helper()
-	adapter, err := newAdapter(transport, verifier, time.Second)
+	inspector, ok := transport.(unitFileInspector)
+	if !ok {
+		t.Fatal("test transport does not implement unitFileInspector")
+	}
+	adapter, err := newAdapter(transport, verifier, inspector, time.Second)
 	if err != nil {
 		t.Fatalf("newAdapter() error = %v", err)
 	}
