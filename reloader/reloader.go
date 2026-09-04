@@ -157,6 +157,11 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 		outcome.Err = fmt.Errorf("build CPU Points candidate reserve: %w", err)
 		return outcome
 	}
+	root, err := cpupoints.NewRootPoints(uint64(newConfig.GetCPURootPoints()))
+	if err != nil {
+		outcome.Err = fmt.Errorf("build CPU Points candidate root entitlement: %w", err)
+		return outcome
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(newConfig.GetCPUBestEffortPoints()))
 	if err != nil {
 		outcome.Err = fmt.Errorf("build CPU Points candidate best effort: %w", err)
@@ -167,7 +172,7 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 		outcome.Err = fmt.Errorf("build CPU Points candidate map path: %w", err)
 		return outcome
 	}
-	candidate, err := r.policyLoader.Load(cpupoints.PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}, r.identityResolver)
+	candidate, err := r.policyLoader.Load(cpupoints.PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath}, r.identityResolver)
 	if err != nil {
 		outcome.Err = fmt.Errorf("load composite CPU Points candidate: %w", err)
 		return outcome

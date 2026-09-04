@@ -422,11 +422,15 @@ func NewManager(
 	if err != nil {
 		return nil, fmt.Errorf("initialize CPU Points reserve: %w", err)
 	}
+	root, err := cpupoints.NewRootPoints(uint64(cfg.GetCPURootPoints()))
+	if err != nil {
+		return nil, fmt.Errorf("initialize CPU Points root entitlement: %w", err)
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(cfg.GetCPUBestEffortPoints()))
 	if err != nil {
 		return nil, fmt.Errorf("initialize CPU Points best-effort entitlement: %w", err)
 	}
-	mgr.cpuPointsPolicy, err = cpupoints.NewEmptyPolicySnapshot(reserve, bestEffort)
+	mgr.cpuPointsPolicy, err = cpupoints.NewEmptyPolicySnapshot(reserve, root, bestEffort)
 	if err != nil {
 		return nil, fmt.Errorf("initialize empty CPU Points policy: %w", err)
 	}

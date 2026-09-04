@@ -199,6 +199,10 @@ func (a *App) WithStateManager() *App {
 	if err != nil {
 		return a.failCPUPointsStartup("invalid CPU Points reserve", err, true)
 	}
+	root, err := cpupoints.NewRootPoints(uint64(a.cfg.GetCPURootPoints()))
+	if err != nil {
+		return a.failCPUPointsStartup("invalid CPU Points root entitlement", err, true)
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(a.cfg.GetCPUBestEffortPoints()))
 	if err != nil {
 		return a.failCPUPointsStartup("invalid CPU Points best-effort entitlement", err, true)
@@ -208,7 +212,7 @@ func (a *App) WithStateManager() *App {
 		return a.failCPUPointsStartup("invalid CPU Points map path", err, true)
 	}
 	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
-		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+		Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath,
 	}, cpupoints.NSSIdentityResolver{})
 	if err != nil {
 		return a.failCPUPointsStartup("load CPU Points policy", err, true)

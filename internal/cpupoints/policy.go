@@ -24,9 +24,10 @@ const (
 	PolicyMapMarker = "[resman-cpu-points-map-v1]"
 	// MaximumPolicyMapBytes bounds the complete policy file before parsing.
 	MaximumPolicyMapBytes = 64 * 1024
-	// MaximumPolicyMapEntries is the largest representable version-one map: 999
-	// one-point guarantees plus the mandatory one-point best-effort entitlement.
-	MaximumPolicyMapEntries = 999
+	// MaximumPolicyMapEntries is the largest representable version-one map: 998
+	// one-point guarantees plus the mandatory one-point root and best-effort
+	// entitlements.
+	MaximumPolicyMapEntries = 998
 )
 
 // PolicyMapPath is an absolute, clean path to the separate CPU Points map.
@@ -61,6 +62,7 @@ func (p PolicyMapPath) String() string { return p.value }
 // PolicyInputs are the complete typed inputs used to build one policy epoch.
 type PolicyInputs struct {
 	Reserve    ReservePoints
+	Root       RootPoints
 	BestEffort BestEffortPoints
 	MapPath    PolicyMapPath
 }
@@ -155,6 +157,7 @@ func (s PolicySource) Digest() [sha256.Size]byte { return s.digest }
 type PolicySnapshot struct {
 	reserve         ReservePoints
 	pool            ParentPoolPoints
+	root            RootPoints
 	bestEffort      BestEffortPoints
 	configuredTotal ConfiguredGuaranteeTotalPoints
 	entries         []UserGuarantee
@@ -165,10 +168,10 @@ type PolicySnapshot struct {
 // NewEmptyPolicySnapshot constructs a validated policy without mapped users.
 // It exists for dependency-injected consumers that do not load a policy file;
 // production startup must use PolicyLoader so file provenance is retained.
-func NewEmptyPolicySnapshot(reserve ReservePoints, bestEffort BestEffortPoints) (PolicySnapshot, error) {
+func NewEmptyPolicySnapshot(reserve ReservePoints, root RootPoints, bestEffort BestEffortPoints) (PolicySnapshot, error) {
 	pool := reserve.ParentPool()
-	if bestEffort.Value() > pool.Value() {
-		return PolicySnapshot{}, fmt.Errorf("CPU Points policy overcommits nominal pool %d: best effort %d", pool.Value(), bestEffort.Value())
+	if root.Value()+bestEffort.Value() > pool.Value() {
+		return PolicySnapshot{}, newPolicyOvercommitError(pool, reserve, 0, root, bestEffort)
 	}
 	total, err := NewConfiguredGuaranteeTotalPoints(0)
 	if err != nil {
@@ -177,6 +180,7 @@ func NewEmptyPolicySnapshot(reserve ReservePoints, bestEffort BestEffortPoints) 
 	return PolicySnapshot{
 		reserve:         reserve,
 		pool:            pool,
+		root:            root,
 		bestEffort:      bestEffort,
 		configuredTotal: total,
 		guaranteesByUID: make(map[int]UserGuarantee),
@@ -188,6 +192,9 @@ func (s PolicySnapshot) Reserve() ReservePoints { return s.reserve }
 
 // Pool returns the reserve-derived nominal parent pool.
 func (s PolicySnapshot) Pool() ParentPoolPoints { return s.pool }
+
+// Root returns the entitlement of an active root user slice.
+func (s PolicySnapshot) Root() RootPoints { return s.root }
 
 // BestEffort returns the aggregate best-effort entitlement.
 func (s PolicySnapshot) BestEffort() BestEffortPoints { return s.bestEffort }

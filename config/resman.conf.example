@@ -83,17 +83,21 @@ CPU_THRESHOLD_DURATION=90
 # CPU_RESERVE_POINTS is nominal headroom outside the finite ResMan parent, not
 # exclusive physical CPU isolation. Even reserve zero programs finite cpu.max;
 # a saturated parent can throttle and deliver less than its nominal quota.
-# Mapped users receive relative guarantees from CPU_POINTS_FILE while CPU
-# enforcement is active and only for processes ResMan can acquire. Exclusions
-# and PID-namespace rejections reduce that coverage. All other CPU-eligible
-# users share CPU_BEST_EFFORT_POINTS as one aggregate entitlement.
-# Idle mapped capacity is lent to other runnable mapped siblings first. Best
-# effort borrows the parent only when the complete guaranteed domain is idle.
-# Reserve, best-effort, and map-content changes reload atomically. Changing the
+# Mapped eligible users receive relative guarantees from CPU_POINTS_FILE.
+# PID-namespace rejections reduce that coverage until systemd-native control is active.
+# Every other active non-root user slice, including excluded and unmapped users,
+# shares CPU_BEST_EFFORT_POINTS as one aggregate entitlement. Active root
+# sessions receive CPU_ROOT_POINTS as a lendable minimum, never as a ceiling;
+# root must not appear in CPU_POINTS_FILE.
+# CPU Points are minimum proportional entitlements, not ceilings. Unused
+# bandwidth is work-conserving among all runnable sibling user slices.
+# Configured guarantees plus root and best effort must fit within 1000 minus
+# reserve. These values and map-content changes reload atomically. Changing the
 # CPU_POINTS_FILE path requires a restart. A class change for an active UID is
 # rejected atomically: release the UID, then retry the map reload. There is no
 # pending class state. Same-class weights and inactive membership remain dynamic.
 CPU_RESERVE_POINTS=100
+CPU_ROOT_POINTS=100
 CPU_BEST_EFFORT_POINTS=100
 CPU_POINTS_FILE=/etc/resman/cpu-points.map
 

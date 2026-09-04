@@ -16,7 +16,7 @@ func writeEditorFixture(t *testing.T, configBody string) (*Config, string) {
 		t.Fatalf("chmod fixture directory: %v", err)
 	}
 	mapPath := filepath.Join(directory, "cpu-points.map")
-	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nroot=100\n"), 0600); err != nil {
+	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nnobody=100\n"), 0600); err != nil {
 		t.Fatalf("write CPU Points fixture: %v", err)
 	}
 	configPath := filepath.Join(directory, "resman.conf")

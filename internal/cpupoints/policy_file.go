@@ -27,16 +27,26 @@ type PolicyIdentityError struct {
 func (e *PolicyIdentityError) Error() string { return e.Cause.Error() }
 func (e *PolicyIdentityError) Unwrap() error { return e.Cause }
 
-// PolicyOvercommitError identifies a candidate whose configured guarantees
-// and best-effort entitlement exceed its nominal pool.
+// PolicyOvercommitError identifies a candidate whose configured guarantees,
+// root entitlement and best-effort entitlement exceed its nominal pool.
 type PolicyOvercommitError struct {
+	Reserve    uint64
 	Pool       uint64
 	Guarantees uint64
+	Root       uint64
 	BestEffort uint64
+	Total      uint64
 }
 
 func (e *PolicyOvercommitError) Error() string {
-	return fmt.Sprintf("CPU Points policy overcommits nominal pool %d: configured guarantees %d plus best effort %d", e.Pool, e.Guarantees, e.BestEffort)
+	return fmt.Sprintf("CPU Points policy overcommits available pool %d (1000 - reserve %d): configured guarantees %d + root %d + best effort %d = %d", e.Pool, e.Reserve, e.Guarantees, e.Root, e.BestEffort, e.Total)
+}
+
+func newPolicyOvercommitError(pool ParentPoolPoints, reserve ReservePoints, guarantees uint64, root RootPoints, bestEffort BestEffortPoints) *PolicyOvercommitError {
+	return &PolicyOvercommitError{
+		Reserve: reserve.Value(), Pool: pool.Value(), Guarantees: guarantees,
+		Root: root.Value(), BestEffort: bestEffort.Value(), Total: guarantees + root.Value() + bestEffort.Value(),
+	}
 }
 
 // PolicyLoader builds an immutable snapshot using filesystem and NSS I/O before
@@ -103,15 +113,26 @@ func (l *PolicyLoader) loadContent(inputs PolicyInputs, mapPath PolicyMapPath, d
 	if err != nil {
 		return PolicySnapshot{}, fmt.Errorf("validate policy best-effort entitlement: %w", err)
 	}
+	root, err := NewRootPoints(inputs.Root.Value())
+	if err != nil {
+		return PolicySnapshot{}, fmt.Errorf("validate policy root entitlement: %w", err)
+	}
 	rawEntries, err := parsePolicyMap(data)
 	if err != nil {
 		return PolicySnapshot{}, fmt.Errorf("parse CPU Points map %s: %w", mapPath.String(), &PolicySyntaxError{Cause: err})
 	}
 
 	pool := reserve.ParentPool()
+	var configuredTotal uint64
+	for _, raw := range rawEntries {
+		configuredTotal += raw.points.Value()
+	}
+	if configuredTotal+root.Value()+bestEffort.Value() > pool.Value() {
+		return PolicySnapshot{}, newPolicyOvercommitError(pool, reserve, configuredTotal, root, bestEffort)
+	}
+
 	entries := make([]UserGuarantee, 0, len(rawEntries))
 	guaranteesByUID := make(map[int]UserGuarantee, len(rawEntries))
-	var configuredTotal uint64
 	for _, raw := range rawEntries {
 		identities, err := resolver.ResolveExactUsername(raw.username)
 		if err != nil {
@@ -135,15 +156,15 @@ func (l *PolicyLoader) loadContent(inputs PolicyInputs, mapPath PolicyMapPath, d
 			cause := fmt.Errorf("CPU Points map %s line %d username %q resolved to unrepresentable UID %d", mapPath.String(), raw.line, raw.username, identity.UID)
 			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
+		if identity.UID == 0 {
+			cause := fmt.Errorf("CPU Points map %s line %d username %q resolves to root UID 0; configure root sessions with CPU_ROOT_POINTS", mapPath.String(), raw.line, raw.username)
+			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
+		}
 		if previous, duplicate := guaranteesByUID[identity.UID]; duplicate {
 			cause := fmt.Errorf("CPU Points map %s usernames %q and %q resolve to duplicate UID %d", mapPath.String(), previous.Username(), raw.username, identity.UID)
 			return PolicySnapshot{}, &PolicyIdentityError{Username: raw.username, Cause: cause}
 		}
 
-		configuredTotal += raw.points.Value()
-		if configuredTotal+bestEffort.Value() > pool.Value() {
-			return PolicySnapshot{}, &PolicyOvercommitError{Pool: pool.Value(), Guarantees: configuredTotal, BestEffort: bestEffort.Value()}
-		}
 		guarantee := UserGuarantee{
 			username: raw.username,
 			uid:      identity.UID,
@@ -161,6 +182,7 @@ func (l *PolicyLoader) loadContent(inputs PolicyInputs, mapPath PolicyMapPath, d
 	return PolicySnapshot{
 		reserve:         reserve,
 		pool:            pool,
+		root:            root,
 		bestEffort:      bestEffort,
 		configuredTotal: total,
 		entries:         entries,

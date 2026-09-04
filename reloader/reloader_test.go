@@ -162,9 +162,10 @@ func loadReloaderPolicy(t *testing.T, path, content string) cpupoints.PolicySnap
 		t.Fatal(err)
 	}
 	reserve, _ := cpupoints.NewReservePoints(100)
+	root, _ := cpupoints.NewRootPoints(100)
 	bestEffort, _ := cpupoints.NewBestEffortPoints(100)
 	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
-		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+		Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath,
 	}, reloaderResolver{"alice": 1000})
 	if err != nil {
 		t.Fatal(err)

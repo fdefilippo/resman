@@ -735,6 +735,7 @@ func testCPUPointsPolicy(t *testing.T, entries map[string]struct {
 		t.Fatal(err)
 	}
 	reserve, _ := cpupoints.NewReservePoints(100)
+	root, _ := cpupoints.NewRootPoints(100)
 	bestEffort, _ := cpupoints.NewBestEffortPoints(100)
 	mapPath, err := cpupoints.NewPolicyMapPath(path)
 	if err != nil {
@@ -748,7 +749,7 @@ func testCPUPointsPolicy(t *testing.T, entries map[string]struct {
 		return []cpupoints.ResolvedUserIdentity{{Username: username, UID: entry.uid}}, nil
 	})
 	snapshot, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
-		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+		Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath,
 	}, resolver)
 	if err != nil {
 		t.Fatalf("load CPU Points test policy: %v", err)
@@ -830,7 +831,7 @@ func TestCPUPointsReloadOrdersSameClassChangesAndConvergesExactly(t *testing.T) 
 	candidate := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
 		points int
-	}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+	}{"alice": {uid: 1000, points: 350}, "bob": {uid: 1001, points: 350}})
 	cgroups := &cpuPointsReloadCgroupManager{}
 	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
 	weight, _ := cpupoints.NewKernelCPUWeight(300)
@@ -845,20 +846,20 @@ func TestCPUPointsReloadOrdersSameClassChangesAndConvergesExactly(t *testing.T) 
 	}
 	want := []string{
 		"parent:360000 100000",
-		"guaranteed:800",
-		"leaf:user_1000:400",
-		"leaf:user_1001:400",
-		"guaranteed:800",
+		"guaranteed:700",
+		"leaf:user_1000:350",
+		"leaf:user_1001:350",
+		"guaranteed:700",
 		"best_effort:100",
 	}
 	if !reflect.DeepEqual(cgroups.events, want) {
 		t.Fatalf("reconciliation events = %v, want %v", cgroups.events, want)
 	}
-	if got := manager.appliedGuaranteePoints.Value(); got != 800 {
-		t.Fatalf("applied guarantee = %d, want 800", got)
+	if got := manager.appliedGuaranteePoints.Value(); got != 700 {
+		t.Fatalf("applied guarantee = %d, want 700", got)
 	}
-	if got := manager.programmedGuaranteePoints; got != 800 {
-		t.Fatalf("programmed guarantee = %d, want 800", got)
+	if got := manager.programmedGuaranteePoints; got != 700 {
+		t.Fatalf("programmed guarantee = %d, want 700", got)
 	}
 	if state := manager.resourceLimits[1000]; !state.ramApplied || !state.ioApplied {
 		t.Fatalf("same-class weight change lost RAM/IO state: %+v", state)
@@ -905,7 +906,7 @@ func TestCPUPointsReloadFailureKeepsConservativeWeightAndRetriesOldEpoch(t *test
 	candidate := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
 		points int
-	}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+	}{"alice": {uid: 1000, points: 350}, "bob": {uid: 1001, points: 350}})
 	cgroups := &cpuPointsReloadCgroupManager{failAt: 4}
 	manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
 	weight, _ := cpupoints.NewKernelCPUWeight(300)
@@ -955,7 +956,7 @@ func TestCPUPointsReloadFailureAtEveryMutationRetainsSafeRetryIntent(t *testing.
 			candidate := testCPUPointsPolicy(t, map[string]struct {
 				uid    int
 				points int
-			}{"alice": {uid: 1000, points: 400}, "bob": {uid: 1001, points: 400}})
+			}{"alice": {uid: 1000, points: 350}, "bob": {uid: 1001, points: 350}})
 			cgroups := &cpuPointsReloadCgroupManager{failAt: failAt}
 			manager := testCPUPointsManagerForReload(t, oldPolicy, cgroups)
 			weight, _ := cpupoints.NewKernelCPUWeight(300)

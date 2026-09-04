@@ -140,8 +140,8 @@ func TestPolicyLoaderBuildsOneResolvedImmutableSnapshot(t *testing.T) {
 	if got := strings.Join(resolved, ","); got != "john.smith,DOMAIN\\user,user@example,hyphen-name" {
 		t.Errorf("NSS inputs = %q", got)
 	}
-	if snapshot.Reserve().Value() != 100 || snapshot.Pool().Value() != 900 || snapshot.BestEffort().Value() != 100 {
-		t.Errorf("global points = reserve %d pool %d best-effort %d", snapshot.Reserve().Value(), snapshot.Pool().Value(), snapshot.BestEffort().Value())
+	if snapshot.Reserve().Value() != 100 || snapshot.Pool().Value() != 900 || snapshot.Root().Value() != 100 || snapshot.BestEffort().Value() != 100 {
+		t.Errorf("global points = reserve %d pool %d root %d best-effort %d", snapshot.Reserve().Value(), snapshot.Pool().Value(), snapshot.Root().Value(), snapshot.BestEffort().Value())
 	}
 	if got := snapshot.ConfiguredGuaranteeTotal().Value(); got != 650 {
 		t.Errorf("configured total = %d, want 650", got)
@@ -228,6 +228,13 @@ func TestPolicyLoaderRejectsIdentityAmbiguityAtomically(t *testing.T) {
 			}),
 		},
 		{
+			name:    "root UID has dedicated entitlement",
+			content: PolicyMapMarker + "\nroot=1",
+			resolver: exactResolverFunc(func(username string) ([]ResolvedUserIdentity, error) {
+				return []ResolvedUserIdentity{{Username: username, UID: 0}}, nil
+			}),
+		},
+		{
 			name:    "duplicate UID",
 			content: PolicyMapMarker + "\nalice=1\nalice.alias=1",
 			resolver: exactResolverFunc(func(username string) ([]ResolvedUserIdentity, error) {
@@ -280,8 +287,8 @@ func TestPolicyLoaderReturnsTypedEditorSafeRejectionCauses(t *testing.T) {
 			}),
 			assert: func(t *testing.T, err error) {
 				var typed *PolicyOvercommitError
-				if !errors.As(err, &typed) || typed.Pool != 900 || typed.Guarantees != 900 || typed.BestEffort != 100 {
-					t.Fatalf("error = %T %+v, want typed 900+100 overcommit of pool 900", err, typed)
+				if !errors.As(err, &typed) || typed.Reserve != 100 || typed.Pool != 900 || typed.Guarantees != 900 || typed.Root != 100 || typed.BestEffort != 100 || typed.Total != 1100 {
+					t.Fatalf("error = %T %+v, want typed 900+100+100 overcommit of pool 900", err, typed)
 				}
 			},
 		},
@@ -314,8 +321,9 @@ func TestPolicyLoaderValidatesTheCompleteCapacityInvariant(t *testing.T) {
 		valid      bool
 		wantTotal  uint64
 	}{
-		{name: "equality", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\nalice=400\nbob=400", valid: true, wantTotal: 800},
-		{name: "one point excess", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\nalice=401\nbob=400", valid: false},
+		{name: "root-aware equality", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\nalice=350\nbob=350", valid: true, wantTotal: 700},
+		{name: "one point excess", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\nalice=351\nbob=350", valid: false, wantTotal: 701},
+		{name: "previously valid 750-point map", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\nalice=400\nbob=350", valid: false, wantTotal: 750},
 		{name: "empty map", reserve: 100, bestEffort: 100, content: PolicyMapMarker + "\n", valid: true, wantTotal: 0},
 	}
 	resolver := exactResolverFunc(func(username string) ([]ResolvedUserIdentity, error) {
@@ -340,6 +348,13 @@ func TestPolicyLoaderValidatesTheCompleteCapacityInvariant(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("Load() accepted overcommit")
+			}
+			var overcommit *PolicyOvercommitError
+			if !errors.As(err, &overcommit) {
+				t.Fatalf("Load() error = %T %v, want PolicyOvercommitError", err, err)
+			}
+			if overcommit.Reserve != tt.reserve || overcommit.Pool != TotalPoints-tt.reserve || overcommit.Guarantees != tt.wantTotal || overcommit.Root != 100 || overcommit.BestEffort != tt.bestEffort || overcommit.Total != tt.wantTotal+100+tt.bestEffort {
+				t.Fatalf("overcommit = %+v, want every policy term", overcommit)
 			}
 		})
 	}
@@ -370,7 +385,7 @@ func TestPolicyLoaderEnforcesExactByteAndEntryBounds(t *testing.T) {
 
 	t.Run("exact entry maximum", func(t *testing.T) {
 		path := writePolicyMap(t, numberedPolicyMap(MaximumPolicyMapEntries))
-		snapshot, err := newTestPolicyLoader().Load(policyInputs(t, path, 0, 1), resolverByNumericSuffix)
+		snapshot, err := newTestPolicyLoader().Load(policyInputsWithRoot(t, path, 0, 1, 1), resolverByNumericSuffix)
 		if err != nil {
 			t.Fatalf("Load() exact entry maximum: %v", err)
 		}
@@ -381,7 +396,7 @@ func TestPolicyLoaderEnforcesExactByteAndEntryBounds(t *testing.T) {
 
 	t.Run("one entry excess", func(t *testing.T) {
 		path := writePolicyMap(t, numberedPolicyMap(MaximumPolicyMapEntries+1))
-		if _, err := newTestPolicyLoader().Load(policyInputs(t, path, 0, 1), resolverByNumericSuffix); err == nil {
+		if _, err := newTestPolicyLoader().Load(policyInputsWithRoot(t, path, 0, 1, 1), resolverByNumericSuffix); err == nil {
 			t.Fatal("Load() accepted one entry over maximum")
 		}
 	})
@@ -669,8 +684,16 @@ func newTestPolicyLoader() *PolicyLoader {
 }
 
 func policyInputs(t *testing.T, path string, reserveValue, bestEffortValue uint64) PolicyInputs {
+	return policyInputsWithRoot(t, path, reserveValue, 100, bestEffortValue)
+}
+
+func policyInputsWithRoot(t *testing.T, path string, reserveValue, rootValue, bestEffortValue uint64) PolicyInputs {
 	t.Helper()
 	reserve, err := NewReservePoints(reserveValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := NewRootPoints(rootValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +705,7 @@ func policyInputs(t *testing.T, path string, reserveValue, bestEffortValue uint6
 	if err != nil {
 		t.Fatal(err)
 	}
-	return PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}
+	return PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath}
 }
 
 func numberedPolicyMap(entries int) string {

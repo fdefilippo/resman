@@ -51,6 +51,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"CPUThreshold", cfg.CPUThreshold, 75},
 		{"CPUReleaseThreshold", cfg.CPUReleaseThreshold, 40},
 		{"CPUReservePoints", cfg.CPUReservePoints, 100},
+		{"CPURootPoints", cfg.CPURootPoints, 100},
 		{"CPUBestEffortPoints", cfg.CPUBestEffortPoints, 100},
 		{"CPUPointsFile", cfg.CPUPointsFile, DefaultCPUPointsMapPath},
 		{"DaemonShutdownTimeout", cfg.DaemonShutdownTimeout, 60},
@@ -99,6 +100,7 @@ func TestValidateConfig(t *testing.T) {
 				DaemonShutdownTimeout:   60,
 				MCPShutdownTimeout:      10,
 				CPUReservePoints:        100,
+				CPURootPoints:           100,
 				CPUBestEffortPoints:     100,
 				CPUPointsFile:           DefaultCPUPointsMapPath,
 				BatchNightRAMQuota:      "4G",
@@ -951,6 +953,12 @@ func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 		mutate func(*Config)
 	}{
 		{
+			name: "invalid root points",
+			mutate: func(cfg *Config) {
+				cfg.CPURootPoints = 0
+			},
+		},
+		{
 			name: "invalid best-effort points",
 			mutate: func(cfg *Config) {
 				cfg.CPUBestEffortPoints = 0
@@ -984,6 +992,22 @@ func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 				t.Fatal("validateConfig() expected an error")
 			}
 		})
+	}
+}
+
+func TestValidateConfigReportsEveryBaseCPUPointsBudgetTermOnce(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CPUReservePoints = 900
+	cfg.CPURootPoints = 60
+	cfg.CPUBestEffortPoints = 50
+
+	err := validateConfig(cfg)
+	if err == nil {
+		t.Fatal("validateConfig() accepted an overcommitted base CPU Points budget")
+	}
+	want := "available pool 100 (1000 - reserve 900): root 60 + best effort 50 = 110"
+	if strings.Count(err.Error(), want) != 1 {
+		t.Fatalf("validateConfig() error = %q, want one complete bounded diagnostic %q", err, want)
 	}
 }
 

@@ -38,6 +38,9 @@ type ConfiguredGuaranteeTotalPoints struct{ value uint16 }
 // BestEffortPoints is the aggregate proportional entitlement of the best-effort domain.
 type BestEffortPoints struct{ value uint16 }
 
+// RootPoints is the proportional entitlement reserved for an active user-0.slice.
+type RootPoints struct{ value uint16 }
+
 // AcquiredGuaranteePoints is the sum of guarantees whose user leaves ResMan acquired.
 type AcquiredGuaranteePoints struct{ value uint16 }
 
@@ -100,6 +103,14 @@ func NewBestEffortPoints(value uint64) (BestEffortPoints, error) {
 	return BestEffortPoints{value: uint16(value)}, nil
 }
 
+// NewRootPoints validates the root-session entitlement in the range 1 through 1000.
+func NewRootPoints(value uint64) (RootPoints, error) {
+	if err := validateRange("root points", value, 1, TotalPoints); err != nil {
+		return RootPoints{}, err
+	}
+	return RootPoints{value: uint16(value)}, nil
+}
+
 // NewAcquiredGuaranteePoints validates an acquired guarantee sum in the range 0 through 1000.
 func NewAcquiredGuaranteePoints(value uint64) (AcquiredGuaranteePoints, error) {
 	if err := validateRange("acquired guarantee points", value, 0, TotalPoints); err != nil {
@@ -152,6 +163,9 @@ func (p ConfiguredGuaranteeTotalPoints) Value() uint64 { return uint64(p.value) 
 // Value returns the aggregate best-effort entitlement.
 func (p BestEffortPoints) Value() uint64 { return uint64(p.value) }
 
+// Value returns the root-session entitlement.
+func (p RootPoints) Value() uint64 { return uint64(p.value) }
+
 // Value returns the acquired guarantee sum.
 func (p AcquiredGuaranteePoints) Value() uint64 { return uint64(p.value) }
 
@@ -173,6 +187,11 @@ func (p ConfiguredGuaranteePoints) KernelWeight() (KernelCPUWeight, error) {
 
 // KernelWeight converts the aggregate best-effort entitlement into an exact proportional weight.
 func (p BestEffortPoints) KernelWeight() (KernelCPUWeight, error) {
+	return NewKernelCPUWeight(int(p.value))
+}
+
+// KernelWeight converts root points into the same exact proportional weight.
+func (p RootPoints) KernelWeight() (KernelCPUWeight, error) {
 	return NewKernelCPUWeight(int(p.value))
 }
 

@@ -87,6 +87,7 @@ type Config struct {
 	// CPU Points policy. The map is loaded as one immutable snapshot by the
 	// enforcement owner before the daemon can publish successful startup.
 	CPUReservePoints    int    `config:"CPU_RESERVE_POINTS"`
+	CPURootPoints       int    `config:"CPU_ROOT_POINTS"`
 	CPUBestEffortPoints int    `config:"CPU_BEST_EFFORT_POINTS"`
 	CPUPointsFile       string `config:"CPU_POINTS_FILE"`
 
@@ -281,6 +282,7 @@ func DefaultConfig() *Config {
 		CPUThresholdDuration: 90, // Default: wait 90 seconds before activating limits
 
 		CPUReservePoints:    100,
+		CPURootPoints:       100,
 		CPUBestEffortPoints: 100,
 		CPUPointsFile:       DefaultCPUPointsMapPath,
 
@@ -649,6 +651,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"CPU_RELEASE_THRESHOLD":  setInt(func(cfg *Config, value int) { cfg.CPUReleaseThreshold = value }),
 	"CPU_THRESHOLD_DURATION": setInt(func(cfg *Config, value int) { cfg.CPUThresholdDuration = value }),
 	"CPU_RESERVE_POINTS":     setInt(func(cfg *Config, value int) { cfg.CPUReservePoints = value }),
+	"CPU_ROOT_POINTS":        setInt(func(cfg *Config, value int) { cfg.CPURootPoints = value }),
 	"CPU_BEST_EFFORT_POINTS": setInt(func(cfg *Config, value int) { cfg.CPUBestEffortPoints = value }),
 	"CPU_POINTS_FILE":        setString(func(cfg *Config, value string) { cfg.CPUPointsFile = value }),
 	"LIMIT_HOOK_ENABLED":     setBool(func(cfg *Config, value bool) { cfg.LimitHookEnabled = value }),
@@ -1018,8 +1021,12 @@ func validateConfig(cfg *Config) error {
 	if cfg.CPUBestEffortPoints < 0 || bestEffortErr != nil {
 		errors = append(errors, "CPU_BEST_EFFORT_POINTS must be between 1 and 1000")
 	}
-	if reserveErr == nil && bestEffortErr == nil && bestEffort.Value() > reserve.ParentPool().Value() {
-		errors = append(errors, "CPU_BEST_EFFORT_POINTS cannot exceed the nominal pool 1000-CPU_RESERVE_POINTS")
+	root, rootErr := cpupoints.NewRootPoints(uint64(max(cfg.CPURootPoints, 0)))
+	if cfg.CPURootPoints < 0 || rootErr != nil {
+		errors = append(errors, "CPU_ROOT_POINTS must be between 1 and 1000")
+	}
+	if reserveErr == nil && rootErr == nil && bestEffortErr == nil && root.Value()+bestEffort.Value() > reserve.ParentPool().Value() {
+		errors = append(errors, fmt.Sprintf("CPU Points base policy overcommits available pool %d (1000 - reserve %d): root %d + best effort %d = %d", reserve.ParentPool().Value(), reserve.Value(), root.Value(), bestEffort.Value(), root.Value()+bestEffort.Value()))
 	}
 	if _, err := cpupoints.NewPolicyMapPath(cfg.CPUPointsFile); err != nil {
 		errors = append(errors, fmt.Sprintf("CPU_POINTS_FILE is invalid: %v", err))
@@ -1961,7 +1968,14 @@ func (c *Config) GetCPUReservePoints() int {
 	return c.CPUReservePoints
 }
 
-// GetCPUBestEffortPoints returns the aggregate entitlement for unmapped eligible users.
+// GetCPURootPoints returns the proportional entitlement for active root sessions.
+func (c *Config) GetCPURootPoints() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.CPURootPoints
+}
+
+// GetCPUBestEffortPoints returns the aggregate entitlement for non-guaranteed active user slices.
 func (c *Config) GetCPUBestEffortPoints() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

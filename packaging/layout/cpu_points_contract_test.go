@@ -41,7 +41,7 @@ func TestShippedCPUPointsMapPassesTheProductionParserAndCapacityInvariant(t *tes
 	t.Run("guarantee overcommit", func(t *testing.T) {
 		mutated := cpupoints.PolicyMapMarker + "\nalice=800\nbob=1\n"
 		if _, err := loadCPUPointsMap(t, mutated, exactCPUPointsResolver{"alice": 1001, "bob": 1002}); err == nil {
-			t.Fatal("production loader accepted guarantees plus best effort above the parent pool")
+			t.Fatal("production loader accepted guarantees plus root and best effort above the parent pool")
 		}
 	})
 }
@@ -173,12 +173,17 @@ func loadCPUPointsMap(t *testing.T, content string, resolver exactCPUPointsResol
 	if err != nil {
 		t.Fatalf("construct reserve: %v", err)
 	}
+	root, err := cpupoints.NewRootPoints(100)
+	if err != nil {
+		t.Fatalf("construct root points: %v", err)
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(100)
 	if err != nil {
 		t.Fatalf("construct best effort: %v", err)
 	}
 	return cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
 		Reserve:    reserve,
+		Root:       root,
 		BestEffort: bestEffort,
 		MapPath:    mapPath,
 	}, resolver)

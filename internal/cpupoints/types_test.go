@@ -40,6 +40,15 @@ func TestCPUPointConstructorsEnforceDistinctRanges(t *testing.T) {
 			},
 		},
 		{
+			name:    "root",
+			valid:   []uint64{1, 1000},
+			invalid: []uint64{0, 1001},
+			build: func(value uint64) error {
+				_, err := NewRootPoints(value)
+				return err
+			},
+		},
+		{
 			name:    "best effort",
 			valid:   []uint64{1, 1000},
 			invalid: []uint64{0, 1001},
@@ -184,6 +193,7 @@ func TestGuaranteeWeightsPreserveRatiosAndRejectZeroParticipation(t *testing.T) 
 	one, _ := NewConfiguredGuaranteePoints(1)
 	maximum, _ := NewConfiguredGuaranteePoints(1000)
 	bestEffort, _ := NewBestEffortPoints(73)
+	root, _ := NewRootPoints(101)
 	acquired, _ := NewAcquiredGuaranteePoints(400)
 	applied, _ := NewAppliedGuaranteePoints(300)
 
@@ -195,6 +205,9 @@ func TestGuaranteeWeightsPreserveRatiosAndRejectZeroParticipation(t *testing.T) 
 	}
 	if got, err := bestEffort.KernelWeight(); err != nil || got.Value() != 73 {
 		t.Errorf("best-effort weight = %d, err=%v", got.Value(), err)
+	}
+	if got, err := root.KernelWeight(); err != nil || got.Value() != 101 {
+		t.Errorf("root weight = %d, err=%v", got.Value(), err)
 	}
 	if got, err := acquired.KernelWeight(); err != nil || got.Value() != 400 {
 		t.Errorf("acquired weight = %d, err=%v", got.Value(), err)

@@ -657,7 +657,7 @@ watcher retries them after the affected users have been released.
 **Dynamic Updates:**
 - `USER_EXCLUDE_LIST`: Applied immediately, cache cleared
 - `CPU_THRESHOLD`: Applied on next control cycle
-- `CPU_RESERVE_POINTS`, `CPU_BEST_EFFORT_POINTS`, and map contents: Reconciled
+- `CPU_RESERVE_POINTS`, `CPU_ROOT_POINTS`, `CPU_BEST_EFFORT_POINTS`, and map contents: Reconciled
   dynamically as one CPU Points epoch
 - `CPU_POINTS_FILE`: Its active path is restart-required; a rejected new path is
   never opened by the reload candidate

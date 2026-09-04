@@ -449,6 +449,10 @@ func policyInputs(cfg *config.Config) (cpupoints.PolicyInputs, error) {
 	if err != nil {
 		return cpupoints.PolicyInputs{}, err
 	}
+	root, err := cpupoints.NewRootPoints(uint64(cfg.GetCPURootPoints()))
+	if err != nil {
+		return cpupoints.PolicyInputs{}, err
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(cfg.GetCPUBestEffortPoints()))
 	if err != nil {
 		return cpupoints.PolicyInputs{}, err
@@ -457,7 +461,7 @@ func policyInputs(cfg *config.Config) (cpupoints.PolicyInputs, error) {
 	if err != nil {
 		return cpupoints.PolicyInputs{}, err
 	}
-	return cpupoints.PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: path}, nil
+	return cpupoints.PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: path}, nil
 }
 
 func loadEditorPolicy(cfg *config.Config) (cpupoints.PolicySnapshot, error) {

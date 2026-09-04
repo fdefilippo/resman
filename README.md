@@ -115,9 +115,10 @@ CPU_RELEASE_THRESHOLD=40
 CPU_THRESHOLD_DURATION=90
 PROCESS_MIN_AGE_SECONDS=60
 
-# CPU Points: reserve 100/1000 outside ResMan, share 100/1000 with
-# unmapped best-effort users, and load explicit guarantees separately.
+# CPU Points: reserve 100/1000 outside ResMan; assign lendable minimums of
+# 100/1000 to active root sessions and 100/1000 to best-effort users.
 CPU_RESERVE_POINTS=100
+CPU_ROOT_POINTS=100
 CPU_BEST_EFFORT_POINTS=100
 CPU_POINTS_FILE=/etc/resman/cpu-points.map
 
@@ -217,12 +218,13 @@ acquired/applied leaves, not from instantaneous scheduler runnability.
 The strict map begins with `[resman-cpu-points-map-v1]` and then contains exact
 `username=points` assignments. A dot is part of the username, so
 `john.smith=200` maps the exact NSS identity `john.smith`. Configured guarantees plus
-the best-effort entitlement must not exceed the pool. The default package installs
+the root and best-effort entitlements must not exceed the pool. UID 0 has the dedicated
+`CPU_ROOT_POINTS` entitlement and is rejected from the map. The default package installs
 `/etc/resman/cpu-points.map` as a root-owned regular mode-`0600` file below the
 mode-`0700` configuration directory. Custom paths must satisfy the same regular-file,
 ownership, mode, trusted-ancestor, and no-symlink checks.
 
-Reserve, best-effort, and map-content changes form one atomic hot-reload epoch;
+Reserve, root, best-effort, and map-content changes form one atomic hot-reload epoch;
 `CPU_POINTS_FILE` path changes require a restart. A reload may change the weight
 of an active user within its current class, but changing an active user between
 guaranteed and best-effort is rejected atomically. Wait for normal release or first

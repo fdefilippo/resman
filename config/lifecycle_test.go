@@ -120,6 +120,7 @@ func TestRepresentativeFieldLifecycles(t *testing.T) {
 	tests := map[string]FieldLifecycle{
 		"PROCESS_EXCLUDE_LIST":      LifecycleDynamic,
 		"CPU_RESERVE_POINTS":        LifecycleDynamic,
+		"CPU_ROOT_POINTS":           LifecycleDynamic,
 		"CPU_BEST_EFFORT_POINTS":    LifecycleDynamic,
 		"CPU_POINTS_FILE":           LifecycleRestartRequired,
 		"DAEMON_SHUTDOWN_TIMEOUT":   LifecycleDynamic,

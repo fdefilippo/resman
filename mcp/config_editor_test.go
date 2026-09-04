@@ -42,7 +42,7 @@ func TestCPUPointsEditorReconfirmsCompositeRevisionAfterPreflightBeforePersisten
 		t.Fatal(err)
 	}
 	mapPath := filepath.Join(directory, "cpu-points.map")
-	originalMap := []byte("[resman-cpu-points-map-v1]\nroot=100\n")
+	originalMap := []byte("[resman-cpu-points-map-v1]\nnobody=100\n")
 	if err := os.WriteFile(mapPath, originalMap, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCPUPointsEditorReconfirmsCompositeRevisionAfterPreflightBeforePersisten
 		t.Fatal(err)
 	}
 	server.revisionConfirm = func(current *config.Config) (config.EditorSnapshot, error) {
-		if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nroot=101\n"), 0600); err != nil {
+		if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\nnobody=101\n"), 0600); err != nil {
 			return config.EditorSnapshot{}, err
 		}
 		fresh, snapshotErr := config.BuildEditorSnapshot(current)
@@ -80,7 +80,7 @@ func TestCPUPointsEditorReconfirmsCompositeRevisionAfterPreflightBeforePersisten
 
 	points := uint64(120)
 	_, result, err := server.handleUpdateCPUPoints(context.Background(), nil, updateCPUPointsArgs{
-		Revision: request.Revision, Changes: []cpuPointsEditorChange{{Username: "root", Points: &points}},
+		Revision: request.Revision, Changes: []cpuPointsEditorChange{{Username: "nobody", Points: &points}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestRevisionConflictIsBoundedAndContainsNoSensitiveValues(t *testing.T) {
 
 func TestConfigurationEditorClassifiesRefusalsWithoutReturningSubmittedValues(t *testing.T) {
 	configResult := classifyEditorPolicyError(
-		fmt.Errorf("candidate policy: %w", &cpupoints.PolicyOvercommitError{Pool: 900, Guarantees: 850, BestEffort: 100}),
+		fmt.Errorf("candidate policy: %w", &cpupoints.PolicyOvercommitError{Reserve: 100, Pool: 900, Guarantees: 750, Root: 100, BestEffort: 100, Total: 950}),
 		[]string{"CPU_BEST_EFFORT_POINTS"}, nil,
 	)
 	if configResult.Refusal == nil || configResult.Refusal.Reason != "cpu_points_overcommit" || len(configResult.Refusal.Keys) != 1 || configResult.Refusal.Keys[0] != "CPU_BEST_EFFORT_POINTS" {
@@ -275,7 +275,7 @@ func TestConfigurationEditorPersistsAndSynchronouslyPublishesBothSourceKinds(t *
 		t.Fatal(err)
 	}
 	mapPath := filepath.Join(directory, "cpu-points.map")
-	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\n# keep map comment\nroot=100\n"), 0600); err != nil {
+	if err := os.WriteFile(mapPath, []byte("[resman-cpu-points-map-v1]\n# keep map comment\nnobody=100\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(directory, "resman.conf")
@@ -325,7 +325,7 @@ func TestConfigurationEditorPersistsAndSynchronouslyPublishesBothSourceKinds(t *
 	}
 	points := uint64(120)
 	_, pointsResult, err := server.handleUpdateCPUPoints(context.Background(), nil, updateCPUPointsArgs{
-		Revision: second.Revision, Changes: []cpuPointsEditorChange{{Username: "root", Points: &points}},
+		Revision: second.Revision, Changes: []cpuPointsEditorChange{{Username: "nobody", Points: &points}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -334,7 +334,7 @@ func TestConfigurationEditorPersistsAndSynchronouslyPublishesBothSourceKinds(t *
 		t.Fatalf("CPU Points result = %+v", pointsResult)
 	}
 	mapContent, _ := os.ReadFile(mapPath)
-	for _, required := range []string{"# keep map comment", "root=120"} {
+	for _, required := range []string{"# keep map comment", "nobody=120"} {
 		if !strings.Contains(string(mapContent), required) {
 			t.Errorf("persisted CPU Points map omits %q", required)
 		}

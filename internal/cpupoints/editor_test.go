@@ -32,8 +32,9 @@ func TestPolicyEditorCandidatePreservesCommentsAndRejectsSourceRaces(t *testing.
 	}
 	mapPath, _ := NewPolicyMapPath(path)
 	reserve, _ := NewReservePoints(100)
+	root, _ := NewRootPoints(100)
 	bestEffort, _ := NewBestEffortPoints(100)
-	inputs := PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}
+	inputs := PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath}
 	resolver := editorIdentityResolver{"alice": 1001, "bob": 1002, "carol": 1003}
 	current, err := NewPolicyLoader().Load(inputs, resolver)
 	if err != nil {
@@ -93,8 +94,9 @@ func TestPolicyEditorCandidateRejectsOvercommitAndUnresolvedUsers(t *testing.T) 
 	}
 	mapPath, _ := NewPolicyMapPath(path)
 	reserve, _ := NewReservePoints(100)
+	root, _ := NewRootPoints(100)
 	bestEffort, _ := NewBestEffortPoints(100)
-	inputs := PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}
+	inputs := PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath}
 	resolver := editorIdentityResolver{"alice": 1001}
 	current, err := NewPolicyLoader().Load(inputs, resolver)
 	if err != nil {
@@ -138,8 +140,9 @@ func TestPolicyEditorCandidateRollbackRefusesToOverwriteAConcurrentWriter(t *tes
 	}
 	mapPath, _ := NewPolicyMapPath(path)
 	reserve, _ := NewReservePoints(100)
+	root, _ := NewRootPoints(100)
 	bestEffort, _ := NewBestEffortPoints(100)
-	inputs := PolicyInputs{Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath}
+	inputs := PolicyInputs{Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath}
 	resolver := editorIdentityResolver{"alice": 1001}
 	current, err := NewPolicyLoader().Load(inputs, resolver)
 	if err != nil {

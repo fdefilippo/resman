@@ -104,7 +104,7 @@ func TestCPUPointsPolicyRejectionIsPermanentAndOperatorVisible(t *testing.T) {
 		t.Fatalf("secure CPU Points policy directory: %v", err)
 	}
 	policyPath := filepath.Join(policyDir, "cpu-points.map")
-	if err := os.WriteFile(policyPath, []byte("[resman-cpu-points-map-v1]\nroot=801\n"), 0600); err != nil {
+	if err := os.WriteFile(policyPath, []byte("[resman-cpu-points-map-v1]\nnobody=750\n"), 0600); err != nil {
 		t.Fatalf("write CPU Points policy: %v", err)
 	}
 	cfg := config.DefaultConfig()
@@ -118,10 +118,11 @@ func TestCPUPointsPolicyRejectionIsPermanentAndOperatorVisible(t *testing.T) {
 	if !IsPermanentStartupError(err) {
 		t.Fatalf("Run() error = %v, want permanent CPU Points rejection", err)
 	}
-	if !strings.Contains(err.Error(), "configured guarantees 801 plus best effort 100") {
+	want := "configured guarantees 750 + root 100 + best effort 100 = 950"
+	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("Run() error = %v, want overcommit diagnostic", err)
 	}
-	if len(logger.errors) != 1 || !strings.Contains(logger.errors[0], "configured guarantees 801 plus best effort 100") {
+	if len(logger.errors) != 1 || !strings.Contains(logger.errors[0], want) {
 		t.Fatalf("operator error records = %q, want one overcommit diagnostic", logger.errors)
 	}
 }

@@ -422,6 +422,10 @@ func BuildEditorSnapshot(applied *Config) (EditorSnapshot, error) {
 	if err != nil {
 		return EditorSnapshot{}, err
 	}
+	root, err := cpupoints.NewRootPoints(uint64(persisted.GetCPURootPoints()))
+	if err != nil {
+		return EditorSnapshot{}, err
+	}
 	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(persisted.GetCPUBestEffortPoints()))
 	if err != nil {
 		return EditorSnapshot{}, err
@@ -431,7 +435,7 @@ func BuildEditorSnapshot(applied *Config) (EditorSnapshot, error) {
 		return EditorSnapshot{}, err
 	}
 	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
-		Reserve: reserve, BestEffort: bestEffort, MapPath: mapPath,
+		Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath,
 	}, cpupoints.NSSIdentityResolver{})
 	if err != nil {
 		return EditorSnapshot{}, fmt.Errorf("load editor CPU Points source: %w", err)

@@ -74,6 +74,7 @@ func TestStructuredConstraintsUseProductionParsingAndValidation(t *testing.T) {
 		invalid string
 	}{
 		{key: "CPU_RESERVE_POINTS", valid: "100", invalid: "991"},
+		{key: "CPU_ROOT_POINTS", valid: "100", invalid: "0"},
 		{key: "CPU_BEST_EFFORT_POINTS", valid: "100", invalid: "0"},
 		{key: "CPU_THRESHOLD", valid: "75", invalid: "101"},
 		{key: "MCP_TRANSPORT", valid: "stdio", invalid: "websocket"},
@@ -242,6 +243,7 @@ func TestSecondaryConfigurationReferencesStayFocusedAndSecure(t *testing.T) {
 func TestCPUPointsPublicKeysLandTogetherAtTheEnforcementCutover(t *testing.T) {
 	want := map[string]bool{
 		"CPU_RESERVE_POINTS":     false,
+		"CPU_ROOT_POINTS":        false,
 		"CPU_BEST_EFFORT_POINTS": false,
 		"CPU_POINTS_FILE":        false,
 	}
