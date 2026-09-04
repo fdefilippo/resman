@@ -807,7 +807,7 @@ func (m *Manager) commitReleasedUsers(users []int) {
 
 func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
 	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
-		return m.activateSystemdCPUPoints(metrics)
+		return m.activateSystemdEnforcement(metrics)
 	}
 	defer func() {
 		if resultErr != nil && m.prometheusExporter != nil {

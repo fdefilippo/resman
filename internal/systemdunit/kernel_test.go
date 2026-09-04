@@ -4,7 +4,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"syscall"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestReadOnlyKernelVerifierChecksEveryApprovedScalarInterface(t *testing.T) {
@@ -27,7 +32,7 @@ func TestReadOnlyKernelVerifierChecksEveryApprovedScalarInterface(t *testing.T) 
 			t.Fatalf("WriteFile(%s) error = %v", name, err)
 		}
 	}
-	properties := newPropertySet(map[PropertyName]uint64{
+	properties := newScalarTestPropertySet(map[PropertyName]uint64{
 		PropertyCPUWeight:          321,
 		PropertyCPUQuotaPerSecUSec: 900_000,
 		PropertyCPUQuotaPeriodUSec: 100_000,
@@ -56,11 +61,41 @@ func TestReadOnlyKernelVerifierRejectsDivergentEffectiveValue(t *testing.T) {
 	snapshot := UnitSnapshot{
 		Identity:     UnitIdentity{Name: parentUserSlice},
 		ControlGroup: "/user.slice",
-		Properties:   newPropertySet(map[PropertyName]uint64{PropertyCPUWeight: 500}),
+		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyCPUWeight: 500}),
 	}
 	assignment := mustAssignment(t, PropertyCPUWeight, 500)
 	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{assignment}); err == nil {
 		t.Fatal("verify() error = nil, want effective-value mismatch")
+	}
+}
+
+func TestReadOnlyKernelVerifierRejectsDivergentMemoryHighAndMax(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		property PropertyName
+		file     string
+	}{
+		{name: "high", property: PropertyMemoryHigh, file: "memory.high"},
+		{name: "max", property: PropertyMemoryMax, file: "memory.max"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "user.slice", "user-1000.slice")
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, test.file), []byte("67108863\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := UnitSnapshot{
+				Identity:     UnitIdentity{Name: "user-1000.slice"},
+				ControlGroup: "/user.slice/user-1000.slice",
+				Properties:   newScalarTestPropertySet(map[PropertyName]uint64{test.property: 64 << 20}),
+			}
+			if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, test.property, 64<<20)}); err == nil {
+				t.Fatalf("verify() accepted divergent %s", test.property)
+			}
+		})
 	}
 }
 
@@ -87,7 +122,7 @@ func TestReadOnlyKernelVerifierRejectsDivergentCPUQuotaAndPeriod(t *testing.T) {
 			snapshot := UnitSnapshot{
 				Identity:     UnitIdentity{Name: parentUserSlice},
 				ControlGroup: "/user.slice",
-				Properties: newPropertySet(map[PropertyName]uint64{
+				Properties: newScalarTestPropertySet(map[PropertyName]uint64{
 					PropertyCPUQuotaPerSecUSec: test.perSec,
 					PropertyCPUQuotaPeriodUSec: test.period,
 				}),
@@ -112,13 +147,13 @@ func TestReadOnlyKernelVerifierAcceptsMissingControllerOnlyForUnsetProperty(t *t
 	unset := UnitSnapshot{
 		Identity:     UnitIdentity{Name: parentUserSlice},
 		ControlGroup: "/user.slice",
-		Properties:   newPropertySet(map[PropertyName]uint64{PropertyCPUWeight: SystemdUnset}),
+		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyCPUWeight: SystemdUnset}),
 	}
 	if err := newCgroupVerifier(root).verify(unset, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, SystemdUnset)}); err != nil {
 		t.Fatalf("unset verification error = %v", err)
 	}
 	finite := unset
-	finite.Properties = newPropertySet(map[PropertyName]uint64{PropertyCPUWeight: 200})
+	finite.Properties = newScalarTestPropertySet(map[PropertyName]uint64{PropertyCPUWeight: 200})
 	if err := newCgroupVerifier(root).verify(finite, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 200)}); err == nil {
 		t.Fatal("finite verification accepted a missing controller interface")
 	}
@@ -128,4 +163,158 @@ func TestScalePerSecondQuotaRejectsOverflow(t *testing.T) {
 	if _, err := scalePerSecondQuota(math.MaxUint64, math.MaxUint64); err == nil {
 		t.Fatal("scalePerSecondQuota() error = nil, want overflow")
 	}
+}
+
+func TestReadOnlyKernelVerifierChecksHardAndWeightedIO(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.weight"), []byte("default 321\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.max"), []byte("8:0 rbps=1048576 wbps=2097152 riops=100 wiops=200\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values := map[PropertyName]propertyValue{PropertyIOWeight: scalarPropertyValue(321)}
+	assignments := []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 321)}
+	for _, candidate := range []struct {
+		name  PropertyName
+		value uint64
+	}{
+		{name: PropertyIOReadBandwidthMax, value: 1 << 20},
+		{name: PropertyIOWriteBandwidthMax, value: 2 << 20},
+		{name: PropertyIOReadIOPSMax, value: 100},
+		{name: PropertyIOWriteIOPSMax, value: 200},
+	} {
+		assignment, err := NewDevicePropertyAssignment(candidate.name, []DeviceLimit{{Path: "/dev/vda", Value: candidate.value}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		values[candidate.name] = assignment.value
+		assignments = append(assignments, assignment)
+	}
+	verifier := newCgroupVerifier(root)
+	verifier.stat = func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
+	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice"}, ControlGroup: "/user.slice/user-1000.slice", Properties: newPropertySet(values)}
+	if err := verifier.verify(snapshot, assignments); err != nil {
+		t.Fatalf("verify() error: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(path, "io.max"), []byte("8:0 rbps=1048575 wbps=2097152 riops=100 wiops=200\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.verify(snapshot, assignments); err == nil {
+		t.Fatal("verify() accepted a divergent hard I/O limit")
+	}
+}
+
+func TestReadOnlyKernelVerifierChecksSystemdWeightThroughBFQInterface(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 132\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{
+		Identity:     UnitIdentity{Name: "user-1000.slice"},
+		ControlGroup: "/user.slice/user-1000.slice",
+		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyIOWeight: 456}),
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err != nil {
+		t.Fatalf("verify() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 131\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err == nil {
+		t.Fatal("verify() accepted a divergent BFQ weight")
+	}
+}
+
+func TestIOPreflightAcceptsControllerThatSystemdCanEnableOnTheParent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice"}, ControlGroup: "/user.slice/user-1000.slice"}
+	if err := newCgroupVerifier(root).preflight(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err != nil {
+		t.Fatalf("preflight() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCgroupVerifier(root).preflight(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err == nil {
+		t.Fatal("preflight() accepted an unavailable I/O controller")
+	}
+}
+
+func TestResolveBlockDevicesReturnsCanonicalNodesForFilterAndAll(t *testing.T) {
+	root := t.TempDir()
+	sysBlock := filepath.Join(root, "sys", "block")
+	sysDevBlock := filepath.Join(root, "sys", "dev", "block")
+	devRoot := filepath.Join(root, "dev")
+	for _, fixture := range []struct {
+		name   string
+		number string
+	}{
+		{name: "sda", number: "8:0"},
+		{name: "sdb", number: "8:16"},
+	} {
+		if err := os.MkdirAll(filepath.Join(sysBlock, fixture.name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sysBlock, fixture.name, "dev"), []byte(fixture.number+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(sysDevBlock, fixture.number), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sysDevBlock, fixture.number, "uevent"), []byte("DEVNAME="+fixture.name+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stat := func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
+	got, err := resolveBlockDevices("8:16", sysBlock, sysDevBlock, devRoot, os.ReadDir, os.ReadFile, stat)
+	if err != nil {
+		t.Fatalf("resolveBlockDevices(filter) error = %v", err)
+	}
+	want := []string{filepath.Join(devRoot, "sdb")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveBlockDevices(filter) = %v, want %v", got, want)
+	}
+	got, err = resolveBlockDevices("all", sysBlock, sysDevBlock, devRoot, os.ReadDir, os.ReadFile, stat)
+	if err != nil {
+		t.Fatalf("resolveBlockDevices(all) error = %v", err)
+	}
+	want = []string{filepath.Join(devRoot, "sda"), filepath.Join(devRoot, "sdb")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveBlockDevices(all) = %v, want %v", got, want)
+	}
+}
+
+type fakeBlockDeviceInfo struct{}
+
+func newScalarTestPropertySet(values map[PropertyName]uint64) PropertySet {
+	normalized := make(map[PropertyName]propertyValue, len(values))
+	for name, value := range values {
+		normalized[name] = scalarPropertyValue(value)
+	}
+	return newPropertySet(normalized)
+}
+
+func (fakeBlockDeviceInfo) Name() string       { return "vda" }
+func (fakeBlockDeviceInfo) Size() int64        { return 0 }
+func (fakeBlockDeviceInfo) Mode() os.FileMode  { return os.ModeDevice }
+func (fakeBlockDeviceInfo) ModTime() time.Time { return time.Time{} }
+func (fakeBlockDeviceInfo) IsDir() bool        { return false }
+func (fakeBlockDeviceInfo) Sys() any {
+	return &syscall.Stat_t{Rdev: uint64(unix.Mkdev(8, 0))}
 }

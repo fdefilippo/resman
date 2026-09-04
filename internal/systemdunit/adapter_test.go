@@ -138,7 +138,15 @@ func (f *fakeUnitTransport) applyAssignments(unit string, assignments []Property
 		seen[path] = true
 	}
 	for _, assignment := range assignments {
-		state.slice[string(assignment.name)] = assignment.value
+		if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
+			values := make([]dbusDeviceLimit, len(assignment.value.devices))
+			for index, value := range assignment.value.devices {
+				values[index] = dbusDeviceLimit(value)
+			}
+			state.slice[string(assignment.name)] = values
+		} else {
+			state.slice[string(assignment.name)] = assignment.value.scalar
+		}
 		seen[managedRuntimeDropInPath(unit, assignment.name)] = true
 	}
 	paths = paths[:0]
@@ -159,6 +167,9 @@ func (f *fakeUnitTransport) applyRevert(unit string) {
 	}
 	for property := range approvedScalarProperties {
 		state.slice[string(property)] = uint64(SystemdUnset)
+	}
+	for property := range approvedDeviceProperties {
+		state.slice[string(property)] = []dbusDeviceLimit{}
 	}
 	state.unit["DropInPaths"] = []string{}
 }
@@ -444,7 +455,7 @@ func TestReadConfirmsOneUnitLifetimeAroundPropertySnapshot(t *testing.T) {
 	assertAdapterReason(t, err, ReasonUnitRecreated)
 }
 
-func TestRestorePreservesTheWholeUnitWhenOnePropertyChangedExternally(t *testing.T) {
+func TestRestorePreservesExternalConflictAndRestoresOtherProperties(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	identity := identityFor(t, adapter, 1001)
@@ -460,8 +471,8 @@ func TestRestorePreservesTheWholeUnitWhenOnePropertyChangedExternally(t *testing
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Restore() error = %v, want RestoreConflictError", err)
 	}
-	if len(result.Restored) != 0 {
-		t.Fatalf("restored = %v", result.Restored)
+	if !reflect.DeepEqual(result.Restored, []PropertyName{PropertyMemoryHigh}) {
+		t.Fatalf("restored = %v, want MemoryHigh", result.Restored)
 	}
 	if len(result.Conflicts) != 1 || result.Conflicts[0].Property != PropertyCPUWeight || result.Conflicts[0].Current != 777 {
 		t.Fatalf("conflicts = %+v", result.Conflicts)
@@ -469,8 +480,8 @@ func TestRestorePreservesTheWholeUnitWhenOnePropertyChangedExternally(t *testing
 	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(777) {
 		t.Fatalf("external CPUWeight was overwritten: %v", got)
 	}
-	if got := transport.units[identity.Name].slice[string(PropertyMemoryHigh)]; got != uint64(64<<20) {
-		t.Fatalf("MemoryHigh = %v, want ResMan value preserved until safe unit-wide cleanup", got)
+	if got := transport.units[identity.Name].slice[string(PropertyMemoryHigh)]; got != uint64(SystemdUnset) {
+		t.Fatalf("MemoryHigh = %v, want independently restored baseline", got)
 	}
 	if len(transport.revertCalls) != 0 {
 		t.Fatalf("revert calls = %v, want none", transport.revertCalls)
@@ -1045,6 +1056,20 @@ func TestPositivePropertyAllowlistRejectsUnknownAndInvalidValues(t *testing.T) {
 	}
 }
 
+func TestDevicePropertyParserAcceptsDynamicDBusTuples(t *testing.T) {
+	got, err := parseDevicePropertyValue([][]interface{}{
+		{"/dev/sdb", uint64(2 << 20)},
+		{"/dev/sda", uint64(1 << 20)},
+	})
+	if err != nil {
+		t.Fatalf("parseDevicePropertyValue() error = %v", err)
+	}
+	want := []DeviceLimit{{Path: "/dev/sda", Value: 1 << 20}, {Path: "/dev/sdb", Value: 2 << 20}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseDevicePropertyValue() = %v, want %v", got, want)
+	}
+}
+
 func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.T) {
 	typeOfAdapter := reflect.TypeOf((*Adapter)(nil))
 	var methods []string
@@ -1052,9 +1077,126 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore"}
+	want := []string{"Apply", "CheckResourceAuthority", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
+	}
+}
+
+func TestAdapterPersistsAndRestoresStructuredIODeviceLimits(t *testing.T) {
+	transport := newFakeUnitTransport(1000)
+	store := newMemoryLeaseJournalStore()
+	adapter, err := newAdapter(context.Background(), transport, &fakeKernelVerifier{}, transport, store, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	memory := mustAssignment(t, PropertyMemoryHigh, 64<<20)
+	read, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{memory, read}); err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+	leases := adapter.Leases(identity)
+	deviceLeases := 0
+	for _, lease := range leases {
+		if len(lease.LastAppliedDeviceLimits) == 1 {
+			deviceLeases++
+		}
+	}
+	if len(leases) != 2 || deviceLeases != 1 {
+		t.Fatalf("leases = %+v, want scalar and structured ownership", leases)
+	}
+
+	restarted, err := newAdapter(context.Background(), transport, &fakeKernelVerifier{}, transport, store, time.Second)
+	if err != nil {
+		t.Fatalf("restart adapter: %v", err)
+	}
+	if _, err := restarted.RestoreProperties(context.Background(), identity, []PropertyName{PropertyMemoryHigh}); err != nil {
+		t.Fatalf("RestoreProperties() error: %v", err)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyMemoryHigh)]; got != uint64(SystemdUnset) {
+		t.Fatalf("MemoryHigh after selected restore = %v", got)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit); len(got) != 1 || got[0].Value != 1<<20 {
+		t.Fatalf("I/O limit changed during memory-only restore: %+v", got)
+	}
+	if len(transport.revertCalls) != 0 {
+		t.Fatal("selected property restoration reverted unrelated unit overrides")
+	}
+	if _, err := restarted.Restore(context.Background(), identity); err != nil {
+		t.Fatalf("Restore() error: %v", err)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit); len(got) != 0 {
+		t.Fatalf("I/O limit after complete restore = %+v", got)
+	}
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("durable journal retained restored unit: %+v", store.journal.Units)
+	}
+}
+
+func TestRestorePropertiesRestoresOwnedValuesAndPreservesExternalConflict(t *testing.T) {
+	transport := newFakeUnitTransport(1000)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, _ := adapter.Discover(context.Background())
+	identity := topology.Users[0].Unit.Identity
+	memory := mustAssignment(t, PropertyMemoryMax, 128<<20)
+	read, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{memory, read}); err != nil {
+		t.Fatal(err)
+	}
+	transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)] = []dbusDeviceLimit{{Path: "/dev/vda", Value: 2 << 20}}
+	result, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyMemoryMax, PropertyIOReadBandwidthMax})
+	var conflict *RestoreConflictError
+	if !errors.As(err, &conflict) || len(result.Conflicts) != 1 || result.Conflicts[0].Property != PropertyIOReadBandwidthMax {
+		t.Fatalf("result=%+v error=%v, want one I/O conflict", result, err)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyMemoryMax)]; got != uint64(SystemdUnset) {
+		t.Fatalf("non-conflicting MemoryMax was not restored: %v", got)
+	}
+	got := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit)
+	if len(got) != 1 || got[0].Value != 2<<20 {
+		t.Fatalf("external I/O limit was overwritten: %+v", got)
+	}
+}
+
+func TestCompleteRestoreStillRestoresOwnedPropertiesWhenAnotherPropertyConflicts(t *testing.T) {
+	transport := newFakeUnitTransport(1000)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, _ := adapter.Discover(context.Background())
+	identity := topology.Users[0].Unit.Identity
+	memory := mustAssignment(t, PropertyMemoryMax, 128<<20)
+	read, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{memory, read}); err != nil {
+		t.Fatal(err)
+	}
+	transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)] = []dbusDeviceLimit{{Path: "/dev/vda", Value: 2 << 20}}
+	result, err := adapter.Restore(context.Background(), identity)
+	var conflict *RestoreConflictError
+	if !errors.As(err, &conflict) || len(result.Conflicts) != 1 || result.Conflicts[0].Property != PropertyIOReadBandwidthMax {
+		t.Fatalf("result=%+v error=%v, want one I/O conflict", result, err)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyMemoryMax)]; got != uint64(SystemdUnset) {
+		t.Fatalf("non-conflicting MemoryMax was not restored: %v", got)
+	}
+	got := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit)
+	if len(got) != 1 || got[0].Value != 2<<20 {
+		t.Fatalf("external I/O limit was overwritten: %+v", got)
+	}
+	if len(transport.revertCalls) != 0 {
+		t.Fatalf("unit-wide revert ran despite an external conflict: %v", transport.revertCalls)
 	}
 }
 
@@ -1070,15 +1212,19 @@ func newFakeUnitTransport(uids ...uint32) *fakeUnitTransport {
 
 func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 	properties := map[string]any{
-		"ControlGroup":                     controlGroup,
-		"ControlGroupId":                   uint64(seed + 100),
-		string(PropertyCPUWeight):          uint64(SystemdUnset),
-		string(PropertyCPUQuotaPerSecUSec): uint64(SystemdUnset),
-		string(PropertyCPUQuotaPeriodUSec): uint64(SystemdUnset),
-		string(PropertyMemoryHigh):         uint64(SystemdUnset),
-		string(PropertyMemoryMax):          uint64(SystemdUnset),
-		string(PropertyMemorySwapMax):      uint64(SystemdUnset),
-		string(PropertyIOWeight):           uint64(SystemdUnset),
+		"ControlGroup":                      controlGroup,
+		"ControlGroupId":                    uint64(seed + 100),
+		string(PropertyCPUWeight):           uint64(SystemdUnset),
+		string(PropertyCPUQuotaPerSecUSec):  uint64(SystemdUnset),
+		string(PropertyCPUQuotaPeriodUSec):  uint64(SystemdUnset),
+		string(PropertyMemoryHigh):          uint64(SystemdUnset),
+		string(PropertyMemoryMax):           uint64(SystemdUnset),
+		string(PropertyMemorySwapMax):       uint64(SystemdUnset),
+		string(PropertyIOWeight):            uint64(SystemdUnset),
+		string(PropertyIOReadBandwidthMax):  []dbusDeviceLimit{},
+		string(PropertyIOWriteBandwidthMax): []dbusDeviceLimit{},
+		string(PropertyIOReadIOPSMax):       []dbusDeviceLimit{},
+		string(PropertyIOWriteIOPSMax):      []dbusDeviceLimit{},
 	}
 	return &fakeUnitState{
 		listed: listedUnit{name: name, objectPath: "/org/freedesktop/systemd1/unit/" + name, loadState: "loaded", activeState: "active"},

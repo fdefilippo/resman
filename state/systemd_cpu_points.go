@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,10 +18,13 @@ import (
 // the state manager. It intentionally exposes no process-management method.
 type SystemdCPUUnitAdapter interface {
 	Discover(context.Context) (systemdunit.TopologySnapshot, error)
+	CheckResourceAuthority(context.Context, systemdunit.UnitIdentity, uint32, systemdunit.ResourceKind, []systemdunit.PropertyAssignment) (systemdunit.ResourceAuthority, error)
 	Apply(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
 	Restore(context.Context, systemdunit.UnitIdentity) (systemdunit.RestoreResult, error)
+	RestoreProperties(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyName) (systemdunit.RestoreResult, error)
 	ReconcileOwned(context.Context) error
 	OwnedUnits() []systemdunit.UnitIdentity
+	Leases(systemdunit.UnitIdentity) []systemdunit.PropertyLease
 	Close()
 }
 
@@ -39,9 +43,41 @@ func WithSystemdCPUEnforcement(adapter SystemdCPUUnitAdapter) ManagerOption {
 		// A recovered durable lease means CPU properties are still effective.
 		// Reconcile them in the first cycle instead of publishing an inactive
 		// manager beside an enforced systemd topology.
-		m.systemdCPURequested = len(adapter.OwnedUnits()) > 0
+		for _, identity := range adapter.OwnedUnits() {
+			for _, lease := range adapter.Leases(identity) {
+				if !lease.Active() {
+					continue
+				}
+				if lease.Property.IsCPU() {
+					m.systemdCPURequested = true
+					if identity.IsParentUserSlice() {
+						m.systemdCPUParent = identity
+					} else if uid, ok := systemdUserSliceUID(identity.Name); ok {
+						m.systemdCPUSlices[uid] = identity
+					}
+				}
+				if _, resourceProperty := lease.Property.Resource(); resourceProperty {
+					m.systemdResourcesRequested = true
+					if uid, ok := systemdUserSliceUID(identity.Name); ok {
+						m.systemdResourceUnits[uid] = identity
+					}
+				}
+			}
+		}
 		return nil
 	}
+}
+
+func systemdUserSliceUID(name string) (int, bool) {
+	if !strings.HasPrefix(name, "user-") || !strings.HasSuffix(name, ".slice") {
+		return 0, false
+	}
+	value := strings.TrimSuffix(strings.TrimPrefix(name, "user-"), ".slice")
+	uid, err := strconv.ParseUint(value, 10, 31)
+	if err != nil || strconv.FormatUint(uid, 10) != value {
+		return 0, false
+	}
+	return int(uid), true
 }
 
 func (m *Manager) activateSystemdCPUPoints(metrics *SystemMetrics) error {
@@ -50,8 +86,8 @@ func (m *Manager) activateSystemdCPUPoints(metrics *SystemMetrics) error {
 	m.systemdCPURequested = len(metrics.CPUEligibleUsers) > 0
 	m.mu.Unlock()
 	if len(metrics.CPUEligibleUsers) == 0 {
-		if wasRequested || len(m.systemdUnits.OwnedUnits()) > 0 {
-			return m.restoreSystemdCPUPoints(context.Background())
+		if wasRequested {
+			return m.restoreSystemdCPUProperties(context.Background())
 		}
 		return nil
 	}
@@ -88,7 +124,7 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 		// Root participates in the flat scheduler only while at least one
 		// eligible non-root workload is governed. It cannot keep the finite
 		// parent quota alive by itself.
-		return m.restoreSystemdCPUPoints(ctx)
+		return m.restoreSystemdCPUProperties(ctx)
 	}
 	capacity, err := m.cpuCapacity.Refresh(policy.Pool())
 	if err != nil {
@@ -214,6 +250,81 @@ func (m *Manager) deferSystemdCPUPointsError(step string, err error) error {
 	return wrapped
 }
 
+func (m *Manager) restoreSystemdCPUProperties(ctx context.Context) error {
+	if m.systemdUnits == nil {
+		return fmt.Errorf("restore systemd CPU Points: adapter is unavailable")
+	}
+	if err := m.systemdUnits.ReconcileOwned(ctx); err != nil {
+		return fmt.Errorf("reconcile owned systemd properties before CPU restore: %w", err)
+	}
+	owned := make(map[string]bool)
+	for _, identity := range m.systemdUnits.OwnedUnits() {
+		owned[identity.Name] = true
+	}
+	m.mu.RLock()
+	parent := m.systemdCPUParent
+	slices := make(map[int]systemdunit.UnitIdentity, len(m.systemdCPUSlices))
+	for uid, identity := range m.systemdCPUSlices {
+		slices[uid] = identity
+	}
+	resources := make(map[int]userResourceLimitState, len(m.resourceLimits))
+	for uid, state := range m.resourceLimits {
+		resources[uid] = state
+	}
+	m.mu.RUnlock()
+
+	var restoreErrors []error
+	orderedUIDs := make([]int, 0, len(slices))
+	for uid := range slices {
+		orderedUIDs = append(orderedUIDs, uid)
+	}
+	sort.Ints(orderedUIDs)
+	for _, uid := range orderedUIDs {
+		identity := slices[uid]
+		if !owned[identity.Name] {
+			continue
+		}
+		state := resources[uid]
+		var err error
+		if state.ramApplied || state.ioApplied {
+			_, err = m.systemdUnits.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyCPUWeight})
+		} else {
+			_, err = m.systemdUnits.Restore(ctx, identity)
+		}
+		if err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore CPU properties for %s: %w", identity.Name, err))
+		}
+	}
+	if parent.Name != "" && owned[parent.Name] {
+		if _, err := m.systemdUnits.Restore(ctx, parent); err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore CPU properties for %s: %w", parent.Name, err))
+		}
+	}
+	if err := errors.Join(restoreErrors...); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	wasActive := m.limitsActive
+	hadPlan := m.systemdCPUPlanSignature != ""
+	m.systemdCPURequested = false
+	m.systemdCPUComplete = false
+	m.systemdCPUParent = systemdunit.UnitIdentity{}
+	m.systemdCPUSlices = make(map[int]systemdunit.UnitIdentity)
+	m.systemdCPUPlanSignature = ""
+	m.requestedCPUUsers = make(map[int]bool)
+	m.activeUsers = make(map[int]bool)
+	m.userLimitedAt = make(map[int]time.Time)
+	m.limitsActive = false
+	m.limitsAppliedTime = time.Time{}
+	m.cpuPointsDegraded = false
+	m.mu.Unlock()
+	m.recordCPUTransitions(false, wasActive)
+	if hadPlan {
+		m.logger.Info("Systemd-native CPU Points plan released")
+	}
+	return nil
+}
+
 func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 	if m.systemdUnits == nil {
 		return fmt.Errorf("restore systemd CPU Points: adapter is unavailable")
@@ -260,11 +371,16 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 	m.systemdCPUParent = systemdunit.UnitIdentity{}
 	m.systemdCPUSlices = make(map[int]systemdunit.UnitIdentity)
 	m.systemdCPUPlanSignature = ""
+	m.systemdResourcesRequested = false
+	m.systemdResourceUnits = make(map[int]systemdunit.UnitIdentity)
 	m.requestedCPUUsers = make(map[int]bool)
 	m.activeUsers = make(map[int]bool)
 	m.userLimitedAt = make(map[int]time.Time)
+	m.resourceLimits = make(map[int]userResourceLimitState)
 	m.limitsActive = false
+	m.resourceLimitsActive = false
 	m.limitsAppliedTime = time.Time{}
+	m.resourceLimitsAppliedTime = time.Time{}
 	m.cpuPointsDegraded = false
 	m.mu.Unlock()
 	m.recordCPUTransitions(false, wasActive)

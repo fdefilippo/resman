@@ -608,6 +608,11 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			wantFailed: true,
 		},
 		{
+			name:    "authoritative control group used by read-only coverage inspector",
+			path:    systemdUnitCoveragePath,
+			content: `package systemdunit; type unit struct{ ControlGroup string }; func inspect(u unit){ _ = u.ControlGroup }`,
+		},
+		{
 			name:       "raw manager mutation over D-Bus",
 			path:       "state/apply.go",
 			content:    `package state; type object struct{}; func (object) Call(...any){}; func apply(o object){ o.Call("org.freedesktop.systemd1.Manager.SetUnitProperties", "unit") }`,

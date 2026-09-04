@@ -93,6 +93,9 @@ type Manager struct {
 	systemdCPUParent          systemdunit.UnitIdentity
 	systemdCPUSlices          map[int]systemdunit.UnitIdentity
 	systemdCPUPlanSignature   string
+	systemdResourcesRequested bool
+	systemdResourceUnits      map[int]systemdunit.UnitIdentity
+	resolveSystemdIODevices   func(string) ([]string, error)
 	recoverySnapshot          cgroup.RecoverySnapshot
 
 	// Threshold monitoring
@@ -142,12 +145,14 @@ type Manager struct {
 }
 
 type userResourceLimitState struct {
-	ram        bool
-	ramApplied bool
-	swap       bool
-	io         bool
-	ioApplied  bool
-	standalone bool
+	ram          bool
+	ramApplied   bool
+	swap         bool
+	io           bool
+	ioApplied    bool
+	standalone   bool
+	ramAuthority systemdunit.ResourceAuthority
+	ioAuthority  systemdunit.ResourceAuthority
 }
 
 type cpuPointsAllocation struct {
@@ -382,6 +387,8 @@ func NewManager(
 		cpuPointsLifecycleEvents:  make(map[int]cpuPointsLifecycleEvent),
 		cpuPointsUserSnapshots:    make(map[int]resmanmetrics.CPUPointsUserSnapshot),
 		systemdCPUSlices:          make(map[int]systemdunit.UnitIdentity),
+		systemdResourceUnits:      make(map[int]systemdunit.UnitIdentity),
+		resolveSystemdIODevices:   systemdunit.ResolveBlockDevices,
 		enforcementStatus: cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeMigrationEnabled,
 			Reason: cgroup.EnforcementReasonNoSystemdRuntime,

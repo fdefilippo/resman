@@ -79,8 +79,8 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 		identity, override, _, exists := a.unitLeaseState(unit)
 		if phase == leasePhaseApplied && exists && identity == current.Identity {
 			actual, footprintErr := a.captureFootprint(current)
-			if footprintErr == nil && a.propertiesMatch(unit, func(state propertyLeaseState) uint64 {
-				return state.lease.LastApplied
+			if footprintErr == nil && a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue {
+				return state.lastApplied
 			}, current) && equalFingerprints(actual, override.fingerprints) {
 				continue
 			}
@@ -166,7 +166,7 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 	sameIdentity := identity == current.Identity
 	switch phase {
 	case leasePhaseApplied:
-		if !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.LastApplied }, current) || !equalFingerprints(actual, override.fingerprints) {
+		if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.lastApplied }, current) || !equalFingerprints(actual, override.fingerprints) {
 			return externalRecoveryConflict(unit, "recorded applied values or footprint differ from current state")
 		}
 		a.rebindUnit(identity, current.Identity)
@@ -183,7 +183,7 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: state})
 		return nil
 	case leasePhaseApplying:
-		if a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.LastApplied }, current) && pendingFootprintMatches(actual, override) {
+		if a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.lastApplied }, current) && pendingFootprintMatches(actual, override) {
 			before := a.snapshotLeaseState()
 			a.rebindUnit(identity, current.Identity)
 			a.confirmAppliedUnit(unit, actual)
@@ -198,7 +198,7 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 			a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: state})
 			return nil
 		}
-		if sameIdentity && a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.previousApplied }, current) && equalFingerprints(actual, override.previousFingerprint) {
+		if sameIdentity && a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.previousApplied }, current) && equalFingerprints(actual, override.previousFingerprint) {
 			return a.rollbackUndispatchedApply(unit)
 		}
 		return externalRecoveryConflict(unit, "uncertain apply cannot be resolved from current values and footprint")
@@ -223,7 +223,7 @@ func (a *Adapter) recoverActiveRestore(ctx context.Context, unit, objectPath str
 		if err != nil {
 			return err
 		}
-		if !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.Baseline }, refreshed) {
+		if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, refreshed) {
 			return externalRecoveryConflict(unit, "post-revert properties do not match the recorded baselines")
 		}
 		if err := a.removeUnitLeaseDurably(unit); err != nil {
@@ -315,7 +315,7 @@ func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
 
 func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSnapshot, actual []unitFileFingerprint) error {
 	_, override, phase, _ := a.unitLeaseState(unit)
-	if phase != leasePhaseRestoring || !equalFingerprints(actual, override.fingerprints) || !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.previousApplied }, current) {
+	if phase != leasePhaseRestoring || !equalFingerprints(actual, override.fingerprints) || !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.previousApplied }, current) {
 		return externalRecoveryConflict(unit, "uncertain restore cannot be resolved from current values and footprint")
 	}
 	if err := a.transport.revertUnitFiles(ctx, unit); err != nil {
@@ -334,7 +334,7 @@ func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSn
 	if err != nil {
 		return err
 	}
-	if !a.propertiesMatch(unit, func(state propertyLeaseState) uint64 { return state.lease.Baseline }, refreshed) {
+	if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, refreshed) {
 		return externalRecoveryConflict(unit, "restored properties do not match the recorded baselines")
 	}
 	if err := a.removeUnitLeaseDurably(unit); err != nil {
@@ -370,9 +370,13 @@ func (a *Adapter) importJournal(journal durableLeaseJournal) error {
 		a.overrides[identity] = override
 		a.phases[unit.Unit] = unit.Phase
 		for _, property := range unit.Properties {
+			baseline := durablePropertyValue(property.Property, property.Baseline, property.BaselineDeviceLimits)
+			lastApplied := durablePropertyValue(property.Property, property.LastApplied, property.LastAppliedDeviceLimits)
 			a.leases[propertyLeaseKey{identity: identity, property: property.Property}] = propertyLeaseState{
-				lease:           PropertyLease{Property: property.Property, Baseline: property.Baseline, LastApplied: property.LastApplied},
-				previousApplied: property.PreviousApplied,
+				lease:           publicPropertyLease(property.Property, baseline, lastApplied),
+				baseline:        baseline,
+				lastApplied:     lastApplied,
+				previousApplied: durablePropertyValue(property.Property, property.PreviousApplied, property.PreviousDeviceLimits),
 				uncertain:       property.Uncertain,
 				newLease:        property.NewLease,
 			}
@@ -414,10 +418,17 @@ func (a *Adapter) exportJournal(generation uint64) (durableLeaseJournal, error) 
 			if key.identity != identity {
 				continue
 			}
-			unit.Properties = append(unit.Properties, durablePropertyLease{
-				Property: key.property, Baseline: state.lease.Baseline, PreviousApplied: state.previousApplied,
-				LastApplied: state.lease.LastApplied, Uncertain: state.uncertain, NewLease: state.newLease,
-			})
+			property := durablePropertyLease{Property: key.property, Uncertain: state.uncertain, NewLease: state.newLease}
+			if _, deviceProperty := approvedDeviceProperties[key.property]; deviceProperty {
+				property.BaselineDeviceLimits = deviceLimitsToDurable(state.baseline.devices)
+				property.PreviousDeviceLimits = deviceLimitsToDurable(state.previousApplied.devices)
+				property.LastAppliedDeviceLimits = deviceLimitsToDurable(state.lastApplied.devices)
+			} else {
+				property.Baseline = state.baseline.scalar
+				property.PreviousApplied = state.previousApplied.scalar
+				property.LastApplied = state.lastApplied.scalar
+			}
+			unit.Properties = append(unit.Properties, property)
 		}
 		journal.Units = append(journal.Units, unit)
 	}
@@ -464,7 +475,7 @@ func (a *Adapter) unitLeaseState(unit string) (UnitIdentity, unitOverrideLease, 
 	return UnitIdentity{}, unitOverrideLease{}, "", false
 }
 
-func (a *Adapter) propertiesMatch(unit string, want func(propertyLeaseState) uint64, snapshot UnitSnapshot) bool {
+func (a *Adapter) propertiesMatch(unit string, want func(propertyLeaseState) propertyValue, snapshot UnitSnapshot) bool {
 	identity, _, _, ok := a.unitLeaseState(unit)
 	if !ok {
 		return false
@@ -474,8 +485,8 @@ func (a *Adapter) propertiesMatch(unit string, want func(propertyLeaseState) uin
 		if key.identity != identity {
 			continue
 		}
-		current, exists := snapshot.Properties.Value(key.property)
-		if !exists || current != want(state) {
+		current, exists := snapshot.Properties.propertyValue(key.property)
+		if !exists || !propertyValuesEqual(key.property, current, want(state)) {
 			return false
 		}
 		matched++
@@ -525,8 +536,9 @@ func (a *Adapter) stageUnitRestore(unit string) {
 		if key.identity != identity {
 			continue
 		}
-		state.previousApplied = state.lease.LastApplied
-		state.lease.LastApplied = state.lease.Baseline
+		state.previousApplied = state.lastApplied
+		state.lastApplied = clonePropertyValue(key.property, state.baseline)
+		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = true
 		state.newLease = false
 		a.leases[key] = state
@@ -545,7 +557,8 @@ func (a *Adapter) rollbackUndispatchedApply(unit string) error {
 			delete(a.leases, key)
 			continue
 		}
-		state.lease.LastApplied = state.previousApplied
+		state.lastApplied = clonePropertyValue(key.property, state.previousApplied)
+		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = false
 		state.newLease = false
 		a.leases[key] = state

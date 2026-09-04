@@ -105,10 +105,26 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 	for index, assignment := range ordered {
 		properties[index] = systemdbus.Property{
 			Name:  string(assignment.name),
-			Value: godbus.MakeVariant(assignment.value),
+			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
 		}
 	}
 	return t.conn.SetUnitPropertiesContext(ctx, unit, runtime, properties...)
+}
+
+type dbusDeviceLimit struct {
+	Path  string
+	Value uint64
+}
+
+func dbusPropertyValue(assignment PropertyAssignment) any {
+	if _, deviceProperty := approvedDeviceProperties[assignment.name]; !deviceProperty {
+		return assignment.value.scalar
+	}
+	values := make([]dbusDeviceLimit, len(assignment.value.devices))
+	for index, value := range assignment.value.devices {
+		values[index] = dbusDeviceLimit(value)
+	}
+	return values
 }
 
 func (t *dbusTransport) revertUnitFiles(ctx context.Context, unit string) error {

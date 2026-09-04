@@ -22,6 +22,27 @@ fills those digests before success is reported. This file is an ownership journa
 not a disposable cache. Removing it while a lease is active makes automatic ownership
 recovery impossible.
 
+## Resource-specific workload authority
+
+CPU, memory, and I/O authority are evaluated independently. A finite CPU envelope on
+`user.slice` and a relative weight on `user-UID.slice` safely cover every descendant,
+including a rootless container. ResMan never acquires or migrates the container's
+processes.
+
+Memory and I/O are stricter. Before their first property mutation, ResMan verifies
+that every process owned by the UID is below the authoritative `user-UID.slice` and
+that every process already below it shares the host PID namespace. A UID split across
+another parent is reported as partial `authority_split` coverage. A rootless-container
+descendant is reported as refused `runtime_owned_descendant` coverage. In both cases
+CPU scheduling may continue, but ResMan does not claim or apply a complete memory or
+I/O policy. Failure to inspect the process set or the required controller also refuses
+that resource before mutation.
+
+This conservative rule avoids presenting a leaf-only memory or I/O limit as coverage
+of a workload whose runtime owns a nested resource boundary. It does not provide a
+per-container policy; authoritative whole-container management remains a separate
+contract.
+
 ## Automatic startup recovery
 
 Before accepting a new systemd property mutation, ResMan compares every journal record

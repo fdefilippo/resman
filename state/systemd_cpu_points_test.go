@@ -18,6 +18,12 @@ import (
 type systemdCPUApplyCall struct {
 	unit        string
 	assignments map[systemdunit.PropertyName]uint64
+	devices     map[systemdunit.PropertyName][]systemdunit.DeviceLimit
+}
+
+type systemdResourceCheckCall struct {
+	uid      uint32
+	resource systemdunit.ResourceKind
 }
 
 type fakeSystemdCPUUnitAdapter struct {
@@ -29,6 +35,9 @@ type fakeSystemdCPUUnitAdapter struct {
 	failApplyUnit  string
 	reconcileError error
 	discoverError  error
+	authority      map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
+	authorityError map[systemdunit.ResourceKind]error
+	resourceChecks []systemdResourceCheckCall
 	closed         bool
 }
 
@@ -54,10 +63,15 @@ func (a *fakeSystemdCPUUnitAdapter) Discover(context.Context) (systemdunit.Topol
 
 func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemdunit.UnitIdentity, assignments []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error) {
 	values := make(map[systemdunit.PropertyName]uint64, len(assignments))
+	devices := make(map[systemdunit.PropertyName][]systemdunit.DeviceLimit)
 	for _, assignment := range assignments {
-		values[assignment.Name()] = assignment.Value()
+		if limits := assignment.DeviceLimits(); limits != nil {
+			devices[assignment.Name()] = limits
+		} else {
+			values[assignment.Name()] = assignment.Value()
+		}
 	}
-	a.applies = append(a.applies, systemdCPUApplyCall{unit: identity.Name, assignments: values})
+	a.applies = append(a.applies, systemdCPUApplyCall{unit: identity.Name, assignments: values, devices: devices})
 	if a.owned == nil {
 		a.owned = make(map[string]systemdunit.UnitIdentity)
 	}
@@ -68,10 +82,23 @@ func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemduni
 	return systemdunit.UnitSnapshot{Identity: identity}, nil
 }
 
+func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthority(_ context.Context, _ systemdunit.UnitIdentity, uid uint32, resource systemdunit.ResourceKind, _ []systemdunit.PropertyAssignment) (systemdunit.ResourceAuthority, error) {
+	a.resourceChecks = append(a.resourceChecks, systemdResourceCheckCall{uid: uid, resource: resource})
+	if authority, ok := a.authority[resource]; ok {
+		return authority, a.authorityError[resource]
+	}
+	return systemdunit.ResourceAuthority{Resource: resource, State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}, a.authorityError[resource]
+}
+
 func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdunit.UnitIdentity) (systemdunit.RestoreResult, error) {
 	a.restores = append(a.restores, identity.Name)
 	delete(a.owned, identity.Name)
 	return systemdunit.RestoreResult{}, nil
+}
+
+func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identity systemdunit.UnitIdentity, properties []systemdunit.PropertyName) (systemdunit.RestoreResult, error) {
+	a.restores = append(a.restores, identity.Name)
+	return systemdunit.RestoreResult{Restored: append([]systemdunit.PropertyName(nil), properties...)}, nil
 }
 
 func (a *fakeSystemdCPUUnitAdapter) ReconcileOwned(context.Context) error {
@@ -103,6 +130,17 @@ func (a *fakeSystemdCPUUnitAdapter) OwnedUnits() []systemdunit.UnitIdentity {
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })
 	return result
+}
+
+func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []systemdunit.PropertyLease {
+	if _, ok := a.owned[identity.Name]; !ok {
+		return nil
+	}
+	property := systemdunit.PropertyCPUWeight
+	if identity.Name == "user.slice" {
+		property = systemdunit.PropertyCPUQuotaPerSecUSec
+	}
+	return []systemdunit.PropertyLease{{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1}}
 }
 
 func (a *fakeSystemdCPUUnitAdapter) Close() { a.closed = true }

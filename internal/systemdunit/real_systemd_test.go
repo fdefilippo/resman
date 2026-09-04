@@ -50,6 +50,9 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 		PropertyCPUQuotaPerSecUSec: 500_000,
 		PropertyCPUQuotaPeriodUSec: 100_000,
 		PropertyMemoryHigh:         512 << 20,
+		PropertyMemoryMax:          1 << 30,
+		PropertyMemorySwapMax:      0,
+		PropertyIOWeight:           456,
 	}
 	var assignments []PropertyAssignment
 	for property, probeValue := range probeValues {
@@ -63,6 +66,45 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 			probeValues[property] = probeValue
 		}
 		assignments = append(assignments, mustAssignment(t, property, probeValue))
+	}
+	deviceBaselines := make(map[PropertyName][]DeviceLimit)
+	if device := os.Getenv("RESMAN_REAL_SYSTEMD_DEVICE"); device != "" {
+		for _, candidate := range []struct {
+			property PropertyName
+			value    uint64
+		}{
+			{property: PropertyIOReadBandwidthMax, value: 100 << 20},
+			{property: PropertyIOWriteBandwidthMax, value: 100 << 20},
+			{property: PropertyIOReadIOPSMax, value: 10_000},
+			{property: PropertyIOWriteIOPSMax, value: 10_000},
+		} {
+			baseline, ok := unit.Properties.DeviceLimits(candidate.property)
+			if !ok {
+				t.Fatalf("%s baseline is absent", candidate.property)
+			}
+			deviceBaselines[candidate.property] = baseline
+			assignment, err := NewDevicePropertyAssignment(candidate.property, []DeviceLimit{{Path: device, Value: candidate.value}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignments = append(assignments, assignment)
+		}
+	}
+	resourceAssignments := map[ResourceKind][]PropertyAssignment{
+		ResourceMemory: nil,
+		ResourceIO:     nil,
+	}
+	for _, assignment := range assignments {
+		resource, ok := assignment.Name().Resource()
+		if ok {
+			resourceAssignments[resource] = append(resourceAssignments[resource], assignment)
+		}
+	}
+	for _, resource := range []ResourceKind{ResourceMemory, ResourceIO} {
+		authority, err := adapter.CheckResourceAuthority(ctx, unit.Identity, uint32(uid64), resource, resourceAssignments[resource])
+		if err != nil || authority.State != ResourceCoverageComplete {
+			t.Fatalf("CheckResourceAuthority(%s) = %+v, %v", resource, authority, err)
+		}
 	}
 	applied, err := adapter.Apply(ctx, unit.Identity, assignments)
 	if err != nil {
@@ -89,6 +131,46 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 			t.Fatalf("%s after daemon-reload = %d, want %d", property, got, want)
 		}
 	}
+	for property := range deviceBaselines {
+		got, _ := afterReload.Properties.propertyValue(property)
+		wantAssignment := assignmentForProperty(assignments, property)
+		if !propertyValuesEqual(property, got, wantAssignment.value) {
+			t.Fatalf("%s after daemon-reload = %s, want %s", property, formatPropertyValue(property, got), formatPropertyValue(property, wantAssignment.value))
+		}
+	}
+
+	resourceProperties := []PropertyName{
+		PropertyMemoryHigh, PropertyMemoryMax, PropertyMemorySwapMax,
+		PropertyIOWeight,
+	}
+	for property := range deviceBaselines {
+		resourceProperties = append(resourceProperties, property)
+	}
+	selected, err := adapter.RestoreProperties(ctx, unit.Identity, resourceProperties)
+	if err != nil {
+		t.Fatalf("RestoreProperties() error = %v", err)
+	}
+	if len(selected.Restored) != len(resourceProperties) {
+		t.Fatalf("RestoreProperties() result = %+v", selected)
+	}
+	resourcesRestored := findUserSlice(t, ctx, adapter, uint32(uid64))
+	for property, want := range baselines {
+		if property.IsCPU() {
+			if got, _ := resourcesRestored.Properties.Value(property); got != probeValues[property] {
+				t.Fatalf("selected resource restore changed %s = %d, want applied %d", property, got, probeValues[property])
+			}
+			continue
+		}
+		if got, _ := resourcesRestored.Properties.Value(property); got != want {
+			t.Fatalf("selected restore left %s = %d, want baseline %d", property, got, want)
+		}
+	}
+	for property, want := range deviceBaselines {
+		got, ok := resourcesRestored.Properties.DeviceLimits(property)
+		if !ok || !propertyValuesEqual(property, devicePropertyValue(got), devicePropertyValue(want)) {
+			t.Fatalf("selected restore left %s = %v, want baseline %v", property, got, want)
+		}
+	}
 
 	result, err := adapter.Restore(ctx, unit.Identity)
 	if err != nil {
@@ -106,6 +188,21 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 			t.Fatalf("restored %s = %d, want baseline %d", property, got, want)
 		}
 	}
+	for property, want := range deviceBaselines {
+		got, ok := restored.Properties.DeviceLimits(property)
+		if !ok || !propertyValuesEqual(property, devicePropertyValue(got), devicePropertyValue(want)) {
+			t.Fatalf("restored %s = %v, want baseline %v", property, got, want)
+		}
+	}
+}
+
+func assignmentForProperty(assignments []PropertyAssignment, property PropertyName) PropertyAssignment {
+	for _, assignment := range assignments {
+		if assignment.Name() == property {
+			return assignment
+		}
+	}
+	return PropertyAssignment{}
 }
 
 func findUserSlice(t *testing.T, ctx context.Context, adapter *Adapter, uid uint32) UnitSnapshot {

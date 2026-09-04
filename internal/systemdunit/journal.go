@@ -54,12 +54,43 @@ type durableUnitIdentity struct {
 }
 
 type durablePropertyLease struct {
-	Property        PropertyName `json:"property"`
-	Baseline        uint64       `json:"baseline"`
-	PreviousApplied uint64       `json:"previous_applied"`
-	LastApplied     uint64       `json:"last_applied"`
-	Uncertain       bool         `json:"uncertain"`
-	NewLease        bool         `json:"new_lease"`
+	Property                PropertyName         `json:"property"`
+	Baseline                uint64               `json:"baseline,omitempty"`
+	PreviousApplied         uint64               `json:"previous_applied,omitempty"`
+	LastApplied             uint64               `json:"last_applied,omitempty"`
+	BaselineDeviceLimits    []durableDeviceLimit `json:"baseline_device_limits,omitempty"`
+	PreviousDeviceLimits    []durableDeviceLimit `json:"previous_device_limits,omitempty"`
+	LastAppliedDeviceLimits []durableDeviceLimit `json:"last_applied_device_limits,omitempty"`
+	Uncertain               bool                 `json:"uncertain"`
+	NewLease                bool                 `json:"new_lease"`
+}
+
+type durableDeviceLimit struct {
+	Path  string `json:"path"`
+	Value uint64 `json:"value"`
+}
+
+func deviceLimitsToDurable(values []DeviceLimit) []durableDeviceLimit {
+	result := make([]durableDeviceLimit, len(values))
+	for index, value := range values {
+		result[index] = durableDeviceLimit(value)
+	}
+	return result
+}
+
+func deviceLimitsFromDurable(values []durableDeviceLimit) []DeviceLimit {
+	result := make([]DeviceLimit, len(values))
+	for index, value := range values {
+		result[index] = DeviceLimit(value)
+	}
+	return result
+}
+
+func durablePropertyValue(name PropertyName, scalar uint64, devices []durableDeviceLimit) propertyValue {
+	if _, deviceProperty := approvedDeviceProperties[name]; deviceProperty {
+		return devicePropertyValue(deviceLimitsFromDurable(devices))
+	}
+	return scalarPropertyValue(scalar)
 }
 
 type durableFileFingerprint struct {
@@ -358,12 +389,23 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 				return fmt.Errorf("unit %s has duplicate property %s", unit.Unit, property.Property)
 			}
 			seenProperties[property.Property] = true
-			if _, ok := approvedScalarProperties[property.Property]; !ok {
+			if !isApprovedProperty(property.Property) {
 				return fmt.Errorf("unit %s has invalid property %q", unit.Unit, property.Property)
 			}
-			for _, value := range []uint64{property.Baseline, property.PreviousApplied, property.LastApplied} {
-				if err := validatePropertyValue(property.Property, value); err != nil {
-					return fmt.Errorf("unit %s property %s has invalid value: %w", unit.Unit, property.Property, err)
+			if _, deviceProperty := approvedDeviceProperties[property.Property]; deviceProperty {
+				for _, values := range [][]durableDeviceLimit{property.BaselineDeviceLimits, property.PreviousDeviceLimits, property.LastAppliedDeviceLimits} {
+					if err := validateDeviceLimits(deviceLimitsFromDurable(values)); err != nil {
+						return fmt.Errorf("unit %s property %s has invalid value: %w", unit.Unit, property.Property, err)
+					}
+				}
+			} else {
+				if len(property.BaselineDeviceLimits)+len(property.PreviousDeviceLimits)+len(property.LastAppliedDeviceLimits) != 0 {
+					return fmt.Errorf("unit %s scalar property %s contains device limits", unit.Unit, property.Property)
+				}
+				for _, value := range []uint64{property.Baseline, property.PreviousApplied, property.LastApplied} {
+					if err := validatePropertyValue(property.Property, value); err != nil {
+						return fmt.Errorf("unit %s property %s has invalid value: %w", unit.Unit, property.Property, err)
+					}
 				}
 			}
 			if property.Uncertain {

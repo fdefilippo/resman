@@ -10,6 +10,7 @@ const systemdUnitAdapterPath = "internal/systemdunit/transport.go"
 const systemdUnitErrorsPath = "internal/systemdunit/errors.go"
 const systemdUnitJournalPath = "internal/systemdunit/journal.go"
 const systemdUnitFilesPath = "internal/systemdunit/unit_files.go"
+const systemdUnitCoveragePath = "internal/systemdunit/coverage.go"
 
 func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 	result := checkResult{name: "systemd-unit-mutation-boundary"}
@@ -50,8 +51,8 @@ func checkSystemdOwnedCgroupLiteral(source goSource, literal *ast.BasicLit, resu
 }
 
 func checkSystemdControlGroupCapability(source goSource, selector *ast.SelectorExpr, result *checkResult) {
-	if selector.Sel.Name == "ControlGroup" && source.path != "internal/systemdunit/kernel.go" {
-		result.fail(source.path, sourceLine(source, selector.Pos()), "the authoritative systemd control-group path is restricted to read-only kernel verification")
+	if selector.Sel.Name == "ControlGroup" && source.path != "internal/systemdunit/kernel.go" && source.path != systemdUnitCoveragePath {
+		result.fail(source.path, sourceLine(source, selector.Pos()), "the authoritative systemd control-group path is restricted to read-only kernel verification and workload-coverage inspection")
 	}
 }
 

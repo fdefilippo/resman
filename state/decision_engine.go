@@ -318,12 +318,19 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
 		switch decision {
 		case "ACTIVATE_LIMITS":
-			return m.activateSystemdCPUPoints(metrics)
+			return m.activateSystemdEnforcement(metrics)
 		case "DEACTIVATE_LIMITS":
 			return m.restoreSystemdCPUPoints(context.Background())
 		case "MAINTAIN_CURRENT_STATE":
 			// The first control-cycle stage already reconciled topology and
-			// capacity. Do not rewrite the same runtime properties twice.
+			// capacity for CPU. Resource authority depends on the freshly
+			// collected per-resource eligible sets and is reconciled here.
+			m.mu.RLock()
+			resourcesRequested := m.systemdResourcesRequested
+			m.mu.RUnlock()
+			if resourcesRequested {
+				return m.reconcileSystemdResources(context.Background(), metrics, m.GetConfig())
+			}
 			return nil
 		default:
 			return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)

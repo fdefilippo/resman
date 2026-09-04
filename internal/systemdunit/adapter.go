@@ -17,7 +17,9 @@ const parentUserSlice = "user.slice"
 
 type propertyLeaseState struct {
 	lease           PropertyLease
-	previousApplied uint64
+	baseline        propertyValue
+	lastApplied     propertyValue
+	previousApplied propertyValue
 	uncertain       bool
 	newLease        bool
 }
@@ -42,6 +44,7 @@ type kernelVerifier interface {
 type Adapter struct {
 	transport  unitTransport
 	verifier   kernelVerifier
+	coverage   resourceCoverageInspector
 	unitFiles  unitFileInspector
 	timeout    time.Duration
 	opGate     operationgate.Gate
@@ -92,6 +95,7 @@ func newAdapter(ctx context.Context, transport unitTransport, verifier kernelVer
 	adapter := &Adapter{
 		transport: transport,
 		verifier:  verifier,
+		coverage:  newProcCoverageInspector(""),
 		unitFiles: unitFiles,
 		timeout:   timeout,
 		leases:    make(map[propertyLeaseKey]propertyLeaseState),
@@ -104,6 +108,43 @@ func newAdapter(ctx context.Context, transport unitTransport, verifier kernelVer
 		return nil, err
 	}
 	return adapter, nil
+}
+
+// CheckResourceAuthority confirms that one complete user workload can be
+// governed for a specific resource before the first property mutation.
+func (a *Adapter) CheckResourceAuthority(ctx context.Context, identity UnitIdentity, uid uint32, resource ResourceKind, assignments []PropertyAssignment) (ResourceAuthority, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("check_resource_authority"); err != nil {
+		return ResourceAuthority{}, err
+	}
+	validated, err := validateResourceAssignments(resource, assignments)
+	if err != nil {
+		return ResourceAuthority{}, err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	snapshot, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return ResourceAuthority{}, err
+	}
+	if err := requireSameIdentity("check_resource_authority", identity, snapshot.Identity); err != nil {
+		return ResourceAuthority{}, err
+	}
+	authority, inspectErr := inspectResourceCoverage(a.coverage, callCtx, uid, snapshot)
+	authority.Resource = resource
+	if inspectErr != nil || authority.State != ResourceCoverageComplete {
+		return authority, &ResourceAuthorityError{UID: uid, Authority: authority, Err: inspectErr}
+	}
+	if verifier, ok := a.verifier.(interface {
+		preflight(UnitSnapshot, []PropertyAssignment) error
+	}); ok {
+		if err := verifier.preflight(snapshot, validated); err != nil {
+			authority = ResourceAuthority{Resource: resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
+			return authority, &ResourceAuthorityError{UID: uid, Authority: authority, Err: err}
+		}
+	}
+	return authority, nil
 }
 
 // Close closes the D-Bus connection. Callers must restore owned properties first.
@@ -216,8 +257,8 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		if !equalFingerprints(fingerprints, currentOverride.fingerprints) {
 			return UnitSnapshot{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed after application")
 		}
-		if a.propertiesMatch(identity.Name, func(state propertyLeaseState) uint64 {
-			return state.lease.LastApplied
+		if a.propertiesMatch(identity.Name, func(state propertyLeaseState) propertyValue {
+			return state.lastApplied
 		}, before) && a.appliedAssignmentsMatch(identity, before, validated) {
 			// Reconciliation is deliberately read-only when the durable lease,
 			// systemd properties, runtime drop-ins, and effective kernel values
@@ -232,7 +273,7 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 
 	staged := make(map[propertyLeaseKey]propertyLeaseState, len(validated))
 	for _, assignment := range validated {
-		current, ok := before.Properties.Value(assignment.name)
+		current, ok := before.Properties.propertyValue(assignment.name)
 		if !ok {
 			return UnitSnapshot{}, malformedReply("apply", identity.Name, fmt.Sprintf("property %s is absent", assignment.name))
 		}
@@ -241,15 +282,16 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		if tracked {
 			owned, resolved := resolveUncertainOwnership(current, state)
 			if !owned {
-				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lease.LastApplied, current)
+				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lastApplied, current)
 			}
 			state = resolved
 		} else {
-			state.lease = PropertyLease{Property: assignment.name, Baseline: current, LastApplied: current}
+			state = newPropertyLeaseState(assignment.name, current)
 			state.newLease = true
 		}
-		state.previousApplied = state.lease.LastApplied
-		state.lease.LastApplied = assignment.value
+		state.previousApplied = state.lastApplied
+		state.lastApplied = clonePropertyValue(assignment.name, assignment.value)
+		state.lease = publicPropertyLease(assignment.name, state.baseline, state.lastApplied)
 		state.uncertain = true
 		staged[key] = state
 	}
@@ -303,15 +345,130 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 func (a *Adapter) appliedAssignmentsMatch(identity UnitIdentity, snapshot UnitSnapshot, assignments []PropertyAssignment) bool {
 	for _, assignment := range assignments {
 		state, ok := a.leases[propertyLeaseKey{identity: identity, property: assignment.name}]
-		if !ok || state.uncertain || state.lease.LastApplied != assignment.value {
+		if !ok || state.uncertain || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) {
 			return false
 		}
-		current, ok := snapshot.Properties.Value(assignment.name)
-		if !ok || current != assignment.value {
+		current, ok := snapshot.Properties.propertyValue(assignment.name)
+		if !ok || !propertyValuesEqual(assignment.name, current, assignment.value) {
 			return false
 		}
 	}
 	return len(assignments) > 0
+}
+
+// RestoreProperties restores selected properties without reverting the unit's
+// other ResMan-owned runtime overrides. Baseline reset drop-ins remain tracked
+// until a later complete unit restore can remove the exact footprint safely.
+func (a *Adapter) RestoreProperties(ctx context.Context, identity UnitIdentity, properties []PropertyName) (RestoreResult, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("restore_properties"); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := a.blocked[identity.Name]; err != nil {
+		return RestoreResult{}, err
+	}
+	selected, err := validateRestoreProperties(properties)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	current, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if err := requireSameIdentity("restore_properties", identity, current.Identity); err != nil {
+		return RestoreResult{}, err
+	}
+	override, tracked := a.overrides[identity]
+	if err := a.requireManagedUnitFileFootprint("restore_properties", current, override, tracked); err != nil {
+		return RestoreResult{}, err
+	}
+	if tracked {
+		fingerprints, err := a.captureFootprint(current)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		if !equalFingerprints(fingerprints, override.fingerprints) {
+			return RestoreResult{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed before property restoration")
+		}
+	}
+
+	var result RestoreResult
+	var assignments []PropertyAssignment
+	var keys []propertyLeaseKey
+	for _, property := range selected {
+		key := propertyLeaseKey{identity: identity, property: property}
+		state, exists := a.leases[key]
+		if !exists {
+			continue
+		}
+		value, exists := current.Properties.propertyValue(property)
+		if !exists {
+			return result, malformedReply("restore_properties", identity.Name, fmt.Sprintf("property %s is absent", property))
+		}
+		owned, resolved := resolveUncertainOwnership(value, state)
+		if !owned {
+			result.Conflicts = append(result.Conflicts, publicPropertyConflict(property, state.lastApplied, value))
+			continue
+		}
+		a.leases[key] = resolved
+		if propertyValuesEqual(property, value, resolved.baseline) {
+			result.Restored = append(result.Restored, property)
+			continue
+		}
+		assignments = append(assignments, PropertyAssignment{name: property, value: clonePropertyValue(property, resolved.baseline)})
+		keys = append(keys, key)
+	}
+	if len(assignments) != 0 {
+		before := a.snapshotLeaseState()
+		for _, key := range keys {
+			state := a.leases[key]
+			state.previousApplied = state.lastApplied
+			state.lastApplied = clonePropertyValue(key.property, state.baseline)
+			state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
+			state.uncertain = true
+			a.leases[key] = state
+		}
+		a.phases[identity.Name] = leasePhaseApplying
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(before)
+			return result, err
+		}
+		if err := a.transport.setUnitProperties(callCtx, identity.Name, true, assignments); err != nil {
+			return result, classifyTransportError("restore_properties", identity.Name, err)
+		}
+		after, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+		if err != nil {
+			return result, err
+		}
+		if err := requireSameIdentity("restore_properties_readback", identity, after.Identity); err != nil {
+			return result, err
+		}
+		if err := verifyReadback("restore_properties_readback", after, assignments); err != nil {
+			return result, err
+		}
+		if err := a.verifier.verify(after, assignments); err != nil {
+			return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_readback", Unit: identity.Name, Err: err}
+		}
+		fingerprints, err := a.captureFootprint(after)
+		if err != nil {
+			return result, err
+		}
+		beforeConfirmation := a.snapshotLeaseState()
+		a.confirmAppliedUnit(identity.Name, fingerprints)
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(beforeConfirmation)
+			return result, err
+		}
+		for _, key := range keys {
+			result.Restored = append(result.Restored, key.property)
+		}
+	}
+	sortPropertyNames(result.Restored)
+	sort.Slice(result.Conflicts, func(i, j int) bool { return result.Conflicts[i].Property < result.Conflicts[j].Property })
+	return result, conflictError(identity.Name, result.Conflicts)
 }
 
 // Restore restores every still-owned property for one unit. Externally changed
@@ -358,45 +515,55 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 
 	var result RestoreResult
 	var restore []PropertyAssignment
+	var restoreNeeded []PropertyAssignment
+	var ownedKeys []propertyLeaseKey
 	var restoreKeys []propertyLeaseKey
-	allAtBaseline := true
 	for key, state := range a.leases {
 		if key.identity != identity {
 			continue
 		}
-		value, ok := current.Properties.Value(key.property)
+		value, ok := current.Properties.propertyValue(key.property)
 		if !ok {
 			return result, malformedReply("restore", identity.Name, fmt.Sprintf("property %s is absent", key.property))
 		}
 		owned, resolved := resolveUncertainOwnership(value, state)
 		if !owned {
-			result.Conflicts = append(result.Conflicts, PropertyConflict{Property: key.property, LastApplied: state.lease.LastApplied, Current: value})
+			result.Conflicts = append(result.Conflicts, publicPropertyConflict(key.property, state.lastApplied, value))
 			continue
 		}
 		a.leases[key] = resolved
-		if value != resolved.lease.Baseline {
-			allAtBaseline = false
+		assignment := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, resolved.baseline)}
+		restore = append(restore, assignment)
+		ownedKeys = append(ownedKeys, key)
+		if propertyValuesEqual(key.property, value, resolved.baseline) {
+			result.Restored = append(result.Restored, key.property)
+			continue
 		}
-		restore = append(restore, PropertyAssignment{name: key.property, value: resolved.lease.Baseline})
+		restoreNeeded = append(restoreNeeded, assignment)
 		restoreKeys = append(restoreKeys, key)
 	}
 	sortPropertyNames(result.Restored)
 	sort.Slice(result.Conflicts, func(i, j int) bool { return result.Conflicts[i].Property < result.Conflicts[j].Property })
 	sort.Slice(restore, func(i, j int) bool { return restore[i].name < restore[j].name })
+	sort.Slice(restoreNeeded, func(i, j int) bool { return restoreNeeded[i].name < restoreNeeded[j].name })
+	sort.Slice(ownedKeys, func(i, j int) bool { return ownedKeys[i].property < ownedKeys[j].property })
 	sort.Slice(restoreKeys, func(i, j int) bool { return restoreKeys[i].property < restoreKeys[j].property })
 
 	if len(result.Conflicts) > 0 {
+		if len(restoreNeeded) != 0 {
+			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, restoreNeeded, restoreKeys, &result); err != nil {
+				return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+			}
+		}
+		sortPropertyNames(result.Restored)
 		return result, conflictError(identity.Name, result.Conflicts)
 	}
-	if len(restoreKeys) > 0 && allAtBaseline && len(currentMutablePaths) == 0 {
+	if len(ownedKeys) > 0 && len(restoreKeys) == 0 && len(currentMutablePaths) == 0 {
 		if err := verifyReadback("restore_recovered_readback", current, restore); err != nil {
 			return result, err
 		}
 		if err := a.verifier.verify(current, restore); err != nil {
 			return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_recovered_readback", Unit: identity.Name, Err: err}
-		}
-		for _, key := range restoreKeys {
-			result.Restored = append(result.Restored, key.property)
 		}
 		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
 			return result, err
@@ -404,15 +571,16 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		sortPropertyNames(result.Restored)
 		return result, nil
 	}
-	if len(restore) > 0 {
+	if len(ownedKeys) > 0 {
 		if len(override.managedPaths) == 0 {
 			return result, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")}
 		}
 		beforeRestore := a.snapshotLeaseState()
-		for _, key := range restoreKeys {
+		for _, key := range ownedKeys {
 			state := a.leases[key]
-			state.previousApplied = state.lease.LastApplied
-			state.lease.LastApplied = state.lease.Baseline
+			state.previousApplied = state.lastApplied
+			state.lastApplied = clonePropertyValue(key.property, state.baseline)
+			state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 			state.uncertain = true
 			a.leases[key] = state
 		}
@@ -450,8 +618,10 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 			verificationErr := &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_readback", Unit: identity.Name, Err: err}
 			return result, errors.Join(verificationErr, conflictError(identity.Name, result.Conflicts))
 		}
-		for _, key := range restoreKeys {
-			result.Restored = append(result.Restored, key.property)
+		for _, key := range ownedKeys {
+			if !containsPropertyName(result.Restored, key.property) {
+				result.Restored = append(result.Restored, key.property)
+			}
 		}
 		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
 			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
@@ -459,6 +629,62 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		sortPropertyNames(result.Restored)
 	}
 	return result, conflictError(identity.Name, result.Conflicts)
+}
+
+func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, identity UnitIdentity, assignments []PropertyAssignment, keys []propertyLeaseKey, result *RestoreResult) error {
+	before := a.snapshotLeaseState()
+	for _, key := range keys {
+		state := a.leases[key]
+		state.previousApplied = state.lastApplied
+		state.lastApplied = clonePropertyValue(key.property, state.baseline)
+		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
+		state.uncertain = true
+		a.leases[key] = state
+	}
+	a.phases[identity.Name] = leasePhaseApplying
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(before)
+		return err
+	}
+	if err := a.transport.setUnitProperties(ctx, identity.Name, true, assignments); err != nil {
+		return classifyTransportError("restore_properties", identity.Name, err)
+	}
+	after, err := a.readUnit(ctx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return err
+	}
+	if err := requireSameIdentity("restore_properties_readback", identity, after.Identity); err != nil {
+		return err
+	}
+	if err := verifyReadback("restore_properties_readback", after, assignments); err != nil {
+		return err
+	}
+	if err := a.verifier.verify(after, assignments); err != nil {
+		return &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_readback", Unit: identity.Name, Err: err}
+	}
+	fingerprints, err := a.captureFootprint(after)
+	if err != nil {
+		return err
+	}
+	beforeConfirmation := a.snapshotLeaseState()
+	a.confirmAppliedUnit(identity.Name, fingerprints)
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(beforeConfirmation)
+		return err
+	}
+	for _, key := range keys {
+		result.Restored = append(result.Restored, key.property)
+	}
+	return nil
+}
+
+func containsPropertyName(properties []PropertyName, wanted PropertyName) bool {
+	for _, property := range properties {
+		if property == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // RecoveryReport returns a sorted defensive copy of startup lease-reconciliation outcomes.
@@ -531,7 +757,7 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 	if !ok || !validControlGroup(controlGroup) {
 		return UnitSnapshot{}, malformedReply("read_slice", unit, "ControlGroup is absent or invalid")
 	}
-	properties := make(map[PropertyName]uint64, len(approvedScalarProperties))
+	properties := make(map[PropertyName]propertyValue, len(approvedScalarProperties)+len(approvedDeviceProperties))
 	for property := range approvedScalarProperties {
 		value, ok := sliceProperties[string(property)].(uint64)
 		if !ok {
@@ -540,7 +766,14 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 		if err := validatePropertyValue(property, value); err != nil {
 			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s has invalid value: %v", property, err))
 		}
-		properties[property] = value
+		properties[property] = scalarPropertyValue(value)
+	}
+	for property := range approvedDeviceProperties {
+		value, err := parseDevicePropertyValue(sliceProperties[string(property)])
+		if err != nil {
+			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s is absent or malformed: %v", property, err))
+		}
+		properties[property] = devicePropertyValue(value)
 	}
 	unitFiles, err := parseUnitFileSnapshot(unit, unitAfter)
 	if err != nil {
@@ -590,13 +823,17 @@ func extendManagedUnitFileFootprint(unit string, current unitOverrideLease, assi
 
 func managedRuntimeDropInPath(unit string, property PropertyName) string {
 	filename := map[PropertyName]string{
-		PropertyCPUWeight:          "50-CPUWeight.conf",
-		PropertyCPUQuotaPerSecUSec: "50-CPUQuota.conf",
-		PropertyCPUQuotaPeriodUSec: "50-CPUQuotaPeriodSec.conf",
-		PropertyMemoryHigh:         "50-MemoryHigh.conf",
-		PropertyMemoryMax:          "50-MemoryMax.conf",
-		PropertyMemorySwapMax:      "50-MemorySwapMax.conf",
-		PropertyIOWeight:           "50-IOWeight.conf",
+		PropertyCPUWeight:           "50-CPUWeight.conf",
+		PropertyCPUQuotaPerSecUSec:  "50-CPUQuota.conf",
+		PropertyCPUQuotaPeriodUSec:  "50-CPUQuotaPeriodSec.conf",
+		PropertyMemoryHigh:          "50-MemoryHigh.conf",
+		PropertyMemoryMax:           "50-MemoryMax.conf",
+		PropertyMemorySwapMax:       "50-MemorySwapMax.conf",
+		PropertyIOWeight:            "50-IOWeight.conf",
+		PropertyIOReadBandwidthMax:  "50-IOReadBandwidthMax.conf",
+		PropertyIOWriteBandwidthMax: "50-IOWriteBandwidthMax.conf",
+		PropertyIOReadIOPSMax:       "50-IOReadIOPSMax.conf",
+		PropertyIOWriteIOPSMax:      "50-IOWriteIOPSMax.conf",
 	}[property]
 	return filepath.Join("/run/systemd/system.control", unit+".d", filename)
 }
@@ -731,7 +968,7 @@ func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment
 	if len(assignments) == 0 {
 		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Err: fmt.Errorf("at least one property assignment is required")}
 	}
-	if len(assignments) > len(approvedScalarProperties) {
+	if len(assignments) > len(approvedScalarProperties)+len(approvedDeviceProperties) {
 		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Err: fmt.Errorf("too many property assignments")}
 	}
 	result := append([]PropertyAssignment(nil), assignments...)
@@ -741,10 +978,14 @@ func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment
 			return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Property: assignment.name, Err: fmt.Errorf("duplicate property assignment")}
 		}
 		seen[assignment.name] = true
-		if _, ok := approvedScalarProperties[assignment.name]; !ok {
+		if !isApprovedProperty(assignment.name) {
 			return nil, &AdapterError{Reason: ReasonPropertyNotAllowed, Operation: "apply", Property: assignment.name, Err: fmt.Errorf("property is not approved")}
 		}
-		if err := validatePropertyValue(assignment.name, assignment.value); err != nil {
+		if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
+			if err := validateDeviceLimits(assignment.value.devices); err != nil {
+				return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Property: assignment.name, Err: err}
+			}
+		} else if err := validatePropertyValue(assignment.name, assignment.value.scalar); err != nil {
 			return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Property: assignment.name, Err: err}
 		}
 	}
@@ -752,16 +993,59 @@ func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment
 	return result, nil
 }
 
+func validateResourceAssignments(resource ResourceKind, assignments []PropertyAssignment) ([]PropertyAssignment, error) {
+	validated, err := validateAssignments(assignments)
+	if err != nil {
+		return nil, err
+	}
+	allowed := map[ResourceKind]map[PropertyName]bool{
+		ResourceMemory: {
+			PropertyMemoryHigh: true, PropertyMemoryMax: true, PropertyMemorySwapMax: true,
+		},
+		ResourceIO: {
+			PropertyIOWeight: true, PropertyIOReadBandwidthMax: true, PropertyIOWriteBandwidthMax: true,
+			PropertyIOReadIOPSMax: true, PropertyIOWriteIOPSMax: true,
+		},
+	}
+	resourceProperties, ok := allowed[resource]
+	if !ok {
+		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "check_resource_authority", Err: fmt.Errorf("unsupported resource %q", resource)}
+	}
+	for _, assignment := range validated {
+		if !resourceProperties[assignment.name] {
+			return nil, &AdapterError{Reason: ReasonPropertyNotAllowed, Operation: "check_resource_authority", Property: assignment.name, Err: fmt.Errorf("property does not belong to %s", resource)}
+		}
+	}
+	return validated, nil
+}
+
+func validateRestoreProperties(properties []PropertyName) ([]PropertyName, error) {
+	if len(properties) == 0 {
+		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "restore_properties", Err: fmt.Errorf("at least one property is required")}
+	}
+	result := append([]PropertyName(nil), properties...)
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	for index, property := range result {
+		if !isApprovedProperty(property) {
+			return nil, &AdapterError{Reason: ReasonPropertyNotAllowed, Operation: "restore_properties", Property: property, Err: fmt.Errorf("property is not approved")}
+		}
+		if index > 0 && result[index-1] == property {
+			return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "restore_properties", Property: property, Err: fmt.Errorf("duplicate property")}
+		}
+	}
+	return result, nil
+}
+
 func verifyReadback(operation string, snapshot UnitSnapshot, assignments []PropertyAssignment) error {
 	for _, assignment := range assignments {
-		current, ok := snapshot.Properties.Value(assignment.name)
-		if !ok || current != assignment.value {
+		current, ok := snapshot.Properties.propertyValue(assignment.name)
+		if !ok || !propertyValuesEqual(assignment.name, current, assignment.value) {
 			return &AdapterError{
 				Reason:    ReasonReadbackMismatch,
 				Operation: operation,
 				Unit:      snapshot.Identity.Name,
 				Property:  assignment.name,
-				Err:       fmt.Errorf("wrote %d and read back %d", assignment.value, current),
+				Err:       fmt.Errorf("wrote %s and read back %s", formatPropertyValue(assignment.name, assignment.value), formatPropertyValue(assignment.name, current)),
 			}
 		}
 	}
@@ -775,17 +1059,18 @@ func requireSameIdentity(operation string, expected, current UnitIdentity) error
 	return &AdapterError{Reason: ReasonUnitRecreated, Operation: operation, Unit: expected.Name, Err: fmt.Errorf("expected invocation %s and cgroup ID %d, got invocation %s and cgroup ID %d", expected.InvocationIDString(), expected.ControlGroupID, current.InvocationIDString(), current.ControlGroupID)}
 }
 
-func resolveUncertainOwnership(current uint64, state propertyLeaseState) (bool, propertyLeaseState) {
+func resolveUncertainOwnership(current propertyValue, state propertyLeaseState) (bool, propertyLeaseState) {
 	if !state.uncertain {
-		return current == state.lease.LastApplied, state
+		return propertyValuesEqual(state.lease.Property, current, state.lastApplied), state
 	}
-	if current == state.lease.LastApplied {
+	if propertyValuesEqual(state.lease.Property, current, state.lastApplied) {
 		state.uncertain = false
 		state.newLease = false
 		return true, state
 	}
-	if current == state.previousApplied {
-		state.lease.LastApplied = state.previousApplied
+	if propertyValuesEqual(state.lease.Property, current, state.previousApplied) {
+		state.lastApplied = clonePropertyValue(state.lease.Property, state.previousApplied)
+		state.lease = publicPropertyLease(state.lease.Property, state.baseline, state.lastApplied)
 		state.uncertain = false
 		return true, state
 	}
@@ -812,8 +1097,8 @@ func malformedReply(operation, unit, message string) error {
 	return &AdapterError{Reason: ReasonMalformedReply, Operation: operation, Unit: unit, Err: fmt.Errorf("%s", message)}
 }
 
-func externalConflict(unit string, property PropertyName, lastApplied, current uint64) error {
-	return &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: unit, Property: property, Err: fmt.Errorf("last applied %d differs from current %d", lastApplied, current)}
+func externalConflict(unit string, property PropertyName, lastApplied, current propertyValue) error {
+	return &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: unit, Property: property, Err: fmt.Errorf("last applied %s differs from current %s", formatPropertyValue(property, lastApplied), formatPropertyValue(property, current))}
 }
 
 func conflictError(unit string, conflicts []PropertyConflict) error {

@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const defaultCgroupRoot = "/sys/fs/cgroup"
@@ -16,13 +19,14 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 type cgroupVerifier struct {
 	root     string
 	readFile func(string) ([]byte, error)
+	stat     func(string) (os.FileInfo, error)
 }
 
 func newCgroupVerifier(root string) cgroupVerifier {
 	if root == "" {
 		root = defaultCgroupRoot
 	}
-	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile}
+	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat}
 }
 
 func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
@@ -34,11 +38,16 @@ func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssi
 	for _, assignment := range assignments {
 		touched[assignment.name] = true
 	}
-	for _, property := range []PropertyName{PropertyCPUWeight, PropertyMemoryHigh, PropertyMemoryMax, PropertyMemorySwapMax, PropertyIOWeight} {
+	for _, property := range []PropertyName{PropertyCPUWeight, PropertyMemoryHigh, PropertyMemoryMax, PropertyMemorySwapMax} {
 		if !touched[property] {
 			continue
 		}
 		if err := v.verifyScalarFile(path, snapshot, property); err != nil {
+			return err
+		}
+	}
+	if touched[PropertyIOWeight] {
+		if err := v.verifyIOWeight(path, snapshot); err != nil {
 			return err
 		}
 	}
@@ -47,7 +56,62 @@ func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssi
 			return err
 		}
 	}
+	for property := range approvedDeviceProperties {
+		if touched[property] {
+			if err := v.verifyDeviceLimits(path, snapshot, property); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+func (v cgroupVerifier) preflight(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
+	path, err := v.controlGroupPath(snapshot.ControlGroup)
+	if err != nil {
+		return err
+	}
+	required := make(map[string]bool)
+	requiresIO := false
+	for _, assignment := range assignments {
+		switch assignment.name {
+		case PropertyMemoryHigh:
+			required["memory.high"] = true
+		case PropertyMemoryMax:
+			required["memory.max"] = true
+		case PropertyMemorySwapMax:
+			required["memory.swap.max"] = true
+		case PropertyIOWeight:
+			requiresIO = true
+		case PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
+			requiresIO = true
+		}
+	}
+	for filename := range required {
+		if _, err := v.readFile(filepath.Join(path, filename)); err != nil {
+			return fmt.Errorf("required controller interface %s is unavailable for %s: %w", filename, snapshot.Identity.Name, err)
+		}
+	}
+	if requiresIO {
+		parent := filepath.Dir(path)
+		controllers, err := v.readFile(filepath.Join(parent, "cgroup.controllers"))
+		if err != nil {
+			return fmt.Errorf("inspect available I/O controller for %s: %w", snapshot.Identity.Name, err)
+		}
+		if !containsWord(string(controllers), "io") {
+			return fmt.Errorf("required I/O controller is unavailable for %s", snapshot.Identity.Name)
+		}
+	}
+	return nil
+}
+
+func containsWord(value, wanted string) bool {
+	for _, field := range strings.Fields(value) {
+		if field == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (v cgroupVerifier) controlGroupPath(controlGroup string) (string, error) {
@@ -76,12 +140,7 @@ func (v cgroupVerifier) verifyScalarFile(path string, snapshot UnitSnapshot, pro
 		}
 		return fmt.Errorf("read effective %s for %s: %w", filename, snapshot.Identity.Name, err)
 	}
-	var actual uint64
-	if property == PropertyIOWeight {
-		actual, err = parseKernelDefaultIOWeight(string(data))
-	} else {
-		actual, err = parseKernelScalar(string(data))
-	}
+	actual, err := parseKernelScalar(string(data))
 	if err != nil {
 		return fmt.Errorf("parse effective %s for %s: %w", filename, snapshot.Identity.Name, err)
 	}
@@ -94,6 +153,55 @@ func (v cgroupVerifier) verifyScalarFile(path string, snapshot UnitSnapshot, pro
 	return nil
 }
 
+func (v cgroupVerifier) verifyIOWeight(path string, snapshot UnitSnapshot) error {
+	expected, ok := snapshot.Properties.Value(PropertyIOWeight)
+	if !ok {
+		return fmt.Errorf("systemd readback omitted %s", PropertyIOWeight)
+	}
+	expectedUnset := expected == SystemdUnset
+	if expected == SystemdUnset {
+		expected = 100
+	}
+	filename := "io.weight"
+	data, err := v.readFile(filepath.Join(path, filename))
+	bfq := false
+	if errors.Is(err, os.ErrNotExist) {
+		filename = "io.bfq.weight"
+		data, err = v.readFile(filepath.Join(path, filename))
+		bfq = true
+	}
+	if expectedUnset && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read effective I/O weight for %s: %w", snapshot.Identity.Name, err)
+	}
+	actual, err := parseKernelDefaultIOWeight(string(data))
+	if err != nil {
+		return fmt.Errorf("parse effective %s for %s: %w", filename, snapshot.Identity.Name, err)
+	}
+	if bfq {
+		expected = bfqWeight(expected)
+	}
+	if actual != expected {
+		return fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", PropertyIOWeight, snapshot.Identity.Name, expected, actual)
+	}
+	return nil
+}
+
+func bfqWeight(ioWeight uint64) uint64 {
+	const (
+		defaultWeight = uint64(100)
+		minimumBFQ    = uint64(1)
+		maximumBFQ    = uint64(1_000)
+		maximumWeight = uint64(10_000)
+	)
+	if ioWeight <= defaultWeight {
+		return defaultWeight - (defaultWeight-ioWeight)*(defaultWeight-minimumBFQ)/(defaultWeight-minimumBFQ)
+	}
+	return defaultWeight + (ioWeight-defaultWeight)*(maximumBFQ-defaultWeight)/(maximumWeight-defaultWeight)
+}
+
 func kernelFileForProperty(property PropertyName) (string, uint64) {
 	switch property {
 	case PropertyCPUWeight:
@@ -104,8 +212,6 @@ func kernelFileForProperty(property PropertyName) (string, uint64) {
 		return "memory.max", math.MaxUint64
 	case PropertyMemorySwapMax:
 		return "memory.swap.max", math.MaxUint64
-	case PropertyIOWeight:
-		return "io.weight", 100
 	default:
 		panic("unapproved scalar kernel property: " + string(property))
 	}
@@ -159,6 +265,95 @@ func (v cgroupVerifier) verifyCPUQuota(path string, snapshot UnitSnapshot) error
 		return fmt.Errorf("effective CPU quota mismatch for %s: systemd=%d/%d kernel=%d/%d", snapshot.Identity.Name, perSecond, configuredPeriod, actualQuota, actualPeriod)
 	}
 	return nil
+}
+
+func (v cgroupVerifier) verifyDeviceLimits(path string, snapshot UnitSnapshot, property PropertyName) error {
+	expected, ok := snapshot.Properties.DeviceLimits(property)
+	if !ok {
+		return fmt.Errorf("systemd readback omitted %s", property)
+	}
+	data, err := v.readFile(filepath.Join(path, "io.max"))
+	if err != nil {
+		if len(expected) == 0 && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read effective io.max for %s: %w", snapshot.Identity.Name, err)
+	}
+	actual, err := parseKernelIOMax(string(data))
+	if err != nil {
+		return fmt.Errorf("parse effective io.max for %s: %w", snapshot.Identity.Name, err)
+	}
+	field := map[PropertyName]string{
+		PropertyIOReadBandwidthMax:  "rbps",
+		PropertyIOWriteBandwidthMax: "wbps",
+		PropertyIOReadIOPSMax:       "riops",
+		PropertyIOWriteIOPSMax:      "wiops",
+	}[property]
+	wantedDevices := make(map[string]uint64, len(expected))
+	for _, limit := range expected {
+		device, err := v.deviceNumber(limit.Path)
+		if err != nil {
+			return fmt.Errorf("resolve block device %s for %s: %w", limit.Path, property, err)
+		}
+		wantedDevices[device] = limit.Value
+	}
+	for device, fields := range actual {
+		value, exists := fields[field]
+		wanted, constrained := wantedDevices[device]
+		if constrained {
+			if !exists || value != strconv.FormatUint(wanted, 10) {
+				return fmt.Errorf("effective %s mismatch for %s device %s: systemd=%d kernel=%q", property, snapshot.Identity.Name, device, wanted, value)
+			}
+			delete(wantedDevices, device)
+			continue
+		}
+		if exists && value != "max" {
+			return fmt.Errorf("effective %s retains unexpected finite limit for %s device %s: %s", property, snapshot.Identity.Name, device, value)
+		}
+	}
+	if len(wantedDevices) != 0 {
+		return fmt.Errorf("effective %s is absent for %s on %d devices", property, snapshot.Identity.Name, len(wantedDevices))
+	}
+	return nil
+}
+
+func (v cgroupVerifier) deviceNumber(path string) (string, error) {
+	stat := v.stat
+	if stat == nil {
+		stat = os.Stat
+	}
+	info, err := stat(path)
+	if err != nil {
+		return "", err
+	}
+	data, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 {
+		return "", fmt.Errorf("path is not a block device")
+	}
+	return fmt.Sprintf("%d:%d", unix.Major(uint64(data.Rdev)), unix.Minor(uint64(data.Rdev))), nil
+}
+
+func parseKernelIOMax(value string) (map[string]map[string]string, error) {
+	result := make(map[string]map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(value), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if !strings.Contains(fields[0], ":") {
+			return nil, fmt.Errorf("invalid device field %q", fields[0])
+		}
+		values := make(map[string]string, len(fields)-1)
+		for _, field := range fields[1:] {
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 || values[parts[0]] != "" {
+				return nil, fmt.Errorf("invalid or duplicate limit field %q", field)
+			}
+			values[parts[0]] = parts[1]
+		}
+		result[fields[0]] = values
+	}
+	return result, nil
 }
 
 func scalePerSecondQuota(perSecond, period uint64) (uint64, error) {
