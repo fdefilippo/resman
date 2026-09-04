@@ -163,6 +163,65 @@ func TestSystemdNativeResourceBusLossDoesNotPublishAppliedState(t *testing.T) {
 	}
 }
 
+func TestSystemdNativeResourceAuthorityIsReconfirmedBeforeAppliedStateIsPublished(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+	adapter.authorityHook = func(call int) {
+		if call != 2 {
+			return
+		}
+		authority := systemdunit.ResourceAuthority{
+			Resource: systemdunit.ResourceMemory,
+			State:    systemdunit.ResourceCoveragePartial,
+			Reason:   systemdunit.ResourceCoverageAuthoritySplit,
+		}
+		adapter.authority = map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceMemory: authority}
+		adapter.authorityError = map[systemdunit.ResourceKind]error{
+			systemdunit.ResourceMemory: &systemdunit.ResourceAuthorityError{UID: 1000, Authority: authority, Err: errors.New("workload escaped during reconciliation")},
+		}
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMEnabled = true
+
+	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
+	var reconciliationErr *SystemdResourceReconciliationError
+	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "pre_acknowledgement_authority" {
+		t.Fatalf("activateLimits() error = %v, want final authority refusal", err)
+	}
+	state := manager.resourceLimits[1000]
+	if state.ramApplied || state.ramAuthority.Reason != systemdunit.ResourceCoverageAuthoritySplit {
+		t.Fatalf("lost authority was acknowledged as applied: %+v", state)
+	}
+	if _, ok := findPropertyRestore(adapter.propertyRestores, systemdunit.PropertyMemoryHigh); !ok {
+		t.Fatalf("lost authority did not compensate the applied memory properties: %+v", adapter.propertyRestores)
+	}
+}
+
+func TestSystemdNativeResourceFinalReadbackPreservesAnExternalPropertyChange(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: testSystemdTopology(1000),
+		confirmApplyErr: map[string]error{
+			"user-1000.slice": &systemdunit.AdapterError{Reason: systemdunit.ReasonExternalConflict, Operation: "confirm_applied", Unit: "user-1000.slice", Err: errors.New("operator changed MemoryMax")},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMEnabled = true
+
+	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
+	var reconciliationErr *SystemdResourceReconciliationError
+	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "pre_acknowledgement_readback" {
+		t.Fatalf("activateLimits() error = %v, want final readback conflict", err)
+	}
+	state := manager.resourceLimits[1000]
+	if state.ramApplied || state.ramAuthority.Reason != systemdunit.ResourceCoverageInspectionFailed {
+		t.Fatalf("external property change was acknowledged as applied: %+v", state)
+	}
+	if len(adapter.propertyRestores) != 0 {
+		t.Fatalf("external property change was overwritten by compensation: %+v", adapter.propertyRestores)
+	}
+}
+
 func TestSystemdNativeResourceReleaseDoesNotRemoveActiveCPUWeight(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int

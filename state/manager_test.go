@@ -321,11 +321,17 @@ func (m *cpuPointsReloadCgroupManager) ApplyCPUPointsUserWeight(path string, wei
 }
 
 type mutableCPUCapacityProvider struct {
-	state cpupoints.CapacityState
-	cpus  uint64
+	state        cpupoints.CapacityState
+	cpus         uint64
+	refreshCalls int
+	onRefresh    func(int, *mutableCPUCapacityProvider)
 }
 
 func (p *mutableCPUCapacityProvider) Refresh(pool cpupoints.ParentPoolPoints) (cpupoints.CapacityState, error) {
+	p.refreshCalls++
+	if p.onRefresh != nil {
+		p.onRefresh(p.refreshCalls, p)
+	}
 	count, err := cpupoints.NewOnlineCPUCount(p.cpus)
 	if err != nil {
 		return p.state, err

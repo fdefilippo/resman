@@ -16,6 +16,7 @@ const (
 	ReasonUnitMissing          ErrorReason = "unit_missing"
 	ReasonAuthorizationDenied  ErrorReason = "authorization_denied"
 	ReasonUnitRecreated        ErrorReason = "unit_recreated"
+	ReasonTopologyChanged      ErrorReason = "topology_changed"
 	ReasonMalformedReply       ErrorReason = "malformed_reply"
 	ReasonPropertyNotAllowed   ErrorReason = "property_not_allowed"
 	ReasonInvalidValue         ErrorReason = "invalid_value"
@@ -56,6 +57,25 @@ func (e *AdapterError) Error() string {
 
 // Unwrap exposes the underlying transport, validation or verification error.
 func (e *AdapterError) Unwrap() error { return e.Err }
+
+// RetryableReconciliation reports whether repeating discovery and planning may
+// resolve this failure without overriding an external property value.
+func (e *AdapterError) RetryableReconciliation() bool {
+	switch e.Reason {
+	case ReasonUnitMissing, ReasonUnitRecreated, ReasonTopologyChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsRetryableReconciliation reports whether err carries a typed transient
+// systemd topology outcome. Transport failures and external property conflicts
+// deliberately require a later control cycle instead of an immediate retry.
+func IsRetryableReconciliation(err error) bool {
+	var retryable interface{ RetryableReconciliation() bool }
+	return errors.As(err, &retryable) && retryable.RetryableReconciliation()
+}
 
 // RestoreConflictError reports properties that changed outside ResMan after application.
 type RestoreConflictError struct {

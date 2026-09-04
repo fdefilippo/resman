@@ -276,6 +276,80 @@ func TestDiscoverTreatsAUserSliceThatDepartsDuringReadAsAbsent(t *testing.T) {
 	}
 }
 
+func TestConfirmTopologyRejectsArrivalDepartureAndUnitRecreationAsRetryable(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*fakeUnitTransport)
+	}{
+		{
+			name: "arrival",
+			mutate: func(transport *fakeUnitTransport) {
+				transport.units["user-1002.slice"] = fakeUnit("user-1002.slice", "/user.slice/user-1002.slice", 1004)
+			},
+		},
+		{
+			name: "departure",
+			mutate: func(transport *fakeUnitTransport) {
+				delete(transport.units, "user-1001.slice")
+			},
+		},
+		{
+			name: "recreation",
+			mutate: func(transport *fakeUnitTransport) {
+				transport.units["user-1001.slice"].unit["InvocationID"] = invocationBytes(77)
+				transport.units["user-1001.slice"].slice["ControlGroupId"] = uint64(777)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeUnitTransport(1001)
+			adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+			topology, err := adapter.Discover(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(transport)
+			err = adapter.ConfirmTopology(context.Background(), topology)
+			assertAdapterReason(t, err, ReasonTopologyChanged)
+			if !IsRetryableReconciliation(err) {
+				t.Fatalf("ConfirmTopology() error = %v, want typed retryable outcome", err)
+			}
+		})
+	}
+}
+
+func TestConfirmTopologyAcceptsTheExactAuthoritativeIdentitySet(t *testing.T) {
+	transport := newFakeUnitTransport(1002, 1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ConfirmTopology(context.Background(), topology); err != nil {
+		t.Fatalf("ConfirmTopology() error: %v", err)
+	}
+}
+
+func TestConfirmTopologyCancellationReleasesTheOperationGate(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.blockList = true
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := adapter.ConfirmTopology(ctx, topology); err == nil {
+		t.Fatal("ConfirmTopology() error = nil for cancelled reconciliation")
+	}
+	transport.blockList = false
+	if err := adapter.ConfirmTopology(context.Background(), topology); err != nil {
+		t.Fatalf("ConfirmTopology() after cancellation error: %v", err)
+	}
+}
+
 func TestReconcileOwnedCleansAUnitThatDepartedAfterApplication(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
@@ -573,6 +647,33 @@ func TestRestorePreservesExternalConflictAndRestoresOtherProperties(t *testing.T
 	}
 	if len(transport.setCalls) != beforeCalls {
 		t.Fatalf("set calls after repeated conflict = %d, want %d", len(transport.setCalls), beforeCalls)
+	}
+}
+
+func TestConfirmAppliedIsReadOnlyAndPreservesAnExternalPropertyChange(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	weight := mustAssignment(t, PropertyCPUWeight, 400)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight}); err != nil {
+		t.Fatal(err)
+	}
+	writes := len(transport.setCalls)
+	if _, err := adapter.ConfirmApplied(context.Background(), identity, []PropertyAssignment{weight}); err != nil {
+		t.Fatalf("ConfirmApplied() error: %v", err)
+	}
+	if len(transport.setCalls) != writes {
+		t.Fatalf("ConfirmApplied() performed a write: before=%d after=%d", writes, len(transport.setCalls))
+	}
+
+	transport.units[identity.Name].slice[string(PropertyCPUWeight)] = uint64(777)
+	_, err := adapter.ConfirmApplied(context.Background(), identity, []PropertyAssignment{weight})
+	assertAdapterReason(t, err, ReasonExternalConflict)
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(777) {
+		t.Fatalf("ConfirmApplied() overwrote external CPUWeight: %v", got)
+	}
+	if len(transport.setCalls) != writes {
+		t.Fatalf("external conflict caused a write: before=%d after=%d", writes, len(transport.setCalls))
 	}
 }
 
@@ -1153,7 +1254,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
+	want := []string{"Apply", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}

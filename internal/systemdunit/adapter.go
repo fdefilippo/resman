@@ -200,12 +200,53 @@ func (a *Adapter) Discover(ctx context.Context) (TopologySnapshot, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
+	return a.discover(callCtx, "discover")
+}
 
-	listed, err := a.transport.listUserSlices(callCtx)
+func (a *Adapter) discover(ctx context.Context, operation string) (TopologySnapshot, error) {
+	listed, err := a.transport.listUserSlices(ctx)
 	if err != nil {
-		return TopologySnapshot{}, classifyTransportError("discover", "", err)
+		return TopologySnapshot{}, classifyTransportError(operation, "", err)
 	}
-	return a.snapshotTopology(callCtx, listed)
+	return a.snapshotTopology(ctx, listed)
+}
+
+// ConfirmTopology verifies that the complete active user-slice identity set
+// still matches a prior discovery. Callers use it immediately before mutation
+// and acknowledgement so unit turnover cannot publish a stale plan as complete.
+func (a *Adapter) ConfirmTopology(ctx context.Context, expected TopologySnapshot) error {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("confirm_topology"); err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	current, err := a.discover(callCtx, "confirm_topology")
+	if err != nil {
+		return err
+	}
+	if sameTopologyIdentity(expected, current) {
+		return nil
+	}
+	return &AdapterError{
+		Reason:    ReasonTopologyChanged,
+		Operation: "confirm_topology",
+		Unit:      parentUserSlice,
+		Err:       fmt.Errorf("active user-slice identity set changed since discovery"),
+	}
+}
+
+func sameTopologyIdentity(expected, current TopologySnapshot) bool {
+	if expected.Parent.Identity != current.Parent.Identity || len(expected.Users) != len(current.Users) {
+		return false
+	}
+	for index := range expected.Users {
+		if expected.Users[index].UID != current.Users[index].UID || expected.Users[index].Unit.Identity != current.Users[index].Unit.Identity {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Adapter) snapshotTopology(ctx context.Context, listed []listedUnit) (TopologySnapshot, error) {
@@ -373,6 +414,62 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		return UnitSnapshot{}, err
 	}
 	return after, nil
+}
+
+// ConfirmApplied performs a read-only final confirmation of one exact unit
+// lifetime, the durable ResMan footprint, D-Bus properties and effective kernel
+// values. It never repairs drift: an external value wins and is reported.
+func (a *Adapter) ConfirmApplied(ctx context.Context, identity UnitIdentity, assignments []PropertyAssignment) (UnitSnapshot, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("confirm_applied"); err != nil {
+		return UnitSnapshot{}, err
+	}
+	validated, err := validateAssignments(assignments)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	snapshot, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	if err := requireSameIdentity("confirm_applied", identity, snapshot.Identity); err != nil {
+		return UnitSnapshot{}, err
+	}
+	override, tracked := a.overrides[identity]
+	if !tracked || a.phases[identity.Name] != leasePhaseApplied {
+		return UnitSnapshot{}, &AdapterError{Reason: ReasonReadbackMismatch, Operation: "confirm_applied", Unit: identity.Name, Err: fmt.Errorf("no confirmed durable lease exists for the requested unit lifetime")}
+	}
+	if err := a.requireManagedUnitFileFootprint("confirm_applied", snapshot, override, true); err != nil {
+		return UnitSnapshot{}, err
+	}
+	fingerprints, err := a.captureFootprint(snapshot)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	if !equalFingerprints(fingerprints, override.fingerprints) {
+		return UnitSnapshot{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed after application")
+	}
+	for _, assignment := range validated {
+		key := propertyLeaseKey{identity: identity, property: assignment.name}
+		state, exists := a.leases[key]
+		if !exists || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) {
+			return UnitSnapshot{}, &AdapterError{Reason: ReasonReadbackMismatch, Operation: "confirm_applied", Unit: identity.Name, Property: assignment.name, Err: fmt.Errorf("requested value does not match the durable lease")}
+		}
+		current, exists := snapshot.Properties.propertyValue(assignment.name)
+		if !exists {
+			return UnitSnapshot{}, malformedReply("confirm_applied", identity.Name, fmt.Sprintf("property %s is absent", assignment.name))
+		}
+		if !propertyValuesEqual(assignment.name, current, state.lastApplied) {
+			return UnitSnapshot{}, externalConflictFor("confirm_applied", identity.Name, assignment.name, state.lastApplied, current)
+		}
+	}
+	if err := a.verifier.verify(snapshot, validated); err != nil {
+		return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "confirm_applied", Unit: identity.Name, Err: err}
+	}
+	return snapshot, nil
 }
 
 func (a *Adapter) appliedAssignmentsMatch(identity UnitIdentity, snapshot UnitSnapshot, assignments []PropertyAssignment) bool {
@@ -1131,7 +1228,11 @@ func malformedReply(operation, unit, message string) error {
 }
 
 func externalConflict(unit string, property PropertyName, lastApplied, current propertyValue) error {
-	return &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: unit, Property: property, Err: fmt.Errorf("last applied %s differs from current %s", formatPropertyValue(property, lastApplied), formatPropertyValue(property, current))}
+	return externalConflictFor("apply", unit, property, lastApplied, current)
+}
+
+func externalConflictFor(operation, unit string, property PropertyName, lastApplied, current propertyValue) error {
+	return &AdapterError{Reason: ReasonExternalConflict, Operation: operation, Unit: unit, Property: property, Err: fmt.Errorf("last applied %s differs from current %s", formatPropertyValue(property, lastApplied), formatPropertyValue(property, current))}
 }
 
 func conflictError(unit string, conflicts []PropertyConflict) error {

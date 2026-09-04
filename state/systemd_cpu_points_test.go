@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ type systemdPropertyRestoreCall struct {
 }
 
 type fakeSystemdCPUUnitAdapter struct {
+	mu               sync.Mutex
 	topology         systemdunit.TopologySnapshot
 	applies          []systemdCPUApplyCall
 	restores         []string
@@ -40,11 +43,21 @@ type fakeSystemdCPUUnitAdapter struct {
 	owned            map[string]systemdunit.UnitIdentity
 	activeProperties map[string]map[systemdunit.PropertyName]bool
 	failApplyUnit    string
+	applyHook        func(string)
 	reconcileError   error
 	discoverError    error
 	authority        map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
 	authorityError   map[systemdunit.ResourceKind]error
 	resourceChecks   []systemdResourceCheckCall
+	authorityChecks  int
+	authorityHook    func(int)
+	confirmCalls     int
+	confirmHook      func(int)
+	confirmError     error
+	confirmedApplied []string
+	confirmApplyErr  map[string]error
+	confirmStarted   chan struct{}
+	confirmProceed   chan struct{}
 	closed           bool
 }
 
@@ -62,13 +75,56 @@ func (*systemdPlanCaptureLogger) DebugChecked(string, ...interface{}) error { re
 func (*systemdPlanCaptureLogger) InfoChecked(string, ...interface{}) error  { return nil }
 
 func (a *fakeSystemdCPUUnitAdapter) Discover(context.Context) (systemdunit.TopologySnapshot, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.discoverError != nil {
 		return systemdunit.TopologySnapshot{}, a.discoverError
 	}
 	return a.topology, nil
 }
 
+func (a *fakeSystemdCPUUnitAdapter) ConfirmTopology(_ context.Context, expected systemdunit.TopologySnapshot) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.confirmCalls++
+	if a.confirmHook != nil {
+		a.confirmHook(a.confirmCalls)
+	}
+	if a.confirmError != nil {
+		return a.confirmError
+	}
+	if !reflect.DeepEqual(topologyIdentities(expected), topologyIdentities(a.topology)) {
+		return &systemdunit.AdapterError{Reason: systemdunit.ReasonTopologyChanged, Operation: "confirm_topology", Err: errors.New("injected topology turnover")}
+	}
+	return nil
+}
+
+func topologyIdentities(topology systemdunit.TopologySnapshot) []systemdunit.UnitIdentity {
+	result := []systemdunit.UnitIdentity{topology.Parent.Identity}
+	for _, user := range topology.Users {
+		result = append(result, user.Unit.Identity)
+	}
+	return result
+}
+
+func (a *fakeSystemdCPUUnitAdapter) ConfirmApplied(_ context.Context, identity systemdunit.UnitIdentity, _ []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.confirmStarted != nil {
+		close(a.confirmStarted)
+		a.confirmStarted = nil
+		<-a.confirmProceed
+	}
+	a.confirmedApplied = append(a.confirmedApplied, identity.Name)
+	if err := a.confirmApplyErr[identity.Name]; err != nil {
+		return systemdunit.UnitSnapshot{}, err
+	}
+	return systemdunit.UnitSnapshot{Identity: identity}, nil
+}
+
 func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemdunit.UnitIdentity, assignments []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	values := make(map[systemdunit.PropertyName]uint64, len(assignments))
 	devices := make(map[systemdunit.PropertyName][]systemdunit.DeviceLimit)
 	for _, assignment := range assignments {
@@ -79,6 +135,9 @@ func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemduni
 		}
 	}
 	a.applies = append(a.applies, systemdCPUApplyCall{unit: identity.Name, assignments: values, devices: devices})
+	if a.applyHook != nil {
+		a.applyHook(identity.Name)
+	}
 	if a.owned == nil {
 		a.owned = make(map[string]systemdunit.UnitIdentity)
 	}
@@ -99,6 +158,12 @@ func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemduni
 }
 
 func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthorities(_ context.Context, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.authorityChecks++
+	if a.authorityHook != nil {
+		a.authorityHook(a.authorityChecks)
+	}
 	results := make([]systemdunit.ResourceAuthorityResult, len(requests))
 	for index, request := range requests {
 		a.resourceChecks = append(a.resourceChecks, systemdResourceCheckCall{uid: request.UID, resource: request.Resource})
@@ -112,6 +177,8 @@ func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthorities(_ context.Context, 
 }
 
 func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdunit.UnitIdentity) (systemdunit.RestoreResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.restores = append(a.restores, identity.Name)
 	delete(a.owned, identity.Name)
 	delete(a.activeProperties, identity.Name)
@@ -119,6 +186,8 @@ func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdu
 }
 
 func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identity systemdunit.UnitIdentity, properties []systemdunit.PropertyName) (systemdunit.RestoreResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.restores = append(a.restores, identity.Name)
 	a.propertyRestores = append(a.propertyRestores, systemdPropertyRestoreCall{unit: identity.Name, properties: append([]systemdunit.PropertyName(nil), properties...)})
 	for _, property := range properties {
@@ -128,6 +197,8 @@ func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identit
 }
 
 func (a *fakeSystemdCPUUnitAdapter) ReconcileOwned(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.reconcileError != nil {
 		return a.reconcileError
 	}
@@ -150,6 +221,8 @@ func (a *fakeSystemdCPUUnitAdapter) ReconcileOwned(context.Context) error {
 }
 
 func (a *fakeSystemdCPUUnitAdapter) OwnedUnits() []systemdunit.UnitIdentity {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	result := make([]systemdunit.UnitIdentity, 0, len(a.owned))
 	for _, identity := range a.owned {
 		result = append(result, identity)
@@ -159,6 +232,8 @@ func (a *fakeSystemdCPUUnitAdapter) OwnedUnits() []systemdunit.UnitIdentity {
 }
 
 func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []systemdunit.PropertyLease {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if _, ok := a.owned[identity.Name]; !ok {
 		return nil
 	}
@@ -178,7 +253,17 @@ func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []
 	return result
 }
 
-func (a *fakeSystemdCPUUnitAdapter) Close() { a.closed = true }
+func (a *fakeSystemdCPUUnitAdapter) Close() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closed = true
+}
+
+func (a *fakeSystemdCPUUnitAdapter) replaceTopology(topology systemdunit.TopologySnapshot) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.topology = topology
+}
 
 type forbiddenSystemdNativeCgroupManager struct {
 	mockCgroupManager
@@ -305,6 +390,252 @@ func TestSystemdNativeReconciliationDoesNotPublishAPartialPlanAndRetries(t *test
 	}
 }
 
+func TestSystemdNativeReconciliationConfirmsTopologyBeforeAnyMutation(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	adapter.confirmHook = func(call int) {
+		if call == 1 {
+			adapter.topology = testSystemdTopology(0, 1001)
+		}
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000, 1001}}); err != nil {
+		t.Fatalf("activateLimits() error: %v", err)
+	}
+	for _, call := range adapter.applies {
+		if call.unit == "user-1000.slice" {
+			t.Fatalf("stale slice was mutated before pre-mutation confirmation: %+v", adapter.applies)
+		}
+	}
+	if !manager.activeUsers[1001] || manager.activeUsers[1000] {
+		t.Fatalf("published users = %v, want only the confirmed replacement", manager.activeUsers)
+	}
+}
+
+func TestSystemdNativeReconciliationConfirmsTopologyBeforeAcknowledgement(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	adapter.confirmHook = func(call int) {
+		if call == 2 {
+			adapter.topology = testSystemdTopology(0, 1000, 1001)
+		}
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000, 1001}}); err != nil {
+		t.Fatalf("activateLimits() error: %v", err)
+	}
+	if adapter.confirmCalls != 4 {
+		t.Fatalf("topology confirmations = %d, want pre/post confirmation on both bounded attempts", adapter.confirmCalls)
+	}
+	if !manager.activeUsers[1000] || !manager.activeUsers[1001] || len(manager.systemdCPUSlices) != 3 {
+		t.Fatalf("published stale topology users=%v slices=%v", manager.activeUsers, manager.systemdCPUSlices)
+	}
+}
+
+func TestSystemdNativeReconciliationRetriesAnOnlineCPUChangeBeforeAcknowledgement(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	capacity := manager.cpuCapacity.(*mutableCPUCapacityProvider)
+	capacity.onRefresh = func(call int, provider *mutableCPUCapacityProvider) {
+		if call == 2 {
+			provider.cpus = 2
+		}
+	}
+
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+		t.Fatalf("activateLimits() error: %v", err)
+	}
+	if capacity.refreshCalls != 4 {
+		t.Fatalf("capacity refreshes = %d, want initial/final checks on both bounded attempts", capacity.refreshCalls)
+	}
+	lastParent := uint64(0)
+	for _, call := range adapter.applies {
+		if call.unit == "user.slice" {
+			lastParent = call.assignments[systemdunit.PropertyCPUQuotaPerSecUSec]
+		}
+	}
+	if lastParent != 1_800_000 {
+		t.Fatalf("published parent quota = %d, want quota recomputed for two online CPUs", lastParent)
+	}
+}
+
+func TestSystemdNativeReconciliationBoundsTransientTopologyRetries(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology:     testSystemdTopology(0, 1000),
+		confirmError: &systemdunit.AdapterError{Reason: systemdunit.ReasonTopologyChanged, Operation: "confirm_topology", Err: errors.New("continuous turnover")},
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+
+	err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}})
+	if err == nil || !systemdunit.IsRetryableReconciliation(err) {
+		t.Fatalf("activateLimits() error = %v, want typed retryable topology outcome", err)
+	}
+	if adapter.confirmCalls != 2 || len(adapter.applies) != 0 {
+		t.Fatalf("bounded retry confirmations=%d mutations=%v, want two attempts and no mutation", adapter.confirmCalls, adapter.applies)
+	}
+	if manager.systemdCPUComplete || !manager.cpuPointsDegraded {
+		t.Fatalf("optimistic acknowledgement complete=%t degraded=%t", manager.systemdCPUComplete, manager.cpuPointsDegraded)
+	}
+}
+
+func TestSystemdNativeCancelledReconciliationDoesNotRetryOrAcknowledge(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology:     testSystemdTopology(0, 1000),
+		confirmError: context.Canceled,
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := manager.reconcileSystemdCPUPoints(ctx, policy)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("reconcileSystemdCPUPoints() error = %v, want context cancellation", err)
+	}
+	if adapter.confirmCalls != 1 || len(adapter.applies) != 0 {
+		t.Fatalf("cancelled reconciliation confirmations=%d mutations=%v", adapter.confirmCalls, adapter.applies)
+	}
+	if manager.systemdCPUComplete || !manager.cpuPointsDegraded {
+		t.Fatalf("cancelled reconciliation complete=%t degraded=%t", manager.systemdCPUComplete, manager.cpuPointsDegraded)
+	}
+}
+
+func TestSystemdNativeReconciliationDoesNotAcknowledgeAnExternalPropertyChange(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: testSystemdTopology(0, 1000),
+		confirmApplyErr: map[string]error{
+			"user-1000.slice": &systemdunit.AdapterError{Reason: systemdunit.ReasonExternalConflict, Operation: "confirm_applied", Unit: "user-1000.slice", Err: errors.New("operator changed CPUWeight")},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+
+	err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}})
+	var adapterErr *systemdunit.AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != systemdunit.ReasonExternalConflict {
+		t.Fatalf("activateLimits() error = %v, want preserved external-property conflict", err)
+	}
+	if manager.systemdCPUComplete || !manager.cpuPointsDegraded || manager.limitsActive {
+		t.Fatalf("external change was acknowledged complete=%t degraded=%t active=%t", manager.systemdCPUComplete, manager.cpuPointsDegraded, manager.limitsActive)
+	}
+}
+
+func TestSystemdNativePolicyReconciliationsAreSerializedByTheManagerOperationGate(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	manager.systemdCPURequested = true
+
+	leave := manager.opGate.Enter()
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.ReconcileCPUPointsPolicy(policy, policy)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("policy reconciliation bypassed manager operation gate: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	leave()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReconcileCPUPointsPolicy() error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serialized policy reconciliation did not complete")
+	}
+}
+
+func TestSystemdNativeStateRemainsReadableDuringFinalBusAndKernelConfirmation(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	confirmStarted := make(chan struct{})
+	confirmProceed := make(chan struct{})
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology:       testSystemdTopology(0, 1000),
+		confirmStarted: confirmStarted,
+		confirmProceed: confirmProceed,
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}})
+	}()
+	<-confirmStarted
+
+	statusDone := make(chan RuntimeStatus, 1)
+	go func() { statusDone <- manager.GetStatus() }()
+	select {
+	case <-statusDone:
+	case <-time.After(time.Second):
+		close(confirmProceed)
+		<-reconcileDone
+		t.Fatal("state mutex was held during final systemd confirmation")
+	}
+	close(confirmProceed)
+	if err := <-reconcileDone; err != nil {
+		t.Fatalf("activateLimits() error: %v", err)
+	}
+}
+
+func TestSystemdNativeRepeatedArrivalDepartureReconciliationHasNoOrphanedWork(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	manager.systemdCPURequested = true
+
+	const workers = 16
+	done := make(chan error, workers)
+	turnoverDone := make(chan struct{})
+	go func() {
+		defer close(turnoverDone)
+		for index := 0; index < workers*4; index++ {
+			if index%2 == 0 {
+				adapter.replaceTopology(testSystemdTopology(0, 1000, 1001))
+			} else {
+				adapter.replaceTopology(testSystemdTopology(0, 1000))
+			}
+			runtime.Gosched()
+		}
+	}()
+	for index := 0; index < workers; index++ {
+		go func() {
+			done <- manager.ReconcileCPUPointsPolicy(policy, policy)
+		}()
+	}
+	for index := 0; index < workers; index++ {
+		select {
+		case err := <-done:
+			if err != nil && !systemdunit.IsRetryableReconciliation(err) {
+				t.Fatalf("concurrent reconciliation error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent reconciliation deadlocked")
+		}
+	}
+	<-turnoverDone
+	adapter.replaceTopology(testSystemdTopology(0, 1000))
+	if err := manager.ReconcileCPUPointsPolicy(policy, policy); err != nil {
+		t.Fatalf("stable reconciliation after turnover error: %v", err)
+	}
+	if !manager.systemdCPUComplete || !manager.activeUsers[1000] {
+		t.Fatalf("final acknowledgement complete=%t users=%v", manager.systemdCPUComplete, manager.activeUsers)
+	}
+}
+
 func TestSystemdNativeMaintainDoesNotRepeatTheStageReconciliation(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
@@ -402,6 +733,54 @@ func TestSystemdNativeReconciliationTracksArrivalDepartureAndLiveCapacity(t *tes
 	}
 	if manager.activeUsers[1000] || !manager.activeUsers[1001] || len(manager.systemdCPUSlices) != 2 {
 		t.Fatalf("published users=%v slices=%v after departure", manager.activeUsers, manager.systemdCPUSlices)
+	}
+}
+
+func TestSystemdNativeReconciliationPublishesSiblingDenominatorsOnlyAfterKernelOrdering(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter.topology = testSystemdTopology(0, 1000, 1001)
+	arrivalObserved := false
+	adapter.applyHook = func(unit string) {
+		if unit != "user-1001.slice" {
+			return
+		}
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		arrivalObserved = true
+		if manager.systemdCPUComplete || manager.systemdCPUSlices[1001].Name != "" {
+			t.Fatalf("new sibling was published before its kernel weight: complete=%t slices=%v", manager.systemdCPUComplete, manager.systemdCPUSlices)
+		}
+	}
+	if err := manager.stageReconcileCPUPoints(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !arrivalObserved || !manager.systemdCPUComplete || manager.systemdCPUSlices[1001].Name == "" {
+		t.Fatalf("arrival acknowledgement observed=%t complete=%t slices=%v", arrivalObserved, manager.systemdCPUComplete, manager.systemdCPUSlices)
+	}
+
+	adapter.applyHook = func(unit string) {
+		if unit != "user.slice" {
+			return
+		}
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		if manager.systemdCPUComplete || manager.systemdCPUSlices[1001].Name == "" {
+			t.Fatalf("departing sibling left the published denominator before kernel reconciliation: complete=%t slices=%v", manager.systemdCPUComplete, manager.systemdCPUSlices)
+		}
+	}
+	adapter.topology = testSystemdTopology(0, 1000)
+	if err := manager.stageReconcileCPUPoints(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.systemdCPUComplete || manager.systemdCPUSlices[1001].Name != "" {
+		t.Fatalf("departure was not published after reconciliation: complete=%t slices=%v", manager.systemdCPUComplete, manager.systemdCPUSlices)
 	}
 }
 

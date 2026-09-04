@@ -71,6 +71,18 @@ func (m *Manager) activateSystemdEnforcement(metrics *SystemMetrics) error {
 }
 
 func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *SystemMetrics, cfg *config.Config) error {
+	const attempts = 2
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err = m.reconcileSystemdResourcesAttempt(ctx, metrics, cfg)
+		if err == nil || ctx.Err() != nil || !systemdunit.IsRetryableReconciliation(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics *SystemMetrics, cfg *config.Config) error {
 	if m.systemdUnits == nil {
 		return fmt.Errorf("reconcile systemd-native resources: adapter is unavailable")
 	}
@@ -140,6 +152,13 @@ func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *System
 	if len(authorities) != len(planned) {
 		return fmt.Errorf("inspect systemd resource authority: adapter returned %d results for %d requests", len(authorities), len(planned))
 	}
+	// The first authority pass builds a complete process snapshot. Reconfirm the
+	// unit identity set immediately before any apply or restore so no mutation is
+	// based on a topology that already changed while the plan was assembled.
+	if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+		return &SystemdResourceReconciliationError{Step: "pre_mutation_identity", Err: err}
+	}
+	applied := make([]plannedResource, 0, len(planned))
 	for index, plan := range planned {
 		result := authorities[index]
 		if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
@@ -149,8 +168,55 @@ func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *System
 			reconcileErrors = append(reconcileErrors, m.refuseSystemdResource(ctx, plan.uid, plan.identity, plan.resource, result.Authority, result.Err))
 			continue
 		}
-		if err := m.applySystemdResource(ctx, plan.uid, plan.identity, plan.resource, plan.assignments, plan.swap, result.Authority); err != nil {
+		if err := m.mutateSystemdResource(ctx, plan.uid, plan.identity, plan.resource, plan.assignments); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
+			continue
+		}
+		applied = append(applied, plan)
+	}
+
+	if len(applied) > 0 {
+		readbackConfirmed := make([]plannedResource, 0, len(applied))
+		for _, plan := range applied {
+			if _, err := m.systemdUnits.ConfirmApplied(ctx, plan.identity, plan.assignments); err != nil {
+				if systemdunit.IsRetryableReconciliation(err) {
+					return errors.Join(errors.Join(reconcileErrors...), &SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_readback", Err: err})
+				}
+				m.recordSystemdResourceUnapplied(plan.uid, plan.resource, systemdunit.ResourceAuthority{Resource: plan.resource, State: systemdunit.ResourceCoverageRefused, Reason: systemdunit.ResourceCoverageInspectionFailed})
+				reconcileErrors = append(reconcileErrors, &SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_readback", Err: err})
+				continue
+			}
+			readbackConfirmed = append(readbackConfirmed, plan)
+		}
+		confirmedRequests := make([]systemdunit.ResourceAuthorityRequest, len(readbackConfirmed))
+		for index, plan := range readbackConfirmed {
+			confirmedRequests[index] = systemdunit.ResourceAuthorityRequest{Identity: plan.identity, UID: uint32(plan.uid), Resource: plan.resource, Assignments: plan.assignments}
+		}
+		confirmed, err := m.systemdUnits.CheckResourceAuthorities(ctx, confirmedRequests)
+		if err != nil {
+			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: %w", err))
+		}
+		if len(confirmed) != len(readbackConfirmed) {
+			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: adapter returned %d results for %d requests", len(confirmed), len(readbackConfirmed)))
+		}
+		if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+			return errors.Join(errors.Join(reconcileErrors...), &SystemdResourceReconciliationError{Step: "pre_acknowledgement_identity", Err: err})
+		}
+		for index, plan := range readbackConfirmed {
+			result := confirmed[index]
+			if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
+				if result.Err == nil {
+					result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not reconfirm complete resource authority")}
+				}
+				restoreErr := m.restoreSystemdResource(ctx, plan.uid, plan.identity, plan.resource)
+				m.recordSystemdResourceAuthority(plan.uid, plan.resource, result.Authority)
+				reconcileErrors = append(reconcileErrors,
+					&SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_authority", Err: result.Err},
+					restoreErr,
+				)
+				continue
+			}
+			m.publishSystemdResource(plan.uid, plan.identity, plan.resource, plan.swap, result.Authority)
 		}
 	}
 
@@ -368,11 +434,16 @@ func (m *Manager) systemdIOAssignments(cfg *config.Config, multiplier float64) (
 	return result, nil
 }
 
-func (m *Manager) applySystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, assignments []systemdunit.PropertyAssignment, swap bool, authority systemdunit.ResourceAuthority) error {
+func (m *Manager) mutateSystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, assignments []systemdunit.PropertyAssignment) error {
 	if _, err := m.systemdUnits.Apply(ctx, identity, assignments); err != nil {
 		return &SystemdResourceReconciliationError{UID: uid, Resource: resource, Step: "apply", Err: err}
 	}
+	return nil
+}
+
+func (m *Manager) publishSystemdResource(uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, swap bool, authority systemdunit.ResourceAuthority) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	state := m.resourceLimits[uid]
 	if resource == systemdunit.ResourceMemory {
 		state.ram = true
@@ -386,8 +457,6 @@ func (m *Manager) applySystemdResource(ctx context.Context, uid int, identity sy
 	}
 	m.resourceLimits[uid] = state
 	m.systemdResourceUnits[uid] = identity
-	m.mu.Unlock()
-	return nil
 }
 
 func (m *Manager) refuseSystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind, authority systemdunit.ResourceAuthority, authorityErr error) error {
@@ -433,6 +502,23 @@ func (m *Manager) recordSystemdResourceAuthority(uid int, resource systemdunit.R
 	}
 	m.resourceLimits[uid] = state
 	m.mu.Unlock()
+}
+
+func (m *Manager) recordSystemdResourceUnapplied(uid int, resource systemdunit.ResourceKind, authority systemdunit.ResourceAuthority) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.resourceLimits[uid]
+	if resource == systemdunit.ResourceMemory {
+		state.ram = true
+		state.ramApplied = false
+		state.swap = false
+		state.ramAuthority = authority
+	} else {
+		state.io = true
+		state.ioApplied = false
+		state.ioAuthority = authority
+	}
+	m.resourceLimits[uid] = state
 }
 
 func (m *Manager) restoreSystemdResource(ctx context.Context, uid int, identity systemdunit.UnitIdentity, resource systemdunit.ResourceKind) error {

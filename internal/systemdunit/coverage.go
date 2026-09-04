@@ -60,7 +60,7 @@ type ResourceAuthorityResult struct {
 	Err       error
 }
 
-// ResourceAuthorityError reports a refusal made before resource mutation.
+// ResourceAuthorityError reports a refusal at either resource-authority confirmation boundary.
 type ResourceAuthorityError struct {
 	UID       uint32
 	Authority ResourceAuthority

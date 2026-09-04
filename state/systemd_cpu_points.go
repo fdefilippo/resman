@@ -18,6 +18,8 @@ import (
 // the state manager. It intentionally exposes no process-management method.
 type SystemdCPUUnitAdapter interface {
 	Discover(context.Context) (systemdunit.TopologySnapshot, error)
+	ConfirmTopology(context.Context, systemdunit.TopologySnapshot) error
+	ConfirmApplied(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
 	CheckResourceAuthorities(context.Context, []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error)
 	Apply(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
 	Restore(context.Context, systemdunit.UnitIdentity) (systemdunit.RestoreResult, error)
@@ -95,15 +97,37 @@ func (m *Manager) activateSystemdCPUPoints(metrics *SystemMetrics) error {
 }
 
 func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoints.PolicySnapshot) error {
+	const attempts = 2
+	var step string
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		step, err = m.reconcileSystemdCPUPointsAttempt(ctx, policy)
+		if err == nil {
+			return nil
+		}
+		retryable := systemdunit.IsRetryableReconciliation(err)
+		if retryable {
+			m.mu.Lock()
+			m.systemdCPUComplete = false
+			m.mu.Unlock()
+		}
+		if ctx.Err() != nil || !retryable {
+			break
+		}
+	}
+	return m.deferSystemdCPUPointsError(step, err)
+}
+
+func (m *Manager) reconcileSystemdCPUPointsAttempt(ctx context.Context, policy cpupoints.PolicySnapshot) (string, error) {
 	if m.systemdUnits == nil {
-		return m.deferSystemdCPUPointsError("adapter", fmt.Errorf("systemd CPU adapter is unavailable"))
+		return "adapter", fmt.Errorf("systemd CPU adapter is unavailable")
 	}
 	if err := m.systemdUnits.ReconcileOwned(ctx); err != nil {
-		return m.deferSystemdCPUPointsError("owned_leases", err)
+		return "owned_leases", err
 	}
 	topology, err := m.systemdUnits.Discover(ctx)
 	if err != nil {
-		return m.deferSystemdCPUPointsError("discover", err)
+		return "discover", err
 	}
 	participants := make([]cpupoints.ActiveUserSlice, 0, len(topology.Users))
 	units := make(map[int]systemdunit.UnitIdentity, len(topology.Users))
@@ -124,15 +148,15 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 		// Root participates in the flat scheduler only while at least one
 		// eligible non-root workload is governed. It cannot keep the finite
 		// parent quota alive by itself.
-		return m.restoreSystemdCPUProperties(ctx)
+		return "restore", m.restoreSystemdCPUProperties(ctx)
 	}
 	capacity, err := m.cpuCapacity.Refresh(policy.Pool())
 	if err != nil {
-		return m.deferSystemdCPUPointsError("capacity", err)
+		return "capacity", err
 	}
 	plan, err := cpupoints.PlanFlatTopology(policy, capacity.LastVerified.OnlineCPUs(), participants)
 	if err != nil {
-		return m.deferSystemdCPUPointsError("plan", err)
+		return "plan", err
 	}
 
 	parentAssignments, err := systemdunit.NewCPUQuotaAssignmentsFromCgroupMax(
@@ -140,25 +164,63 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 		plan.ParentQuota().PeriodMicroseconds(),
 	)
 	if err != nil {
-		return m.deferSystemdCPUPointsError("parent_quota", err)
+		return "parent_quota", err
 	}
+	if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+		return "pre_mutation_identity", err
+	}
+	// The prior plan remains useful as a conservative denominator while this
+	// attempt is assembled, but it is no longer a complete acknowledgement once
+	// kernel mutation starts. Publication becomes complete again only after the
+	// second topology and capacity confirmations.
+	m.mu.Lock()
+	m.systemdCPUComplete = false
+	m.mu.Unlock()
 	if _, err := m.systemdUnits.Apply(ctx, topology.Parent.Identity, parentAssignments); err != nil {
-		return m.deferSystemdCPUPointsError("parent_quota", err)
+		return "parent_quota", err
 	}
 
 	for _, slice := range plan.Slices() {
 		assignment, err := systemdunit.NewPropertyAssignment(systemdunit.PropertyCPUWeight, uint64(slice.Weight().Value()))
 		if err != nil {
-			return m.deferSystemdCPUPointsError("leaf_weight", err)
+			return "leaf_weight", err
 		}
 		if _, err := m.systemdUnits.Apply(ctx, units[slice.UID()], []systemdunit.PropertyAssignment{assignment}); err != nil {
-			return m.deferSystemdCPUPointsError("leaf_weight", fmt.Errorf("UID %d: %w", slice.UID(), err))
+			return "leaf_weight", fmt.Errorf("UID %d: %w", slice.UID(), err)
 		}
 	}
 
+	if _, err := m.systemdUnits.ConfirmApplied(ctx, topology.Parent.Identity, parentAssignments); err != nil {
+		return "pre_acknowledgement_parent", err
+	}
+	for _, slice := range plan.Slices() {
+		assignment, err := systemdunit.NewPropertyAssignment(systemdunit.PropertyCPUWeight, uint64(slice.Weight().Value()))
+		if err != nil {
+			return "pre_acknowledgement_leaf", err
+		}
+		if _, err := m.systemdUnits.ConfirmApplied(ctx, units[slice.UID()], []systemdunit.PropertyAssignment{assignment}); err != nil {
+			return "pre_acknowledgement_leaf", fmt.Errorf("UID %d: %w", slice.UID(), err)
+		}
+	}
+	confirmedCapacity, err := m.cpuCapacity.Refresh(policy.Pool())
+	if err != nil {
+		return "pre_acknowledgement_capacity", err
+	}
+	if !confirmedCapacity.Available || confirmedCapacity.LastVerified != capacity.LastVerified {
+		return "pre_acknowledgement_capacity", &systemdReconciliationRetryError{reason: "online CPU capacity changed during reconciliation"}
+	}
+	if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+		return "pre_acknowledgement_identity", err
+	}
 	m.publishSystemdCPUPointsPlan(topology.Parent.Identity, units, plan)
-	return nil
+	return "", nil
 }
+
+type systemdReconciliationRetryError struct{ reason string }
+
+func (e *systemdReconciliationRetryError) Error() string { return e.reason }
+
+func (*systemdReconciliationRetryError) RetryableReconciliation() bool { return true }
 
 func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, units map[int]systemdunit.UnitIdentity, plan cpupoints.FlatPlan) {
 	now := time.Now()
