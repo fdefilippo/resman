@@ -71,6 +71,33 @@ func (a PropertyAssignment) Name() PropertyName { return a.name }
 // Value returns the normalized uint64 D-Bus value.
 func (a PropertyAssignment) Value() uint64 { return a.value }
 
+// NewCPUQuotaAssignmentsFromCgroupMax converts one exact cgroup v2 quota and
+// period into systemd's normalized per-second quota plus explicit period.
+func NewCPUQuotaAssignmentsFromCgroupMax(quota, period uint64) ([]PropertyAssignment, error) {
+	if quota == 0 || period == 0 || 1_000_000%period != 0 {
+		return nil, &AdapterError{
+			Reason: ReasonInvalidValue, Operation: "convert_cpu_quota",
+			Err: fmt.Errorf("cgroup quota %d period %d is not exactly representable by systemd", quota, period),
+		}
+	}
+	factor := uint64(1_000_000) / period
+	if quota > math.MaxUint64/factor {
+		return nil, &AdapterError{
+			Reason: ReasonInvalidValue, Operation: "convert_cpu_quota",
+			Err: fmt.Errorf("cgroup quota %d period %d overflows systemd per-second quota", quota, period),
+		}
+	}
+	perSecond, err := NewPropertyAssignment(PropertyCPUQuotaPerSecUSec, quota*factor)
+	if err != nil {
+		return nil, err
+	}
+	configuredPeriod, err := NewPropertyAssignment(PropertyCPUQuotaPeriodUSec, period)
+	if err != nil {
+		return nil, err
+	}
+	return []PropertyAssignment{perSecond, configuredPeriod}, nil
+}
+
 func validatePropertyValue(name PropertyName, value uint64) error {
 	switch name {
 	case PropertyCPUWeight, PropertyIOWeight:
@@ -133,6 +160,10 @@ type UnitIdentity struct {
 
 // InvocationIDString returns the canonical lower-case systemd invocation ID.
 func (i UnitIdentity) InvocationIDString() string { return hex.EncodeToString(i.InvocationID[:]) }
+
+// IsParentUserSlice reports whether this identity names the authoritative
+// parent of the flat systemd user-slice topology.
+func (i UnitIdentity) IsParentUserSlice() bool { return i.Name == parentUserSlice }
 
 // UnitSnapshot is one authoritative systemd view of an active slice.
 type UnitSnapshot struct {

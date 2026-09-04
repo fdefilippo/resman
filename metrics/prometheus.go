@@ -536,7 +536,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
 			Name:        "enforcement_mode",
-			Help:        "Bounded host enforcement mode: migration_enabled or observation_only_systemd",
+			Help:        "Bounded host enforcement mode: migration_enabled, observation_only_systemd, or systemd_native",
 			ConstLabels: staticLabels,
 		},
 		[]string{"mode"},
@@ -955,6 +955,7 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 	for _, mode := range []cgroup.EnforcementMode{
 		cgroup.EnforcementModeMigrationEnabled,
 		cgroup.EnforcementModeObservationOnlySystemd,
+		cgroup.EnforcementModeSystemdNative,
 	} {
 		value := 0.0
 		if metrics.EnforcementMode == mode {

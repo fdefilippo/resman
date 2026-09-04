@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -805,6 +806,9 @@ func (m *Manager) commitReleasedUsers(users []int) {
 }
 
 func (m *Manager) activateLimits(metrics *SystemMetrics) (resultErr error) {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		return m.activateSystemdCPUPoints(metrics)
+	}
 	defer func() {
 		if resultErr != nil && m.prometheusExporter != nil {
 			m.prometheusExporter.RecordError(limitTransitionErrorComponent, limitTransitionActivationFailure)
@@ -1244,6 +1248,9 @@ func (m *Manager) clearResourceLimitState(uid int, ram, io bool) {
 }
 
 func (m *Manager) deactivateLimits() (resultErr error) {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		return m.restoreSystemdCPUPoints(context.Background())
+	}
 	defer func() {
 		if resultErr != nil && m.prometheusExporter != nil {
 			m.prometheusExporter.RecordError(limitTransitionErrorComponent, limitTransitionDeactivationFailure)
@@ -1477,6 +1484,9 @@ func (m *Manager) ForceActivateLimits() error {
 	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
 		m.recordObservationOnlyIntent("ACTIVATE_LIMITS", metrics)
 		return nil
+	}
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		return m.activateSystemdCPUPoints(metrics)
 	}
 	return m.activateLimits(metrics)
 }

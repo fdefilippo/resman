@@ -247,6 +247,98 @@ func TestDiscoverReturnsAuthoritativeSortedUserSlices(t *testing.T) {
 	}
 }
 
+func TestDiscoverTreatsAUserSliceThatDepartsDuringReadAsAbsent(t *testing.T) {
+	transport := newFakeUnitTransport(1001, 1002)
+	transport.onUnitRead = func(f *fakeUnitTransport, unit string, _ int) {
+		if unit == "user-1001.slice" {
+			delete(f.units, unit)
+		}
+	}
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error: %v", err)
+	}
+	if len(topology.Users) != 1 || topology.Users[0].UID != 1002 {
+		t.Fatalf("discovered users = %+v, want only UID 1002", topology.Users)
+	}
+}
+
+func TestReconcileOwnedCleansAUnitThatDepartedAfterApplication(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+	path := managedRuntimeDropInPath(identity.Name, PropertyCPUWeight)
+	transport.diskPaths = map[string][]string{identity.Name: {path}}
+	delete(transport.units, identity.Name)
+
+	if err := adapter.ReconcileOwned(context.Background()); err != nil {
+		t.Fatalf("ReconcileOwned() error: %v", err)
+	}
+	if got := adapter.OwnedUnits(); len(got) != 0 {
+		t.Fatalf("OwnedUnits() = %+v, want empty after inactive cleanup", got)
+	}
+	if !reflect.DeepEqual(transport.revertCalls, []string{identity.Name}) || transport.reloadCalls != 1 {
+		t.Fatalf("inactive cleanup calls = revert %v reload %d", transport.revertCalls, transport.reloadCalls)
+	}
+}
+
+func TestReconcileOwnedRebindsAnExactlyRecreatedActiveUnit(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIdentity := topology.Users[0].Unit.Identity
+	if _, err := adapter.Apply(context.Background(), oldIdentity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+
+	recreated := fakeUnit(oldIdentity.Name, "/user.slice/"+oldIdentity.Name, 9001)
+	recreated.slice[string(PropertyCPUWeight)] = uint64(321)
+	recreated.unit["DropInPaths"] = []string{managedRuntimeDropInPath(oldIdentity.Name, PropertyCPUWeight)}
+	transport.units[oldIdentity.Name] = recreated
+	if err := adapter.ReconcileOwned(context.Background()); err != nil {
+		t.Fatalf("ReconcileOwned() error: %v", err)
+	}
+	owned := adapter.OwnedUnits()
+	if len(owned) != 1 || owned[0] == oldIdentity || owned[0].Name != oldIdentity.Name {
+		t.Fatalf("OwnedUnits() = %+v, want recreated identity for %s", owned, oldIdentity.Name)
+	}
+}
+
+func TestCPUQuotaAssignmentsPreserveExactCgroupMaxMeaning(t *testing.T) {
+	assignments, err := NewCPUQuotaAssignmentsFromCgroupMax(360000, 100000)
+	if err != nil {
+		t.Fatalf("NewCPUQuotaAssignmentsFromCgroupMax() error: %v", err)
+	}
+	want := map[PropertyName]uint64{
+		PropertyCPUQuotaPerSecUSec: 3_600_000,
+		PropertyCPUQuotaPeriodUSec: 100_000,
+	}
+	for _, assignment := range assignments {
+		if want[assignment.Name()] != assignment.Value() {
+			t.Fatalf("assignment %s = %d, want %d", assignment.Name(), assignment.Value(), want[assignment.Name()])
+		}
+		delete(want, assignment.Name())
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing quota assignments: %v", want)
+	}
+	if _, err := NewCPUQuotaAssignmentsFromCgroupMax(1000, 300000); err == nil {
+		t.Fatal("inexact quota period was accepted")
+	}
+}
+
 func TestApplyUsesRuntimeOnlyReadbackAndKernelVerification(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	verifier := &fakeKernelVerifier{}
@@ -921,7 +1013,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "Close", "Discover", "Leases", "RecoveryReport", "Restore"}
+	want := []string{"Apply", "Close", "Discover", "Leases", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}

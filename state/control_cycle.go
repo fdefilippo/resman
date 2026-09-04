@@ -72,7 +72,24 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
 
-func (m *Manager) stageReconcileCPUPoints(*controlCycleContext) error {
+func (m *Manager) stageReconcileCPUPoints(run *controlCycleContext) error {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		m.mu.RLock()
+		requested := m.systemdCPURequested
+		policy := m.cpuPointsPolicy
+		m.mu.RUnlock()
+		if !requested {
+			return nil
+		}
+		ctx := context.Background()
+		if run != nil && run.ctx != nil {
+			ctx = run.ctx
+		}
+		if err := m.reconcileSystemdCPUPoints(ctx, policy); err != nil {
+			return fmt.Errorf("systemd-native CPU Points topology remains degraded: %w", err)
+		}
+		return nil
+	}
 	if err := m.retryCPUPointsPolicyLocked(); err != nil {
 		return fmt.Errorf("CPU Points topology remains degraded: %w", err)
 	}
@@ -270,6 +287,11 @@ func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
 
 func (m *Manager) stageIORemediation(run *controlCycleContext) error {
 	// Run I/O starvation auto-remediation for observed active, I/O-eligible users.
+	// systemd-native I/O authority is introduced separately; never fall back to
+	// the migration-owned cgroup implementation while only CPU is authoritative.
+	if m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
+		return nil
+	}
 	if m.ioRemediation != nil {
 		var limitedUsers []int
 		if run.cfg.GetIOEnabled() {
@@ -420,6 +442,11 @@ func (m *Manager) reconcilePatternPolicies(uids map[int]struct{}, cfg *config.Co
 }
 
 func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) error {
+	// Pattern policies currently apply RAM through the migration-owned cgroup
+	// implementation. The systemd-native resource adapter is a separate contract.
+	if m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
+		return nil
+	}
 	if !m.isUserLimited(uid) {
 		return nil
 	}
@@ -661,7 +688,7 @@ type blockIOCounterSample struct {
 
 func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy, normalQuota string) {
 	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
-	if needsBlockIO && m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+	if needsBlockIO && m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
 		metrics.IOBlockIOPSUnavailableUsers += len(metrics.IOEligibleUsers)
 		m.mu.Lock()
 		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)

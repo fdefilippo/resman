@@ -152,6 +152,13 @@ func (a *Adapter) snapshotTopology(ctx context.Context, listed []listedUnit) (To
 
 		snapshot, err := a.readUnit(ctx, candidate.name, candidate.objectPath)
 		if err != nil {
+			var adapterErr *AdapterError
+			if candidate.name != parentUserSlice && errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
+				// User slices may disappear between ListUnitsByPatterns and the
+				// authoritative property read. Treat that turnover as absence from
+				// this complete snapshot; the next discovery observes a later set.
+				continue
+			}
 			return TopologySnapshot{}, err
 		}
 		if candidate.name == parentUserSlice {
@@ -439,6 +446,20 @@ func (a *Adapter) RecoveryReport() []LeaseRecoveryOutcome {
 		}
 		return result[left].Unit < result[right].Unit
 	})
+	return result
+}
+
+// OwnedUnits returns the current durable property-lease identities. Callers
+// use this inventory for exact release; a unit name or cgroup path alone never
+// establishes ResMan ownership.
+func (a *Adapter) OwnedUnits() []UnitIdentity {
+	leave := a.opGate.Enter()
+	defer leave()
+	result := make([]UnitIdentity, 0, len(a.overrides))
+	for identity := range a.overrides {
+		result = append(result, identity)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })
 	return result
 }
 

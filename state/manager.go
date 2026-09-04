@@ -37,6 +37,7 @@ import (
 	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/limithook"
 	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/logging"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -86,6 +87,11 @@ type Manager struct {
 	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
 	cpuPointsDegraded         bool
 	enforcementStatus         cgroup.EnforcementStatus
+	systemdUnits              SystemdCPUUnitAdapter
+	systemdCPURequested       bool
+	systemdCPUComplete        bool
+	systemdCPUParent          systemdunit.UnitIdentity
+	systemdCPUSlices          map[int]systemdunit.UnitIdentity
 	recoverySnapshot          cgroup.RecoverySnapshot
 
 	// Threshold monitoring
@@ -213,7 +219,7 @@ func WithCPUPointsRuntime(policy cpupoints.PolicySnapshot, capacity CPUCapacityP
 func WithEnforcementStatus(status cgroup.EnforcementStatus) ManagerOption {
 	return func(m *Manager) error {
 		switch status.Mode {
-		case cgroup.EnforcementModeMigrationEnabled, cgroup.EnforcementModeObservationOnlySystemd:
+		case cgroup.EnforcementModeMigrationEnabled, cgroup.EnforcementModeObservationOnlySystemd, cgroup.EnforcementModeSystemdNative:
 			m.enforcementStatus = status
 			return nil
 		default:
@@ -374,6 +380,7 @@ func NewManager(
 		persistencePreviousRAM:    make(map[int]cgroup.MemoryAccountingSnapshot),
 		cpuPointsLifecycleEvents:  make(map[int]cpuPointsLifecycleEvent),
 		cpuPointsUserSnapshots:    make(map[int]resmanmetrics.CPUPointsUserSnapshot),
+		systemdCPUSlices:          make(map[int]systemdunit.UnitIdentity),
 		enforcementStatus: cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeMigrationEnabled,
 			Reason: cgroup.EnforcementReasonNoSystemdRuntime,
@@ -448,6 +455,12 @@ func NewManager(
 		if err := option(mgr); err != nil {
 			return nil, err
 		}
+	}
+	if mgr.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative && mgr.systemdUnits == nil {
+		return nil, fmt.Errorf("systemd-native enforcement requires the authoritative systemd adapter")
+	}
+	if mgr.systemdUnits != nil && mgr.enforcementStatus.Mode != cgroup.EnforcementModeSystemdNative {
+		return nil, fmt.Errorf("systemd CPU adapter requires systemd-native enforcement mode")
 	}
 
 	logger.Info("State manager initialized",
@@ -677,8 +690,11 @@ func (m *Manager) Cleanup() error {
 
 		// Remove all active limits.
 		m.mu.RLock()
-		limitsActive := m.limitsActive || m.resourceLimitsActive
+		limitsActive := m.limitsActive || m.resourceLimitsActive || m.systemdCPURequested
 		m.mu.RUnlock()
+		if m.systemdUnits != nil && len(m.systemdUnits.OwnedUnits()) > 0 {
+			limitsActive = true
+		}
 		if limitsActive {
 			if err := m.deactivateLimits(); err != nil {
 				m.logger.Error("Error during cleanup deactivation", "error", err)
@@ -692,6 +708,9 @@ func (m *Manager) Cleanup() error {
 				m.logger.Error("Error during cgroup cleanup", "error", err)
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup cgroups: %w", err))
 			}
+		}
+		if m.systemdUnits != nil {
+			m.systemdUnits.Close()
 		}
 	}()
 

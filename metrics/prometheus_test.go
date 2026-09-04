@@ -903,6 +903,7 @@ func TestEnforcementModeAndRestoreOutcomesUseBoundedLabelVocabularies(t *testing
 	wantModes := map[string]float64{
 		string(cgroup.EnforcementModeMigrationEnabled):       0,
 		string(cgroup.EnforcementModeObservationOnlySystemd): 1,
+		string(cgroup.EnforcementModeSystemdNative):          0,
 	}
 	wantRestores := map[string]float64{
 		string(cgroup.ProcessRestoreExactOrigin): 1,

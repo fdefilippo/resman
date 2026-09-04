@@ -10,12 +10,13 @@ import (
 
 const defaultSystemdRuntimePath = "/run/systemd/system"
 
-// EnforcementMode describes whether ResMan may migrate processes into its own cgroups.
+// EnforcementMode identifies the authoritative boundary used for enforcement.
 type EnforcementMode string
 
 const (
 	EnforcementModeMigrationEnabled       EnforcementMode = "migration_enabled"
 	EnforcementModeObservationOnlySystemd EnforcementMode = "observation_only_systemd"
+	EnforcementModeSystemdNative          EnforcementMode = "systemd_native"
 )
 
 // EnforcementStatus is the bounded result of resolving the host ownership boundary.
@@ -28,6 +29,7 @@ const (
 	EnforcementReasonNoSystemdRuntime         = "systemd_runtime_absent"
 	EnforcementReasonSystemdOwnsHostWorkloads = "systemd_owns_host_workloads"
 	EnforcementReasonAuthorityUnverifiable    = "systemd_authority_unverifiable"
+	EnforcementReasonSystemdNativeAdapter     = "systemd_native_adapter"
 )
 
 // SystemdOwnershipPreservationError reports ingress refused to preserve the

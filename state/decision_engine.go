@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -313,6 +314,20 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
 		m.recordObservationOnlyIntent(decision, metrics)
 		return nil
+	}
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		switch decision {
+		case "ACTIVATE_LIMITS":
+			return m.activateSystemdCPUPoints(metrics)
+		case "DEACTIVATE_LIMITS":
+			return m.restoreSystemdCPUPoints(context.Background())
+		case "MAINTAIN_CURRENT_STATE":
+			// The first control-cycle stage already reconciled topology and
+			// capacity. Do not rewrite the same runtime properties twice.
+			return nil
+		default:
+			return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
+		}
 	}
 	switch decision {
 	case "ACTIVATE_LIMITS":

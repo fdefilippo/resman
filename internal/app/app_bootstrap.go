@@ -12,6 +12,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/mcp"
 	"github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/reloader"
@@ -226,16 +227,40 @@ func (a *App) WithStateManager() *App {
 		a.logger.Warn("Failed to inspect recovery occupants during state initialization", "error", recoveryErr)
 	}
 
+	status := a.cgroupMgr.EnforcementStatus()
+	options := []state.ManagerOption{
+		state.WithCPUPointsRuntime(policy, capacity),
+		state.WithEnforcementStatus(status),
+		state.WithRecoverySnapshot(recoverySnapshot),
+	}
+	var systemdAdapter *systemdunit.Adapter
+	if status.Mode == cgroup.EnforcementModeObservationOnlySystemd && status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
+		systemdAdapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout)
+		if err != nil {
+			a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
+				"reason", status.Reason,
+				"error", err,
+			)
+		} else {
+			options = append(options, state.WithSystemdCPUEnforcement(systemdAdapter))
+			a.logger.Info("Systemd-native CPU enforcement selected",
+				"enforcement_mode", cgroup.EnforcementModeSystemdNative,
+				"reason", cgroup.EnforcementReasonSystemdNativeAdapter,
+			)
+		}
+	}
+
 	stateManager, err := state.NewManager(
 		a.cfg,
 		a.metricsCollector,
 		a.cgroupMgr,
 		a.prometheusExporter,
-		state.WithCPUPointsRuntime(policy, capacity),
-		state.WithEnforcementStatus(a.cgroupMgr.EnforcementStatus()),
-		state.WithRecoverySnapshot(recoverySnapshot),
+		options...,
 	)
 	if err != nil {
+		if systemdAdapter != nil {
+			systemdAdapter.Close()
+		}
 		a.logger.Error("Failed to initialize state manager", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)
 		a.err = err

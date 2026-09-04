@@ -17,6 +17,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -88,6 +89,9 @@ func (m *Manager) PublishCPUPointsPolicy(candidate cpupoints.PolicySnapshot) {
 }
 
 func (m *Manager) preflightCPUPointsPolicyLocked(candidate cpupoints.PolicySnapshot) error {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		return nil
+	}
 	m.mu.RLock()
 	affected := make([]int, 0)
 	for uid, allocation := range m.cpuAllocations {
@@ -104,6 +108,18 @@ func (m *Manager) preflightCPUPointsPolicyLocked(candidate cpupoints.PolicySnaps
 }
 
 func (m *Manager) reconcileCPUPointsPolicyLocked(candidate, fallback cpupoints.PolicySnapshot, force bool) error {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeSystemdNative {
+		m.mu.RLock()
+		requested := m.systemdCPURequested
+		m.mu.RUnlock()
+		if !requested {
+			return nil
+		}
+		if err := m.reconcileSystemdCPUPoints(context.Background(), candidate); err != nil {
+			return m.deferCPUPointsPolicyLocked(fallback, err)
+		}
+		return nil
+	}
 	if err := m.preflightCPUPointsPolicyLocked(candidate); err != nil {
 		return err
 	}
@@ -278,7 +294,9 @@ func cpuPointsReconciliationErrorType(err error) string {
 		return "internal"
 	}
 	switch reconciliationErr.Step {
-	case "capacity", "parent_quota", "guaranteed_domain_weight", "best_effort_weight", "leaf_weight":
+	case "capacity", "parent_quota", "guaranteed_domain_weight", "best_effort_weight", "leaf_weight",
+		"systemd_adapter", "systemd_owned_leases", "systemd_discover", "systemd_capacity",
+		"systemd_plan", "systemd_parent_quota", "systemd_leaf_weight":
 		return reconciliationErr.Step
 	default:
 		return "internal"

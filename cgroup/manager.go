@@ -157,7 +157,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		"enforcement_reason", mgr.enforcementStatus.Reason,
 	)
 	if !mgr.enforcementStatus.migrationAllowed() {
-		logger.Warn("ResMan is running in observation-only mode; systemd-owned processes will not be migrated",
+		logger.Warn("ResMan-owned PID migration is disabled on this systemd host",
 			"enforcement_mode", mgr.enforcementStatus.Mode,
 			"reason", mgr.enforcementStatus.Reason,
 		)

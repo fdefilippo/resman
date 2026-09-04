@@ -15,6 +15,91 @@ type adapterLeaseSnapshot struct {
 	generation uint64
 }
 
+// ReconcileOwned resolves active-unit recreation and cleans leases for units
+// that disappeared since the previous topology pass. Exact property values,
+// unit identity and the complete recorded footprint remain mandatory.
+func (a *Adapter) ReconcileOwned(ctx context.Context) error {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("reconcile_owned"); err != nil {
+		return err
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	listed, err := a.transport.listUserSlices(listCtx)
+	cancel()
+	if err != nil {
+		return classifyTransportError("reconcile_owned", "", err)
+	}
+	active := make(map[string]listedUnit, len(listed))
+	for _, unit := range listed {
+		active[unit.name] = unit
+	}
+	units := make([]string, 0, len(a.phases))
+	for unit := range a.phases {
+		units = append(units, unit)
+	}
+	sort.Strings(units)
+
+	var reconcileErrors []error
+	for _, unit := range units {
+		if blocked := a.blocked[unit]; blocked != nil {
+			reconcileErrors = append(reconcileErrors, blocked)
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+		listedUnit, ok := active[unit]
+		if !ok {
+			err := a.recoverInactive(callCtx, unit)
+			cancel()
+			if err != nil {
+				a.recordInactiveRecoveryFailure(unit, err)
+				reconcileErrors = append(reconcileErrors, err)
+			}
+			continue
+		}
+
+		phase := a.phases[unit]
+		if phase == leasePhaseRestoring || phase == leasePhaseReloading {
+			err := a.recoverActiveRestore(callCtx, unit, listedUnit.objectPath)
+			cancel()
+			if err != nil {
+				a.recordRecoveryConflict(unit, err)
+				reconcileErrors = append(reconcileErrors, err)
+			}
+			continue
+		}
+		current, err := a.readUnit(callCtx, unit, listedUnit.objectPath)
+		cancel()
+		if err != nil {
+			a.recordRecoveryConflict(unit, err)
+			reconcileErrors = append(reconcileErrors, err)
+			continue
+		}
+		identity, override, _, exists := a.unitLeaseState(unit)
+		if phase == leasePhaseApplied && exists && identity == current.Identity {
+			actual, footprintErr := a.captureFootprint(current)
+			if footprintErr == nil && a.propertiesMatch(unit, func(state propertyLeaseState) uint64 {
+				return state.lease.LastApplied
+			}, current) && equalFingerprints(actual, override.fingerprints) {
+				continue
+			}
+			if footprintErr != nil {
+				err = footprintErr
+			} else {
+				err = externalRecoveryConflict(unit, "recorded applied values or footprint differ from current state")
+			}
+		} else {
+			err = a.recoverActive(ctx, unit, current)
+		}
+		if err != nil {
+			a.recordRecoveryConflict(unit, err)
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
+	return errors.Join(reconcileErrors...)
+}
+
 func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 	journal, err := a.store.Load()
 	if err != nil {
