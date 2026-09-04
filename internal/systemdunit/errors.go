@@ -22,6 +22,7 @@ const (
 	ReasonReadbackMismatch     ErrorReason = "readback_mismatch"
 	ReasonKernelVerification   ErrorReason = "kernel_verification_failed"
 	ReasonUnitFileVerification ErrorReason = "unit_file_verification_failed"
+	ReasonLeaseStore           ErrorReason = "lease_store_failed"
 	ReasonExternalConflict     ErrorReason = "external_property_conflict"
 	ReasonTimeout              ErrorReason = "timeout"
 	ReasonClosed               ErrorReason = "adapter_closed"

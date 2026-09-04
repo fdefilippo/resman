@@ -268,6 +268,10 @@ This preserves ownership by login sessions, user services, transient units, and
 system services. The hierarchy below is therefore an enforcement topology only for a
 separately supported non-systemd ownership model; it is not created for new systemd
 workloads. The systemd-native replacement is specified by `resman-nq6`.
+Its runtime-property ownership and crash-recovery journal are documented in
+[`SYSTEMD-PROPERTY-LEASES.md`](SYSTEMD-PROPERTY-LEASES.md). The journal is durable
+ownership evidence rather than a cache and must exist before a systemd property is
+mutated.
 
 **Cgroup Hierarchy:**
 ```

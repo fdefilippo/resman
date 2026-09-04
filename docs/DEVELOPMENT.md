@@ -600,6 +600,10 @@ against it. Remote wildcard binds remain explicit, non-default security decision
   not recovery.
 - Durability (`fsync` of file and parent directory) **MUST** be a documented, tested
   decision, not an accident of ordering.
+- External-property ownership that must survive daemon or unit lifetime **MUST** use
+  a secure write-ahead journal. Persist ownership before mutation, acknowledge success
+  only after verified durable publication, and never reconstruct ownership from a
+  filename or current value that an operator could have produced independently.
 
 **Why.** Before `resman-4pw.5`, `config/config.go` wrote both the timestamped backup
 and the temporary file with mode `0644` before renaming, with no inspection of the
@@ -616,7 +620,7 @@ SQLite history: a private parent protects sidecars before SQLite-created modes a
 normalized, while unsafe pre-existing directories and files are rejected with an
 explicit ownership and permission remedy.
 
-*Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48, resman-4pw.66*
+*Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48, resman-4pw.66, resman-nq6.13*
 
 ---
 

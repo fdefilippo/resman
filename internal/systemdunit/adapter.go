@@ -19,6 +19,7 @@ type propertyLeaseState struct {
 	lease           PropertyLease
 	previousApplied uint64
 	uncertain       bool
+	newLease        bool
 }
 
 type propertyLeaseKey struct {
@@ -27,7 +28,9 @@ type propertyLeaseKey struct {
 }
 
 type unitOverrideLease struct {
-	managedPaths []string
+	managedPaths        []string
+	fingerprints        []unitFileFingerprint
+	previousFingerprint []unitFileFingerprint
 }
 
 type kernelVerifier interface {
@@ -37,14 +40,19 @@ type kernelVerifier interface {
 // Adapter is the narrow, runtime-only systemd resource-control boundary.
 // The operation gate may span D-Bus and read-only cgroup verification I/O.
 type Adapter struct {
-	transport unitTransport
-	verifier  kernelVerifier
-	unitFiles unitFileInspector
-	timeout   time.Duration
-	opGate    operationgate.Gate
-	leases    map[propertyLeaseKey]propertyLeaseState
-	overrides map[UnitIdentity]unitOverrideLease
-	closed    bool
+	transport  unitTransport
+	verifier   kernelVerifier
+	unitFiles  unitFileInspector
+	timeout    time.Duration
+	opGate     operationgate.Gate
+	leases     map[propertyLeaseKey]propertyLeaseState
+	overrides  map[UnitIdentity]unitOverrideLease
+	phases     map[string]leasePhase
+	store      leaseJournalStore
+	generation uint64
+	recovery   []LeaseRecoveryOutcome
+	blocked    map[string]error
+	closed     bool
 }
 
 // New opens the authoritative system bus and a read-only cgroup verifier. The
@@ -57,7 +65,7 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapte
 	if err != nil {
 		return nil, classifyTransportError("connect", "", err)
 	}
-	adapter, err := newAdapter(transport, newCgroupVerifier(cgroupRoot), localUnitFileInspector{}, timeout)
+	adapter, err := newAdapter(ctx, transport, newCgroupVerifier(cgroupRoot), localUnitFileInspector{}, newFileLeaseJournalStoreForOwner(DefaultLeaseJournalPath, 0), timeout)
 	if err != nil {
 		transport.close()
 		return nil, err
@@ -65,7 +73,7 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapte
 	return adapter, nil
 }
 
-func newAdapter(transport unitTransport, verifier kernelVerifier, unitFiles unitFileInspector, timeout time.Duration) (*Adapter, error) {
+func newAdapter(ctx context.Context, transport unitTransport, verifier kernelVerifier, unitFiles unitFileInspector, store leaseJournalStore, timeout time.Duration) (*Adapter, error) {
 	if transport == nil {
 		return nil, &AdapterError{Reason: ReasonBusUnavailable, Operation: "construct", Err: fmt.Errorf("systemd transport is required")}
 	}
@@ -75,17 +83,27 @@ func newAdapter(transport unitTransport, verifier kernelVerifier, unitFiles unit
 	if unitFiles == nil {
 		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "construct", Err: fmt.Errorf("unit-file inspector is required")}
 	}
+	if store == nil {
+		return nil, &AdapterError{Reason: ReasonLeaseStore, Operation: "construct", Err: fmt.Errorf("lease journal store is required")}
+	}
 	if timeout <= 0 {
 		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "construct", Err: fmt.Errorf("call timeout must be positive")}
 	}
-	return &Adapter{
+	adapter := &Adapter{
 		transport: transport,
 		verifier:  verifier,
 		unitFiles: unitFiles,
 		timeout:   timeout,
 		leases:    make(map[propertyLeaseKey]propertyLeaseState),
 		overrides: make(map[UnitIdentity]unitOverrideLease),
-	}, nil
+		phases:    make(map[string]leasePhase),
+		store:     store,
+		blocked:   make(map[string]error),
+	}
+	if err := adapter.loadAndReconcile(ctx); err != nil {
+		return nil, err
+	}
+	return adapter, nil
 }
 
 // Close closes the D-Bus connection. Callers must restore owned properties first.
@@ -162,6 +180,9 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	if err := a.requireOpen("apply"); err != nil {
 		return UnitSnapshot{}, err
 	}
+	if err := a.blocked[identity.Name]; err != nil {
+		return UnitSnapshot{}, err
+	}
 	validated, err := validateAssignments(assignments)
 	if err != nil {
 		return UnitSnapshot{}, err
@@ -180,6 +201,15 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	if err := a.requireManagedUnitFileFootprint("apply", before, currentOverride, trackedOverride); err != nil {
 		return UnitSnapshot{}, err
 	}
+	if trackedOverride && a.phases[identity.Name] == leasePhaseApplied {
+		fingerprints, err := a.captureFootprint(before)
+		if err != nil {
+			return UnitSnapshot{}, err
+		}
+		if !equalFingerprints(fingerprints, currentOverride.fingerprints) {
+			return UnitSnapshot{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed after application")
+		}
+	}
 
 	staged := make(map[propertyLeaseKey]propertyLeaseState, len(validated))
 	for _, assignment := range validated {
@@ -197,17 +227,26 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 			state = resolved
 		} else {
 			state.lease = PropertyLease{Property: assignment.name, Baseline: current, LastApplied: current}
+			state.newLease = true
 		}
 		state.previousApplied = state.lease.LastApplied
 		state.lease.LastApplied = assignment.value
 		state.uncertain = true
 		staged[key] = state
 	}
+	beforeStage := a.snapshotLeaseState()
 	for key, state := range staged {
 		a.leases[key] = state
 	}
 	stagedOverride := extendManagedUnitFileFootprint(identity.Name, currentOverride, validated)
+	stagedOverride.fingerprints = append([]unitFileFingerprint(nil), currentOverride.fingerprints...)
+	stagedOverride.previousFingerprint = append([]unitFileFingerprint(nil), currentOverride.fingerprints...)
 	a.overrides[identity] = stagedOverride
+	a.phases[identity.Name] = leasePhaseApplying
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(beforeStage)
+		return UnitSnapshot{}, err
+	}
 
 	// runtime=true is deliberately fixed here. The public adapter cannot persist unit changes.
 	if err := a.transport.setUnitProperties(callCtx, identity.Name, true, validated); err != nil {
@@ -229,9 +268,15 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	if err := a.verifier.verify(after, validated); err != nil {
 		return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "apply_readback", Unit: identity.Name, Err: err}
 	}
-	for key, state := range staged {
-		state.uncertain = false
-		a.leases[key] = state
+	fingerprints, err := a.captureFootprint(after)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	beforeConfirmation := a.snapshotLeaseState()
+	a.confirmAppliedUnit(identity.Name, fingerprints)
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(beforeConfirmation)
+		return UnitSnapshot{}, err
 	}
 	return after, nil
 }
@@ -242,6 +287,9 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 	leave := a.opGate.Enter()
 	defer leave()
 	if err := a.requireOpen("restore"); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := a.blocked[identity.Name]; err != nil {
 		return RestoreResult{}, err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
@@ -261,6 +309,18 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 	}
 	if err := requireRestorableUnitFileFootprint(identity.Name, currentMutablePaths, override, trackedOverride); err != nil {
 		return RestoreResult{}, err
+	}
+	if trackedOverride && len(currentMutablePaths) > 0 {
+		fingerprints, err := a.unitFiles.fingerprints(currentMutablePaths)
+		if err != nil {
+			return RestoreResult{}, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: err}
+		}
+		if a.phases[identity.Name] == leasePhaseApplying && pathsMatchFootprint(fingerprints, override.managedPaths) {
+			override.fingerprints = fingerprints
+			a.overrides[identity] = override
+		} else if !equalFingerprints(fingerprints, override.fingerprints) {
+			return RestoreResult{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed before restoration")
+		}
 	}
 
 	var result RestoreResult
@@ -304,9 +364,10 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		}
 		for _, key := range restoreKeys {
 			result.Restored = append(result.Restored, key.property)
-			delete(a.leases, key)
 		}
-		delete(a.overrides, identity)
+		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
+			return result, err
+		}
 		sortPropertyNames(result.Restored)
 		return result, nil
 	}
@@ -314,6 +375,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		if len(override.managedPaths) == 0 {
 			return result, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")}
 		}
+		beforeRestore := a.snapshotLeaseState()
 		for _, key := range restoreKeys {
 			state := a.leases[key]
 			state.previousApplied = state.lease.LastApplied
@@ -321,8 +383,22 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 			state.uncertain = true
 			a.leases[key] = state
 		}
+		a.phases[identity.Name] = leasePhaseRestoring
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(beforeRestore)
+			return result, err
+		}
 		if err := a.transport.revertUnitFiles(callCtx, identity.Name); err != nil {
 			return result, errors.Join(classifyTransportError("restore", identity.Name, err), conflictError(identity.Name, result.Conflicts))
+		}
+		beforeReload := a.snapshotLeaseState()
+		a.phases[identity.Name] = leasePhaseReloading
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(beforeReload)
+			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+		}
+		if err := a.transport.reload(callCtx); err != nil {
+			return result, errors.Join(classifyTransportError("restore_reload", identity.Name, err), conflictError(identity.Name, result.Conflicts))
 		}
 		after, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
 		if err != nil {
@@ -343,12 +419,27 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		}
 		for _, key := range restoreKeys {
 			result.Restored = append(result.Restored, key.property)
-			delete(a.leases, key)
 		}
-		delete(a.overrides, identity)
+		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
+			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+		}
 		sortPropertyNames(result.Restored)
 	}
 	return result, conflictError(identity.Name, result.Conflicts)
+}
+
+// RecoveryReport returns a sorted defensive copy of startup lease-reconciliation outcomes.
+func (a *Adapter) RecoveryReport() []LeaseRecoveryOutcome {
+	leave := a.opGate.Enter()
+	defer leave()
+	result := append([]LeaseRecoveryOutcome(nil), a.recovery...)
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Unit == result[right].Unit {
+			return result[left].State < result[right].State
+		}
+		return result[left].Unit < result[right].Unit
+	})
+	return result
 }
 
 // Leases returns a sorted defensive copy of the properties currently owned for a unit lifetime.
@@ -643,6 +734,7 @@ func resolveUncertainOwnership(current uint64, state propertyLeaseState) (bool, 
 	}
 	if current == state.lease.LastApplied {
 		state.uncertain = false
+		state.newLease = false
 		return true, state
 	}
 	if current == state.previousApplied {

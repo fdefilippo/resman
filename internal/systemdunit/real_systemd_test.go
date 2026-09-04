@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -24,8 +25,17 @@ func TestRealSystemdRuntimePropertySurvivesReloadAndRestores(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	adapter, err := New(ctx, defaultCgroupRoot, DefaultCallTimeout)
+	transport, err := openDBusTransport(ctx)
 	if err != nil {
+		t.Fatalf("openDBusTransport() error = %v", err)
+	}
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0700); err != nil {
+		t.Fatalf("Chmod(state directory) error = %v", err)
+	}
+	adapter, err := newAdapter(ctx, transport, newCgroupVerifier(defaultCgroupRoot), localUnitFileInspector{}, newFileLeaseJournalStore(filepath.Join(stateDir, "leases.json")), DefaultCallTimeout)
+	if err != nil {
+		transport.close()
 		t.Fatalf("New() error = %v", err)
 	}
 	defer adapter.Close()

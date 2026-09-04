@@ -8,6 +8,8 @@ import (
 
 const systemdUnitAdapterPath = "internal/systemdunit/transport.go"
 const systemdUnitErrorsPath = "internal/systemdunit/errors.go"
+const systemdUnitJournalPath = "internal/systemdunit/journal.go"
+const systemdUnitFilesPath = "internal/systemdunit/unit_files.go"
 
 func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 	result := checkResult{name: "systemd-unit-mutation-boundary"}
@@ -79,7 +81,13 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, result *check
 		return
 	}
 	switch method {
-	case "WriteFile", "OpenFile", "Create", "CreateTemp", "Mkdir", "MkdirAll", "Remove", "RemoveAll", "Rename", "Truncate", "Write", "WriteString":
-		result.fail(source.path, sourceLine(source, call.Pos()), "%s is forbidden in the read-only cgroup verification package", method)
+	case "OpenFile":
+		if source.path != systemdUnitJournalPath && source.path != systemdUnitFilesPath {
+			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to read-only footprint inspection and the durable lease journal", method)
+		}
+	case "WriteFile", "Create", "CreateTemp", "Mkdir", "MkdirAll", "Remove", "RemoveAll", "Rename", "Truncate", "Write", "WriteString":
+		if source.path != systemdUnitJournalPath {
+			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the durable lease journal inside the systemd adapter", method)
+		}
 	}
 }

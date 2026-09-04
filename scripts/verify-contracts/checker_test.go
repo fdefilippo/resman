@@ -642,6 +642,22 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			content:    `package systemdunit; import "os"; func apply(){ _ = os.WriteFile("cpu.weight", nil, 0600) }`,
 			wantFailed: true,
 		},
+		{
+			name:    "durable lease journal write",
+			path:    systemdUnitJournalPath,
+			content: `package systemdunit; import "os"; func persist(path string){ _ = os.WriteFile(path, nil, 0600) }`,
+		},
+		{
+			name:    "read-only unit footprint open",
+			path:    systemdUnitFilesPath,
+			content: `package systemdunit; import "os"; func inspect(path string){ file, _ := os.OpenFile(path, os.O_RDONLY, 0); if file != nil { _ = file.Close() } }`,
+		},
+		{
+			name:       "unit footprint writer",
+			path:       systemdUnitFilesPath,
+			content:    `package systemdunit; import "os"; func mutate(path string){ _ = os.WriteFile(path, nil, 0600) }`,
+			wantFailed: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

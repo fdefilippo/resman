@@ -2,6 +2,7 @@ package systemdunit
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -26,22 +27,27 @@ type fakeSetCall struct {
 }
 
 type fakeUnitTransport struct {
-	units        map[string]*fakeUnitState
-	setCalls     []fakeSetCall
-	listErr      error
-	unitErr      error
-	sliceErr     error
-	setErr       error
-	revertErr    error
-	ignoreWrites bool
-	blockList    bool
-	unitReads    int
-	onUnitRead   func(*fakeUnitTransport, string, int)
-	onSet        func(*fakeUnitTransport, string, []PropertyAssignment)
-	onRevert     func(*fakeUnitTransport, string)
-	revertCalls  []string
-	diskPaths    map[string][]string
-	closed       bool
+	units            map[string]*fakeUnitState
+	setCalls         []fakeSetCall
+	listErr          error
+	unitErr          error
+	sliceErr         error
+	setErr           error
+	revertErr        error
+	reloadErr        error
+	ignoreWrites     bool
+	blockList        bool
+	unitReads        int
+	onUnitRead       func(*fakeUnitTransport, string, int)
+	onSet            func(*fakeUnitTransport, string, []PropertyAssignment)
+	onRevert         func(*fakeUnitTransport, string)
+	onReload         func(*fakeUnitTransport)
+	skipRevertEffect bool
+	revertCalls      []string
+	reloadCalls      int
+	diskPaths        map[string][]string
+	fingerprintSalt  map[string]string
+	closed           bool
 }
 
 func (f *fakeUnitTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {
@@ -107,8 +113,18 @@ func (f *fakeUnitTransport) revertUnitFiles(_ context.Context, unit string) erro
 	if f.revertErr != nil {
 		return f.revertErr
 	}
-	f.applyRevert(unit)
+	if !f.skipRevertEffect {
+		f.applyRevert(unit)
+	}
 	return nil
+}
+
+func (f *fakeUnitTransport) reload(context.Context) error {
+	f.reloadCalls++
+	if f.onReload != nil {
+		f.onReload(f)
+	}
+	return f.reloadErr
 }
 
 func (f *fakeUnitTransport) applyAssignments(unit string, assignments []PropertyAssignment) {
@@ -131,7 +147,13 @@ func (f *fakeUnitTransport) applyAssignments(unit string, assignments []Property
 }
 
 func (f *fakeUnitTransport) applyRevert(unit string) {
-	state := f.units[unit]
+	state, ok := f.units[unit]
+	if !ok {
+		if f.diskPaths != nil {
+			f.diskPaths[unit] = nil
+		}
+		return
+	}
 	for property := range approvedScalarProperties {
 		state.slice[string(property)] = uint64(SystemdUnset)
 	}
@@ -151,6 +173,41 @@ func (f *fakeUnitTransport) mutablePaths(unit string) ([]string, error) {
 	fragmentPath, _ := state.unit["FragmentPath"].(string)
 	dropInPaths, _ := state.unit["DropInPaths"].([]string)
 	return mutableUnitFilePaths(unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: dropInPaths}), nil
+}
+
+func (f *fakeUnitTransport) fingerprints(paths []string) ([]unitFileFingerprint, error) {
+	result := make([]unitFileFingerprint, 0, len(paths))
+	for _, path := range paths {
+		digest := sha256.Sum256([]byte(path + f.fingerprintSalt[path]))
+		result = append(result, unitFileFingerprint{path: path, digest: digest})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].path < result[right].path })
+	return result, nil
+}
+
+type memoryLeaseJournalStore struct {
+	journal   durableLeaseJournal
+	loadErr   error
+	saveErr   error
+	saveCalls int
+	failSave  int
+}
+
+func newMemoryLeaseJournalStore() *memoryLeaseJournalStore {
+	return &memoryLeaseJournalStore{journal: durableLeaseJournal{Version: leaseJournalVersion}}
+}
+
+func (s *memoryLeaseJournalStore) Load() (durableLeaseJournal, error) {
+	return s.journal, s.loadErr
+}
+
+func (s *memoryLeaseJournalStore) Save(journal durableLeaseJournal) error {
+	s.saveCalls++
+	if s.saveErr != nil && (s.failSave == 0 || s.saveCalls == s.failSave) {
+		return s.saveErr
+	}
+	s.journal = journal
+	return nil
 }
 
 type fakeKernelVerifier struct {
@@ -427,6 +484,306 @@ func TestRepeatedApplyPreservesTheFirstBaseline(t *testing.T) {
 	}
 }
 
+func TestApplyPersistsWriteAheadOwnershipBeforeTheFirstMutation(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	store.saveErr = errors.New("storage unavailable")
+	store.failSave = 1
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, adapter, 1001)
+
+	_, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)})
+	assertAdapterReason(t, err, ReasonLeaseStore)
+	if len(transport.setCalls) != 0 {
+		t.Fatalf("SetUnitProperties calls = %d, want zero before durable ownership", len(transport.setCalls))
+	}
+	if len(adapter.Leases(identity)) != 0 {
+		t.Fatal("failed durable staging became visible in memory")
+	}
+}
+
+func TestStartupResolvesAnApplyThatSucceededBeforeConfirmationPersistence(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	store.saveErr = errors.New("confirmation persistence unavailable")
+	store.failSave = 2
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+
+	_, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)})
+	assertAdapterReason(t, err, ReasonLeaseStore)
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(321) {
+		t.Fatalf("CPUWeight = %v, want dispatched value", got)
+	}
+	if store.journal.Units[0].Phase != leasePhaseApplying {
+		t.Fatalf("durable phase = %q, want uncertain apply", store.journal.Units[0].Phase)
+	}
+	setCalls := len(transport.setCalls)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if got := restarted.Leases(identity); len(got) != 1 || got[0].LastApplied != 321 {
+		t.Fatalf("recovered leases = %+v", got)
+	}
+	if len(transport.setCalls) != setCalls {
+		t.Fatal("startup repeated an already dispatched Apply")
+	}
+	if store.journal.Units[0].Phase != leasePhaseApplied {
+		t.Fatalf("recovered durable phase = %q, want applied", store.journal.Units[0].Phase)
+	}
+}
+
+func TestStartupDiscardsAnApplyWhoseMutationWasNeverDispatched(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	transport.setErr = errors.New("connection failed before dispatch")
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err == nil {
+		t.Fatal("Apply() error = nil")
+	}
+	transport.setErr = nil
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if got := restarted.Leases(identity); len(got) != 0 {
+		t.Fatalf("undispatched leases = %+v, want none", got)
+	}
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("undispatched durable record remained: %+v", store.journal)
+	}
+}
+
+func TestRestorePersistsIntentBeforeRevertUnitFiles(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, adapter, 1001)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	store.saveErr = errors.New("restore staging unavailable")
+	store.failSave = 3
+	_, err := adapter.Restore(context.Background(), identity)
+	assertAdapterReason(t, err, ReasonLeaseStore)
+	if len(transport.revertCalls) != 0 {
+		t.Fatalf("RevertUnitFiles calls = %v, want none before durable restore intent", transport.revertCalls)
+	}
+	if store.journal.Units[0].Phase != leasePhaseApplied {
+		t.Fatalf("durable phase = %q, want applied", store.journal.Units[0].Phase)
+	}
+}
+
+func TestStartupReclaimsConfirmedLeaseWithoutRewritingTheUnit(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	setCalls := len(transport.setCalls)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if got := restarted.Leases(identity); len(got) != 1 || got[0].LastApplied != 321 {
+		t.Fatalf("reclaimed leases = %+v", got)
+	}
+	if len(transport.setCalls) != setCalls {
+		t.Fatalf("startup rewrote the unit: calls = %d, want %d", len(transport.setCalls), setCalls)
+	}
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryReclaimed}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+}
+
+func TestStartupRebindsAnExactOrphanedFootprintToARecreatedUnit(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	oldIdentity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), oldIdentity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	transport.units[oldIdentity.Name].unit["InvocationID"] = invocationBytes(9001)
+	transport.units[oldIdentity.Name].slice["ControlGroupId"] = uint64(9002)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	newIdentity := identityFor(t, restarted, 1001)
+	if newIdentity == oldIdentity {
+		t.Fatal("test did not recreate the unit identity")
+	}
+	if got := restarted.Leases(newIdentity); len(got) != 1 || got[0].LastApplied != 321 {
+		t.Fatalf("rebound leases = %+v", got)
+	}
+	want := []LeaseRecoveryOutcome{{Unit: oldIdentity.Name, State: LeaseRecoveryOrphaned}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+	if _, err := restarted.Restore(context.Background(), newIdentity); err != nil {
+		t.Fatalf("Restore() after identity rebound error = %v", err)
+	}
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("durable lease remained after restoration: %+v", store.journal)
+	}
+}
+
+func TestStartupCompletesCrashBetweenRevertUnitFilesAndReload(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	transport.skipRevertEffect = true
+	transport.onRevert = func(f *fakeUnitTransport, unit string) {
+		f.units[unit].unit["DropInPaths"] = []string{}
+	}
+	transport.onReload = func(f *fakeUnitTransport) {
+		f.units[identity.Name].slice[string(PropertyCPUWeight)] = uint64(SystemdUnset)
+	}
+	store.saveErr = errors.New("simulated crash after RevertUnitFiles")
+	store.failSave = 4
+	if _, err := first.Restore(context.Background(), identity); err == nil {
+		t.Fatal("Restore() error = nil, want midpoint persistence failure")
+	}
+	if store.journal.Units[0].Phase != leasePhaseRestoring {
+		t.Fatalf("durable phase = %q, want %q", store.journal.Units[0].Phase, leasePhaseRestoring)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(321) {
+		t.Fatalf("pre-reload CPUWeight = %v, want last applied value", got)
+	}
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("midpoint lease remained after startup recovery: %+v", store.journal)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(SystemdUnset) {
+		t.Fatalf("recovered CPUWeight = %v, want baseline", got)
+	}
+	if got := restarted.RecoveryReport(); len(got) != 1 || got[0].State != LeaseRecoveryReclaimed {
+		t.Fatalf("RecoveryReport() = %+v", got)
+	}
+}
+
+func TestStartupCompletesRestoreWhoseFinalJournalRemovalFailed(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	store.saveErr = errors.New("final journal removal unavailable")
+	store.failSave = 5
+	if _, err := first.Restore(context.Background(), identity); err == nil {
+		t.Fatal("Restore() error = nil, want final persistence failure")
+	}
+	if store.journal.Units[0].Phase != leasePhaseReloading {
+		t.Fatalf("durable phase = %q, want reloading", store.journal.Units[0].Phase)
+	}
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(SystemdUnset) {
+		t.Fatalf("restored CPUWeight = %v, want baseline", got)
+	}
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("completed restore remained durable: %+v", store.journal)
+	}
+	if got := restarted.RecoveryReport(); len(got) != 1 || got[0].State != LeaseRecoveryReclaimed {
+		t.Fatalf("RecoveryReport() = %+v", got)
+	}
+}
+
+func TestAdapterConstructionFailsClosedWhenTheJournalCannotBeLoaded(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	store.loadErr = errors.New("corrupt journal")
+	_, err := newAdapter(context.Background(), transport, &fakeKernelVerifier{}, transport, store, time.Second)
+	assertAdapterReason(t, err, ReasonLeaseStore)
+	if len(transport.setCalls) != 0 || len(transport.revertCalls) != 0 {
+		t.Fatalf("invalid journal caused mutation: set=%d revert=%d", len(transport.setCalls), len(transport.revertCalls))
+	}
+}
+
+func TestStartupCleansAnExactRecordedFootprintForAnInactiveUnitWithoutLoadingIt(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	paths := append([]string(nil), transport.units[identity.Name].unit["DropInPaths"].([]string)...)
+	transport.diskPaths = map[string][]string{identity.Name: paths}
+	delete(transport.units, identity.Name)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	if len(transport.revertCalls) != 1 || transport.revertCalls[0] != identity.Name {
+		t.Fatalf("inactive cleanup calls = %v", transport.revertCalls)
+	}
+	if len(store.journal.Units) != 0 {
+		t.Fatalf("inactive lease remained after cleanup: %+v", store.journal)
+	}
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryInactive}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+}
+
+func TestStartupReportsExactInactiveLeaseAsPendingWhenCleanupCannotComplete(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	paths := append([]string(nil), transport.units[identity.Name].unit["DropInPaths"].([]string)...)
+	transport.diskPaths = map[string][]string{identity.Name: paths}
+	delete(transport.units, identity.Name)
+	transport.revertErr = errors.New("system bus temporarily unavailable")
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryPending}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+	if len(store.journal.Units) != 1 {
+		t.Fatal("pending inactive lease was deleted")
+	}
+	if _, err := restarted.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 400)}); err == nil {
+		t.Fatal("Apply() accepted a unit with pending inactive reconciliation")
+	}
+}
+
+func TestStartupRetainsDivergentRecordedStateAsAnExternalConflict(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	path := managedRuntimeDropInPath(identity.Name, PropertyCPUWeight)
+	transport.fingerprintSalt = map[string]string{path: "externally-rewritten"}
+	setCalls := len(transport.setCalls)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryConflict}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+	if _, err := restarted.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 400)}); err == nil {
+		t.Fatal("Apply() accepted a conflicted durable footprint")
+	}
+	if len(transport.setCalls) != setCalls || len(transport.revertCalls) != 0 {
+		t.Fatalf("conflict caused mutation: set=%d revert=%v", len(transport.setCalls), transport.revertCalls)
+	}
+	if len(store.journal.Units) != 1 {
+		t.Fatal("conflicted durable record was deleted")
+	}
+}
+
 func TestUnitRecreationFailsClosedBeforeMutation(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
@@ -470,7 +827,7 @@ func TestMalformedRepliesAndTransportFailuresAreTyped(t *testing.T) {
 func TestCallsAreBoundedByAdapterTimeout(t *testing.T) {
 	transport := newFakeUnitTransport()
 	transport.blockList = true
-	adapter, err := newAdapter(transport, &fakeKernelVerifier{}, transport, 10*time.Millisecond)
+	adapter, err := newAdapter(context.Background(), transport, &fakeKernelVerifier{}, transport, newMemoryLeaseJournalStore(), 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("newAdapter() error = %v", err)
 	}
@@ -507,7 +864,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "Close", "Discover", "Leases", "Restore"}
+	want := []string{"Apply", "Close", "Discover", "Leases", "RecoveryReport", "Restore"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}
@@ -583,11 +940,16 @@ func slicesContain(values []string, want string) bool {
 
 func mustTestAdapter(t *testing.T, transport unitTransport, verifier kernelVerifier) *Adapter {
 	t.Helper()
+	return mustTestAdapterWithStore(t, transport, verifier, newMemoryLeaseJournalStore())
+}
+
+func mustTestAdapterWithStore(t *testing.T, transport unitTransport, verifier kernelVerifier, store leaseJournalStore) *Adapter {
+	t.Helper()
 	inspector, ok := transport.(unitFileInspector)
 	if !ok {
 		t.Fatal("test transport does not implement unitFileInspector")
 	}
-	adapter, err := newAdapter(transport, verifier, inspector, time.Second)
+	adapter, err := newAdapter(context.Background(), transport, verifier, inspector, store, time.Second)
 	if err != nil {
 		t.Fatalf("newAdapter() error = %v", err)
 	}

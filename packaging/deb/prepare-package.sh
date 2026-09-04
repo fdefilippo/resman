@@ -75,6 +75,8 @@ install -m 0644 "$project_dir/docs/UPGRADING.md" \
     "$package_dir/usr/share/doc/resman/UPGRADING.md"
 install -m 0644 "$project_dir/docs/LIMIT-HOOKS.md" \
     "$package_dir/usr/share/doc/resman/LIMIT-HOOKS.md"
+install -m 0644 "$project_dir/docs/SYSTEMD-PROPERTY-LEASES.md" \
+    "$package_dir/usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md"
 install -m 0644 "$script_dir/copyright" "$package_dir/usr/share/doc/resman/copyright"
 install -m 0644 "$project_dir/docs/alerting-rules.yml" \
     "$package_dir/usr/share/doc/resman/alerting-rules.yml"

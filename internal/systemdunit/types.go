@@ -178,3 +178,20 @@ type RestoreResult struct {
 	Restored  []PropertyName
 	Conflicts []PropertyConflict
 }
+
+// LeaseRecoveryState is a bounded startup-reconciliation outcome.
+type LeaseRecoveryState string
+
+const (
+	LeaseRecoveryReclaimed LeaseRecoveryState = "reclaimed"
+	LeaseRecoveryOrphaned  LeaseRecoveryState = "orphaned_resman_footprint"
+	LeaseRecoveryInactive  LeaseRecoveryState = "inactive_unit_cleaned"
+	LeaseRecoveryPending   LeaseRecoveryState = "pending_inactive_unit"
+	LeaseRecoveryConflict  LeaseRecoveryState = "external_property_conflict"
+)
+
+// LeaseRecoveryOutcome describes one durable unit lease after startup reconciliation.
+type LeaseRecoveryOutcome struct {
+	Unit  string
+	State LeaseRecoveryState
+}

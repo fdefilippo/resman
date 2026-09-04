@@ -22,6 +22,7 @@ type unitTransport interface {
 	sliceProperties(context.Context, string) (map[string]any, error)
 	setUnitProperties(context.Context, string, bool, []PropertyAssignment) error
 	revertUnitFiles(context.Context, string) error
+	reload(context.Context) error
 	close()
 }
 
@@ -104,11 +105,10 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 }
 
 func (t *dbusTransport) revertUnitFiles(ctx context.Context, unit string) error {
-	if err := t.revertObj.CallWithContext(ctx, "org.freedesktop.systemd1.Manager.RevertUnitFiles", 0, []string{unit}).Err; err != nil {
-		return err
-	}
-	return t.conn.ReloadContext(ctx)
+	return t.revertObj.CallWithContext(ctx, "org.freedesktop.systemd1.Manager.RevertUnitFiles", 0, []string{unit}).Err
 }
+
+func (t *dbusTransport) reload(ctx context.Context) error { return t.conn.ReloadContext(ctx) }
 
 func (t *dbusTransport) close() {
 	t.cancel()
