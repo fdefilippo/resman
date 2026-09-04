@@ -565,6 +565,59 @@ func TestEnglishLanguageCheckerScansPackagingSyslog(t *testing.T) {
 	}
 }
 
+func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		content    string
+		wantFailed bool
+	}{
+		{
+			name:    "authoritative adapter runtime mutation",
+			path:    systemdUnitAdapterPath,
+			content: `package systemdunit; type connection struct{}; func (connection) SetUnitPropertiesContext(...any){}; func apply(c connection){ c.SetUnitPropertiesContext(nil, "user.slice", true) }`,
+		},
+		{
+			name:       "raw systemd-owned cgroup path",
+			path:       "state/apply.go",
+			content:    `package state; const target = "/sys/fs/cgroup/user.slice/user-1000.slice/cpu.weight"`,
+			wantFailed: true,
+		},
+		{
+			name:       "direct systemd mutation outside adapter",
+			path:       "state/apply.go",
+			content:    `package state; type connection struct{}; func (connection) SetUnitPropertiesContext(...any){}; func apply(c connection){ c.SetUnitPropertiesContext(nil, "unit", true) }`,
+			wantFailed: true,
+		},
+		{
+			name:       "general unit lifecycle method",
+			path:       systemdUnitAdapterPath,
+			content:    `package systemdunit; type connection struct{}; func (connection) StartUnitContext(...any){}; func apply(c connection){ c.StartUnitContext(nil, "unit") }`,
+			wantFailed: true,
+		},
+		{
+			name:       "cgroup write in adapter",
+			path:       "internal/systemdunit/kernel.go",
+			content:    `package systemdunit; import "os"; func apply(){ _ = os.WriteFile("cpu.weight", nil, 0600) }`,
+			wantFailed: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := newCheckerFixture(t)
+			writeFixture(t, root, test.path, test.content)
+			sources, parseFindings := loadGoFiles(root)
+			if len(parseFindings) != 0 {
+				t.Fatalf("parse findings: %v", parseFindings)
+			}
+			result := checkSystemdUnitMutationBoundary(sources)
+			if got := len(result.findings) > 0; got != test.wantFailed {
+				t.Fatalf("failed = %v, want %v; findings=%v", got, test.wantFailed, result.findings)
+			}
+		})
+	}
+}
+
 func newCheckerFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

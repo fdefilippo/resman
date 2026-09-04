@@ -3,7 +3,9 @@ module github.com/fdefilippo/resman
 go 1.25.7
 
 require (
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/mattn/go-sqlite3 v1.14.48
 	github.com/modelcontextprotocol/go-sdk v1.7.0

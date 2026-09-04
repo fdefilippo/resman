@@ -73,6 +73,7 @@ func main() {
 		checkLockBoundaryInventory(root, goFiles),
 		checkCrossPackageMapKeys(root, goFiles),
 		checkMCPContracts(root, goFiles),
+		checkSystemdUnitMutationBoundary(goFiles),
 		checkShippedAssets(root, goFiles),
 		checkEnglishLanguage(root, goFiles),
 		checkPrometheusAssets(root),
