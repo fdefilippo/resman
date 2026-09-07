@@ -62,11 +62,97 @@ under the controller's private umask. The separate Go test
 the state boundary and positive control; manually invoking a refresh there does not
 prove that the application loop schedules it during blackout.
 
-The release matrix still needs the remaining nq6.9 acceptance, including SSH,
-synchronized proportional measurements and same-run oracle, root responsiveness,
-rootless/nspawn placements, actual block-I/O behavior, external conflicts, interrupted
-revert/reload recovery, hot topology changes, and the non-systemd backend's own kernel
-evidence. Track completion and findings in Beads, not by reinterpreting this pre-gate.
+The release matrix still needs complete current-revision nq6.9 acceptance. The
+controlled proportional method and its earlier campaign have independent PASS;
+that does not extend to the new producers described below or replace a complete
+current-revision final matrix. Coverage, recovery, reconciliation, package and
+non-systemd producers are implemented and locally tested, but their field acceptance
+has not yet been established by this harness change. Weighted-I/O delivery is a
+different gap: its safe independent oracle is not implemented, so that required
+check always reports BLOCKED. There is no overall nq6.9 PASS yet. Track completion
+and findings in Beads, not by reinterpreting a supported subset as the final gate.
+
+## Additional native rows: implementation is not field acceptance
+
+The following commands collect separate revision-bound rows, sequentially, without
+changing the installed service configuration or installing a package:
+
+```bash
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-coverage root@terra
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-recovery root@terra
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-reconciliation root@terra
+```
+
+`systemd-native-coverage` requires root and non-root localhost SSH authentication
+and trusted host keys to work already. It probes both PTY modes, child units,
+runtime-owned descendants and kernel-backed I/O. It never installs SSH credentials,
+edits PAM, downloads an image or changes the block-device scheduler. The nspawn root
+must already exist at `/var/lib/machines/nq6c`; runs use volatile overlays. The
+rootless test requires the preloaded rootful `docker.io/library/oraclelinux:9`
+image, transferred into isolated run-owned rootless storage, rather than pulled
+from a registry. Unavailable prerequisites remain explicit BLOCKED results.
+
+The coverage method `weighted_io` currently **always reports BLOCKED**. A safe,
+independent weighted-I/O contention oracle has not been implemented or approved.
+This is not an automatic BFQ availability test, and an existing BFQ device would
+not remove that block. Neither an `IOWeight` readback nor successful hard-limit
+measurements establish weighted-I/O delivery.
+
+`systemd-native-recovery` executes a retained opt-in adapter test binary. It checks
+real PAM ownership, crash between revert and reload, automatic recovery, persistent
+and runtime operator conflicts, recreated units and exact cleanup. Its evidence
+class is an adapter probe, not the daemon or installed package.
+
+`systemd-native-reconciliation` uses CPU-only policy with genuine PAM sessions.
+It verifies composite reload and successful acknowledgement against live weights,
+SQLite intervals and durable journal generations; real logout/login; concurrent
+reload and sibling admission; and bounded cardinality refusal. At most sixteen
+transient topology-probe slices are created under previously unused UID names;
+no user accounts are created. Existing services and nonempty unowned slices are
+not eligible for cleanup.
+
+CPU hotplug is opt-in, not an implied consequence of running reconciliation:
+
+```bash
+# Run only after explicit approval for CPU hotplug on this disposable host.
+REAL_KERNEL_ALLOW_CPU_HOTPLUG=1 GO_BIN=/usr/local/go/bin/go \
+  test/functional/real-kernel/remote.sh systemd-native-reconciliation root@terra
+```
+
+Without that flag, the other proofs remain retained and `online-cpu-change` is
+BLOCKED. Only values `0` and `1` are accepted. The fixture records the requested
+intent, changes only the highest online nonzero CPU, and confirms restoration of
+the original online set on success or failure. This is a laboratory topology probe,
+not a new ResMan affinity or placement feature.
+
+## Package and non-systemd rows
+
+The package row runs the installed `/usr/bin/resman` only after its identity and
+bytes match the supplied RPM payload:
+
+```bash
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-2.el9.x86_64.rpm \
+GO_BIN=/usr/local/go/bin/go \
+  test/functional/real-kernel/remote.sh native-package-acceptance root@terra
+```
+
+The example uses the next identity after the produced `1.33.0-1`. That new RPM has
+not yet been built as part of this harness change: increment RELEASE before its
+build and install it only through an explicitly approved operation. The row neither
+builds nor installs packages. It uses shipped RPM defaults, proves the 750-point
+rejection, preserves rejected schema 5, observes schema 6 with real rows, and runs
+the native lifecycle using isolated configuration. A source-binary PASS cannot
+satisfy this package row.
+
+```bash
+SMOLVM_SCENARIO=non-systemd-migration test/functional/smolvm/run.sh run
+```
+
+This required row proves legacy ingress and exact live restoration under a private
+PID/mount namespace with non-systemd PID 1 inside disposable SmolVM. It does not
+claim a physical non-systemd boot. Missing guest capabilities produce BLOCKED.
+The final catalog also retains separate SmolVM `missing-io-startup` and
+`mcp-filter-reload` rows and real-host `psi-refresh-neutrality` evidence.
 
 ## Simultaneous flat proportional scenario
 

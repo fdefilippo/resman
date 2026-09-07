@@ -89,28 +89,16 @@ safe_remove_scratch() {
 cleanup() {
     local status=$?
     local cleanup_status=PASS
-    local outcome
     trap - EXIT INT TERM
     set +e
     if ! cleanup_resources; then
         cleanup_status=FAIL
-        if [[ $status -eq 0 ]]; then
-            status=1
-        fi
-    fi
-    [[ -n $evidence_dir ]] && printf 'cleanup=%s\n' "$cleanup_status" \
-        >>"$evidence_dir/environment.txt"
-    if [[ -n $evidence_dir && $status -ne 0 ]]; then
-        outcome=FAIL
-        [[ $status -eq 77 ]] && outcome=BLOCKED
-        printf '%s\n' "$outcome" >"$evidence_dir/result"
-        printf 'result=%s\nexit_code=%d\n' "$outcome" "$status" \
-            >>"$evidence_dir/environment.txt"
-    elif [[ -n $evidence_dir && ! -f $evidence_dir/result ]]; then
         status=1
-        printf 'FAIL\n' >"$evidence_dir/result"
-        printf 'result=FAIL\ndetail=missing final guest result\nexit_code=1\n' \
-            >>"$evidence_dir/environment.txt"
+    fi
+    if [[ -n $evidence_dir ]]; then
+        [[ $status -ne 0 || -f $evidence_dir/result ]] || status=1
+        python3 "$script_dir/guest/evidence-metadata.py" finalize "$evidence_dir" "$cleanup_status" "$status" \
+            || status=1
     fi
     exit "$status"
 }
@@ -196,6 +184,7 @@ initialize_evidence() {
         printf 'requested_memory_mib=%s\n' "$memory_mib"
         printf 'requested_psi_required=%s\n' "$require_psi"
         printf 'requested_scenario=%s\n' "$scenario"
+        printf 'source_revision=%s\n' "$(git -C "$repo_root" rev-parse HEAD)"
         printf 'network=disabled\n'
         printf 'host_ports=none\n'
     } >"$evidence_dir/environment.txt"
@@ -211,11 +200,15 @@ run_harness() {
 		|| $scenario == cpu-without-cpuset || $scenario == missing-io-startup \
 		|| $scenario == mcp-filter-reload || $scenario == container-runtime \
 		|| $scenario == block-iops || $scenario == psi-refresh-neutrality \
-		|| $scenario == limit-hook-executor || $scenario == host-cpu-sampling-cadence ]] \
+		|| $scenario == limit-hook-executor || $scenario == host-cpu-sampling-cadence \
+		|| $scenario == non-systemd-migration ]] \
 		|| blocked "SMOLVM_SCENARIO must name a documented functional scenario"
 
     local smolvm_version base_image_id base_image_digest fixture_image_id
-    local fixture_hash fixture_reused image_id container_image_id guest_status
+    local fixture_hash fixture_reused image_id container_image_id guest_status source_revision
+    source_revision=$(git -C "$repo_root" rev-parse HEAD)
+    [[ -z $(git -C "$repo_root" status --porcelain --untracked-files=no) ]] \
+        || blocked "source tree must be committed before a revision-bound SmolVM build"
     scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-smolvm.XXXXXX")
     image_archive=$scratch_dir/resman-functional.tar
     image_ref=localhost/resman-functional:$run_id
@@ -299,8 +292,8 @@ run_harness() {
         /opt/resman-functional/wait-systemd.sh
 
     set +e
-	run_kvm machine exec --stream --name "$vm_name" --timeout 3m -- \
-		/opt/resman-functional/run-functional.sh "$run_id" "$cpus" "$memory_mib" "$require_psi" "$scenario"
+	run_kvm machine exec --stream --name "$vm_name" --timeout 4m -- \
+		/opt/resman-functional/run-functional.sh "$run_id" "$cpus" "$memory_mib" "$require_psi" "$scenario" "$source_revision"
     guest_status=$?
     set -e
 
@@ -318,14 +311,12 @@ run_harness() {
     fi
 
     if ! cleanup_resources; then
-        printf 'FAIL\n' >"$evidence_dir/result"
-        printf 'cleanup=FAIL\nresult=FAIL\ndetail=deterministic host cleanup failed\nexit_code=1\n' \
-            >>"$evidence_dir/environment.txt"
+        python3 "$script_dir/guest/evidence-metadata.py" finalize "$evidence_dir" FAIL 1
         trap - EXIT INT TERM
         echo "FAIL: deterministic cleanup failed; evidence: $evidence_dir" >&2
         return 1
     fi
-    printf 'cleanup=PASS\n' >>"$evidence_dir/environment.txt"
+    python3 "$script_dir/guest/evidence-metadata.py" finalize "$evidence_dir" PASS 0
     trap - EXIT INT TERM
 
     echo "PASS: SmolVM functional harness"

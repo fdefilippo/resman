@@ -83,6 +83,16 @@ run_remote_scenario() {
 	return "$status"
 }
 
+write_hotplug_opt_in() {
+	local directory=$1 intent=$2
+	case "$intent" in
+		0) ;;
+		1) printf 'yes\n' >"$directory/allow-cpu-hotplug" ;;
+		*) echo "REAL_KERNEL_ALLOW_CPU_HOTPLUG must be exactly 0 or 1" >&2; return 2 ;;
+	esac
+	printf '%s\n' "$intent" >"$directory/hotplug-intent"
+}
+
 if [[ ${RESMAN_REAL_KERNEL_REMOTE_LIBRARY_ONLY:-0} == 1 ]]; then
 	if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
 		return 0
@@ -100,6 +110,8 @@ scenario_family=source
 case "$scenario" in
 	psi-refresh-neutrality|block-io-all-dimensions|cpu-points-proportional|systemd-ownership-preservation|systemd-native-lifecycle) ;;
 	systemd-native-proportional|systemd-native-reference|systemd-native-reference-pinned|systemd-native-reference-pinned-six) ;;
+	systemd-native-coverage|systemd-native-recovery|systemd-native-reconciliation) ;;
+	native-package-acceptance) ;;
 	service-start-stop|service-reload-lifecycle|service-fatal-config) scenario_family=package ;;
 	prometheus-scrape|mcp-https-endtoend) scenario_family=package ;;
 	prometheus-user-series-lifecycle) scenario_family=package ;;
@@ -143,12 +155,29 @@ if [[ $scenario_family == package ]]; then
 	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/run.sh"
 	install -m 0755 "$repo_root/docs/generate-tls-certs.sh" "$bundle_dir/generate-tls-certs.sh"
 else
-	if [[ $scenario == systemd-native-lifecycle || $scenario == systemd-native-proportional || $scenario == systemd-native-reference || $scenario == systemd-native-reference-pinned || $scenario == systemd-native-reference-pinned-six ]]; then
+	if [[ $scenario == systemd-native-* || $scenario == native-package-acceptance ]]; then
 		install -m 0755 "$script_dir/native-run.sh" "$bundle_dir/run.sh"
 		install -m 0644 "$script_dir/native_gate.py" "$script_dir/native-workload.py" "$bundle_dir/"
 		install -m 0644 "$script_dir/native_proportional.py" "$bundle_dir/"
 		install -m 0644 "$script_dir/native_reference.py" "$bundle_dir/"
 		install -m 0644 "$script_dir/native_placement.py" "$bundle_dir/"
+		install -m 0644 "$script_dir/native_coverage.py" "$bundle_dir/"
+		if [[ $scenario == systemd-native-reconciliation ]]; then
+			install -m 0644 "$script_dir/native_reconciliation.py" "$bundle_dir/"
+			write_hotplug_opt_in "$bundle_dir" "${REAL_KERNEL_ALLOW_CPU_HOTPLUG:-0}"
+		fi
+		if [[ $scenario == systemd-native-recovery ]]; then
+			install -m 0644 "$script_dir/native_recovery.py" "$bundle_dir/"
+			(cd "$repo_root" && CGO_ENABLED=1 "$go_bin" test -c -o "$bundle_dir/systemdunit-real.test" ./internal/systemdunit)
+		fi
+		if [[ $scenario == native-package-acceptance ]]; then
+			[[ -n ${REAL_KERNEL_PACKAGE:-} && -f $REAL_KERNEL_PACKAGE && ! -L $REAL_KERNEL_PACKAGE ]] || {
+				echo "native-package-acceptance requires REAL_KERNEL_PACKAGE naming a regular RPM file" >&2
+				exit 77
+			}
+			install -m 0644 "$script_dir/native_package.py" "$bundle_dir/"
+			install -m 0644 "$REAL_KERNEL_PACKAGE" "$bundle_dir/package.rpm"
+		fi
 		install -m 0600 "$repo_root/config/resman.conf.example" "$bundle_dir/resman.conf.example"
 	elif [[ $scenario == cpu-points-proportional ]]; then
 		install -m 0755 "$script_dir/cpu-points-run.sh" "$bundle_dir/run.sh"
@@ -156,13 +185,16 @@ else
 		install -m 0755 "$script_dir/ownership-run.sh" "$bundle_dir/run.sh"
 	else
 		install -m 0755 "$script_dir/run.sh" "$bundle_dir/run.sh"
+		install -m 0644 "$script_dir/native_psi_evidence.py" "$bundle_dir/"
 		install -m 0755 "$script_dir/workload.py" "$bundle_dir/workload.py"
 	fi
 	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/service-run.sh"
-	(
-		cd "$repo_root"
-		CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
-	)
+	if [[ $scenario != native-package-acceptance ]]; then
+		(
+			cd "$repo_root"
+			CGO_ENABLED=1 "$go_bin" build -trimpath -o "$bundle_dir/resman" ./main.go
+		)
+	fi
 fi
 install -m 0755 "$script_dir/remote-control.sh" "$bundle_dir/control.sh"
 

@@ -4,7 +4,7 @@ ENV container=smolvm
 
 RUN dnf install -y oracle-epel-release-el9 \
  && dnf --enablerepo=ol9_developer_EPEL install -y \
-      ca-certificates curl podman procps-ng shadow-utils sqlite stress sudo systemd util-linux \
+      ca-certificates curl podman procps-ng python3 shadow-utils sqlite stress sudo systemd util-linux \
  && dnf clean all \
  && rm -rf /var/cache/dnf \
  && useradd --create-home --shell /bin/bash resman-cpu \

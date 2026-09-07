@@ -37,6 +37,7 @@ esac
 
 mkdir -p "$evidence_dir"
 chmod 0700 "$evidence_dir"
+printf 'scenario=%s\nsource_revision=%s\nkernel=%s\n' "$scenario" "$source_revision" "$(uname -r)" >"$evidence_dir/environment.txt"
 exec > >(tee -a "$evidence_dir/runner.log") 2>&1
 
 stop_children() {
@@ -98,6 +99,7 @@ finish() {
 	fi
 	if [[ $cleanup_status != PASS ]]; then
 		status=1
+		result=FAIL
 		detail="dedicated cgroup cleanup failed"
 	fi
 	if [[ $result == PASS && $status -ne 0 ]]; then
@@ -235,7 +237,7 @@ start_resman() {
 }
 
 preflight() {
-	local os_name deadline
+	local os_name
 	[[ $(id -u) -eq 0 ]] || fail "real-kernel scenarios must run as root"
 	[[ -x $binary ]] || fail "the staged resman binary is missing or not executable"
 	[[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]] || fail "cgroup v2 is not mounted"
@@ -247,17 +249,7 @@ preflight() {
 	id "$test_user" >/dev/null 2>&1 || fail "fixture user $test_user is unavailable"
 	initial_service_active=$(systemctl is-active resman 2>&1 || true)
 	if pgrep -x resman >/dev/null 2>&1; then
-		[[ $initial_service_active == active ]] \
-			|| fail "an unowned resman process is active; refusing to mutate a shared host"
-		quiesce_installed_service \
-			|| fail "installed resman service could not be quiesced"
-		deadline=$((SECONDS + 30))
-		while (( SECONDS < deadline )); do
-			pgrep -x resman >/dev/null 2>&1 || break
-			sleep 1
-		done
-		pgrep -x resman >/dev/null 2>&1 \
-			&& fail "a resman process remains active after service quiescence"
+		blocked "an existing resman process is active; quiesce it explicitly before the campaign"
 	fi
 	test_uid=$(id -u "$test_user")
 	test_gid=$(id -g "$test_user")
@@ -275,6 +267,7 @@ preflight() {
 		printf 'test_uid=%s\n' "$test_uid"
 		printf 'initial_service_active=%s\n' "$initial_service_active"
 	} >"$evidence_dir/environment.txt"
+	python3 "$bundle_dir/native_psi_evidence.py" metadata "$evidence_dir" "$binary" "$source_revision" "$run_id"
 }
 
 run_psi_refresh_neutrality() {
@@ -287,7 +280,7 @@ run_psi_refresh_neutrality() {
 	local after=$evidence_dir/psi-after-refresh.prom
 	local cycles_before cycles_after collection_before collection_after
 	local user_cpu_before user_cpu_after user_ema_before user_ema_after
-	local system_before system_after refresh_ready=false
+	local system_before system_after sample_available refresh_ready=false
 
 	for pressure in cpu memory io; do
 		[[ -r /proc/pressure/$pressure ]] || fail "PSI pressure file is unavailable: $pressure"
@@ -314,12 +307,13 @@ EOF
 		curl --fail --silent --show-error --max-time 2 "$endpoint" >"$baseline" || true
 		cycles_before=$(metric_value resman_control_cycles_total "$baseline")
 		user_cpu_before=$(user_metric_value resman_user_cpu_usage_percent "$test_user" "$baseline")
-		if [[ ${cycles_before:-0} -ge 2 && -n ${user_cpu_before:-} ]]; then
+		sample_available=$(metric_value resman_observation_host_cpu_sample_available "$baseline")
+		if [[ ${cycles_before:-0} -ge 2 && -n ${user_cpu_before:-} && $sample_available == 1 ]]; then
 			break
 		fi
 		sleep 1
 	done
-	[[ ${cycles_before:-0} -ge 2 && -n ${user_cpu_before:-} ]] \
+	[[ ${cycles_before:-0} -ge 2 && -n ${user_cpu_before:-} && $sample_available == 1 ]] \
 		|| fail "PSI fallback did not establish a user decision sample"
 	user_ema_before=$(user_metric_value resman_user_cpu_usage_ema_percent "$test_user" "$baseline")
 	collection_before=$(metric_value resman_metrics_collection_duration_seconds_count "$baseline")
@@ -335,8 +329,9 @@ EOF
 		curl --fail --silent --show-error --max-time 2 "$endpoint" >"$after" || true
 		cycles_after=$(metric_value resman_control_cycles_total "$after")
 		collection_after=$(metric_value resman_metrics_collection_duration_seconds_count "$after")
+		sample_available=$(metric_value resman_observation_host_cpu_sample_available "$after")
 		if [[ $cycles_after == "$cycles_before" \
-			&& ${collection_after:-0} -ge $((collection_before + 2)) ]]; then
+			&& ${collection_after:-0} -ge $((collection_before + 2)) && $sample_available == 1 ]]; then
 			refresh_ready=true
 			break
 		fi
@@ -367,6 +362,8 @@ EOF
 		printf 'system_observation_before=%s\n' "$system_before"
 		printf 'system_observation_after=%s\n' "$system_after"
 	} >"$evidence_dir/psi-refresh-neutrality.txt"
+	python3 "$bundle_dir/native_psi_evidence.py" validate "$evidence_dir" \
+		|| fail "PSI raw evidence did not reproduce the measured contract"
 	stop_children
 	[[ ! -e $cgroup_base ]] || fail "PSI scenario left its dedicated cgroup behind"
 	active_cgroup_base=

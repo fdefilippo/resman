@@ -28,7 +28,10 @@ COPY test/functional/smolvm/guest/run-functional.sh \
      test/functional/smolvm/guest/assert-daemon-errors.sh \
      test/functional/smolvm/guest/wait-systemd.sh \
      test/functional/smolvm/guest/workload.sh \
+     test/functional/smolvm/guest/non-systemd-migration.py \
+     test/functional/smolvm/guest/evidence-metadata.py \
      /opt/resman-functional/
+COPY resman.conf.example /opt/resman-functional/resman.conf.example
 COPY test/functional/smolvm/fixtures/resman.conf \
      /opt/resman-functional/fixtures/resman.conf
 

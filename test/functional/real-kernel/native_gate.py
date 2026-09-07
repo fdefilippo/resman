@@ -137,11 +137,18 @@ class NativeGate:
             raise Blocked("the current lifecycle fixture requires verified block device 8:0")
         if self.command("systemctl", "is-active", "crond", check=False).stdout.strip() != "active":
             raise Blocked("the lifecycle fixture requires the cron/PAM service")
+        artifacts = self.evidence / "artifacts"
+        artifacts.mkdir(mode=0o700, exist_ok=True)
+        shutil.copyfile(self.binary, artifacts / "resman")
+        (artifacts / "resman").chmod(0o700)
         self.save("environment", {
             "source_revision": self.revision, "kernel": os.uname().release,
+            "host_identity": field("/etc/machine-id"),
+            "boot_id": field("/proc/sys/kernel/random/boot_id"),
             "online_cpus": field("/sys/devices/system/cpu/online"),
             "package": self.command("rpm", "-q", "resman").stdout.strip(),
             "tested_binary_sha256": sha(self.binary),
+            "artifact_path": "artifacts/resman",
             "tested_artifact": "source-binary, not the installed package",
             "runner_sha256": sha(__file__),
             "workload_sha256": sha(self.bundle / "native-workload.py"),

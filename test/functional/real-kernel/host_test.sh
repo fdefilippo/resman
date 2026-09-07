@@ -5,6 +5,11 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 bash -n "$script_dir/cpu-points-run.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_gate_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_coverage_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_psi_evidence_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_recovery_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_reconciliation_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_package_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_proportional_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_reference_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_replicas_test.py"

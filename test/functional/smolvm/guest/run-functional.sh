@@ -6,6 +6,7 @@ allocated_cpus=${2:?allocated CPU count is required}
 allocated_memory_mib=${3:?allocated memory is required}
 require_psi=${4:?PSI requirement flag is required}
 scenario=${5:?scenario is required}
+source_revision=${6:?source revision is required}
 artifact_dir=/mnt/resman-artifacts
 runtime_dir=/run/resman-functional/$run_id
 state_dir=/var/lib/resman-functional/$run_id
@@ -42,7 +43,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor|host-cpu-sampling-cadence) ;;
+	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor|host-cpu-sampling-cadence|non-systemd-migration) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -62,6 +63,10 @@ fi
 mkdir -p "$artifact_dir" "$runtime_dir" "$state_dir"
 chmod 0700 "$runtime_dir" "$state_dir"
 exec > >(tee -a "$artifact_dir/guest.log") 2>&1
+python3 /opt/resman-functional/evidence-metadata.py "$artifact_dir" "$run_id" "$source_revision" "$scenario"
+if [[ $scenario == non-systemd-migration ]]; then
+    exec python3 /opt/resman-functional/non-systemd-migration.py "$run_id" "$source_revision"
+fi
 
 result=FAIL
 detail="guest harness did not complete"
@@ -152,6 +157,13 @@ finish() {
 		status=1
 	fi
     printf '%s\n' "$result" >"$result_file"
+	if [[ $result == PASS ]]; then
+		# A per-scenario key is published only after the existing scenario and
+		# daemon-error assertions have both succeeded, never as an inventory stub.
+		printf '{"%s":"PASS"}\n' "$scenario" >"$artifact_dir/checks.json"
+		printf '{"scenario":"%s","daemon_error_assertion":"PASS","detail":"see guest.log and scenario evidence"}\n' \
+			"$scenario" >"$artifact_dir/$scenario.json"
+	fi
 	printf 'daemon_error_assertion=%s\nresult=%s\ndetail=%s\nexit_code=%d\n' \
 		"$daemon_error_assertion" "$result" "$detail" "$status" \
         >>"$artifact_dir/environment.txt"
@@ -392,7 +404,8 @@ fi
 chmod 0600 "$runtime_dir/environment"
 
 {
-    printf 'kernel=%s\n' "$(uname -srvmo)"
+    printf 'kernel=%s\n' "$(uname -r)"
+    printf 'uname=%s\n' "$(uname -srvmo)"
     printf 'kernel_cmdline=%s\n' "$(< /proc/cmdline)"
     printf 'pid1=%s\n' "$(ps -p 1 -o comm= | tr -d ' ')"
     printf 'cgroup_mount=%s\n' "$(findmnt -n -o SOURCE,FSTYPE,OPTIONS /sys/fs/cgroup)"

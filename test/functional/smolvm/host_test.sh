@@ -14,6 +14,8 @@ for script in "$script_dir/run.sh" "$script_dir/host_test.sh" \
 done
 
 "$script_dir/daemon_errors_test.sh"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest/non_systemd_migration_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest/evidence_metadata_test.py"
 
 cat >"$tmp_dir/sg-ok" <<'EOF'
 #!/usr/bin/env bash
