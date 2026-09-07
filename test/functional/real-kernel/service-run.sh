@@ -1198,16 +1198,18 @@ scenario_metrics_database_lifecycle() {
 	mode=$(stat -c '%a' /var/lib/resman)
 	[[ $mode == 700 ]] || fail "the state directory has mode $mode instead of 700"
 
+	stat -c '%n %a %U:%G' "$db"* >"$evidence_dir/database-modes.txt" 2>&1
+	systemctl stop resman || fail "systemctl stop failed after the database scenario"
+
+	# Inspect the schema after shutdown, with an explicitly read-only connection.
 	# The schema is part of the release contract and cannot pass unmeasured.
 	command -v sqlite3 >/dev/null 2>&1 \
 		|| blocked "sqlite3 is required to verify the packaged metrics schema"
-	sqlite3 "$db" 'PRAGMA user_version;' >"$evidence_dir/schema-version.txt" 2>&1
+	sqlite3 -readonly "$db" 'PRAGMA user_version;' >"$evidence_dir/schema-version.txt" 2>&1
 	[[ $(< "$evidence_dir/schema-version.txt") == 6 ]] \
 		|| fail "the metrics database reports schema version $(< "$evidence_dir/schema-version.txt") instead of 6"
 	verify_containment_assertion schema-6
 
-	stat -c '%n %a %U:%G' "$db"* >"$evidence_dir/database-modes.txt" 2>&1
-	systemctl stop resman || fail "systemctl stop failed after the database scenario"
 	assert_no_protected_process || fail "a protected identity was moved into a managed cgroup"
 
 	result=PASS

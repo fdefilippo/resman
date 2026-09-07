@@ -11,6 +11,14 @@ bash -n "$script_dir/cpu-points-run.sh"
 # shellcheck disable=SC1091
 RESMAN_REAL_KERNEL_LIBRARY_ONLY=1 source "$script_dir/service-run.sh"
 
+# The packaged database scenario must not use a writable CLI on a live store.
+database_scenario=$(sed -n '/^scenario_metrics_database_lifecycle() {$/,/^}$/p' "$script_dir/service-run.sh")
+[[ $database_scenario == *"sqlite3 -readonly \"\$db\""* ]] \
+	|| { printf 'schema inspection must explicitly use sqlite3 -readonly\n' >&2; exit 1; }
+before_schema_inspection=${database_scenario%%sqlite3 -readonly*}
+[[ $before_schema_inspection == *'systemctl stop resman'* ]] \
+	|| { printf 'schema inspection must follow daemon shutdown\n' >&2; exit 1; }
+
 dispositions_file=$script_dir/../final/systemd-containment-dispositions.tsv
 mapfile -t disposition_rows <"$dispositions_file"
 for disposition_row in "${disposition_rows[@]}"; do

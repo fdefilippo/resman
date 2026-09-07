@@ -17,10 +17,13 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -290,26 +293,60 @@ func (s *sqliteStorageBoundary) secureRuntimeArtifacts() error {
 			return validateSQLiteArtifactInfo(artifact, info)
 		}
 
-		flags := os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
-		file, err := os.OpenFile(artifact.path, flags, 0)
-		if err != nil {
-			return fmt.Errorf("failed to open runtime %s %s for permission enforcement: %w", artifact.kind, artifact.path, err)
-		}
-		if err := file.Chmod(privateDatabaseFileMode); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("failed to set mode 0600 on runtime %s %s: %w", artifact.kind, artifact.path, err)
-		}
-		info, statErr := file.Stat()
-		closeErr := file.Close()
-		if statErr != nil {
-			return fmt.Errorf("failed to verify runtime %s %s: %w", artifact.kind, artifact.path, statErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("failed to close runtime %s %s after permission enforcement: %w", artifact.kind, artifact.path, closeErr)
-		}
-		if err := validateSQLiteArtifactInfo(artifact, info); err != nil {
+		if err := secureRuntimeArtifact(artifact, info); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// secureRuntimeArtifact pins metadata without opening an ordinary file descriptor.
+// Closing any ordinary descriptor for a SQLite inode releases this process's
+// POSIX locks, even when SQLite owns them through a different descriptor.
+// Linux O_PATH descriptors do not release those locks on close. The procfs magic
+// link permits chmod on the pinned inode even on kernels predating fchmodat2.
+func secureRuntimeArtifact(artifact sqliteArtifact, expected os.FileInfo) (result error) {
+	fd, err := unix.Open(artifact.path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("failed to pin runtime %s %s for permission enforcement: %w", artifact.kind, artifact.path, err)
+	}
+	file := os.NewFile(uintptr(fd), artifact.path)
+	defer func() {
+		if err := file.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("failed to close runtime metadata descriptor for %s: %w", artifact.path, err))
+		}
+	}()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to inspect pinned runtime %s: %w", artifact.path, err)
+	}
+	// O_PATH|O_NOFOLLOW can pin a symlink itself: reject it before chmod.
+	if !info.Mode().IsRegular() || !os.SameFile(expected, info) {
+		return fmt.Errorf("runtime SQLite artifact %s changed identity before permission enforcement", artifact.path)
+	}
+	uid, err := fileOwnerUID(info)
+	if err != nil {
+		return fmt.Errorf("failed to inspect pinned runtime ownership for %s: %w", artifact.path, err)
+	}
+	if uid != os.Geteuid() {
+		return validateSQLiteArtifactInfo(artifact, info)
+	}
+	if err := os.Chmod(fmt.Sprintf("/proc/self/fd/%d", fd), privateDatabaseFileMode); err != nil {
+		return fmt.Errorf("failed to set mode 0600 on runtime %s: %w", artifact.path, err)
+	}
+	info, err = file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to verify runtime %s: %w", artifact.path, err)
+	}
+	if err := validateSQLiteArtifactInfo(artifact, info); err != nil {
+		return err
+	}
+	current, err := os.Lstat(artifact.path)
+	if err != nil {
+		return fmt.Errorf("failed to reconfirm runtime %s: %w", artifact.path, err)
+	}
+	if !os.SameFile(info, current) {
+		return fmt.Errorf("runtime SQLite artifact %s changed identity during permission enforcement", artifact.path)
 	}
 	return nil
 }

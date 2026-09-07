@@ -27,6 +27,53 @@ import (
 	"github.com/fdefilippo/resman/config"
 )
 
+func TestRuntimeArtifactPermissionsUseVerifiedPinnedIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		replace string
+	}{
+		{name: "normalizes pinned regular file"},
+		{name: "rejects substituted symlink before chmod", replace: "symlink"},
+		{name: "rejects substituted regular file before chmod", replace: "regular"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "artifact")
+			writeFileWithExactMode(t, path, nil, 0644)
+			expected, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.replace != "" {
+				if err := os.Rename(path, path+".original"); err != nil {
+					t.Fatal(err)
+				}
+				if test.replace == "symlink" {
+					if err := os.Symlink(path+".original", path); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					writeFileWithExactMode(t, path, nil, 0644)
+				}
+			}
+			err = secureRuntimeArtifact(sqliteArtifact{path: path, kind: "test artifact"}, expected)
+			if test.replace == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertMode(t, path, 0600)
+			} else {
+				if err == nil {
+					t.Fatal("substituted artifact accepted")
+				}
+				assertMode(t, path+".original", 0644)
+				if test.replace == "regular" {
+					assertMode(t, path, 0644)
+				}
+			}
+		})
+	}
+}
+
 func TestNewDatabaseManagerProtectsFileBackedStorageWithPermissiveUmask(t *testing.T) {
 	tests := []struct {
 		name  string

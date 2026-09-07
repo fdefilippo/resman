@@ -594,6 +594,12 @@ against it. Remote wildcard binds remain explicit, non-default security decision
   with mode `0600`; the ancestor chain **MUST NOT** be replaceable by an
   untrusted owner, group, or other user. Relying on the process umask or a
   check-then-open race is forbidden.
+- After SQLite opens a store, permission checks **MUST NOT** open and close an
+  ordinary descriptor for its database or sidecars: POSIX close releases locks
+  held by SQLite through other descriptors in the same process (`resman-k8u`).
+  Use pinned `O_PATH` metadata descriptors for permission normalization, and
+  prove with a separate read-write SQLite client that live WAL/SHM identities
+  and newly committed rows remain visible before the writer closes.
 - If an atomic rollback cannot restore a known readable state, persistence **MUST**
   enter an explicit unusable state and reject later writes until operator recovery and
   restart. Logging possible disk/runtime divergence without enforcing that boundary is

@@ -145,14 +145,16 @@ expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday
 
 ## Direct inspection
 
-Stop ResMan before maintenance that modifies the database. Read-only inspection can
-use SQLite directly:
+Stop ResMan before maintenance that modifies the database. For live inspection,
+explicitly open SQLite in read-only mode: a `SELECT` alone does not make the
+default CLI connection read-only. Never remove or rename the database, WAL, or
+shared-memory sidecar while the daemon is running.
 
 ```bash
-sqlite3 /var/lib/resman/metrics.db \
+sqlite3 -readonly /var/lib/resman/metrics.db \
   'SELECT timestamp, uid, username, cpu_usage_percent FROM user_metrics ORDER BY timestamp DESC LIMIT 10;'
 
-sqlite3 /var/lib/resman/metrics.db \
+sqlite3 -readonly /var/lib/resman/metrics.db \
   'SELECT uid, username, AVG(cpu_usage_percent) FROM user_metrics WHERE timestamp > datetime("now", "-24 hours") GROUP BY uid, username;'
 ```
 
