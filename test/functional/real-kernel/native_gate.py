@@ -48,6 +48,17 @@ def eventually(check, message, seconds=60):
     raise AssertionError(message)
 
 
+def wait_for_json(path, message, seconds=60):
+    """Wait until a readiness document exists and contains one complete JSON value."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            return json.loads(Path(path).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.5)
+    raise AssertionError(message)
+
+
 def field(path, fallback=None):
     try:
         return Path(path).read_text().strip()
@@ -247,8 +258,7 @@ class NativeGate:
         self.cron_created = True
         for a in self.cron_accounts():
             path = self.helper / str(a.pw_uid) / "identity.json"
-            eventually(path.exists, "cron did not create workload for " + a.pw_name, 90)
-            identity = json.loads(path.read_text())
+            identity = wait_for_json(path, "cron did not publish complete workload identity for " + a.pw_name, 90)
             match = re.fullmatch(r"0::/user.slice/user-%d.slice/session-([a-z0-9]+).scope" % a.pw_uid,
                                  identity["cgroup"])
             require(match is not None, "workload is not in a real PAM session: " + str(identity))

@@ -9,7 +9,7 @@
 # Project name
 PROJECT_NAME = resman
 VERSION = 1.33.0
-RELEASE = 6
+RELEASE = 7
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths

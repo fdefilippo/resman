@@ -1,3 +1,9 @@
+resman (1.33.0-7) stable; urgency=medium
+
+  * Wait for complete fixture identity documents before treating workloads as ready.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 18:08:00 +0200
+
 resman (1.33.0-6) stable; urgency=medium
 
   * Reject package builds that cannot expand required systemd scriptlet macros.

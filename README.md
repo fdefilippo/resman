@@ -50,7 +50,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.33.0-6_<architecture>.deb
+# Creates build/deb/resman_1.33.0-7_<architecture>.deb
 
 # All packages
 make all-with-packages

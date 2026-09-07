@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 
-from native_gate import Blocked, NativeGate, eventually, field, require
+from native_gate import Blocked, NativeGate, eventually, field, require, wait_for_json
 
 
 REQUIRED_CHECKS = frozenset({"policy-reload", "concurrent-reconciliation", "topology-turnover", "cardinality-refusal", "online-cpu-change"})
@@ -267,8 +267,8 @@ class ReconciliationGate(NativeGate):
             stream.flush()
             os.fsync(stream.fileno())
         try:
-            eventually(lambda: (directory / "identity.json").exists(), "new cron/PAM session did not appear", 90)
-            identity = json.loads((directory / "identity.json").read_text())
+            identity = wait_for_json(directory / "identity.json",
+                                     "new cron/PAM session did not publish complete identity", 90)
             match = re.fullmatch(r"0::/user.slice/user-%d.slice/session-([a-z0-9]+)\.scope" % uid, identity["cgroup"])
             require(match is not None, "new workload is not governed by a genuine PAM scope")
             identity["session"] = match[1]

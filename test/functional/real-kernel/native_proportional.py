@@ -12,7 +12,7 @@ import sys
 import time
 import traceback
 
-from native_gate import Blocked, NativeGate, eventually, field, require, sha
+from native_gate import Blocked, NativeGate, eventually, field, require, sha, wait_for_json
 from native_placement import SCOPE, observe
 
 
@@ -211,8 +211,7 @@ class ProportionalGate(NativeGate):
         self.save("root-ssh-command", command)
         self.root_output = (self.evidence / "root-ssh.log").open("w")
         self.root_ssh = subprocess.Popen(command, stdout=self.root_output, stderr=self.root_output)
-        eventually(lambda: (output / "identity.json").exists(), "root SSH workload did not start", 20)
-        identity = json.loads((output / "identity.json").read_text())
+        identity = wait_for_json(output / "identity.json", "root SSH workload did not publish complete identity", 20)
         match = re.fullmatch(r"0::/user.slice/user-0.slice/session-([a-z0-9]+)\.scope", identity["cgroup"])
         require(match is not None, "root workload is not in its own SSH/PAM session")
         identity["session"] = match[1]
@@ -277,8 +276,7 @@ class ProportionalGate(NativeGate):
                 self.command("systemd-run", "--quiet", "--unit=" + service, "--slice=" + unit,
                              "-p", "RuntimeMaxSec=1200", "-p", "TimeoutStopSec=10s",
                              "/usr/bin/python3", self.helper / "workload.py", output, *self.reference_workload_args())
-                eventually(lambda p=output: (p / "identity.json").exists(), "reference workload did not start")
-                identity = json.loads((output / "identity.json").read_text())
+                identity = wait_for_json(output / "identity.json", "reference workload did not publish complete identity")
                 require(identity["cgroup"] == "0::/" + parent + "/" + unit + "/" + service,
                         "reference worker is outside its independent parent")
                 self.reference_identities[(group, leaf)] = identity

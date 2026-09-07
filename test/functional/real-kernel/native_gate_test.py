@@ -10,10 +10,17 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from native_gate import Blocked, NativeGate, checks_pass, field
+from native_gate import Blocked, NativeGate, checks_pass, field, wait_for_json
 
 
 class NativeGateTests(unittest.TestCase):
+    def test_identity_readiness_waits_past_an_existing_empty_file(self):
+        path = Path("/existing/identity.json")
+        with patch.object(Path, "read_text", side_effect=["", '{"pid": 1234}']) as read, \
+                patch("native_gate.time.sleep"):
+            self.assertEqual(wait_for_json(path, "identity not published", 1), {"pid": 1234})
+        self.assertEqual(read.call_count, 2)
+
     def test_unplaced_helper_is_cleaned_only_with_exact_recorded_identity(self):
         for valid in (True, False):
             with self.subTest(valid=valid), tempfile.TemporaryDirectory() as directory:
