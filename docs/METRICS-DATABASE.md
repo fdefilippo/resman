@@ -7,6 +7,11 @@ history through MCP. Persistence is disabled by default so an operator must opt 
 Database write failures are observable and retried on a later control cycle, but they
 do not disable resource enforcement.
 
+During blackout, host Prometheus observations still refresh at
+`METRICS_REFRESH_INTERVAL` in polling and PSI modes. SQLite history and per-user
+Prometheus series remain decision-owned: no new decision interval is sampled or
+persisted during blackout. A gap in history is not a measured zero-usage interval.
+
 ## Configuration
 
 The authoritative defaults and comments are in

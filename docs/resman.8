@@ -525,7 +525,9 @@ events are not generated for an extended period (e.g., when the system is idle).
 This heartbeat is for the decision loop only. Prometheus/Grafana metrics are
 refreshed separately using
 .B METRICS_REFRESH_INTERVAL
-so dashboards remain current even when no PSI event fires.
+in both polling and PSI modes, including blackout. Host observations remain current
+without advancing decision baselines. Per-user series and SQLite history remain
+decision-owned and are not sampled during blackout.
 .PP
 When a limited user experiences CPU throttling (pressure exceeds threshold in their
 per-user cgroup), the daemon temporarily boosts their cpu.weight to grant more CPU
@@ -555,7 +557,7 @@ take effect immediately.
 - Fallback polling interval in seconds when event-driven (default: 300 = 5min)
 .IP \(bu
 .B METRICS_REFRESH_INTERVAL
-- Prometheus/Grafana refresh interval in seconds when event-driven (default: 30)
+- Host Prometheus/Grafana refresh interval in seconds, including blackout (default: 30)
 .PP
 Requirements:
 .IP \(bu 2

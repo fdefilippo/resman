@@ -245,6 +245,9 @@ func (a *Adapter) recoverActiveRestore(ctx context.Context, unit, objectPath str
 		if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, refreshed) {
 			return externalRecoveryConflict(unit, "post-revert properties do not match the recorded baselines")
 		}
+		if err := a.verifyRestored(ctx, refreshed.Identity, a.baselineAssignments(unit)); err != nil {
+			return err
+		}
 		if err := a.removeUnitLeaseDurably(unit); err != nil {
 			return err
 		}
@@ -355,6 +358,9 @@ func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSn
 	}
 	if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, refreshed) {
 		return externalRecoveryConflict(unit, "restored properties do not match the recorded baselines")
+	}
+	if err := a.verifyRestored(ctx, refreshed.Identity, a.baselineAssignments(unit)); err != nil {
+		return err
 	}
 	if err := a.removeUnitLeaseDurably(unit); err != nil {
 		return err

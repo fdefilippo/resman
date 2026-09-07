@@ -89,6 +89,13 @@ func (v cgroupVerifier) observe(snapshot UnitSnapshot) (UnitAccounting, error) {
 
 const defaultCgroupRoot = "/sys/fs/cgroup"
 
+// deviceLimitMismatch distinguishes a parsed but not yet converged io.max value
+// from read, permission and parse failures, which are never retried as convergence.
+type deviceLimitMismatch struct{ err error }
+
+func (e *deviceLimitMismatch) Error() string { return e.err.Error() }
+func (e *deviceLimitMismatch) Unwrap() error { return e.err }
+
 type cgroupVerifier struct {
 	root     string
 	readFile func(string) ([]byte, error)
@@ -385,17 +392,17 @@ func (v cgroupVerifier) verifyDeviceLimits(path string, snapshot UnitSnapshot, p
 		wanted, constrained := wantedDevices[device]
 		if constrained {
 			if !exists || value != strconv.FormatUint(wanted, 10) {
-				return fmt.Errorf("effective %s mismatch for %s device %s: systemd=%d kernel=%q", property, snapshot.Identity.Name, device, wanted, value)
+				return &deviceLimitMismatch{fmt.Errorf("effective %s mismatch for %s device %s: systemd=%d kernel=%q", property, snapshot.Identity.Name, device, wanted, value)}
 			}
 			delete(wantedDevices, device)
 			continue
 		}
 		if exists && value != "max" {
-			return fmt.Errorf("effective %s retains unexpected finite limit for %s device %s: %s", property, snapshot.Identity.Name, device, value)
+			return &deviceLimitMismatch{fmt.Errorf("effective %s retains unexpected finite limit for %s device %s: %s", property, snapshot.Identity.Name, device, value)}
 		}
 	}
 	if len(wantedDevices) != 0 {
-		return fmt.Errorf("effective %s is absent for %s on %d devices", property, snapshot.Identity.Name, len(wantedDevices))
+		return &deviceLimitMismatch{fmt.Errorf("effective %s is absent for %s on %d devices", property, snapshot.Identity.Name, len(wantedDevices))}
 	}
 	return nil
 }

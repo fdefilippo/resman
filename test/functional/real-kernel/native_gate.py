@@ -420,6 +420,15 @@ class NativeGate:
             self.blackout()
             self.assert_applied()
             self.resources()
+            # A clean stop on live slices is independent of crash recovery.
+            self.checks["graceful-stop"] = "FAIL"
+            self.stop_daemon()
+            self.assert_released()
+            self.assert_membership()
+            self.save("ordinary-stop", {"sessions_still_owned": True, "journal_absent": True})
+            self.start_daemon()
+            self.assert_applied()
+            self.resources()
             self.authority_split()
             self.restart()
             self.checks["graceful-stop"] = "FAIL"

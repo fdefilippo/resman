@@ -44,6 +44,11 @@ crash reclaim, graceful stop, and release when only root remains. A missing resu
 FAIL or BLOCKED can never produce an overall PASS. Property checks are **not** I/O
 throughput or CPU proportional-delivery measurements.
 
+Graceful stop is proved twice with sessions still alive: first after ordinary
+application, then after crash/reclaim. The first must finish before the crash phase
+starts. Both require the journal and mutable drop-ins to disappear, with exact
+baseline values in the kernel; a late cleanup after logout cannot substitute.
+
 Config, map, SQLite history, logs, scrapes, PID identities, command arguments, kernel
 readbacks and result files are retained under the local evidence directory printed by
 the remote runner. On failed release, the runner records the journal and both D-Bus

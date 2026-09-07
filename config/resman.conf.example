@@ -716,9 +716,11 @@ USERNAME_CACHE_TTL=60
 # (e.g., system idle). Set to 0 to disable fallback (not recommended).
 #
 # METRICS_REFRESH_INTERVAL: Prometheus/Grafana refresh interval in seconds
-# when PSI_EVENT_DRIVEN=true. This keeps operational dashboards fresh even
-# when no PSI pressure event wakes the decision loop. It does not apply or
+# in both polling and PSI modes, including blackout. This keeps host dashboards
+# fresh even when the decision loop is suspended. It does not apply or
 # remove limits. Default: 30 seconds.
+# Per-user series and SQLite history remain decision-owned; blackout does not
+# create their samples or advance their baselines.
 # Fallback and metrics refresh interval changes update their tickers immediately.
 #
 # Examples:

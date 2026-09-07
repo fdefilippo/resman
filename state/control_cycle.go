@@ -178,6 +178,9 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []controlCycleStage) error {
 	var cycleErrors []error
 	for _, stage := range stages {
+		if run.ctx != nil && run.ctx.Err() != nil {
+			return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...), run.ctx.Err())
+		}
 		if err := stage.run(m, run); err != nil {
 			cycleErrors = append(cycleErrors, err)
 			if !stage.continueAfterError {

@@ -115,7 +115,7 @@ func (m *Manager) reconcileSystemdCPUPoints(ctx context.Context, policy cpupoint
 			break
 		}
 	}
-	return m.deferSystemdCPUPointsError(step, err)
+	return m.deferSystemdCPUPointsError(ctx, step, err)
 }
 
 func (m *Manager) reconcileSystemdCPUPointsAttempt(ctx context.Context, policy cpupoints.PolicySnapshot) (string, error) {
@@ -301,13 +301,13 @@ func systemdCPUPointsPlanSummary(parent systemdunit.UnitIdentity, units map[int]
 	return signature.String(), guaranteedSlices, bestEffortSlices, rootSlices
 }
 
-func (m *Manager) deferSystemdCPUPointsError(step string, err error) error {
+func (m *Manager) deferSystemdCPUPointsError(ctx context.Context, step string, err error) error {
 	m.mu.Lock()
 	m.systemdCPUComplete = false
 	m.cpuPointsDegraded = true
 	m.mu.Unlock()
 	wrapped := &CPUPointsReconciliationError{Step: "systemd_" + step, Err: err}
-	if m.prometheusExporter != nil {
+	if m.prometheusExporter != nil && !IsControlCycleCancellation(ctx, err) {
 		m.prometheusExporter.RecordError("cpu_points_reconciliation", cpuPointsReconciliationErrorType(wrapped))
 	}
 	return wrapped

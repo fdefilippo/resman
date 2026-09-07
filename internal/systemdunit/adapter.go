@@ -689,11 +689,8 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		return result, conflictError(identity.Name, result.Conflicts)
 	}
 	if len(ownedKeys) > 0 && len(restoreKeys) == 0 && len(currentMutablePaths) == 0 {
-		if err := verifyReadback("restore_recovered_readback", current, restore); err != nil {
+		if err := a.verifyRestored(callCtx, identity, restore); err != nil {
 			return result, err
-		}
-		if err := a.verifier.verify(current, restore); err != nil {
-			return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_recovered_readback", Unit: identity.Name, Err: err}
 		}
 		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
 			return result, err
@@ -731,22 +728,8 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		if err := a.transport.reload(callCtx); err != nil {
 			return result, errors.Join(classifyTransportError("restore_reload", identity.Name, err), conflictError(identity.Name, result.Conflicts))
 		}
-		after, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
-		if err != nil {
+		if err := a.verifyRestored(callCtx, identity, restore); err != nil {
 			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		if err := requireSameIdentity("restore_readback", identity, after.Identity); err != nil {
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		if err := verifyReadback("restore_readback", after, restore); err != nil {
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		if err := a.requireManagedUnitFileFootprint("restore_readback", after, unitOverrideLease{}, false); err != nil {
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		if err := a.verifier.verify(after, restore); err != nil {
-			verificationErr := &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_readback", Unit: identity.Name, Err: err}
-			return result, errors.Join(verificationErr, conflictError(identity.Name, result.Conflicts))
 		}
 		for _, key := range ownedKeys {
 			if !containsPropertyName(result.Restored, key.property) {

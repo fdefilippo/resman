@@ -61,7 +61,7 @@ func (a *App) runControlLoop() error {
 		}
 	}()
 
-	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil {
+	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil && !a.reportShutdownCycleCancellation(err, state.ControlCycleTriggerInitial) {
 		a.logger.Error("Error in initial control cycle",
 			"cycle_id", "initial",
 			"error", err,
@@ -137,6 +137,10 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 
 	*cycleComplete = make(chan struct{})
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerTicker); err != nil {
+		if a.reportShutdownCycleCancellation(err, state.ControlCycleTriggerTicker) {
+			close(*cycleComplete)
+			return ticker
+		}
 		a.logger.Error("Error in control cycle", "error", err)
 	}
 
@@ -155,6 +159,14 @@ func (a *App) handleTickerCycle(ticker *time.Ticker, pollingInterval *int, cycle
 	}
 
 	return ticker
+}
+
+func (a *App) reportShutdownCycleCancellation(err error, trigger string) bool {
+	if !state.IsControlCycleCancellation(a.ctx, err) {
+		return false
+	}
+	a.logger.Info("Control cycle canceled by shutdown", "trigger", trigger, "outcome", "canceled")
+	return true
 }
 
 func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *time.Ticker {
@@ -197,7 +209,9 @@ func (a *App) controlCycleInterval() int {
 
 func (a *App) metricsRefreshInterval() int {
 	cfg := a.stateManager.GetConfig()
-	if !a.isPSIEventDrivenActive() || a.prometheusExporter == nil {
+	// Observation has its own cadence even when polling decisions are suspended
+	// by blackout. It must never depend on the decision trigger backend.
+	if a.prometheusExporter == nil {
 		return 0
 	}
 	return cfg.GetMetricsRefreshInterval()

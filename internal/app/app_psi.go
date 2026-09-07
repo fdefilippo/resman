@@ -186,7 +186,9 @@ func (a *App) handlePSIEvent(psiEvent cgroup.PSIEvent, cycleComplete *chan struc
 	*cycleComplete = make(chan struct{})
 	trigger := "psi_" + psiScope + "_" + psiEvent.Type
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, trigger); err != nil {
-		a.logger.Error("Error in control cycle (PSI-triggered)", "error", err)
+		if !a.reportShutdownCycleCancellation(err, trigger) {
+			a.logger.Error("Error in control cycle (PSI-triggered)", "error", err)
+		}
 	}
 	close(*cycleComplete)
 }

@@ -13,6 +13,21 @@ from native_gate import Blocked, NativeGate, checks_pass, field
 
 
 class NativeGateTests(unittest.TestCase):
+    def test_ordinary_live_stop_failure_prevents_the_crash_phase(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            gate = NativeGate(directory, "runit", "revision")
+            for name in ("preflight", "validate", "start_daemon", "start_sessions", "blackout",
+                         "assert_applied", "resources", "cleanup", "stop_daemon"):
+                stack.enter_context(patch.object(gate, name))
+            crash = stack.enter_context(patch.object(gate, "restart"))
+            stack.enter_context(patch.object(gate, "authority_split"))
+            stack.enter_context(patch.object(gate, "assert_released", side_effect=RuntimeError("live restore incomplete")))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            self.assertEqual(gate.run(), 1)
+            crash.assert_not_called()
+            self.assertEqual(gate.checks["graceful-stop"], "FAIL")
+
     def test_helper_remains_traversable_under_the_remote_private_umask(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = NativeGate(directory, "runit", "revision")

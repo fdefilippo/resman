@@ -824,6 +824,11 @@ Metrics collection has two temporal contracts: observation keeps dashboards and 
 current; decision sampling advances the baselines and smoothing used to apply or
 release limits. They are not interchangeable.
 
+With Prometheus enabled, the application schedules host observation at
+`METRICS_REFRESH_INTERVAL` in both polling and PSI modes, including blackout.
+Per-user series and SQLite history retain their decision-owned intervals: blackout
+does not manufacture new decision samples or update their baselines.
+
 - Observation-only refreshes and reads **MUST NOT** advance decision baselines, EMA,
   threshold trackers, cool-down state, or any other temporal enforcement input.
 - Each sampling purpose **MUST** own its cache key and its complete temporal state. A
