@@ -19,11 +19,11 @@ def burn(cpu=None):
 def worker_cpus(arguments):
     if not arguments:
         return [None] * 6
-    if arguments != ["--one-worker-per-cpu"]:
+    if arguments not in (["--one-worker-per-cpu"], ["--six-pinned-workers"]):
         raise ValueError("unsupported workload mode")
     if os.sched_getaffinity(0) != set(range(4)):
         raise ValueError("pinned diagnostic requires CPUs 0-3")
-    return list(range(4))
+    return [index % 4 for index in range(6 if arguments == ["--six-pinned-workers"] else 4)]
 
 
 def main():

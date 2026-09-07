@@ -11,6 +11,7 @@ from pathlib import Path
 
 from native_reference import ReferenceDiagnostic, analyze, comparable, inspect_workload
 from native_proportional_test import frames
+from native_proportional import ProportionalGate
 
 spec = importlib.util.spec_from_file_location("native_workload", Path(__file__).with_name("native-workload.py"))
 workload = importlib.util.module_from_spec(spec)
@@ -41,6 +42,20 @@ def samples():
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_live_worker_validation_is_wired_into_each_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = ReferenceDiagnostic(directory, "runit", "revision")
+            gate.reference_identities = {("referencea", "a"): {}}
+            with patch("native_reference.inspect_workload", side_effect=[{101: "old"}, {101: "new"}]) as inspect, \
+                    patch.object(ProportionalGate, "snapshot", return_value={}):
+                gate.snapshot()
+                with self.assertRaisesRegex(AssertionError, "identity changed"):
+                    gate.snapshot()
+                self.assertEqual(inspect.call_count, 2)
+            with patch("native_reference.inspect_workload", side_effect=AssertionError("wrong affinity")):
+                with self.assertRaisesRegex(AssertionError, "wrong affinity"):
+                    gate.snapshot()
+
     def test_declared_worker_layout_must_be_observed(self):
         identity = {"pid": 100, "start_time": "90", "children": [101, 102, 103, 104]}
         stat = "100 (worker) " + " ".join(["R", "100"] + ["0"] * 17 + ["90"])
@@ -59,6 +74,15 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(workload.worker_cpus([]), [None] * 6)
         with patch.object(workload.os, "sched_getaffinity", return_value={0, 1, 2, 3}):
             self.assertEqual(workload.worker_cpus(["--one-worker-per-cpu"]), [0, 1, 2, 3])
+            self.assertEqual(workload.worker_cpus(["--six-pinned-workers"]), [0, 1, 2, 3, 0, 1])
+        with tempfile.TemporaryDirectory() as directory:
+            gate = ReferenceDiagnostic(directory, "runit", "revision")
+            self.assertEqual(gate.reference_workload_args(), ())
+            gate.pinned = True
+            self.assertEqual(gate.reference_workload_args(), ("--one-worker-per-cpu",))
+            gate.six_pinned = True
+            self.assertEqual(gate.reference_workload_args(), ("--six-pinned-workers",))
+            self.assertEqual(gate.scenario(), "systemd-native-reference-pinned-six")
         with patch.object(workload.os, "sched_getaffinity", return_value={0, 1}):
             with self.assertRaises(ValueError):
                 workload.worker_cpus(["--one-worker-per-cpu"])

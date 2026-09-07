@@ -132,3 +132,10 @@ weights, measurement windows and thresholds. It can investigate sensitivity to
 worker layout, but changes both worker count and affinity: it does not isolate one
 of those factors by itself. Even a PASS cannot replace the unbound workload evidence
 or authorize a change to the release gate without review.
+
+`systemd-native-reference-pinned-six` retains the original six workers per leaf,
+binding them to CPUs 0,1,2,3,0,1 in every reference. It changes affinity without
+changing worker count. Worker count, actual affinity, owner and birth identities
+are verified at every sample in all diagnostic variants. The helper remains unbound;
+neither diagnostic establishes how the production workload behaves without affinity
+restrictions or changes ResMan's policy.

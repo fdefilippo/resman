@@ -15,15 +15,15 @@ from native_proportional import LEAVES, ProportionalGate, compare_reference, rat
 WINDOWS = 6
 
 
-def inspect_workload(identity, pinned):
+def inspect_workload(identity, pinned, six_pinned=False):
     parent = field("/proc/%d/stat" % identity["pid"]).rsplit(")", 1)[1].split()
     require(parent[19] == identity["start_time"], "reference owner was recreated")
-    require(len(identity["children"]) == (4 if pinned else 6), "wrong reference worker count")
+    require(len(identity["children"]) == (4 if pinned and not six_pinned else 6), "wrong reference worker count")
     births = {}
     for index, pid in enumerate(identity["children"]):
         stat = field("/proc/%d/stat" % pid).rsplit(")", 1)[1].split()
         require(stat[1] == str(identity["pid"]) and stat[0] != "Z", "reference worker exited or changed owner")
-        require(os.sched_getaffinity(pid) == ({index} if pinned else set(range(4))),
+        require(os.sched_getaffinity(pid) == ({index % 4} if pinned else set(range(4))),
                 "reference worker affinity differs from the declared fixture")
         births[pid] = stat[19]
     return births
@@ -67,12 +67,20 @@ def comparable(results):
 
 class ReferenceDiagnostic(ProportionalGate):
     pinned = False
+    six_pinned = False
+
+    def scenario(self):
+        if self.six_pinned:
+            return "systemd-native-reference-pinned-six"
+        return "systemd-native-reference-pinned" if self.pinned else "systemd-native-reference"
 
     def reference_workload_args(self):
+        if self.six_pinned:
+            return ("--six-pinned-workers",)
         return ("--one-worker-per-cpu",) if self.pinned else ()
 
     def snapshot(self):
-        births = {group + "/" + leaf: inspect_workload(identity, self.pinned)
+        births = {group + "/" + leaf: inspect_workload(identity, self.pinned, self.six_pinned)
                   for (group, leaf), identity in self.reference_identities.items()}
         previous = getattr(self, "worker_births", births)
         require(births == previous, "reference worker identity changed")
@@ -92,8 +100,9 @@ class ReferenceDiagnostic(ProportionalGate):
             "exploratory_windows_seconds": [180, 360], "aggregate_tolerance_pp": 0.5,
             "leaf_tolerance_pp": 1.0, "minimum_stale_separation_pp": 2.0,
             "groups": ["referencea", "referenceb", "stale"],
-            "workers_per_leaf": 4 if self.pinned else 6,
-            "worker_affinity": "one worker on each CPU 0-3" if self.pinned else "unrestricted CPUs 0-3",
+            "workers_per_leaf": 4 if self.pinned and not self.six_pinned else 6,
+            "worker_affinity": ("round-robin CPUs 0,1,2,3,0,1" if self.six_pinned else
+                                "one worker on each CPU 0-3" if self.pinned else "unrestricted CPUs 0-3"),
             "note": "Longer windows are descriptive, not an alternative route to PASS.",
         })
 
@@ -137,16 +146,18 @@ class ReferenceDiagnostic(ProportionalGate):
             (self.evidence / "result").write_text(status + "\n")
             (self.evidence / "environment.txt").write_text(
                 "scenario=%s\nsource_revision=%s\nkernel=%s\ncleanup=%s\nresult=%s\ndetail=%s\n" %
-                ("systemd-native-reference-pinned" if self.pinned else "systemd-native-reference",
+                (self.scenario(),
                  self.revision, os.uname().release, cleanup, status, detail.replace("\n", " ")))
             print(status + ": " + detail, flush=True)
         return {"PASS": 0, "BLOCKED": 77, "FAIL": 1}[status]
 
 
 if __name__ == "__main__":
-    require(sys.argv[1] in ("systemd-native-reference", "systemd-native-reference-pinned"), "unsupported reference diagnostic")
+    require(sys.argv[1] in ("systemd-native-reference", "systemd-native-reference-pinned", "systemd-native-reference-pinned-six"),
+            "unsupported reference diagnostic")
     gate = ReferenceDiagnostic(Path(__file__).parent, sys.argv[2], sys.argv[3])
-    gate.pinned = sys.argv[1] == "systemd-native-reference-pinned"
+    gate.pinned = sys.argv[1] != "systemd-native-reference"
+    gate.six_pinned = sys.argv[1] == "systemd-native-reference-pinned-six"
     def interrupted(_signal, _frame):
         raise RuntimeError("reference diagnostic interrupted")
     signal.signal(signal.SIGTERM, interrupted)
