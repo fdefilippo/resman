@@ -429,9 +429,28 @@ class CoverageTests(unittest.TestCase):
 
     def test_supervisor_initialization_keeps_exact_session_authority(self):
         scope = "0::/user.slice/user-1006.slice/session-42.scope"
-        for after, birth, accepted in ((scope, "123", True), (scope + "/supervisor", "123", True),
-                                      (scope + "-other/supervisor", "123", False),
-                                      (scope + "/supervisor", "124", False)):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            proc = Path(directory) / "proc"
+            proc.mkdir()
+            (proc / "stat").write_text("99 (nspawn) " + " ".join(["S"] + ["0"] * 18 + ["123"]))
+            (proc / "cgroup").write_text(scope)
+            identity = {"pid": 99, "birth": "123", "cgroup": scope,
+                        "session_identity": {"snapshot": {"control_group": scope[3:]}}}
+
+            gate.confirm_nested_supervisor(proc, identity, "discovery")
+            (proc / "cgroup").write_text(scope + "/supervisor")
+            gate.confirm_nested_supervisor(proc, identity, "post-envelope")
+
+            self.assertEqual(identity["cgroup"], scope + "/supervisor")
+            self.assertEqual(json.loads((gate.evidence / "nested-supervisor-99-discovery.json").read_text())[
+                "after_cgroup"], scope)
+            self.assertEqual(json.loads((gate.evidence / "nested-supervisor-99-post-envelope.json").read_text())[
+                "after_cgroup"], scope + "/supervisor")
+
+        for after, birth in ((scope + "-other/supervisor", "123"),
+                             ("0::/resman/limited/user_1006", "123"),
+                             (scope + "/supervisor", "124")):
             with self.subTest(after=after, birth=birth), tempfile.TemporaryDirectory() as directory:
                 gate = CoverageGate(directory, "runit", "revision")
                 proc = Path(directory) / "proc"
@@ -440,13 +459,10 @@ class CoverageTests(unittest.TestCase):
                 (proc / "cgroup").write_text(after)
                 identity = {"pid": 99, "birth": "123", "cgroup": scope,
                             "session_identity": {"snapshot": {"control_group": scope[3:]}}}
-                if accepted:
-                    gate.confirm_nested_supervisor(proc, identity)
-                    self.assertEqual(identity["cgroup"], after)
-                else:
-                    with self.assertRaisesRegex(AssertionError, "identity or left"):
-                        gate.confirm_nested_supervisor(proc, identity)
-                self.assertEqual(json.loads((gate.evidence / "nested-supervisor-99.json").read_text())["after_cgroup"], after)
+                with self.assertRaisesRegex(AssertionError, "identity or left"):
+                    gate.confirm_nested_supervisor(proc, identity, "post-envelope")
+                self.assertEqual(json.loads((gate.evidence / "nested-supervisor-99-post-envelope.json").read_text())[
+                    "after_cgroup"], after)
 
     def test_missing_nested_unit_does_not_prove_payload_drain(self):
         with tempfile.TemporaryDirectory() as directory:

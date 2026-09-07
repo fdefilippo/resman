@@ -583,7 +583,7 @@ class CoverageGate(NativeGate):
                 return any(row["uid"] == user.pw_uid and row["cpu_authority_coverage"] == "complete"
                            for row in self.rows())
             eventually(complete, "nested workload CPU envelope is not complete")
-            require(field("/proc/%d/cgroup" % identity["pid"]) == identity["cgroup"], "nested supervisor migrated")
+            self.confirm_nested_supervisor(Path("/proc/%d" % identity["pid"]), identity, "post-envelope")
             require(self.nested_payloads(identity) == payloads, "nested payload identity or placement changed")
             limits = self.verify_payload_restoration_cycle([p["cgroup"] for p in payloads] + [identity["cgroup"]],
                                                            user.pw_uid, "runtime_owned_descendant", "nspawn-nested")
@@ -606,14 +606,14 @@ class CoverageGate(NativeGate):
         require(match is not None, "nested nspawn is not inside a genuine PAM scope")
         identity["session"] = match[1]
         identity["session_identity"] = self.capture_nested_session(match[1], uid)
-        self.confirm_nested_supervisor(proc, identity)
+        self.confirm_nested_supervisor(proc, identity, "discovery")
         return identity
 
-    def confirm_nested_supervisor(self, proc, identity):
+    def confirm_nested_supervisor(self, proc, identity, phase):
         final_birth = field(proc / "stat").rsplit(")", 1)[1].split()[19]
         final_cgroup = field(proc / "cgroup")
         scope = "0::" + identity["session_identity"]["snapshot"]["control_group"]
-        self.save("nested-supervisor-" + str(identity["pid"]), {
+        self.save("nested-supervisor-" + str(identity["pid"]) + "-" + phase, {
             "before": identity, "after_birth": final_birth, "after_cgroup": final_cgroup})
         # nspawn may initialize its supervisor subgroup during discovery. That
         # does not change the authoritative session which this fixture owns.

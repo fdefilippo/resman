@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.33.0
-Release: 8%{?dist}
+Release: 9%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -284,6 +284,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-9
+- Preserve nspawn session ownership across runtime-created subgroups
+
 * Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-8
 - Bound short CPU sampling uncertainty by instantaneous runnable capacity
 
