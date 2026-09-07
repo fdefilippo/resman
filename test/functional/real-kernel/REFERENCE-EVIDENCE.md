@@ -123,3 +123,6 @@ delivery verdict, and scope in gate output. See [PLACEMENT.md](PLACEMENT.md) for
 the kernel mechanism, fixture assertions and execution protocol. The historical
 A4/A6 trials above do not count as the three new trials under these assertions.
 Operator delivery wording is tracked separately in resman-nq6.38.
+The subsequent three-replica and real-daemon results are recorded separately in
+[PLACEMENT-EVIDENCE.md](PLACEMENT-EVIDENCE.md), without changing the historical
+observations above.

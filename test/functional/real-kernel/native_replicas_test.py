@@ -31,6 +31,11 @@ class ReplicaTests(unittest.TestCase):
                     rows = copy.deepcopy(data)
                     status, environment = "PASS", "cleanup=PASS\n"
                     if index == 2:
+                        if mutation == "none":
+                            # A worse but valid final replica must survive aggregation.
+                            for step, row in enumerate(rows):
+                                row["nodes"]["referencea"]["a"]["stat"]["usage_usec"] += 9000 * step
+                                row["nodes"]["referencea"]["best"]["stat"]["usage_usec"] -= 9000 * step
                         if mutation == "scope": scope["scope"] = "unbound"
                         if mutation == "revision": scope["source_revision"] = "old"
                         if mutation == "duplicate": scope["run_id"] = "0"
@@ -51,7 +56,9 @@ class ReplicaTests(unittest.TestCase):
                 if mutation == "none":
                     result = summarize(paths, "revision")
                     self.assertEqual(result["primary_windows"], 18)
-                    self.assertEqual(result["worst_aggregate_gap_pp"], 0)
+                    self.assertAlmostEqual(result["worst_aggregate_gap_pp"], 0.15)
+                    self.assertAlmostEqual(result["worst_leaf_gap_pp"], 0.15)
+                    self.assertAlmostEqual(result["worst_stale_separation_pp"], 100 / 15 - 0.15)
                     self.assertEqual(result["aggregate_tolerance_pp"], 0.5)
                     with self.assertRaises(AssertionError): summarize(paths[:2], "revision")
                     with self.assertRaises(AssertionError): summarize([paths[0]] * 3, "revision")
