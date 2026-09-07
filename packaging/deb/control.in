@@ -9,10 +9,11 @@ Depends: @DEPENDS@
 Homepage: https://github.com/fdefilippo/resman
 Description: per-user CPU, memory and IO observer and manager for cgroups v2
  ResMan monitors Linux resource usage and applies cgroups v2 limits on
- supported ownership models. On systemd hosts this containment build is
- observation-only and preserves authoritative workload ownership.
+ supported ownership models. The systemd-native adapter preserves session
+ ownership and applies flat CPU Points with CPU_ROOT_POINTS=100. RAM and I/O
+ require complete resource authority; no PID is migrated on systemd hosts.
  .
  It provides Prometheus metrics, PSI event-driven control, configuration
  hot reload, SQLite history, limit notifications and an optional MCP server.
  .
- Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.31.1 to 1.32.0.
+ Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.32.0 to 1.33.0.

@@ -250,6 +250,8 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
+Current metrics schema: 6.
+
 **Responsibilities:**
 - Create and manage cgroup v2 hierarchies
 - Apply CPU limits using `cpu.max`
@@ -260,35 +262,35 @@ type Config struct {
 
 **Systemd ownership boundary:**
 
-When `/run/systemd/system` identifies a systemd-booted host, the containment
-architecture is explicitly observation-only. The collector and decision engine keep
-running, but CPU, RAM, and I/O intent cannot authorize a process migration or active
-limit. The mode is exposed by typed runtime/MCP state and bounded Prometheus labels.
-This preserves ownership by login sessions, user services, transient units, and
-system services. The hierarchy below is therefore an enforcement topology only for a
-separately supported non-systemd ownership model; it is not created for new systemd
-workloads. The systemd-native replacement is specified by `resman-nq6`.
-Its runtime-property ownership and crash-recovery journal are documented in
-[`SYSTEMD-PROPERTY-LEASES.md`](SYSTEMD-PROPERTY-LEASES.md). The journal is durable
-ownership evidence rather than a cache and must exist before a systemd property is
-mutated.
+The `systemd_native` adapter uses authoritative D-Bus unit identities and
+runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
+It verifies normalized properties and kernel values before acknowledging a plan.
+The fallback `observation_only_systemd` applies when authority is unavailable;
+`migration_enabled` is the separate non-systemd backend, not a systemd escape hatch.
 
-**Cgroup Hierarchy:**
+**Native cgroup hierarchy:**
+```text
+user.slice                  finite CPU pool
+├── user-0.slice             CPU_ROOT_POINTS=100, no leaf CPUQuota
+├── user-1000.slice          exact mapped entitlement
+│   ├── session-N.scope      unchanged PAM/logind membership
+│   └── user@1000.service    unchanged child services and rootless descendants
+└── user-1001.slice          share of aggregate best effort, including excluded users
 ```
-/sys/fs/cgroup/
-└── resman/                  # Base cgroup (CgroupBase)
-    ├── limited/              # Shared cgroup for limited users
-    │   ├── guaranteed/       # Aggregate mapped-user entitlement
-    │   │   ├── user_1000/    # Exact configured guarantee weight
-    │   │   └── ...
-    │   └── best_effort/      # Aggregate unmapped-user entitlement
-    │       ├── user_1001/    # Equal best-effort leaf weight
-    │       └── ...
-    ├── user_1002/            # RAM/IO-only; cpu.max remains unlimited
-    └── recovery/             # Processes whose original cgroup cannot accept them
-        ├── user_1000/
-        └── ...
-```
+
+The default reserve 100 + root 100 + best effort 100 leaves at most 700 mapped
+points. All runnable siblings can borrow unused capacity. The reserve protects
+system.slice and other workloads outside user.slice, not an unbounded root shell.
+A UID split across parents has partial CPU coverage. Memory and I/O require complete
+independent authority; authority_split and runtime_owned_descendant trigger release
+of the affected resource's owned properties while preserving CPU scheduling.
+
+Runtime-property ownership and crash recovery use the durable private journal in
+[SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). Startup reclaims exact
+footprints; release compares before restoring and guarded unit-file cleanup never
+erases operator changes. A root-only topology releases the finite pool. An unchanged
+verified plan produces no property or journal rewrite. The legacy cgroup APIs below
+remain specific to non-systemd migration and recovery of older acquisitions.
 
 Where migration is supported, resman atomically persists PID, process start time, parent,
 session ID, and original cgroup. Release restores the exact original cgroup
@@ -627,9 +629,9 @@ only `scheme://host[:port]`, never URL userinfo, path, query values, or fragment
    cycles to drain
 4. Compare all public keys with the lifecycle table and restore every
    restart-required key to its effective value
-5. Reject an active guaranteed/best-effort class change before any cgroup write;
-   otherwise reconcile parent quota, domain weights, and existing leaf weights
-   with read-back verification and conservative ordering
+5. In native mode, reconcile active class changes, parent quota and the complete
+   sibling-weight plan in place, with topology reconfirmation and read-back verification.
+   Only the non-systemd migration backend rejects active cross-class placement changes.
 6. Apply dynamic values to logging, cgroup, state, metrics, and the application
    runtime hook, including PSI watcher reconciliation
 7. Confirm both files again and publish only after every consumer and kernel
@@ -702,8 +704,8 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A pre-version-5 database must be archived or deleted so schema
-version 5 can be created; it is not moved or migrated. Version 5 persists one common
+component construction. A pre-version-6 database must be archived or deleted so schema
+version 6 can be created; it is not moved or migrated. Version 6 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
 nullable identity-safe cgroup deltas, PID-namespace and systemd-ownership refusal,
 typed recovery lifecycle, RAM-charge coverage, and distinct memory high/max/OOM/kill
@@ -784,10 +786,11 @@ claiming that the load is external. Temporary external-load suppression preserve
 CPU threshold-duration tracker.
 
 CPU activation refreshes the online CPU denominator and programs one finite parent
-quota from `1000 - CPU_RESERVE_POINTS`. Mapped eligible UIDs enter the guaranteed
-domain with their exact map weight; unmapped eligible UIDs share the aggregate
-`CPU_BEST_EFFORT_POINTS` domain. All leaves remain unlimited by `cpu.max`. The
-guaranteed-domain weight is raised before ingress and lowered only after departure.
+quota from `1000 - CPU_RESERVE_POINTS`. In native mode, mapped eligible slices receive
+exactly scaled weights, root receives CPU_ROOT_POINTS, and unmapped/excluded slices
+partition CPU_BEST_EFFORT_POINTS with integer weights differing by at most one.
+ResMan does not write leaf CPUQuota, including on root. Configured operator limits
+are not removed to manufacture delivery. No PID changes its unit.
 
 **Deactivate Limits When:**
 - `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
@@ -1553,7 +1556,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.32.0-2'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.33.0-1'" -o resman .
 ```
 
 **Build RPM:**

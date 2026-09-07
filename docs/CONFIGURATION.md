@@ -21,7 +21,7 @@ Environment-shadowing remedy: Inspect the running service with `systemctl show r
 | `CPU_BEST_EFFORT_POINTS` | `integer` | `100` | `dynamic` | `false` | `true` | min 1; max 1000 | One aggregate entitlement shared by active non-root user slices without an eligible mapped guarantee. | Correct the authored value and submit the complete candidate for validation. |
 | `CPU_POINTS_FILE` | `string` | `/etc/resman/cpu-points.map` | `restart-required` | `false` | `false` | format absolute-clean-path | Absolute restart-required path to the strict direct username guarantee map. | Change the policy-map path in the configuration file and restart resman; MCP map updates target the currently authoritative path only. |
 | `CPU_RELEASE_THRESHOLD` | `integer` | `40` | `dynamic` | `false` | `true` | min 1; max 100 | — | Correct the authored value and submit the complete candidate for validation. |
-| `CPU_RESERVE_POINTS` | `integer` | `100` | `dynamic` | `false` | `true` | min 0; max 990 | 0 removes nominal headroom outside the finite ResMan CPU parent; it does not create physical isolation. | Correct the authored value and submit the complete candidate for validation. |
+| `CPU_RESERVE_POINTS` | `integer` | `100` | `dynamic` | `false` | `true` | min 0; max 990 | Nominal headroom outside user.slice, including system.slice, not an unbounded root shell or physical isolation. 0 still programs a finite parent quota. | Correct the authored value and submit the complete candidate for validation. |
 | `CPU_ROOT_POINTS` | `integer` | `100` | `dynamic` | `false` | `true` | min 1; max 1000 | Lendable minimum scheduling entitlement for an active user-0.slice; it is not a CPU ceiling. | Correct the authored value and submit the complete candidate for validation. |
 | `CPU_THRESHOLD` | `integer` | `75` | `dynamic` | `false` | `true` | min 1; max 100 | — | Correct the authored value and submit the complete candidate for validation. |
 | `CPU_THRESHOLD_DURATION` | `integer` | `90` | `dynamic` | `false` | `true` | min 0 | 0 makes CPU threshold activation immediate after a valid sample. | Correct the authored value and submit the complete candidate for validation. |
@@ -117,6 +117,16 @@ Environment-shadowing remedy: Inspect the running service with `systemctl show r
 | `SYSTEM_UID_MAX` | `integer` | `host /proc/sys/kernel/pid_max (fallback 60000)` | `dynamic` | `false` | `true` | — | — | Correct the authored value and submit the complete candidate for validation. |
 | `SYSTEM_UID_MIN` | `integer` | `1000` | `dynamic` | `false` | `true` | min 0 | — | Correct the authored value and submit the complete candidate for validation. |
 | `USERNAME_CACHE_TTL` | `integer` | `60` | `dynamic` | `false` | `true` | min 1 | — | Correct the authored value and submit the complete candidate for validation. |
-| `USER_EXCLUDE_LIST` | `string_list` | `(empty)` | `dynamic` | `false` | `true` | format comma-separated-regex-list | Empty excludes nobody from CPU eligibility. | Correct the authored value and submit the complete candidate for validation. |
+| `USER_EXCLUDE_LIST` | `string_list` | `(empty)` | `dynamic` | `false` | `true` | format comma-separated-regex-list | Empty excludes nobody from CPU eligibility. Excluded native user slices remain inside the parent quota and share aggregate best effort. | Correct the authored value and submit the complete candidate for validation. |
 | `USER_INCLUDE_LIST` | `string_list` | `(empty)` | `dynamic` | `false` | `true` | format comma-separated-regex-list | Empty makes no user eligible for CPU Points enforcement; observation remains active. Use .* for every non-excluded user. | Correct the authored value and submit the complete candidate for validation. |
 | `USE_SYSLOG` | `boolean` | `false` | `restart-required` | `false` | `true` | — | — | Persist the value and restart resman for it to become effective. |
+
+## Native CPU Points planning
+
+Defaults: CPU_RESERVE_POINTS=100, CPU_ROOT_POINTS=100, CPU_BEST_EFFORT_POINTS=100; at most 700 mapped points. Root is a lendable minimum, not a ceiling; ResMan never writes CPUQuota on user-0.slice.
+
+Admission requires `sum(mapped guarantees) + CPU_ROOT_POINTS + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`. All mapped entries count, including inactive or currently ineligible accounts. UID 0 is forbidden in the map.
+
+Let `M` be the largest configured entitlement among root, aggregate best effort and all mapped guarantees. The exact scale is `floor(10000 / M)`. The active best-effort slice count must not exceed `CPU_BEST_EFFORT_POINTS * floor(10000 / M)`. Best-effort weights differ by at most one and their sum is exact. With an empty default map the bound is 10000 slices; with a 700-point guarantee and best effort 100 it is 1400. An impossible plan reports `best_effort_cardinality` before mutation, including active count, aggregate weight and maximum scale.
+
+Under systemd_native, active class changes reconcile weights in place; the non-systemd migration backend still rejects active cross-class moves. Map contents and the three point settings reload as one verified epoch; CPU_POINTS_FILE requires restart. See [UPGRADING.md](UPGRADING.md) for the 701–800 default-budget break and the 750-point rebalance example, and [CPU-POINTS-OBSERVABILITY.md](CPU-POINTS-OBSERVABILITY.md) for synchronized measurement.

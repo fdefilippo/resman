@@ -19,7 +19,7 @@ In cgroups v2, CPU and memory are controlled by **independent controllers**. Eac
 
 ```
 /sys/fs/cgroup/
-└── user_slice/
+└── user.slice/
     └── user-1000.slice/
         ├── cgroup.controllers      → Available controllers (cpu memory io...)
         ├── cgroup.subtree_control  → Enabled controllers for children
@@ -69,9 +69,27 @@ cat /sys/fs/cgroup/mygroup/cpu.stat
 # throttled_usec 42350000
 ```
 
-### ResMan Usage
+### Systemd-native ResMan usage
 
-ResMan uses one finite CPU Points parent and two proportional scheduling domains:
+`systemd_native` programs the finite CPU Points pool on `user.slice` through
+systemd D-Bus. Active `user-UID.slice` siblings receive exactly scaled weights:
+mapped guarantees, CPU_ROOT_POINTS=100 for root, and one aggregate best-effort
+entitlement partitioned among unmapped and excluded slices. No leaf CPUQuota is
+written and no PID leaves its session or service. The reserve protects system.slice
+and other workloads outside user.slice, not unbounded root login sessions.
+All surplus is work-conserving among runnable siblings, without class priority.
+
+RAM and I/O require complete independent authority and act on the existing user
+slice. A split UID or nested runtime-owned descendant refuses those resources,
+restoring their owned properties while preserving CPU scheduling. Existing memory
+charges remain visible because no migration occurs. The generic direct-write
+examples in this reference apply only to disposable cgroups owned by the experiment,
+never to systemd-owned units. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
+and [property lease recovery](SYSTEMD-PROPERTY-LEASES.md).
+
+### Non-systemd migration backend only
+
+The retained non-systemd backend uses one finite CPU Points parent and two scheduling domains:
 
 - online CPU capacity is normalized to 1000 points;
 - `CPU_RESERVE_POINTS` stays outside the parent;
@@ -85,7 +103,7 @@ Users eligible only for RAM or I/O enforcement use standalone
 `cpu.max`, so the CPU Points parent does not indirectly throttle memory-only or
 I/O-only enforcement.
 
-### Managed User Placement Contract
+### Non-systemd managed user placement contract
 
 ResMan deliberately uses two possible managed parents for one user. The placement
 depends on observed CPU enforcement, not merely on whether the user is being observed:
@@ -129,7 +147,7 @@ The standalone step is optional: a user that does not need pre-enforcement block
 observation may move directly from its original cgroup into the shared hierarchy.
 
 Because the authoritative kernel accounting identity changes during migration, the
-following mechanisms are permanent parts of the placement contract rather than cleanup
+following mechanisms remain parts of the non-systemd placement contract rather than cleanup
 opportunities:
 
 - `transitionUserCgroup` moves enforceable processes with rollback.
@@ -249,7 +267,7 @@ Scenario C: Process uses 100% CPU AND 600MB RAM
 
 ## ResMan Current Implementation
 
-### CPU Management
+### Non-systemd CPU management
 
 **Files:** `cgroup/cpu_points.go`, `cgroup/io_accounting.go`
 

@@ -11,8 +11,8 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.32.0
-Release: 2%{?dist}
+Version: 1.33.0
+Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -50,8 +50,8 @@ Requires(postun): systemd-units
 
 %description
 Enterprise-grade CPU, RAM and IO resource observation and management tool with cgroups v2 support.
-On systemd hosts this containment build observes and reports policy intent without
-migrating processes or claiming active CPU, memory or block-I/O limits.
+On systemd hosts the systemd-native adapter applies flat CPU Points in place,
+preserving session ownership. RAM and I/O require complete resource authority.
 v1.20.0: IO limits via cgroups v2 io controller.
 v1.24.0: PSI event-driven control cycles, limit hook notifications and config reload hardening.
 v1.24.1: cgroup lifecycle, hot reload and controller propagation fixes.
@@ -68,7 +68,7 @@ v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
 v1.31.1: normalized CPU Points guarantees, class-priority lending and typed delivery history.
 v1.32.0: systemd ownership preservation, public editor protocol and bounded hooks.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.31.1 to 1.32.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.32.0 to 1.33.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -78,9 +78,9 @@ CGO is enabled by default in this RPM and is required for:
 - Proper integration with system authentication services
 
 Features:
-- Dynamic CPU limiting on supported non-systemd ownership models
+- Dynamic systemd-native CPU limiting without PID migration
 - Configurable activation/release thresholds
-- Normalized CPU Points guarantees where migration enforcement is available
+- Flat CPU Points with CPU_ROOT_POINTS=100 and aggregate best-effort scheduling
 - RAM limiting with memory.high (soft) and memory.max (hard) limits
 - Graceful memory throttling before OOM killer (v1.19.0+)
 - Block I/O limiting with io.max (bandwidth and IOPS) (v1.20.0+)
@@ -163,6 +163,7 @@ install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/SYSTEMD-PROPERTY-LEASES.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/CPU-POINTS-OBSERVABILITY.md %{buildroot}/%{_docdir}/%{name}/
 
 # Install TLS and monitoring documentation.
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -277,11 +278,22 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/LIMIT-HOOKS.md
 %doc %{_docdir}/%{name}/SYSTEMD-PROPERTY-LEASES.md
+%doc %{_docdir}/%{name}/CPU-POINTS-OBSERVABILITY.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-1
+- BREAKING: replace systemd observation-only containment with in-place user-slice enforcement
+- BREAKING: flat work-conserving lending, CPU_ROOT_POINTS=100 and indirectly bounded excluded users
+- BREAKING: reject old default-budget maps totaling 701-800 points; require explicit operator rebalance
+- BREAKING: schema 6 requires history reset; replace domain/lending telemetry with flat coverage and delivery
+- Enforce RAM and I/O only with complete authority; preserve CPU during typed resource refusals
+- Persist property ownership and recover daemon/unit recreation and interrupted restoration
+- Preserve SQLite WAL locks during permission checks and document read-only inspection
+- Preserve operator files and ship the native upgrade, observation and lease-recovery references
+
 * Thu Sep 03 2026 Francesco Defilippo <francesco@defilippo.org> - 1.32.0-2
 - METRICS: preserve the last valid observation CPU gauge and expose bounded sample availability
 - OBSERVABILITY: report observation-only enforcement refusal on every completed activation cycle

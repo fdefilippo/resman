@@ -1,22 +1,24 @@
 # ResMan
 
+Current metrics schema: 6.
+
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
 ResMan monitors system resources and applies limits to users when the active host
 ownership model permits safe enforcement. It exposes Prometheus metrics, supports
 hot-reload configuration, and includes an MCP server for AI assistant integration.
 
-> **Breaking containment mode:** on hosts booted with systemd, ResMan currently runs
-> in `observation_only_systemd` mode for CPU, RAM, and I/O. It continues collecting,
-> deciding, persisting, and reporting policy intent, but it does not move processes or
-> claim an active limit. This preserves the authoritative session/service owner until
-> the systemd-native design tracked by `resman-nq6` is delivered. Check
-> `resman_enforcement_mode` or the MCP status before assuming that enforcement is
-> available.
+> **Breaking systemd-native upgrade:** CPU Points now use a flat `user.slice`
+> hierarchy without PID migration. `CPU_ROOT_POINTS=100` protects root's lendable
+> entitlement inside the pool; excluded users remain indirectly quota-bound.
+> Read the upgrade guide for the 701–800 default-budget break and schema 6 reset.
+> Check `resman_enforcement_mode` or MCP: `systemd_native` is the native backend,
+> `observation_only_systemd` is the safe fallback when authority is unavailable,
+> and `migration_enabled` is the separate non-systemd backend.
 
 ## Features
 
-- Dynamic CPU, RAM, and IO limiting via cgroups v2 on supported non-systemd ownership models
+- Systemd-native CPU limiting without PID migration; RAM and I/O require complete independent authority
 - PSI event-driven mode: uses poll() on cpu.pressure/io.pressure to trigger control cycles when the kernel reports real pressure/stall, while keeping polling as a heartbeat
 - Per-user resource tracking with Prometheus metrics
 - Configurable thresholds with time-window delay to prevent false activations
@@ -48,7 +50,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.32.0-2_<architecture>.deb
+# Creates build/deb/resman_1.33.0-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -91,10 +93,10 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
-Upgrading any ResMan release from 1.25.x through 1.31.1 to 1.32.0 is intentionally
+Upgrading any ResMan release from 1.25.x through 1.32.0 to 1.33.0 is intentionally
 breaking. Complete the filesystem, database, configuration, MCP, Prometheus, hook,
 capability, and container actions in [`docs/UPGRADING.md`](docs/UPGRADING.md) before
-installing ResMan 1.32.0.
+installing ResMan 1.33.0.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
@@ -196,7 +198,7 @@ wall-clock based, so PSI events cannot shorten it.
 Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
 are already active. Limits that are disabled or no longer applicable are reset
 and retried on later cycles if cleanup fails.
-RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
+On the non-systemd backend only, RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
 `cpu.max`; they do not inherit the finite CPU Points parent quota.
 
 CPU Points normalizes the online host capacity to 1000 points. The finite parent
@@ -204,9 +206,10 @@ pool is `1000 - CPU_RESERVE_POINTS`. The reserve is nominal headroom outside tha
 parent, not exclusive isolation from arbitrary host workloads. Reserve zero still
 programs a finite full-capacity `cpu.max`, which can throttle and under-deliver under
 saturation. A mapped user receives its configured relative share of the bandwidth
-actually delivered to the parent while CPU enforcement is active and only for its
-acquired, enforceable processes; exclusions and PID-namespace rejections reduce that
-coverage. This is not an absolute host CPU floor or cpuset isolation.
+actually delivered to the parent while CPU enforcement is active. The reserve protects
+system.slice and other workloads outside user.slice, not an unbounded root shell. Native CPU coverage
+includes all descendants of the authoritative user slice; an authority-split UID has
+partial coverage. This is not an absolute host CPU floor or cpuset isolation.
 
 All runnable user slices may borrow unused capacity. Root has its own entitlement;
 excluded and unmapped slices share aggregate best effort. Processes remain in their
@@ -222,7 +225,8 @@ mode-`0700` configuration directory. Custom paths must satisfy the same regular-
 ownership, mode, trusted-ancestor, and no-symlink checks.
 
 Reserve, root, best-effort, and map-content changes form one atomic hot-reload epoch;
-`CPU_POINTS_FILE` path changes require a restart. A reload may change the weight
+`CPU_POINTS_FILE` path changes require a restart. Native active class changes reconcile
+weights in place without moving processes. On the non-systemd backend only, a reload may change the weight
 of an active user within its current class, but changing an active user between
 guaranteed and best-effort is rejected atomically. Wait for normal release or first
 make the UID CPU-ineligible and reload, confirm it is released, change the map and
@@ -232,6 +236,9 @@ For accounting, coverage, schema 6 and operator measurements, see
 [CPU Points observability](docs/CPU-POINTS-OBSERVABILITY.md). Use the daemon's
 synchronized deltas and a 60-second observation window; raw weights do not prove delivery.
 
+Native RAM observes existing slice charges and applies page-aligned limits in place;
+`authority_split` or `runtime_owned_descendant` refuses RAM/I/O independently of CPU.
+The following placement restrictions apply only to the non-systemd migration backend.
 Moving a live process does not transfer existing cgroup v2 memory charges. The first
 dynamic ingress therefore applies `memory.high` and `memory.max` only to post-ingress
 charges; process-derived UID memory remains complete while cgroup RAM coverage is
@@ -245,9 +252,9 @@ swap or reclaimable pages, a process can stay alive but effectively stall at hig
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 5 records each decision
+When metrics persistence is enabled, SQLite schema version 6 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
-applied CPU class and weight, delivered parent/domain bandwidth and throttling, raw
+applied CPU class and weight, delivered parent/slice bandwidth and throttling, raw
 cgroup diagnostics, PID-namespace coverage, and process-derived memory from cgroup
 RAM charges and high/max/OOM events. Missing comparable baselines are `null`, not
 zero; incompatible older databases must be archived or deleted before restart. See
@@ -291,9 +298,9 @@ sidecars are regular, non-symlink mode `0600` files. Unsafe existing custom
 paths or replaceable/symlinked ancestors are refused before SQLite opens them
 rather than relying on the umask or a check-then-open race.
 
-On a systemd host ResMan refuses new migration-based ingress before the first
-cgroup mutation. Existing process-origin records from an older release are still
-used during release and shutdown so the containment release can remove inherited
+On a systemd host ResMan refuses new migration-based ingress, but applies native
+limits through the systemd adapter. Existing process-origin records from an older release are still
+used during release and shutdown to remove inherited
 constraints. Every restore is classified as `exact_origin`, `recovery`,
 `disappeared`, or `failed`; only `exact_origin` is an ordinary successful release.
 
@@ -388,7 +395,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Upgrade guide from 1.25.x through 1.31.1 to 1.32.0: [`docs/UPGRADING.md`](docs/UPGRADING.md)
+- Upgrade guide from 1.25.x through 1.32.0 to 1.33.0: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

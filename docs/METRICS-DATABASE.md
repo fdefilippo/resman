@@ -126,7 +126,8 @@ by the CPU Points cutover because they cannot express allocation class, guarante
 common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
 rejected by the ownership-containment release because its lifecycle vocabulary cannot
 represent ownership refusal, recovery, or stranded occupants. Move or delete the
-store and restart to create version 5. No alias or dual-read path exists.
+store and restart to create version 6. Version 5 is also rejected because its
+domain-oriented history cannot represent the native flat plan. No alias or dual-read path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
 values are stored in UTC and API responses use RFC 3339.
@@ -144,6 +145,8 @@ expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday
 `last_24_hours`, `last_7_days`, and `last_30_days`.
 
 ## Direct inspection
+
+Current metrics schema: 6.
 
 Stop ResMan before maintenance that modifies the database. For live inspection,
 explicitly open SQLite in read-only mode: a `SELECT` alone does not make the

@@ -1,4 +1,4 @@
-.TH RESMAN 8 "September 2026" "v1.32.0" "System Administration"
+.TH RESMAN 8 "September 2026" "v1.33.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -167,6 +167,8 @@ than retrying forever. After correcting the transient cause, run
 before starting the service when the start limit was reached. A clean stop is not
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
+Current metrics schema: 6.
+.PP
 The system normalizes current online CPU capacity to 1000 CPU Points and uses a
 flat systemd-owned hierarchy. The finite parent user.slice contains active user
 slices, with dedicated root entitlement, exact mapped weights and one aggregate
@@ -195,14 +197,28 @@ below root-owned mode-0700
 .BR /etc/resman .
 Configured guarantees plus CPU_ROOT_POINTS and CPU_BEST_EFFORT_POINTS must not
 exceed 1000 minus CPU_RESERVE_POINTS. Root login sessions stay inside the finite
-pool. The reserve protects workloads outside user.slice, not an unbounded root shell.
+pool. The reserve protects system.slice and other workloads outside user.slice, not an unbounded root shell.
 .PP
-Changes to the reserve, best-effort entitlement, or map contents are applied as
+Defaults are CPU_RESERVE_POINTS=100, CPU_ROOT_POINTS=100 and
+CPU_BEST_EFFORT_POINTS=100, leaving at most 700 mapped points. The old default-budget
+range 701-800 is rejected; see the 750-point rebalance example in UPGRADING.md.
+Root is a lendable minimum, not a ceiling: ResMan never writes CPUQuota on user-0.slice.
+.PP
+Let M be the largest configured entitlement among root, aggregate best effort and
+all mapped guarantees. The exact scale is floor(10000 / M). Active best-effort slices
+must not exceed CPU_BEST_EFFORT_POINTS * floor(10000 / M): 10000 with the empty default
+map, or 1400 with a 700-point guarantee and best effort 100. Their individual weights
+differ by at most one and sum exactly to the aggregate. An impossible plan fails
+before mutation with best_effort_cardinality and its active count, aggregate weight
+and maximum scale. This is a topology bound, not a per-user guarantee.
+.PP
+Changes to the reserve, root, best-effort entitlement, or map contents are applied as
 one composite hot-reload epoch. Both files are confirmed before and after kernel
 reconciliation. Changing
 .B CPU_POINTS_FILE
 itself requires a restart; a rejected path change never redirects the live reload.
-An active user's guaranteed/best-effort class cannot change until that user is
+Native active class changes reconcile weights in place with verified acknowledgement.
+On the non-systemd migration backend only, an active user's guaranteed/best-effort class cannot change until that user is
 released, while same-class weight changes and inactive membership changes are dynamic.
 The rejection is atomic and creates no pending class state. Wait for normal release or
 first make the UID CPU-ineligible and reload, confirm that it is released, change the
@@ -270,7 +286,9 @@ and
 .B memory.high
 limits according to the configured quotas and ratio.
 .PP
-Moving a running process does not transfer its existing memory charges. Dynamic first
+Native memory limits apply to existing slice charges after independent authority
+validation. The following placement restrictions apply only to the non-systemd
+migration backend. Moving a running process does not transfer its existing memory charges. Dynamic first
 ingress therefore constrains post-ingress charges only: process-derived UID memory
 remains complete while cgroup RAM coverage is reported as partial. ResMan refuses CPU
 activation from a standalone RAM cgroup and defers a CPU release that would cross a
@@ -290,7 +308,7 @@ disable high, provide reclaimable capacity or swap, or release the RAM limit. An
 explicit high-equals-max control is a distinct diagnostic configuration that can
 exercise max/OOM behavior without the lower high boundary stalling progress first.
 .PP
-A user eligible for RAM or I/O but not CPU limiting is moved to a standalone
+On the non-systemd backend only, a user eligible for RAM or I/O but not CPU limiting is moved to a standalone
 per\-user cgroup with
 .BR cpu.max="max 100000" .
 It does not inherit the finite CPU Points parent quota. Consequently,
@@ -389,16 +407,23 @@ the original limits are restored earlier when pressure returns to normal.
 .B IO_REVERT_ON_NORMAL
 - Revert limits when I/O returns to normal (true/false)
 .PP
-.SH SYSTEMD OWNERSHIP CONTAINMENT
-On a host booted with systemd, ResMan runs in
+.SH SYSTEMD NATIVE ENFORCEMENT
+On a host booted with systemd, ResMan uses
+.B systemd_native
+when the authoritative adapter is available. It applies runtime-only properties to
+user.slice and user-UID.slice without moving PIDs out of their session or service.
+The finite CPU parent indirectly bounds excluded users and rootless descendants.
+RAM and I/O require complete independent authority; authority_split or
+runtime_owned_descendant refuses them and releases their owned properties while CPU
+may remain active. The durable systemd-property-leases.json journal is not a cache.
+See /usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md for guarded restoration and
+operator-conflict recovery. Never delete this journal during a metrics reset.
+.PP
+If the adapter cannot establish authority, ResMan remains in
 .B observation_only_systemd
-mode for CPU, RAM, and I/O. It observes workloads, evaluates policy, records
-requested intent, exports metrics, and writes history, but refuses every new
-migration-based ingress before the first cgroup mutation. It never represents a
-refused PID or UID as actively limited. This breaking containment mode preserves
-authoritative systemd ownership of login sessions, user and system services, and
-transient units until the ownership-preserving design tracked by resman-nq6 is
-available.
+mode without a migration fallback. Non-systemd hosts retain the separate
+.B migration_enabled
+backend. Neither observation-only mode nor a typed resource refusal is enforcement.
 .PP
 Inspect
 .B resman_enforcement_mode
@@ -727,9 +752,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.31.1 to 1.32.0
+.B Upgrade from 1.25.x through 1.32.0 to 1.33.0
 .PP
-ResMan 1.32.0 intentionally breaks filesystem, database,
+ResMan 1.33.0 intentionally breaks filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
@@ -775,7 +800,7 @@ are stored and queried in UTC.
 Schema version 6 commits one common sample epoch and interval boundary for every
 system and user row. CPU Points history separates configured class and optional
 guarantee from applied class and weight, raw cgroup diagnostics, nullable comparable
-usage deltas, the online-CPU denominator, programmed parent quota, domain use and
+usage deltas, the online-CPU denominator, programmed parent quota, flat sibling use and
 parent throttling. RAM history separately reports process-derived memory,
 memory.current, applied state, complete or partial charge coverage, memory.high/max
 limits, swap policy, and high/max/OOM/kill event deltas. A NULL counter delta means
@@ -979,7 +1004,7 @@ resman_user_cpu_limit_active{uid, username} \- User limit status (1=limited, 0=u
 .IP \(bu
 resman_cpu_points_parent_usage_microseconds_delta \- Effective parent CPU time delivered during the common control-cycle interval; the allocation denominator
 .IP \(bu
-resman_cpu_points_programmed_sibling_weight_sum and resman_cpu_points_observed_sibling_weight_sum \\- Flat scheduling denominator weights\- Synchronized class-domain CPU time
+resman_cpu_points_programmed_sibling_weight_sum and resman_cpu_points_observed_sibling_weight_sum \- Flat scheduling denominator weights
 .IP \(bu
 resman_cpu_points_parent_throttled_periods_delta and resman_cpu_points_parent_throttled_microseconds_delta \- CFS throttling in the common interval; positive values can be expected under saturation
 .IP \(bu
@@ -993,13 +1018,13 @@ resman_user_cpu_points_applied_weight{uid, username} \- Raw verified leaf cpu.we
 .IP \(bu
 resman_user_cpu_points_process_coverage{uid, username, coverage} \- none, complete, partial, or unavailable host-process coverage
 .IP \(bu
-resman_user_ram_cgroup_memory_current_bytes{uid, username} \- Post-ingress cgroup memory.current accounting, not complete process-derived UID memory
+resman_user_ram_cgroup_memory_current_bytes{uid, username} \- Native slice charges or legacy post-ingress charges; interpret with typed coverage, not as complete process-derived UID memory
 .PP
 All per-user series are published exclusively from the authoritative control-cycle
 sample. Observation-only refreshes update system-wide telemetry but do not write or
 remove per-user series, so CPU alerts and the exported EMA use the same sampling
 stream as enforcement.
-CPU Points usage and throttling deltas share one explicit interval. Compare domain or
+CPU Points usage and throttling deltas share one explicit interval. Compare sibling or
 leaf delivery with effective parent usage, never with the nominal pool or programmed
 quota. CFS can under-deliver nominal quota. Unused capacity is available to all runnable user-slice siblings.
 .IP \(bu

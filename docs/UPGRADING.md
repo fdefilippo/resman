@@ -1,10 +1,13 @@
-# Upgrading from ResMan 1.25.x through 1.31.1 to ResMan 1.32.0
+# Upgrading from ResMan 1.25.x through 1.32.0 to ResMan 1.33.0
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.31.1 to
-ResMan 1.32.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
-cutover and the systemd ownership-preservation change, and intentionally breaks
+Current metrics schema: 6.
+
+This guide applies when moving from any ResMan release from 1.25.x through 1.32.0 to
+ResMan 1.33.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
-from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 builds on that contract.
+from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
+on systemd hosts. Version 1.33.0 restores enforcement through systemd itself.
 It does not migrate old database schemas, accept removed configuration keys, preserve
 old MCP shapes, or alias renamed metrics.
 
@@ -12,25 +15,95 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
-## BREAKING: systemd hosts are observation-only
+## BREAKING: systemd-native enforcement and flat CPU Points
 
-ResMan 1.32.0 disables migration-based CPU, RAM, and I/O
-enforcement on every host booted with systemd. ResMan still observes workloads,
-evaluates policy, records requested intent, exports metrics, and writes history, but
-it does not move a candidate process into a ResMan-owned cgroup and does not count a
-PID or UID as actively limited. This deliberately preserves authoritative systemd
-session, service, transient-unit, and system-service ownership. There is no
-configuration switch that restores safe enforcement; the planned
-ownership-preserving replacement is tracked by `resman-nq6`.
+**Visible change.** ResMan 1.33.0 selects `systemd_native` when the authoritative
+systemd adapter is available. PIDs stay in their original session/service units;
+CPU enforcement programs a finite `user.slice` parent and weights on its active
+`user-UID.slice` children. RAM and I/O act in place only with complete independent
+resource authority. Unlike 1.32.0, a previously observational policy can now apply.
 
-Confirm the mode after startup with the `resman_enforcement_mode` metric or the MCP
-system/limits status. A value of `observation_only_systemd` means that policy actions
-are intent and observation only. The startup warning is bounded and carries no PID,
-UID, cgroup path, or raw error text.
-Every completed control-cycle log also records `enforcement_mode`,
-`migration_enforcement_available`, and the bounded `ingress_refused_count`; therefore
-`decision=ACTIVATE_LIMITS outcome=success` describes a successfully completed cycle,
-not enforcement, when the mode is observation-only.
+**Cause.** Moving processes out of systemd units severed session and service
+ownership. A flat hierarchy preserves that ownership but changes CPU scheduling
+and the meaning of exclusions; it cannot preserve the former class-priority topology.
+
+**Action.** Review the complete compatibility-break inventory before starting:
+
+| Contract | Change and operator action |
+|---|---|
+| Enforcement mode | Confirm `systemd_native` through `resman_enforcement_mode`, MCP and the cycle log. `observation_only_systemd` remains the safe fallback when authority is unavailable; it is not successful enforcement. `migration_enabled` remains a separate non-systemd backend. |
+| Flat lending | Surplus is work-conserving among all runnable siblings, without guarantee-first lending. Points are minimum proportional entitlements to effective parent bandwidth under complete contention, not absolute CPU floors. |
+| Root sessions | `CPU_ROOT_POINTS=100` is a lendable minimum, not a ceiling. ResMan never writes CPUQuota on `user-0.slice`. The reserve protects capacity outside `user.slice`, including `system.slice`, not an unbounded root login shell. |
+| Excluded users | `USER_EXCLUDE_LIST` still controls individual CPU eligibility, but excluded active user slices remain inside the parent quota and share aggregate best effort. Excluded no longer means CPU-unbounded. |
+| Rootless inheritance | Rootless descendants spend their UID slice entitlement and inherit the parent quota. No container PID is acquired or migrated. Nested runtime ownership refuses RAM and I/O as `runtime_owned_descendant`; CPU can remain applied. |
+| Split authority | A UID spanning unrelated parents has partial CPU coverage. RAM and I/O refuse `authority_split` and restore previously owned resource limits; an external conflict remains visible instead of being overwritten. An observed UID without a user slice remains observable with unavailable slice fields. |
+| History reset | The current schema version is 6. Stop the daemon and archive/reset prior databases with their WAL/SHM sidecars. No schema migration or aliases are provided. |
+| Telemetry replacement | Three-level domain columns/metrics and the lending-state field are removed without aliases. Use flat sibling weights, denominator state, root points, per-resource coverage and measured delivery; update MCP decoders, queries, dashboards and alerts. |
+| Measurement | Use synchronized exported intervals, not independently timed file reads or nominal quota. Kernel jitter and bias depend on host and workload; the functional gate's same-run reference tolerances are not operator thresholds. |
+| Reload | Native active class changes reconcile weights in place, without PID movement or lost memory charges. Source validation, topology reconfirmation and kernel readback precede acknowledgement. The non-systemd backend still rejects cross-class migration while active. |
+| Durable ownership | Preserve `/var/lib/resman/systemd-property-leases.json` (root:root, 0600, private parent). It is a recovery journal, not metrics history or a cache. Never remove it as part of a database reset. |
+
+The default root entitlement assigns 100 of the 1000 nominal budget points to
+active administrative sessions. Actual delivery is proportional to usable parent
+bandwidth, not an absolute CPU floor. It is represented as a weight, not physical isolation from affinity restrictions, realtime
+tasks or other host workloads. Inactive root capacity is available to other siblings.
+The default budget is reserve 100 + root 100 + best effort 100 + at most 700 named
+guarantee points. Review existing limits before enabling the upgraded service.
+
+### Rebalance a previously valid 750-point map
+
+With the shipped reserve=100 and best-effort=100, version 1.32.0 allowed up to 800
+mapped points. Adding root=100 makes every mapped total **701–800 with the defaults**
+invalid, not only a fully allocated old budget. For example, this existing map was
+valid in 1.32.0 (750 + 100 <= 900):
+
+```ini
+[resman-cpu-points-map-v1]
+alice=400
+bob=350
+```
+
+Assuming those exact NSS accounts exist, the new candidate with default root points
+is refused atomically before any systemd mutation. The complete diagnostic is:
+
+```text
+CPU Points policy overcommits available pool 900 (1000 - reserve 100): configured guarantees 750 + root 100 + best effort 100 = 950
+```
+
+Choose one of these explicit alternatives; ResMan chooses none automatically:
+
+| Operator choice | Mapped total | CPU_RESERVE_POINTS | CPU_ROOT_POINTS | CPU_BEST_EFFORT_POINTS | Pool |
+|---|---|---|---|---|---|
+| Reduce mapped guarantees (alice=400, bob=300) | 700 | 100 | 100 | 100 | 900 |
+| Reduce reserve | 750 | 50 | 100 | 100 | 950 |
+| Reduce aggregate best effort | 750 | 100 | 100 | 50 | 900 |
+| Reduce root entitlement | 750 | 100 | 50 | 100 | 900 |
+
+Each choice weakens a different protection. Keep root and best effort positive.
+An old fully allocated 800-point map is also rejected (800 + 100 + 100 > 900).
+The packaged map is empty except for commented examples: new installations start
+with no named guarantees. Upgrades preserve both operator files; do not replace an
+existing map with that empty default to make validation pass.
+
+### Weight cardinality and configuration lifecycle
+
+Let `M` be the largest configured entitlement among root, aggregate best effort and
+all mapped guarantees. The common exact scale is `floor(10000 / M)`; the active
+best-effort slice count must not exceed `CPU_BEST_EFFORT_POINTS * floor(10000 / M)`.
+The default empty map allows 10000 slices; a 700-point guarantee with best effort 100
+allows 1400. Best-effort leaf weights differ by at most one and sum exactly to the
+aggregate weight. A larger topology is rejected before mutation with
+`best_effort_cardinality`, not weight zero or silent rounding of a
+public entitlement.
+
+Reserve, root, best effort and map contents are dynamic and validated as one epoch.
+`CPU_POINTS_FILE` is restart-required. The complete lifecycle is in
+[CONFIGURATION.md](CONFIGURATION.md); removed-key remedies are listed below under
+configuration loading. An environment override wins
+over an authored file (`default < file < environment`) and requires process restart
+to remove. No new setting enables PID migration on a systemd host.
+
+### Already stranded processes
 
 An upgrade can find processes that an earlier release already placed below
 `resman/recovery`. Their original systemd ownership cannot be reconstructed. They
@@ -41,9 +114,8 @@ leaf. A release that falls back to recovery is reported as `recovery`, not
 `released`; restore results distinguish `exact_origin`, `recovery`, `disappeared`,
 and `failed`.
 
-Schema version 5 adds the lifecycle values `ownership_rejected`, `recovery`, and
-`stranded`. Archive or delete a schema-version-4 database before starting this
-release; in-place schema migration is not supported.
+The lifecycle values `ownership_rejected`, `recovery`, and `stranded` remain
+available in schema 6; the upgrade does not reconstruct a lost session.
 
 ## Pre-upgrade checklist
 
@@ -54,7 +126,7 @@ release; in-place schema migration is not supported.
    `/etc/resman/resman.conf` and prepare the packaged regular mode-`0600`
    `/etc/resman/cpu-points.map` below a root-owned mode-`0700` `/etc/resman` directory.
 4. Remove or securely archive every legacy configuration artifact described below.
-5. Archive or delete the pre-1.32.0 metrics database. It cannot be opened by the new
+5. Archive or delete the pre-1.33.0 metrics database. It cannot be opened by the new
    schema.
 6. If MCP uses HTTP, provision its certificate and key, update clients to HTTPS and
    MCP revision 2026-07-28, and update the health probe.
@@ -140,7 +212,7 @@ symbolic-link ancestors are rejected. Failure disables historical persistence wi
 explicit remedy while resource enforcement remains active.
 
 **Cause.** Persisted fields now distinguish CPU Points configured guarantees, class,
-applied weight, common interval identity, delivered parent/domain bandwidth,
+applied weight, common interval identity, delivered parent/slice bandwidth,
 throttling, topology resets, PID-namespace coverage, RAM cgroup charges and memory
 events in addition to CPU enforcement, RAM/I/O enforcement, and the active-user union. Reinterpreting old rows would
 silently corrupt history, and relying on SQLite defaults or the service umask could
@@ -208,8 +280,10 @@ least the previous nominal headroom. For example, two reserved cores on an eight
 host become 250 points. When `m >= N`, no exact CPU Points equivalent exists: leave
 `USER_INCLUDE_LIST` empty to disable CPU enforcement, or deliberately select the
 minimum representable finite parent pool and accept the changed semantics. With the
-100000-microsecond period, that minimum is `ceil(10/N)` points, so the corresponding
-maximum reserve is `1000 - ceil(10/N)`.
+100000-microsecond period, the kernel minimum is `ceil(10/N)` points. The public
+configuration additionally requires a pool of at least 10 points (reserve at most
+990), and root plus best effort must fit even with an empty map. Do not use the
+kernel bound alone as a configuration limit.
 
 Choose a positive `CPU_BEST_EFFORT_POINTS`, populate the shipped map, and ensure
 `sum(all mapped guarantees) + CPU_ROOT_POINTS + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`.
@@ -228,7 +302,8 @@ across unrelated parents. RAM and I/O authority are checked independently.
 See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the schema-6 reset,
 replacement fields, synchronized measurement procedure and coverage semantics.
 
-Reserve, best-effort, and map-content reload as one confirmed epoch. A class change
+Reserve, root, best-effort, and map-content reload as one confirmed epoch. Native
+active class changes reconcile the flat plan in place. On non-systemd hosts only, a class change
 for an active UID is rejected atomically and no pending class state is retained. Wait
 for normal release or first remove that UID from CPU eligibility and reload, confirm
 release, then edit the map and reload; restore eligibility only in a later reload.
@@ -237,6 +312,7 @@ the map path requires a restart. A custom map path must be absolute and clean, n
 root/daemon-owned regular mode-`0600` file, and traverse only trusted non-symlink
 ancestors that are not group/other writable except for a root-owned sticky directory.
 
+The following placement restriction applies only to the non-systemd migration backend.
 Moving a live process does not transfer existing cgroup v2 memory charges. Dynamic
 first ingress therefore constrains post-ingress charges only: process-derived UID
 memory stays complete while managed-cgroup RAM coverage is partial. CPU activation
@@ -481,9 +557,10 @@ resource and count fields.
 
 **Visible change.** `resman_cpu_action_cores` is removed without an alias. Prometheus
 now exposes the configured reserve and nominal parent pool, the verified live online-CPU
-denominator, programmed parent quota/period, synchronized parent/domain/leaf usage deltas,
+denominator, programmed parent quota/period, synchronized parent/slice usage deltas,
 parent throttling, bounded delivery and flat denominator states, optional mapped-user
-guarantees, applied class/raw weight, process coverage, and post-ingress RAM cgroup coverage.
+guarantees, applied class/raw weight, process coverage, and independent native RAM coverage
+(post-ingress coverage only on the non-systemd migration backend).
 Current MCP system, limits, user-metrics and CPU-report payloads add the corresponding typed
 `cpu_points` objects; limits status also includes `cpu_point_users`. Limit-hook JSON and script
 environments add typed configured/applied CPU Points and RAM-coverage fields.
@@ -494,7 +571,7 @@ quota or raw weight is not evidence of delivered CPU bandwidth, and an applied h
 subset is not a guarantee for the complete UID workload.
 
 **Action.** Remove every query for `resman_cpu_action_cores`. Compute allocation ratios from
-the synchronized domain or leaf CPU deltas divided by the effective parent usage delta, not
+the synchronized sibling CPU deltas divided by the effective parent usage delta, not
 from nominal quota or raw weights. Treat absent optional guarantees and unavailable/reset
 interval deltas as unknown rather than zero. Update MCP and hook decoders for the nested typed
 objects and bounded lifecycle/coverage states; no compatibility fields are provided.
@@ -749,12 +826,15 @@ investigating delayed release.
 
 ### Enabled features require real cgroup interfaces
 
-**Visible change.** Startup creates a real child cgroup and requires `cpu.max`, plus
+**Visible change.** On the non-systemd backend, startup creates a real child cgroup and requires `cpu.max`, plus
 `memory.max` when `RAM_LIMIT_ENABLED=true` and `io.max` when
 `IO_LIMIT_ENABLED=true`. Missing structural capability exits with status 78. `cpuset`
 is optional. A hot reload cannot enable a feature whose interface was unavailable at
 startup; the effective feature remains disabled and restart is required after host
-repair.
+repair. On systemd-native hosts the adapter verifies the relevant runtime properties
+and real controller interfaces before applying each resource. Systemd may enable
+controllers on demand, so an idle slice without cpu.max is not itself evidence of
+an unsupported kernel.
 
 **Cause.** Controller names alone did not prove that the kernel exposed the file
 enforcement writes, while packaging made optional `cpuset` fatal.

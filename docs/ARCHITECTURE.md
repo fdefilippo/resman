@@ -93,6 +93,8 @@ for the schema-6 contract and operator measurement procedure.
 
 ## Cgroup Hierarchy
 
+Current metrics schema: 6.
+
 On systemd hosts the authoritative topology is flat:
 
 ```text
@@ -119,14 +121,21 @@ installs `/etc/resman/cpu-points.map` as a root-owned regular mode-`0600` file b
 the private mode-`0700` configuration directory. Unsafe files or ancestors reject the
 complete composite configuration epoch.
 
-An active UID cannot change between guaranteed and best-effort because that requires
+Native active class changes reconcile weights in place without moving processes or
+changing the accounting identity. Reserve, root and best effort default to 100 each,
+leaving 700 named points. Root receives CPU_ROOT_POINTS=100 without a leaf CPUQuota;
+the reserve protects system.slice, not an unbounded root login shell.
+
+On the non-systemd migration backend only, an active UID cannot change between guaranteed and best-effort because that requires
 a cross-domain move. Such a reload is rejected atomically and records no pending
 class. The operator must first wait for release or make the UID CPU-ineligible, reload
 and confirm release, then change the map and reload; eligibility may be restored only
 in a later epoch. Same-class weight changes and inactive membership changes remain
 dynamic.
 
-Linux does not transfer existing memory charges when a process moves. Dynamic first
+Native memory accounting includes existing slice charges; incomplete authority refuses
+RAM and I/O without abandoning CPU scheduling. The following placement restrictions
+apply only to the non-systemd backend. Linux does not transfer existing memory charges when a process moves. Dynamic first
 ingress therefore provides post-ingress `memory.high`/`memory.max` enforcement, while
 process-derived UID memory remains complete and the cgroup charge coverage is partial.
 A cross-parent CPU activation or release is refused while RAM enforcement is active;

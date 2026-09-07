@@ -177,7 +177,7 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
 	it. If executable identity is unavailable, the process **MUST** remain enforceable and
 	the failure **MUST** be reported explicitly. PID-decorated display names and
 	user-controlled `argv[0]` values are not policy identities.
-- While any resource limit remains observed as active, every control cycle **MUST**
+- On the non-systemd migration backend, while any resource limit remains observed as active, every control cycle **MUST**
   reconcile process membership once per limited user. Newly enforceable processes move
   into the user's current shared or standalone cgroup. Processes that become excluded
   move back only to an origin captured for the same PID start time. If that origin is
@@ -197,6 +197,12 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   for CPU, RAM, or I/O enforcement. A refusal is typed and bounded, leaves requested
   intent observable, and never creates active-limit state. Restore remains permitted
   only to remove a constraint inherited from an earlier release.
+- The native systemd adapter **MUST** reconcile a complete flat `user.slice` plan
+  without PID migration. Root has its explicit lendable entitlement, excluded active
+  slices still participate in the parent envelope, and RAM/I/O require independent
+  complete authority. Native active class changes modify weights in place; the
+  non-systemd cross-class placement restriction does not apply. Unavailable authority
+  remains observation-only, never a reason to select migration on a systemd host.
 - A ResMan recovery leaf is never an authoritative process origin. Every restore
   candidate **MUST** end in exactly one typed disposition: exact origin, recovery,
   disappeared, or failed. Recovery occupants remain persistently stranded, cannot be

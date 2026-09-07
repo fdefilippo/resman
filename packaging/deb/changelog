@@ -1,3 +1,21 @@
+resman (1.33.0-1) stable; urgency=medium
+
+  * BREAKING: replace systemd observation-only containment with in-place
+    user-slice enforcement and flat work-conserving lending.
+  * BREAKING: CPU_ROOT_POINTS=100 and indirectly bounded excluded users;
+    default-budget maps totaling 701-800 points require explicit rebalance.
+  * BREAKING: schema 6 requires history reset; replace domain/lending
+    telemetry with flat weights, coverage and measured delivery.
+  * Require complete independent authority for memory and I/O; preserve CPU
+    scheduling during typed resource refusals.
+  * Persist systemd property ownership and recover interrupted restoration,
+    daemon restarts and unit recreation without deleting operator state.
+  * Preserve SQLite WAL locks during permission checks; document read-only
+    inspection and ship native upgrade, observation and recovery references.
+  * Preserve the operator's main configuration and CPU Points map.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 06:45:00 +0200
+
 resman (1.32.0-2) stable; urgency=medium
 
   * Preserve the last valid observation CPU gauge and expose bounded sample

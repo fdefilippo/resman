@@ -8,8 +8,8 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.32.0
-RELEASE = 2
+VERSION = 1.33.0
+RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
@@ -304,13 +304,19 @@ install: build
 	@echo "Installing $(PROJECT_NAME) to $(BIN_DIR)..."
 	sudo install -m 755 $(PROJECT_NAME) $(BIN_DIR)/
 	sudo install -d -m 0700 $(CONF_DIR) $(STATE_DIR)
-	sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf
+	@if sudo test -e $(CONF_DIR)/resman.conf || sudo test -L $(CONF_DIR)/resman.conf; then \
+		echo "Preserving existing $(CONF_DIR)/resman.conf"; \
+	else \
+		sudo install -m 0600 config/resman.conf.example $(CONF_DIR)/resman.conf; \
+	fi
 	@if sudo test -e $(CONF_DIR)/cpu-points.map || sudo test -L $(CONF_DIR)/cpu-points.map; then \
 		echo "Preserving existing $(CONF_DIR)/cpu-points.map"; \
 	else \
 		sudo install -m 0600 config/cpu-points.map.example $(CONF_DIR)/cpu-points.map; \
 	fi
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
+	sudo install -d -m 0755 /usr/share/doc/resman
+	sudo install -m 0644 docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
 	@echo "Configuration: $(CONF_DIR)/resman.conf"

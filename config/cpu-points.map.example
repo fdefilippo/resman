@@ -1,8 +1,9 @@
 [resman-cpu-points-map-v1]
 # Exact NSS username=guaranteed points, one assignment per line. Dots,
 # backslashes, at-signs, and hyphens are literal username characters.
-# Unlisted CPU-eligible users share one aggregate CPU_BEST_EFFORT_POINTS
-# entitlement. Configured guarantees plus that entitlement must not exceed
-# 1000 - CPU_RESERVE_POINTS.
+# Active unmapped and excluded native user slices share CPU_BEST_EFFORT_POINTS.
+# Configured guarantees + CPU_ROOT_POINTS + CPU_BEST_EFFORT_POINTS must not
+# exceed 1000 - CPU_RESERVE_POINTS. Defaults leave 700 mapped points.
+# Root uses CPU_ROOT_POINTS=100, not a map entry. All surplus is lendable.
 # alice=300
 # john.smith=200

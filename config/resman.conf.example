@@ -84,7 +84,8 @@ CPU_THRESHOLD_DURATION=90
 # exclusive physical CPU isolation. Even reserve zero programs finite cpu.max;
 # a saturated parent can throttle and deliver less than its nominal quota.
 # Mapped eligible users receive relative guarantees from CPU_POINTS_FILE.
-# PID-namespace rejections reduce that coverage until systemd-native control is active.
+# Native CPU includes rootless descendants; unrelated parents make coverage partial.
+# PID-namespace rejections reduce that coverage on the non-systemd migration backend.
 # Every other active non-root user slice, including excluded and unmapped users,
 # shares CPU_BEST_EFFORT_POINTS as one aggregate entitlement. Active root
 # sessions receive CPU_ROOT_POINTS as a lendable minimum, never as a ceiling;
@@ -92,10 +93,14 @@ CPU_THRESHOLD_DURATION=90
 # CPU Points are minimum proportional entitlements, not ceilings. Unused
 # bandwidth is work-conserving among all runnable sibling user slices.
 # Configured guarantees plus root and best effort must fit within 1000 minus
-# reserve. These values and map-content changes reload atomically. Changing the
-# CPU_POINTS_FILE path requires a restart. A class change for an active UID is
+# reserve. Defaults leave 700 points for named guarantees (previously 800).
+# These values and map-content changes reload atomically. Native active class
+# changes reconcile weights in place. Changing CPU_POINTS_FILE requires restart.
+# On the non-systemd migration backend only, a class change for an active UID is
 # rejected atomically: release the UID, then retry the map reload. There is no
 # pending class state. Same-class weights and inactive membership remain dynamic.
+# The reserve protects system.slice and other workloads outside user.slice;
+# root login sessions remain inside the finite CPU pool, without a leaf quota.
 CPU_RESERVE_POINTS=100
 CPU_ROOT_POINTS=100
 CPU_BEST_EFFORT_POINTS=100

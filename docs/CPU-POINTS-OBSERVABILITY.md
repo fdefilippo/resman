@@ -1,5 +1,7 @@
 # CPU Points observation under systemd
 
+Current metrics schema: 6.
+
 On a systemd host, `systemd_native` enforcement keeps processes in their existing
 units. The finite parent is `user.slice`; its active `user-UID.slice` children
 share bandwidth through weights. Root has the dedicated `CPU_ROOT_POINTS`
