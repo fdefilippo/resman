@@ -75,6 +75,21 @@ def journal_advanced(before, after):
             "changed plan did not advance its durable journal generation")
 
 
+def unused_slice(info):
+    """Accept synthetic inactive slices, never operator-configured units."""
+    values = {}
+    for line in info.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key in values:
+            return False
+        values[key] = value
+    return (set(values) == {"LoadState", "ActiveState", "ControlGroup", "FragmentPath", "DropInPaths"}
+            and values["LoadState"] in {"not-found", "loaded"}
+            and values["ActiveState"] == "inactive"
+            and not values["ControlGroup"] and not values["FragmentPath"]
+            and values["DropInPaths"] in {"", "/usr/lib/systemd/system/user-.slice.d/10-defaults.conf"})
+
+
 class ReconciliationGate(NativeGate):
     def __init__(self, *args):
         super().__init__(*args)
@@ -107,9 +122,12 @@ class ReconciliationGate(NativeGate):
             if self.command("pgrep", "-u", str(uid), check=False).returncode == 0:
                 continue
             info = self.command("systemctl", "show", "user-%d.slice" % uid,
-                                "-p", "LoadState", "-p", "FragmentPath", "-p", "DropInPaths", check=False).stdout
-            if "LoadState=not-found" not in info or re.search(r"(?m)^(FragmentPath|DropInPaths)=.+", info):
+                                "-p", "LoadState", "-p", "ActiveState", "-p", "ControlGroup",
+                                "-p", "FragmentPath", "-p", "DropInPaths", check=False).stdout
+            if not unused_slice(info) or self.slice(uid).exists():
                 continue
+            self.save("candidate-slice-%d" % uid, {"uid": uid, "unit_properties": info,
+                      "scope": "unused synthetic UID; inherited distribution default is preserved"})
             self.candidate_uids.append(uid)
             if len(self.candidate_uids) == 17:
                 break
@@ -201,8 +219,9 @@ class ReconciliationGate(NativeGate):
         require(uid in self.candidate_uids and uid not in self.probes, "UID is not a fresh reserved topology probe")
         unit = "user-%d.slice" % uid
         require(uid not in self.active_uids(), "probe slice became active before creation")
-        info = self.command("systemctl", "show", unit, "-p", "FragmentPath", "-p", "DropInPaths", check=False).stdout
-        require(not re.search(r"(?m)^(FragmentPath|DropInPaths)=.+", info), "probe slice acquired an external configuration")
+        info = self.command("systemctl", "show", unit, "-p", "LoadState", "-p", "ActiveState",
+                            "-p", "ControlGroup", "-p", "FragmentPath", "-p", "DropInPaths", check=False).stdout
+        require(unused_slice(info) and not self.slice(uid).exists(), "probe slice acquired an external configuration or workload")
         service = "resman-native-topology-%s-%d.service" % (self.run_id, uid)
         before = self.command("systemctl", "show", service, "-p", "LoadState", "-p", "FragmentPath", "-p", "DropInPaths", check=False).stdout
         require("LoadState=not-found" in before, "probe service name already exists")
@@ -297,15 +316,15 @@ class ReconciliationGate(NativeGate):
             operations = [workers.submit(reload), workers.submit(turnover)]
             for operation in operations:
                 operation.result(timeout=50)
-        concurrent = self.stable(start_epoch, expected_initial | {uid})
-        journal_advanced(removed, concurrent)
+        joined = self.stable(start_epoch, expected_initial | {uid})
+        journal_advanced(removed, joined)
         interval = self.history(start_epoch)
         require(bool(interval), "concurrent reconciliation produced no recorded interval")
         for row in interval:
             truthful_row(row)
         self.remove_probe(uid)
-        settled = self.stable(concurrent["history"]["sample_epoch_id"], expected_initial)
-        self.record("concurrent-reconciliation", {"intervals": interval, "joined": concurrent, "settled": settled,
+        settled = self.stable(joined["history"]["sample_epoch_id"], expected_initial)
+        self.record("concurrent-reconciliation", {"intervals": interval, "joined": joined, "settled": settled,
                     "allowed_intermediate_states": ["complete", "incomplete", "inactive", "unavailable"]})
 
     def cardinality(self):

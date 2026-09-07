@@ -145,7 +145,7 @@ The package row runs the installed `/usr/bin/resman` only after its identity and
 bytes match the supplied RPM payload:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-3.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-4.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```

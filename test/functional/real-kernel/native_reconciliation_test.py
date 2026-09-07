@@ -9,13 +9,81 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from native_gate import Blocked
-from native_reconciliation import ReconciliationGate, REQUIRED_CHECKS, atomic_write, expected_weights, journal_advanced, online_set, truthful_row
+from native_reconciliation import ReconciliationGate, REQUIRED_CHECKS, atomic_write, expected_weights, journal_advanced, online_set, truthful_row, unused_slice
 
 
 class ReconciliationTests(unittest.TestCase):
+    def test_real_concurrent_phase_executes_both_workers_and_propagates_failure(self):
+        def snapshot(epoch):
+            return {"history": {"sample_epoch_id": epoch}, "journal": {"generation": epoch},
+                    "kernel": {"weights": {str(uid): "100" for uid in (0, 1006, 1007, 1008)}},
+                    "main_sha256": str(epoch), "map_sha256": str(epoch)}
+        for failed_worker in (False, True):
+            with self.subTest(failure=failed_worker), tempfile.TemporaryDirectory() as directory:
+                gate = ReconciliationGate(directory, "rtest", "revision")
+                gate.accounts = [Mock(pw_uid=uid) for uid in (1006, 1007, 1008)]
+                gate.candidate_uids = [60000]
+                def publish(points, _best_effort):
+                    if failed_worker and points == (350, 250):
+                        raise RuntimeError("concurrent worker failed")
+                with patch.object(gate, "stable", side_effect=[snapshot(n) for n in (1, 2, 4, 5, 6, 7)]), \
+                        patch.object(gate, "reload_time", side_effect=[1, 2, 2]), \
+                        patch.object(gate, "publish_policy", side_effect=publish) as policies, \
+                        patch.object(gate, "pam_turnover", return_value={"login": snapshot(3)}), \
+                        patch.object(gate, "create_probe") as create, patch.object(gate, "remove_probe"), \
+                        patch.object(gate, "history", return_value=[{"denominator_state": "complete",
+                            "programmed_sibling_weight_sum": 100, "observed_sibling_weight_sum": 100}]):
+                    if failed_worker:
+                        with self.assertRaisesRegex(RuntimeError, "concurrent worker failed"):
+                            gate.reload_and_turnover()
+                        self.assertNotIn("concurrent-reconciliation", gate.reconcile_checks)
+                    else:
+                        gate.reload_and_turnover()
+                        self.assertEqual(gate.reconcile_checks["concurrent-reconciliation"], "PASS")
+                    self.assertEqual(policies.call_count, 2)
+                    self.assertEqual(create.call_count, 2)
+
+    def test_probe_reconfirms_synthetic_scope_before_starting_service(self):
+        base = "LoadState=loaded\nActiveState=inactive\nControlGroup=\nFragmentPath=\nDropInPaths=/usr/lib/systemd/system/user-.slice.d/10-defaults.conf\n"
+        for configured, populated in ((False, False), (True, False), (False, True)):
+            with self.subTest(configured=configured, populated=populated), tempfile.TemporaryDirectory() as directory:
+                gate = ReconciliationGate(directory, "rtest", "revision")
+                gate.candidate_uids = [60000]
+                leaf = Path(directory) / "leaf"
+                if populated: leaf.mkdir()
+                info = base.replace("/usr/lib/systemd/system/user-.slice.d/10-defaults.conf", "/etc/operator.conf") if configured else base
+                command = Mock(side_effect=[Mock(stdout=info), Mock(stdout="LoadState=not-found"), Mock(), Mock(stdout="invocation")])
+                with patch.object(gate, "active_uids", side_effect=[set(), {60000}]), \
+                        patch.object(gate, "slice", return_value=leaf), patch.object(gate, "command", command):
+                    if configured or populated:
+                        with self.assertRaises(AssertionError): gate.create_probe(60000)
+                        self.assertEqual(command.call_count, 1)
+                    else:
+                        gate.create_probe(60000)
+                        self.assertEqual(command.call_args_list[2].args[0], "systemd-run")
+                        self.assertEqual(gate.probes[60000]["invocation"], "invocation")
+
+    def test_unused_synthetic_slice_preserves_only_generic_distribution_defaults(self):
+        base = {"LoadState": "loaded", "ActiveState": "inactive", "ControlGroup": "",
+                "FragmentPath": "", "DropInPaths": "/usr/lib/systemd/system/user-.slice.d/10-defaults.conf"}
+        def text(values):
+            return "\n".join(key + "=" + value for key, value in values.items())
+        self.assertTrue(unused_slice(text(base)))
+        self.assertTrue(unused_slice(text(dict(base, LoadState="not-found", DropInPaths=""))))
+        for key, value in (("LoadState", "error"), ("ActiveState", "active"), ("ActiveState", "failed"),
+                           ("ControlGroup", "/user.slice/user-60000.slice"), ("FragmentPath", "/etc/custom.slice"),
+                           ("DropInPaths", "/etc/systemd/system/user-.slice.d/10-defaults.conf"),
+                           ("DropInPaths", "/usr/lib/systemd/system/user-60000.slice.d/10-defaults.conf"),
+                           ("DropInPaths", base["DropInPaths"] + " /run/systemd/system.control/user-60000.slice.d/50-CPUWeight.conf")):
+            with self.subTest(key=key, value=value):
+                self.assertFalse(unused_slice(text(dict(base, **{key: value}))))
+        for key in base:
+            self.assertFalse(unused_slice(text({k: v for k, v in base.items() if k != key})))
+        self.assertFalse(unused_slice(text(base) + "\nActiveState=inactive"))
+
     def test_expected_plan_includes_root_and_partitions_excluded_siblings(self):
         weights = expected_weights({1006: 400, 1007: 200}, 100, 80, {0, 1006, 1007, 1008, 60000})
         self.assertEqual(weights, {0: 2500, 1006: 10000, 1007: 5000, 1008: 1000, 60000: 1000})
