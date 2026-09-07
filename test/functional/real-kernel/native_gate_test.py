@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +14,52 @@ from native_gate import Blocked, NativeGate, checks_pass, field
 
 
 class NativeGateTests(unittest.TestCase):
+    def test_unplaced_helper_is_cleaned_only_with_exact_recorded_identity(self):
+        for valid in (True, False):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as directory:
+                gate = NativeGate(directory, "runit", "revision")
+                gate.owned_host = True
+                gate.accounts = [SimpleNamespace(pw_uid=1001)]
+                gate.helper = Path(directory) / "helper"
+                output = gate.helper / "1001"
+                output.mkdir(parents=True)
+                identity = {"pid": 2000000000, "start_time": "123", "children": []}
+                (output / "identity.json").write_text(json.dumps(identity))
+                proc_files = Path(directory) / "fake-proc"
+                proc_files.mkdir()
+                (proc_files / "cgroup").write_text("0::/system.slice/crond.service")
+                (proc_files / "stat").write_text("1 (python3) " + " ".join(["0"] * 19 + ["123" if valid else "456"]))
+                (proc_files / "cmdline").write_bytes(b"\0".join([
+                    b"/usr/bin/python3", os.fsencode(gate.helper / "workload.py"), os.fsencode(output), b"",
+                ]))
+
+                class FakeProcess:
+                    alive = True
+                    def exists(self):
+                        return self.alive
+                    def stat(self):
+                        return SimpleNamespace(st_uid=1001)
+                    def __truediv__(self, name):
+                        return proc_files / name
+
+                proc = FakeProcess()
+                def kill(pid, _signal):
+                    self.assertEqual(pid, identity["pid"])
+                    proc.alive = False
+
+                with patch("native_gate.Path", side_effect=lambda p: proc if str(p) == "/proc/2000000000" else Path(p)), \
+                        patch("native_gate.os.kill", side_effect=kill) as terminate, \
+                        patch.object(gate, "command"), patch.object(gate, "stop_daemon"), patch.object(gate, "assert_released"):
+                    if valid:
+                        gate.cleanup()
+                        terminate.assert_called_once()
+                        self.assertFalse(proc.alive)
+                    else:
+                        with self.assertRaises(AssertionError):
+                            gate.cleanup()
+                        terminate.assert_not_called()
+                        self.assertTrue(gate.helper.exists())
+
     def test_ordinary_live_stop_failure_prevents_the_crash_phase(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
             gate = NativeGate(directory, "runit", "revision")
