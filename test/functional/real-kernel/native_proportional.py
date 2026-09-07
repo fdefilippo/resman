@@ -24,7 +24,10 @@ REQUIRED_CHECKS = frozenset({
 LEAVES = ("a", "b", "root", "best")
 WEIGHTS = {"a": 5000, "b": 5000, "root": 10000, "best": 10000}
 SAMPLED_NODES = ("parent",) + LEAVES
-PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND = 1200000
+# CFS bandwidth is a period-average ceiling, not an instantaneous execution
+# ceiling. During a sub-period sampling span this four-CPU fixture can execute
+# on all four CPUs before its 120% quota is exhausted.
+MAXIMUM_INSTANTANEOUS_CAPACITY_USEC_PER_SECOND = 4000000
 MAXIMUM_FRAME_SKEW_SECONDS = 0.2
 PRIMARY_CONSERVATION_FRACTION = 0.01
 # Five integer-microsecond counters at both endpoints can contribute at most
@@ -45,8 +48,10 @@ def _sampling_spans(frame):
     for group, nodes in frame["nodes"].items():
         require(set(nodes) == set(SAMPLED_NODES), "measurement nodes changed")
         sampling = frame["sampling"][group]
-        require(sampling == {"capacity_usec_per_second": PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND},
-                "wrong or ambiguous programmed parent capacity")
+        require(sampling == {
+            "maximum_instantaneous_capacity_usec_per_second":
+                MAXIMUM_INSTANTANEOUS_CAPACITY_USEC_PER_SECOND,
+        }, "wrong or ambiguous instantaneous sampling capacity")
         group_reads = []
         for node in SAMPLED_NODES:
             read = nodes[node].get("read")
@@ -103,7 +108,7 @@ def validate_sample_interval(before, after):
         measured_error = leaf_total - deltas["parent"]
         timing_allowance = math.ceil(
             (measurement["before_span"] + measurement["after_span"])
-            * PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND
+            * MAXIMUM_INSTANTANEOUS_CAPACITY_USEC_PER_SECOND
         )
         permitted_error = timing_allowance + COUNTER_QUANTIZATION_ALLOWANCE_USEC
         require(abs(measured_error) <= permitted_error,
@@ -288,7 +293,10 @@ class ProportionalGate(NativeGate):
         nodes, sampling = {}, {}
         for group, paths in self.paths.items():
             nodes[group] = {}
-            sampling[group] = {"capacity_usec_per_second": PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND}
+            sampling[group] = {
+                "maximum_instantaneous_capacity_usec_per_second":
+                    MAXIMUM_INSTANTANEOUS_CAPACITY_USEC_PER_SECOND,
+            }
             require(tuple(paths) == SAMPLED_NODES, "counter paths are not in the adjacent sampling order")
             require(field(paths["parent"] / "cpu.max") == "120000 100000", "parent quota changed")
             for leaf, path in paths.items():

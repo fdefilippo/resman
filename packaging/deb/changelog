@@ -1,3 +1,9 @@
+resman (1.33.0-8) stable; urgency=medium
+
+  * Bound short CPU sampling uncertainty by instantaneous runnable capacity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 18:36:00 +0200
+
 resman (1.33.0-7) stable; urgency=medium
 
   * Wait for complete fixture identity documents before treating workloads as ready.

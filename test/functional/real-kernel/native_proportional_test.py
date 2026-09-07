@@ -16,7 +16,7 @@ def stamp(frame, node_gap=0.0002, read_width=0.0001):
     cursor = frame["time"] + 0.001
     frame["sampling"] = {}
     for group, nodes in frame["nodes"].items():
-        frame["sampling"][group] = {"capacity_usec_per_second": 1200000}
+        frame["sampling"][group] = {"maximum_instantaneous_capacity_usec_per_second": 4000000}
         for node in ("parent",) + LEAVES:
             nodes[node]["read"] = {"started": cursor, "finished": cursor + read_width}
             cursor += node_gap + read_width
@@ -133,12 +133,12 @@ class ProportionalTests(unittest.TestCase):
                 after["time"] = 105
                 stamp(after, node_gap=0.01, read_width=0.001)
                 stamp(before, node_gap=0.01, read_width=0.001)
-                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 60000
+                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 200000
                 report = validate_sample_interval(before, after)
-                self.assertEqual(report["native"]["error_usec"], direction * 60000)
-                self.assertEqual(report["native"]["permitted_error_usec"], 108010)
+                self.assertEqual(report["native"]["error_usec"], direction * 200000)
+                self.assertEqual(report["native"]["permitted_error_usec"], 360010)
 
-                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 60000
+                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 200000
                 with self.assertRaisesRegex(AssertionError, "measured read-timing uncertainty"):
                     validate_sample_interval(before, after)
 

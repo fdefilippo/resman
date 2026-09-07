@@ -145,7 +145,7 @@ The package row runs the installed `/usr/bin/resman` only after its identity and
 bytes match the supplied RPM payload:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-7.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-8.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```
@@ -186,8 +186,10 @@ lending window record raw parent/leaf counters, identities, per-node monotonic r
 intervals, online capacity and throttling. Each group parent and its four leaves are
 read as one adjacent block. Every five-second interval checks conservation in both
 directions against an error bound derived from the two measured block spans, the
-programmed 1.2-CPU capacity and the ten-microsecond integer-counter quantization
-allowance. The complete 60-second window retains the fixed bilateral one-percent
+four-CPU instantaneous execution capacity and the ten-microsecond integer-counter
+quantization allowance. The 1.2-CPU CFS bandwidth is a period-average ceiling and
+cannot bound execution during a sub-period read span, before the quota is exhausted.
+The complete 60-second window retains the fixed bilateral one-percent
 conservation bound. The
 mapped aggregate must match the same-window reference within 0.5 percentage points;
 each leaf within 1.0; the stale control must remain at least 2.0 points away at the
