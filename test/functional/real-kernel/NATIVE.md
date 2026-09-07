@@ -72,7 +72,10 @@ evidence. Track completion and findings in Beads, not by reinterpreting this pre
 
 `remote.sh systemd-native-proportional root@terra` adds a separate source-binary row.
 It uses the same exclusive remote ownership and cleanup boundary, with genuine cron
-sessions for both mapped users, an excluded best-effort user, and root. Four online
+sessions for both mapped users and an excluded best-effort user, plus an authenticated
+localhost SSH/PAM session for root (OL9 cron does not register root with logind).
+Root localhost authentication and a known host key must already work: the runner
+never changes SSH, PAM, authorized keys or host-key verification. Four online
 CPUs with unrestricted runner affinity are required. The fixture is deliberately not
 the shipped default: reserve 700, root 100, best effort 100, mapped 50 + 50. Its
 300-point native parent runs beside independent correct and stale-control parents

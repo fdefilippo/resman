@@ -223,7 +223,7 @@ class NativeGate:
         shutil.copyfile(self.bundle / "native-workload.py", workload)
         workload.chmod(0o755)
         lines = ["SHELL=/bin/bash", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"]
-        for a in self.session_accounts():
+        for a in self.cron_accounts():
             directory = self.helper / str(a.pw_uid)
             directory.mkdir(mode=0o700)
             os.chown(directory, a.pw_uid, a.pw_gid)
@@ -232,7 +232,7 @@ class NativeGate:
         self.cron.write_text("\n".join(lines) + "\n")
         self.cron.chmod(0o600)
         self.cron_created = True
-        for a in self.session_accounts():
+        for a in self.cron_accounts():
             path = self.helper / str(a.pw_uid) / "identity.json"
             eventually(path.exists, "cron did not create workload for " + a.pw_name, 90)
             identity = json.loads(path.read_text())
@@ -249,6 +249,9 @@ class NativeGate:
 
     def session_accounts(self):
         return self.accounts
+
+    def cron_accounts(self):
+        return self.session_accounts()
 
     def scrape(self):
         with urllib.request.urlopen("http://127.0.0.1:%d/metrics" % self.port, timeout=5) as response:
@@ -404,6 +407,19 @@ class NativeGate:
                                  field(proc / "cgroup"))
             if match:
                 self.sessions[account.pw_uid] = {"session": match[1]}
+            else:
+                # An invalid fixture placement must not escape cleanup as PASS.
+                # Only the exact recorded helper process may be terminated here.
+                stat = field(proc / "stat").rsplit(")", 1)[1].split()
+                argv = (proc / "cmdline").read_bytes().split(b"\0")[:-1]
+                expected = [b"/usr/bin/python3", os.fsencode(self.helper / "workload.py"),
+                            os.fsencode(self.helper / str(account.pw_uid))]
+                require(stat[19] == identity["start_time"] and argv == expected,
+                        "unrecognized workload outside PAM; manual cleanup required")
+                os.kill(identity["pid"], signal.SIGTERM)
+                eventually(lambda p=proc: not p.exists(), "invalid fixture workload survived termination", 15)
+                require(not any(Path("/proc/%d" % child).exists() for child in identity["children"]),
+                        "invalid fixture children survived termination")
         for identity in self.sessions.values():
             self.command("loginctl", "terminate-session", identity["session"], check=False)
         self.command("systemctl", "stop", self.split_unit, check=False)

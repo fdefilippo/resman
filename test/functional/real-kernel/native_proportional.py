@@ -6,6 +6,7 @@ from pathlib import Path
 import pwd
 import re
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -69,20 +70,49 @@ class ProportionalGate(NativeGate):
         self.reference_identities = {}
         self.paused = []
         self.paths = {}
+        self.root_ssh = None
+        self.root_output = None
 
     def session_accounts(self):
         return self.accounts + [pwd.getpwuid(0)]
+
+    def cron_accounts(self):
+        # OL9 cron skips logind for root; SSH is the real root-session boundary.
+        return self.accounts
 
     def preflight(self):
         super().preflight()
         if field("/sys/devices/system/cpu/online") != "0-3" or os.sched_getaffinity(0) != set(range(4)):
             raise Blocked("this simultaneous three-parent fixture requires four unrestricted online CPUs")
+        probe = self.command("ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+                             "-o", "ConnectTimeout=5", "root@localhost", "cat /proc/self/cgroup", check=False)
+        if probe.returncode or not re.fullmatch(r"0::/user.slice/user-0.slice/session-[a-z0-9]+\.scope", probe.stdout.strip()):
+            raise Blocked("root localhost SSH must already authenticate and enter a genuine logind session")
         self.save("proportional-environment", {
             "runner_sha256": sha(__file__), "window_seconds": 60, "maximum_skew_seconds": 0.2,
             "aggregate_tolerance_pp": 0.5, "leaf_tolerance_pp": 1.0,
             "minimum_stale_separation_pp": 2.0, "reserve": 700, "root": 100,
             "best_effort": 100, "mapped": [50, 50], "combined_parent_ceiling_points": 900,
         })
+
+    def start_sessions(self):
+        super().start_sessions()
+        output = self.helper / "0"
+        output.mkdir(mode=0o700)
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=5",
+                   "root@localhost", "/usr/bin/python3", str(self.helper / "workload.py"), str(output)]
+        self.save("root-ssh-command", command)
+        self.root_output = (self.evidence / "root-ssh.log").open("w")
+        self.root_ssh = subprocess.Popen(command, stdout=self.root_output, stderr=self.root_output)
+        eventually(lambda: (output / "identity.json").exists(), "root SSH workload did not start", 20)
+        identity = json.loads((output / "identity.json").read_text())
+        match = re.fullmatch(r"0::/user.slice/user-0.slice/session-([a-z0-9]+)\.scope", identity["cgroup"])
+        require(match is not None, "root workload is not in its own SSH/PAM session")
+        identity["session"] = match[1]
+        state = self.command("loginctl", "show-session", match[1], "-p", "User", "-p", "Scope").stdout
+        require("User=0" in state and "Scope=session-" + match[1] + ".scope" in state, "logind does not own root workload")
+        self.sessions[0] = identity
+        self.passed("pam-sessions", self.sessions)
 
     def write_config(self, blackout=True, overcommit=False):
         super().write_config(blackout, overcommit)
@@ -218,7 +248,14 @@ class ProportionalGate(NativeGate):
             self.command("systemctl", "revert", unit)
             self.command("systemctl", "stop", unit)
             require(not (Path("/run/systemd/system.control") / (unit + ".d")).exists(), "reference drop-in survived")
-        super().cleanup()
+        try:
+            super().cleanup()
+        finally:
+            if self.root_ssh is not None:
+                self.root_ssh.terminate()
+                self.root_ssh.wait(timeout=10)
+            if self.root_output is not None:
+                self.root_output.close()
 
     def run(self):
         status, detail, cleanup = "FAIL", "proportional gate incomplete", "PASS"

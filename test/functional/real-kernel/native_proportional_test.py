@@ -28,6 +28,12 @@ def frames():
 
 
 class ProportionalTests(unittest.TestCase):
+    def test_root_uses_ssh_and_is_not_assumed_to_have_a_cron_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = ProportionalGate(directory, "runit", "revision")
+            self.assertEqual(gate.cron_accounts(), [])
+            self.assertEqual([a.pw_uid for a in gate.session_accounts()], [0])
+
     def test_each_result_is_mandatory(self):
         keys = ("full-budget-rejection", "pam-sessions", "native-plan", "full-contention", "stale-control",
                 "work-conserving-lending", "root-progress", "unchanged-membership", "unchanged-weights", "graceful-stop")
