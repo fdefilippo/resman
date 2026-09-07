@@ -193,6 +193,7 @@ class ProportionalGate(NativeGate):
         return {"time": start, "skew": time.monotonic() - start, "nodes": nodes}
 
     def measure(self, phase):
+        self.record_topology(phase + "-topology-before")
         before = self.snapshot()
         frames = [before]
         for step in range(1, 13):
@@ -200,6 +201,7 @@ class ProportionalGate(NativeGate):
             time.sleep(max(0, before["time"] + step * 5 - time.monotonic()))
             frames.append(self.snapshot())
         self.save(phase + "-raw", frames)
+        self.record_topology(phase + "-topology-after")
         measured = ratios(frames[0], frames[-1])
         duration = frames[-1]["time"] - frames[0]["time"]
         for group, values in measured.items():
@@ -209,6 +211,31 @@ class ProportionalGate(NativeGate):
         self.save(phase + "-measured", measured)
         compare_reference(measured)
         return measured
+
+    def record_topology(self, name):
+        result = {}
+        for group, paths in self.paths.items():
+            result[group] = {}
+            for stat in paths["parent"].rglob("cpu.stat"):
+                directory = stat.parent
+                values = {key: field(directory / key, "unavailable") for key in
+                          ("cpu.stat", "cpu.weight", "cpu.weight.nice", "cpu.idle", "cpuset.cpus.effective", "cgroup.procs")}
+                processes = {}
+                for pid in values["cgroup.procs"].split():
+                    if not pid.isdigit():
+                        continue
+                    proc = Path("/proc") / pid
+                    try:
+                        fields = field(proc / "stat").rsplit(")", 1)[1].split()
+                        status = field(proc / "status")
+                        processes[pid] = {"state": fields[0], "ppid": fields[1], "priority": fields[15],
+                                          "nice": fields[16], "start_time": fields[19],
+                                          "affinity": re.findall(r"(?m)^Cpus_allowed_list:.*$", status)}
+                    except FileNotFoundError:
+                        processes[pid] = {"state": "disappeared"}
+                values["processes"] = processes
+                result[group][str(directory.relative_to(paths["parent"]))] = values
+        self.save(name, result)
 
     def pause(self, identity):
         self.assert_membership()
