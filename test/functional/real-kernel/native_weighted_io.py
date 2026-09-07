@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Adapter-only IOWeight proof; device traffic is characterization, never policy."""
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,12 @@ PROBE_SCOPE = "adapter-programmed-weight-only; not daemon or device-delivery evi
 REQUIRED_CHECKS = frozenset({"weighted-io-pam-sessions", "owned-null-block-device",
     "bfq-device-capability", "non-bfq-negative-capability", "adapter-weight-roundtrip",
     "exact-weight-restoration", "owned-device-cleanup"})
+
+
+def device_name(run_id):
+    # Linux null_blk copies the configfs name into disk_name[DISK_NAME_LEN=32].
+    # Keep the entire name within 31 bytes instead of relying on truncation.
+    return "resmanweight" + hashlib.sha256(run_id.encode("ascii")).hexdigest()[:19]
 
 
 def selected_scheduler(text):
@@ -51,10 +58,10 @@ def validate_proof(read_json, metadata):
             scope["run_id"] == metadata["run_id"] and
             scope["probe_sha256"] == metadata["tested_binary_sha256"], "weighted probe provenance differs")
     device = read_json("owned-null-block-device.json")
-    insist(re.fullmatch(r"resmanweight[a-z0-9]+", device["name"]) is not None and
+    insist(re.fullmatch(r"resmanweight[0-9a-f]{19}", device["name"]) is not None and
             device["created_by_run"] is True and re.fullmatch(r"\d+:\d+", device["major_minor"]),
             "device was not created by this run")
-    insist(device["name"] == "resmanweight" + re.sub("[^a-z0-9]", "", metadata["run_id"]),
+    insist(device["name"] == device_name(metadata["run_id"]),
             "device is not run-specific")
     sessions = read_json("weighted-io-pam-sessions.json")
     insist(len(sessions) == 2 and all(int(uid) > 0 for uid in sessions), "two non-root PAM users required")
@@ -137,7 +144,7 @@ class WeightedIOGate(NativeGate):
     def __init__(self, bundle, run_id, revision):
         super().__init__(bundle, run_id, revision)
         self.probe = self.bundle / "systemdunit-real.test"
-        self.name = "resmanweight" + re.sub("[^a-z0-9]", "", run_id)
+        self.name = device_name(run_id)
         self.device_config = Path("/sys/kernel/config/nullb") / self.name
         self.block = Path("/sys/block") / self.name
         self.device = Path("/dev") / self.name
@@ -189,7 +196,7 @@ class WeightedIOGate(NativeGate):
                     raise Blocked("existing operator drop-ins: " + target)
             self.accounts.append(account)
         self.accounts.sort(key=lambda account: account.pw_uid)
-        if self.cron.exists() or self.helper.exists() or self.device_config.exists() or self.block.exists():
+        if self.cron.exists() or self.helper.exists() or self.device_config.exists() or self.block.exists() or self.device.exists():
             raise Blocked("fixture path collision")
         self.lock = os.open("/run/resman-nullblk-characterization.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

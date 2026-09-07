@@ -22,7 +22,7 @@ def fixture(directory, metadata):
     put("weighted-io-scope.json", {"scope": weighted.SCOPE, "daemon_exercised": False,
         "adapter_exercised": True, "source_revision": metadata["source_revision"],
         "run_id": metadata["run_id"], "probe_sha256": metadata["tested_binary_sha256"]})
-    put("owned-null-block-device.json", {"name": "resmanweight" + weighted.re.sub("[^a-z0-9]", "", metadata["run_id"]),
+    put("owned-null-block-device.json", {"name": weighted.device_name(metadata["run_id"]),
         "major_minor": "250:1", "created_by_run": True})
     put("weighted-io-pam-sessions.json", {str(uid): {"cgroup": "0::/user.slice/user-%d.slice/session-42.scope" % uid}
                                          for uid in uid_list})
@@ -72,6 +72,19 @@ def fixture(directory, metadata):
 
 
 class WeightedIOTests(unittest.TestCase):
+    def test_real_runner_id_fits_linux_disk_name_without_truncation(self):
+        run_id = "r20260907122325-302396"
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = weighted.WeightedIOGate(tmp, run_id, "revision")
+            self.assertEqual(len(gate.name.encode("ascii")), 31)
+            self.assertEqual(gate.device.name, gate.device_config.name)
+            self.assertEqual(gate.block.name, gate.device_config.name)
+            self.assertEqual(gate.name, "resmanweight" + weighted.hashlib.sha256(run_id.encode("ascii")).hexdigest()[:19])
+            metadata = {"run_id": run_id, "source_revision": "revision", "tested_binary_sha256": "sha"}
+            fixture(gate.evidence, metadata)
+            weighted.validate_proof(lambda name: json.loads((gate.evidence / name).read_text()), metadata)
+        self.assertNotEqual(weighted.device_name("runit-123"), weighted.device_name("runit123"))
+
     def test_scope_and_every_raw_boundary_are_required(self):
         cases = [
             ("weighted-io-scope.json", lambda x: x.update(daemon_exercised=True)),

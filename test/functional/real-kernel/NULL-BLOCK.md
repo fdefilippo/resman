@@ -46,8 +46,11 @@ the device has no enabled io.cost policy before reporting effective weight
 capability false. This is not a change to the production adapter's verification
 contract. Missing schedulers, configfs or other prerequisites remain BLOCKED.
 
-The new device is named `resmanweight<RUN_ID>` (sanitized to lowercase letters
-and digits), not `nullb<index>`: UEK exposes the configfs name as the block name.
+The new device is named `resmanweight` plus the first 19 hexadecimal digits of
+SHA-256 of the complete run ID. Its 31-byte name fits Linux's
+`disk_name[DISK_NAME_LEN=32]` without truncation. The same name is used for configfs,
+sysfs and `/dev`, with collision checks before creation. It is not `nullb<index>`:
+UEK exposes the configfs name as the block name.
 Existing devices, including Terra's unrelated `nullb0`, are not reused or changed.
 The module and all existing scheduler selections are preserved. Both fixtures
 share the same exclusive lock; the remote runner also retains its bounded
