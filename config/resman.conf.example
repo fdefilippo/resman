@@ -83,15 +83,17 @@ CPU_THRESHOLD_DURATION=90
 # CPU_RESERVE_POINTS is nominal headroom outside the finite ResMan parent, not
 # exclusive physical CPU isolation. Even reserve zero programs finite cpu.max;
 # a saturated parent can throttle and deliver less than its nominal quota.
-# Mapped eligible users receive relative guarantees from CPU_POINTS_FILE.
+# CPU_POINTS_FILE assigns mapped eligible users scheduling entitlements.
 # Native CPU includes rootless descendants; unrelated parents make coverage partial.
 # PID-namespace rejections reduce that coverage on the non-systemd migration backend.
 # Every other active non-root user slice, including excluded and unmapped users,
 # shares CPU_BEST_EFFORT_POINTS as one aggregate entitlement. Active root
-# sessions receive CPU_ROOT_POINTS as a lendable minimum, never as a ceiling;
+# sessions receive CPU_ROOT_POINTS as a lendable entitlement, never as a ceiling;
 # root must not appear in CPU_POINTS_FILE.
-# CPU Points are minimum proportional entitlements, not ceilings. Unused
-# bandwidth is work-conserving among all runnable sibling user slices.
+# CPU Points are scheduling entitlements implemented as weights, not ceilings;
+# realized share depends on thread placement. Measure actual delivery counters;
+# see docs/CPU-POINTS-OBSERVABILITY.md, not nominal weight ratios or gate tolerances.
+# Unused bandwidth is work-conserving among all runnable sibling user slices.
 # Configured guarantees plus root and best effort must fit within 1000 minus
 # reserve. Defaults leave 700 points for named guarantees (previously 800).
 # These values and map-content changes reload atomically. Native active class

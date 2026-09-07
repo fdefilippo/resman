@@ -216,6 +216,9 @@ class NativeGate:
             self.command("systemctl", "stop", self.unit, timeout=85)
             self.started = False
 
+    def workload_args(self):
+        return ()
+
     def start_sessions(self):
         self.helper.mkdir(mode=0o755)
         self.helper.chmod(0o755)
@@ -228,7 +231,7 @@ class NativeGate:
             directory.mkdir(mode=0o700)
             os.chown(directory, a.pw_uid, a.pw_gid)
             lines.append("* * * * * %s /usr/bin/flock -n %s/run.lock /usr/bin/python3 %s %s" %
-                         (a.pw_name, directory, workload, directory))
+                         (a.pw_name, directory, workload, directory) + "".join(" " + arg for arg in self.workload_args()))
         self.cron.write_text("\n".join(lines) + "\n")
         self.cron.chmod(0o600)
         self.cron_created = True
@@ -414,6 +417,7 @@ class NativeGate:
                 argv = (proc / "cmdline").read_bytes().split(b"\0")[:-1]
                 expected = [b"/usr/bin/python3", os.fsencode(self.helper / "workload.py"),
                             os.fsencode(self.helper / str(account.pw_uid))]
+                expected.extend(os.fsencode(arg) for arg in self.workload_args())
                 require(stat[19] == identity["start_time"] and argv == expected,
                         "unrecognized workload outside PAM; manual cleanup required")
                 os.kill(identity["pid"], signal.SIGTERM)

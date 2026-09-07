@@ -12,9 +12,10 @@ rootless descendants inside the user slice remain inside its CPU envelope.
 
 The normalized pool is `1000 - CPU_RESERVE_POINTS`. Its programmed quota is
 `floor(online_cpus * period * (1000 - reserve) / 1000)` with a minimum quota of
-1000 microseconds. CPU Points express relative entitlements to bandwidth actually
-delivered by that parent, not absolute CPU floors. Raw weights and configured
-quota do not prove delivery.
+1000 microseconds. CPU Points are scheduling entitlements implemented as weights;
+realized share depends on thread placement. Raw weights and configured quota do
+not prove a delivered minimum. The exact configured entitlement and admission
+budget remain unchanged; this qualification concerns realized delivery only.
 
 ## One sample, every surface
 
@@ -52,11 +53,13 @@ An unavailable event delta is never a measured zero.
 
 Use the daemon's synchronized values instead of independently timed file reads.
 Divide `resman_user_cpu_points_leaf_usage_microseconds_delta` by
-`resman_cpu_points_parent_usage_microseconds_delta`. Under complete contention,
-compare that ratio with the user's programmed weight divided by
-`resman_cpu_points_programmed_sibling_weight_sum`. Sum the best-effort users to
-compare the aggregate entitlement; do not treat each rounded best-effort leaf as
-having an exact public points guarantee.
+`resman_cpu_points_parent_usage_microseconds_delta`. This measures actual delivery.
+The user's programmed weight divided by
+`resman_cpu_points_programmed_sibling_weight_sum` is a nominal diagnostic ratio:
+complete contention alone is insufficient to make it an observed floor. Comparable
+normalized runnable distributions across CPUs are also needed. Sum best-effort
+delivery to observe the aggregate; individual rounded weights are not exact public
+points guarantees.
 
 Require `resman_cpu_points_denominator_state{state="complete"} == 1`, a positive
 parent usage delta, and `resman_cpu_points_observation_interval_seconds` for the
@@ -78,8 +81,16 @@ lifecycle is `failed`: inability to inspect a slice does not prove its absence.
 Jitter and bias depend on both host and workload; an algebraic ratio is a diagnostic
 expectation, not a strict per-window pass threshold. Positive parent throttling and
 nominal under-delivery can be expected under saturation. The real-kernel functional
-gate uses a reference measured in the same execution; its tolerances are not
-operator thresholds against the algebraic ratio.
+gate uses a reference measured in the same execution with controlled worker
+placement; its tolerances are not operator thresholds against the algebraic ratio.
+A pinned PASS is not evidence of equivalent precision for unbound workloads.
+
+On Terra's four-CPU UEK host, two isomorphic correct reference trees with six
+unbound workers per leaf differed by up to **17.2815 percentage points** in the
+mapped aggregate over 60 seconds. This is measured reference dispersion, not a
+universal error bound or a measurement of ResMan's enforcement error. See the
+[durable investigation](../test/functional/real-kernel/REFERENCE-EVIDENCE.md).
+Increasing the observation window does not remove a systematic placement bias.
 
 Database retention and `METRICS_DB_WRITE_INTERVAL` select which decision intervals
 are stored. Stored rows may therefore have gaps. Normalize a delta by its own

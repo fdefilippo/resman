@@ -12,6 +12,33 @@ import (
 
 type exactCPUPointsResolver map[string]int
 
+func TestCPUPointsDeliveryDocumentsRequirePlacementQualification(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, path := range []string{"docs/UPGRADING.md", "docs/CPU-POINTS-OBSERVABILITY.md", "docs/resman.8", "config/resman.conf.example"} {
+		content := readTextFile(t, filepath.Join(root, path))
+		for _, required := range []string{"realized share depends on thread placement", "scheduling entitlements", "CPU-POINTS-OBSERVABILITY.md"} {
+			if path == "docs/CPU-POINTS-OBSERVABILITY.md" && required == "CPU-POINTS-OBSERVABILITY.md" {
+				continue
+			}
+			if !strings.Contains(content, required) {
+				t.Errorf("%s lacks delivery qualification %q", path, required)
+			}
+		}
+		normalized := strings.Join(strings.Fields(strings.ReplaceAll(content, "#", "")), " ")
+		for _, forbidden := range []string{"minimum proportional entitlements to effective parent bandwidth", "Actual delivery is proportional to usable parent bandwidth", "CPU Points are minimum proportional entitlements"} {
+			if strings.Contains(normalized, forbidden) {
+				t.Errorf("%s restores an unqualified delivered-minimum claim: %s", path, forbidden)
+			}
+		}
+	}
+	observation := readTextFile(t, filepath.Join(root, "docs/CPU-POINTS-OBSERVABILITY.md"))
+	for _, fragment := range []string{"complete contention alone is insufficient", "17.2815 percentage points", "not operator thresholds", "resman_user_cpu_points_leaf_usage_microseconds_delta", "resman_cpu_points_parent_usage_microseconds_delta"} {
+		if !strings.Contains(observation, fragment) {
+			t.Errorf("observation procedure lacks %q", fragment)
+		}
+	}
+}
+
 func (r exactCPUPointsResolver) ResolveExactUsername(username string) ([]cpupoints.ResolvedUserIdentity, error) {
 	uid, ok := r[username]
 	if !ok {

@@ -82,7 +82,8 @@ the shipped default: reserve 700, root 100, best effort 100, mapped 50 + 50. Its
 with the same quota, so their combined ceilings total 900 points on the host.
 
 The reference has weights 5000/5000/10000/10000. The deliberately stale control
-underweights best effort at 5000. Two simultaneous 60-second windows record raw
+underweights best effort at 5000. Six full-contention 60-second windows and one
+lending window record raw
 parent/leaf counters, identities, read skew, online capacity and throttling. The
 mapped aggregate must match the same-window reference within 0.5 percentage points;
 each leaf within 1.0; the stale control must remain at least 2.0 points away at the
@@ -91,7 +92,7 @@ against a nominal guarantee. A parent delivering less than 80% of its nominal qu
 no throttling, changed weights/identity, missing counters or skew above 200 ms fails
 the measurement rather than silently relaxing the tolerances.
 
-In the second window one mapped workload is stopped with SIGSTOP, not migrated or
+In the lending window one mapped workload is stopped with SIGSTOP, not migrated or
 reclassified; its session stays present. Every other native sibling, including the
 excluded best-effort user, must consume more of the delivered parent bandwidth.
 The journal and programmed weights must remain unchanged. Root must make measured
@@ -109,22 +110,29 @@ the remaining recovery/conflict/topology cases retain their separate obligations
 
 The [2026-09-07 investigation](REFERENCE-EVIDENCE.md) records the failed unbound
 replications, fixed-affinity controls, immutable evidence identities and the
-measurement proposal awaiting independent review.
+historical measurement proposal. The accepted controlled method and its scope are
+specified in [PLACEMENT.md](PLACEMENT.md). All compared active leaves must have the
+same observed CPU assignment multiset; dead or blocked workers invalidate the sample.
+Three independent fresh-tree replicas are required, not three windows in one run.
 
 `remote.sh systemd-native-reference root@terra` investigates nq6.37 without starting
 ResMan, creating login sessions, or changing `user.slice`. Two independent identical
 reference trees and one deliberately stale control each have a 1.2-CPU parent and
 the same workloads used above. Six consecutive, non-overlapping 60-second windows
 retain all raw samples and scheduling topology. Every five-second sample must have
-valid identities, counters and skew. Each primary window must meet the existing
-0.5/1.0-point comparison bounds and distinguish the stale control by at least 2.0
-points. No bad window is discarded. Descriptive 180/360-second aggregates are also
+valid identities, counters and skew. The unbound row now reports dispersion with
+`CHARACTERIZATION`, without a delivery verdict. The pinned controls require each
+primary window to meet the existing 0.5/1.0-point comparison bounds and distinguish
+the stale control by at least 2.0 points. No bad window is discarded.
+Descriptive 180/360-second aggregates are also
 saved, but cannot substitute for failed primary windows or authorize changed bounds.
 
-The existing exclusive host controller and exact reference cleanup apply. A PASS
+The existing exclusive host controller and exact reference cleanup apply. A pinned PASS
 means only that these reference trees were comparable in this run, never that the
 daemon, lending contract, package or release passed. A FAIL establishes that this
-measurement method cannot yet attribute that discrepancy to ResMan. The bundled
+measurement method cannot yet attribute that discrepancy to ResMan. Invalid
+unbound collection or cleanup still fails; valid characterization never substitutes
+for a required PASS. The bundled
 source binary is only queried for its version, never started as a daemon;
 `diagnostic-contract.json` explicitly records that scope. Independent fresh runs are
 required to assess reproducibility.

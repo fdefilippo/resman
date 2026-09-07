@@ -12,6 +12,7 @@ import time
 import traceback
 
 from native_gate import Blocked, NativeGate, eventually, field, require, sha
+from native_placement import SCOPE, observe
 
 
 REQUIRED_CHECKS = frozenset({
@@ -74,6 +75,21 @@ class ProportionalGate(NativeGate):
         self.paths = {}
         self.root_ssh = None
         self.root_output = None
+        self.worker_births = None
+        self.paused_leaves = set()
+
+    def workload_args(self):
+        return ("--six-pinned-workers",)
+
+    def placement(self):
+        identities = {group + "/" + leaf: identity for (group, leaf), identity in self.reference_identities.items()}
+        if self.sessions:
+            uids = (self.accounts[0].pw_uid, self.accounts[1].pw_uid, 0, self.accounts[2].pw_uid)
+            identities.update({"native/" + leaf: self.sessions[uid] for leaf, uid in zip(LEAVES, uids)})
+        expected = {group + "/" + leaf for group in self.paths for leaf in LEAVES}
+        require(set(identities) == expected, "missing compared workload identity")
+        layouts, self.worker_births = observe(identities, self.worker_births, paused=self.paused_leaves)
+        return layouts
 
     def session_accounts(self):
         return self.accounts + [pwd.getpwuid(0)]
@@ -102,7 +118,7 @@ class ProportionalGate(NativeGate):
         output = self.helper / "0"
         output.mkdir(mode=0o700)
         command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=5",
-                   "root@localhost", "/usr/bin/python3", str(self.helper / "workload.py"), str(output)]
+                   "root@localhost", "/usr/bin/python3", str(self.helper / "workload.py"), str(output), *self.workload_args()]
         self.save("root-ssh-command", command)
         self.root_output = (self.evidence / "root-ssh.log").open("w")
         self.root_ssh = subprocess.Popen(command, stdout=self.root_output, stderr=self.root_output)
@@ -141,7 +157,7 @@ class ProportionalGate(NativeGate):
         self.passed("native-plan", {"quota": "120000 100000", "weights": WEIGHTS, "uids": mapping})
 
     def reference_workload_args(self):
-        return ()
+        return self.workload_args()
 
     def start_references(self, groups=("oracle", "stale")):
         # Separate, run-owned parents provide an independent same-window oracle.
@@ -170,7 +186,7 @@ class ProportionalGate(NativeGate):
                 self.command("systemctl", "reset-failed", service, check=False)
                 self.reference_units.append(service)
                 self.command("systemd-run", "--quiet", "--unit=" + service, "--slice=" + unit,
-                             "-p", "RuntimeMaxSec=600", "-p", "TimeoutStopSec=10s",
+                             "-p", "RuntimeMaxSec=1200", "-p", "TimeoutStopSec=10s",
                              "/usr/bin/python3", self.helper / "workload.py", output, *self.reference_workload_args())
                 eventually(lambda p=output: (p / "identity.json").exists(), "reference workload did not start")
                 identity = json.loads((output / "identity.json").read_text())
@@ -180,6 +196,7 @@ class ProportionalGate(NativeGate):
                 self.paths[group][leaf] = root / unit
 
     def snapshot(self):
+        placement = self.placement()
         start = time.monotonic()
         nodes = {}
         for group, paths in self.paths.items():
@@ -195,7 +212,7 @@ class ProportionalGate(NativeGate):
                     expected = 5000 if group == "stale" and leaf == "best" else WEIGHTS[leaf]
                     require(field(path / "cpu.weight") == str(expected), "programmed weight changed during measurement")
                 nodes[group][leaf] = {"identity": [before.st_dev, before.st_ino], "stat": stat}
-        return {"time": start, "skew": time.monotonic() - start, "nodes": nodes}
+        return {"time": start, "skew": time.monotonic() - start, "nodes": nodes, "placement": placement}
 
     def measure(self, phase):
         self.record_topology(phase + "-topology-before")
@@ -207,6 +224,8 @@ class ProportionalGate(NativeGate):
             frames.append(self.snapshot())
         self.save(phase + "-raw", frames)
         self.record_topology(phase + "-topology-after")
+        for old, new in zip(frames, frames[1:]):
+            ratios(old, new, minimum_seconds=0)
         measured = ratios(frames[0], frames[-1])
         duration = frames[-1]["time"] - frames[0]["time"]
         for group, values in measured.items():
@@ -249,6 +268,8 @@ class ProportionalGate(NativeGate):
             require(int(stat[1]) == identity["pid"], "worker is no longer a child of the recorded owner")
             self.paused.append((pid, stat[19]))
             os.kill(pid, signal.SIGSTOP)
+            eventually(lambda p=pid: field("/proc/%d/stat" % p).rsplit(")", 1)[1].split()[0] == "T",
+                       "worker did not acknowledge pause")
 
     def resume(self):
         for pid, start_time in self.paused:
@@ -301,8 +322,14 @@ class ProportionalGate(NativeGate):
             self.start_references()
             self.assert_membership()
             journal = self.journal.read_bytes()
-            full = self.measure("full-contention")
-            self.passed("full-contention", full)
+            full_windows = []
+            for window in range(6):
+                full = self.measure("full-contention-%d" % window)
+                separation = min(abs(full[group]["mapped"] - full["stale"]["mapped"]) for group in ("native", "oracle"))
+                require(separation >= 2.0, "stale-plan control is not distinguishable")
+                full_windows.append(full)
+                print("daemon full contention: %d/6 windows" % (window + 1), flush=True)
+            self.passed("full-contention", full_windows)
             root_full = self.root_response()
             separation = abs(full["oracle"]["mapped"] - full["stale"]["mapped"])
             require(separation >= 2.0, "stale-plan control is not distinguishable")
@@ -310,6 +337,7 @@ class ProportionalGate(NativeGate):
             self.pause(self.sessions[self.accounts[0].pw_uid])
             for group in ("oracle", "stale"):
                 self.pause(self.reference_identities[(group, "a")])
+            self.paused_leaves = {group + "/a" for group in self.paths}
             idle = self.measure("mapped-idle")
             for leaf in ("b", "root", "best"):
                 require(idle["native"][leaf] > full["native"][leaf] + 1.0, "idle capacity was not lent to " + leaf)
@@ -344,6 +372,10 @@ class ProportionalGate(NativeGate):
             for name in REQUIRED_CHECKS:
                 self.checks.setdefault(name, "BLOCKED")
             self.save("checks", self.checks)
+            self.save("measurement-scope", {"scope": SCOPE, "source_revision": self.revision,
+                                           "run_id": self.run_id, "daemon_exercised": True,
+                                           "full_contention_windows": 6, "window_seconds": 60,
+                                           "cpu_assignment_multiset": [0, 0, 1, 1, 2, 3]})
             (self.evidence / "result").write_text(status + "\n")
             (self.evidence / "environment.txt").write_text(
                 "scenario=systemd-native-proportional\nsource_revision=%s\nkernel=%s\ncleanup=%s\nresult=%s\ndetail=%s\n" %

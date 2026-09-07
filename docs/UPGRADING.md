@@ -32,8 +32,8 @@ and the meaning of exclusions; it cannot preserve the former class-priority topo
 | Contract | Change and operator action |
 |---|---|
 | Enforcement mode | Confirm `systemd_native` through `resman_enforcement_mode`, MCP and the cycle log. `observation_only_systemd` remains the safe fallback when authority is unavailable; it is not successful enforcement. `migration_enabled` remains a separate non-systemd backend. |
-| Flat lending | Surplus is work-conserving among all runnable siblings, without guarantee-first lending. Points are minimum proportional entitlements to effective parent bandwidth under complete contention, not absolute CPU floors. |
-| Root sessions | `CPU_ROOT_POINTS=100` is a lendable minimum, not a ceiling. ResMan never writes CPUQuota on `user-0.slice`. The reserve protects capacity outside `user.slice`, including `system.slice`, not an unbounded root login shell. |
+| Flat lending | Surplus is work-conserving among all runnable siblings, without guarantee-first lending. CPU Points are scheduling entitlements implemented as weights, not absolute CPU floors; realized share depends on thread placement. |
+| Root sessions | `CPU_ROOT_POINTS=100` is a lendable scheduling entitlement, not a ceiling. ResMan never writes CPUQuota on `user-0.slice`. The reserve protects capacity outside `user.slice`, including `system.slice`, not an unbounded root login shell. |
 | Excluded users | `USER_EXCLUDE_LIST` still controls individual CPU eligibility, but excluded active user slices remain inside the parent quota and share aggregate best effort. Excluded no longer means CPU-unbounded. |
 | Rootless inheritance | Rootless descendants spend their UID slice entitlement and inherit the parent quota. No container PID is acquired or migrated. Nested runtime ownership refuses RAM and I/O as `runtime_owned_descendant`; CPU can remain applied. |
 | Split authority | A UID spanning unrelated parents has partial CPU coverage. RAM and I/O refuse `authority_split` and restore previously owned resource limits; an external conflict remains visible instead of being overwritten. An observed UID without a user slice remains observable with unavailable slice fields. |
@@ -56,8 +56,8 @@ reported as an informational canceled outcome, not a reconciliation error. Any
 independent failure remains an error, and shutdown still verifies restoration.
 
 The default root entitlement assigns 100 of the 1000 nominal budget points to
-active administrative sessions. Actual delivery is proportional to usable parent
-bandwidth, not an absolute CPU floor. It is represented as a weight, not physical isolation from affinity restrictions, realtime
+active administrative sessions. This is a scheduling entitlement, not an absolute
+CPU floor or a measured delivery minimum. It is represented as a weight, not physical isolation from affinity restrictions, realtime
 tasks or other host workloads. Inactive root capacity is available to other siblings.
 The default budget is reserve 100 + root 100 + best effort 100 + at most 700 named
 guarantee points. Review existing limits before enabling the upgraded service.
@@ -280,7 +280,7 @@ before restarting rather than discovering one key per service start.
 
 **Cause.** The previous contract mixed a core reserve, raw quotas, pattern-selected
 ceilings, and PSI weight mutation. CPU Points instead programs one finite parent pool
-and gives users relative guarantees through a flat systemd-owned
+and gives users scheduling entitlements through a flat systemd-owned
 hierarchy. Active unmapped and excluded user slices partition one aggregate best-effort
 entitlement. Root has a dedicated entitlement. Unused capacity is available to
 all runnable siblings; the previous class-priority borrowing contract is removed.

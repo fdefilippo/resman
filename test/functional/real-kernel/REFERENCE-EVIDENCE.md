@@ -113,3 +113,13 @@ It must then be implemented and exercised with the real daemon and genuine PAM
 sessions, including lending, the incorrect-plan control, root response, unchanged
 ownership/weights/journal and cleanup. None of those daemon acceptance claims was
 tested in these reference-only runs. `.37`, `.9` and the epic remain open.
+
+## Subsequent review decision
+
+The maintainer accepted controlled placement with five conditions: explicit equal
+CPU assignment multisets for runnable leaves, three independent six-window fresh
+replicas, unchanged thresholds, an executable unbound characterization without a
+delivery verdict, and scope in gate output. See [PLACEMENT.md](PLACEMENT.md) for
+the kernel mechanism, fixture assertions and execution protocol. The historical
+A4/A6 trials above do not count as the three new trials under these assertions.
+Operator delivery wording is tracked separately in resman-nq6.38.

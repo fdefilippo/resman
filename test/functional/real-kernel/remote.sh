@@ -148,6 +148,7 @@ else
 		install -m 0644 "$script_dir/native_gate.py" "$script_dir/native-workload.py" "$bundle_dir/"
 		install -m 0644 "$script_dir/native_proportional.py" "$bundle_dir/"
 		install -m 0644 "$script_dir/native_reference.py" "$bundle_dir/"
+		install -m 0644 "$script_dir/native_placement.py" "$bundle_dir/"
 		install -m 0600 "$repo_root/config/resman.conf.example" "$bundle_dir/resman.conf.example"
 	elif [[ $scenario == cpu-points-proportional ]]; then
 		install -m 0755 "$script_dir/cpu-points-run.sh" "$bundle_dir/run.sh"
@@ -250,9 +251,14 @@ safe_remove_scratch
 scratch_dir=
 trap - EXIT INT TERM
 
+if [[ $remote_status -eq 0 && $scenario == systemd-native-reference && $(< "$evidence_dir/result") == CHARACTERIZATION ]]; then
+	grep -q '^cleanup=PASS$' "$evidence_dir/environment.txt" || exit 1
+	echo "CHARACTERIZATION (no acceptance verdict): $evidence_dir"
+	exit 0
+fi
 if [[ $remote_status -ne 0 || $(< "$evidence_dir/result") != PASS ]]; then
 	echo "FAIL: real-kernel scenario failed; evidence: $evidence_dir" >&2
-	exit "${remote_status:-1}"
+	if [[ $remote_status -ne 0 ]]; then exit "$remote_status"; else exit 1; fi
 fi
 grep -q '^cleanup=PASS$' "$evidence_dir/environment.txt" \
 	|| { echo "FAIL: remote cleanup was not verified; evidence: $evidence_dir" >&2; exit 1; }

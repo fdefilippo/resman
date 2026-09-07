@@ -10,23 +10,10 @@ import traceback
 
 from native_gate import Blocked, NativeGate, field, require, sha
 from native_proportional import LEAVES, ProportionalGate, compare_reference, ratios
+from native_placement import SCOPE, observe
 
 
 WINDOWS = 6
-
-
-def inspect_workload(identity, pinned, six_pinned=False):
-    parent = field("/proc/%d/stat" % identity["pid"]).rsplit(")", 1)[1].split()
-    require(parent[19] == identity["start_time"], "reference owner was recreated")
-    require(len(identity["children"]) == (4 if pinned and not six_pinned else 6), "wrong reference worker count")
-    births = {}
-    for index, pid in enumerate(identity["children"]):
-        stat = field("/proc/%d/stat" % pid).rsplit(")", 1)[1].split()
-        require(stat[1] == str(identity["pid"]) and stat[0] != "Z", "reference worker exited or changed owner")
-        require(os.sched_getaffinity(pid) == ({index % 4} if pinned else set(range(4))),
-                "reference worker affinity differs from the declared fixture")
-        births[pid] = stat[19]
-    return births
 
 
 def analyze(frames):
@@ -79,15 +66,13 @@ class ReferenceDiagnostic(ProportionalGate):
             return ("--six-pinned-workers",)
         return ("--one-worker-per-cpu",) if self.pinned else ()
 
-    def snapshot(self):
-        births = {group + "/" + leaf: inspect_workload(identity, self.pinned, self.six_pinned)
-                  for (group, leaf), identity in self.reference_identities.items()}
-        previous = getattr(self, "worker_births", births)
-        require(births == previous, "reference worker identity changed")
-        self.worker_births = births
-        snapshot = super().snapshot()
-        snapshot["worker_births"] = births
-        return snapshot
+    def placement(self):
+        identities = {group + "/" + leaf: identity for (group, leaf), identity in self.reference_identities.items()}
+        require(set(identities) == {group + "/" + leaf for group in self.paths for leaf in LEAVES},
+                "missing compared workload identity")
+        layouts, self.worker_births = observe(identities, self.worker_births, self.pinned,
+                                              4 if self.pinned and not self.six_pinned else 6)
+        return layouts
 
     def preflight(self):
         NativeGate.preflight(self)
@@ -126,8 +111,13 @@ class ReferenceDiagnostic(ProportionalGate):
                     self.record_topology("reference-topology-%03d" % (step * 5))
                     print("reference sampling: %d/360 seconds" % (step * 5), flush=True)
             results = analyze(frames)
+            if not self.pinned:
+                # An executable counterexample reports dispersion, never acceptance.
+                for row in results:
+                    for key in ("reference_comparable", "violation", "stale_discriminating"):
+                        row.pop(key)
             self.save("reference-analysis", results)
-            status = "PASS" if comparable(results) else "FAIL"
+            status = ("PASS" if comparable(results) else "FAIL") if self.pinned else "CHARACTERIZATION"
             detail = "reference comparability only; no daemon, lending or release acceptance"
             if status == "FAIL":
                 detail = "identical references exceed declared bounds or stale control is not discriminating"
@@ -144,12 +134,17 @@ class ReferenceDiagnostic(ProportionalGate):
                 detail += "; cleanup: " + str(err)
                 traceback.print_exc()
             (self.evidence / "result").write_text(status + "\n")
+            self.save("measurement-scope", {"scope": SCOPE if self.pinned else "unbound-characterization; no acceptance verdict",
+                                           "source_revision": self.revision, "run_id": self.run_id,
+                                           "daemon_exercised": False, "primary_windows": 6,
+                                           "cpu_assignment_multiset": sorted(index % 4 for index in range(4 if not self.six_pinned else 6))
+                                           if self.pinned else None})
             (self.evidence / "environment.txt").write_text(
                 "scenario=%s\nsource_revision=%s\nkernel=%s\ncleanup=%s\nresult=%s\ndetail=%s\n" %
                 (self.scenario(),
                  self.revision, os.uname().release, cleanup, status, detail.replace("\n", " ")))
             print(status + ": " + detail, flush=True)
-        return {"PASS": 0, "BLOCKED": 77, "FAIL": 1}[status]
+        return {"PASS": 0, "CHARACTERIZATION": 0, "BLOCKED": 77, "FAIL": 1}[status]
 
 
 if __name__ == "__main__":

@@ -202,7 +202,7 @@ pool. The reserve protects system.slice and other workloads outside user.slice, 
 Defaults are CPU_RESERVE_POINTS=100, CPU_ROOT_POINTS=100 and
 CPU_BEST_EFFORT_POINTS=100, leaving at most 700 mapped points. The old default-budget
 range 701-800 is rejected; see the 750-point rebalance example in UPGRADING.md.
-Root is a lendable minimum, not a ceiling: ResMan never writes CPUQuota on user-0.slice.
+Root has a lendable scheduling entitlement, not a ceiling: ResMan never writes CPUQuota on user-0.slice.
 .PP
 Let M be the largest configured entitlement among root, aggregate best effort and
 all mapped guarantees. The exact scale is floor(10000 / M). Active best-effort slices
@@ -228,6 +228,10 @@ CPU Points observation uses the same decision interval for parent and per-slice
 usage deltas. See docs/CPU-POINTS-OBSERVABILITY.md for schema 6, independent resource
 coverage and the 60-second measurement procedure. Ratios use effective parent
 delivery and confirmed sibling weights, not nominal quota as a delivered guarantee.
+CPU Points are scheduling entitlements implemented as weights;
+realized share depends on thread placement. Measure actual delivery counters,
+not an assumed algebraic floor. A controlled-placement gate PASS does not establish
+the same precision for unbound workloads; its tolerances are not operator thresholds.
 .PP
 CPU limit eligibility is controlled by
 .B USER_INCLUDE_LIST

@@ -9,7 +9,8 @@ import importlib.util
 from unittest.mock import patch
 from pathlib import Path
 
-from native_reference import ReferenceDiagnostic, analyze, comparable, inspect_workload
+from native_reference import ReferenceDiagnostic, analyze, comparable
+from native_placement import assert_equal_layout, inspect, observe
 from native_proportional_test import frames
 from native_proportional import ProportionalGate
 
@@ -45,30 +46,59 @@ class ReferenceTests(unittest.TestCase):
     def test_live_worker_validation_is_wired_into_each_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = ReferenceDiagnostic(directory, "runit", "revision")
-            gate.reference_identities = {("referencea", "a"): {}}
-            with patch("native_reference.inspect_workload", side_effect=[{101: "old"}, {101: "new"}]) as inspect, \
-                    patch.object(ProportionalGate, "snapshot", return_value={}):
-                gate.snapshot()
-                with self.assertRaisesRegex(AssertionError, "identity changed"):
+            with patch.object(gate, "placement", side_effect=AssertionError("wrong affinity")) as placement:
+                with self.assertRaisesRegex(AssertionError, "wrong affinity"):
                     gate.snapshot()
-                self.assertEqual(inspect.call_count, 2)
-            with patch("native_reference.inspect_workload", side_effect=AssertionError("wrong affinity")):
+                placement.assert_called_once()
+            second = Path(directory) / "second"
+            second.mkdir()
+            gate = ProportionalGate(second, "runit", "revision")
+            with patch.object(gate, "placement", side_effect=AssertionError("wrong affinity")):
                 with self.assertRaisesRegex(AssertionError, "wrong affinity"):
                     gate.snapshot()
 
     def test_declared_worker_layout_must_be_observed(self):
-        identity = {"pid": 100, "start_time": "90", "children": [101, 102, 103, 104]}
+        identity = {"pid": 100, "uid": 0, "start_time": "90", "children": [101, 102, 103, 104, 105, 106]}
         stat = "100 (worker) " + " ".join(["R", "100"] + ["0"] * 17 + ["90"])
-        with patch("native_reference.field", return_value=stat), \
-                patch("native_reference.os.sched_getaffinity", side_effect=lambda pid: {pid - 101}):
-            self.assertEqual(inspect_workload(identity, True), dict.fromkeys(identity["children"], "90"))
-        with patch("native_reference.field", return_value=stat), \
-                patch("native_reference.os.sched_getaffinity", return_value={0, 1, 2, 3}):
+        with patch("native_placement.field", return_value=stat), patch("native_placement.Path.stat") as owner, \
+                patch("native_placement.os.sched_getaffinity", side_effect=lambda pid: {(pid - 101) % 4}):
+            owner.return_value.st_uid = 0
+            workers = inspect(identity)
+            assert_equal_layout({"a": workers, "b": dict(reversed(list(workers.items())))})
+            old = {"a": dict.fromkeys(workers, "other birth")}
+            with self.assertRaisesRegex(AssertionError, "identity changed"):
+                observe({"a": identity}, old)
+            owner.return_value.st_uid = 1
+            with self.assertRaisesRegex(AssertionError, "UID"):
+                inspect(identity)
+        with patch("native_placement.field", return_value=stat), patch("native_placement.Path.stat") as owner, \
+                patch("native_placement.os.sched_getaffinity", return_value={0, 1, 2, 3}):
+            owner.return_value.st_uid = 0
             with self.assertRaisesRegex(AssertionError, "affinity"):
-                inspect_workload(identity, True)
-        with patch("native_reference.field", return_value=stat.replace(" R ", " Z ")):
-            with self.assertRaisesRegex(AssertionError, "exited"):
-                inspect_workload(identity, True)
+                inspect(identity)
+        for state in ("Z", "S", "D", "T"):
+            with patch("native_placement.field", return_value=stat.replace(" R ", " " + state + " ")), \
+                    patch("native_placement.Path.stat") as owner:
+                owner.return_value.st_uid = 0
+                with self.assertRaisesRegex(AssertionError, "runnable state"):
+                    inspect(identity)
+
+    def test_multiset_not_just_allowed_cpus_or_equal_counts(self):
+        def leaf(cpus):
+            return {str(i): {"affinity": [cpu]} for i, cpu in enumerate(cpus)}
+        valid = leaf([0, 1, 2, 3, 0, 1])
+        assert_equal_layout({"a": valid, "b": leaf([1, 0, 3, 2, 1, 0])})
+        with self.assertRaisesRegex(AssertionError, "different CPU assignment"):
+            assert_equal_layout({"a": valid, "b": leaf([0, 1, 2, 3, 2, 3])})
+        with self.assertRaises(AssertionError):
+            assert_equal_layout({"a": valid, "b": leaf([0, 1, 2, 3, 0])})
+        with self.assertRaises(AssertionError):
+            assert_equal_layout({"a": leaf([0] * 6), "b": leaf([0] * 6)})
+        def observed(cpus):
+            return {pid: dict(worker, birth="90", state="R") for pid, worker in leaf(cpus).items()}
+        with patch("native_placement.inspect", side_effect=[observed([0, 1, 2, 3, 0, 1]), observed([0, 1, 2, 3, 2, 3])]):
+            with self.assertRaisesRegex(AssertionError, "different CPU assignment"):
+                observe({"a": {}, "b": {}}, None)
 
     def test_affinity_control_is_explicit_and_does_not_change_default_workers(self):
         self.assertEqual(workload.worker_cpus([]), [None] * 6)
@@ -166,6 +196,25 @@ class ReferenceTests(unittest.TestCase):
             self.assertIn("cleanup=FAIL", (gate.evidence / "environment.txt").read_text())
             daemon.assert_not_called()
             sessions.assert_not_called()
+
+    def test_unbound_dispersion_is_characterization_not_a_delivery_verdict(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            gate = ReferenceDiagnostic(directory, "runit", "revision")
+            gate.helper = Path(directory) / "helper"
+            (Path(directory) / "native-workload.py").write_text("# fixture\n")
+            for name in ("preflight", "start_references", "record_topology", "cleanup"):
+                stack.enter_context(patch.object(gate, name))
+            data = samples()
+            for row in data:
+                row["nodes"]["stale"] = copy.deepcopy(row["nodes"]["referencea"])
+            stack.enter_context(patch.object(gate, "snapshot", side_effect=data))
+            stack.enter_context(patch("native_reference.time.sleep"))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            self.assertEqual(gate.run(), 0)
+            self.assertEqual((gate.evidence / "result").read_text(), "CHARACTERIZATION\n")
+            report = (gate.evidence / "reference-analysis.json").read_text()
+            self.assertNotIn("reference_comparable", report)
+            self.assertNotIn("stale_discriminating", report)
 
 
 if __name__ == "__main__":
