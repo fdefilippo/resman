@@ -14,6 +14,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import subprocess
 import sqlite3
 import ssl
 import sys
@@ -88,15 +89,41 @@ IO_DIMENSIONS = {"rbps": ("IO_READ_BPS", 100 << 20), "wbps": ("IO_WRITE_BPS", 50
                  "riops": ("IO_READ_IOPS", 1000), "wiops": ("IO_WRITE_IOPS", 500)}
 
 
+def io_sample(path):
+    sample = {"time": time.monotonic(), "identity": None, "identity_after": None, "io_stat": None}
+    try:
+        first = path.stat()
+        sample["identity"] = [first.st_dev, first.st_ino]
+        sample["io_stat"] = (path / "io.stat").read_text()
+        last = path.stat()
+        sample["identity_after"] = [last.st_dev, last.st_ino]
+    except OSError as error:
+        sample["error"] = str(error)
+    return sample
+
+
+def io_counters(text):
+    if text is None:
+        raise Blocked("I/O accounting file is unavailable")
+    for line in text.splitlines():
+        words = line.split()
+        if words and words[0] == "8:0":
+            return {key: int(value) for key, value in (word.split("=", 1) for word in words[1:])}
+    raise Blocked("device 8:0 has no I/O accounting for this workload")
+
+
+def validate_io_sample(sample):
+    if sample.get("error") or sample["identity"] is None or sample["io_stat"] is None:
+        raise Blocked("I/O accounting sample is unavailable")
+    require(sample["identity"] == sample["identity_after"], "I/O cgroup changed during observation")
+    counters = io_counters(sample["io_stat"])
+    if not {"rbytes", "wbytes", "rios", "wios"} <= counters.keys():
+        raise Blocked("device accounting omits bytes or completed operations")
+
+
 def io_measurement(before, after, size, seconds, dimension):
     require(seconds > 0, "nonpositive I/O interval")
-    def counters(text):
-        for line in text.splitlines():
-            words = line.split()
-            if words and words[0] == "8:0":
-                return {key: int(value) for key, value in (word.split("=", 1) for word in words[1:])}
-        raise Blocked("device 8:0 has no I/O accounting for this workload")
-    first, last = counters(before), counters(after)
+    first, last = io_counters(before), io_counters(after)
     prefix = dimension[0]
     keys = (prefix + "bytes", prefix + "ios")
     if not all(key in first and key in last for key in keys):
@@ -580,6 +607,51 @@ class CoverageGate(NativeGate):
         identity["session"] = match[1]
         return identity
 
+    def io_transfer(self, user, unit, args):
+        self.child_units.append(unit)
+        self.command("systemctl", "reset-failed", unit, check=False)
+        command = ["systemd-run", "--quiet", "--wait", "--pipe", "--unit=" + unit,
+                   "--uid=" + str(user.pw_uid), "-p", "Slice=user-%d.slice" % user.pw_uid,
+                   "-p", "RuntimeMaxSec=90", "/usr/bin/dd", *args, "status=none"]
+        result = {"command": command, "returncode": None}
+        try:
+            completed = self.command(*command, check=False, timeout=100)
+            result.update(returncode=completed.returncode, output=completed.stdout)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["error"] = str(error)
+        return result
+
+    def measure_io_phase(self, user, target, dimension, phase):
+        name = "hard-io-%s-%s" % (dimension, phase)
+        unit = "resman-coverage-%s-%s-%s" % (self.run_id, dimension, phase)
+        # A successful transfer creates a real sparse device-counter baseline.
+        # It is outside both the requested byte count and measured interval.
+        warmup = self.io_transfer(user, unit + "-warmup.service", ["if=" + str(target), "of=/dev/null",
+                                  "iflag=direct", "bs=1M", "count=1"])
+        before = io_sample(self.slice(user.pw_uid))
+        proof = {"warmup": warmup, "before": before, "after": None,
+                 "scope": "daemon hard-limit delivery; fixture accounting and unmeasured warmup only"}
+        self.save(name + "-raw", proof)
+        require(warmup["returncode"] == 0, "I/O baseline warmup failed")
+        validate_io_sample(before)
+        is_read, is_iops = dimension.startswith("r"), dimension.endswith("iops")
+        size = (32 if is_iops else 512) << 20
+        args = (["if=" + str(target), "of=/dev/null", "iflag=direct"] if is_read else
+                ["if=/dev/zero", "of=" + str(target), "oflag=direct", "conv=notrunc,fdatasync"])
+        args += ["bs=4K", "count=8192"] if is_iops else ["bs=1M", "count=512"]
+        start = time.monotonic()
+        measured = self.io_transfer(user, unit + ".service", args)
+        elapsed = time.monotonic() - start
+        after = io_sample(self.slice(user.pw_uid))
+        proof.update(after=after, command_result=measured, start=start, end=start + elapsed,
+                     bytes_requested=size)
+        # Save the unsuccessful interval too, before any capability or value check.
+        self.save(name + "-raw", proof)
+        require(measured["returncode"] == 0, "measured I/O command failed")
+        validate_io_sample(after)
+        require(before["identity"] == after["identity"], "I/O cgroup changed across measurement")
+        return io_measurement(before["io_stat"], after["io_stat"], size, elapsed, dimension)
+
     def hard_io(self):
         # A slow disk cannot prove a working cap: require an independently measured
         # uncapped control on the same run-owned file and device before comparing.
@@ -593,6 +665,14 @@ class CoverageGate(NativeGate):
         measurements = {}
         blocked = []
         try:
+            # Keep the accounting controller available while the daemon is stopped
+            # for the uncapped control. This owned child sets no resource limit.
+            anchor = "resman-coverage-%s-io-accounting.service" % self.run_id
+            self.child_units.append(anchor)
+            self.command("systemctl", "reset-failed", anchor, check=False)
+            self.command("systemd-run", "--quiet", "--unit=" + anchor, "--uid=" + str(user.pw_uid),
+                         "-p", "Slice=user-%d.slice" % user.pw_uid, "-p", "IOAccounting=yes",
+                         "-p", "RuntimeMaxSec=1800", "/usr/bin/sleep", "1800")
             for dimension in IO_DIMENSIONS:
                 self.stop_daemon()
                 self.assert_released()
@@ -609,22 +689,7 @@ class CoverageGate(NativeGate):
                         self.assert_applied()
                         eventually(lambda: io_values(field(self.slice(user.pw_uid) / "io.max", "")) == expected,
                                    "I/O measurement has another finite dimension or the wrong target cap")
-                    unit = "resman-coverage-%s-%s-%s.service" % (self.run_id, dimension, phase)
-                    self.child_units.append(unit)
-                    self.command("systemctl", "reset-failed", unit, check=False)
-                    is_read, is_iops = dimension.startswith("r"), dimension.endswith("iops")
-                    size = (32 if is_iops else 512) << 20
-                    args = (["if=" + str(target), "of=/dev/null", "iflag=direct"] if is_read else
-                            ["if=/dev/zero", "of=" + str(target), "oflag=direct", "conv=notrunc,fdatasync"])
-                    args += ["bs=4K", "count=8192"] if is_iops else ["bs=1M", "count=512"]
-                    before = field(self.slice(user.pw_uid) / "io.stat", "")
-                    start = time.monotonic()
-                    self.command("systemd-run", "--quiet", "--wait", "--pipe", "--unit=" + unit,
-                                 "--uid=" + str(user.pw_uid), "-p", "Slice=user-%d.slice" % user.pw_uid,
-                                 "-p", "RuntimeMaxSec=90", "/usr/bin/dd", *args, "status=none", timeout=100)
-                    elapsed = time.monotonic() - start
-                    after = field(self.slice(user.pw_uid) / "io.stat", "")
-                    per_dimension[phase] = io_measurement(before, after, size, elapsed, dimension)
+                    per_dimension[phase] = self.measure_io_phase(user, target, dimension, phase)
                 measurements[dimension] = per_dimension
                 self.save("hard-io-measurements", {"device": "8:0", "backing_devices": sorted(backing), "dimensions": measurements})
                 try:

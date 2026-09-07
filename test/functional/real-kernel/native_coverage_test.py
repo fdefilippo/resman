@@ -16,11 +16,82 @@ from unittest.mock import patch
 
 from native_coverage import (CoverageGate, REQUIRED_CHECKS, pam_identity, result_for,
                              validate_container_observation, io_values, verify_io_interval,
-                             IO_DIMENSIONS, io_measurement, verify_io_dimension)
+                             IO_DIMENSIONS, io_measurement, verify_io_dimension, io_sample, validate_io_sample)
 from native_gate import Blocked
 
 
 class CoverageTests(unittest.TestCase):
+    def test_io_command_failure_is_returned_for_raw_evidence(self):
+        for error in (OSError("command unavailable"), subprocess.TimeoutExpired(["dd"], 100)):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                gate = CoverageGate(directory, "runit", "revision")
+                with patch.object(gate, "command", side_effect=[None, error]):
+                    result = gate.io_transfer(SimpleNamespace(pw_uid=1006), "owned.service", ["count=1"])
+                self.assertIsNone(result["returncode"])
+                self.assertIn("error", result)
+                self.assertIn("owned.service", gate.child_units)
+
+    def test_io_sample_distinguishes_missing_file_from_sparse_device_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            missing = io_sample(path)
+            self.assertIsNone(missing["io_stat"])
+            self.assertIn("error", missing)
+            with self.assertRaises(Blocked):
+                validate_io_sample(missing)
+            (path / "io.stat").write_text("")
+            sparse = io_sample(path)
+            self.assertEqual(sparse["io_stat"], "")
+            self.assertNotIn("error", sparse)
+            with self.assertRaises(Blocked):
+                validate_io_sample(sparse)
+
+    def test_io_phase_warms_outside_interval_and_preserves_invalid_raw_samples(self):
+        for defect in ("none", "before-unavailable", "before-sparse", "before-identity", "after-unavailable",
+                       "after-sparse", "after-identity", "between-identity", "reset", "command"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                gate = CoverageGate(directory, "runit", "revision")
+                user = SimpleNamespace(pw_uid=1006)
+                warm, size = 1 << 20, 512 << 20
+                calls = []
+                def transfer(_user, unit, args):
+                    calls.append((unit, args))
+                    return {"returncode": 1 if defect == "command" and len(calls) == 2 else 0,
+                            "command": [unit, *args], "output": "captured command output"}
+                def sample(_path):
+                    self.assertTrue(calls, "sample taken before warmup")
+                    phase = "before" if len(calls) == 1 else "after"
+                    count = warm if phase == "before" or defect == "reset" else warm + size
+                    result = {"time": len(calls), "identity": [26, 99], "identity_after": [26, 99],
+                              "io_stat": "8:0 rbytes=%d wbytes=0 rios=%d wios=0" % (count, count // 4096)}
+                    if defect == phase + "-unavailable":
+                        result.update(io_stat=None, error="file missing")
+                    elif defect == phase + "-sparse":
+                        result["io_stat"] = ""
+                    elif defect == phase + "-identity":
+                        result["identity_after"] = [26, 100]
+                    elif defect == "between-identity" and phase == "after":
+                        result.update(identity=[26, 100], identity_after=[26, 100])
+                    return result
+                with patch.object(gate, "io_transfer", side_effect=transfer), patch("native_coverage.io_sample", side_effect=sample):
+                    if defect == "none":
+                        measured = gate.measure_io_phase(user, Path("/owned/direct-io.bin"), "rbps", "uncapped")
+                        self.assertEqual(measured["deltas"]["rbytes"], size)
+                        self.assertEqual(len(calls), 2)
+                        self.assertIn("count=1", calls[0][1])
+                        self.assertIn("count=512", calls[1][1])
+                    else:
+                        with self.assertRaises((Blocked, AssertionError)):
+                            gate.measure_io_phase(user, Path("/owned/direct-io.bin"), "rbps", "uncapped")
+                raw = json.loads((gate.evidence / "hard-io-rbps-uncapped-raw.json").read_text())
+                self.assertIn("before", raw)
+                self.assertEqual(raw["warmup"]["output"], "captured command output")
+                if len(calls) == 2:
+                    self.assertIn("identity", raw["after"])
+                    self.assertIn("io_stat", raw["after"])
+                    self.assertIn("command_result", raw)
+                    self.assertGreater(raw["end"], raw["start"])
+
     def test_sudoers_collision_never_becomes_owned_or_deleted(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = CoverageGate(directory, "runit", "revision")
@@ -124,8 +195,16 @@ class CoverageTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "backing_devices", return_value={"8:0"}))
             stack.enter_context(patch.object(gate, "configure_io_dimension", side_effect=configure))
             stack.enter_context(patch("native_coverage.field", side_effect=field_value))
+            stack.enter_context(patch("native_coverage.io_sample", return_value={
+                "time": 1, "identity": [26, 99], "identity_after": [26, 99],
+                "io_stat": "8:0 rbytes=1048576 wbytes=0 rios=256 wios=0"}))
             stack.enter_context(patch("native_coverage.io_measurement", side_effect=measured_interval))
             gate.hard_io()
+            anchor = "resman-coverage-runit-io-accounting.service"
+            self.assertIn(anchor, gate.child_units)
+            started = [call.args for call in gate.command.call_args_list if call.args[0] == "systemd-run"]
+            self.assertEqual(sum("IOAccounting=yes" in command for command in started), 1)
+            self.assertTrue(any("--unit=" + anchor in command and "IOAccounting=yes" in command for command in started))
             self.assertEqual(measured, [(dimension, phase) for dimension in IO_DIMENSIONS for phase in ("uncapped", "capped")])
             proof = json.loads((gate.evidence / "hard-io-delivery.json").read_text())
             self.assertEqual(set(proof["dimensions"]), {"rbps", "wbps", "riops", "wiops"})

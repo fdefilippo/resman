@@ -1,3 +1,10 @@
+resman (1.33.0-3) stable; urgency=medium
+
+  * Rebuild the unchanged native daemon for the corrected final-acceptance
+    fixtures.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 15:01:11 +0200
+
 resman (1.33.0-2) stable; urgency=medium
 
   * Preserve host observation during blackout and complete live per-device

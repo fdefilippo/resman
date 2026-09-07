@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.33.0
-Release: 2%{?dist}
+Release: 3%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -284,6 +284,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-3
+- Rebuild the unchanged native daemon for the corrected final-acceptance fixtures
+
 * Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-2
 - Preserve host observation during blackout and complete live per-device I/O restoration
 - Treat shutdown cancellation as lifecycle completion without hiding independent failures
