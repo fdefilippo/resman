@@ -11,6 +11,15 @@ from null_blk_characterization import Characterization, counters, summarize
 
 
 class CharacterizationTests(unittest.TestCase):
+    def test_parent_preflight_does_not_implicitly_load_a_slice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Characterization(Path(directory) / "evidence", "r123456")
+            with patch.object(gate, "command", return_value="") as command:
+                gate.require_new_parent()
+                self.assertEqual(command.call_args.args[1], "list-units")
+            with patch.object(gate, "command", return_value="existing slice"), self.assertRaises(RuntimeError):
+                gate.require_new_parent()
+
     def interval(self):
         first = {"time_ns": 100, "leaves": [
             {"identity": ["a", 1], "io_stat": "251:0 rbytes=100 rios=1"},

@@ -91,8 +91,7 @@ class Characterization:
         require(not list(Path("/tmp").glob("resman-final-*")), "another real-kernel bundle exists")
         require(not self.command("pgrep", "-x", "resman", check=False), "ResMan must be quiescent")
         require(not self.config.exists() and not self.block.exists(), "device name already exists")
-        require(self.command("systemctl", "show", self.parent, "-p", "LoadState", "--value") == "not-found",
-                "fixture parent already exists")
+        self.require_new_parent()
         self.system_schedulers = {str(path): read(path) for path in Path("/sys/block").glob("*/queue/scheduler")}
         self.record["system_schedulers_before"] = self.system_schedulers
         self.record["host_identity"] = read("/etc/machine-id")
@@ -123,6 +122,12 @@ class Characterization:
                                  "low_latency": read(self.block / "queue/iosched/low_latency"),
                                  "scope": "synthetic completion, no physical media performance"}
         self.save()
+
+    def require_new_parent(self):
+        # show/GetUnit loads even an otherwise nonexistent slice implicitly.
+        # List the already loaded units instead; do not manufacture the collision.
+        require(not self.command("systemctl", "list-units", "--all", "--plain", "--no-legend", self.parent),
+                "fixture parent already exists")
 
     def snapshot(self, identities, weights):
         require("[bfq]" in read(self.block / "queue/scheduler"), "BFQ was changed during measurement")
