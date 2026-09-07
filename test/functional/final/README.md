@@ -122,15 +122,14 @@ Package acceptance requires a freshly built RPM identity already explicitly
 installed on the test host, plus the exact matching RPM file:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-4.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-5.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```
 
-This example names the next identity after the previously produced `1.33.0-2`;
-the new RPM has **not** been built by this harness implementation. Increment
-RELEASE before building it, and do not treat this command as build or installation
-authorization. The fixture verifies the installed identity and actual binary bytes
+This example names the next identity after the previously produced `1.33.0-4`.
+Increment RELEASE before any later build, and do not treat this command as build or
+installation authorization. The fixture verifies the installed identity and actual binary bytes
 against the retained RPM payload, then exercises that package binary with isolated
 configuration. It never substitutes a freshly compiled source binary.
 

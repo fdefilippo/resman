@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Simultaneous native/reference/stale-control measurements on a disposable host."""
 import json
+import math
 import os
 from pathlib import Path
 import pwd
@@ -22,32 +23,117 @@ REQUIRED_CHECKS = frozenset({
 })
 LEAVES = ("a", "b", "root", "best")
 WEIGHTS = {"a": 5000, "b": 5000, "root": 10000, "best": 10000}
+SAMPLED_NODES = ("parent",) + LEAVES
+PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND = 1200000
+MAXIMUM_FRAME_SKEW_SECONDS = 0.2
+PRIMARY_CONSERVATION_FRACTION = 0.01
+# Five integer-microsecond counters at both endpoints can contribute at most
+# one microsecond of truncation apiece to the parent-versus-leaf difference.
+COUNTER_QUANTIZATION_ALLOWANCE_USEC = 2 * len(SAMPLED_NODES)
 
 
 def checks_pass(checks):
     return set(checks) == REQUIRED_CHECKS and all(value == "PASS" for value in checks.values())
 
 
-def ratios(before, after, minimum_seconds=60):
-    result = {}
+def _sampling_spans(frame):
+    require(set(frame["sampling"]) == set(frame["nodes"]), "sampling metadata differs from measurement groups")
+    require(0 <= frame["skew"] <= MAXIMUM_FRAME_SKEW_SECONDS, "counter-read skew exceeds 200 ms")
+    frame_end = frame["time"] + frame["skew"]
+    ordered = []
+    spans = {}
+    for group, nodes in frame["nodes"].items():
+        require(set(nodes) == set(SAMPLED_NODES), "measurement nodes changed")
+        sampling = frame["sampling"][group]
+        require(sampling == {"capacity_usec_per_second": PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND},
+                "wrong or ambiguous programmed parent capacity")
+        group_reads = []
+        for node in SAMPLED_NODES:
+            read = nodes[node].get("read")
+            require(isinstance(read, dict) and set(read) == {"started", "finished"},
+                    "missing per-node counter-read timing")
+            started, finished = read["started"], read["finished"]
+            require(isinstance(started, (int, float)) and isinstance(finished, (int, float)),
+                    "counter-read timing is not numeric")
+            require(frame["time"] <= started <= finished <= frame_end,
+                    "counter-read timing lies outside its frame")
+            group_reads.append((started, finished, group, node))
+            ordered.append((started, finished, group, node))
+        for previous, current in zip(group_reads, group_reads[1:]):
+            require(previous[1] <= current[0], "parent and leaf counters were not read in declared order")
+        spans[group] = group_reads[-1][1] - group_reads[0][0]
+    ordered.sort()
+    for previous, current in zip(ordered, ordered[1:]):
+        require(previous[1] <= current[0], "counter reads overlap")
+    observed_groups = [group for _, _, group, _ in ordered]
+    for group in frame["nodes"]:
+        positions = [index for index, observed in enumerate(observed_groups) if observed == group]
+        require(positions == list(range(positions[0], positions[0] + len(SAMPLED_NODES))),
+                "a parent/leaf read block was interleaved with another group")
+    return spans
+
+
+def _counter_deltas(before, after, minimum_seconds):
+    require(after["time"] > before["time"], "measurement interval is not positive")
     require(after["time"] - before["time"] >= minimum_seconds, "measurement window too short")
-    require(max(before["skew"], after["skew"]) <= 0.2, "counter-read skew exceeds 200 ms")
+    before_spans, after_spans = _sampling_spans(before), _sampling_spans(after)
     require(set(before["nodes"]) == set(after["nodes"]), "measurement groups changed")
     require(bool(before["nodes"]), "no measurement groups")
+    result = {}
     for group in before["nodes"]:
         deltas = {}
-        for node in ("parent",) + LEAVES:
+        for node in SAMPLED_NODES:
             old, new = before["nodes"][group][node], after["nodes"][group][node]
             require(old["identity"] == new["identity"], "cgroup recreated during measurement")
             delta = new["stat"]["usage_usec"] - old["stat"]["usage_usec"]
             require(delta >= 0, "counter decreased during measurement")
             deltas[node] = delta
         require(deltas["parent"] > 0, "no measured parent bandwidth")
-        require(sum(deltas[node] for node in LEAVES) <= deltas["parent"] * 1.01,
-                "leaf totals exceed their synchronized parent interval")
+        result[group] = {"deltas": deltas, "before_span": before_spans[group],
+                         "after_span": after_spans[group]}
+    return result
+
+
+def validate_sample_interval(before, after):
+    """Validate a short sample using only its measured counter-read uncertainty."""
+    report = {}
+    for group, measurement in _counter_deltas(before, after, 0).items():
+        deltas = measurement["deltas"]
+        leaf_total = sum(deltas[node] for node in LEAVES)
+        measured_error = leaf_total - deltas["parent"]
+        timing_allowance = math.ceil(
+            (measurement["before_span"] + measurement["after_span"])
+            * PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND
+        )
+        permitted_error = timing_allowance + COUNTER_QUANTIZATION_ALLOWANCE_USEC
+        require(abs(measured_error) <= permitted_error,
+                "parent/leaf sample difference exceeds measured read-timing uncertainty")
+        report[group] = {
+            "parent_usec": deltas["parent"], "leaf_usec": leaf_total,
+            "error_usec": measured_error, "permitted_error_usec": permitted_error,
+            "before_read_span_seconds": measurement["before_span"],
+            "after_read_span_seconds": measurement["after_span"],
+        }
+    return report
+
+
+def ratios(before, after, minimum_seconds=60):
+    """Calculate full-window shares after fixed bilateral conservation validation."""
+    result = {}
+    for group, measurement in _counter_deltas(before, after, minimum_seconds).items():
+        deltas = measurement["deltas"]
+        leaf_total = sum(deltas[node] for node in LEAVES)
+        measured_error = leaf_total - deltas["parent"]
+        permitted_error = deltas["parent"] * PRIMARY_CONSERVATION_FRACTION
+        require(abs(measured_error) <= permitted_error,
+                "parent/leaf full-window difference exceeds one percent")
         result[group] = {node: 100 * deltas[node] / deltas["parent"] for node in LEAVES}
         result[group]["mapped"] = result[group]["a"] + result[group]["b"]
         result[group]["parent_usec"] = deltas["parent"]
+        result[group]["conservation"] = {
+            "error_usec": measured_error, "permitted_error_usec": permitted_error,
+            "contract": "bilateral-fixed-one-percent",
+        }
         result[group]["throttling"] = {}
         for key in ("nr_periods", "nr_throttled", "throttled_usec"):
             value = after["nodes"][group]["parent"]["stat"][key] - before["nodes"][group]["parent"]["stat"][key]
@@ -108,6 +194,9 @@ class ProportionalGate(NativeGate):
             raise Blocked("root localhost SSH must already authenticate and enter a genuine logind session")
         self.save("proportional-environment", {
             "runner_sha256": sha(__file__), "window_seconds": 60, "maximum_skew_seconds": 0.2,
+            "sample_conservation": "bilateral-measured-read-span",
+            "sample_quantization_allowance_usec": COUNTER_QUANTIZATION_ALLOWANCE_USEC,
+            "full_window_conservation": "bilateral-fixed-one-percent",
             "aggregate_tolerance_pp": 0.5, "leaf_tolerance_pp": 1.0,
             "minimum_stale_separation_pp": 2.0, "reserve": 700, "root": 100,
             "best_effort": 100, "mapped": [50, 50], "combined_parent_ceiling_points": 900,
@@ -198,11 +287,14 @@ class ProportionalGate(NativeGate):
     def snapshot(self):
         placement = self.placement()
         start = time.monotonic()
-        nodes = {}
+        nodes, sampling = {}, {}
         for group, paths in self.paths.items():
             nodes[group] = {}
+            sampling[group] = {"capacity_usec_per_second": PROGRAMMED_PARENT_CAPACITY_USEC_PER_SECOND}
+            require(tuple(paths) == SAMPLED_NODES, "counter paths are not in the adjacent sampling order")
             require(field(paths["parent"] / "cpu.max") == "120000 100000", "parent quota changed")
             for leaf, path in paths.items():
+                read_started = time.monotonic()
                 before = path.stat()
                 stat = dict((key, int(value)) for key, value in
                             (line.split() for line in field(path / "cpu.stat").splitlines()))
@@ -211,8 +303,11 @@ class ProportionalGate(NativeGate):
                 if leaf != "parent":
                     expected = 5000 if group == "stale" and leaf == "best" else WEIGHTS[leaf]
                     require(field(path / "cpu.weight") == str(expected), "programmed weight changed during measurement")
-                nodes[group][leaf] = {"identity": [before.st_dev, before.st_ino], "stat": stat}
-        return {"time": start, "skew": time.monotonic() - start, "nodes": nodes, "placement": placement}
+                read_finished = time.monotonic()
+                nodes[group][leaf] = {"identity": [before.st_dev, before.st_ino], "stat": stat,
+                                      "read": {"started": read_started, "finished": read_finished}}
+        return {"time": start, "skew": time.monotonic() - start, "sampling": sampling,
+                "nodes": nodes, "placement": placement}
 
     def measure(self, phase):
         self.record_topology(phase + "-topology-before")
@@ -224,8 +319,8 @@ class ProportionalGate(NativeGate):
             frames.append(self.snapshot())
         self.save(phase + "-raw", frames)
         self.record_topology(phase + "-topology-after")
-        for old, new in zip(frames, frames[1:]):
-            ratios(old, new, minimum_seconds=0)
+        sample_validity = [validate_sample_interval(old, new) for old, new in zip(frames, frames[1:])]
+        self.save(phase + "-sample-validity", sample_validity)
         measured = ratios(frames[0], frames[-1])
         duration = frames[-1]["time"] - frames[0]["time"]
         for group, values in measured.items():

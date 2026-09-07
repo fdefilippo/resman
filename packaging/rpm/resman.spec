@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.33.0
-Release: 4%{?dist}
+Release: 5%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -284,6 +284,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-5
+- Measure per-node CPU counter timing and use a bilateral sampling contract
+
 * Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-4
 - Rebuild the unchanged native daemon with executable reconciliation acceptance
 - Bound the final fixture session and guest workload cleanup

@@ -11,6 +11,7 @@ from unittest.mock import patch
 import gate
 from catalog import ROWS, validate_catalog
 from native_reference_test import samples
+from native_proportional_test import stamp
 from native_psi_evidence_test import fixture as psi_fixture
 from native_weighted_io_test import fixture as weighted_fixture
 
@@ -66,6 +67,7 @@ def fixture(root):
                 for frame in raw:
                     frame["time"] += replica * 400
                     frame["placement"] = placement(("referencea", "referenceb", "stale"))
+                    stamp(frame)
                 put(directory / "reference-raw.json", raw)
                 put(directory / "measurement-scope.json", {
                     "scope": gate.SCOPE if status == "PASS" else "unbound-characterization; no acceptance verdict",
@@ -78,6 +80,7 @@ def fixture(root):
                         frame["nodes"]["native"] = frame["nodes"].pop("referencea")
                         frame["nodes"]["oracle"] = frame["nodes"].pop("referenceb")
                         frame["placement"] = placement(("native", "oracle", "stale"))
+                        stamp(frame)
                     put(directory / ("full-contention-%d-raw.json" % window), raw)
                 idle = copy.deepcopy(raw)
                 final = copy.deepcopy(raw[-1])
@@ -91,6 +94,7 @@ def fixture(root):
                         for name, per_sample in {"a": 0, "b": 1200000, "root": 2400000, "best": 2400000}.items():
                             nodes[name]["stat"]["usage_usec"] = final["nodes"][group][name]["stat"]["usage_usec"] + per_sample * step
                     frame["placement"] = placement(("native", "oracle", "stale"), paused=True)
+                    stamp(frame)
                 put(directory / "mapped-idle-raw.json", idle)
                 put(directory / "root-progress.json", {"full_response_seconds": [1, 1, 1], "idle_response_seconds": [1, 1, 1]})
                 put(directory / "unchanged-weights.json", {"journal_unchanged": True})
@@ -173,7 +177,9 @@ class FinalGateTests(unittest.TestCase):
                 self.assertTrue((root / "output/matrix.json").exists())
 
     def test_raw_recomputation_scope_and_replicas_cannot_be_replaced_by_summary(self):
-        for fault in ("two-replicas", "duplicate-run", "duplicate-reference", "duplicate-window", "missing-frame", "control", "scope", "host", "daemon-frame", "daemon-control", "sleeping", "affinity", "root-response"):
+        for fault in ("two-replicas", "duplicate-run", "duplicate-reference", "duplicate-window", "missing-frame",
+                      "control", "scope", "host", "daemon-frame", "daemon-control", "old-sampling", "sleeping",
+                      "affinity", "root-response"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 manifest = fixture(root)
@@ -199,11 +205,17 @@ class FinalGateTests(unittest.TestCase):
                 daemon = Path(manifest["evidence"]["systemd-native-proportional"][0])
                 if fault == "duplicate-window":
                     (daemon / "full-contention-4-raw.json").write_bytes((daemon / "full-contention-0-raw.json").read_bytes())
-                if fault in ("daemon-frame", "daemon-control", "sleeping", "affinity"):
+                if fault in ("daemon-frame", "daemon-control", "old-sampling", "sleeping", "affinity"):
                     raw = gate.read_json(daemon / "full-contention-4-raw.json")
                     if fault == "daemon-frame": raw.pop()
                     elif fault == "daemon-control":
                         for frame in raw: frame["nodes"]["stale"] = copy.deepcopy(frame["nodes"]["native"])
+                    elif fault == "old-sampling":
+                        for frame in raw:
+                            frame.pop("sampling")
+                            for nodes in frame["nodes"].values():
+                                for node in nodes.values():
+                                    node.pop("read")
                     elif fault == "sleeping": raw[6]["placement"]["native/a"]["0"]["state"] = "S"
                     else: raw[6]["placement"]["native/a"]["0"]["affinity"] = [0, 1]
                     put(daemon / "full-contention-4-raw.json", raw)

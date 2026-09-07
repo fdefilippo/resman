@@ -3,11 +3,32 @@
 import contextlib
 import copy
 import io
+from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from native_proportional import ProportionalGate, checks_pass, compare_reference, ratios
+from native_proportional import (LEAVES, ProportionalGate, checks_pass, compare_reference, ratios,
+                                 _sampling_spans, validate_sample_interval)
+
+
+def stamp(frame, node_gap=0.0002, read_width=0.0001):
+    cursor = frame["time"] + 0.001
+    frame["sampling"] = {}
+    for group, nodes in frame["nodes"].items():
+        frame["sampling"][group] = {"capacity_usec_per_second": 1200000}
+        for node in ("parent",) + LEAVES:
+            nodes[node]["read"] = {"started": cursor, "finished": cursor + read_width}
+            cursor += node_gap + read_width
+    frame["skew"] = cursor - frame["time"] + 0.001
+
+
+def set_read_sequence(frame, sequence):
+    cursor = frame["time"] + 0.001
+    for group, node in sequence:
+        frame["nodes"][group][node]["read"] = {"started": cursor, "finished": cursor + 0.0001}
+        cursor += 0.0002
+    frame["skew"] = cursor - frame["time"] + 0.001
 
 
 def frames():
@@ -18,9 +39,11 @@ def frames():
             nodes[group][node] = {"identity": [1, node], "stat": {
                 "usage_usec": value, "nr_periods": 600, "nr_throttled": 550, "throttled_usec": 10000000,
             }}
-    after = {"time": 160, "skew": 0.01, "nodes": nodes}
+    after = {"time": 160, "nodes": nodes}
+    stamp(after)
     before = copy.deepcopy(after)
     before["time"] = 100
+    stamp(before)
     for group in before["nodes"].values():
         for node in group.values():
             node["stat"] = dict.fromkeys(node["stat"], 0)
@@ -54,8 +77,34 @@ class ProportionalTests(unittest.TestCase):
         self.assertEqual(result["native"]["throttling"]["nr_throttled"], 550)
         compare_reference(result)
 
+    def test_snapshot_records_the_counter_read_contract_at_the_producer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {}
+            for node in ("parent",) + LEAVES:
+                path = root / node
+                path.mkdir()
+                (path / "cpu.stat").write_text(
+                    "usage_usec 1\nnr_periods 1\nnr_throttled 1\nthrottled_usec 1\n"
+                )
+                paths[node] = path
+                if node != "parent":
+                    (path / "cpu.weight").write_text(str({"a": 5000, "b": 5000, "root": 10000, "best": 10000}[node]))
+            (paths["parent"] / "cpu.max").write_text("120000 100000")
+            gate = ProportionalGate(root, "runit", "revision")
+            gate.paths = {"native": paths}
+            with patch.object(gate, "placement", return_value={}):
+                frame = gate.snapshot()
+            spans = _sampling_spans(frame)
+            self.assertGreater(spans["native"], 0)
+            self.assertEqual(
+                sorted(frame["nodes"]["native"], key=lambda node: frame["nodes"]["native"][node]["read"]["started"]),
+                ["parent", "a", "b", "root", "best"],
+            )
+
     def test_invalid_measurements_are_not_zero_or_pass(self):
-        for kind in ("short", "skew", "identity", "decrease", "empty_parent", "overflowing_leaves", "throttle_reset"):
+        for kind in ("short", "skew", "identity", "decrease", "empty_parent", "overflowing_leaves",
+                     "underflowing_leaves", "throttle_reset"):
             with self.subTest(kind=kind):
                 before, after = frames()
                 if kind == "short":
@@ -70,10 +119,54 @@ class ProportionalTests(unittest.TestCase):
                     after["nodes"]["native"]["parent"]["stat"]["usage_usec"] = 0
                 elif kind == "overflowing_leaves":
                     after["nodes"]["native"]["root"]["stat"]["usage_usec"] = 60000001
+                elif kind == "underflowing_leaves":
+                    after["nodes"]["native"]["best"]["stat"]["usage_usec"] = 0
                 else:
                     before["nodes"]["native"]["parent"]["stat"]["nr_throttled"] = 551
                 with self.assertRaises(AssertionError):
                     ratios(before, after)
+
+    def test_intermediate_conservation_uses_measured_timing_and_is_bilateral(self):
+        for direction in (-1, 1):
+            with self.subTest(direction=direction):
+                before, after = frames()
+                after["time"] = 105
+                stamp(after, node_gap=0.01, read_width=0.001)
+                stamp(before, node_gap=0.01, read_width=0.001)
+                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 60000
+                report = validate_sample_interval(before, after)
+                self.assertEqual(report["native"]["error_usec"], direction * 60000)
+                self.assertEqual(report["native"]["permitted_error_usec"], 108010)
+
+                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 60000
+                with self.assertRaisesRegex(AssertionError, "measured read-timing uncertainty"):
+                    validate_sample_interval(before, after)
+
+    def test_primary_conservation_remains_fixed_at_one_percent_in_both_directions(self):
+        for direction in (-1, 1):
+            with self.subTest(direction=direction):
+                before, after = frames()
+                after["nodes"]["native"]["root"]["stat"]["usage_usec"] += direction * 600001
+                with self.assertRaisesRegex(AssertionError, "full-window difference exceeds one percent"):
+                    ratios(before, after)
+
+    def test_per_node_timing_and_adjacent_group_reads_are_mandatory(self):
+        for kind in ("missing", "reordered", "interleaved"):
+            with self.subTest(kind=kind):
+                before, after = frames()
+                if kind == "missing":
+                    del after["nodes"]["native"]["a"]["read"]
+                elif kind == "reordered":
+                    reads = after["nodes"]["native"]
+                    reads["parent"]["read"], reads["a"]["read"] = reads["a"]["read"], reads["parent"]["read"]
+                else:
+                    sequence = [("native", "parent"), ("native", "a")]
+                    sequence += [("oracle", node) for node in ("parent",) + LEAVES]
+                    sequence += [("native", node) for node in ("b", "root", "best")]
+                    sequence += [("stale", node) for node in ("parent",) + LEAVES]
+                    set_read_sequence(after, sequence)
+                with self.assertRaises(AssertionError):
+                    validate_sample_interval(before, after)
 
     def test_aggregate_and_leaf_tolerances_are_independent(self):
         for dimension, delta in (("mapped", 0.501), ("a", 1.001)):

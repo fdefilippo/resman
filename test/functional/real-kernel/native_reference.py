@@ -9,7 +9,8 @@ import time
 import traceback
 
 from native_gate import Blocked, NativeGate, field, require, sha
-from native_proportional import LEAVES, ProportionalGate, compare_reference, ratios
+from native_proportional import (COUNTER_QUANTIZATION_ALLOWANCE_USEC, LEAVES, ProportionalGate,
+                                 compare_reference, ratios, validate_sample_interval)
 from native_placement import SCOPE, observe
 
 
@@ -24,7 +25,7 @@ def analyze(frames):
             segment = frames[start:start + length + 1]
             # Every intermediate sample is part of the validity contract.
             for old, new in zip(segment, segment[1:]):
-                ratios(old, new, minimum_seconds=0)
+                validate_sample_interval(old, new)
             measured = ratios(segment[0], segment[-1], minimum_seconds=length * 5)
             duration = segment[-1]["time"] - segment[0]["time"]
             for group, values in measured.items():
@@ -82,6 +83,9 @@ class ReferenceDiagnostic(ProportionalGate):
             "runner_sha256": sha(__file__), "daemon_started": False,
             "tested_artifact": "reference fixture only; bundled daemon binary is not exercised",
             "primary_windows": 6, "primary_window_seconds": 60, "sampling_seconds": 5,
+            "sample_conservation": "bilateral-measured-read-span",
+            "sample_quantization_allowance_usec": COUNTER_QUANTIZATION_ALLOWANCE_USEC,
+            "full_window_conservation": "bilateral-fixed-one-percent",
             "exploratory_windows_seconds": [180, 360], "aggregate_tolerance_pp": 0.5,
             "leaf_tolerance_pp": 1.0, "minimum_stale_separation_pp": 2.0,
             "groups": ["referencea", "referenceb", "stale"],

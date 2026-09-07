@@ -11,7 +11,7 @@ from pathlib import Path
 
 from native_reference import ReferenceDiagnostic, analyze, comparable
 from native_placement import assert_equal_layout, inspect, observe
-from native_proportional_test import frames
+from native_proportional_test import frames, stamp
 from native_proportional import ProportionalGate
 
 spec = importlib.util.spec_from_file_location("native_workload", Path(__file__).with_name("native-workload.py"))
@@ -38,6 +38,7 @@ def samples():
                     usage = 1600000
                 values["stat"] = {"usage_usec": usage * step, "nr_periods": 50 * step,
                                   "nr_throttled": 45 * step, "throttled_usec": 1000000 * step}
+        stamp(current)
         result.append(current)
     return result
 
@@ -138,6 +139,7 @@ class ReferenceTests(unittest.TestCase):
         data = samples()
         for frame in data:
             frame["nodes"]["stale"] = copy.deepcopy(frame["nodes"]["referencea"])
+            stamp(frame)
         self.assertFalse(comparable(analyze(data)))
 
     def test_one_bad_window_cannot_be_hidden_by_longer_averages(self):
@@ -207,6 +209,7 @@ class ReferenceTests(unittest.TestCase):
             data = samples()
             for row in data:
                 row["nodes"]["stale"] = copy.deepcopy(row["nodes"]["referencea"])
+                stamp(row)
             stack.enter_context(patch.object(gate, "snapshot", side_effect=data))
             stack.enter_context(patch("native_reference.time.sleep"))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))

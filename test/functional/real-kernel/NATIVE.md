@@ -145,15 +145,14 @@ The package row runs the installed `/usr/bin/resman` only after its identity and
 bytes match the supplied RPM payload:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-4.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-5.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```
 
-The example uses the next identity after the produced `1.33.0-2`. That new RPM has
-not yet been built as part of this harness change: increment RELEASE before its
-build and install it only through an explicitly approved operation. The row neither
-builds nor installs packages. It uses shipped RPM defaults, proves the 750-point
+The example uses the next identity after the produced `1.33.0-4`. Increment RELEASE
+before any later build and install it only through an explicitly approved operation.
+The row neither builds nor installs packages. It uses shipped RPM defaults, proves the 750-point
 rejection, preserves rejected schema 5, observes schema 6 with real rows, and runs
 the native lifecycle using isolated configuration. A source-binary PASS cannot
 satisfy this package row.
@@ -183,14 +182,20 @@ with the same quota, so their combined ceilings total 900 points on the host.
 
 The reference has weights 5000/5000/10000/10000. The deliberately stale control
 underweights best effort at 5000. Six full-contention 60-second windows and one
-lending window record raw
-parent/leaf counters, identities, read skew, online capacity and throttling. The
+lending window record raw parent/leaf counters, identities, per-node monotonic read
+intervals, online capacity and throttling. Each group parent and its four leaves are
+read as one adjacent block. Every five-second interval checks conservation in both
+directions against an error bound derived from the two measured block spans, the
+programmed 1.2-CPU capacity and the ten-microsecond integer-counter quantization
+allowance. The complete 60-second window retains the fixed bilateral one-percent
+conservation bound. The
 mapped aggregate must match the same-window reference within 0.5 percentage points;
 each leaf within 1.0; the stale control must remain at least 2.0 points away at the
 aggregate. There is no stored calibration constant or comparison of delivered CPU
 against a nominal guarantee. A parent delivering less than 80% of its nominal quota,
-no throttling, changed weights/identity, missing counters or skew above 200 ms fails
-the measurement rather than silently relaxing the tolerances.
+no throttling, changed weights/identity, missing per-node timing, reordered or
+interleaved group reads, missing counters or frame skew above 200 ms fails the
+measurement rather than silently relaxing the delivery tolerances.
 
 In the lending window one mapped workload is stopped with SIGSTOP, not migrated or
 reclassified; its session stays present. Every other native sibling, including the

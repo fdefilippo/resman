@@ -53,3 +53,11 @@ verdict; invalid collection or cleanup still fails. It cannot substitute for a
 required PASS. The daemon test uses the same bounds, placement inspection and
 counter synchronization. Its PASS is not the complete nq6.9 matrix or release
 approval; independent review and the other acceptance rows remain required.
+
+Counter synchronization is measured rather than inferred. Every `cpu.stat` read has
+its own monotonic start and finish time, and a parent plus its four leaves form one
+adjacent read block. Intermediate five-second conservation is bilateral and permits
+only the programmed parent capacity multiplied by the measured block spans at both
+endpoints, plus ten microseconds for integer-counter quantization. Primary and longer
+windows retain the fixed bilateral one-percent limit. The 200 ms frame-skew ceiling
+does not become an intermediate conservation tolerance.

@@ -1,3 +1,9 @@
+resman (1.33.0-5) stable; urgency=medium
+
+  * Measure per-node CPU counter timing and use a bilateral sampling contract.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 17:20:00 +0200
+
 resman (1.33.0-4) stable; urgency=medium
 
   * Rebuild the unchanged native daemon with executable reconciliation

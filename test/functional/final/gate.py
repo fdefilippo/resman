@@ -15,7 +15,7 @@ from catalog import ROWS, validate_catalog
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "test/functional/real-kernel"))
 from native_placement import LAYOUT, SCOPE, assert_equal_layout
-from native_proportional import LEAVES, compare_reference, ratios
+from native_proportional import LEAVES, compare_reference, ratios, validate_sample_interval
 from native_weighted_io import validate_proof as validate_weighted_io
 from native_reference import analyze
 from native_replicas import summarize
@@ -77,7 +77,7 @@ def check_placement(frames, groups, paused=()):
         require(previous is None or previous == births, "worker changed during interval")
         previous = births
         if index:
-            ratios(frames[index - 1], frame, minimum_seconds=0)
+            validate_sample_interval(frames[index - 1], frame)
 
 
 def proportional(directory, revision):
