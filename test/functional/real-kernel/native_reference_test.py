@@ -5,11 +5,16 @@ import copy
 import io
 import tempfile
 import unittest
+import importlib.util
 from unittest.mock import patch
 from pathlib import Path
 
-from native_reference import ReferenceDiagnostic, analyze, comparable
+from native_reference import ReferenceDiagnostic, analyze, comparable, inspect_workload
 from native_proportional_test import frames
+
+spec = importlib.util.spec_from_file_location("native_workload", Path(__file__).with_name("native-workload.py"))
+workload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(workload)
 
 
 def samples():
@@ -36,6 +41,35 @@ def samples():
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_declared_worker_layout_must_be_observed(self):
+        identity = {"pid": 100, "start_time": "90", "children": [101, 102, 103, 104]}
+        stat = "100 (worker) " + " ".join(["R", "100"] + ["0"] * 17 + ["90"])
+        with patch("native_reference.field", return_value=stat), \
+                patch("native_reference.os.sched_getaffinity", side_effect=lambda pid: {pid - 101}):
+            self.assertEqual(inspect_workload(identity, True), dict.fromkeys(identity["children"], "90"))
+        with patch("native_reference.field", return_value=stat), \
+                patch("native_reference.os.sched_getaffinity", return_value={0, 1, 2, 3}):
+            with self.assertRaisesRegex(AssertionError, "affinity"):
+                inspect_workload(identity, True)
+        with patch("native_reference.field", return_value=stat.replace(" R ", " Z ")):
+            with self.assertRaisesRegex(AssertionError, "exited"):
+                inspect_workload(identity, True)
+
+    def test_affinity_control_is_explicit_and_does_not_change_default_workers(self):
+        self.assertEqual(workload.worker_cpus([]), [None] * 6)
+        with patch.object(workload.os, "sched_getaffinity", return_value={0, 1, 2, 3}):
+            self.assertEqual(workload.worker_cpus(["--one-worker-per-cpu"]), [0, 1, 2, 3])
+        with patch.object(workload.os, "sched_getaffinity", return_value={0, 1}):
+            with self.assertRaises(ValueError):
+                workload.worker_cpus(["--one-worker-per-cpu"])
+        with self.assertRaises(ValueError):
+            workload.worker_cpus(["--unknown"])
+        with patch.object(workload.os, "sched_setaffinity") as affinity, \
+                patch("builtins.sum", side_effect=RuntimeError("stop burner")):
+            with self.assertRaises(RuntimeError):
+                workload.burn(2)
+            affinity.assert_called_once_with(0, {2})
+
     def test_all_fixed_windows_are_required(self):
         results = analyze(samples())
         self.assertEqual(len(results), 9)

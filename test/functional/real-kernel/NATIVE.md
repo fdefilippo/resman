@@ -124,3 +124,11 @@ measurement method cannot yet attribute that discrepancy to ResMan. The bundled
 source binary is only queried for its version, never started as a daemon;
 `diagnostic-contract.json` explicitly records that scope. Independent fresh runs are
 required to assess reproducibility.
+
+`systemd-native-reference-pinned` is a separate diagnostic control: each leaf has
+four CPU workers, one explicitly bound to each CPU 0-3, instead of six unbound
+workers. The helper process remains unbound. It keeps the same three parents,
+weights, measurement windows and thresholds. It can investigate sensitivity to
+worker layout, but changes both worker count and affinity: it does not isolate one
+of those factors by itself. Even a PASS cannot replace the unbound workload evidence
+or authorize a change to the release gate without review.

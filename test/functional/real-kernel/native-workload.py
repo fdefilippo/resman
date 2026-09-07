@@ -9,14 +9,26 @@ import sys
 import time
 
 
-def burn():
+def burn(cpu=None):
+    if cpu is not None:
+        os.sched_setaffinity(0, {cpu})
     while True:
         sum(range(10000))
 
 
+def worker_cpus(arguments):
+    if not arguments:
+        return [None] * 6
+    if arguments != ["--one-worker-per-cpu"]:
+        raise ValueError("unsupported workload mode")
+    if os.sched_getaffinity(0) != set(range(4)):
+        raise ValueError("pinned diagnostic requires CPUs 0-3")
+    return list(range(4))
+
+
 def main():
     output = Path(sys.argv[1])
-    children = [multiprocessing.Process(target=burn) for _ in range(6)]
+    children = [multiprocessing.Process(target=burn, args=(cpu,)) for cpu in worker_cpus(sys.argv[2:])]
     # Existing resident charges must remain visible when limits are applied in place.
     resident = bytearray(64 << 20)
     for offset in range(0, len(resident), 4096):

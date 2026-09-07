@@ -140,6 +140,9 @@ class ProportionalGate(NativeGate):
                 "native denominator differs from the four workload slices")
         self.passed("native-plan", {"quota": "120000 100000", "weights": WEIGHTS, "uids": mapping})
 
+    def reference_workload_args(self):
+        return ()
+
     def start_references(self, groups=("oracle", "stale")):
         # Separate, run-owned parents provide an independent same-window oracle.
         # Their total ceiling plus the native ceiling is 90% of this four-CPU host.
@@ -168,7 +171,7 @@ class ProportionalGate(NativeGate):
                 self.reference_units.append(service)
                 self.command("systemd-run", "--quiet", "--unit=" + service, "--slice=" + unit,
                              "-p", "RuntimeMaxSec=600", "-p", "TimeoutStopSec=10s",
-                             "/usr/bin/python3", self.helper / "workload.py", output)
+                             "/usr/bin/python3", self.helper / "workload.py", output, *self.reference_workload_args())
                 eventually(lambda p=output: (p / "identity.json").exists(), "reference workload did not start")
                 identity = json.loads((output / "identity.json").read_text())
                 require(identity["cgroup"] == "0::/" + parent + "/" + unit + "/" + service,
