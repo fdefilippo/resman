@@ -4,6 +4,7 @@ set -Eeuo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 bash -n "$script_dir/cpu-points-run.sh"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_gate_test.py"
 
 [[ $(grep -c 'tar --no-same-owner' "$script_dir/remote.sh") -eq 2 ]] \
 	|| { printf 'remote bundle transport must reject archived local ownership\n' >&2; exit 1; }
