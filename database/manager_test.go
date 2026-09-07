@@ -72,6 +72,31 @@ func TestNewDatabaseManager(t *testing.T) {
 	}
 }
 
+func TestProcessOnlyHistoryStoresAbsentCgroupFieldsAsNull(t *testing.T) {
+	manager, err := NewDatabaseManager(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := manager.writeUserMetricsForTest(&UserMetricsRecord{UID: 1002, Username: "service", CPUUsagePercent: 40, ProcessCount: 3, MemoryUsageBytes: 32 << 20}); err != nil {
+		t.Fatal(err)
+	}
+	var processPresent, cgroupAbsent bool
+	if err := manager.db.QueryRow(`SELECT cpu_usage_percent = 40 AND process_count = 3 AND memory_usage_bytes = 33554432,
+		cgroup_path IS NULL AND cpu_quota IS NULL AND applied_cpu_weight IS NULL AND cpu_weight IS NULL
+		AND leaf_cpu_usage_usec_delta IS NULL AND ram_cgroup_usage_bytes IS NULL AND memory_high_limit IS NULL
+		FROM user_metrics WHERE uid = 1002`).Scan(&processPresent, &cgroupAbsent); err != nil {
+		t.Fatal(err)
+	}
+	if !processPresent || !cgroupAbsent {
+		t.Fatalf("process present=%v, cgroup absent=%v", processPresent, cgroupAbsent)
+	}
+}
+
 func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
 	dbPath := privateTestDatabasePath(t, "metrics.db")
 	manager, err := NewDatabaseManager(dbPath)

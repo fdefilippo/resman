@@ -224,3 +224,77 @@ func TestSystemdAccountingResetsOnlyUnavailableOrRecreatedBaselines(t *testing.T
 		})
 	}
 }
+
+func TestSystemdAccountingPreservesProcessesWithoutUserSlices(t *testing.T) {
+	for _, scenario := range []string{"process_only", "slice_departed", "discovery_unavailable", "ineligible"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, a := accountingManager(t)
+			start := time.Now().UTC()
+			m.collectPersistenceInterval(persistenceSample(start))
+			sample := persistenceSample(start.Add(30 * time.Second))
+			uid := 1002
+			if scenario == "slice_departed" {
+				uid = 1000
+				a.topology.Users = append(a.topology.Users[:1], a.topology.Users[2:]...)
+			}
+			if scenario == "discovery_unavailable" {
+				a.discoverError = errors.New("discovery unavailable")
+			}
+			observed := &resmanmetrics.UserMetrics{UID: uid, Username: "service", CPUUsage: 40, MemoryUsage: 32 << 20, ProcessCount: 3, EligibleForCPU: scenario != "ineligible", CPULimitRequested: true}
+			sample.UserMetrics[uid] = observed
+			m.collectPersistenceInterval(sample)
+			user, exists := sample.PersistenceUsers[uid]
+			if !exists || user.Metrics != observed || user.ProcessObservationUnavailable {
+				t.Fatalf("observed UID lost: %+v", sample.PersistenceUsers)
+			}
+			wantLifecycle := resmanmetrics.CPUPointsLifecycleEligibleInactive
+			if scenario == "ineligible" {
+				wantLifecycle = resmanmetrics.CPUPointsLifecycleIneligible
+			}
+			if scenario == "discovery_unavailable" {
+				wantLifecycle = resmanmetrics.CPUPointsLifecycleFailed
+			}
+			if user.LifecycleState != wantLifecycle || user.AppliedClass != nil || user.AppliedWeight != nil || user.CPUWeight != nil || user.LeafCPUUsageUsecDelta != nil || user.RAMCgroupUsageBytes != nil || user.MemoryHighLimit != nil || user.MemoryHighEventsDelta != nil || user.CgroupPath != "" || user.CPUQuota != "" {
+				t.Fatalf("slice observation invented or retained: %+v", user)
+			}
+			for _, coverage := range []*string{user.CPUAuthorityCoverage, user.RAMCoverage, user.IOCoverage} {
+				if coverage == nil || *coverage != "unavailable" {
+					t.Fatalf("invented resource coverage: %+v", user)
+				}
+			}
+			if scenario == "slice_departed" && (user.ConfiguredClass != "guaranteed" || user.ConfiguredGuaranteePoints == nil || *user.ConfiguredGuaranteePoints != 300) {
+				t.Fatalf("configuration lost with slice: %+v", user)
+			}
+			status, exists := m.GetCPUPointsUserStatus(uid)
+			if !exists || status.ObservedProcessCount != 3 || !status.CPUEnforcementRequested || status.AppliedToProcesses || status.CompleteUIDWorkloadGuaranteed || status.ProcessCoverage != resmanmetrics.CPUPointsCoverageUnavailable {
+				t.Fatalf("typed status disagrees with persistence: %+v", status)
+			}
+			if scenario == "process_only" {
+				if len(sample.PersistenceUsers) != 4 || sample.CPUPointsSystem.DenominatorState != resmanmetrics.CPUPointsDenominatorComplete {
+					t.Fatalf("union or denominator changed: %+v", sample.CPUPointsSystem)
+				}
+				assertUint64Pointer(t, "unchanged sibling weight", sample.CPUPointsSystem.ProgrammedSiblingWeightSum, 16500)
+			}
+			db, err := database.NewDatabaseManager(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := db.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := resmanmetrics.NewDBWriter(db, 0).WriteMetricsBatch(resmanmetrics.PersistenceBatch{System: sample.PersistenceSystem, Users: sample.PersistenceUsers}); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := db.GetUserHistory(uid, start, sample.Timestamp.Add(time.Second), 10)
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("history missing: %+v %v", rows, err)
+			}
+			row := rows[0]
+			if row.ProcessObservationUnavailable || row.CPUUsagePercent != 40 || row.ProcessCount != 3 || row.MemoryUsageBytes != 32<<20 || row.EligibleForCPU != observed.EligibleForCPU || row.CPUWeight != nil || row.AppliedCPUWeight != nil || row.RAMCgroupUsageBytes != nil || row.CPUPointsLifecycleState != string(wantLifecycle) {
+				t.Fatalf("history disagrees with observation: %+v", row)
+			}
+		})
+	}
+}

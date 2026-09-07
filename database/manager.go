@@ -408,6 +408,13 @@ func (m *DatabaseManager) InitSchema() error {
 	return m.normalizeStoredTimestamps()
 }
 
+func optionalCgroupText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func processObservationValue(value any, unavailable bool) any {
 	if unavailable {
 		return nil
@@ -722,8 +729,8 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 				processObservationValue(record.CPUUsagePercent, record.ProcessObservationUnavailable),
 				processObservationValue(record.MemoryUsageBytes, record.ProcessObservationUnavailable),
 				processObservationValue(record.ProcessCount, record.ProcessObservationUnavailable),
-				record.CgroupPath,
-				record.CPUQuota,
+				optionalCgroupText(record.CgroupPath),
+				optionalCgroupText(record.CPUQuota),
 				record.ConfiguredGuaranteePoints,
 				record.ConfiguredCPUClass,
 				record.CPUPointsLifecycleState,
@@ -799,7 +806,7 @@ func (m *DatabaseManager) GetUserHistory(uid int, startTime, endTime time.Time, 
 	query := `
 	SELECT timestamp, sample_epoch_id, interval_start, interval_end,
 		   uid, username, COALESCE(cpu_usage_percent, 0), COALESCE(memory_usage_bytes, 0),
-		   COALESCE(process_count, 0), cgroup_path, cpu_quota, configured_guarantee_points,
+		   COALESCE(process_count, 0), COALESCE(cgroup_path, ''), COALESCE(cpu_quota, ''), configured_guarantee_points,
 		   configured_cpu_class, cpu_points_lifecycle_state, applied_cpu_class,
 		   applied_cpu_weight, cpu_weight, leaf_cpu_usage_usec_delta,
 		   pid_namespace_mismatch_count, pid_namespace_unavailable_count,

@@ -65,6 +65,14 @@ A slice can participate even when its UID is outside the process collector's
 selection (root is the usual example). Its slice counters remain observable;
 uncollected process usage/count fields are NULL in history and MCP and absent
 from Prometheus. Such rows are excluded from process-derived user summaries.
+Conversely, an observed UID without a user slice (for example, a service account
+running only under `system.slice`) remains in history, MCP and Prometheus with its
+process-derived values. Slice weights, counters, limits and history path/quota are
+absent/NULL, with CPU/RAM/I/O coverage `unavailable`. Configured CPU eligibility is
+preserved: lifecycle is `eligible_inactive` or `ineligible`, never `applied` merely
+because processes were observed. These UIDs do not enter the sibling denominator.
+If topology discovery itself fails, the process rows still survive but their
+lifecycle is `failed`: inability to inspect a slice does not prove its absence.
 Jitter and bias depend on both host and workload; an algebraic ratio is a diagnostic
 expectation, not a strict per-window pass threshold. Positive parent throttling and
 nominal under-delivery can be expected under saturation. The real-kernel functional

@@ -35,6 +35,26 @@ func TestSliceOnlyWireObservationKeepsProcessValuesNull(t *testing.T) {
 	}
 }
 
+func TestProcessOnlyHistoryWireKeepsSliceValuesNull(t *testing.T) {
+	payload := newUserHistoryRecord(database.UserMetricsRecord{UID: 1002, Username: "service", CPUUsagePercent: 40, MemoryUsageBytes: 32 << 20, ProcessCount: 3, EligibleForCPU: true, CPUPointsLifecycleState: "eligible_inactive"})
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["cpu_usage"] != float64(40) || fields["memory_usage"] != float64(32<<20) || fields["process_count"] != float64(3) || fields["eligible_for_cpu"] != true {
+		t.Fatalf("observed process lost on wire: %s", data)
+	}
+	for _, key := range []string{"cgroup_path", "cpu_quota", "applied_cpu_class", "applied_cpu_weight", "cpu_weight", "leaf_cpu_usage_usec_delta", "ram_cgroup_usage_bytes", "memory_high_limit", "memory_max_limit"} {
+		if value, exists := fields[key]; !exists || value != nil {
+			t.Fatalf("missing or fabricated %s: %s", key, data)
+		}
+	}
+}
+
 type unusedNativeAccountingAdapter struct{ state.SystemdCPUUnitAdapter }
 
 func (unusedNativeAccountingAdapter) OwnedUnits() []systemdunit.UnitIdentity { return nil }

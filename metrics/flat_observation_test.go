@@ -2,6 +2,27 @@ package metrics
 
 import "testing"
 
+func TestProcessOnlyPrometheusObservationDoesNotInventSliceAccounting(t *testing.T) {
+	exporter := newCPUPointsTestExporter(t)
+	unavailable := "unavailable"
+	exporter.UpdateUserSnapshot(UserExporterMetrics{UID: 1002, Username: "service", CPUUsagePercent: 40, MemoryUsageBytes: 32 << 20, ProcessCount: 3,
+		CPUPoints: CPUPointsUserSnapshot{UID: 1002, Username: "service", ConfiguredClass: "best_effort", CPUEnforcementRequested: true,
+			LifecycleState: CPUPointsLifecycleEligibleInactive, ProcessCoverage: CPUPointsCoverageUnavailable, ObservedProcessCount: 3,
+			CPUAuthorityCoverage: &unavailable, RAMCoverage: &unavailable, IOCoverage: &unavailable}})
+	if gatheredMetricValue(t, exporter, "resman_user_cpu_usage_percent") != 40 || gatheredMetricValue(t, exporter, "resman_user_process_count") != 3 {
+		t.Fatal("process-only observation disappeared")
+	}
+	for _, name := range []string{"resman_user_cpu_points_applied_weight", "resman_user_cpu_points_programmed_weight", "resman_user_cpu_points_observed_weight", "resman_user_ram_cgroup_memory_current_bytes", "resman_user_cpu_points_leaf_usage_microseconds_delta"} {
+		if hasMetricFamily(t, exporter, name) {
+			t.Fatalf("fabricated slice series: %s", name)
+		}
+	}
+	assertGaugeLabelValue(t, exporter, "resman_user_cpu_points_lifecycle_state", "state", "eligible_inactive", 1)
+	assertGaugeLabelValue(t, exporter, "resman_user_cpu_points_process_coverage", "coverage", "unavailable", 1)
+	assertGaugeLabelValue(t, exporter, "resman_user_ram_cgroup_coverage", "coverage", "unavailable", 1)
+	assertGaugeLabelValue(t, exporter, "resman_user_io_coverage", "coverage", "unavailable", 1)
+}
+
 func TestFlatSliceWithoutProcessSampleDoesNotPublishZeroUIDUsage(t *testing.T) {
 	exporter := newCPUPointsTestExporter(t)
 	weight := uint64(3300)

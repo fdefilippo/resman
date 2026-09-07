@@ -287,8 +287,8 @@ type userHistoryRecord struct {
 	MemoryUsage                       *int64   `json:"memory_usage"`
 	ProcessCount                      *int     `json:"process_count"`
 	EnforceableProcessCount           *int     `json:"enforceable_process_count"`
-	CgroupPath                        string   `json:"cgroup_path"`
-	CPUQuota                          string   `json:"cpu_quota"`
+	CgroupPath                        *string  `json:"cgroup_path"`
+	CPUQuota                          *string  `json:"cpu_quota"`
 	ConfiguredGuaranteePoints         *uint64  `json:"configured_guarantee_points"`
 	ConfiguredCPUClass                string   `json:"configured_cpu_class"`
 	CPUPointsLifecycleState           string   `json:"cpu_points_lifecycle_state"`
@@ -344,8 +344,8 @@ func newUserHistoryRecord(record database.UserMetricsRecord) userHistoryRecord {
 		MemoryUsage:                       optionalProcessValue(record.MemoryUsageBytes, record.ProcessObservationUnavailable),
 		ProcessCount:                      optionalProcessValue(record.ProcessCount, record.ProcessObservationUnavailable),
 		EnforceableProcessCount:           optionalProcessValue(record.EnforceableProcessCount, record.ProcessObservationUnavailable),
-		CgroupPath:                        record.CgroupPath,
-		CPUQuota:                          record.CPUQuota,
+		CgroupPath:                        optionalCgroupText(record.CgroupPath),
+		CPUQuota:                          optionalCgroupText(record.CPUQuota),
 		ConfiguredGuaranteePoints:         record.ConfiguredGuaranteePoints,
 		ConfiguredCPUClass:                record.ConfiguredCPUClass,
 		CPUPointsLifecycleState:           record.CPUPointsLifecycleState,
@@ -466,6 +466,13 @@ func formatOptionalHistoryTime(value *time.Time) *string {
 	}
 	formatted := value.Format(time.RFC3339)
 	return &formatted
+}
+
+func optionalCgroupText(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func optionalProcessValue[T any](value T, unavailable bool) *T {

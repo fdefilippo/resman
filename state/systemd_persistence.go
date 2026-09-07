@@ -239,6 +239,35 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		}
 		users[uid] = user
 	}
+	// Process observation is independent of slice membership. Keep workloads
+	// outside user.slice in history without inventing an applied allocation or
+	// adding them to the flat scheduling denominator.
+	for uid, observed := range sample.UserMetrics {
+		if _, exists := users[uid]; exists || observed == nil {
+			continue
+		}
+		unavailable := string(resmanmetrics.CPUPointsCoverageUnavailable)
+		user := resmanmetrics.UserPersistenceMetrics{
+			Metrics: observed, ConfiguredClass: string(policy.ClassForUID(uid)),
+			LifecycleState:       resmanmetrics.CPUPointsLifecycleEligibleInactive,
+			CPUAuthorityCoverage: &unavailable, RAMCoverage: &unavailable, IOCoverage: &unavailable,
+		}
+		if !observed.EligibleForCPU {
+			user.LifecycleState = resmanmetrics.CPUPointsLifecycleIneligible
+		}
+		if topologyErr != nil {
+			// Failed discovery does not prove that an old allocation is absent.
+			user.LifecycleState = resmanmetrics.CPUPointsLifecycleFailed
+		}
+		if uid == 0 {
+			user.ConfiguredClass = string(cpupoints.FlatAllocationRoot)
+		}
+		if guarantee, exists := policy.GuaranteeForUID(uid); exists {
+			points := guarantee.Points().Value()
+			user.ConfiguredGuaranteePoints = &points
+		}
+		users[uid] = user
+	}
 	if topologyErr == nil {
 		if err := m.systemdUnits.ConfirmTopology(context.Background(), topology); err != nil {
 			allWeights = false
