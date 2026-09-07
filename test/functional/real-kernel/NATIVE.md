@@ -121,5 +121,6 @@ The existing exclusive host controller and exact reference cleanup apply. A PASS
 means only that these reference trees were comparable in this run, never that the
 daemon, lending contract, package or release passed. A FAIL establishes that this
 measurement method cannot yet attribute that discrepancy to ResMan. The bundled
-source binary is not executed; `diagnostic-contract.json` explicitly records that
-scope. Independent fresh runs are required to assess reproducibility.
+source binary is only queried for its version, never started as a daemon;
+`diagnostic-contract.json` explicitly records that scope. Independent fresh runs are
+required to assess reproducibility.

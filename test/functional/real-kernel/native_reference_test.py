@@ -6,6 +6,7 @@ import io
 import tempfile
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 from native_reference import ReferenceDiagnostic, analyze, comparable
 from native_proportional_test import frames
@@ -90,13 +91,23 @@ class ReferenceTests(unittest.TestCase):
     def test_cleanup_failure_overrides_a_complete_measurement(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
             gate = ReferenceDiagnostic(directory, "runit", "revision")
-            # No daemon/session startup belongs to this diagnostic.
-            stack.enter_context(patch.object(gate, "preflight", side_effect=RuntimeError("fixture failure")))
+            gate.helper = Path(directory) / "helper"
+            (Path(directory) / "native-workload.py").write_text("# fixture\n")
+            stack.enter_context(patch.object(gate, "preflight"))
+            stack.enter_context(patch.object(gate, "start_references"))
+            stack.enter_context(patch.object(gate, "record_topology"))
+            stack.enter_context(patch.object(gate, "snapshot", side_effect=samples()))
+            stack.enter_context(patch("native_reference.time.sleep"))
             stack.enter_context(patch.object(gate, "cleanup", side_effect=RuntimeError("cleanup failure")))
+            daemon = stack.enter_context(patch.object(gate, "start_daemon"))
+            sessions = stack.enter_context(patch.object(gate, "start_sessions"))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             self.assertEqual(gate.run(), 1)
+            self.assertTrue((gate.evidence / "reference-analysis.json").exists())
             self.assertIn("cleanup=FAIL", (gate.evidence / "environment.txt").read_text())
+            daemon.assert_not_called()
+            sessions.assert_not_called()
 
 
 if __name__ == "__main__":
