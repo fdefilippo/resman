@@ -43,8 +43,13 @@ and the meaning of exclusions; it cannot preserve the former class-priority topo
 | Reload | Native active class changes reconcile weights in place, without PID movement or lost memory charges. Source validation, topology reconfirmation and kernel readback precede acknowledgement. The non-systemd backend still rejects cross-class migration while active. |
 | Durable ownership | Preserve `/var/lib/resman/systemd-property-leases.json` (root:root, 0600, private parent). It is a recovery journal, not metrics history or a cache. Never remove it as part of a database reset. |
 
-Restoring live slices can complete in systemd before device I/O values converge in
-the kernel. ResMan rechecks exact values within the adapter's existing operation
+Restoring a live slice first resets owned device I/O properties to their recorded
+baselines through systemd, with durable intent and readback. Revert and reload alone
+can forget the device list while an old kernel limit remains under an active I/O
+controller; waiting longer cannot repair that state. Only after the explicit reset
+does ResMan recheck ownership and remove its runtime drop-ins. A restart completes
+an interrupted baseline-only reset instead of retaining inactive ownership.
+ResMan rechecks exact kernel values within the adapter's existing operation
 deadline and retains the journal on failure; removal means verified completion,
 not merely a successful reload. Cancellation of an in-flight cycle by shutdown is
 reported as an informational canceled outcome, not a reconciliation error. Any

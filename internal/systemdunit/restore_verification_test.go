@@ -40,6 +40,9 @@ func TestRestoreWaitsForDeviceKernelConvergenceBeforeJournalCompletion(t *testin
 				reads := 0
 				verifier := newCgroupVerifier(t.TempDir())
 				verifier.readFile = func(string) ([]byte, error) {
+					if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
+						return []byte(""), nil // Explicit device reset before revert is already confirmed.
+					}
 					reads++
 					if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseReloading {
 						t.Fatal("ownership completed before exact kernel confirmation")
@@ -91,6 +94,9 @@ func TestRestoreConvergenceFailsClosedOnDeadlineCancellationAndExternalChange(t 
 			reads := 0
 			verifier := newCgroupVerifier(t.TempDir())
 			verifier.readFile = func(string) ([]byte, error) {
+				if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
+					return []byte(""), nil
+				}
 				reads++
 				switch outcome {
 				case "canceled":

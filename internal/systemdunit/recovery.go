@@ -189,6 +189,9 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 			return externalRecoveryConflict(unit, "recorded applied values or footprint differ from current state")
 		}
 		a.rebindUnit(identity, current.Identity)
+		if a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, current) {
+			return a.finishResetUnit(ctx, unit, current, actual)
+		}
 		if !sameIdentity {
 			if err := a.persistLeaseState(); err != nil {
 				a.rebindUnit(current.Identity, identity)
@@ -210,6 +213,9 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 				a.restoreLeaseState(before)
 				return err
 			}
+			if a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.baseline }, current) {
+				return a.finishResetUnit(ctx, unit, current, actual)
+			}
 			state := LeaseRecoveryReclaimed
 			if !sameIdentity {
 				state = LeaseRecoveryOrphaned
@@ -224,6 +230,23 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 	default:
 		return fmt.Errorf("unit %s has unsupported recovery phase %q", unit, phase)
 	}
+}
+
+// finishResetUnit removes owned drop-ins when a crash left an acknowledged or
+// uncertain reset at baseline, before the destructive restore intent was saved.
+// The caller has already verified the complete footprint and normalized values.
+func (a *Adapter) finishResetUnit(ctx context.Context, unit string, current UnitSnapshot, actual []unitFileFingerprint) error {
+	_, override, _, _ := a.unitLeaseState(unit)
+	if err := a.requireManagedUnitFileFootprint("recover_reset", current, override, true); err != nil {
+		return err
+	}
+	before := a.snapshotLeaseState()
+	a.stageUnitRestore(unit)
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(before)
+		return err
+	}
+	return a.resumeRestore(ctx, unit, current, actual)
 }
 
 func (a *Adapter) recoverActiveRestore(ctx context.Context, unit, objectPath string) error {
