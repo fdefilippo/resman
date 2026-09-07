@@ -107,6 +107,10 @@ the remaining recovery/conflict/topology cases retain their separate obligations
 
 ## Reference-only diagnostic
 
+The [2026-09-07 investigation](REFERENCE-EVIDENCE.md) records the failed unbound
+replications, fixed-affinity controls, immutable evidence identities and the
+measurement proposal awaiting independent review.
+
 `remote.sh systemd-native-reference root@terra` investigates nq6.37 without starting
 ResMan, creating login sessions, or changing `user.slice`. Two independent identical
 reference trees and one deliberately stale control each have a 1.2-CPU parent and
