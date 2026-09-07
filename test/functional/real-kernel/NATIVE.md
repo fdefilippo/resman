@@ -145,12 +145,12 @@ The package row runs the installed `/usr/bin/resman` only after its identity and
 bytes match the supplied RPM payload:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-5.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.33.0-6.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```
 
-The example uses the next identity after the produced `1.33.0-4`. Increment RELEASE
+The example uses the next identity after the produced `1.33.0-5`. Increment RELEASE
 before any later build and install it only through an explicitly approved operation.
 The row neither builds nor installs packages. It uses shipped RPM defaults, proves the 750-point
 rejection, preserves rejected schema 5, observes schema 6 with real rows, and runs

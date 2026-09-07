@@ -9,7 +9,7 @@
 # Project name
 PROJECT_NAME = resman
 VERSION = 1.33.0
-RELEASE = 5
+RELEASE = 6
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
@@ -23,6 +23,8 @@ SHELLCHECK = shellcheck
 BUILD_DIR = build
 DIST_DIR = dist
 RPMBUILD_DIR = $(HOME)/rpmbuild
+RPM = rpm
+RPMBUILD = rpmbuild
 DEB_BUILD_DIR = $(BUILD_DIR)/deb
 BIN_DIR = /usr/bin
 CONF_DIR = /etc/resman
@@ -336,6 +338,20 @@ uninstall:
 # RPM PACKAGING
 # ============================================================================
 
+# Refuse to create an artifact when the build host cannot expand the systemd
+# macros that become package scriptlets.
+rpm-check:
+	@command -v $(RPM) >/dev/null 2>&1 || { echo "rpm is required"; exit 1; }
+	@command -v $(RPMBUILD) >/dev/null 2>&1 || { echo "rpmbuild is required"; exit 1; }
+	@unitdir="$$($(RPM) --eval '%{_unitdir}')"; \
+	case "$$unitdir" in /*) ;; *) echo "rpm _unitdir is unresolved: $$unitdir"; exit 1 ;; esac
+	@for macro in systemd_post systemd_preun systemd_postun_with_restart; do \
+		expansion="$$($(RPM) --eval "%$${macro} resman.service")"; \
+		case "$$expansion" in ""|*"%$${macro}"*) \
+			echo "rpm macro %$${macro} is unavailable; install systemd-rpm-macros"; exit 1 ;; \
+		esac; \
+	done
+
 # Create the RPM build structure.
 rpm-dirs:
 	@echo "Creating RPM build directories..."
@@ -347,7 +363,7 @@ rpm-dirs:
 		$(RPMBUILD_DIR)/SRPMS
 
 # Create the RPM source tarball.
-rpm-source: build rpm-dirs
+rpm-source: rpm-check build rpm-dirs
 	@echo "Creating source tarball for RPM..."
 	mkdir -p $(PROJECT_NAME)-$(VERSION)
 	cp -r *.go go.mod go.sum \
@@ -368,7 +384,12 @@ rpm-source: build rpm-dirs
 rpm: rpm-source
 	@echo "Building RPM package..."
 	cp packaging/rpm/$(PROJECT_NAME).spec $(RPMBUILD_DIR)/SPECS/
-	rpmbuild --define "_topdir $(RPMBUILD_DIR)" -ba $(RPMBUILD_DIR)/SPECS/$(PROJECT_NAME).spec
+	$(RPMBUILD) --define "_topdir $(RPMBUILD_DIR)" -ba $(RPMBUILD_DIR)/SPECS/$(PROJECT_NAME).spec
+	@package=$(RPMBUILD_DIR)/RPMS/*/$(PROJECT_NAME)-$(VERSION)-$(RELEASE).*.rpm; \
+	set -- $$package; \
+	[ "$$#" -eq 1 ] && [ -f "$$1" ] || { echo "RPM build did not produce exactly one binary package"; exit 1; }; \
+	scripts="$$($(RPM) -qp --scripts "$$1")"; \
+	case "$$scripts" in *'%systemd_'*) echo "RPM contains an unresolved systemd scriptlet macro"; exit 1 ;; esac
 	@echo "RPM created: $(RPMBUILD_DIR)/RPMS/*/$(PROJECT_NAME)-$(VERSION)-$(RELEASE).*.rpm"
 
 # Install the RPM locally.

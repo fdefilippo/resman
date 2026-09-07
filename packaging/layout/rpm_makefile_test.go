@@ -61,3 +61,49 @@ func TestRPMBuildDirectoryControlsEveryRPMBuildPath(t *testing.T) {
 		})
 	}
 }
+
+func TestRPMBuildRequiresExpandedSystemdMacros(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, tt := range []struct {
+		name    string
+		invalid string
+	}{
+		{name: "all macros available"},
+		{name: "unit directory unresolved", invalid: "unitdir"},
+		{name: "post macro unresolved", invalid: "systemd_post"},
+		{name: "preun macro unresolved", invalid: "systemd_preun"},
+		{name: "postun macro unresolved", invalid: "systemd_postun_with_restart"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeRPM := filepath.Join(t.TempDir(), "rpm")
+			script := `#!/bin/sh
+case "$2" in
+'%{_unitdir}') value=/usr/lib/systemd/system ;;
+'%systemd_post resman.service') value='if [ "$1" -eq 1 ]; then :; fi' ;;
+'%systemd_preun resman.service') value='if [ "$1" -eq 0 ]; then :; fi' ;;
+'%systemd_postun_with_restart resman.service') value='if [ "$1" -ge 1 ]; then :; fi' ;;
+*) exit 2 ;;
+esac
+`
+			if tt.invalid != "" {
+				script += `case "$2" in *'` + tt.invalid + `'* ) value="$2" ;; esac
+`
+			}
+			script += `printf '%s\n' "$value"
+`
+			if err := os.WriteFile(fakeRPM, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("make", "--no-print-directory", "-f", filepath.Join(root, "Makefile"),
+				"rpm-check", "RPM="+fakeRPM, "RPMBUILD=true")
+			cmd.Dir = root
+			output, err := cmd.CombinedOutput()
+			if tt.invalid == "" && err != nil {
+				t.Fatalf("valid macros rejected: %v\n%s", err, output)
+			}
+			if tt.invalid != "" && err == nil {
+				t.Fatalf("unresolved %s was accepted", tt.invalid)
+			}
+		})
+	}
+}
