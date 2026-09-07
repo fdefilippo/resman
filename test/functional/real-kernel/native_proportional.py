@@ -31,7 +31,9 @@ def ratios(before, after, minimum_seconds=60):
     result = {}
     require(after["time"] - before["time"] >= minimum_seconds, "measurement window too short")
     require(max(before["skew"], after["skew"]) <= 0.2, "counter-read skew exceeds 200 ms")
-    for group in ("native", "oracle", "stale"):
+    require(set(before["nodes"]) == set(after["nodes"]), "measurement groups changed")
+    require(bool(before["nodes"]), "no measurement groups")
+    for group in before["nodes"]:
         deltas = {}
         for node in ("parent",) + LEAVES:
             old, new = before["nodes"][group][node], after["nodes"][group][node]
@@ -138,10 +140,10 @@ class ProportionalGate(NativeGate):
                 "native denominator differs from the four workload slices")
         self.passed("native-plan", {"quota": "120000 100000", "weights": WEIGHTS, "uids": mapping})
 
-    def start_references(self):
+    def start_references(self, groups=("oracle", "stale")):
         # Separate, run-owned parents provide an independent same-window oracle.
         # Their total ceiling plus the native ceiling is 90% of this four-CPU host.
-        for group in ("oracle", "stale"):
+        for group in groups:
             prefix = "nq6" + group + self.run_id.replace("-", "")
             parent = prefix + ".slice"
             root = Path("/sys/fs/cgroup") / parent

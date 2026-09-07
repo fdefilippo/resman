@@ -104,3 +104,22 @@ Ten mandatory result keys and independent unprivileged measurement tests guard t
 row. Neither this row nor the lifecycle pre-gate alone proves the complete `.9`
 acceptance: package identity, SSH, multiple child services, containers, real I/O and
 the remaining recovery/conflict/topology cases retain their separate obligations.
+
+## Reference-only diagnostic
+
+`remote.sh systemd-native-reference root@terra` investigates nq6.37 without starting
+ResMan, creating login sessions, or changing `user.slice`. Two independent identical
+reference trees and one deliberately stale control each have a 1.2-CPU parent and
+the same workloads used above. Six consecutive, non-overlapping 60-second windows
+retain all raw samples and scheduling topology. Every five-second sample must have
+valid identities, counters and skew. Each primary window must meet the existing
+0.5/1.0-point comparison bounds and distinguish the stale control by at least 2.0
+points. No bad window is discarded. Descriptive 180/360-second aggregates are also
+saved, but cannot substitute for failed primary windows or authorize changed bounds.
+
+The existing exclusive host controller and exact reference cleanup apply. A PASS
+means only that these reference trees were comparable in this run, never that the
+daemon, lending contract, package or release passed. A FAIL establishes that this
+measurement method cannot yet attribute that discrepancy to ResMan. The bundled
+source binary is not executed; `diagnostic-contract.json` explicitly records that
+scope. Independent fresh runs are required to assess reproducibility.
