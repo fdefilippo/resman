@@ -427,6 +427,27 @@ class CoverageTests(unittest.TestCase):
             self.assertTrue(proof["drained"])
             self.assertIsNone(proof["last_snapshot"])
 
+    def test_supervisor_initialization_keeps_exact_session_authority(self):
+        scope = "0::/user.slice/user-1006.slice/session-42.scope"
+        for after, birth, accepted in ((scope, "123", True), (scope + "/supervisor", "123", True),
+                                      (scope + "-other/supervisor", "123", False),
+                                      (scope + "/supervisor", "124", False)):
+            with self.subTest(after=after, birth=birth), tempfile.TemporaryDirectory() as directory:
+                gate = CoverageGate(directory, "runit", "revision")
+                proc = Path(directory) / "proc"
+                proc.mkdir()
+                (proc / "stat").write_text("99 (nspawn) " + " ".join(["S"] + ["0"] * 18 + [birth]))
+                (proc / "cgroup").write_text(after)
+                identity = {"pid": 99, "birth": "123", "cgroup": scope,
+                            "session_identity": {"snapshot": {"control_group": scope[3:]}}}
+                if accepted:
+                    gate.confirm_nested_supervisor(proc, identity)
+                    self.assertEqual(identity["cgroup"], after)
+                else:
+                    with self.assertRaisesRegex(AssertionError, "identity or left"):
+                        gate.confirm_nested_supervisor(proc, identity)
+                self.assertEqual(json.loads((gate.evidence / "nested-supervisor-99.json").read_text())["after_cgroup"], after)
+
     def test_missing_nested_unit_does_not_prove_payload_drain(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = CoverageGate(directory, "runit", "revision")

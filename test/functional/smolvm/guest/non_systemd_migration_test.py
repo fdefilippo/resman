@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 spec = importlib.util.spec_from_file_location("legacy_fixture", Path(__file__).with_name("non-systemd-migration.py"))
@@ -21,6 +21,40 @@ from gate import fields
 
 
 class LegacyFixtureTests(unittest.TestCase):
+    def test_cleanup_escalates_only_in_the_recorded_private_tree(self):
+        for timeout, populated in ((False, False), (False, True), (True, True)):
+            with self.subTest(timeout=timeout, populated=populated), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                identity = (root.stat().st_dev, root.stat().st_ino)
+                workload = Mock(pid=123, returncode=-9)
+                workload.poll.return_value = None
+                workload.wait.side_effect = ([subprocess.TimeoutExpired("stress", 10), -9]
+                                             if timeout else [0, 0])
+                with patch.object(legacy, "birth", return_value="100"), \
+                        patch.object(legacy.os, "getpgid", return_value=123), \
+                        patch.object(legacy.os, "killpg") as kill, \
+                        patch.object(legacy, "field", side_effect=["populated %d" % populated, "populated 0"]):
+                    result = legacy.stop_owned_workload(workload, "100", root, identity)
+                kill.assert_called_once_with(123, legacy.signal.SIGTERM)
+                self.assertEqual(result["forced_tree_termination"], timeout or populated)
+                self.assertEqual((root / "cgroup.kill").exists(), populated)
+                if populated:
+                    self.assertEqual((root / "cgroup.kill").read_text(), "1")
+
+    def test_cleanup_refuses_replaced_tree_or_process(self):
+        for replaced_tree in (False, True):
+            with self.subTest(tree=replaced_tree), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                identity = (root.stat().st_dev, root.stat().st_ino + int(replaced_tree))
+                workload = Mock(pid=123)
+                workload.poll.return_value = None
+                with patch.object(legacy, "birth", return_value="101"), \
+                        patch.object(legacy.os, "killpg") as kill:
+                    with self.assertRaises(AssertionError):
+                        legacy.stop_owned_workload(workload, "100", root, identity)
+                kill.assert_not_called()
+                self.assertFalse((root / "cgroup.kill").exists())
+
     def test_real_guest_producers_and_host_finalizer_have_one_value_per_field(self):
         copyfile = shutil.copyfile
         for guest_status, exit_code, host_cleanup, expected in (

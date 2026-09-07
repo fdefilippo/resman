@@ -55,6 +55,37 @@ def assert_restored(pid, original_birth, original_cgroup):
             "live workload did not return to its exact origin")
 
 
+def stop_owned_workload(workload, original_birth, root, identity):
+    """Bound cleanup to the fixture's recorded process and private cgroup tree."""
+    def confirm_tree():
+        current = root.stat()
+        require((current.st_dev, current.st_ino) == identity,
+                "fixture cgroup identity changed before cleanup")
+
+    confirm_tree()
+    forced = False
+    if workload.poll() is None:
+        require(original_birth is not None and birth(workload.pid) == original_birth,
+                "workload identity changed before cleanup")
+        require(os.getpgid(workload.pid) == workload.pid, "workload process group changed")
+        os.killpg(workload.pid, signal.SIGTERM)
+        try:
+            workload.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            forced = True
+    # The supervisor may exit before its workers. Kill only the recorded,
+    # run-private tree, never a potentially reused process group identifier.
+    confirm_tree()
+    if "populated 1" in field(root / "cgroup.events").splitlines():
+        forced = True
+        (root / "cgroup.kill").write_text("1")
+    workload.wait(timeout=10)
+    eventually(lambda: "populated 0" in field(root / "cgroup.events").splitlines(),
+               "fixture workload tree remained populated after cleanup", 10)
+    return {"forced_tree_termination": forced, "returncode": workload.returncode,
+            "tree_identity": list(identity), "populated": False}
+
+
 def save(directory, name, value):
     (directory / (name + ".json")).write_text(json.dumps(value, indent=2) + "\n")
 
@@ -92,6 +123,7 @@ def run(run_id, revision):
     checks = {}
     status, detail, cleanup = "FAIL", "legacy migration incomplete", "PASS"
     daemon = workload = None
+    original_birth = root_identity = None
     root = Path("/sys/fs/cgroup") / ("resman-legacy-" + run_id)
     owned_root = False
     work = Path("/var/lib/resman-functional") / run_id / "legacy"
@@ -136,6 +168,8 @@ def run(run_id, revision):
         Path("/sys/fs/cgroup/cgroup.subtree_control").write_text(" ".join("+" + name for name in available))
         root.mkdir()
         owned_root = True
+        root_stat = root.stat()
+        root_identity = (root_stat.st_dev, root_stat.st_ino)
         (root / "cgroup.subtree_control").write_text(" ".join("+" + name for name in available))
         origin = root / "origin"
         origin.mkdir()
@@ -196,9 +230,8 @@ def run(run_id, revision):
                 daemon.terminate()
                 require(daemon.wait(timeout=75) == 0, "cleanup daemon shutdown failed")
             if workload is not None:
-                if workload.poll() is None:
-                    os.killpg(workload.pid, signal.SIGTERM)
-                workload.wait(timeout=10)
+                save(evidence, "workload-termination",
+                     stop_owned_workload(workload, original_birth, root, root_identity))
             if owned_root:
                 for directory in sorted([root, *[p for p in root.rglob("*") if p.is_dir()]],
                                         key=lambda path: len(path.parts), reverse=True):

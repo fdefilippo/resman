@@ -606,9 +606,21 @@ class CoverageGate(NativeGate):
         require(match is not None, "nested nspawn is not inside a genuine PAM scope")
         identity["session"] = match[1]
         identity["session_identity"] = self.capture_nested_session(match[1], uid)
-        require(field(proc / "stat").rsplit(")", 1)[1].split()[19] == identity["birth"] and
-                field(proc / "cgroup") == identity["cgroup"], "nested supervisor changed while recording session ownership")
+        self.confirm_nested_supervisor(proc, identity)
         return identity
+
+    def confirm_nested_supervisor(self, proc, identity):
+        final_birth = field(proc / "stat").rsplit(")", 1)[1].split()[19]
+        final_cgroup = field(proc / "cgroup")
+        scope = "0::" + identity["session_identity"]["snapshot"]["control_group"]
+        self.save("nested-supervisor-" + str(identity["pid"]), {
+            "before": identity, "after_birth": final_birth, "after_cgroup": final_cgroup})
+        # nspawn may initialize its supervisor subgroup during discovery. That
+        # does not change the authoritative session which this fixture owns.
+        require(final_birth == identity["birth"] and
+                (final_cgroup == scope or final_cgroup.startswith(scope + "/")),
+                "nested supervisor changed identity or left the owned session")
+        identity["cgroup"] = final_cgroup
 
     def nested_scope_snapshot(self, scope):
         result = self.command("systemctl", "show", scope, "-p", "LoadState", "-p", "ActiveState",
