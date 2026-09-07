@@ -28,7 +28,7 @@ REQUIRED_CHECKS = frozenset({
     "ssh-pam-root-no-pty", "ssh-pam-root-pty", "ssh-pam-user-no-pty", "ssh-pam-user-pty",
     "child-units", "resource-properties", "rootless-envelope", "nspawn-machine-split",
     "nspawn-machine-only", "nspawn-keep-unit", "nspawn-shifted-bounded",
-    "hard-io-delivery", "weighted-io-delivery",
+    "hard-io-delivery",
 })
 
 
@@ -732,13 +732,6 @@ class CoverageGate(NativeGate):
             except FileNotFoundError:
                 del self.nested_processes[pid]
 
-    def weighted_io(self):
-        scheduler = field("/sys/dev/block/8:0/queue/scheduler", "unavailable")
-        self.save("weighted-io-capability", {"device": "8:0", "scheduler": scheduler,
-                                             "policy": "never switch the scheduler of the host system disk"})
-        raise Blocked("weighted-I/O delivery needs an approved dedicated BFQ device and independent contention oracle; "
-                      "the shared system disk is not modified (scheduler=" + scheduler + ")")
-
     def cleanup(self):
         errors = []
         def attempt(operation):
@@ -798,8 +791,7 @@ class CoverageGate(NativeGate):
                                   (["nspawn-machine-split", "nspawn-machine-only"], self.nspawn_machine),
                                   (["nspawn-keep-unit"], self.keep_unit),
                                   (["nspawn-shifted-bounded"], self.nspawn_shifted),
-                                  (["hard-io-delivery"], self.hard_io),
-                                  (["weighted-io-delivery"], self.weighted_io)):
+                                  (["hard-io-delivery"], self.hard_io)):
                 self.attempt(names, action)
             detail = "native ownership coverage completed; capability refusals remain BLOCKED"
         except Blocked as err:

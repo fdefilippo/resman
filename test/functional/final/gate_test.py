@@ -12,6 +12,7 @@ import gate
 from catalog import ROWS, validate_catalog
 from native_reference_test import samples
 from native_psi_evidence_test import fixture as psi_fixture
+from native_weighted_io_test import fixture as weighted_fixture
 
 
 def put(path, data):
@@ -58,6 +59,8 @@ def fixture(root):
                     put(directory / (check + ".json"), {"observation": 1})
             if row.scenario == "psi-refresh-neutrality":
                 psi_fixture(directory)
+            if row.scenario == "systemd-native-weighted-io-adapter":
+                weighted_fixture(directory, meta)
             if row.scenario.startswith("systemd-native-reference"):
                 raw = samples()
                 for frame in raw:

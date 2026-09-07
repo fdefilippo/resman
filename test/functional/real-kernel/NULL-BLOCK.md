@@ -14,8 +14,45 @@ This is **kernel-only characterization**, not daemon enforcement or physical
 disk performance. The fixture writes `IOWeight` on its own transient services;
 ResMan does not run. The current native planner generates hard bandwidth/IOPS
 limits, not `IOWeight` assignments. The adapter can represent and verify weights,
-but that is not a daemon scheduling policy. `resman-nq6.39` owns the acceptance
-decision. These results cannot satisfy `weighted-io-delivery` in the final gate.
+but that is not a daemon scheduling policy. The approved `resman-nq6.39` decision
+removes weighted delivery from the daemon coverage row and requires a distinct
+adapter proof instead. The future daemon policy and production device-capability
+semantics are deferred to `resman-nq6.40`. These standalone characterization
+results cannot satisfy the adapter row or any daemon-delivery claim.
+
+## Revision-bound adapter acceptance
+
+```sh
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-weighted-io-adapter root@terra
+```
+
+`native_weighted_io.py` uses two quiescent fixture accounts (`resman-t1` and
+`resman-t2`) in genuine cron/PAM sessions. No SSH credentials are installed or
+needed. The retained `systemdunit-real.test` runs `TestRealIOWeightGateProbe` for
+every operation, with separate root-private lease journals. It applies IOWeight
+100/100, then 100/2300 (BFQ readback 100/300), and restores the original values
+through the adapter before ending the sessions. No daemon process is started.
+
+The row declares `adapter_exercised=true` and `daemon_exercised=false`. PASS means
+exact adapter/kernel roundtrip, independently verified BFQ on the dedicated device,
+a negative phase and exact cleanup. It does not mean proportional delivery by
+ResMan. Two 20-second direct-read windows record raw per-device counters and
+recomputed shares as CHARACTERIZATION, with no ratio threshold or CPU tolerance.
+
+The negative phase selects `none` or `mq-deadline` on this device only. IOWeight
+can still be programmed and `io.bfq.weight` can remain readable; neither proves
+that the selected scheduler consumes it. The fixture additionally checks that
+the device has no enabled io.cost policy before reporting effective weight
+capability false. This is not a change to the production adapter's verification
+contract. Missing schedulers, configfs or other prerequisites remain BLOCKED.
+
+The new device is named `resmanweight<RUN_ID>` (sanitized to lowercase letters
+and digits), not `nullb<index>`: UEK exposes the configfs name as the block name.
+Existing devices, including Terra's unrelated `nullb0`, are not reused or changed.
+The module and all existing scheduler selections are preserved. Both fixtures
+share the same exclusive lock; the remote runner also retains its bounded
+controller, cancellation/drain and artifact-provenance contract. Cleanup errors
+are FAIL, never silently downgraded to a capability refusal.
 
 The synthetic device uses one submission queue, depth one, 1 ms completion delay,
 256 MiB logical size and no memory backing. Read requests use direct I/O. BFQ

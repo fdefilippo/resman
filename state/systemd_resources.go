@@ -19,6 +19,9 @@ var memorySystemdProperties = []systemdunit.PropertyName{
 	systemdunit.PropertyMemorySwapMax,
 }
 
+// ioSystemdProperties is a restoration superset, not a policy assignment list.
+// Keep IOWeight so an unexpected recovered lease can be released completely;
+// weighted I/O is an adapter capability and no native policy produces it.
 var ioSystemdProperties = []systemdunit.PropertyName{
 	systemdunit.PropertyIOWeight,
 	systemdunit.PropertyIOReadBandwidthMax,

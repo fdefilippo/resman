@@ -203,6 +203,14 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   complete authority. Native active class changes modify weights in place; the
   non-systemd cross-class placement restriction does not apply. Unavailable authority
   remains observation-only, never a reason to select migration on a systemd host.
+- Native weighted I/O is an adapter capability, not a daemon policy. Production
+  code outside `internal/systemdunit` **MUST NOT** construct an `IOWeight`
+  assignment. The exact `ioSystemdProperties` restoration inventory remains a
+  superset of policy output so unexpected recovered leases can be released. Its
+  only permitted consumer is resource restoration, never an assignment producer.
+  The AST gate conservatively rejects property names, constant concatenations,
+  aliases and other uses of that inventory; this is a structural source boundary,
+  not a claim of arbitrary whole-program data-flow analysis.
 - A ResMan recovery leaf is never an authoritative process origin. Every restore
   candidate **MUST** end in exactly one typed disposition: exact origin, recovery,
   disappeared, or failed. Recovery occupants remain persistently stranded, cannot be

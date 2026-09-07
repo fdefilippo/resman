@@ -226,11 +226,14 @@ class NativeGate:
     def workload_args(self):
         return ()
 
+    def session_workload(self):
+        return self.bundle / "native-workload.py"
+
     def start_sessions(self):
         self.helper.mkdir(mode=0o755)
         self.helper.chmod(0o755)
         workload = self.helper / "workload.py"
-        shutil.copyfile(self.bundle / "native-workload.py", workload)
+        shutil.copyfile(self.session_workload(), workload)
         workload.chmod(0o755)
         lines = ["SHELL=/bin/bash", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"]
         for a in self.cron_accounts():

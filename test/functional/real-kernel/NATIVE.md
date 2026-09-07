@@ -92,11 +92,23 @@ rootless test requires the preloaded rootful `docker.io/library/oraclelinux:9`
 image, transferred into isolated run-owned rootless storage, rather than pulled
 from a registry. Unavailable prerequisites remain explicit BLOCKED results.
 
-The coverage method `weighted_io` currently **always reports BLOCKED**. A safe,
-independent weighted-I/O contention oracle has not been implemented or approved.
-This is not an automatic BFQ availability test, and an existing BFQ device would
-not remove that block. Neither an `IOWeight` readback nor successful hard-limit
-measurements establish weighted-I/O delivery.
+The daemon coverage row does not claim weighted-I/O policy. The approved
+`resman-nq6.39` scope is a separate `systemd-native-weighted-io-adapter` row:
+
+```bash
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-weighted-io-adapter root@terra
+```
+
+It uses a run-owned configfs null_blk device and two real cron/PAM user slices,
+without non-root SSH credentials. Only the real adapter writes IOWeight; its
+retained probe proves 100/2300 programming, BFQ 100/300 readback and exact release.
+The fixture independently checks BFQ on its own device and a non-BFQ negative
+phase (also excluding enabled per-device io.cost). Programmed values can remain
+readable while the negative device has no effective weight capability. This is
+fixture capability logic, not a new production scheduler detector. Pure-read
+traffic remains CHARACTERIZATION without a delivery verdict. No daemon policy,
+public knob or physical-disk guarantee is added; `resman-nq6.40` owns that deferred
+design. See [NULL-BLOCK.md](NULL-BLOCK.md) for ownership and cleanup boundaries.
 
 `systemd-native-recovery` executes a retained opt-in adapter test binary. It checks
 real PAM ownership, crash between revert and reload, automatic recovery, persistent

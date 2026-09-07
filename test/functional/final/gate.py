@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "test/functional/real-kernel"))
 from native_placement import LAYOUT, SCOPE, assert_equal_layout
 from native_proportional import LEAVES, compare_reference, ratios
+from native_weighted_io import validate_proof as validate_weighted_io
 from native_reference import analyze
 from native_replicas import summarize
 from native_psi_evidence import validate as validate_psi
@@ -175,7 +176,9 @@ def inspect_evidence(row, directory, revision, artifact):
     extra = {}
     if row.scenario in {"systemd-native-proportional", "systemd-native-reference-pinned-six", "systemd-native-reference"}:
         require(read_json(directory / "measurement-scope.json")["run_id"] == meta["run_id"], "scope and environment run identities differ")
-    if row.scenario == "systemd-native-proportional":
+    if row.scenario == "systemd-native-weighted-io-adapter":
+        extra = validate_weighted_io(lambda name: read_json(directory / name), meta)
+    elif row.scenario == "systemd-native-proportional":
         extra = proportional(directory, revision)
     elif row.scenario == "psi-refresh-neutrality":
         extra = {"recomputed": validate_psi(directory)}

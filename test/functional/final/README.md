@@ -13,10 +13,10 @@ pending even after an automated PASS; the gate never closes an issue or epic.
 
 There is **no overall nq6.9 PASS yet**. The new coverage, recovery,
 reconciliation and package producers have local regression tests, but this does
-not establish their field acceptance. In particular, the weighted-I/O delivery
-fixture is **not implemented**: its required check always reports BLOCKED pending
-an approved safe contention oracle. This is not merely detection of a missing BFQ
-scheduler; having BFQ available does not make the current fixture pass.
+not establish their field acceptance. Weighted I/O is explicitly **adapter-only**
+under the approved `resman-nq6.39` decision. The daemon has no weighted-I/O policy;
+that future product contract is deferred to `resman-nq6.40`. An adapter PASS cannot
+be reported as a daemon delivery PASS.
 
 ## Evidence contract
 
@@ -85,7 +85,22 @@ GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native
 GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-reconciliation root@terra
 ```
 
-The last command deliberately leaves `online-cpu-change` BLOCKED. Only after
+The separate adapter row creates only its own disposable null_blk device, uses
+cron/PAM rather than SSH authentication, and retains the exact compiled probe:
+
+```bash
+GO_BIN=/usr/local/go/bin/go test/functional/real-kernel/remote.sh systemd-native-weighted-io-adapter root@terra
+```
+
+Its required proof is IOWeight 100/2300 programmed through the real adapter,
+BFQ kernel readback 100/300, per-device BFQ capability, a non-BFQ negative phase
+without enabled per-device io.cost, and exact restoration. The matrix validates
+`adapter_exercised=true`, `daemon_exercised=false`, probe identity and raw operation
+evidence. Direct-read traffic shares are recomputed but remain CHARACTERIZATION,
+without CPU tolerances or a ratio verdict. A prior standalone null_blk script
+cannot satisfy the adapter row. See [NULL-BLOCK.md](../real-kernel/NULL-BLOCK.md).
+
+The reconciliation command deliberately leaves `online-cpu-change` BLOCKED. Only after
 explicit approval to change the disposable host's CPU topology, use:
 
 ```bash
@@ -155,13 +170,14 @@ the machine-readable matrix and summary, not just issue notes.
 
 Besides the lifecycle and proportional rows, the catalog requires real SSH/PAM
 root and non-root sessions with and without PTY, child units, excluded and rootless
-workloads, all three nspawn placements, hard and weighted I/O delivery, adapter
-crash/conflict/recreation recovery, concurrent policy/topology reconciliation,
+workloads, all three nspawn placements, hard I/O delivery, adapter-only weighted I/O,
+adapter crash/conflict/recreation recovery, concurrent policy/topology reconciliation,
 non-systemd migration, package upgrade/default/schema behavior, and the existing
 missing-controller/MCP-reload/PSI-observation regression contracts. Missing runtime
 images, genuine SSH sessions, package bytes or guest capabilities remain BLOCKED.
-The missing weighted-I/O oracle is an implementation gap and always remains
-BLOCKED in the current fixture; property readback cannot replace delivery evidence.
+Weighted-I/O delivery by the daemon is not claimed or implied by its adapter's
+programmed-property proof. Missing dedicated null_blk/BFQ capabilities leave the
+adapter row BLOCKED; no existing system-disk scheduler is changed to obtain PASS.
 
 Local whole-package tests use Go JSON events and must include actual passing test
 events; a command that exits zero after selecting no tests cannot pass.

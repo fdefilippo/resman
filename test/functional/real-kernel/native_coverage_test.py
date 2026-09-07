@@ -211,9 +211,9 @@ class CoverageTests(unittest.TestCase):
             gate = CoverageGate(directory, "runit", "revision")
             def unavailable():
                 raise Blocked("no dedicated device")
-            gate.attempt(["weighted-io-delivery"], unavailable)
-            self.assertEqual(gate.checks["weighted-io-delivery"], "BLOCKED")
-            evidence = json.loads((gate.evidence / "weighted-io-delivery.json").read_text())
+            gate.attempt(["hard-io-delivery"], unavailable)
+            self.assertEqual(gate.checks["hard-io-delivery"], "BLOCKED")
+            evidence = json.loads((gate.evidence / "hard-io-delivery.json").read_text())
             self.assertEqual(evidence["capability_failure"], "no dedicated device")
 
     def test_mid_campaign_failure_cannot_be_downgraded_to_blocked(self):
@@ -228,13 +228,9 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(gate.run(), 1)
             self.assertEqual((gate.evidence / "result").read_text().strip(), "FAIL")
 
-    def test_shared_disk_scheduler_is_never_mutated(self):
-        with tempfile.TemporaryDirectory() as directory:
-            gate = CoverageGate(directory, "runit", "revision")
-            with patch("native_coverage.field", return_value="none [mq-deadline] bfq"), patch.object(gate, "command") as command:
-                with self.assertRaises(Blocked):
-                    gate.weighted_io()
-                command.assert_not_called()
+    def test_daemon_coverage_does_not_claim_adapter_weight_policy(self):
+        self.assertNotIn("weighted-io-delivery", REQUIRED_CHECKS)
+        self.assertFalse(hasattr(CoverageGate, "weighted_io"))
 
     def test_retained_credentials_are_redacted_without_changing_the_source_digest(self):
         with tempfile.TemporaryDirectory() as directory:

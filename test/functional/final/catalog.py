@@ -23,7 +23,11 @@ ROWS = (
     Row("systemd-native-coverage", (1, 2, 3, 4, 8, 12), (
         "ssh-pam-root-no-pty", "ssh-pam-root-pty", "ssh-pam-user-no-pty", "ssh-pam-user-pty", "child-units",
         "resource-properties", "rootless-envelope", "nspawn-machine-split", "nspawn-machine-only", "nspawn-keep-unit",
-        "nspawn-shifted-bounded", "hard-io-delivery", "weighted-io-delivery")),
+        "nspawn-shifted-bounded", "hard-io-delivery")),
+    Row("systemd-native-weighted-io-adapter", (4,), (
+        "weighted-io-pam-sessions", "owned-null-block-device", "bfq-device-capability",
+        "non-bfq-negative-capability", "adapter-weight-roundtrip", "exact-weight-restoration",
+        "owned-device-cleanup"), "adapter-probe"),
     Row("systemd-native-recovery", (4, 8), (
         "recovery-pam-session", "crash-before-reload", "automatic-crash-recovery", "persistent-operator-conflict",
         "runtime-operator-conflict", "recreated-unit-recovery", "exact-recovery-cleanup"), artifact="adapter-probe"),

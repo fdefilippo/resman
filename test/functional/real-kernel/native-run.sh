@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+if [[ ${1:-} == systemd-native-weighted-io-adapter ]]; then
+	exec python3 "$script_dir/native_weighted_io.py" "$@"
+fi
 if [[ ${1:-} == systemd-native-reconciliation ]]; then
 	exec python3 "$script_dir/native_reconciliation.py" "$@"
 fi
