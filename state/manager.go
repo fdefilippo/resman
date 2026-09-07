@@ -62,41 +62,43 @@ type Manager struct {
 	hookWG sync.WaitGroup
 
 	// Internal control and observed enforcement state.
-	limitsActive              bool
-	limitsAppliedTime         time.Time
-	resourceLimitsActive      bool
-	resourceLimitsAppliedTime time.Time
-	requestedCPUUsers         map[int]bool
-	activeUsers               map[int]bool // UID -> user observed in the CPU-limited cgroup
-	userLimitedAt             map[int]time.Time
-	resourceLimits            map[int]userResourceLimitState
-	sharedCgroupPath          string // Shared CPU cgroup path
-	cpuPointsHierarchy        cgroup.CPUPointsHierarchy
-	cpuPointsPolicy           cpupoints.PolicySnapshot
-	cpuCapacity               CPUCapacityProvider
-	cpuAllocations            map[int]cpuPointsAllocation
-	appliedGuaranteePoints    cpupoints.AppliedGuaranteePoints
-	programmedGuaranteePoints uint64
-	ramCoverage               map[int]ramCoverageState
-	persistencePreviousCPU    map[string]cgroup.CPUPointsNodeSnapshot
-	persistencePreviousRAM    map[int]cgroup.MemoryAccountingSnapshot
-	persistencePreviousTime   time.Time
-	cpuPointsLifecycleEvents  map[int]cpuPointsLifecycleEvent
-	cpuPointsSystemSnapshot   resmanmetrics.CPUPointsSystemSnapshot
-	cpuPointsUserSnapshots    map[int]resmanmetrics.CPUPointsUserSnapshot
-	pendingCPUPointsPolicy    *cpupoints.PolicySnapshot
-	cpuPointsDegraded         bool
-	enforcementStatus         cgroup.EnforcementStatus
-	systemdUnits              SystemdCPUUnitAdapter
-	systemdCPURequested       bool
-	systemdCPUComplete        bool
-	systemdCPUParent          systemdunit.UnitIdentity
-	systemdCPUSlices          map[int]systemdunit.UnitIdentity
-	systemdCPUPlanSignature   string
-	systemdResourcesRequested bool
-	systemdResourceUnits      map[int]systemdunit.UnitIdentity
-	resolveSystemdIODevices   func(string) ([]string, error)
-	recoverySnapshot          cgroup.RecoverySnapshot
+	limitsActive               bool
+	limitsAppliedTime          time.Time
+	resourceLimitsActive       bool
+	resourceLimitsAppliedTime  time.Time
+	requestedCPUUsers          map[int]bool
+	activeUsers                map[int]bool // UID -> user observed in the CPU-limited cgroup
+	userLimitedAt              map[int]time.Time
+	resourceLimits             map[int]userResourceLimitState
+	sharedCgroupPath           string // Shared CPU cgroup path
+	cpuPointsHierarchy         cgroup.CPUPointsHierarchy
+	cpuPointsPolicy            cpupoints.PolicySnapshot
+	cpuCapacity                CPUCapacityProvider
+	cpuAllocations             map[int]cpuPointsAllocation
+	appliedGuaranteePoints     cpupoints.AppliedGuaranteePoints
+	programmedGuaranteePoints  uint64
+	ramCoverage                map[int]ramCoverageState
+	persistencePreviousCPU     map[string]cgroup.CPUPointsNodeSnapshot
+	persistencePreviousRAM     map[int]cgroup.MemoryAccountingSnapshot
+	persistencePreviousTime    time.Time
+	cpuPointsLifecycleEvents   map[int]cpuPointsLifecycleEvent
+	cpuPointsSystemSnapshot    resmanmetrics.CPUPointsSystemSnapshot
+	cpuPointsUserSnapshots     map[int]resmanmetrics.CPUPointsUserSnapshot
+	pendingCPUPointsPolicy     *cpupoints.PolicySnapshot
+	cpuPointsDegraded          bool
+	enforcementStatus          cgroup.EnforcementStatus
+	systemdUnits               SystemdCPUUnitAdapter
+	systemdCPURequested        bool
+	systemdCPUComplete         bool
+	systemdCPUParent           systemdunit.UnitIdentity
+	systemdCPUSlices           map[int]systemdunit.UnitIdentity
+	systemdCPUPlanSignature    string
+	systemdCPUPlan             cpupoints.FlatPlan
+	persistencePreviousSystemd map[int]systemdunit.UnitIdentity
+	systemdResourcesRequested  bool
+	systemdResourceUnits       map[int]systemdunit.UnitIdentity
+	resolveSystemdIODevices    func(string) ([]string, error)
+	recoverySnapshot           cgroup.RecoverySnapshot
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -636,7 +638,12 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	status.CPUPoints.ReservePoints = policy.Reserve().Value()
 	status.CPUPoints.NominalParentPoolPoints = policy.Pool().Value()
 	status.CPUPoints.ConfiguredBestEffortPoints = policy.BestEffort().Value()
-	status.CPUPoints.ReconciliationDegraded = degraded
+	status.CPUPoints.EnforcementMode = string(status.EnforcementMode)
+	rootPoints := policy.Root().Value()
+	if m.systemdUnits != nil {
+		status.CPUPoints.ConfiguredRootPoints = &rootPoints
+	}
+	status.CPUPoints.ReconciliationDegraded = status.CPUPoints.ReconciliationDegraded || degraded
 	if status.CPUPoints.IntervalEnd.IsZero() && m.cpuCapacity != nil {
 		capacity := m.cpuCapacity.State()
 		status.CPUPoints.CapacityAvailable = capacity.Available
@@ -645,19 +652,16 @@ func (m *Manager) GetStatus() RuntimeStatus {
 			quota := capacity.LastVerified.QuotaMicroseconds()
 			period := capacity.LastVerified.PeriodMicroseconds()
 			online := capacity.LastVerified.OnlineCPUs().Value()
-			status.CPUPoints.ProgrammedParentQuotaUsec = &quota
-			status.CPUPoints.ProgrammedParentPeriodUsec = &period
+			if m.systemdUnits == nil {
+				status.CPUPoints.ProgrammedParentQuotaUsec = &quota
+				status.CPUPoints.ProgrammedParentPeriodUsec = &period
+			}
 			if capacity.Available {
 				status.CPUPoints.OnlineCPUs = &online
 			}
 		}
-		if capacity.Available {
-			status.CPUPoints.DeliveryState = resmanmetrics.CPUPointsDeliveryAvailable
-			status.CPUPoints.LendingState = resmanmetrics.CPUPointsLendingInactive
-		} else {
-			status.CPUPoints.DeliveryState = resmanmetrics.CPUPointsDeliveryUnavailable
-			status.CPUPoints.LendingState = resmanmetrics.CPUPointsLendingUnavailable
-		}
+		status.CPUPoints.DeliveryState = resmanmetrics.CPUPointsDeliveryUnavailable
+		status.CPUPoints.DenominatorState = resmanmetrics.CPUPointsDenominatorUnavailable
 	}
 	sort.Slice(status.CPUPointUsers, func(i, j int) bool { return status.CPUPointUsers[i].UID < status.CPUPointUsers[j].UID })
 

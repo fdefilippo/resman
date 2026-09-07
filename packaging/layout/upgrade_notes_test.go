@@ -15,7 +15,7 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 		"/etc/" + "resman.conf.rpmsave",
 		"/etc/" + "resman.conf.backup_*",
 		"/var/lib/resman/metrics.db",
-		"schema version is 5",
+		"schema version is 6",
 		"CPU_QUOTA_LIMITED",
 		"PROMETHEUS_METRICS_BIND_HOST",
 		"METRICS_CACHE_TTL",

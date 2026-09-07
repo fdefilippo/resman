@@ -1023,6 +1023,26 @@ func (exp *PrometheusExporter) UpdateUserSnapshot(metrics UserExporterMetrics) {
 	// Track the user as present in the current metrics set.
 	userKey := fmt.Sprintf("%s_%s", uidStr, username)
 	exp.activeUserMetrics[userKey] = true
+	if metrics.CPUPoints.ProcessObservationUnavailable {
+		for _, gauge := range []*prometheus.GaugeVec{exp.userCPUUsage, exp.userCPUUsageAverage, exp.userCPUUsageEMA, exp.userMemoryUsage, exp.userProcessCount, exp.userCPULimitActive} {
+			gauge.DeleteLabelValues(uidStr, username)
+		}
+		for _, counter := range []*prometheus.CounterVec{exp.userIOReadBytes, exp.userIOWriteBytes, exp.userIOReadOps, exp.userIOWriteOps, exp.userMemoryHighEvents} {
+			counter.DeleteLabelValues(uidStr, username)
+		}
+		delete(exp.prevIOStats, userKey)
+		delete(exp.prevMemoryHighEvents, userKey)
+		if pattern, exists := exp.prevUserPatterns[userKey]; exists {
+			exp.userWorkloadPattern.DeleteLabelValues(uidStr, username, pattern)
+			delete(exp.prevUserPatterns, userKey)
+		}
+		if path := exp.activeCgroupPaths[uidStr]; path != "" {
+			exp.deleteCgroupMetricSeries(uidStr, path)
+			delete(exp.activeCgroupPaths, uidStr)
+		}
+		exp.cpuPoints.updateUser(uidStr, username, metrics.CPUPoints)
+		return
+	}
 
 	// Update per-user CPU usage.
 	exp.userCPUUsage.WithLabelValues(uidStr, username).Set(metrics.CPUUsagePercent)

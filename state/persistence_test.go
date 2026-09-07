@@ -126,8 +126,6 @@ func TestPersistenceIntervalKeepsPolicyAppliedStateCoverageAndKernelDeltasDistin
 		t.Fatalf("interval start = %v, want %s", sample2.PersistenceSystem.IntervalStart, t1)
 	}
 	assertUint64Pointer(t, "parent usage", sample2.PersistenceSystem.ParentCPUUsageUsecDelta, 900)
-	assertUint64Pointer(t, "guaranteed usage", sample2.PersistenceSystem.GuaranteedDomainCPUUsageUsecDelta, 700)
-	assertUint64Pointer(t, "best-effort usage", sample2.PersistenceSystem.BestEffortDomainCPUUsageUsecDelta, 200)
 	assertUint64Pointer(t, "parent periods", sample2.PersistenceSystem.ParentCPUPeriodsDelta, 20)
 	assertUint64Pointer(t, "parent throttled periods", sample2.PersistenceSystem.ParentCPUThrottledPeriodsDelta, 10)
 	assertUint64Pointer(t, "parent throttled usec", sample2.PersistenceSystem.ParentCPUThrottledUsecDelta, 70)
@@ -177,8 +175,8 @@ func TestOperationalCPUPointsSnapshotExistsWithoutDatabaseWriterAndUsesTheDecisi
 	if sample.CPUPointsSystem.DeliveryState != resmanmetrics.CPUPointsDeliveryThrottledParent {
 		t.Fatalf("delivery state = %q, want throttled_parent", sample.CPUPointsSystem.DeliveryState)
 	}
-	if sample.CPUPointsSystem.LendingState != resmanmetrics.CPUPointsLendingGuaranteedPriority {
-		t.Fatalf("lending state = %q, want guaranteed_priority", sample.CPUPointsSystem.LendingState)
+	if sample.CPUPointsSystem.DenominatorState != resmanmetrics.CPUPointsDenominatorUnavailable {
+		t.Fatalf("migration topology must not claim a flat denominator: %q", sample.CPUPointsSystem.DenominatorState)
 	}
 	status := manager.GetStatus()
 	if status.CPUPoints.SampleEpochID != sample.Timestamp.UnixNano() || status.CPUPoints.ParentCPUUsageUsecDelta == nil {
@@ -487,79 +485,30 @@ func TestPersistenceLifecycleKeepsDeferredReleaseSeparateFromAppliedStateAndNeve
 	}
 }
 
-func TestOperationalCPUPointsLendingStateDistinguishesEntitlementFromBorrowing(t *testing.T) {
-	parent, guaranteed, bestEffort := uint64(1000), uint64(900), uint64(100)
-	base := resmanmetrics.SystemPersistenceMetrics{
-		CPUCapacityAvailable: true, AppliedGuaranteePoints: 300,
-		ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
-		ParentCPUUsageUsecDelta: &parent,
-	}
-
-	withGuaranteedActivity := base
-	withGuaranteedActivity.GuaranteedDomainCPUUsageUsecDelta = &guaranteed
-	withGuaranteedActivity.BestEffortDomainCPUUsageUsecDelta = &bestEffort
-	if got := operationalCPUPointsSystemSnapshot(100, "", withGuaranteedActivity).LendingState; got != resmanmetrics.CPUPointsLendingGuaranteedPriority {
-		t.Fatalf("active guaranteed domain lending state = %q", got)
-	}
-
-	zero := uint64(0)
-	withBorrowing := base
-	withBorrowing.GuaranteedDomainCPUUsageUsecDelta = &zero
-	withBorrowing.BestEffortDomainCPUUsageUsecDelta = &parent
-	if got := operationalCPUPointsSystemSnapshot(100, "", withBorrowing).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortBorrowed {
-		t.Fatalf("inactive guaranteed domain lending state = %q", got)
-	}
-
-	withoutMappedGuarantees := base
-	withoutMappedGuarantees.AppliedGuaranteePoints = 0
-	withoutMappedGuarantees.ProgrammedGuaranteeWeight = 0
-	withoutMappedGuarantees.GuaranteedDomainCPUUsageUsecDelta = &zero
-	withoutMappedGuarantees.BestEffortDomainCPUUsageUsecDelta = &parent
-	if got := operationalCPUPointsSystemSnapshot(100, "", withoutMappedGuarantees).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortEntitled {
-		t.Fatalf("best-effort-only lending state = %q, want entitlement without borrowing", got)
-	}
-
-	atEntitlementBoundary := base
-	atEntitlementBoundary.GuaranteedDomainCPUUsageUsecDelta = &zero
-	entitledBestEffort := uint64(250)
-	atEntitlementBoundary.BestEffortDomainCPUUsageUsecDelta = &entitledBestEffort
-	if got := operationalCPUPointsSystemSnapshot(100, "", atEntitlementBoundary).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortEntitled {
-		t.Fatalf("best-effort lending state at exact entitlement = %q, want entitlement", got)
-	}
-
-	aboveEntitlementBoundary := atEntitlementBoundary
-	borrowedBestEffort := uint64(251)
-	aboveEntitlementBoundary.BestEffortDomainCPUUsageUsecDelta = &borrowedBestEffort
-	if got := operationalCPUPointsSystemSnapshot(100, "", aboveEntitlementBoundary).LendingState; got != resmanmetrics.CPUPointsLendingBestEffortBorrowed {
-		t.Fatalf("best-effort lending state above entitlement = %q, want borrowed", got)
-	}
-}
-
-func TestOperationalCPUPointsStatesRequireCompleteComparableDeltas(t *testing.T) {
-	zero, parent, bestEffort := uint64(0), uint64(1000), uint64(900)
-	periods := uint64(10)
-	base := resmanmetrics.SystemPersistenceMetrics{
-		CPUCapacityAvailable: true, AppliedGuaranteePoints: 300,
-		ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
-	}
-
-	if got := operationalCPUPointsSystemSnapshot(100, "", base); got.DeliveryState != resmanmetrics.CPUPointsDeliveryUnavailable || got.LendingState != resmanmetrics.CPUPointsLendingUnavailable {
-		t.Fatalf("states without a comparable interval = delivery %q lending %q, want unavailable/unavailable", got.DeliveryState, got.LendingState)
-	}
-
-	missingGuaranteed := base
-	missingGuaranteed.ParentCPUUsageUsecDelta = &parent
-	missingGuaranteed.BestEffortDomainCPUUsageUsecDelta = &bestEffort
-	if got := operationalCPUPointsSystemSnapshot(100, "", missingGuaranteed).LendingState; got != resmanmetrics.CPUPointsLendingUnavailable {
-		t.Fatalf("lending state without guaranteed-domain delta = %q, want unavailable", got)
-	}
-
-	incompleteDelivery := base
-	incompleteDelivery.ParentCPUUsageUsecDelta = &parent
-	incompleteDelivery.ParentCPUPeriodsDelta = &periods
-	incompleteDelivery.ParentCPUThrottledPeriodsDelta = &zero
-	if got := operationalCPUPointsSystemSnapshot(100, "", incompleteDelivery).DeliveryState; got != resmanmetrics.CPUPointsDeliveryUnavailable {
-		t.Fatalf("delivery state without throttled-usec delta = %q, want unavailable", got)
+func TestOperationalCPUPointsDeliveryRequiresCompleteComparableDeltas(t *testing.T) {
+	zero, parent, periods := uint64(0), uint64(1000), uint64(10)
+	for _, missing := range []string{"usage", "periods", "throttled_periods", "throttled_usec", "none"} {
+		t.Run(missing, func(t *testing.T) {
+			sample := resmanmetrics.SystemPersistenceMetrics{CPUCapacityAvailable: true, ParentCPUUsageUsecDelta: &parent, ParentCPUPeriodsDelta: &periods, ParentCPUThrottledPeriodsDelta: &zero, ParentCPUThrottledUsecDelta: &zero}
+			switch missing {
+			case "usage":
+				sample.ParentCPUUsageUsecDelta = nil
+			case "periods":
+				sample.ParentCPUPeriodsDelta = nil
+			case "throttled_periods":
+				sample.ParentCPUThrottledPeriodsDelta = nil
+			case "throttled_usec":
+				sample.ParentCPUThrottledUsecDelta = nil
+			}
+			got := operationalCPUPointsSystemSnapshot(100, "", sample).DeliveryState
+			want := resmanmetrics.CPUPointsDeliveryUnavailable
+			if missing == "none" {
+				want = resmanmetrics.CPUPointsDeliveryAvailable
+			}
+			if got != want {
+				t.Fatalf("delivery = %s, want %s", got, want)
+			}
+		})
 	}
 }
 

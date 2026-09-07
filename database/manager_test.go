@@ -219,7 +219,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 5"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 6"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -241,7 +241,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 }
 
 func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T) {
-	for _, version := range []int{2, 3, 4} {
+	for _, version := range []int{1, 2, 3, 4, 5} {
 		t.Run(fmt.Sprintf("schema version %d", version), func(t *testing.T) {
 			dbPath := privateTestDatabasePath(t, fmt.Sprintf("version-%d.db", version))
 			legacyDB, err := sql.Open("sqlite3", dbPath)
@@ -267,7 +267,7 @@ func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T)
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 5"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 6"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -494,10 +494,10 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 		CPULimitsActive: true, AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 2,
 		NominalParentPoolPoints: 900, CPUCapacityAvailable: true, OnlineCPUs: u64(4),
 		ProgrammedParentQuotaUsec: u64(360000), ProgrammedParentPeriodUsec: u64(100000),
-		AppliedGuaranteePoints: 300, ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortWeight: 100,
-		ParentCPUQuota: text("360000 100000"), GuaranteedDomainCPUWeight: u64(300), BestEffortDomainCPUWeight: u64(100),
-		ParentCPUUsageUsecDelta: u64(900000), GuaranteedDomainCPUUsageUsecDelta: u64(700000),
-		BestEffortDomainCPUUsageUsecDelta: u64(200000), ParentCPUPeriodsDelta: u64(300),
+		AppliedGuaranteePoints: 300, ProgrammedGuaranteeWeight: 300, ConfiguredBestEffortPoints: 100,
+		ParentCPUQuota: text("360000 100000"), ProgrammedSiblingWeightSum: u64(300), ProgrammedBestEffortWeight: u64(100),
+		ParentCPUUsageUsecDelta: u64(900000), ObservedSiblingWeightSum: u64(700000),
+		ConfiguredRootPoints: u64(200000), ParentCPUPeriodsDelta: u64(300),
 		ParentCPUThrottledPeriodsDelta: u64(190), ParentCPUThrottledUsecDelta: u64(4590000),
 	}
 	users := []*UserMetricsRecord{

@@ -74,6 +74,7 @@ func main() {
 		checkCrossPackageMapKeys(root, goFiles),
 		checkMCPContracts(root, goFiles),
 		checkSystemdUnitMutationBoundary(goFiles),
+		checkCPUPointsSurfaces(root, goFiles),
 		checkShippedAssets(root, goFiles),
 		checkEnglishLanguage(root, goFiles),
 		checkPrometheusAssets(root),

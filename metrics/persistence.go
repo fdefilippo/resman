@@ -20,6 +20,7 @@ const (
 // UserPersistenceMetrics combines one user observation with typed policy,
 // applied allocation, process coverage and RAM accounting state.
 type UserPersistenceMetrics struct {
+	ProcessObservationUnavailable     bool
 	Metrics                           *UserMetrics
 	ConfiguredGuaranteePoints         *uint64
 	ConfiguredClass                   string
@@ -29,6 +30,8 @@ type UserPersistenceMetrics struct {
 	CgroupPath                        string
 	CPUQuota                          string
 	CPUWeight                         *uint64
+	IOCoverage                        *string
+	CPUAuthorityCoverage              *string
 	LeafCPUUsageUsecDelta             *uint64
 	PIDNamespaceMismatchCount         int
 	PIDNamespaceUnavailableCount      int
@@ -51,35 +54,37 @@ type UserPersistenceMetrics struct {
 
 // SystemPersistenceMetrics contains one synchronized control-cycle interval.
 type SystemPersistenceMetrics struct {
-	SampleEpochID                     int64
-	IntervalStart                     *time.Time
-	IntervalEnd                       time.Time
-	TotalCPUUsagePercent              float64
-	TotalCores                        int
-	SystemLoad                        float64
-	CPULimitsActive                   bool
-	ResourceLimitsActive              bool
-	AnyLimitsActive                   bool
-	CPUActivelyLimitedUsersCount      int
-	ActivelyLimitedUsersCount         int
-	NominalParentPoolPoints           uint64
-	CPUCapacityAvailable              bool
-	OnlineCPUs                        *uint64
-	ProgrammedParentQuotaUsec         *uint64
-	ProgrammedParentPeriodUsec        *uint64
-	CPUPointsDegraded                 bool
-	AppliedGuaranteePoints            uint64
-	ProgrammedGuaranteeWeight         uint64
-	ConfiguredBestEffortWeight        uint64
-	ParentCPUQuota                    *string
-	GuaranteedDomainCPUWeight         *uint64
-	BestEffortDomainCPUWeight         *uint64
-	ParentCPUUsageUsecDelta           *uint64
-	GuaranteedDomainCPUUsageUsecDelta *uint64
-	BestEffortDomainCPUUsageUsecDelta *uint64
-	ParentCPUPeriodsDelta             *uint64
-	ParentCPUThrottledPeriodsDelta    *uint64
-	ParentCPUThrottledUsecDelta       *uint64
+	DenominatorState               CPUPointsDenominatorState
+	EnforcementMode                string
+	SampleEpochID                  int64
+	IntervalStart                  *time.Time
+	IntervalEnd                    time.Time
+	TotalCPUUsagePercent           float64
+	TotalCores                     int
+	SystemLoad                     float64
+	CPULimitsActive                bool
+	ResourceLimitsActive           bool
+	AnyLimitsActive                bool
+	CPUActivelyLimitedUsersCount   int
+	ActivelyLimitedUsersCount      int
+	NominalParentPoolPoints        uint64
+	CPUCapacityAvailable           bool
+	OnlineCPUs                     *uint64
+	ProgrammedParentQuotaUsec      *uint64
+	ProgrammedParentPeriodUsec     *uint64
+	CPUPointsDegraded              bool
+	AppliedGuaranteePoints         uint64
+	ProgrammedGuaranteeWeight      uint64
+	ConfiguredBestEffortPoints     uint64
+	ParentCPUQuota                 *string
+	ProgrammedSiblingWeightSum     *uint64
+	ProgrammedBestEffortWeight     *uint64
+	ParentCPUUsageUsecDelta        *uint64
+	ObservedSiblingWeightSum       *uint64
+	ConfiguredRootPoints           *uint64
+	ParentCPUPeriodsDelta          *uint64
+	ParentCPUThrottledPeriodsDelta *uint64
+	ParentCPUThrottledUsecDelta    *uint64
 }
 
 // PersistenceBatch is one atomic user/system history transaction.

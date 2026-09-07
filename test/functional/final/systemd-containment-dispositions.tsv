@@ -11,7 +11,7 @@ pid-namespace-mixed-ingress	nested namespace refusal	superseded by global system
 pid-namespace-container-only	nested-only namespace refusal	superseded by global systemd ownership refusal	resman-yom
 mcp-https-endtoend	MCP transport and typed status	retained with containment-mode assertions	resman-yom
 blackout-timeframe	blackout suppression then enforcement	displaced: enforcement half belongs to systemd-native adapter	resman-nq6
-metrics-database-lifecycle	metrics persistence lifecycle	retained with schema-5 lifecycle	resman-yom
+metrics-database-lifecycle	metrics persistence lifecycle	retained with schema-6 lifecycle	resman-yom
 multi-user-enforcement	multi-user CPU Points enforcement	displaced: systemd containment cannot enforce	resman-nq6
 shutdown-restoration-under-load	migration shutdown restoration	displaced: new ingress is forbidden; inherited recovery is covered separately	resman-nq6
 limit-hook-delivery	post-enforcement hook delivery	displaced: no active limit exists on systemd hosts	resman-nq6

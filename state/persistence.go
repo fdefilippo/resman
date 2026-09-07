@@ -17,6 +17,10 @@ const (
 // collectPersistenceInterval captures kernel counters at the same decision
 // sample boundary as the process-derived user metrics.
 func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
+	if m.systemdUnits != nil {
+		m.collectSystemdPersistenceInterval(sample)
+		return
+	}
 	if m.cgroupManager == nil {
 		return
 	}
@@ -72,6 +76,8 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		capacity = m.cpuCapacity.State()
 	}
 	system := resmanmetrics.SystemPersistenceMetrics{
+		EnforcementMode:            string(m.enforcementStatus.Mode),
+		DenominatorState:           resmanmetrics.CPUPointsDenominatorUnavailable,
 		SampleEpochID:              sample.Timestamp.UnixNano(),
 		IntervalEnd:                sample.Timestamp,
 		TotalCPUUsagePercent:       sample.TotalCPUUsage,
@@ -82,7 +88,7 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		CPUPointsDegraded:          degraded,
 		AppliedGuaranteePoints:     appliedGuarantees,
 		ProgrammedGuaranteeWeight:  programmedGuarantees,
-		ConfiguredBestEffortWeight: policy.BestEffort().Value(),
+		ConfiguredBestEffortPoints: policy.BestEffort().Value(),
 	}
 	capacityReason := string(capacity.UnavailableReason)
 	if !previousTime.IsZero() {
@@ -106,8 +112,6 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		path string
 	}{
 		{name: "parent", path: hierarchy.Parent},
-		{name: "guaranteed", path: hierarchy.Guaranteed},
-		{name: "best_effort", path: hierarchy.BestEffort},
 	}
 	for _, node := range nodes {
 		if node.path == "" {
@@ -128,14 +132,6 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 			system.ParentCPUPeriodsDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.NrPeriods, previous.Identity, previous.CPUStat.NrPeriods, hasPrevious)
 			system.ParentCPUThrottledPeriodsDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.NrThrottled, previous.Identity, previous.CPUStat.NrThrottled, hasPrevious)
 			system.ParentCPUThrottledUsecDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.ThrottledUsec, previous.Identity, previous.CPUStat.ThrottledUsec, hasPrevious)
-		case "guaranteed":
-			weight := observed.CPUWeight
-			system.GuaranteedDomainCPUWeight = &weight
-			system.GuaranteedDomainCPUUsageUsecDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.UsageUsec, previous.Identity, previous.CPUStat.UsageUsec, hasPrevious)
-		case "best_effort":
-			weight := observed.CPUWeight
-			system.BestEffortDomainCPUWeight = &weight
-			system.BestEffortDomainCPUUsageUsecDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.UsageUsec, previous.Identity, previous.CPUStat.UsageUsec, hasPrevious)
 		}
 	}
 
@@ -267,43 +263,32 @@ func operationalCPUPointsSystemSnapshot(reserve uint64, capacityReason string, p
 			delivery = resmanmetrics.CPUPointsDeliveryThrottledParent
 		}
 	}
-	lending := resmanmetrics.CPUPointsLendingUnavailable
-	if persisted.CPUCapacityAvailable && completeCPUPointsLendingInterval(persisted) {
-		lending = resmanmetrics.CPUPointsLendingInactive
-		if *persisted.GuaranteedDomainCPUUsageUsecDelta > 0 {
-			lending = resmanmetrics.CPUPointsLendingGuaranteedPriority
-		} else if *persisted.BestEffortDomainCPUUsageUsecDelta > 0 {
-			lending = resmanmetrics.CPUPointsLendingBestEffortEntitled
-			if observedBestEffortBorrowing(persisted) {
-				lending = resmanmetrics.CPUPointsLendingBestEffortBorrowed
-			}
-		}
-	}
 	return resmanmetrics.CPUPointsSystemSnapshot{
-		SampleEpochID:                     persisted.SampleEpochID,
-		IntervalStart:                     persisted.IntervalStart,
-		IntervalEnd:                       persisted.IntervalEnd,
-		ReservePoints:                     reserve,
-		NominalParentPoolPoints:           persisted.NominalParentPoolPoints,
-		ConfiguredBestEffortPoints:        persisted.ConfiguredBestEffortWeight,
-		CapacityAvailable:                 persisted.CPUCapacityAvailable,
-		CapacityUnavailableReason:         capacityReason,
-		OnlineCPUs:                        persisted.OnlineCPUs,
-		ProgrammedParentQuotaUsec:         persisted.ProgrammedParentQuotaUsec,
-		ProgrammedParentPeriodUsec:        persisted.ProgrammedParentPeriodUsec,
-		ReconciliationDegraded:            persisted.CPUPointsDegraded,
-		AppliedGuaranteePoints:            persisted.AppliedGuaranteePoints,
-		ProgrammedGuaranteeWeight:         persisted.ProgrammedGuaranteeWeight,
-		GuaranteedDomainWeight:            persisted.GuaranteedDomainCPUWeight,
-		BestEffortDomainWeight:            persisted.BestEffortDomainCPUWeight,
-		ParentCPUUsageUsecDelta:           persisted.ParentCPUUsageUsecDelta,
-		GuaranteedDomainCPUUsageUsecDelta: persisted.GuaranteedDomainCPUUsageUsecDelta,
-		BestEffortDomainCPUUsageUsecDelta: persisted.BestEffortDomainCPUUsageUsecDelta,
-		ParentCPUPeriodsDelta:             persisted.ParentCPUPeriodsDelta,
-		ParentCPUThrottledPeriodsDelta:    persisted.ParentCPUThrottledPeriodsDelta,
-		ParentCPUThrottledUsecDelta:       persisted.ParentCPUThrottledUsecDelta,
-		DeliveryState:                     delivery,
-		LendingState:                      lending,
+		SampleEpochID:                  persisted.SampleEpochID,
+		IntervalStart:                  persisted.IntervalStart,
+		IntervalEnd:                    persisted.IntervalEnd,
+		ReservePoints:                  reserve,
+		NominalParentPoolPoints:        persisted.NominalParentPoolPoints,
+		ConfiguredBestEffortPoints:     persisted.ConfiguredBestEffortPoints,
+		CapacityAvailable:              persisted.CPUCapacityAvailable,
+		CapacityUnavailableReason:      capacityReason,
+		OnlineCPUs:                     persisted.OnlineCPUs,
+		ProgrammedParentQuotaUsec:      persisted.ProgrammedParentQuotaUsec,
+		ProgrammedParentPeriodUsec:     persisted.ProgrammedParentPeriodUsec,
+		ReconciliationDegraded:         persisted.CPUPointsDegraded,
+		AppliedGuaranteePoints:         persisted.AppliedGuaranteePoints,
+		ProgrammedGuaranteeWeight:      persisted.ProgrammedGuaranteeWeight,
+		ProgrammedSiblingWeightSum:     persisted.ProgrammedSiblingWeightSum,
+		ProgrammedBestEffortWeight:     persisted.ProgrammedBestEffortWeight,
+		ParentCPUUsageUsecDelta:        persisted.ParentCPUUsageUsecDelta,
+		ObservedSiblingWeightSum:       persisted.ObservedSiblingWeightSum,
+		ConfiguredRootPoints:           persisted.ConfiguredRootPoints,
+		ParentCPUPeriodsDelta:          persisted.ParentCPUPeriodsDelta,
+		ParentCPUThrottledPeriodsDelta: persisted.ParentCPUThrottledPeriodsDelta,
+		ParentCPUThrottledUsecDelta:    persisted.ParentCPUThrottledUsecDelta,
+		DeliveryState:                  delivery,
+		DenominatorState:               persisted.DenominatorState,
+		EnforcementMode:                persisted.EnforcementMode,
 	}
 }
 
@@ -312,25 +297,6 @@ func completeParentCPUPointsInterval(snapshot resmanmetrics.SystemPersistenceMet
 		snapshot.ParentCPUPeriodsDelta != nil &&
 		snapshot.ParentCPUThrottledPeriodsDelta != nil &&
 		snapshot.ParentCPUThrottledUsecDelta != nil
-}
-
-func completeCPUPointsLendingInterval(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
-	return snapshot.ParentCPUUsageUsecDelta != nil &&
-		snapshot.GuaranteedDomainCPUUsageUsecDelta != nil &&
-		snapshot.BestEffortDomainCPUUsageUsecDelta != nil
-}
-
-func observedBestEffortBorrowing(snapshot resmanmetrics.SystemPersistenceMetrics) bool {
-	if snapshot.AppliedGuaranteePoints == 0 || snapshot.ParentCPUUsageUsecDelta == nil || snapshot.BestEffortDomainCPUUsageUsecDelta == nil || *snapshot.ParentCPUUsageUsecDelta == 0 {
-		return false
-	}
-	totalWeight := snapshot.ProgrammedGuaranteeWeight + snapshot.ConfiguredBestEffortWeight
-	if totalWeight == 0 {
-		return false
-	}
-	observedShare := float64(*snapshot.BestEffortDomainCPUUsageUsecDelta) / float64(*snapshot.ParentCPUUsageUsecDelta)
-	entitledShare := float64(snapshot.ConfiguredBestEffortWeight) / float64(totalWeight)
-	return observedShare > entitledShare
 }
 
 func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersistenceMetrics, degraded bool) map[int]resmanmetrics.CPUPointsUserSnapshot {
@@ -359,12 +325,18 @@ func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersi
 				coverage = resmanmetrics.CPUPointsCoveragePartial
 			}
 		}
+		if user.CPUAuthorityCoverage != nil {
+			coverage = resmanmetrics.CPUPointsProcessCoverage(*user.CPUAuthorityCoverage)
+			applied = user.AppliedWeight != nil && user.CPUWeight != nil && *user.AppliedWeight == *user.CPUWeight
+		}
 		result[uid] = resmanmetrics.CPUPointsUserSnapshot{
+			ProcessObservationUnavailable: user.ProcessObservationUnavailable,
+			ObservedWeight:                user.CPUWeight, IOCoverage: user.IOCoverage, CPUAuthorityCoverage: user.CPUAuthorityCoverage,
 			UID: uid, Username: username,
 			ConfiguredClass: user.ConfiguredClass, ConfiguredGuaranteePoints: user.ConfiguredGuaranteePoints,
 			CPUEnforcementRequested: requested, LifecycleState: user.LifecycleState,
 			AppliedClass: user.AppliedClass, AppliedWeight: user.AppliedWeight,
-			AppliedToProcesses: applied, CompleteUIDWorkloadGuaranteed: applied && coverage == resmanmetrics.CPUPointsCoverageComplete,
+			AppliedToProcesses: applied, CompleteUIDWorkloadGuaranteed: applied && (!degraded || user.CPUAuthorityCoverage == nil) && coverage == resmanmetrics.CPUPointsCoverageComplete,
 			ReconciliationDegraded: degraded, ProcessCoverage: coverage,
 			ObservedProcessCount: observedCount, EnforceableProcessCount: enforceableCount,
 			PIDNamespaceMismatchCount: user.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: user.PIDNamespaceUnavailableCount,

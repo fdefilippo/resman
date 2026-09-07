@@ -11,15 +11,15 @@ const (
 	CPUPointsDeliveryThrottledParent CPUPointsDeliveryState = "throttled_parent"
 )
 
-// CPUPointsLendingState describes the observed class-priority lending mode.
-type CPUPointsLendingState string
+// CPUPointsDenominatorState describes whether the complete active sibling set
+// and its programmed weights have been reconfirmed for this observation.
+type CPUPointsDenominatorState string
 
 const (
-	CPUPointsLendingUnavailable        CPUPointsLendingState = "unavailable"
-	CPUPointsLendingInactive           CPUPointsLendingState = "inactive"
-	CPUPointsLendingGuaranteedPriority CPUPointsLendingState = "guaranteed_priority"
-	CPUPointsLendingBestEffortEntitled CPUPointsLendingState = "best_effort_entitled"
-	CPUPointsLendingBestEffortBorrowed CPUPointsLendingState = "best_effort_borrowed"
+	CPUPointsDenominatorUnavailable CPUPointsDenominatorState = "unavailable"
+	CPUPointsDenominatorInactive    CPUPointsDenominatorState = "inactive"
+	CPUPointsDenominatorComplete    CPUPointsDenominatorState = "complete"
+	CPUPointsDenominatorIncomplete  CPUPointsDenominatorState = "incomplete"
 )
 
 // CPUPointsProcessCoverage describes whether an applied leaf covers the whole
@@ -37,35 +37,37 @@ const (
 // control-cycle interval. Points, counters and the online denominator are
 // values rather than labels.
 type CPUPointsSystemSnapshot struct {
-	SampleEpochID                     int64
-	IntervalStart                     *time.Time
-	IntervalEnd                       time.Time
-	ReservePoints                     uint64
-	NominalParentPoolPoints           uint64
-	ConfiguredBestEffortPoints        uint64
-	CapacityAvailable                 bool
-	CapacityUnavailableReason         string
-	OnlineCPUs                        *uint64
-	ProgrammedParentQuotaUsec         *uint64
-	ProgrammedParentPeriodUsec        *uint64
-	ReconciliationDegraded            bool
-	AppliedGuaranteePoints            uint64
-	ProgrammedGuaranteeWeight         uint64
-	GuaranteedDomainWeight            *uint64
-	BestEffortDomainWeight            *uint64
-	ParentCPUUsageUsecDelta           *uint64
-	GuaranteedDomainCPUUsageUsecDelta *uint64
-	BestEffortDomainCPUUsageUsecDelta *uint64
-	ParentCPUPeriodsDelta             *uint64
-	ParentCPUThrottledPeriodsDelta    *uint64
-	ParentCPUThrottledUsecDelta       *uint64
-	DeliveryState                     CPUPointsDeliveryState
-	LendingState                      CPUPointsLendingState
+	SampleEpochID                  int64
+	IntervalStart                  *time.Time
+	IntervalEnd                    time.Time
+	ReservePoints                  uint64
+	NominalParentPoolPoints        uint64
+	ConfiguredBestEffortPoints     uint64
+	CapacityAvailable              bool
+	CapacityUnavailableReason      string
+	OnlineCPUs                     *uint64
+	ProgrammedParentQuotaUsec      *uint64
+	ProgrammedParentPeriodUsec     *uint64
+	ReconciliationDegraded         bool
+	AppliedGuaranteePoints         uint64
+	ProgrammedGuaranteeWeight      uint64
+	ProgrammedSiblingWeightSum     *uint64
+	ProgrammedBestEffortWeight     *uint64
+	ParentCPUUsageUsecDelta        *uint64
+	ObservedSiblingWeightSum       *uint64
+	ConfiguredRootPoints           *uint64
+	ParentCPUPeriodsDelta          *uint64
+	ParentCPUThrottledPeriodsDelta *uint64
+	ParentCPUThrottledUsecDelta    *uint64
+	DeliveryState                  CPUPointsDeliveryState
+	DenominatorState               CPUPointsDenominatorState
+	EnforcementMode                string
 }
 
 // CPUPointsUserSnapshot separates configured policy, requested enforcement,
 // observed leaf state, process coverage and post-ingress RAM accounting.
 type CPUPointsUserSnapshot struct {
+	ProcessObservationUnavailable     bool
 	UID                               int
 	Username                          string
 	ConfiguredClass                   string
@@ -74,6 +76,9 @@ type CPUPointsUserSnapshot struct {
 	LifecycleState                    CPUPointsLifecycleState
 	AppliedClass                      *string
 	AppliedWeight                     *uint64
+	ObservedWeight                    *uint64
+	IOCoverage                        *string
+	CPUAuthorityCoverage              *string
 	AppliedToProcesses                bool
 	CompleteUIDWorkloadGuaranteed     bool
 	ReconciliationDegraded            bool

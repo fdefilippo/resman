@@ -523,7 +523,7 @@ func TestMCPStatusContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
 	}
 
 	promptText := callPromptOverHTTP(t, server, "system-health")
-	for _, term := range []string{"Observed Users CPU", "Observed Users", "Actively Limited Users", "CPU Limits Active", "Resource Limits Active", "CPU Points Nominal Parent Pool", "CPU Points Delivery State", "CPU Points Lending State"} {
+	for _, term := range []string{"Observed Users CPU", "Observed Users", "Actively Limited Users", "CPU Limits Active", "Resource Limits Active", "CPU Points Nominal Parent Pool", "CPU Points Delivery State", "CPU Points Denominator State"} {
 		if !strings.Contains(promptText, term) {
 			t.Errorf("system-health prompt is missing %q: %s", term, promptText)
 		}

@@ -75,7 +75,7 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 5 and contains `user_metrics` and
+The current store uses schema version 6 and contains `user_metrics` and
 `system_metrics` tables. Every transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
@@ -101,12 +101,12 @@ counter decreases, read failures, and daemon restart create a nullable baseline
 instead of a wrapped or multi-lifetime delta. Rising `memory.high` with zero
 max/OOM/kill deltas represents throttling or a stall, not a kill.
 
-System records contain the nominal parent pool, live online-CPU denominator,
-programmed parent quota/period, configured and applied domain weights, degraded state,
-and synchronized parent/guaranteed-domain/best-effort-domain usage deltas. Parent
-period, throttled-period and throttled-time deltas explain the bandwidth actually
-delivered by the kernel. Configured class-priority lending is distinct from measured
-use; history never claims that an idle domain was runnable.
+System records contain the nominal parent pool, live online-CPU capacity,
+programmed quota/period, root entitlement, flat programmed/observed sibling weights,
+denominator state, enforcement mode and synchronized parent usage/throttling deltas.
+User rows include independent CPU authority and I/O coverage in addition to RAM.
+See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the complete schema-6
+contract. A missing observation never claims measured zero or runnable capacity.
 
 The current Prometheus and MCP projections use the same typed control-cycle snapshot
 as these history rows even when the database is disabled. Database cadence controls

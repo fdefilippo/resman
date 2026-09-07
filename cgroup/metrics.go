@@ -53,6 +53,11 @@ type MemoryAccountingSnapshot struct {
 
 // GetCPUPointsNodeSnapshot reads one identity-stable CPU Points cgroup node.
 func (m *Manager) GetCPUPointsNodeSnapshot(path string) (CPUPointsNodeSnapshot, error) {
+	return ReadCPUAccountingSnapshot(path)
+}
+
+// ReadCPUAccountingSnapshot reads counters without creating or mutating a cgroup.
+func ReadCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
 	identity, err := readCgroupIdentity(path)
 	if err != nil {
 		return CPUPointsNodeSnapshot{}, fmt.Errorf("inspect CPU Points cgroup %s: %w", path, err)
@@ -98,9 +103,14 @@ func (m *Manager) GetMemoryAccountingSnapshot(uid int) (MemoryAccountingSnapshot
 	if !exists {
 		return MemoryAccountingSnapshot{}, fmt.Errorf("cgroup for UID %d not found", uid)
 	}
+	return ReadMemoryAccountingSnapshot(path)
+}
+
+// ReadMemoryAccountingSnapshot reads identity-stable memory accounting at an authorized path.
+func ReadMemoryAccountingSnapshot(path string) (MemoryAccountingSnapshot, error) {
 	identity, err := readCgroupIdentity(path)
 	if err != nil {
-		return MemoryAccountingSnapshot{}, fmt.Errorf("inspect RAM cgroup for UID %d: %w", uid, err)
+		return MemoryAccountingSnapshot{}, fmt.Errorf("inspect RAM cgroup %s: %w", path, err)
 	}
 	currentText, err := readCgroupValue(filepath.Join(path, "memory.current"))
 	if err != nil {
@@ -108,7 +118,7 @@ func (m *Manager) GetMemoryAccountingSnapshot(uid int) (MemoryAccountingSnapshot
 	}
 	current, err := strconv.ParseUint(currentText, 10, 64)
 	if err != nil {
-		return MemoryAccountingSnapshot{}, fmt.Errorf("parse memory.current for UID %d: %w", uid, err)
+		return MemoryAccountingSnapshot{}, fmt.Errorf("parse memory.current for %s: %w", path, err)
 	}
 	high, err := readCgroupValue(filepath.Join(path, "memory.high"))
 	if err != nil {
@@ -135,7 +145,7 @@ func (m *Manager) GetMemoryAccountingSnapshot(uid int) (MemoryAccountingSnapshot
 	} {
 		value, ok := values[key]
 		if !ok {
-			return MemoryAccountingSnapshot{}, fmt.Errorf("RAM cgroup for UID %d memory.events is missing %s", uid, key)
+			return MemoryAccountingSnapshot{}, fmt.Errorf("RAM cgroup %s memory.events is missing %s", path, key)
 		}
 		*target = value
 	}

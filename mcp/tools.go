@@ -540,7 +540,7 @@ CPU limits: %s
 CPU-limited users: %d of %d
 CPU Points nominal parent pool: %d
 CPU Points delivery state: %s
-CPU Points lending state: %s
+CPU Points denominator state: %s
 `,
 			hostname,
 			serverRole,
@@ -555,7 +555,7 @@ CPU Points lending state: %s
 			len(allUserMetrics),
 			status.CPUPoints.NominalParentPoolPoints,
 			status.CPUPoints.DeliveryState,
-			status.CPUPoints.LendingState,
+			status.CPUPoints.DenominatorState,
 		)
 
 		result := cpuReportPayload{
@@ -1082,6 +1082,11 @@ func (s *Server) newUserMetricPayload(uid int, sample *resmanmetrics.UserMetrics
 		payload := newCPUPointsUserPayload(cpuPoints)
 		result.CPUPoints = &payload
 	}
+	if s.stateManager.GetStatus().EnforcementMode == cgroup.EnforcementModeSystemdNative {
+		// Native accounting is already in the typed interval above. Reading a
+		// legacy recovery path would mix ownership and observation lifetimes.
+		return result
+	}
 
 	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
 		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
@@ -1108,6 +1113,9 @@ func (s *Server) newUserMetricPayload(uid int, sample *resmanmetrics.UserMetrics
 func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolRequest, args GetCgroupInfoArgs) (*mcp.CallToolResult, GetCgroupInfoResult, error) {
 	if args.UID == 0 {
 		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("uid is required")
+	}
+	if s.stateManager != nil && s.stateManager.GetStatus().EnforcementMode == cgroup.EnforcementModeSystemdNative {
+		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("legacy cgroup inspection is unavailable under systemd_native; use get_limits_status for authoritative slice accounting")
 	}
 
 	info, err := s.cgroupManager.GetCgroupInfo(args.UID)

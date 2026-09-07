@@ -168,36 +168,11 @@ before starting the service when the start limit was reached. A clean stop is no
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
 The system normalizes current online CPU capacity to 1000 CPU Points and uses a
-three-level cgroups v2 hierarchy:
-.IP 1. 3
-Keeps
-.B CPU_RESERVE_POINTS
-outside the finite parent; the parent pool is 1000 minus the reserve
-.IP 2.
-Creates
-.I limited/guaranteed
-and
-.I limited/best_effort
-internal domains below that parent
-.IP 3.
-Places mapped eligible users in the guaranteed domain with their exact map weight;
-unmapped eligible users receive equal leaf weights inside the aggregate
-.B CPU_BEST_EFFORT_POINTS
-domain
-.IP 4.
-Keeps every user leaf unlimited by
-.BR cpu.max ;
-only the parent has a finite quota
-.PP
-The reserve is nominal headroom outside the ResMan parent, not exclusive physical
-CPU reservation against arbitrary host workloads. A zero reserve still programs a
-finite full-capacity
-.B cpu.max
-on the parent. CFS may throttle that parent and deliver less than its nominal quota
-under saturation. CPU Points guarantees are relative shares of the bandwidth actually
-delivered to the parent, not absolute host CPU floors or cpuset isolation. They apply
-only while CPU enforcement is active and only to processes successfully acquired by
-ResMan; process exclusions and PID-namespace rejections reduce coverage.
+flat systemd-owned hierarchy. The finite parent user.slice contains active user
+slices, with dedicated root entitlement, exact mapped weights and one aggregate
+best-effort allocation partitioned among unmapped and excluded users.
+Unused capacity is available to all runnable siblings. No PID leaves its session
+or service unit. CPU covers rootless descendants within the user's slice.
 .PP
 The map named by
 .B CPU_POINTS_FILE
@@ -218,16 +193,9 @@ snapshot. The packaged default is the root-owned regular file
 .B /etc/resman/cpu-points.map
 below root-owned mode-0700
 .BR /etc/resman .
-Configured guarantees plus the best-effort entitlement must not exceed the pool.
-Resource division occurs proportionally through cgroup
-.B cpu.weight
-values. Unused mapped capacity is first borrowed by runnable mapped siblings;
-best effort borrows it only when the whole guaranteed domain is inactive. The active
-guarantee total and guaranteed-domain weight follow acquired/applied leaves, not
-instantaneous scheduler runnability. For example, with pool 900, mapped guarantees
-300 and 300, and best effort 100, either runnable mapped user can borrow its mapped
-sibling's idle capacity; best effort remains at its class share until both mapped
-leaves are idle, then it can use the parent.
+Configured guarantees plus CPU_ROOT_POINTS and CPU_BEST_EFFORT_POINTS must not
+exceed 1000 minus CPU_RESERVE_POINTS. Root login sessions stay inside the finite
+pool. The reserve protects workloads outside user.slice, not an unbounded root shell.
 .PP
 Changes to the reserve, best-effort entitlement, or map contents are applied as
 one composite hot-reload epoch. Both files are confirmed before and after kernel
@@ -240,29 +208,10 @@ The rejection is atomic and creates no pending class state. Wait for normal rele
 first make the UID CPU-ineligible and reload, confirm that it is released, change the
 map and reload, then restore eligibility with a later reload.
 .PP
-Practical example with four online CPUs, reserve 250, guarantees 300 and 300,
-and best effort 100:
-.RS
-.IP \(bu 2
-The finite parent receives 750 points, or three nominal CPUs
-.IP \(bu
-The two mapped users have weight 300 each
-.IP \(bu
-All unmapped eligible users share the best-effort domain weight 100
-.RE
-.PP
-For a saturated observation window, use synchronized
-.B cpu.stat
-deltas. The guaranteed-domain ratio is
-.B guaranteed_domain_usage_delta / parent_usage_delta
-and should follow
-.BR active_guarantee_points / (active_guarantee_points + best_effort_points) .
-A mapped leaf follows
-.BR user_points / (active_guarantee_points + best_effort_points) .
-Use at least a 60-second window. The functional gate compares against a measured
-same-host reference with tolerances of 0.5 percentage points for the domain and 1.0
-point for a leaf rather than assuming the algebraic target is delivered exactly.
-Positive parent throttling and nominal under-delivery are expected under saturation.
+CPU Points observation uses the same decision interval for parent and per-slice
+usage deltas. See docs/CPU-POINTS-OBSERVABILITY.md for schema 6, independent resource
+coverage and the 60-second measurement procedure. Ratios use effective parent
+delivery and confirmed sibling weights, not nominal quota as a delivered guarantee.
 .PP
 CPU limit eligibility is controlled by
 .B USER_INCLUDE_LIST
@@ -753,7 +702,7 @@ When metrics persistence is enabled at its default
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
 Earlier database schemas are incompatible: archive or delete the database
-and restart so resman can create schema version 5. It is never migrated or opened
+and restart so resman can create schema version 6. It is never migrated or opened
 under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
@@ -823,7 +772,7 @@ size. Each collection cycle is committed as one transaction.
 File-backed databases use WAL mode with a 5-second busy timeout, and timestamps
 are stored and queried in UTC.
 .PP
-Schema version 5 commits one common sample epoch and interval boundary for every
+Schema version 6 commits one common sample epoch and interval boundary for every
 system and user row. CPU Points history separates configured class and optional
 guarantee from applied class and weight, raw cgroup diagnostics, nullable comparable
 usage deltas, the online-CPU denominator, programmed parent quota, domain use and
@@ -1030,7 +979,7 @@ resman_user_cpu_limit_active{uid, username} \- User limit status (1=limited, 0=u
 .IP \(bu
 resman_cpu_points_parent_usage_microseconds_delta \- Effective parent CPU time delivered during the common control-cycle interval; the allocation denominator
 .IP \(bu
-resman_cpu_points_guaranteed_domain_usage_microseconds_delta and resman_cpu_points_best_effort_domain_usage_microseconds_delta \- Synchronized class-domain CPU time
+resman_cpu_points_programmed_sibling_weight_sum and resman_cpu_points_observed_sibling_weight_sum \\- Flat scheduling denominator weights\- Synchronized class-domain CPU time
 .IP \(bu
 resman_cpu_points_parent_throttled_periods_delta and resman_cpu_points_parent_throttled_microseconds_delta \- CFS throttling in the common interval; positive values can be expected under saturation
 .IP \(bu
@@ -1052,9 +1001,7 @@ remove per-user series, so CPU alerts and the exported EMA use the same sampling
 stream as enforcement.
 CPU Points usage and throttling deltas share one explicit interval. Compare domain or
 leaf delivery with effective parent usage, never with the nominal pool or programmed
-quota. CFS can under-deliver nominal quota. Idle mapped capacity serves runnable
-guaranteed siblings first; best effort borrows only when the complete guaranteed
-domain is inactive.
+quota. CFS can under-deliver nominal quota. Unused capacity is available to all runnable user-slice siblings.
 .IP \(bu
 resman_cpu_limits_activated_total \- Confirmed inactive-to-active limit transitions (counter)
 .IP \(bu

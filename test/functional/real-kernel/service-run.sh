@@ -66,7 +66,7 @@ containment_requirement_for() {
 		"retained without migration") printf 'none\n' ;;
 		"retained with containment-mode assertions") printf 'containment-mode\n' ;;
 		"retained with ownership-refusal lifecycle") printf 'ownership-refusal\n' ;;
-		"retained with schema-5 lifecycle") printf 'schema-5\n' ;;
+		"retained with schema-6 lifecycle") printf 'schema-6\n' ;;
 		displaced:*|superseded\ *) printf 'displaced\n' ;;
 		*) return 1 ;;
 	esac
@@ -318,7 +318,7 @@ containment_requirement=$(containment_requirement_for "$containment_disposition"
 	|| fail "unsupported systemd containment disposition: $containment_disposition"
 case "$containment_requirement" in
 	none) ;;
-	containment-mode|ownership-refusal|schema-5) containment_assertion_required=$containment_requirement ;;
+	containment-mode|ownership-refusal|schema-6) containment_assertion_required=$containment_requirement ;;
 	displaced)
 		blocked "scenario displaced by systemd containment: $containment_disposition"
 		;;
@@ -1202,9 +1202,9 @@ scenario_metrics_database_lifecycle() {
 	command -v sqlite3 >/dev/null 2>&1 \
 		|| blocked "sqlite3 is required to verify the packaged metrics schema"
 	sqlite3 "$db" 'PRAGMA user_version;' >"$evidence_dir/schema-version.txt" 2>&1
-	[[ $(< "$evidence_dir/schema-version.txt") == 5 ]] \
-		|| fail "the metrics database reports schema version $(< "$evidence_dir/schema-version.txt") instead of 5"
-	verify_containment_assertion schema-5
+	[[ $(< "$evidence_dir/schema-version.txt") == 6 ]] \
+		|| fail "the metrics database reports schema version $(< "$evidence_dir/schema-version.txt") instead of 6"
+	verify_containment_assertion schema-6
 
 	stat -c '%n %a %U:%G' "$db"* >"$evidence_dir/database-modes.txt" 2>&1
 	systemctl stop resman || fail "systemctl stop failed after the database scenario"

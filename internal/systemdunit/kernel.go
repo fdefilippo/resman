@@ -1,6 +1,7 @@
 package systemdunit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -11,8 +12,80 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"golang.org/x/sys/unix"
 )
+
+// UnitAccounting is an observation of one authoritative unit lifetime. Missing
+// resource observations remain absent; they are never substituted with zero.
+type UnitAccounting struct {
+	Identity    UnitIdentity
+	CPU         *cgroup.CPUPointsNodeSnapshot
+	Memory      *cgroup.MemoryAccountingSnapshot
+	CPUError    error
+	MemoryError error
+}
+
+// ObserveAccounting reads CPU and memory independently, then reconfirms the
+// systemd unit identity. The kernel readers also reconfirm directory identity.
+func (a *Adapter) ObserveAccounting(ctx context.Context, identity UnitIdentity) (UnitAccounting, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("observe_accounting"); err != nil {
+		return UnitAccounting{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	snapshot, err := a.readUnit(ctx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return UnitAccounting{}, err
+	}
+	if err := requireSameIdentity("observe_accounting", identity, snapshot.Identity); err != nil {
+		return UnitAccounting{}, err
+	}
+	reader, ok := a.verifier.(interface {
+		observe(UnitSnapshot) (UnitAccounting, error)
+	})
+	if !ok {
+		return UnitAccounting{}, fmt.Errorf("kernel accounting reader is unavailable")
+	}
+	result, err := reader.observe(snapshot)
+	if err != nil {
+		return UnitAccounting{}, err
+	}
+	confirmed, err := a.readUnit(ctx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return UnitAccounting{}, err
+	}
+	if err := requireSameIdentity("observe_accounting", identity, confirmed.Identity); err != nil {
+		return UnitAccounting{}, err
+	}
+	return result, nil
+}
+
+func (v cgroupVerifier) observe(snapshot UnitSnapshot) (UnitAccounting, error) {
+	path, err := v.controlGroupPath(snapshot.ControlGroup)
+	if err != nil {
+		return UnitAccounting{}, err
+	}
+	result := UnitAccounting{Identity: snapshot.Identity}
+	cpu, err := cgroup.ReadCPUAccountingSnapshot(path)
+	if err != nil {
+		result.CPUError = err
+	} else {
+		result.CPU = &cpu
+	}
+	memory, err := cgroup.ReadMemoryAccountingSnapshot(path)
+	if err != nil {
+		result.MemoryError = err
+	} else {
+		result.Memory = &memory
+	}
+	if result.CPU != nil && result.Memory != nil && result.CPU.Identity != result.Memory.Identity {
+		return UnitAccounting{}, fmt.Errorf("unit accounting changed cgroup identity between resource reads")
+	}
+	return result, nil
+}
 
 const defaultCgroupRoot = "/sys/fs/cgroup"
 

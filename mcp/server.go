@@ -691,7 +691,7 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 - **System Under Load**: %v
 - **CPU Points Nominal Parent Pool**: %d
 - **CPU Points Delivery State**: %s
-- **CPU Points Lending State**: %s
+- **CPU Points Denominator State**: %s
 
 ## Assessment
 `,
@@ -707,7 +707,7 @@ func (s *Server) handleSystemHealthPrompt(ctx context.Context, req *mcp.GetPromp
 		metrics.SystemUnderLoad,
 		status.CPUPoints.NominalParentPoolPoints,
 		status.CPUPoints.DeliveryState,
-		status.CPUPoints.LendingState,
+		status.CPUPoints.DenominatorState,
 	)
 
 	// Add assessment
@@ -786,7 +786,7 @@ func (s *Server) handleTroubleshootingPrompt(ctx context.Context, req *mcp.GetPr
 	text += fmt.Sprintf("- **Actively Limited Users**: %d\n", status.ActivelyLimitedUsersCount)
 	text += fmt.Sprintf("- **CPU Points Nominal Parent Pool**: %d\n", status.CPUPoints.NominalParentPoolPoints)
 	text += fmt.Sprintf("- **CPU Points Delivery State**: %s\n", status.CPUPoints.DeliveryState)
-	text += fmt.Sprintf("- **CPU Points Lending State**: %s\n", status.CPUPoints.LendingState)
+	text += fmt.Sprintf("- **CPU Points Denominator State**: %s\n", status.CPUPoints.DenominatorState)
 
 	text += "\n## Diagnostic Steps\n\n"
 

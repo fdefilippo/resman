@@ -208,12 +208,9 @@ actually delivered to the parent while CPU enforcement is active and only for it
 acquired, enforceable processes; exclusions and PID-namespace rejections reduce that
 coverage. This is not an absolute host CPU floor or cpuset isolation.
 
-Mapped users may borrow idle capacity from mapped siblings. That lending stays in the
-guaranteed domain while any guaranteed sibling is runnable; the aggregate best-effort
-domain borrows beyond `CPU_BEST_EFFORT_POINTS` only when the complete guaranteed
-domain is idle. Unmapped eligible users divide that one aggregate entitlement with
-equal leaf weights. Active guarantees plus the domain weight are derived from
-acquired/applied leaves, not from instantaneous scheduler runnability.
+All runnable user slices may borrow unused capacity. Root has its own entitlement;
+excluded and unmapped slices share aggregate best effort. Processes remain in their
+authoritative systemd units.
 
 The strict map begins with `[resman-cpu-points-map-v1]` and then contains exact
 `username=points` assignments. A dot is part of the username, so
@@ -231,14 +228,9 @@ guaranteed and best-effort is rejected atomically. Wait for normal release or fi
 make the UID CPU-ineligible and reload, confirm it is released, change the map and
 reload, then restore eligibility in a later reload. No pending class state exists.
 
-For a saturated measurement window, compare synchronized `cpu.stat` deltas:
-`guaranteed_domain_usage_delta / parent_usage_delta` should follow
-`active_guarantee_points / (active_guarantee_points + best_effort_points)`, and a
-mapped leaf follows `user_points / (active_guarantee_points + best_effort_points)`.
-Use at least a 60-second observation window; the functional gate uses a measured
-same-host reference with tolerances of 0.5 percentage points for the domain and
-1.0 point for a leaf. Positive parent throttling and delivery below nominal quota are
-expected evidence that the finite CFS bandwidth boundary is active, not a failure.
+For accounting, coverage, schema 6 and operator measurements, see
+[CPU Points observability](docs/CPU-POINTS-OBSERVABILITY.md). Use the daemon's
+synchronized deltas and a 60-second observation window; raw weights do not prove delivery.
 
 Moving a live process does not transfer existing cgroup v2 memory charges. The first
 dynamic ingress therefore applies `memory.high` and `memory.max` only to post-ingress

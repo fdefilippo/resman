@@ -46,6 +46,81 @@ type ResourceAuthority struct {
 	Reason   ResourceCoverageReason
 }
 
+// ObserveCPUCoverage checks UID-wide membership without excluding rootless
+// descendants: CPU authority covers the entire user slice, including containers.
+func (a *Adapter) ObserveCPUCoverage(ctx context.Context, topology TopologySnapshot) (map[uint32]bool, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("observe_cpu_coverage"); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	inspector, ok := a.coverage.(procCoverageInspector)
+	if !ok {
+		return nil, fmt.Errorf("CPU coverage inspector is unavailable")
+	}
+	targets := make([]resourceCoverageTarget, 0, len(topology.Users))
+	for _, user := range topology.Users {
+		targets = append(targets, coverageTargetFor(user.UID, user.Unit))
+	}
+	return inspector.observeCPU(ctx, targets)
+}
+
+func (i procCoverageInspector) observeCPU(ctx context.Context, targets []resourceCoverageTarget) (map[uint32]bool, error) {
+	result := make(map[uint32]bool, len(targets))
+	paths := make(map[uint32]string, len(targets))
+	for _, target := range targets {
+		result[target.uid] = true
+		paths[target.uid] = target.controlGroup
+	}
+	entries, err := i.readDir(i.root)
+	if err != nil {
+		return nil, fmt.Errorf("scan CPU authority: %w", err)
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if _, err := strconv.ParseUint(entry.Name(), 10, 32); err != nil {
+			continue
+		}
+		path := filepath.Join(i.root, entry.Name())
+		info, err := i.stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect CPU authority process: %w", err)
+		}
+		uid := i.ownerUID(info)
+		parent, tracked := paths[uid]
+		if !tracked {
+			continue
+		}
+		data, err := i.readFile(filepath.Join(path, "cgroup"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read CPU authority process: %w", err)
+		}
+		member := ""
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "0::") {
+				member = strings.TrimPrefix(line, "0::")
+			}
+		}
+		if member == "" {
+			return nil, fmt.Errorf("CPU authority process has no unified cgroup")
+		}
+		if member != parent && !strings.HasPrefix(member, strings.TrimSuffix(parent, "/")+"/") {
+			result[uid] = false
+		}
+	}
+	return result, nil
+}
+
 // ResourceAuthorityRequest describes one resource-specific authority check.
 type ResourceAuthorityRequest struct {
 	Identity    UnitIdentity

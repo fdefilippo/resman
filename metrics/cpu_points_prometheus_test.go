@@ -13,8 +13,8 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 	start := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 	end := start.Add(30 * time.Second)
 	online, quota, period := uint64(4), uint64(360000), uint64(100000)
-	guaranteedWeight, bestEffortWeight := uint64(600), uint64(100)
-	parentUsage, guaranteedUsage, bestEffortUsage := uint64(9_000_000), uint64(7_700_000), uint64(1_300_000)
+	siblingWeight, bestEffortWeight := uint64(800), uint64(100)
+	parentUsage, observedWeight, rootPoints := uint64(9_000_000), uint64(800), uint64(100)
 	periods, throttled, throttledUsec := uint64(300), uint64(190), uint64(4_590_000)
 
 	first := CPUPointsSystemSnapshot{
@@ -22,11 +22,11 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 		ReservePoints: 100, NominalParentPoolPoints: 900, ConfiguredBestEffortPoints: 100,
 		CapacityAvailable: true, OnlineCPUs: &online, ProgrammedParentQuotaUsec: &quota, ProgrammedParentPeriodUsec: &period,
 		AppliedGuaranteePoints: 600, ProgrammedGuaranteeWeight: 600,
-		GuaranteedDomainWeight: &guaranteedWeight, BestEffortDomainWeight: &bestEffortWeight,
-		ParentCPUUsageUsecDelta: &parentUsage, GuaranteedDomainCPUUsageUsecDelta: &guaranteedUsage,
-		BestEffortDomainCPUUsageUsecDelta: &bestEffortUsage, ParentCPUPeriodsDelta: &periods,
+		ProgrammedSiblingWeightSum: &siblingWeight, ProgrammedBestEffortWeight: &bestEffortWeight,
+		ParentCPUUsageUsecDelta: &parentUsage, ObservedSiblingWeightSum: &observedWeight,
+		ConfiguredRootPoints: &rootPoints, ParentCPUPeriodsDelta: &periods,
 		ParentCPUThrottledPeriodsDelta: &throttled, ParentCPUThrottledUsecDelta: &throttledUsec,
-		DeliveryState: CPUPointsDeliveryThrottledParent, LendingState: CPUPointsLendingGuaranteedPriority,
+		DeliveryState: CPUPointsDeliveryThrottledParent, DenominatorState: CPUPointsDenominatorComplete,
 	}
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{CPUPoints: &first})
 
@@ -34,19 +34,19 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 		"resman_cpu_points_reserve": 100, "resman_cpu_points_nominal_parent_pool": 900,
 		"resman_cpu_points_best_effort_entitlement": 100, "resman_cpu_points_online_cpus": 4,
 		"resman_cpu_points_parent_quota_microseconds": 360000, "resman_cpu_points_parent_period_microseconds": 100000,
-		"resman_cpu_points_capacity_available":                          1,
-		"resman_cpu_points_reconciliation_degraded":                     0,
-		"resman_cpu_points_applied_guarantee_total":                     600,
-		"resman_cpu_points_programmed_guaranteed_domain_weight":         600,
-		"resman_cpu_points_observed_guaranteed_domain_weight":           600,
-		"resman_cpu_points_observed_best_effort_domain_weight":          100,
-		"resman_cpu_points_parent_usage_microseconds_delta":             9_000_000,
-		"resman_cpu_points_guaranteed_domain_usage_microseconds_delta":  7_700_000,
-		"resman_cpu_points_best_effort_domain_usage_microseconds_delta": 1_300_000,
-		"resman_cpu_points_parent_periods_delta":                        300,
-		"resman_cpu_points_parent_throttled_periods_delta":              190,
-		"resman_cpu_points_parent_throttled_microseconds_delta":         4_590_000,
-		"resman_cpu_points_observation_interval_seconds":                30,
+		"resman_cpu_points_capacity_available":                  1,
+		"resman_cpu_points_reconciliation_degraded":             0,
+		"resman_cpu_points_applied_guarantee_total":             600,
+		"resman_cpu_points_programmed_guaranteed_weight_sum":    600,
+		"resman_cpu_points_programmed_sibling_weight_sum":       800,
+		"resman_cpu_points_programmed_best_effort_weight":       100,
+		"resman_cpu_points_parent_usage_microseconds_delta":     9_000_000,
+		"resman_cpu_points_observed_sibling_weight_sum":         800,
+		"resman_cpu_points_root_entitlement":                    100,
+		"resman_cpu_points_parent_periods_delta":                300,
+		"resman_cpu_points_parent_throttled_periods_delta":      190,
+		"resman_cpu_points_parent_throttled_microseconds_delta": 4_590_000,
+		"resman_cpu_points_observation_interval_seconds":        30,
 	}
 	for name, value := range want {
 		if got := gatheredMetricValue(t, exporter, name); got != value {
@@ -63,7 +63,7 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 		t.Fatalf("nominal-quota help = %q", help)
 	}
 	assertGaugeLabelValue(t, exporter, "resman_cpu_points_delivery_state", "state", "throttled_parent", 1)
-	assertGaugeLabelValue(t, exporter, "resman_cpu_points_lending_state", "state", "guaranteed_priority", 1)
+	assertGaugeLabelValue(t, exporter, "resman_cpu_points_denominator_state", "state", "complete", 1)
 
 	// Observation-only refreshes have no CPU Points pointer and must not erase
 	// or advance the decision-owned interval.
@@ -74,7 +74,7 @@ func TestCPUPointsPrometheusSystemSnapshotUsesEffectiveParentIntervalAndDeletesS
 
 	unavailableSnapshot := CPUPointsSystemSnapshot{
 		ReservePoints: 100, NominalParentPoolPoints: 900, ConfiguredBestEffortPoints: 100,
-		DeliveryState: CPUPointsDeliveryUnavailable, LendingState: CPUPointsLendingUnavailable,
+		DeliveryState: CPUPointsDeliveryUnavailable, DenominatorState: CPUPointsDenominatorUnavailable,
 	}
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{CPUPoints: &unavailableSnapshot})
 	for _, name := range []string{
@@ -218,8 +218,8 @@ func TestCPUPointsPrometheusRejectsUnboundedSnapshotLabels(t *testing.T) {
 	invalidClass := "uid-1000-dynamic"
 	invalidCoverage := "pid-42-missing"
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{CPUPoints: &CPUPointsSystemSnapshot{
-		DeliveryState: CPUPointsDeliveryState("kernel-error-text"),
-		LendingState:  CPUPointsLendingState("user-derived-runnable-points"),
+		DeliveryState:    CPUPointsDeliveryState("kernel-error-text"),
+		DenominatorState: CPUPointsDenominatorState("user-derived-runnable-points"),
 	}})
 	exporter.UpdateUserSnapshot(UserExporterMetrics{UID: 1000, Username: "alice", CPUPoints: CPUPointsUserSnapshot{
 		ConfiguredClass: invalidClass, LifecycleState: CPUPointsLifecycleState("pid-42-failed"),
@@ -231,7 +231,7 @@ func TestCPUPointsPrometheusRejectsUnboundedSnapshotLabels(t *testing.T) {
 		name, label, value string
 	}{
 		{"resman_cpu_points_delivery_state", "state", "kernel-error-text"},
-		{"resman_cpu_points_lending_state", "state", "user-derived-runnable-points"},
+		{"resman_cpu_points_denominator_state", "state", "user-derived-runnable-points"},
 		{"resman_user_cpu_points_configured_class", "class", invalidClass},
 		{"resman_user_cpu_points_applied_class", "class", invalidClass},
 		{"resman_user_cpu_points_lifecycle_state", "state", "pid-42-failed"},

@@ -87,70 +87,27 @@ enforcement placement changes.
 
 To show only limited users in dashboards, filter by `resman_user_cpu_limit_active{uid, username} == 1`.
 
-CPU Points observability is interval-based. The parent, guaranteed-domain,
-best-effort-domain, and per-leaf `*_usage_microseconds_delta` gauges all come from
-one control-cycle interval, whose duration is
-`resman_cpu_points_observation_interval_seconds`. Allocation ratios use effective
-parent usage as the denominator; the nominal pool and programmed `cpu.max` are not
-delivered guarantees. Positive parent throttling is expected under a saturated finite
-pool, and CFS can deliver less than the nominal quota.
-
-Mapped-user guarantees are optional values. A best-effort UID has no fabricated
-per-user guarantee. The applied-class, lifecycle, and process-coverage series separate
-a complete UID workload from a partial host-enforceable subset. Lending is
-class-prioritized: idle mapped capacity serves runnable guaranteed siblings first;
-best effort is reported as borrowing only while the complete guaranteed domain is
-inactive.
-
-CPU capacity is normalized to 1000 points. The finite parent pool is
-`P = 1000 - CPU_RESERVE_POINTS`; the reserve is nominal headroom outside the ResMan
-parent, not exclusive physical isolation from other host cgroups. Even `P = 1000`
-programs a finite `cpu.max`. Let `G` be the sum of acquired/applied mapped guarantees
-and `B = CPU_BEST_EFFORT_POINTS`. While both domains are runnable, the expected
-saturated ratios over one synchronized interval are:
-
-```text
-guaranteed_domain_usage_delta / parent_usage_delta = G / (G + B)
-mapped_leaf_usage_delta       / parent_usage_delta = user_points / (G + B)
-```
-
-These are relative shares of effective parent delivery, not absolute host CPU floors.
-CFS bandwidth can leave the parent below its nominal quota while reporting positive
-throttling. Functional evidence therefore uses a 60-second window, a measured
-same-host reference, tolerance of 0.5 percentage points for the aggregate guaranteed
-domain, and 1.0 point for a leaf. The configured pool, programmed quota, raw weights,
-and a short sample are not substitutes for delivered-bandwidth evidence.
-
-Hierarchical lending has a strict priority. If one acquired guaranteed leaf is idle,
-its runnable guaranteed siblings consume the unused domain capacity first. The
-best-effort domain can exceed its aggregate entitlement only when the entire
-guaranteed domain is idle. `G` and the guaranteed-domain weight follow acquired and
-applied leaves rather than instantaneous scheduler runnability; lowering that domain
-weight before a leaf departs could silently violate another guarantee.
-
-The guarantee scope is the host-enforceable subset acquired by ResMan while CPU
-enforcement is active. Process exclusions and PID-namespace rejections remain in
-observation and decision inputs but cannot be represented by the managed leaf, so
-coverage is reported as partial. CPU Points do not provide cpuset isolation from
-arbitrary host workloads, realtime tasks, or affinity constraints.
+CPU Points observations use one synchronized decision interval for parent and slice
+CPU deltas and resource coverage. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
+for the schema-6 contract and operator measurement procedure.
 
 ## Cgroup Hierarchy
 
-```
-/sys/fs/cgroup/                     ← root (controllers: cpu, cpuset, io)
-  └── resman/                       ← base cgroup
-        ├── limited/               ← finite CPU Points parent
-        │     ├── guaranteed/       ← aggregate acquired mapped guarantees
-        │     │     └── user_1000/  ← exact mapped weight
-        │     └── best_effort/      ← one aggregate best-effort entitlement
-        │           └── user_1001/  ← equal-share best-effort leaf
-        ├── user_1000/              ← IOPS observation; RAM/IO when active
-        └── user_1001/
+On systemd hosts the authoritative topology is flat:
+
+```text
+user.slice                 finite parent pool
+  user-0.slice             dedicated root entitlement
+  user-1000.slice          mapped guarantee
+  user-1001.slice          best effort, including excluded users
 ```
 
-- **CPU**: Uses the finite CPU Points parent and two class-priority scheduling domains
-- **RAM**: Applied directly to per-user cgroup (`memory.max`, `memory.high`)
-- **IO**: Observed and applied directly in the current per-user cgroup (`io.stat`, `io.max`)
+All runnable siblings can borrow unused capacity. Processes retain their original
+session/service membership. CPU covers descendants of each user slice, including
+rootless containers; a UID split across unrelated units has partial coverage.
+RAM and I/O use independent authority checks and are refused when ownership is
+incomplete. The non-systemd migration backend remains separate and reports its
+mode explicitly. Measurements use a 60-second window and effective parent delivery.
 
 ## Placement transitions and memory charges
 

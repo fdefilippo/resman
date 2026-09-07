@@ -826,46 +826,18 @@ successfully applied state for each resource.
 
 ### 5.3 Limit Application
 
-**CPU Points hierarchy:**
+**Systemd-native CPU Points hierarchy:**
 
-1. Refresh the live online-CPU set from `/sys/devices/system/cpu/online`; the
-   observation cache is not an enforcement denominator.
-2. Create the finite `limited/` parent and program
-   `floor(online_cpus * period * (1000 - reserve) / 1000)` in `cpu.max`.
-   The kernel minimum quota is 1000 microseconds. A one-CPU host with period 100000
-   therefore requires a parent pool of at least 10 points.
-3. Create internal `guaranteed/` and `best_effort/` domains. Their weights are the
-   sum of acquired/applied mapped guarantees `G` and the configured aggregate
-   best-effort entitlement `B`.
-4. Place mapped UIDs in guaranteed leaves with their exact configured weight. Place
-   unmapped eligible UIDs in equal-weight leaves under best effort. Every leaf keeps
-   `cpu.max=max`; the parent alone owns the finite quota.
-5. Raise the guaranteed-domain weight before first ingress of a guaranteed leaf and
-   lower it only after successful departure. An error may retain a conservative high
-   weight but must never silently underweight an acquired guarantee.
+The adapter programs a finite parent quota from the live online CPU set and
+`floor(online_cpus * period * (1000 - reserve) / 1000)`. The minimum quota is
+1000 microseconds. Active user slices remain in place, with exact mapped/root
+weights and an exactly partitioned aggregate best-effort weight. Every active
+sibling, including excluded users, belongs to the scheduling denominator.
+Unused capacity is available to all runnable siblings.
 
-The invariant `sum(all configured guarantees) + B <= 1000 - reserve` rejects the
-complete policy atomically. With both domains saturated, synchronized `cpu.stat`
-deltas are evaluated against effective parent delivery:
-
-```text
-guaranteed_domain_usage_delta / parent_usage_delta = G / (G + B)
-mapped_leaf_usage_delta       / parent_usage_delta = user_points / (G + B)
-```
-
-Functional evidence uses a 60-second window and a same-kernel measured reference,
-with tolerance of 0.5 percentage points for the guaranteed domain and 1.0 point for a
-leaf. Positive parent throttling and nominal under-delivery are expected CFS bandwidth
-effects. Raw weights, nominal quota, and configured points are not evidence of
-delivered bandwidth.
-
-Lending remains inside the guaranteed domain while any guaranteed leaf is runnable:
-idle mapped capacity goes to runnable mapped siblings first. Best effort borrows the
-parent only when the entire guaranteed domain is idle. `G` represents acquired/applied
-leaves, not instantaneous scheduler runnability. CPU Points are relative guarantees
-for the acquired host-enforceable process subset while enforcement is active; they
-are not absolute host floors or cpuset isolation. Exclusions and PID-namespace
-rejections reduce process coverage and remain explicit in telemetry.
+[CPU Points observability](CPU-POINTS-OBSERVABILITY.md) defines schema 6, complete
+denominator confirmation, resource coverage and the 60-second window measurement
+procedure. No complete guarantee is published from a partial reconciliation.
 
 The map is a root/daemon-owned regular mode-0600 file under trusted, non-writable,
 non-symlink ancestors. Its exact marker and line grammar are validated before exact
@@ -1356,7 +1328,7 @@ decision policy.
 - configured reserve, nominal parent pool, aggregate best-effort entitlement, and
   applied guarantee total;
 - verified live online-CPU denominator and programmed parent quota/period;
-- synchronized parent, guaranteed-domain, best-effort-domain, and leaf CPU usage
+- synchronized parent and user-slice CPU usage
   deltas plus the common interval duration;
 - parent period, throttled-period, and throttled-time deltas;
 - optional mapped-user guarantee, requested enforcement, bounded configured/applied
@@ -1368,16 +1340,14 @@ decision policy.
 Effective parent CPU usage is the allocation denominator. The nominal pool and raw
 `cpu.max` are capacity configuration, not observed delivery; raw `cpu.weight` is a
 kernel scheduling value, not a second spelling of CPU Points. CFS can under-deliver
-the nominal parent quota under saturation. Idle mapped capacity serves runnable
-guaranteed siblings first; best effort borrows only when the complete guaranteed
-domain is inactive. ResMan does not derive runnable points in userspace.
+the nominal parent quota under saturation. All runnable sibling slices may borrow unused capacity. ResMan does not derive runnable points in userspace.
 
 Every per-user series is published exclusively from the control-cycle decision
 sample. Its CPU delta and smoothing window therefore match the sample used by
 enforcement. Observation-only refreshes update system-wide gauges but do not write or
 remove per-user series. The shipped per-user alert rules consequently evaluate one
 defined sampling stream even when PSI event-driven refreshes run at another cadence.
-CPU Points parent/domain/leaf deltas and memory event deltas use that same stream;
+CPU Points parent/slice deltas and memory event deltas use that same stream;
 recreated cgroups, daemon restart, counter decrease, or an unavailable read removes
 the interval series instead of creating a wrapped delta.
 

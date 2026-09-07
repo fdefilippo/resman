@@ -252,6 +252,7 @@ func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, u
 	}
 	planChanged := m.systemdCPUPlanSignature != signature
 	m.systemdCPUPlanSignature = signature
+	m.systemdCPUPlan = plan
 	m.systemdCPUComplete = true
 	m.cpuPointsDegraded = false
 	m.pendingCPUPointsPolicy = nil

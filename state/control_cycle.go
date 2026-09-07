@@ -897,7 +897,16 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 
 	// Per-user series are owned exclusively by the decision sample. Observation
 	// refreshes must not overwrite them with a different baseline or EMA history.
-	for uid, userMetrics := range metrics.UserMetrics {
+	exporterUsers := make(map[int]*resmanmetrics.UserMetrics, len(metrics.UserMetrics))
+	for uid, user := range metrics.UserMetrics {
+		exporterUsers[uid] = user
+	}
+	for uid, user := range metrics.PersistenceUsers {
+		if exporterUsers[uid] == nil {
+			exporterUsers[uid] = user.Metrics
+		}
+	}
+	for uid, userMetrics := range exporterUsers {
 		username := userMetrics.Username
 		if username == "" || username == strconv.Itoa(uid) {
 			username = m.getUsername(uid)
@@ -909,7 +918,7 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
 		var cgroupIOReadBytes, cgroupIOWriteBytes uint64
-		if m.cgroupManager != nil {
+		if m.cgroupManager != nil && m.systemdUnits == nil {
 			var err error
 			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, _, _, err = m.cgroupManager.GetUserCgroupMetrics(uid)
 			if err != nil {
@@ -960,7 +969,7 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 
 	// Remove metric series for users absent from the current sample.
 	activeUids := make(map[int]bool)
-	for uid := range metrics.UserMetrics {
+	for uid := range exporterUsers {
 		activeUids[uid] = true
 	}
 	m.prometheusExporter.CleanupUserMetrics(activeUids)

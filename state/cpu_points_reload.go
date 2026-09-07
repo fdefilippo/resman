@@ -244,7 +244,7 @@ func (m *Manager) applyCPUPointsAggregateWeightLocked(hierarchy cgroup.CPUPoints
 	}
 	weight, err := cpupoints.NewKernelCPUWeight(value)
 	if err != nil {
-		return &CPUPointsReconciliationError{Step: "guaranteed_domain_weight", Err: err}
+		return &CPUPointsReconciliationError{Step: "legacy_domain_weight", Err: err}
 	}
 	m.mu.Lock()
 	if points > m.programmedGuaranteePoints {
@@ -252,7 +252,7 @@ func (m *Manager) applyCPUPointsAggregateWeightLocked(hierarchy cgroup.CPUPoints
 	}
 	m.mu.Unlock()
 	if err := m.cgroupManager.ApplyCPUPointsGuaranteedWeight(hierarchy, weight); err != nil {
-		return &CPUPointsReconciliationError{Step: "guaranteed_domain_weight", Err: err}
+		return &CPUPointsReconciliationError{Step: "legacy_domain_weight", Err: err}
 	}
 	m.mu.Lock()
 	m.programmedGuaranteePoints = points
@@ -294,7 +294,7 @@ func cpuPointsReconciliationErrorType(err error) string {
 		return "internal"
 	}
 	switch reconciliationErr.Step {
-	case "capacity", "parent_quota", "guaranteed_domain_weight", "best_effort_weight", "leaf_weight",
+	case "capacity", "parent_quota", "legacy_domain_weight", "best_effort_weight", "leaf_weight",
 		"systemd_adapter", "systemd_owned_leases", "systemd_discover", "systemd_capacity",
 		"systemd_plan", "systemd_parent_quota", "systemd_leaf_weight":
 		return reconciliationErr.Step

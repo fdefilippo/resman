@@ -132,7 +132,7 @@ rollback.
 
 **Visible change.** The default database moves from `/etc/resman/metrics.db` to
 `/var/lib/resman/metrics.db`. Unversioned, schema-version-2, schema-version-3,
-schema-version-4, and other incompatible stores are rejected; the current schema version is 5.
+schema-version-4, and other incompatible stores are rejected; the current schema version is 6.
 The immediate parent must be a
 real, process-owned mode-`0700` directory. The database and pre-existing `-wal` and
 `-shm` sidecars must be regular, process-owned mode-`0600` files. Replaceable or
@@ -149,7 +149,7 @@ expose per-user data.
 **Action.** Stop ResMan and archive or delete the old database; it is not migrated.
 Create a stable, non-symlink hierarchy with a service-owned mode-`0700` immediate
 parent. Set any retained database and sidecars to the service UID and mode `0600`, or
-let ResMan create a new schema-5 store. The `:memory:` database is unchanged.
+let ResMan create a new schema-6 store. The `:memory:` database is unchanged.
 
 ### Runtime-state and log paths change
 
@@ -166,6 +166,16 @@ treated as secret-bearing state.
 **Action.** Update tooling that reads the runtime-state path. Log collectors that need
 shared access must use an intended group and a group-only mode such as `0640`; access
 for other users is no longer supported.
+
+## Systemd-native accounting: schema 6
+
+The current archive format is schema 6. Prior archives, including schema 5,
+are rejected and require the established archive-or-delete procedure below.
+The domain columns and class-priority lending telemetry are removed. Root points,
+flat programmed/observed sibling weights, denominator state, enforcement mode and
+independent CPU/RAM/I/O coverage replace them without aliases. The matching
+[observation contract](CPU-POINTS-OBSERVABILITY.md) applies to SQLite, MCP and
+Prometheus and explains why missing data must not be read as zero.
 
 ## Configuration loading and reload
 
@@ -186,11 +196,10 @@ before restarting rather than discovering one key per service start.
 
 **Cause.** The previous contract mixed a core reserve, raw quotas, pattern-selected
 ceilings, and PSI weight mutation. CPU Points instead programs one finite parent pool
-and gives acquired mapped users relative guarantees through a class-priority cgroup
-hierarchy. Unmapped eligible users share one aggregate best-effort domain. Idle mapped
-capacity goes to runnable mapped siblings first; best effort borrows beyond its class
-share only when the complete guaranteed domain is idle. The active guarantee sum and
-domain weight follow acquired/applied leaves, not instantaneous runnability.
+and gives users relative guarantees through a flat systemd-owned
+hierarchy. Active unmapped and excluded user slices partition one aggregate best-effort
+entitlement. Root has a dedicated entitlement. Unused capacity is available to
+all runnable siblings; the previous class-priority borrowing contract is removed.
 
 **Action.** Stop ResMan before conversion. For an old reserve of `m` cores on a host
 with `N` online CPUs and `m < N`, set
@@ -203,7 +212,7 @@ minimum representable finite parent pool and accept the changed semantics. With 
 maximum reserve is `1000 - ceil(10/N)`.
 
 Choose a positive `CPU_BEST_EFFORT_POINTS`, populate the shipped map, and ensure
-`sum(all mapped guarantees) + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`.
+`sum(all mapped guarantees) + CPU_ROOT_POINTS + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`.
 The newly shipped map file is a preserved operator configuration file, so package
 upgrades do not overwrite local assignments.
 There is no numeric conversion for the old normal quota, global limited quota,
@@ -213,33 +222,11 @@ it still programs a finite full-capacity `cpu.max`, which may throttle and deliv
 than nominal capacity. The reserve is nominal headroom outside the ResMan parent, not
 exclusive physical isolation against arbitrary host workloads.
 
-CPU Points apply only while CPU enforcement is active and only to processes acquired
-by ResMan. Process exclusions and PID-namespace rejections reduce coverage. A mapped
-value is a relative share of effective parent delivery, not an absolute host CPU floor
-or cpuset reservation. Under saturation, observe the synchronized values published by
-the daemon rather than sampling cgroup files independently:
-
-- divide `resman_cpu_points_guaranteed_domain_usage_microseconds_delta` and
-  `resman_cpu_points_best_effort_domain_usage_microseconds_delta` by
-  `resman_cpu_points_parent_usage_microseconds_delta`;
-- divide `resman_user_cpu_points_leaf_usage_microseconds_delta` by the same parent
-  denominator for a mapped user; and
-- require `resman_cpu_points_observation_interval_seconds` to describe the interval and
-  treat an absent delta or a zero parent denominator as unavailable, not as zero use.
-
-Compare several complete intervals with `G/(G+B)` for the guaranteed domain and
-`g/(G+B)` for a mapped leaf, where `G` is the acquired guarantee sum, `B` is the
-best-effort entitlement, and `g` is the leaf guarantee. These algebraic values are
-diagnostic expectations, not strict per-window operator thresholds: kernel scheduling
-introduces both jitter and a stable host-specific bias, so averaging reduces jitter but
-does not remove the bias. Establish an operational baseline on the actual host and
-investigate sustained departures from it together with runnable workload and parent
-throttling. Positive parent throttling and nominal under-delivery are expected.
-
-The final functional gate uses a separate known-correct hierarchy measured during the
-same execution. Its 0.5-percentage-point domain tolerance and 1.0-point leaf tolerance
-are reference-centred acceptance values; they do not apply to an operator comparing a
-single hierarchy directly with the algebraic ratios.
+Systemd-native CPU Points apply to authoritative user slices without moving PIDs.
+Rootless descendants inherit the UID envelope. Coverage is partial for a UID split
+across unrelated parents. RAM and I/O authority are checked independently.
+See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the schema-6 reset,
+replacement fields, synchronized measurement procedure and coverage semantics.
 
 Reserve, best-effort, and map-content reload as one confirmed epoch. A class change
 for an active UID is rejected atomically and no pending class state is retained. Wait
@@ -495,7 +482,7 @@ resource and count fields.
 **Visible change.** `resman_cpu_action_cores` is removed without an alias. Prometheus
 now exposes the configured reserve and nominal parent pool, the verified live online-CPU
 denominator, programmed parent quota/period, synchronized parent/domain/leaf usage deltas,
-parent throttling, bounded delivery and class-priority lending states, optional mapped-user
+parent throttling, bounded delivery and flat denominator states, optional mapped-user
 guarantees, applied class/raw weight, process coverage, and post-ingress RAM cgroup coverage.
 Current MCP system, limits, user-metrics and CPU-report payloads add the corresponding typed
 `cpu_points` objects; limits status also includes `cpu_point_users`. Limit-hook JSON and script
@@ -867,7 +854,7 @@ Verify all of the following before treating the upgrade as complete:
 - Prometheus exposes the renamed CPU, RAM, I/O, and union series with `hostname` and
   `server_role` labels.
 - Alertmanager routes and silences use the new CPU alert identifiers.
-- The metrics database reports schema version 5 or persistence is deliberately
+- The metrics database reports schema version 6 or persistence is deliberately
   disabled with its remedy understood.
 - Enabled RAM and I/O features passed their real-interface probes.
 - Procfs and block-I/O coverage metrics are zero or their conservative enforcement

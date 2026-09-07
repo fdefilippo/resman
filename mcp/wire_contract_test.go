@@ -139,6 +139,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 	}
 
 	assertExactNestedJSONKeys(t, getUserHistoryResult{Records: []userHistoryRecord{{}}}, "records", []string{
+		"cpu_authority_coverage", "io_coverage",
 		"applied_cpu_class", "applied_cpu_weight", "cgroup_path", "configured_cpu_class", "configured_guarantee_points",
 		"cpu_limit_active", "cpu_limit_requested", "cpu_points_lifecycle_state", "cpu_quota", "cpu_usage", "cpu_weight",
 		"eligible_for_cpu", "eligible_for_io", "eligible_for_ram", "enforceable_process_count", "interval_end", "interval_start",
@@ -151,9 +152,10 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"systemd_ownership_refused_count", "timestamp", "uid", "username",
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
-		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "best_effort_domain_cpu_usage_usec_delta",
-		"best_effort_domain_cpu_weight", "configured_best_effort_weight", "cpu_actively_limited_users_count", "cpu_capacity_available",
-		"cpu_limits_active", "cpu_points_degraded", "guaranteed_domain_cpu_usage_usec_delta", "guaranteed_domain_cpu_weight",
+		"denominator_state", "enforcement_mode",
+		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "configured_root_points",
+		"programmed_best_effort_weight", "configured_best_effort_points", "cpu_actively_limited_users_count", "cpu_capacity_available",
+		"cpu_limits_active", "cpu_points_degraded", "observed_sibling_weight_sum", "programmed_sibling_weight_sum",
 		"interval_end", "interval_start", "nominal_parent_pool_points", "online_cpus", "parent_cpu_periods_delta",
 		"parent_cpu_quota", "parent_cpu_throttled_periods_delta", "parent_cpu_throttled_usec_delta", "parent_cpu_usage_usec_delta",
 		"programmed_guarantee_weight", "programmed_parent_period_usec", "programmed_parent_quota_usec", "resource_limits_active",
@@ -175,16 +177,17 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 		ReservePoints: 100, NominalParentPoolPoints: 900, ConfiguredBestEffortPoints: 100,
 		CapacityAvailable: true, OnlineCPUs: &online, ProgrammedParentQuotaUsec: &quota,
 		ProgrammedParentPeriodUsec: &period, ParentCPUUsageUsecDelta: &parent,
-		GuaranteedDomainCPUUsageUsecDelta: &guaranteed, BestEffortDomainCPUUsageUsecDelta: &bestEffort,
-		GuaranteedDomainWeight: &guaranteedWeight, BestEffortDomainWeight: &bestEffortWeight,
+		ObservedSiblingWeightSum: &guaranteed, ConfiguredRootPoints: &bestEffort,
+		ProgrammedSiblingWeightSum: &guaranteedWeight, ProgrammedBestEffortWeight: &bestEffortWeight,
 		ParentCPUPeriodsDelta: &periods, ParentCPUThrottledPeriodsDelta: &throttled, ParentCPUThrottledUsecDelta: &throttledUsec,
-		DeliveryState: resmanmetrics.CPUPointsDeliveryThrottledParent,
-		LendingState:  resmanmetrics.CPUPointsLendingBestEffortBorrowed,
+		DeliveryState:    resmanmetrics.CPUPointsDeliveryThrottledParent,
+		DenominatorState: resmanmetrics.CPUPointsDenominatorComplete,
 	})
 	assertExactJSONKeys(t, system, []string{
-		"applied_guarantee_points", "best_effort_domain_cpu_usage_usec_delta", "best_effort_domain_weight",
-		"capacity_available", "configured_best_effort_points", "delivery_state", "guaranteed_domain_cpu_usage_usec_delta",
-		"guaranteed_domain_weight", "interval_end", "interval_start", "lending_state", "nominal_parent_pool_points",
+		"enforcement_mode",
+		"applied_guarantee_points", "configured_root_points", "programmed_best_effort_weight",
+		"capacity_available", "configured_best_effort_points", "delivery_state", "observed_sibling_weight_sum",
+		"programmed_sibling_weight_sum", "interval_end", "interval_start", "denominator_state", "nominal_parent_pool_points",
 		"online_cpus", "parent_cpu_periods_delta", "parent_cpu_throttled_periods_delta", "parent_cpu_throttled_usec_delta",
 		"parent_cpu_usage_usec_delta", "programmed_guarantee_weight", "programmed_parent_period_usec",
 		"programmed_parent_quota_usec", "reconciliation_degraded", "reserve_points", "sample_epoch_id",
@@ -194,7 +197,7 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, fragment := range []string{`"delivery_state":"throttled_parent"`, `"lending_state":"best_effort_borrowed"`, `"online_cpus":4`} {
+	for _, fragment := range []string{`"delivery_state":"throttled_parent"`, `"denominator_state":"complete"`, `"online_cpus":4`} {
 		if !strings.Contains(text, fragment) {
 			t.Errorf("system CPU Points payload %s lacks %s", text, fragment)
 		}
@@ -249,8 +252,8 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 	}
 
 	unavailable := newCPUPointsSystemPayload(resmanmetrics.CPUPointsSystemSnapshot{
-		DeliveryState: resmanmetrics.CPUPointsDeliveryUnavailable,
-		LendingState:  resmanmetrics.CPUPointsLendingUnavailable,
+		DeliveryState:    resmanmetrics.CPUPointsDeliveryUnavailable,
+		DenominatorState: resmanmetrics.CPUPointsDenominatorUnavailable,
 	})
 	encoded, err = json.Marshal(unavailable)
 	if err != nil {
@@ -280,7 +283,7 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 		CPUPointsLifecycleState: "applied", AppliedCPUClass: &class,
 		AppliedCPUWeight: &weight, LeafCPUUsageUsecDelta: &delta,
 	})
-	if userRecord.Timestamp != now.Format(time.RFC3339) || userRecord.MemoryUsage != 42 ||
+	if userRecord.Timestamp != now.Format(time.RFC3339) || (userRecord.MemoryUsage == nil || *userRecord.MemoryUsage != 42) ||
 		userRecord.IntervalStart == nil || *userRecord.IntervalStart != start.Format(time.RFC3339) ||
 		userRecord.ConfiguredGuaranteePoints == nil || *userRecord.ConfiguredGuaranteePoints != 300 ||
 		userRecord.AppliedCPUClass == nil || *userRecord.AppliedCPUClass != class {
