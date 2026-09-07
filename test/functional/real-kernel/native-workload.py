@@ -40,6 +40,10 @@ def main():
     signal.signal(signal.SIGINT, stop)
     deadline = time.monotonic() + 1800
     while time.monotonic() < deadline:
+        probe = output / "probe"
+        if probe.exists():
+            (output / "response").write_text(probe.read_text())
+            probe.unlink()
         time.sleep(1)
     stop(None, None)
 

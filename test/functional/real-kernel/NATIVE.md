@@ -67,3 +67,37 @@ synchronized proportional measurements and same-run oracle, root responsiveness,
 rootless/nspawn placements, actual block-I/O behavior, external conflicts, interrupted
 revert/reload recovery, hot topology changes, and the non-systemd backend's own kernel
 evidence. Track completion and findings in Beads, not by reinterpreting this pre-gate.
+
+## Simultaneous flat proportional scenario
+
+`remote.sh systemd-native-proportional root@terra` adds a separate source-binary row.
+It uses the same exclusive remote ownership and cleanup boundary, with genuine cron
+sessions for both mapped users, an excluded best-effort user, and root. Four online
+CPUs with unrestricted runner affinity are required. The fixture is deliberately not
+the shipped default: reserve 700, root 100, best effort 100, mapped 50 + 50. Its
+300-point native parent runs beside independent correct and stale-control parents
+with the same quota, so their combined ceilings total 900 points on the host.
+
+The reference has weights 5000/5000/10000/10000. The deliberately stale control
+underweights best effort at 5000. Two simultaneous 60-second windows record raw
+parent/leaf counters, identities, read skew, online capacity and throttling. The
+mapped aggregate must match the same-window reference within 0.5 percentage points;
+each leaf within 1.0; the stale control must remain at least 2.0 points away at the
+aggregate. There is no stored calibration constant or comparison of delivered CPU
+against a nominal guarantee. A parent delivering less than 80% of its nominal quota,
+no throttling, changed weights/identity, missing counters or skew above 200 ms fails
+the measurement rather than silently relaxing the tolerances.
+
+In the second window one mapped workload is stopped with SIGSTOP, not migrated or
+reclassified; its session stays present. Every other native sibling, including the
+excluded best-effort user, must consume more of the delivered parent bandwidth.
+The journal and programmed weights must remain unchanged. Root must make measured
+CPU progress and answer three file probes from its own PAM session within three
+seconds in each phase. These probes are not SSH latency measurements. Cleanup resumes
+only recorded same-start-time children, restores native properties through ResMan,
+and removes only the run-owned reference units and their overrides.
+
+Ten mandatory result keys and independent unprivileged measurement tests guard this
+row. Neither this row nor the lifecycle pre-gate alone proves the complete `.9`
+acceptance: package identity, SSH, multiple child services, containers, real I/O and
+the remaining recovery/conflict/topology cases retain their separate obligations.

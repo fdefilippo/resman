@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""Simultaneous native/reference/stale-control measurements on a disposable host."""
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import signal
+import sys
+import time
+import traceback
+
+from native_gate import Blocked, NativeGate, eventually, field, require, sha
+
+
+REQUIRED_CHECKS = frozenset({
+    "full-budget-rejection", "pam-sessions", "native-plan", "full-contention",
+    "stale-control", "work-conserving-lending", "root-progress", "unchanged-membership",
+    "unchanged-weights", "graceful-stop",
+})
+LEAVES = ("a", "b", "root", "best")
+WEIGHTS = {"a": 5000, "b": 5000, "root": 10000, "best": 10000}
+
+
+def checks_pass(checks):
+    return set(checks) == REQUIRED_CHECKS and all(value == "PASS" for value in checks.values())
+
+
+def ratios(before, after, minimum_seconds=60):
+    result = {}
+    require(after["time"] - before["time"] >= minimum_seconds, "measurement window too short")
+    require(max(before["skew"], after["skew"]) <= 0.2, "counter-read skew exceeds 200 ms")
+    for group in ("native", "oracle", "stale"):
+        deltas = {}
+        for node in ("parent",) + LEAVES:
+            old, new = before["nodes"][group][node], after["nodes"][group][node]
+            require(old["identity"] == new["identity"], "cgroup recreated during measurement")
+            delta = new["stat"]["usage_usec"] - old["stat"]["usage_usec"]
+            require(delta >= 0, "counter decreased during measurement")
+            deltas[node] = delta
+        require(deltas["parent"] > 0, "no measured parent bandwidth")
+        require(sum(deltas[node] for node in LEAVES) <= deltas["parent"] * 1.01,
+                "leaf totals exceed their synchronized parent interval")
+        result[group] = {node: 100 * deltas[node] / deltas["parent"] for node in LEAVES}
+        result[group]["mapped"] = result[group]["a"] + result[group]["b"]
+        result[group]["parent_usec"] = deltas["parent"]
+        result[group]["throttling"] = {}
+        for key in ("nr_periods", "nr_throttled", "throttled_usec"):
+            value = after["nodes"][group]["parent"]["stat"][key] - before["nodes"][group]["parent"]["stat"][key]
+            require(value >= 0, "parent throttling counter decreased")
+            result[group]["throttling"][key] = value
+    return result
+
+
+def compare_reference(measured):
+    native, reference = measured["native"], measured["oracle"]
+    require(abs(native["mapped"] - reference["mapped"]) <= 0.5,
+            "mapped aggregate differs from same-window reference by more than 0.5 pp")
+    for leaf in LEAVES:
+        require(abs(native[leaf] - reference[leaf]) <= 1.0,
+                leaf + " differs from same-window reference by more than 1.0 pp")
+
+
+class ProportionalGate(NativeGate):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.reference_units = []
+        self.reference_slices = []
+        self.reference_identities = {}
+        self.paused = []
+        self.paths = {}
+
+    def session_accounts(self):
+        return self.accounts + [pwd.getpwuid(0)]
+
+    def preflight(self):
+        super().preflight()
+        if field("/sys/devices/system/cpu/online") != "0-3" or os.sched_getaffinity(0) != set(range(4)):
+            raise Blocked("this simultaneous three-parent fixture requires four unrestricted online CPUs")
+        self.save("proportional-environment", {
+            "runner_sha256": sha(__file__), "window_seconds": 60, "maximum_skew_seconds": 0.2,
+            "aggregate_tolerance_pp": 0.5, "leaf_tolerance_pp": 1.0,
+            "minimum_stale_separation_pp": 2.0, "reserve": 700, "root": 100,
+            "best_effort": 100, "mapped": [50, 50], "combined_parent_ceiling_points": 900,
+        })
+
+    def write_config(self, blackout=True, overcommit=False):
+        super().write_config(blackout, overcommit)
+        if not overcommit:
+            self.map.write_text("[resman-cpu-points-map-v1]\n" +
+                                "".join(a.pw_name + "=50\n" for a in self.accounts[:2]))
+        body = self.config.read_text()
+        for key, value in {"CPU_RESERVE_POINTS": "700", "RAM_LIMIT_ENABLED": "false", "IO_LIMIT_ENABLED": "false"}.items():
+            body, count = re.subn(r"(?m)^" + key + "=.*$", key + "=" + value, body)
+            require(count == 1, "missing fixture key " + key)
+        self.config.write_text(body)
+
+    def assert_applied(self):
+        eventually(lambda: field(self.parent / "cpu.max") == "120000 100000", "native 300-point parent missing")
+        mapping = dict(zip(LEAVES, (self.accounts[0].pw_uid, self.accounts[1].pw_uid, 0, self.accounts[2].pw_uid)))
+        self.paths["native"] = {"parent": self.parent, **{key: self.slice(uid) for key, uid in mapping.items()}}
+        for key, uid in mapping.items():
+            eventually(lambda u=uid, k=key: field(self.slice(u) / "cpu.weight", "") == str(WEIGHTS[k]),
+                       "native weight missing: " + key)
+            require(field(self.slice(uid) / "cpu.max").split()[0] == "max", "native leaf has a quota")
+        expected = {"user.slice"} | {"user-%d.slice" % uid for uid in mapping.values()}
+        require({item["unit"] for item in json.loads(self.journal.read_text())["units"]} == expected,
+                "native denominator differs from the four workload slices")
+        self.passed("native-plan", {"quota": "120000 100000", "weights": WEIGHTS, "uids": mapping})
+
+    def start_references(self):
+        # Separate, run-owned parents provide an independent same-window oracle.
+        # Their total ceiling plus the native ceiling is 90% of this four-CPU host.
+        for group in ("oracle", "stale"):
+            prefix = "nq6" + group + self.run_id.replace("-", "")
+            parent = prefix + ".slice"
+            root = Path("/sys/fs/cgroup") / parent
+            require(not root.exists(), "reference cgroup already exists")
+            properties = self.command("systemctl", "show", parent, "-p", "ActiveState", "-p", "FragmentPath", "-p", "DropInPaths").stdout
+            require(set(properties.splitlines()) == {"ActiveState=inactive", "FragmentPath=", "DropInPaths="},
+                    "reference slice has pre-existing configuration or activity")
+            self.reference_slices.append(parent)
+            self.command("systemctl", "start", parent)
+            self.command("systemctl", "set-property", "--runtime", parent, "CPUQuota=120%", "CPUQuotaPeriodSec=100ms")
+            self.paths[group] = {"parent": root}
+            for leaf in LEAVES:
+                unit = prefix + "-" + leaf + ".slice"
+                service = prefix + "-" + leaf + ".service"
+                self.reference_slices.append(unit)
+                self.command("systemctl", "start", unit)
+                weight = 5000 if group == "stale" and leaf == "best" else WEIGHTS[leaf]
+                self.command("systemctl", "set-property", "--runtime", unit, "CPUWeight=" + str(weight))
+                output = self.helper / (group + "-" + leaf)
+                output.mkdir(mode=0o700)
+                self.command("systemctl", "reset-failed", service, check=False)
+                self.reference_units.append(service)
+                self.command("systemd-run", "--quiet", "--unit=" + service, "--slice=" + unit,
+                             "-p", "RuntimeMaxSec=600", "-p", "TimeoutStopSec=10s",
+                             "/usr/bin/python3", self.helper / "workload.py", output)
+                eventually(lambda p=output: (p / "identity.json").exists(), "reference workload did not start")
+                identity = json.loads((output / "identity.json").read_text())
+                require(identity["cgroup"] == "0::/" + parent + "/" + unit + "/" + service,
+                        "reference worker is outside its independent parent")
+                self.reference_identities[(group, leaf)] = identity
+                self.paths[group][leaf] = root / unit
+
+    def snapshot(self):
+        start = time.monotonic()
+        nodes = {}
+        for group, paths in self.paths.items():
+            nodes[group] = {}
+            require(field(paths["parent"] / "cpu.max") == "120000 100000", "parent quota changed")
+            for leaf, path in paths.items():
+                before = path.stat()
+                stat = dict((key, int(value)) for key, value in
+                            (line.split() for line in field(path / "cpu.stat").splitlines()))
+                after = path.stat()
+                require((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino), "cgroup replaced during read")
+                if leaf != "parent":
+                    expected = 5000 if group == "stale" and leaf == "best" else WEIGHTS[leaf]
+                    require(field(path / "cpu.weight") == str(expected), "programmed weight changed during measurement")
+                nodes[group][leaf] = {"identity": [before.st_dev, before.st_ino], "stat": stat}
+        return {"time": start, "skew": time.monotonic() - start, "nodes": nodes}
+
+    def measure(self, phase):
+        before = self.snapshot()
+        frames = [before]
+        for step in range(1, 13):
+            # Sampling duration, not readiness synchronization.
+            time.sleep(max(0, before["time"] + step * 5 - time.monotonic()))
+            frames.append(self.snapshot())
+        self.save(phase + "-raw", frames)
+        measured = ratios(frames[0], frames[-1])
+        duration = frames[-1]["time"] - frames[0]["time"]
+        for group, values in measured.items():
+            values["delivered_over_nominal"] = values["parent_usec"] / (duration * 1200000)
+            require(values["delivered_over_nominal"] >= 0.8, group + " parent lacks usable nominal bandwidth")
+            require(values["throttling"]["nr_throttled"] > 0, group + " finite parent never throttled")
+        self.save(phase + "-measured", measured)
+        compare_reference(measured)
+        return measured
+
+    def pause(self, identity):
+        self.assert_membership()
+        for pid in identity["children"]:
+            stat = field("/proc/%d/stat" % pid).rsplit(")", 1)[1].split()
+            require(int(stat[1]) == identity["pid"], "worker is no longer a child of the recorded owner")
+            self.paused.append((pid, stat[19]))
+            os.kill(pid, signal.SIGSTOP)
+
+    def resume(self):
+        for pid, start_time in self.paused:
+            stat = field("/proc/%d/stat" % pid, "")
+            if stat and stat.rsplit(")", 1)[1].split()[19] == start_time:
+                os.kill(pid, signal.SIGCONT)
+        self.paused = []
+
+    def root_response(self):
+        output = self.helper / "0"
+        latencies = []
+        for attempt in range(3):
+            token = self.run_id + str(time.monotonic_ns()) + str(attempt)
+            start = time.monotonic()
+            (output / "probe").write_text(token)
+            eventually(lambda: field(output / "response", "") == token, "root session did not respond under contention", 3)
+            latencies.append(time.monotonic() - start)
+        require(max(latencies) <= 3, "root response exceeded the declared three-second bound")
+        return latencies
+
+    def cleanup(self):
+        self.resume()
+        # Never revert the native user slices here: their durable owner restores them.
+        # These reference units were proved absent before this run created them.
+        for service in reversed(self.reference_units):
+            self.command("systemctl", "stop", service)
+            self.command("systemctl", "reset-failed", service, check=False)
+        for unit in reversed(self.reference_slices):
+            self.command("systemctl", "revert", unit)
+            self.command("systemctl", "stop", unit)
+            require(not (Path("/run/systemd/system.control") / (unit + ".d")).exists(), "reference drop-in survived")
+        super().cleanup()
+
+    def run(self):
+        status, detail, cleanup = "FAIL", "proportional gate incomplete", "PASS"
+        try:
+            self.preflight()
+            self.validate()
+            self.start_sessions()
+            self.write_config(blackout=False)
+            self.start_daemon()
+            self.assert_applied()
+            self.start_references()
+            self.assert_membership()
+            journal = self.journal.read_bytes()
+            full = self.measure("full-contention")
+            self.passed("full-contention", full)
+            root_full = self.root_response()
+            separation = abs(full["oracle"]["mapped"] - full["stale"]["mapped"])
+            require(separation >= 2.0, "stale-plan control is not distinguishable")
+            self.passed("stale-control", {"separation_pp": separation})
+            self.pause(self.sessions[self.accounts[0].pw_uid])
+            for group in ("oracle", "stale"):
+                self.pause(self.reference_identities[(group, "a")])
+            idle = self.measure("mapped-idle")
+            for leaf in ("b", "root", "best"):
+                require(idle["native"][leaf] > full["native"][leaf] + 1.0, "idle capacity was not lent to " + leaf)
+            require(idle["native"]["a"] < 0.1, "paused leaf still consumes material CPU")
+            self.passed("work-conserving-lending", idle)
+            require(full["native"]["root"] > 5 and idle["native"]["root"] > 5, "root did not progress under contention")
+            self.passed("root-progress", {"full_pp": full["native"]["root"], "idle_pp": idle["native"]["root"],
+                                          "full_response_seconds": root_full, "idle_response_seconds": self.root_response()})
+            require(self.journal.read_bytes() == journal, "scheduler lending rewrote the native ownership plan")
+            self.passed("unchanged-weights", {"journal_unchanged": True})
+            self.assert_membership()
+            self.passed("unchanged-membership", self.sessions)
+            self.resume()
+            self.stop_daemon()
+            self.assert_released()
+            self.assert_membership()
+            self.passed("graceful-stop", {"journal_absent": True, "sessions_still_owned": True})
+            status = "PASS" if checks_pass(self.checks) else "FAIL"
+            detail = "same-window flat proportional and lending checks completed"
+        except Blocked as err:
+            status, detail = "BLOCKED", str(err)
+        except Exception as err:
+            detail = str(err)
+            traceback.print_exc()
+        finally:
+            try:
+                self.cleanup()
+            except Exception as err:
+                cleanup, status = "FAIL", "FAIL"
+                detail += "; cleanup: " + str(err)
+                traceback.print_exc()
+            for name in REQUIRED_CHECKS:
+                self.checks.setdefault(name, "BLOCKED")
+            self.save("checks", self.checks)
+            (self.evidence / "result").write_text(status + "\n")
+            (self.evidence / "environment.txt").write_text(
+                "scenario=systemd-native-proportional\nsource_revision=%s\nkernel=%s\ncleanup=%s\nresult=%s\ndetail=%s\n" %
+                (self.revision, os.uname().release, cleanup, status, detail.replace("\n", " ")))
+            print(status + ": " + detail, flush=True)
+        return {"PASS": 0, "BLOCKED": 77, "FAIL": 1}[status]
+
+
+if __name__ == "__main__":
+    require(sys.argv[1] == "systemd-native-proportional", "unsupported proportional scenario")
+    gate = ProportionalGate(Path(__file__).parent, sys.argv[2], sys.argv[3])
+    def interrupted(_signal, _frame):
+        raise RuntimeError("proportional campaign interrupted")
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    sys.exit(gate.run())

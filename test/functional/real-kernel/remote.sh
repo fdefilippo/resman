@@ -99,6 +99,7 @@ remote_host=${2:-${RESMAN_REAL_KERNEL_HOST:-}}
 scenario_family=source
 case "$scenario" in
 	psi-refresh-neutrality|block-io-all-dimensions|cpu-points-proportional|systemd-ownership-preservation|systemd-native-lifecycle) ;;
+	systemd-native-proportional) ;;
 	service-start-stop|service-reload-lifecycle|service-fatal-config) scenario_family=package ;;
 	prometheus-scrape|mcp-https-endtoend) scenario_family=package ;;
 	prometheus-user-series-lifecycle) scenario_family=package ;;
@@ -142,9 +143,10 @@ if [[ $scenario_family == package ]]; then
 	install -m 0755 "$script_dir/service-run.sh" "$bundle_dir/run.sh"
 	install -m 0755 "$repo_root/docs/generate-tls-certs.sh" "$bundle_dir/generate-tls-certs.sh"
 else
-	if [[ $scenario == systemd-native-lifecycle ]]; then
+	if [[ $scenario == systemd-native-lifecycle || $scenario == systemd-native-proportional ]]; then
 		install -m 0755 "$script_dir/native-run.sh" "$bundle_dir/run.sh"
 		install -m 0644 "$script_dir/native_gate.py" "$script_dir/native-workload.py" "$bundle_dir/"
+		install -m 0644 "$script_dir/native_proportional.py" "$bundle_dir/"
 		install -m 0600 "$repo_root/config/resman.conf.example" "$bundle_dir/resman.conf.example"
 	elif [[ $scenario == cpu-points-proportional ]]; then
 		install -m 0755 "$script_dir/cpu-points-run.sh" "$bundle_dir/run.sh"

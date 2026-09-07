@@ -223,7 +223,7 @@ class NativeGate:
         shutil.copyfile(self.bundle / "native-workload.py", workload)
         workload.chmod(0o755)
         lines = ["SHELL=/bin/bash", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"]
-        for a in self.accounts:
+        for a in self.session_accounts():
             directory = self.helper / str(a.pw_uid)
             directory.mkdir(mode=0o700)
             os.chown(directory, a.pw_uid, a.pw_gid)
@@ -232,7 +232,7 @@ class NativeGate:
         self.cron.write_text("\n".join(lines) + "\n")
         self.cron.chmod(0o600)
         self.cron_created = True
-        for a in self.accounts:
+        for a in self.session_accounts():
             path = self.helper / str(a.pw_uid) / "identity.json"
             eventually(path.exists, "cron did not create workload for " + a.pw_name, 90)
             identity = json.loads(path.read_text())
@@ -246,6 +246,9 @@ class NativeGate:
         self.cron.unlink()
         self.cron_created = False
         self.passed("pam-sessions", self.sessions)
+
+    def session_accounts(self):
+        return self.accounts
 
     def scrape(self):
         with urllib.request.urlopen("http://127.0.0.1:%d/metrics" % self.port, timeout=5) as response:
@@ -389,7 +392,7 @@ class NativeGate:
         self.stop_daemon()
         # Read actual procfs membership, not a user-writable session identifier,
         # including sessions created while a peer failed readiness.
-        for account in self.accounts:
+        for account in self.session_accounts():
             identity_file = self.helper / str(account.pw_uid) / "identity.json"
             if not identity_file.exists():
                 continue
