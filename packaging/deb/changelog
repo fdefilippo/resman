@@ -1,3 +1,15 @@
+resman (1.33.0-2) stable; urgency=medium
+
+  * Preserve host observation during blackout and complete live per-device
+    I/O restoration.
+  * Treat shutdown cancellation as lifecycle completion without hiding
+    independent failures.
+  * Clarify scheduling-weight delivery and keep weighted I/O outside daemon
+    policy.
+  * Ship the revised native dashboard and scheduling-weight measurement guide.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 07 Sep 2026 15:00:00 +0200
+
 resman (1.33.0-1) stable; urgency=medium
 
   * BREAKING: replace systemd observation-only containment with in-place

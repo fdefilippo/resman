@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.33.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -284,6 +284,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-2
+- Preserve host observation during blackout and complete live per-device I/O restoration
+- Treat shutdown cancellation as lifecycle completion without hiding independent failures
+- Clarify scheduling-weight delivery and keep weighted I/O outside daemon policy
+- Ship the revised native dashboard and scheduling-weight measurement guidance
+
 * Mon Sep 07 2026 Francesco Defilippo <francesco@defilippo.org> - 1.33.0-1
 - BREAKING: replace systemd observation-only containment with in-place user-slice enforcement
 - BREAKING: flat work-conserving lending, CPU_ROOT_POINTS=100 and indirectly bounded excluded users

@@ -67,10 +67,12 @@ controlled proportional method and its earlier campaign have independent PASS;
 that does not extend to the new producers described below or replace a complete
 current-revision final matrix. Coverage, recovery, reconciliation, package and
 non-systemd producers are implemented and locally tested, but their field acceptance
-has not yet been established by this harness change. Weighted-I/O delivery is a
-different gap: its safe independent oracle is not implemented, so that required
-check always reports BLOCKED. There is no overall nq6.9 PASS yet. Track completion
-and findings in Beads, not by reinterpreting a supported subset as the final gate.
+has not yet been established by this harness change. Hard I/O delivery remains
+part of the daemon coverage row. Weighted I/O is exercised by the implemented
+adapter-only row described below, not by a daemon policy or a delivery guarantee;
+the future policy is deferred to `resman-nq6.40`. There is no overall nq6.9 PASS
+yet. Track completion and findings in Beads, not by reinterpreting a supported
+subset as the final gate.
 
 ## Additional native rows: implementation is not field acceptance
 
