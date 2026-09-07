@@ -605,7 +605,103 @@ class CoverageGate(NativeGate):
                          identity["cgroup"])
         require(match is not None, "nested nspawn is not inside a genuine PAM scope")
         identity["session"] = match[1]
+        identity["session_identity"] = self.capture_nested_session(match[1], uid)
+        require(field(proc / "stat").rsplit(")", 1)[1].split()[19] == identity["birth"] and
+                field(proc / "cgroup") == identity["cgroup"], "nested supervisor changed while recording session ownership")
         return identity
+
+    def nested_scope_snapshot(self, scope):
+        result = self.command("systemctl", "show", scope, "-p", "LoadState", "-p", "ActiveState",
+                              "-p", "InvocationID", "-p", "ControlGroup", check=False)
+        values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if values.get("LoadState") == "not-found":
+            return None
+        require(result.returncode == 0 and values.get("LoadState") == "loaded", "cannot inspect owned nested scope")
+        control = values.get("ControlGroup", "")
+        if not control and values.get("ActiveState") in ("inactive", "failed"):
+            return None
+        require(control.startswith("/user.slice/user-") and ".." not in Path(control).parts,
+                "nested scope has no exact user cgroup")
+        path = Path("/sys/fs/cgroup") / control.lstrip("/")
+        try:
+            first = path.stat()
+        except FileNotFoundError:
+            return None  # The original cgroup has drained and disappeared.
+        try:
+            events = dict(line.split() for line in field(path / "cgroup.events").splitlines())
+            last = path.stat()
+        except FileNotFoundError:
+            require(not path.exists(), "nested scope accounting disappeared before cleanup")
+            return None
+        require((first.st_dev, first.st_ino) == (last.st_dev, last.st_ino), "nested scope changed during inspection")
+        return {"scope": scope, "control_group": control, "invocation_id": values.get("InvocationID", ""),
+                "cgroup_identity": [first.st_dev, first.st_ino], "active_state": values.get("ActiveState"),
+                "populated": events.get("populated")}
+
+    def capture_nested_session(self, session, uid):
+        properties = self.command("loginctl", "show-session", session, "-p", "User", "-p", "Scope").stdout
+        values = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
+        scope = "session-" + session + ".scope"
+        require(values == {"User": str(uid), "Scope": scope}, "nested session owner or scope differs")
+        snapshot = self.nested_scope_snapshot(scope)
+        require(snapshot is not None and snapshot["control_group"] == "/user.slice/user-%d.slice/%s" % (uid, scope)
+                and snapshot["invocation_id"], "nested session lacks a stable authoritative scope")
+        return {"session": session, "uid": uid, "snapshot": snapshot}
+
+    def nested_cgroup_drained(self, original):
+        path = Path("/sys/fs/cgroup") / original["control_group"].lstrip("/")
+        try:
+            first = path.stat()
+            require([first.st_dev, first.st_ino] == original["cgroup_identity"],
+                    "nested cgroup identity changed after unit disappearance")
+            events = dict(line.split() for line in (path / "cgroup.events").read_text().splitlines())
+            last = path.stat()
+            require((first.st_dev, first.st_ino) == (last.st_dev, last.st_ino),
+                    "nested cgroup changed during drain confirmation")
+            return events.get("populated") == "0"
+        except FileNotFoundError:
+            require(not path.exists(), "nested cgroup lost accounting before drain confirmation")
+            return True
+
+    def drain_nested_session(self, owned):
+        original = owned["snapshot"]
+        scope = original["scope"]
+        require(scope == "session-" + owned["session"] + ".scope" and
+                original["control_group"] == "/user.slice/user-%d.slice/%s" % (owned["uid"], scope),
+                "nested session cleanup identity is inconsistent")
+        proof = {"owned": owned}
+        name = "nested-session-drain-" + owned["session"]
+        def inspect():
+            current = self.nested_scope_snapshot(scope)
+            proof["last_snapshot"] = current
+            self.save(name, proof)
+            if current is not None:
+                for key in ("scope", "control_group", "invocation_id", "cgroup_identity"):
+                    require(current[key] == original[key], "nested session identity changed before cleanup: " + key)
+            else:
+                require(self.nested_cgroup_drained(original),
+                        "nested scope disappeared while its payload remains populated")
+            return current
+        current = inspect()
+        if current is None:
+            proof["drained"] = True
+            self.save(name, proof)
+            return
+        proof["terminate_returncode"] = self.command("loginctl", "terminate-session", owned["session"], check=False).returncode
+        current = inspect()
+        if current is not None and current["populated"] == "1":
+            # Termination can acknowledge before container PID 1 exits. Only the
+            # original, revalidated run-owned PAM scope may receive this signal.
+            killed = self.command("systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", scope, check=False)
+            proof["kill_returncode"] = killed.returncode
+            current = inspect()
+            require(killed.returncode == 0 or current is None, "failed to kill owned nested payload")
+        def drained():
+            snapshot = inspect()
+            return snapshot is None or (snapshot["populated"] == "0" and snapshot["active_state"] in ("inactive", "failed"))
+        eventually(drained, "owned nested session payload survived cleanup", 20)
+        proof["drained"] = True
+        self.save(name, proof)
 
     def io_transfer(self, user, unit, args):
         self.child_units.append(unit)
@@ -778,6 +874,10 @@ class CoverageGate(NativeGate):
         for pid, identity in list(self.nested_processes.items()):
             proc = Path("/proc/%d" % pid)
             try:
+                if "session_identity" in identity:
+                    self.drain_nested_session(identity["session_identity"])
+                    del self.nested_processes[pid]
+                    continue
                 stat = field(proc / "stat").rsplit(")", 1)[1].split()
                 if stat[19] != identity["birth"]:
                     del self.nested_processes[pid]
@@ -789,7 +889,10 @@ class CoverageGate(NativeGate):
                 match = re.fullmatch(r"0::/user\.slice/user-%d\.slice/session-([a-z0-9]+)\.scope(?:/.*)?" %
                                      self.accounts[0].pw_uid, field(proc / "cgroup"))
                 if match:
-                    self.command("loginctl", "terminate-session", match[1])
+                    identity["session_identity"] = self.capture_nested_session(match[1], self.accounts[0].pw_uid)
+                    require(field(proc / "stat").rsplit(")", 1)[1].split()[19] == identity["birth"],
+                            "nested supervisor changed before cleanup")
+                    self.drain_nested_session(identity["session_identity"])
                 else:
                     os.kill(pid, signal.SIGTERM)
                 eventually(lambda p=proc: not p.exists(), "nested supervisor survived bounded cleanup", 20)

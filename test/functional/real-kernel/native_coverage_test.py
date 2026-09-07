@@ -404,6 +404,91 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(gate.nested_processes[123]["birth"], "456")
             self.assertEqual(gate.nested_processes[123]["machine"], "run-machine")
 
+    def test_nested_session_drain_waits_for_payload_after_supervisor_disappears(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            snapshot = {"scope": "session-42.scope", "control_group": "/user.slice/user-1006.slice/session-42.scope",
+                        "invocation_id": "original", "cgroup_identity": [26, 99], "active_state": "active", "populated": "1"}
+            owned = {"session": "42", "uid": 1006, "snapshot": snapshot}
+            gate.nested_processes[123] = {"pid": 123, "birth": "old", "session_identity": owned}
+            states = [snapshot, snapshot, snapshot, snapshot, None]
+            with patch("native_coverage.Path", side_effect=lambda p: Path(directory) if str(p) == "/proc" else Path(p)), \
+                 patch.object(gate, "nested_scope_snapshot", side_effect=states) as observed, \
+                 patch.object(gate, "nested_cgroup_drained", return_value=True), \
+                 patch.object(gate, "command", return_value=SimpleNamespace(returncode=0)) as command, \
+                 patch("native_gate.time.sleep"):
+                gate.cleanup_nested()
+            self.assertFalse(gate.nested_processes)
+            self.assertEqual(observed.call_count, 5)
+            self.assertEqual([call.args for call in command.call_args_list], [
+                ("loginctl", "terminate-session", "42"),
+                ("systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", "session-42.scope")])
+            proof = json.loads((gate.evidence / "nested-session-drain-42.json").read_text())
+            self.assertTrue(proof["drained"])
+            self.assertIsNone(proof["last_snapshot"])
+
+    def test_missing_nested_unit_does_not_prove_payload_drain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            original = {"scope": "session-42.scope", "control_group": "/user.slice/user-1006.slice/session-42.scope",
+                        "invocation_id": "original", "cgroup_identity": [26, 99]}
+            with patch.object(gate, "nested_scope_snapshot", return_value=None), \
+                 patch.object(gate, "nested_cgroup_drained", return_value=False) as drained, \
+                 patch.object(gate, "command") as command:
+                with self.assertRaisesRegex(AssertionError, "payload remains populated"):
+                    gate.drain_nested_session({"session": "42", "uid": 1006, "snapshot": original})
+                drained.assert_called_once_with(original)
+                command.assert_not_called()
+
+    def test_original_nested_cgroup_drain_requires_identity_and_empty_population(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            root = Path(directory) / "cgroup"
+            node = root / "session"
+            node.mkdir(parents=True)
+            stat = node.stat()
+            original = {"control_group": "/session", "cgroup_identity": [stat.st_dev, stat.st_ino]}
+            with patch("native_coverage.Path", side_effect=lambda p: root if p == "/sys/fs/cgroup" else Path(p)):
+                for populated, expected in (("1", False), ("0", True)):
+                    (node / "cgroup.events").write_text("populated " + populated + "\n")
+                    self.assertEqual(gate.nested_cgroup_drained(original), expected)
+                with self.assertRaisesRegex(AssertionError, "identity changed"):
+                    gate.nested_cgroup_drained(dict(original, cgroup_identity=[stat.st_dev, stat.st_ino + 1]))
+                (node / "cgroup.events").unlink()
+                with self.assertRaisesRegex(AssertionError, "lost accounting"):
+                    gate.nested_cgroup_drained(original)
+                node.rmdir()
+                self.assertTrue(gate.nested_cgroup_drained(original))
+
+    def test_nested_session_cleanup_refuses_changed_scope_before_any_kill(self):
+        original = {"scope": "session-42.scope", "control_group": "/user.slice/user-1006.slice/session-42.scope",
+                    "invocation_id": "original", "cgroup_identity": [26, 99], "active_state": "active", "populated": "1"}
+        for key, changed in (("scope", "session-43.scope"), ("control_group", "/user.slice/user-0.slice/session-42.scope"),
+                             ("invocation_id", "recreated"), ("cgroup_identity", [26, 100])):
+            for phase in ("before-terminate", "before-kill"):
+                with self.subTest(key=key, phase=phase), tempfile.TemporaryDirectory() as directory:
+                    gate = CoverageGate(directory, "runit", "revision")
+                    owned = {"session": "42", "uid": 1006, "snapshot": original}
+                    states = [dict(original, **{key: changed})]
+                    if phase == "before-kill":
+                        states.insert(0, original)
+                    with patch.object(gate, "nested_scope_snapshot", side_effect=states), \
+                         patch.object(gate, "command", return_value=SimpleNamespace(returncode=0)) as command:
+                        with self.assertRaisesRegex(AssertionError, "identity changed"):
+                            gate.drain_nested_session(owned)
+                    self.assertFalse(any(call.args[0] == "systemctl" for call in command.call_args_list))
+                    proof = json.loads((gate.evidence / "nested-session-drain-42.json").read_text())
+                    self.assertNotIn("drained", proof)
+
+    def test_nested_session_capture_refuses_different_logind_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            with patch.object(gate, "command", return_value=SimpleNamespace(stdout="User=0\nScope=session-42.scope\n")), \
+                 patch.object(gate, "nested_scope_snapshot") as snapshot:
+                with self.assertRaisesRegex(AssertionError, "owner or scope differs"):
+                    gate.capture_nested_session("42", 1006)
+                snapshot.assert_not_called()
+
     def test_nested_cleanup_discovers_supervisor_after_failed_readiness_and_checks_birth(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = CoverageGate(directory, "runit", "revision")

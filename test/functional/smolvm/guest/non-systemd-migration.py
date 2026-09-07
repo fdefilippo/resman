@@ -59,6 +59,25 @@ def save(directory, name, value):
     (directory / (name + ".json")).write_text(json.dumps(value, indent=2) + "\n")
 
 
+def render_config(example, work, root):
+    """Render the exact guest candidate for production validation and execution."""
+    settings = {"CGROUP_ROOT": "/sys/fs/cgroup", "CGROUP_BASE": root.name + "/managed",
+                "CREATED_CGROUPS_FILE": str(work / "cgroups.txt"),
+                "CPU_POINTS_FILE": str(work / "cpu-points.map"), "USER_INCLUDE_LIST": "^resman-cpu$",
+                "USER_EXCLUDE_LIST": "root", "CPU_THRESHOLD": "2", "CPU_RELEASE_THRESHOLD": "1",
+                "CPU_THRESHOLD_DURATION": "0", "MIN_ACTIVE_TIME": "5", "PROCESS_MIN_AGE_SECONDS": "0",
+                "POLLING_INTERVAL": "5", "METRICS_CACHE_TTL": "1", "METRICS_REFRESH_INTERVAL": "5",
+                "IGNORE_SYSTEM_LOAD": "true", "PSI_EVENT_DRIVEN": "false", "BLACKOUT": "",
+                "RAM_LIMIT_ENABLED": "false", "IO_LIMIT_ENABLED": "false", "MCP_ENABLED": "false",
+                "METRICS_DB_ENABLED": "false", "LOG_FILE": str(work / "resman.log"), "USE_SYSLOG": "false",
+                "ENABLE_PROMETHEUS": "true", "PROMETHEUS_METRICS_BIND_PORT": "19100"}
+    body = example.strip() + "\n"
+    for key, value in settings.items():
+        body, count = re.subn(r"(?m)^" + key + "=.*$", key + "=" + value, body)
+        require(count == 1, "missing or duplicated fixture key: " + key)
+    return body
+
+
 def write_guest_outcome(evidence, status, detail, cleanup):
     (evidence / "result").write_text(status + "\n")
     with (evidence / "environment.txt").open("a") as stream:
@@ -124,22 +143,8 @@ def run(run_id, revision):
         points = work / "cpu-points.map"
         points.write_text("[resman-cpu-points-map-v1]\n")
         points.chmod(0o600)
-        settings = {"CGROUP_ROOT": "/sys/fs/cgroup", "CGROUP_BASE": root.name + "/managed",
-                    "CREATED_CGROUPS_FILE": str(work / "cgroups.txt"),
-                    "CPU_POINTS_FILE": str(points), "USER_INCLUDE_LIST": "^resman-cpu$",
-                    "USER_EXCLUDE_LIST": "root", "CPU_THRESHOLD": "2", "CPU_RELEASE_THRESHOLD": "1",
-                    "CPU_THRESHOLD_DURATION": "0", "MIN_ACTIVE_TIME": "5", "PROCESS_MIN_AGE_SECONDS": "0",
-                    "POLLING_INTERVAL": "2", "METRICS_CACHE_TTL": "1", "METRICS_REFRESH_INTERVAL": "2",
-                    "IGNORE_SYSTEM_LOAD": "true", "PSI_EVENT_DRIVEN": "false", "BLACKOUT": "",
-                    "RAM_LIMIT_ENABLED": "false", "IO_LIMIT_ENABLED": "false", "MCP_ENABLED": "false",
-                    "METRICS_DB_ENABLED": "false", "LOG_FILE": str(log), "USE_SYSLOG": "false",
-                    "ENABLE_PROMETHEUS": "true", "PROMETHEUS_METRICS_BIND_PORT": "19100"}
         config = work / "resman.conf"
-        body = field("/opt/resman-functional/resman.conf.example") + "\n"
-        for key, value in settings.items():
-            body, count = re.subn(r"(?m)^" + key + "=.*$", key + "=" + value, body)
-            require(count == 1, "missing or duplicated fixture key: " + key)
-        config.write_text(body)
+        config.write_text(render_config(field("/opt/resman-functional/resman.conf.example"), work, root))
         config.chmod(0o600)
         stdout = (work / "daemon-stdout.log").open("w")
         daemon = subprocess.Popen(["/usr/bin/resman", "-config", str(config)], stdout=stdout, stderr=stdout)
