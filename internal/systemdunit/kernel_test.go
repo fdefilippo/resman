@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -276,6 +277,42 @@ func TestIOPreflightAcceptsControllerThatSystemdCanEnableOnTheParent(t *testing.
 	}
 	if err := newCgroupVerifier(root).preflight(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err == nil {
 		t.Fatal("preflight() accepted an unavailable I/O controller")
+	}
+}
+
+func TestPreflightRequiresEveryEnabledControllerInterface(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		property      PropertyName
+		interfaceName string
+	}{
+		{name: "cpu quota", property: PropertyCPUQuotaPerSecUSec, interfaceName: "cpu.max"},
+		{name: "memory high", property: PropertyMemoryHigh, interfaceName: "memory.high"},
+		{name: "memory max", property: PropertyMemoryMax, interfaceName: "memory.max"},
+		{name: "strong io", property: PropertyIOReadBandwidthMax, interfaceName: "io.max"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "user.slice")
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "cgroup.controllers"), []byte("cpu io memory\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := UnitSnapshot{Identity: UnitIdentity{Name: parentUserSlice}, ControlGroup: "/user.slice"}
+			assignment := PropertyAssignment{name: test.property}
+			verifier := newCgroupVerifier(root)
+			if err := verifier.preflight(snapshot, []PropertyAssignment{assignment}); err == nil || !strings.Contains(err.Error(), test.interfaceName) {
+				t.Fatalf("preflight() error = %v, want missing %s", err, test.interfaceName)
+			}
+			if err := os.WriteFile(filepath.Join(path, test.interfaceName), []byte("available\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifier.preflight(snapshot, []PropertyAssignment{assignment}); err != nil {
+				t.Fatalf("preflight() after creating %s error = %v", test.interfaceName, err)
+			}
+		})
 	}
 }
 

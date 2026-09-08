@@ -37,6 +37,7 @@ type unitOverrideLease struct {
 
 type kernelVerifier interface {
 	verify(UnitSnapshot, []PropertyAssignment) error
+	preflight(UnitSnapshot, []PropertyAssignment) error
 }
 
 // Adapter is the narrow, runtime-only systemd resource-control boundary.
@@ -60,7 +61,7 @@ type Adapter struct {
 
 // New opens the authoritative system bus and a read-only cgroup verifier. The
 // supplied context bounds startup recovery only; Close owns the connection lifetime.
-func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapter, error) {
+func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements StartupRequirements) (*Adapter, error) {
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
@@ -71,6 +72,10 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapte
 	adapter, err := newAdapter(ctx, transport, newCgroupVerifier(cgroupRoot), localUnitFileInspector{}, newFileLeaseJournalStoreForOwner(DefaultLeaseJournalPath, 0), timeout)
 	if err != nil {
 		transport.close()
+		return nil, err
+	}
+	if err := adapter.requireStartupCapabilities(ctx, requirements); err != nil {
+		adapter.Close()
 		return nil, err
 	}
 	return adapter, nil
@@ -168,13 +173,9 @@ func (a *Adapter) CheckResourceAuthorities(ctx context.Context, requests []Resou
 			results[item.index].Err = &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: inspections[preparedIndex].err}
 			continue
 		}
-		if verifier, ok := a.verifier.(interface {
-			preflight(UnitSnapshot, []PropertyAssignment) error
-		}); ok {
-			if err := verifier.preflight(item.snapshot, item.validated); err != nil {
-				authority = ResourceAuthority{Resource: item.request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
-				results[item.index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: err}}
-			}
+		if err := a.verifier.preflight(item.snapshot, item.validated); err != nil {
+			authority = ResourceAuthority{Resource: item.request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
+			results[item.index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: err}}
 		}
 	}
 	return results, nil

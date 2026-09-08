@@ -1,3 +1,10 @@
+resman (1.35.1-1) stable; urgency=medium
+
+  * Fail startup when an enabled systemd-native resource lacks a mandatory controller interface.
+  * Preserve the failed 1.35.0-6 SmolVM evidence instead of weakening the capability contract.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 17:20:00 +0200
+
 resman (1.35.0-6) stable; urgency=medium
 
   * Remove retired cgroup ownership keys from the retained PSI real-kernel fixture.

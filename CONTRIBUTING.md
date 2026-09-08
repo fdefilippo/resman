@@ -344,7 +344,7 @@ For maintainers:
 3. Create one release commit on `main`.
 4. Create an annotated tag using the project convention:
    ```bash
-   git tag -a v1.35.0 -m "Release 1.35.0"
+   git tag -a v1.35.1 -m "Release 1.35.1"
    ```
 5. Push `main` and the tag only when publication is intended.
 6. GitHub Actions will:

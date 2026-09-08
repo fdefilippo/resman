@@ -156,6 +156,8 @@ func (v cgroupVerifier) preflight(snapshot UnitSnapshot, assignments []PropertyA
 	requiresIO := false
 	for _, assignment := range assignments {
 		switch assignment.name {
+		case PropertyCPUQuotaPerSecUSec, PropertyCPUQuotaPeriodUSec:
+			required["cpu.max"] = true
 		case PropertyMemoryHigh:
 			required["memory.high"] = true
 		case PropertyMemoryMax:
@@ -165,6 +167,7 @@ func (v cgroupVerifier) preflight(snapshot UnitSnapshot, assignments []PropertyA
 		case PropertyIOWeight:
 			requiresIO = true
 		case PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
+			required["io.max"] = true
 			requiresIO = true
 		}
 	}

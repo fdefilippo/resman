@@ -217,8 +217,14 @@ func (a *App) WithStateManager() *App {
 	}
 	var systemdAdapter *systemdunit.Adapter
 	if status.Mode == cgroup.EnforcementModeObservationOnly && status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
-		systemdAdapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout)
+		systemdAdapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
 		if err != nil {
+			if startupErr := classifySystemdAdapterStartupError(err); startupErr != nil {
+				a.logger.Error("Failed to initialize systemd-native enforcement", "error", err)
+				fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement: %v\n", err)
+				a.err = startupErr
+				return a
+			}
 			a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
 				"reason", status.Reason,
 				"error", err,
@@ -251,6 +257,17 @@ func (a *App) WithStateManager() *App {
 	}
 	a.stateManager = stateManager
 	return a
+}
+
+func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequirements {
+	return systemdunit.StartupRequirements{Memory: cfg.RAMEnabled, IO: cfg.IOEnabled}
+}
+
+func classifySystemdAdapterStartupError(err error) error {
+	if !systemdunit.IsRequiredCapabilityError(err) {
+		return nil
+	}
+	return NewPermanentStartupError(fmt.Errorf("initialize systemd-native enforcement: %w", err))
 }
 
 func logSystemdLeaseRecovery(logger appLogger, report []systemdunit.LeaseRecoveryOutcome) {

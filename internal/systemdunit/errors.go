@@ -21,6 +21,7 @@ const (
 	ReasonPropertyNotAllowed   ErrorReason = "property_not_allowed"
 	ReasonInvalidValue         ErrorReason = "invalid_value"
 	ReasonReadbackMismatch     ErrorReason = "readback_mismatch"
+	ReasonRequiredCapability   ErrorReason = "required_capability_unavailable"
 	ReasonKernelVerification   ErrorReason = "kernel_verification_failed"
 	ReasonUnitFileVerification ErrorReason = "unit_file_verification_failed"
 	ReasonLeaseStore           ErrorReason = "lease_store_failed"
@@ -75,6 +76,13 @@ func (e *AdapterError) RetryableReconciliation() bool {
 func IsRetryableReconciliation(err error) bool {
 	var retryable interface{ RetryableReconciliation() bool }
 	return errors.As(err, &retryable) && retryable.RetryableReconciliation()
+}
+
+// IsRequiredCapabilityError reports whether an enabled enforcement feature is
+// missing a mandatory kernel/controller interface at startup.
+func IsRequiredCapabilityError(err error) bool {
+	var adapterErr *AdapterError
+	return errors.As(err, &adapterErr) && adapterErr.Reason == ReasonRequiredCapability
 }
 
 // RestoreConflictError reports properties that changed outside ResMan after application.

@@ -225,13 +225,25 @@ func (s *memoryLeaseJournalStore) Save(journal durableLeaseJournal) error {
 }
 
 type fakeKernelVerifier struct {
-	calls int
-	err   error
+	calls           int
+	err             error
+	preflightCalls  [][]PropertyAssignment
+	preflightByName map[PropertyName]error
 }
 
 func (v *fakeKernelVerifier) verify(UnitSnapshot, []PropertyAssignment) error {
 	v.calls++
 	return v.err
+}
+
+func (v *fakeKernelVerifier) preflight(_ UnitSnapshot, assignments []PropertyAssignment) error {
+	v.preflightCalls = append(v.preflightCalls, append([]PropertyAssignment(nil), assignments...))
+	for _, assignment := range assignments {
+		if err := v.preflightByName[assignment.Name()]; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TestDiscoverReturnsAuthoritativeSortedUserSlices(t *testing.T) {

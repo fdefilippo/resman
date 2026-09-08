@@ -29,12 +29,12 @@ grep -Fq 'deliberately injected daemon failure' \
 
 expected_case=$(new_case expected)
 printf '%s\n' \
-	'Failed to initialize cgroup manager: enabled feature I/O limiting requires controller "io" interface "io.max"' \
+	'Failed to initialize systemd-native enforcement: enabled feature I/O limiting requires controller "io" interface "io.max"' \
 	>"$expected_case/controller-startup-rejection.txt"
 printf '%s\n' \
-	'[2026-08-24 00:00:00] [ERROR] Failed to initialize cgroup manager error=enabled feature I/O limiting requires controller \"io\" interface \"io.max\"' \
+	'[2026-08-24 00:00:00] [ERROR] Failed to initialize systemd-native enforcement error=enabled feature I/O limiting requires controller \"io\" interface \"io.max\"' \
 	>"$expected_case/resman.log"
-expected_pattern='Failed to initialize cgroup manager.*I/O limiting.*controller "io".*interface "io.max"'
+expected_pattern='Failed to initialize systemd-native enforcement.*I/O limiting.*controller "io".*interface "io.max"'
 bash "$assert_script" missing-io-startup "$expected_case" "$expected_pattern"
 grep -Fq "expected_pattern=$expected_pattern" \
 	"$expected_case/daemon-error-expectations.txt"

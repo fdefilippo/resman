@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/logging"
 )
 
@@ -124,5 +125,34 @@ func TestCPUPointsPolicyRejectionIsPermanentAndOperatorVisible(t *testing.T) {
 	}
 	if len(logger.errors) != 1 || !strings.Contains(logger.errors[0], want) {
 		t.Fatalf("operator error records = %q, want one overcommit diagnostic", logger.errors)
+	}
+}
+
+func TestSystemdStartupRequirementsFollowEnabledResourcePolicies(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMEnabled = true
+	cfg.IOEnabled = false
+	requirements := systemdStartupRequirements(cfg)
+	if !requirements.Memory || requirements.IO {
+		t.Fatalf("requirements = %+v, want memory only", requirements)
+	}
+	cfg.RAMEnabled = false
+	cfg.IOEnabled = true
+	requirements = systemdStartupRequirements(cfg)
+	if requirements.Memory || !requirements.IO {
+		t.Fatalf("requirements = %+v, want I/O only", requirements)
+	}
+}
+
+func TestRequiredSystemdCapabilityFailureIsPermanent(t *testing.T) {
+	capabilityErr := &systemdunit.AdapterError{
+		Reason: systemdunit.ReasonRequiredCapability,
+		Err:    errors.New("enabled feature I/O limiting requires controller io interface io.max"),
+	}
+	if err := classifySystemdAdapterStartupError(capabilityErr); !IsPermanentStartupError(err) {
+		t.Fatalf("classifySystemdAdapterStartupError() = %v, want permanent", err)
+	}
+	if err := classifySystemdAdapterStartupError(errors.New("system bus unavailable")); err != nil {
+		t.Fatalf("non-capability error classified as permanent: %v", err)
 	}
 }

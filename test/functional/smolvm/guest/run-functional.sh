@@ -51,7 +51,7 @@ case "$scenario" in
 esac
 if [[ $scenario == missing-io-startup ]]; then
 	expected_daemon_error_patterns+=(
-		'Failed to initialize cgroup manager.*I/O limiting.*controller "io".*interface "io.max"'
+		'Failed to initialize systemd-native enforcement.*I/O limiting.*controller "io".*interface "io.max"'
 	)
 fi
 if [[ $scenario == process-membership ]]; then
