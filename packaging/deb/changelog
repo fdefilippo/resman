@@ -1,3 +1,10 @@
+resman (1.35.2-1) stable; urgency=medium
+
+  * Verify enabled controllers through empty transient systemd slices before startup.
+  * Distinguish interfaces that systemd can materialize from properties the kernel cannot enforce.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 18:10:00 +0200
+
 resman (1.35.1-1) stable; urgency=medium
 
   * Fail startup when an enabled systemd-native resource lacks a mandatory controller interface.

@@ -48,6 +48,10 @@ type fakeUnitTransport struct {
 	diskPaths        map[string][]string
 	fingerprintSalt  map[string]string
 	closed           bool
+	probeStartErr    error
+	probeStopErr     error
+	probeStarts      []fakeSetCall
+	probeStops       []string
 }
 
 func (f *fakeUnitTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {
@@ -103,6 +107,19 @@ func (f *fakeUnitTransport) setUnitProperties(_ context.Context, unit string, ru
 		f.applyAssignments(unit, assignments)
 	}
 	return nil
+}
+
+func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string, assignments []PropertyAssignment) (string, error) {
+	f.probeStarts = append(f.probeStarts, fakeSetCall{unit: unit, runtime: true, assignments: append([]PropertyAssignment(nil), assignments...)})
+	if f.probeStartErr != nil {
+		return "", f.probeStartErr
+	}
+	return "/" + unit, nil
+}
+
+func (f *fakeUnitTransport) stopCapabilityProbe(_ context.Context, unit string) error {
+	f.probeStops = append(f.probeStops, unit)
+	return f.probeStopErr
 }
 
 func (f *fakeUnitTransport) revertUnitFiles(_ context.Context, unit string) error {

@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.35.1
+Version: 1.35.2
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -71,7 +71,7 @@ v1.34.0: authoritative in-place systemd enforcement without PID migration.
 v1.34.1: reject ambiguous comma-bearing regex-list patterns.
 v1.35.0: retire the non-systemd PID-relocation backend; systemd is the only enforcing authority.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.1 to 1.35.1.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.1 to 1.35.2.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -286,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.2-1
+- Verify enabled controllers through empty transient systemd slices before startup.
+- Distinguish interfaces that systemd can materialize from properties the kernel cannot enforce.
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.1-1
 - Fail startup when an enabled systemd-native resource lacks a mandatory controller interface.
 - Preserve the failed 1.35.0-6 SmolVM evidence instead of weakening the capability contract.

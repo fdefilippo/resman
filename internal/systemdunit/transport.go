@@ -26,6 +26,11 @@ type unitTransport interface {
 	close()
 }
 
+type startupCapabilityTransport interface {
+	startCapabilityProbe(context.Context, string, []PropertyAssignment) (string, error)
+	stopCapabilityProbe(context.Context, string) error
+}
+
 type dbusTransport struct {
 	conn       *systemdbus.Conn
 	revertConn *godbus.Conn
@@ -109,6 +114,53 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 		}
 	}
 	return t.conn.SetUnitPropertiesContext(ctx, unit, runtime, properties...)
+}
+
+func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, error) {
+	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
+	for _, assignment := range assignments {
+		properties = append(properties, systemdbus.Property{
+			Name:  string(assignment.name),
+			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
+		})
+	}
+	result := make(chan string, 1)
+	if _, err := t.conn.StartTransientUnitContext(ctx, unit, "fail", properties, result); err != nil {
+		return "", err
+	}
+	select {
+	case outcome := <-result:
+		if outcome != "done" {
+			return "", fmt.Errorf("transient capability probe start completed with %s", outcome)
+		}
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	propertiesByName, err := t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
+	if err != nil {
+		return "", err
+	}
+	controlGroup, ok := propertiesByName["ControlGroup"].(string)
+	if !ok || !validControlGroup(controlGroup) {
+		return "", fmt.Errorf("transient capability probe returned an invalid ControlGroup")
+	}
+	return controlGroup, nil
+}
+
+func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {
+	result := make(chan string, 1)
+	if _, err := t.conn.StopUnitContext(ctx, unit, "replace", result); err != nil {
+		return err
+	}
+	select {
+	case outcome := <-result:
+		if outcome != "done" {
+			return fmt.Errorf("transient capability probe stop completed with %s", outcome)
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 type dbusDeviceLimit struct {

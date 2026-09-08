@@ -260,7 +260,7 @@ func (a *App) WithStateManager() *App {
 }
 
 func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequirements {
-	return systemdunit.StartupRequirements{Memory: cfg.RAMEnabled, IO: cfg.IOEnabled}
+	return systemdunit.StartupRequirements{Memory: cfg.RAMEnabled, IO: cfg.IOEnabled, IODeviceFilter: cfg.IODeviceFilter}
 }
 
 func classifySystemdAdapterStartupError(err error) error {
