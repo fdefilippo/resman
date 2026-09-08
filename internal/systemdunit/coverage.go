@@ -37,6 +37,7 @@ const (
 	ResourceCoverageRuntimeDescendant ResourceCoverageReason = "runtime_owned_descendant"
 	ResourceCoverageInspectionFailed  ResourceCoverageReason = "inspection_unavailable"
 	ResourceCoverageControllerMissing ResourceCoverageReason = "controller_unavailable"
+	ResourceCoverageApplyFailed       ResourceCoverageReason = "apply_failed"
 )
 
 // ResourceAuthority records one complete, partial or refused authority decision.

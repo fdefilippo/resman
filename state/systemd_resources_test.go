@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fdefilippo/resman/internal/systemdunit"
@@ -160,6 +161,38 @@ func TestSystemdNativeResourceBusLossDoesNotPublishAppliedState(t *testing.T) {
 	}
 	if manager.resourceLimits[1000].ramApplied || manager.resourceLimitsActive {
 		t.Fatalf("failed apply published active resource state: %+v", manager.resourceLimits[1000])
+	}
+}
+
+func TestSystemdNativeResourceAuthorityResultMismatchInvalidatesTheCycle(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	ioAuthority := systemdunit.ResourceAuthority{
+		Resource: systemdunit.ResourceIO,
+		State:    systemdunit.ResourceCoveragePartial,
+		Reason:   systemdunit.ResourceCoverageAuthoritySplit,
+	}
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology:        testSystemdTopology(1000),
+		authority:       map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceIO: ioAuthority},
+		authorityCounts: map[int]int{2: 0},
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMEnabled = true
+	manager.cfg.IOEnabled = true
+	manager.resolveSystemdIODevices = func(string) ([]string, error) { return []string{"/dev/vda"}, nil }
+	metrics := &SystemMetrics{RAMEligibleUsers: []int{1000}, IOEligibleUsers: []int{1000}}
+	initializeCycleResourceAuthorities(metrics)
+	resetCycleResourceAuthorities(metrics, manager.cfg)
+
+	err := manager.reconcileSystemdResourcesAttempt(context.Background(), metrics, manager.cfg)
+	if err == nil || !strings.Contains(err.Error(), "before acknowledgement: adapter returned 0 results for 1 requests") {
+		t.Fatalf("resource reconciliation error = %v, want result-count mismatch", err)
+	}
+	if authority := metrics.systemdRAMAuthority[1000]; authority != nil {
+		t.Fatalf("count mismatch retained RAM authority: %+v", authority)
+	}
+	if authority := metrics.systemdIOAuthority[1000]; authority != nil {
+		t.Fatalf("count mismatch retained I/O authority: %+v", authority)
 	}
 }
 

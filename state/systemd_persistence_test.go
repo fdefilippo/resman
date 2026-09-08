@@ -210,6 +210,69 @@ func TestSystemdResourceCoverageIsPublishedFromTheCurrentControlCycle(t *testing
 	assertStoredResourceCoverage(t, recovered, "complete")
 }
 
+func TestSystemdResourceApplyFailurePublishesRefusedCoverageInTheCurrentCycle(t *testing.T) {
+	for _, resource := range []systemdunit.ResourceKind{systemdunit.ResourceMemory, systemdunit.ResourceIO} {
+		t.Run(string(resource), func(t *testing.T) {
+			m, a := accountingManager(t)
+			m.systemdResourcesRequested = true
+			delete(m.resourceLimits, 1000)
+			delete(m.systemdResourceUnits, 1000)
+			a.failApplyUnit = "user-1000.slice"
+
+			sample := persistenceSample(time.Now().UTC())
+			switch resource {
+			case systemdunit.ResourceMemory:
+				m.cfg.RAMEnabled = true
+				sample.RAMEligibleUsers = []int{1000}
+			case systemdunit.ResourceIO:
+				m.cfg.IOEnabled = true
+				m.resolveSystemdIODevices = func(string) ([]string, error) { return []string{"/dev/vda"}, nil }
+				sample.IOEligibleUsers = []int{1000}
+			}
+			m.collectPersistenceInterval(sample)
+			run := &controlCycleContext{metrics: sample, decision: "MAINTAIN_CURRENT_STATE"}
+			err := runControlCyclePipeline(m, run, []controlCycleStage{
+				{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+				{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+				{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+			})
+			var reconciliationErr *SystemdResourceReconciliationError
+			if !errors.As(err, &reconciliationErr) || reconciliationErr.Resource != resource || reconciliationErr.Step != "apply" {
+				t.Fatalf("failed apply error = %v, want typed %s apply failure", err, resource)
+			}
+
+			persisted := sample.PersistenceUsers[1000]
+			status, ok := m.GetCPUPointsUserStatus(1000)
+			if !ok {
+				t.Fatal("failed apply omitted the MCP user status")
+			}
+			exported := m.prometheusExporter.(*mockPrometheusExporter).userSnapshots[1000].CPUPoints
+			refused := "refused"
+			var authority *systemdunit.ResourceAuthority
+			var persistedCoverage, statusCoverage, exportedCoverage *string
+			var wantRAM, wantIO *string
+			if resource == systemdunit.ResourceMemory {
+				authority = sample.systemdRAMAuthority[1000]
+				persistedCoverage, statusCoverage, exportedCoverage = persisted.RAMCoverage, status.RAMCoverage, exported.RAMCoverage
+				wantRAM = &refused
+			} else {
+				authority = sample.systemdIOAuthority[1000]
+				persistedCoverage, statusCoverage, exportedCoverage = persisted.IOCoverage, status.IOCoverage, exported.IOCoverage
+				wantIO = &refused
+			}
+			if authority == nil || authority.State != systemdunit.ResourceCoverageRefused || authority.Reason != systemdunit.ResourceCoverageApplyFailed {
+				t.Fatalf("failed apply cycle authority = %+v, want refused/apply_failed", authority)
+			}
+			for name, coverage := range map[string]*string{"persistence": persistedCoverage, "MCP": statusCoverage, "Prometheus": exportedCoverage} {
+				if coverage == nil || *coverage != refused {
+					t.Fatalf("failed apply %s coverage = %v, want refused", name, coverage)
+				}
+			}
+			assertStoredCoverage(t, sample, wantRAM, wantIO)
+		})
+	}
+}
+
 func assertResourceCoverage(t *testing.T, name string, ram, io *string, want string) {
 	t.Helper()
 	if ram == nil || *ram != want || io == nil || *io != want {
@@ -218,6 +281,11 @@ func assertResourceCoverage(t *testing.T, name string, ram, io *string, want str
 }
 
 func assertStoredResourceCoverage(t *testing.T, sample *SystemMetrics, want string) {
+	t.Helper()
+	assertStoredCoverage(t, sample, &want, &want)
+}
+
+func assertStoredCoverage(t *testing.T, sample *SystemMetrics, wantRAM, wantIO *string) {
 	t.Helper()
 	db, err := database.NewDatabaseManager(":memory:")
 	if err != nil {
@@ -235,7 +303,23 @@ func assertStoredResourceCoverage(t *testing.T, sample *SystemMetrics, want stri
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("stored coverage rows=%v error=%v", rows, err)
 	}
-	assertResourceCoverage(t, "stored coverage", rows[0].RAMCoverage, rows[0].IOCoverage, want)
+	for name, pair := range map[string]struct {
+		got  *string
+		want *string
+	}{
+		"RAM": {got: rows[0].RAMCoverage, want: wantRAM},
+		"I/O": {got: rows[0].IOCoverage, want: wantIO},
+	} {
+		if pair.want == nil {
+			if pair.got != nil {
+				t.Fatalf("stored %s coverage = %v, want nil", name, pair.got)
+			}
+			continue
+		}
+		if pair.got == nil || *pair.got != *pair.want {
+			t.Fatalf("stored %s coverage = %v, want %q", name, pair.got, *pair.want)
+		}
+	}
 }
 
 func TestSystemdAccountingDoesNotInventCompleteObservations(t *testing.T) {

@@ -51,6 +51,7 @@ type fakeSystemdCPUUnitAdapter struct {
 	resourceChecks   []systemdResourceCheckCall
 	authorityChecks  int
 	authorityHook    func(int)
+	authorityCounts  map[int]int
 	confirmCalls     int
 	confirmHook      func(int)
 	confirmError     error
@@ -172,6 +173,9 @@ func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthorities(_ context.Context, 
 			authority = systemdunit.ResourceAuthority{Resource: request.Resource, State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}
 		}
 		results[index] = systemdunit.ResourceAuthorityResult{Authority: authority, Err: a.authorityError[request.Resource]}
+	}
+	if count, ok := a.authorityCounts[a.authorityChecks]; ok {
+		return results[:count], nil
 	}
 	return results, nil
 }

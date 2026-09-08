@@ -156,9 +156,11 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	}
 	authorities, err := m.systemdUnits.CheckResourceAuthorities(ctx, requests)
 	if err != nil {
+		invalidateCycleResourceAuthorities(metrics)
 		return fmt.Errorf("inspect systemd resource authority: %w", err)
 	}
 	if len(authorities) != len(planned) {
+		invalidateCycleResourceAuthorities(metrics)
 		return fmt.Errorf("inspect systemd resource authority: adapter returned %d results for %d requests", len(authorities), len(planned))
 	}
 	// The first authority pass builds a complete process snapshot. Reconfirm the
@@ -171,8 +173,8 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	applied := make([]plannedResource, 0, len(planned))
 	for index, plan := range planned {
 		result := authorities[index]
-		recordCycleResourceAuthority(metrics, plan.uid, plan.resource, result.Authority)
 		if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
+			recordCycleResourceAuthority(metrics, plan.uid, plan.resource, result.Authority)
 			if result.Err == nil {
 				result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not confirm complete resource authority")}
 			}
@@ -180,6 +182,8 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 			continue
 		}
 		if err := m.mutateSystemdResource(ctx, plan.uid, plan.identity, plan.resource, plan.assignments); err != nil {
+			refused := systemdunit.ResourceAuthority{Resource: plan.resource, State: systemdunit.ResourceCoverageRefused, Reason: systemdunit.ResourceCoverageApplyFailed}
+			recordCycleResourceAuthority(metrics, plan.uid, plan.resource, refused)
 			reconcileErrors = append(reconcileErrors, err)
 			continue
 		}
@@ -212,6 +216,7 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: %w", err))
 		}
 		if len(confirmed) != len(readbackConfirmed) {
+			invalidateCycleResourceAuthorities(metrics)
 			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: adapter returned %d results for %d requests", len(confirmed), len(readbackConfirmed)))
 		}
 		if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
