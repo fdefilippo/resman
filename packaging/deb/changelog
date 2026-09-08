@@ -1,3 +1,10 @@
+resman (1.35.3-1) stable; urgency=medium
+
+  * Probe native controller interfaces in the authoritative user.slice hierarchy.
+  * Preserve the failed 1.35.2-1 lifecycle evidence instead of rebuilding its package identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 19:20:00 +0200
+
 resman (1.35.2-1) stable; urgency=medium
 
   * Verify enabled controllers through empty transient systemd slices before startup.

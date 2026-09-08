@@ -12,8 +12,9 @@ func TestCapabilityProbeUnitIsOneTopLevelSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(unit, "resmancapprobe") || !strings.HasSuffix(unit, ".slice") || strings.Contains(strings.TrimSuffix(unit, ".slice"), "-") {
-		t.Fatalf("newCapabilityProbeUnit() = %q, want one top-level transient slice", unit)
+	leaf := strings.TrimSuffix(unit, ".slice")
+	if !strings.HasPrefix(unit, "user-resmancapprobe") || !strings.HasSuffix(unit, ".slice") || strings.Count(leaf, "-") != 1 {
+		t.Fatalf("newCapabilityProbeUnit() = %q, want one direct user.slice child", unit)
 	}
 }
 

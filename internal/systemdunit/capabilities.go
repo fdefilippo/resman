@@ -122,7 +122,8 @@ func newCapabilityProbeUnit() (string, error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", fmt.Errorf("generate capability probe identity: %w", err)
 	}
-	// Avoid hyphens: systemd interprets them as slice hierarchy separators and
-	// would create implicit parent slices that outlive the leaf probe.
-	return "resmancapprobe" + hex.EncodeToString(suffix[:]) + ".slice", nil
+	// Place the probe directly under user.slice so it verifies and materializes
+	// the controller interface in the same hierarchy used by native enforcement.
+	// The single separator names the existing parent and creates no implicit slice.
+	return "user-resmancapprobe" + hex.EncodeToString(suffix[:]) + ".slice", nil
 }
