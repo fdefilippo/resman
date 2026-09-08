@@ -3,6 +3,7 @@
 import contextlib
 import copy
 import io
+import json
 import tempfile
 import unittest
 import importlib.util
@@ -166,6 +167,29 @@ class ReferenceTests(unittest.TestCase):
         with patch.object(workload.time, "monotonic", side_effect=[0, 1]):
             with self.assertRaisesRegex(RuntimeError, "acknowledgement timed out"):
                 workload.wait_for_worker_readiness([alive], [ready], timeout=1)
+
+    def test_main_publishes_ready_workers_without_starting_them_twice(self):
+        children = [Mock(pid=101), Mock(pid=102)]
+
+        class EmptyResident:
+            def __len__(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(workload.sys, "argv", ["native-workload.py", directory]), \
+                patch.object(workload, "worker_cpus", return_value=[None, None]), \
+                patch.object(workload, "start_workers", return_value=children), \
+                patch.object(workload.signal, "signal"), \
+                patch.object(workload.time, "monotonic", side_effect=[0, 1801]), \
+                patch("builtins.bytearray", return_value=EmptyResident()):
+            with self.assertRaises(SystemExit):
+                workload.main()
+            identity = json.loads((Path(directory) / "identity.json").read_text())
+        self.assertEqual(identity["children"], [101, 102])
+        for child in children:
+            child.start.assert_not_called()
+            child.terminate.assert_called_once_with()
+            child.join.assert_called_once_with(5)
 
     def test_all_fixed_windows_are_required(self):
         results = analyze(samples())

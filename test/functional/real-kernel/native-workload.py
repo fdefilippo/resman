@@ -70,8 +70,6 @@ def main():
     resident = bytearray(64 << 20)
     for offset in range(0, len(resident), 4096):
         resident[offset] = 1
-    for child in children:
-        child.start()
     (output / "identity.json").write_text(json.dumps({
         "pid": os.getpid(), "uid": os.getuid(),
         "session": os.environ.get("XDG_SESSION_ID", ""),
