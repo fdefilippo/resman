@@ -2,6 +2,7 @@ package systemdunit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -117,24 +118,33 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 }
 
 func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
-	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
-	for _, assignment := range assignments {
-		properties = append(properties, systemdbus.Property{
-			Name:  string(assignment.name),
-			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
-		})
+	start := func(target string) error {
+		properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
+		for _, assignment := range assignments {
+			properties = append(properties, systemdbus.Property{
+				Name:  string(assignment.name),
+				Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
+			})
+		}
+		result := make(chan string, 1)
+		if _, err := t.conn.StartTransientUnitContext(ctx, target, "fail", properties, result); err != nil {
+			return err
+		}
+		select {
+		case outcome := <-result:
+			if outcome != "done" {
+				return fmt.Errorf("transient capability probe start completed with %s", outcome)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
 	}
-	result := make(chan string, 1)
-	if _, err := t.conn.StartTransientUnitContext(ctx, unit, "fail", properties, result); err != nil {
+	if err := start(unit); err != nil {
 		return "", false, err
 	}
-	select {
-	case outcome := <-result:
-		if outcome != "done" {
-			return "", true, fmt.Errorf("transient capability probe start completed with %s", outcome)
-		}
-	case <-ctx.Done():
-		return "", true, ctx.Err()
+	if err := start(capabilityProbeLeafUnit(unit)); err != nil {
+		return "", true, err
 	}
 	propertiesByName, err := t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
 	if err != nil {
@@ -148,19 +158,27 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 }
 
 func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {
-	result := make(chan string, 1)
-	if _, err := t.conn.StopUnitContext(ctx, unit, "replace", result); err != nil {
-		return err
-	}
-	select {
-	case outcome := <-result:
-		if outcome != "done" {
-			return fmt.Errorf("transient capability probe stop completed with %s", outcome)
+	stop := func(target string) error {
+		result := make(chan string, 1)
+		if _, err := t.conn.StopUnitContext(ctx, target, "replace", result); err != nil {
+			classified := classifyTransportError("stop_capability_probe", target, err)
+			var adapterErr *AdapterError
+			if errors.As(classified, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
+				return nil
+			}
+			return err
 		}
-	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case outcome := <-result:
+			if outcome != "done" {
+				return fmt.Errorf("transient capability probe stop completed with %s", outcome)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
 	}
-	return nil
+	return errors.Join(stop(capabilityProbeLeafUnit(unit)), stop(unit))
 }
 
 type dbusDeviceLimit struct {

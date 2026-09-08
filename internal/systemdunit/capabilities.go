@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // StartupRequirements names the optional resource features enabled by the
@@ -130,4 +131,8 @@ func newCapabilityProbeUnit() (string, error) {
 	// the controller interface in the same hierarchy used by native enforcement.
 	// The single separator names the existing parent and creates no implicit slice.
 	return "user-resmancapprobe" + hex.EncodeToString(suffix[:]) + ".slice", nil
+}
+
+func capabilityProbeLeafUnit(parent string) string {
+	return strings.TrimSuffix(parent, ".slice") + "-leaf.slice"
 }
