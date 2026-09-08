@@ -306,6 +306,48 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	sample.PersistenceSystem, sample.PersistenceUsers = system, users
 }
 
+// finalizeSystemdResourceCoverage projects the authority outcome produced by
+// this control cycle onto every observation surface before it is published.
+func (m *Manager) finalizeSystemdResourceCoverage(sample *SystemMetrics) {
+	if m.systemdUnits == nil || sample == nil {
+		return
+	}
+	for uid, user := range sample.PersistenceUsers {
+		user.RAMCoverage = finalizedResourceCoverage(user.CPUAuthorityCoverage, user.RAMCoverage, sample.systemdRAMAuthority, uid)
+		user.IOCoverage = finalizedResourceCoverage(user.CPUAuthorityCoverage, user.IOCoverage, sample.systemdIOAuthority, uid)
+		sample.PersistenceUsers[uid] = user
+
+		snapshot := sample.CPUPointsUsers[uid]
+		snapshot.RAMCoverage = user.RAMCoverage
+		snapshot.IOCoverage = user.IOCoverage
+		sample.CPUPointsUsers[uid] = snapshot
+	}
+	m.mu.Lock()
+	m.cpuPointsUserSnapshots = cloneCPUPointsUserSnapshots(sample.CPUPointsUsers)
+	m.mu.Unlock()
+}
+
+func finalizedResourceCoverage(cpuCoverage, collected *string, authorities map[int]*systemdunit.ResourceAuthority, uid int) *string {
+	if cpuCoverage == nil || *cpuCoverage == string(resmanmetrics.CPUPointsCoverageUnavailable) {
+		unavailable := string(resmanmetrics.CPUPointsCoverageUnavailable)
+		return &unavailable
+	}
+	authority, requested := authorities[uid]
+	if !requested {
+		return nil
+	}
+	if authority == nil || authority.State == "" {
+		unavailable := string(resmanmetrics.CPUPointsCoverageUnavailable)
+		return &unavailable
+	}
+	if authority.State == systemdunit.ResourceCoverageComplete && collected != nil && *collected == string(resmanmetrics.CPUPointsCoverageUnavailable) {
+		unavailable := string(resmanmetrics.CPUPointsCoverageUnavailable)
+		return &unavailable
+	}
+	coverage := string(authority.State)
+	return &coverage
+}
+
 func accountingIdentityKey(identity systemdunit.UnitIdentity) string {
 	return fmt.Sprintf("%s:%s:%d", identity.Name, identity.InvocationIDString(), identity.ControlGroupID)
 }

@@ -74,9 +74,11 @@ func (m *Manager) activateSystemdEnforcement(metrics *SystemMetrics) error {
 }
 
 func (m *Manager) reconcileSystemdResources(ctx context.Context, metrics *SystemMetrics, cfg *config.Config) error {
+	initializeCycleResourceAuthorities(metrics)
 	const attempts = 2
 	var err error
 	for attempt := 0; attempt < attempts; attempt++ {
+		resetCycleResourceAuthorities(metrics, cfg)
 		err = m.reconcileSystemdResourcesAttempt(ctx, metrics, cfg)
 		if err == nil || ctx.Err() != nil || !systemdunit.IsRetryableReconciliation(err) {
 			return err
@@ -125,9 +127,13 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 		identity, present := units[uid]
 		if !present {
 			if ramDesired[uid] {
+				authority := systemdunit.ResourceAuthority{Resource: systemdunit.ResourceMemory, State: systemdunit.ResourceCoveragePartial, Reason: systemdunit.ResourceCoverageAuthoritySplit}
+				recordCycleResourceAuthority(metrics, uid, systemdunit.ResourceMemory, authority)
 				reconcileErrors = append(reconcileErrors, m.recordMissingSystemdResourceAuthority(uid, systemdunit.ResourceMemory))
 			}
 			if ioDesired[uid] {
+				authority := systemdunit.ResourceAuthority{Resource: systemdunit.ResourceIO, State: systemdunit.ResourceCoveragePartial, Reason: systemdunit.ResourceCoverageAuthoritySplit}
+				recordCycleResourceAuthority(metrics, uid, systemdunit.ResourceIO, authority)
 				reconcileErrors = append(reconcileErrors, m.recordMissingSystemdResourceAuthority(uid, systemdunit.ResourceIO))
 			}
 			continue
@@ -159,11 +165,13 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	// unit identity set immediately before any apply or restore so no mutation is
 	// based on a topology that already changed while the plan was assembled.
 	if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+		invalidateCycleResourceAuthorities(metrics)
 		return &SystemdResourceReconciliationError{Step: "pre_mutation_identity", Err: err}
 	}
 	applied := make([]plannedResource, 0, len(planned))
 	for index, plan := range planned {
 		result := authorities[index]
+		recordCycleResourceAuthority(metrics, plan.uid, plan.resource, result.Authority)
 		if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
 			if result.Err == nil {
 				result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not confirm complete resource authority")}
@@ -183,9 +191,12 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 		for _, plan := range applied {
 			if _, err := m.systemdUnits.ConfirmApplied(ctx, plan.identity, plan.assignments); err != nil {
 				if systemdunit.IsRetryableReconciliation(err) {
+					invalidateCycleResourceAuthorities(metrics)
 					return errors.Join(errors.Join(reconcileErrors...), &SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_readback", Err: err})
 				}
-				m.recordSystemdResourceUnapplied(plan.uid, plan.resource, systemdunit.ResourceAuthority{Resource: plan.resource, State: systemdunit.ResourceCoverageRefused, Reason: systemdunit.ResourceCoverageInspectionFailed})
+				unavailable := systemdunit.ResourceAuthority{Resource: plan.resource, State: systemdunit.ResourceCoverageRefused, Reason: systemdunit.ResourceCoverageInspectionFailed}
+				recordCycleResourceAuthority(metrics, plan.uid, plan.resource, unavailable)
+				m.recordSystemdResourceUnapplied(plan.uid, plan.resource, unavailable)
 				reconcileErrors = append(reconcileErrors, &SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_readback", Err: err})
 				continue
 			}
@@ -197,16 +208,19 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 		}
 		confirmed, err := m.systemdUnits.CheckResourceAuthorities(ctx, confirmedRequests)
 		if err != nil {
+			invalidateCycleResourceAuthorities(metrics)
 			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: %w", err))
 		}
 		if len(confirmed) != len(readbackConfirmed) {
 			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: adapter returned %d results for %d requests", len(confirmed), len(readbackConfirmed)))
 		}
 		if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
+			invalidateCycleResourceAuthorities(metrics)
 			return errors.Join(errors.Join(reconcileErrors...), &SystemdResourceReconciliationError{Step: "pre_acknowledgement_identity", Err: err})
 		}
 		for index, plan := range readbackConfirmed {
 			result := confirmed[index]
+			recordCycleResourceAuthority(metrics, plan.uid, plan.resource, result.Authority)
 			if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
 				if result.Err == nil {
 					result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not reconfirm complete resource authority")}
@@ -246,6 +260,52 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	m.refreshResourceLimitsActiveLocked(time.Now())
 	m.mu.Unlock()
 	return errors.Join(reconcileErrors...)
+}
+
+func initializeCycleResourceAuthorities(metrics *SystemMetrics) {
+	if metrics == nil {
+		return
+	}
+	metrics.systemdRAMAuthority = make(map[int]*systemdunit.ResourceAuthority)
+	metrics.systemdIOAuthority = make(map[int]*systemdunit.ResourceAuthority)
+}
+
+func resetCycleResourceAuthorities(metrics *SystemMetrics, cfg *config.Config) {
+	if metrics == nil {
+		return
+	}
+	clear(metrics.systemdRAMAuthority)
+	clear(metrics.systemdIOAuthority)
+	for uid := range desiredResourceUsers(cfg.RAMEnabled, metrics.RAMEligibleUsers) {
+		metrics.systemdRAMAuthority[uid] = nil
+	}
+	for uid := range desiredResourceUsers(cfg.IOEnabled, metrics.IOEligibleUsers) {
+		metrics.systemdIOAuthority[uid] = nil
+	}
+}
+
+func recordCycleResourceAuthority(metrics *SystemMetrics, uid int, resource systemdunit.ResourceKind, authority systemdunit.ResourceAuthority) {
+	if metrics == nil {
+		return
+	}
+	observed := authority
+	if resource == systemdunit.ResourceMemory {
+		metrics.systemdRAMAuthority[uid] = &observed
+		return
+	}
+	metrics.systemdIOAuthority[uid] = &observed
+}
+
+func invalidateCycleResourceAuthorities(metrics *SystemMetrics) {
+	if metrics == nil {
+		return
+	}
+	for uid := range metrics.systemdRAMAuthority {
+		metrics.systemdRAMAuthority[uid] = nil
+	}
+	for uid := range metrics.systemdIOAuthority {
+		metrics.systemdIOAuthority[uid] = nil
+	}
 }
 
 func (m *Manager) pruneReleasedSystemdResourceState(current map[int]systemdunit.UnitIdentity) {

@@ -141,6 +141,103 @@ func TestSystemdAccountingRoundTripUsesSlicesAndFlatDenominator(t *testing.T) {
 	}
 }
 
+func TestSystemdResourceCoverageIsPublishedFromTheCurrentControlCycle(t *testing.T) {
+	m, a := accountingManager(t)
+	m.cfg.RAMEnabled = true
+	m.cfg.IOEnabled = true
+	m.resolveSystemdIODevices = func(string) ([]string, error) { return []string{"/dev/vda"}, nil }
+	m.systemdResourcesRequested = true
+
+	start := time.Now().UTC()
+	m.collectPersistenceInterval(persistenceSample(start))
+	partial := systemdunit.ResourceAuthority{State: systemdunit.ResourceCoveragePartial, Reason: systemdunit.ResourceCoverageAuthoritySplit}
+	a.authority = map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{
+		systemdunit.ResourceMemory: partial,
+		systemdunit.ResourceIO:     partial,
+	}
+	a.authorityError = map[systemdunit.ResourceKind]error{
+		systemdunit.ResourceMemory: &systemdunit.ResourceAuthorityError{UID: 1000, Authority: partial},
+		systemdunit.ResourceIO:     &systemdunit.ResourceAuthorityError{UID: 1000, Authority: partial},
+	}
+
+	refused := persistenceSample(start.Add(30 * time.Second))
+	refused.RAMEligibleUsers = []int{1000}
+	refused.IOEligibleUsers = []int{1000}
+	m.collectPersistenceInterval(refused)
+	if got := refused.PersistenceUsers[1000]; got.RAMCoverage == nil || *got.RAMCoverage != "complete" || got.IOCoverage == nil || *got.IOCoverage != "complete" {
+		t.Fatalf("pre-decision coverage = %+v, want previous-cycle complete state", got)
+	}
+	run := &controlCycleContext{metrics: refused, decision: "MAINTAIN_CURRENT_STATE"}
+	err := runControlCyclePipeline(m, run, []controlCycleStage{
+		{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+		{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+		{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+	})
+	var reconciliationErr *SystemdResourceReconciliationError
+	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "authority" {
+		t.Fatalf("refused cycle error = %v, want typed authority refusal", err)
+	}
+	assertResourceCoverage(t, "refused persistence", refused.PersistenceUsers[1000].RAMCoverage, refused.PersistenceUsers[1000].IOCoverage, "partial")
+	assertResourceCoverage(t, "refused operational", refused.CPUPointsUsers[1000].RAMCoverage, refused.CPUPointsUsers[1000].IOCoverage, "partial")
+	exporter := m.prometheusExporter.(*mockPrometheusExporter)
+	assertResourceCoverage(t, "refused Prometheus", exporter.userSnapshots[1000].CPUPoints.RAMCoverage, exporter.userSnapshots[1000].CPUPoints.IOCoverage, "partial")
+	assertStoredResourceCoverage(t, refused, "partial")
+
+	complete := systemdunit.ResourceAuthority{State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}
+	a.authority = map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{
+		systemdunit.ResourceMemory: complete,
+		systemdunit.ResourceIO:     complete,
+	}
+	a.authorityError = nil
+	m.systemdResourcesRequested = true
+	recovered := persistenceSample(start.Add(60 * time.Second))
+	recovered.RAMEligibleUsers = []int{1000}
+	recovered.IOEligibleUsers = []int{1000}
+	m.collectPersistenceInterval(recovered)
+	if got := recovered.PersistenceUsers[1000]; got.RAMCoverage == nil || *got.RAMCoverage != "partial" || got.IOCoverage == nil || *got.IOCoverage != "partial" {
+		t.Fatalf("next pre-decision coverage = %+v, want previous-cycle refusal", got)
+	}
+	run = &controlCycleContext{metrics: recovered, decision: "MAINTAIN_CURRENT_STATE"}
+	if err := runControlCyclePipeline(m, run, []controlCycleStage{
+		{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+		{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+		{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+	}); err != nil {
+		t.Fatalf("recovered cycle error: %v", err)
+	}
+	assertResourceCoverage(t, "recovered persistence", recovered.PersistenceUsers[1000].RAMCoverage, recovered.PersistenceUsers[1000].IOCoverage, "complete")
+	assertResourceCoverage(t, "recovered Prometheus", exporter.userSnapshots[1000].CPUPoints.RAMCoverage, exporter.userSnapshots[1000].CPUPoints.IOCoverage, "complete")
+	assertStoredResourceCoverage(t, recovered, "complete")
+}
+
+func assertResourceCoverage(t *testing.T, name string, ram, io *string, want string) {
+	t.Helper()
+	if ram == nil || *ram != want || io == nil || *io != want {
+		t.Fatalf("%s RAM=%v I/O=%v, want %q", name, ram, io, want)
+	}
+}
+
+func assertStoredResourceCoverage(t *testing.T, sample *SystemMetrics, want string) {
+	t.Helper()
+	db, err := database.NewDatabaseManager(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := resmanmetrics.NewDBWriter(db, 1).WriteMetricsBatch(resmanmetrics.PersistenceBatch{System: sample.PersistenceSystem, Users: sample.PersistenceUsers}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.GetUserHistory(1000, sample.Timestamp.Add(-time.Second), sample.Timestamp.Add(time.Second), 1)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("stored coverage rows=%v error=%v", rows, err)
+	}
+	assertResourceCoverage(t, "stored coverage", rows[0].RAMCoverage, rows[0].IOCoverage, want)
+}
+
 func TestSystemdAccountingDoesNotInventCompleteObservations(t *testing.T) {
 	for _, fault := range []string{"missing_cpu", "missing_memory", "external_weight", "recreated_unit", "late_topology", "incomplete_plan", "authority_split", "missing_coverage", "capacity_unavailable"} {
 		t.Run(fault, func(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -62,10 +63,11 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "reconcile_cpu_points", run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
 	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
 	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
-	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
-	{name: "write_database", run: (*Manager).stageWriteDatabase},
 	{name: "make_decision", run: (*Manager).stageMakeDecision},
 	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+	{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+	{name: "write_database", run: (*Manager).stageWriteDatabase},
 	{name: "record_history", run: (*Manager).stageRecordHistory},
 	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
 	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
@@ -278,6 +280,11 @@ func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 	if err := m.executeDecision(run.decision, run.metrics); err != nil {
 		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
 	}
+	return nil
+}
+
+func (m *Manager) stageFinalizeEnforcementObservation(run *controlCycleContext) error {
+	m.finalizeSystemdResourceCoverage(run.metrics)
 	return nil
 }
 
@@ -510,6 +517,8 @@ type SystemMetrics struct {
 	PersistenceUsers              map[int]resmanmetrics.UserPersistenceMetrics
 	CPUPointsSystem               resmanmetrics.CPUPointsSystemSnapshot
 	CPUPointsUsers                map[int]resmanmetrics.CPUPointsUserSnapshot
+	systemdRAMAuthority           map[int]*systemdunit.ResourceAuthority
+	systemdIOAuthority            map[int]*systemdunit.ResourceAuthority
 
 	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64

@@ -285,6 +285,15 @@ class CoverageTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_container_observation([], 1008, "unavailable", True)
 
+    def test_machine_split_observation_requires_same_cycle_resource_coverage(self):
+        row = {"uid": 1006, "cpu_authority_coverage": "partial", "ram_coverage": "partial",
+               "io_coverage": "partial", "cpu_weight": 9900, "ram_cgroup_usage_bytes": 0,
+               "cgroup_path": "/user.slice/user-1006.slice"}
+        validate_container_observation([row], 1006, "partial")
+        for key in ("ram_coverage", "io_coverage"):
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                validate_container_observation([dict(row, **{key: "complete"})], 1006, "partial")
+
     def test_capability_refusal_is_not_a_decorative_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             gate = CoverageGate(directory, "runit", "revision")

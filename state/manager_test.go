@@ -533,6 +533,7 @@ type mockPrometheusExporter struct {
 	metricsCollectionDurations   []time.Duration
 	lastSystemSnapshot           metrics.SystemExporterMetrics
 	lastUserSnapshot             metrics.UserExporterMetrics
+	userSnapshots                map[int]metrics.UserExporterMetrics
 	systemSnapshots              int
 	userMetricUpdates            int
 	userMetricCleanups           int
@@ -560,6 +561,10 @@ func (m *mockPrometheusExporter) UpdateUserSnapshot(snapshot metrics.UserExporte
 	defer m.mu.Unlock()
 	m.userMetricUpdates++
 	m.lastUserSnapshot = snapshot
+	if m.userSnapshots == nil {
+		m.userSnapshots = make(map[int]metrics.UserExporterMetrics)
+	}
+	m.userSnapshots[snapshot.UID] = snapshot
 }
 func (m *mockPrometheusExporter) UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64) {
 }
@@ -1275,6 +1280,29 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 				t.Fatalf("deferred errors = %d, want %d", len(run.deferredErrors), tt.wantDeferredErrors)
 			}
 		})
+	}
+}
+
+func TestControlCyclePublishesOnlyAfterTheDecisionOutcomeIsFinalized(t *testing.T) {
+	positions := make(map[string]int, len(defaultControlCyclePipeline))
+	for index, stage := range defaultControlCyclePipeline {
+		positions[stage.name] = index
+	}
+	for _, relation := range []struct {
+		before string
+		after  string
+	}{
+		{before: "collect_metrics", after: "make_decision"},
+		{before: "make_decision", after: "execute_decision"},
+		{before: "execute_decision", after: "finalize_enforcement_observation"},
+		{before: "finalize_enforcement_observation", after: "update_prometheus"},
+		{before: "finalize_enforcement_observation", after: "write_database"},
+	} {
+		before, beforeExists := positions[relation.before]
+		after, afterExists := positions[relation.after]
+		if !beforeExists || !afterExists || before >= after {
+			t.Fatalf("pipeline order %s=%d (present=%t), %s=%d (present=%t)", relation.before, before, beforeExists, relation.after, after, afterExists)
+		}
 	}
 }
 

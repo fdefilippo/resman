@@ -57,6 +57,9 @@ def validate_container_observation(rows, uid, coverage, machine_only=False):
             require(row[key] is None, "machine-only UID fabricated a slice field: " + key)
         require(row["ram_coverage"] == "unavailable" and row["io_coverage"] == "unavailable",
                 "machine-only UID claims resource coverage")
+    elif coverage == "partial":
+        require(row["ram_coverage"] == "partial" and row["io_coverage"] == "partial",
+                "authority-split UID mixes CPU coverage with an earlier resource cycle")
     return row
 
 
