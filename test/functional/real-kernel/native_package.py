@@ -12,12 +12,12 @@ import subprocess
 import sys
 import traceback
 
-from native_gate import Blocked, NativeGate, eventually, field, require, sha
+from native_gate import (Blocked, CURRENT_SCHEMA_VERSION, NativeGate, eventually,
+                         field, require, sha)
 
 
 REQUIRED_CHECKS = frozenset({"installed-identity", "shipped-defaults", "schema-reset", "upgrade-750-rejected", "graceful-stop"})
 PREVIOUS_SCHEMA_VERSION = 6
-CURRENT_SCHEMA_VERSION = 7
 
 
 def matching_package(installed_identity, package_identity, installed_binary, payload):

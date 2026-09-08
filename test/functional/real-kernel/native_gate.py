@@ -28,6 +28,7 @@ REQUIRED_CHECKS = frozenset({
     "full-budget-rejection", "pam-sessions", "blackout-suppression", "blackout-observation",
     "native-plan", "resource-properties", "authority-split", "crash-reclaim", "graceful-stop", "root-only-release",
 })
+CURRENT_SCHEMA_VERSION = 7
 
 
 def checks_pass(checks):
@@ -70,6 +71,17 @@ def field(path, fallback=None):
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def read_current_observations(path):
+    with sqlite3.connect("file:%s?mode=ro" % path, uri=True) as db:
+        db.row_factory = sqlite3.Row
+        require(db.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA_VERSION,
+                "unexpected schema")
+        return [dict(row) for row in db.execute(
+            "SELECT uid, cpu_usage_percent, cpu_authority_coverage, ram_coverage, ram_cgroup_usage_bytes, "
+            "cpu_weight, cpu_points_lifecycle_state FROM user_metrics "
+            "WHERE sample_epoch_id=(SELECT MAX(sample_epoch_id) FROM user_metrics) ORDER BY uid")]
 
 
 class NativeGate:
@@ -339,13 +351,7 @@ class NativeGate:
         self.observations()
 
     def observations(self):
-        with sqlite3.connect("file:%s?mode=ro" % self.db, uri=True) as db:
-            db.row_factory = sqlite3.Row
-            require(db.execute("PRAGMA user_version").fetchone()[0] == 6, "unexpected schema")
-            rows = [dict(row) for row in db.execute(
-                "SELECT uid, cpu_usage_percent, cpu_authority_coverage, ram_coverage, ram_cgroup_usage_bytes, "
-                "cpu_weight, cpu_points_lifecycle_state FROM user_metrics "
-                "WHERE sample_epoch_id=(SELECT MAX(sample_epoch_id) FROM user_metrics) ORDER BY uid")]
+        rows = read_current_observations(self.db)
         self.save("observations", rows)
         (self.evidence / "active.prom").write_text(self.scrape())
 

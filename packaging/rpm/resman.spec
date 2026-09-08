@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.0
-Release: 3%{?dist}
+Release: 4%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -286,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-4
+- Align the shared native acceptance fixture with metrics schema 7.
+- Preserve the failed release 3 evidence instead of rebuilding its identity.
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-3
 - Remove the retired cgroup tracking path from package installation output and current documentation.
 - Keep the schema 7 package acceptance correction introduced by release 2.

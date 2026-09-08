@@ -5,15 +5,38 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from native_gate import Blocked, NativeGate, checks_pass, field, wait_for_json
+from native_gate import (Blocked, NativeGate, checks_pass, field,
+                         read_current_observations, wait_for_json)
 
 
 class NativeGateTests(unittest.TestCase):
+    def test_native_observations_require_the_current_schema(self):
+        columns = (
+            "uid INTEGER, sample_epoch_id INTEGER, cpu_usage_percent REAL, "
+            "cpu_authority_coverage TEXT, ram_coverage TEXT, "
+            "ram_cgroup_usage_bytes INTEGER, cpu_weight INTEGER, "
+            "cpu_points_lifecycle_state TEXT"
+        )
+        for version, accepted in ((6, False), (7, True)):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                database_path = Path(directory) / "metrics.db"
+                with sqlite3.connect(database_path) as database:
+                    database.execute("PRAGMA user_version=%d" % version)
+                    database.execute("CREATE TABLE user_metrics(" + columns + ")")
+                    database.execute(
+                        "INSERT INTO user_metrics VALUES(1006, 1, 12.5, 'complete', 'complete', 4096, 3300, 'applied')")
+                if accepted:
+                    self.assertEqual(read_current_observations(database_path)[0]["uid"], 1006)
+                else:
+                    with self.assertRaisesRegex(AssertionError, "unexpected schema"):
+                        read_current_observations(database_path)
+
     def test_identity_readiness_waits_past_an_existing_empty_file(self):
         path = Path("/existing/identity.json")
         with patch.object(Path, "read_text", side_effect=["", '{"pid": 1234}']) as read, \

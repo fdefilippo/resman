@@ -1,3 +1,10 @@
+resman (1.35.0-4) stable; urgency=medium
+
+  * Align the shared native acceptance fixture with metrics schema 7.
+  * Preserve the failed release 3 evidence instead of rebuilding its identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 15:10:00 +0200
+
 resman (1.35.0-3) stable; urgency=medium
 
   * Remove the retired cgroup tracking path from package installation output and current documentation.
