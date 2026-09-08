@@ -89,18 +89,20 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
-	controlGroup, err := transport.startCapabilityProbe(callCtx, unit, []PropertyAssignment{capability.probeAssignment})
+	controlGroup, started, err := transport.startCapabilityProbe(callCtx, unit, []PropertyAssignment{capability.probeAssignment})
 	cancel()
+	if started {
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), a.timeout)
+			defer cleanupCancel()
+			if cleanupErr := transport.stopCapabilityProbe(cleanupCtx, unit); cleanupErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("stop transient capability probe %s: %w", unit, cleanupErr))
+			}
+		}()
+	}
 	if err != nil {
 		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
 	}
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), a.timeout)
-		defer cleanupCancel()
-		if cleanupErr := transport.stopCapabilityProbe(cleanupCtx, unit); cleanupErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("stop transient capability probe %s: %w", unit, cleanupErr))
-		}
-	}()
 	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: unit}, ControlGroup: controlGroup}
 	if err := a.verifier.preflight(snapshot, []PropertyAssignment{capability.requiredAssignment}); err != nil {
 		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)

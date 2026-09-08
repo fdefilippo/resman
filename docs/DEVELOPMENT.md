@@ -202,6 +202,12 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   The AST gate conservatively rejects property names, constant concatenations,
   aliases and other uses of that inventory; this is a structural source boundary,
   not a claim of arbitrary whole-program data-flow analysis.
+- Startup capability checks may create one empty, top-level transient systemd slice
+  at a time solely to make the requested controller interface materialize for kernel
+  verification. The probe must never contain a PID, must be removed synchronously on
+  success and failure, and may use unit start/stop calls only in the two exact transport
+  methods pinned by the architectural gate. It is not an enforcement workload or a
+  second placement backend.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for

@@ -642,6 +642,35 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			wantFailed: true,
 		},
 		{
+			name: "exact empty capability probe lifecycle",
+			path: systemdUnitAdapterPath,
+			content: `package systemdunit
+type connection struct{}
+func (connection) StartTransientUnitContext(...any){}
+func (connection) StopUnitContext(...any){}
+type dbusTransport struct{ conn connection }
+func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitContext(nil, "probe.slice") }
+func (t *dbusTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "probe.slice") }`,
+		},
+		{
+			name:       "transient probe start outside exact method",
+			path:       systemdUnitAdapterPath,
+			content:    `package systemdunit; type connection struct{}; func (connection) StartTransientUnitContext(...any){}; type dbusTransport struct{ conn connection }; func (t *dbusTransport) startWorkload(){ t.conn.StartTransientUnitContext(nil, "workload.scope") }`,
+			wantFailed: true,
+		},
+		{
+			name:       "probe stop outside exact receiver",
+			path:       systemdUnitAdapterPath,
+			content:    `package systemdunit; type connection struct{}; func (connection) StopUnitContext(...any){}; type otherTransport struct{ conn connection }; func (t *otherTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "probe.slice") }`,
+			wantFailed: true,
+		},
+		{
+			name:       "duplicate transient starts in capability probe",
+			path:       systemdUnitAdapterPath,
+			content:    `package systemdunit; type connection struct{}; func (connection) StartTransientUnitContext(...any){}; type dbusTransport struct{ conn connection }; func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitContext(nil, "one.slice"); t.conn.StartTransientUnitContext(nil, "two.slice") }`,
+			wantFailed: true,
+		},
+		{
 			name:       "cgroup write in adapter",
 			path:       "internal/systemdunit/kernel.go",
 			content:    `package systemdunit; import "os"; func apply(){ _ = os.WriteFile("cpu.weight", nil, 0600) }`,

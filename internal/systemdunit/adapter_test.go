@@ -49,6 +49,7 @@ type fakeUnitTransport struct {
 	fingerprintSalt  map[string]string
 	closed           bool
 	probeStartErr    error
+	probeStarted     bool
 	probeStopErr     error
 	probeStarts      []fakeSetCall
 	probeStops       []string
@@ -109,12 +110,12 @@ func (f *fakeUnitTransport) setUnitProperties(_ context.Context, unit string, ru
 	return nil
 }
 
-func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string, assignments []PropertyAssignment) (string, error) {
+func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
 	f.probeStarts = append(f.probeStarts, fakeSetCall{unit: unit, runtime: true, assignments: append([]PropertyAssignment(nil), assignments...)})
 	if f.probeStartErr != nil {
-		return "", f.probeStartErr
+		return "", f.probeStarted, f.probeStartErr
 	}
-	return "/" + unit, nil
+	return "/" + unit, true, nil
 }
 
 func (f *fakeUnitTransport) stopCapabilityProbe(_ context.Context, unit string) error {

@@ -30,6 +30,7 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 	}
 	for _, source := range production {
 		ioRestore := systemdIORestoreException(source, &result)
+		capabilityProbes := systemdCapabilityProbeExceptions(source)
 		constants := packages[path.Dir(source.path)]
 		ast.Inspect(source.file, func(node ast.Node) bool {
 			checkSystemdIOWeightPolicy(source, node, ioRestore, constants, &result)
@@ -37,7 +38,7 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 			case *ast.BasicLit:
 				checkSystemdOwnedCgroupLiteral(source, typed, &result)
 			case *ast.CallExpr:
-				checkSystemdMutationCall(source, typed, &result)
+				checkSystemdMutationCall(source, typed, capabilityProbes, &result)
 			case *ast.SelectorExpr:
 				checkSystemdControlGroupCapability(source, typed, &result)
 			}
@@ -45,6 +46,58 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 		})
 	}
 	return result
+}
+
+// systemdCapabilityProbeExceptions permits exactly one start and stop call in
+// the transport methods that create and remove an empty startup probe slice.
+// All other unit-lifecycle calls remain outside ResMan's capability boundary.
+func systemdCapabilityProbeExceptions(source goSource) map[ast.Node]bool {
+	allowed := map[ast.Node]bool{}
+	if source.path != systemdUnitAdapterPath {
+		return allowed
+	}
+	want := map[string]string{
+		"startCapabilityProbe": "StartTransientUnitContext",
+		"stopCapabilityProbe":  "StopUnitContext",
+	}
+	for _, declaration := range source.file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || !systemdDBusTransportMethod(function) {
+			continue
+		}
+		method, ok := want[function.Name.Name]
+		if !ok || function.Body == nil {
+			continue
+		}
+		var matches []ast.Node
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && selector.Sel.Name == method {
+				matches = append(matches, call)
+			}
+			return true
+		})
+		if len(matches) == 1 {
+			allowed[matches[0]] = true
+		}
+	}
+	return allowed
+}
+
+func systemdDBusTransportMethod(function *ast.FuncDecl) bool {
+	if function.Recv == nil || len(function.Recv.List) != 1 {
+		return false
+	}
+	receiver := function.Recv.List[0].Type
+	if pointer, ok := receiver.(*ast.StarExpr); ok {
+		receiver = pointer.X
+	}
+	identifier, ok := receiver.(*ast.Ident)
+	return ok && identifier.Name == "dbusTransport"
 }
 
 func checkSystemdIOWeightPolicy(source goSource, node ast.Node, allowed map[ast.Node]bool, constants map[string][]ast.Expr, result *checkResult) {
@@ -288,7 +341,7 @@ func checkSystemdControlGroupCapability(source goSource, selector *ast.SelectorE
 	}
 }
 
-func checkSystemdMutationCall(source goSource, call *ast.CallExpr, result *checkResult) {
+func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityProbes map[ast.Node]bool, result *checkResult) {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -299,11 +352,15 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, result *check
 		if source.path != systemdUnitAdapterPath {
 			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the authoritative systemd adapter", method)
 		}
+	case "StartTransientUnitContext", "StopUnitContext":
+		if !capabilityProbes[call] {
+			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the exact empty startup capability probe", method)
+		}
 	case "RevertUnit", "RevertUnitContext", "RevertUnitFiles", "RevertUnitFilesContext",
-		"StartUnit", "StartUnitContext", "StopUnit", "StopUnitContext", "RestartUnit", "RestartUnitContext",
+		"StartUnit", "StartUnitContext", "StopUnit", "RestartUnit", "RestartUnitContext",
 		"TryRestartUnit", "TryRestartUnitContext", "ReloadUnit", "ReloadUnitContext",
 		"ReloadOrRestartUnit", "ReloadOrRestartUnitContext", "ReloadOrTryRestartUnit", "ReloadOrTryRestartUnitContext",
-		"StartTransientUnit", "StartTransientUnitContext", "StartTransientUnitAux",
+		"StartTransientUnit", "StartTransientUnitAux",
 		"KillUnit", "KillUnitContext", "ResetFailedUnit", "ResetFailedUnitContext",
 		"FreezeUnit", "ThawUnit", "AttachProcessesToUnit", "AttachProcessesToUnitContext", "EnqueueUnitJob", "EnqueueUnitJobContext",
 		"LinkUnitFiles", "EnableUnitFiles", "DisableUnitFiles", "MaskUnitFiles", "UnmaskUnitFiles", "PresetUnitFiles", "PresetUnitFilesWithMode":

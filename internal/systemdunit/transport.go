@@ -27,7 +27,7 @@ type unitTransport interface {
 }
 
 type startupCapabilityTransport interface {
-	startCapabilityProbe(context.Context, string, []PropertyAssignment) (string, error)
+	startCapabilityProbe(context.Context, string, []PropertyAssignment) (string, bool, error)
 	stopCapabilityProbe(context.Context, string) error
 }
 
@@ -116,7 +116,7 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 	return t.conn.SetUnitPropertiesContext(ctx, unit, runtime, properties...)
 }
 
-func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, error) {
+func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
 	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
 	for _, assignment := range assignments {
 		properties = append(properties, systemdbus.Property{
@@ -126,25 +126,25 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	}
 	result := make(chan string, 1)
 	if _, err := t.conn.StartTransientUnitContext(ctx, unit, "fail", properties, result); err != nil {
-		return "", err
+		return "", false, err
 	}
 	select {
 	case outcome := <-result:
 		if outcome != "done" {
-			return "", fmt.Errorf("transient capability probe start completed with %s", outcome)
+			return "", true, fmt.Errorf("transient capability probe start completed with %s", outcome)
 		}
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return "", true, ctx.Err()
 	}
 	propertiesByName, err := t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
 	if err != nil {
-		return "", err
+		return "", true, err
 	}
 	controlGroup, ok := propertiesByName["ControlGroup"].(string)
 	if !ok || !validControlGroup(controlGroup) {
-		return "", fmt.Errorf("transient capability probe returned an invalid ControlGroup")
+		return "", true, fmt.Errorf("transient capability probe returned an invalid ControlGroup")
 	}
-	return controlGroup, nil
+	return controlGroup, true, nil
 }
 
 func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {

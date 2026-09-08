@@ -88,3 +88,24 @@ func TestStartupCapabilitiesPropagateProbeCleanupFailure(t *testing.T) {
 		t.Fatalf("probeStartupCapability() error = %v, want cleanup failure", err)
 	}
 }
+
+func TestStartupCapabilitiesCleanProbeWhenStartAcknowledgementFailsAfterCreation(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.probeStarted = true
+	transport.probeStartErr = errors.New("injected post-start failure")
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	assignment, err := NewPropertyAssignment(PropertyCPUQuotaPerSecUSec, 1_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.probeStartupCapability(context.Background(), transport, startupCapability{
+		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
+		probeAssignment: assignment, requiredAssignment: assignment,
+	})
+	if !IsRequiredCapabilityError(err) || !strings.Contains(err.Error(), "injected post-start failure") {
+		t.Fatalf("probeStartupCapability() error = %v, want post-start required capability failure", err)
+	}
+	if len(transport.probeStops) != 1 || transport.probeStops[0] != transport.probeStarts[0].unit {
+		t.Fatalf("post-start failure cleanup start=%v stop=%v", transport.probeStarts, transport.probeStops)
+	}
+}
