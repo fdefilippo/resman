@@ -1004,8 +1004,8 @@ func TestStartupCompletesCrashBetweenRevertUnitFilesAndReload(t *testing.T) {
 	if store.journal.Units[0].Phase != leasePhaseReloading {
 		t.Fatalf("durable phase = %q, want %q", store.journal.Units[0].Phase, leasePhaseReloading)
 	}
-	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(321) {
-		t.Fatalf("pre-reload CPUWeight = %v, want last applied value", got)
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(SystemdUnset) {
+		t.Fatalf("pre-reload CPUWeight = %v, want explicitly restored baseline", got)
 	}
 	if got := transport.units[identity.Name].unit["DropInPaths"].([]string); len(got) != 1 {
 		t.Fatalf("pre-reload D-Bus DropInPaths = %v, want stale managed path", got)
@@ -1080,7 +1080,7 @@ func TestStartupCompletesRestoreWhoseFinalJournalRemovalFailed(t *testing.T) {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	store.saveErr = errors.New("final journal removal unavailable")
-	store.failSave = 5
+	store.failSave = store.saveCalls + 5
 	if _, err := first.Restore(context.Background(), identity); err == nil {
 		t.Fatal("Restore() error = nil, want final persistence failure")
 	}

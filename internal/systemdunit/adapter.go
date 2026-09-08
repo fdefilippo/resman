@@ -703,20 +703,13 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		if len(override.managedPaths) == 0 {
 			return result, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")}
 		}
-		// Revert/Reload discards systemd's device list without necessarily
-		// resetting io.max while a sibling still uses the I/O controller.
-		// Clear device limits through the still-authoritative list first, using
-		// the existing write-ahead/readback ownership transaction.
-		var deviceRestore []PropertyAssignment
-		var deviceKeys []propertyLeaseKey
-		for index, assignment := range restoreNeeded {
-			if _, device := approvedDeviceProperties[assignment.name]; device {
-				deviceRestore = append(deviceRestore, assignment)
-				deviceKeys = append(deviceKeys, restoreKeys[index])
-			}
-		}
-		if len(deviceRestore) > 0 {
-			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, deviceRestore, deviceKeys, &result); err != nil {
+		// Revert/Reload removes ResMan's runtime drop-ins without necessarily
+		// applying their scalar or per-device baselines to an active cgroup.
+		// Restore every changed property while the lease is still authoritative,
+		// using the existing write-ahead/readback ownership transaction, and only
+		// then remove the runtime files.
+		if len(restoreNeeded) > 0 {
+			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, restoreNeeded, restoreKeys, &result); err != nil {
 				return result, err
 			}
 			// Recheck the complete footprint after the reset transaction, before
@@ -729,7 +722,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 				return result, err
 			}
 			if !a.propertiesMatch(identity.Name, func(state propertyLeaseState) propertyValue { return state.lastApplied }, refreshed) {
-				return result, externalRecoveryConflict(identity.Name, "property changed after device reset")
+				return result, externalRecoveryConflict(identity.Name, "property changed after baseline restore")
 			}
 			if err := a.requireManagedUnitFileFootprint("restore_before_revert", refreshed, a.overrides[identity], true); err != nil {
 				return result, err
@@ -739,7 +732,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 				return result, err
 			}
 			if !equalFingerprints(actual, a.overrides[identity].fingerprints) {
-				return result, externalRecoveryConflict(identity.Name, "unit file changed after device reset")
+				return result, externalRecoveryConflict(identity.Name, "unit file changed after baseline restore")
 			}
 		}
 		beforeRestore := a.snapshotLeaseState()

@@ -85,6 +85,9 @@ func TestRestoreWaitsForScalarKernelConvergenceBeforeJournalCompletion(t *testin
 	reads := 0
 	verifier := newCgroupVerifier(t.TempDir())
 	verifier.readFile = func(string) ([]byte, error) {
+		if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
+			return []byte("100\n"), nil // Explicit scalar baseline restore before revert.
+		}
 		reads++
 		if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseReloading {
 			t.Fatal("ownership completed before scalar kernel confirmation")

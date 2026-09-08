@@ -55,6 +55,42 @@ func TestRestoreResetsDeviceLimitsBeforeRevertWhilePeerKeepsController(t *testin
 	}
 }
 
+func TestRestoreResetsScalarBaselineBeforeRevertWhileUnitRemainsActive(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, adapter, 1001)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 3300)}); err != nil {
+		t.Fatal(err)
+	}
+
+	reset := false
+	transport.onSet = func(_ *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
+		if unit != identity.Name || len(assignments) != 1 || assignments[0].name != PropertyCPUWeight || assignments[0].value.scalar != uint64(SystemdUnset) {
+			t.Fatalf("unexpected scalar baseline restore: %+v", assignments)
+		}
+		if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplying {
+			t.Fatal("scalar baseline restore lacks durable intent")
+		}
+		reset = true
+	}
+	transport.onRevert = func(*fakeUnitTransport, string) {
+		if !reset {
+			t.Fatal("runtime files reverted before the scalar baseline was restored")
+		}
+		if store.journal.Units[0].Phase != leasePhaseRestoring {
+			t.Fatal("revert lacks durable intent")
+		}
+	}
+
+	if _, err := adapter.Restore(context.Background(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if !reset || len(store.journal.Units) != 0 {
+		t.Fatal("scalar baseline restore or ownership completion missing")
+	}
+}
+
 func TestStartupFinishesDeviceResetInterruptedBeforeRestoreIntent(t *testing.T) {
 	for _, failedSave := range []int{2, 3} {
 		t.Run(map[int]string{2: "reset_acknowledgement", 3: "restore_intent"}[failedSave], func(t *testing.T) {
