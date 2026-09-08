@@ -16,9 +16,9 @@ func TestCapabilityProbeUnitIsOneTopLevelSlice(t *testing.T) {
 	if !strings.HasPrefix(unit, "user-resmancapprobe") || !strings.HasSuffix(unit, ".slice") || strings.Count(leaf, "-") != 1 {
 		t.Fatalf("newCapabilityProbeUnit() = %q, want one direct user.slice child", unit)
 	}
-	child := capabilityProbeLeafUnit(unit)
-	if !strings.HasPrefix(child, leaf+"-") || !strings.HasSuffix(child, "-leaf.slice") || strings.Count(strings.TrimSuffix(child, ".slice"), "-") != 2 {
-		t.Fatalf("capabilityProbeLeafUnit(%q) = %q, want one explicit nested leaf", unit, child)
+	service := capabilityProbeServiceUnit(unit)
+	if !strings.HasPrefix(service, "resmancapprobe") || !strings.HasSuffix(service, ".service") || strings.Contains(strings.TrimSuffix(service, ".service"), "-") {
+		t.Fatalf("capabilityProbeServiceUnit(%q) = %q, want a flat dedicated service", unit, service)
 	}
 }
 

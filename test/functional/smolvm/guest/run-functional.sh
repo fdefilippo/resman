@@ -462,8 +462,14 @@ if [[ $scenario == missing-io-startup ]]; then
 	if systemctl list-units --all --plain --no-legend 'user-resmancapprobe*.slice' | grep -q .; then
 		fail "systemd capability probe unit remained loaded after startup rejection"
 	fi
+	if systemctl list-units --all --plain --no-legend 'resmancapprobe*.service' | grep -q .; then
+		fail "systemd capability probe service remained loaded after startup rejection"
+	fi
 	if find /sys/fs/cgroup -type d -name 'user-resmancapprobe*.slice' -print -quit | grep -q .; then
 		fail "systemd capability probe cgroup remained after startup rejection"
+	fi
+	if find /sys/fs/cgroup -type d -name 'resmancapprobe*.service' -print -quit | grep -q .; then
+		fail "systemd capability probe service cgroup remained after startup rejection"
 	fi
 	result=PASS
 	detail="startup rejected IO limiting because the real child cgroup lacked io.max"

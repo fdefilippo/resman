@@ -125,9 +125,14 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
 		})
 	}
-	child := capabilityProbeLeafUnit(unit)
+	service := capabilityProbeServiceUnit(unit)
+	serviceProperties := []systemdbus.Property{
+		systemdbus.PropDescription("ResMan bounded cgroup interface capability probe"),
+		systemdbus.PropSlice(unit),
+		systemdbus.PropExecStart([]string{"/usr/bin/sleep", "30"}, false),
+	}
 	result := make(chan string, 1)
-	if _, err := t.conn.StartTransientUnitAux(ctx, child, "fail", properties, []systemdbus.PropertyCollection{{
+	if _, err := t.conn.StartTransientUnitAux(ctx, service, "fail", serviceProperties, []systemdbus.PropertyCollection{{
 		Name: unit, Properties: properties,
 	}}, result); err != nil {
 		return "", false, err
@@ -172,7 +177,7 @@ func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) er
 		}
 		return nil
 	}
-	return errors.Join(stop(capabilityProbeLeafUnit(unit)), stop(unit))
+	return errors.Join(stop(capabilityProbeServiceUnit(unit)), stop(unit))
 }
 
 type dbusDeviceLimit struct {

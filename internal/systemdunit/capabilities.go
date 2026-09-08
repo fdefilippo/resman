@@ -133,6 +133,7 @@ func newCapabilityProbeUnit() (string, error) {
 	return "user-resmancapprobe" + hex.EncodeToString(suffix[:]) + ".slice", nil
 }
 
-func capabilityProbeLeafUnit(parent string) string {
-	return strings.TrimSuffix(parent, ".slice") + "-leaf.slice"
+func capabilityProbeServiceUnit(parent string) string {
+	base := strings.TrimSuffix(strings.TrimPrefix(parent, "user-"), ".slice")
+	return base + ".service"
 }
