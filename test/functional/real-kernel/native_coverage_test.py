@@ -594,6 +594,15 @@ class CoverageTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     gate.nested_payloads(supervisor)
 
+    def test_nested_payload_readiness_waits_after_supervisor_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = CoverageGate(directory, "runit", "revision")
+            payload = {"pid": 123, "birth": "456", "cgroup": "0::/owned/payload/work", "pid_namespace": 789}
+            with patch.object(gate, "nested_payloads", side_effect=[[], [payload]]) as inspect, \
+                    patch("native_gate.time.sleep"):
+                self.assertEqual(gate.wait_nested_payloads({"cgroup": "0::/owned"}, seconds=1), [payload])
+            self.assertEqual(inspect.call_count, 2)
+
     def test_real_shell_dispatch_retains_cleanup_and_result_on_sigterm(self):
         source = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as directory:

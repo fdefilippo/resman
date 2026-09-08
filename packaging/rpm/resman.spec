@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.0
-Release: 4%{?dist}
+Release: 5%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -286,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-5
+- Wait for nested nspawn payload readiness in the native coverage fixture.
+- Preserve the failed release 4 coverage evidence instead of rebuilding its identity.
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-4
 - Align the shared native acceptance fixture with metrics schema 7.
 - Preserve the failed release 3 evidence instead of rebuilding its identity.

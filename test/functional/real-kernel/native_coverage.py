@@ -580,8 +580,7 @@ class CoverageGate(NativeGate):
             eventually(locate, "cron did not create the nested nspawn PAM fixture", 90)
             cron.unlink()
             self.refused(user.pw_uid, "runtime_owned_descendant", since)
-            payloads = self.nested_payloads(identity)
-            require(payloads, "nested nspawn has no live foreign-namespace payload")
+            payloads = self.wait_nested_payloads(identity)
             def complete():
                 return any(row["uid"] == user.pw_uid and row["cpu_authority_coverage"] == "complete"
                            for row in self.rows())
@@ -870,6 +869,17 @@ class CoverageGate(NativeGate):
             except FileNotFoundError:
                 continue
         return sorted(result, key=lambda item: item["pid"])
+
+    def wait_nested_payloads(self, supervisor, seconds=60):
+        payloads = []
+
+        def ready():
+            nonlocal payloads
+            payloads = self.nested_payloads(supervisor)
+            return bool(payloads)
+
+        eventually(ready, "nested nspawn has no live foreign-namespace payload", seconds)
+        return payloads
 
     def cleanup_nested(self):
         # Discovery also runs after readiness failure: a launched supervisor is
