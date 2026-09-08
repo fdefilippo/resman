@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -287,6 +287,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-2
+- Align final package acceptance with the schema 6 to schema 7 reset contract.
+- No daemon runtime or operator contract change.
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.0-1
 - BREAKING: retire all non-systemd PID relocation, origin tracking and recovery state.
 - Keep hosts without authoritative systemd enforcement in explicit observation-only mode.

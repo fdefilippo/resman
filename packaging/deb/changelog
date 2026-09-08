@@ -1,3 +1,10 @@
+resman (1.35.0-2) stable; urgency=medium
+
+  * Align final package acceptance with the schema 6 to schema 7 reset contract.
+  * No daemon runtime or operator contract change.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 14:40:00 +0200
+
 resman (1.35.0-1) stable; urgency=medium
 
   * BREAKING: retire all non-systemd PID relocation, origin tracking and recovery state.

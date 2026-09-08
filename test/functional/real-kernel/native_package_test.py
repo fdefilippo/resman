@@ -10,10 +10,15 @@ import unittest
 from unittest.mock import patch
 
 from native_gate import NativeGate
-from native_package import PackageGate, REQUIRED_CHECKS, matching_package
+from native_package import (CURRENT_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION,
+                            PackageGate, REQUIRED_CHECKS, matching_package)
 
 
 class PackageTests(unittest.TestCase):
+    def test_package_schema_contract_rejects_six_and_creates_seven(self):
+        self.assertEqual(PREVIOUS_SCHEMA_VERSION, 6)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 7)
+
     def test_both_installed_identity_and_actual_payload_bytes_are_required(self):
         matching_package("resman-1.33.0-2", "resman-1.33.0-2", b"package", b"package")
         for identity, binary in (("resman-1.33.0-1", b"package"), ("resman-1.33.0-2", b"source")):
@@ -28,12 +33,13 @@ class PackageTests(unittest.TestCase):
             common.assert_not_called()
 
     def test_package_projection_requires_full_lifecycle_and_real_database_rows(self):
-        for mutation in ("none", "failed-lifecycle", "old-schema", "no-rows", "missing-identity"):
+        for mutation in ("none", "failed-lifecycle", "previous-schema", "no-rows", "missing-identity"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 gate = PackageGate(directory, "rpackage", "revision")
                 def lifecycle(instance):
                     with sqlite3.connect(instance.db) as database:
-                        database.execute("PRAGMA user_version=" + ("5" if mutation == "old-schema" else "6"))
+                        database.execute("PRAGMA user_version=" + str(
+                            PREVIOUS_SCHEMA_VERSION if mutation == "previous-schema" else CURRENT_SCHEMA_VERSION))
                         database.execute("CREATE TABLE user_metrics(uid INTEGER)")
                         if mutation != "no-rows": database.execute("INSERT INTO user_metrics VALUES(1006)")
                     for key in ("installed-identity", "shipped-defaults", "upgrade-750-rejected"):

@@ -16,6 +16,8 @@ from native_gate import Blocked, NativeGate, eventually, field, require, sha
 
 
 REQUIRED_CHECKS = frozenset({"installed-identity", "shipped-defaults", "schema-reset", "upgrade-750-rejected", "graceful-stop"})
+PREVIOUS_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 def matching_package(installed_identity, package_identity, installed_binary, payload):
@@ -84,28 +86,31 @@ class PackageGate(NativeGate):
     def validate(self):
         super().validate()
         self.package_passed("upgrade-750-rejected", json.loads((self.evidence / "rejected-config.json").read_text()))
-        old_database = self.work / "schema-five.db"
+        old_database = self.work / "schema-six.db"
         with sqlite3.connect(old_database) as database:
-            database.execute("PRAGMA user_version=5")
+            database.execute("PRAGMA user_version=%d" % PREVIOUS_SCHEMA_VERSION)
         old_database.chmod(0o600)
-        old_config = self.work / "schema-five.conf"
-        old_log = self.work / "schema-five.log"
+        old_config = self.work / "schema-six.conf"
+        old_log = self.work / "schema-six.log"
         body = self.config.read_text().replace("METRICS_DB_PATH=" + str(self.db), "METRICS_DB_PATH=" + str(old_database))
         body = body.replace("LOG_FILE=" + str(self.log), "LOG_FILE=" + str(old_log))
         old_config.write_text(body)
         old_config.chmod(0o600)
-        with (self.evidence / "schema-five-startup.log").open("w") as log:
+        with (self.evidence / "schema-six-startup.log").open("w") as log:
             process = subprocess.Popen([str(self.binary), "-config", str(old_config)], stdout=log, stderr=log)
             try:
-                eventually(lambda: "schema version 5" in field(old_log, "") and "delete or move" in field(old_log, ""),
+                eventually(lambda: "schema version %d" % PREVIOUS_SCHEMA_VERSION in field(old_log, "")
+                           and "delete or move" in field(old_log, ""),
                            "package did not report explicit incompatible-schema reset", 20)
             finally:
                 if process.poll() is None:
                     process.terminate()
                 process.wait(timeout=75)
         with sqlite3.connect("file:%s?mode=ro" % old_database, uri=True) as database:
-            require(database.execute("PRAGMA user_version").fetchone()[0] == 5, "old schema was silently migrated")
-        self.save("schema-five-preserved", {"old_schema": 5, "operator_reset_required": True})
+            require(database.execute("PRAGMA user_version").fetchone()[0] == PREVIOUS_SCHEMA_VERSION,
+                    "old schema was silently migrated")
+        self.save("schema-six-preserved", {"old_schema": PREVIOUS_SCHEMA_VERSION,
+                                             "operator_reset_required": True})
 
     def run(self):
         code = super().run()
@@ -115,8 +120,10 @@ class PackageGate(NativeGate):
                 with sqlite3.connect("file:%s?mode=ro" % self.db, uri=True) as database:
                     version = database.execute("PRAGMA user_version").fetchone()[0]
                     rows = database.execute("SELECT count(*) FROM user_metrics").fetchone()[0]
-                require(version == 6 and rows > 0, "package produced no schema-six runtime history")
-                self.package_passed("schema-reset", {"old_schema_preserved": 5, "new_schema": version, "measured_rows": rows})
+                require(version == CURRENT_SCHEMA_VERSION and rows > 0,
+                        "package produced no schema-seven runtime history")
+                self.package_passed("schema-reset", {"old_schema_preserved": PREVIOUS_SCHEMA_VERSION,
+                                                      "new_schema": version, "measured_rows": rows})
                 self.package_passed("graceful-stop", json.loads((self.evidence / "graceful-stop.json").read_text()))
                 require(set(self.package_checks) == REQUIRED_CHECKS and all(v == "PASS" for v in self.package_checks.values()),
                         "package acceptance is incomplete")
