@@ -4,6 +4,12 @@ set -Eeuo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 bash -n "$script_dir/cpu-points-run.sh"
+
+if grep -Eq '^[[:space:]]*(CGROUP_BASE|CREATED_CGROUPS_FILE)=' "$script_dir/run.sh"; then
+	printf 'retired cgroup ownership keys remain in the retained real-kernel fixture\n' >&2
+	exit 1
+fi
+
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_gate_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/native_coverage_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/null_blk_characterization_test.py"

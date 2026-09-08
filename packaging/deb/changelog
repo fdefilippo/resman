@@ -1,3 +1,10 @@
+resman (1.35.0-6) stable; urgency=medium
+
+  * Remove retired cgroup ownership keys from the retained PSI real-kernel fixture.
+  * Preserve the failed release 5 matrix evidence instead of rebuilding its identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 16:55:00 +0200
+
 resman (1.35.0-5) stable; urgency=medium
 
   * Wait for nested nspawn payload readiness in the native coverage fixture.

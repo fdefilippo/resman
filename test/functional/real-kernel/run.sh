@@ -167,16 +167,13 @@ user_metric_value() {
 
 write_common_config() {
 	local config_file=$1
-	local cgroup_base=$2
-	local log_file=$3
-	local port=$4
+	local log_file=$2
+	local port=$3
 	local cpu_points_file=${config_file%.conf}.cpu-points.map
 	printf '%s\n' '[resman-cpu-points-map-v1]' >"$cpu_points_file"
 	chmod 0600 "$cpu_points_file"
 	cat >"$config_file" <<EOF
 CGROUP_ROOT=/sys/fs/cgroup
-CGROUP_BASE=$(basename "$cgroup_base")
-CREATED_CGROUPS_FILE=${config_file%.conf}.cgroups.txt
 LOG_FILE=$log_file
 LOG_LEVEL=DEBUG
 USE_SYSLOG=false
@@ -287,7 +284,7 @@ run_psi_refresh_neutrality() {
 	done
 	active_cgroup_base=$cgroup_base
 	[[ ! -e $cgroup_base ]] || fail "dedicated PSI cgroup already exists"
-	write_common_config "$config_file" "$cgroup_base" "$log_file" "$port"
+	write_common_config "$config_file" "$log_file" "$port"
 	sed -i \
 		-e 's/^POLLING_INTERVAL=.*/POLLING_INTERVAL=120/' \
 		-e 's/^METRICS_REFRESH_INTERVAL=.*/METRICS_REFRESH_INTERVAL=5/' \
@@ -433,7 +430,7 @@ run_io_phase() {
 	chown "$test_uid:$test_gid" "$work_dir/direct.bin"
 	active_cgroup_base=$cgroup_base
 	[[ ! -e $cgroup_base ]] || fail "dedicated $dimension cgroup already exists"
-	write_common_config "$config_file" "$cgroup_base" "$log_file" "$port"
+	write_common_config "$config_file" "$log_file" "$port"
 	sed -i \
 		-e 's/^IO_LIMIT_ENABLED=.*/IO_LIMIT_ENABLED=true/' \
 		-e "s/^IO_DEVICE_FILTER=.*/IO_DEVICE_FILTER=$selected_io_device/" \
