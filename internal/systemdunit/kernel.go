@@ -89,12 +89,12 @@ func (v cgroupVerifier) observe(snapshot UnitSnapshot) (UnitAccounting, error) {
 
 const defaultCgroupRoot = "/sys/fs/cgroup"
 
-// deviceLimitMismatch distinguishes a parsed but not yet converged io.max value
-// from read, permission and parse failures, which are never retried as convergence.
-type deviceLimitMismatch struct{ err error }
+// kernelValueMismatch distinguishes a parsed but not yet converged controller
+// value from read, permission and parse failures, which are never retried.
+type kernelValueMismatch struct{ err error }
 
-func (e *deviceLimitMismatch) Error() string { return e.err.Error() }
-func (e *deviceLimitMismatch) Unwrap() error { return e.err }
+func (e *kernelValueMismatch) Error() string { return e.err.Error() }
+func (e *kernelValueMismatch) Unwrap() error { return e.err }
 
 type cgroupVerifier struct {
 	root     string
@@ -234,7 +234,7 @@ func (v cgroupVerifier) verifyScalarFile(path string, snapshot UnitSnapshot, pro
 		expected = pageAlignedMemoryLimit(expected, v.pageSize)
 	}
 	if actual != expected {
-		return fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", property, snapshot.Identity.Name, expected, actual)
+		return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", property, snapshot.Identity.Name, expected, actual)}
 	}
 	return nil
 }
@@ -277,7 +277,7 @@ func (v cgroupVerifier) verifyIOWeight(path string, snapshot UnitSnapshot) error
 		expected = bfqWeight(expected)
 	}
 	if actual != expected {
-		return fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", PropertyIOWeight, snapshot.Identity.Name, expected, actual)
+		return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", PropertyIOWeight, snapshot.Identity.Name, expected, actual)}
 	}
 	return nil
 }
@@ -335,11 +335,11 @@ func (v cgroupVerifier) verifyCPUQuota(path string, snapshot UnitSnapshot) error
 		return fmt.Errorf("parse effective cpu.max period for %s", snapshot.Identity.Name)
 	}
 	if configuredPeriod != SystemdUnset && actualPeriod != configuredPeriod {
-		return fmt.Errorf("effective CPU quota period mismatch for %s: systemd=%d kernel=%d", snapshot.Identity.Name, configuredPeriod, actualPeriod)
+		return &kernelValueMismatch{fmt.Errorf("effective CPU quota period mismatch for %s: systemd=%d kernel=%d", snapshot.Identity.Name, configuredPeriod, actualPeriod)}
 	}
 	if perSecond == SystemdUnset {
 		if fields[0] != "max" {
-			return fmt.Errorf("effective CPU quota mismatch for %s: systemd=infinity kernel=%q", snapshot.Identity.Name, fields[0])
+			return &kernelValueMismatch{fmt.Errorf("effective CPU quota mismatch for %s: systemd=infinity kernel=%q", snapshot.Identity.Name, fields[0])}
 		}
 		return nil
 	}
@@ -355,7 +355,7 @@ func (v cgroupVerifier) verifyCPUQuota(path string, snapshot UnitSnapshot) error
 		expectedQuota = 1_000
 	}
 	if actualQuota != expectedQuota {
-		return fmt.Errorf("effective CPU quota mismatch for %s: systemd=%d/%d kernel=%d/%d", snapshot.Identity.Name, perSecond, configuredPeriod, actualQuota, actualPeriod)
+		return &kernelValueMismatch{fmt.Errorf("effective CPU quota mismatch for %s: systemd=%d/%d kernel=%d/%d", snapshot.Identity.Name, perSecond, configuredPeriod, actualQuota, actualPeriod)}
 	}
 	return nil
 }
@@ -395,17 +395,17 @@ func (v cgroupVerifier) verifyDeviceLimits(path string, snapshot UnitSnapshot, p
 		wanted, constrained := wantedDevices[device]
 		if constrained {
 			if !exists || value != strconv.FormatUint(wanted, 10) {
-				return &deviceLimitMismatch{fmt.Errorf("effective %s mismatch for %s device %s: systemd=%d kernel=%q", property, snapshot.Identity.Name, device, wanted, value)}
+				return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s device %s: systemd=%d kernel=%q", property, snapshot.Identity.Name, device, wanted, value)}
 			}
 			delete(wantedDevices, device)
 			continue
 		}
 		if exists && value != "max" {
-			return &deviceLimitMismatch{fmt.Errorf("effective %s retains unexpected finite limit for %s device %s: %s", property, snapshot.Identity.Name, device, value)}
+			return &kernelValueMismatch{fmt.Errorf("effective %s retains unexpected finite limit for %s device %s: %s", property, snapshot.Identity.Name, device, value)}
 		}
 	}
 	if len(wantedDevices) != 0 {
-		return &deviceLimitMismatch{fmt.Errorf("effective %s is absent for %s on %d devices", property, snapshot.Identity.Name, len(wantedDevices))}
+		return &kernelValueMismatch{fmt.Errorf("effective %s is absent for %s on %d devices", property, snapshot.Identity.Name, len(wantedDevices))}
 	}
 	return nil
 }

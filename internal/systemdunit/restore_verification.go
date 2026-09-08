@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// verifyRestored waits only for asynchronous device-I/O convergence after reload.
+// verifyRestored waits only for parsed controller values to converge after reload.
 // The caller's operation deadline owns the entire wait; no new budget is started.
 // Every attempt rechecks authority, identity, exact D-Bus values and the empty
 // mutable footprint. A kernel retry never permits an external change to be adopted.
@@ -34,7 +34,7 @@ func (a *Adapter) verifyRestored(ctx context.Context, identity UnitIdentity, ass
 			return nil
 		}
 		failure := &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_readback", Unit: identity.Name, Err: err}
-		var pending *deviceLimitMismatch
+		var pending *kernelValueMismatch
 		if !errors.As(err, &pending) {
 			return failure
 		}

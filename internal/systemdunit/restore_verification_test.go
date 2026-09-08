@@ -74,6 +74,35 @@ func TestRestoreWaitsForDeviceKernelConvergenceBeforeJournalCompletion(t *testin
 	}
 }
 
+func TestRestoreWaitsForScalarKernelConvergenceBeforeJournalCompletion(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, adapter, 1001)
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 3300)}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	verifier := newCgroupVerifier(t.TempDir())
+	verifier.readFile = func(string) ([]byte, error) {
+		reads++
+		if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseReloading {
+			t.Fatal("ownership completed before scalar kernel confirmation")
+		}
+		if reads <= 2 {
+			return []byte("3300\n"), nil
+		}
+		return []byte("100\n"), nil
+	}
+	adapter.verifier = verifier
+	if _, err := adapter.Restore(context.Background(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 3 || len(store.journal.Units) != 0 {
+		t.Fatalf("readbacks=%d journal=%+v", reads, store.journal)
+	}
+}
+
 func TestRestoreConvergenceFailsClosedOnDeadlineCancellationAndExternalChange(t *testing.T) {
 	for _, outcome := range []string{"deadline", "canceled", "permission", "malformed", "identity", "operator_property", "operator_file"} {
 		t.Run(outcome, func(t *testing.T) {
