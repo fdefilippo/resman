@@ -44,13 +44,17 @@ func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements S
 }
 
 func startupCapabilities(requirements StartupRequirements) ([]startupCapability, error) {
-	cpu, err := NewPropertyAssignment(PropertyCPUQuotaPerSecUSec, 1_000_000)
+	cpuActivation, err := NewPropertyAssignment(PropertyCPUWeight, 100)
+	if err != nil {
+		return nil, err
+	}
+	cpuRequired, err := NewPropertyAssignment(PropertyCPUQuotaPerSecUSec, 1_000_000)
 	if err != nil {
 		return nil, err
 	}
 	result := []startupCapability{{
 		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
-		probeAssignment: cpu, requiredAssignment: cpu,
+		probeAssignment: cpuActivation, requiredAssignment: cpuRequired,
 	}}
 	if requirements.Memory {
 		for _, candidate := range []struct {

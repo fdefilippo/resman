@@ -43,6 +43,9 @@ func TestStartupCapabilitiesUseTransientSystemdProbesAndOnlyEnabledResources(t *
 			t.Fatalf("probe %d start=%s stop=%s", index, transport.probeStarts[index].unit, transport.probeStops[index])
 		}
 	}
+	if got := transport.probeStarts[0].assignments[0].Name(); got != PropertyCPUWeight {
+		t.Fatalf("CPU probe activation property = %s, want %s", got, PropertyCPUWeight)
+	}
 }
 
 func TestStartupCapabilitiesClassifyEnabledIOMissingInterfaceAndCleanProbe(t *testing.T) {
