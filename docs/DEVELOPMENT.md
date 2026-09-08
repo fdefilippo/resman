@@ -934,6 +934,24 @@ to one client or licence model.
 A change is not done until every line is true:
 
 - [ ] `make fmt`, `make lint`, `make test`, `go vet ./...`, `go test -race ./...` pass.
+
+<!-- BEGIN VERSION PROGRESSION v:1 -->
+The release identity is `MAJOR.MINOR.PATCH-RELEASE`. Choose its next value from
+product impact, not from the mere existence of a branch:
+
+- A new feature or intentional operational-contract change increments `MINOR`,
+  resets `PATCH` to `0`, and sets `RELEASE` to `1` (`1.34.0-1` becomes
+  `1.35.0-1`).
+- A behavioral bug fix for an already produced release increments `PATCH` and
+  sets `RELEASE` to `1` (`1.34.0-1` becomes `1.34.1-1`).
+- A packaging-only rebuild, or a documentation/comment-only correction with no
+  runtime or operator-contract effect, keeps `VERSION` and increments `RELEASE`
+  exactly once (`1.34.0-1` becomes `1.34.0-2`).
+
+If one release contains changes from more than one class, use the highest-impact
+class. A branch name alone never determines the version.
+<!-- END VERSION PROGRESSION v:1 -->
+
 - [ ] Every newly produced RPM or DEB has a fresh package identity: for an unchanged
       `VERSION`, `RELEASE` is incremented by exactly one in both `Makefile` and the
       RPM spec (for example, `1.31.1-1` is followed by `1.31.1-2`). `RELEASE` returns

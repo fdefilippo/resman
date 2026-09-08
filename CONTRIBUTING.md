@@ -311,11 +311,27 @@ Before submitting:
 
 ### Version Numbering
 
-Follow [Semantic Versioning](https://semver.org/):
+ResMan uses a semantic upstream `VERSION` plus a packaging `RELEASE`. A `MAJOR`
+change is an explicit product-generation decision; routine release progression is
+classified by the contract below, including intentional operational-contract
+changes that require upgrade notes.
 
-- **MAJOR**: Breaking changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes (backward compatible)
+<!-- BEGIN VERSION PROGRESSION v:1 -->
+The release identity is `MAJOR.MINOR.PATCH-RELEASE`. Choose its next value from
+product impact, not from the mere existence of a branch:
+
+- A new feature or intentional operational-contract change increments `MINOR`,
+  resets `PATCH` to `0`, and sets `RELEASE` to `1` (`1.34.0-1` becomes
+  `1.35.0-1`).
+- A behavioral bug fix for an already produced release increments `PATCH` and
+  sets `RELEASE` to `1` (`1.34.0-1` becomes `1.34.1-1`).
+- A packaging-only rebuild, or a documentation/comment-only correction with no
+  runtime or operator-contract effect, keeps `VERSION` and increments `RELEASE`
+  exactly once (`1.34.0-1` becomes `1.34.0-2`).
+
+If one release contains changes from more than one class, use the highest-impact
+class. A branch name alone never determines the version.
+<!-- END VERSION PROGRESSION v:1 -->
 
 ### Release Checklist
 

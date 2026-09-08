@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +49,53 @@ func TestCurrentReleaseVersionSurfacesAgree(t *testing.T) {
 	_, changelog, found := strings.Cut(rpmSpec, "%changelog\n")
 	if !found || !strings.HasSuffix(strings.SplitN(changelog, "\n", 2)[0], " - "+packageVersion) {
 		t.Errorf("RPM changelog does not start with current release %s", packageVersion)
+	}
+}
+
+func TestVersionProgressionContractIsIdenticalAcrossAvailableNormativeGuides(t *testing.T) {
+	const (
+		begin = "<!-- BEGIN VERSION PROGRESSION v:1 -->"
+		end   = "<!-- END VERSION PROGRESSION v:1 -->"
+	)
+
+	root := repositoryRoot(t)
+	paths := []string{"CONTRIBUTING.md", "docs/DEVELOPMENT.md"}
+	agentsPath := filepath.Join(root, "AGENTS.md")
+	if _, err := os.Stat(agentsPath); err == nil {
+		paths = append([]string{"AGENTS.md"}, paths...)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("inspect optional AGENTS.md: %v", err)
+	}
+	contracts := make(map[string]string, len(paths))
+	for _, path := range paths {
+		content := readTextFile(t, filepath.Join(root, path))
+		if strings.Count(content, begin) != 1 || strings.Count(content, end) != 1 {
+			t.Fatalf("%s must contain exactly one version-progression contract", path)
+		}
+		_, after, _ := strings.Cut(content, begin)
+		contract, _, found := strings.Cut(after, end)
+		if !found {
+			t.Fatalf("%s has an unterminated version-progression contract", path)
+		}
+		contracts[path] = strings.TrimSpace(contract)
+	}
+
+	want := contracts[paths[0]]
+	for _, path := range paths[1:] {
+		if contracts[path] != want {
+			t.Errorf("%s version progression differs from %s", path, paths[0])
+		}
+	}
+	normalized := strings.Join(strings.Fields(want), " ")
+	for _, required := range []string{
+		"`1.34.0-1` becomes `1.35.0-1`",
+		"`1.34.0-1` becomes `1.34.1-1`",
+		"`1.34.0-1` becomes `1.34.0-2`",
+		"A branch name alone never determines the version.",
+	} {
+		if !strings.Contains(normalized, required) {
+			t.Errorf("version-progression contract is missing %q", required)
+		}
 	}
 }
 
