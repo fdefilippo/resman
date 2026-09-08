@@ -695,9 +695,9 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
 	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
 	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
-	"USER_INCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
-	"USER_EXCLUDE_LIST":             setRegexList("", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
-	"PROCESS_EXCLUDE_LIST":          setRegexList(" in PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
+	"USER_INCLUDE_LIST":             setRegexList("USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
+	"USER_EXCLUDE_LIST":             setRegexList("USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
+	"PROCESS_EXCLUDE_LIST":          setRegexList("PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
 	"BLACKOUT":                      setBlackout,
 	"IGNORE_SYSTEM_LOAD":            setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
 	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
@@ -728,8 +728,8 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
 	"DISABLE_SWAP":                  setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
 	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
-	"RAM_USER_INCLUDE_LIST":         setRegexList(" in RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
-	"RAM_USER_EXCLUDE_LIST":         setRegexList(" in RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
+	"RAM_USER_INCLUDE_LIST":         setRegexList("RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
+	"RAM_USER_EXCLUDE_LIST":         setRegexList("RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
 	"IO_LIMIT_ENABLED":              setBool(func(cfg *Config, value bool) { cfg.IOEnabled = value }),
 	"IO_THRESHOLD":                  setInt(func(cfg *Config, value int) { cfg.IOThreshold = value }),
 	"IO_RELEASE_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.IOReleaseThreshold = value }),
@@ -739,8 +739,8 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"IO_WRITE_IOPS":                 setInt(func(cfg *Config, value int) { cfg.IOWriteIOPS = value }),
 	"IO_DEVICE_FILTER":              setString(func(cfg *Config, value string) { cfg.IODeviceFilter = value }),
 	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
-	"IO_USER_INCLUDE_LIST":          setRegexList(" in IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
-	"IO_USER_EXCLUDE_LIST":          setRegexList(" in IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
+	"IO_USER_INCLUDE_LIST":          setRegexList("IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
+	"IO_USER_EXCLUDE_LIST":          setRegexList("IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
 	"IO_REMEDIATION_ENABLED":        setBool(func(cfg *Config, value bool) { cfg.IORemediationEnabled = value }),
 	"IO_STARVATION_THRESHOLD":       setInt(func(cfg *Config, value int) { cfg.IOStarvationThreshold = value }),
 	"IO_STARVATION_CHECK_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.IOStarvationCheckInterval = value }),
@@ -862,9 +862,11 @@ func setBlackout(cfg *Config, value string) error {
 	return nil
 }
 
-func setRegexList(errorContext string, assign func(*Config, []string)) configFieldHandler {
+const regexListRemedy = "A comma is the list separator and cannot appear inside a regex pattern, including a bounded quantifier such as {2,4}; rewrite the expression without a comma, for example by expanding the alternatives."
+
+func setRegexList(key string, assign func(*Config, []string)) configFieldHandler {
 	return func(cfg *Config, value string) error {
-		patterns, err := parseRegexList(value, errorContext)
+		patterns, err := parseRegexList(key, value)
 		if err != nil {
 			return err
 		}
@@ -873,10 +875,14 @@ func setRegexList(errorContext string, assign func(*Config, []string)) configFie
 	}
 }
 
-func parseRegexList(value, errorContext string) ([]string, error) {
+func parseRegexList(key, value string) ([]string, error) {
+	originalValue := value
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, nil
+	}
+	if regexListContainsAmbiguousComma(value) {
+		return nil, fmt.Errorf("configuration key %s value %q is invalid: %s", key, originalValue, regexListRemedy)
 	}
 
 	rawPatterns := strings.Split(value, ",")
@@ -887,7 +893,7 @@ func parseRegexList(value, errorContext string) ([]string, error) {
 			continue
 		}
 		if _, err := regexp.Compile(pattern); err != nil {
-			return nil, fmt.Errorf("invalid regex pattern '%s'%s: %w", pattern, errorContext, err)
+			return nil, fmt.Errorf("configuration key %s value %q contains invalid regex pattern %q: %w", key, originalValue, pattern, err)
 		}
 		patterns = append(patterns, pattern)
 	}
@@ -895,6 +901,48 @@ func parseRegexList(value, errorContext string) ([]string, error) {
 		return nil, nil
 	}
 	return patterns, nil
+}
+
+func regexListContainsAmbiguousComma(value string) bool {
+	braceDepth := 0
+	inCharacterClass := false
+	escaped := false
+
+	for _, current := range value {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if current == '\\' {
+			escaped = true
+			continue
+		}
+		if inCharacterClass {
+			if current == ',' {
+				return true
+			}
+			if current == ']' {
+				inCharacterClass = false
+			}
+			continue
+		}
+
+		switch current {
+		case '[':
+			inCharacterClass = true
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case ',':
+			if braceDepth > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateLimitHookConfig(cfg *Config) []string {

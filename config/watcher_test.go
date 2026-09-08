@@ -507,6 +507,42 @@ func TestWatcherKeepsCurrentConfigAfterInvalidEnvironmentOverride(t *testing.T) 
 	}
 }
 
+func TestWatcherKeepsCurrentConfigAfterCommaBearingRegex(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "resman.conf")
+	if err := os.WriteFile(configPath, []byte("USER_INCLUDE_LIST=^svc[0-9]{2,4}$\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	initialConfig := DefaultConfig()
+	initialConfig.UserIncludeList = []string{"^preserved$"}
+	handler := &channelConfigChangeHandler{values: make(chan int, 1)}
+	watcher := &Watcher{
+		configPath:    configPath,
+		currentConfig: initialConfig,
+		logger:        logging.GetLogger(),
+		onChange:      handler,
+		isRunning:     true,
+	}
+
+	err := watcher.handleConfigChange(context.Background(), true)
+	if err == nil {
+		t.Fatal("handleConfigChange() accepted a comma-bearing quantifier")
+	}
+	for _, required := range []string{"USER_INCLUDE_LIST", "^svc[0-9]{2,4}$", "expanding the alternatives"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Errorf("reload error %q omits %q", err, required)
+		}
+	}
+	if watcher.currentConfig != initialConfig || !reflect.DeepEqual(watcher.currentConfig.UserIncludeList, []string{"^preserved$"}) {
+		t.Fatal("rejected regex-list candidate replaced the current configuration")
+	}
+	select {
+	case value := <-handler.values:
+		t.Fatalf("reload handler called with CPU_THRESHOLD=%d", value)
+	default:
+	}
+}
+
 func TestWatcherHandlesRepeatedAtomicReplacement(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "resman.conf")
 	writeAtomicConfig(t, configPath, 80)

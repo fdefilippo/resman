@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.34.0
+Version: 1.34.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -68,8 +68,9 @@ v1.30.8: PID-namespace-safe cgroup ingress with bounded skip telemetry.
 v1.31.1: normalized CPU Points guarantees, class-priority lending and typed delivery history.
 v1.32.0: systemd ownership preservation, public editor protocol and bounded hooks.
 v1.34.0: authoritative in-place systemd enforcement without PID migration.
+v1.34.1: reject ambiguous comma-bearing regex-list patterns.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.32.0 to 1.34.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.0 to 1.34.1.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -285,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.34.1-1
+- Reject comma-bearing regex patterns instead of silently changing their meaning
+- Report the key, original value and comma-free rewrite remedy on every input path
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.34.0-1
 - BREAKING: enforce CPU Points in place through authoritative systemd user slices
 - Preserve session and service ownership without migrating workload processes

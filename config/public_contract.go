@@ -159,6 +159,16 @@ var nonEditablePublicFields = map[string]string{
 	"CPU_POINTS_FILE": "Change the policy-map path in the configuration file and restart resman; MCP map updates target the currently authoritative path only.",
 }
 
+var publicFieldRemedies = map[string]string{
+	"USER_INCLUDE_LIST":     regexListRemedy,
+	"USER_EXCLUDE_LIST":     regexListRemedy,
+	"PROCESS_EXCLUDE_LIST":  regexListRemedy,
+	"RAM_USER_INCLUDE_LIST": regexListRemedy,
+	"RAM_USER_EXCLUDE_LIST": regexListRemedy,
+	"IO_USER_INCLUDE_LIST":  regexListRemedy,
+	"IO_USER_EXCLUDE_LIST":  regexListRemedy,
+}
+
 func number(value float64) *float64 { return &value }
 
 var publicFieldConstraints = map[string]PublicFieldConstraint{
@@ -310,6 +320,9 @@ func PublicFieldContracts() []PublicFieldContract {
 		remedy := "Correct the authored value and submit the complete candidate for validation."
 		if lifecycle == LifecycleRestartRequired {
 			remedy = "Persist the value and restart resman for it to become effective."
+		}
+		if specific := publicFieldRemedies[key]; specific != "" {
+			remedy = specific
 		}
 		if specific := nonEditablePublicFields[key]; specific != "" {
 			remedy = specific

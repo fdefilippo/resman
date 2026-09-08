@@ -2,6 +2,9 @@
 # Location: /etc/resman/resman.conf
 #
 # Complete defaults, lifecycle, and empty-value semantics: docs/CONFIGURATION.md
+# Regex-list keys use comma as the list separator. A comma cannot appear inside
+# one pattern, including a bounded quantifier such as {2,4}; expand it into
+# comma-free alternatives, for example ^(?:svc[0-9]{2}|svc[0-9]{3}|svc[0-9]{4})$.
 
 # ========================
 # PATHS
@@ -174,7 +177,7 @@ RAM_HIGH_RATIO=0.8
 # Separate lists for RAM limits (if different from CPU limits)
 # RAM_USER_INCLUDE_LIST: If specified, include ONLY matching users
 # RAM_USER_EXCLUDE_LIST: If specified, EXCLUDE users from RAM limits
-# Format: comma-separated regex patterns
+# Format: comma-separated, comma-free regex patterns (see the rule above)
 #
 # Examples:
 # # Only specific users for RAM
@@ -217,7 +220,7 @@ RAM_USER_EXCLUDE_LIST=
 #
 # IO_USER_INCLUDE_LIST: If specified, include ONLY matching users for IO limits
 # IO_USER_EXCLUDE_LIST: If specified, EXCLUDE users from IO limits
-# Format: comma-separated regex patterns
+# Format: comma-separated, comma-free regex patterns (see the rule above)
 #
 # Examples:
 # # IO limits disabled (default)
@@ -444,7 +447,7 @@ SYSTEM_UID_MIN=1000
 # If specified, only users matching the listed regex patterns are eligible
 # for CPU limits. If empty or unspecified, NO users will be limited.
 # Metrics monitoring remains active for all UIDs in the configured range.
-# Format: comma-separated regex patterns, no spaces
+# Format: comma-separated, comma-free regex patterns, no spaces (see the rule above)
 # Examples:
 #   USER_INCLUDE_LIST=francesco                    # Only francesco can be limited
 #   USER_INCLUDE_LIST=^www.*,^apache.*             # Web users (regex)
@@ -465,7 +468,7 @@ USER_INCLUDE_LIST=
 # If specified, exclude matching users from CPU limit application.
 # Metrics monitoring remains active. If empty or unspecified, eligibility
 # is determined only by USER_INCLUDE_LIST.
-# Format: comma-separated regex patterns, no spaces
+# Format: comma-separated, comma-free regex patterns, no spaces (see the rule above)
 # Examples:
 #   USER_EXCLUDE_LIST=francesco                    # Francesco is NOT limited
 #   USER_EXCLUDE_LIST=^www-.*,^test-.*             # Excludes web and test users (regex)
@@ -479,7 +482,8 @@ USER_EXCLUDE_LIST=
 # ========================
 # PROCESS EXCLUDE LIST
 # ========================
-# List of processes to exclude from every resource limit (comma-separated)
+# List of comma-free regex patterns to exclude from every resource limit
+# (comma-separated; see the rule at the top of this file)
 # These processes remain visible in observed totals, but they do not contribute
 # to CPU, RAM, or IO decisions and are never moved into limited cgroups.
 # Matching uses only the /proc/PID/exe basename. /proc/PID/comm is display-only;

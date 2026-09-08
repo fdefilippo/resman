@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.32.0 to ResMan 1.34.0
+# Upgrading from ResMan 1.25.x through 1.34.0 to ResMan 1.34.1
 
 Current metrics schema: 6.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.32.0 to
-ResMan 1.34.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.34.0 to
+ResMan 1.34.1. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -14,6 +14,26 @@ old MCP shapes, or alias renamed metrics.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## BREAKING: commas inside regex-list patterns are rejected
+
+**Visible change.** Startup exits with status 78 when any regex-list key contains a
+comma inside one pattern, including a bounded quantifier such as `{2,4}`. A hot
+reload or MCP editor candidate with the same value is refused atomically while the
+previous effective configuration remains in force.
+
+**Cause.** A comma is the list separator for `USER_INCLUDE_LIST`,
+`USER_EXCLUDE_LIST`, `PROCESS_EXCLUDE_LIST`, `RAM_USER_INCLUDE_LIST`,
+`RAM_USER_EXCLUDE_LIST`, `IO_USER_INCLUDE_LIST` and `IO_USER_EXCLUDE_LIST`.
+Earlier releases silently split a bounded quantifier into multiple valid but
+unintended regular expressions, so an include or exclusion policy could match
+nothing without an error.
+
+**Action.** Before upgrading, inspect all seven keys and remove commas from each
+individual pattern. Expand a bounded quantifier into comma-free alternatives; for
+example, replace `^svc[0-9]{2,4}$` with
+`^(?:svc[0-9]{2}|svc[0-9]{3}|svc[0-9]{4})$`. Do not quote or escape the comma:
+ResMan 1.34.1 intentionally introduces no alternate regex-list grammar.
 
 ## BREAKING: systemd-native enforcement and flat CPU Points
 

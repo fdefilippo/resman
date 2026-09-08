@@ -1,3 +1,10 @@
+resman (1.34.1-1) stable; urgency=medium
+
+  * Reject comma-bearing regex patterns instead of silently changing their meaning.
+  * Report the key, original value and comma-free rewrite remedy on every input path.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 12:00:00 +0200
+
 resman (1.34.0-1) stable; urgency=medium
 
   * BREAKING: enforce CPU Points in place through authoritative systemd user slices.

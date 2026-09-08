@@ -152,6 +152,41 @@ func TestEditorConfigCandidatePreservesUnmentionedSecretBytesAndInlineComments(t
 	}
 }
 
+func TestEditorConfigCandidateRejectsCommaBearingRegexWithoutPersistence(t *testing.T) {
+	applied, configPath := writeEditorFixture(t, "USER_INCLUDE_LIST=^old$\n")
+	snapshot, err := BuildEditorSnapshot(applied)
+	if err != nil {
+		t.Fatalf("BuildEditorSnapshot() error = %v", err)
+	}
+	original, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = PrepareEditorConfigCandidate(applied, snapshot.Revision.Config, []EditorFieldChange{{
+		Key: "USER_INCLUDE_LIST", Value: "^svc[0-9]{2,4}$",
+	}})
+	if err == nil {
+		t.Fatal("PrepareEditorConfigCandidate() accepted a comma-bearing quantifier")
+	}
+	var candidateErr *EditorCandidateError
+	if !errors.As(err, &candidateErr) || candidateErr.Reason != "invalid_value" {
+		t.Fatalf("PrepareEditorConfigCandidate() error = %v, want invalid_value", err)
+	}
+	for _, required := range []string{"USER_INCLUDE_LIST", "^svc[0-9]{2,4}$", "expanding the alternatives"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Errorf("editor error %q omits %q", err, required)
+		}
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("rejected editor candidate changed source from %q to %q", original, after)
+	}
+}
+
 func TestEditorConfigCandidateRejectsRemovedDuplicateAndStaleInput(t *testing.T) {
 	applied, configPath := writeEditorFixture(t, "CPU_THRESHOLD=70\n")
 	snapshot, err := BuildEditorSnapshot(applied)

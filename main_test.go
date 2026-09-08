@@ -32,26 +32,50 @@ func TestApplicationExitCode(t *testing.T) {
 }
 
 func TestInvalidConfigurationExitsWithPermanentStartupStatus(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "invalid.conf")
-	if err := os.WriteFile(configPath, []byte("CPU_THRESHOLD=0\n"), 0600); err != nil {
-		t.Fatalf("write invalid configuration: %v", err)
+	tests := []struct {
+		name     string
+		content  string
+		required []string
+	}{
+		{name: "invalid threshold", content: "CPU_THRESHOLD=0\n"},
+		{
+			name:    "comma-bearing regex quantifier",
+			content: "USER_INCLUDE_LIST=^svc[0-9]{2,4}$\n",
+			required: []string{
+				"USER_INCLUDE_LIST", "^svc[0-9]{2,4}$", "comma is the list separator", "expanding the alternatives",
+			},
+		},
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestMainInvalidConfigurationHelper")
-	cmd.Env = append(os.Environ(),
-		"RESMAN_MAIN_HELPER=invalid-configuration",
-		"RESMAN_MAIN_HELPER_CONFIG="+configPath,
-	)
-	output, err := cmd.CombinedOutput()
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		t.Fatalf("main subprocess error = %v, want exit status %d; output=%s", err, exitStatusConfiguration, output)
-	}
-	if got := exitErr.ExitCode(); got != exitStatusConfiguration {
-		t.Fatalf("main subprocess exit status = %d, want %d; output=%s", got, exitStatusConfiguration, output)
-	}
-	if !strings.Contains(string(output), "Failed to load configuration") {
-		t.Fatalf("main subprocess output lacks configuration diagnostic: %s", output)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "invalid.conf")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0600); err != nil {
+				t.Fatalf("write invalid configuration: %v", err)
+			}
+
+			cmd := exec.Command(os.Args[0], "-test.run=TestMainInvalidConfigurationHelper")
+			cmd.Env = append(os.Environ(),
+				"RESMAN_MAIN_HELPER=invalid-configuration",
+				"RESMAN_MAIN_HELPER_CONFIG="+configPath,
+			)
+			output, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("main subprocess error = %v, want exit status %d; output=%s", err, exitStatusConfiguration, output)
+			}
+			if got := exitErr.ExitCode(); got != exitStatusConfiguration {
+				t.Fatalf("main subprocess exit status = %d, want %d; output=%s", got, exitStatusConfiguration, output)
+			}
+			if !strings.Contains(string(output), "Failed to load configuration") {
+				t.Fatalf("main subprocess output lacks configuration diagnostic: %s", output)
+			}
+			for _, required := range tt.required {
+				if !strings.Contains(string(output), required) {
+					t.Errorf("main subprocess output %q omits %q", output, required)
+				}
+			}
+		})
 	}
 }
 

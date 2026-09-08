@@ -1,4 +1,4 @@
-.TH RESMAN 8 "September 2026" "v1.34.0" "System Administration"
+.TH RESMAN 8 "September 2026" "v1.34.1" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -237,6 +237,15 @@ CPU limit eligibility is controlled by
 .B USER_INCLUDE_LIST
 and
 .BR USER_EXCLUDE_LIST .
+.PP
+For every regex-list key, a comma is the list separator and cannot occur inside
+one pattern. This applies to CPU, RAM and I/O user lists and to
+.BR PROCESS_EXCLUDE_LIST .
+A bounded quantifier such as
+.B {2,4}
+is therefore rejected. Rewrite it without a comma, for example by expanding it
+into comma-free alternatives such as
+.BR "(?:x{2}|x{3}|x{4})" .
 An empty or unset
 .B USER_INCLUDE_LIST
 keeps metrics monitoring active but makes no user eligible for CPU limits.
@@ -758,9 +767,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.32.0 to 1.34.0
+.B Upgrade from 1.25.x through 1.34.0 to 1.34.1
 .PP
-ResMan 1.34.0 intentionally breaks filesystem, database,
+ResMan 1.34.1 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

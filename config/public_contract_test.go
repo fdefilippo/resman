@@ -67,6 +67,31 @@ func TestPublicSourcePrecedenceAndEnvironmentRemedyAreAuthoritative(t *testing.T
 	}
 }
 
+func TestRegexListPublicContractsExposeTheParserRemedy(t *testing.T) {
+	contracts := make(map[string]PublicFieldContract)
+	for _, contract := range PublicFieldContracts() {
+		contracts[contract.Key] = contract
+	}
+	for _, key := range []string{
+		"USER_INCLUDE_LIST",
+		"USER_EXCLUDE_LIST",
+		"PROCESS_EXCLUDE_LIST",
+		"RAM_USER_INCLUDE_LIST",
+		"RAM_USER_EXCLUDE_LIST",
+		"IO_USER_INCLUDE_LIST",
+		"IO_USER_EXCLUDE_LIST",
+	} {
+		contract, ok := contracts[key]
+		if !ok {
+			t.Errorf("missing public contract for %s", key)
+			continue
+		}
+		if contract.Remedy != regexListRemedy {
+			t.Errorf("%s remedy = %q, want authoritative regex-list remedy", key, contract.Remedy)
+		}
+	}
+}
+
 func TestStructuredConstraintsUseProductionParsingAndValidation(t *testing.T) {
 	tests := []struct {
 		key     string
