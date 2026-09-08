@@ -31,6 +31,26 @@ func TestPolicyLoaderRejectsUninitializedLoader(t *testing.T) {
 	}
 }
 
+func TestEmptyPolicySnapshotValidatesTheRootAwareCapacityInvariant(t *testing.T) {
+	reserve, err := NewReservePoints(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := NewRootPoints(900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bestEffort, err := NewBestEffortPoints(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewEmptyPolicySnapshot(reserve, root, bestEffort)
+	var overcommit *PolicyOvercommitError
+	if !errors.As(err, &overcommit) {
+		t.Fatalf("NewEmptyPolicySnapshot() error = %T %v, want PolicyOvercommitError", err, err)
+	}
+}
+
 func TestPolicyMapGrammar(t *testing.T) {
 	validSpecialNames := "john.smith=100\nDOMAIN\\user=200\nuser@example=300\nhyphen-name=400"
 	tests := []struct {

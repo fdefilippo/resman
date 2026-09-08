@@ -197,6 +197,34 @@ func TestSystemdNativeResourceAuthorityIsReconfirmedBeforeAppliedStateIsPublishe
 	}
 }
 
+func TestSystemdNativeResourceTopologyIsReconfirmedBeforeAcknowledgement(t *testing.T) {
+	policy := testCPUPointsPolicy(t, nil)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+	adapter.confirmHook = func(call int) {
+		if call == 2 {
+			adapter.topology = testSystemdTopology(1000)
+			adapter.topology.Users[0].Unit.Identity.InvocationID[0]++
+		}
+	}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMEnabled = true
+	metrics := &SystemMetrics{RAMEligibleUsers: []int{1000}}
+	initializeCycleResourceAuthorities(metrics)
+	resetCycleResourceAuthorities(metrics, manager.cfg)
+
+	err := manager.reconcileSystemdResourcesAttempt(context.Background(), metrics, manager.cfg)
+	var reconciliationErr *SystemdResourceReconciliationError
+	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "pre_acknowledgement_identity" {
+		t.Fatalf("resource reconciliation error = %v, want pre_acknowledgement_identity", err)
+	}
+	if state := manager.resourceLimits[1000]; state.ramApplied || state.ramAuthority.State != "" {
+		t.Fatalf("stale topology published RAM state: %+v", state)
+	}
+	if authority, requested := metrics.systemdRAMAuthority[1000]; !requested || authority != nil {
+		t.Fatalf("stale topology published cycle authority: requested=%t authority=%+v", requested, authority)
+	}
+}
+
 func TestSystemdNativeResourceFinalReadbackPreservesAnExternalPropertyChange(t *testing.T) {
 	policy := testCPUPointsPolicy(t, nil)
 	adapter := &fakeSystemdCPUUnitAdapter{
