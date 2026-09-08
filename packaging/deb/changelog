@@ -1,3 +1,10 @@
+resman (1.35.0-3) stable; urgency=medium
+
+  * Remove the retired cgroup tracking path from package installation output and current documentation.
+  * Keep the schema 7 package acceptance correction introduced by release 2.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 14:50:00 +0200
+
 resman (1.35.0-2) stable; urgency=medium
 
   * Align final package acceptance with the schema 6 to schema 7 reset contract.

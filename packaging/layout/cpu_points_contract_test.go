@@ -134,6 +134,24 @@ func TestCPUPointsOperatorSurfacesCarryTheCompleteContract(t *testing.T) {
 	}
 }
 
+func TestCurrentPackageSurfacesDoNotPublishRetiredCgroupTrackingState(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, path := range []string{
+		"README.md",
+		"docs/TECHNICAL-SPECIFICATION.md",
+		"docs/resman.8",
+		"packaging/deb/control.in",
+		"packaging/rpm/resman.spec",
+	} {
+		body := readTextFile(t, filepath.Join(root, path))
+		for _, retired := range []string{"/run/resman-cgroups.txt", "Boot-scoped cgroup state"} {
+			if strings.Contains(body, retired) {
+				t.Errorf("%s publishes retired runtime state %q", path, retired)
+			}
+		}
+	}
+}
+
 func TestCPUPointsContractsRejectYAMLPrefixAndAbsoluteGuaranteeDrift(t *testing.T) {
 	root := repositoryRoot(t)
 	paths := []string{
