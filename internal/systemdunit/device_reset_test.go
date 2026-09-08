@@ -66,11 +66,15 @@ func TestRestoreResetsScalarBaselineBeforeRevertWhileUnitRemainsActive(t *testin
 
 	reset := false
 	transport.onSet = func(_ *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
-		if unit != identity.Name || len(assignments) != 1 || assignments[0].name != PropertyCPUWeight || assignments[0].value.scalar != uint64(SystemdUnset) {
+		if unit != identity.Name || len(assignments) != 1 || assignments[0].name != PropertyCPUWeight || assignments[0].value.scalar != 100 {
 			t.Fatalf("unexpected scalar baseline restore: %+v", assignments)
 		}
 		if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplying {
 			t.Fatal("scalar baseline restore lacks durable intent")
+		}
+		lease := store.journal.Units[0].Properties[0]
+		if lease.Baseline != SystemdUnset || lease.LastApplied != 100 || !lease.Uncertain {
+			t.Fatalf("scalar baseline restore journal = %+v", lease)
 		}
 		reset = true
 	}

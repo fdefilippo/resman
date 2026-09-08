@@ -709,7 +709,8 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		// using the existing write-ahead/readback ownership transaction, and only
 		// then remove the runtime files.
 		if len(restoreNeeded) > 0 {
-			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, restoreNeeded, restoreKeys, &result); err != nil {
+			programmedRestore := effectiveBaselineAssignments(restoreNeeded)
+			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, programmedRestore, restoreKeys, &result); err != nil {
 				return result, err
 			}
 			// Recheck the complete footprint after the reset transaction, before
@@ -778,11 +779,17 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 }
 
 func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, identity UnitIdentity, assignments []PropertyAssignment, keys []propertyLeaseKey, result *RestoreResult) error {
+	if len(assignments) != len(keys) {
+		return fmt.Errorf("restore property assignment count %d does not match lease count %d", len(assignments), len(keys))
+	}
 	before := a.snapshotLeaseState()
-	for _, key := range keys {
+	for index, key := range keys {
+		if assignments[index].name != key.property {
+			return fmt.Errorf("restore property assignment %s does not match lease %s", assignments[index].name, key.property)
+		}
 		state := a.leases[key]
 		state.previousApplied = state.lastApplied
-		state.lastApplied = clonePropertyValue(key.property, state.baseline)
+		state.lastApplied = clonePropertyValue(key.property, assignments[index].value)
 		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = true
 		a.leases[key] = state
@@ -822,6 +829,20 @@ func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, ident
 		result.Restored = append(result.Restored, key.property)
 	}
 	return nil
+}
+
+func effectiveBaselineAssignments(baselines []PropertyAssignment) []PropertyAssignment {
+	result := make([]PropertyAssignment, len(baselines))
+	for index, baseline := range baselines {
+		result[index] = PropertyAssignment{name: baseline.name, value: clonePropertyValue(baseline.name, baseline.value)}
+		if (baseline.name == PropertyCPUWeight || baseline.name == PropertyIOWeight) && baseline.value.scalar == SystemdUnset {
+			// An empty weight assignment changes systemd's normalized property but
+			// does not reliably reset the live cgroup. Program the kernel default
+			// explicitly; the guarded RevertUnitFiles removes this temporary value.
+			result[index].value = scalarPropertyValue(100)
+		}
+	}
+	return result
 }
 
 func containsPropertyName(properties []PropertyName, wanted PropertyName) bool {

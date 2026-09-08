@@ -1004,8 +1004,8 @@ func TestStartupCompletesCrashBetweenRevertUnitFilesAndReload(t *testing.T) {
 	if store.journal.Units[0].Phase != leasePhaseReloading {
 		t.Fatalf("durable phase = %q, want %q", store.journal.Units[0].Phase, leasePhaseReloading)
 	}
-	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(SystemdUnset) {
-		t.Fatalf("pre-reload CPUWeight = %v, want explicitly restored baseline", got)
+	if got := transport.units[identity.Name].slice[string(PropertyCPUWeight)]; got != uint64(100) {
+		t.Fatalf("pre-reload CPUWeight = %v, want explicit effective baseline", got)
 	}
 	if got := transport.units[identity.Name].unit["DropInPaths"].([]string); len(got) != 1 {
 		t.Fatalf("pre-reload D-Bus DropInPaths = %v, want stale managed path", got)
