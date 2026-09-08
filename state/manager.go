@@ -126,9 +126,6 @@ type Manager struct {
 	// are converted to rates only for users eligible in both samples.
 	previousIOEligibleUsers map[int]struct{}
 	prevIOTime              time.Time
-
-	// PSI watcher triggers observation and control cycles; CPU Points exclusively owns weights.
-	psiWatcher *cgroup.PSIWatcher
 }
 
 type userResourceLimitState struct {
@@ -642,13 +639,6 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 // callbacks may perform I/O because the epoch barrier does not remain locked.
 func (m *Manager) BeginConfigUpdate() func() {
 	return m.epoch.BeginUpdate()
-}
-
-// RegisterPSIWatcher sets the PSI watcher for per-user cgroup monitoring.
-func (m *Manager) RegisterPSIWatcher(w *cgroup.PSIWatcher) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.psiWatcher = w
 }
 
 // OnUserPSIEvent records pressure for an actively enforced user. CPU Points

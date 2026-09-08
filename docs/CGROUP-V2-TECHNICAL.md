@@ -121,6 +121,11 @@ The architectural source gate enforces the first and fourth prohibitions. The
 non-systemd SmolVM scenario proves observation-only behavior, unchanged PID
 membership, and absence of a managed ResMan hierarchy.
 
+When event-driven PSI observation is enabled, ResMan writes a poll selector to the
+kernel `cpu.pressure` or `io.pressure` interface. That registration does not alter a
+controller property, PID membership, scheduling weight, quota, or resource limit and
+is outside the prohibited enforcement mutations above.
+
 ## References
 
 - [Kernel cgroup v2 documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html)

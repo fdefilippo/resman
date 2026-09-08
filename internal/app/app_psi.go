@@ -67,11 +67,6 @@ func (a *App) startPSIWatcherWithConfig(cfg *config.Config) {
 	a.psiEvents = psiWatcher.Events()
 	a.psiEventDriven = true
 	a.psiMu.Unlock()
-	if pressureFileExists(cgroupCPUPressure) || pressureFileExists(cgroupIOPressure) {
-		a.stateManager.RegisterPSIWatcher(psiWatcher)
-	} else {
-		a.logger.Info("Per-user PSI boosting disabled because cgroup pressure files are unavailable")
-	}
 	a.logger.Info("PSI event-driven mode enabled",
 		"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
 		"io_threshold_us", cfg.GetPSIOStallThreshold(),
@@ -79,7 +74,7 @@ func (a *App) startPSIWatcherWithConfig(cfg *config.Config) {
 		"cpu_pressure_path", sysCPUPressure,
 		"io_pressure_path", sysIOPressure,
 		"system_monitors", monitored,
-		"note", "PSI events trigger user CPU weight boosts and extra control cycles",
+		"note", "PSI events trigger extra control cycles without changing resource controls",
 	)
 }
 
@@ -123,9 +118,6 @@ func (a *App) stopPSIWatcher() {
 	a.psiEventDriven = false
 	a.psiMu.Unlock()
 
-	if a.stateManager != nil {
-		a.stateManager.RegisterPSIWatcher(nil)
-	}
 	if psiWatcher != nil {
 		psiWatcher.Stop()
 	}

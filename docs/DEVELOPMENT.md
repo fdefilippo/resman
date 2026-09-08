@@ -185,6 +185,10 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   Missing, zero-value, or unverifiable systemd authority selects the bounded
   `observation_only` mode. Observation-only execution leaves intent visible but never
   creates active-limit state or changes a resource-control property.
+- Event-driven PSI observation registers poll triggers by writing selector strings to
+  kernel `cpu.pressure` and `io.pressure` files. This does not change resource-control
+  properties, PID membership, scheduling weights, quotas, or limits and therefore does
+  not constitute enforcement.
 - The native systemd adapter **MUST** reconcile a complete flat `user.slice` plan
   without PID migration. Root has its explicit lendable entitlement, excluded active
   slices still participate in the parent envelope, and RAM/I/O require independent
@@ -992,7 +996,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | Every production named struct declaring `sync.Mutex`, `sync.RWMutex`, or `operationgate.Gate` is recorded exactly once in the lock-boundary inventory | 15 | AST field/import scan matched to machine-readable inventory identifiers; test and generated files excluded; no call-graph proof |
 | systemd-owned user slices are mutated only through the runtime-only D-Bus adapter; raw user-slice cgroup paths and general unit lifecycle methods are forbidden | 14, 15 | AST scan of production literals, client imports, raw D-Bus members, control-group-path consumers and mutation calls; the adapter permits only read-only cgroup verification plus its guarded unit-file cleanup |
-| PID relocation, origin/recovery state and the retired enforcement vocabulary cannot return | 3, 5, 16 | Repository-wide production-Go AST scan rejects direct, concatenated and constant-aliased `cgroup.procs` or `migration_enabled` strings plus the retired placement API identifiers |
+| PID relocation, origin/recovery state and the retired enforcement vocabulary cannot return | 3, 5, 16 | Repository-wide production-Go AST scan rejects direct, concatenated, variable-aliased and `fmt.Sprintf`-constructed `cgroup.procs` or `migration_enabled` strings plus the retired placement API identifiers |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
 | Production comments, user-facing strings, build help, and current shipped documentation use English | 17 | conservative Italian-language lexical scan of production Go comments/string literals, the Makefile, and shipped assets, excluding test/checker fixtures and historical RPM/DEB changelogs |

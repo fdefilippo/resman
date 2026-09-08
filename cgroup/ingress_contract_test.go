@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -64,6 +65,8 @@ func TestRetiredPIDRelocationGateRejectsDirectAndIndirectForms(t *testing.T) {
 		{name: "direct interface", source: `package sample; const path = "cgroup.procs"`},
 		{name: "concatenated interface", source: `package sample; const path = "cgroup" + ".procs"`},
 		{name: "aliased interface", source: `package sample; const a = "cgroup"; const b = ".procs"; const path = a + b`},
+		{name: "variable-aliased interface", source: `package sample; var a = "cgroup"; var b = ".procs"; var path = a + b`},
+		{name: "formatted interface", source: `package sample; import "fmt"; var path = fmt.Sprintf("%s.procs", "cgroup")`},
 		{name: "retired mode", source: `package sample; const mode = "migration_" + "enabled"`},
 		{name: "retired identifier", source: `package sample; func MoveProcessToCgroup() {}`},
 	}
@@ -81,7 +84,7 @@ func TestRetiredPIDRelocationGateRejectsDirectAndIndirectForms(t *testing.T) {
 }
 
 func retiredPIDRelocationFindings(file *ast.File) []string {
-	constants := stringConstantDefinitions(file)
+	definitions := stringDefinitions(file)
 	var findings []string
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
@@ -90,7 +93,7 @@ func retiredPIDRelocationFindings(file *ast.File) []string {
 				findings = append(findings, "retired PID-relocation identifier "+typed.Name)
 			}
 		case ast.Expr:
-			for _, value := range resolvedStringValues(typed, constants, map[string]bool{}, 1000) {
+			for _, value := range resolvedStringValues(typed, definitions, map[string]bool{}, 1000) {
 				if strings.Contains(value, "cgroup.procs") || strings.Contains(value, "migration_enabled") {
 					findings = append(findings, "retired PID-relocation interface "+strconv.Quote(value))
 				}
@@ -101,23 +104,30 @@ func retiredPIDRelocationFindings(file *ast.File) []string {
 	return findings
 }
 
-func stringConstantDefinitions(file *ast.File) map[string][]ast.Expr {
+func stringDefinitions(file *ast.File) map[string][]ast.Expr {
 	definitions := make(map[string][]ast.Expr)
-	for _, declaration := range file.Decls {
-		general, ok := declaration.(*ast.GenDecl)
-		if !ok || general.Tok != token.CONST {
-			continue
-		}
-		for _, specification := range general.Specs {
-			value, ok := specification.(*ast.ValueSpec)
-			if !ok || len(value.Names) != len(value.Values) {
-				continue
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.ValueSpec:
+			if len(typed.Names) != len(typed.Values) {
+				return true
 			}
-			for index, name := range value.Names {
-				definitions[name.Name] = append(definitions[name.Name], value.Values[index])
+			for index, name := range typed.Names {
+				definitions[name.Name] = append(definitions[name.Name], typed.Values[index])
+			}
+		case *ast.AssignStmt:
+			if len(typed.Lhs) != len(typed.Rhs) {
+				return true
+			}
+			for index, left := range typed.Lhs {
+				name, ok := left.(*ast.Ident)
+				if ok {
+					definitions[name.Name] = append(definitions[name.Name], typed.Rhs[index])
+				}
 			}
 		}
-	}
+		return true
+	})
 	return definitions
 }
 
@@ -159,7 +169,44 @@ func resolvedStringValues(expression ast.Expr, definitions map[string][]ast.Expr
 			values = append(values, resolvedStringValues(value, definitions, visiting, budget-1)...)
 		}
 		return values
+	case *ast.CallExpr:
+		selector, ok := typed.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Sprintf" || len(typed.Args) == 0 {
+			return nil
+		}
+		packageName, ok := selector.X.(*ast.Ident)
+		if !ok || packageName.Name != "fmt" {
+			return nil
+		}
+		formats := resolvedStringValues(typed.Args[0], definitions, visiting, budget-1)
+		argumentValues := make([][]string, 0, len(typed.Args)-1)
+		for _, argument := range typed.Args[1:] {
+			values := resolvedStringValues(argument, definitions, visiting, budget-1)
+			if len(values) == 0 {
+				return nil
+			}
+			argumentValues = append(argumentValues, values)
+		}
+		var values []string
+		for _, format := range formats {
+			values = append(values, resolvedFormattedStrings(format, argumentValues, nil, budget-1)...)
+		}
+		return values
 	default:
 		return nil
 	}
+}
+
+func resolvedFormattedStrings(format string, remaining [][]string, arguments []any, budget int) []string {
+	if budget <= 0 {
+		return nil
+	}
+	if len(remaining) == 0 {
+		return []string{fmt.Sprintf(format, arguments...)}
+	}
+	var values []string
+	for _, value := range remaining[0] {
+		values = append(values, resolvedFormattedStrings(format, remaining[1:], append(arguments, value), budget-1)...)
+	}
+	return values
 }
