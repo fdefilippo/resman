@@ -6,7 +6,7 @@ import io
 import tempfile
 import unittest
 import importlib.util
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from native_reference import ReferenceDiagnostic, analyze, comparable
@@ -119,11 +119,53 @@ class ReferenceTests(unittest.TestCase):
                 workload.worker_cpus(["--one-worker-per-cpu"])
         with self.assertRaises(ValueError):
             workload.worker_cpus(["--unknown"])
-        with patch.object(workload.os, "sched_setaffinity") as affinity, \
+        calls = []
+        ready = Mock()
+        ready.set.side_effect = lambda: calls.append("ready")
+        with patch.object(workload.os, "sched_setaffinity", side_effect=lambda *_: calls.append("affinity")) as affinity, \
                 patch("builtins.sum", side_effect=RuntimeError("stop burner")):
             with self.assertRaises(RuntimeError):
-                workload.burn(2)
+                workload.burn(2, ready)
             affinity.assert_called_once_with(0, {2})
+            ready.set.assert_called_once_with()
+            self.assertEqual(calls, ["affinity", "ready"])
+
+    def test_worker_identity_is_not_published_before_every_worker_is_ready(self):
+        calls = []
+
+        class Event:
+            def is_set(self):
+                calls.append("inspect-ready")
+                return True
+
+        class Process:
+            def __init__(self, target, args):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                calls.append("start")
+
+            def is_alive(self):
+                return True
+
+        children = workload.start_workers([0, 1], Event, Process)
+        self.assertEqual(len(children), 2)
+        self.assertEqual(calls, ["start", "start", "inspect-ready", "inspect-ready"])
+
+    def test_worker_readiness_refuses_an_exited_or_silent_child(self):
+        ready = Mock()
+        ready.is_set.return_value = False
+        exited = Mock()
+        exited.is_alive.return_value = False
+        with self.assertRaisesRegex(RuntimeError, "exited before acknowledging"):
+            workload.wait_for_worker_readiness([exited], [ready])
+
+        alive = Mock()
+        alive.is_alive.return_value = True
+        with patch.object(workload.time, "monotonic", side_effect=[0, 1]):
+            with self.assertRaisesRegex(RuntimeError, "acknowledgement timed out"):
+                workload.wait_for_worker_readiness([alive], [ready], timeout=1)
 
     def test_all_fixed_windows_are_required(self):
         results = analyze(samples())

@@ -9,9 +9,14 @@ import sys
 import time
 
 
-def burn(cpu=None):
+WORKER_READY_TIMEOUT_SECONDS = 10
+
+
+def burn(cpu=None, ready=None):
     if cpu is not None:
         os.sched_setaffinity(0, {cpu})
+    if ready is not None:
+        ready.set()
     while True:
         sum(range(10000))
 
@@ -26,9 +31,41 @@ def worker_cpus(arguments):
     return [index % 4 for index in range(6 if arguments == ["--six-pinned-workers"] else 4)]
 
 
+def wait_for_worker_readiness(children, readiness, timeout=WORKER_READY_TIMEOUT_SECONDS):
+    deadline = time.monotonic() + timeout
+    pending = set(range(len(children)))
+    while pending:
+        for index in tuple(pending):
+            if readiness[index].is_set():
+                pending.remove(index)
+            elif not children[index].is_alive():
+                raise RuntimeError("worker exited before acknowledging readiness")
+        if pending and time.monotonic() >= deadline:
+            raise RuntimeError("worker readiness acknowledgement timed out")
+        if pending:
+            time.sleep(0.01)
+
+
+def start_workers(cpus, event_factory=multiprocessing.Event, process_factory=multiprocessing.Process):
+    readiness = [event_factory() for _ in cpus]
+    children = [process_factory(target=burn, args=(cpu, ready)) for cpu, ready in zip(cpus, readiness)]
+    try:
+        for child in children:
+            child.start()
+        wait_for_worker_readiness(children, readiness)
+    except Exception:
+        for child in children:
+            if child.is_alive():
+                child.terminate()
+        for child in children:
+            child.join(5)
+        raise
+    return children
+
+
 def main():
     output = Path(sys.argv[1])
-    children = [multiprocessing.Process(target=burn, args=(cpu,)) for cpu in worker_cpus(sys.argv[2:])]
+    children = start_workers(worker_cpus(sys.argv[2:]))
     # Existing resident charges must remain visible when limits are applied in place.
     resident = bytearray(64 << 20)
     for offset in range(0, len(resident), 4096):
