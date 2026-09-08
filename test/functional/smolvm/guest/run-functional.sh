@@ -459,6 +459,12 @@ if [[ $scenario == missing-io-startup ]]; then
 		|| fail "startup rejection did not name the io controller"
 	grep -Fq 'interface "io.max"' "$artifact_dir/controller-startup-rejection.txt" \
 		|| fail "startup rejection did not name the io.max interface"
+	if systemctl list-units --all --plain --no-legend 'resmancapprobe*.slice' | grep -q .; then
+		fail "systemd capability probe unit remained loaded after startup rejection"
+	fi
+	if find /sys/fs/cgroup -type d -name 'resmancapprobe*.slice' -print -quit | grep -q .; then
+		fail "systemd capability probe cgroup remained after startup rejection"
+	fi
 	result=PASS
 	detail="startup rejected IO limiting because the real child cgroup lacked io.max"
 	echo "PASS: $detail"

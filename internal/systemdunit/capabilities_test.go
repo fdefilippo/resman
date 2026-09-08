@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func TestCapabilityProbeUnitIsOneTopLevelSlice(t *testing.T) {
+	unit, err := newCapabilityProbeUnit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(unit, "resmancapprobe") || !strings.HasSuffix(unit, ".slice") || strings.Contains(strings.TrimSuffix(unit, ".slice"), "-") {
+		t.Fatalf("newCapabilityProbeUnit() = %q, want one top-level transient slice", unit)
+	}
+}
+
 func TestStartupCapabilitiesUseTransientSystemdProbesAndOnlyEnabledResources(t *testing.T) {
 	transport := newFakeUnitTransport()
 	verifier := &fakeKernelVerifier{}

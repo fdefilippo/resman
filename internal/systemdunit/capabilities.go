@@ -120,5 +120,7 @@ func newCapabilityProbeUnit() (string, error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", fmt.Errorf("generate capability probe identity: %w", err)
 	}
-	return "resman-capability-probe-" + hex.EncodeToString(suffix[:]) + ".slice", nil
+	// Avoid hyphens: systemd interprets them as slice hierarchy separators and
+	// would create implicit parent slices that outlive the leaf probe.
+	return "resmancapprobe" + hex.EncodeToString(suffix[:]) + ".slice", nil
 }
