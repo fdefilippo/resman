@@ -40,11 +40,14 @@ func TestStartupCapabilitiesClassifyEnabledIOMissingInterfaceAndCleanProbe(t *te
 		PropertyIOReadBandwidthMax: errors.New("io.max is absent"),
 	}}
 	adapter := mustTestAdapter(t, transport, verifier)
-	assignment, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 30}})
+	activation, err := NewPropertyAssignment(PropertyIOWeight, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capability := startupCapability{feature: "I/O limiting", controller: "io", interfaceName: "io.max", assignment: assignment}
+	capability := startupCapability{
+		feature: "I/O limiting", controller: "io", interfaceName: "io.max",
+		probeAssignment: activation, requiredAssignment: PropertyAssignment{name: PropertyIOReadBandwidthMax},
+	}
 	err = adapter.probeStartupCapability(context.Background(), transport, capability)
 	if !IsRequiredCapabilityError(err) {
 		t.Fatalf("probeStartupCapability() error = %v, want required capability", err)
@@ -68,7 +71,8 @@ func TestStartupCapabilitiesPropagateProbeCleanupFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = adapter.probeStartupCapability(context.Background(), transport, startupCapability{
-		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max", assignment: assignment,
+		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
+		probeAssignment: assignment, requiredAssignment: assignment,
 	})
 	if err == nil || !strings.Contains(err.Error(), "injected cleanup failure") {
 		t.Fatalf("probeStartupCapability() error = %v, want cleanup failure", err)

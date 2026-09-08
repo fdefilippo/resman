@@ -11,16 +11,16 @@ import (
 // StartupRequirements names the optional resource features enabled by the
 // operator. CPU quota is always mandatory for systemd-native enforcement.
 type StartupRequirements struct {
-	Memory         bool
-	IO             bool
-	IODeviceFilter string
+	Memory bool
+	IO     bool
 }
 
 type startupCapability struct {
-	feature       string
-	controller    string
-	interfaceName string
-	assignment    PropertyAssignment
+	feature            string
+	controller         string
+	interfaceName      string
+	probeAssignment    PropertyAssignment
+	requiredAssignment PropertyAssignment
 }
 
 func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements StartupRequirements) error {
@@ -49,7 +49,8 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 		return nil, err
 	}
 	result := []startupCapability{{
-		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max", assignment: cpu,
+		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
+		probeAssignment: cpu, requiredAssignment: cpu,
 	}}
 	if requirements.Memory {
 		for _, candidate := range []struct {
@@ -64,21 +65,19 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 				return nil, assignmentErr
 			}
 			result = append(result, startupCapability{
-				feature: "RAM limiting", controller: "memory", interfaceName: candidate.interfaceName, assignment: assignment,
+				feature: "RAM limiting", controller: "memory", interfaceName: candidate.interfaceName,
+				probeAssignment: assignment, requiredAssignment: assignment,
 			})
 		}
 	}
 	if requirements.IO {
-		devices, resolveErr := ResolveBlockDevices(requirements.IODeviceFilter)
-		if resolveErr != nil {
-			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOReadBandwidthMax, resolveErr)
-		}
-		assignment, assignmentErr := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: devices[0], Value: 1 << 30}})
+		activation, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 100)
 		if assignmentErr != nil {
 			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOReadBandwidthMax, assignmentErr)
 		}
 		result = append(result, startupCapability{
-			feature: "I/O limiting", controller: "io", interfaceName: "io.max", assignment: assignment,
+			feature: "I/O limiting", controller: "io", interfaceName: "io.max",
+			probeAssignment: activation, requiredAssignment: PropertyAssignment{name: PropertyIOReadBandwidthMax},
 		})
 	}
 	return result, nil
@@ -87,13 +86,13 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupCapabilityTransport, capability startupCapability) (retErr error) {
 	unit, err := newCapabilityProbeUnit()
 	if err != nil {
-		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.assignment.name, err)
+		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
-	controlGroup, err := transport.startCapabilityProbe(callCtx, unit, []PropertyAssignment{capability.assignment})
+	controlGroup, err := transport.startCapabilityProbe(callCtx, unit, []PropertyAssignment{capability.probeAssignment})
 	cancel()
 	if err != nil {
-		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.assignment.name, err)
+		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
 	}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), a.timeout)
@@ -103,8 +102,8 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 		}
 	}()
 	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: unit}, ControlGroup: controlGroup}
-	if err := a.verifier.preflight(snapshot, []PropertyAssignment{capability.assignment}); err != nil {
-		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.assignment.name, err)
+	if err := a.verifier.preflight(snapshot, []PropertyAssignment{capability.requiredAssignment}); err != nil {
+		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
 	}
 	return nil
 }

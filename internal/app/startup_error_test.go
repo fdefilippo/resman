@@ -138,9 +138,8 @@ func TestSystemdStartupRequirementsFollowEnabledResourcePolicies(t *testing.T) {
 	}
 	cfg.RAMEnabled = false
 	cfg.IOEnabled = true
-	cfg.IODeviceFilter = "8:0"
 	requirements = systemdStartupRequirements(cfg)
-	if requirements.Memory || !requirements.IO || requirements.IODeviceFilter != "8:0" {
+	if requirements.Memory || !requirements.IO {
 		t.Fatalf("requirements = %+v, want I/O only", requirements)
 	}
 }
