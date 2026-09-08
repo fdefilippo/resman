@@ -646,10 +646,10 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			path: systemdUnitAdapterPath,
 			content: `package systemdunit
 type connection struct{}
-func (connection) StartTransientUnitContext(...any){}
+func (connection) StartTransientUnitAux(...any){}
 func (connection) StopUnitContext(...any){}
 type dbusTransport struct{ conn connection }
-func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitContext(nil, "probe.slice") }
+func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitAux(nil, "probe.slice") }
 func (t *dbusTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "probe.slice") }`,
 		},
 		{
@@ -667,7 +667,7 @@ func (t *dbusTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "prob
 		{
 			name:       "duplicate transient starts in capability probe",
 			path:       systemdUnitAdapterPath,
-			content:    `package systemdunit; type connection struct{}; func (connection) StartTransientUnitContext(...any){}; type dbusTransport struct{ conn connection }; func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitContext(nil, "one.slice"); t.conn.StartTransientUnitContext(nil, "two.slice") }`,
+			content:    `package systemdunit; type connection struct{}; func (connection) StartTransientUnitAux(...any){}; type dbusTransport struct{ conn connection }; func (t *dbusTransport) startCapabilityProbe(){ t.conn.StartTransientUnitAux(nil, "one.slice"); t.conn.StartTransientUnitAux(nil, "two.slice") }`,
 			wantFailed: true,
 		},
 		{

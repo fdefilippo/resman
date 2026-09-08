@@ -57,7 +57,7 @@ func systemdCapabilityProbeExceptions(source goSource) map[ast.Node]bool {
 		return allowed
 	}
 	want := map[string]string{
-		"startCapabilityProbe": "StartTransientUnitContext",
+		"startCapabilityProbe": "StartTransientUnitAux",
 		"stopCapabilityProbe":  "StopUnitContext",
 	}
 	for _, declaration := range source.file.Decls {
@@ -352,7 +352,7 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityPro
 		if source.path != systemdUnitAdapterPath {
 			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the authoritative systemd adapter", method)
 		}
-	case "StartTransientUnitContext", "StopUnitContext":
+	case "StartTransientUnitAux", "StopUnitContext":
 		if !capabilityProbes[call] {
 			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the exact empty startup capability probe", method)
 		}
@@ -360,7 +360,7 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityPro
 		"StartUnit", "StartUnitContext", "StopUnit", "RestartUnit", "RestartUnitContext",
 		"TryRestartUnit", "TryRestartUnitContext", "ReloadUnit", "ReloadUnitContext",
 		"ReloadOrRestartUnit", "ReloadOrRestartUnitContext", "ReloadOrTryRestartUnit", "ReloadOrTryRestartUnitContext",
-		"StartTransientUnit", "StartTransientUnitAux",
+		"StartTransientUnit", "StartTransientUnitContext",
 		"KillUnit", "KillUnitContext", "ResetFailedUnit", "ResetFailedUnitContext",
 		"FreezeUnit", "ThawUnit", "AttachProcessesToUnit", "AttachProcessesToUnitContext", "EnqueueUnitJob", "EnqueueUnitJobContext",
 		"LinkUnitFiles", "EnableUnitFiles", "DisableUnitFiles", "MaskUnitFiles", "UnmaskUnitFiles", "PresetUnitFiles", "PresetUnitFilesWithMode":

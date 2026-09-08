@@ -118,33 +118,27 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 }
 
 func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
-	start := func(target string) error {
-		properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
-		for _, assignment := range assignments {
-			properties = append(properties, systemdbus.Property{
-				Name:  string(assignment.name),
-				Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
-			})
-		}
-		result := make(chan string, 1)
-		if _, err := t.conn.StartTransientUnitContext(ctx, target, "fail", properties, result); err != nil {
-			return err
-		}
-		select {
-		case outcome := <-result:
-			if outcome != "done" {
-				return fmt.Errorf("transient capability probe start completed with %s", outcome)
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		return nil
+	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
+	for _, assignment := range assignments {
+		properties = append(properties, systemdbus.Property{
+			Name:  string(assignment.name),
+			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
+		})
 	}
-	if err := start(unit); err != nil {
+	child := capabilityProbeLeafUnit(unit)
+	result := make(chan string, 1)
+	if _, err := t.conn.StartTransientUnitAux(ctx, child, "fail", properties, []systemdbus.PropertyCollection{{
+		Name: unit, Properties: properties,
+	}}, result); err != nil {
 		return "", false, err
 	}
-	if err := start(capabilityProbeLeafUnit(unit)); err != nil {
-		return "", true, err
+	select {
+	case outcome := <-result:
+		if outcome != "done" {
+			return "", true, fmt.Errorf("transient capability probe start completed with %s", outcome)
+		}
+	case <-ctx.Done():
+		return "", true, ctx.Err()
 	}
 	propertiesByName, err := t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
 	if err != nil {
