@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.34.1
+VERSION = 1.35.0
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -119,7 +119,7 @@ ci-test:
 # Fail when any tracked Go source is not gofmt-clean.
 verify-format:
 	@set -eu; \
-	unformatted="$$(git ls-files -z -- '*.go' | xargs -0 -r gofmt -l)"; \
+	unformatted="$$(git ls-files -z -- '*.go' | xargs -0 -r sh -c 'for file do [ ! -f "$$file" ] || gofmt -l "$$file"; done' sh)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "The following Go files are not formatted:" >&2; \
 		echo "$$unformatted" >&2; \

@@ -259,7 +259,6 @@ func (r *Reloader) applyEffectiveConfig(newConfig *config.Config) []error {
 		} else {
 			r.logger.Info("Cgroup manager configuration updated",
 				"cgroup_root", newConfig.CgroupRoot,
-				"base_cgroup", newConfig.CgroupBase,
 			)
 		}
 	}

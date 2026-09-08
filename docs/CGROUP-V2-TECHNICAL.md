@@ -2,424 +2,135 @@
 
 ## Overview
 
-This document describes how Linux cgroups v2 work and how ResMan uses them to manage CPU and memory limits.
+ResMan 1.35 uses cgroup v2 through authoritative systemd units. It never creates a
+parallel enforcement hierarchy and never changes process membership. systemd and
+logind remain the owners of sessions, services, transient units, and rootless
+container descendants.
 
----
+The only enforcing mode is `systemd_native`. If the systemd authority boundary is
+missing or cannot be verified, ResMan selects `observation_only`: metrics and
+decisions remain available, but no resource property is changed.
 
-## Cgroup v2 Architecture
+## Authoritative topology
 
-### Independent Controllers
-
-In cgroups v2, CPU and memory are controlled by **independent controllers**. Each controller:
-- Has its own configuration files
-- Can be enabled/disabled independently via `cgroup.subtree_control`
-- Operates completely separately from other controllers
-
-### Directory Structure
-
-```
+```text
 /sys/fs/cgroup/
-└── user.slice/
-    └── user-1000.slice/
-        ├── cgroup.controllers      → Available controllers (cpu memory io...)
-        ├── cgroup.subtree_control  → Enabled controllers for children
-        ├── cpu.max                 → CPU bandwidth limit
-        ├── cpu.weight              → CPU relative priority
-        ├── memory.max              → Memory hard limit
-        ├── memory.high             → Memory soft limit (throttling)
-        ├── memory.swap.max         → Swap limit
-        ├── memory.current          → Current memory usage (read-only)
-        ├── cpu.stat                → CPU statistics (read-only)
-        └── memory.events           → Memory events (read-only)
+└── user.slice/                 finite CPU pool
+    ├── user-0.slice/           explicit lendable root entitlement
+    ├── user-1000.slice/        mapped guarantee
+    │   ├── session-N.scope/    membership remains owned by logind
+    │   └── user@1000.service/  child services and rootless descendants
+    └── user-1001.slice/        best-effort participant
 ```
 
----
-
-## CPU Limiting (`cpu.max`)
-
-### Configuration
-
-```bash
-# Format: $MAX $PERIOD (in microseconds)
-echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max
-```
-
-This limits the cgroup to 50% of one CPU core (50000µs out of 100000µs period).
-
-### Behavior When Exceeded: **THROTTLING**
-
-When a process exceeds its CPU quota:
-- Processes are **throttled** (paused) until the next period
-- Processes are **NEVER killed** for exceeding CPU limits
-- Statistics are tracked in `cpu.stat`:
-  - `nr_throttled` → Number of periods where throttling occurred
-  - `throttled_usec` → Total throttling duration (microseconds)
-
-### Example
-
-```bash
-# Apply limit: 0.5 core
-echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max
-
-# Check throttling statistics
-cat /sys/fs/cgroup/mygroup/cpu.stat
-# Output:
-# nr_periods 1523
-# nr_throttled 847
-# throttled_usec 42350000
-```
-
-### Systemd-native ResMan usage
-
-`systemd_native` programs the finite CPU Points pool on `user.slice` through
-systemd D-Bus. Active `user-UID.slice` siblings receive exactly scaled weights:
-mapped guarantees, CPU_ROOT_POINTS=100 for root, and one aggregate best-effort
-entitlement partitioned among unmapped and excluded slices. No leaf CPUQuota is
-written and no PID leaves its session or service. The reserve protects system.slice
-and other workloads outside user.slice, not unbounded root login sessions.
-All surplus is work-conserving among runnable siblings, without class priority.
-
-RAM and I/O require complete independent authority and act on the existing user
-slice. A split UID or nested runtime-owned descendant refuses those resources,
-restoring their owned properties while preserving CPU scheduling. Existing memory
-charges remain visible because no migration occurs. The generic direct-write
-examples in this reference apply only to disposable cgroups owned by the experiment,
-never to systemd-owned units. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
-and [property lease recovery](SYSTEMD-PROPERTY-LEASES.md).
-
-### Non-systemd migration backend only
-
-The retained non-systemd backend uses one finite CPU Points parent and two scheduling domains:
-
-- online CPU capacity is normalized to 1000 points;
-- `CPU_RESERVE_POINTS` stays outside the parent;
-- mapped users enter `guaranteed` with their exact configured weight;
-- unmapped eligible users enter `best_effort` with equal leaf weights while the
-  domain as a whole receives `CPU_BEST_EFFORT_POINTS`;
-- every user leaf keeps `cpu.max=max 100000`; only the parent has a finite quota.
-
-Users eligible only for RAM or I/O enforcement use standalone
-`/sys/fs/cgroup/resman/user_UID` cgroups. ResMan writes `max 100000` to their
-`cpu.max`, so the CPU Points parent does not indirectly throttle memory-only or
-I/O-only enforcement.
-
-### Non-systemd managed user placement contract
-
-ResMan deliberately uses two possible managed parents for one user. The placement
-depends on observed CPU enforcement, not merely on whether the user is being observed:
-
-```text
-/sys/fs/cgroup/resman/
-├── user_UID/                    # Finite-IOPS observation or standalone RAM/I/O
-│   └── cpu.max = max 100000     # No finite CPU quota
-└── limited/
-    ├── cpu.max = online capacity × (1000 - CPU_RESERVE_POINTS) / 1000
-    ├── guaranteed/              # weight = sum of acquired mapped guarantees
-    │   └── user_UID/            # weight = exact configured guarantee
-    │       └── cpu.max = max 100000
-    └── best_effort/             # weight = CPU_BEST_EFFORT_POINTS
-        └── user_UID/            # equal leaf weight
-            └── cpu.max = max 100000
-```
-
-The guaranteed-domain weight is raised before a mapped leaf can receive a PID and is
-lowered only after that leaf has been released. A failed transition may leave the
-domain conservatively overweight, but never silently underweight. Unused capacity of
-one mapped leaf is first available to runnable siblings in `guaranteed`; best effort
-borrows it only when the entire guaranteed domain is inactive.
-
-The resulting placement lifecycle is intentional:
-
-```text
-original cgroup
-      │
-      ├─────────────── CPU enforcement activates ───────────────┐
-      ▼                                                         ▼
-resman/user_UID  ─────────────────────►  resman/limited/{guaranteed,best_effort}/user_UID
-finite-IOPS observation or RAM/I/O-only             CPU enforcement active
-      ▲                                                         │
-      └──── CPU enforcement releases while observation remains ┘
-      │
-      └──────── observation/enforcement ends ─────► original or recovery cgroup
-```
-
-The standalone step is optional: a user that does not need pre-enforcement block-I/O
-observation may move directly from its original cgroup into the shared hierarchy.
-
-Because the authoritative kernel accounting identity changes during migration, the
-following mechanisms remain parts of the non-systemd placement contract rather than cleanup
-opportunities:
-
-- `transitionUserCgroup` moves enforceable processes with rollback.
-- `blockIOAccountingState` carries the final source `io.stat` delta into the
-  destination baseline so the logical counter remains monotonic.
-- `cleanupAlternateUserCgroup` and `UserCgroupPlacementIncompleteError` detect and
-  retry a transient split instead of treating both paths as authoritative.
-- `logicalBlockIOCounters` revalidates the tracked path around concurrent reads.
-- The cgroup manager's tracked path is the authoritative placement. The state manager's
-  block-I/O observation set tracks finite-IOPS observation, while the resource-state
-  `standalone` flag records standalone RAM/I/O enforcement and is reconciled during
-  CPU placement changes.
-- Process origins and start times remain authoritative for reconciliation and shutdown
-  restoration.
-
-Moving a running process does not transfer its existing memory charges. First ingress
-therefore records post-ingress RAM coverage as partial for each PID/start-time. A later
-cross-parent move is refused while RAM enforcement is active; the old authoritative
-placement remains applied and the CPU transition is reported as degraded. I/O-only
-movement remains permitted through the logical `io.stat` ledger.
-
-At steady state, exactly one managed path is authoritative for each UID. A populated
-alternate path is a reported transient condition, never a second valid placement.
-Future topology changes must be explicit product decisions and must revalidate block-I/O
-continuity, process reconciliation, rollback, shutdown restoration, and the functional
-cgroup gate before replacing any of these mechanisms.
-
----
-
-## Memory Limiting (`memory.max` and `memory.high`)
-
-### Configuration
-
-```bash
-# Hard limit (current ResMan default)
-echo "536870912" > /sys/fs/cgroup/mygroup/memory.max  # 512MB
-
-# Soft limit (alternative)
-echo "268435456" > /sys/fs/cgroup/mygroup/memory.high  # 256MB
-```
-
-### `memory.max` - Hard Limit (Current ResMan Behavior)
-
-**Behavior when exceeded:**
-1. Kernel attempts **memory reclaim** (drop page cache, reclaim swap if enabled)
-2. If reclaim fails → **OOM killer invoked within the cgroup**
-3. OOM killer terminates **one or more processes INSIDE the cgroup**
-4. Events tracked in `memory.events`:
-   ```
-   oom 1          # Number of OOM events
-   oom_kill 1     # Processes killed
-   ```
-
-**Characteristics:**
-- Absolute ceiling (with minor temporary breaches possible)
-- Triggers OOM killer when limit is reached
-- **Processes DIE when exceeding this limit**
-
-### `memory.high` - Soft Limit (Proposed Alternative)
-
-**Behavior when exceeded:**
-1. Processes are **throttled** on memory allocation
-2. Kernel applies **aggressive reclaim pressure**
-3. **OOM killer is NEVER invoked** for exceeding `memory.high` alone
-4. Limit may be temporarily breached under extreme conditions
-
-**Characteristics:**
-- Warning threshold, not a hard ceiling
-- Causes slowdown, not termination
-- Useful for external monitoring and graceful degradation
-
-### Comparison Table
-
-| Feature | `memory.high` | `memory.max` |
-|---------|---------------|--------------|
-| Type | Soft limit | Hard limit |
-| When exceeded | Throttling + reclaim | OOM killer |
-| Processes killed | ❌ Never | ✅ Yes |
-| Can be breached | ✅ Temporarily | ⚠️ Rarely (temporary) |
-| Use case | Warning, monitoring | Absolute enforcement |
-| ResMan current | ❌ Not used | ✅ Default |
-
----
-
-## Combined CPU + Memory Limits
-
-### Independent Operation
-
-CPU and memory limits work **independently**:
-
-```
-Cgroup with:
-- cpu.max = "50000 100000"   (0.5 core)
-- memory.max = "536870912"   (512MB)
-
-Scenario A: Process uses 100% CPU for 10 seconds
-→ Throttled to 0.5 core
-→ Process SURVIVES
-
-Scenario B: Process allocates 600MB RAM
-→ OOM killer terminates process
-→ Process DIES
-
-Scenario C: Process uses 100% CPU AND 600MB RAM
-→ Throttled on CPU
-→ OOM killer on RAM
-→ Result: Process killed by RAM limit
-```
-
-### Key Insight
-
-**Memory limits are more dangerous than CPU limits** because:
-- CPU throttling slows down but doesn't kill
-- Memory limits trigger OOM killer that terminates processes
-
----
-
-## ResMan Current Implementation
-
-### Non-systemd CPU management
-
-**Files:** `cgroup/cpu_points.go`, `cgroup/io_accounting.go`
-
-```go
-// EnsureCPUPointsHierarchy applies the finite parent pool and creates the
-// process-free guaranteed and best-effort scheduling domains.
-func (m *Manager) EnsureCPUPointsHierarchy(
-    quota cpupoints.ParentQuota,
-    bestEffort cpupoints.KernelCPUWeight,
-) (CPUPointsHierarchy, error) {
-    // Every value is written and read back before any leaf admits a PID.
-}
-```
-
-**Approach:**
-- Shared cgroup for all limited users
-- Proportional `cpu.weight` distribution
-- Throttling-based enforcement (safe)
-
-### Memory Management
-
-**File:** `cgroup/memory.go`
-
-```go
-// ApplyRAMLimit applies hard memory limit via memory.max
-func (m *Manager) ApplyRAMLimit(uid int, limit string) error {
-    memoryMaxFile := filepath.Join(cgroupPath, "memory.max")
-    return os.WriteFile(memoryMaxFile, []byte(limitValue), defaultFilePerm)
-}
-
-// ApplyRAMHigh applies soft memory limit via memory.high
-func (m *Manager) ApplyRAMHigh(uid int, limit string) error {
-    memoryHighFile := filepath.Join(cgroupPath, "memory.high")
-    return os.WriteFile(memoryHighFile, []byte(limit), defaultFilePerm)
-}
-
-// ApplyRAMLimitWithHigh applies both memory.high and memory.max
-func (m *Manager) ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit string) error {
-    // Apply soft limit first (memory.high)
-    if err := m.ApplyRAMHigh(uid, highLimit); err != nil {
-        return fmt.Errorf("failed to apply RAM high: %w", err)
-    }
-    // Apply hard limit (memory.max)
-    if err := m.ApplyRAMLimit(uid, maxLimit); err != nil {
-        return fmt.Errorf("failed to apply RAM max: %w", err)
-    }
-    m.logger.Info("RAM limits applied (high + max)",
-        "uid", uid,
-        "high", highLimit,
-        "max", maxLimit,
-    )
-    return nil
-}
-
-// ApplyRAMLimitWithSwapDisabled also disables swap
-func (m *Manager) ApplyRAMLimitWithSwapDisabled(uid int, limit string) error {
-    if err := m.ApplyRAMLimit(uid, limit); err != nil {
-        return err
-    }
-    swapMaxFile := filepath.Join(cgroupPath, "memory.swap.max")
-    return os.WriteFile(swapMaxFile, []byte("0"), defaultFilePerm)
-}
-
-// GetMemoryHighEvents returns the number of times memory.high was exceeded
-func (m *Manager) GetMemoryHighEvents(uid int) (uint64, error) {
-    memoryEventsFile := filepath.Join(cgroupPath, "memory.events")
-    data, err := os.ReadFile(memoryEventsFile)
-    if err != nil {
-        return 0, err
-    }
-    // Parse "high 123" from memory.events
-    // Returns count of memory.high breaches
-}
-```
-
-**Approach:**
-- Per-user cgroup with `memory.high` (soft) + `memory.max` (hard) limits
-- `memory.high` = `RAM_QUOTA_PER_USER * RAM_HIGH_RATIO` (default: 80%)
-- `memory.max` = `RAM_QUOTA_PER_USER` (100%)
-- Optional swap disable via `memory.swap.max=0`
-- OOM killer enforcement only when `memory.max` is exceeded
-- Memory.high events tracked via `memory.events` file
-
-### Configuration Variables
-
-```bash
-# RAM Management
-RAM_LIMIT_ENABLED=false          # Enable RAM limiting
-RAM_THRESHOLD=75                 # Activation threshold (%)
-RAM_RELEASE_THRESHOLD=40         # Deactivation threshold (%)
-RAM_QUOTA_PER_USER=512M          # Per-user RAM quota
-DISABLE_SWAP=false               # Set memory.swap.max=0
-RAM_HIGH_RATIO=0.8               # memory.high = 80% of memory.max
-```
-
-### Prometheus Metrics
-
-**Metric (available since v1.19.0):**
-```
-resman_user_memory_high_breaches_total{uid, username, hostname, server_role}
-```
-
-This counter tracks how many times each user exceeded their `memory.high` soft limit,
-allowing monitoring and alerting on memory pressure before OOM kills occur.
-
----
-
-## Implications for Production Use
-
-### Current Behavior (memory.high + memory.max) - v1.19.0+
-
-**Pros:**
-- Graceful throttling when exceeding memory.high (80% by default)
-- OOM killer only when exceeding memory.max (100%)
-- External monitoring via `resman_user_memory_high_breaches_total` metric
-- Reduced process kills with early warning system
-- Configurable ratio via `RAM_HIGH_RATIO`
-
-**Cons:**
-- More complex configuration
-- Two thresholds to tune (high ratio + max limit)
-- May still OOM under extreme pressure
-
-### Legacy Behavior (memory.max only) - Pre-v1.19.0
-
-**Pros:**
-- Absolute memory enforcement
-- Prevents memory exhaustion attacks
-- Clear boundary
-- Simple configuration
-
-**Cons:**
-- Processes can be killed unexpectedly
-- May cause service disruptions
-- No graceful degradation
-- No early warning system
-
----
+The native adapter discovers unit identities over D-Bus, applies runtime-only
+systemd properties, reads the normalized property back, and verifies the
+corresponding kernel interface before publishing success.
+
+## CPU control
+
+### Parent capacity
+
+ResMan applies the finite pool to `user.slice` using `CPUQuota` and
+`CPUQuotaPeriodSec`. The pool is derived from the verified online-CPU capacity and
+`CPU_RESERVE_POINTS`. The reserve protects workloads outside `user.slice`,
+including `system.slice`; it does not exempt root login sessions.
+
+`CPU_ROOT_POINTS` gives `user-0.slice` an explicit lendable scheduling
+entitlement. ResMan never writes a CPU quota to `user-0.slice`.
+
+### User weights
+
+Mapped guarantees, root, and the aggregate best-effort entitlement are converted to
+exact integer `CPUWeight` values. Best-effort slices receive an even integer
+partition whose members differ by at most one. Unused capacity remains lendable
+among runnable siblings.
+
+CPU Points are scheduling weights, not dedicated cores or physical isolation.
+Realized delivery also depends on runnable-thread placement, affinity, and external
+workloads. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) and
+[placement methodology](CPU-POINTS-PLACEMENT.md).
+
+## Memory control
+
+When RAM limiting is enabled and authority is complete, ResMan applies
+`MemoryMax` and, when configured, `MemoryHigh` to the authoritative user slice.
+The adapter accounts for kernel page-size normalization before confirming the
+effective value.
+
+Memory charges remain with the authoritative hierarchy because no PID moves between
+cgroups. If an observed UID is split across parents or contains a runtime-owned
+descendant that makes authority incomplete, ResMan releases only its owned memory
+properties and reports partial or refused coverage.
+
+`memory.high` throttles allocation. On a host without reclaimable pages or swap, a
+process can remain alive but make almost no progress before reaching
+`memory.max`; a hard-limit OOM kill is not guaranteed merely because both values
+are configured.
+
+## I/O control
+
+Strong I/O limits are applied as per-device systemd properties and verified against
+`io.max`. The device identity is part of the property lease and exact restoration
+contract.
+
+Weighted I/O remains an adapter capability only. No production policy constructs an
+`IOWeight` assignment because a readable weight file does not prove that the
+device scheduler honors the value. A future weighted-I/O policy must verify the
+scheduler per device and distinguish programmed state from effective enforcement.
+
+## Property ownership and restoration
+
+Runtime property ownership is recorded in the private journal described by
+[SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). The adapter:
+
+- writes intent durably before mutation;
+- confirms systemd and kernel state before acknowledging application;
+- reclaims exact leases after restart or unit recreation;
+- compares the current footprint before restoration;
+- refuses destructive cleanup when operator state diverges;
+- completes interrupted revert/reload sequences idempotently.
+
+An unchanged verified plan produces no D-Bus or journal write. A root-only topology
+releases the finite parent pool.
+
+## Observation contract
+
+ResMan reads process and system metrics from `/proc` and cgroup accounting from the
+authoritative unit paths. Missing observations are represented as unavailable, never
+as fabricated zeroes. Unit recreation, counter decrease, daemon restart, and identity
+changes reset delta baselines.
+
+The current SQLite schema is version 7. Prometheus, MCP, and SQLite consume the same
+typed control-cycle snapshot and the same bounded enforcement modes:
+
+- `systemd_native`
+- `observation_only`
+
+## Prohibited architecture
+
+Production code must not:
+
+- write `cgroup.procs`;
+- create a ResMan-owned enforcement or recovery hierarchy;
+- record process origins or attempt PID restoration;
+- expose `migration_enabled` as a mode or compatibility alias;
+- acknowledge enforcement without authoritative systemd application and readback.
+
+The architectural source gate enforces the first and fourth prohibitions. The
+non-systemd SmolVM scenario proves observation-only behavior, unchanged PID
+membership, and absence of a managed ResMan hierarchy.
 
 ## References
 
-- [Kernel Documentation - Cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
-- [Memory Controller Documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)
-- [CPU Controller Documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu)
-- [Linux cgroup v2 implementation notes](https://github.com/torvalds/linux/blob/master/kernel/cgroup/cgroup.c)
+- [Kernel cgroup v2 documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html)
+- [systemd resource control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)
+- [Systemd property leases](SYSTEMD-PROPERTY-LEASES.md)
+- [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
+- [Architecture](ARCHITECTURE.md)
 
 ---
 
-## Document Metadata
-
-- **Version:** 1.2
-- **Date:** 2026-08-27
-- **Author:** ResMan Development Team
-- **Related Project:** ResMan
-- **Changes:** Recorded the managed-user placement decision and refreshed implementation locations
+**Document version:** 3.0
+**Last updated:** 2026-09-08
+**Applies to:** ResMan 1.35.0 and later

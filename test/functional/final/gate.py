@@ -210,7 +210,7 @@ def run_local(output, command):
 
 
 def collect(row, root, host, runner, log):
-    smolvm = row.scenario in {"non-systemd-migration", "missing-io-startup", "mcp-filter-reload"}
+    smolvm = row.scenario in {"non-systemd-observation", "missing-io-startup", "mcp-filter-reload"}
     if (not host or not row.remote) and not smolvm:
         return []
     expected = 3 if row.scenario == "systemd-native-reference-pinned-six" else 1

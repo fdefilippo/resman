@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.34.0 to ResMan 1.34.1
+# Upgrading from ResMan 1.25.x through 1.34.1 to ResMan 1.35.0
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.34.0 to
-ResMan 1.34.1. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.34.1 to
+ResMan 1.35.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -14,6 +14,31 @@ old MCP shapes, or alias renamed metrics.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## BREAKING: non-systemd PID relocation is removed
+
+**Visible change.** `systemd_native` is the only mode that can apply CPU, RAM or
+I/O limits. A host without an authoritative systemd adapter reports
+`observation_only`; it remains observable but applies no limits. The
+`migration_enabled` mode, ResMan-owned cgroup hierarchy, PID relocation,
+process-origin tracking and recovery cgroups no longer exist. The metrics schema
+is version 7 because the associated history fields were removed.
+
+**Cause.** Moving a process through `cgroup.procs` changes cgroup membership
+without preserving the workload manager's ownership semantics. Maintaining a
+second backend also duplicated policy, recovery, accounting and verification for
+an operating model that the packaged Enterprise Linux service does not support.
+There are no deployed legacy relocation installations that require a compatibility
+drain, so 1.35 ships no restoration-only path.
+
+**Action.** Run ResMan under systemd and confirm `systemd_native` in
+`resman_enforcement_mode`, MCP status and the control-cycle log before expecting
+enforcement. On another init system, treat ResMan as observation-only. Remove the
+retired `CGROUP_BASE`, `CREATED_CGROUPS_FILE`, `CGROUP_OPERATION_TIMEOUT`, pattern
+RAM quota and I/O remediation keys: each is rejected with a replacement remedy.
+Stop ResMan and archive or delete the schema-6 metrics database together with its
+WAL and SHM sidecars before starting 1.35. No origin or recovery file needs to be
+migrated, and 1.35 never reads or writes one.
 
 ## BREAKING: commas inside regex-list patterns are rejected
 
@@ -51,16 +76,16 @@ and the meaning of exclusions; it cannot preserve the former class-priority topo
 
 | Contract | Change and operator action |
 |---|---|
-| Enforcement mode | Confirm `systemd_native` through `resman_enforcement_mode`, MCP and the cycle log. `observation_only_systemd` remains the safe fallback when authority is unavailable; it is not successful enforcement. `migration_enabled` remains a separate non-systemd backend. |
+| Enforcement mode | Confirm `systemd_native` through `resman_enforcement_mode`, MCP and the cycle log. `observation_only` is the safe fallback when authority is unavailable; it is not successful enforcement. No PID-relocation backend remains. |
 | Flat lending | Surplus is work-conserving among all runnable siblings, without guarantee-first lending. CPU Points are scheduling entitlements implemented as weights, not absolute CPU floors; realized share depends on thread placement. |
 | Root sessions | `CPU_ROOT_POINTS=100` is a lendable scheduling entitlement, not a ceiling. ResMan never writes CPUQuota on `user-0.slice`. The reserve protects capacity outside `user.slice`, including `system.slice`, not an unbounded root login shell. |
 | Excluded users | `USER_EXCLUDE_LIST` still controls individual CPU eligibility, but excluded active user slices remain inside the parent quota and share aggregate best effort. Excluded no longer means CPU-unbounded. |
 | Rootless inheritance | Rootless descendants spend their UID slice entitlement and inherit the parent quota. No container PID is acquired or migrated. Nested runtime ownership refuses RAM and I/O as `runtime_owned_descendant`; CPU can remain applied. |
 | Split authority | A UID spanning unrelated parents has partial CPU coverage. RAM and I/O refuse `authority_split` and restore previously owned resource limits; an external conflict remains visible instead of being overwritten. An observed UID without a user slice remains observable with unavailable slice fields. |
-| History reset | The current schema version is 6. Stop the daemon and archive/reset prior databases with their WAL/SHM sidecars. No schema migration or aliases are provided. |
+| History reset | The current schema version is 7. Stop the daemon and archive/reset prior databases with their WAL/SHM sidecars. No schema migration or aliases are provided. |
 | Telemetry replacement | Three-level domain columns/metrics and the lending-state field are removed without aliases. Use flat sibling weights, denominator state, root points, per-resource coverage and measured delivery; update MCP decoders, queries, dashboards and alerts. |
 | Measurement | Use synchronized exported intervals, not independently timed file reads or nominal quota. Kernel jitter and bias depend on host and workload; the functional gate's same-run reference tolerances are not operator thresholds. |
-| Reload | Native active class changes reconcile weights in place, without PID movement or lost memory charges. Source validation, topology reconfirmation and kernel readback precede acknowledgement. The non-systemd backend still rejects cross-class migration while active. |
+| Reload | Native active class changes reconcile weights in place, without PID movement or lost memory charges. Source validation, topology reconfirmation and kernel readback precede acknowledgement. Non-systemd hosts remain observation-only. |
 | Durable ownership | Preserve `/var/lib/resman/systemd-property-leases.json` (root:root, 0600, private parent). It is a recovery journal, not metrics history or a cache. Never remove it as part of a database reset. |
 
 Restoring a live slice first resets owned device I/O properties to their recorded
@@ -135,19 +160,13 @@ configuration loading. An environment override wins
 over an authored file (`default < file < environment`) and requires process restart
 to remove. No new setting enables PID migration on a systemd host.
 
-### Already stranded processes
+### No PID-relocation state is migrated
 
-An upgrade can find processes that an earlier release already placed below
-`resman/recovery`. Their original systemd ownership cannot be reconstructed. They
-remain in place and are reported as `stranded`; they are never re-admitted and the
-recovery path never becomes their authoritative origin. Stop or restart each process
-under its owning service or session. After it exits, remove only the empty recovery
-leaf. A release that falls back to recovery is reported as `recovery`, not
-`released`; restore results distinguish `exact_origin`, `recovery`, `disappeared`,
-and `failed`.
-
-The lifecycle values `ownership_rejected`, `recovery`, and `stranded` remain
-available in schema 6; the upgrade does not reconstruct a lost session.
+There are no deployed legacy PID-relocation installations to preserve. ResMan 1.35
+therefore does not read a created-cgroup list, process-origin file, recovery hierarchy,
+or schema-6 relocation lifecycle. Stop any experimental pre-1.35 build before
+upgrading and remove its private test hierarchy manually only after confirming it has
+no live processes. The 1.35 daemon will neither adopt nor alter it.
 
 ## Pre-upgrade checklist
 
@@ -236,7 +255,7 @@ rollback.
 
 **Visible change.** The default database moves from `/etc/resman/metrics.db` to
 `/var/lib/resman/metrics.db`. Unversioned, schema-version-2, schema-version-3,
-schema-version-4, and other incompatible stores are rejected; the current schema version is 6.
+schema-version-4, and other incompatible stores are rejected; the current schema version is 7.
 The immediate parent must be a
 real, process-owned mode-`0700` directory. The database and pre-existing `-wal` and
 `-shm` sidecars must be regular, process-owned mode-`0600` files. Replaceable or
@@ -253,9 +272,9 @@ expose per-user data.
 **Action.** Stop ResMan and archive or delete the old database; it is not migrated.
 Create a stable, non-symlink hierarchy with a service-owned mode-`0700` immediate
 parent. Set any retained database and sidecars to the service UID and mode `0600`, or
-let ResMan create a new schema-6 store. The `:memory:` database is unchanged.
+let ResMan create a new store. The `:memory:` database is unchanged.
 
-### Runtime-state and log paths change
+### Historical runtime-state and log path change
 
 **Visible change.** Created-cgroup state moves from `/var/run/resman-cgroups.txt` to
 `/run/resman-cgroups.txt`; the process-origin state follows that base. File logs and
@@ -271,9 +290,9 @@ treated as secret-bearing state.
 shared access must use an intended group and a group-only mode such as `0640`; access
 for other users is no longer supported.
 
-## Systemd-native accounting: schema 6
+## Systemd-native accounting: schema 7
 
-The current archive format is schema 6. Prior archives, including schema 5,
+The current archive format is schema 7. Prior archives, including schema 6,
 are rejected and require the established archive-or-delete procedure below.
 The domain columns and class-priority lending telemetry are removed. Root points,
 flat programmed/observed sibling weights, denominator state, enforcement mode and
@@ -331,16 +350,12 @@ exclusive physical isolation against arbitrary host workloads.
 Systemd-native CPU Points apply to authoritative user slices without moving PIDs.
 Rootless descendants inherit the UID envelope. Coverage is partial for a UID split
 across unrelated parents. RAM and I/O authority are checked independently.
-See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the schema-6 reset,
+See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the schema-7 reset,
 replacement fields, synchronized measurement procedure and coverage semantics.
 
-Reserve, root, best-effort, and map-content reload as one confirmed epoch. Native
-active class changes reconcile the flat plan in place. On non-systemd hosts only, a class change
-for an active UID is rejected atomically and no pending class state is retained. Wait
-for normal release or first remove that UID from CPU eligibility and reload, confirm
-release, then edit the map and reload; restore eligibility only in a later reload.
-Same-class guarantee changes and inactive membership changes remain dynamic. Changing
-the map path requires a restart. A custom map path must be absolute and clean, name a
+Reserve, root, best-effort, and map-content reload as one confirmed epoch. Active
+class and guarantee changes reconcile the flat plan in place. Changing the map path
+requires a restart. A custom map path must be absolute and clean, name a
 root/daemon-owned regular mode-`0600` file, and traverse only trusted non-symlink
 ancestors that are not group/other writable except for a root-owned sticky directory.
 

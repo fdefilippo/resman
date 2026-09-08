@@ -318,7 +318,7 @@ func newToolInventoryTestServer(t *testing.T, allowWriteOps bool) *Server {
 	cfg.MCPAuthToken = protocolTestToken
 	cfg.MCPEditorAuthToken = "editor-inventory-token"
 	cfg.MCPAllowWriteOps = allowWriteOps
-	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
+	server, err := NewServer(cfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

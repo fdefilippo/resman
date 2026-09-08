@@ -63,7 +63,6 @@ func TestApplyReloadLifecycle(t *testing.T) {
 	requested.DaemonShutdownTimeout = 75
 	requested.UsernameCacheTTL = 17
 	requested.MetricsDBRetentionDays = 12
-	requested.CreatedCgroupsFile = "/other/created-cgroups"
 	requested.MetricsDBPath = "/other/metrics.db"
 	requested.MCPTLSCertFile = "/other/server.crt"
 	requested.MCPAuthToken = "new-secret"
@@ -75,7 +74,7 @@ func TestApplyReloadLifecycle(t *testing.T) {
 		t.Fatalf("ApplyReloadLifecycle() error: %v", err)
 	}
 	wantRejected := []string{
-		"CREATED_CGROUPS_FILE", "MCP_AUTH_TOKEN", "MCP_SHUTDOWN_TIMEOUT", "MCP_TLS_CERT_FILE",
+		"MCP_AUTH_TOKEN", "MCP_SHUTDOWN_TIMEOUT", "MCP_TLS_CERT_FILE",
 		"METRICS_DB_PATH", "SERVER_ROLE",
 	}
 	if !slices.Equal(rejected, wantRejected) {
@@ -85,8 +84,7 @@ func TestApplyReloadLifecycle(t *testing.T) {
 		requested.UsernameCacheTTL != 17 || requested.MetricsDBRetentionDays != 12 {
 		t.Fatal("dynamic fields were not preserved from the requested configuration")
 	}
-	if requested.CreatedCgroupsFile != effective.CreatedCgroupsFile ||
-		requested.MetricsDBPath != effective.MetricsDBPath ||
+	if requested.MetricsDBPath != effective.MetricsDBPath ||
 		requested.MCPTLSCertFile != effective.MCPTLSCertFile ||
 		requested.MCPAuthToken != effective.MCPAuthToken ||
 		requested.MCPShutdownTimeout != effective.MCPShutdownTimeout ||
@@ -126,7 +124,6 @@ func TestRepresentativeFieldLifecycles(t *testing.T) {
 		"DAEMON_SHUTDOWN_TIMEOUT":   LifecycleDynamic,
 		"USERNAME_CACHE_TTL":        LifecycleDynamic,
 		"METRICS_DB_RETENTION_DAYS": LifecycleDynamic,
-		"CREATED_CGROUPS_FILE":      LifecycleRestartRequired,
 		"METRICS_DB_PATH":           LifecycleRestartRequired,
 		"MCP_TLS_KEY_FILE":          LifecycleRestartRequired,
 		"MCP_SHUTDOWN_TIMEOUT":      LifecycleRestartRequired,

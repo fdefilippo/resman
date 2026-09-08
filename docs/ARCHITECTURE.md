@@ -31,7 +31,7 @@ ResMan uses a single control cycle that runs every `POLLING_INTERVAL` seconds:
 | Aspect | CPU | RAM | IO |
 |--------|-----|-----|-----|
 | **Enable flag** | Always on | `RAM_LIMIT_ENABLED` | `IO_LIMIT_ENABLED` |
-| **Activation** | `cpu.weight` in shared cgroup | `memory.max` + `memory.high` in per-user cgroup | `io.max` in per-user cgroup |
+| **Activation** | `CPUWeight` on systemd user slices | `MemoryMax` + `MemoryHigh` on systemd user slices | systemd per-device I/O maxima |
 | **Throttling** | Reduces CPU share proportionally | Kernel reclaim + throttle | Kernel IO throttle |
 | **Hard limit** | Quota in `cpu.max` | `memory.max` (OOM killer) | `io.max` (bandwidth/IOPS cap) |
 | **Soft limit** | — | `memory.high` (throttle, no kill) | — |
@@ -81,19 +81,19 @@ resman_user_io_write_ops_total{uid, username}
 The `*_bytes_total` series report block-device traffic. The Prometheus
 `*_ops_total` series expose `/proc/PID/io` `syscr`/`syscw`: read/write-family
 syscall counts, not the block-device IOPS used for decisions. When an IOPS
-dimension is configured, the decision engine reads `rios`/`wios` from unlimited
-per-user observation cgroups and preserves a logical cumulative counter across
-enforcement placement changes.
+dimension is configured, the decision engine reads `rios`/`wios` from the
+authoritative user slice and preserves a logical cumulative counter across slice
+lifetimes.
 
 To show only limited users in dashboards, filter by `resman_user_cpu_limit_active{uid, username} == 1`.
 
 CPU Points observations use one synchronized decision interval for parent and slice
 CPU deltas and resource coverage. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
-for the schema-6 contract and operator measurement procedure.
+for the schema-7 contract and operator measurement procedure.
 
 ## Cgroup Hierarchy
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
 On systemd hosts the authoritative topology is flat:
 
@@ -108,8 +108,9 @@ All runnable siblings can borrow unused capacity. Processes retain their origina
 session/service membership. CPU covers descendants of each user slice, including
 rootless containers; a UID split across unrelated units has partial coverage.
 RAM and I/O use independent authority checks and are refused when ownership is
-incomplete. The non-systemd migration backend remains separate and reports its
-mode explicitly. Measurements use a 60-second window and effective parent delivery.
+incomplete. Without an authoritative systemd adapter ResMan reports
+`observation_only` and applies no limits. Measurements use a 60-second window and
+effective parent delivery.
 
 ## Placement transitions and memory charges
 
@@ -121,26 +122,14 @@ installs `/etc/resman/cpu-points.map` as a root-owned regular mode-`0600` file b
 the private mode-`0700` configuration directory. Unsafe files or ancestors reject the
 complete composite configuration epoch.
 
-Native active class changes reconcile weights in place without moving processes or
-changing the accounting identity. Reserve, root and best effort default to 100 each,
+Active class changes reconcile weights in place without moving processes or changing
+the accounting identity. Reserve, root and best effort default to 100 each,
 leaving 700 named points. Root receives CPU_ROOT_POINTS=100 without a leaf CPUQuota;
 the reserve protects system.slice, not an unbounded root login shell.
 
-On the non-systemd migration backend only, an active UID cannot change between guaranteed and best-effort because that requires
-a cross-domain move. Such a reload is rejected atomically and records no pending
-class. The operator must first wait for release or make the UID CPU-ineligible, reload
-and confirm release, then change the map and reload; eligibility may be restored only
-in a later epoch. Same-class weight changes and inactive membership changes remain
-dynamic.
-
 Native memory accounting includes existing slice charges; incomplete authority refuses
-RAM and I/O without abandoning CPU scheduling. The following placement restrictions
-apply only to the non-systemd backend. Linux does not transfer existing memory charges when a process moves. Dynamic first
-ingress therefore provides post-ingress `memory.high`/`memory.max` enforcement, while
-process-derived UID memory remains complete and the cgroup charge coverage is partial.
-A cross-parent CPU activation or release is refused while RAM enforcement is active;
-release or disable RAM, allow reconciliation to complete, and retry. I/O-only
-transitions are safe because the logical `io.stat` ledger preserves attribution.
+RAM and I/O without abandoning CPU scheduling. No resource transition changes process
+membership or the accounting identity.
 
 With the normal `memory.high < memory.max` composition and no swap or reclaimable
 pages, a process can remain alive but make negligible progress at high indefinitely.

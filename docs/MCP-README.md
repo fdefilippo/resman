@@ -46,7 +46,6 @@ requirement" controls whether a registered tool can complete successfully.
 | `get_user_metrics` | Get metrics for specific users | Always | None |
 | `get_active_users` | List active non-system users | Always | None |
 | `get_limits_status` | Get current resource-limit status | Always | None |
-| `get_cgroup_info` | Get cgroup details for a user | Always | None |
 | `get_configuration` | Get current CPU, RAM, and I/O resource-policy configuration | Always | None |
 | `get_configuration_editor` | Get the redacted versioned editor snapshot | Always | None |
 | `update_configuration` | Apply a revision-bound partial configuration update | Always | `MCP_ALLOW_WRITE_OPS=true` |
@@ -117,7 +116,6 @@ and `username` inside those host-scoped responses.
 | URI template | Description |
 |--------------|-------------|
 | `resman://users/{uid}/metrics` | Per-user metrics |
-| `resman://cgroups/{uid}` | Cgroup information |
 
 <!-- END MCP RESOURCE TEMPLATE INVENTORY -->
 
@@ -169,24 +167,6 @@ observed user's bounded configured-class, lifecycle, and process-coverage state 
 The system-health, user-analysis, and troubleshooting prompts expose the corresponding bounded
 summary. The active-user inventory remains identity-only; the memory report remains scoped to
 process-derived memory and RAM-limit state rather than duplicating CPU Points status.
-
-#### Cgroup interface availability
-
-`get_cgroup_info` and `resman://cgroups/{uid}` share one JSON schema. They expose the
-`cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high` interfaces as
-`cpu_max`, `cpu_weight`, `memory_current`, `memory_max`, and `memory_high`, each paired
-with an explicit `*_available` boolean. When an interface cannot be read, its value is
-omitted, the boolean is `false`, and `*_unavailable_reason` contains one bounded reason.
-Clients must not interpret an empty or absent value as an unlimited setting.
-
-| Unavailable reason | Meaning | Operator action |
-|--------------------|---------|-----------------|
-| `not_present` | The interface or its managed cgroup does not exist. | Verify that the managed cgroup still exists. If the interface is required by the enabled configuration, repair/enable the corresponding `cpu` or `memory` controller in the delegated hierarchy and restart ResMan; an interface for a disabled feature may legitimately be absent. |
-| `permission_denied` | The daemon cannot read an existing interface. | Restore the documented root/delegation model and cgroup mount permissions; do not make individual interface files world-readable. |
-| `read_error` | The read failed for another bounded class, such as a transient kernel or cgroup-filesystem error. | Inspect the ResMan journal and kernel log, verify that the managed cgroup still exists, and investigate persistent cgroup-filesystem failures. |
-
-The reason never contains the attempted interface path or a raw error string. The
-existing `path` field continues to identify the managed cgroup itself.
 
 ## Configuration
 

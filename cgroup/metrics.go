@@ -51,11 +51,6 @@ type MemoryAccountingSnapshot struct {
 	Events       MemoryEventCounters
 }
 
-// GetCPUPointsNodeSnapshot reads one identity-stable CPU Points cgroup node.
-func (m *Manager) GetCPUPointsNodeSnapshot(path string) (CPUPointsNodeSnapshot, error) {
-	return ReadCPUAccountingSnapshot(path)
-}
-
 // ReadCPUAccountingSnapshot reads counters without creating or mutating a cgroup.
 func ReadCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
 	identity, err := readCgroupIdentity(path)
@@ -95,15 +90,6 @@ func ReadCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
 		return CPUPointsNodeSnapshot{}, err
 	}
 	return CPUPointsNodeSnapshot{Identity: identity, CPUStat: stat, CPUQuota: quota, CPUWeight: weight}, nil
-}
-
-// GetMemoryAccountingSnapshot reads RAM usage, limits and event counters for one managed UID.
-func (m *Manager) GetMemoryAccountingSnapshot(uid int) (MemoryAccountingSnapshot, error) {
-	path, exists := m.getCgroupPath(uid)
-	if !exists {
-		return MemoryAccountingSnapshot{}, fmt.Errorf("cgroup for UID %d not found", uid)
-	}
-	return ReadMemoryAccountingSnapshot(path)
 }
 
 // ReadMemoryAccountingSnapshot reads identity-stable memory accounting at an authorized path.
@@ -215,34 +201,3 @@ func readCgroupCounterFile(path string) (map[string]uint64, error) {
 	}
 	return values, nil
 }
-
-func (m *Manager) GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error) {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		return "", "", 0, 0, 0, 0, 0, fmt.Errorf("cgroup for UID %d not found", uid)
-	}
-
-	// Read cpu.max.
-	cpuMaxFile := filepath.Join(cgroupPath, "cpu.max")
-	if data, readErr := os.ReadFile(cpuMaxFile); readErr == nil {
-		cpuQuota = strings.TrimSpace(string(data))
-	}
-
-	// Read memory.high events.
-	if memEvents, memErr := m.GetMemoryHighEvents(uid); memErr == nil {
-		memoryHighEvents = memEvents
-	} else {
-		m.logger.Debug("Failed to read memory high events (optional metric)", "uid", uid, "error", memErr)
-	}
-
-	// Read io.stat.
-	if rBytes, wBytes, rOps, wOps, ioErr := m.GetIOStats(uid); ioErr == nil {
-		ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps = rBytes, wBytes, rOps, wOps
-	} else {
-		m.logger.Debug("Failed to read IO stats (optional metric)", "uid", uid, "error", ioErr)
-	}
-
-	return cgroupPath, cpuQuota, memoryHighEvents, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps, nil
-}
-
-// getProcessInfo returns detailed information about a process.

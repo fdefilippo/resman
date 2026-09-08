@@ -10,8 +10,6 @@
 # PATHS
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup
-CGROUP_BASE=resman
-CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 
 # ========================
 # TIMING
@@ -32,11 +30,6 @@ PROCESS_MIN_AGE_SECONDS=60
 # TIMEOUT CONFIGURATION
 # ========================
 # Timeout for critical operations (v1.18.3+)
-#
-# CGROUP_OPERATION_TIMEOUT: Timeout for cgroup operations (process migration)
-# Default: 5 seconds
-# Increase on slow systems or with many processes
-CGROUP_OPERATION_TIMEOUT=5
 #
 # DAEMON_SHUTDOWN_TIMEOUT: Deadline for the complete daemon shutdown sequence
 # Default: 60 seconds
@@ -88,7 +81,6 @@ CPU_THRESHOLD_DURATION=90
 # a saturated parent can throttle and deliver less than its nominal quota.
 # CPU_POINTS_FILE assigns mapped eligible users scheduling entitlements.
 # Native CPU includes rootless descendants; unrelated parents make coverage partial.
-# PID-namespace rejections reduce that coverage on the non-systemd migration backend.
 # Every other active non-root user slice, including excluded and unmapped users,
 # shares CPU_BEST_EFFORT_POINTS as one aggregate entitlement. Active root
 # sessions receive CPU_ROOT_POINTS as a lendable entitlement, never as a ceiling;
@@ -99,11 +91,8 @@ CPU_THRESHOLD_DURATION=90
 # Unused bandwidth is work-conserving among all runnable sibling user slices.
 # Configured guarantees plus root and best effort must fit within 1000 minus
 # reserve. Defaults leave 700 points for named guarantees (previously 800).
-# These values and map-content changes reload atomically. Native active class
-# changes reconcile weights in place. Changing CPU_POINTS_FILE requires restart.
-# On the non-systemd migration backend only, a class change for an active UID is
-# rejected atomically: release the UID, then retry the map reload. There is no
-# pending class state. Same-class weights and inactive membership remain dynamic.
+# These values and map-content changes reload atomically. Active class changes
+# reconcile weights in place. Changing CPU_POINTS_FILE requires restart.
 # The reserve protects system.slice and other workloads outside user.slice;
 # root login sessions remain inside the finite CPU pool, without a leaf quota.
 CPU_RESERVE_POINTS=100
@@ -257,40 +246,12 @@ IO_THRESHOLD_DURATION=0
 IO_USER_INCLUDE_LIST=
 IO_USER_EXCLUDE_LIST=
 
-# IO Starvation Auto-Remediation
-# Detects when a user is IO-throttled for too long and temporarily
-# increases limits to prevent prolonged performance degradation.
-# Applies only to users with active IO limits and restores the configured
-# limits when the boost expires, even when IO_REVERT_ON_NORMAL is false.
-# Requires kernel >= 4.20 with CONFIG_PSI=y for PSI detection.
-# IO_REMEDIATION_ENABLED: true = enable auto-remediation
-# IO_STARVATION_THRESHOLD: Seconds of continuous throttling before acting
-# IO_STARVATION_CHECK_INTERVAL: Check frequency (seconds)
-# IO_BOOST_MULTIPLIER: Multiplier for temporary limits (2.0 = 2x)
-# IO_BOOST_DURATION: Duration of boost in seconds
-# IO_BOOST_MAX_PER_HOUR: Max boosts per user per hour
-# IO_PSI_THRESHOLD: PSI some avg10 % threshold to consider starvation
-# IO_REVERT_ON_NORMAL: true = revert limits when IO returns to normal
-IO_REMEDIATION_ENABLED=false
-IO_STARVATION_THRESHOLD=300
-IO_STARVATION_CHECK_INTERVAL=30
-IO_BOOST_MULTIPLIER=2.0
-IO_BOOST_DURATION=600
-IO_BOOST_MAX_PER_HOUR=3
-IO_PSI_THRESHOLD=50
-IO_REVERT_ON_NORMAL=true
-
 # ========================
 # WORKLOAD PATTERN DETECTION
 # ========================
-# Auto-detect eligible user workload patterns (batch/interactive/mixed) and
-# select RAM policy based on historical usage. CPU Points remains authoritative
-# for CPU capacity.
+# Auto-detect eligible user workload patterns (batch/interactive/mixed) for
+# observation and reporting. Pattern detection never changes resource policy.
 # Uses a sliding window of PATTERN_HISTORY_HOURS with hourly analysis.
-# Pattern RAM policy is applied only while the user is in a managed CPU leaf.
-# It never moves excluded users or creates standalone policy cgroups.
-# When a pattern becomes unknown or this feature is disabled, active users are
-# restored to the configured non-pattern RAM limit without changing CPU Points.
 #
 # AUTODETECT_PATTERNS: Enable pattern detection (true/false)
 # Default: false
@@ -306,12 +267,6 @@ IO_REVERT_ON_NORMAL=true
 # Default: 0.7
 # Higher values reduce false classifications but may leave users unclassified
 #
-# BATCH_NIGHT_RAM_QUOTA: RAM quota for batch night pattern (K/M/G/T, case-insensitive)
-# Default: 4G
-#
-# INTERACTIVE_RAM_QUOTA: RAM quota for interactive day pattern (K/M/G/T, case-insensitive)
-# Default: 1G
-#
 # Examples:
 # # Enable pattern detection with defaults
 # AUTODETECT_PATTERNS=true
@@ -322,17 +277,10 @@ IO_REVERT_ON_NORMAL=true
 # PATTERN_MIN_SAMPLES=12         # 12 hours minimum
 # PATTERN_CONFIDENCE_THRESHOLD=0.5  # Lower confidence requirement
 #
-# # Batch-optimized: high RAM quotas for batch users
-# AUTODETECT_PATTERNS=true
-# BATCH_NIGHT_RAM_QUOTA=8G
-# INTERACTIVE_RAM_QUOTA=512M
-#
 AUTODETECT_PATTERNS=false
 PATTERN_HISTORY_HOURS=168
 PATTERN_MIN_SAMPLES=24
 PATTERN_CONFIDENCE_THRESHOLD=0.7
-BATCH_NIGHT_RAM_QUOTA=4G
-INTERACTIVE_RAM_QUOTA=1G
 
 # ========================
 # LIMIT HOOK
@@ -341,7 +289,7 @@ INTERACTIVE_RAM_QUOTA=1G
 # Script runs as the required non-root user/group with no supplementary groups.
 # It receives only the documented fixed environment and RESMAN_LIMIT_* variables.
 # URL receives a JSON POST with uid, username, enforceable_cpu_usage_percent,
-# cpu_eligible_users_count, shared_cgroup, and timestamp.
+# cpu_eligible_users_count, timestamp, and typed enforcement details.
 # Script stdout/stderr is discarded and never copied into daemon errors or logs.
 # URL failures log only scheme://host[:port], never userinfo, path, query, or fragment.
 # Script and URL are independent jobs and each receives the full timeout below.
@@ -485,12 +433,10 @@ USER_EXCLUDE_LIST=
 # List of comma-free regex patterns to exclude from every resource limit
 # (comma-separated; see the rule at the top of this file)
 # These processes remain visible in observed totals, but they do not contribute
-# to CPU, RAM, or IO decisions and are never moved into limited cgroups.
+# to CPU, RAM, or IO decisions. Because enforcement acts on a user slice, this
+# setting cannot exempt one process from a limit applied to its containing slice.
 # Matching uses only the /proc/PID/exe basename. /proc/PID/comm is display-only;
 # an unreadable executable identity remains enforceable and is reported explicitly.
-# Active limits reconcile membership every control cycle. A newly excluded
-# process is restored only to its captured origin for the same PID start time;
-# if no safe origin exists, it remains constrained and the cycle reports an error.
 # Useful for protecting critical processes that could cause instability
 # Supports regular expressions (regex) for advanced pattern matching
 #

@@ -35,7 +35,6 @@ import (
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	"github.com/fdefilippo/resman/internal/operationgate"
@@ -72,7 +71,6 @@ var editorToolAllowlist = map[string]struct{}{
 	"get_user_metrics":             {},
 	"get_active_users":             {},
 	"get_limits_status":            {},
-	"get_cgroup_info":              {},
 	"get_configuration":            {},
 	"get_configuration_editor":     {},
 	"update_configuration":         {},
@@ -100,19 +98,12 @@ type serverLogger interface {
 	Error(string, ...interface{})
 }
 
-type cgroupInfoReader interface {
-	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
-	GetMemoryHighEvents(uid int) (uint64, error)
-	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
-}
-
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
 	mcpServer         *mcp.Server
 	cfg               *config.MCPServerConfig
 	stateManager      *state.Manager
 	metricsCollector  *metrics.Collector
-	cgroupManager     cgroupInfoReader
 	dbManager         *database.DatabaseManager
 	configReloader    ConfigurationReloader
 	revisionConfirm   func(*config.Config) (config.EditorSnapshot, error)
@@ -137,7 +128,6 @@ func NewServer(
 	parentCfg *config.Config,
 	sm *state.Manager,
 	mc *metrics.Collector,
-	cg *cgroup.Manager,
 	dbm *database.DatabaseManager,
 	configReloader ConfigurationReloader,
 ) (*Server, error) {
@@ -177,7 +167,6 @@ func NewServer(
 		cfg:              &mcpCfg,
 		stateManager:     sm,
 		metricsCollector: mc,
-		cgroupManager:    cg,
 		dbManager:        dbm,
 		configReloader:   configReloader,
 		logger:           logger,

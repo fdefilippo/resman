@@ -36,7 +36,7 @@ ROWS = (
     Row("missing-io-startup", (9,), ("missing-io-startup",), remote=False),
     Row("mcp-filter-reload", (9,), ("mcp-filter-reload",), remote=False),
     Row("psi-refresh-neutrality", (7, 9), ("psi-refresh-neutrality",)),
-    Row("non-systemd-migration", (9,), ("non-systemd-namespace", "legacy-cpu-ingress", "legacy-live-restoration", "legacy-cleanup"), remote=False),
+    Row("non-systemd-observation", (9,), ("non-systemd-namespace", "observation-only-mode", "no-pid-relocation", "no-managed-hierarchy"), remote=False),
     Row("native-package-acceptance", (6, 10), (
         "installed-identity", "shipped-defaults", "schema-reset", "upgrade-750-rejected", "graceful-stop"),
         artifact="package"),

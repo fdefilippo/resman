@@ -97,8 +97,8 @@ The CPU Points operational snapshot additionally exposes interval gauges for
 high delta with zero max/OOM/kill deltas can mean sustained throttling or an indefinite
 stall, especially for unreclaimable anonymous memory without swap; it is not evidence
 that RAM enforcement is absent and does not imply that the process will be killed.
-The accompanying cgroup memory-current gauge is post-ingress cgroup accounting, not
-the complete process-derived UID memory value.
+The accompanying cgroup memory-current gauge is authoritative user-slice accounting,
+not the complete process-derived UID memory value when coverage is partial.
 
 ## Verification
 
@@ -106,15 +106,15 @@ For a limited UID, inspect the actual cgroup files:
 
 ```bash
 uid=1001
-base=/sys/fs/cgroup/resman/user_${uid}
+base=/sys/fs/cgroup/user.slice/user-${uid}.slice
 
 cat "$base/memory.high"
 cat "$base/memory.max"
 cat "$base/memory.events"
 ```
 
-The exact cgroup path may differ when `CGROUP_ROOT` or `CGROUP_BASE` is customized.
-Use the MCP cgroup information surface or ResMan logs to find the managed path.
+Use `systemctl show "user-${uid}.slice" -p ControlGroup` to resolve the
+authoritative path. ResMan does not create a separate managed hierarchy.
 
 ## Troubleshooting
 

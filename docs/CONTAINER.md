@@ -5,27 +5,19 @@ observes the host. It is not an isolated or rootless workload. The daemon must s
 host PIDs, resolve host users through NSS, read trustworthy `/proc/PID/exe` and
 `/proc/PID/io` entries for foreign users, and inspect the host cgroup v2 hierarchy.
 The invocation below does not expose the host system bus or mutable systemd unit-file
-roots. On a systemd host it therefore remains `observation_only_systemd`; native
-enforcement from this container layout is not claimed. For `systemd_native`, install
-the host package and verify its adapter and property-lease recovery. A non-systemd
-host uses the separate migration backend. Merely adding a bus socket does not prove
-that safe unit-file inspection and recovery work through container mounts.
+roots. It therefore remains `observation_only`; enforcement from this container
+layout is not claimed. For `systemd_native`, install the host package and verify its
+adapter and property-lease recovery. Merely adding a bus socket does not prove that
+safe unit-file inspection and recovery work through container mounts.
 
 The image is built with CGO on Oracle Linux 9 and includes the SSSD NSS client.
 The process runs as UID 0. Rootless Podman, a private PID or cgroup namespace,
 an unprivileged user, and a read-only cgroup mount are unsupported because they
 cannot satisfy the resource-manager contract.
 
-At startup resman records its own PID namespace identity from `/proc/self/ns/pid`.
-Before every move into a ResMan-owned cgroup it requires the candidate process to have
-the same namespace identity and verifies it again immediately before the kernel write.
-Processes in nested PID namespaces are still observed and included in policy inputs,
-but resman does not acquire them from their runtime-owned cgroups; the skip is logged
-once per user operation and counted by `resman_cgroup_ingress_skipped_total`. This
-boundary is guaranteed only when resman itself runs on the host, or in the supported
-container deployment below with `--pid=host` and the host `/proc`. A workload using
-the host PID namespace is not distinguishable by this guard; the systemd ownership
-boundary still refuses migration for the complete host.
+ResMan never moves observed processes. `--pid=host` and the host `/proc` are still
+required for truthful process observation, while the absence of the authoritative
+systemd adapter keeps this deployment observation-only.
 
 ## Prepare the host
 
@@ -34,7 +26,6 @@ Create a configuration whose persistent paths point at the mounted directories:
 ```ini
 CGROUP_ROOT=/sys/fs/cgroup
 LOG_FILE=/var/log/resman/resman.log
-CREATED_CGROUPS_FILE=/run/resman-cgroups.txt
 METRICS_DB_PATH=/var/lib/resman/metrics.db
 ```
 
@@ -68,7 +59,7 @@ sudo podman run --rm --name resman \
   -v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
   -v /var/lib/resman:/var/lib/resman:rw \
   -v /var/log/resman:/var/log/resman:rw \
-resman:1.34.1
+resman:1.35.0
 ```
 
 `--pid=host` makes `/proc` describe the processes resman controls.

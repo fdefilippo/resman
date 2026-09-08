@@ -21,8 +21,7 @@ func TestCPUPointsAndMemoryAccountingSnapshotsReadTypedKernelState(t *testing.T)
 	write(filepath.Join(root, "cpu.max"), "90000 100000\n")
 	write(filepath.Join(root, "cpu.weight"), "300\n")
 
-	manager := &Manager{createdCgroups: map[int]string{1000: root}}
-	cpu, err := manager.GetCPUPointsNodeSnapshot(root)
+	cpu, err := ReadCPUAccountingSnapshot(root)
 	if err != nil {
 		t.Fatalf("GetCPUPointsNodeSnapshot() error = %v", err)
 	}
@@ -38,7 +37,7 @@ func TestCPUPointsAndMemoryAccountingSnapshotsReadTypedKernelState(t *testing.T)
 	write(filepath.Join(root, "memory.max"), "8192\n")
 	write(filepath.Join(root, "memory.swap.max"), "0\n")
 	write(filepath.Join(root, "memory.events"), "low 0\nhigh 7\nmax 0\noom 0\noom_kill 0\n")
-	memory, err := manager.GetMemoryAccountingSnapshot(1000)
+	memory, err := ReadMemoryAccountingSnapshot(root)
 	if err != nil {
 		t.Fatalf("GetMemoryAccountingSnapshot() error = %v", err)
 	}
@@ -71,7 +70,7 @@ func TestCgroupCounterSnapshotRejectsIncompleteOrAmbiguousData(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			write("cpu.stat", tt.data)
-			if _, err := (&Manager{}).GetCPUPointsNodeSnapshot(root); err == nil {
+			if _, err := ReadCPUAccountingSnapshot(root); err == nil {
 				t.Fatal("GetCPUPointsNodeSnapshot() error = nil")
 			}
 		})
@@ -99,14 +98,13 @@ func TestCgroupSnapshotReadersRejectDirectoryReplacementDuringInterfaceReads(t *
 				writeSnapshotFixture(t, filepath.Join(path, "cpu.weight"), "300\n")
 			},
 			func(path string) error {
-				_, err := (&Manager{}).GetCPUPointsNodeSnapshot(path)
+				_, err := ReadCPUAccountingSnapshot(path)
 				return err
 			},
 		)
 	})
 
 	t.Run("RAM node", func(t *testing.T) {
-		const uid = 1000
 		runSnapshotDirectoryReplacement(t, "memory.current", "4096\n",
 			func(path string) {
 				writeSnapshotFixture(t, filepath.Join(path, "memory.high"), "2048\n")
@@ -115,8 +113,7 @@ func TestCgroupSnapshotReadersRejectDirectoryReplacementDuringInterfaceReads(t *
 				writeSnapshotFixture(t, filepath.Join(path, "memory.events"), "high 7\nmax 0\noom 0\noom_kill 0\n")
 			},
 			func(path string) error {
-				manager := &Manager{createdCgroups: map[int]string{uid: path}}
-				_, err := manager.GetMemoryAccountingSnapshot(uid)
+				_, err := ReadMemoryAccountingSnapshot(path)
 				return err
 			},
 		)

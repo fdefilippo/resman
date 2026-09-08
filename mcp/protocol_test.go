@@ -389,7 +389,7 @@ func TestHTTPEditorCredentialCannotReachOperatorMutationTools(t *testing.T) {
 	cfg.MCPAuthToken = protocolTestToken
 	cfg.MCPEditorAuthToken = "editor-protocol-token"
 	cfg.MCPAllowWriteOps = true
-	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
+	server, err := NewServer(cfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,13 +657,13 @@ func newStatusProtocolTestServer(t *testing.T) *Server {
 		t.Fatalf("NewCollector() error = %v", err)
 	}
 	manager, err := state.NewManager(cfg, collector, nil, nil, state.WithEnforcementStatus(cgroup.EnforcementStatus{
-		Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+		Mode:   cgroup.EnforcementModeObservationOnly,
 		Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
 	}))
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
-	server, err := NewServer(cfg, manager, collector, nil, nil, nil)
+	server, err := NewServer(cfg, manager, collector, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -768,8 +768,6 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 	for _, key := range []string{
 		"enforcement_mode",
 		"enforcement_reason",
-		"migration_enforcement_available",
-		"recovery_occupants",
 		"observed_users_cpu_usage",
 		"observed_users_count",
 		"total_cpu_usage_available",
@@ -783,11 +781,8 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 			t.Errorf("status is missing %q: %+v", key, status)
 		}
 	}
-	if got := status["enforcement_mode"]; got != string(cgroup.EnforcementModeObservationOnlySystemd) {
+	if got := status["enforcement_mode"]; got != string(cgroup.EnforcementModeObservationOnly) {
 		t.Errorf("enforcement_mode = %v", got)
-	}
-	if got := status["migration_enforcement_available"]; got != false {
-		t.Errorf("migration_enforcement_available = %v", got)
 	}
 	for _, key := range []string{"total_user_cpu_usage", "user_cpu_usage", "active_users_count", "limits_active", "limits_applied_time"} {
 		if _, exists := status[key]; exists {
@@ -813,7 +808,7 @@ func newProtocolTestServer(t testing.TB) *Server {
 	cfg.MCPTransport = "http"
 	cfg.MCPHTTPHost = "127.0.0.1"
 	cfg.MCPAuthToken = protocolTestToken
-	server, err := NewServer(cfg, nil, nil, nil, nil, nil)
+	server, err := NewServer(cfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

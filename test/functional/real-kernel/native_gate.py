@@ -185,7 +185,6 @@ class NativeGate:
             "CPU_POINTS_FILE": str(self.map), "LOG_LEVEL": "INFO", "RAM_LIMIT_ENABLED": "true",
             "RAM_THRESHOLD": "2", "RAM_RELEASE_THRESHOLD": "1", "IO_LIMIT_ENABLED": "true",
             "IO_THRESHOLD": "2", "IO_RELEASE_THRESHOLD": "1", "IO_DEVICE_FILTER": "8:0",
-            "CREATED_CGROUPS_FILE": str(self.work / "cgroups.txt"), "CGROUP_BASE": "resman-native-" + self.run_id,
             "METRICS_DB_ENABLED": "true", "METRICS_DB_PATH": str(self.db),
             "METRICS_DB_WRITE_INTERVAL": "5", "BLACKOUT": "* 00-24" if blackout else "",
         }

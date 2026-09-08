@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/fdefilippo/resman/config"
-	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/limithook"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -69,7 +68,6 @@ func TestPostLimitHook(t *testing.T) {
 		Username:                   "app",
 		EnforceableCPUUsagePercent: 82.5,
 		CPUEligibleUsersCount:      2,
-		SharedCgroup:               "/sys/fs/cgroup/resman/limited",
 		Timestamp:                  time.Now().UTC(),
 		LimitHookSource:            "resman",
 		CPUPointsConfiguredClass:   "best_effort",
@@ -388,24 +386,27 @@ func TestRunLimitHookScript(t *testing.T) {
 	}
 }
 
-func TestLimitHookSnapshotReportsAppliedHostSubsetWithoutCallingTheCompleteUIDGuaranteed(t *testing.T) {
+func TestLimitHookSnapshotUsesTheAuthoritativeSystemdObservation(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
 		points int
 	}{"alice": {uid: 1000, points: 300}})
-	weight, err := cpupoints.NewKernelCPUWeight(300)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager := &Manager{
-		cpuPointsPolicy: policy, cpuAllocations: map[int]cpuPointsAllocation{1000: {class: cpupoints.AllocationClassGuaranteed, weight: weight}},
-		cpuPointsLifecycleEvents: map[int]cpuPointsLifecycleEvent{1000: {state: resmanmetrics.CPUPointsLifecycleApplied, pidNamespaceMismatches: 1}},
-		resourceLimits:           map[int]userResourceLimitState{}, ramCoverage: map[int]ramCoverageState{},
+		cpuPointsPolicy:          policy,
+		cpuPointsLifecycleEvents: map[int]cpuPointsLifecycleEvent{1000: {state: resmanmetrics.CPUPointsLifecycleApplied}},
 	}
-	sample := &SystemMetrics{UserMetrics: map[int]*resmanmetrics.UserMetrics{1000: {
-		UID: 1000, Username: "alice", ProcessCount: 3, CPULimitRequested: true,
-		EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 2},
-	}}}
+	weight := uint64(300)
+	class := "guaranteed"
+	sample := &SystemMetrics{
+		UserMetrics: map[int]*resmanmetrics.UserMetrics{1000: {
+			UID: 1000, Username: "alice", ProcessCount: 3, CPULimitRequested: true,
+			EnforceableUsage: resmanmetrics.ProcessSetMetrics{ProcessCount: 2},
+		}},
+		CPUPointsUsers: map[int]resmanmetrics.CPUPointsUserSnapshot{1000: {
+			UID: 1000, Username: "alice", AppliedClass: &class, AppliedWeight: &weight,
+			AppliedToProcesses: true, ProcessCoverage: resmanmetrics.CPUPointsCoveragePartial,
+		}},
+	}
 	snapshot := manager.limitHookCPUPointsSnapshot(1000, "alice", sample)
 	if !snapshot.AppliedToProcesses || snapshot.CompleteUIDWorkloadGuaranteed || snapshot.ProcessCoverage != resmanmetrics.CPUPointsCoveragePartial {
 		t.Fatalf("limit-hook CPU Points snapshot = %+v", snapshot)

@@ -28,7 +28,6 @@ func (a *App) WithCgroupManager() *App {
 	if err != nil {
 		a.logger.Error("Failed to initialize cgroup manager",
 			"cgroup_root", a.cfg.CgroupRoot,
-			"cgroup_base", a.cfg.CgroupBase,
 			"error", err,
 		)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize cgroup manager: %v\n", err)
@@ -41,16 +40,6 @@ func (a *App) WithCgroupManager() *App {
 		a.err = classifyCgroupStartupError(err)
 		return a
 	}
-	restoreResult, err := cgroupMgr.RecoverExistingCgroupsWithResult()
-	if err != nil {
-		a.logger.Error("Failed to recover cgroups left by a previous daemon instance",
-			"error", err,
-		)
-		fmt.Fprintf(os.Stderr, "\nFailed to recover existing resman cgroups: %v\n", err)
-		a.err = err
-		return a
-	}
-	a.startupRestore = restoreResult
 	a.cgroupMgr = cgroupMgr
 	return a
 }
@@ -182,7 +171,6 @@ func (a *App) WithPrometheus() *App {
 	}
 
 	a.prometheusExporter = prometheusExporter
-	prometheusExporter.RecordProcessRestoreResult(a.startupRestore)
 	a.logger.Info("Prometheus exporter started",
 		"host", a.cfg.PrometheusMetricsBindHost,
 		"port", a.cfg.PrometheusMetricsBindPort,
@@ -222,19 +210,13 @@ func (a *App) WithStateManager() *App {
 	if err != nil {
 		return a.failCPUPointsStartup("initialize CPU Points live capacity", err, false)
 	}
-	recoverySnapshot, recoveryErr := a.cgroupMgr.RecoverySnapshot()
-	if recoveryErr != nil {
-		a.logger.Warn("Failed to inspect recovery occupants during state initialization", "error", recoveryErr)
-	}
-
 	status := a.cgroupMgr.EnforcementStatus()
 	options := []state.ManagerOption{
 		state.WithCPUPointsRuntime(policy, capacity),
 		state.WithEnforcementStatus(status),
-		state.WithRecoverySnapshot(recoverySnapshot),
 	}
 	var systemdAdapter *systemdunit.Adapter
-	if status.Mode == cgroup.EnforcementModeObservationOnlySystemd && status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
+	if status.Mode == cgroup.EnforcementModeObservationOnly && status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
 		systemdAdapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout)
 		if err != nil {
 			a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
@@ -355,7 +337,7 @@ func (a *App) WithMCPServer() *App {
 		return a
 	}
 
-	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.cgroupMgr, a.dbManager, a.configWatcher)
+	mcpServer, err := mcp.NewServer(cfg, a.stateManager, a.metricsCollector, a.dbManager, a.configWatcher)
 	if err != nil {
 		a.logger.Error("Failed to initialize MCP server", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize MCP server: %v\n", err)

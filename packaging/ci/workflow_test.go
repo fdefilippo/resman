@@ -273,6 +273,24 @@ func TestVerifyFormatRejectsInvalidGoSyntax(t *testing.T) {
 	}
 }
 
+func TestVerifyFormatIgnoresTrackedFilesDeletedByTheChange(t *testing.T) {
+	root := repositoryRoot(t)
+	fixture := t.TempDir()
+	runCommand(t, fixture, nil, "git", "init", "--quiet")
+	goFile := filepath.Join(fixture, "retired.go")
+	if err := os.WriteFile(goFile, []byte("package retired\n"), 0600); err != nil {
+		t.Fatalf("write retired fixture: %v", err)
+	}
+	runCommand(t, fixture, nil, "git", "add", "retired.go")
+	if err := os.Remove(goFile); err != nil {
+		t.Fatalf("remove retired fixture: %v", err)
+	}
+
+	if output, err := runMakeTarget(fixture, root, "verify-format"); err != nil {
+		t.Fatalf("verify-format inspected a tracked file deleted by the change: %v; output=%s", err, output)
+	}
+}
+
 func TestVerifyPromtoolRejectsMissingBinary(t *testing.T) {
 	root := repositoryRoot(t)
 	makeBinary, err := exec.LookPath("make")

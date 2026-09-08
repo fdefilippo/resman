@@ -18,7 +18,6 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/cpupoints"
-	"github.com/fdefilippo/resman/state"
 )
 
 const maximumConflictFields = 16
@@ -72,7 +71,6 @@ const (
 	editorRefusalMalformedCPUPointsMap editorRefusalReason = "malformed_cpu_points_map"
 	editorRefusalUnresolvedUsername    editorRefusalReason = "unresolved_username"
 	editorRefusalCPUPointsOvercommit   editorRefusalReason = "cpu_points_overcommit"
-	editorRefusalActiveUIDClassChange  editorRefusalReason = "active_uid_class_change"
 )
 
 func allEditorRefusalReasons() []editorRefusalReason {
@@ -82,7 +80,7 @@ func allEditorRefusalReasons() []editorRefusalReason {
 		editorRefusalDuplicateKey, editorRefusalInvalidValue, editorRefusalInvalidSource,
 		editorRefusalNoChange, editorRefusalEnvironmentInvalid, editorRefusalInvalidCandidate,
 		editorRefusalInvalidCPUPointsPatch, editorRefusalMalformedCPUPointsMap,
-		editorRefusalUnresolvedUsername, editorRefusalCPUPointsOvercommit, editorRefusalActiveUIDClassChange,
+		editorRefusalUnresolvedUsername, editorRefusalCPUPointsOvercommit,
 	}
 }
 
@@ -154,12 +152,9 @@ func (s *Server) handleUpdateConfiguration(ctx context.Context, _ *mcp.CallToolR
 		}
 		return &mcp.CallToolResult{}, failedEditorResult(), nil
 	}
-	policy, err := loadEditorPolicy(candidate.Config())
+	_, err = loadEditorPolicy(candidate.Config())
 	if err != nil {
 		return &mcp.CallToolResult{}, classifyEditorPolicyError(err, configKeys(args.Changes), nil), nil
-	}
-	if err := s.stateManager.ValidateCPUPointsPolicyTransition(policy); err != nil {
-		return &mcp.CallToolResult{}, classifyEditorPreflight(err, configKeys(args.Changes)), nil
 	}
 	persistedConfig, err := candidate.Persist(args.Revision.Config, args.Revision.CPUPoints)
 	if err != nil {
@@ -213,9 +208,6 @@ func (s *Server) handleUpdateCPUPoints(ctx context.Context, _ *mcp.CallToolReque
 			return &mcp.CallToolResult{}, classifyPolicyEditorCandidateError(candidateErr), nil
 		}
 		return &mcp.CallToolResult{}, classifyEditorPolicyError(err, nil, cpuPointsUsernames(args.Changes)), nil
-	}
-	if err := s.stateManager.ValidateCPUPointsPolicyTransition(candidate.Policy()); err != nil {
-		return &mcp.CallToolResult{}, classifyEditorPreflight(err, nil), nil
 	}
 	fresh, err := s.buildEditorPrePersistSnapshot(applied)
 	if err != nil || fresh.Revision.Value != args.Revision.Value {
@@ -369,14 +361,6 @@ func (s *Server) recordEditorOperation(ctx context.Context, operation string, re
 		"persisted_revision", result.PersistedRevision,
 		"applied_revision", result.AppliedRevision,
 	)
-}
-
-func classifyEditorPreflight(err error, keys []string) editorUpdateResult {
-	var classChange *state.CPUPointsClassChangeError
-	if errors.As(err, &classChange) {
-		return refusedEditorResult(editorRefusalActiveUIDClassChange, keys, append([]int(nil), classChange.UIDs...))
-	}
-	return failedEditorResult()
 }
 
 func classifyEditorPolicyError(err error, keys, usernames []string) editorUpdateResult {

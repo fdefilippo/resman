@@ -145,24 +145,25 @@ The package row runs the installed `/usr/bin/resman` only after its identity and
 bytes match the supplied RPM payload:
 
 ```bash
-REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.34.1-1.el9.x86_64.rpm \
+REAL_KERNEL_PACKAGE=/absolute/path/to/resman-1.35.0-1.el9.x86_64.rpm \
 GO_BIN=/usr/local/go/bin/go \
   test/functional/real-kernel/remote.sh native-package-acceptance root@terra
 ```
 
-The example names the current `1.34.1-1` release identity. Increment RELEASE before
+The example names the current `1.35.0-1` release identity. Increment RELEASE before
 any later build of the same VERSION and install it only through an explicitly approved operation.
 The row neither builds nor installs packages. It uses shipped RPM defaults, proves the 750-point
-rejection, preserves rejected schema 5, observes schema 6 with real rows, and runs
+rejection, preserves rejected schema 6, observes schema 7 with real rows, and runs
 the native lifecycle using isolated configuration. A source-binary PASS cannot
 satisfy this package row.
 
 ```bash
-SMOLVM_SCENARIO=non-systemd-migration test/functional/smolvm/run.sh run
+SMOLVM_SCENARIO=non-systemd-observation test/functional/smolvm/run.sh run
 ```
 
-This required row proves legacy ingress and exact live restoration under a private
-PID/mount namespace with non-systemd PID 1 inside disposable SmolVM. It does not
+This required row proves observation-only behavior, unchanged PID membership, and
+absence of a ResMan-owned hierarchy under a private PID/mount namespace with
+non-systemd PID 1 inside disposable SmolVM. It does not
 claim a physical non-systemd boot. Missing guest capabilities produce BLOCKED.
 The final catalog also retains separate SmolVM `missing-io-startup` and
 `mcp-filter-reload` rows and real-host `psi-refresh-neutrality` evidence.

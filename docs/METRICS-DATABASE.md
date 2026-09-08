@@ -80,7 +80,7 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 6 and contains `user_metrics` and
+The current store uses schema version 7 and contains `user_metrics` and
 `system_metrics` tables. Every transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
@@ -90,14 +90,11 @@ from different epoch identifiers.
 User records separate process-derived CPU and memory observation; total and
 enforceable process counts; configured CPU class and nullable mapped guarantee;
 lifecycle outcome from applied class and weight; raw `cpu.max`/`cpu.weight`
-diagnostics; nullable leaf usage deltas; PID-namespace and systemd-ownership
-rejection counts; and cgroup
+diagnostics; nullable slice usage deltas; and cgroup
 RAM usage, charge coverage, limits, swap policy and distinct high/max/OOM/kill event
 deltas. Lifecycle is one of `ineligible`, `eligible_inactive`, `applied`,
-`namespace_rejected`, `ownership_rejected`, `recovery`, `stranded`, `failed`, or
-`released`. `recovery` means that an attempted release could not return every
-process to its recorded origin. `stranded` persists while a process is found in a
-ResMan recovery leaf; neither state is ordinary successful release.
+`failed`, or `released`. Process-origin, ownership-rejection, and recovery lifecycle
+columns were removed with schema 7 because ResMan no longer relocates PIDs.
 
 An absent guarantee never means zero: best-effort users have no synthetic per-user
 guarantee. An absent delta means no comparable baseline was available; numeric zero
@@ -110,7 +107,7 @@ System records contain the nominal parent pool, live online-CPU capacity,
 programmed quota/period, root entitlement, flat programmed/observed sibling weights,
 denominator state, enforcement mode and synchronized parent usage/throttling deltas.
 User rows include independent CPU authority and I/O coverage in addition to RAM.
-See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the complete schema-6
+See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) for the complete schema-7
 contract. A missing observation never claims measured zero or runnable capacity.
 
 The current Prometheus and MCP projections use the same typed control-cycle snapshot
@@ -129,10 +126,9 @@ The schema is versioned with SQLite `PRAGMA user_version`. ResMan intentionally 
 not migrate an incompatible database. Version 3 and unversioned stores are rejected
 by the CPU Points cutover because they cannot express allocation class, guarantee,
 common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
-rejected by the ownership-containment release because its lifecycle vocabulary cannot
-represent ownership refusal, recovery, or stranded occupants. Move or delete the
-store and restart to create version 6. Version 5 is also rejected because its
-domain-oriented history cannot represent the native flat plan. No alias or dual-read path exists.
+rejected by the ownership-containment release. Version 5 cannot represent the native
+flat plan, and version 6 still contains the retired PID-relocation lifecycle. Move or
+delete an older store and restart to create version 7. No alias or dual-read path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
 values are stored in UTC and API responses use RFC 3339.
@@ -151,7 +147,7 @@ expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday
 
 ## Direct inspection
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
 Stop ResMan before maintenance that modifies the database. For live inspection,
 explicitly open SQLite in read-only mode: a `SELECT` alone does not make the

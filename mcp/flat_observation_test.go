@@ -1,9 +1,7 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/fdefilippo/resman/cgroup"
@@ -70,11 +68,7 @@ func TestNativeMCPDoesNotReadLegacyCgroupPaths(t *testing.T) {
 	// A nil legacy reader makes any accidental call fail immediately.
 	server := &Server{stateManager: manager}
 	payload := server.newUserMetricPayload(1000, &resmanmetrics.UserMetrics{UID: 1000, Username: "alice", CPUUsage: 25})
-	if payload.CPUUsage != 25 || payload.CPUPoints != nil || payload.CgroupMemoryCurrentBytes != 0 {
+	if payload.CPUUsage != 25 || payload.CPUPoints != nil {
 		t.Fatalf("invented native observation before the first interval: %+v", payload)
-	}
-	_, _, err = server.handleGetCgroupInfo(context.Background(), nil, GetCgroupInfoArgs{UID: 1000})
-	if err == nil || !strings.Contains(err.Error(), "get_limits_status") {
-		t.Fatalf("legacy inspection did not explain its native replacement: %v", err)
 	}
 }

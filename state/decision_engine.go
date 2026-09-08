@@ -142,7 +142,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				m.stabilityTracker = newUserStabilityTracker()
 			}
 
-			// Only users currently tracked in the shared cgroup participate in
+			// Only users with an authoritative applied CPU plan participate in
 			// release stability. Configuration eligibility alone is not runtime state.
 			m.mu.RLock()
 			limitedUsers := make([]int, 0, len(m.activeUsers))
@@ -311,7 +311,7 @@ func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metric
 }
 
 func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error {
-	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnly {
 		m.recordObservationOnlyIntent(decision, metrics)
 		return nil
 	}
@@ -336,36 +336,19 @@ func (m *Manager) executeDecision(decision string, metrics *SystemMetrics) error
 			return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
 		}
 	}
-	switch decision {
-	case "ACTIVATE_LIMITS":
-		return m.activateLimits(metrics)
-	case "DEACTIVATE_LIMITS":
-		return m.deactivateLimits()
-	case "MAINTAIN_CURRENT_STATE":
-		// Reconcile users and release idle CPU enforcement.
-		return m.releaseIdleUsers(metrics)
-	default:
-		return fmt.Errorf("unknown decision '%s': expected ACTIVATE_LIMITS, DEACTIVATE_LIMITS, or MAINTAIN_CURRENT_STATE", decision)
-	}
+	return fmt.Errorf("unsupported enforcement mode %q", m.enforcementStatus.Mode)
 }
 
 func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMetrics) int {
 	m.mu.Lock()
-	refusedTotal := 0
 
 	switch decision {
 	case "ACTIVATE_LIMITS":
 		m.requestedCPUUsers = make(map[int]bool, len(metrics.CPUEligibleUsers))
 		for _, uid := range metrics.CPUEligibleUsers {
 			m.requestedCPUUsers[uid] = true
-			refused := 0
-			if observed := metrics.UserMetrics[uid]; observed != nil {
-				refused = observed.EnforceableUsage.ProcessCount
-			}
-			refusedTotal += refused
 			m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-				state:                   resmanmetrics.CPUPointsLifecycleOwnershipRejected,
-				systemdOwnershipRefused: refused,
+				state: resmanmetrics.CPUPointsLifecycleEligibleInactive,
 			}
 		}
 		ramEligible := make(map[int]bool, len(metrics.RAMEligibleUsers))
@@ -380,7 +363,7 @@ func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMe
 			current := m.resourceLimits[uid]
 			current.ram = m.cfg.RAMEnabled && ramEligible[uid]
 			current.io = m.cfg.IOEnabled && ioEligible[uid]
-			if !current.ram && !current.io && !current.ramApplied && !current.ioApplied && !current.swap && !current.standalone {
+			if !current.ram && !current.io && !current.ramApplied && !current.ioApplied && !current.swap {
 				delete(m.resourceLimits, uid)
 			} else {
 				m.resourceLimits[uid] = current
@@ -391,20 +374,15 @@ func (m *Manager) recordObservationOnlyIntent(decision string, metrics *SystemMe
 		for uid, current := range m.resourceLimits {
 			current.ram = false
 			current.io = false
-			if !current.ramApplied && !current.ioApplied && !current.swap && !current.standalone {
+			if !current.ramApplied && !current.ioApplied && !current.swap {
 				delete(m.resourceLimits, uid)
 			} else {
 				m.resourceLimits[uid] = current
 			}
 		}
 	}
-	exporter := m.prometheusExporter
 	m.mu.Unlock()
-
-	if exporter != nil && refusedTotal > 0 {
-		exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{SystemdOwnershipRefused: refusedTotal})
-	}
-	return refusedTotal
+	return 0
 }
 
 func newUserStabilityTracker() *UserStabilityTracker {

@@ -6,15 +6,11 @@ import "time"
 type CPUPointsLifecycleState string
 
 const (
-	CPUPointsLifecycleIneligible        CPUPointsLifecycleState = "ineligible"
-	CPUPointsLifecycleEligibleInactive  CPUPointsLifecycleState = "eligible_inactive"
-	CPUPointsLifecycleApplied           CPUPointsLifecycleState = "applied"
-	CPUPointsLifecycleNamespaceRejected CPUPointsLifecycleState = "namespace_rejected"
-	CPUPointsLifecycleOwnershipRejected CPUPointsLifecycleState = "ownership_rejected"
-	CPUPointsLifecycleRecovery          CPUPointsLifecycleState = "recovery"
-	CPUPointsLifecycleStranded          CPUPointsLifecycleState = "stranded"
-	CPUPointsLifecycleFailed            CPUPointsLifecycleState = "failed"
-	CPUPointsLifecycleReleased          CPUPointsLifecycleState = "released"
+	CPUPointsLifecycleIneligible       CPUPointsLifecycleState = "ineligible"
+	CPUPointsLifecycleEligibleInactive CPUPointsLifecycleState = "eligible_inactive"
+	CPUPointsLifecycleApplied          CPUPointsLifecycleState = "applied"
+	CPUPointsLifecycleFailed           CPUPointsLifecycleState = "failed"
+	CPUPointsLifecycleReleased         CPUPointsLifecycleState = "released"
 )
 
 // UserPersistenceMetrics combines one user observation with typed policy,
@@ -33,12 +29,6 @@ type UserPersistenceMetrics struct {
 	IOCoverage                        *string
 	CPUAuthorityCoverage              *string
 	LeafCPUUsageUsecDelta             *uint64
-	PIDNamespaceMismatchCount         int
-	PIDNamespaceUnavailableCount      int
-	SystemdOwnershipRefusedCount      int
-	RecoveryProcessCount              int
-	RestoreFailedProcessCount         int
-	StrandedProcessCount              int
 	RAMCgroupUsageBytes               *uint64
 	RAMCoverage                       *string
 	RAMCoverageIncompleteProcessCount int

@@ -396,7 +396,6 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 	current.PrometheusMetricsBindHost = "127.0.0.1"
 	current.PrometheusMetricsBindPort = 1974
 	current.CgroupRoot = "/sys/fs/cgroup"
-	current.CgroupBase = "resman"
 	current.LogFile = "/var/log/resman.log"
 	current.LogMaxSize = 10 * 1024 * 1024
 	current.UseSyslog = false
@@ -417,7 +416,6 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 	requested.PrometheusMetricsBindPort = 9101
 	requested.PrometheusTLSEnabled = true
 	requested.CgroupRoot = "/other/cgroup"
-	requested.CgroupBase = "other"
 	requested.LogFile = "/var/log/resman-debug.log"
 	requested.LogMaxSize = 20 * 1024 * 1024
 	requested.UseSyslog = true
@@ -462,7 +460,7 @@ func TestOnConfigChangeRejectsRestartFieldsAndAppliesRuntimeFields(t *testing.T)
 		requested.PrometheusTLSEnabled != current.PrometheusTLSEnabled {
 		t.Fatal("Prometheus restart-required fields were applied at runtime")
 	}
-	if requested.CgroupRoot != current.CgroupRoot || requested.CgroupBase != current.CgroupBase {
+	if requested.CgroupRoot != current.CgroupRoot {
 		t.Fatal("cgroup restart-required fields were applied at runtime")
 	}
 	if requested.LogFile != current.LogFile ||

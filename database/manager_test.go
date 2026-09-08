@@ -244,7 +244,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 6"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 7"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -292,7 +292,7 @@ func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T)
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 6"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 7"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -532,8 +532,6 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 			ConfiguredGuaranteePoints: u64(300), ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
 			AppliedCPUClass: text("guaranteed"), AppliedCPUWeight: u64(300), CgroupPath: "/limited/guaranteed/user_1000",
 			CPUQuota: "max 100000", CPUWeight: u64(300), LeafCPUUsageUsecDelta: u64(290000),
-			PIDNamespaceMismatchCount: 1, SystemdOwnershipRefusedCount: 2,
-			RecoveryProcessCount: 1, RestoreFailedProcessCount: 1, StrandedProcessCount: 1,
 			EnforceableProcessCount: 2,
 			RAMCgroupUsageBytes:     u64(8 << 20), RAMCoverage: text("partial"), RAMCoverageIncompleteProcessCount: 1,
 			RAMSwapDisabled: boolean(true), MemoryHighLimit: text("16M"), MemoryMaxLimit: text("48M"), MemorySwapMax: text("0"),
@@ -544,8 +542,8 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 		{
 			SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
 			UID: 1001, Username: "bob", CPUUsagePercent: 20, ProcessCount: 1,
-			ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "namespace_rejected",
-			PIDNamespaceMismatchCount: 1, EnforceableProcessCount: 0, EligibleForCPU: true,
+			ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive",
+			EnforceableProcessCount: 0, EligibleForCPU: true,
 		},
 	}
 	if err := manager.WriteMetricsBatch(system, users); err != nil {
@@ -574,14 +572,11 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 	if alice[0].RAMCoverage == nil || *alice[0].RAMCoverage != "partial" || alice[0].MemoryHighEventsDelta == nil || *alice[0].MemoryHighEventsDelta != 153 || alice[0].MemoryOOMEventsDelta == nil || *alice[0].MemoryOOMEventsDelta != 0 {
 		t.Fatalf("RAM accounting = %+v", alice[0])
 	}
-	if alice[0].SystemdOwnershipRefusedCount != 2 || alice[0].RecoveryProcessCount != 1 || alice[0].RestoreFailedProcessCount != 1 || alice[0].StrandedProcessCount != 1 {
-		t.Fatalf("ownership and restoration accounting = %+v", alice[0])
-	}
 	bob, err := manager.GetUserHistory(1001, start.Add(-time.Second), end.Add(time.Second), 1)
 	if err != nil || len(bob) != 1 {
 		t.Fatalf("GetUserHistory(bob) records=%d error=%v", len(bob), err)
 	}
-	if bob[0].ConfiguredGuaranteePoints != nil || bob[0].AppliedCPUClass != nil || bob[0].CPUPointsLifecycleState != "namespace_rejected" {
+	if bob[0].ConfiguredGuaranteePoints != nil || bob[0].AppliedCPUClass != nil || bob[0].CPUPointsLifecycleState != "eligible_inactive" {
 		t.Fatalf("best-effort rejected allocation = %+v", bob[0])
 	}
 }
@@ -639,7 +634,7 @@ func TestCPUPointsLifecycleStatesRemainDistinct(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 	now := time.Now().UTC()
-	states := []string{"ineligible", "eligible_inactive", "applied", "namespace_rejected", "ownership_rejected", "recovery", "stranded", "failed", "released"}
+	states := []string{"ineligible", "eligible_inactive", "applied", "failed", "released"}
 	users := make([]*UserMetricsRecord, 0, len(states))
 	for index, state := range states {
 		users = append(users, &UserMetricsRecord{

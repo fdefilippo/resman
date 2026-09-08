@@ -139,7 +139,7 @@
           "type": "object",
           "required": ["reason"],
           "properties": {
-            "reason": {"enum": ["revision_conflict", "write_operations_disabled", "update_in_progress", "empty_patch", "removed_or_unknown_key", "non_editable_key", "duplicate_key", "invalid_value", "invalid_source", "no_change", "environment_invalid", "invalid_candidate", "invalid_cpu_points_patch", "malformed_cpu_points_map", "unresolved_username", "cpu_points_overcommit", "active_uid_class_change"]},
+            "reason": {"enum": ["revision_conflict", "write_operations_disabled", "update_in_progress", "empty_patch", "removed_or_unknown_key", "non_editable_key", "duplicate_key", "invalid_value", "invalid_source", "no_change", "environment_invalid", "invalid_candidate", "invalid_cpu_points_patch", "malformed_cpu_points_map", "unresolved_username", "cpu_points_overcommit"]},
             "keys": {"type": "array", "items": {"type": "string"}},
             "usernames": {"type": "array", "items": {"type": "string"}},
             "uids": {"type": "array", "items": {"type": "integer", "minimum": 0}},

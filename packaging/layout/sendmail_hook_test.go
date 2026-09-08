@@ -180,7 +180,6 @@ func sendmailHookEnvironment(argumentsPath, bodyPath string) []string {
 		"RESMAN_LIMIT_TIMESTAMP=2026-09-02T07:00:00Z",
 		"RESMAN_LIMIT_SERVER_ROLE=build",
 		"RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT=250.00",
-		"RESMAN_LIMIT_SHARED_CGROUP=/sys/fs/cgroup/resman/cpu-points/guaranteed/1006",
 		"RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS=guaranteed",
 		"RESMAN_LIMIT_CPU_POINTS_LIFECYCLE_STATE=applied",
 		"RESMAN_LIMIT_CPU_POINTS_APPLIED_CLASS=guaranteed",

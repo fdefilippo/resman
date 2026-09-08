@@ -274,46 +274,6 @@ type forbiddenSystemdNativeCgroupManager struct {
 	mutations []string
 }
 
-func (m *forbiddenSystemdNativeCgroupManager) EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error) {
-	m.mutations = append(m.mutations, "ensure_hierarchy")
-	return cgroup.CPUPointsHierarchy{}, nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) EnsureCPUPointsUserPlacement(int, string, cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error) {
-	m.mutations = append(m.mutations, "move_processes")
-	return "", cgroup.ProcessMoveResult{}, nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy, cpupoints.ParentQuota) error {
-	m.mutations = append(m.mutations, "write_parent_cgroupfs")
-	return nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) ApplyCPUPointsUserWeight(string, cpupoints.KernelCPUWeight) error {
-	m.mutations = append(m.mutations, "write_leaf_cgroupfs")
-	return nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) EnsureUserCgroupPlacement(int, string, string) (string, cgroup.ProcessMoveResult, error) {
-	m.mutations = append(m.mutations, "legacy_user_placement")
-	return "", cgroup.ProcessMoveResult{}, nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) ApplyRAMLimitWithHigh(int, string, string) error {
-	m.mutations = append(m.mutations, "legacy_ram_limit")
-	return nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) ApplyIOLimit(int, string, string, int, int, string) error {
-	m.mutations = append(m.mutations, "legacy_io_limit")
-	return nil
-}
-
-func (m *forbiddenSystemdNativeCgroupManager) GetPSIStats(int) (cgroup.PSIStats, error) {
-	m.mutations = append(m.mutations, "legacy_psi_read")
-	return cgroup.PSIStats{}, nil
-}
-
 func TestSystemdNativeReconciliationAppliesOneCompleteFlatPlanWithoutPIDMigration(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int
@@ -930,7 +890,7 @@ func TestSystemdAdapterCannotBeInstalledUnderANonNativeMode(t *testing.T) {
 	_, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, &mockCgroupManager{}, &mockPrometheusExporter{},
 		WithSystemdCPUEnforcement(adapter),
 		WithEnforcementStatus(cgroup.EnforcementStatus{
-			Mode:   cgroup.EnforcementModeObservationOnlySystemd,
+			Mode:   cgroup.EnforcementModeObservationOnly,
 			Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
 		}),
 	)
@@ -977,22 +937,15 @@ func TestSystemdNativeCPUCannotFallThroughLegacyRAMIOOrRemediationPaths(t *testi
 	manager.cfg.UserIncludeList = []string{".*"}
 	manager.cfg.RAMEnabled = true
 	manager.cfg.IOEnabled = true
-	manager.cfg.IORemediationEnabled = true
 	manager.cfg.IOReadIOPS = 1
 	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
 		t.Fatal(err)
 	}
 
 	observed := &SystemMetrics{IOEligibleUsers: []int{1000}}
-	manager.collectEligibleBlockIOPS(observed, time.Now(), manager.cfg.GetIODecisionPolicy(), normalCPUQuota)
+	manager.collectEligibleBlockIOPS(observed, manager.cfg.GetIODecisionPolicy())
 	if observed.IOBlockIOPSUnavailableUsers != 1 {
 		t.Fatalf("systemd-native block-I/O unavailable users = %d, want 1 until the resource adapter exists", observed.IOBlockIOPSUnavailableUsers)
-	}
-	if err := manager.reconcilePatternPolicy(1000, manager.cfg); err != nil {
-		t.Fatalf("reconcilePatternPolicy() error: %v", err)
-	}
-	if err := manager.stageIORemediation(&controlCycleContext{cfg: manager.cfg}); err != nil {
-		t.Fatalf("stageIORemediation() error: %v", err)
 	}
 	if len(cgroups.mutations) != 0 {
 		t.Fatalf("systemd-native CPU enforcement fell through legacy cgroup paths: %v", cgroups.mutations)
@@ -1010,7 +963,7 @@ func testSystemdCPUPointsManager(t *testing.T, policy cpupoints.PolicySnapshot, 
 	collector := &mockMetricsCollector{usernames: map[int]string{0: "root", 1000: "alice", 1001: "bob", 1002: "carol"}}
 	manager, err := NewManager(config.DefaultConfig(), collector, cgroups, &mockPrometheusExporter{},
 		WithCPUPointsRuntime(policy, capacity),
-		WithEnforcementStatus(cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnlySystemd, Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads}),
+		WithEnforcementStatus(cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnly, Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads}),
 		WithSystemdCPUEnforcement(adapter),
 	)
 	if err != nil {

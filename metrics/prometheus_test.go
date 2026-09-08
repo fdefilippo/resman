@@ -671,8 +671,7 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{TotalCPUUsage: 10, TotalCPUUsageAvailable: true})
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
-		EnforcementMode:                              cgroup.EnforcementModeObservationOnlySystemd,
-		RecoveryStrandedProcesses:                    4,
+		EnforcementMode:                              cgroup.EnforcementModeObservationOnly,
 		TotalCPUUsage:                                25,
 		TotalCPUUsageAvailable:                       true,
 		TotalCores:                                   8,
@@ -723,7 +722,6 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 		"resman_cpu_limits_active":                                   1,
 		"resman_resource_limits_active":                              1,
 		"resman_any_limits_active":                                   1,
-		"resman_recovery_stranded_processes":                         4,
 		"resman_memory_usage_megabytes":                              256,
 		"resman_memory_total_megabytes":                              2048,
 		"resman_memory_cached_megabytes":                             128,
@@ -830,7 +828,7 @@ func TestRecordErrorPublishesOneBoundedSeries(t *testing.T) {
 	t.Fatal("resman_errors_total metric family not found")
 }
 
-func TestRecordCgroupIngressSkipsPublishesOnlyBoundedReasons(t *testing.T) {
+func TestEnforcementModeUsesBoundedLabelVocabulary(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.EnablePrometheus = true
 	exporter, err := NewPrometheusExporter(cfg)
@@ -838,81 +836,17 @@ func TestRecordCgroupIngressSkipsPublishesOnlyBoundedReasons(t *testing.T) {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{
-		PIDNamespaceMismatches:  2,
-		PIDNamespaceUnavailable: 1,
-		SystemdOwnershipRefused: 4,
-		RecoveryStranded:        5,
-	})
-	exporter.RecordCgroupIngressSkips(cgroup.ProcessMoveResult{PIDNamespaceMismatches: 3})
-
-	families, err := exporter.registry.Gather()
-	if err != nil {
-		t.Fatalf("Gather() error: %v", err)
-	}
-	for _, family := range families {
-		if family.GetName() != "resman_cgroup_ingress_skipped_total" {
-			continue
-		}
-		if len(family.Metric) != 4 {
-			t.Fatalf("resman_cgroup_ingress_skipped_total series = %d, want 4", len(family.Metric))
-		}
-		values := make(map[string]float64, len(family.Metric))
-		for _, metric := range family.Metric {
-			if len(metric.Label) != 3 {
-				t.Fatalf("metric labels = %+v, want reason plus two static labels", metric.Label)
-			}
-			for _, label := range metric.Label {
-				if label.GetName() == "reason" {
-					values[label.GetValue()] = metric.Counter.GetValue()
-				}
-			}
-		}
-		if values[string(cgroup.PIDNamespaceMismatch)] != 5 ||
-			values[string(cgroup.PIDNamespaceUnavailable)] != 1 ||
-			values[string(cgroup.SystemdOwnershipPreserved)] != 4 ||
-			values[string(cgroup.RecoveryProcessStranded)] != 5 {
-			t.Fatalf("bounded ingress skip values = %v", values)
-		}
-		return
-	}
-	t.Fatal("resman_cgroup_ingress_skipped_total metric family not found")
-}
-
-func TestEnforcementModeAndRestoreOutcomesUseBoundedLabelVocabularies(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.EnablePrometheus = true
-	exporter, err := NewPrometheusExporter(cfg)
-	if err != nil {
-		t.Fatalf("NewPrometheusExporter() error: %v", err)
-	}
-
-	exporter.UpdateSystemSnapshot(SystemExporterMetrics{EnforcementMode: cgroup.EnforcementModeObservationOnlySystemd})
-	exporter.RecordProcessRestoreResult(cgroup.ProcessRestoreResult{Outcomes: []cgroup.ProcessRestoreOutcome{
-		{Disposition: cgroup.ProcessRestoreExactOrigin},
-		{Disposition: cgroup.ProcessRestoreRecovery},
-		{Disposition: cgroup.ProcessRestoreRecovery},
-		{Disposition: cgroup.ProcessRestoreDisappeared},
-		{Disposition: cgroup.ProcessRestoreFailed},
-	}})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{EnforcementMode: cgroup.EnforcementModeObservationOnly})
 
 	families, err := exporter.registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantModes := map[string]float64{
-		string(cgroup.EnforcementModeMigrationEnabled):       0,
-		string(cgroup.EnforcementModeObservationOnlySystemd): 1,
-		string(cgroup.EnforcementModeSystemdNative):          0,
-	}
-	wantRestores := map[string]float64{
-		string(cgroup.ProcessRestoreExactOrigin): 1,
-		string(cgroup.ProcessRestoreRecovery):    2,
-		string(cgroup.ProcessRestoreDisappeared): 1,
-		string(cgroup.ProcessRestoreFailed):      1,
+		string(cgroup.EnforcementModeObservationOnly): 1,
+		string(cgroup.EnforcementModeSystemdNative):   0,
 	}
 	foundModes := false
-	foundRestores := false
 	for _, family := range families {
 		switch family.GetName() {
 		case "resman_enforcement_mode":
@@ -928,23 +862,10 @@ func TestEnforcementModeAndRestoreOutcomesUseBoundedLabelVocabularies(t *testing
 			if !reflect.DeepEqual(got, wantModes) {
 				t.Fatalf("enforcement modes = %v, want %v", got, wantModes)
 			}
-		case "resman_process_restore_total":
-			foundRestores = true
-			got := make(map[string]float64)
-			for _, metric := range family.Metric {
-				for _, label := range metric.Label {
-					if label.GetName() == "disposition" {
-						got[label.GetValue()] = metric.GetCounter().GetValue()
-					}
-				}
-			}
-			if !reflect.DeepEqual(got, wantRestores) {
-				t.Fatalf("restore outcomes = %v, want %v", got, wantRestores)
-			}
 		}
 	}
-	if !foundModes || !foundRestores {
-		t.Fatalf("bounded metric families found: modes=%t restores=%t", foundModes, foundRestores)
+	if !foundModes {
+		t.Fatal("bounded enforcement-mode metric family not found")
 	}
 }
 

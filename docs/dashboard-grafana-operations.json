@@ -182,7 +182,7 @@
       "type": "gauge",
       "id": 4,
       "title": "Memory pressure",
-      "description": "ResMan does not export a memory PSI value. This gauge shows memory.high breaches per minute across monitored users: the kernel is reclaiming and throttling inside the managed cgroups. 'no RAM enforcement' means no breach counter exists, which is the case when RAM limits are disabled.",
+      "description": "ResMan does not export a memory PSI value. This gauge shows memory.high breaches per minute across monitored users: the kernel is reclaiming and throttling inside authoritative user slices. 'no RAM enforcement' means no breach counter exists, which is the case when RAM limits are disabled.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -267,7 +267,7 @@
       "type": "timeseries",
       "id": 6,
       "title": "CPU limits",
-      "description": "Users with a CPU limit currently applied against the users eligible under the CPU policy. Read together with resman_enforcement_mode: in observation_only_systemd the daemon records intent only and no user is ever counted as limited.",
+      "description": "Users with a CPU limit currently applied against the users eligible under the CPU policy. Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -378,7 +378,7 @@
       "type": "timeseries",
       "id": 7,
       "title": "RAM limits",
-      "description": "Users eligible under the RAM policy, whether RAM or I/O limits are active on the host (0/1), and memory.high breaches in the window. Read together with resman_enforcement_mode: in observation_only_systemd the daemon records intent only and no user is ever counted as limited.",
+      "description": "Users eligible under the RAM policy, whether RAM or I/O limits are active on the host (0/1), and memory.high breaches in the window. Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -501,7 +501,7 @@
       "type": "timeseries",
       "id": 8,
       "title": "I/O limits",
-      "description": "Users eligible under the I/O policy and whether RAM or I/O limits are active on the host (0/1). Read together with resman_enforcement_mode: in observation_only_systemd the daemon records intent only and no user is ever counted as limited.",
+      "description": "Users eligible under the I/O policy and whether RAM or I/O limits are active on the host (0/1). Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -626,7 +626,7 @@
       "type": "timeseries",
       "id": 10,
       "title": "RAM of monitored processes",
-      "description": "Process-derived memory of every monitored non-system user, the subset eligible under the RAM policy, and memory.current charged to the ResMan-managed cgroups. On the migration path the cgroup figure covers post-ingress charges only; on systemd_native it includes the slice's existing charges.",
+      "description": "Process-derived memory of every monitored non-system user, the subset eligible under the RAM policy, and memory.current charged to authoritative systemd user slices.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -666,7 +666,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "sum by (cluster, environment, server_role, hostname) (resman_cgroup_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
-          "legendFormat": "managed cgroups memory.current - {{hostname}}",
+          "legendFormat": "user slices memory.current - {{hostname}}",
           "refId": "C",
           "range": true,
           "instant": false
@@ -1092,7 +1092,7 @@
       "type": "stat",
       "id": 17,
       "title": "Enforcement mode",
-      "description": "Bounded host enforcement mode. migration_enabled: ResMan-owned cgroups on a non-systemd host. observation_only_systemd: intent and observation only, no limit reaches the kernel. systemd_native: properties applied on the systemd user slices.",
+      "description": "Bounded host enforcement mode. observation_only: intent and observation only, no limit reaches the kernel. systemd_native: properties applied on authoritative systemd user slices.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1146,20 +1146,10 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*migration_enabled$",
-                "result": {
-                  "color": "blue",
-                  "index": 1
-                }
-              }
-            },
-            {
-              "type": "regex",
-              "options": {
-                "pattern": ".*observation_only_systemd$",
+                "pattern": ".*observation_only$",
                 "result": {
                   "color": "orange",
-                  "index": 2
+                  "index": 1
                 }
               }
             }
@@ -1510,7 +1500,7 @@
       "type": "table",
       "id": 21,
       "title": "RAM coverage by user",
-      "description": "RAM authority coverage: refused when the slice holds runtime-owned descendants (runtime_owned_descendant), partial on the legacy migration path because of pre-ingress charges.",
+      "description": "RAM authority coverage: refused when the slice holds runtime-owned descendants (runtime_owned_descendant) and unavailable without an authoritative user slice.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2202,8 +2192,8 @@
     {
       "type": "timeseries",
       "id": 29,
-      "title": "Stranded processes and refused ingress",
-      "description": "Processes still living in a ResMan recovery leaf with no reconstructible origin (manual restart under the owning unit required) and ingress refusals per cycle by reason.",
+      "title": "Observation-only state",
+      "description": "Hosts without an authoritative systemd adapter remain observable but apply no limits; correlated daemon errors explain unavailable authority or runtime failures.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2220,8 +2210,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (resman_recovery_stranded_processes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
-          "legendFormat": "stranded - {{hostname}}",
+          "expr": "resman_enforcement_mode{mode=\"observation_only\", cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
+          "legendFormat": "observation only - {{hostname}}",
           "refId": "A",
           "range": true,
           "instant": false
@@ -2231,8 +2221,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname, reason) (increase(resman_cgroup_ingress_skipped_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
-          "legendFormat": "refused {{reason}} - {{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname, component, error_type) (increase(resman_errors_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[$__rate_interval]))",
+          "legendFormat": "{{component}}/{{error_type}} - {{hostname}}",
           "refId": "B",
           "range": true,
           "instant": false
@@ -2269,27 +2259,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "stranded.*"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "legend": {

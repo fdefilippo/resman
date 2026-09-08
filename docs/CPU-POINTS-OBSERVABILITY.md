@@ -1,6 +1,6 @@
 # CPU Points observation under systemd
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
 On a systemd host, `systemd_native` enforcement keeps processes in their existing
 units. The finite parent is `user.slice`; its active `user-UID.slice` children
@@ -42,8 +42,7 @@ The flat snapshot exposes:
   required counter baselines, even when capacity is known.
 - Separate CPU authority, RAM and I/O coverage. CPU authority can be partial while
   the slice is correctly weighted. RAM/I/O can be refused independently of CPU.
-  `memory.current` on a native slice includes its existing charges; the legacy
-  migration path still has partial post-ingress memory accounting.
+  `memory.current` on a native slice includes its existing charges.
 
 RAM high/max/OOM/kill event deltas remain distinct. With unreclaimable pages,
 `memory.high < memory.max` can throttle or stall indefinitely without an OOM kill.
@@ -96,24 +95,20 @@ Database retention and `METRICS_DB_WRITE_INTERVAL` select which decision interva
 are stored. Stored rows may therefore have gaps. Normalize a delta by its own
 interval duration; summing sparse deltas does not reconstruct elapsed-period totals.
 
-Under `systemd_native`, MCP uses the typed `cpu_points` observation rather than
-enriching a sample from a legacy recovery cgroup. `get_limits_status` includes all
-observed user slices, including root. The legacy `get_cgroup_info` inspection
-refuses this mode and directs callers to that authoritative snapshot.
+MCP uses the typed `cpu_points` observation from authoritative systemd slices.
+`get_limits_status` includes all observed user slices, including root. ResMan
+does not expose or create a separate managed-cgroup hierarchy.
 
 ## Schema and vocabulary break
 
-Schema 6 rejects all prior versioned and unversioned incompatible archives. Stop
+Schema 7 rejects all prior versioned and unversioned incompatible archives. Stop
 ResMan, archive or delete the old metrics database together with its WAL/SHM
-sidecars, then restart to create a private schema-6 store. There is no migration
+sidecars, then restart to create a private schema-7 store. There is no migration
 or alias. The three-level domain columns, domain metrics and lending-state field
 have been removed. Use flat sibling weights, coverage and measured delivery.
 
-The enforcement-mode vocabulary retains `migration_enabled` for non-systemd hosts
-and `observation_only_systemd` when authority is unavailable; native enforcement
-uses `systemd_native`. Ownership-refusal lifecycle and bounded ingress counters
-remain meaningful for refused acquisition and historical recovery. Native CPU
-scheduling never manufactures ownership-refusal events or moves a PID. Requested
-intent, successful application, recovery and resource refusal stay separate.
+The enforcement-mode vocabulary is bounded to `observation_only` and
+`systemd_native`. Native CPU scheduling never moves a PID. Requested intent,
+successful application and resource refusal stay separate.
 The final harness must select its assertions for the actual enforcement mode;
 the systemd-native kernel campaign belongs to `resman-nq6.9`.

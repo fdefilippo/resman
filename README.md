@@ -1,6 +1,6 @@
 # ResMan
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
@@ -8,13 +8,10 @@ ResMan monitors system resources and applies limits to users when the active hos
 ownership model permits safe enforcement. It exposes Prometheus metrics, supports
 hot-reload configuration, and includes an MCP server for AI assistant integration.
 
-> **Breaking systemd-native upgrade:** CPU Points now use a flat `user.slice`
-> hierarchy without PID migration. `CPU_ROOT_POINTS=100` protects root's lendable
-> entitlement inside the pool; excluded users remain indirectly quota-bound.
-> Read the upgrade guide for the 701–800 default-budget break and schema 6 reset.
-> Check `resman_enforcement_mode` or MCP: `systemd_native` is the native backend,
-> `observation_only_systemd` is the safe fallback when authority is unavailable,
-> and `migration_enabled` is the separate non-systemd backend.
+> **Breaking 1.35 upgrade:** `systemd_native` is the only enforcing backend.
+> ResMan never moves PIDs or creates an enforcement hierarchy of its own. When an
+> authoritative systemd adapter is unavailable, it reports `observation_only` and
+> applies no CPU, RAM or I/O limits. Read the upgrade guide before installation.
 
 ## Features
 
@@ -50,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.34.1-1_<architecture>.deb
+# Creates build/deb/resman_1.35.0-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -93,10 +90,10 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
-Upgrading any ResMan release from 1.25.x through 1.34.0 to 1.34.1 is intentionally
+Upgrading any ResMan release from 1.25.x through 1.34.1 to 1.35.0 is intentionally
 breaking. Complete the filesystem, database, configuration, MCP, Prometheus, hook,
 capability, and container actions in [`docs/UPGRADING.md`](docs/UPGRADING.md) before
-installing ResMan 1.34.1.
+installing ResMan 1.35.0.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
@@ -195,11 +192,10 @@ additionally requires all actively limited users to remain below
 `CPU_RELEASE_THRESHOLD` for three `POLLING_INTERVAL` periods. This cool-down is
 wall-clock based, so PSI events cannot shorten it.
 
-Dynamic RAM/IO enable and user-filter changes are reconciled for cgroups that
-are already active. Limits that are disabled or no longer applicable are reset
-and retried on later cycles if cleanup fails.
-On the non-systemd backend only, RAM/IO-only eligible users run in standalone per-user cgroups with an unlimited
-`cpu.max`; they do not inherit the finite CPU Points parent quota.
+Dynamic RAM/IO enable and user-filter changes are reconciled on authoritative user
+slices. Limits that are disabled or no longer applicable are restored and retried on
+later cycles if restoration fails. RAM/IO-only eligibility does not create a separate
+cgroup or change CPU membership.
 
 CPU Points normalizes the online host capacity to 1000 points. The finite parent
 pool is `1000 - CPU_RESERVE_POINTS`. The reserve is nominal headroom outside that
@@ -225,38 +221,26 @@ mode-`0700` configuration directory. Custom paths must satisfy the same regular-
 ownership, mode, trusted-ancestor, and no-symlink checks.
 
 Reserve, root, best-effort, and map-content changes form one atomic hot-reload epoch;
-`CPU_POINTS_FILE` path changes require a restart. Native active class changes reconcile
-weights in place without moving processes. On the non-systemd backend only, a reload may change the weight
-of an active user within its current class, but changing an active user between
-guaranteed and best-effort is rejected atomically. Wait for normal release or first
-make the UID CPU-ineligible and reload, confirm it is released, change the map and
-reload, then restore eligibility in a later reload. No pending class state exists.
+`CPU_POINTS_FILE` path changes require a restart. Active class and weight changes
+reconcile in place without moving processes.
 
-For accounting, coverage, schema 6 and operator measurements, see
+For accounting, coverage, schema 7 and operator measurements, see
 [CPU Points observability](docs/CPU-POINTS-OBSERVABILITY.md). Use the daemon's
 synchronized deltas and a 60-second observation window; raw weights do not prove delivery.
 
 Native RAM observes existing slice charges and applies page-aligned limits in place;
 `authority_split` or `runtime_owned_descendant` refuses RAM/I/O independently of CPU.
-The following placement restrictions apply only to the non-systemd migration backend.
-Moving a live process does not transfer existing cgroup v2 memory charges. The first
-dynamic ingress therefore applies `memory.high` and `memory.max` only to post-ingress
-charges; process-derived UID memory remains complete while cgroup RAM coverage is
-reported as partial. ResMan refuses CPU activation from a standalone RAM cgroup and
-defers CPU release to another parent while RAM enforcement is active. Release or
-disable RAM enforcement, let reconciliation complete, then retry the CPU transition.
-I/O-only transitions remain safe because ResMan carries a logical `io.stat` ledger
-across placements. With the normal `memory.high < memory.max` configuration and no
+With the normal `memory.high < memory.max` configuration and no
 swap or reclaimable pages, a process can stay alive but effectively stall at high:
 `high` events rise while `max`, `oom`, and `oom_kill` remain zero indefinitely. Raise
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 6 records each decision
+When metrics persistence is enabled, SQLite schema version 7 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
 applied CPU class and weight, delivered parent/slice bandwidth and throttling, raw
-cgroup diagnostics, PID-namespace coverage, and process-derived memory from cgroup
-RAM charges and high/max/OOM events. Missing comparable baselines are `null`, not
+unit diagnostics, independent resource authority, and process-derived memory from
+slice RAM charges and high/max/OOM events. Missing comparable baselines are `null`, not
 zero; incompatible older databases must be archived or deleted before restart. See
 [`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md).
 
@@ -298,28 +282,10 @@ sidecars are regular, non-symlink mode `0600` files. Unsafe existing custom
 paths or replaceable/symlinked ancestors are refused before SQLite opens them
 rather than relying on the umask or a check-then-open race.
 
-On a systemd host ResMan refuses new migration-based ingress, but applies native
-limits through the systemd adapter. Existing process-origin records from an older release are still
-used during release and shutdown to remove inherited
-constraints. Every restore is classified as `exact_origin`, `recovery`,
-`disappeared`, or `failed`; only `exact_origin` is an ordinary successful release.
-
-If the recorded origin no longer exists or cannot accept processes, the process is
-placed in `resman/recovery/user_UID` and remains visibly `stranded`. A recovery leaf
-is never accepted as a new authoritative origin and its occupants are never silently
-admitted again. Stop or restart each stranded process under its service or session;
-once it exits, an empty recovery leaf may be removed. If restoration is incomplete
-during shutdown, the daemon exits non-zero rather than reporting a successful stop.
-
-Live policy reconciliation remains fail-closed: if an excluded process has no
-same-start-time recorded or inherited origin, it stays constrained while the
-rest of the control cycle continues. Prometheus distinguishes this persistent
-condition as `resman_errors_total{component="process_membership",error_type="origin_unavailable"}`;
-other reconciliation failures use `error_type="reconciliation_failure"`. To
-clear an unavailable-origin condition, stop or restart the affected process
-under its owning service/session. If that is not possible while resman is
-running, stop resman cleanly so shutdown can place the process in its recovery
-leaf, then restart the owning service/session before starting resman again.
+ResMan enforces only through authoritative systemd units. It never creates an
+enforcement cgroup hierarchy, records process origins, or writes PID membership.
+If the systemd adapter is unavailable, the daemon remains in explicit
+`observation_only` mode and applies no CPU, RAM or I/O limit.
 
 `PSI_EVENT_DRIVEN` is a pressure trigger, not another CPU usage threshold. PSI
 events mean that runnable tasks or IO operations spent time waiting for resources.
@@ -360,13 +326,13 @@ Limit hook scripts run under an explicit non-root NSS user and group, without
 supplementary groups or the daemon environment. Script and webhook deliveries use a
 fixed worker pool and bounded queue; saturation never blocks enforcement. Webhooks
 receive a JSON `POST` with `uid`, `username`,
-`enforceable_cpu_usage_percent`, `cpu_eligible_users_count`, `shared_cgroup`,
-`timestamp`, and `server_role`. Each mechanism receives an independent
+`enforceable_cpu_usage_percent`, `cpu_eligible_users_count`, `timestamp`, and
+`server_role`. Each mechanism receives an independent
 `LIMIT_HOOK_TIMEOUT` deadline. See [Limit-hook execution](docs/LIMIT-HOOKS.md) for the
 complete security, shutdown, and observability contract.
 
 Dynamic fields are reloaded automatically. Restart the service after changing
-fields marked static in `config/resman.conf.example`, such as cgroup paths or
+fields marked static in `config/resman.conf.example`, such as the cgroup observation root or
 Prometheus listener, TLS and authentication settings, logging backend settings,
 or MCP listener and security settings:
 
@@ -395,7 +361,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Upgrade guide from 1.25.x through 1.34.0 to 1.34.1: [`docs/UPGRADING.md`](docs/UPGRADING.md)
+- Upgrade guide from 1.25.x through 1.34.1 to 1.35.0: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

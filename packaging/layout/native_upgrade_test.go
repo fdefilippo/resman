@@ -166,7 +166,7 @@ func TestNativeUpgradeSurfacesCarryEveryCompatibilityBreak(t *testing.T) {
 			t.Errorf("missing compatibility-break row %s", row)
 		}
 	}
-	for _, required := range []string{"701–800 with the defaults", "CPU_ROOT_POINTS=100", "user-0.slice", "system.slice", "schema version is 6", "systemd-property-leases.json", "750-point map"} {
+	for _, required := range []string{"701–800 with the defaults", "CPU_ROOT_POINTS=100", "user-0.slice", "system.slice", "schema version is 7", "systemd-property-leases.json", "750-point map"} {
 		if !strings.Contains(guide, required) {
 			t.Errorf("missing native upgrade contract %q", required)
 		}
@@ -174,7 +174,7 @@ func TestNativeUpgradeSurfacesCarryEveryCompatibilityBreak(t *testing.T) {
 	for _, path := range []string{"README.md", "docs/ARCHITECTURE.md", "docs/TECHNICAL-SPECIFICATION.md", "docs/resman.8", "docs/CONFIGURATION.md"} {
 		t.Run(path, func(t *testing.T) {
 			body := readTextFile(t, filepath.Join(root, path))
-			for _, required := range []string{"CPU_ROOT_POINTS", "system.slice", "user.slice", "CPU-POINTS-OBSERVABILITY.md", "non-systemd"} {
+			for _, required := range []string{"CPU_ROOT_POINTS", "system.slice", "user.slice", "CPU-POINTS-OBSERVABILITY.md", "observation_only"} {
 				if !strings.Contains(body, required) {
 					t.Errorf("missing %q", required)
 				}

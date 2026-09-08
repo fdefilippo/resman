@@ -401,11 +401,6 @@ func unionResourceUIDs(left, right map[int]bool) []int {
 
 func (m *Manager) systemdMemoryAssignments(uid int, cfg *config.Config) ([]systemdunit.PropertyAssignment, error) {
 	quota := cfg.RAMQuotaPerUser
-	if cfg.GetAutodetectPatterns() && m.policyEngine != nil {
-		if policy, exists := m.policyEngine.GetPolicy(uid); exists && policy.RAMQuota != "" {
-			quota = policy.RAMQuota
-		}
-	}
 	maxBytes, err := config.ParseByteQuota(quota)
 	if err != nil || maxBytes == 0 {
 		return nil, fmt.Errorf("invalid RAM quota %q", quota)

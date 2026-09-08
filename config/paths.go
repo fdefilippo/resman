@@ -35,8 +35,6 @@ const (
 	DefaultMetricsDBPath = "/var/lib/resman/metrics.db"
 	// LegacyMetricsDBPath is rejected when default metrics persistence is enabled.
 	LegacyMetricsDBPath = "/etc/resman/metrics.db"
-	// DefaultCreatedCgroupsPath is boot-scoped runtime state under /run.
-	DefaultCreatedCgroupsPath = "/run/resman-cgroups.txt"
 	// DefaultCPUPointsMapPath is the authoritative direct username guarantee map.
 	DefaultCPUPointsMapPath = "/etc/resman/cpu-points.map"
 )

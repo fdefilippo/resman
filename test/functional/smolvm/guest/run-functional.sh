@@ -43,7 +43,7 @@ case "$run_id" in
         ;;
 esac
 case "$scenario" in
-	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor|host-cpu-sampling-cadence|non-systemd-migration) ;;
+	resource-only|memory-only|process-membership|cpu-without-cpuset|missing-io-startup|mcp-filter-reload|container-runtime|block-iops|psi-refresh-neutrality|limit-hook-executor|host-cpu-sampling-cadence|non-systemd-observation) ;;
 	*)
 		echo "invalid scenario: $scenario" >&2
 		exit 2
@@ -64,8 +64,8 @@ mkdir -p "$artifact_dir" "$runtime_dir" "$state_dir"
 chmod 0700 "$runtime_dir" "$state_dir"
 exec > >(tee -a "$artifact_dir/guest.log") 2>&1
 python3 /opt/resman-functional/evidence-metadata.py "$artifact_dir" "$run_id" "$source_revision" "$scenario"
-if [[ $scenario == non-systemd-migration ]]; then
-    exec python3 /opt/resman-functional/non-systemd-migration.py "$run_id" "$source_revision"
+if [[ $scenario == non-systemd-observation ]]; then
+    exec python3 /opt/resman-functional/non-systemd-observation.py "$run_id" "$source_revision"
 fi
 
 result=FAIL

@@ -28,7 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -607,8 +606,6 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 		ActivelyLimitedUsersCount:    2,
 		CPUActivelyLimitedUsers:      []int{1001},
 		CPUActivelyLimitedUsersCount: 1,
-		SharedCgroupPath:             "/sys/fs/cgroup/resman/limited",
-		SharedCgroupActive:           true,
 	}
 
 	tests := []struct {
@@ -663,45 +660,6 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 				}
 			}
 		})
-	}
-}
-
-func TestExtractCgroupMemoryMetrics(t *testing.T) {
-	current, hasCurrent, max, high := extractCgroupMemoryMetrics(cgroup.CgroupInfo{
-		MemoryCurrent: cgroup.CgroupFileValue{Value: "1048576", Available: true},
-		MemoryMax:     cgroup.CgroupFileValue{Value: "max", Available: true},
-		MemoryHigh:    cgroup.CgroupFileValue{Value: "2097152", Available: true},
-	})
-
-	if !hasCurrent || current != 1048576 {
-		t.Errorf("current = %d, present = %t; want 1048576, true", current, hasCurrent)
-	}
-	if max != "max" {
-		t.Errorf("max = %q, want %q", max, "max")
-	}
-	if high != "2097152" {
-		t.Errorf("high = %q, want %q", high, "2097152")
-	}
-}
-
-func TestUserMetricJSONUsesExplicitCgroupMemoryFields(t *testing.T) {
-	data, err := json.Marshal(UserMetric{
-		CgroupMemoryCurrentBytes: 1048576,
-		MemoryMax:                "max",
-		MemoryHigh:               "2097152",
-	})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-
-	payload := string(data)
-	for _, field := range []string{"cgroup_memory_current_bytes", "memory_max", "memory_high"} {
-		if !strings.Contains(payload, `"`+field+`"`) {
-			t.Errorf("JSON payload %s does not contain field %q", payload, field)
-		}
-	}
-	if strings.Contains(payload, `"memory_max_bytes"`) {
-		t.Errorf("JSON payload %s contains obsolete field memory_max_bytes", payload)
 	}
 }
 

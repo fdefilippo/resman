@@ -168,41 +168,28 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   buried in a helper.
 - Adding a new limited resource **MUST** add its own `IsUserWhitelistedFor<Resource>`
   and its own row in the empty-list test table.
-- `PROCESS_EXCLUDE_LIST` defines the enforceable process set for every resource.
-  Excluded processes **MUST** remain visible in total-user observation, but **MUST NOT**
-	contribute to CPU, RAM, or I/O decision inputs because enforcement deliberately
-	leaves them outside limited cgroups. Accounting and cgroup placement **MUST** consume
-	the same normalized process-policy result. The policy identity is the basename resolved
-	from `/proc/PID/exe`; `/proc/PID/comm` is display-only because the process can rewrite
-	it. If executable identity is unavailable, the process **MUST** remain enforceable and
-	the failure **MUST** be reported explicitly. PID-decorated display names and
-	user-controlled `argv[0]` values are not policy identities.
-- On the non-systemd migration backend, while any resource limit remains observed as active, every control cycle **MUST**
-  reconcile process membership once per limited user. Newly enforceable processes move
-  into the user's current shared or standalone cgroup. Processes that become excluded
-  move back only to an origin captured for the same PID start time. If that origin is
-  unavailable, reconciliation fails visibly and leaves the process constrained; it
-  **MUST NOT** guess an untracked destination or clear the user's active state.
-- Cgroup ingress **MUST NOT** cross the daemon's PID namespace boundary. The daemon
-  caches the device and inode of `/proc/self/ns/pid`, filters candidates against that
-  identity, and verifies it again immediately before every write to a ResMan-owned
-  `cgroup.procs`. A mismatch or unreadable namespace is a bounded, visible skip, not
-  an error fallback that moves the process anyway. Observation and decision accounting
-  remain unchanged. Restore and recovery are exempt because they remove an existing
-  ResMan constraint instead of acquiring a new process.
-- A host booted with systemd **MUST** preserve systemd as the authoritative owner of
-  every session, service, transient-unit, and system-service workload. Until an
-  ownership-preserving adapter implements the complete resource contract, the daemon
-  runs in an explicit observation-only mode and **MUST NOT** migrate any new process
-  for CPU, RAM, or I/O enforcement. A refusal is typed and bounded, leaves requested
-  intent observable, and never creates active-limit state. Restore remains permitted
-  only to remove a constraint inherited from an earlier release.
+- `PROCESS_EXCLUDE_LIST` defines which process observations contribute to resource
+  decision inputs. Excluded processes **MUST** remain visible in total-user observation,
+  but **MUST NOT** contribute to CPU, RAM, or I/O decision inputs. The policy identity is
+  the basename resolved from `/proc/PID/exe`; `/proc/PID/comm` is display-only because
+  the process can rewrite it. If executable identity is unavailable, the process
+  **MUST** remain in decision inputs and the failure **MUST** be reported explicitly.
+  PID-decorated display names and user-controlled `argv[0]` values are not policy
+  identities. Because systemd-native enforcement acts on an authoritative unit, this
+  setting does not exempt one process from a limit applied to its containing user slice.
+- Production code **MUST NOT** write `cgroup.procs`, record process origins, create a
+  ResMan-owned enforcement hierarchy, or restore PID membership. There is no legacy,
+  recovery, or test-only exception. The architectural source gate **MUST** fail when any
+  such write or the retired `migration_enabled` vocabulary reappears.
+- `systemd_native` is the only mode that may acknowledge CPU, RAM, or I/O enforcement.
+  Missing, zero-value, or unverifiable systemd authority selects the bounded
+  `observation_only` mode. Observation-only execution leaves intent visible but never
+  creates active-limit state or changes a resource-control property.
 - The native systemd adapter **MUST** reconcile a complete flat `user.slice` plan
   without PID migration. Root has its explicit lendable entitlement, excluded active
   slices still participate in the parent envelope, and RAM/I/O require independent
-  complete authority. Native active class changes modify weights in place; the
-  non-systemd cross-class placement restriction does not apply. Unavailable authority
-  remains observation-only, never a reason to select migration on a systemd host.
+  complete authority. Native active class changes modify weights in place. Unavailable
+  authority remains observation-only and never selects another enforcement backend.
 - Native weighted I/O is an adapter capability, not a daemon policy. Production
   code outside `internal/systemdunit` **MUST NOT** construct an `IOWeight`
   assignment. The exact `ioSystemdProperties` restoration inventory remains a
@@ -211,42 +198,18 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   The AST gate conservatively rejects property names, constant concatenations,
   aliases and other uses of that inventory; this is a structural source boundary,
   not a claim of arbitrary whole-program data-flow analysis.
-- A ResMan recovery leaf is never an authoritative process origin. Every restore
-  candidate **MUST** end in exactly one typed disposition: exact origin, recovery,
-  disappeared, or failed. Recovery occupants remain persistently stranded, cannot be
-  admitted again, and are removed only after exit or deliberate operator disposition.
-- Because observation remains UID-wide, a nested workload refused at ingress still
-  contributes to activation and release inputs. If it keeps a mixed UID above the
-  release threshold, host-namespace processes already acquired by ResMan remain
-  constrained until that total usage falls. This is a deliberate conservative policy,
-  not evidence that the nested workload was constrained. Operator documentation
-  **MUST** identify the bounded ingress-skip warning and counter as the diagnostic.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
 RAM and I/O decisions even though their own empty include lists select everybody.
 Independent aggregates and a table-driven policy test now preserve the intended
-asymmetry. Process accounting previously included excluded processes even though
-cgroup placement omitted them, allowing unenforceable workload to trigger or prolong
-limits.
+asymmetry. Process relocation previously severed systemd/logind ownership, could detach
+container workloads from their runtime, and required a second origin/recovery model.
+The systemd-native design keeps every PID in its authoritative unit and applies only
+verified unit properties; the non-systemd relocation backend was retired in
+`resman-6w1`.
 
-Initial placement previously ran only during activation or re-add. A new login or
-service process created while the limit stayed active could therefore remain outside
-the controlled cgroup indefinitely, and a reload that excluded a process left it
-constrained under stale policy. Bounded per-cycle reconciliation now makes membership
-eventually consistent and uses captured start times to avoid acting on reused PIDs.
-
-A rootful Podman process was observed being moved out of its runtime-owned
-`machine.slice/libpod-*.scope/container` leaf into a ResMan CPU-enforcement leaf. The
-runtime scope disappeared while Podman still reported the container running, and
-shutdown could restore the process only to a ResMan recovery leaf. PID-namespace
-ownership is therefore an ingress invariant, not a container-name heuristic.
-The same unchanged accounting means a dominant nested workload can prolong a mixed
-UID's active limit even though ResMan deliberately cannot reduce that workload's use.
-The per-operation warning identifies the UID and bounded skip counts; the Prometheus
-counter exposes the host-level trend without unbounded identity labels.
-
-*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d, resman-yom*
+*Findings: resman-4pw.1, resman-4pw.2, resman-4pw.3, resman-54d, resman-yom, resman-6w1*
 
 ## Rule 4 — Every configured decision dimension must be evaluated
 
@@ -422,7 +385,7 @@ stderr without copying the potentially sensitive failed record.
   retains a typed runtime retry intent independently of watcher digest bookkeeping.
 
 **Why.** Before `resman-4pw.9`, `preserveRestartRequiredConfig` was a hand-written
-list that omitted `METRICS_DB_*` and `CREATED_CGROUPS_FILE`, while
+list that omitted `METRICS_DB_*` and a then-supported cgroup tracking path, while
 `USERNAME_CACHE_TTL` was applied only on a database-enabled bootstrap path. The
 remediation moved every public key into `config/lifecycle.go`, rejects static changes
 explicitly, and uses one configuration epoch across control-cycle consumers.
@@ -1029,6 +992,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | Every production named struct declaring `sync.Mutex`, `sync.RWMutex`, or `operationgate.Gate` is recorded exactly once in the lock-boundary inventory | 15 | AST field/import scan matched to machine-readable inventory identifiers; test and generated files excluded; no call-graph proof |
 | systemd-owned user slices are mutated only through the runtime-only D-Bus adapter; raw user-slice cgroup paths and general unit lifecycle methods are forbidden | 14, 15 | AST scan of production literals, client imports, raw D-Bus members, control-group-path consumers and mutation calls; the adapter permits only read-only cgroup verification plus its guarded unit-file cleanup |
+| PID relocation, origin/recovery state and the retired enforcement vocabulary cannot return | 3, 5, 16 | Repository-wide production-Go AST scan rejects direct, concatenated and constant-aliased `cgroup.procs` or `migration_enabled` strings plus the retired placement API identifiers |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |
 | Production comments, user-facing strings, build help, and current shipped documentation use English | 17 | conservative Italian-language lexical scan of production Go comments/string literals, the Makefile, and shipped assets, excluding test/checker fixtures and historical RPM/DEB changelogs |

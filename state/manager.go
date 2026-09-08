@@ -21,12 +21,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,17 +64,11 @@ type Manager struct {
 	resourceLimitsActive       bool
 	resourceLimitsAppliedTime  time.Time
 	requestedCPUUsers          map[int]bool
-	activeUsers                map[int]bool // UID -> user observed in the CPU-limited cgroup
+	activeUsers                map[int]bool // UID -> user with an authoritative applied CPU plan
 	userLimitedAt              map[int]time.Time
 	resourceLimits             map[int]userResourceLimitState
-	sharedCgroupPath           string // Shared CPU cgroup path
-	cpuPointsHierarchy         cgroup.CPUPointsHierarchy
 	cpuPointsPolicy            cpupoints.PolicySnapshot
 	cpuCapacity                CPUCapacityProvider
-	cpuAllocations             map[int]cpuPointsAllocation
-	appliedGuaranteePoints     cpupoints.AppliedGuaranteePoints
-	programmedGuaranteePoints  uint64
-	ramCoverage                map[int]ramCoverageState
 	persistencePreviousCPU     map[string]cgroup.CPUPointsNodeSnapshot
 	persistencePreviousRAM     map[int]cgroup.MemoryAccountingSnapshot
 	persistencePreviousTime    time.Time
@@ -98,7 +89,6 @@ type Manager struct {
 	systemdResourcesRequested  bool
 	systemdResourceUnits       map[int]systemdunit.UnitIdentity
 	resolveSystemdIODevices    func(string) ([]string, error)
-	recoverySnapshot           cgroup.RecoverySnapshot
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -107,26 +97,23 @@ type Manager struct {
 	lastPatternAnalysis time.Time
 
 	// Injected dependencies.
-	metricsCollector              MetricsCollector
-	cgroupManager                 CgroupManager
-	prometheusExporter            PrometheusExporter
-	ioRemediation                 *IORemediation
-	patternDetector               *PatternDetector
-	policyEngine                  *PolicyEngine
-	pendingPatternReconciliations map[int]struct{}
-	hookCtx                       context.Context
-	hookCancel                    context.CancelFunc
-	hookClosed                    bool
-	hookQueue                     chan limitHookJob
-	hookWorkerCount               int
-	hookWorkersStarted            bool
-	hookInFlight                  atomic.Int64
-	hookScriptIdentity            limithook.ScriptIdentity
-	hookLastSaturationLog         time.Time
-	hookSaturationSuppressed      uint64
-	hookNow                       func() time.Time
-	executeHookScript             func(context.Context, hookScriptInvocation, limitHookEvent) error
-	executeHookRequest            func(context.Context, string, limitHookEvent) error
+	metricsCollector         MetricsCollector
+	cgroupManager            CgroupManager
+	prometheusExporter       PrometheusExporter
+	patternDetector          *PatternDetector
+	hookCtx                  context.Context
+	hookCancel               context.CancelFunc
+	hookClosed               bool
+	hookQueue                chan limitHookJob
+	hookWorkerCount          int
+	hookWorkersStarted       bool
+	hookInFlight             atomic.Int64
+	hookScriptIdentity       limithook.ScriptIdentity
+	hookLastSaturationLog    time.Time
+	hookSaturationSuppressed uint64
+	hookNow                  func() time.Time
+	executeHookScript        func(context.Context, hookScriptInvocation, limitHookEvent) error
+	executeHookRequest       func(context.Context, string, limitHookEvent) error
 
 	// Cached metrics state.
 	metricsCache     map[string]interface{}
@@ -139,8 +126,6 @@ type Manager struct {
 	// are converted to rates only for users eligible in both samples.
 	previousIOEligibleUsers map[int]struct{}
 	prevIOTime              time.Time
-	previousBlockIOCounters map[int]blockIOCounterSample
-	blockIOObservedUsers    map[int]bool
 
 	// PSI watcher triggers observation and control cycles; CPU Points exclusively owns weights.
 	psiWatcher *cgroup.PSIWatcher
@@ -152,54 +137,12 @@ type userResourceLimitState struct {
 	swap         bool
 	io           bool
 	ioApplied    bool
-	standalone   bool
 	ramAuthority systemdunit.ResourceAuthority
 	ioAuthority  systemdunit.ResourceAuthority
 }
 
-type cpuPointsAllocation struct {
-	class                   cpupoints.AllocationClass
-	weight                  cpupoints.KernelCPUWeight
-	domainPath              string
-	leafPath                string
-	pidNamespaceMismatches  int
-	pidNamespaceUnavailable int
-}
-
 type cpuPointsLifecycleEvent struct {
-	state                   resmanmetrics.CPUPointsLifecycleState
-	pidNamespaceMismatches  int
-	pidNamespaceUnavailable int
-	systemdOwnershipRefused int
-	recoveryProcesses       int
-	restoreFailedProcesses  int
-}
-
-// RAMCoverage describes whether a managed leaf accounts for the complete
-// memory footprint of one UID. Dynamic ingress can only provide post-ingress
-// coverage because cgroup v2 does not transfer existing page charges.
-type RAMCoverage string
-
-const (
-	RAMCoverageComplete RAMCoverage = "complete"
-	RAMCoveragePartial  RAMCoverage = "partial"
-)
-
-type ramCoverageState struct {
-	coverage RAMCoverage
-	partial  map[int]uint64 // PID -> start time
-}
-
-// RAMActiveCPUTransitionError reports a CPU placement transition refused to
-// preserve the authoritative cgroup for already-applied RAM enforcement.
-type RAMActiveCPUTransitionError struct {
-	UID  int
-	From string
-	To   string
-}
-
-func (e *RAMActiveCPUTransitionError) Error() string {
-	return fmt.Sprintf("refusing CPU cgroup transition for UID %d from %s to %s while RAM enforcement is active", e.UID, e.From, e.To)
+	state resmanmetrics.CPUPointsLifecycleState
 }
 
 // CPUCapacityProvider supplies a fresh authoritative CPU denominator for each reconciliation.
@@ -227,21 +170,12 @@ func WithCPUPointsRuntime(policy cpupoints.PolicySnapshot, capacity CPUCapacityP
 func WithEnforcementStatus(status cgroup.EnforcementStatus) ManagerOption {
 	return func(m *Manager) error {
 		switch status.Mode {
-		case cgroup.EnforcementModeMigrationEnabled, cgroup.EnforcementModeObservationOnlySystemd, cgroup.EnforcementModeSystemdNative:
+		case cgroup.EnforcementModeObservationOnly, cgroup.EnforcementModeSystemdNative:
 			m.enforcementStatus = status
 			return nil
 		default:
 			return fmt.Errorf("unsupported enforcement mode %q", status.Mode)
 		}
-	}
-}
-
-// WithRecoverySnapshot installs the startup view of processes already stranded
-// in recovery so public status is truthful before the first control cycle.
-func WithRecoverySnapshot(snapshot cgroup.RecoverySnapshot) ManagerOption {
-	return func(m *Manager) error {
-		m.recoverySnapshot = snapshot
-		return nil
 	}
 }
 
@@ -284,46 +218,10 @@ type MetricsCollector interface {
 	GetUsernameFromUID(uid int) string
 }
 
-// CgroupManager defines the cgroup v2 operations used by the state manager.
+// CgroupManager exposes the read-only cgroup observer's lifecycle hook. Runtime
+// enforcement is performed exclusively through the authoritative systemd adapter.
 type CgroupManager interface {
-	CreateUserCgroup(uid int) error
-	EnsureUnlimitedCPUQuota(uid int) error
-	ApplyRAMLimit(uid int, limit string) error
-	ApplyRAMLimitWithSwapDisabled(uid int, limit string) error
-	ApplyRAMHigh(uid int, limit string) error
-	ApplyRAMLimitWithHigh(uid int, maxLimit string, highLimit string) error
-	ApplyRAMLimitWithHighAndSwapDisabled(uid int, maxLimit string, highLimit string) error
-	RemoveRAMLimit(uid int) error
-	RemoveRAMHigh(uid int) error
-	RemoveRAMSwapLimit(uid int) error
-	GetCgroupRAMUsage(uid int) (uint64, error)
-	GetMemoryHighEvents(uid int) (uint64, error)
-	ApplyIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string) error
-	RemoveIOLimit(uid int) error
-	GetIOStats(uid int) (readBytes, writeBytes uint64, readOps, writeOps uint64, err error)
-	EnsureUserCgroupPlacement(uid int, sharedPath, normalQuota string) (string, cgroup.ProcessMoveResult, error)
-	GetUserCgroupMetrics(uid int) (cgroupPath, cpuQuota string, memoryHighEvents uint64, ioReadBytes, ioWriteBytes, ioReadOps, ioWriteOps uint64, err error)
-	GetCPUPointsNodeSnapshot(path string) (cgroup.CPUPointsNodeSnapshot, error)
-	GetMemoryAccountingSnapshot(uid int) (cgroup.MemoryAccountingSnapshot, error)
-	GetPSIStats(uid int) (cgroup.PSIStats, error)
-	ApplyTemporaryIOLimit(uid int, readBPS, writeBPS string, readIOPS, writeIOPS int, deviceFilter string, multiplier float64) error
-	CleanupUserCgroup(uid int) error
-	MoveProcessToCgroup(pid int, uid int) (cgroup.ProcessMoveResult, error)
-	MoveAllUserProcesses(uid int) (cgroup.ProcessMoveResult, error)
-	MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) (cgroup.ProcessMoveResult, error)
-	ReconcileUserProcessMembership(uid int, sharedPath, normalQuota string) (cgroup.ProcessMembershipResult, error)
-	ReleaseUserFromSharedCgroup(uid int, sharedPath, normalQuota string) error
-	EnsureCPUPointsHierarchy(cpupoints.ParentQuota, cpupoints.KernelCPUWeight) (cgroup.CPUPointsHierarchy, error)
-	ApplyCPUPointsParentQuota(cgroup.CPUPointsHierarchy, cpupoints.ParentQuota) error
-	ApplyCPUPointsGuaranteedWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error
-	ApplyCPUPointsBestEffortWeight(cgroup.CPUPointsHierarchy, cpupoints.KernelCPUWeight) error
-	ApplyCPUPointsUserWeight(string, cpupoints.KernelCPUWeight) error
-	EnsureCPUPointsUserPlacement(int, string, cpupoints.KernelCPUWeight) (string, cgroup.ProcessMoveResult, error)
-	ReleaseCPUPointsUser(int, string) error
-	RemoveCPUPointsHierarchy(cgroup.CPUPointsHierarchy) error
 	CleanupAll() error
-	GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
-	GetCreatedCgroups() []int
 }
 
 // PrometheusExporter defines the Prometheus boundary used by the state manager.
@@ -337,8 +235,6 @@ type PrometheusExporter interface {
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
-	RecordCgroupIngressSkips(result cgroup.ProcessMoveResult)
-	RecordProcessRestoreResult(result cgroup.ProcessRestoreResult)
 	RecordLimitHookExecution(hookType resmanmetrics.LimitHookType, outcome resmanmetrics.LimitHookOutcome)
 	ObserveLimitHookExecutor(inFlight, queued, capacity int)
 	Start(ctx context.Context) error
@@ -381,9 +277,6 @@ func NewManager(
 		activeUsers:               make(map[int]bool),
 		userLimitedAt:             make(map[int]time.Time),
 		resourceLimits:            make(map[int]userResourceLimitState),
-		sharedCgroupPath:          "",
-		cpuAllocations:            make(map[int]cpuPointsAllocation),
-		ramCoverage:               make(map[int]ramCoverageState),
 		persistencePreviousCPU:    make(map[string]cgroup.CPUPointsNodeSnapshot),
 		persistencePreviousRAM:    make(map[int]cgroup.MemoryAccountingSnapshot),
 		cpuPointsLifecycleEvents:  make(map[int]cpuPointsLifecycleEvent),
@@ -392,35 +285,30 @@ func NewManager(
 		systemdResourceUnits:      make(map[int]systemdunit.UnitIdentity),
 		resolveSystemdIODevices:   systemdunit.ResolveBlockDevices,
 		enforcementStatus: cgroup.EnforcementStatus{
-			Mode:   cgroup.EnforcementModeMigrationEnabled,
-			Reason: cgroup.EnforcementReasonNoSystemdRuntime,
+			Mode:   cgroup.EnforcementModeObservationOnly,
+			Reason: cgroup.EnforcementReasonSystemdRuntimeAbsent,
 		},
-		thresholdTracker:              &ThresholdTracker{},
-		stabilityTracker:              newUserStabilityTracker(),
-		ioThresholdTracker:            &ThresholdTracker{},
-		metricsCollector:              metrics,
-		cgroupManager:                 cgroups,
-		prometheusExporter:            prometheus,
-		ioRemediation:                 NewIORemediation(logger),
-		patternDetector:               NewPatternDetector(logger),
-		policyEngine:                  NewPolicyEngine(logger),
-		pendingPatternReconciliations: make(map[int]struct{}),
-		hookCtx:                       hookCtx,
-		hookCancel:                    hookCancel,
-		hookQueue:                     make(chan limitHookJob, cfg.LimitHookQueueCapacity),
-		hookWorkerCount:               cfg.LimitHookMaxConcurrency,
-		hookNow:                       time.Now,
-		executeHookScript:             runLimitHookScript,
-		executeHookRequest:            newLimitHookHTTPRequestExecutor(),
-		metricsCache:                  make(map[string]interface{}),
-		metricsCacheTime:              make(map[string]time.Time),
+		thresholdTracker:   &ThresholdTracker{},
+		stabilityTracker:   newUserStabilityTracker(),
+		ioThresholdTracker: &ThresholdTracker{},
+		metricsCollector:   metrics,
+		cgroupManager:      cgroups,
+		prometheusExporter: prometheus,
+		patternDetector:    NewPatternDetector(logger),
+		hookCtx:            hookCtx,
+		hookCancel:         hookCancel,
+		hookQueue:          make(chan limitHookJob, cfg.LimitHookQueueCapacity),
+		hookWorkerCount:    cfg.LimitHookMaxConcurrency,
+		hookNow:            time.Now,
+		executeHookScript:  runLimitHookScript,
+		executeHookRequest: newLimitHookHTTPRequestExecutor(),
+		metricsCache:       make(map[string]interface{}),
+		metricsCacheTime:   make(map[string]time.Time),
 		controlHist: &controlHistory{
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,
 		},
 		previousIOEligibleUsers: make(map[int]struct{}),
-		previousBlockIOCounters: make(map[int]blockIOCounterSample),
-		blockIOObservedUsers:    make(map[int]bool),
 	}
 	if cfg.LimitHookScript != "" {
 		identity, identityErr := limithook.ResolveScriptIdentity(cfg.LimitHookScriptUser, cfg.LimitHookScriptGroup)
@@ -540,25 +428,19 @@ func (m *Manager) isUserLimited(uid int) bool {
 
 // RuntimeStatus is an observed snapshot of current enforcement state.
 type RuntimeStatus struct {
-	EnforcementMode               cgroup.EnforcementMode
-	EnforcementReason             string
-	MigrationEnforcementAvailable bool
-	RecoveryOccupants             []cgroup.RecoveryOccupant
-	CPULimitsActive               bool
-	ResourceLimitsActive          bool
-	AnyLimitsActive               bool
-	CPULimitsAppliedTime          time.Time
-	ResourceLimitsAppliedTime     time.Time
-	ActivelyLimitedUsers          []int
-	ActivelyLimitedUsersCount     int
-	CPUActivelyLimitedUsers       []int
-	CPUActivelyLimitedUsersCount  int
-	SharedCgroupPath              string
-	SharedCgroupActive            bool
-	SharedCgroupQuota             string
-	SharedCgroupUserCount         int
-	CPUPoints                     resmanmetrics.CPUPointsSystemSnapshot
-	CPUPointUsers                 []resmanmetrics.CPUPointsUserSnapshot
+	EnforcementMode              cgroup.EnforcementMode
+	EnforcementReason            string
+	CPULimitsActive              bool
+	ResourceLimitsActive         bool
+	AnyLimitsActive              bool
+	CPULimitsAppliedTime         time.Time
+	ResourceLimitsAppliedTime    time.Time
+	ActivelyLimitedUsers         []int
+	ActivelyLimitedUsersCount    int
+	CPUActivelyLimitedUsers      []int
+	CPUActivelyLimitedUsersCount int
+	CPUPoints                    resmanmetrics.CPUPointsSystemSnapshot
+	CPUPointUsers                []resmanmetrics.CPUPointsUserSnapshot
 }
 
 type enforcementSummary struct {
@@ -568,7 +450,6 @@ type enforcementSummary struct {
 	resourceLimitsActive      bool
 	cpuLimitsAppliedTime      time.Time
 	resourceLimitsAppliedTime time.Time
-	sharedCgroupPath          string
 }
 
 func (m *Manager) getEnforcementSummary() enforcementSummary {
@@ -592,7 +473,6 @@ func (m *Manager) getEnforcementSummary() enforcementSummary {
 		resourceLimitsActive:      resourceEnforcementObserved,
 		cpuLimitsAppliedTime:      m.limitsAppliedTime,
 		resourceLimitsAppliedTime: m.resourceLimitsAppliedTime,
-		sharedCgroupPath:          m.sharedCgroupPath,
 	}
 	m.mu.RUnlock()
 
@@ -610,24 +490,20 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	summary := m.getEnforcementSummary()
 
 	status := RuntimeStatus{
-		EnforcementMode:               m.enforcementStatus.Mode,
-		EnforcementReason:             m.enforcementStatus.Reason,
-		MigrationEnforcementAvailable: m.enforcementStatus.Mode == cgroup.EnforcementModeMigrationEnabled,
-		CPULimitsActive:               summary.cpuLimitsActive,
-		ResourceLimitsActive:          summary.resourceLimitsActive,
-		AnyLimitsActive:               summary.cpuLimitsActive || summary.resourceLimitsActive,
-		CPULimitsAppliedTime:          summary.cpuLimitsAppliedTime,
-		ResourceLimitsAppliedTime:     summary.resourceLimitsAppliedTime,
-		ActivelyLimitedUsers:          summary.activelyLimitedUsers,
-		ActivelyLimitedUsersCount:     len(summary.activelyLimitedUsers),
-		CPUActivelyLimitedUsers:       summary.cpuUsers,
-		CPUActivelyLimitedUsersCount:  len(summary.cpuUsers),
-		SharedCgroupPath:              summary.sharedCgroupPath,
-		SharedCgroupActive:            summary.sharedCgroupPath != "" && summary.cpuLimitsActive,
+		EnforcementMode:              m.enforcementStatus.Mode,
+		EnforcementReason:            m.enforcementStatus.Reason,
+		CPULimitsActive:              summary.cpuLimitsActive,
+		ResourceLimitsActive:         summary.resourceLimitsActive,
+		AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
+		CPULimitsAppliedTime:         summary.cpuLimitsAppliedTime,
+		ResourceLimitsAppliedTime:    summary.resourceLimitsAppliedTime,
+		ActivelyLimitedUsers:         summary.activelyLimitedUsers,
+		ActivelyLimitedUsersCount:    len(summary.activelyLimitedUsers),
+		CPUActivelyLimitedUsers:      summary.cpuUsers,
+		CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
 	}
 	m.mu.RLock()
 	status.CPUPoints = m.cpuPointsSystemSnapshot
-	status.RecoveryOccupants = append([]cgroup.RecoveryOccupant(nil), m.recoverySnapshot.Occupants...)
 	status.CPUPointUsers = make([]resmanmetrics.CPUPointsUserSnapshot, 0, len(m.cpuPointsUserSnapshots))
 	for _, snapshot := range m.cpuPointsUserSnapshots {
 		status.CPUPointUsers = append(status.CPUPointUsers, snapshot)
@@ -665,19 +541,6 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	}
 	sort.Slice(status.CPUPointUsers, func(i, j int) bool { return status.CPUPointUsers[i].UID < status.CPUPointUsers[j].UID })
 
-	// Read shared cgroup details without holding the manager lock.
-	if summary.sharedCgroupPath != "" {
-		cpuMaxFile := filepath.Join(summary.sharedCgroupPath, "cpu.max")
-		if data, err := os.ReadFile(cpuMaxFile); err == nil {
-			status.SharedCgroupQuota = strings.TrimSpace(string(data))
-		}
-
-		// The CPU Points hierarchy nests leaves below guaranteed and
-		// best_effort. The observed allocation snapshot is authoritative;
-		// counting only direct children of the parent would report zero.
-		status.SharedCgroupUserCount = len(summary.cpuUsers)
-	}
-
 	return status
 }
 
@@ -714,7 +577,7 @@ func (m *Manager) Cleanup() error {
 			}
 		}
 
-		// Clean up managed cgroups.
+		// Finish the read-only cgroup observer lifecycle.
 		if m.cgroupManager != nil {
 			if err := m.cgroupManager.CleanupAll(); err != nil {
 				m.logger.Error("Error during cgroup cleanup", "error", err)
@@ -763,7 +626,6 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	m.cfg = newConfig
 	if processPolicyChanged {
 		m.previousIOEligibleUsers = make(map[int]struct{})
-		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)
 		m.prevIOTime = time.Time{}
 	}
 	m.mu.Unlock()
@@ -820,10 +682,6 @@ func (m *Manager) GetConfig() *config.Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cfg
-}
-
-func isMissingUserCgroupError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "cgroup for UID") && strings.Contains(err.Error(), "not found")
 }
 
 // ControlCycleEntry represents a single control cycle entry in history

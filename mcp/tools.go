@@ -24,13 +24,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -60,31 +58,21 @@ type GetUserMetricsArgs struct {
 }
 
 type UserMetric struct {
-	UID               int     `json:"uid"`
-	Username          string  `json:"username"`
-	CPUUsage          float64 `json:"cpu_usage"`
-	MemoryUsage       uint64  `json:"memory_usage"`
-	ProcessCount      int     `json:"process_count"`
-	EligibleForCPU    bool    `json:"eligible_for_cpu"`
-	EligibleForRAM    bool    `json:"eligible_for_ram"`
-	EligibleForIO     bool    `json:"eligible_for_io"`
-	CPULimitRequested bool    `json:"cpu_limit_requested"`
-	CPULimitActive    bool    `json:"cpu_limit_active"`
-	RAMLimitRequested bool    `json:"ram_limit_requested"`
-	RAMLimitActive    bool    `json:"ram_limit_active"`
-	IOLimitRequested  bool    `json:"io_limit_requested"`
-	IOLimitActive     bool    `json:"io_limit_active"`
-	// RAM cgroup metrics
-	CgroupMemoryCurrentBytes uint64 `json:"cgroup_memory_current_bytes,omitempty"`
-	MemoryMax                string `json:"memory_max,omitempty"`
-	MemoryHigh               string `json:"memory_high,omitempty"`
-	MemoryHighEvents         uint64 `json:"memory_high_events,omitempty"`
-	// IO cgroup metrics
-	IOReadBytes  uint64                `json:"io_read_bytes,omitempty"`
-	IOWriteBytes uint64                `json:"io_write_bytes,omitempty"`
-	IOReadOps    uint64                `json:"io_read_ops,omitempty"`
-	IOWriteOps   uint64                `json:"io_write_ops,omitempty"`
-	CPUPoints    *cpuPointsUserPayload `json:"cpu_points,omitempty"`
+	UID               int                   `json:"uid"`
+	Username          string                `json:"username"`
+	CPUUsage          float64               `json:"cpu_usage"`
+	MemoryUsage       uint64                `json:"memory_usage"`
+	ProcessCount      int                   `json:"process_count"`
+	EligibleForCPU    bool                  `json:"eligible_for_cpu"`
+	EligibleForRAM    bool                  `json:"eligible_for_ram"`
+	EligibleForIO     bool                  `json:"eligible_for_io"`
+	CPULimitRequested bool                  `json:"cpu_limit_requested"`
+	CPULimitActive    bool                  `json:"cpu_limit_active"`
+	RAMLimitRequested bool                  `json:"ram_limit_requested"`
+	RAMLimitActive    bool                  `json:"ram_limit_active"`
+	IOLimitRequested  bool                  `json:"io_limit_requested"`
+	IOLimitActive     bool                  `json:"io_limit_active"`
+	CPUPoints         *cpuPointsUserPayload `json:"cpu_points,omitempty"`
 }
 
 func newUserMetric(uid int, sample *resmanmetrics.UserMetrics, limitState state.UserLimitState) UserMetric {
@@ -108,34 +96,6 @@ func newUserMetric(uid int, sample *resmanmetrics.UserMetrics, limitState state.
 
 type GetUserMetricsResult struct {
 	Users []UserMetric `json:"users"`
-}
-
-type GetCgroupInfoArgs struct {
-	UID int `json:"uid"`
-}
-
-// GetCgroupInfoResult reports cgroup values and their explicit availability.
-type GetCgroupInfoResult struct {
-	Path                           string                             `json:"path"`
-	CPUQuota                       string                             `json:"cpu_max,omitempty"`
-	CPUQuotaAvailable              bool                               `json:"cpu_max_available"`
-	CPUQuotaUnavailableReason      cgroup.CgroupFileUnavailableReason `json:"cpu_max_unavailable_reason,omitempty"`
-	CPUWeight                      string                             `json:"cpu_weight,omitempty"`
-	CPUWeightAvailable             bool                               `json:"cpu_weight_available"`
-	CPUWeightUnavailableReason     cgroup.CgroupFileUnavailableReason `json:"cpu_weight_unavailable_reason,omitempty"`
-	MemoryCurrent                  string                             `json:"memory_current,omitempty"`
-	MemoryCurrentAvailable         bool                               `json:"memory_current_available"`
-	MemoryCurrentUnavailableReason cgroup.CgroupFileUnavailableReason `json:"memory_current_unavailable_reason,omitempty"`
-	MemoryMax                      string                             `json:"memory_max,omitempty"`
-	MemoryMaxAvailable             bool                               `json:"memory_max_available"`
-	MemoryMaxUnavailableReason     cgroup.CgroupFileUnavailableReason `json:"memory_max_unavailable_reason,omitempty"`
-	MemoryHigh                     string                             `json:"memory_high,omitempty"`
-	MemoryHighAvailable            bool                               `json:"memory_high_available"`
-	MemoryHighUnavailableReason    cgroup.CgroupFileUnavailableReason `json:"memory_high_unavailable_reason,omitempty"`
-	IOReadBPS                      string                             `json:"io_read_bps,omitempty"`
-	IOWriteBPS                     string                             `json:"io_write_bps,omitempty"`
-	IOReadIOPS                     string                             `json:"io_read_iops,omitempty"`
-	IOWriteIOPS                    string                             `json:"io_write_iops,omitempty"`
 }
 
 type userFilterKind string
@@ -219,52 +179,43 @@ type ActivateLimitsArgs struct {
 }
 
 type systemStatusPayload struct {
-	Hostname                  string                    `json:"hostname"`
-	ServerRole                string                    `json:"server_role"`
-	EnforcementMode           string                    `json:"enforcement_mode"`
-	EnforcementReason         string                    `json:"enforcement_reason"`
-	MigrationAvailable        bool                      `json:"migration_enforcement_available"`
-	RecoveryOccupants         []recoveryOccupantPayload `json:"recovery_occupants"`
-	TotalCPUUsage             float64                   `json:"total_cpu_usage"`
-	TotalCPUUsageAvailable    bool                      `json:"total_cpu_usage_available"`
-	TotalCPUUnavailableReason string                    `json:"total_cpu_usage_unavailable_reason"`
-	ObservedUsersCPUUsage     float64                   `json:"observed_users_cpu_usage"`
-	MemoryUsageMB             float64                   `json:"memory_usage_mb"`
-	ObservedUsersCount        int                       `json:"observed_users_count"`
-	ActivelyLimitedUsersCount int                       `json:"actively_limited_users_count"`
-	TotalCores                int                       `json:"total_cores"`
-	SystemUnderLoad           bool                      `json:"system_under_load"`
-	AnyLimitsActive           bool                      `json:"any_limits_active"`
-	CPULimitsActive           bool                      `json:"cpu_limits_active"`
-	ResourceLimitsActive      bool                      `json:"resource_limits_active"`
-	CPULimitsAppliedTime      string                    `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime string                    `json:"resource_limits_applied_time"`
-	SharedCgroupActive        bool                      `json:"shared_cgroup_active"`
-	CPUPoints                 cpuPointsSystemPayload    `json:"cpu_points"`
+	Hostname                  string                 `json:"hostname"`
+	ServerRole                string                 `json:"server_role"`
+	EnforcementMode           string                 `json:"enforcement_mode"`
+	EnforcementReason         string                 `json:"enforcement_reason"`
+	TotalCPUUsage             float64                `json:"total_cpu_usage"`
+	TotalCPUUsageAvailable    bool                   `json:"total_cpu_usage_available"`
+	TotalCPUUnavailableReason string                 `json:"total_cpu_usage_unavailable_reason"`
+	ObservedUsersCPUUsage     float64                `json:"observed_users_cpu_usage"`
+	MemoryUsageMB             float64                `json:"memory_usage_mb"`
+	ObservedUsersCount        int                    `json:"observed_users_count"`
+	ActivelyLimitedUsersCount int                    `json:"actively_limited_users_count"`
+	TotalCores                int                    `json:"total_cores"`
+	SystemUnderLoad           bool                   `json:"system_under_load"`
+	AnyLimitsActive           bool                   `json:"any_limits_active"`
+	CPULimitsActive           bool                   `json:"cpu_limits_active"`
+	ResourceLimitsActive      bool                   `json:"resource_limits_active"`
+	CPULimitsAppliedTime      string                 `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime string                 `json:"resource_limits_applied_time"`
+	CPUPoints                 cpuPointsSystemPayload `json:"cpu_points"`
 }
 
 type limitsStatusPayload struct {
-	Hostname                     string                    `json:"hostname"`
-	ServerRole                   string                    `json:"server_role"`
-	EnforcementMode              string                    `json:"enforcement_mode"`
-	EnforcementReason            string                    `json:"enforcement_reason"`
-	MigrationAvailable           bool                      `json:"migration_enforcement_available"`
-	RecoveryOccupants            []recoveryOccupantPayload `json:"recovery_occupants"`
-	AnyLimitsActive              bool                      `json:"any_limits_active"`
-	CPULimitsActive              bool                      `json:"cpu_limits_active"`
-	ResourceLimitsActive         bool                      `json:"resource_limits_active"`
-	CPULimitsAppliedTime         string                    `json:"cpu_limits_applied_time"`
-	ResourceLimitsAppliedTime    string                    `json:"resource_limits_applied_time"`
-	ActivelyLimitedUsersCount    int                       `json:"actively_limited_users_count"`
-	ActivelyLimitedUsers         []int                     `json:"actively_limited_users"`
-	CPUActivelyLimitedUsersCount int                       `json:"cpu_actively_limited_users_count"`
-	CPUActivelyLimitedUsers      []int                     `json:"cpu_actively_limited_users"`
-	SharedCgroupPath             string                    `json:"shared_cgroup_path"`
-	SharedCgroupActive           bool                      `json:"shared_cgroup_active"`
-	SharedCgroupQuota            string                    `json:"shared_cgroup_quota,omitempty"`
-	SharedCgroupUserCount        int                       `json:"shared_cgroup_user_count"`
-	CPUPoints                    cpuPointsSystemPayload    `json:"cpu_points"`
-	CPUPointUsers                []cpuPointsUserPayload    `json:"cpu_point_users"`
+	Hostname                     string                 `json:"hostname"`
+	ServerRole                   string                 `json:"server_role"`
+	EnforcementMode              string                 `json:"enforcement_mode"`
+	EnforcementReason            string                 `json:"enforcement_reason"`
+	AnyLimitsActive              bool                   `json:"any_limits_active"`
+	CPULimitsActive              bool                   `json:"cpu_limits_active"`
+	ResourceLimitsActive         bool                   `json:"resource_limits_active"`
+	CPULimitsAppliedTime         string                 `json:"cpu_limits_applied_time"`
+	ResourceLimitsAppliedTime    string                 `json:"resource_limits_applied_time"`
+	ActivelyLimitedUsersCount    int                    `json:"actively_limited_users_count"`
+	ActivelyLimitedUsers         []int                  `json:"actively_limited_users"`
+	CPUActivelyLimitedUsersCount int                    `json:"cpu_actively_limited_users_count"`
+	CPUActivelyLimitedUsers      []int                  `json:"cpu_actively_limited_users"`
+	CPUPoints                    cpuPointsSystemPayload `json:"cpu_points"`
+	CPUPointUsers                []cpuPointsUserPayload `json:"cpu_point_users"`
 }
 
 func newSystemStatusPayload(hostname, serverRole string, observation resmanmetrics.ObservationMetrics, runtime state.RuntimeStatus) systemStatusPayload {
@@ -273,8 +224,6 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		ServerRole:                serverRole,
 		EnforcementMode:           string(runtime.EnforcementMode),
 		EnforcementReason:         runtime.EnforcementReason,
-		MigrationAvailable:        runtime.MigrationEnforcementAvailable,
-		RecoveryOccupants:         newRecoveryOccupantPayloads(runtime.RecoveryOccupants),
 		TotalCPUUsage:             observation.TotalCPUUsage,
 		TotalCPUUsageAvailable:    observation.TotalCPUUsageAvailable,
 		TotalCPUUnavailableReason: string(observation.TotalCPUUsageUnavailableReason),
@@ -289,7 +238,6 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		ResourceLimitsActive:      runtime.ResourceLimitsActive,
 		CPULimitsAppliedTime:      formatOptionalTime(runtime.CPULimitsAppliedTime),
 		ResourceLimitsAppliedTime: formatOptionalTime(runtime.ResourceLimitsAppliedTime),
-		SharedCgroupActive:        runtime.SharedCgroupActive,
 		CPUPoints:                 newCPUPointsSystemPayload(runtime.CPUPoints),
 	}
 }
@@ -300,8 +248,6 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 		ServerRole:                   serverRole,
 		EnforcementMode:              string(runtime.EnforcementMode),
 		EnforcementReason:            runtime.EnforcementReason,
-		MigrationAvailable:           runtime.MigrationEnforcementAvailable,
-		RecoveryOccupants:            newRecoveryOccupantPayloads(runtime.RecoveryOccupants),
 		AnyLimitsActive:              runtime.AnyLimitsActive,
 		CPULimitsActive:              runtime.CPULimitsActive,
 		ResourceLimitsActive:         runtime.ResourceLimitsActive,
@@ -311,33 +257,11 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 		ActivelyLimitedUsers:         runtime.ActivelyLimitedUsers,
 		CPUActivelyLimitedUsersCount: runtime.CPUActivelyLimitedUsersCount,
 		CPUActivelyLimitedUsers:      runtime.CPUActivelyLimitedUsers,
-		SharedCgroupPath:             runtime.SharedCgroupPath,
-		SharedCgroupActive:           runtime.SharedCgroupActive,
-		SharedCgroupQuota:            runtime.SharedCgroupQuota,
-		SharedCgroupUserCount:        runtime.SharedCgroupUserCount,
 		CPUPoints:                    newCPUPointsSystemPayload(runtime.CPUPoints),
 		CPUPointUsers:                make([]cpuPointsUserPayload, 0, len(runtime.CPUPointUsers)),
 	}
 	for _, user := range runtime.CPUPointUsers {
 		result.CPUPointUsers = append(result.CPUPointUsers, newCPUPointsUserPayload(user))
-	}
-	return result
-}
-
-type recoveryOccupantPayload struct {
-	UID       int    `json:"uid"`
-	PID       int    `json:"pid"`
-	StartTime string `json:"start_time"`
-}
-
-func newRecoveryOccupantPayloads(occupants []cgroup.RecoveryOccupant) []recoveryOccupantPayload {
-	result := make([]recoveryOccupantPayload, 0, len(occupants))
-	for _, occupant := range occupants {
-		result = append(result, recoveryOccupantPayload{
-			UID:       occupant.UID,
-			PID:       occupant.PID,
-			StartTime: strconv.FormatUint(occupant.StartTime, 10),
-		})
 	}
 	return result
 }
@@ -430,11 +354,6 @@ func (s *Server) registerTools() {
 			StructuredContent: result,
 		}, nil
 	})
-
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
-		Name:        "get_cgroup_info",
-		Description: "Get cgroup details for a specific user",
-	}, s.handleGetCgroupInfo)
 
 	// get_configuration - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
@@ -1082,75 +1001,7 @@ func (s *Server) newUserMetricPayload(uid int, sample *resmanmetrics.UserMetrics
 		payload := newCPUPointsUserPayload(cpuPoints)
 		result.CPUPoints = &payload
 	}
-	if s.stateManager.GetStatus().EnforcementMode == cgroup.EnforcementModeSystemdNative {
-		// Native accounting is already in the typed interval above. Reading a
-		// legacy recovery path would mix ownership and observation lifetimes.
-		return result
-	}
-
-	if info, err := s.cgroupManager.GetCgroupInfo(uid); err == nil {
-		current, hasCurrent, max, high := extractCgroupMemoryMetrics(info)
-		if hasCurrent {
-			result.CgroupMemoryCurrentBytes = current
-		}
-		result.MemoryMax = max
-		result.MemoryHigh = high
-	}
-	if highEvents, err := s.cgroupManager.GetMemoryHighEvents(uid); err == nil {
-		result.MemoryHighEvents = highEvents
-	}
-	if ioRead, ioWrite, ioROps, ioWOps, err := s.cgroupManager.GetIOStats(uid); err == nil {
-		result.IOReadBytes = ioRead
-		result.IOWriteBytes = ioWrite
-		result.IOReadOps = ioROps
-		result.IOWriteOps = ioWOps
-	}
-
 	return result
-}
-
-// handleGetCgroupInfo handles get_cgroup_info tool requests
-func (s *Server) handleGetCgroupInfo(ctx context.Context, req *mcp.CallToolRequest, args GetCgroupInfoArgs) (*mcp.CallToolResult, GetCgroupInfoResult, error) {
-	if args.UID == 0 {
-		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("uid is required")
-	}
-	if s.stateManager != nil && s.stateManager.GetStatus().EnforcementMode == cgroup.EnforcementModeSystemdNative {
-		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("legacy cgroup inspection is unavailable under systemd_native; use get_limits_status for authoritative slice accounting")
-	}
-
-	info, err := s.cgroupManager.GetCgroupInfo(args.UID)
-	if err != nil {
-		return &mcp.CallToolResult{}, GetCgroupInfoResult{}, fmt.Errorf("failed to get cgroup info: %w", err)
-	}
-
-	result := newCgroupInfoResult(info)
-
-	// Read IO limits from cgroup.
-	if cgroupPath := info.Path; cgroupPath != "" {
-		if data, err := os.ReadFile(cgroupPath + "/io.max"); err == nil {
-			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "default ") || strings.Contains(line, "rbps=") {
-					fields := strings.Fields(line)
-					for _, f := range fields {
-						switch {
-						case strings.HasPrefix(f, "rbps="):
-							result.IOReadBPS = strings.TrimPrefix(f, "rbps=")
-						case strings.HasPrefix(f, "wbps="):
-							result.IOWriteBPS = strings.TrimPrefix(f, "wbps=")
-						case strings.HasPrefix(f, "riops="):
-							result.IOReadIOPS = strings.TrimPrefix(f, "riops=")
-						case strings.HasPrefix(f, "wiops="):
-							result.IOWriteIOPS = strings.TrimPrefix(f, "wiops=")
-						}
-					}
-					break
-				}
-			}
-		}
-	}
-
-	return &mcp.CallToolResult{}, result, nil
 }
 
 // handleGetControlHistory handles get_control_history tool requests

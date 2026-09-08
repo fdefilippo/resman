@@ -11,7 +11,7 @@ import (
 	"github.com/fdefilippo/resman/internal/cpupoints"
 )
 
-func TestLegacyGuestGeneratedConfigPassesProductionValidation(t *testing.T) {
+func TestNonSystemdObservationGuestConfigPassesProductionValidation(t *testing.T) {
 	work := t.TempDir()
 	// The guest's map is empty, so this fixture requires no host NSS accounts.
 	if err := os.WriteFile(filepath.Join(work, "cpu-points.map"), []byte(cpupoints.PolicyMapMarker+"\n"), 0600); err != nil {
@@ -23,16 +23,15 @@ func TestLegacyGuestGeneratedConfigPassesProductionValidation(t *testing.T) {
 import importlib.util
 from pathlib import Path
 import sys
-spec = importlib.util.spec_from_file_location("legacy_fixture", sys.argv[1])
+spec = importlib.util.spec_from_file_location("observation_fixture", sys.argv[1])
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
-print(fixture.render_config(Path(sys.argv[2]).read_text(), Path(sys.argv[3]),
-                            Path("/sys/fs/cgroup/resman-legacy-rtest")), end="")
-`, "../../test/functional/smolvm/guest/non-systemd-migration.py", "../../config/resman.conf.example", work)
+print(fixture.render_config(Path(sys.argv[2]).read_text(), Path(sys.argv[3])), end="")
+`, "../../test/functional/smolvm/guest/non-systemd-observation.py", "../../config/resman.conf.example", work)
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("render actual legacy guest config: %v\n%s", err, output)
+		t.Fatalf("render actual non-systemd observation guest config: %v\n%s", err, output)
 	}
 	for _, tc := range []struct {
 		name string

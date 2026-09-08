@@ -64,12 +64,6 @@ func (s *Server) registerResources() {
 		MIMEType:    "application/json",
 	}, s.handleUserMetricsResource)
 
-	s.mcpServer.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate: "resman://cgroups/{uid}",
-		Name:        "Cgroup Info",
-		Description: "Cgroup information for a specific user",
-		MIMEType:    "application/json",
-	}, s.handleCgroupResource)
 }
 
 // handleSystemStatusResource handles resman://system/status
@@ -171,50 +165,14 @@ func (s *Server) handleUserMetricsResource(ctx context.Context, req *mcp.ReadRes
 	}, nil
 }
 
-// handleCgroupResource handles resman://cgroups/{uid}
-func (s *Server) handleCgroupResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	// Extract UID from URI
-	uid, err := extractUIDFromURI(req.Params.URI)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URI: %w", err)
-	}
-
-	info, err := s.cgroupManager.GetCgroupInfo(uid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cgroup info: %w", err)
-	}
-
-	return &mcp.ReadResourceResult{
-		Contents: []*mcp.ResourceContents{
-			{
-				URI:      req.Params.URI,
-				MIMEType: "application/json",
-				Text:     toJSON(newCgroupInfoResult(info)),
-			},
-		},
-	}, nil
-}
-
 // extractUIDFromURI extracts the UID from a resource URI
 func extractUIDFromURI(uri string) (int, error) {
-	// Parse resman://users/{uid}/metrics or resman://cgroups/{uid}
+	// Parse resman://users/{uid}/metrics.
 	if strings.Contains(uri, "/users/") {
 		// Format: resman://users/{uid}/metrics
 		parts := strings.Split(uri, "/")
 		for i, part := range parts {
 			if part == "users" && i+1 < len(parts) {
-				uid, err := strconv.Atoi(parts[i+1])
-				if err != nil {
-					return 0, fmt.Errorf("could not extract UID from URI: %s", uri)
-				}
-				return uid, nil
-			}
-		}
-	} else if strings.Contains(uri, "/cgroups/") {
-		// Format: resman://cgroups/{uid}
-		parts := strings.Split(uri, "/")
-		for i, part := range parts {
-			if part == "cgroups" && i+1 < len(parts) {
 				uid, err := strconv.Atoi(parts[i+1])
 				if err != nil {
 					return 0, fmt.Errorf("could not extract UID from URI: %s", uri)

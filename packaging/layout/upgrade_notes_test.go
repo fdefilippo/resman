@@ -11,11 +11,11 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 	guide := readTextFile(t, filepath.Join(root, "docs/UPGRADING.md"))
 
 	required := []string{
-		"# Upgrading from ResMan 1.25.x through 1.34.0 to ResMan 1.34.1",
+		"# Upgrading from ResMan 1.25.x through 1.34.1 to ResMan 1.35.0",
 		"/etc/" + "resman.conf.rpmsave",
 		"/etc/" + "resman.conf.backup_*",
 		"/var/lib/resman/metrics.db",
-		"schema version is 6",
+		"schema version is 7",
 		"CPU_QUOTA_LIMITED",
 		"PROMETHEUS_METRICS_BIND_HOST",
 		"METRICS_CACHE_TTL",
@@ -31,7 +31,7 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 		"ResManCPULimitsNotActivating",
 		"resman_procfs_unavailable_processes",
 		"RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT",
-		"`process_membership/origin_unavailable`",
+		"`observation_only`",
 		"`PROCESS_EXCLUDE_LIST`",
 		"`POLLING_INTERVAL`",
 		"`IO_READ_BPS`",
@@ -40,7 +40,7 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 		"`MIN_ACTIVE_TIME`",
 		"`memory.max`",
 		"status 78",
-		"`CGROUP_OPERATION_TIMEOUT`",
+		"no restoration-only path",
 		"rootful Podman",
 	}
 	for _, text := range required {
@@ -71,19 +71,19 @@ func TestUpgradeGuideIsReferencedAndPackaged(t *testing.T) {
 	}{
 		{
 			path:     "README.md",
-			required: []string{"docs/UPGRADING.md", "from 1.25.x through 1.34.0 to 1.34.1 is intentionally"},
+			required: []string{"docs/UPGRADING.md", "from 1.25.x through 1.34.1 to 1.35.0 is intentionally"},
 		},
 		{
 			path:     "docs/resman.8",
-			required: []string{"/usr/share/doc/resman/UPGRADING.md", "Upgrade from 1.25.x through 1.34.0 to 1.34.1"},
+			required: []string{"/usr/share/doc/resman/UPGRADING.md", "Upgrade from 1.25.x through 1.34.1 to 1.35.0"},
 		},
 		{
 			path:     "packaging/deb/control.in",
-			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.0 to 1.34.1"},
+			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.1 to 1.35.0"},
 		},
 		{
 			path:     "packaging/rpm/resman.spec",
-			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.0 to 1.34.1"},
+			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.1 to 1.35.0"},
 		},
 		{
 			path: "packaging/deb/prepare-package.sh",

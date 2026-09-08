@@ -43,7 +43,6 @@ func TestDefaultConfig(t *testing.T) {
 	}{
 		{"CgroupRoot", cfg.CgroupRoot, "/sys/fs/cgroup"},
 		{"ConfigFile", cfg.ConfigFile, DefaultConfigPath},
-		{"CreatedCgroupsFile", cfg.CreatedCgroupsFile, DefaultCreatedCgroupsPath},
 		{"MetricsDBPath", cfg.MetricsDBPath, DefaultMetricsDBPath},
 		{"LogFile", cfg.LogFile, "/var/log/resman.log"},
 		{"PollingInterval", cfg.PollingInterval, 30},
@@ -96,15 +95,12 @@ func TestValidateConfig(t *testing.T) {
 				PollingInterval:         30,
 				MetricsCacheTTL:         15,
 				MetricsRefreshInterval:  30,
-				CgroupOperationTimeout:  5,
 				DaemonShutdownTimeout:   60,
 				MCPShutdownTimeout:      10,
 				CPUReservePoints:        100,
 				CPURootPoints:           100,
 				CPUBestEffortPoints:     100,
 				CPUPointsFile:           DefaultCPUPointsMapPath,
-				BatchNightRAMQuota:      "4G",
-				InteractiveRAMQuota:     "1G",
 				LogLevel:                "INFO",
 				LogMaxSize:              10 * 1024 * 1024,
 				SystemUIDMin:            1000,
@@ -650,9 +646,6 @@ func TestLoadFromEnvironmentUsesValidatedHandlers(t *testing.T) {
 	if cfg.UserIncludeList != nil {
 		t.Errorf("invalid USER_INCLUDE_LIST changed value to %v", cfg.UserIncludeList)
 	}
-	if cfg.CgroupBase != "resman" {
-		t.Errorf("invalid CGROUP_BASE changed value to %q", cfg.CgroupBase)
-	}
 	if cfg.PrometheusMetricsBindPort != 1974 {
 		t.Errorf("invalid Prometheus port changed value to %d", cfg.PrometheusMetricsBindPort)
 	}
@@ -965,12 +958,6 @@ func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 			},
 		},
 		{
-			name: "zero cgroup operation timeout",
-			mutate: func(cfg *Config) {
-				cfg.CgroupOperationTimeout = 0
-			},
-		},
-		{
 			name: "zero daemon shutdown timeout",
 			mutate: func(cfg *Config) {
 				cfg.DaemonShutdownTimeout = 0
@@ -1008,35 +995,6 @@ func TestValidateConfigReportsEveryBaseCPUPointsBudgetTermOnce(t *testing.T) {
 	want := "available pool 100 (1000 - reserve 900): root 60 + best effort 50 = 110"
 	if strings.Count(err.Error(), want) != 1 {
 		t.Fatalf("validateConfig() error = %q, want one complete bounded diagnostic %q", err, want)
-	}
-}
-
-func TestValidateConfigRejectsInvalidPatternRAMQuotas(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*Config)
-	}{
-		{
-			name: "batch night quota",
-			mutate: func(cfg *Config) {
-				cfg.BatchNightRAMQuota = "invalid"
-			},
-		},
-		{
-			name: "interactive quota overflow",
-			mutate: func(cfg *Config) {
-				cfg.InteractiveRAMQuota = strconv.FormatUint(^uint64(0), 10) + "T"
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultConfig()
-			tt.mutate(cfg)
-			if err := validateConfig(cfg); err == nil {
-				t.Fatal("validateConfig() accepted invalid pattern RAM quota")
-			}
-		})
 	}
 }
 

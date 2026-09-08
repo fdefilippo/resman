@@ -41,7 +41,7 @@ func (c *blackoutCollector) GetAllUserMetricsForDecision() map[int]*metrics.User
 type blackoutCgroups struct{ shutdownCgroupManager }
 
 func (*blackoutCgroups) EnforcementStatus() cgroup.EnforcementStatus {
-	return cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnlySystemd}
+	return cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnly}
 }
 
 type blackoutExporter struct {
@@ -58,7 +58,6 @@ func (*blackoutExporter) RecordMetricsCollectionDuration(time.Duration)         
 func (*blackoutExporter) ObserveObservationHostCPUUsage(metrics.HostCPUUsageSample) {}
 func (*blackoutExporter) Stop() error                                               { return nil }
 func (*blackoutExporter) ObserveLimitHookExecutor(int, int, int)                    {}
-func (*blackoutExporter) RecordProcessRestoreResult(cgroup.ProcessRestoreResult)    {}
 
 func TestApplicationPollingBlackoutSchedulesIndependentObservation(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -74,7 +73,7 @@ func TestApplicationPollingBlackoutSchedulesIndependentObservation(t *testing.T)
 	collector := &blackoutCollector{}
 	exporter := &blackoutExporter{samples: make(chan metrics.SystemExporterMetrics, 8)}
 	manager, err := state.NewManager(cfg, collector, &blackoutCgroups{}, exporter,
-		state.WithEnforcementStatus(cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnlySystemd}))
+		state.WithEnforcementStatus(cgroup.EnforcementStatus{Mode: cgroup.EnforcementModeObservationOnly}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +101,7 @@ func TestApplicationPollingBlackoutSchedulesIndependentObservation(t *testing.T)
 		select {
 		case sample := <-exporter.samples:
 			if !sample.TotalCPUUsageAvailable || sample.TotalCPUUsage != float64(i*10) || sample.SystemLoad != 2 ||
-				sample.EnforcementMode != cgroup.EnforcementModeObservationOnlySystemd || sample.AnyLimitsActive {
+				sample.EnforcementMode != cgroup.EnforcementModeObservationOnly || sample.AnyLimitsActive {
 				t.Fatalf("stale or fabricated blackout observation: %+v", sample)
 			}
 		case <-time.After(5 * time.Second):

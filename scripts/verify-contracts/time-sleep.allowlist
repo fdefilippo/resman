@@ -1,2 +1,1 @@
 # path | function | ordinal within function | call purpose | classification | reason
-cgroup/cleanup.go | waitBeforeCgroupRemovalRetry | 1 | bounded retry backoff | allowed | Called only after the first managed cgroup removal attempt fails.

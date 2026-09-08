@@ -1,10 +1,7 @@
 package state
 
 import (
-	"fmt"
-
 	"github.com/fdefilippo/resman/cgroup"
-	"github.com/fdefilippo/resman/internal/cpupoints"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -14,67 +11,26 @@ const (
 	metricsDatabaseRAMReadFailure        = "ram_observation_failure"
 )
 
-// collectPersistenceInterval captures kernel counters at the same decision
-// sample boundary as the process-derived user metrics.
+// collectPersistenceInterval captures one coherent decision interval. Only the
+// systemd adapter may publish applied resource state; observation-only mode
+// publishes intent without consulting or creating managed cgroups.
 func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 	if m.systemdUnits != nil {
 		m.collectSystemdPersistenceInterval(sample)
 		return
 	}
-	if m.cgroupManager == nil {
-		return
-	}
 
 	m.mu.RLock()
 	policy := m.cpuPointsPolicy
-	hierarchy := m.cpuPointsHierarchy
-	allocations := make(map[int]cpuPointsAllocation, len(m.cpuAllocations))
-	for uid, allocation := range m.cpuAllocations {
-		allocations[uid] = allocation
-	}
-	resources := make(map[int]userResourceLimitState, len(m.resourceLimits))
-	for uid, state := range m.resourceLimits {
-		resources[uid] = state
-	}
-	coverage := make(map[int]ramCoverageState, len(m.ramCoverage))
-	for uid, state := range m.ramCoverage {
-		copyState := state
-		copyState.partial = make(map[int]uint64, len(state.partial))
-		for pid, startTime := range state.partial {
-			copyState.partial[pid] = startTime
-		}
-		coverage[uid] = copyState
-	}
 	events := make(map[int]cpuPointsLifecycleEvent, len(m.cpuPointsLifecycleEvents))
 	for uid, event := range m.cpuPointsLifecycleEvents {
 		events[uid] = event
 	}
-	previousCPU := m.persistencePreviousCPU
-	previousRAM := m.persistencePreviousRAM
 	previousTime := m.persistencePreviousTime
 	degraded := m.cpuPointsDegraded
-	appliedGuarantees := m.appliedGuaranteePoints.Value()
-	programmedGuarantees := m.programmedGuaranteePoints
 	m.mu.RUnlock()
 
-	recovery := cgroup.RecoverySnapshot{}
-	if provider, ok := m.cgroupManager.(interface {
-		RecoverySnapshot() (cgroup.RecoverySnapshot, error)
-	}); ok {
-		var err error
-		recovery, err = provider.RecoverySnapshot()
-		if err != nil {
-			m.recordPersistenceObservationError("recovery_snapshot_failure", 0, err)
-		}
-		m.mu.Lock()
-		m.recoverySnapshot = recovery
-		m.mu.Unlock()
-	}
-
-	capacity := cpupoints.CapacityState{}
-	if m.cpuCapacity != nil {
-		capacity = m.cpuCapacity.State()
-	}
+	rootPoints := policy.Root().Value()
 	system := resmanmetrics.SystemPersistenceMetrics{
 		EnforcementMode:            string(m.enforcementStatus.Mode),
 		DenominatorState:           resmanmetrics.CPUPointsDenominatorUnavailable,
@@ -84,167 +40,42 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 		TotalCores:                 sample.TotalCores,
 		SystemLoad:                 sample.SystemLoad,
 		NominalParentPoolPoints:    policy.Pool().Value(),
-		CPUCapacityAvailable:       capacity.Available,
-		CPUPointsDegraded:          degraded,
-		AppliedGuaranteePoints:     appliedGuarantees,
-		ProgrammedGuaranteeWeight:  programmedGuarantees,
+		ConfiguredRootPoints:       &rootPoints,
 		ConfiguredBestEffortPoints: policy.BestEffort().Value(),
+		CPUCapacityAvailable:       false,
+		CPUPointsDegraded:          degraded,
 	}
-	capacityReason := string(capacity.UnavailableReason)
 	if !previousTime.IsZero() {
 		start := previousTime
 		system.IntervalStart = &start
 	}
-	if capacity.LastVerified.PeriodMicroseconds() != 0 {
-		quota := capacity.LastVerified.QuotaMicroseconds()
-		period := capacity.LastVerified.PeriodMicroseconds()
-		system.ProgrammedParentQuotaUsec = &quota
-		system.ProgrammedParentPeriodUsec = &period
-		if capacity.Available {
-			online := capacity.LastVerified.OnlineCPUs().Value()
-			system.OnlineCPUs = &online
-		}
-	}
-
-	currentCPU := make(map[string]cgroup.CPUPointsNodeSnapshot)
-	nodes := []struct {
-		name string
-		path string
-	}{
-		{name: "parent", path: hierarchy.Parent},
-	}
-	for _, node := range nodes {
-		if node.path == "" {
-			continue
-		}
-		observed, err := m.cgroupManager.GetCPUPointsNodeSnapshot(node.path)
-		if err != nil {
-			m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, fmt.Errorf("read %s CPU Points node: %w", node.name, err))
-			continue
-		}
-		currentCPU[node.path] = observed
-		previous, hasPrevious := previousCPU[node.path]
-		switch node.name {
-		case "parent":
-			quota := observed.CPUQuota
-			system.ParentCPUQuota = &quota
-			system.ParentCPUUsageUsecDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.UsageUsec, previous.Identity, previous.CPUStat.UsageUsec, hasPrevious)
-			system.ParentCPUPeriodsDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.NrPeriods, previous.Identity, previous.CPUStat.NrPeriods, hasPrevious)
-			system.ParentCPUThrottledPeriodsDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.NrThrottled, previous.Identity, previous.CPUStat.NrThrottled, hasPrevious)
-			system.ParentCPUThrottledUsecDelta = cgroupCounterDelta(observed.Identity, observed.CPUStat.ThrottledUsec, previous.Identity, previous.CPUStat.ThrottledUsec, hasPrevious)
-		}
-	}
 
 	users := make(map[int]resmanmetrics.UserPersistenceMetrics, len(sample.UserMetrics))
-	strandedByUID := make(map[int]int)
-	for _, occupant := range recovery.Occupants {
-		strandedByUID[occupant.UID]++
-	}
-	currentRAM := make(map[int]cgroup.MemoryAccountingSnapshot)
 	for uid, observed := range sample.UserMetrics {
+		unavailable := string(resmanmetrics.CPUPointsCoverageUnavailable)
 		user := resmanmetrics.UserPersistenceMetrics{
-			Metrics:         observed,
-			ConfiguredClass: string(policy.ClassForUID(uid)),
-			LifecycleState:  resmanmetrics.CPUPointsLifecycleEligibleInactive,
+			Metrics:              observed,
+			ConfiguredClass:      string(policy.ClassForUID(uid)),
+			LifecycleState:       resmanmetrics.CPUPointsLifecycleEligibleInactive,
+			CPUAuthorityCoverage: &unavailable,
+			RAMCoverage:          &unavailable,
+			IOCoverage:           &unavailable,
 		}
 		if guarantee, ok := policy.GuaranteeForUID(uid); ok {
 			points := guarantee.Points().Value()
 			user.ConfiguredGuaranteePoints = &points
 		}
-		if !observed.EligibleForCPU {
+		if observed == nil || !observed.EligibleForCPU {
 			user.LifecycleState = resmanmetrics.CPUPointsLifecycleIneligible
 		}
-		event, hasEvent := events[uid]
-		if hasEvent {
+		if event, ok := events[uid]; ok {
 			user.LifecycleState = event.state
-			user.PIDNamespaceMismatchCount = event.pidNamespaceMismatches
-			user.PIDNamespaceUnavailableCount = event.pidNamespaceUnavailable
-			user.SystemdOwnershipRefusedCount = event.systemdOwnershipRefused
-			user.RecoveryProcessCount = event.recoveryProcesses
-			user.RestoreFailedProcessCount = event.restoreFailedProcesses
-		}
-		if strandedByUID[uid] > 0 {
-			user.LifecycleState = resmanmetrics.CPUPointsLifecycleStranded
-			user.StrandedProcessCount = strandedByUID[uid]
-		}
-		if allocation, ok := allocations[uid]; ok {
-			class := string(allocation.class)
-			weight := uint64(allocation.weight.Value())
-			user.AppliedClass = &class
-			user.AppliedWeight = &weight
-			user.PIDNamespaceMismatchCount = allocation.pidNamespaceMismatches
-			user.PIDNamespaceUnavailableCount = allocation.pidNamespaceUnavailable
-			user.CgroupPath = allocation.leafPath
-			if !hasEvent || event.state == resmanmetrics.CPUPointsLifecycleApplied {
-				user.LifecycleState = resmanmetrics.CPUPointsLifecycleApplied
-			}
-			if leaf, ok := currentCPU[allocation.leafPath]; ok {
-				user.CPUQuota = leaf.CPUQuota
-				leafWeight := leaf.CPUWeight
-				user.CPUWeight = &leafWeight
-				previous, hasPrevious := previousCPU[allocation.leafPath]
-				user.LeafCPUUsageUsecDelta = cgroupCounterDelta(leaf.Identity, leaf.CPUStat.UsageUsec, previous.Identity, previous.CPUStat.UsageUsec, hasPrevious)
-			} else {
-				leaf, err := m.cgroupManager.GetCPUPointsNodeSnapshot(allocation.leafPath)
-				if err != nil {
-					m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, uid, fmt.Errorf("read CPU Points leaf: %w", err))
-				} else {
-					currentCPU[allocation.leafPath] = leaf
-					user.CPUQuota = leaf.CPUQuota
-					leafWeight := leaf.CPUWeight
-					user.CPUWeight = &leafWeight
-					previous, hasPrevious := previousCPU[allocation.leafPath]
-					user.LeafCPUUsageUsecDelta = cgroupCounterDelta(leaf.Identity, leaf.CPUStat.UsageUsec, previous.Identity, previous.CPUStat.UsageUsec, hasPrevious)
-				}
-			}
-		}
-
-		resource := resources[uid]
-		if _, cpuApplied := allocations[uid]; cpuApplied && !resource.ramApplied {
-			memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid)
-			if err != nil {
-				m.recordOptionalPersistenceObservationGap(metricsDatabaseRAMReadFailure, uid, err)
-			} else {
-				user.CgroupPath = memory.Path
-				currentBytes := memory.CurrentBytes
-				user.RAMCgroupUsageBytes = &currentBytes
-			}
-		}
-		if resource.ramApplied {
-			ramCoverage := RAMCoverageComplete
-			incomplete := 0
-			if state, ok := coverage[uid]; ok && state.coverage == RAMCoveragePartial {
-				ramCoverage = RAMCoveragePartial
-				incomplete = len(state.partial)
-			}
-			coverageText := string(ramCoverage)
-			user.RAMCoverage = &coverageText
-			user.RAMCoverageIncompleteProcessCount = incomplete
-			swapDisabled := resource.swap
-			user.RAMSwapDisabled = &swapDisabled
-			memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid)
-			if err != nil {
-				m.recordPersistenceObservationError(metricsDatabaseRAMReadFailure, uid, err)
-			} else {
-				currentRAM[uid] = memory
-				user.CgroupPath = memory.Path
-				currentBytes := memory.CurrentBytes
-				user.RAMCgroupUsageBytes = &currentBytes
-				high, max, swapMax := memory.HighLimit, memory.MaxLimit, memory.SwapMax
-				user.MemoryHighLimit, user.MemoryMaxLimit, user.MemorySwapMax = &high, &max, &swapMax
-				previous, hasPrevious := previousRAM[uid]
-				user.MemoryHighEventsDelta = cgroupCounterDelta(memory.Identity, memory.Events.High, previous.Identity, previous.Events.High, hasPrevious)
-				user.MemoryMaxEventsDelta = cgroupCounterDelta(memory.Identity, memory.Events.Max, previous.Identity, previous.Events.Max, hasPrevious)
-				user.MemoryOOMEventsDelta = cgroupCounterDelta(memory.Identity, memory.Events.OOM, previous.Identity, previous.Events.OOM, hasPrevious)
-				user.MemoryOOMKillEventsDelta = cgroupCounterDelta(memory.Identity, memory.Events.OOMKill, previous.Identity, previous.Events.OOMKill, hasPrevious)
-			}
 		}
 		users[uid] = user
 	}
 
+	capacityReason := m.enforcementStatus.Reason
 	m.mu.Lock()
-	m.persistencePreviousCPU = currentCPU
-	m.persistencePreviousRAM = currentRAM
 	m.persistencePreviousTime = sample.Timestamp
 	sample.CPUPointsSystem = operationalCPUPointsSystemSnapshot(policy.Reserve().Value(), capacityReason, system)
 	sample.CPUPointsUsers = operationalCPUPointsUserSnapshots(users, degraded)
@@ -311,23 +142,20 @@ func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersi
 			enforceableCount = user.Metrics.EnforceableUsage.ProcessCount
 			requested = user.Metrics.CPULimitRequested
 		}
-		acquiredCount := enforceableCount - user.PIDNamespaceMismatchCount - user.PIDNamespaceUnavailableCount - user.SystemdOwnershipRefusedCount
-		if acquiredCount < 0 {
-			acquiredCount = 0
-		}
-		applied := user.AppliedClass != nil && user.AppliedWeight != nil && acquiredCount > 0
+		applied := user.AppliedClass != nil && user.AppliedWeight != nil && enforceableCount > 0
 		coverage := resmanmetrics.CPUPointsCoverageNone
 		if user.LifecycleState == resmanmetrics.CPUPointsLifecycleFailed && user.Metrics == nil {
 			coverage = resmanmetrics.CPUPointsCoverageUnavailable
 		} else if applied {
 			coverage = resmanmetrics.CPUPointsCoverageComplete
-			if acquiredCount != observedCount || observedCount != enforceableCount || user.PIDNamespaceMismatchCount > 0 || user.PIDNamespaceUnavailableCount > 0 {
+			if observedCount != enforceableCount {
 				coverage = resmanmetrics.CPUPointsCoveragePartial
 			}
 		}
 		if user.CPUAuthorityCoverage != nil {
 			coverage = resmanmetrics.CPUPointsProcessCoverage(*user.CPUAuthorityCoverage)
-			applied = user.AppliedWeight != nil && user.CPUWeight != nil && *user.AppliedWeight == *user.CPUWeight
+			applied = (coverage == resmanmetrics.CPUPointsCoverageComplete || coverage == resmanmetrics.CPUPointsCoveragePartial) &&
+				user.AppliedWeight != nil && user.CPUWeight != nil && *user.AppliedWeight == *user.CPUWeight
 		}
 		result[uid] = resmanmetrics.CPUPointsUserSnapshot{
 			ProcessObservationUnavailable: user.ProcessObservationUnavailable,
@@ -339,12 +167,7 @@ func operationalCPUPointsUserSnapshots(persisted map[int]resmanmetrics.UserPersi
 			AppliedToProcesses: applied, CompleteUIDWorkloadGuaranteed: applied && (!degraded || user.CPUAuthorityCoverage == nil) && coverage == resmanmetrics.CPUPointsCoverageComplete,
 			ReconciliationDegraded: degraded, ProcessCoverage: coverage,
 			ObservedProcessCount: observedCount, EnforceableProcessCount: enforceableCount,
-			PIDNamespaceMismatchCount: user.PIDNamespaceMismatchCount, PIDNamespaceUnavailableCount: user.PIDNamespaceUnavailableCount,
-			SystemdOwnershipRefusedCount: user.SystemdOwnershipRefusedCount,
-			RecoveryProcessCount:         user.RecoveryProcessCount,
-			RestoreFailedProcessCount:    user.RestoreFailedProcessCount,
-			StrandedProcessCount:         user.StrandedProcessCount,
-			CgroupPath:                   user.CgroupPath, LeafCPUUsageUsecDelta: user.LeafCPUUsageUsecDelta,
+			CgroupPath: user.CgroupPath, LeafCPUUsageUsecDelta: user.LeafCPUUsageUsecDelta,
 			RAMCgroupUsageBytes: user.RAMCgroupUsageBytes, RAMCoverage: user.RAMCoverage,
 			RAMCoverageIncompleteProcessCount: user.RAMCoverageIncompleteProcessCount, RAMSwapDisabled: user.RAMSwapDisabled,
 			MemoryHighLimit: user.MemoryHighLimit, MemoryMaxLimit: user.MemoryMaxLimit, MemorySwapMax: user.MemorySwapMax,
@@ -386,56 +209,6 @@ func (m *Manager) recordOptionalPersistenceObservationGap(errorType string, uid 
 	m.logger.Debug("Optional typed enforcement accounting unavailable", "uid", uid, "error_type", errorType, "error", err)
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
-	}
-}
-
-func (m *Manager) recordCPUPointsAdmissionOutcome(uid int, result cgroup.ProcessMoveResult, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err == nil && result.Applied() {
-		if result.IngressSkipped() == 0 {
-			delete(m.cpuPointsLifecycleEvents, uid)
-			return
-		}
-		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-			state: resmanmetrics.CPUPointsLifecycleApplied, pidNamespaceMismatches: result.PIDNamespaceMismatches,
-			pidNamespaceUnavailable: result.PIDNamespaceUnavailable, systemdOwnershipRefused: result.SystemdOwnershipRefused,
-		}
-		return
-	}
-	state := resmanmetrics.CPUPointsLifecycleFailed
-	if !result.Applied() && result.SystemdOwnershipRefused > 0 {
-		state = resmanmetrics.CPUPointsLifecycleOwnershipRejected
-	} else if !result.Applied() && result.RecoveryStranded > 0 {
-		state = resmanmetrics.CPUPointsLifecycleStranded
-	} else if !result.Applied() && result.NamespaceSkipped() > 0 {
-		state = resmanmetrics.CPUPointsLifecycleNamespaceRejected
-	}
-	m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-		state: state, pidNamespaceMismatches: result.PIDNamespaceMismatches,
-		pidNamespaceUnavailable: result.PIDNamespaceUnavailable, systemdOwnershipRefused: result.SystemdOwnershipRefused,
-	}
-}
-
-func (m *Manager) recordCPUPointsReleaseOutcome(uid int, released bool, result cgroup.ProcessRestoreResult, err error) {
-	m.mu.Lock()
-	if err != nil {
-		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-			state:                  resmanmetrics.CPUPointsLifecycleFailed,
-			recoveryProcesses:      result.Count(cgroup.ProcessRestoreRecovery),
-			restoreFailedProcesses: result.Count(cgroup.ProcessRestoreFailed),
-		}
-	} else if result.Count(cgroup.ProcessRestoreRecovery) > 0 {
-		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{
-			state:             resmanmetrics.CPUPointsLifecycleRecovery,
-			recoveryProcesses: result.Count(cgroup.ProcessRestoreRecovery),
-		}
-	} else if released {
-		m.cpuPointsLifecycleEvents[uid] = cpuPointsLifecycleEvent{state: resmanmetrics.CPUPointsLifecycleReleased}
-	}
-	m.mu.Unlock()
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordProcessRestoreResult(result)
 	}
 }
 

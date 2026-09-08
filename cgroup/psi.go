@@ -19,8 +19,6 @@ package cgroup
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -35,24 +33,6 @@ type PSIStats struct {
 	FullAvg60  float64 // Percentage of time with all tasks stalled over 60 seconds
 	FullAvg300 float64 // Percentage of time with all tasks stalled over 300 seconds
 	FullTotal  uint64  // Total microseconds stalled in full mode
-}
-
-// GetPSIStats reads I/O PSI statistics from a user's cgroup.
-// It returns an error when io.pressure does not exist or cannot be read.
-// It also returns an error when the kernel does not support PSI (CONFIG_PSI=n).
-func (m *Manager) GetPSIStats(uid int) (PSIStats, error) {
-	cgroupPath, exists := m.getCgroupPath(uid)
-	if !exists {
-		return PSIStats{}, fmt.Errorf("cgroup for UID %d not found", uid)
-	}
-
-	psiFile := filepath.Join(cgroupPath, "io.pressure")
-	data, err := os.ReadFile(psiFile)
-	if err != nil {
-		return PSIStats{}, fmt.Errorf("failed to read io.pressure for UID %d: %w", uid, err)
-	}
-
-	return parsePSI(string(data))
 }
 
 // parsePSI parses a pressure file. The full line is optional because older

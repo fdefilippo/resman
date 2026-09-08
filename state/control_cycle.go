@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -46,19 +44,6 @@ type controlCycleStage struct {
 	continueAfterError bool
 }
 
-type patternPolicyError struct {
-	uid int
-	err error
-}
-
-func (e *patternPolicyError) Error() string {
-	return fmt.Sprintf("reconcile workload pattern policy for UID %d: %v", e.uid, e.err)
-}
-
-func (e *patternPolicyError) Unwrap() error {
-	return e.err
-}
-
 var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "reconcile_cpu_points", run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
 	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
@@ -69,7 +54,6 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
 	{name: "write_database", run: (*Manager).stageWriteDatabase},
 	{name: "record_history", run: (*Manager).stageRecordHistory},
-	{name: "io_remediation", run: (*Manager).stageIORemediation, continueAfterError: true},
 	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
 	{name: "log_completion", run: (*Manager).stageLogCompletion},
 }
@@ -91,9 +75,6 @@ func (m *Manager) stageReconcileCPUPoints(run *controlCycleContext) error {
 			return fmt.Errorf("systemd-native CPU Points topology remains degraded: %w", err)
 		}
 		return nil
-	}
-	if err := m.retryCPUPointsPolicyLocked(); err != nil {
-		return fmt.Errorf("CPU Points topology remains degraded: %w", err)
 	}
 	return nil
 }
@@ -202,13 +183,8 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	// Check whether the current time is within a blackout window.
 	nextEnd := run.cfg.GetNextBlackoutEnd()
 	if nextEnd != nil {
-		ioBoostsReset := 0
-		if m.ioRemediation != nil {
-			ioBoostsReset = m.ioRemediation.ResetActiveBoosts()
-		}
-
 		m.mu.RLock()
-		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0 || m.sharedCgroupPath != ""
+		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0
 		m.mu.RUnlock()
 		if limitsNeedDeactivation {
 			if err := m.deactivateLimits(); err != nil {
@@ -220,7 +196,6 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 			"cycle_id", run.cycleID,
 			"trigger", run.trigger,
 			"next_check", nextEnd.Format("2006-01-02 15:04:05"),
-			"io_boosts_reset", ioBoostsReset,
 		)
 		run.stopWithoutError = true
 	}
@@ -239,8 +214,6 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", run.cycleID, err)
 	}
 	run.metrics = metrics
-	run.degradedErrors = append(run.degradedErrors, metrics.blockIOObservationErrors...)
-	run.degradedWarnings = append(run.degradedWarnings, metrics.blockIOObservationWarnings...)
 	return nil
 }
 
@@ -273,7 +246,7 @@ func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
 func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 	// Execute the selected enforcement action. The application-level caller owns
 	// the single cycle failure log after protective stages have completed.
-	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnlySystemd {
+	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnly {
 		run.ingressRefusedCount = m.recordObservationOnlyIntent(run.decision, run.metrics)
 		return nil
 	}
@@ -295,52 +268,16 @@ func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
 	return nil
 }
 
-func (m *Manager) stageIORemediation(run *controlCycleContext) error {
-	// Run I/O starvation auto-remediation for observed active, I/O-eligible users.
-	// systemd-native I/O authority is introduced separately; never fall back to
-	// the migration-owned cgroup implementation while only CPU is authoritative.
-	if m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
-		return nil
-	}
-	if m.ioRemediation != nil {
-		var limitedUsers []int
-		if run.cfg.GetIOEnabled() {
-			m.mu.RLock()
-			for uid := range m.activeUsers {
-				limitedUsers = append(limitedUsers, uid)
-			}
-			m.mu.RUnlock()
-			limitedUsers = slices.DeleteFunc(limitedUsers, func(uid int) bool {
-				return !run.cfg.EvaluateUserEligibility(m.getUsername(uid)).EligibleForIO
-			})
-			sort.Ints(limitedUsers)
-		}
-		remediationErrors := m.ioRemediation.CheckAndRemediate(m.cgroupManager, run.cfg, limitedUsers)
-		for _, err := range remediationErrors {
-			var remediationErr *ioRemediationError
-			if errors.As(err, &remediationErr) && m.prometheusExporter != nil {
-				m.prometheusExporter.RecordError(ioRemediationErrorComponent, remediationErr.operation)
-			}
-		}
-		// Remove stale remediation state periodically.
-		m.ioRemediation.Cleanup(24 * time.Hour)
-		return errors.Join(remediationErrors...)
-	}
-	return nil
-}
-
 func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error {
-	// 8. Workload Pattern Detection
-	if m.patternDetector == nil || m.policyEngine == nil {
+	// Workload classification remains observational. Pattern-selected resource
+	// mutation ended with the retired PID-relocation backend.
+	if m.patternDetector == nil {
 		return nil
 	}
-	toReconcile := m.pendingPatternReconciliationSnapshot()
 
 	if !run.cfg.GetAutodetectPatterns() {
-		for _, uid := range m.policyEngine.Clear() {
-			toReconcile[uid] = struct{}{}
-		}
-		return m.reconcilePatternPolicies(toReconcile, run.cfg)
+		m.patternDetector.RetainUsers(map[int]bool{})
+		return nil
 	}
 
 	configuredEligible := make(map[int]bool)
@@ -374,100 +311,21 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 	}
 
 	m.patternDetector.RetainUsers(configuredEligible)
-	for _, uid := range m.policyEngine.RetainUsers(configuredEligible) {
-		toReconcile[uid] = struct{}{}
-	}
 
 	// Analyze patterns once per hour.
 	if time.Since(m.lastPatternAnalysis) <= time.Hour {
-		return m.reconcilePatternPolicies(toReconcile, run.cfg)
+		return nil
 	}
 
 	m.lastPatternAnalysis = time.Now()
-	for _, uid := range m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour) {
-		if m.policyEngine.RemovePolicy(uid) {
-			toReconcile[uid] = struct{}{}
-		}
-	}
+	m.patternDetector.Cleanup(time.Duration(run.cfg.GetPatternHistoryHours()) * time.Hour)
 	patterns := m.patternDetector.Analyze(run.cfg)
 	for uid, result := range patterns {
 		if m.prometheusExporter != nil {
 			username := m.metricsCollector.GetUsernameFromUID(uid)
 			m.prometheusExporter.UpdateUserWorkloadPattern(uid, username, string(result.Pattern), result.Confidence)
 		}
-
-		changed := false
-		if result.Pattern == PatternUnknown {
-			changed = m.policyEngine.RemovePolicy(uid)
-		} else {
-			changed = m.policyEngine.ApplyPolicy(uid, result.Pattern, run.cfg)
-		}
-		if changed {
-			toReconcile[uid] = struct{}{}
-		}
 	}
-
-	return m.reconcilePatternPolicies(toReconcile, run.cfg)
-}
-
-func (m *Manager) pendingPatternReconciliationSnapshot() map[int]struct{} {
-	m.mu.RLock()
-	pending := make(map[int]struct{}, len(m.pendingPatternReconciliations))
-	for uid := range m.pendingPatternReconciliations {
-		pending[uid] = struct{}{}
-	}
-	m.mu.RUnlock()
-	return pending
-}
-
-func (m *Manager) reconcilePatternPolicies(uids map[int]struct{}, cfg *config.Config) error {
-	ordered := make([]int, 0, len(uids))
-	for uid := range uids {
-		ordered = append(ordered, uid)
-	}
-	sort.Ints(ordered)
-
-	var reconcileErrors []error
-	for _, uid := range ordered {
-		err := m.reconcilePatternPolicy(uid, cfg)
-		m.mu.Lock()
-		if err != nil {
-			if m.pendingPatternReconciliations == nil {
-				m.pendingPatternReconciliations = make(map[int]struct{})
-			}
-			m.pendingPatternReconciliations[uid] = struct{}{}
-		} else {
-			delete(m.pendingPatternReconciliations, uid)
-		}
-		m.mu.Unlock()
-		if err == nil {
-			continue
-		}
-		reconcileErrors = append(reconcileErrors, err)
-		if m.prometheusExporter != nil {
-			m.prometheusExporter.RecordError(patternPolicyErrorComponent, patternPolicyApplicationFailure)
-		}
-	}
-	return errors.Join(reconcileErrors...)
-}
-
-func (m *Manager) reconcilePatternPolicy(uid int, cfg *config.Config) error {
-	// Pattern policies currently apply RAM through the migration-owned cgroup
-	// implementation. The systemd-native resource adapter is a separate contract.
-	if m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
-		return nil
-	}
-	if !m.isUserLimited(uid) {
-		return nil
-	}
-	err := m.applyUserResourceLimits(uid, cfg, cfg.EvaluateUserEligibility(m.getUsername(uid)))
-	m.mu.Lock()
-	m.refreshResourceLimitsActiveLocked(time.Now())
-	m.mu.Unlock()
-	if err != nil {
-		return &patternPolicyError{uid: uid, err: err}
-	}
-	m.logger.Info("Workload pattern resource limits reconciled", "uid", uid)
 	return nil
 }
 
@@ -492,7 +350,6 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
 		"enforcement_mode", m.enforcementStatus.Mode,
-		"migration_enforcement_available", m.enforcementStatus.Mode == cgroup.EnforcementModeMigrationEnabled,
 		"ingress_refused_count", run.ingressRefusedCount,
 		"system_under_load", run.metrics.SystemUnderLoad,
 		"ignore_system_load", run.cfg.GetIgnoreSystemLoad(),
@@ -538,8 +395,6 @@ type SystemMetrics struct {
 	IOEligibleWriteBlockIOPS       float64
 	IOBlockIOPSUnavailableUsers    int
 	IOEligibleUnavailableProcesses int
-	blockIOObservationErrors       []error
-	blockIOObservationWarnings     []error
 
 	// Current procfs coverage failures across all observed processes.
 	ProcFSExecutableIdentityUnavailableProcesses int
@@ -681,7 +536,7 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 
 	if decisionSample {
 		decisionConfig := m.GetConfig()
-		m.collectEligibleBlockIOPS(metrics, sampleTime, decisionConfig.GetIODecisionPolicy(), normalCPUQuota)
+		m.collectEligibleBlockIOPS(metrics, decisionConfig.GetIODecisionPolicy())
 		m.prevIOTime = sampleTime
 		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
 		for _, uid := range metrics.IOEligibleUsers {
@@ -693,145 +548,11 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 	return metrics, nil
 }
 
-type blockIOCounterSample struct {
-	readOps  uint64
-	writeOps uint64
-}
-
-func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, sampleTime time.Time, policy config.IODecisionPolicy, normalQuota string) {
+func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, policy config.IODecisionPolicy) {
 	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
-	if needsBlockIO && m.enforcementStatus.Mode != cgroup.EnforcementModeMigrationEnabled {
-		metrics.IOBlockIOPSUnavailableUsers += len(metrics.IOEligibleUsers)
-		m.mu.Lock()
-		m.previousBlockIOCounters = make(map[int]blockIOCounterSample)
-		m.blockIOObservedUsers = make(map[int]bool)
-		m.mu.Unlock()
-		return
-	}
-	desired := make(map[int]bool)
 	if needsBlockIO {
-		for _, uid := range metrics.IOEligibleUsers {
-			desired[uid] = true
-		}
+		metrics.IOBlockIOPSUnavailableUsers += len(metrics.IOEligibleUsers)
 	}
-
-	m.mu.RLock()
-	legacySharedPath := m.sharedCgroupPath
-	activeUsers := make(map[int]bool, len(m.activeUsers))
-	activePlacements := make(map[int]string, len(m.activeUsers))
-	for uid := range m.activeUsers {
-		activeUsers[uid] = true
-		activePlacements[uid] = m.cpuAllocations[uid].domainPath
-	}
-	observedBefore := make(map[int]bool, len(m.blockIOObservedUsers))
-	for uid := range m.blockIOObservedUsers {
-		observedBefore[uid] = true
-	}
-	resourceStates := make(map[int]userResourceLimitState, len(m.resourceLimits))
-	for uid, state := range m.resourceLimits {
-		resourceStates[uid] = state
-	}
-	m.mu.RUnlock()
-
-	uids := append([]int(nil), metrics.IOEligibleUsers...)
-	sort.Ints(uids)
-	current := make(map[int]blockIOCounterSample, len(uids))
-	observedNext := make(map[int]bool, len(desired)+len(observedBefore))
-	for uid := range desired {
-		observedNext[uid] = true
-	}
-	for _, uid := range uids {
-		if !desired[uid] {
-			continue
-		}
-		placement := ""
-		if activeUsers[uid] {
-			placement = activePlacements[uid]
-			if placement == "" {
-				// Compatibility for enforcement state acquired before this
-				// process started the CPU Points epoch.
-				placement = legacySharedPath
-			}
-		}
-		_, ingress, err := m.cgroupManager.EnsureUserCgroupPlacement(uid, placement, normalQuota)
-		m.recordCgroupIngressSkips(ingress)
-		if err == nil && ingress.IngressSkipped() > 0 && !ingress.Applied() {
-			err = cgroupIngressNoopError(uid, ingress)
-		}
-		if err != nil {
-			metrics.IOBlockIOPSUnavailableUsers++
-			var incomplete *cgroup.UserCgroupPlacementIncompleteError
-			if errors.As(err, &incomplete) {
-				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementIncomplete, err, true)
-			} else {
-				m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationPlacementFailure, err, false)
-			}
-			continue
-		}
-		_, _, readOps, writeOps, err := m.cgroupManager.GetIOStats(uid)
-		if err != nil {
-			metrics.IOBlockIOPSUnavailableUsers++
-			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCounterReadFailure, err, false)
-			continue
-		}
-		now := blockIOCounterSample{readOps: readOps, writeOps: writeOps}
-		current[uid] = now
-		previous, hadPrevious := m.previousBlockIOCounters[uid]
-		_, wasEligible := m.previousIOEligibleUsers[uid]
-		if hadPrevious && wasEligible && !m.prevIOTime.IsZero() {
-			seconds := sampleTime.Sub(m.prevIOTime).Seconds()
-			if seconds > 0 {
-				metrics.IOEligibleReadBlockIOPS += float64(monotonicUint64Delta(now.readOps, previous.readOps)) / seconds
-				metrics.IOEligibleWriteBlockIOPS += float64(monotonicUint64Delta(now.writeOps, previous.writeOps)) / seconds
-			} else {
-				metrics.IOBlockIOPSUnavailableUsers++
-			}
-		} else {
-			metrics.IOBlockIOPSUnavailableUsers++
-		}
-	}
-
-	for uid := range observedBefore {
-		if desired[uid] || activeUsers[uid] {
-			continue
-		}
-		state := resourceStates[uid]
-		if state.ramApplied || state.ioApplied || state.standalone {
-			continue
-		}
-		if err := m.cgroupManager.CleanupUserCgroup(uid); err != nil {
-			observedNext[uid] = true
-			m.recordBlockIOObservationIssue(metrics, uid, blockIOObservationCleanupFailure, err, false)
-		}
-	}
-
-	m.previousBlockIOCounters = current
-	m.mu.Lock()
-	m.blockIOObservedUsers = observedNext
-	m.mu.Unlock()
-}
-
-func (m *Manager) recordBlockIOObservationIssue(metrics *SystemMetrics, uid int, errorType string, err error, warning bool) {
-	issue := fmt.Errorf("block I/O observation for UID %d (%s): %w", uid, errorType, err)
-	if warning {
-		metrics.blockIOObservationWarnings = append(metrics.blockIOObservationWarnings, issue)
-		m.logger.Warn("Block I/O observation placement remains split; retrying next cycle",
-			"uid", uid,
-			"error", err,
-		)
-	} else {
-		metrics.blockIOObservationErrors = append(metrics.blockIOObservationErrors, issue)
-	}
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordError(blockIOObservationErrorComponent, errorType)
-	}
-}
-
-func monotonicUint64Delta(current, previous uint64) uint64 {
-	if current < previous {
-		return 0
-	}
-	return current - previous
 }
 
 // calculateIOByteRates converts per-process counter growth into per-second rates.
@@ -859,9 +580,6 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	}
 
 	summary := m.getEnforcementSummary()
-	m.mu.RLock()
-	recoveryStrandedProcesses := len(m.recoverySnapshot.Occupants)
-	m.mu.RUnlock()
 	var cpuPoints *resmanmetrics.CPUPointsSystemSnapshot
 	if metrics.CPUPointsUsers != nil {
 		cpuPoints = &metrics.CPUPointsSystem
@@ -869,7 +587,6 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
 		EnforcementMode:                              m.enforcementStatus.Mode,
-		RecoveryStrandedProcesses:                    recoveryStrandedProcesses,
 		TotalCPUUsage:                                metrics.TotalCPUUsage,
 		TotalCPUUsageAvailable:                       metrics.HostCPUUsageAvailable,
 		TotalCores:                                   metrics.TotalCores,
@@ -924,23 +641,8 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			username = m.getUsername(uid)
 		}
 
-		// Retain the legacy observation counters while CPU Points and RAM
-		// accounting are projected exclusively from the authoritative decision
-		// interval captured in collectPersistenceInterval.
 		var cgroupPath, cpuQuota string
 		var memoryHighEvents uint64
-		var cgroupIOReadBytes, cgroupIOWriteBytes uint64
-		if m.cgroupManager != nil && m.systemdUnits == nil {
-			var err error
-			cgroupPath, cpuQuota, memoryHighEvents, cgroupIOReadBytes, cgroupIOWriteBytes, _, _, err = m.cgroupManager.GetUserCgroupMetrics(uid)
-			if err != nil {
-				if isMissingUserCgroupError(err) {
-					m.logger.Debug("Cgroup metrics unavailable for user without cgroup", "uid", uid)
-				} else {
-					m.logger.Warn("Failed to get cgroup metrics for user", "uid", uid, "error", err)
-				}
-			}
-		}
 		cpuPoints := metrics.CPUPointsUsers[uid]
 		if persisted, ok := metrics.PersistenceUsers[uid]; ok {
 			if persisted.CgroupPath != "" {
@@ -952,10 +654,6 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 		}
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
-		if ioReadBytes == 0 && ioWriteBytes == 0 && cgroupIOReadBytes > 0 {
-			ioReadBytes = cgroupIOReadBytes
-			ioWriteBytes = cgroupIOWriteBytes
-		}
 
 		// Publish the explicit observed CPU enforcement state.
 		m.prometheusExporter.UpdateUserSnapshot(resmanmetrics.UserExporterMetrics{
@@ -988,24 +686,19 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 }
 
 const (
-	metricsCollectionErrorComponent       = "metrics_collection"
-	metricsCollectionSystemLoadError      = "system_load_failure"
-	metricsDatabaseErrorComponent         = "metrics_database"
-	metricsDatabaseWriteFailure           = "write_failure"
-	limitTransitionErrorComponent         = "limit_transition"
-	limitTransitionActivationFailure      = "activation_failure"
-	limitTransitionDeactivationFailure    = "deactivation_failure"
-	processMembershipErrorComponent       = "process_membership"
-	processMembershipReconcileFailure     = "reconciliation_failure"
-	processMembershipOriginUnavailable    = "origin_unavailable"
-	blockIOObservationErrorComponent      = "block_io_observation"
-	blockIOObservationPlacementFailure    = "placement_failure"
-	blockIOObservationPlacementIncomplete = "placement_incomplete"
-	blockIOObservationCounterReadFailure  = "counter_read_failure"
-	blockIOObservationCleanupFailure      = "cleanup_failure"
-	ioRemediationErrorComponent           = "io_remediation"
-	patternPolicyErrorComponent           = "pattern_policy"
-	patternPolicyApplicationFailure       = "application_failure"
+	metricsCollectionErrorComponent    = "metrics_collection"
+	metricsCollectionSystemLoadError   = "system_load_failure"
+	metricsDatabaseErrorComponent      = "metrics_database"
+	metricsDatabaseWriteFailure        = "write_failure"
+	limitTransitionErrorComponent      = "limit_transition"
+	limitTransitionActivationFailure   = "activation_failure"
+	limitTransitionDeactivationFailure = "deactivation_failure"
+	processMembershipErrorComponent    = "process_membership"
+	processMembershipReconcileFailure  = "reconciliation_failure"
+	processMembershipOriginUnavailable = "origin_unavailable"
+	ioRemediationErrorComponent        = "io_remediation"
+	patternPolicyErrorComponent        = "pattern_policy"
+	patternPolicyApplicationFailure    = "application_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

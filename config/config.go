@@ -57,11 +57,9 @@ type Config struct {
 	regexCache sync.Map // map[string]*regexp.Regexp
 
 	// Paths
-	CgroupRoot         string `config:"CGROUP_ROOT"`
-	CgroupBase         string `config:"CGROUP_BASE"`
-	ConfigFile         string `config:"-"` // Runtime path selected by the --config flag
-	LogFile            string `config:"LOG_FILE"`
-	CreatedCgroupsFile string `config:"CREATED_CGROUPS_FILE"`
+	CgroupRoot string `config:"CGROUP_ROOT"`
+	ConfigFile string `config:"-"` // Runtime path selected by the --config flag
+	LogFile    string `config:"LOG_FILE"`
 
 	// Timing
 	PollingInterval int `config:"POLLING_INTERVAL"`
@@ -73,9 +71,8 @@ type Config struct {
 	ProcessMinAgeSeconds int `config:"PROCESS_MIN_AGE_SECONDS"`
 
 	// Timeouts (seconds)
-	CgroupOperationTimeout int `config:"CGROUP_OPERATION_TIMEOUT"` // Timeout for cgroup operations (seconds)
-	DaemonShutdownTimeout  int `config:"DAEMON_SHUTDOWN_TIMEOUT"`  // Deadline for the complete daemon shutdown sequence (seconds)
-	MCPShutdownTimeout     int `config:"MCP_SHUTDOWN_TIMEOUT"`     // Timeout for MCP server shutdown (seconds)
+	DaemonShutdownTimeout int `config:"DAEMON_SHUTDOWN_TIMEOUT"` // Deadline for the complete daemon shutdown sequence (seconds)
+	MCPShutdownTimeout    int `config:"MCP_SHUTDOWN_TIMEOUT"`    // Timeout for MCP server shutdown (seconds)
 
 	// Thresholds (percentages)
 	CPUThreshold        int `config:"CPU_THRESHOLD"`
@@ -116,16 +113,6 @@ type Config struct {
 	IODeviceFilter      string `config:"IO_DEVICE_FILTER"`      // "all" or "major:minor" (default "all")
 	IOThresholdDuration int    `config:"IO_THRESHOLD_DURATION"` // Seconds to wait before activating IO limits (0 = immediate)
 
-	// IO Starvation Auto-Remediation
-	IORemediationEnabled      bool    `config:"IO_REMEDIATION_ENABLED"`
-	IOStarvationThreshold     int     `config:"IO_STARVATION_THRESHOLD"`      // Seconds of continuous throttling before remediation
-	IOStarvationCheckInterval int     `config:"IO_STARVATION_CHECK_INTERVAL"` // Check frequency in seconds
-	IOBoostMultiplier         float64 `config:"IO_BOOST_MULTIPLIER"`          // Multiplier for temporary limits
-	IOBoostDuration           int     `config:"IO_BOOST_DURATION"`            // Duration of boost in seconds
-	IOBoostMaxPerHour         int     `config:"IO_BOOST_MAX_PER_HOUR"`        // Max boosts per user per hour
-	IOPSIThreshold            float64 `config:"IO_PSI_THRESHOLD"`             // PSI some avg10 % threshold
-	IORevertOnNormal          bool    `config:"IO_REVERT_ON_NORMAL"`          // Revert limits when IO returns to normal
-
 	// IO User Include/Exclude Lists (regex support)
 	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
 	IOUserExcludeList []string `config:"IO_USER_EXCLUDE_LIST"`
@@ -135,10 +122,6 @@ type Config struct {
 	PatternHistoryHours        int     `config:"PATTERN_HISTORY_HOURS"`        // History window in hours
 	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
 	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Confidence threshold (0.0-1.0)
-	// Per-pattern RAM policies. CPU capacity is owned exclusively by CPU Points.
-	BatchNightRAMQuota  string `config:"BATCH_NIGHT_RAM_QUOTA"` // RAM quota per batch
-	InteractiveRAMQuota string `config:"INTERACTIVE_RAM_QUOTA"` // RAM quota for interactive workloads
-
 	// Hooks
 	LimitHookEnabled        bool   `config:"LIMIT_HOOK_ENABLED"`
 	LimitHookScript         string `config:"LIMIT_HOOK_SCRIPT"`
@@ -256,13 +239,11 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		saveGate:           &operationgate.Gate{},
-		saveState:          &configPersistenceState{},
-		CgroupRoot:         "/sys/fs/cgroup",
-		CgroupBase:         "resman",
-		ConfigFile:         DefaultConfigPath,
-		LogFile:            "/var/log/resman.log",
-		CreatedCgroupsFile: DefaultCreatedCgroupsPath,
+		saveGate:   &operationgate.Gate{},
+		saveState:  &configPersistenceState{},
+		CgroupRoot: "/sys/fs/cgroup",
+		ConfigFile: DefaultConfigPath,
+		LogFile:    "/var/log/resman.log",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -273,9 +254,8 @@ func DefaultConfig() *Config {
 		ProcessMinAgeSeconds: 60,
 
 		// Timeout defaults
-		CgroupOperationTimeout: 5,  // 5 seconds for cgroup operations
-		DaemonShutdownTimeout:  60, // 60 seconds for the complete daemon shutdown sequence
-		MCPShutdownTimeout:     10, // 10 seconds for MCP shutdown
+		DaemonShutdownTimeout: 60, // 60 seconds for the complete daemon shutdown sequence
+		MCPShutdownTimeout:    10, // 10 seconds for MCP shutdown
 
 		CPUThreshold:         75,
 		CPUReleaseThreshold:  40,
@@ -306,16 +286,6 @@ func DefaultConfig() *Config {
 		IODeviceFilter:      "all",
 		IOThresholdDuration: 0, // 0 = immediate (no duration check)
 
-		// IO Starvation Auto-Remediation
-		IORemediationEnabled:      false,
-		IOStarvationThreshold:     300, // 5 minutes
-		IOStarvationCheckInterval: 30,  // 30 seconds
-		IOBoostMultiplier:         2.0, // 2x limits
-		IOBoostDuration:           600, // 10 minutes
-		IOBoostMaxPerHour:         3,
-		IOPSIThreshold:            50.0, // 50%
-		IORevertOnNormal:          true,
-
 		IOUserIncludeList: nil,
 		IOUserExcludeList: nil,
 
@@ -324,8 +294,6 @@ func DefaultConfig() *Config {
 		PatternHistoryHours:        168, // 7 days
 		PatternMinSamples:          24,  // 24 distinct hourly buckets minimum
 		PatternConfidenceThreshold: 0.7,
-		BatchNightRAMQuota:         "4G",
-		InteractiveRAMQuota:        "1G",
 
 		// Limit hook
 		LimitHookEnabled:        false,
@@ -609,22 +577,35 @@ func setConfigField(cfg *Config, key, value string) error {
 }
 
 var removedConfigKeys = map[string]string{
-	"CONFIG_FILE":           "select the active file with the --config command-line option",
-	"BATCH_NIGHT_CPU_QUOTA": "workload patterns no longer select CPU capacity; use CPU Points guarantees",
-	"CPU_DEFAULT_POINTS":    "unmapped eligible users share CPU_BEST_EFFORT_POINTS as one aggregate entitlement",
-	"CPU_QUOTA_NORMAL":      "recovery uses an internal unlimited cpu.max value",
-	"CPU_QUOTA_LIMITED":     "CPU enforcement is proportional and has no global limited quota",
-	"INTERACTIVE_CPU_QUOTA": "workload patterns no longer select CPU capacity; use CPU Points guarantees",
-	"METRICS_CACHE_FILE":    "resman has no file-backed metrics cache",
-	"PROMETHEUS_FILE":       "resman exports metrics over HTTP and does not write a Prometheus textfile",
-	"PROMETHEUS_HOST":       "use PROMETHEUS_METRICS_BIND_HOST",
-	"PROMETHEUS_JWT_EXPIRY": "token lifetime is set by the signed exp claim at token issuance",
-	"PROMETHEUS_PORT":       "use PROMETHEUS_METRICS_BIND_PORT",
-	"MIN_SYSTEM_CORES":      "use CPU_RESERVE_POINTS to define nominal capacity outside the ResMan pool",
-	"PSI_BOOST_DURATION":    "PSI observes pressure but no longer owns CPU allocation weights",
-	"PSI_BOOST_WEIGHT":      "CPU Points is the sole owner of policy cpu.weight",
-	"RAM_QUOTA_LIMITED":     "RAM enforcement uses RAM_QUOTA_PER_USER",
-	"USER_WHITELIST":        "use USER_EXCLUDE_LIST",
+	"CONFIG_FILE":                  "select the active file with the --config command-line option",
+	"BATCH_NIGHT_CPU_QUOTA":        "workload patterns no longer select CPU capacity; use CPU Points guarantees",
+	"CPU_DEFAULT_POINTS":           "unmapped eligible users share CPU_BEST_EFFORT_POINTS as one aggregate entitlement",
+	"CPU_QUOTA_NORMAL":             "CPU capacity is owned by CPU Points and authoritative systemd properties",
+	"CPU_QUOTA_LIMITED":            "CPU enforcement is proportional and has no global limited quota",
+	"CGROUP_OPERATION_TIMEOUT":     "PID-relocation operations were retired; no cgroup operation timeout remains",
+	"CGROUP_BASE":                  "ResMan no longer creates or owns an enforcement cgroup hierarchy",
+	"CREATED_CGROUPS_FILE":         "ResMan no longer persists managed-cgroup membership",
+	"INTERACTIVE_CPU_QUOTA":        "workload patterns no longer select CPU capacity; use CPU Points guarantees",
+	"METRICS_CACHE_FILE":           "resman has no file-backed metrics cache",
+	"PROMETHEUS_FILE":              "resman exports metrics over HTTP and does not write a Prometheus textfile",
+	"PROMETHEUS_HOST":              "use PROMETHEUS_METRICS_BIND_HOST",
+	"PROMETHEUS_JWT_EXPIRY":        "token lifetime is set by the signed exp claim at token issuance",
+	"PROMETHEUS_PORT":              "use PROMETHEUS_METRICS_BIND_PORT",
+	"MIN_SYSTEM_CORES":             "use CPU_RESERVE_POINTS to define nominal capacity outside the ResMan pool",
+	"PSI_BOOST_DURATION":           "PSI observes pressure but no longer owns CPU allocation weights",
+	"PSI_BOOST_WEIGHT":             "CPU Points is the sole owner of policy cpu.weight",
+	"RAM_QUOTA_LIMITED":            "RAM enforcement uses RAM_QUOTA_PER_USER",
+	"IO_REMEDIATION_ENABLED":       "I/O limits are applied authoritatively to systemd user slices; automatic migration-cgroup boosting was retired",
+	"IO_STARVATION_THRESHOLD":      "automatic I/O remediation was retired; use I/O pressure metrics and external automation",
+	"IO_STARVATION_CHECK_INTERVAL": "automatic I/O remediation was retired; use I/O pressure metrics and external automation",
+	"IO_BOOST_MULTIPLIER":          "automatic I/O remediation was retired; configure authoritative I/O limits directly",
+	"IO_BOOST_DURATION":            "automatic I/O remediation was retired; configure authoritative I/O limits directly",
+	"IO_BOOST_MAX_PER_HOUR":        "automatic I/O remediation was retired; use external automation with its own rate limit",
+	"IO_PSI_THRESHOLD":             "automatic I/O remediation was retired; PSI remains observable",
+	"IO_REVERT_ON_NORMAL":          "automatic I/O remediation was retired; configure authoritative I/O limits directly",
+	"BATCH_NIGHT_RAM_QUOTA":        "workload-pattern classification is observational; use RAM_QUOTA_PER_USER for enforcement",
+	"INTERACTIVE_RAM_QUOTA":        "workload-pattern classification is observational; use RAM_QUOTA_PER_USER for enforcement",
+	"USER_WHITELIST":               "use USER_EXCLUDE_LIST",
 }
 
 func removedConfigKeyError(key string) error {
@@ -634,13 +615,11 @@ func removedConfigKeyError(key string) error {
 type configFieldHandler func(*Config, string) error
 
 var configFieldHandlers = map[string]configFieldHandler{
-	"CGROUP_ROOT":          setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
-	"CGROUP_BASE":          setCgroupBase,
-	"LOG_FILE":             setString(func(cfg *Config, value string) { cfg.LogFile = value }),
-	"CREATED_CGROUPS_FILE": setString(func(cfg *Config, value string) { cfg.CreatedCgroupsFile = value }),
-	"POLLING_INTERVAL":     setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
-	"MIN_ACTIVE_TIME":      setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
-	"METRICS_CACHE_TTL":    setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
+	"CGROUP_ROOT":       setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
+	"LOG_FILE":          setString(func(cfg *Config, value string) { cfg.LogFile = value }),
+	"POLLING_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
+	"MIN_ACTIVE_TIME":   setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
+	"METRICS_CACHE_TTL": setInt(func(cfg *Config, value int) { cfg.MetricsCacheTTL = value }),
 	"METRICS_REFRESH_INTERVAL": setPositiveInt(func(cfg *Config, value int) {
 		cfg.MetricsRefreshInterval = value
 	}),
@@ -719,7 +698,6 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"METRICS_DB_RETENTION_DAYS":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRetentionDays = value }),
 	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
 	"USERNAME_CACHE_TTL":            setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
-	"CGROUP_OPERATION_TIMEOUT":      setInt(func(cfg *Config, value int) { cfg.CgroupOperationTimeout = value }),
 	"DAEMON_SHUTDOWN_TIMEOUT":       setInt(func(cfg *Config, value int) { cfg.DaemonShutdownTimeout = value }),
 	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
 	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
@@ -741,20 +719,10 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
 	"IO_USER_INCLUDE_LIST":          setRegexList("IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
 	"IO_USER_EXCLUDE_LIST":          setRegexList("IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
-	"IO_REMEDIATION_ENABLED":        setBool(func(cfg *Config, value bool) { cfg.IORemediationEnabled = value }),
-	"IO_STARVATION_THRESHOLD":       setInt(func(cfg *Config, value int) { cfg.IOStarvationThreshold = value }),
-	"IO_STARVATION_CHECK_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.IOStarvationCheckInterval = value }),
-	"IO_BOOST_MULTIPLIER":           setFloat(func(cfg *Config, value float64) { cfg.IOBoostMultiplier = value }),
-	"IO_BOOST_DURATION":             setInt(func(cfg *Config, value int) { cfg.IOBoostDuration = value }),
-	"IO_BOOST_MAX_PER_HOUR":         setInt(func(cfg *Config, value int) { cfg.IOBoostMaxPerHour = value }),
-	"IO_PSI_THRESHOLD":              setFloat(func(cfg *Config, value float64) { cfg.IOPSIThreshold = value }),
-	"IO_REVERT_ON_NORMAL":           setBool(func(cfg *Config, value bool) { cfg.IORevertOnNormal = value }),
 	"AUTODETECT_PATTERNS":           setBool(func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
 	"PATTERN_HISTORY_HOURS":         setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
 	"PATTERN_MIN_SAMPLES":           setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
 	"PATTERN_CONFIDENCE_THRESHOLD":  setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
-	"BATCH_NIGHT_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.BatchNightRAMQuota = value }),
-	"INTERACTIVE_RAM_QUOTA":         setString(func(cfg *Config, value string) { cfg.InteractiveRAMQuota = value }),
 	"PSI_EVENT_DRIVEN":              setBool(func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
 	"PSI_CPU_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
 	"PSI_IO_STALL_THRESHOLD":        setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
@@ -838,14 +806,6 @@ func setPort(key string, assign func(*Config, int)) configFieldHandler {
 		assign(cfg, i)
 		return nil
 	}
-}
-
-func setCgroupBase(cfg *Config, value string) error {
-	if strings.Contains(value, "..") || strings.HasPrefix(value, "/") {
-		return fmt.Errorf("invalid CGROUP_BASE: must be a relative path without '..'")
-	}
-	cfg.CgroupBase = value
-	return nil
 }
 
 func setBlackout(cfg *Config, value string) error {
@@ -1031,9 +991,6 @@ func validateConfig(cfg *Config) error {
 	if cfg.LogMaxSize <= 0 {
 		errors = append(errors, "LOG_MAX_SIZE must be greater than 0")
 	}
-	if cfg.CgroupOperationTimeout <= 0 {
-		errors = append(errors, "CGROUP_OPERATION_TIMEOUT must be greater than 0")
-	}
 	if cfg.DaemonShutdownTimeout <= 0 {
 		errors = append(errors, "DAEMON_SHUTDOWN_TIMEOUT must be greater than 0")
 	}
@@ -1103,12 +1060,6 @@ func validateConfig(cfg *Config) error {
 		if cfg.RAMHighRatio < 0 || cfg.RAMHighRatio > 1 {
 			errors = append(errors, "RAM_HIGH_RATIO must be between 0.0 and 1.0 (e.g., 0.8 for 80%, 0 to disable)")
 		}
-	}
-	if !isValidByteQuota(cfg.BatchNightRAMQuota) {
-		errors = append(errors, "BATCH_NIGHT_RAM_QUOTA must be a valid byte value (e.g., '8589934592', '8G')")
-	}
-	if !isValidByteQuota(cfg.InteractiveRAMQuota) {
-		errors = append(errors, "INTERACTIVE_RAM_QUOTA must be a valid byte value (e.g., '536870912', '512M')")
 	}
 
 	// Validate IO limits
@@ -1988,13 +1939,6 @@ func (c *Config) GetPollingInterval() int {
 	return c.PollingInterval
 }
 
-// GetCgroupOperationTimeout returns the cgroup operation timeout in seconds.
-func (c *Config) GetCgroupOperationTimeout() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.CgroupOperationTimeout
-}
-
 // GetDaemonShutdownTimeout returns the complete daemon shutdown deadline in seconds.
 func (c *Config) GetDaemonShutdownTimeout() int {
 	c.mu.RLock()
@@ -2113,62 +2057,6 @@ func (c *Config) GetIOThresholdDuration() int {
 	return c.IOThresholdDuration
 }
 
-// GetIORemediationEnabled returns whether IO starvation remediation is enabled.
-func (c *Config) GetIORemediationEnabled() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IORemediationEnabled
-}
-
-// GetIOStarvationThreshold returns the starvation threshold in seconds.
-func (c *Config) GetIOStarvationThreshold() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOStarvationThreshold
-}
-
-// GetIOStarvationCheckInterval returns the check interval in seconds.
-func (c *Config) GetIOStarvationCheckInterval() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOStarvationCheckInterval
-}
-
-// GetIOBoostMultiplier returns the boost multiplier.
-func (c *Config) GetIOBoostMultiplier() float64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOBoostMultiplier
-}
-
-// GetIOBoostDuration returns the boost duration in seconds.
-func (c *Config) GetIOBoostDuration() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOBoostDuration
-}
-
-// GetIOBoostMaxPerHour returns the max boosts per user per hour.
-func (c *Config) GetIOBoostMaxPerHour() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOBoostMaxPerHour
-}
-
-// GetIOPSIThreshold returns the PSI threshold percentage.
-func (c *Config) GetIOPSIThreshold() float64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IOPSIThreshold
-}
-
-// GetIORevertOnNormal returns whether to revert limits when IO returns to normal.
-func (c *Config) GetIORevertOnNormal() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.IORevertOnNormal
-}
-
 // GetAutodetectPatterns returns whether workload pattern detection is enabled.
 func (c *Config) GetAutodetectPatterns() bool {
 	c.mu.RLock()
@@ -2195,20 +2083,6 @@ func (c *Config) GetPatternConfidenceThreshold() float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.PatternConfidenceThreshold
-}
-
-// GetBatchNightRAMQuota returns the RAM quota for batch night pattern.
-func (c *Config) GetBatchNightRAMQuota() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.BatchNightRAMQuota
-}
-
-// GetInteractiveRAMQuota returns the RAM quota for interactive pattern.
-func (c *Config) GetInteractiveRAMQuota() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.InteractiveRAMQuota
 }
 
 // GetIgnoreSystemLoad returns whether to ignore system load in decisions.

@@ -25,7 +25,6 @@ type limitHookEvent struct {
 	Username                          string                                 `json:"username"`
 	EnforceableCPUUsagePercent        float64                                `json:"enforceable_cpu_usage_percent"`
 	CPUEligibleUsersCount             int                                    `json:"cpu_eligible_users_count"`
-	SharedCgroup                      string                                 `json:"shared_cgroup"`
 	Timestamp                         time.Time                              `json:"timestamp"`
 	ServerRole                        string                                 `json:"server_role,omitempty"`
 	LimitHookSource                   string                                 `json:"source"`
@@ -38,8 +37,6 @@ type limitHookEvent struct {
 	CPUPointsCompleteUIDGuaranteed    bool                                   `json:"cpu_points_complete_uid_workload_guaranteed"`
 	CPUPointsReconciliationDegraded   bool                                   `json:"cpu_points_reconciliation_degraded"`
 	CPUPointsProcessCoverage          resmanmetrics.CPUPointsProcessCoverage `json:"cpu_points_process_coverage"`
-	PIDNamespaceMismatchCount         int                                    `json:"pid_namespace_mismatch_count"`
-	PIDNamespaceUnavailableCount      int                                    `json:"pid_namespace_unavailable_count"`
 	RAMCgroupMemoryCurrentBytes       *uint64                                `json:"ram_cgroup_memory_current_bytes,omitempty"`
 	RAMCoverage                       *string                                `json:"ram_coverage,omitempty"`
 	RAMCoverageIncompleteProcessCount int                                    `json:"ram_coverage_incomplete_process_count"`
@@ -63,6 +60,13 @@ type hookOutcomeLogger interface {
 	Warn(msg string, keyvals ...interface{})
 }
 
+func userEnforceableCPUUsage(metrics *SystemMetrics, uid int) float64 {
+	if metrics == nil || metrics.UserMetrics[uid] == nil {
+		return 0
+	}
+	return metrics.UserMetrics[uid].EnforceableUsage.CPUUsage
+}
+
 func (e *sanitizedHookError) Error() string {
 	return e.message
 }
@@ -77,16 +81,11 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 	}
 
 	cpuPoints := m.limitHookCPUPointsSnapshot(uid, username, metrics)
-	m.mu.RLock()
-	sharedCgroup := m.sharedCgroupPath
-	m.mu.RUnlock()
-
 	event := limitHookEvent{
 		UID:                               uid,
 		Username:                          username,
 		EnforceableCPUUsagePercent:        userEnforceableCPUUsage(metrics, uid),
 		CPUEligibleUsersCount:             metrics.CPUEligibleUsersCount,
-		SharedCgroup:                      sharedCgroup,
 		Timestamp:                         time.Now().UTC(),
 		ServerRole:                        cfg.ServerRole,
 		LimitHookSource:                   "resman",
@@ -99,8 +98,6 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 		CPUPointsCompleteUIDGuaranteed:    cpuPoints.CompleteUIDWorkloadGuaranteed,
 		CPUPointsReconciliationDegraded:   cpuPoints.ReconciliationDegraded,
 		CPUPointsProcessCoverage:          cpuPoints.ProcessCoverage,
-		PIDNamespaceMismatchCount:         cpuPoints.PIDNamespaceMismatchCount,
-		PIDNamespaceUnavailableCount:      cpuPoints.PIDNamespaceUnavailableCount,
 		RAMCgroupMemoryCurrentBytes:       cpuPoints.RAMCgroupUsageBytes,
 		RAMCoverage:                       cpuPoints.RAMCoverage,
 		RAMCoverageIncompleteProcessCount: cpuPoints.RAMCoverageIncompleteProcessCount,
@@ -126,10 +123,6 @@ func (m *Manager) limitHookCPUPointsSnapshot(uid int, username string, sample *S
 	}
 	m.mu.RLock()
 	policy := m.cpuPointsPolicy
-	allocation, applied := m.cpuAllocations[uid]
-	event := m.cpuPointsLifecycleEvents[uid]
-	resource := m.resourceLimits[uid]
-	ramCoverage := m.ramCoverage[uid]
 	result.ReconciliationDegraded = m.cpuPointsDegraded
 	m.mu.RUnlock()
 	result.UID, result.Username = uid, username
@@ -145,33 +138,6 @@ func (m *Manager) limitHookCPUPointsSnapshot(uid int, username string, sample *S
 		result.CPUEnforcementRequested = observed.CPULimitRequested
 		result.ObservedProcessCount = observed.ProcessCount
 		result.EnforceableProcessCount = observed.EnforceableUsage.ProcessCount
-	}
-	result.PIDNamespaceMismatchCount = event.pidNamespaceMismatches
-	result.PIDNamespaceUnavailableCount = event.pidNamespaceUnavailable
-	acquired := result.EnforceableProcessCount - event.pidNamespaceMismatches - event.pidNamespaceUnavailable
-	if applied && acquired > 0 {
-		class := string(allocation.class)
-		weight := uint64(allocation.weight.Value())
-		result.AppliedClass, result.AppliedWeight = &class, &weight
-		result.AppliedToProcesses = true
-		result.LifecycleState = resmanmetrics.CPUPointsLifecycleApplied
-		result.ProcessCoverage = resmanmetrics.CPUPointsCoverageComplete
-		if acquired != result.ObservedProcessCount || result.ObservedProcessCount != result.EnforceableProcessCount || event.pidNamespaceMismatches > 0 || event.pidNamespaceUnavailable > 0 {
-			result.ProcessCoverage = resmanmetrics.CPUPointsCoveragePartial
-		}
-		result.CompleteUIDWorkloadGuaranteed = result.ProcessCoverage == resmanmetrics.CPUPointsCoverageComplete
-	}
-	if resource.ramApplied {
-		coverage := string(RAMCoverageComplete)
-		if ramCoverage.coverage == RAMCoveragePartial {
-			coverage = string(RAMCoveragePartial)
-			result.RAMCoverageIncompleteProcessCount = len(ramCoverage.partial)
-		}
-		result.RAMCoverage = &coverage
-		if memory, err := m.cgroupManager.GetMemoryAccountingSnapshot(uid); err == nil {
-			current := memory.CurrentBytes
-			result.RAMCgroupUsageBytes = &current
-		}
 	}
 	return result
 }
@@ -255,7 +221,6 @@ func runLimitHookScript(ctx context.Context, invocation hookScriptInvocation, ev
 		"RESMAN_LIMIT_USERNAME="+event.Username,
 		"RESMAN_LIMIT_ENFORCEABLE_CPU_USAGE_PERCENT="+strconv.FormatFloat(event.EnforceableCPUUsagePercent, 'f', 2, 64),
 		"RESMAN_LIMIT_CPU_ELIGIBLE_USERS_COUNT="+strconv.Itoa(event.CPUEligibleUsersCount),
-		"RESMAN_LIMIT_SHARED_CGROUP="+event.SharedCgroup,
 		"RESMAN_LIMIT_TIMESTAMP="+event.Timestamp.Format(time.RFC3339),
 		"RESMAN_LIMIT_SERVER_ROLE="+event.ServerRole,
 		"RESMAN_LIMIT_CPU_POINTS_CONFIGURED_CLASS="+event.CPUPointsConfiguredClass,
@@ -267,8 +232,6 @@ func runLimitHookScript(ctx context.Context, invocation hookScriptInvocation, ev
 		"RESMAN_LIMIT_CPU_POINTS_COMPLETE_UID_WORKLOAD_GUARANTEED="+strconv.FormatBool(event.CPUPointsCompleteUIDGuaranteed),
 		"RESMAN_LIMIT_CPU_POINTS_RECONCILIATION_DEGRADED="+strconv.FormatBool(event.CPUPointsReconciliationDegraded),
 		"RESMAN_LIMIT_CPU_POINTS_PROCESS_COVERAGE="+string(event.CPUPointsProcessCoverage),
-		"RESMAN_LIMIT_PID_NAMESPACE_MISMATCH_COUNT="+strconv.Itoa(event.PIDNamespaceMismatchCount),
-		"RESMAN_LIMIT_PID_NAMESPACE_UNAVAILABLE_COUNT="+strconv.Itoa(event.PIDNamespaceUnavailableCount),
 		"RESMAN_LIMIT_RAM_CGROUP_MEMORY_CURRENT_BYTES="+formatOptionalUint64(event.RAMCgroupMemoryCurrentBytes),
 		"RESMAN_LIMIT_RAM_COVERAGE="+formatOptionalString(event.RAMCoverage),
 		"RESMAN_LIMIT_RAM_COVERAGE_INCOMPLETE_PROCESS_COUNT="+strconv.Itoa(event.RAMCoverageIncompleteProcessCount),

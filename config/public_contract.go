@@ -172,7 +172,6 @@ var publicFieldRemedies = map[string]string{
 func number(value float64) *float64 { return &value }
 
 var publicFieldConstraints = map[string]PublicFieldConstraint{
-	"CGROUP_BASE":                  {Format: "relative-cgroup-path"},
 	"POLLING_INTERVAL":             {Minimum: number(5)},
 	"METRICS_CACHE_TTL":            {Minimum: number(1)},
 	"METRICS_REFRESH_INTERVAL":     {Minimum: number(5)},
@@ -207,7 +206,6 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 	"METRICS_DB_RETENTION_DAYS":    {Minimum: number(1)},
 	"METRICS_DB_WRITE_INTERVAL":    {Minimum: number(5)},
 	"USERNAME_CACHE_TTL":           {Minimum: number(1)},
-	"CGROUP_OPERATION_TIMEOUT":     {Minimum: number(1)},
 	"DAEMON_SHUTDOWN_TIMEOUT":      {Minimum: number(1)},
 	"RAM_THRESHOLD":                {Minimum: number(1), Maximum: number(100)},
 	"RAM_RELEASE_THRESHOLD":        {Minimum: number(1), Maximum: number(100)},
@@ -225,17 +223,9 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 	"IO_THRESHOLD_DURATION":        {Minimum: number(0)},
 	"IO_USER_INCLUDE_LIST":         {Format: "comma-separated-regex-list"},
 	"IO_USER_EXCLUDE_LIST":         {Format: "comma-separated-regex-list"},
-	"IO_STARVATION_THRESHOLD":      {Minimum: number(1)},
-	"IO_STARVATION_CHECK_INTERVAL": {Minimum: number(1)},
-	"IO_BOOST_MULTIPLIER":          {Minimum: number(0)},
-	"IO_BOOST_DURATION":            {Minimum: number(1)},
-	"IO_BOOST_MAX_PER_HOUR":        {Minimum: number(0)},
-	"IO_PSI_THRESHOLD":             {Minimum: number(0), Maximum: number(100)},
 	"PATTERN_HISTORY_HOURS":        {Minimum: number(1)},
 	"PATTERN_MIN_SAMPLES":          {Minimum: number(1)},
 	"PATTERN_CONFIDENCE_THRESHOLD": {Minimum: number(0), Maximum: number(1)},
-	"BATCH_NIGHT_RAM_QUOTA":        {Format: "byte-quota"},
-	"INTERACTIVE_RAM_QUOTA":        {Format: "byte-quota"},
 	"PSI_CPU_STALL_THRESHOLD":      {Minimum: number(0)},
 	"PSI_IO_STALL_THRESHOLD":       {Minimum: number(0)},
 	"PSI_WINDOW_US":                {Minimum: number(0)},
@@ -243,7 +233,7 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 }
 
 var specialFieldMeanings = map[string]string{
-	"AUTODETECT_PATTERNS":        "false disables workload-pattern classification and RAM policy selection.",
+	"AUTODETECT_PATTERNS":        "false disables observational workload-pattern classification.",
 	"BLACKOUT":                   "Empty means no blackout; enforcement is always permitted by schedule.",
 	"CPU_THRESHOLD_DURATION":     "0 makes CPU threshold activation immediate after a valid sample.",
 	"CPU_RESERVE_POINTS":         "Nominal headroom outside user.slice, including system.slice, not an unbounded root shell or physical isolation. 0 still programs a finite parent quota.",
@@ -251,12 +241,10 @@ var specialFieldMeanings = map[string]string{
 	"CPU_BEST_EFFORT_POINTS":     "One aggregate entitlement shared by active non-root user slices without an eligible mapped guarantee.",
 	"CPU_POINTS_FILE":            "Absolute restart-required path to the strict direct username guarantee map.",
 	"ENABLE_PROMETHEUS":          "false creates no Prometheus listener.",
-	"IO_BOOST_DURATION":          "0 is rejected while I/O remediation is enabled.",
 	"IO_DEVICE_FILTER":           "all selects every eligible whole block device.",
 	"IO_LIMIT_ENABLED":           "false disables I/O enforcement while observation remains available.",
 	"IO_READ_BPS":                "max disables the read-bandwidth decision and limit dimension.",
 	"IO_READ_IOPS":               "0 disables the read-IOPS decision and limit dimension.",
-	"IO_REMEDIATION_ENABLED":     "false disables starvation remediation.",
 	"IO_THRESHOLD_DURATION":      "0 makes I/O threshold activation immediate.",
 	"IO_USER_EXCLUDE_LIST":       "Empty excludes nobody from I/O eligibility.",
 	"IO_USER_INCLUDE_LIST":       "Empty includes every non-excluded user for I/O eligibility.",
@@ -381,7 +369,7 @@ func RenderPublicConfigReference() string {
 		1000-defaults.CPUReservePoints-defaults.CPURootPoints-defaults.CPUBestEffortPoints)
 	output.WriteString("Admission requires `sum(mapped guarantees) + CPU_ROOT_POINTS + CPU_BEST_EFFORT_POINTS <= 1000 - CPU_RESERVE_POINTS`. All mapped entries count, including inactive or currently ineligible accounts. UID 0 is forbidden in the map.\n\n")
 	fmt.Fprintf(&output, "Let `M` be the largest configured entitlement among root, aggregate best effort and all mapped guarantees. The exact scale is `floor(%d / M)`. The active best-effort slice count must not exceed `CPU_BEST_EFFORT_POINTS * floor(%d / M)`. Best-effort weights differ by at most one and their sum is exact. With an empty default map the bound is 10000 slices; with a 700-point guarantee and best effort 100 it is 1400. An impossible plan reports `best_effort_cardinality` before mutation, including active count, aggregate weight and maximum scale.\n\n", cpupoints.MaximumKernelCPUWeight, cpupoints.MaximumKernelCPUWeight)
-	output.WriteString("Under systemd_native, active class changes reconcile weights in place; the non-systemd migration backend still rejects active cross-class moves. Map contents and the three point settings reload as one verified epoch; CPU_POINTS_FILE requires restart. See [UPGRADING.md](UPGRADING.md) for the 701–800 default-budget break and the 750-point rebalance example, and [CPU-POINTS-OBSERVABILITY.md](CPU-POINTS-OBSERVABILITY.md) for synchronized measurement.\n")
+	output.WriteString("Under systemd_native, active class and weight changes reconcile in place. Map contents and the three point settings reload as one verified epoch; CPU_POINTS_FILE requires restart. On a host without authoritative systemd enforcement, ResMan remains in observation_only mode. See [UPGRADING.md](UPGRADING.md) for the 701–800 default-budget break and the 750-point rebalance example, and [CPU-POINTS-OBSERVABILITY.md](CPU-POINTS-OBSERVABILITY.md) for synchronized measurement.\n")
 	return output.String()
 }
 

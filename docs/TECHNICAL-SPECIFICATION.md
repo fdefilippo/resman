@@ -250,23 +250,20 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
-Current metrics schema: 6.
+Current metrics schema: 7.
 
 **Responsibilities:**
-- Create and manage cgroup v2 hierarchies
-- Apply CPU limits using `cpu.max`
-- Apply CPU weights using `cpu.weight`
-- Move processes to cgroups
-- Track created cgroups in file
-- Clean up cgroups on shutdown
+- Verify the cgroup v2 observation boundary
+- Detect whether authoritative systemd enforcement is available
+- Provide read-only cgroup accounting to the control cycle
 
 **Systemd ownership boundary:**
 
 The `systemd_native` adapter uses authoritative D-Bus unit identities and
 runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
 It verifies normalized properties and kernel values before acknowledging a plan.
-The fallback `observation_only_systemd` applies when authority is unavailable;
-`migration_enabled` is the separate non-systemd backend, not a systemd escape hatch.
+The fallback `observation_only` applies whenever authority is unavailable or cannot
+be verified. It never owns a cgroup hierarchy or changes process membership.
 
 **Native cgroup hierarchy:**
 ```text
@@ -289,37 +286,12 @@ Runtime-property ownership and crash recovery use the durable private journal in
 [SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). Startup reclaims exact
 footprints; release compares before restoring and guarded unit-file cleanup never
 erases operator changes. A root-only topology releases the finite pool. An unchanged
-verified plan produces no property or journal rewrite. The legacy cgroup APIs below
-remain specific to non-systemd migration and recovery of older acquisitions.
+verified plan produces no property or journal rewrite. ResMan never writes
+`cgroup.procs`, records process origins, or creates recovery cgroups.
 
-Where migration is supported, resman atomically persists PID, process start time, parent,
-session ID, and original cgroup. Release restores the exact original cgroup
-when it can legally accept processes. If that cgroup disappeared or is an
-internal cgroup v2 node with controllers delegated to children, the process
-enters the resman-owned recovery hierarchy. PID reuse is detected by
-revalidating the start time immediately before every restore write. Descendants
-inherit an unambiguous parent or session origin; otherwise they also use
-recovery. Recovery leaves receive an internal unlimited `cpu.max`; no public
-normal-quota setting is written into systemd-managed cgroups. Every attempted
-restore returns one typed disposition: exact origin, recovery, disappeared, or
-failed. Recovery is not successful release. Its occupants remain visibly stranded,
-are never admitted again, and the recovery path is never recorded as a new origin.
-An incomplete shutdown restoration is returned from the application and produces a
-non-zero daemon exit status.
-
-Live reconciliation deliberately differs from shutdown recovery. It does not
-guess or create a replacement destination for an excluded process without a
-same-start-time recorded or inherited origin: that process remains constrained.
-The restore planner reports the typed per-process failure and still executes
-valid peer restores. Enforcement errors are returned after history recording,
-I/O remediation, workload pattern detection, and completion
-logging have run. `resman_errors_total` distinguishes the persistent
-`process_membership/origin_unavailable` outcome from transient
-`process_membership/reconciliation_failure` outcomes.
-
-At startup, the manager enables the controllers it may use and creates a
-temporary child below the resman base cgroup. Capability is determined from the
-interface files populated in that real child, not from controller names alone.
+At startup, the systemd adapter verifies the controller interfaces it requires on
+the authoritative hierarchy. Capability is determined from the interfaces exposed
+by the live unit topology, not from controller names alone.
 CPU Points always requires both `cpu.max` and `cpu.weight`; `RAM_LIMIT_ENABLED=true` additionally
 requires `memory.max`, and `IO_LIMIT_ENABLED=true` requires `io.max`. A missing
 required interface aborts startup with the feature, controller, and interface in
@@ -333,32 +305,15 @@ capability error and publishes the effective configuration with the feature
 still disabled. Repairing the host does not refresh the snapshot; resman must be
 restarted to discover the repaired interface. This differs from a feature that
 was merely disabled in the startup configuration: when its interface was found
-usable, a reload can enable the feature without a restart. If the controller
-cannot be enabled in an existing shared cgroup, the reload reports that failure
-and leaves the feature disabled.
+usable, a reload can enable the feature without a restart. If a required controller
+cannot be enabled through the authoritative unit hierarchy, the reload reports that
+failure and leaves the feature disabled.
 
 **Key Functions:**
-- `NewManager(cfg)`: Creates cgroup manager
-- `verifyCgroupSetup()`: Verifies cgroups v2 availability
-- `CreateUserCgroup(uid)`: Creates cgroup for user
-- `CreateSharedCgroup()`: Creates shared "limited" cgroup
-- `EnsureCPUPointsHierarchy(quota, bestEffortWeight)`: Creates and verifies the finite pool and process-free domains
-- `ApplyCPUPointsParentQuota(hierarchy, quota)`: Reconciles the typed finite parent quota
-- `ApplyCPUPointsGuaranteedWeight(hierarchy, weight)`: Reconciles the active guaranteed entitlement
-- `EnsureCPUPointsUserPlacement(uid, domain, weight)`: Fully configures and verifies an unlimited leaf before ingress
-- `EnsureUnlimitedCPUQuota(uid)`: Keeps a RAM/I/O-only observation cgroup outside CPU allocation policy
-- `MoveProcessToCgroup(pid, uid)`: Moves process to user cgroup
-- `MoveAllUserProcesses(uid)`: Moves all user processes to a standalone cgroup
-- `MoveAllUserProcessesToSharedCgroup(uid, path)`: Moves all user processes
-- `CleanupUserCgroup(uid)`: Removes user cgroup
-- `CleanupAll()`: Removes all created cgroups
-- `GetCgroupInfo(uid)`: Returns cgroup information
-
-CPU Points ingress owns process migration synchronously. `CGROUP_OPERATION_TIMEOUT`
-cancels the scan between PID moves, but the call does not return until any in-flight
-move has completed. A blocked kernel operation can therefore make the call exceed the
-nominal timeout; after the returned error no background worker remains able to change
-cgroup membership.
+- `NewManager(cfg)`: verifies the read-only cgroup observation boundary and selects
+  the bounded enforcement mode
+- the systemd unit adapter owns property application, readback, leases, and exact
+  restoration without changing process membership
 
 **CPU Limit Format:**
 - `cpu.max` format: `"quota period"` (in microseconds)
@@ -406,24 +361,9 @@ cgroup membership.
 - Matching uses only the `/proc/PID/exe` basename. `/proc/PID/comm` is display-only
   because a process can rewrite it. If executable identity is unavailable, the
   process remains in decision inputs and enforcement and an explicit error is emitted.
-- While limits are active, every control cycle moves new enforceable processes into
-  the current user cgroup and restores newly excluded processes to their captured
-  origins.
-- Origin restoration requires the same PID start time. A missing origin fails closed:
-  the process remains constrained and the control cycle reports the error.
-- Every ingress into a ResMan-owned cgroup requires the candidate PID namespace to
-  equal the daemon's cached `/proc/self/ns/pid` device and inode. The identity is
-  checked before origin persistence and again immediately before `cgroup.procs` is
-  written. Mismatched or unreadable namespace entries are skipped without changing
-  observation or decision aggregation. Restore and recovery deliberately bypass this
-  guard because they remove an existing ResMan constraint.
-- Keeping decision aggregation unchanged is conservative but asymmetric. A nested
-  process that ResMan refuses to acquire still contributes to its host UID's CPU, RAM,
-  and I/O totals. If that workload keeps a mixed UID above the release threshold,
-  host-namespace processes already in ResMan cgroups remain constrained even though
-  their restriction cannot reduce the nested workload's usage. The bounded
-  `pid_namespace_boundary` warning identifies the UID and skip counts;
-  `resman_cgroup_ingress_skipped_total` exposes the host-level occurrence trend.
+- Process exclusion affects observation and eligibility only. It never causes PID
+  relocation. Under `systemd_native`, limits are applied to authoritative units; under
+  `observation_only`, no resource property is changed.
 
 **Procfs decision coverage:**
 - Executable identity and I/O decision inputs carry explicit per-scan coverage.
@@ -524,21 +464,9 @@ inventory distinguishes registration conditions from invocation requirements, wh
 the remaining inventories distinguish fixed resources from URI templates. Cross-boundary
 tests compare every inventory with the corresponding production discovery response.
 
-The cgroup tool and resource share one JSON schema backed by a typed internal contract.
-They expose `cpu.max`, `cpu.weight`, `memory.current`, `memory.max`, and `memory.high`
-as the underscore-named fields `cpu_max`, `cpu_weight`, `memory_current`, `memory_max`,
-and `memory_high`. Each value is paired with an explicit `*_available` boolean. An
-unreadable interface is omitted with availability `false` and a bounded
-`*_unavailable_reason`: `not_present`, `permission_denied`, or `read_error`. Available
-values omit that reason. The reason carries neither the attempted interface path nor raw
-error text; the existing `path` field still identifies the managed cgroup. Consumers
-must not reinterpret an empty value as an unlimited limit. The operator action for each
-reason is documented in
-[MCP-README](MCP-README.md#cgroup-interface-availability).
-
 All production MCP result and resource payloads use typed wire DTOs. Tool/resource pairs
 for active users, resource-policy configuration, user metrics, system status, limits
-status, and cgroup information share one projection per semantic contract. User-history
+status share one projection per semantic contract. User-history
 and system-history records intentionally remain distinct typed contracts. Dynamic maps
 are limited to MCP input-schema metadata and decoded client arguments; they are never
 serialized as production result payloads.
@@ -630,8 +558,7 @@ only `scheme://host[:port]`, never URL userinfo, path, query values, or fragment
 4. Compare all public keys with the lifecycle table and restore every
    restart-required key to its effective value
 5. In native mode, reconcile active class changes, parent quota and the complete
-   sibling-weight plan in place, with topology reconfirmation and read-back verification.
-   Only the non-systemd migration backend rejects active cross-class placement changes.
+   sibling-weight plan in place, with topology reconfirmation and read-back verification
 6. Apply dynamic values to logging, cgroup, state, metrics, and the application
    runtime hook, including PSI watcher reconciliation
 7. Confirm both files again and publish only after every consumer and kernel
@@ -646,8 +573,7 @@ A safe partial kernel mutation never advances the public configuration or policy
 snapshot. It creates one typed internal reconciliation intent for the old
 authoritative epoch. The control-cycle owner retries that intent without waiting
 for another file event and reports a bounded degraded error until exact read-back
-convergence clears it. Class-change preflight failures remain unprocessed so the
-watcher retries them after the affected users have been released.
+convergence clears it.
 
 **Key Functions:**
 - `NewReloader(state, cgroup, metrics, prometheus, hooks...)`: Creates reloader
@@ -673,8 +599,8 @@ watcher retries them after the affected users have been released.
   discovery found the required interface usable; otherwise the requested feature
   remains disabled and the error requires a restart after repairing the host
 - `ENABLE_PROMETHEUS`, Prometheus listener, TLS, and authentication: Rejected until restart
-- Cgroup paths, created-cgroup state path, metrics database lifecycle/path/write interval,
-  logging backend, and `SERVER_ROLE`: Rejected until restart
+- Cgroup observation root, metrics database lifecycle/path/write interval, logging
+  backend, and `SERVER_ROLE`: Rejected until restart
 - MCP enablement, transport, listener, log level, authentication token, and
   write permissions: Rejected until restart
 
@@ -704,12 +630,11 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A pre-version-6 database must be archived or deleted so schema
-version 6 can be created; it is not moved or migrated. Version 6 persists one common
+component construction. A pre-version-7 database must be archived or deleted so schema
+version 7 can be created; it is not moved or migrated. Version 7 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
-nullable identity-safe cgroup deltas, PID-namespace and systemd-ownership refusal,
-typed recovery lifecycle, RAM-charge coverage, and distinct memory high/max/OOM/kill
-deltas. First baselines, counter resets and cgroup
+nullable identity-safe unit deltas, independent resource authority and RAM-charge
+coverage, and distinct memory high/max/OOM/kill deltas. First baselines, counter resets and unit
 recreation remain NULL rather than being reinterpreted as zero or wrapped deltas.
 
 **Format:**
@@ -838,22 +763,17 @@ weights and an exactly partitioned aggregate best-effort weight. Every active
 sibling, including excluded users, belongs to the scheduling denominator.
 Unused capacity is available to all runnable siblings.
 
-[CPU Points observability](CPU-POINTS-OBSERVABILITY.md) defines schema 6, complete
+[CPU Points observability](CPU-POINTS-OBSERVABILITY.md) defines schema 7, complete
 denominator confirmation, resource coverage and the 60-second window measurement
 procedure. No complete guarantee is published from a partial reconciliation.
 
 The map is a root/daemon-owned regular mode-0600 file under trusted, non-writable,
 non-symlink ancestors. Its exact marker and line grammar are validated before exact
 NSS resolution. Main configuration and map content are one confirmed composite epoch.
-Changing the class of an active UID is rejected before cgroup mutation and creates no
-pending state. The UID must first be released; same-class guarantee changes and
-inactive membership changes remain dynamic.
+Changing the class or guarantee of an active UID reconciles the authoritative weight
+in place and creates no pending membership state.
 
-Dynamic process movement does not transfer cgroup v2 memory charges. First ingress
-therefore yields complete process-derived UID memory but partial post-ingress cgroup
-RAM coverage. A cross-parent CPU transition is refused while RAM enforcement is
-active; release or disable RAM and retry after reconciliation. I/O-only transitions
-remain permitted through the logical `io.stat` ledger. With `memory.high` below
+With `memory.high` below
 `memory.max`, no swap, and unreclaimable pages, a live workload can stall indefinitely
 at high with rising high events and zero max/OOM/kill events. An explicit
 high-equals-max control is a distinct max/OOM experiment; requested allocation size
@@ -879,21 +799,13 @@ single source of mandatory/optional capability diagnostics.
 | `cpu.max` | CPU limit (quota period) |
 | `cpu.weight` | CPU weight (1-10000) |
 | `cpu.stat` | CPU statistics |
-| `cgroup.procs` | Process list |
 | `cgroup.subtree_control` | Controller enablement |
 
-### 6.3 Process Movement
+### 6.3 Process Membership
 
-**Method:**
-1. Read all PIDs from `/proc`
-2. Filter by UID
-3. Write PID to `cgroup.procs`
-4. Verify movement
-
-**Challenges:**
-- Processes may exit during movement
-- Some processes may resist movement (permissions)
-- Kernel may reject movement (busy)
+ResMan never changes process membership. systemd and logind retain ownership of every
+PID, and the native adapter changes only resource-control properties on authoritative
+units. A host without that authority remains observable but unenforced.
 
 ---
 
@@ -1187,7 +1099,7 @@ remain excluded from returned errors and logs. The complete operational contract
 in [`LIMIT-HOOKS.md`](LIMIT-HOOKS.md).
 The transition payload also carries configured class and optional guarantee,
 requested/applied lifecycle and weight, reconciliation state, complete/partial process
-coverage, PID-namespace rejection counts, and post-ingress RAM cgroup coverage. It
+coverage, and authoritative RAM slice coverage. It
 never calls a partial host subset the complete UID workload and never promises that a
 `memory.high` event will terminate a process.
 
@@ -1211,8 +1123,7 @@ never calls a partial host subset the complete UID workload and never promises t
 - Component initialization
 - Control cycle start/complete
 - Limit activate/deactivate
-- Cgroup create/remove
-- Process movement
+- Systemd property application/restoration
 - Errors and warnings
 
 ### 10.3 Log Rotation
@@ -1317,7 +1228,6 @@ decision policy.
 - `resman_resource_limits_active` (gauge)
 - `resman_any_limits_active` (gauge)
 - `resman_enforcement_mode{mode}` (one bounded active mode)
-- `resman_recovery_stranded_processes` (current live recovery occupants)
 
 **Per-User Metrics:**
 - `resman_user_cpu_usage_percent{uid, username}` (gauge)
@@ -1337,7 +1247,7 @@ decision policy.
 - optional mapped-user guarantee, requested enforcement, bounded configured/applied
   class, raw applied weight, lifecycle, reconciliation state, and complete/partial
   process coverage;
-- cgroup `memory.current` explicitly labelled as post-ingress cgroup accounting,
+- cgroup `memory.current` explicitly labelled as authoritative slice accounting,
   bounded RAM coverage, and distinct high/max/OOM/OOM-kill event deltas.
 
 Effective parent CPU usage is the allocation denominator. The nominal pool and raw
@@ -1363,11 +1273,6 @@ the interval series instead of creating a wrapped delta.
 - `resman_limit_hook_in_flight` (current deliveries owned by workers)
 - `resman_limit_hook_queue_depth` (current pending deliveries)
 - `resman_limit_hook_queue_capacity` (configured pending-delivery bound)
-- `resman_cgroup_ingress_skipped_total{reason}` (processes not moved into ResMan-owned
-  cgroups; reason is `pid_namespace_mismatch`, `pid_namespace_unavailable`,
-  `systemd_ownership_preserved`, or `recovery_process_stranded`)
-- `resman_process_restore_total{disposition}` (exact-origin, recovery,
-  disappearance, and failure outcomes with bounded labels)
 - `resman_procfs_unavailable_processes{access}` (current missing executable-identity
   or I/O-decision procfs inputs)
 
@@ -1507,26 +1412,25 @@ type CgroupManager interface {
 - Validation error (fail fast)
 
 **Runtime Errors:**
-- Cgroup operation failed (log, continue)
-- Process movement failed (log, retry next cycle)
+- Systemd topology or property reconciliation failed (log, retry next cycle)
 - Metrics collection failed (use fallback, log)
 - Prometheus export failed (log, continue)
 
 **Fatal Errors:**
-- Cannot create cgroup manager (exit)
+- Cannot initialize cgroup observation (exit)
 - Cannot create state manager (exit)
 - Cannot bind Prometheus port (disable Prometheus)
 
 ### 14.2 Error Recovery
 
 **Automatic Recovery:**
-- Failed process movement: Retry next cycle
-- Temporary cgroup error: Retry on next activation
+- Failed systemd property reconciliation: Retry next cycle
+- Interrupted property restoration: Resume from the durable lease journal
 - Metrics cache miss: Recalculate
 
 **Manual Recovery:**
 - Configuration error: Fix config, send SIGHUP
-- Cgroup corruption: Restart service (cleanup on start)
+- External systemd-property conflict: Resolve the operator change, then retry
 
 ---
 
@@ -1556,7 +1460,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.34.1-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.35.0-1'" -o resman .
 ```
 
 **Build RPM:**

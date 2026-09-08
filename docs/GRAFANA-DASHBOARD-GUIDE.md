@@ -44,7 +44,7 @@ The dashboard is organized in seven rows. Every query is filtered by the `cluste
 |-------|--------|-------------|
 | **CPU pressure** | `rate(resman_psi_events_total{type="cpu", scope="system"}) * 60` | Kernel PSI events per minute; shows `PSI inactive` when `PSI_EVENT_DRIVEN` is off or no event was ever recorded |
 | **I/O pressure** | `rate(resman_psi_events_total{type="io", scope="system"}) * 60` | Same for the I/O stall monitor |
-| **Memory pressure** | `rate(resman_user_memory_high_breaches_total) * 60` | ResMan exports no memory PSI value; this gauge counts `memory.high` breaches per minute in the managed cgroups and shows `no RAM enforcement` when no counter exists |
+| **Memory pressure** | `rate(resman_user_memory_high_breaches_total) * 60` | ResMan exports no memory PSI value; this gauge counts `memory.high` breaches per minute in authoritative user slices and shows `no RAM enforcement` when no counter exists |
 
 ### Row 2: Limits
 
@@ -54,14 +54,14 @@ The dashboard is organized in seven rows. Every query is filtered by the `cluste
 | **RAM limits** | `resman_ram_eligible_users_count`, `resman_resource_limits_active`, `increase(resman_user_memory_high_breaches_total)` | RAM-eligible users, whether RAM or I/O limits are active (0/1) and soft-limit breaches |
 | **I/O limits** | `resman_io_eligible_users_count`, `resman_resource_limits_active` | I/O-eligible users and the RAM/I/O active state |
 
-Read this row together with `resman_enforcement_mode`: in `observation_only_systemd` the
+Read this row together with `resman_enforcement_mode`: in `observation_only` the
 daemon records intent only and no user is ever counted as limited.
 
 ### Row 3: Memory and I/O
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **RAM of monitored processes** | `resman_all_users_memory_usage_bytes`, `resman_ram_eligible_users_memory_usage_bytes`, `sum(resman_cgroup_memory_usage_bytes)` | Process-derived memory of all monitored users, of RAM-eligible users, and `memory.current` of the managed cgroups |
+| **RAM of monitored processes** | `resman_all_users_memory_usage_bytes`, `resman_ram_eligible_users_memory_usage_bytes`, `sum(resman_cgroup_memory_usage_bytes)` | Process-derived memory of all monitored users, of RAM-eligible users, and `memory.current` of authoritative user slices |
 | **I/O by user** | `rate(resman_user_io_read_bytes_total) + rate(resman_user_io_write_bytes_total)` | Block-device throughput per user, top 10 |
 | **RAM by user** | `resman_user_memory_usage_bytes` | Process-derived memory per user, top 10 |
 
@@ -76,7 +76,7 @@ daemon records intent only and no user is ever counted as limited.
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Enforcement mode** | `resman_enforcement_mode{mode} == 1` | `migration_enabled`, `observation_only_systemd` or `systemd_native`; the key to reading the Limits row |
+| **Enforcement mode** | `resman_enforcement_mode{mode} == 1` | `observation_only` or `systemd_native`; the key to reading the Limits row |
 | **CPU Points denominator** | `resman_cpu_points_denominator_state{state} == 1` | `complete` means every active sibling slice was confirmed this cycle |
 | **CPU Points delivery** | `resman_cpu_points_delivery_state{state} == 1` | `available`, `throttled_parent` or `unavailable` |
 | **CPU / RAM / I/O coverage by user** | `resman_user_cpu_points_process_coverage`, `resman_user_ram_cgroup_coverage`, `resman_user_io_coverage` (`coverage` label) | Per-user authority coverage: `complete`, `partial`, `refused`, `unavailable` |
@@ -90,17 +90,17 @@ daemon records intent only and no user is ever counted as limited.
 | **Programmed weights** | `resman_cpu_points_programmed_*_weight*`, `resman_cpu_points_observed_sibling_weight_sum` | Programmed against observed sibling weights |
 | **Points budget** | `resman_cpu_points_reserve`, `..._nominal_parent_pool`, `..._root_entitlement`, `..._best_effort_entitlement`, `..._applied_guarantee_total` | The configured budget and the guarantees in the last published plan |
 
-### Row 7: Residues and daemon health
+### Row 7: Authority and daemon health
 
 | Panel | Metric | Description |
 |-------|--------|-------------|
-| **Stranded processes and refused ingress** | `resman_recovery_stranded_processes`, `increase(resman_cgroup_ingress_skipped_total{reason})` | Residues that need a manual restart and refusals per cycle |
+| **Observation-only state** | `resman_enforcement_mode{mode="observation_only"} == 1` | Hosts where no authoritative enforcement adapter is available |
 | **Errors by component** | `increase(resman_errors_total{component, error_type})` | Error increments per window |
 | **Limit hooks** | `resman_limit_hook_executions_total{hook_type, outcome}`, `..._queue_depth`, `..._queue_capacity`, `..._in_flight` | Hook delivery health |
 | **Control cycle duration p95** | `histogram_quantile(0.95, rate(resman_control_cycle_duration_seconds_bucket))` | Daemon latency |
 | **Control cycles by trigger** | `increase(resman_control_cycle_triggers_total{trigger})` | Polling against PSI-triggered cycles |
 
-Rows 5 and 6 depend on the schema-6 CPU Points telemetry (`resman-nq6.7`); on an
+Rows 5 and 6 depend on the schema-7 CPU Points telemetry; on an
 earlier release those panels show no data.
 
 ## User Policy Configuration Impact

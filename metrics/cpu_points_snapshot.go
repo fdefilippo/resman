@@ -85,12 +85,6 @@ type CPUPointsUserSnapshot struct {
 	ProcessCoverage                   CPUPointsProcessCoverage
 	ObservedProcessCount              int
 	EnforceableProcessCount           int
-	PIDNamespaceMismatchCount         int
-	PIDNamespaceUnavailableCount      int
-	SystemdOwnershipRefusedCount      int
-	RecoveryProcessCount              int
-	RestoreFailedProcessCount         int
-	StrandedProcessCount              int
 	CgroupPath                        string
 	LeafCPUUsageUsecDelta             *uint64
 	RAMCgroupUsageBytes               *uint64

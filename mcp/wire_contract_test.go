@@ -29,13 +29,13 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		{
 			name: "system status",
 			value: newSystemStatusPayload("host", "role", resmanmetrics.ObservationMetrics{}, state.RuntimeStatus{
-				EnforcementMode: cgroup.EnforcementModeObservationOnlySystemd,
+				EnforcementMode: cgroup.EnforcementModeObservationOnly,
 			}),
 			keys: []string{
 				"actively_limited_users_count", "any_limits_active", "cpu_limits_active", "cpu_limits_applied_time",
 				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
-				"migration_enforcement_available", "observed_users_count", "observed_users_cpu_usage", "recovery_occupants",
-				"resource_limits_active", "resource_limits_applied_time", "server_role", "shared_cgroup_active",
+				"observed_users_count", "observed_users_cpu_usage",
+				"resource_limits_active", "resource_limits_applied_time", "server_role",
 				"system_under_load", "total_cores", "total_cpu_usage", "total_cpu_usage_available",
 				"total_cpu_usage_unavailable_reason",
 			},
@@ -43,14 +43,13 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		{
 			name: "limits status",
 			value: newLimitsStatusPayload("host", "role", state.RuntimeStatus{
-				EnforcementMode: cgroup.EnforcementModeObservationOnlySystemd,
+				EnforcementMode: cgroup.EnforcementModeObservationOnly,
 			}),
 			keys: []string{
 				"actively_limited_users", "actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users",
 				"cpu_actively_limited_users_count", "cpu_limits_active", "cpu_limits_applied_time", "cpu_point_users",
-				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "migration_enforcement_available",
-				"recovery_occupants", "resource_limits_active", "resource_limits_applied_time", "server_role",
-				"shared_cgroup_active", "shared_cgroup_path", "shared_cgroup_user_count",
+				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname",
+				"resource_limits_active", "resource_limits_applied_time", "server_role",
 			},
 		},
 		{
@@ -59,15 +58,11 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			keys:  []string{"hostname", "server_role", "users"},
 		},
 		{
-			name: "user metric",
-			value: UserMetric{
-				CgroupMemoryCurrentBytes: 1, MemoryMax: "max", MemoryHigh: "1024", MemoryHighEvents: 1,
-				IOReadBytes: 1, IOWriteBytes: 1, IOReadOps: 1, IOWriteOps: 1,
-			},
+			name:  "user metric",
+			value: UserMetric{},
 			keys: []string{
-				"cgroup_memory_current_bytes", "cpu_limit_active", "cpu_limit_requested", "cpu_usage", "eligible_for_cpu",
-				"eligible_for_io", "eligible_for_ram", "io_limit_active", "io_limit_requested", "io_read_bytes", "io_read_ops",
-				"io_write_bytes", "io_write_ops", "memory_high", "memory_high_events", "memory_max", "memory_usage",
+				"cpu_limit_active", "cpu_limit_requested", "cpu_usage", "eligible_for_cpu",
+				"eligible_for_io", "eligible_for_ram", "io_limit_active", "io_limit_requested", "memory_usage",
 				"process_count", "ram_limit_active", "ram_limit_requested", "uid", "username",
 			},
 		},
@@ -145,11 +140,9 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"eligible_for_cpu", "eligible_for_io", "eligible_for_ram", "enforceable_process_count", "interval_end", "interval_start",
 		"io_limit_active", "io_limit_requested", "leaf_cpu_usage_usec_delta", "memory_high_events_delta", "memory_high_limit",
 		"memory_max_events_delta", "memory_max_limit", "memory_oom_events_delta",
-		"memory_oom_kill_events_delta", "memory_swap_max", "memory_usage", "pid_namespace_mismatch_count",
-		"pid_namespace_unavailable_count", "process_count", "ram_cgroup_usage_bytes", "ram_coverage",
+		"memory_oom_kill_events_delta", "memory_swap_max", "memory_usage", "process_count", "ram_cgroup_usage_bytes", "ram_coverage",
 		"ram_coverage_incomplete_process_count", "ram_limit_active", "ram_limit_requested", "ram_swap_disabled",
-		"recovery_process_count", "restore_failed_process_count", "sample_epoch_id", "stranded_process_count",
-		"systemd_ownership_refused_count", "timestamp", "uid", "username",
+		"sample_epoch_id", "timestamp", "uid", "username",
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
 		"denominator_state", "enforcement_mode",
@@ -162,7 +155,6 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"sample_epoch_id", "system_load", "timestamp", "total_cores", "total_cpu_usage",
 	})
 	assertExactNestedJSONKeys(t, activeUsersPayload{Users: []activeUserPayload{{UID: 1000, Username: "alice"}}}, "users", []string{"uid", "username"})
-	assertExactNestedJSONKeys(t, systemStatusPayload{RecoveryOccupants: []recoveryOccupantPayload{{UID: 1000, PID: 123, StartTime: "456"}}}, "recovery_occupants", []string{"pid", "start_time", "uid"})
 }
 
 func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *testing.T) {
@@ -218,7 +210,7 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 			UID: 1000, Username: "alice", ConfiguredClass: "guaranteed", ConfiguredGuaranteePoints: &guarantee,
 			LifecycleState: resmanmetrics.CPUPointsLifecycleApplied, AppliedClass: &class, AppliedWeight: &weight,
 			AppliedToProcesses: true, ProcessCoverage: resmanmetrics.CPUPointsCoveragePartial,
-			ObservedProcessCount: 3, EnforceableProcessCount: 2, PIDNamespaceMismatchCount: 1,
+			ObservedProcessCount: 3, EnforceableProcessCount: 2,
 			LeafCPUUsageUsecDelta: &leafUsage, RAMCgroupUsageBytes: &ramCurrent, RAMCoverage: &ramCoverage,
 			RAMCoverageIncompleteProcessCount: 1, RAMSwapDisabled: &swapDisabled,
 			MemoryHighLimit: &memoryHigh, MemoryMaxLimit: &memoryMax, MemorySwapMax: &memorySwap,
@@ -232,10 +224,9 @@ func TestCPUPointsWireContractKeepsPolicyDeliveryAndLifecycleStatesDistinct(t *t
 		"configured_class", "configured_guarantee_points", "cpu_enforcement_requested", "enforceable_process_count",
 		"leaf_cpu_usage_usec_delta", "lifecycle_state", "memory_high_events_delta", "memory_high_limit",
 		"memory_max_events_delta", "memory_max_limit", "memory_oom_events_delta", "memory_oom_kill_events_delta",
-		"memory_swap_max", "observed_process_count", "pid_namespace_mismatch_count", "pid_namespace_unavailable_count",
+		"memory_swap_max", "observed_process_count",
 		"process_coverage", "ram_cgroup_memory_current_bytes", "ram_coverage", "ram_coverage_incomplete_process_count",
-		"ram_swap_disabled", "reconciliation_degraded", "recovery_process_count", "restore_failed_process_count",
-		"stranded_process_count", "systemd_ownership_refused_count", "uid", "username",
+		"ram_swap_disabled", "reconciliation_degraded", "uid", "username",
 	})
 	encoded, err = json.Marshal(users)
 	if err != nil {

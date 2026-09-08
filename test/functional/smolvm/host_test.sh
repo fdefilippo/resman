@@ -14,7 +14,7 @@ for script in "$script_dir/run.sh" "$script_dir/host_test.sh" \
 done
 
 "$script_dir/daemon_errors_test.sh"
-PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest/non_systemd_migration_test.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest/non_systemd_observation_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest/evidence_metadata_test.py"
 
 cat >"$tmp_dir/sg-ok" <<'EOF'
@@ -171,7 +171,10 @@ set -e
 grep -q '^cleanup=PASS$' "$signal_evidence/environment.txt"
 grep -q '^exit_code=143$' "$signal_evidence/environment.txt"
 
-grep -q '^CGROUP_BASE=resman-functional-@RUN_ID@$' "$script_dir/fixtures/resman.conf"
+if grep -qE '^(CGROUP_BASE|CREATED_CGROUPS_FILE)=' "$script_dir/fixtures/resman.conf"; then
+    echo "smolvm fixture contains retired cgroup relocation settings" >&2
+    exit 1
+fi
 grep -q '^METRICS_DB_PATH=.*/@RUN_ID@/metrics.db$' "$script_dir/fixtures/resman.conf"
 grep -q '^PROMETHEUS_METRICS_BIND_PORT=19100$' "$script_dir/fixtures/resman.conf"
 grep -q '^MCP_HTTP_PORT=19101$' "$script_dir/fixtures/resman.conf"
