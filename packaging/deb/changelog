@@ -1,3 +1,13 @@
+resman (1.34.0-1) stable; urgency=medium
+
+  * BREAKING: enforce CPU Points in place through authoritative systemd user slices.
+  * Preserve session and service ownership without migrating workload processes.
+  * Apply RAM and I/O only with complete per-resource authority and truthful coverage.
+  * Recover exact systemd property ownership through a durable write-ahead journal.
+  * Replace three-level lending telemetry with flat scheduling and delivery evidence.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 08 Sep 2026 05:00:00 +0200
+
 resman (1.33.0-9) stable; urgency=medium
 
   * Preserve nspawn session ownership across runtime-created subgroups.

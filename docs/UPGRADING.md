@@ -1,13 +1,13 @@
-# Upgrading from ResMan 1.25.x through 1.32.0 to ResMan 1.33.0
+# Upgrading from ResMan 1.25.x through 1.32.0 to ResMan 1.34.0
 
 Current metrics schema: 6.
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.32.0 to
-ResMan 1.33.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+ResMan 1.34.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
-on systemd hosts. Version 1.33.0 restores enforcement through systemd itself.
+on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
 It does not migrate old database schemas, accept removed configuration keys, preserve
 old MCP shapes, or alias renamed metrics.
 
@@ -17,7 +17,7 @@ operator-authored configuration has been recovered.
 
 ## BREAKING: systemd-native enforcement and flat CPU Points
 
-**Visible change.** ResMan 1.33.0 selects `systemd_native` when the authoritative
+**Visible change.** ResMan 1.34.0 selects `systemd_native` when the authoritative
 systemd adapter is available. PIDs stay in their original session/service units;
 CPU enforcement programs a finite `user.slice` parent and weights on its active
 `user-UID.slice` children. RAM and I/O act in place only with complete independent
@@ -138,7 +138,7 @@ available in schema 6; the upgrade does not reconstruct a lost session.
    `/etc/resman/resman.conf` and prepare the packaged regular mode-`0600`
    `/etc/resman/cpu-points.map` below a root-owned mode-`0700` `/etc/resman` directory.
 4. Remove or securely archive every legacy configuration artifact described below.
-5. Archive or delete the pre-1.33.0 metrics database. It cannot be opened by the new
+5. Archive or delete the pre-1.34.0 metrics database. It cannot be opened by the new
    schema.
 6. If MCP uses HTTP, provision its certificate and key, update clients to HTTPS and
    MCP revision 2026-07-28, and update the health probe.
