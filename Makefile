@@ -16,12 +16,15 @@ PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 GO = go
 GOLANGCI_LINT = golangci-lint
 GOLANGCI_LINT_VERSION = v2.12.2
+GOVULNCHECK ?= $(shell command -v govulncheck 2>/dev/null || { if [ -x "$$HOME/go/bin/govulncheck" ]; then printf '%s\n' "$$HOME/go/bin/govulncheck"; fi; })
+GOVULNCHECK_VERSION = v1.8.0
 GORELEASER = goreleaser
 SHELLCHECK = shellcheck
 
 # Build directories
 BUILD_DIR = build
 DIST_DIR = dist
+DEPS_REPORT_DIR ?= $(BUILD_DIR)/dependencies
 RPMBUILD_DIR = $(HOME)/rpmbuild
 RPM = rpm
 RPMBUILD = rpmbuild
@@ -39,6 +42,18 @@ export CGO_ENABLED
 GO_FLAGS = -v
 GO_LDFLAGS = -ldflags="-s -w -X 'main.version=$(VERSION)-$(RELEASE)'"
 GO_TAGS =
+VULN_PACKAGES ?= ./...
+DEPS_CORE_MODULES = \
+	github.com/coreos/go-systemd/v22 \
+	github.com/fsnotify/fsnotify \
+	github.com/godbus/dbus/v5 \
+	github.com/golang-jwt/jwt/v5 \
+	github.com/mattn/go-sqlite3 \
+	github.com/modelcontextprotocol/go-sdk \
+	github.com/prometheus/client_golang \
+	github.com/shirou/gopsutil/v3 \
+	golang.org/x/sys \
+	gopkg.in/yaml.v3
 
 # CGO compiler settings
 export CC = gcc
@@ -65,6 +80,8 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
+
+.PHONY: deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
 all: clean test lint build
 
@@ -294,6 +311,66 @@ fmt:
 # Verify dependencies.
 deps:
 	@echo "Checking/updating dependencies..."
+	$(GO) mod tidy
+	$(GO) mod verify
+
+# List available module updates without changing go.mod or go.sum.
+deps-check:
+	$(GO) list -u -m all
+
+# Emit available module updates as a stream of JSON objects.
+deps-check-json:
+	@$(GO) list -u -m -json all
+
+# Verify downloaded module contents against their recorded checksums.
+deps-verify:
+	$(GO) mod verify
+
+# Scan reachable symbols with the official Go vulnerability scanner.
+deps-vuln:
+	@if [ -z "$(GOVULNCHECK)" ]; then \
+		echo "govulncheck is not installed; run 'make deps-vuln-install' first" >&2; \
+		exit 127; \
+	fi
+	@scanner_version="$$("$(GOVULNCHECK)" -version | sed -n 's/^Scanner: govulncheck@//p')"; \
+	if [ "$$scanner_version" != "$(GOVULNCHECK_VERSION)" ]; then \
+		echo "govulncheck $$scanner_version is installed; version $(GOVULNCHECK_VERSION) is required" >&2; \
+		echo "run 'make deps-vuln-install'" >&2; \
+		exit 127; \
+	fi
+	"$(GOVULNCHECK)" $(VULN_PACKAGES)
+
+# Install the reviewed scanner version through the selected Go toolchain.
+deps-vuln-install:
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+# Run the non-mutating checks and fail on reachable vulnerabilities.
+deps-audit: deps-check deps-verify deps-vuln
+
+# Produce the periodic report and its raw inputs.
+deps-weekly: deps-report
+
+deps-report:
+	GO="$(GO)" GOVULNCHECK="$(GOVULNCHECK)" GOVULNCHECK_VERSION="$(GOVULNCHECK_VERSION)" VULN_PACKAGES="$(VULN_PACKAGES)" OUTDIR="$(DEPS_REPORT_DIR)" $(PROJECT_ROOT)scripts/deps-report.sh
+
+# Run the normal quality gate and bounded fuzzing after an intentional update.
+deps-test:
+	$(MAKE) ci-quality GO="$(GO)"
+	$(MAKE) fuzz GO="$(GO)"
+
+# Update exactly one named module from a clean module-file baseline.
+deps-update:
+	@test -n "$(MODULE)" || { echo "Set MODULE, for example: make deps-update MODULE=golang.org/x/sys" >&2; exit 2; }
+	@test "$(words $(MODULE))" -eq 1 || { echo "MODULE must name exactly one module" >&2; exit 2; }
+	@test -z "$$(git status --porcelain -- go.mod go.sum)" || { echo "go.mod or go.sum already has uncommitted changes" >&2; exit 2; }
+	$(GO) get -u "$(MODULE)"
+	$(GO) mod tidy
+	$(GO) mod verify
+
+# Update the explicit direct dependency set from a clean module-file baseline.
+deps-update-core:
+	@test -z "$$(git status --porcelain -- go.mod go.sum)" || { echo "go.mod or go.sum already has uncommitted changes" >&2; exit 2; }
+	$(GO) get -u $(DEPS_CORE_MODULES)
 	$(GO) mod tidy
 	$(GO) mod verify
 
@@ -599,6 +676,19 @@ help:
 	@echo "    lint-install - Install the pinned golangci-lint version"
 	@echo "    fmt          - Format the code"
 	@echo ""
+	@echo "  DEPENDENCIES:"
+	@echo "    deps-check      - List available module updates"
+	@echo "    deps-check-json - Emit available module updates as JSON"
+	@echo "    deps-verify     - Verify downloaded module checksums"
+	@echo "    deps-vuln       - Fail on reachable Go vulnerabilities"
+	@echo "    deps-vuln-install - Install the pinned govulncheck version"
+	@echo "    deps-audit      - Run all non-mutating dependency gates"
+	@echo "    deps-weekly     - Write the periodic dependency report"
+	@echo "    deps-report     - Write the dependency report and raw inputs"
+	@echo "    deps-test       - Run quality gates and bounded fuzzing"
+	@echo "    deps-update     - Update one MODULE from clean module files"
+	@echo "    deps-update-core - Update the explicit direct module set"
+	@echo ""
 	@echo "  INSTALLATION:"
 	@echo "    install      - Install locally (binary, config, service)"
 	@echo "    install-man  - Install only the man page"
@@ -633,6 +723,8 @@ help:
 	@echo "  VERSION=$(VERSION)"
 	@echo "  RELEASE=$(RELEASE)"
 	@echo "  ARCHES=$(ARCHES)"
+	@echo "  DEPS_REPORT_DIR=$(DEPS_REPORT_DIR)"
+	@echo "  GOVULNCHECK_VERSION=$(GOVULNCHECK_VERSION)"
 	@echo "  MAN_INSTALL_DIR=$(MAN_INSTALL_DIR)"
 	@echo "  DEB_MAINTAINER=$(DEB_MAINTAINER)"
 

@@ -356,6 +356,7 @@ curl -s http://localhost:1974/metrics | grep resman
 
 - Man page: `man resman`
 - Development guide (required reading before contributing code): `docs/DEVELOPMENT.md`
+- Dependency inspection and controlled updates: [`docs/DEPENDENCY-MANAGEMENT.md`](docs/DEPENDENCY-MANAGEMENT.md)
 - Supported rootful Podman deployment: `docs/CONTAINER.md`
 - Grafana dashboard: `docs/dashboard-grafana-operations.json`
 - Architecture: `docs/ARCHITECTURE.md`

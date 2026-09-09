@@ -60,6 +60,12 @@ workflow installs the pinned linter and passes that exact binary to the gate. Th
 `.github/workflows/quality.yml` definition runs on every pull request, push to `main`,
 and release tag, so release validation cannot drift from pull-request CI.
 
+Dependency discovery and vulnerability checks are deliberately non-mutating; use the
+`deps-check`, `deps-audit`, or `deps-weekly` targets described in
+[`DEPENDENCY-MANAGEMENT.md`](DEPENDENCY-MANAGEMENT.md). The `deps-update` and
+`deps-update-core` targets are separate operations that require clean module files and
+leave their changes for review.
+
 The audit-level semantic closure gate is intentionally separate because it
 requires KVM and, when the SmolVM kernel lacks PSI or `io.max`, an explicitly
 selected disposable real-kernel host:
