@@ -36,9 +36,9 @@ Provides:  cpu-manager-go = %{version}
 # Declare that the package contains a man page.
 %global _has_manpage 1
 
-# Go 1.21 is the minimum bootstrap that understands go.mod toolchain selection.
-# The release workflow installs the exact Go 1.27.1 compiler selected by go.mod.
-BuildRequires:  golang >= 1.21
+# Enterprise Linux 8 does not yet package the Go version selected by go.mod.
+# The release workflow supplies that exact compiler before invoking rpmbuild;
+# reintroduce a golang BuildRequires when the distribution provides it.
 BuildRequires:  systemd
 BuildRequires:  groff-base
 BuildRequires:  openssl
