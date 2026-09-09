@@ -119,6 +119,55 @@ sys.exit(native_recovery.main(["systemd-native-recovery", "runit", "a" * 40]))
             self.assertTrue(operator.exists())
             self.assertIn(operator, gate.operator_files)
 
+    def test_runtime_operator_io_is_restored_before_its_file_is_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = RecoveryGate(directory, "runit", "a" * 40)
+            gate.target = "user-1006.slice"
+            gate.accounts = [type("Account", (), {"pw_uid": 1006})()]
+            gate.baseline_io_kernel = {"io.weight": "default 100", "io.bfq.weight": "default 100"}
+            operator = Path(directory) / "50-IOWeight.conf"
+            operator.write_text("[Slice]\nIOWeight=200\n")
+            gate.operator_files[operator] = native_recovery.sha(operator)
+            events = []
+
+            def set_property(*args, **_kwargs):
+                events.append(("set-property", args))
+                operator.write_text("[Slice]\nIOWeight=100\n")
+
+            with patch.object(gate, "command", side_effect=set_property), \
+                    patch.object(gate, "slice", return_value=Path(directory)), \
+                    patch.object(native_recovery, "field", return_value="default 100"):
+                gate.restore_runtime_operator_io(operator)
+
+            self.assertEqual(events, [("set-property", (
+                "systemctl", "set-property", "--runtime", "user-1006.slice", "IOWeight=100"))])
+            self.assertEqual(gate.operator_files[operator], native_recovery.sha(operator))
+
+    def test_runtime_conflict_restores_external_io_before_removing_its_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = RecoveryGate(directory, "runit", "a" * 40)
+            gate.target = "user-1006.slice"
+            events = []
+            results = [
+                {},
+                {"conflict": True},
+                {"conflict": True},
+                {},
+            ]
+            with patch.object(gate, "operation", side_effect=results), \
+                    patch.object(gate, "runtime_files", return_value={}), \
+                    patch.object(gate, "command"), \
+                    patch.object(gate, "restore_runtime_operator_io",
+                                 side_effect=lambda path: events.append(("restore", path))), \
+                    patch.object(gate, "remove_operator_file",
+                                 side_effect=lambda path: events.append(("remove", path))), \
+                    patch.object(gate, "restored"), \
+                    patch.object(gate, "passed"), \
+                    patch.object(native_recovery, "sha", return_value="digest"):
+                gate.conflict(persistent=False)
+
+            self.assertEqual([name for name, _path in events], ["restore", "remove"])
+
 
 if __name__ == "__main__":
     unittest.main()

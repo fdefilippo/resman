@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -128,6 +129,23 @@ class RecoveryGate(NativeGate):
         if not any(path.parent.iterdir()):
             path.parent.rmdir()
 
+    def restore_runtime_operator_io(self, path):
+        expected = self.operator_files[path]
+        require(path.is_file() and not path.is_symlink() and sha(path) == expected,
+                "operator fixture changed externally; refusing I/O restoration: " + str(path))
+        weights = set()
+        for baseline in self.baseline_io_kernel.values():
+            match = re.fullmatch(r"default ([1-9][0-9]*)", baseline)
+            require(match is not None, "unsupported kernel I/O weight baseline: " + baseline)
+            weights.add(int(match.group(1)))
+        require(len(weights) == 1, "kernel I/O weight baselines disagree")
+        self.command("systemctl", "set-property", "--runtime", self.target,
+                     "IOWeight=" + str(weights.pop()))
+        self.operator_files[path] = sha(path)
+        for filename, baseline in self.baseline_io_kernel.items():
+            eventually(lambda f=filename, b=baseline: field(self.slice(self.accounts[0].pw_uid) / f, b) == b,
+                       "operator fixture could not restore its kernel I/O weight baseline")
+
     def conflict(self, persistent):
         self.operation("apply")
         before = self.runtime_files()
@@ -152,6 +170,8 @@ class RecoveryGate(NativeGate):
         evidence = {"operator_file": str(path), "operator_sha256": sha(path),
                     "owned_files_before": before, "owned_files_after": after,
                     "apply": refused_apply, "restore": refused_restore}
+        if not persistent:
+            self.restore_runtime_operator_io(path)
         self.remove_operator_file(path)
         self.command("systemctl", "daemon-reload")
         self.restored(self.operation("restore"))

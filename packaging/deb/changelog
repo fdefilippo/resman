@@ -1,3 +1,10 @@
+resman (1.35.3-5) stable; urgency=medium
+
+  * Restore the recovery fixture's external I/O weight before removing its runtime file.
+  * Preserve the failed 1.35.3-4 recovery evidence instead of rebuilding its package identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 05:15:00 +0200
+
 resman (1.35.3-4) stable; urgency=medium
 
   * Align recovery evidence with verified baseline programming before runtime-file reversion.

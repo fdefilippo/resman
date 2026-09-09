@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.3
-Release: 4%{?dist}
+Release: 5%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -286,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.3-5
+- Restore the recovery fixture's external I/O weight before removing its runtime file.
+- Preserve the failed 1.35.3-4 recovery evidence instead of rebuilding its package identity.
+
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.3-4
 - Align recovery evidence with verified baseline programming before runtime-file reversion.
 - Preserve the failed 1.35.3-3 recovery evidence instead of rebuilding its package identity.
