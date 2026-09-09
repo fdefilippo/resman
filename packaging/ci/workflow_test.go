@@ -353,7 +353,7 @@ func TestVerifyShellcheckFailsClosedWhenRequiredBinaryIsMissing(t *testing.T) {
 func TestLintRequiredAcceptsAnAvailableLinterWithoutVersionGate(t *testing.T) {
 	root := repositoryRoot(t)
 	fixture := t.TempDir()
-	if err := os.WriteFile(filepath.Join(fixture, "go.mod"), []byte("module example.test/lint-version\n\ngo 1.25.7\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture, "go.mod"), []byte("module example.test/lint-version\n\ngo 1.27.1\n"), 0600); err != nil {
 		t.Fatalf("write fixture go.mod: %v", err)
 	}
 	fakeLint := filepath.Join(fixture, "golangci-lint")
@@ -379,7 +379,7 @@ func TestLintRequiredAcceptsAnAvailableLinterWithoutVersionGate(t *testing.T) {
 func TestCITestRejectsADeliberatelyFailingTest(t *testing.T) {
 	root := repositoryRoot(t)
 	fixture := t.TempDir()
-	if err := os.WriteFile(filepath.Join(fixture, "go.mod"), []byte("module example.test/ci-failure\n\ngo 1.25.7\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture, "go.mod"), []byte("module example.test/ci-failure\n\ngo 1.27.1\n"), 0600); err != nil {
 		t.Fatalf("write fixture go.mod: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture, "failure_test.go"), []byte("package failure\n\nimport \"testing\"\n\nfunc TestDeliberateFailure(t *testing.T) { t.Fatal(\"deliberate CI mutation\") }\n"), 0600); err != nil {

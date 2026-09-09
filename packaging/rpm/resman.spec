@@ -36,6 +36,8 @@ Provides:  cpu-manager-go = %{version}
 # Declare that the package contains a man page.
 %global _has_manpage 1
 
+# Go 1.21 is the minimum bootstrap that understands go.mod toolchain selection.
+# The release workflow installs the exact Go 1.27.1 compiler selected by go.mod.
 BuildRequires:  golang >= 1.21
 BuildRequires:  systemd
 BuildRequires:  groff-base
@@ -292,6 +294,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.0-1
 - Bound the packaged service to the capabilities and filesystem paths its enabled features require.
 - Document the inherited sandbox contract for limit hooks and preserve PSI trigger registration.
+- Raise the build contract to Go 1.27.1 and refresh the reviewed dependency graph.
 
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-3
 - Build packages from the frozen release revision without concurrent worktree changes.

@@ -52,6 +52,41 @@ func TestCurrentReleaseVersionSurfacesAgree(t *testing.T) {
 	}
 }
 
+func TestGoToolchainVersionSurfacesAgree(t *testing.T) {
+	root := repositoryRoot(t)
+	goMod := readTextFile(t, filepath.Join(root, "go.mod"))
+	var version string
+	for _, line := range strings.Split(goMod, "\n") {
+		if value, found := strings.CutPrefix(line, "go "); found {
+			version = strings.TrimSpace(value)
+			break
+		}
+	}
+	if version == "" {
+		t.Fatal("go.mod does not declare a Go version")
+	}
+
+	tests := []struct {
+		path     string
+		required string
+	}{
+		{path: "README.md", required: "Go " + version + "+"},
+		{path: "docs/TECHNICAL-SPECIFICATION.md", required: "Go " + version + " or later"},
+		{path: "packaging/docker/Dockerfile", required: "ARG GO_VERSION=" + version},
+		{path: "test/functional/smolvm/Containerfile", required: "golang:" + version + "-bookworm"},
+		{path: ".github/workflows/quality.yml", required: "go-version-file: go.mod"},
+		{path: ".github/workflows/release.yml", required: "go-version-file: go.mod"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			content := readTextFile(t, filepath.Join(root, tt.path))
+			if !strings.Contains(content, tt.required) {
+				t.Errorf("%s does not use Go %s via %q", tt.path, version, tt.required)
+			}
+		})
+	}
+}
+
 func TestVersionProgressionContractIsIdenticalAcrossAvailableNormativeGuides(t *testing.T) {
 	const (
 		begin = "<!-- BEGIN VERSION PROGRESSION v:1 -->"

@@ -16,18 +16,18 @@ The project uses GitHub Actions for continuous integration and deployment with a
 
 **Jobs**:
 
-| Job | Description | Go Versions |
+| Job | Description | Go Version |
 |-----|-------------|-------------|
-| **test** | Run unit tests with coverage | 1.21, 1.22, 1.23 |
-| **lint** | Code quality checks | 1.23 |
-| **build** | Multi-platform binaries | 1.23 |
-| **package** | **RPM & DEB packages** | 1.23 |
-| **security** | Vulnerability scanning | 1.23 |
-| **release** | GitHub release (tags only) | 1.23 |
+| **test** | Run unit tests with coverage | from `go.mod` (1.27.1) |
+| **lint** | Code quality checks | from `go.mod` (1.27.1) |
+| **build** | Multi-platform binaries | from `go.mod` (1.27.1) |
+| **package** | **RPM & DEB packages** | from `go.mod` (1.27.1) |
+| **security** | Vulnerability scanning | from `go.mod` (1.27.1) |
+| **release** | GitHub release (tags only) | from `go.mod` (1.27.1) |
 | **notify** | Notifications | - |
 
 **Features**:
-- ✅ Parallel test execution on multiple Go versions
+- ✅ One reproducible Go version selected by `go.mod`
 - ✅ Race detector enabled
 - ✅ Coverage report generation
 - ✅ **RPM package build** (source tarball + spec file)
@@ -175,10 +175,10 @@ Add these badges to your README:
 
 ### Matrix Testing
 
-Tests run on multiple Go versions:
-- **Go 1.21** - Minimum supported version
-- **Go 1.22** - Previous stable
-- **Go 1.23** - Latest stable
+Tests use the exact Go version declared by `go.mod`, currently **Go 1.27.1**.
+The quality and release workflows both use `actions/setup-go` with
+`go-version-file: go.mod`, so local and packaged builds share the same language
+and standard-library baseline.
 
 ---
 

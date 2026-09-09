@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.25.7
+ARG GO_VERSION=1.27.1
 
 FROM docker.io/library/golang:${GO_VERSION}-bookworm AS go-toolchain
 

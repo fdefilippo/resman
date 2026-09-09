@@ -32,7 +32,7 @@ hot-reload configuration, and includes an MCP server for AI assistant integratio
 
 - Linux kernel 4.18 or later with cgroups v2 support
 - Enterprise Linux 8 or later for the published RPM package
-- Go 1.25.7+
+- Go 1.27.1+
 - CGO enabled (for LDAP/NIS username resolution)
 - Debian package tools (`dpkg-dev`) when building `.deb` packages
 

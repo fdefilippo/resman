@@ -247,7 +247,7 @@ func TestMCPCheckerPinsSDKRevisionAndStatelessTransport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := newCheckerFixture(t)
-			writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.25.7\n\nrequire github.com/modelcontextprotocol/go-sdk "+tt.sdk+"\n")
+			writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.27.1\n\nrequire github.com/modelcontextprotocol/go-sdk "+tt.sdk+"\n")
 			writeFixture(t, root, "mcp/server.go", `package mcp
 const protocolVersion = "`+tt.revision+`"
 type StreamableHTTPOptions struct{ Stateless bool }
@@ -269,7 +269,7 @@ var sdk struct{ StreamableHTTPOptions StreamableHTTPOptions }
 
 func TestMCPCheckerRejectsMCPGoDebugOutsideMCPPackage(t *testing.T) {
 	root := newCheckerFixture(t)
-	writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.25.7\n\nrequire github.com/modelcontextprotocol/go-sdk v1.7.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.27.1\n\nrequire github.com/modelcontextprotocol/go-sdk v1.7.0\n")
 	writeFixture(t, root, "mcp/server.go", `package mcp
 const protocolVersion = "2026-07-28"
 type StreamableHTTPOptions struct{ Stateless bool }
@@ -712,7 +712,7 @@ func (t *dbusTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "prob
 func newCheckerFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.25.7\n")
+	writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.27.1\n")
 	return root
 }
 

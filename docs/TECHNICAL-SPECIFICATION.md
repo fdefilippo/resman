@@ -51,7 +51,7 @@ ResMan is an enterprise-grade dynamic CPU resource management tool for Linux sys
 - Write access to `/sys/fs/cgroup`
 - Root privileges or CAP_SYS_ADMIN capability
 - GCC compiler (required for CGO)
-- Go 1.21 or later
+- Go 1.27.1 or later
 
 ---
 
@@ -1439,17 +1439,21 @@ type CgroupManager interface {
 ### 15.1 Build Requirements
 
 **Software:**
-- Go 1.21 or later
+- Go 1.27.1 or later
 - GCC (for CGO)
 - Make (optional, for Makefile)
 
 **Dependencies:**
 ```go
 require (
-    github.com/fsnotify/fsnotify v1.9.0
-    github.com/modelcontextprotocol/go-sdk v1.7.0
-    github.com/prometheus/client_golang v1.23.2
-    github.com/shirou/gopsutil/v3 v3.24.5
+	github.com/coreos/go-systemd/v22 v22.7.0
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/godbus/dbus/v5 v5.2.2
+	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/prometheus/client_golang v1.24.1
+	github.com/shirou/gopsutil/v3 v3.24.5
+	golang.org/x/sys v0.48.0
 )
 ```
 
@@ -1477,7 +1481,7 @@ make deb
 
 The Debian build is native because CGO is required for NSS, LDAP, NIS and SSSD
 username resolution. Run it on the target architecture (`amd64` or `arm64`) with
-`dpkg-dev`, a C compiler and Go 1.25.7 or newer installed.
+`dpkg-dev`, a C compiler and Go 1.27.1 or newer installed.
 `dpkg-shlibdeps` derives the minimum runtime library versions from the resulting
 binary. Build release artifacts on the oldest supported distribution baseline
 when the same package must run across multiple Debian and Ubuntu releases.
