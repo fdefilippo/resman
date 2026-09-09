@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.4
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -288,6 +288,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-2
+- Rebuild the RPM in the supported Enterprise Linux container environment.
+- Preserve the rejected 1.35.4-1 workstation-built artifact without overwriting it.
+
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-1
 - Declare coreutils as the packaged startup capability-probe dependency.
 - Distinguish probe startup failures from missing controller interfaces.

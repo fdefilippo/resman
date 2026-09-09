@@ -1,3 +1,10 @@
+resman (1.35.4-2) stable; urgency=medium
+
+  * Rebuild the RPM in the supported Enterprise Linux container environment.
+  * Preserve the rejected 1.35.4-1 workstation-built artifact without overwriting it.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 07:28:00 +0200
+
 resman (1.35.4-1) stable; urgency=medium
 
   * Declare coreutils as the packaged startup capability-probe dependency.
