@@ -20,6 +20,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 		{
 			path: "packaging/deb/prepare-package.sh",
 			required: []string{
+				`$depends, coreutils, procps, systemd`,
 				`install -d -m 0700`,
 				`"$package_dir/etc/resman"`,
 				`"$package_dir/var/lib/resman"`,
@@ -54,6 +55,7 @@ func TestPackageSourcesDeclareRestrictiveLayout(t *testing.T) {
 		{
 			path: "packaging/rpm/resman.spec",
 			required: []string{
+				"Requires:       coreutils",
 				"%dir %attr(0700,root,root) %{_sysconfdir}/resman",
 				"%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf",
 				"%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/cpu-points.map",

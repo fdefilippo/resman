@@ -264,7 +264,7 @@ func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequireme
 }
 
 func classifySystemdAdapterStartupError(err error) error {
-	if !systemdunit.IsRequiredCapabilityError(err) {
+	if !systemdunit.IsRequiredCapabilityError(err) && !systemdunit.IsCapabilityProbeError(err) {
 		return nil
 	}
 	return NewPermanentStartupError(fmt.Errorf("initialize systemd-native enforcement: %w", err))

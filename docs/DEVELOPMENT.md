@@ -208,7 +208,9 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   moved. Both units must be removed synchronously on success and failure; after a daemon
   crash the probe process must terminate by itself. Unit start/stop calls remain confined
   to the two exact transport methods pinned by the architectural gate. This is neither
-  an enforcement workload nor a second placement backend.
+  an enforcement workload nor a second placement backend. Any external probe executable
+  must be an explicit RPM and Debian package dependency. Failure to start that payload
+  must be typed and diagnosed separately from a missing controller or cgroup interface.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for

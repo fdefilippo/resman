@@ -156,3 +156,13 @@ func TestRequiredSystemdCapabilityFailureIsPermanent(t *testing.T) {
 		t.Fatalf("non-capability error classified as permanent: %v", err)
 	}
 }
+
+func TestSystemdCapabilityProbeFailureIsPermanent(t *testing.T) {
+	probeErr := &systemdunit.AdapterError{
+		Reason: systemdunit.ReasonCapabilityProbe,
+		Err:    errors.New("capability probe executable is unavailable"),
+	}
+	if err := classifySystemdAdapterStartupError(probeErr); !IsPermanentStartupError(err) {
+		t.Fatalf("classifySystemdAdapterStartupError() = %v, want permanent", err)
+	}
+}

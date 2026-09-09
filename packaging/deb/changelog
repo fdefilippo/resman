@@ -1,3 +1,10 @@
+resman (1.35.4-1) stable; urgency=medium
+
+  * Declare coreutils as the packaged startup capability-probe dependency.
+  * Distinguish probe startup failures from missing controller interfaces.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 06:54:39 +0200
+
 resman (1.35.3-5) stable; urgency=medium
 
   * Restore the recovery fixture's external I/O weight before removing its runtime file.

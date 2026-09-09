@@ -22,6 +22,7 @@ const (
 	ReasonInvalidValue         ErrorReason = "invalid_value"
 	ReasonReadbackMismatch     ErrorReason = "readback_mismatch"
 	ReasonRequiredCapability   ErrorReason = "required_capability_unavailable"
+	ReasonCapabilityProbe      ErrorReason = "capability_probe_failed"
 	ReasonKernelVerification   ErrorReason = "kernel_verification_failed"
 	ReasonUnitFileVerification ErrorReason = "unit_file_verification_failed"
 	ReasonLeaseStore           ErrorReason = "lease_store_failed"
@@ -83,6 +84,12 @@ func IsRetryableReconciliation(err error) bool {
 func IsRequiredCapabilityError(err error) bool {
 	var adapterErr *AdapterError
 	return errors.As(err, &adapterErr) && adapterErr.Reason == ReasonRequiredCapability
+}
+
+// IsCapabilityProbeError reports whether the packaged startup probe could not run.
+func IsCapabilityProbeError(err error) bool {
+	var adapterErr *AdapterError
+	return errors.As(err, &adapterErr) && adapterErr.Reason == ReasonCapabilityProbe
 }
 
 // RestoreConflictError reports properties that changed outside ResMan after application.

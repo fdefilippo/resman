@@ -91,7 +91,7 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupCapabilityTransport, capability startupCapability) (retErr error) {
 	unit, err := newCapabilityProbeUnit()
 	if err != nil {
-		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
+		return capabilityProbePreparationError(capability.feature, err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	controlGroup, started, err := transport.startCapabilityProbe(callCtx, unit, []PropertyAssignment{capability.probeAssignment})
@@ -106,7 +106,7 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 		}()
 	}
 	if err != nil {
-		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignment.name, err)
+		return capabilityProbeStartError(capability.feature, err)
 	}
 	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: unit}, ControlGroup: controlGroup}
 	if err := a.verifier.preflight(snapshot, []PropertyAssignment{capability.requiredAssignment}); err != nil {
@@ -119,6 +119,20 @@ func requiredCapabilityError(feature, controller, interfaceName string, property
 	return &AdapterError{
 		Reason: ReasonRequiredCapability, Operation: "startup_capabilities", Property: property,
 		Err: fmt.Errorf("enabled feature %s requires controller %q interface %q: %w", feature, controller, interfaceName, err),
+	}
+}
+
+func capabilityProbePreparationError(feature string, err error) error {
+	return &AdapterError{
+		Reason: ReasonCapabilityProbe, Operation: "startup_capabilities",
+		Err: fmt.Errorf("enabled feature %s could not prepare its startup capability probe: %w", feature, err),
+	}
+}
+
+func capabilityProbeStartError(feature string, err error) error {
+	return &AdapterError{
+		Reason: ReasonCapabilityProbe, Operation: "startup_capabilities",
+		Err: fmt.Errorf("enabled feature %s could not start capability probe executable %q: %w", feature, capabilityProbeExecutable, err),
 	}
 }
 

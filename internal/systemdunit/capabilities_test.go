@@ -8,6 +8,9 @@ import (
 )
 
 func TestCapabilityProbeUnitIsOneTopLevelSlice(t *testing.T) {
+	if capabilityProbeExecutable != "/usr/bin/sleep" {
+		t.Fatalf("capabilityProbeExecutable = %q, want the packaged coreutils payload", capabilityProbeExecutable)
+	}
 	unit, err := newCapabilityProbeUnit()
 	if err != nil {
 		t.Fatal(err)
@@ -110,10 +113,37 @@ func TestStartupCapabilitiesCleanProbeWhenStartAcknowledgementFailsAfterCreation
 		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
 		probeAssignment: assignment, requiredAssignment: assignment,
 	})
-	if !IsRequiredCapabilityError(err) || !strings.Contains(err.Error(), "injected post-start failure") {
-		t.Fatalf("probeStartupCapability() error = %v, want post-start required capability failure", err)
+	if !IsCapabilityProbeError(err) || !strings.Contains(err.Error(), "injected post-start failure") {
+		t.Fatalf("probeStartupCapability() error = %v, want typed probe-start failure", err)
 	}
 	if len(transport.probeStops) != 1 || transport.probeStops[0] != transport.probeStarts[0].unit {
 		t.Fatalf("post-start failure cleanup start=%v stop=%v", transport.probeStarts, transport.probeStops)
+	}
+}
+
+func TestStartupCapabilityProbeFailureNamesPayloadWithoutClaimingMissingInterface(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.probeStartErr = errors.New("transient service failed before execution")
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	assignment, err := NewPropertyAssignment(PropertyCPUQuotaPerSecUSec, 1_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.probeStartupCapability(context.Background(), transport, startupCapability{
+		feature: "CPU limiting", controller: "cpu", interfaceName: "cpu.max",
+		probeAssignment: assignment, requiredAssignment: assignment,
+	})
+	if !IsCapabilityProbeError(err) || IsRequiredCapabilityError(err) {
+		t.Fatalf("probeStartupCapability() error = %v, want only typed probe failure", err)
+	}
+	for _, required := range []string{"could not start capability probe executable", capabilityProbeExecutable, "transient service failed before execution"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Fatalf("probeStartupCapability() error = %v, want %q", err, required)
+		}
+	}
+	for _, forbidden := range []string{`controller "cpu"`, `interface "cpu.max"`} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("probeStartupCapability() error = %v, must not claim missing %s", err, forbidden)
+		}
 	}
 }

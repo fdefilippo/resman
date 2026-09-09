@@ -134,7 +134,7 @@ sed \
     -e "s/@VERSION@/$version-$release/" \
     -e "s/@ARCH@/$arch/" \
     -e "s/@INSTALLED_SIZE@/$installed_size/" \
-    -e "s/@DEPENDS@/$depends, procps, systemd/" \
+    -e "s/@DEPENDS@/$depends, coreutils, procps, systemd/" \
     "$script_dir/control.in" >"$package_dir/DEBIAN/control"
 
 (

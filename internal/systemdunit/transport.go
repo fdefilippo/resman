@@ -39,6 +39,8 @@ type dbusTransport struct {
 	cancel     context.CancelFunc
 }
 
+const capabilityProbeExecutable = "/usr/bin/sleep"
+
 func openDBusTransport(runCtx context.Context) (*dbusTransport, error) {
 	// The transport owns its connection lifetime. Operation contexts may be
 	// cancelled to stop the control loop, but Close is the only event that may
@@ -129,7 +131,7 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	serviceProperties := []systemdbus.Property{
 		systemdbus.PropDescription("ResMan bounded cgroup interface capability probe"),
 		systemdbus.PropSlice(unit),
-		systemdbus.PropExecStart([]string{"/usr/bin/sleep", "30"}, false),
+		systemdbus.PropExecStart([]string{capabilityProbeExecutable, "30"}, false),
 	}
 	result := make(chan string, 1)
 	if _, err := t.conn.StartTransientUnitAux(ctx, service, "fail", serviceProperties, []systemdbus.PropertyCollection{{
