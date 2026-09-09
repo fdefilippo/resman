@@ -1,3 +1,10 @@
+resman (1.35.4-3) stable; urgency=medium
+
+  * Build packages from the frozen release revision without concurrent worktree changes.
+  * Preserve the rejected 1.35.4-2 source-drift artifact without overwriting it.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 08:08:00 +0200
+
 resman (1.35.4-2) stable; urgency=medium
 
   * Rebuild the RPM in the supported Enterprise Linux container environment.

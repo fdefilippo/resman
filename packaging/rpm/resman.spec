@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.4
-Release: 2%{?dist}
+Release: 3%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -288,6 +288,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-3
+- Build packages from the frozen release revision without concurrent worktree changes.
+- Preserve the rejected 1.35.4-2 source-drift artifact without overwriting it.
+
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-2
 - Rebuild the RPM in the supported Enterprise Linux container environment.
 - Preserve the rejected 1.35.4-1 workstation-built artifact without overwriting it.
