@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.35.3
-Release: 3%{?dist}
+Release: 4%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -286,6 +286,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.3-4
+- Align recovery evidence with verified baseline programming before runtime-file reversion.
+- Preserve the failed 1.35.3-3 recovery evidence instead of rebuilding its package identity.
+
 * Tue Sep 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.3-3
 - Prevent the readiness-aware workload launcher from starting workers twice.
 - Preserve the failed 1.35.3-2 field evidence instead of rebuilding its package identity.

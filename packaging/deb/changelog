@@ -1,3 +1,10 @@
+resman (1.35.3-4) stable; urgency=medium
+
+  * Align recovery evidence with verified baseline programming before runtime-file reversion.
+  * Preserve the failed 1.35.3-3 recovery evidence instead of rebuilding its package identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 04:50:00 +0200
+
 resman (1.35.3-3) stable; urgency=medium
 
   * Prevent the readiness-aware workload launcher from starting workers twice.

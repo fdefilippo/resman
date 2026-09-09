@@ -91,12 +91,12 @@ sys.exit(native_recovery.main(["systemd-native-recovery", "runit", "a" * 40]))
             self.assertTrue(all(value == "BLOCKED" for value in json.loads(
                 (gate.evidence / "checks.json").read_text()).values()))
 
-    def test_recovery_cannot_pass_without_the_real_stale_window(self):
+    def test_recovery_requires_the_verified_baseline_and_real_stale_window(self):
         valid = {"phase": "reloading", "disk_footprint_absent": True,
-                 "reload_executed": False, "cpu_weight_before_reload": 321,
+                 "reload_executed": False, "cpu_weight_before_reload": 100,
                  "drop_in_paths_before_reload": ["/run/systemd/system.control/user-1006.slice.d/50-CPUWeight.conf"]}
         for key, value in (("phase", "applied"), ("disk_footprint_absent", False),
-                           ("reload_executed", True), ("cpu_weight_before_reload", 100),
+                           ("reload_executed", True), ("cpu_weight_before_reload", 321),
                            ("drop_in_paths_before_reload", [])):
             with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
                 gate = RecoveryGate(directory, "runit", "a" * 40)

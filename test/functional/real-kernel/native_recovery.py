@@ -107,8 +107,8 @@ class RecoveryGate(NativeGate):
         crashed = self.operation("crash-restore", crash=True)
         require(crashed["phase"] == "reloading" and crashed["disk_footprint_absent"],
                 "crash did not reach the durable post-revert boundary")
-        require(crashed["reload_executed"] is False and crashed["cpu_weight_before_reload"] == 321,
-                "crash did not retain the pre-reload systemd weight")
+        require(crashed["reload_executed"] is False and crashed["cpu_weight_before_reload"] == 100,
+                "crash did not retain the verified effective baseline before reload")
         require(crashed["drop_in_paths_before_reload"], "systemd did not expose the stale DropInPaths window")
         require(not self.runtime_files(), "revert left files before restart")
         self.passed("crash-before-reload", crashed)
