@@ -130,6 +130,10 @@ export GO111MODULE=on
 export GOFLAGS="-mod=mod"  # Use go.mod, don't try to update it
 export CGO_ENABLED=1
 
+# Refuse build caches below the unpacked source and isolate generated RPM
+# content from the main module package walk.
+GO=go PROJECT_ROOT="$(pwd)" ./scripts/prepare-go-worktree.sh
+
 # Build binario principale
 go build -v -ldflags="-s -w -X 'main.version=%{version}-%{release}'" -o %{name}
 

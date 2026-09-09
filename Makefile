@@ -81,7 +81,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
-.PHONY: deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
+.PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
 all: clean test lint build
 
@@ -130,7 +130,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	$(MAKE) lint-required GO="$(GO)"
 
 # Run the race-enabled test command shared by CI and its mutation tests.
-ci-test:
+ci-test: prepare-go-worktree
 	$(GO) test -race -cover ./...
 
 # Fail when any tracked Go source is not gofmt-clean.
@@ -165,7 +165,7 @@ test: deps
 	$(GO) test -v -cover ./...
 
 # Exercise the sendmail helper with deterministic external commands.
-test-sendmail:
+test-sendmail: prepare-go-worktree
 	GO="$(GO)" scripts/sendmail_test.sh
 
 # Run tests with coverage.
@@ -250,7 +250,7 @@ test-functional-final-unit:
 	test/functional/final/gate_test.sh
 
 # Verify mechanically checkable development-guide contracts.
-verify-contracts:
+verify-contracts: prepare-go-worktree
 	@echo "Verifying architectural contracts..."
 	$(GO) run ./scripts/generate-config-reference --check
 	$(GO) test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath|TestPublicConfigReferenceMatchesRuntimeContract|TestExampleConfigMatchesRuntimeDefaults|TestEmptyIncludeListMeaningsMatchEligibility|TestSecondaryConfigurationReferencesStayFocusedAndSecure)$$'
@@ -298,36 +298,41 @@ lint-required: deps
 	$(GOLANGCI_LINT) run --max-same-issues=0 --max-issues-per-linter=0 ./...
 
 # Install the pinned golangci-lint version in $(GOPATH)/bin.
-lint-install:
+lint-install: prepare-go-worktree
 	@echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "golangci-lint installed in $$($(GO) env GOPATH)/bin"
 
 # Format the code.
-fmt:
+fmt: prepare-go-worktree
 	@echo "Formatting code..."
 	$(GO) fmt ./...
 
+# Refuse repository-local Go caches and keep generated build content outside the
+# main module package walk.
+prepare-go-worktree:
+	@GO="$(GO)" PROJECT_ROOT="$(PROJECT_ROOT)" $(PROJECT_ROOT)scripts/prepare-go-worktree.sh
+
 # Verify dependencies.
-deps:
+deps: prepare-go-worktree
 	@echo "Checking/updating dependencies..."
 	$(GO) mod tidy
 	$(GO) mod verify
 
 # List available module updates without changing go.mod or go.sum.
-deps-check:
+deps-check: prepare-go-worktree
 	$(GO) list -u -m all
 
 # Emit available module updates as a stream of JSON objects.
-deps-check-json:
+deps-check-json: prepare-go-worktree
 	@$(GO) list -u -m -json all
 
 # Verify downloaded module contents against their recorded checksums.
-deps-verify:
+deps-verify: prepare-go-worktree
 	$(GO) mod verify
 
 # Scan reachable symbols with the official Go vulnerability scanner.
-deps-vuln:
+deps-vuln: prepare-go-worktree
 	@if [ -z "$(GOVULNCHECK)" ]; then \
 		echo "govulncheck is not installed; run 'make deps-vuln-install' first" >&2; \
 		exit 127; \
@@ -341,7 +346,7 @@ deps-vuln:
 	"$(GOVULNCHECK)" $(VULN_PACKAGES)
 
 # Install the reviewed scanner version through the selected Go toolchain.
-deps-vuln-install:
+deps-vuln-install: prepare-go-worktree
 	$(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 # Run the non-mutating checks and fail on reachable vulnerabilities.
@@ -350,7 +355,7 @@ deps-audit: deps-check deps-verify deps-vuln
 # Produce the periodic report and its raw inputs.
 deps-weekly: deps-report
 
-deps-report:
+deps-report: prepare-go-worktree
 	GO="$(GO)" GOVULNCHECK="$(GOVULNCHECK)" GOVULNCHECK_VERSION="$(GOVULNCHECK_VERSION)" VULN_PACKAGES="$(VULN_PACKAGES)" OUTDIR="$(DEPS_REPORT_DIR)" $(PROJECT_ROOT)scripts/deps-report.sh
 
 # Run the normal quality gate and bounded fuzzing after an intentional update.
@@ -359,7 +364,7 @@ deps-test:
 	$(MAKE) fuzz GO="$(GO)"
 
 # Update exactly one named module from a clean module-file baseline.
-deps-update:
+deps-update: prepare-go-worktree
 	@test -n "$(MODULE)" || { echo "Set MODULE, for example: make deps-update MODULE=golang.org/x/sys" >&2; exit 2; }
 	@test "$(words $(MODULE))" -eq 1 || { echo "MODULE must name exactly one module" >&2; exit 2; }
 	@test -z "$$(git status --porcelain -- go.mod go.sum)" || { echo "go.mod or go.sum already has uncommitted changes" >&2; exit 2; }
@@ -368,7 +373,7 @@ deps-update:
 	$(GO) mod verify
 
 # Update the explicit direct dependency set from a clean module-file baseline.
-deps-update-core:
+deps-update-core: prepare-go-worktree
 	@test -z "$$(git status --porcelain -- go.mod go.sum)" || { echo "go.mod or go.sum already has uncommitted changes" >&2; exit 2; }
 	$(GO) get -u $(DEPS_CORE_MODULES)
 	$(GO) mod tidy
@@ -449,7 +454,7 @@ rpm-source: rpm-check build rpm-dirs
 		packaging/ docs/ \
 		$(PROJECT_NAME)-$(VERSION)/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/scripts
-	cp scripts/sendmail.sh scripts/resman-sendmail-hook.sh $(PROJECT_NAME)-$(VERSION)/scripts/
+	cp scripts/sendmail.sh scripts/resman-sendmail-hook.sh scripts/prepare-go-worktree.sh $(PROJECT_NAME)-$(VERSION)/scripts/
 	mkdir -p $(PROJECT_NAME)-$(VERSION)/packaging/syslog
 	cp packaging/syslog/resman.conf $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true
 	cp packaging/syslog/resman $(PROJECT_NAME)-$(VERSION)/packaging/syslog/ 2>/dev/null || true

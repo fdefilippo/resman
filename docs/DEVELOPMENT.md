@@ -66,6 +66,13 @@ Dependency discovery and vulnerability checks are deliberately non-mutating; use
 `deps-update-core` targets are separate operations that require clean module files and
 leave their changes for review.
 
+Go build and inspection targets reject `GOCACHE` or `GOMODCACHE` paths that resolve
+inside the repository. Use writable external caches; ignored cache trees under
+`build/` are not a fallback. The preparation target also maintains `build/go.mod` as
+a generated nested-module boundary so stale or foreign build artifacts cannot enter
+the main module's package walk. `make clean` removes this boundary with the rest of
+the disposable build directory.
+
 The audit-level semantic closure gate is intentionally separate because it
 requires KVM and, when the SmolVM kernel lacks PSI or `io.max`, an explicitly
 selected disposable real-kernel host:
