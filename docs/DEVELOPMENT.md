@@ -493,6 +493,19 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - A privilege-dependent observation used for a security or enforcement decision **MUST**
   fail explicitly and conservatively. It **MUST NOT** downgrade to a process-controlled
   identity or a zero-valued decision signal when access is denied.
+- The packaged unit **MUST** bound the Linux capabilities it retains to the ones an
+  enabled feature actually uses, and each retained capability **MUST** name the call
+  site that needs it. ResMan stays root because systemd authorizes unit-property
+  mutation by user identity through polkit rather than by a capability, so the
+  bounding set and the read-only file system are the only boundary that remains.
+  Registering a PSI poll trigger requires `CAP_SYS_RESOURCE`; omitting it silently
+  disables event-driven pressure observation even when the pressure file is writable.
+- A sandboxing directive that would disable a shipped feature **MUST** be refused by a
+  test rather than carried as an inert comment. `PrivateDevices`, `ProtectControlGroups`,
+  `ProtectProc` and `ProtectKernelTunables` are refused for that reason; the first hides
+  the block devices weighted I/O resolves, the second and the fourth make the cgroup
+  pressure files read-only and downgrade PSI event mode, and the third hides the
+  processes the collector observes.
 - Coverage over a dynamic process set **MUST** travel with the aggregate. Available
   non-negative counters may prove that an activation threshold is exceeded, but an
   incomplete aggregate **MUST NOT** prove below-threshold pressure or authorize release.

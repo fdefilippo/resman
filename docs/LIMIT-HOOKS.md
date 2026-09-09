@@ -48,6 +48,27 @@ The daemon environment is not inherited. A shell interpreter can create its own
 shell-local variables after startup; they do not originate from ResMan's environment.
 Script stdout and stderr are discarded.
 
+## Constraints inherited from the service sandbox
+
+The script runs inside the mount namespace of `resman.service`, so the packaged unit
+constrains it as well as the daemon:
+
+- `ProtectHome=yes` hides `/home`, `/root`, and `/run/user`. A hook script placed
+  below any of them is unreachable; install it under a system path such as
+  `/usr/local/libexec`.
+- `PrivateTmp=yes` gives the service its own `/tmp` and `/var/tmp`. A hook can still
+  use them, but nothing it writes there is visible to other processes on the host,
+  and files another process left there are not visible to the hook.
+- `ProtectSystem=full` mounts `/usr`, the boot directories, and `/etc` read-only,
+  with `/etc/resman` as the single writable exception. A hook that writes below
+  `/etc` outside that directory fails.
+- The capability bounding set of the service is the upper bound for the hook. It
+  carries no `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_MODULE`, or `CAP_SYS_TIME`.
+
+`NoNewPrivileges` is deliberately not set, so a hook may still invoke a setuid or
+setgid helper. The shipped `resman-sendmail-hook.sh` example depends on that,
+because mail submission on Enterprise Linux passes through a setgid helper.
+
 Each script starts in a new process group. On timeout or daemon shutdown, ResMan
 sends `TERM` to the group, waits for a bounded grace period, escalates to `KILL`,
 waits for the direct child, and verifies that the group has drained before releasing

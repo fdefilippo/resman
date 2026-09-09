@@ -28,14 +28,90 @@ func TestServiceDelegatesControllerSetupToResourceManager(t *testing.T) {
 func TestServiceContainsNoIneffectiveLayoutOrHardeningTemplate(t *testing.T) {
 	contents := readService(t)
 
-	for _, directive := range []string{"RuntimeDirectory", "ReadWritePaths"} {
-		if containsActiveDirective(contents, directive) {
-			t.Errorf("resman.service contains active %s although no shipped path consumes or enables it", directive)
-		}
+	if containsActiveDirective(contents, "RuntimeDirectory") {
+		t.Error("resman.service contains active RuntimeDirectory although no shipped path consumes or enables it")
 	}
 	for _, inertTemplate := range []string{"#ProtectSystem=", "#NoNewPrivileges=", "#CPUAccounting="} {
 		if strings.Contains(contents, inertTemplate) {
 			t.Errorf("resman.service retains inert commented template %q", inertTemplate)
+		}
+	}
+}
+
+// TestServiceBoundsThePrivilegeSurface pins the sandboxing the daemon runs
+// under. ResMan stays root because systemd authorizes unit-property mutation
+// by uid through polkit rather than by a Linux capability, so the bounding set
+// and the read-only file system are the boundary that remains.
+func TestServiceBoundsThePrivilegeSurface(t *testing.T) {
+	contents := readService(t)
+	tests := []struct {
+		name      string
+		directive string
+		want      string
+	}{
+		{
+			name:      "capabilities the enabled features use",
+			directive: "CapabilityBoundingSet",
+			want:      "CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL CAP_NET_BIND_SERVICE CAP_SYS_RESOURCE",
+		},
+		{name: "read-only usr, boot and etc", directive: "ProtectSystem", want: "full"},
+		{name: "single writable path below etc", directive: "ReadWritePaths", want: "/etc/resman"},
+		{name: "no home visibility", directive: "ProtectHome", want: "yes"},
+		{name: "private temporary directories", directive: "PrivateTmp", want: "yes"},
+		{name: "no module loading", directive: "ProtectKernelModules", want: "yes"},
+		{name: "no kernel log access", directive: "ProtectKernelLogs", want: "yes"},
+		{name: "no clock changes", directive: "ProtectClock", want: "yes"},
+		{name: "no realtime scheduling", directive: "RestrictRealtime", want: "yes"},
+		{name: "no namespace creation", directive: "RestrictNamespaces", want: "yes"},
+		{name: "locked personality", directive: "LockPersonality", want: "yes"},
+		{name: "native syscall architecture", directive: "SystemCallArchitectures", want: "native"},
+		{
+			name:      "address families the daemon dials",
+			directive: "RestrictAddressFamilies",
+			want:      "AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values := activeDirectiveValues(contents, "Service", tt.directive)
+			if len(values) != 1 || values[0] != tt.want {
+				t.Fatalf("Service.%s values = %v, want exactly [%s]", tt.directive, values, tt.want)
+			}
+		})
+	}
+}
+
+// TestServiceKeepsObservationSandboxExclusions guards the four sandboxing
+// directives that would silently disable a shipped feature. They are refused
+// here rather than carried as inert comments, so the exclusion survives an edit
+// without reintroducing an ineffective template.
+func TestServiceKeepsObservationSandboxExclusions(t *testing.T) {
+	contents := readService(t)
+	exclusions := []struct {
+		directive string
+		reason    string
+	}{
+		{
+			directive: "PrivateDevices",
+			reason:    "weighted-I/O device resolution stats entries in /dev and reads /sys/block",
+		},
+		{
+			directive: "ProtectControlGroups",
+			reason:    "the PSI watcher opens the cgroup pressure files read-write to register a poll trigger",
+		},
+		{
+			directive: "ProtectProc",
+			reason:    "the collector reads /proc/PID/io, /proc/PID/smaps_rollup and /proc/PID/exe for every user",
+		},
+		{
+			directive: "ProtectKernelTunables",
+			reason:    "it mounts /sys read-only, which would silently downgrade PSI event mode to polling",
+		},
+	}
+	for _, exclusion := range exclusions {
+		if containsActiveDirective(contents, exclusion.directive) {
+			t.Errorf("resman.service activates %s: %s", exclusion.directive, exclusion.reason)
 		}
 	}
 }

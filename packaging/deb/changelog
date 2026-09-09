@@ -1,3 +1,10 @@
+resman (1.36.0-1) stable; urgency=medium
+
+  * Bound the packaged service to the capabilities and filesystem paths its enabled features require.
+  * Document the inherited sandbox contract for limit hooks and preserve PSI trigger registration.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 09 Sep 2026 08:52:57 +0200
+
 resman (1.35.4-3) stable; urgency=medium
 
   * Build packages from the frozen release revision without concurrent worktree changes.

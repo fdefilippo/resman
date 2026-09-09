@@ -11,8 +11,8 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.35.4
-Release: 3%{?dist}
+Version: 1.36.0
+Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -72,8 +72,9 @@ v1.34.0: authoritative in-place systemd enforcement without PID migration.
 v1.34.1: reject ambiguous comma-bearing regex-list patterns.
 v1.35.0: retire the non-systemd PID-relocation backend; systemd is the only enforcing authority.
 v1.35.4: declare the capability-probe payload and distinguish probe startup failures.
+v1.36.0: bound the packaged service privilege and filesystem surface.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.34.1 to 1.35.4.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -288,6 +289,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.0-1
+- Bound the packaged service to the capabilities and filesystem paths its enabled features require.
+- Document the inherited sandbox contract for limit hooks and preserve PSI trigger registration.
+
 * Wed Sep 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.35.4-3
 - Build packages from the frozen release revision without concurrent worktree changes.
 - Preserve the rejected 1.35.4-2 source-drift artifact without overwriting it.

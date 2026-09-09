@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.34.1 to ResMan 1.35.4
+# Upgrading from ResMan 1.25.x through 1.35.4 to ResMan 1.36.0
 
 Current metrics schema: 7.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.34.1 to
-ResMan 1.35.4. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.35.4 to
+ResMan 1.36.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -11,7 +11,7 @@ on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
 It does not migrate old database schemas, accept removed configuration keys, preserve
 old MCP shapes, or alias renamed metrics.
 
-ResMan 1.35.4 validates the systemd-native
+ResMan 1.36.0 validates the systemd-native
 interfaces used by enabled resource policies. CPU enforcement requires `cpu.max`;
 enabled RAM enforcement requires `memory.high` and `memory.max`; enabled strong I/O
 enforcement requires the `io` controller and `io.max`. If one is unavailable, startup
@@ -25,6 +25,32 @@ failure with its path, separately from a missing controller or cgroup interface.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## BREAKING: the packaged service runs in a bounded systemd sandbox
+
+**Visible change.** The packaged `resman.service` still runs as root, but it now has
+an explicit capability bounding set, read-only `/usr`, boot directories and `/etc`,
+hidden home directories, private temporary directories, restricted namespace creation
+and a limited address-family set. Limit hooks inherit the same mount namespace and
+capability ceiling. A hook under `/home`, `/root` or `/run/user` is no longer visible;
+its `/tmp` and `/var/tmp` are private; and it cannot write below `/etc` outside
+`/etc/resman`.
+
+**Cause.** Systemd authorizes unit-property mutation by the root identity through
+polkit rather than by a Linux capability. Keeping the root identity while bounding
+capabilities and file-system visibility reduces the privilege surface without
+weakening systemd-native enforcement. `CAP_SYS_RESOURCE` remains present because PSI
+poll-trigger registration requires it; the other retained capabilities each serve
+cross-user observation, non-root hook execution, hook process-group termination or
+privileged listener ports.
+
+**Action.** Install hook programs under a system path such as `/usr/local/libexec`,
+use `/etc/resman` for configuration writes, and do not use host `/tmp` as an exchange
+directory. Review service drop-ins and hooks for dependencies on home-directory
+visibility, namespace creation, unsupported address families or capabilities outside
+the documented set. Do not add `PrivateDevices`, `ProtectControlGroups`, `ProtectProc`
+or `ProtectKernelTunables`: each disables a supported observation or I/O path. See
+`docs/LIMIT-HOOKS.md` and the `SERVICE PRIVILEGE BOUNDARY` section of `resman(8)`.
 
 ## BREAKING: non-systemd PID relocation is removed
 
