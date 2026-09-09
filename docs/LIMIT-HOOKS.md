@@ -65,9 +65,10 @@ constrains it as well as the daemon:
 - The capability bounding set of the service is the upper bound for the hook. It
   carries no `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_MODULE`, or `CAP_SYS_TIME`.
 
-`NoNewPrivileges` is deliberately not set, so a hook may still invoke a setuid or
-setgid helper. The shipped `resman-sendmail-hook.sh` example depends on that,
-because mail submission on Enterprise Linux passes through a setgid helper.
+`NoNewPrivileges` and `RestrictSUIDSGID` are deliberately not set, so a hook may
+still invoke a setuid or setgid helper. The shipped `resman-sendmail-hook.sh`
+example depends on that because mail submission on Enterprise Linux passes through
+a setgid helper.
 
 Each script starts in a new process group. On timeout or daemon shutdown, ResMan
 sends `TERM` to the group, waits for a bounded grace period, escalates to `KILL`,

@@ -82,11 +82,11 @@ func TestServiceBoundsThePrivilegeSurface(t *testing.T) {
 	}
 }
 
-// TestServiceKeepsObservationSandboxExclusions guards the four sandboxing
+// TestServiceKeepsFeatureRequiredSandboxExclusions guards the sandboxing
 // directives that would silently disable a shipped feature. They are refused
 // here rather than carried as inert comments, so the exclusion survives an edit
 // without reintroducing an ineffective template.
-func TestServiceKeepsObservationSandboxExclusions(t *testing.T) {
+func TestServiceKeepsFeatureRequiredSandboxExclusions(t *testing.T) {
 	contents := readService(t)
 	exclusions := []struct {
 		directive string
@@ -107,6 +107,14 @@ func TestServiceKeepsObservationSandboxExclusions(t *testing.T) {
 		{
 			directive: "ProtectKernelTunables",
 			reason:    "it mounts /sys read-only, which would silently downgrade PSI event mode to polling",
+		},
+		{
+			directive: "NoNewPrivileges",
+			reason:    "the shipped mail hook may invoke a setgid submission helper",
+		},
+		{
+			directive: "RestrictSUIDSGID",
+			reason:    "the shipped mail hook may invoke a setgid submission helper",
 		},
 	}
 	for _, exclusion := range exclusions {

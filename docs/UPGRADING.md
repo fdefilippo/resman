@@ -49,8 +49,10 @@ use `/etc/resman` for configuration writes, and do not use host `/tmp` as an exc
 directory. Review service drop-ins and hooks for dependencies on home-directory
 visibility, namespace creation, unsupported address families or capabilities outside
 the documented set. Do not add `PrivateDevices`, `ProtectControlGroups`, `ProtectProc`
-or `ProtectKernelTunables`: each disables a supported observation or I/O path. See
-`docs/LIMIT-HOOKS.md` and the `SERVICE PRIVILEGE BOUNDARY` section of `resman(8)`.
+or `ProtectKernelTunables`: each disables a supported observation or I/O path. Do not
+add `NoNewPrivileges` or `RestrictSUIDSGID` while using the shipped mail hook example,
+because either can neutralize its setgid submission helper. See `docs/LIMIT-HOOKS.md`
+and the `SERVICE PRIVILEGE BOUNDARY` section of `resman(8)`.
 
 ## BREAKING: non-systemd PID relocation is removed
 

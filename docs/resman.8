@@ -1307,7 +1307,9 @@ mounts
 .I /sys
 read-only, which has the same effect on PSI event mode.
 .B NoNewPrivileges
-is also unset so that a limit hook may invoke a setuid or setgid helper.
+and
+.B RestrictSUIDSGID
+are also unset so that a limit hook may invoke a setuid or setgid helper.
 .SH SIGNALS
 .B SIGHUP
 \- Reload configuration
