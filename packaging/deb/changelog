@@ -1,3 +1,10 @@
+resman (1.36.1-1) stable; urgency=medium
+
+  * Report observation-only policy intent separately from acknowledged enforcement action.
+  * Publish the bounded action and block state consistently through logs, Prometheus and MCP.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 10 Sep 2026 08:25:00 +0200
+
 resman (1.36.0-1) stable; urgency=medium
 
   * Bound the packaged service to the capabilities and filesystem paths its enabled features require.
