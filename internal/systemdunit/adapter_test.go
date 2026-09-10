@@ -55,6 +55,8 @@ type fakeUnitTransport struct {
 	probeStarts      []fakeSetCall
 	probeStops       []string
 	onProbeStart     func(*fakeUnitTransport, string)
+	onProbeStop      func(*fakeUnitTransport, string, *fakeUnitState)
+	onMutablePaths   func(*fakeUnitTransport, string)
 	probeBaselines   map[string]map[PropertyName]propertyValue
 }
 
@@ -155,6 +157,9 @@ func (f *fakeUnitTransport) stopCapabilityProbe(_ context.Context, unit string) 
 				f.diskPaths = make(map[string][]string)
 			}
 			f.diskPaths[unit] = mutableUnitFilePaths(unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: dropInPaths})
+			if f.onProbeStop != nil {
+				f.onProbeStop(f, unit, state)
+			}
 		}
 		delete(f.units, unit)
 		delete(f.probeBaselines, unit)
@@ -245,6 +250,9 @@ func (f *fakeUnitTransport) applyRevert(unit string) {
 func (f *fakeUnitTransport) close() { f.closed = true }
 
 func (f *fakeUnitTransport) mutablePaths(unit string) ([]string, error) {
+	if f.onMutablePaths != nil {
+		f.onMutablePaths(f, unit)
+	}
 	if paths, ok := f.diskPaths[unit]; ok {
 		return append([]string(nil), paths...), nil
 	}
@@ -279,6 +287,7 @@ type memoryLeaseJournalStore struct {
 	saveErr   error
 	saveCalls int
 	failSave  int
+	onSave    func(durableLeaseJournal)
 }
 
 func newMemoryLeaseJournalStore() *memoryLeaseJournalStore {
@@ -295,6 +304,9 @@ func (s *memoryLeaseJournalStore) Save(journal durableLeaseJournal) error {
 		return s.saveErr
 	}
 	s.journal = journal
+	if s.onSave != nil {
+		s.onSave(journal)
+	}
 	return nil
 }
 

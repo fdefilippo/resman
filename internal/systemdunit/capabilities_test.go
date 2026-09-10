@@ -2,6 +2,7 @@ package systemdunit
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -21,6 +22,10 @@ func TestCapabilityProbeUnitIsOneReservedTopLevelSlice(t *testing.T) {
 	}
 	for _, invalid := range []string{
 		"user-resmancapprobe.slice",
+		"user-resmancapprobe0123456789abcd.slice",
+		"user-resmancapprobe0123456789abcde.slice",
+		"user-resmancapprobe0123456789abcdef0.slice",
+		"user-resmancapprobe0123456789abcdef01.slice",
 		"user-resmancapprobe0123456789abcdeg.slice",
 		"user-resmancapprobe0123456789abcdef.service",
 		"user-1000.slice",
@@ -162,6 +167,81 @@ func TestStartupCapabilitiesPropagateProbeCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestStartupCapabilityReportsMutableUnitFilesLeftAfterStop(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.onProbeStop = func(f *fakeUnitTransport, unit string, _ *fakeUnitState) {
+		if f.diskPaths == nil {
+			f.diskPaths = make(map[string][]string)
+		}
+		f.diskPaths[unit] = []string{"/run/systemd/system.control/" + unit + ".d/50-CPUWeight.conf"}
+	}
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
+
+	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	if err == nil || !strings.Contains(err.Error(), "left mutable unit files") {
+		t.Fatalf("probeStartupCapability() error = %v, want mutable unit-file residue", err)
+	}
+}
+
+func TestStartupCapabilityReportsDurableLeaseLeftAfterCleanup(t *testing.T) {
+	transport := newFakeUnitTransport()
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
+	var stoppedIdentity UnitIdentity
+	transport.onProbeStop = func(_ *fakeUnitTransport, _ string, state *fakeUnitState) {
+		stoppedIdentity = fakeStateIdentity(state)
+	}
+	injected := false
+	transport.onMutablePaths = func(f *fakeUnitTransport, unit string) {
+		if injected || len(f.probeStops) == 0 || stoppedIdentity.Name != unit {
+			return
+		}
+		injectReleasedProbeLease(adapter, stoppedIdentity)
+		if err := adapter.persistLeaseState(); err != nil {
+			t.Fatalf("persist injected probe residue: %v", err)
+		}
+		injected = true
+	}
+
+	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	if err == nil || !strings.Contains(err.Error(), "left a durable property lease") {
+		t.Fatalf("probeStartupCapability() error = %v, want durable lease residue", err)
+	}
+	if len(store.journal.Units) != 1 {
+		t.Fatalf("durable probe residue = %+v, want one unit", store.journal)
+	}
+}
+
+func TestStartupCapabilityRequiresRestoreToReleaseEveryLease(t *testing.T) {
+	transport := newFakeUnitTransport()
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
+	armed := true
+	store.onSave = func(journal durableLeaseJournal) {
+		if !armed || len(journal.Units) != 0 || len(transport.probeStarts) == 0 {
+			return
+		}
+		unit := transport.probeStarts[0].unit
+		state, exists := transport.units[unit]
+		if !exists {
+			return
+		}
+		injectReleasedProbeLease(adapter, fakeStateIdentity(state))
+		armed = false
+	}
+
+	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	if !IsCapabilityProbeError(err) || !strings.Contains(err.Error(), "restoration did not release every temporary property lease") {
+		t.Fatalf("probeStartupCapability() error = %v, want incomplete restoration", err)
+	}
+	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("deferred cleanup left injected ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+	}
+}
+
 func TestStartupCapabilitiesCleanProbeWhenStartAcknowledgementFailsAfterCreation(t *testing.T) {
 	transport := newFakeUnitTransport()
 	transport.probeStarted = true
@@ -269,4 +349,31 @@ func setCallsContainScalarValues(calls []fakeSetCall, wanted map[PropertyName]ui
 		}
 	}
 	return false
+}
+
+func fakeStateIdentity(state *fakeUnitState) UnitIdentity {
+	var invocationID [16]byte
+	copy(invocationID[:], state.unit["InvocationID"].([]byte))
+	return UnitIdentity{
+		Name:           state.listed.name,
+		ObjectPath:     state.listed.objectPath,
+		InvocationID:   invocationID,
+		ControlGroupID: state.slice["ControlGroupId"].(uint64),
+	}
+}
+
+func injectReleasedProbeLease(adapter *Adapter, identity UnitIdentity) {
+	property := PropertyCPUWeight
+	baseline := scalarPropertyValue(100)
+	state := newPropertyLeaseState(property, baseline)
+	state.lastApplied = clonePropertyValue(property, baseline)
+	state.previousApplied = clonePropertyValue(property, baseline)
+	state.lease = publicPropertyLease(property, baseline, baseline)
+	adapter.leases[propertyLeaseKey{identity: identity, property: property}] = state
+	override := extendManagedUnitFileFootprint(identity.Name, unitOverrideLease{}, []PropertyAssignment{{name: property, value: baseline}})
+	for _, path := range override.managedPaths {
+		override.fingerprints = append(override.fingerprints, unitFileFingerprint{path: path, digest: sha256.Sum256([]byte(path))})
+	}
+	adapter.overrides[identity] = override
+	adapter.phases[identity.Name] = leasePhaseApplied
 }
