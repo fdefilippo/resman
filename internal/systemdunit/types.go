@@ -392,7 +392,8 @@ func validateDeviceLimits(values []DeviceLimit) error {
 }
 
 // UnitIdentity identifies one particular lifetime of a loaded systemd unit.
-// ObjectPath alone is reusable; InvocationID and ControlGroupID detect recreation.
+// ControlGroupID is always kernel-derived; when systemd exposes ControlGroupId,
+// the adapter requires it to match. The complete tuple detects recreation.
 type UnitIdentity struct {
 	Name           string
 	ObjectPath     string

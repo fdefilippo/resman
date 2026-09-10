@@ -14,6 +14,44 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestKernelIdentityResolvesCanonicalCgroupWithoutFollowingSymlinks(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1001.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := info.Sys().(*syscall.Stat_t).Ino
+	got, err := newCgroupVerifier(root).identity("/user.slice/user-1001.slice")
+	if err != nil {
+		t.Fatalf("identity() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("identity = %d, want inode %d", got, want)
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "user.slice", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	for _, controlGroup := range []string{
+		"user.slice/user-1001.slice",
+		"/user.slice/../outside",
+		"/user.slice/./user-1001.slice",
+		"/user.slice//user-1001.slice",
+		"/user.slice/escape",
+	} {
+		t.Run(strings.ReplaceAll(controlGroup, "/", "_"), func(t *testing.T) {
+			if identity, err := newCgroupVerifier(root).identity(controlGroup); err == nil {
+				t.Fatalf("identity(%q) = %d, want fail-closed path rejection", controlGroup, identity)
+			}
+		})
+	}
+}
+
 func TestReadOnlyKernelVerifierChecksEveryApprovedScalarInterface(t *testing.T) {
 	root := t.TempDir()
 	controlGroup := "/user.slice/user-1001.slice"

@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+type fixedIdentityKernelVerifier struct {
+	cgroupVerifier
+	controlGroupID uint64
+}
+
+func (v fixedIdentityKernelVerifier) identity(string) (uint64, error) {
+	return v.controlGroupID, nil
+}
+
 func TestRestoreWaitsForDeviceKernelConvergenceBeforeJournalCompletion(t *testing.T) {
 	for property, field := range map[PropertyName]string{
 		PropertyIOReadBandwidthMax: "rbps", PropertyIOWriteBandwidthMax: "wbps",
@@ -38,7 +47,7 @@ func TestRestoreWaitsForDeviceKernelConvergenceBeforeJournalCompletion(t *testin
 					transport.reloadErr = nil
 				}
 				reads := 0
-				verifier := newCgroupVerifier(t.TempDir())
+				verifier := fixedIdentityKernelVerifier{cgroupVerifier: newCgroupVerifier(t.TempDir()), controlGroupID: identity.ControlGroupID}
 				verifier.readFile = func(string) ([]byte, error) {
 					if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
 						return []byte(""), nil // Explicit device reset before revert is already confirmed.
@@ -83,7 +92,7 @@ func TestRestoreWaitsForScalarKernelConvergenceBeforeJournalCompletion(t *testin
 		t.Fatal(err)
 	}
 	reads := 0
-	verifier := newCgroupVerifier(t.TempDir())
+	verifier := fixedIdentityKernelVerifier{cgroupVerifier: newCgroupVerifier(t.TempDir()), controlGroupID: identity.ControlGroupID}
 	verifier.readFile = func(string) ([]byte, error) {
 		if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
 			return []byte("100\n"), nil // Explicit scalar baseline restore before revert.
@@ -124,7 +133,7 @@ func TestRestoreConvergenceFailsClosedOnDeadlineCancellationAndExternalChange(t 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			reads := 0
-			verifier := newCgroupVerifier(t.TempDir())
+			verifier := fixedIdentityKernelVerifier{cgroupVerifier: newCgroupVerifier(t.TempDir()), controlGroupID: identity.ControlGroupID}
 			verifier.readFile = func(string) ([]byte, error) {
 				if len(store.journal.Units) == 1 && store.journal.Units[0].Phase == leasePhaseApplying {
 					return []byte(""), nil

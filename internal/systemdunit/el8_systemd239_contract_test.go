@@ -200,12 +200,13 @@ func TestEL8Systemd239FixtureMatchesArchivedRawCapture(t *testing.T) {
 	}
 }
 
-func TestEL8Systemd239FixtureReproducesTheControlGroupIDFailure(t *testing.T) {
+func TestEL8Systemd239FixtureUsesKernelIdentityWithoutControlGroupID(t *testing.T) {
 	modern := newFakeUnitTransport(1000)
 	if _, present := modern.units[parentUserSlice].slice["ControlGroupId"]; !present {
 		t.Fatal("existing fake transport no longer demonstrates its modern-systemd assumption")
 	}
-	if _, err := mustTestAdapter(t, modern, &fakeKernelVerifier{}).Discover(context.Background()); err != nil {
+	modernTopology, err := mustTestAdapter(t, modern, &fakeKernelVerifier{}).Discover(context.Background())
+	if err != nil {
 		t.Fatalf("modern fake transport unexpectedly failed: %v", err)
 	}
 
@@ -213,10 +214,49 @@ func TestEL8Systemd239FixtureReproducesTheControlGroupIDFailure(t *testing.T) {
 	for _, unit := range el8.units {
 		delete(unit.slice, "ControlGroupId")
 	}
-	_, err := mustTestAdapter(t, el8, &fakeKernelVerifier{}).Discover(context.Background())
+	el8Topology, err := mustTestAdapter(t, el8, &fakeKernelVerifier{}).Discover(context.Background())
+	if err != nil {
+		t.Fatalf("EL8 fixture without ControlGroupId failed: %v", err)
+	}
+	if el8Topology.Parent.Identity != modernTopology.Parent.Identity || el8Topology.Users[0].Unit.Identity != modernTopology.Users[0].Unit.Identity {
+		t.Fatalf("kernel identities differ with optional systemd cross-check: EL8=%+v modern=%+v", el8Topology, modernTopology)
+	}
+}
+
+func TestEL8Systemd239IdentityRejectsModernCrossCheckMismatch(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.units[parentUserSlice].slice["ControlGroupId"] = fakeKernelIdentity("/user.slice") + 1
+	_, err := mustTestAdapter(t, transport, &fakeKernelVerifier{}).Discover(context.Background())
 	var adapterErr *AdapterError
-	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonMalformedReply || !strings.Contains(err.Error(), "ControlGroupId is absent") {
-		t.Fatalf("EL8 fixture error = %v, want the field-reported missing-ControlGroupId failure", err)
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonUnitRecreated || !strings.Contains(err.Error(), "does not match kernel cgroup ID") {
+		t.Fatalf("mismatched ControlGroupId error = %v, want typed identity mismatch", err)
+	}
+}
+
+func TestEL8Systemd239IdentityRejectsKernelRecreationDuringRead(t *testing.T) {
+	transport := newFakeUnitTransport()
+	delete(transport.units[parentUserSlice].slice, "ControlGroupId")
+	controlGroup := "/user.slice"
+	verifier := &fakeKernelVerifier{identityByCgroup: map[string]uint64{controlGroup: fakeKernelIdentity(controlGroup)}}
+	verifier.onIdentity = func(v *fakeKernelVerifier, observed string, call int) {
+		if observed == controlGroup && call == 2 {
+			v.identityByCgroup[observed]++
+		}
+	}
+	_, err := mustTestAdapter(t, transport, verifier).Discover(context.Background())
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonUnitRecreated {
+		t.Fatalf("recreated kernel identity error = %v, want %s", err, ReasonUnitRecreated)
+	}
+}
+
+func TestEL8Systemd239IdentityRejectsUnverifiableKernelPath(t *testing.T) {
+	transport := newFakeUnitTransport()
+	delete(transport.units[parentUserSlice].slice, "ControlGroupId")
+	_, err := mustTestAdapter(t, transport, &fakeKernelVerifier{identityErr: os.ErrNotExist}).Discover(context.Background())
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonKernelVerification {
+		t.Fatalf("unverifiable kernel identity error = %v, want %s", err, ReasonKernelVerification)
 	}
 }
 

@@ -24,6 +24,9 @@ func TestAdapterAccountingReadsResourcesIndependentlyAndReconfirmsIdentity(t *te
 				}
 			}
 			transport := newFakeUnitTransport(1000)
+			for _, unit := range transport.units {
+				delete(unit.slice, "ControlGroupId")
+			}
 			adapter := mustTestAdapter(t, transport, newCgroupVerifier(root))
 			identity := identityFor(t, adapter, 1000)
 			transport.unitReads = 0

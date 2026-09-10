@@ -36,6 +36,7 @@ type unitOverrideLease struct {
 }
 
 type kernelVerifier interface {
+	identity(string) (uint64, error)
 	verify(UnitSnapshot, []PropertyAssignment) error
 	preflight(UnitSnapshot, []PropertyAssignment) error
 }
@@ -901,32 +902,48 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 	if err != nil {
 		return UnitSnapshot{}, classifyTransportError("read_unit", unit, err)
 	}
-	sliceProperties, err := a.transport.sliceProperties(ctx, unit)
+	sliceBefore, err := a.transport.sliceProperties(ctx, unit)
 	if err != nil {
 		return UnitSnapshot{}, classifyTransportError("read_slice", unit, err)
+	}
+	controlGroupBefore, err := parseControlGroup(unit, sliceBefore)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	kernelIDBefore, err := a.kernelControlGroupID("read_identity", unit, controlGroupBefore)
+	if err != nil {
+		return UnitSnapshot{}, err
 	}
 	unitAfter, err := a.transport.unitProperties(ctx, unit)
 	if err != nil {
 		return UnitSnapshot{}, classifyTransportError("confirm_unit", unit, err)
 	}
-	beforeIdentity, err := parseUnitIdentity(unit, objectPath, unitBefore, sliceProperties)
+	sliceAfter, err := a.transport.sliceProperties(ctx, unit)
+	if err != nil {
+		return UnitSnapshot{}, classifyTransportError("confirm_slice", unit, err)
+	}
+	controlGroupAfter, err := parseControlGroup(unit, sliceAfter)
 	if err != nil {
 		return UnitSnapshot{}, err
 	}
-	afterIdentity, err := parseUnitIdentity(unit, objectPath, unitAfter, sliceProperties)
+	kernelIDAfter, err := a.kernelControlGroupID("confirm_identity", unit, controlGroupAfter)
 	if err != nil {
 		return UnitSnapshot{}, err
 	}
-	if beforeIdentity != afterIdentity {
+	beforeIdentity, err := parseUnitIdentity(unit, objectPath, unitBefore, sliceBefore, kernelIDBefore)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	afterIdentity, err := parseUnitIdentity(unit, objectPath, unitAfter, sliceAfter, kernelIDAfter)
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	if beforeIdentity != afterIdentity || controlGroupBefore != controlGroupAfter {
 		return UnitSnapshot{}, &AdapterError{Reason: ReasonUnitRecreated, Operation: "confirm_unit", Unit: unit, Err: fmt.Errorf("unit identity changed during read")}
-	}
-	controlGroup, ok := sliceProperties["ControlGroup"].(string)
-	if !ok || !validControlGroup(controlGroup) {
-		return UnitSnapshot{}, malformedReply("read_slice", unit, "ControlGroup is absent or invalid")
 	}
 	properties := make(map[PropertyName]propertyValue, len(approvedScalarProperties)+len(approvedDeviceProperties))
 	for property := range approvedScalarProperties {
-		value, ok := sliceProperties[string(property)].(uint64)
+		value, ok := sliceAfter[string(property)].(uint64)
 		if !ok {
 			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s is absent or is not uint64", property))
 		}
@@ -936,7 +953,7 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 		properties[property] = scalarPropertyValue(value)
 	}
 	for property := range approvedDeviceProperties {
-		value, err := parseDevicePropertyValue(sliceProperties[string(property)])
+		value, err := parseDevicePropertyValue(sliceAfter[string(property)])
 		if err != nil {
 			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s is absent or malformed: %v", property, err))
 		}
@@ -946,7 +963,26 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 	if err != nil {
 		return UnitSnapshot{}, err
 	}
-	return UnitSnapshot{Identity: beforeIdentity, ControlGroup: controlGroup, Properties: newPropertySet(properties), unitFiles: unitFiles}, nil
+	return UnitSnapshot{Identity: beforeIdentity, ControlGroup: controlGroupAfter, Properties: newPropertySet(properties), unitFiles: unitFiles}, nil
+}
+
+func (a *Adapter) kernelControlGroupID(operation, unit, controlGroup string) (uint64, error) {
+	identity, err := a.verifier.identity(controlGroup)
+	if err != nil {
+		return 0, &AdapterError{Reason: ReasonKernelVerification, Operation: operation, Unit: unit, Err: err}
+	}
+	if identity == 0 {
+		return 0, &AdapterError{Reason: ReasonKernelVerification, Operation: operation, Unit: unit, Err: fmt.Errorf("kernel returned a zero cgroup identity")}
+	}
+	return identity, nil
+}
+
+func parseControlGroup(unit string, sliceProperties map[string]any) (string, error) {
+	controlGroup, ok := sliceProperties["ControlGroup"].(string)
+	if !ok || !validControlGroup(controlGroup) {
+		return "", malformedReply("read_slice", unit, "ControlGroup is absent or invalid")
+	}
+	return controlGroup, nil
 }
 
 func parseUnitFileSnapshot(unit string, properties map[string]any) (unitFileSnapshot, error) {
@@ -1106,7 +1142,7 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func parseUnitIdentity(unit, objectPath string, unitProperties, sliceProperties map[string]any) (UnitIdentity, error) {
+func parseUnitIdentity(unit, objectPath string, unitProperties, sliceProperties map[string]any, kernelControlGroupID uint64) (UnitIdentity, error) {
 	id, ok := unitProperties["Id"].(string)
 	if !ok || id != unit {
 		return UnitIdentity{}, malformedReply("read_unit", unit, "Id is absent or does not match the requested unit")
@@ -1124,11 +1160,16 @@ func parseUnitIdentity(unit, objectPath string, unitProperties, sliceProperties 
 	if invocationID == [16]byte{} {
 		return UnitIdentity{}, malformedReply("read_unit", unit, "InvocationID is zero")
 	}
-	controlGroupID, ok := sliceProperties["ControlGroupId"].(uint64)
-	if !ok || controlGroupID == 0 {
-		return UnitIdentity{}, malformedReply("read_slice", unit, "ControlGroupId is absent or zero")
+	if controlGroupID, present := sliceProperties["ControlGroupId"]; present {
+		typedControlGroupID, ok := controlGroupID.(uint64)
+		if !ok || typedControlGroupID == 0 {
+			return UnitIdentity{}, malformedReply("read_slice", unit, "ControlGroupId is present but malformed or zero")
+		}
+		if typedControlGroupID != kernelControlGroupID {
+			return UnitIdentity{}, &AdapterError{Reason: ReasonUnitRecreated, Operation: "confirm_identity", Unit: unit, Err: fmt.Errorf("systemd cgroup ID %d does not match kernel cgroup ID %d", typedControlGroupID, kernelControlGroupID)}
+		}
 	}
-	return UnitIdentity{Name: unit, ObjectPath: objectPath, InvocationID: invocationID, ControlGroupID: controlGroupID}, nil
+	return UnitIdentity{Name: unit, ObjectPath: objectPath, InvocationID: invocationID, ControlGroupID: kernelControlGroupID}, nil
 }
 
 func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment, error) {
@@ -1257,7 +1298,7 @@ func parseUserSliceName(name string) (uint32, bool) {
 }
 
 func validControlGroup(value string) bool {
-	return strings.HasPrefix(value, "/") && !strings.Contains(value, "//") && !strings.Contains(value, "/../") && !strings.HasSuffix(value, "/..")
+	return filepath.IsAbs(value) && filepath.Clean(value) == value && !strings.Contains(value, "//")
 }
 
 func malformedReply(operation, unit, message string) error {

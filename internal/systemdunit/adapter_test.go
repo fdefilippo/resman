@@ -243,10 +243,31 @@ func (s *memoryLeaseJournalStore) Save(journal durableLeaseJournal) error {
 }
 
 type fakeKernelVerifier struct {
-	calls           int
-	err             error
-	preflightCalls  [][]PropertyAssignment
-	preflightByName map[PropertyName]error
+	calls            int
+	err              error
+	identityErr      error
+	identityCalls    map[string]int
+	identityByCgroup map[string]uint64
+	onIdentity       func(*fakeKernelVerifier, string, int)
+	preflightCalls   [][]PropertyAssignment
+	preflightByName  map[PropertyName]error
+}
+
+func (v *fakeKernelVerifier) identity(controlGroup string) (uint64, error) {
+	if v.identityCalls == nil {
+		v.identityCalls = make(map[string]int)
+	}
+	v.identityCalls[controlGroup]++
+	if v.onIdentity != nil {
+		v.onIdentity(v, controlGroup, v.identityCalls[controlGroup])
+	}
+	if v.identityErr != nil {
+		return 0, v.identityErr
+	}
+	if identity, present := v.identityByCgroup[controlGroup]; present {
+		return identity, nil
+	}
+	return fakeKernelIdentity(controlGroup), nil
 }
 
 func (v *fakeKernelVerifier) verify(UnitSnapshot, []PropertyAssignment) error {
@@ -327,7 +348,6 @@ func TestConfirmTopologyRejectsArrivalDepartureAndUnitRecreationAsRetryable(t *t
 			name: "recreation",
 			mutate: func(transport *fakeUnitTransport) {
 				transport.units["user-1001.slice"].unit["InvocationID"] = invocationBytes(77)
-				transport.units["user-1001.slice"].slice["ControlGroupId"] = uint64(777)
 			},
 		},
 	}
@@ -956,7 +976,6 @@ func TestStartupRebindsAnExactOrphanedFootprintToARecreatedUnit(t *testing.T) {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	transport.units[oldIdentity.Name].unit["InvocationID"] = invocationBytes(9001)
-	transport.units[oldIdentity.Name].slice["ControlGroupId"] = uint64(9002)
 
 	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	newIdentity := identityFor(t, restarted, 1001)
@@ -1420,7 +1439,7 @@ func newFakeUnitTransport(uids ...uint32) *fakeUnitTransport {
 func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 	properties := map[string]any{
 		"ControlGroup":                      controlGroup,
-		"ControlGroupId":                    uint64(seed + 100),
+		"ControlGroupId":                    fakeKernelIdentity(controlGroup),
 		string(PropertyCPUWeight):           uint64(SystemdUnset),
 		string(PropertyCPUQuotaPerSecUSec):  uint64(SystemdUnset),
 		string(PropertyCPUQuotaPeriodUSec):  uint64(SystemdUnset),
@@ -1444,6 +1463,18 @@ func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 		},
 		slice: properties,
 	}
+}
+
+func fakeKernelIdentity(controlGroup string) uint64 {
+	identity := uint64(1469598103934665603)
+	for index := range len(controlGroup) {
+		identity ^= uint64(controlGroup[index])
+		identity *= 1099511628211
+	}
+	if identity == 0 {
+		return 1
+	}
+	return identity
 }
 
 func invocationBytes(seed uint32) []byte {

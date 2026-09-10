@@ -119,6 +119,46 @@ func newCgroupVerifier(root string) cgroupVerifier {
 	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat, pageSize: uint64(os.Getpagesize())}
 }
 
+// identity opens every component beneath the configured cgroup root without
+// following symlinks and returns the kernel cgroup inode used as its stable ID.
+// Component-wise openat is available on the older kernels supported by EL8.
+func (v cgroupVerifier) identity(controlGroup string) (uint64, error) {
+	if !validControlGroup(controlGroup) {
+		return 0, fmt.Errorf("invalid authoritative control-group path %q", controlGroup)
+	}
+	rootFD, err := unix.Open(v.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return 0, fmt.Errorf("open cgroup root %s without following symlinks: %w", v.root, err)
+	}
+	currentFD := rootFD
+	for _, component := range strings.Split(strings.TrimPrefix(controlGroup, "/"), "/") {
+		if component == "" {
+			continue
+		}
+		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if currentFD != rootFD {
+			_ = unix.Close(currentFD)
+		}
+		if openErr != nil {
+			_ = unix.Close(rootFD)
+			return 0, fmt.Errorf("open cgroup component %q beneath %s without following symlinks: %w", component, v.root, openErr)
+		}
+		currentFD = nextFD
+	}
+	if currentFD != rootFD {
+		defer func() { _ = unix.Close(currentFD) }()
+	}
+	defer func() { _ = unix.Close(rootFD) }()
+	var stat unix.Stat_t
+	if err := unix.Fstat(currentFD, &stat); err != nil {
+		return 0, fmt.Errorf("stat authoritative control-group path %q: %w", controlGroup, err)
+	}
+	if stat.Ino == 0 {
+		return 0, fmt.Errorf("authoritative control-group path %q has a zero inode", controlGroup)
+	}
+	return stat.Ino, nil
+}
+
 func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
 	path, err := v.controlGroupPath(snapshot.ControlGroup)
 	if err != nil {

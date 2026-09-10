@@ -109,7 +109,7 @@ func TestFileLeaseJournalRemovalSyncsTheEmptyState(t *testing.T) {
 func testDurableJournal(t *testing.T) durableLeaseJournal {
 	t.Helper()
 	identity := fakeUnit("user-1001.slice", "/user.slice/user-1001.slice", 1003)
-	parsed, err := parseUnitIdentity("user-1001.slice", identity.listed.objectPath, identity.unit, identity.slice)
+	parsed, err := parseUnitIdentity("user-1001.slice", identity.listed.objectPath, identity.unit, identity.slice, fakeKernelIdentity("/user.slice/user-1001.slice"))
 	if err != nil {
 		t.Fatalf("parseUnitIdentity() error = %v", err)
 	}

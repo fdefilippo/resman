@@ -80,6 +80,9 @@ func TestCheckResourceAuthorityRejectsMissingControllerBeforeMutation(t *testing
 		t.Fatal(err)
 	}
 	transport := newFakeUnitTransport(1000)
+	for _, unit := range transport.units {
+		delete(unit.slice, "ControlGroupId")
+	}
 	verifier := newCgroupVerifier(root)
 	adapter := mustTestAdapter(t, transport, verifier)
 	adapter.coverage = staticCoverageInspector{authority: ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}}
