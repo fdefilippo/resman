@@ -20,7 +20,7 @@ budget remain unchanged; this qualification concerns realized delivery only.
 ## One sample, every surface
 
 The decision-cycle accounting snapshot supplies Prometheus, MCP and SQLite schema
-6, including when database writes are disabled. CPU and memory readers resolve
+7, including when database writes are disabled. CPU and memory readers resolve
 paths only through the systemd adapter. They check the unit lifetime before and
 after reading, and check the kernel directory identity around the counter reads.
 Missing data stays absent. Unit recreation, a decreased counter, restart or a
