@@ -32,6 +32,8 @@ ssh_options=(-i "$private_key" -o BatchMode=yes -o StrictHostKeyChecking=yes \
 	-o UserKnownHostsFile="$known_hosts" -o LogLevel=ERROR -o ConnectTimeout=5)
 
 guest() {
+	# The arguments form one deliberately caller-supplied command for the guest shell.
+	# shellcheck disable=SC2029
 	ssh "${ssh_options[@]}" root@"$address" "$@"
 }
 
@@ -60,8 +62,10 @@ cleanup() {
 	printf '%s\n' "$result" >"$evidence_dir/result"
 	(
 		cd "$evidence_dir"
+		manifest_tmp=$script_dir/evidence-SHA256SUMS.tmp
 		find . -type f ! -name SHA256SUMS -print0 | sort -z \
-			| xargs -0 sha256sum -- >SHA256SUMS
+			| xargs -0 sha256sum -- >"$manifest_tmp"
+		mv -- "$manifest_tmp" SHA256SUMS
 	)
 	exit "$status"
 }
@@ -111,7 +115,8 @@ virt-customize -q -a "$overlay" --ssh-inject "root:file:$private_key.pub" --seli
 vm_defined=1
 virt-install --connect qemu:///system --name "$vm_name" --memory 3072 --vcpus 2 \
 	--cpu host-passthrough --import --disk "path=$overlay,format=qcow2,bus=sata" \
-	--network network=default,model=virtio --graphics none --noautoconsole --os-variant ol8.9
+	--network network=default,model=virtio --graphics none --noautoconsole \
+	--os-variant ol8.9 --boot uefi
 
 for _ in $(seq 1 120); do
 	address=$(virsh domifaddr "$vm_name" --source lease 2>/dev/null \
@@ -122,20 +127,53 @@ for _ in $(seq 1 120); do
 	guest true 2>/dev/null && break
 	sleep 2
 done
-[[ -n $address ]] && guest true || { echo "EL8 guest SSH did not become ready" >&2; exit 1; }
+if [[ -z $address ]] || ! guest true; then
+	echo "EL8 guest SSH did not become ready" >&2
+	exit 1
+fi
 
-mkdir -p "$evidence_dir/initial-boot" "$evidence_dir/qualified-boot"
+mkdir -p "$evidence_dir/initial-boot" "$evidence_dir/bootloader-before" \
+	"$evidence_dir/bootloader-after" "$evidence_dir/qualified-boot"
 guest 'systemctl --version' >"$evidence_dir/initial-boot/systemd-version.txt"
 guest 'cat /etc/os-release' >"$evidence_dir/initial-boot/os-release.txt"
 guest 'uname -r' >"$evidence_dir/initial-boot/kernel.txt"
 guest 'cat /proc/cmdline' >"$evidence_dir/initial-boot/cmdline.txt"
 guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/initial-boot/cgroup-filesystem.txt"
+guest 'test -d /sys/firmware/efi && printf "uefi\n" || printf "bios\n"' \
+	>"$evidence_dir/initial-boot/firmware.txt"
 initial_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
 printf '%s\n' "$initial_boot_id" >"$evidence_dir/initial-boot/boot-id.txt"
 guest 'dnf install -y cpio cronie util-linux && systemctl enable --now crond' \
 	>"$evidence_dir/provision.log"
+
+guest 'grubby --info=ALL' >"$evidence_dir/bootloader-before/grubby-info.txt"
+guest 'grub2-editenv /boot/grub2/grubenv list' \
+	>"$evidence_dir/bootloader-before/grubenv.txt"
+guest 'ls -l /boot/grub2/grubenv' >"$evidence_dir/bootloader-before/grubenv-link.txt"
+guest 'grep "^GRUB_ENABLE_BLSCFG=" /etc/default/grub' \
+	>"$evidence_dir/bootloader-before/bls-config.txt"
+guest 'grep -H -E "^(title|version|options)" /boot/loader/entries/*.conf' \
+	>"$evidence_dir/bootloader-before/entries.txt"
 guest 'grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1 psi=1"'
-guest 'systemctl reboot' >/dev/null 2>&1 || true
+guest 'grubby --info=ALL' >"$evidence_dir/bootloader-after/grubby-info.txt"
+guest 'grub2-editenv /boot/grub2/grubenv list' \
+	>"$evidence_dir/bootloader-after/grubenv.txt"
+guest 'ls -l /boot/grub2/grubenv' >"$evidence_dir/bootloader-after/grubenv-link.txt"
+guest 'grep "^GRUB_ENABLE_BLSCFG=" /etc/default/grub' \
+	>"$evidence_dir/bootloader-after/bls-config.txt"
+guest 'grep -H -E "^(title|version|options)" /boot/loader/entries/*.conf' \
+	>"$evidence_dir/bootloader-after/entries.txt"
+for argument in systemd.unified_cgroup_hierarchy=1 psi=1; do
+	if ! grep -qw "$argument" "$evidence_dir/bootloader-after/grubby-info.txt"; then
+		echo "grubby did not publish the required kernel argument: $argument" >&2
+		exit 1
+	fi
+	if ! grep -qw "$argument" "$evidence_dir/bootloader-after/grubenv.txt"; then
+		echo "grubenv does not contain the required kernel argument: $argument" >&2
+		exit 1
+	fi
+done
+guest 'sync; systemctl reboot' >/dev/null 2>&1 || true
 
 for _ in $(seq 1 150); do
 	sleep 2
@@ -152,6 +190,8 @@ guest 'uname -r' >"$evidence_dir/qualified-boot/kernel.txt"
 guest 'cat /proc/cmdline' >"$evidence_dir/qualified-boot/cmdline.txt"
 guest 'cat /proc/sys/kernel/random/boot_id' >"$evidence_dir/qualified-boot/boot-id.txt"
 guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/qualified-boot/cgroup-filesystem.txt"
+guest 'test -d /sys/firmware/efi && printf "uefi\n" || printf "bios\n"' \
+	>"$evidence_dir/qualified-boot/firmware.txt"
 guest 'cat /sys/fs/cgroup/cgroup.controllers' >"$evidence_dir/qualified-boot/controllers.txt"
 guest 'find /proc/pressure -maxdepth 1 -type f -printf "%f\n" | sort' >"$evidence_dir/qualified-boot/psi-files.txt"
 guest 'systemctl show user.slice -p ControlGroup -p ControlGroupId -p InvocationID' \
@@ -164,9 +204,18 @@ grep -q '^systemd 239 ' "$evidence_dir/qualified-boot/systemd-version.txt"
 grep -qw 'systemd.unified_cgroup_hierarchy=1' "$evidence_dir/qualified-boot/cmdline.txt"
 grep -qw 'psi=1' "$evidence_dir/qualified-boot/cmdline.txt"
 grep -Eq '^sda[[:space:]]+8:0[[:space:]]+disk' "$evidence_dir/qualified-boot/block-devices.txt"
-! grep -q '^ControlGroupId=' "$evidence_dir/qualified-boot/user-slice.txt"
-! grep -Eq '^[[:space:]]*ControlGroupId[[:space:]]' "$evidence_dir/qualified-boot/slice-interface.txt"
+if grep -q '^ControlGroupId=' "$evidence_dir/qualified-boot/user-slice.txt"; then
+	echo "systemd show unexpectedly exposes ControlGroupId" >&2
+	exit 1
+fi
+if grep -Eq '^[[:space:]]*ControlGroupId[[:space:]]' \
+	"$evidence_dir/qualified-boot/slice-interface.txt"; then
+	echo "systemd Slice unexpectedly exposes ControlGroupId" >&2
+	exit 1
+fi
 
+# This program is evaluated by the guest shell, not expanded on terra.
+# shellcheck disable=SC2016
 guest 'for entry in "resman-t1:1006" "resman-t2:1007" "resman-t3:1008"; do name=${entry%:*}; uid=${entry#*:}; id "$name" >/dev/null 2>&1 || useradd --uid "$uid" --create-home "$name"; done'
 guest 'install -d -m 0700 /root/resman-systemd239'
 scp "${ssh_options[@]}" "$package" "$script_dir/native_gate.py" "$script_dir/native_package.py" \
@@ -184,6 +233,8 @@ guest 'tar -C /root/resman-systemd239 -cf - evidence' \
 
 [[ $guest_status -eq 0 ]]
 [[ $(<"$evidence_dir/guest/result") == PASS ]]
+# This program is evaluated by the guest shell, not expanded on terra.
+# shellcheck disable=SC2016
 guest 'test ! -e /var/lib/resman/systemd-property-leases.json; test -z "$(find /run/systemd/system.control -mindepth 1 -print -quit)"; test "$(systemctl show resman -p ActiveState --value)" = inactive; test "$(cat /sys/fs/cgroup/user.slice/cpu.max | awk '\''{print $1}'\'')" = max'
 guest 'systemctl show resman -p ActiveState -p SubState -p Result; cat /sys/fs/cgroup/user.slice/cpu.max; find /run/systemd/system.control -mindepth 1 -maxdepth 3 -print; test ! -e /var/lib/resman/systemd-property-leases.json' \
 	>"$evidence_dir/post-run.txt"

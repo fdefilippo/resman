@@ -42,7 +42,7 @@ switch.
 ## Exact RPM qualification
 
 The runtime qualification is a separate QEMU/KVM row. It boots the reviewed
-Oracle Linux 8.10 KVM image on terra from a fresh qcow2 overlay, records the
+hybrid Oracle Linux 8.10 KVM image through UEFI on terra from a fresh qcow2 overlay, records the
 initial legacy hierarchy, applies the documented boot arguments, reboots, and
 then proves systemd 239, unified cgroup v2, the required controllers, PSI, and
 the absence of `ControlGroupId` before installing the package:
@@ -66,6 +66,12 @@ repaired blackout assertion, and a masked-cgroup negative identity probe are
 mandatory.
 
 The official base image and its reviewed SHA-256 are pinned in `qemu-host.sh`.
+The UEFI path is required for this hybrid image because `/boot/grub2/grubenv`
+links into its EFI system partition; booting the same image as BIOS would make
+GRUB use stale fallback arguments even after `grubby` updates `kernelopts`.
+The runner records `grubby --info=ALL`, `grub2-editenv`, the BLS entries, the
+`grubenv` link and `GRUB_ENABLE_BLSCFG` before the reboot, and refuses to reboot
+unless both `grubby` and `grubenv` already contain every required argument.
 The base is never modified: the runner deletes its overlay, SSH key, libvirt
 domain, and transient host directory after every outcome. The evidence bundle
 retains both boots, package installation, guest lifecycle results, cleanup,

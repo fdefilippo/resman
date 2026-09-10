@@ -24,7 +24,7 @@ manifest_revision=$(awk -F= '$1 == "source_revision" {print $2}' "$build_manifes
 manifest_tree=$(awk -F= '$1 == "source_tree" {print $2}' "$build_manifest")
 manifest_package_sha=$(awk -F= '$1 == "package_sha256" {print $2}' "$build_manifest")
 [[ $manifest_revision == "$source_revision" ]] || { echo "build manifest revision differs from HEAD" >&2; exit 1; }
-[[ $manifest_tree == "$(git -C "$repo_root" rev-parse HEAD^{tree})" ]] \
+[[ $manifest_tree == "$(git -C "$repo_root" rev-parse 'HEAD^{tree}')" ]] \
 	|| { echo "build manifest tree differs from HEAD" >&2; exit 1; }
 [[ $manifest_package_sha == "$(sha256sum "$package" | awk '{print $1}')" ]] \
 	|| { echo "build manifest package digest differs from the supplied RPM" >&2; exit 1; }
@@ -49,19 +49,24 @@ cleanup() {
 		esac
 	fi
 	if [[ $status -eq 0 ]]; then
-		PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
+		if PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
 			"$evidence_dir/remote" "$source_revision" "$package" "$build_manifest" \
-			>>"$evidence_dir/collect.log" 2>&1 \
-			&& final_result=PASS \
-			|| { status=1; final_result=FAIL; }
+			>>"$evidence_dir/collect.log" 2>&1; then
+			final_result=PASS
+		else
+			status=1
+			final_result=FAIL
+		fi
 	fi
 	printf 'cleanup=%s\nresult=%s\nexit_code=%d\n' "$cleanup_status" "$final_result" "$status" \
 		>>"$evidence_dir/request.txt"
 	printf '%s\n' "$final_result" >"$evidence_dir/result"
 	(
 		cd "$evidence_dir"
+		manifest_tmp=$evidence_dir/../systemd239-SHA256SUMS.tmp
 		find . -type f ! -name SHA256SUMS -print0 | sort -z \
-			| xargs -0 sha256sum -- >SHA256SUMS
+			| xargs -0 sha256sum -- >"$manifest_tmp"
+		mv -- "$manifest_tmp" SHA256SUMS
 	)
 	exit "$status"
 }

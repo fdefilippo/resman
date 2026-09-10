@@ -82,12 +82,33 @@ def validate(root, revision, package, build_manifest):
     qualified = root / "qualified-boot"
     require((initial / "cgroup-filesystem.txt").read_text().strip() != "cgroup2fs",
             "initial boot did not characterize the distribution default")
+    require((initial / "firmware.txt").read_text().strip() == "uefi",
+            "reviewed hybrid image was not booted through its EFI configuration")
     require((initial / "boot-id.txt").read_text() != (qualified / "boot-id.txt").read_text(),
             "boot configuration was not followed by a distinct boot")
     require((qualified / "systemd-version.txt").read_text().startswith("systemd 239 "),
             "qualified guest does not run systemd 239")
     require((qualified / "cgroup-filesystem.txt").read_text().strip() == "cgroup2fs",
             "qualified guest does not use cgroup v2")
+    require((qualified / "firmware.txt").read_text().strip() == "uefi",
+            "qualified guest changed firmware path")
+    before_grubby = (root / "bootloader-before" / "grubby-info.txt").read_text()
+    after_grubby = (root / "bootloader-after" / "grubby-info.txt").read_text()
+    after_grubenv = (root / "bootloader-after" / "grubenv.txt").read_text()
+    for argument in ("systemd.unified_cgroup_hierarchy=1", "psi=1"):
+        require(argument not in before_grubby,
+                "required argument was already present before the documented procedure")
+        require(argument in after_grubby and argument in after_grubenv,
+                "bootloader state did not record required argument " + argument)
+    require("GRUB_ENABLE_BLSCFG=true" in
+            (root / "bootloader-after" / "bls-config.txt").read_text(),
+            "qualified image does not enable BLS configuration")
+    require(" -> ../efi/EFI/redhat/grubenv" in
+            (root / "bootloader-after" / "grubenv-link.txt").read_text(),
+            "reviewed hybrid-image grubenv layout changed")
+    require("options $kernelopts" in
+            (root / "bootloader-after" / "entries.txt").read_text(),
+            "BLS entry no longer consumes kernelopts")
     command_line = set((qualified / "cmdline.txt").read_text().split())
     require({"systemd.unified_cgroup_hierarchy=1", "psi=1"} <= command_line,
             "qualified boot lacks required kernel arguments")
