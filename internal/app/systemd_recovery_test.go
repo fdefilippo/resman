@@ -1,6 +1,9 @@
 package app
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"testing"
 
@@ -10,6 +13,56 @@ import (
 type recoveryCaptureLogger struct {
 	messages []string
 	fields   []interface{}
+}
+
+func TestWithStateManagerLogsRecoveredSystemdLeasesAtBootstrap(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "app_bootstrap.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse app_bootstrap.go: %v", err)
+	}
+	var withStateManager *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "WithStateManager" {
+			withStateManager = function
+			break
+		}
+	}
+	if withStateManager == nil {
+		t.Fatal("WithStateManager declaration not found")
+	}
+	found := false
+	ast.Inspect(withStateManager.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		function, ok := call.Fun.(*ast.Ident)
+		if !ok || function.Name != "logSystemdLeaseRecovery" {
+			return true
+		}
+		if len(call.Args) != 2 || !isSelector(call.Args[0], "a", "logger") {
+			return true
+		}
+		report, ok := call.Args[1].(*ast.CallExpr)
+		if !ok || len(report.Args) != 0 || !isSelector(report.Fun, "systemdAdapter", "RecoveryReport") {
+			return true
+		}
+		found = true
+		return false
+	})
+	if !found {
+		t.Fatal("WithStateManager does not log systemdAdapter.RecoveryReport() at bootstrap")
+	}
+}
+
+func isSelector(expression ast.Expr, receiver, method string) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != method {
+		return false
+	}
+	identifier, ok := selector.X.(*ast.Ident)
+	return ok && identifier.Name == receiver
 }
 
 func (*recoveryCaptureLogger) Debug(string, ...interface{}) {}

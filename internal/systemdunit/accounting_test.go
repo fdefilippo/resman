@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/fdefilippo/resman/cgroup"
 )
 
 func TestAdapterAccountingReadsResourcesIndependentlyAndReconfirmsIdentity(t *testing.T) {
@@ -71,6 +73,25 @@ func TestAdapterAccountingReadsResourcesIndependentlyAndReconfirmsIdentity(t *te
 				t.Fatalf("observation: %+v", got)
 			}
 		})
+	}
+}
+
+func TestObserveUnitAccountingRejectsMixedResourceCgroupLifetimes(t *testing.T) {
+	identity := UnitIdentity{Name: "user-1000.slice"}
+	cpuIdentity := cgroup.CgroupIdentity{Device: 1, Inode: 10}
+	memoryIdentity := cgroup.CgroupIdentity{Device: 1, Inode: 11}
+	_, err := observeUnitAccounting(
+		identity,
+		"/user.slice/user-1000.slice",
+		func(string) (cgroup.CPUPointsNodeSnapshot, error) {
+			return cgroup.CPUPointsNodeSnapshot{Identity: cpuIdentity}, nil
+		},
+		func(string) (cgroup.MemoryAccountingSnapshot, error) {
+			return cgroup.MemoryAccountingSnapshot{Identity: memoryIdentity}, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("CPU and memory observations from different cgroup lifetimes were accepted")
 	}
 }
 

@@ -34,13 +34,7 @@ func (i localUnitFileInspector) mutablePaths(unit string) ([]string, error) {
 	var result []string
 	roots := i.roots
 	if len(roots) == 0 {
-		roots = []string{
-			"/etc/systemd/system",
-			"/run/systemd/system",
-			"/etc/systemd/system.control",
-			"/run/systemd/system.control",
-			"/run/systemd/transient",
-		}
+		roots = defaultMutableUnitFileRoots()
 	}
 	for _, root := range roots {
 		path := filepath.Join(root, unit)
@@ -73,6 +67,16 @@ func (i localUnitFileInspector) mutablePaths(unit string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func defaultMutableUnitFileRoots() []string {
+	return []string{
+		"/etc/systemd/system",
+		"/run/systemd/system",
+		"/etc/systemd/system.control",
+		"/run/systemd/system.control",
+		"/run/systemd/transient",
+	}
 }
 
 func (i localUnitFileInspector) fingerprints(paths []string) ([]unitFileFingerprint, error) {

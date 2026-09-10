@@ -323,7 +323,7 @@ func assertStoredCoverage(t *testing.T, sample *SystemMetrics, wantRAM, wantIO *
 }
 
 func TestSystemdAccountingDoesNotInventCompleteObservations(t *testing.T) {
-	for _, fault := range []string{"missing_cpu", "missing_memory", "external_weight", "recreated_unit", "late_topology", "incomplete_plan", "authority_split", "missing_coverage", "capacity_unavailable"} {
+	for _, fault := range []string{"missing_cpu", "missing_memory", "external_weight", "recreated_unit", "parent_recreated", "parent_quota_mismatch", "late_topology", "incomplete_plan", "authority_split", "missing_coverage", "capacity_unavailable"} {
 		t.Run(fault, func(t *testing.T) {
 			m, a := accountingManager(t)
 			start := time.Now()
@@ -341,6 +341,14 @@ func TestSystemdAccountingDoesNotInventCompleteObservations(t *testing.T) {
 				value.CPU = &cpu
 			case "recreated_unit":
 				a.topology.Users[1].Unit.Identity.InvocationID[0]++
+			case "parent_recreated":
+				a.topology.Parent.Identity.InvocationID[0]++
+			case "parent_quota_mismatch":
+				parent := a.values["user.slice"]
+				cpu := *parent.CPU
+				cpu.CPUQuota = "350000 100000"
+				parent.CPU = &cpu
+				a.values["user.slice"] = parent
 			case "late_topology":
 				a.confirmError = errors.New("late topology change")
 			case "incomplete_plan":
@@ -372,6 +380,30 @@ func TestSystemdAccountingDoesNotInventCompleteObservations(t *testing.T) {
 				t.Fatal("invented complete denominator")
 			}
 		})
+	}
+}
+
+func TestSystemdAccountingDoesNotCarryMemoryDeltasAcrossUnitLifetimes(t *testing.T) {
+	m, a := accountingManager(t)
+	start := time.Now().UTC()
+	m.collectPersistenceInterval(persistenceSample(start))
+
+	value := a.values["user-1000.slice"]
+	memory := *value.Memory
+	memory.Events.High += 7
+	value.Memory = &memory
+	a.values["user-1000.slice"] = value
+	// Model a recreated systemd unit whose cgroup inode has been reused.
+	a.topology.Users[1].Unit.Identity.InvocationID[0]++
+
+	sample := persistenceSample(start.Add(30 * time.Second))
+	m.collectPersistenceInterval(sample)
+	user := sample.CPUPointsUsers[1000]
+	if user.RAMCgroupUsageBytes == nil {
+		t.Fatalf("current memory observation was lost: %+v", user)
+	}
+	if user.MemoryHighEventsDelta != nil {
+		t.Fatalf("memory delta crossed a recreated unit lifetime: %+v", user)
 	}
 }
 
@@ -407,13 +439,17 @@ func TestSystemdAccountingResetsOnlyUnavailableOrRecreatedBaselines(t *testing.T
 }
 
 func TestSystemdAccountingPreservesProcessesWithoutUserSlices(t *testing.T) {
-	for _, scenario := range []string{"process_only", "slice_departed", "discovery_unavailable", "ineligible"} {
+	for _, scenario := range []string{"process_only", "root_process_only", "slice_departed", "discovery_unavailable", "ineligible"} {
 		t.Run(scenario, func(t *testing.T) {
 			m, a := accountingManager(t)
 			start := time.Now().UTC()
 			m.collectPersistenceInterval(persistenceSample(start))
 			sample := persistenceSample(start.Add(30 * time.Second))
 			uid := 1002
+			if scenario == "root_process_only" {
+				uid = 0
+				a.topology.Users = a.topology.Users[1:]
+			}
 			if scenario == "slice_departed" {
 				uid = 1000
 				a.topology.Users = append(a.topology.Users[:1], a.topology.Users[2:]...)
@@ -446,6 +482,9 @@ func TestSystemdAccountingPreservesProcessesWithoutUserSlices(t *testing.T) {
 			if scenario == "slice_departed" && (user.ConfiguredClass != "guaranteed" || user.ConfiguredGuaranteePoints == nil || *user.ConfiguredGuaranteePoints != 300) {
 				t.Fatalf("configuration lost with slice: %+v", user)
 			}
+			if scenario == "root_process_only" && user.ConfiguredClass != "root" {
+				t.Fatalf("sliceless root was not classified as root: %+v", user)
+			}
 			status, exists := m.GetCPUPointsUserStatus(uid)
 			if !exists || status.ObservedProcessCount != 3 || !status.CPUEnforcementRequested || status.AppliedToProcesses || status.CompleteUIDWorkloadGuaranteed || status.ProcessCoverage != resmanmetrics.CPUPointsCoverageUnavailable {
 				t.Fatalf("typed status disagrees with persistence: %+v", status)
@@ -477,5 +516,27 @@ func TestSystemdAccountingPreservesProcessesWithoutUserSlices(t *testing.T) {
 				t.Fatalf("history disagrees with observation: %+v", row)
 			}
 		})
+	}
+}
+
+func TestPrometheusIncludesUsersObservedOnlyThroughSystemdSlices(t *testing.T) {
+	m, _ := accountingManager(t)
+	sample := persistenceSample(time.Now().UTC())
+	m.collectPersistenceInterval(sample)
+	if _, exists := sample.UserMetrics[0]; exists {
+		t.Fatal("fixture unexpectedly contains a process observation for root")
+	}
+	if _, exists := sample.PersistenceUsers[0]; !exists {
+		t.Fatal("fixture does not contain the root slice observation")
+	}
+
+	m.updatePrometheusDecisionUserMetrics(sample)
+	exporter := m.prometheusExporter.(*mockPrometheusExporter)
+	root, exists := exporter.userSnapshots[0]
+	if !exists {
+		t.Fatalf("slice-only root missing from Prometheus snapshots: %+v", exporter.userSnapshots)
+	}
+	if root.CPUPoints.ConfiguredClass != "root" || root.CPUPoints.ObservedWeight == nil || *root.CPUPoints.ObservedWeight != 3300 {
+		t.Fatalf("slice-only root snapshot = %+v", root)
 	}
 }

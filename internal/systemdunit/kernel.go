@@ -68,14 +68,23 @@ func (v cgroupVerifier) observe(snapshot UnitSnapshot) (UnitAccounting, error) {
 	if err != nil {
 		return UnitAccounting{}, err
 	}
-	result := UnitAccounting{Identity: snapshot.Identity}
-	cpu, err := cgroup.ReadCPUAccountingSnapshot(path)
+	return observeUnitAccounting(snapshot.Identity, path, cgroup.ReadCPUAccountingSnapshot, cgroup.ReadMemoryAccountingSnapshot)
+}
+
+func observeUnitAccounting(
+	identity UnitIdentity,
+	path string,
+	readCPU func(string) (cgroup.CPUPointsNodeSnapshot, error),
+	readMemory func(string) (cgroup.MemoryAccountingSnapshot, error),
+) (UnitAccounting, error) {
+	result := UnitAccounting{Identity: identity}
+	cpu, err := readCPU(path)
 	if err != nil {
 		result.CPUError = err
 	} else {
 		result.CPU = &cpu
 	}
-	memory, err := cgroup.ReadMemoryAccountingSnapshot(path)
+	memory, err := readMemory(path)
 	if err != nil {
 		result.MemoryError = err
 	} else {
