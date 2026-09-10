@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,19 +15,40 @@ import (
 
 type accountingSystemdAdapter struct {
 	*fakeSystemdCPUUnitAdapter
-	values   map[string]systemdunit.UnitAccounting
-	coverage map[uint32]bool
-	readHook func(systemdunit.UnitIdentity)
+	values        map[string]systemdunit.UnitAccounting
+	errors        map[string]error
+	coverage      map[uint32]bool
+	coverageError error
+	readHook      func(systemdunit.UnitIdentity)
 }
 
 func (a *accountingSystemdAdapter) ObserveAccounting(_ context.Context, identity systemdunit.UnitIdentity) (systemdunit.UnitAccounting, error) {
 	if a.readHook != nil {
 		a.readHook(identity)
 	}
+	if err := a.errors[identity.Name]; err != nil {
+		return systemdunit.UnitAccounting{}, err
+	}
 	return a.values[identity.Name], nil
 }
 func (a *accountingSystemdAdapter) ObserveCPUCoverage(context.Context, systemdunit.TopologySnapshot) (map[uint32]bool, error) {
-	return a.coverage, nil
+	return a.coverage, a.coverageError
+}
+
+type persistenceObservationLogger struct {
+	failingCompletionLogger
+	warns      []string
+	warnFields [][]interface{}
+	infos      []string
+}
+
+func (l *persistenceObservationLogger) Warn(message string, fields ...interface{}) {
+	l.warns = append(l.warns, message)
+	l.warnFields = append(l.warnFields, append([]interface{}(nil), fields...))
+}
+
+func (l *persistenceObservationLogger) Info(message string, _ ...interface{}) {
+	l.infos = append(l.infos, message)
 }
 
 type forbiddenAccountingCgroupManager struct{ mockCgroupManager }
@@ -50,7 +72,7 @@ func accountingManager(t *testing.T) (*Manager, *accountingSystemdAdapter) {
 	if err := m.activateSystemdCPUPoints(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
 		t.Fatal(err)
 	}
-	a := &accountingSystemdAdapter{fakeSystemdCPUUnitAdapter: base, values: make(map[string]systemdunit.UnitAccounting), coverage: map[uint32]bool{0: true, 1000: true, 1001: true}}
+	a := &accountingSystemdAdapter{fakeSystemdCPUUnitAdapter: base, values: make(map[string]systemdunit.UnitAccounting), errors: make(map[string]error), coverage: map[uint32]bool{0: true, 1000: true, 1001: true}}
 	for _, identity := range topologyIdentities(base.topology) {
 		weight := uint64(3300)
 		quota := "max 100000"
@@ -138,6 +160,156 @@ func TestSystemdAccountingRoundTripUsesSlicesAndFlatDenominator(t *testing.T) {
 	}
 	if users[0].CPUAuthorityCoverage == nil || *users[0].CPUAuthorityCoverage != "complete" || users[0].IOCoverage == nil || *users[0].IOCoverage != "complete" {
 		t.Fatalf("stored coverage: %+v", users[0])
+	}
+}
+
+func TestSystemdObservationFailureDegradesCyclePrometheusMCPAndPersistence(t *testing.T) {
+	m, adapter := accountingManager(t)
+	m.mu.Lock()
+	m.systemdCPURequested = false
+	m.systemdCPUComplete = false
+	m.limitsActive = false
+	m.mu.Unlock()
+	logger := &persistenceObservationLogger{}
+	m.logger = logger
+	adapter.errors["user-1000.slice"] = &systemdunit.AdapterError{
+		Reason:    systemdunit.ReasonMalformedReply,
+		Operation: "read_slice",
+		Unit:      "user-1000.slice",
+		Err:       errors.New("ControlGroupId is absent or zero"),
+	}
+	run := &controlCycleContext{
+		ctx:       context.Background(),
+		cfg:       m.GetConfig(),
+		cycleID:   1,
+		trigger:   ControlCycleTriggerManual,
+		startTime: time.Now(),
+		enforcementState: cgroup.EnforcementCycleState{
+			Mode:            cgroup.EnforcementModeSystemdNative,
+			RequestedIntent: cgroup.EnforcementPolicyIntentMaintain,
+			AppliedAction:   cgroup.AppliedEnforcementActionMaintain,
+			BlockReason:     cgroup.EnforcementBlockReasonNone,
+		},
+	}
+	if err := m.stageCollectMetrics(run); err != nil {
+		t.Fatalf("stageCollectMetrics() error: %v", err)
+	}
+	if len(run.degradedWarnings) == 0 {
+		t.Fatal("systemd observation failure published zero degraded warnings")
+	}
+	if len(logger.warns) != 1 {
+		t.Fatalf("systemd observation failure emitted %d operator warnings, want 1", len(logger.warns))
+	}
+	warningFields := logFieldsByKey(t, logger.warnFields[0])
+	if warningFields["error_type"] != metricsDatabaseCPUPointsReadFailure || warningFields["reason"] != string(systemdunit.ReasonMalformedReply) || warningFields["uid"] != 1000 {
+		t.Fatalf("operator warning fields = %v", warningFields)
+	}
+	if !run.metrics.PersistenceSystem.CPUPointsDegraded || !run.metrics.CPUPointsSystem.ReconciliationDegraded {
+		t.Fatalf("collection published a non-degraded observation: persistence=%t snapshot=%t", run.metrics.PersistenceSystem.CPUPointsDegraded, run.metrics.CPUPointsSystem.ReconciliationDegraded)
+	}
+	var observationFailure persistenceObservationFailure
+	if !errors.As(run.degradedWarnings[0], &observationFailure) || observationFailure.ErrorType != metricsDatabaseCPUPointsReadFailure || observationFailure.UID != 1000 {
+		t.Fatalf("cycle warning = %#v, want typed CPU observation failure for UID 1000", run.degradedWarnings[0])
+	}
+	var adapterError *systemdunit.AdapterError
+	if !errors.As(run.degradedWarnings[0], &adapterError) || adapterError.Reason != systemdunit.ReasonMalformedReply {
+		t.Fatalf("cycle warning = %v, want malformed_reply adapter reason", run.degradedWarnings[0])
+	}
+	if err := m.stageFinalizeEnforcementObservation(run); err != nil {
+		t.Fatalf("stageFinalizeEnforcementObservation() error: %v", err)
+	}
+	if err := m.stageUpdatePrometheus(run); err != nil {
+		t.Fatalf("stageUpdatePrometheus() error: %v", err)
+	}
+	if err := m.stageLogCompletion(run); err != nil {
+		t.Fatalf("stageLogCompletion() error: %v", err)
+	}
+
+	fields := logFieldsByKey(t, logger.fields)
+	if fields["outcome"] != "degraded" || fields["degraded_warning_count"] == 0 {
+		t.Fatalf("completion outcome=%#v degraded_warning_count=%#v, want degraded and non-zero", fields["outcome"], fields["degraded_warning_count"])
+	}
+	if fields["enforcement_mode"] != cgroup.EnforcementModeSystemdNative {
+		t.Fatalf("completion enforcement_mode=%#v, want systemd_native", fields["enforcement_mode"])
+	}
+	if !run.metrics.PersistenceSystem.CPUPointsDegraded || !run.metrics.CPUPointsSystem.ReconciliationDegraded {
+		t.Fatalf("observation failure remained non-degraded: persistence=%t snapshot=%t", run.metrics.PersistenceSystem.CPUPointsDegraded, run.metrics.CPUPointsSystem.ReconciliationDegraded)
+	}
+	status := m.GetStatus()
+	if status.EnforcementMode != cgroup.EnforcementModeSystemdNative || !status.CPUPoints.ReconciliationDegraded {
+		t.Fatalf("MCP source status = mode=%s degraded=%t, want systemd_native and degraded", status.EnforcementMode, status.CPUPoints.ReconciliationDegraded)
+	}
+	exported := m.prometheusExporter.(*mockPrometheusExporter).snapshot().lastSystemSnapshot
+	if exported.EnforcementMode != cgroup.EnforcementModeSystemdNative || exported.CPUPoints == nil || !exported.CPUPoints.ReconciliationDegraded {
+		t.Fatalf("Prometheus snapshot = mode=%s cpu_points=%+v, want systemd_native and degraded", exported.EnforcementMode, exported.CPUPoints)
+	}
+
+	db, err := database.NewDatabaseManager(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := resmanmetrics.NewDBWriter(db, 0).WriteMetricsBatch(resmanmetrics.PersistenceBatch{
+		System: run.metrics.PersistenceSystem,
+		Users:  run.metrics.PersistenceUsers,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := db.GetSystemHistory(run.metrics.Timestamp.Add(-time.Second), run.metrics.Timestamp.Add(time.Second), 1)
+	if err != nil || len(history) != 1 || !history[0].CPUPointsDegraded {
+		t.Fatalf("stored system history = %+v, error=%v, want one degraded row", history, err)
+	}
+}
+
+func TestSystemdObservationFailureLoggingIsBoundedAndTopologySensitive(t *testing.T) {
+	m, adapter := accountingManager(t)
+	logger := &persistenceObservationLogger{}
+	m.logger = logger
+	observationError := &systemdunit.AdapterError{
+		Reason:    systemdunit.ReasonMalformedReply,
+		Operation: "read_slice",
+		Unit:      "user-1000.slice",
+		Err:       errors.New("ControlGroupId is absent or zero"),
+	}
+	adapter.errors["user-1000.slice"] = observationError
+	start := time.Now().UTC()
+	collect := func(at time.Time) {
+		sample := persistenceSample(at)
+		m.collectPersistenceInterval(sample)
+		m.reportPersistenceObservationFailures(sample)
+	}
+	for offset := 0; offset < 3; offset++ {
+		collect(start.Add(time.Duration(offset) * time.Second))
+	}
+	if len(logger.warns) != 1 {
+		t.Fatalf("identical observation failures emitted %d warnings, want 1", len(logger.warns))
+	}
+
+	adapter.topology.Users[1].Unit.Identity.ControlGroupID++
+	collect(start.Add(3 * time.Second))
+	if len(logger.warns) != 2 {
+		t.Fatalf("changed topology emitted %d warnings, want 2", len(logger.warns))
+	}
+	fields := logFieldsByKey(t, logger.warnFields[1])
+	if fields["error_type"] != metricsDatabaseCPUPointsReadFailure || fields["reason"] != string(systemdunit.ReasonMalformedReply) || fields["uid"] != 1000 {
+		t.Fatalf("changed-topology warning fields = %v", fields)
+	}
+
+	delete(adapter.errors, "user-1000.slice")
+	collect(start.Add(4 * time.Second))
+	collect(start.Add(5 * time.Second))
+	if !reflect.DeepEqual(logger.infos, []string{"Typed enforcement accounting recovered"}) {
+		t.Fatalf("recovery messages = %v, want one", logger.infos)
+	}
+
+	adapter.errors["user-1000.slice"] = observationError
+	collect(start.Add(6 * time.Second))
+	if len(logger.warns) != 3 {
+		t.Fatalf("failure after recovery emitted %d warnings, want 3 total", len(logger.warns))
 	}
 }
 

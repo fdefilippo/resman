@@ -15,6 +15,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/systemdunit"
+	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
 type systemdCPUApplyCall struct {
@@ -43,6 +44,7 @@ type fakeSystemdCPUUnitAdapter struct {
 	owned            map[string]systemdunit.UnitIdentity
 	activeProperties map[string]map[systemdunit.PropertyName]bool
 	failApplyUnit    string
+	failRestoreUnit  string
 	applyHook        func(string)
 	reconcileError   error
 	discoverError    error
@@ -184,6 +186,9 @@ func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdu
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.restores = append(a.restores, identity.Name)
+	if identity.Name == a.failRestoreUnit {
+		return systemdunit.RestoreResult{}, errors.New("injected systemd restore failure")
+	}
 	delete(a.owned, identity.Name)
 	delete(a.activeProperties, identity.Name)
 	return systemdunit.RestoreResult{}, nil
@@ -306,6 +311,99 @@ func TestSystemdNativeCycleReportsOnlyAnAcknowledgedAppliedAction(t *testing.T) 
 		status.AppliedEnforcementAction != want.AppliedAction ||
 		status.EnforcementBlockReason != want.BlockReason {
 		t.Fatalf("runtime enforcement projection = %+v, want %+v", status, want)
+	}
+}
+
+func TestSystemdNativeCycleFailuresCannotPublishSuccessfulNonDegradedOutcomes(t *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		decision string
+		prepare  func(*testing.T, *Manager, *fakeSystemdCPUUnitAdapter)
+	}{
+		{
+			name:     "identity",
+			decision: decisionActivate,
+			prepare: func(_ *testing.T, _ *Manager, adapter *fakeSystemdCPUUnitAdapter) {
+				adapter.confirmError = &systemdunit.AdapterError{Reason: systemdunit.ReasonTopologyChanged, Operation: "confirm_topology", Err: errors.New("injected identity change")}
+			},
+		},
+		{
+			name:     "application",
+			decision: decisionActivate,
+			prepare: func(_ *testing.T, _ *Manager, adapter *fakeSystemdCPUUnitAdapter) {
+				adapter.failApplyUnit = "user-1000.slice"
+			},
+		},
+		{
+			name:     "readback",
+			decision: decisionActivate,
+			prepare: func(_ *testing.T, _ *Manager, adapter *fakeSystemdCPUUnitAdapter) {
+				adapter.confirmApplyErr = map[string]error{"user-1000.slice": errors.New("injected readback failure")}
+			},
+		},
+		{
+			name:     "restore",
+			decision: decisionDeactivate,
+			prepare: func(t *testing.T, manager *Manager, adapter *fakeSystemdCPUUnitAdapter) {
+				if err := manager.activateSystemdCPUPoints(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+					t.Fatalf("prepare active plan: %v", err)
+				}
+				adapter.failRestoreUnit = "user-1000.slice"
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			policy := testCPUPointsPolicy(t, map[string]struct {
+				uid    int
+				points int
+			}{"alice": {uid: 1000, points: 300}})
+			adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+			manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+			manager.cfg.UserIncludeList = []string{"^alice$"}
+			logger := &failingCompletionLogger{}
+			manager.logger = logger
+			scenario.prepare(t, manager, adapter)
+
+			sample := &SystemMetrics{
+				CPUEligibleUsers: []int{1000},
+				CPUPointsUsers:   make(map[int]resmanmetrics.CPUPointsUserSnapshot),
+				PersistenceUsers: make(map[int]resmanmetrics.UserPersistenceMetrics),
+			}
+			run := &controlCycleContext{
+				ctx:       context.Background(),
+				cfg:       manager.GetConfig(),
+				cycleID:   1,
+				trigger:   ControlCycleTriggerManual,
+				startTime: time.Now(),
+				decision:  scenario.decision,
+				reason:    "test decision",
+				metrics:   sample,
+			}
+			err := runControlCyclePipeline(manager, run, []controlCycleStage{
+				{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
+				{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+				{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
+				{name: "log_completion", run: (*Manager).stageLogCompletion},
+			})
+			if err == nil {
+				t.Fatal("failed systemd-native cycle returned nil")
+			}
+			fields := logFieldsByKey(t, logger.fields)
+			if fields["outcome"] != "degraded" || fields["deferred_error_count"] == 0 {
+				t.Fatalf("completion outcome=%#v deferred_error_count=%#v, want degraded and non-zero", fields["outcome"], fields["deferred_error_count"])
+			}
+			if !sample.PersistenceSystem.CPUPointsDegraded || !sample.CPUPointsSystem.ReconciliationDegraded {
+				t.Fatalf("failed cycle snapshots remained non-degraded: persistence=%t runtime=%t", sample.PersistenceSystem.CPUPointsDegraded, sample.CPUPointsSystem.ReconciliationDegraded)
+			}
+			status := manager.GetStatus()
+			if status.EnforcementMode != cgroup.EnforcementModeSystemdNative || !status.CPUPoints.ReconciliationDegraded {
+				t.Fatalf("runtime status = mode=%s degraded=%t", status.EnforcementMode, status.CPUPoints.ReconciliationDegraded)
+			}
+			exported := manager.prometheusExporter.(*mockPrometheusExporter).snapshot().lastSystemSnapshot
+			if exported.EnforcementMode != cgroup.EnforcementModeSystemdNative || exported.CPUPoints == nil || !exported.CPUPoints.ReconciliationDegraded {
+				t.Fatalf("Prometheus snapshot = mode=%s cpu_points=%+v", exported.EnforcementMode, exported.CPUPoints)
+			}
+		})
 	}
 }
 

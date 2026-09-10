@@ -3,6 +3,8 @@ package state
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/internal/cpupoints"
@@ -36,6 +38,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	for uid, identity := range m.systemdResourceUnits {
 		resourceUnits[uid] = identity
 	}
+	degraded := m.cpuPointsDegraded
 	m.mu.RUnlock()
 	capacity := cpupoints.CapacityState{}
 	if m.cpuCapacity != nil {
@@ -48,6 +51,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		NominalParentPoolPoints: policy.Pool().Value(), ConfiguredBestEffortPoints: policy.BestEffort().Value(),
 		ConfiguredRootPoints: &root, EnforcementMode: string(cgroup.EnforcementModeSystemdNative),
 		CPUCapacityAvailable: capacity.Available, DenominatorState: resmanmetrics.CPUPointsDenominatorUnavailable,
+		CPUPointsDegraded: degraded,
 	}
 	if !previousTime.IsZero() {
 		system.IntervalStart = &previousTime
@@ -67,14 +71,16 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	reader, readable := m.systemdUnits.(systemdAccountingReader)
 	topology, topologyErr := m.systemdUnits.Discover(context.Background())
 	if topologyErr != nil {
-		m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, topologyErr)
+		m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, topologyErr)
+	} else {
+		sample.systemdObservationContext = persistenceTopologyFingerprint(topology)
 	}
 	var coverage map[uint32]bool
 	if readable && topologyErr == nil {
 		var err error
 		coverage, err = reader.ObserveCPUCoverage(context.Background(), topology)
 		if err != nil {
-			m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, err)
+			m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, err)
 		}
 	}
 	allocations := make(map[int]cpupoints.FlatSlicePlan)
@@ -99,13 +105,13 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	if allWeights && capacity.LastVerified != plan.ParentQuota() {
 		allWeights = false
 	}
-	observe := func(identity systemdunit.UnitIdentity) systemdunit.UnitAccounting {
+	observe := func(uid int, identity systemdunit.UnitIdentity) systemdunit.UnitAccounting {
 		if !readable {
 			return systemdunit.UnitAccounting{}
 		}
 		observed, err := reader.ObserveAccounting(context.Background(), identity)
 		if err != nil {
-			m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, err)
+			m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, uid, err)
 			return systemdunit.UnitAccounting{}
 		}
 		return observed
@@ -114,7 +120,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		if topology.Parent.Identity != parentIdentity {
 			allWeights = false
 		}
-		parent := observe(topology.Parent.Identity)
+		parent := observe(0, topology.Parent.Identity)
 		if parent.CPU != nil {
 			key := accountingIdentityKey(topology.Parent.Identity)
 			previous, exists := previousCPU[key]
@@ -131,7 +137,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		} else {
 			allWeights = false
 			if parent.CPUError != nil {
-				m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, parent.CPUError)
+				m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, parent.CPUError)
 			}
 		}
 	}
@@ -163,7 +169,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		}
 		coverageText := string(cpuCoverage)
 		user.CPUAuthorityCoverage = &coverageText
-		observed := observe(unit.Unit.Identity)
+		observed := observe(uid, unit.Unit.Identity)
 		if observed.CPU != nil {
 			key := accountingIdentityKey(unit.Unit.Identity)
 			previous, exists := previousCPU[key]
@@ -176,7 +182,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 			allWeights = false
 			if observed.CPUError != nil {
 				if _, planned := allocations[uid]; planned {
-					m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, uid, observed.CPUError)
+					m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, uid, observed.CPUError)
 				} else {
 					m.recordOptionalPersistenceObservationGap(metricsDatabaseCPUPointsReadFailure, uid, observed.CPUError)
 				}
@@ -230,7 +236,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 			user.MemoryOOMKillEventsDelta = cgroupCounterDelta(memory.Identity, memory.Events.OOMKill, previous.Identity, previous.Events.OOMKill, exists && sameUnit)
 		} else if resource.ramApplied {
 			if observed.MemoryError != nil {
-				m.recordPersistenceObservationError(metricsDatabaseRAMReadFailure, uid, observed.MemoryError)
+				m.recordPersistenceObservationError(sample, metricsDatabaseRAMReadFailure, uid, observed.MemoryError)
 			}
 			text := "unavailable"
 			user.RAMCoverage = &text
@@ -271,7 +277,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	if topologyErr == nil {
 		if err := m.systemdUnits.ConfirmTopology(context.Background(), topology); err != nil {
 			allWeights = false
-			m.recordPersistenceObservationError(metricsDatabaseCPUPointsReadFailure, 0, err)
+			m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, err)
 			clear(currentCPU)
 			clear(currentRAM)
 			clear(currentUnits)
@@ -292,10 +298,11 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 			system.DenominatorState = resmanmetrics.CPUPointsDenominatorComplete
 			system.ObservedSiblingWeightSum = &observedWeight
 		}
-		system.CPUPointsDegraded = !allWeights
+		system.CPUPointsDegraded = degraded || !allWeights || len(sample.systemdObservationFailures) > 0
 	} else if topologyErr == nil {
 		system.DenominatorState = resmanmetrics.CPUPointsDenominatorInactive
 	}
+	system.CPUPointsDegraded = system.CPUPointsDegraded || degraded || len(sample.systemdObservationFailures) > 0
 	m.mu.Lock()
 	m.persistencePreviousCPU, m.persistencePreviousRAM, m.persistencePreviousTime = currentCPU, currentRAM, sample.Timestamp
 	m.persistencePreviousSystemd = currentUnits
@@ -350,4 +357,14 @@ func finalizedResourceCoverage(cpuCoverage, collected *string, authorities map[i
 
 func accountingIdentityKey(identity systemdunit.UnitIdentity) string {
 	return fmt.Sprintf("%s:%s:%d", identity.Name, identity.InvocationIDString(), identity.ControlGroupID)
+}
+
+func persistenceTopologyFingerprint(topology systemdunit.TopologySnapshot) string {
+	parts := make([]string, 0, len(topology.Users)+1)
+	parts = append(parts, "parent:"+accountingIdentityKey(topology.Parent.Identity))
+	for _, user := range topology.Users {
+		parts = append(parts, fmt.Sprintf("uid:%d:%s", user.UID, accountingIdentityKey(user.Unit.Identity)))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
 }

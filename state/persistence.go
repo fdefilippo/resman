@@ -1,7 +1,13 @@
 package state
 
 import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -10,6 +16,35 @@ const (
 	metricsDatabaseCPUPointsReadFailure  = "cpu_points_observation_failure"
 	metricsDatabaseRAMReadFailure        = "ram_observation_failure"
 )
+
+// persistenceObservationFailure is one required accounting observation that
+// could not be confirmed during a systemd-native control cycle.
+type persistenceObservationFailure struct {
+	ErrorType string
+	UID       int
+	Err       error
+}
+
+func (f persistenceObservationFailure) Error() string {
+	if f.UID > 0 {
+		return fmt.Sprintf("typed enforcement accounting %s for UID %d failed: %v", f.ErrorType, f.UID, f.Err)
+	}
+	return fmt.Sprintf("typed enforcement accounting %s failed: %v", f.ErrorType, f.Err)
+}
+
+func (f persistenceObservationFailure) Unwrap() error { return f.Err }
+
+func (f persistenceObservationFailure) reason() string {
+	var adapterError *systemdunit.AdapterError
+	if errors.As(f.Err, &adapterError) {
+		return string(adapterError.Reason)
+	}
+	return f.ErrorType
+}
+
+func (f persistenceObservationFailure) fingerprint() string {
+	return fmt.Sprintf("%s\x00%d\x00%T\x00%s", f.ErrorType, f.UID, f.Err, f.Err)
+}
 
 // collectPersistenceInterval captures one coherent decision interval. Only the
 // systemd adapter may publish applied resource state; observation-only mode
@@ -194,15 +229,86 @@ func cgroupCounterDelta(currentIdentity cgroup.CgroupIdentity, current uint64, p
 	return &delta
 }
 
-func (m *Manager) recordPersistenceObservationError(errorType string, uid int, err error) {
-	if uid > 0 {
-		m.logger.Warn("Failed to collect typed enforcement accounting", "uid", uid, "error_type", errorType, "error", err)
-	} else {
-		m.logger.Warn("Failed to collect typed enforcement accounting", "error_type", errorType, "error", err)
+func (m *Manager) recordPersistenceObservationError(sample *SystemMetrics, errorType string, uid int, err error) {
+	if sample != nil {
+		sample.systemdObservationFailures = append(sample.systemdObservationFailures, persistenceObservationFailure{
+			ErrorType: errorType,
+			UID:       uid,
+			Err:       err,
+		})
 	}
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
 	}
+}
+
+// reportPersistenceObservationFailures emits required accounting failures only
+// when their typed set changes, and emits one recovery event when it clears.
+func (m *Manager) reportPersistenceObservationFailures(sample *SystemMetrics) {
+	failures := append([]persistenceObservationFailure(nil), sample.systemdObservationFailures...)
+	sort.Slice(failures, func(i, j int) bool {
+		return failures[i].fingerprint() < failures[j].fingerprint()
+	})
+	parts := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		fingerprint := failure.fingerprint()
+		if len(parts) == 0 || parts[len(parts)-1] != fingerprint {
+			parts = append(parts, fingerprint)
+		}
+	}
+	fingerprint := sample.systemdObservationContext + "\x02" + strings.Join(parts, "\x01")
+	active := len(parts) > 0
+
+	m.mu.Lock()
+	changed := active && (!m.persistenceFailureActive || m.persistenceFailureState != fingerprint)
+	recovered := !active && m.persistenceFailureActive
+	m.persistenceFailureActive = active
+	m.persistenceFailureState = fingerprint
+	m.mu.Unlock()
+
+	if recovered {
+		m.logger.Info("Typed enforcement accounting recovered")
+		return
+	}
+	if !changed {
+		return
+	}
+	for index, failure := range failures {
+		if index > 0 && failure.fingerprint() == failures[index-1].fingerprint() {
+			continue
+		}
+		fields := []interface{}{"error_type", failure.ErrorType, "reason", failure.reason(), "error", failure.Err}
+		if failure.UID > 0 {
+			fields = append(fields, "uid", failure.UID)
+		}
+		m.logger.Warn("Failed to collect typed enforcement accounting", fields...)
+	}
+}
+
+// finalizeSystemdCPUPointsDegradation carries failures discovered after the
+// observation stage onto the same snapshots that Prometheus, MCP and SQLite use.
+func (m *Manager) finalizeSystemdCPUPointsDegradation(sample *SystemMetrics) {
+	if m.systemdUnits == nil || sample == nil {
+		return
+	}
+	m.mu.RLock()
+	degraded := m.cpuPointsDegraded
+	m.mu.RUnlock()
+	degraded = degraded || sample.PersistenceSystem.CPUPointsDegraded || len(sample.systemdObservationFailures) > 0
+	if !degraded {
+		return
+	}
+	sample.PersistenceSystem.CPUPointsDegraded = true
+	sample.CPUPointsSystem.ReconciliationDegraded = true
+	for uid, user := range sample.CPUPointsUsers {
+		user.ReconciliationDegraded = true
+		user.CompleteUIDWorkloadGuaranteed = false
+		sample.CPUPointsUsers[uid] = user
+	}
+	m.mu.Lock()
+	m.cpuPointsSystemSnapshot = sample.CPUPointsSystem
+	m.cpuPointsUserSnapshots = cloneCPUPointsUserSnapshots(sample.CPUPointsUsers)
+	m.mu.Unlock()
 }
 
 func (m *Manager) recordOptionalPersistenceObservationGap(errorType string, uid int, err error) {

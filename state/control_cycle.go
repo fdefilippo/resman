@@ -215,6 +215,10 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 		return fmt.Errorf("failed to collect system metrics (cycle %d): %w", run.cycleID, err)
 	}
 	run.metrics = metrics
+	for _, failure := range metrics.systemdObservationFailures {
+		run.degradedWarnings = append(run.degradedWarnings, failure)
+	}
+	m.reportPersistenceObservationFailures(metrics)
 	return nil
 }
 
@@ -277,6 +281,7 @@ func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 
 func (m *Manager) stageFinalizeEnforcementObservation(run *controlCycleContext) error {
 	m.finalizeSystemdResourceCoverage(run.metrics)
+	m.finalizeSystemdCPUPointsDegradation(run.metrics)
 	return nil
 }
 
@@ -397,6 +402,8 @@ type SystemMetrics struct {
 	CPUPointsUsers                map[int]resmanmetrics.CPUPointsUserSnapshot
 	systemdRAMAuthority           map[int]*systemdunit.ResourceAuthority
 	systemdIOAuthority            map[int]*systemdunit.ResourceAuthority
+	systemdObservationFailures    []persistenceObservationFailure
+	systemdObservationContext     string
 
 	// All non-system users with UID at or above SYSTEM_UID_MIN.
 	AllUsersCPUUsage    float64

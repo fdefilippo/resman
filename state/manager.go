@@ -72,6 +72,8 @@ type Manager struct {
 	persistencePreviousCPU     map[string]cgroup.CPUPointsNodeSnapshot
 	persistencePreviousRAM     map[int]cgroup.MemoryAccountingSnapshot
 	persistencePreviousTime    time.Time
+	persistenceFailureState    string
+	persistenceFailureActive   bool
 	cpuPointsLifecycleEvents   map[int]cpuPointsLifecycleEvent
 	cpuPointsSystemSnapshot    resmanmetrics.CPUPointsSystemSnapshot
 	cpuPointsUserSnapshots     map[int]resmanmetrics.CPUPointsUserSnapshot
