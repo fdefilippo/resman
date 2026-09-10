@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "profile": "rhel8-systemd239-cgroup2",
+  "source": {
+    "capture_kind": "dbus_introspection",
+    "distribution": "Red Hat Enterprise Linux 8.10 (Ootpa)",
+    "image": "registry.access.redhat.com/ubi8/ubi:8.10",
+    "image_id": "sha256:f40c835590edbe7adc1a73b6c50eab83fa8b643660951796a21a68f1bf9fb56c",
+    "image_digest": "sha256:bc8b5c83e0f5a7199eeabc8ea350a65b4d9551541ad601dce95ab2442d73a912",
+    "systemd_nevra": "systemd-239-82.el8_10.19.x86_64",
+    "kernel": "6.12.95",
+    "captured_on": "2026-09-10",
+    "environment": "disposable SmolVM guest"
+  },
+  "cgroup": {
+    "filesystem": "cgroup2fs",
+    "controllers": [
+      "cpuset",
+      "cpu",
+      "io",
+      "memory",
+      "hugetlb",
+      "pids"
+    ]
+  },
+  "interfaces": {
+    "org.freedesktop.systemd1.Unit": {
+      "properties": {
+        "Id": "s",
+        "ActiveState": "s",
+        "InvocationID": "ay",
+        "FragmentPath": "s",
+        "DropInPaths": "as"
+      }
+    },
+    "org.freedesktop.systemd1.Slice": {
+      "properties": {
+        "ControlGroup": "s",
+        "CPUWeight": "t",
+        "CPUQuotaPerSecUSec": "t",
+        "CPUQuotaPeriodUSec": "t",
+        "MemoryHigh": "t",
+        "MemoryMax": "t",
+        "MemorySwapMax": "t",
+        "IOWeight": "t",
+        "IOReadBandwidthMax": "a(st)",
+        "IOWriteBandwidthMax": "a(st)",
+        "IOReadIOPSMax": "a(st)",
+        "IOWriteIOPSMax": "a(st)"
+      },
+      "absent_properties": [
+        "ControlGroupId"
+      ]
+    },
+    "org.freedesktop.systemd1.Manager": {
+      "methods": {
+        "ListUnitsByPatterns": {
+          "input": "asas",
+          "output": "a(ssssssouso)"
+        },
+        "SetUnitProperties": {
+          "input": "sba(sv)",
+          "output": ""
+        },
+        "StartTransientUnit": {
+          "input": "ssa(sv)a(sa(sv))",
+          "output": "o"
+        },
+        "StopUnit": {
+          "input": "ss",
+          "output": "o"
+        },
+        "RevertUnitFiles": {
+          "input": "as",
+          "output": "a(sss)"
+        },
+        "Reload": {
+          "input": "",
+          "output": ""
+        }
+      }
+    }
+  }
+}
