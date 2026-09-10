@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.36.1
+VERSION = 1.36.2
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -81,6 +81,8 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
+.PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu
+
 .PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
 all: clean test lint build
@@ -126,6 +128,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	$(MAKE) verify-contracts GO="$(GO)"
 	$(MAKE) test-functional-final-unit
 	$(MAKE) test-functional-real-kernel-unit
+	$(MAKE) test-functional-systemd239-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
@@ -230,6 +233,14 @@ test-functional-smolvm-unit:
 # Exercise packaged-service harness sequencing without a remote host.
 test-functional-real-kernel-unit:
 	test/functional/real-kernel/host_test.sh
+
+# Exercise the EL8/systemd 239 QEMU harness without starting a VM.
+test-functional-systemd239-unit:
+	test/functional/systemd239/qemu_test.sh
+
+# Qualify an exact EL8 RPM inside a disposable QEMU guest on terra.
+test-functional-systemd239-qemu:
+	test/functional/systemd239/remote-qemu.sh "$(RESMAN_EL8_QEMU_HOST)" "$(RESMAN_EL8_RPM)" "$(RESMAN_EL8_RPM_MANIFEST)"
 
 # Run current-revision evidence on an explicitly selected disposable real-kernel host.
 test-functional-real-kernel-psi:
@@ -666,6 +677,8 @@ help:
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
+	@echo "    test-functional-systemd239-unit - Test the EL8/systemd 239 QEMU harness"
+	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-cpu-points - Prove CPU Points on RESMAN_REAL_KERNEL_HOST"

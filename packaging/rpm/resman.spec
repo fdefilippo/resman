@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.36.1
+Version: 1.36.2
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -76,8 +76,9 @@ v1.35.0: retire the non-systemd PID-relocation backend; systemd is the only enfo
 v1.35.4: declare the capability-probe payload and distinguish probe startup failures.
 v1.36.0: bound the packaged service privilege and filesystem surface.
 v1.36.1: report observation-only enforcement intent separately from applied action.
+v1.36.2: restore systemd-native enforcement on EL8 systemd 239 without ControlGroupId.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.1.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.2.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -296,6 +297,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Sep 10 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.2-1
+- Restore systemd-native enforcement on EL8 when systemd omits ControlGroupId.
+- Prove native capability apply, readback and restoration before selecting enforcement.
+- Report native observation and reconciliation failures as degraded outcomes.
+
 * Thu Sep 10 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.1-1
 - Report observation-only policy intent separately from acknowledged enforcement action.
 - Publish the bounded action and block state consistently through logs, Prometheus and MCP.

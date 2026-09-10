@@ -1,3 +1,11 @@
+resman (1.36.2-1) stable; urgency=medium
+
+  * Restore systemd-native enforcement on EL8 when systemd omits ControlGroupId.
+  * Prove native capability apply, readback and restoration before selecting enforcement.
+  * Report native observation and reconciliation failures as degraded outcomes.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 10 Sep 2026 18:20:00 +0200
+
 resman (1.36.1-1) stable; urgency=medium
 
   * Report observation-only policy intent separately from acknowledged enforcement action.
