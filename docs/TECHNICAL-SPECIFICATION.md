@@ -418,9 +418,9 @@ failure and leaves the feature disabled.
       └─ Else: MAINTAIN_CURRENT_STATE
 
 4. Execute decision:
-   ├─ ACTIVATE_LIMITS: Reconcile shared CPU and standalone RAM/IO cgroups
-   ├─ DEACTIVATE_LIMITS: Remove limits, restore normal
-   └─ MAINTAIN: No action
+   ├─ systemd_native: reconcile or restore authoritative systemd properties
+   └─ observation_only: record the requested intent with applied action none and
+      a bounded block reason; perform no enforcement mutation
 
 5. Record control cycle in history
 
@@ -1228,6 +1228,8 @@ decision policy.
 - `resman_resource_limits_active` (gauge)
 - `resman_any_limits_active` (gauge)
 - `resman_enforcement_mode{mode}` (one bounded active mode)
+- `resman_enforcement_action_state{mode, requested_intent, applied_action, block_reason}`
+  (one bounded latest cycle state; requested intent is not treated as applied action)
 
 **Per-User Metrics:**
 - `resman_user_cpu_usage_percent{uid, username}` (gauge)

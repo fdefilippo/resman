@@ -52,9 +52,10 @@ type mockMetricsCollector struct {
 }
 
 type failingCompletionLogger struct {
-	err      error
-	messages []string
-	fields   []interface{}
+	err           error
+	messages      []string
+	fields        []interface{}
+	fieldsHistory [][]interface{}
 }
 
 func (l *failingCompletionLogger) Debug(string, ...interface{}) {}
@@ -67,10 +68,24 @@ func (l *failingCompletionLogger) DebugChecked(string, ...interface{}) error {
 func (l *failingCompletionLogger) InfoChecked(message string, fields ...interface{}) error {
 	l.messages = append(l.messages, message)
 	l.fields = append([]interface{}(nil), fields...)
+	l.fieldsHistory = append(l.fieldsHistory, append([]interface{}(nil), fields...))
 	if message == "Control cycle completed" {
 		return l.err
 	}
 	return nil
+}
+
+func logFieldsByKey(t *testing.T, fields []interface{}) map[string]interface{} {
+	t.Helper()
+	result := make(map[string]interface{}, len(fields)/2)
+	for index := 0; index+1 < len(fields); index += 2 {
+		key, ok := fields[index].(string)
+		if !ok {
+			t.Fatalf("log field key %d = %#v, want string", index, fields[index])
+		}
+		result[key] = fields[index+1]
+	}
+	return result
 }
 
 func (m *mockMetricsCollector) GetTotalCores() int { return 4 }
@@ -325,6 +340,7 @@ type prometheusMetricSnapshot struct {
 	lastHostCPUSample            metrics.HostCPUUsageSample
 	observationHostCPUSamples    int
 	lastObservationHostCPUSample metrics.HostCPUUsageSample
+	lastSystemSnapshot           metrics.SystemExporterMetrics
 }
 
 func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
@@ -343,6 +359,7 @@ func (m *mockPrometheusExporter) snapshot() prometheusMetricSnapshot {
 		lastHostCPUSample:            m.lastHostCPUSample,
 		observationHostCPUSamples:    m.observationHostCPUSamples,
 		lastObservationHostCPUSample: m.lastObservationHostCPUSample,
+		lastSystemSnapshot:           m.lastSystemSnapshot,
 	}
 }
 
@@ -685,13 +702,14 @@ func TestControlCyclePublishesTheExactDecisionHostCPUSample(t *testing.T) {
 	}
 }
 
-func TestObservationOnlyCycleCompletionReportsModeWithoutInventingIngress(t *testing.T) {
+func TestObservationOnlyCyclesSeparateIntentFromAppliedActionAndSuppressRepeatedNoise(t *testing.T) {
 	logger := &failingCompletionLogger{}
+	exporter := &mockPrometheusExporter{}
 	manager, err := NewManager(
 		config.DefaultConfig(),
 		&mockMetricsCollector{},
 		&mockCgroupManager{},
-		&mockPrometheusExporter{},
+		exporter,
 		WithEnforcementStatus(cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeObservationOnly,
 			Reason: cgroup.EnforcementReasonSystemdOwnsHostWorkloads,
@@ -701,42 +719,112 @@ func TestObservationOnlyCycleCompletionReportsModeWithoutInventingIngress(t *tes
 		t.Fatalf("NewManager() error: %v", err)
 	}
 	manager.logger = logger
-	run := &controlCycleContext{
-		cfg:      config.DefaultConfig(),
-		cycleID:  1,
-		trigger:  ControlCycleTriggerManual,
-		decision: "ACTIVATE_LIMITS",
-		reason:   "test activation",
-		metrics: &SystemMetrics{
-			CPUEligibleUsers: []int{1000},
-			UserMetrics: map[int]*metrics.UserMetrics{
-				1000: {EnforceableUsage: metrics.ProcessSetMetrics{ProcessCount: 3}},
+	newRun := func(cycleID int64, decision string) *controlCycleContext {
+		return &controlCycleContext{
+			cfg:      config.DefaultConfig(),
+			cycleID:  cycleID,
+			trigger:  ControlCycleTriggerManual,
+			decision: decision,
+			reason:   "test decision",
+			metrics: &SystemMetrics{
+				CPUEligibleUsers: []int{1000},
+				UserMetrics: map[int]*metrics.UserMetrics{
+					1000: {EnforceableUsage: metrics.ProcessSetMetrics{ProcessCount: 3}},
+				},
 			},
-		},
+		}
 	}
-	if err := manager.stageExecuteDecision(run); err != nil {
-		t.Fatalf("stageExecuteDecision() error: %v", err)
+
+	var run *controlCycleContext
+	for cycleID := int64(1); cycleID <= 3; cycleID++ {
+		run = newRun(cycleID, decisionActivate)
+		if err := manager.stageExecuteDecision(run); err != nil {
+			t.Fatalf("stageExecuteDecision() cycle %d error: %v", cycleID, err)
+		}
+	}
+	if !reflect.DeepEqual(logger.messages, []string{"Enforcement action state changed"}) {
+		t.Fatalf("repeated intent log messages = %v, want one state transition", logger.messages)
+	}
+	if err := manager.stageUpdatePrometheus(run); err != nil {
+		t.Fatalf("stageUpdatePrometheus() error: %v", err)
 	}
 	if err := manager.stageLogCompletion(run); err != nil {
 		t.Fatalf("stageLogCompletion() error: %v", err)
 	}
 
-	fields := make(map[string]interface{}, len(logger.fields)/2)
-	for index := 0; index+1 < len(logger.fields); index += 2 {
-		key, ok := logger.fields[index].(string)
-		if !ok {
-			t.Fatalf("log field key %d = %#v, want string", index, logger.fields[index])
-		}
-		fields[key] = logger.fields[index+1]
-	}
+	fields := logFieldsByKey(t, logger.fields)
 	if fields["enforcement_mode"] != cgroup.EnforcementModeObservationOnly {
 		t.Fatalf("enforcement_mode = %#v", fields["enforcement_mode"])
+	}
+	if fields["requested_policy_intent"] != cgroup.EnforcementPolicyIntentActivate ||
+		fields["applied_enforcement_action"] != cgroup.AppliedEnforcementActionNone ||
+		fields["enforcement_block_reason"] != cgroup.EnforcementBlockReasonSystemdOwnsWorkloads {
+		t.Fatalf("completion enforcement projection = intent=%#v applied=%#v block=%#v",
+			fields["requested_policy_intent"], fields["applied_enforcement_action"], fields["enforcement_block_reason"])
+	}
+	if _, legacy := fields["decision"]; legacy {
+		t.Fatalf("completion contains ambiguous legacy decision field: %v", fields)
 	}
 	if fields["ingress_refused_count"] != 0 {
 		t.Fatalf("ingress_refused_count = %#v, want 0 when no ingress is attempted", fields["ingress_refused_count"])
 	}
 	if fields["outcome"] != "success" {
 		t.Fatalf("outcome = %#v, want pipeline success with explicit refusal fields", fields["outcome"])
+	}
+
+	wantState := cgroup.EnforcementCycleState{
+		Mode:            cgroup.EnforcementModeObservationOnly,
+		RequestedIntent: cgroup.EnforcementPolicyIntentActivate,
+		AppliedAction:   cgroup.AppliedEnforcementActionNone,
+		BlockReason:     cgroup.EnforcementBlockReasonSystemdOwnsWorkloads,
+	}
+	status := manager.GetStatus()
+	if status.RequestedPolicyIntent != wantState.RequestedIntent ||
+		status.AppliedEnforcementAction != wantState.AppliedAction ||
+		status.EnforcementBlockReason != wantState.BlockReason {
+		t.Fatalf("MCP runtime state = %+v, want %+v", status, wantState)
+	}
+	gotSnapshot := exporter.snapshot()
+	if gotSnapshot.lastSystemSnapshot.EnforcementCycleState != wantState {
+		t.Fatalf("Prometheus state = %+v, want %+v", gotSnapshot.lastSystemSnapshot.EnforcementCycleState, wantState)
+	}
+	if gotSnapshot.limitsActivated != 0 || gotSnapshot.limitsDeactivated != 0 {
+		t.Fatalf("transition counters = activate %d deactivate %d, want zero",
+			gotSnapshot.limitsActivated, gotSnapshot.limitsDeactivated)
+	}
+
+	deactivate := newRun(4, decisionDeactivate)
+	if err := manager.stageExecuteDecision(deactivate); err != nil {
+		t.Fatalf("deactivation intent error: %v", err)
+	}
+	if len(logger.messages) != 3 || logger.messages[2] != "Enforcement action state changed" {
+		t.Fatalf("material intent change messages = %v", logger.messages)
+	}
+	if err := manager.stageExecuteDecision(newRun(5, decisionDeactivate)); err != nil {
+		t.Fatalf("repeated deactivation intent error: %v", err)
+	}
+	if len(logger.messages) != 3 {
+		t.Fatalf("repeated deactivation emitted another event: %v", logger.messages)
+	}
+	if err := manager.publishEnforcementCycleState(cgroup.EnforcementCycleState{
+		Mode:            cgroup.EnforcementModeSystemdNative,
+		RequestedIntent: cgroup.EnforcementPolicyIntentDeactivate,
+		AppliedAction:   cgroup.AppliedEnforcementActionDeactivate,
+		BlockReason:     cgroup.EnforcementBlockReasonNone,
+	}); err != nil {
+		t.Fatalf("publish mode change: %v", err)
+	}
+	if len(logger.messages) != 4 || logger.messages[3] != "Enforcement action state changed" {
+		t.Fatalf("mode change messages = %v", logger.messages)
+	}
+	eventFields := logFieldsByKey(t, logger.fieldsHistory[3])
+	if !reflect.DeepEqual(eventFields, map[string]interface{}{
+		"enforcement_mode":           cgroup.EnforcementModeSystemdNative,
+		"requested_policy_intent":    cgroup.EnforcementPolicyIntentDeactivate,
+		"applied_enforcement_action": cgroup.AppliedEnforcementActionDeactivate,
+		"enforcement_block_reason":   cgroup.EnforcementBlockReasonNone,
+	}) {
+		t.Fatalf("bounded state-change fields = %v", eventFields)
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
@@ -599,6 +600,10 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 		SystemUnderLoad:                true,
 	}
 	runtime := state.RuntimeStatus{
+		EnforcementMode:              cgroup.EnforcementModeObservationOnly,
+		RequestedPolicyIntent:        cgroup.EnforcementPolicyIntentActivate,
+		AppliedEnforcementAction:     cgroup.AppliedEnforcementActionNone,
+		EnforcementBlockReason:       cgroup.EnforcementBlockReasonSystemdOwnsWorkloads,
 		AnyLimitsActive:              true,
 		CPULimitsActive:              true,
 		ResourceLimitsActive:         true,
@@ -617,6 +622,9 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 			name:    "system status",
 			payload: newSystemStatusPayload("host-a", "worker", observation, runtime),
 			want: map[string]any{
+				"requested_policy_intent":            string(cgroup.EnforcementPolicyIntentActivate),
+				"applied_enforcement_action":         string(cgroup.AppliedEnforcementActionNone),
+				"enforcement_block_reason":           string(cgroup.EnforcementBlockReasonSystemdOwnsWorkloads),
 				"observed_users_cpu_usage":           54.25,
 				"observed_users_count":               float64(7),
 				"total_cpu_usage_available":          false,
@@ -630,6 +638,9 @@ func TestStatusPayloadsKeepObservationAndRuntimeContractsDistinct(t *testing.T) 
 			name:    "limits status",
 			payload: newLimitsStatusPayload("host-a", "worker", runtime),
 			want: map[string]any{
+				"requested_policy_intent":          string(cgroup.EnforcementPolicyIntentActivate),
+				"applied_enforcement_action":       string(cgroup.AppliedEnforcementActionNone),
+				"enforcement_block_reason":         string(cgroup.EnforcementBlockReasonSystemdOwnsWorkloads),
 				"actively_limited_users_count":     float64(2),
 				"cpu_actively_limited_users_count": float64(1),
 				"cpu_limits_active":                true,

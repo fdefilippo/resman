@@ -11,6 +11,12 @@ import (
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
+const (
+	decisionActivate   = "ACTIVATE_LIMITS"
+	decisionMaintain   = "MAINTAIN_CURRENT_STATE"
+	decisionDeactivate = "DEACTIVATE_LIMITS"
+)
+
 const minimumEligibleCPUShareForLoadOwnership = 0.5
 
 type cpuLoadAttribution struct {
@@ -47,13 +53,6 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	cpuThreshold := cfg.GetCPUThreshold()
 	ignoreSystemLoad := cfg.GetIgnoreSystemLoad()
 	cpuThresholdDuration := cfg.GetCPUThresholdDuration()
-
-	// Supported decisions.
-	const (
-		DecisionActivate   = "ACTIVATE_LIMITS"
-		DecisionMaintain   = "MAINTAIN_CURRENT_STATE"
-		DecisionDeactivate = "DEACTIVATE_LIMITS"
-	)
 
 	// Evaluate activation thresholds independently for every resource.
 	cpuExceeded := metrics.CPUEligibleCPUUsage >= float64(cpuThreshold)
@@ -98,7 +97,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if !anyExceeded && ioThresholdPending {
 		m.thresholdTracker.Reset()
 		remaining := time.Duration(ioPolicy.ThresholdDuration)*time.Second - m.ioThresholdTracker.GetElapsed()
-		return DecisionMaintain, fmt.Sprintf(
+		return decisionMaintain, fmt.Sprintf(
 			"IO threshold exceeded, waiting %s before activating limits (peak %.1f%% >= %d%%)",
 			remaining.Round(time.Second),
 			ioActivationPressure.maxPercent,
@@ -126,14 +125,14 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// All-or-nothing release protects the most recently activated
 		// enforcement family from immediate release and reactivation.
 		if time.Since(limitsAppliedTime) < time.Duration(minActiveTime)*time.Second {
-			return DecisionMaintain, "Limits active, waiting for minimum activation time from the most recent enforcement epoch"
+			return decisionMaintain, "Limits active, waiting for minimum activation time from the most recent enforcement epoch"
 		}
 
 		if ioCoverageIncomplete {
 			if m.stabilityTracker != nil {
 				m.stabilityTracker.Reset()
 			}
-			return DecisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "current limits cannot be released safely")
+			return decisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "current limits cannot be released safely")
 		}
 
 		// Deactivate only when every resource is below its release threshold.
@@ -171,18 +170,18 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			if !metrics.SystemUnderLoad && stable {
 				m.thresholdTracker.Reset()
 				m.ioThresholdTracker.Reset()
-				return DecisionDeactivate, m.buildDeactivateReason(cpuBelow, ramBelow, ioBelow, metrics, cpuReleaseThreshold)
+				return decisionDeactivate, m.buildDeactivateReason(cpuBelow, ramBelow, ioBelow, metrics, cpuReleaseThreshold)
 			}
 			if !stable {
-				return DecisionMaintain, "Resources below thresholds but waiting for stability (cool-down period)"
+				return decisionMaintain, "Resources below thresholds but waiting for stability (cool-down period)"
 			}
-			return DecisionMaintain, "Resources below thresholds but system still under load"
+			return decisionMaintain, "Resources below thresholds but system still under load"
 		}
 
 		if m.stabilityTracker != nil {
 			m.stabilityTracker.Reset()
 		}
-		return DecisionMaintain, "Limits active, at least one resource still above release threshold"
+		return decisionMaintain, "Limits active, at least one resource still above release threshold"
 	}
 
 	// When inactive, activate if any enabled resource exceeds its threshold.
@@ -193,10 +192,10 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		if !ignoreSystemLoad && metrics.SystemUnderLoad {
 			attribution := measureCPULoadAttribution(metrics)
 			if !attribution.measurable {
-				return DecisionMaintain, "Threshold exceeded while system load attribution is unavailable because the host CPU sample is unavailable"
+				return decisionMaintain, "Threshold exceeded while system load attribution is unavailable because the host CPU sample is unavailable"
 			}
 			if attribution.eligibleShare < minimumEligibleCPUShareForLoadOwnership {
-				return DecisionMaintain, fmt.Sprintf(
+				return decisionMaintain, fmt.Sprintf(
 					"Threshold exceeded while system load is primarily external: CPU-eligible users account for %.1f%% of measured CPU activity",
 					attribution.eligibleShare*100,
 				)
@@ -214,7 +213,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				// CPU alone is above threshold but has not stayed there long enough.
 				elapsed := m.thresholdTracker.GetElapsed()
 				remaining := time.Duration(cpuThresholdDuration)*time.Second - elapsed
-				return DecisionMaintain, fmt.Sprintf(
+				return decisionMaintain, fmt.Sprintf(
 					"CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
 					remaining.Round(time.Second),
 					metrics.CPUEligibleCPUUsage, cpuThreshold,
@@ -222,7 +221,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			}
 		}
 
-		return DecisionActivate, m.buildActivateReason(
+		return decisionActivate, m.buildActivateReason(
 			cpuExceeded,
 			ramExceeded,
 			ioExceeded,
@@ -236,13 +235,13 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	if ioCoverageIncomplete {
 		m.thresholdTracker.Reset()
 		m.ioThresholdTracker.Reset()
-		return DecisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "zero pressure is not established")
+		return decisionMaintain, ioCoverageReason(metrics, blockIOPSCoverageIncomplete, "zero pressure is not established")
 	}
 
 	// No resource exceeds its threshold; reset activation tracking.
 	m.thresholdTracker.Reset()
 	m.ioThresholdTracker.Reset()
-	return DecisionMaintain, "All resources within normal range"
+	return decisionMaintain, "All resources within normal range"
 }
 
 // measureCPULoadAttribution compares host and eligible-user CPU in the same
@@ -307,6 +306,49 @@ func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metric
 	return fmt.Sprintf(
 		"All resources below release thresholds (CPU %.1f%% < %d%%)",
 		metrics.CPUEligibleCPUUsage, cpuReleaseThreshold,
+	)
+}
+
+func enforcementPolicyIntent(decision string) (cgroup.EnforcementPolicyIntent, error) {
+	switch decision {
+	case decisionActivate:
+		return cgroup.EnforcementPolicyIntentActivate, nil
+	case decisionDeactivate:
+		return cgroup.EnforcementPolicyIntentDeactivate, nil
+	case decisionMaintain:
+		return cgroup.EnforcementPolicyIntentMaintain, nil
+	default:
+		return cgroup.EnforcementPolicyIntentNone, fmt.Errorf("unknown decision %q", decision)
+	}
+}
+
+func appliedEnforcementAction(intent cgroup.EnforcementPolicyIntent) cgroup.AppliedEnforcementAction {
+	switch intent {
+	case cgroup.EnforcementPolicyIntentActivate:
+		return cgroup.AppliedEnforcementActionActivate
+	case cgroup.EnforcementPolicyIntentDeactivate:
+		return cgroup.AppliedEnforcementActionDeactivate
+	case cgroup.EnforcementPolicyIntentMaintain:
+		return cgroup.AppliedEnforcementActionMaintain
+	default:
+		return cgroup.AppliedEnforcementActionNone
+	}
+}
+
+func (m *Manager) publishEnforcementCycleState(state cgroup.EnforcementCycleState) error {
+	state = cgroup.NormalizedEnforcementCycleState(state, m.enforcementStatus)
+	m.mu.Lock()
+	changed := state != m.enforcementCycleState
+	m.enforcementCycleState = state
+	m.mu.Unlock()
+	if !changed {
+		return nil
+	}
+	return m.logger.InfoChecked("Enforcement action state changed",
+		"enforcement_mode", state.Mode,
+		"requested_policy_intent", state.RequestedIntent,
+		"applied_enforcement_action", state.AppliedAction,
+		"enforcement_block_reason", state.BlockReason,
 	)
 }
 

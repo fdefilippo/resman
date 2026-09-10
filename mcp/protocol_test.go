@@ -766,6 +766,8 @@ func callPromptOverHTTP(t *testing.T, server *Server, name string) string {
 func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 	t.Helper()
 	for _, key := range []string{
+		"applied_enforcement_action",
+		"enforcement_block_reason",
 		"enforcement_mode",
 		"enforcement_reason",
 		"observed_users_cpu_usage",
@@ -775,6 +777,7 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 		"actively_limited_users_count",
 		"cpu_limits_active",
 		"resource_limits_active",
+		"requested_policy_intent",
 		"cpu_points",
 	} {
 		if _, exists := status[key]; !exists {

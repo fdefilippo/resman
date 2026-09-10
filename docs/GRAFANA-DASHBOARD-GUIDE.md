@@ -55,7 +55,9 @@ The dashboard is organized in seven rows. Every query is filtered by the `cluste
 | **I/O limits** | `resman_io_eligible_users_count`, `resman_resource_limits_active` | I/O-eligible users and the RAM/I/O active state |
 
 Read this row together with `resman_enforcement_mode`: in `observation_only` the
-daemon records intent only and no user is ever counted as limited.
+daemon records intent only and no user is ever counted as limited. Use
+`resman_enforcement_action_state` to distinguish the requested intent from the
+acknowledged action and its bounded block reason.
 
 ### Row 3: Memory and I/O
 
@@ -77,6 +79,7 @@ daemon records intent only and no user is ever counted as limited.
 | Panel | Metric | Description |
 |-------|--------|-------------|
 | **Enforcement mode** | `resman_enforcement_mode{mode} == 1` | `observation_only` or `systemd_native`; the key to reading the Limits row |
+| **Requested versus applied action** | `resman_enforcement_action_state == 1` | Latest bounded tuple of mode, requested intent, acknowledged action and block reason |
 | **CPU Points denominator** | `resman_cpu_points_denominator_state{state} == 1` | `complete` means every active sibling slice was confirmed this cycle |
 | **CPU Points delivery** | `resman_cpu_points_delivery_state{state} == 1` | `available`, `throttled_parent` or `unavailable` |
 | **CPU / RAM / I/O coverage by user** | `resman_user_cpu_points_process_coverage`, `resman_user_ram_cgroup_coverage`, `resman_user_io_coverage` (`coverage` label) | Per-user authority coverage: `complete`, `partial`, `refused`, `unavailable` |

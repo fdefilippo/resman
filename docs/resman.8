@@ -371,6 +371,13 @@ Inspect
 .B resman_enforcement_mode
 or the MCP system and limits status before assuming that enforcement is available.
 There is no configuration override for the systemd containment decision.
+.PP
+Cycle status separates the requested policy intent from an action acknowledged by
+the enforcement adapter. In observation_only mode, activation or deactivation is
+reported as requested while applied_enforcement_action remains none and a bounded
+enforcement_block_reason explains the refusal. A successful cycle outcome means
+that the observation pipeline completed; it does not mean that enforcement ran.
+Repeated identical blocked intent is not emitted as a new transition.
 .SH PSI EVENT-DRIVEN MODE
 When enabled, the daemon uses Linux Pressure Stall Information (PSI) files to
 trigger control cycles when system pressure exceeds configured thresholds. The
@@ -922,6 +929,8 @@ resman_limit_hook_queue_depth \- Current pending limit-hook deliveries (gauge)
 resman_limit_hook_queue_capacity \- Configured pending-delivery bound (gauge)
 .IP \(bu
 resman_enforcement_mode{mode} \- Current bounded enforcement mode: observation_only or systemd_native (gauge)
+.IP \(bu
+resman_enforcement_action_state{mode,requested_intent,applied_action,block_reason} \- Latest bounded cycle state separating requested intent from acknowledged action (gauge)
 .IP \(bu
 resman_procfs_unavailable_processes{access} \- Current processes missing executable_identity or io_decision procfs access (gauge)
 .PP

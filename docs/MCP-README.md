@@ -472,6 +472,11 @@ The MCP server runs with the same permissions as ResMan. Ensure:
 ```json
 {
   "hostname": "server-web01",
+  "enforcement_mode": "systemd_native",
+  "enforcement_reason": "systemd_native_adapter",
+  "requested_policy_intent": "activate",
+  "applied_enforcement_action": "activate",
+  "enforcement_block_reason": "none",
   "total_cpu_usage": 45.5,
   "total_cpu_usage_available": true,
   "total_cpu_usage_unavailable_reason": "",
@@ -485,14 +490,16 @@ The MCP server runs with the same permissions as ResMan. Ensure:
   "cpu_limits_active": true,
   "resource_limits_active": false,
   "cpu_limits_applied_time": "2026-03-11T14:30:00Z",
-  "resource_limits_applied_time": "",
-  "shared_cgroup_active": true
+  "resource_limits_applied_time": ""
 }
 ```
 
 When `total_cpu_usage_available` is false, `total_cpu_usage` is not a measured zero
 and must not be interpreted as one. The bounded reason identifies a missing baseline,
 read failure, stale baseline, counter reset, or zero-delta sample.
+The requested policy intent is distinct from the acknowledged applied action. In
+`observation_only`, activation or deactivation intent is returned with applied action
+`none` and a bounded block reason.
 
 ### Tool: get_cpu_report ⭐ NEW
 

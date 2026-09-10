@@ -78,6 +78,7 @@ type Manager struct {
 	pendingCPUPointsPolicy     *cpupoints.PolicySnapshot
 	cpuPointsDegraded          bool
 	enforcementStatus          cgroup.EnforcementStatus
+	enforcementCycleState      cgroup.EnforcementCycleState
 	systemdUnits               SystemdCPUUnitAdapter
 	systemdCPURequested        bool
 	systemdCPUComplete         bool
@@ -357,6 +358,7 @@ func NewManager(
 	if mgr.systemdUnits != nil && mgr.enforcementStatus.Mode != cgroup.EnforcementModeSystemdNative {
 		return nil, fmt.Errorf("systemd CPU adapter requires systemd-native enforcement mode")
 	}
+	mgr.enforcementCycleState = cgroup.InitialEnforcementCycleState(mgr.enforcementStatus)
 
 	logger.Info("State manager initialized",
 		"polling_interval", cfg.PollingInterval,
@@ -427,6 +429,9 @@ func (m *Manager) isUserLimited(uid int) bool {
 type RuntimeStatus struct {
 	EnforcementMode              cgroup.EnforcementMode
 	EnforcementReason            string
+	RequestedPolicyIntent        cgroup.EnforcementPolicyIntent
+	AppliedEnforcementAction     cgroup.AppliedEnforcementAction
+	EnforcementBlockReason       cgroup.EnforcementBlockReason
 	CPULimitsActive              bool
 	ResourceLimitsActive         bool
 	AnyLimitsActive              bool
@@ -485,10 +490,14 @@ func (m *Manager) getEnforcementSummary() enforcementSummary {
 // GetStatus returns a typed snapshot of observed enforcement state.
 func (m *Manager) GetStatus() RuntimeStatus {
 	summary := m.getEnforcementSummary()
+	cycleState := m.currentEnforcementCycleState()
 
 	status := RuntimeStatus{
 		EnforcementMode:              m.enforcementStatus.Mode,
 		EnforcementReason:            m.enforcementStatus.Reason,
+		RequestedPolicyIntent:        cycleState.RequestedIntent,
+		AppliedEnforcementAction:     cycleState.AppliedAction,
+		EnforcementBlockReason:       cycleState.BlockReason,
 		CPULimitsActive:              summary.cpuLimitsActive,
 		ResourceLimitsActive:         summary.resourceLimitsActive,
 		AnyLimitsActive:              summary.cpuLimitsActive || summary.resourceLimitsActive,
@@ -539,6 +548,13 @@ func (m *Manager) GetStatus() RuntimeStatus {
 	sort.Slice(status.CPUPointUsers, func(i, j int) bool { return status.CPUPointUsers[i].UID < status.CPUPointUsers[j].UID })
 
 	return status
+}
+
+func (m *Manager) currentEnforcementCycleState() cgroup.EnforcementCycleState {
+	m.mu.RLock()
+	state := m.enforcementCycleState
+	m.mu.RUnlock()
+	return cgroup.NormalizedEnforcementCycleState(state, m.enforcementStatus)
 }
 
 // GetCPUPointsUserStatus returns the latest authoritative decision-sample

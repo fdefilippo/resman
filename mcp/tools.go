@@ -183,6 +183,9 @@ type systemStatusPayload struct {
 	ServerRole                string                 `json:"server_role"`
 	EnforcementMode           string                 `json:"enforcement_mode"`
 	EnforcementReason         string                 `json:"enforcement_reason"`
+	RequestedPolicyIntent     string                 `json:"requested_policy_intent"`
+	AppliedEnforcementAction  string                 `json:"applied_enforcement_action"`
+	EnforcementBlockReason    string                 `json:"enforcement_block_reason"`
 	TotalCPUUsage             float64                `json:"total_cpu_usage"`
 	TotalCPUUsageAvailable    bool                   `json:"total_cpu_usage_available"`
 	TotalCPUUnavailableReason string                 `json:"total_cpu_usage_unavailable_reason"`
@@ -205,6 +208,9 @@ type limitsStatusPayload struct {
 	ServerRole                   string                 `json:"server_role"`
 	EnforcementMode              string                 `json:"enforcement_mode"`
 	EnforcementReason            string                 `json:"enforcement_reason"`
+	RequestedPolicyIntent        string                 `json:"requested_policy_intent"`
+	AppliedEnforcementAction     string                 `json:"applied_enforcement_action"`
+	EnforcementBlockReason       string                 `json:"enforcement_block_reason"`
 	AnyLimitsActive              bool                   `json:"any_limits_active"`
 	CPULimitsActive              bool                   `json:"cpu_limits_active"`
 	ResourceLimitsActive         bool                   `json:"resource_limits_active"`
@@ -224,6 +230,9 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		ServerRole:                serverRole,
 		EnforcementMode:           string(runtime.EnforcementMode),
 		EnforcementReason:         runtime.EnforcementReason,
+		RequestedPolicyIntent:     string(runtime.RequestedPolicyIntent),
+		AppliedEnforcementAction:  string(runtime.AppliedEnforcementAction),
+		EnforcementBlockReason:    string(runtime.EnforcementBlockReason),
 		TotalCPUUsage:             observation.TotalCPUUsage,
 		TotalCPUUsageAvailable:    observation.TotalCPUUsageAvailable,
 		TotalCPUUnavailableReason: string(observation.TotalCPUUsageUnavailableReason),
@@ -248,6 +257,9 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 		ServerRole:                   serverRole,
 		EnforcementMode:              string(runtime.EnforcementMode),
 		EnforcementReason:            runtime.EnforcementReason,
+		RequestedPolicyIntent:        string(runtime.RequestedPolicyIntent),
+		AppliedEnforcementAction:     string(runtime.AppliedEnforcementAction),
+		EnforcementBlockReason:       string(runtime.EnforcementBlockReason),
 		AnyLimitsActive:              runtime.AnyLimitsActive,
 		CPULimitsActive:              runtime.CPULimitsActive,
 		ResourceLimitsActive:         runtime.ResourceLimitsActive,

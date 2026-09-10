@@ -70,6 +70,39 @@ func TestZeroEnforcementStatusFailsClosed(t *testing.T) {
 	}
 }
 
+func TestEnforcementCycleStateUsesOnlyBoundedPublicVocabulary(t *testing.T) {
+	tests := []struct {
+		reason string
+		want   EnforcementBlockReason
+	}{
+		{EnforcementReasonSystemdRuntimeAbsent, EnforcementBlockReasonSystemdRuntimeAbsent},
+		{EnforcementReasonSystemdOwnsHostWorkloads, EnforcementBlockReasonSystemdOwnsWorkloads},
+		{EnforcementReasonAuthorityUnverifiable, EnforcementBlockReasonAuthorityUnverifiable},
+		{"unbounded detail with PID 1234", EnforcementBlockReasonAuthorityUnverifiable},
+	}
+	for _, tt := range tests {
+		if got := BoundedEnforcementBlockReason(tt.reason); got != tt.want {
+			t.Errorf("BoundedEnforcementBlockReason(%q) = %q, want %q", tt.reason, got, tt.want)
+		}
+	}
+
+	got := NormalizedEnforcementCycleState(EnforcementCycleState{
+		Mode:            "unexpected",
+		RequestedIntent: "pid=1234",
+		AppliedAction:   "executed_maybe",
+		BlockReason:     "path=/sys/fs/cgroup/private",
+	}, EnforcementStatus{Mode: EnforcementModeSystemdNative})
+	want := EnforcementCycleState{
+		Mode:            EnforcementModeSystemdNative,
+		RequestedIntent: EnforcementPolicyIntentNone,
+		AppliedAction:   AppliedEnforcementActionNone,
+		BlockReason:     EnforcementBlockReasonNone,
+	}
+	if got != want {
+		t.Fatalf("normalized state = %+v, want %+v", got, want)
+	}
+}
+
 func TestManagerStartupDoesNotCreateManagedHierarchy(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "cgroup.controllers"), []byte("cpu memory io\n"), 0600); err != nil {

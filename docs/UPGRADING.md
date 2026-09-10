@@ -79,6 +79,14 @@ Stop ResMan and archive or delete the schema-6 metrics database together with it
 WAL and SHM sidecars before starting 1.35. No origin or recovery file needs to be
 migrated, and 1.35 never reads or writes one.
 
+Control-cycle results now distinguish `requested_policy_intent` from
+`applied_enforcement_action`. In `observation_only`, a requested activation or
+deactivation is reported with applied action `none` and a bounded
+`enforcement_block_reason`; the cycle's `outcome=success` means that the observation
+pipeline completed, not that a limit was applied. Prometheus exposes the same tuple
+through `resman_enforcement_action_state`, and MCP system and limits status use the
+same three fields.
+
 ## BREAKING: commas inside regex-list patterns are rejected
 
 **Visible change.** Startup exits with status 78 when any regex-list key contains a

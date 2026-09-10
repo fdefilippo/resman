@@ -836,7 +836,15 @@ func TestEnforcementModeUsesBoundedLabelVocabulary(t *testing.T) {
 		t.Fatalf("NewPrometheusExporter() error: %v", err)
 	}
 
-	exporter.UpdateSystemSnapshot(SystemExporterMetrics{EnforcementMode: cgroup.EnforcementModeObservationOnly})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{
+		EnforcementMode: cgroup.EnforcementModeObservationOnly,
+		EnforcementCycleState: cgroup.EnforcementCycleState{
+			Mode:            cgroup.EnforcementModeObservationOnly,
+			RequestedIntent: cgroup.EnforcementPolicyIntentActivate,
+			AppliedAction:   cgroup.AppliedEnforcementActionNone,
+			BlockReason:     cgroup.EnforcementBlockReasonSystemdOwnsWorkloads,
+		},
+	})
 
 	families, err := exporter.registry.Gather()
 	if err != nil {
@@ -847,6 +855,7 @@ func TestEnforcementModeUsesBoundedLabelVocabulary(t *testing.T) {
 		string(cgroup.EnforcementModeSystemdNative):   0,
 	}
 	foundModes := false
+	foundActionState := false
 	for _, family := range families {
 		switch family.GetName() {
 		case "resman_enforcement_mode":
@@ -862,10 +871,34 @@ func TestEnforcementModeUsesBoundedLabelVocabulary(t *testing.T) {
 			if !reflect.DeepEqual(got, wantModes) {
 				t.Fatalf("enforcement modes = %v, want %v", got, wantModes)
 			}
+		case "resman_enforcement_action_state":
+			foundActionState = true
+			if len(family.Metric) != 1 {
+				t.Fatalf("enforcement action state series = %d, want 1", len(family.Metric))
+			}
+			metric := family.Metric[0]
+			labels := make(map[string]string, len(metric.Label))
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			want := map[string]string{
+				"mode":             string(cgroup.EnforcementModeObservationOnly),
+				"requested_intent": string(cgroup.EnforcementPolicyIntentActivate),
+				"applied_action":   string(cgroup.AppliedEnforcementActionNone),
+				"block_reason":     string(cgroup.EnforcementBlockReasonSystemdOwnsWorkloads),
+				"hostname":         exporter.hostname,
+				"server_role":      exporter.serverRole,
+			}
+			if !reflect.DeepEqual(labels, want) || metric.GetGauge().GetValue() != 1 {
+				t.Fatalf("enforcement action state labels/value = %v/%v, want %v/1", labels, metric.GetGauge().GetValue(), want)
+			}
 		}
 	}
 	if !foundModes {
 		t.Fatal("bounded enforcement-mode metric family not found")
+	}
+	if !foundActionState {
+		t.Fatal("bounded enforcement-action metric family not found")
 	}
 }
 

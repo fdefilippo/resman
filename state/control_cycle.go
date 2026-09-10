@@ -29,6 +29,7 @@ type controlCycleContext struct {
 	metrics             *SystemMetrics
 	decision            string
 	reason              string
+	enforcementState    cgroup.EnforcementCycleState
 	duration            time.Duration
 	activeLimitedUsers  int
 	ingressRefusedCount int
@@ -246,14 +247,32 @@ func (m *Manager) stageMakeDecision(run *controlCycleContext) error {
 func (m *Manager) stageExecuteDecision(run *controlCycleContext) error {
 	// Execute the selected enforcement action. The application-level caller owns
 	// the single cycle failure log after protective stages have completed.
+	intent, err := enforcementPolicyIntent(run.decision)
+	if err != nil {
+		return err
+	}
+	run.enforcementState = cgroup.EnforcementCycleState{
+		Mode:            m.enforcementStatus.Mode,
+		RequestedIntent: intent,
+		AppliedAction:   cgroup.AppliedEnforcementActionNone,
+		BlockReason:     cgroup.EnforcementBlockReasonNone,
+	}
 	if m.enforcementStatus.Mode == cgroup.EnforcementModeObservationOnly {
 		run.ingressRefusedCount = m.recordObservationOnlyIntent(run.decision, run.metrics)
-		return nil
+		if intent == cgroup.EnforcementPolicyIntentActivate || intent == cgroup.EnforcementPolicyIntentDeactivate {
+			run.enforcementState.BlockReason = cgroup.BoundedEnforcementBlockReason(m.enforcementStatus.Reason)
+		}
+		return m.publishEnforcementCycleState(run.enforcementState)
 	}
-	if err := m.executeDecision(run.decision, run.metrics); err != nil {
-		return fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, err)
+	if executionErr := m.executeDecision(run.decision, run.metrics); executionErr != nil {
+		publishErr := m.publishEnforcementCycleState(run.enforcementState)
+		return errors.Join(
+			fmt.Errorf("failed to execute decision %s (cycle %d): %w", run.decision, run.cycleID, executionErr),
+			publishErr,
+		)
 	}
-	return nil
+	run.enforcementState.AppliedAction = appliedEnforcementAction(intent)
+	return m.publishEnforcementCycleState(run.enforcementState)
 }
 
 func (m *Manager) stageFinalizeEnforcementObservation(run *controlCycleContext) error {
@@ -343,8 +362,10 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	if err := m.logger.InfoChecked("Control cycle completed",
 		"cycle_id", run.cycleID,
 		"trigger", run.trigger,
-		"decision", run.decision,
-		"reason", run.reason,
+		"requested_policy_intent", run.enforcementState.RequestedIntent,
+		"applied_enforcement_action", run.enforcementState.AppliedAction,
+		"enforcement_block_reason", run.enforcementState.BlockReason,
+		"decision_reason", run.reason,
 		"total_cpu_usage", run.metrics.TotalCPUUsage,
 		"cpu_eligible_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
 		"eligible_users", run.metrics.CPUEligibleUsersCount,
@@ -587,6 +608,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
 		EnforcementMode:                              m.enforcementStatus.Mode,
+		EnforcementCycleState:                        m.currentEnforcementCycleState(),
 		TotalCPUUsage:                                metrics.TotalCPUUsage,
 		TotalCPUUsageAvailable:                       metrics.HostCPUUsageAvailable,
 		TotalCores:                                   metrics.TotalCores,

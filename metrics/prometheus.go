@@ -122,6 +122,7 @@ type PrometheusExporter struct {
 	resourceLimitsActive       prometheus.Gauge
 	anyLimitsActive            prometheus.Gauge
 	enforcementMode            *prometheus.GaugeVec
+	enforcementActionState     *prometheus.GaugeVec
 	systemLoad                 prometheus.Gauge
 	totalCores                 prometheus.Gauge
 	procFSUnavailableProcesses *prometheus.GaugeVec
@@ -538,6 +539,15 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"mode"},
 	)
+	exp.enforcementActionState = promauto.With(exp.registry).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Name:        "enforcement_action_state",
+			Help:        "Latest bounded enforcement state separating requested policy intent from acknowledged applied action",
+			ConstLabels: staticLabels,
+		},
+		[]string{"mode", "requested_intent", "applied_action", "block_reason"},
+	)
 	exp.systemLoad = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "system_load_average",
@@ -860,6 +870,7 @@ func (exp *PrometheusExporter) ObserveConfigReload(observation config.ReloadObse
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
 	EnforcementMode                              cgroup.EnforcementMode
+	EnforcementCycleState                        cgroup.EnforcementCycleState
 	TotalCPUUsage                                float64
 	TotalCPUUsageAvailable                       bool
 	TotalCores                                   int
@@ -931,6 +942,17 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 		}
 		exp.enforcementMode.WithLabelValues(string(mode)).Set(value)
 	}
+	cycleState := cgroup.NormalizedEnforcementCycleState(metrics.EnforcementCycleState, cgroup.EnforcementStatus{
+		Mode:   metrics.EnforcementMode,
+		Reason: cgroup.EnforcementReasonAuthorityUnverifiable,
+	})
+	exp.enforcementActionState.Reset()
+	exp.enforcementActionState.WithLabelValues(
+		string(cycleState.Mode),
+		string(cycleState.RequestedIntent),
+		string(cycleState.AppliedAction),
+		string(cycleState.BlockReason),
+	).Set(1)
 	exp.memoryUsage.Set(metrics.MemoryUsageMB)
 	exp.totalMemoryMB.Set(metrics.TotalMemoryMB)
 	exp.cachedMemoryMB.Set(metrics.CachedMemoryMB)

@@ -274,6 +274,41 @@ type forbiddenSystemdNativeCgroupManager struct {
 	mutations []string
 }
 
+func TestSystemdNativeCycleReportsOnlyAnAcknowledgedAppliedAction(t *testing.T) {
+	policy := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{"^alice$"}
+	run := &controlCycleContext{
+		ctx:      context.Background(),
+		cycleID:  1,
+		decision: decisionActivate,
+		metrics:  &SystemMetrics{CPUEligibleUsers: []int{1000}},
+	}
+
+	if err := manager.stageExecuteDecision(run); err != nil {
+		t.Fatalf("stageExecuteDecision() error: %v", err)
+	}
+	want := cgroup.EnforcementCycleState{
+		Mode:            cgroup.EnforcementModeSystemdNative,
+		RequestedIntent: cgroup.EnforcementPolicyIntentActivate,
+		AppliedAction:   cgroup.AppliedEnforcementActionActivate,
+		BlockReason:     cgroup.EnforcementBlockReasonNone,
+	}
+	if run.enforcementState != want {
+		t.Fatalf("cycle enforcement state = %+v, want %+v", run.enforcementState, want)
+	}
+	status := manager.GetStatus()
+	if status.RequestedPolicyIntent != want.RequestedIntent ||
+		status.AppliedEnforcementAction != want.AppliedAction ||
+		status.EnforcementBlockReason != want.BlockReason {
+		t.Fatalf("runtime enforcement projection = %+v, want %+v", status, want)
+	}
+}
+
 func TestSystemdNativeReconciliationAppliesOneCompleteFlatPlanWithoutPIDMigration(t *testing.T) {
 	policy := testCPUPointsPolicy(t, map[string]struct {
 		uid    int

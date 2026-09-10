@@ -33,8 +33,9 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			}),
 			keys: []string{
 				"actively_limited_users_count", "any_limits_active", "cpu_limits_active", "cpu_limits_applied_time",
-				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
+				"applied_enforcement_action", "cpu_points", "enforcement_block_reason", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
 				"observed_users_count", "observed_users_cpu_usage",
+				"requested_policy_intent",
 				"resource_limits_active", "resource_limits_applied_time", "server_role",
 				"system_under_load", "total_cores", "total_cpu_usage", "total_cpu_usage_available",
 				"total_cpu_usage_unavailable_reason",
@@ -48,7 +49,8 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			keys: []string{
 				"actively_limited_users", "actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users",
 				"cpu_actively_limited_users_count", "cpu_limits_active", "cpu_limits_applied_time", "cpu_point_users",
-				"cpu_points", "enforcement_mode", "enforcement_reason", "hostname",
+				"applied_enforcement_action", "cpu_points", "enforcement_block_reason", "enforcement_mode", "enforcement_reason", "hostname",
+				"requested_policy_intent",
 				"resource_limits_active", "resource_limits_applied_time", "server_role",
 			},
 		},

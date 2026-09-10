@@ -154,6 +154,13 @@ For every user and every resource, resman deals with three distinct facts:
   `CPULimitActive`. A bare `IsLimited` is forbidden in new code.
 - A consumer **MUST NOT** re-derive one of these from another. If MCP wants "is this
   user actually limited", it reads the observation, not the config.
+- System-wide cycle reporting **MUST** likewise keep the requested policy intent
+  separate from an action acknowledged by the enforcement adapter. In
+  `observation_only`, an activation or deactivation intent has applied action `none`
+  and a bounded block reason; pipeline completion is not enforcement success.
+- Repeated publication of the same blocked system-wide intent **MUST NOT** create a
+  transition event or increment an enforcement transition counter. A changed intent
+  or enforcement mode is a new observable state.
 - When a persisted field changes meaning, the schema change is **intentionally
   breaking** (Rule 1): the store refuses to open old data and the operator resets it.
   Reading old rows under the new meaning is forbidden — historical rows written under
@@ -166,7 +173,7 @@ uses explicit eligibility, requested, and active fields for users and explicit C
 RAM/I/O, and any-resource enforcement state for system samples; old stores are rejected
 and require an operator reset.
 
-*Findings: resman-4pw.1, resman-4pw.6*
+*Findings: resman-4pw.1, resman-4pw.6, resman-6qv*
 
 ## Rule 3 — Resource policy lists have one shared, tested contract **[checkable]**
 
