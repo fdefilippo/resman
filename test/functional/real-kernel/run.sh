@@ -483,7 +483,7 @@ run_io_phase() {
 		workload_pid=
 		workload_process_group=0
 		sleep 3
-		if grep -Eq 'decision=ACTIVATE_LIMITS reason=.*(read_iops|write_iops)' "$log_file"; then
+		if grep -Eq 'requested_policy_intent=activate.*decision_reason=.*(read_iops|write_iops)' "$log_file"; then
 			fail "page-cache or socket syscalls activated block IOPS enforcement"
 		fi
 		grep -Eq '^syscr:[[:space:]]+[1-9][0-9]{4,}' "$work_dir/page.pid.io" \
@@ -506,7 +506,7 @@ run_io_phase() {
 	for _ in $(seq 1 30); do
 		if [[ -r $io_cgroup/io.max ]] \
 			&& grep -Eq "${controller_field}=[0-9]+" "$io_cgroup/io.max" \
-			&& grep -Eq "decision=ACTIVATE_LIMITS reason=.*${decision_name}" "$log_file"; then
+			&& grep -Eq "requested_policy_intent=activate.*decision_reason=.*${decision_name}" "$log_file"; then
 			limited=true
 			break
 		fi

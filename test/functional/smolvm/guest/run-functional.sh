@@ -758,7 +758,7 @@ if [[ $scenario == host-cpu-sampling-cadence ]]; then
 			&& -r $limited_cgroup/cgroup.procs ]] \
 			&& grep -q . "$limited_cgroup/cgroup.procs" \
 			&& grep 'Control cycle completed' "$state_dir/resman.log" \
-				| grep -q 'decision=ACTIVATE_LIMITS.*system_under_load=true.*ignore_system_load=false'; then
+				| grep -q 'requested_policy_intent=activate.*system_under_load=true.*ignore_system_load=false'; then
 			host_cpu_sampling_ready=true
 			break
 		fi

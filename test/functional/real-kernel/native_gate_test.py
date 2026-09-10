@@ -165,6 +165,29 @@ class NativeGateTests(unittest.TestCase):
             self.assertEqual((gate.evidence / "result").read_text(), "FAIL\n")
             self.assertIn("cleanup=FAIL", (gate.evidence / "environment.txt").read_text())
 
+    def test_blackout_rejects_the_current_activation_intent_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = NativeGate(directory, "runit", "revision")
+            gate.log.write_text("")
+            gate.parent = Path(directory) / "user.slice"
+            gate.parent.mkdir()
+            (gate.parent / "cpu.max").write_text("max 100000\n")
+
+            def publish_activation(_seconds):
+                gate.log.write_text(
+                    "Control cycle completed requested_policy_intent=activate "
+                    "applied_enforcement_action=activate\n")
+
+            scrape = (
+                'resman_enforcement_mode{mode="systemd_native"} 1\n'
+                "resman_observation_host_cpu_sample_available 1\n"
+            )
+            with patch("native_gate.eventually"), \
+                    patch("native_gate.time.sleep", side_effect=publish_activation), \
+                    patch.object(gate, "scrape", return_value=scrape):
+                with self.assertRaisesRegex(AssertionError, "blackout emitted activation intent"):
+                    gate.blackout()
+
 
 if __name__ == "__main__":
     unittest.main()

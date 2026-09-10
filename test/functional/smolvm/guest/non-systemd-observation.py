@@ -177,7 +177,7 @@ def run(run_id, revision):
                    "daemon startup did not respond", 20)
         if daemon.poll() is not None:
             raise Blocked("daemon foreground validation failed: " + field(work / "daemon-stdout.log"))
-        eventually(lambda: "decision=ACTIVATE_LIMITS" in field(log),
+        eventually(lambda: "requested_policy_intent=activate" in field(log),
                    "sustained load never reached activation intent", 45)
 
         with urllib.request.urlopen("http://127.0.0.1:19100/metrics", timeout=5) as response:

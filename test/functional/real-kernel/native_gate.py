@@ -296,7 +296,8 @@ class NativeGate:
         eventually(lambda: "blackout" in field(self.log, "")[start:].lower(), "blackout was not observed", 25)
         time.sleep(12)  # Measure across multiple decision deadlines, not a readiness delay.
         text = field(self.log, "")[start:]
-        require("decision=ACTIVATE_LIMITS" not in text, "blackout emitted activation intent")
+        require("requested_policy_intent=activate" not in text,
+                "blackout emitted activation intent")
         require(field(self.parent / "cpu.max").split()[0] == "max", "blackout applied the pool")
         require(not self.journal.exists(), "blackout created leases")
         scrape = self.scrape()
