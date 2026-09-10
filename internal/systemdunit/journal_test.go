@@ -106,6 +106,23 @@ func TestFileLeaseJournalRemovalSyncsTheEmptyState(t *testing.T) {
 	}
 }
 
+func TestDurableJournalAcceptsOnlyTheReservedCapabilityProbeNamespace(t *testing.T) {
+	journal := testDurableJournal(t)
+	unit := capabilityProbeUnitPrefix + "0123456789abcdef.slice"
+	journal.Units[0].Unit = unit
+	journal.Units[0].Identity.ObjectPath = "/org/freedesktop/systemd1/unit/reserved_probe"
+	journal.Units[0].Footprint[0].Path = managedRuntimeDropInPath(unit, PropertyCPUWeight)
+	if err := validateDurableLeaseJournal(journal); err != nil {
+		t.Fatalf("reserved capability probe journal rejected: %v", err)
+	}
+
+	journal.Units[0].Unit = capabilityProbeUnitPrefix + "nothex0123456789.slice"
+	journal.Units[0].Footprint[0].Path = managedRuntimeDropInPath(journal.Units[0].Unit, PropertyCPUWeight)
+	if err := validateDurableLeaseJournal(journal); err == nil {
+		t.Fatal("journal accepted a unit outside the exact reserved capability probe namespace")
+	}
+}
+
 func testDurableJournal(t *testing.T) durableLeaseJournal {
 	t.Helper()
 	identity := fakeUnit("user-1001.slice", "/user.slice/user-1001.slice", 1003)

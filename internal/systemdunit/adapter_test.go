@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -53,6 +54,8 @@ type fakeUnitTransport struct {
 	probeStopErr     error
 	probeStarts      []fakeSetCall
 	probeStops       []string
+	onProbeStart     func(*fakeUnitTransport, string)
+	probeBaselines   map[string]map[PropertyName]propertyValue
 }
 
 func (f *fakeUnitTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {
@@ -110,16 +113,52 @@ func (f *fakeUnitTransport) setUnitProperties(_ context.Context, unit string, ru
 	return nil
 }
 
-func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
+func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string, assignments []PropertyAssignment) (listedUnit, bool, error) {
 	f.probeStarts = append(f.probeStarts, fakeSetCall{unit: unit, runtime: true, assignments: append([]PropertyAssignment(nil), assignments...)})
-	if f.probeStartErr != nil {
-		return "", f.probeStarted, f.probeStartErr
+	started := f.probeStartErr == nil || f.probeStarted
+	if started {
+		state := fakeUnit(unit, "/user.slice/"+unit, uint32(len(f.probeStarts)+100))
+		state.unit["FragmentPath"] = filepath.Join("/run/systemd/transient", unit)
+		if f.probeBaselines == nil {
+			f.probeBaselines = make(map[string]map[PropertyName]propertyValue)
+		}
+		f.probeBaselines[unit] = make(map[PropertyName]propertyValue)
+		for _, assignment := range assignments {
+			f.probeBaselines[unit][assignment.name] = clonePropertyValue(assignment.name, assignment.value)
+			if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
+				state.slice[string(assignment.name)] = []dbusDeviceLimit{}
+			} else {
+				state.slice[string(assignment.name)] = assignment.value.scalar
+			}
+		}
+		f.units[unit] = state
+		if f.onProbeStart != nil {
+			f.onProbeStart(f, unit)
+		}
 	}
-	return "/" + unit, true, nil
+	if f.probeStartErr != nil {
+		return listedUnit{}, f.probeStarted, f.probeStartErr
+	}
+	return f.units[unit].listed, true, nil
 }
 
 func (f *fakeUnitTransport) stopCapabilityProbe(_ context.Context, unit string) error {
 	f.probeStops = append(f.probeStops, unit)
+	if f.probeStopErr == nil {
+		if state, exists := f.units[unit]; exists {
+			fragmentPath, _ := state.unit["FragmentPath"].(string)
+			if isCapabilityProbeTransientFragment(unit, fragmentPath) {
+				fragmentPath = ""
+			}
+			dropInPaths, _ := state.unit["DropInPaths"].([]string)
+			if f.diskPaths == nil {
+				f.diskPaths = make(map[string][]string)
+			}
+			f.diskPaths[unit] = mutableUnitFilePaths(unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: dropInPaths})
+		}
+		delete(f.units, unit)
+		delete(f.probeBaselines, unit)
+	}
 	return f.probeStopErr
 }
 
@@ -189,6 +228,17 @@ func (f *fakeUnitTransport) applyRevert(unit string) {
 	for property := range approvedDeviceProperties {
 		state.slice[string(property)] = []dbusDeviceLimit{}
 	}
+	for property, value := range f.probeBaselines[unit] {
+		if _, deviceProperty := approvedDeviceProperties[property]; deviceProperty {
+			values := make([]dbusDeviceLimit, len(value.devices))
+			for index, item := range value.devices {
+				values[index] = dbusDeviceLimit(item)
+			}
+			state.slice[string(property)] = values
+		} else {
+			state.slice[string(property)] = value.scalar
+		}
+	}
 	state.unit["DropInPaths"] = []string{}
 }
 
@@ -200,9 +250,15 @@ func (f *fakeUnitTransport) mutablePaths(unit string) ([]string, error) {
 	}
 	state, ok := f.units[unit]
 	if !ok {
+		if isCapabilityProbeUnit(unit) {
+			return nil, nil
+		}
 		return nil, os.ErrNotExist
 	}
 	fragmentPath, _ := state.unit["FragmentPath"].(string)
+	if isCapabilityProbeTransientFragment(unit, fragmentPath) {
+		fragmentPath = ""
+	}
 	dropInPaths, _ := state.unit["DropInPaths"].([]string)
 	return mutableUnitFilePaths(unitFileSnapshot{fragmentPath: fragmentPath, dropInPaths: dropInPaths}), nil
 }

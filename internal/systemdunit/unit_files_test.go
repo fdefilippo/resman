@@ -49,6 +49,32 @@ func TestLocalUnitFileInspectorRejectsNonCanonicalUnits(t *testing.T) {
 	}
 }
 
+func TestLocalUnitFileInspectorAcceptsOnlyReservedCapabilityProbeNames(t *testing.T) {
+	inspector := localUnitFileInspector{roots: []string{t.TempDir()}}
+	if _, err := inspector.mutablePaths(capabilityProbeUnitPrefix + "0123456789abcdef.slice"); err != nil {
+		t.Fatalf("reserved capability probe rejected: %v", err)
+	}
+	if _, err := inspector.mutablePaths(capabilityProbeUnitPrefix + "0123456789abcdeg.slice"); err == nil {
+		t.Fatal("malformed capability probe name was accepted")
+	}
+}
+
+func TestCapabilityProbeOwnsOnlyItsExactTransientFragment(t *testing.T) {
+	unit := capabilityProbeUnitPrefix + "0123456789abcdef.slice"
+	if !isCapabilityProbeTransientFragment(unit, "/run/systemd/transient/"+unit) {
+		t.Fatal("exact transient capability probe fragment was not recognized")
+	}
+	for _, path := range []string{
+		"/run/systemd/transient/" + unit + ".d/50-CPUQuota.conf",
+		"/run/systemd/system.control/" + unit,
+		"/run/systemd/transient/user-1000.slice",
+	} {
+		if isCapabilityProbeTransientFragment(unit, path) {
+			t.Fatalf("non-fragment path %q was treated as probe-owned", path)
+		}
+	}
+}
+
 func TestAdapterRejectsOperatorDropInVisibleOnlyToTheLocalInspector(t *testing.T) {
 	root := t.TempDir()
 	unitRoot := filepath.Join(root, "etc", "systemd", "system")

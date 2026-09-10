@@ -256,6 +256,9 @@ func (a *Adapter) snapshotTopology(ctx context.Context, listed []listedUnit) (To
 	seen := make(map[string]bool, len(listed))
 	parentFound := false
 	for _, candidate := range listed {
+		if isCapabilityProbeUnit(candidate.name) {
+			continue
+		}
 		if seen[candidate.name] {
 			return TopologySnapshot{}, malformedReply("discover", candidate.name, "duplicate unit in ListUnitsByPatterns reply")
 		}
@@ -963,6 +966,12 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 	if err != nil {
 		return UnitSnapshot{}, err
 	}
+	if isCapabilityProbeTransientFragment(unit, unitFiles.fragmentPath) {
+		// The transient slice definition belongs to the bounded probe lifecycle,
+		// not to an operator or to ResMan's property-lease footprint. The probe
+		// service owns its removal; system.control drop-ins remain fully guarded.
+		unitFiles.fragmentPath = ""
+	}
 	return UnitSnapshot{Identity: beforeIdentity, ControlGroup: controlGroupAfter, Properties: newPropertySet(properties), unitFiles: unitFiles}, nil
 }
 
@@ -1038,7 +1047,14 @@ func managedRuntimeDropInPath(unit string, property PropertyName) string {
 		PropertyIOReadIOPSMax:       "50-IOReadIOPSMax.conf",
 		PropertyIOWriteIOPSMax:      "50-IOWriteIOPSMax.conf",
 	}[property]
-	return filepath.Join("/run/systemd/system.control", unit+".d", filename)
+	root := "/run/systemd/system.control"
+	if isCapabilityProbeUnit(unit) {
+		// systemd stores SetUnitProperties(runtime=true) overrides for a
+		// transient unit beside its transient definition rather than in
+		// system.control. This remains an exact, guarded probe-only footprint.
+		root = "/run/systemd/transient"
+	}
+	return filepath.Join(root, unit+".d", filename)
 }
 
 func (a *Adapter) requireManagedUnitFileFootprint(operation string, snapshot UnitSnapshot, expected unitOverrideLease, tracked bool) error {

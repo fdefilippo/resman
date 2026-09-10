@@ -28,7 +28,7 @@ type unitTransport interface {
 }
 
 type startupCapabilityTransport interface {
-	startCapabilityProbe(context.Context, string, []PropertyAssignment) (string, bool, error)
+	startCapabilityProbe(context.Context, string, []PropertyAssignment) (listedUnit, bool, error)
 	stopCapabilityProbe(context.Context, string) error
 }
 
@@ -119,7 +119,7 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 	return t.conn.SetUnitPropertiesContext(ctx, unit, runtime, properties...)
 }
 
-func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (string, bool, error) {
+func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (listedUnit, bool, error) {
 	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
 	for _, assignment := range assignments {
 		properties = append(properties, systemdbus.Property{
@@ -137,25 +137,27 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	if _, err := t.conn.StartTransientUnitAux(ctx, service, "fail", serviceProperties, []systemdbus.PropertyCollection{{
 		Name: unit, Properties: properties,
 	}}, result); err != nil {
-		return "", false, err
+		return listedUnit{}, false, err
 	}
 	select {
 	case outcome := <-result:
 		if outcome != "done" {
-			return "", true, fmt.Errorf("transient capability probe start completed with %s", outcome)
+			return listedUnit{}, true, fmt.Errorf("transient capability probe start completed with %s", outcome)
 		}
 	case <-ctx.Done():
-		return "", true, ctx.Err()
+		return listedUnit{}, true, ctx.Err()
 	}
-	propertiesByName, err := t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
+	statuses, err := t.conn.ListUnitsByPatternsContext(ctx, []string{"active"}, []string{unit})
 	if err != nil {
-		return "", true, err
+		return listedUnit{}, true, err
 	}
-	controlGroup, ok := propertiesByName["ControlGroup"].(string)
-	if !ok || !validControlGroup(controlGroup) {
-		return "", true, fmt.Errorf("transient capability probe returned an invalid ControlGroup")
+	if len(statuses) != 1 || statuses[0].Name != unit || statuses[0].LoadState != "loaded" || statuses[0].ActiveState != "active" {
+		return listedUnit{}, true, fmt.Errorf("transient capability probe was not returned as one active loaded unit")
 	}
-	return controlGroup, true, nil
+	return listedUnit{
+		name: unit, objectPath: string(statuses[0].Path),
+		loadState: statuses[0].LoadState, activeState: statuses[0].ActiveState,
+	}, true, nil
 }
 
 func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {

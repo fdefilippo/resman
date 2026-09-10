@@ -26,7 +26,7 @@ type localUnitFileInspector struct {
 }
 
 func (i localUnitFileInspector) mutablePaths(unit string) ([]string, error) {
-	if unit != parentUserSlice {
+	if unit != parentUserSlice && !isCapabilityProbeUnit(unit) {
 		if _, ok := parseUserSliceName(unit); !ok {
 			return nil, fmt.Errorf("unit %q is outside the canonical user-slice boundary", unit)
 		}
@@ -38,7 +38,11 @@ func (i localUnitFileInspector) mutablePaths(unit string) ([]string, error) {
 	}
 	for _, root := range roots {
 		path := filepath.Join(root, unit)
-		exists, err := appendExistingPath(&result, path)
+		exists := false
+		var err error
+		if !isCapabilityProbeTransientFragment(unit, path) {
+			exists, err = appendExistingPath(&result, path)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -67,6 +71,10 @@ func (i localUnitFileInspector) mutablePaths(unit string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func isCapabilityProbeTransientFragment(unit, path string) bool {
+	return isCapabilityProbeUnit(unit) && path == filepath.Join("/run/systemd/transient", unit)
 }
 
 func defaultMutableUnitFileRoots() []string {

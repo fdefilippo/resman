@@ -356,7 +356,7 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 			return fmt.Errorf("duplicate unit %s", unit.Unit)
 		}
 		seenUnits[unit.Unit] = true
-		if unit.Unit != parentUserSlice {
+		if unit.Unit != parentUserSlice && !isCapabilityProbeUnit(unit.Unit) {
 			if _, ok := parseUserSliceName(unit.Unit); !ok {
 				return fmt.Errorf("invalid unit %q", unit.Unit)
 			}
@@ -455,7 +455,11 @@ func validateDurableFootprint(unit string, footprint []durableFileFingerprint, a
 			return fmt.Errorf("unit %s has duplicate footprint path %s", unit, file.Path)
 		}
 		seen[file.Path] = true
-		root := filepath.Join("/run/systemd/system.control", unit+".d")
+		rootBase := "/run/systemd/system.control"
+		if isCapabilityProbeUnit(unit) {
+			rootBase = "/run/systemd/transient"
+		}
+		root := filepath.Join(rootBase, unit+".d")
 		relative, err := filepath.Rel(root, file.Path)
 		if err != nil || relative == "." || strings.Contains(relative, string(filepath.Separator)) || strings.HasPrefix(relative, "..") {
 			return fmt.Errorf("unit %s has invalid footprint path %s", unit, file.Path)
