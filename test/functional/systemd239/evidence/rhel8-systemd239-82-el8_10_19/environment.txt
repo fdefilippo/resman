@@ -1,0 +1,8 @@
+capture_schema=1
+capture_kind=dbus_introspection
+source_revision=ef56470a9233b5d697a7355f9309647c874d3aec
+captured_on=2026-09-10
+environment=disposable SmolVM guest
+image=registry.access.redhat.com/ubi8/ubi:8.10
+image_id=sha256:f40c835590edbe7adc1a73b6c50eab83fa8b643660951796a21a68f1bf9fb56c
+image_digest=sha256:bc8b5c83e0f5a7199eeabc8ea350a65b4d9551541ad601dce95ab2442d73a912

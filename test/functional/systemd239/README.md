@@ -11,7 +11,12 @@ disposable EL8 systemd 239 guest:
 
 ```bash
 install -d -m 0700 /tmp/resman-systemd239-contract
-test/functional/systemd239/collect.sh /tmp/resman-systemd239-contract
+RESMAN_CAPTURE_IMAGE=registry.access.redhat.com/ubi8/ubi:8.10 \
+RESMAN_CAPTURE_IMAGE_ID=sha256:... \
+RESMAN_CAPTURE_IMAGE_DIGEST=sha256:... \
+RESMAN_CAPTURE_SOURCE_REVISION="$(git rev-parse HEAD)" \
+	RESMAN_CAPTURE_ENVIRONMENT='disposable SmolVM guest' \
+	test/functional/systemd239/collect.sh /tmp/resman-systemd239-contract
 sha256sum -c /tmp/resman-systemd239-contract/SHA256SUMS
 ```
 
@@ -23,6 +28,12 @@ that all scalar and per-device properties used by the adapter are present with
 the expected D-Bus signatures, while `ControlGroupId` is absent. It also pins
 the manager method signatures used for discovery, runtime property writes,
 the bounded startup probe, restoration, and reload.
+
+The raw collector output is retained below `evidence/`. Its manifest covers
+the environment, package and kernel identity, cgroup capabilities, property
+values, complete interface introspection, and terminal result. The Go contract
+test recalculates that manifest and derives every checked signature from the
+raw `busctl introspect` output before comparing it with the JSON fixture.
 
 The production adapter must discover capabilities from the D-Bus members it
 actually receives. The systemd package version is provenance, not a capability

@@ -1,0 +1,13 @@
+ControlGroup=/user.slice
+CPUWeight=[not set]
+CPUQuotaPerSecUSec=infinity
+CPUQuotaPeriodUSec=infinity
+IOWeight=[not set]
+MemoryHigh=infinity
+MemoryMax=infinity
+MemorySwapMax=infinity
+Id=user.slice
+ActiveState=active
+FragmentPath=/usr/lib/systemd/system/user.slice
+DropInPaths=
+InvocationID=f75d6abea7fa48789e0c0164222d73e5
