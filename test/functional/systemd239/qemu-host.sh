@@ -148,7 +148,7 @@ guest 'test -d /sys/firmware/efi && printf "uefi\n" || printf "bios\n"' \
 	>"$evidence_dir/initial-boot/firmware.txt"
 initial_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
 printf '%s\n' "$initial_boot_id" >"$evidence_dir/initial-boot/boot-id.txt"
-guest 'dnf install -y cpio cronie util-linux && systemctl enable --now crond' \
+guest 'dnf install -y cpio cronie python3 util-linux && command -v python3 >/dev/null && systemctl enable --now crond' \
 	>"$evidence_dir/provision.log"
 
 guest 'grubby --info=ALL' >"$evidence_dir/bootloader-before/grubby-info.txt"
@@ -233,10 +233,23 @@ guest "cd /root/resman-systemd239 && python3 el8_package.py '$run_id' '$package_
 guest_status=$?
 set -e
 mkdir -p "$evidence_dir/guest"
-guest 'tar -C /root/resman-systemd239 -cf - evidence' \
-	| tar --no-same-owner -C "$evidence_dir/guest" --strip-components=1 -xf -
+if guest 'test -d /root/resman-systemd239/evidence'; then
+	guest 'tar -C /root/resman-systemd239 -cf - evidence' \
+		| tar --no-same-owner -C "$evidence_dir/guest" --strip-components=1 -xf -
+else
+	printf 'guest_evidence=absent\nguest_exit_code=%d\n' "$guest_status" \
+		>"$evidence_dir/guest-evidence-status.txt"
+	result=FAIL
+	detail="guest package gate exited before producing evidence"
+	[[ $guest_status -ne 0 ]] || guest_status=1
+	exit "$guest_status"
+fi
 
-[[ $guest_status -eq 0 ]]
+if [[ $guest_status -ne 0 ]]; then
+	result=FAIL
+	detail="guest package gate failed after producing evidence"
+	exit "$guest_status"
+fi
 [[ $(<"$evidence_dir/guest/result") == PASS ]]
 # This program is evaluated by the guest shell, not expanded on terra.
 # shellcheck disable=SC2016

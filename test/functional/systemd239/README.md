@@ -63,11 +63,11 @@ intervening change is confined to `test/functional/systemd239/`. Any product,
 packaging, or other test change fails closed and requires a newly identified
 package build. The runner never builds or substitutes a binary.
 It verifies the package identity and digest, installs that exact file in the
-guest, and executes the existing native package lifecycle against genuine PAM
-sessions. CPU, RAM, and strong per-device I/O use the guest SATA root device at
-`8:0`. Graceful stop, forced restart, lease recovery, exact restoration, the
-repaired blackout assertion, and a masked-cgroup negative identity probe are
-mandatory.
+guest, provisions the Python runtime required by the qualification program,
+and executes the existing native package lifecycle against genuine PAM sessions.
+CPU, RAM, and strong per-device I/O use the guest SATA root device at `8:0`.
+Graceful stop, forced restart, lease recovery, exact restoration, the repaired
+blackout assertion, and a masked-cgroup negative identity probe are mandatory.
 
 The official base image and its reviewed SHA-256 are pinned in `qemu-host.sh`.
 The UEFI path is required for this hybrid image because `/boot/grub2/grubenv`
