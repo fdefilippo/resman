@@ -131,6 +131,41 @@ class EL8PackageContractTests(unittest.TestCase):
                     self.assertRaisesRegex(Blocked, "explicit unlimited systemd CPU quota"):
                 gate.validate_parent_cpu_baseline()
 
+    def test_native_plan_waits_for_el8_parent_cpu_interface_materialization(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            gate = NativeGate(temporary_directory, "runit", "revision")
+            gate.parent = Path(temporary_directory) / "user.slice"
+            gate.parent.mkdir()
+            gate.accounts = [SimpleNamespace(pw_uid=uid) for uid in (1001, 1002, 1003)]
+            for account, weight in zip(gate.accounts, (9900, 9900, 3300)):
+                user_slice = gate.parent / ("user-%d.slice" % account.pw_uid)
+                user_slice.mkdir()
+                (user_slice / "cpu.weight").write_text(str(weight) + "\n")
+            root_slice = gate.parent / "user-0.slice"
+            root_slice.mkdir()
+            (root_slice / "cpu.weight").write_text("3300\n")
+            (root_slice / "cpu.max").write_text("max 100000\n")
+
+            online = sum(
+                (int(end) - int(start) + 1) if separator else 1
+                for item in Path("/sys/devices/system/cpu/online").read_text().strip().split(",")
+                for start, separator, end in [item.partition("-")]
+            )
+            expected = "%d 100000" % (online * 90000)
+
+            def materialize_then_retry(check, message, seconds=60):
+                del seconds
+                if message == "native parent quota not applied":
+                    self.assertFalse(check())
+                    (gate.parent / "cpu.max").write_text(expected + "\n")
+                self.assertTrue(check())
+
+            with patch("native_gate.os.sched_getaffinity", return_value=set(range(online))), \
+                    patch("native_gate.eventually", side_effect=materialize_then_retry):
+                gate.assert_applied()
+
+            self.assertEqual(json.loads((gate.evidence / "native-plan.json").read_text())["parent"], expected)
+
 
 if __name__ == "__main__":
     unittest.main()

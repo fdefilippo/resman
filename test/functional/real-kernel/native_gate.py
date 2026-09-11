@@ -354,7 +354,7 @@ class NativeGate:
                      for a, sep, b in [item.partition("-")])
         require(cpus == online, "runner affinity differs from online capacity")
         expected = "%d 100000" % (online * 90000)
-        eventually(lambda: field(self.parent / "cpu.max") == expected, "native parent quota not applied")
+        eventually(lambda: field(self.parent / "cpu.max", "") == expected, "native parent quota not applied")
         for account, weight in zip(self.accounts, (9900, 9900, 3300)):
             eventually(lambda a=account, w=weight: field(self.slice(a.pw_uid) / "cpu.weight", "") == str(w),
                        "native sibling weight not applied")
