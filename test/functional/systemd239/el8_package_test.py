@@ -17,10 +17,19 @@ sys.path.insert(0, str(directory.parent / "real-kernel"))
 spec = importlib.util.spec_from_file_location("el8_package", directory / "el8_package.py")
 el8 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(el8)
+import native_package
 from native_gate import Blocked, NativeGate
 
 
 class EL8PackageContractTests(unittest.TestCase):
+    def test_sqlite_paths_cross_the_el8_boundary_as_strings(self):
+        expected = object()
+        database_path = Path("/tmp/resman-schema-six.db")
+        with patch.object(native_package.sqlite3, "connect", return_value=expected) as connect:
+            observed = native_package.connect_database(database_path, uri=True)
+        self.assertIs(observed, expected)
+        connect.assert_called_once_with(str(database_path), uri=True)
+
     def test_systemd_contract_requires_exact_major_version(self):
         self.assertEqual(el8.systemd_major_version("systemd 239 (239-82.el8)\n"), 239)
         self.assertEqual(el8.systemd_major_version("systemd 252 (252.1)\n"), 252)

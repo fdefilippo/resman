@@ -20,6 +20,11 @@ REQUIRED_CHECKS = frozenset({"installed-identity", "shipped-defaults", "schema-r
 PREVIOUS_SCHEMA_VERSION = 6
 
 
+def connect_database(path, **kwargs):
+    """Open SQLite through the string-path boundary supported by EL8 Python."""
+    return sqlite3.connect(str(path), **kwargs)
+
+
 def matching_package(installed_identity, package_identity, installed_binary, payload):
     require(installed_identity == package_identity, "installed RPM identity differs from supplied artifact")
     require(hashlib.sha256(installed_binary).digest() == hashlib.sha256(payload).digest(),
@@ -87,7 +92,7 @@ class PackageGate(NativeGate):
         super().validate()
         self.package_passed("upgrade-750-rejected", json.loads((self.evidence / "rejected-config.json").read_text()))
         old_database = self.work / "schema-six.db"
-        with sqlite3.connect(old_database) as database:
+        with connect_database(old_database) as database:
             database.execute("PRAGMA user_version=%d" % PREVIOUS_SCHEMA_VERSION)
         old_database.chmod(0o600)
         old_config = self.work / "schema-six.conf"
@@ -106,7 +111,7 @@ class PackageGate(NativeGate):
                 if process.poll() is None:
                     process.terminate()
                 process.wait(timeout=75)
-        with sqlite3.connect("file:%s?mode=ro" % old_database, uri=True) as database:
+        with connect_database("file:%s?mode=ro" % old_database, uri=True) as database:
             require(database.execute("PRAGMA user_version").fetchone()[0] == PREVIOUS_SCHEMA_VERSION,
                     "old schema was silently migrated")
         self.save("schema-six-preserved", {"old_schema": PREVIOUS_SCHEMA_VERSION,
@@ -117,7 +122,7 @@ class PackageGate(NativeGate):
         status = (self.evidence / "result").read_text().strip()
         try:
             if status == "PASS":
-                with sqlite3.connect("file:%s?mode=ro" % self.db, uri=True) as database:
+                with connect_database("file:%s?mode=ro" % self.db, uri=True) as database:
                     version = database.execute("PRAGMA user_version").fetchone()[0]
                     rows = database.execute("SELECT count(*) FROM user_metrics").fetchone()[0]
                 require(version == CURRENT_SCHEMA_VERSION and rows > 0,
