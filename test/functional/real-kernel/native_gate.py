@@ -116,7 +116,7 @@ class NativeGate:
     def command(self, *args, check=True, timeout=30, input=None):
         with (self.evidence / "commands.jsonl").open("a") as log:
             log.write(json.dumps([str(a) for a in args]) + "\n")
-        result = subprocess.run([str(a) for a in args], input=input, text=True,
+        result = subprocess.run([str(a) for a in args], input=input, universal_newlines=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
         if check and result.returncode:
             raise RuntimeError("command failed (%d): %s\n%s" % (result.returncode, args, result.stdout))
@@ -391,7 +391,7 @@ class NativeGate:
         try:
             eventually(lambda: not self.journal.exists(), "ownership journal survived release")
         except AssertionError:
-            self.save("release-failure-%d" % time.time_ns(), {
+            self.save("release-failure-%d" % int(time.time() * 1000000000), {
                 "journal": json.loads(self.journal.read_text()) if self.journal.exists() else None,
                 "units": {str(a.pw_uid): {
                     "bus": self.command("systemctl", "show", "user-%d.slice" % a.pw_uid,

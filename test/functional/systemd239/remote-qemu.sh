@@ -34,6 +34,9 @@ git -C "$repo_root" merge-base --is-ancestor "$manifest_revision" "$qualificatio
 while IFS= read -r -d '' changed_path; do
 	case "$changed_path" in
 		test/functional/systemd239/*) ;;
+		test/functional/real-kernel/native_gate.py) ;;
+		test/functional/real-kernel/native_package.py) ;;
+		test/functional/real-kernel/native-workload.py) ;;
 		*)
 			echo "package input changed after the recorded build: $changed_path" >&2
 			exit 1

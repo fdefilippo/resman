@@ -59,9 +59,10 @@ its recorded package source revision. Its manifest must bind `source_revision`,
 `source_tree`, and `package_sha256`; the runner checks all three before transfer.
 The qualification harness revision is recorded separately. It may be newer than
 the package source only when the package revision is its ancestor and every
-intervening change is confined to `test/functional/systemd239/`. Any product,
-packaging, or other test change fails closed and requires a newly identified
-package build. The runner never builds or substitutes a binary.
+intervening change is confined to `test/functional/systemd239/` or to the three
+named `test/functional/real-kernel/` programs copied into the guest bundle. Any
+product, packaging, or other test change fails closed and requires a newly
+identified package build. The runner never builds or substitutes a binary.
 It verifies the package identity and digest, installs that exact file in the
 guest, provisions the Python runtime required by the qualification program,
 and executes the existing native package lifecycle against genuine PAM sessions.

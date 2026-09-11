@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for the EL8 systemd 239 package boundary."""
+import ast
 import importlib.util
 from pathlib import Path
 import sys
@@ -33,6 +34,29 @@ class EL8PackageContractTests(unittest.TestCase):
         self.assertEqual(el8.REQUIRED_CONTROLLERS, {"cpu", "io", "memory"})
         self.assertEqual(el8.REQUIRED_KERNEL_ARGUMENTS,
                          {"systemd.unified_cgroup_hierarchy=1", "psi=1"})
+
+    def test_guest_programs_remain_compatible_with_el8_python(self):
+        programs = (
+            directory / "el8_package.py",
+            directory.parent / "real-kernel" / "native_gate.py",
+            directory.parent / "real-kernel" / "native_package.py",
+            directory.parent / "real-kernel" / "native-workload.py",
+        )
+        for program in programs:
+            with self.subTest(program=program.name):
+                tree = ast.parse(program.read_text(), filename=str(program), feature_version=(3, 6))
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == "subprocess"):
+                        keywords = {keyword.arg for keyword in node.keywords}
+                        self.assertNotIn("text", keywords)
+                        self.assertNotIn("capture_output", keywords)
+                    if (isinstance(node, ast.Attribute)
+                            and isinstance(node.value, ast.Name)
+                            and node.value.id == "time"):
+                        self.assertNotEqual(node.attr, "time_ns")
 
 
 if __name__ == "__main__":
