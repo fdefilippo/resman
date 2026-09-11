@@ -2,9 +2,13 @@
 """Unit tests for the EL8 systemd 239 package boundary."""
 import ast
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 directory = Path(__file__).parent
@@ -13,6 +17,7 @@ sys.path.insert(0, str(directory.parent / "real-kernel"))
 spec = importlib.util.spec_from_file_location("el8_package", directory / "el8_package.py")
 el8 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(el8)
+from native_gate import Blocked, NativeGate
 
 
 class EL8PackageContractTests(unittest.TestCase):
@@ -57,6 +62,48 @@ class EL8PackageContractTests(unittest.TestCase):
                             and isinstance(node.value, ast.Name)
                             and node.value.id == "time"):
                         self.assertNotEqual(node.attr, "time_ns")
+
+    def test_parent_cpu_baseline_accepts_an_unmaterialized_unlimited_controller(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            gate = NativeGate(temporary_directory, "runit", "revision")
+            gate.parent = Path(temporary_directory) / "user.slice"
+            gate.parent.mkdir()
+            response = SimpleNamespace(returncode=0, stdout="CPUQuotaPerSecUSec=infinity\n")
+            with patch.object(gate, "command", return_value=response):
+                gate.validate_parent_cpu_baseline()
+            self.assertEqual(json.loads((gate.evidence / "parent-cpu-baseline.json").read_text()), {
+                "kernel_cpu_max": "unavailable",
+                "systemd_cpu_quota_per_sec_usec": "infinity",
+            })
+
+    def test_parent_cpu_baseline_rejects_a_finite_kernel_or_systemd_quota(self):
+        cases = (
+            ("80000 100000\n", "infinity", "finite kernel CPU quota"),
+            (None, "80000", "explicit unlimited systemd CPU quota"),
+            ("max 100000\n", "", "explicit unlimited systemd CPU quota"),
+        )
+        for kernel_quota, configured_quota, message in cases:
+            with self.subTest(kernel_quota=kernel_quota, configured_quota=configured_quota), \
+                    tempfile.TemporaryDirectory() as temporary_directory:
+                gate = NativeGate(temporary_directory, "runit", "revision")
+                gate.parent = Path(temporary_directory) / "user.slice"
+                gate.parent.mkdir()
+                if kernel_quota is not None:
+                    (gate.parent / "cpu.max").write_text(kernel_quota)
+                response = SimpleNamespace(returncode=0, stdout="CPUQuotaPerSecUSec=" + configured_quota + "\n")
+                with patch.object(gate, "command", return_value=response), \
+                        self.assertRaisesRegex(Blocked, message):
+                    gate.validate_parent_cpu_baseline()
+
+    def test_parent_cpu_baseline_rejects_an_unreadable_systemd_value(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            gate = NativeGate(temporary_directory, "runit", "revision")
+            gate.parent = Path(temporary_directory) / "user.slice"
+            gate.parent.mkdir()
+            response = SimpleNamespace(returncode=1, stdout="systemctl failed\n")
+            with patch.object(gate, "command", return_value=response), \
+                    self.assertRaisesRegex(Blocked, "explicit unlimited systemd CPU quota"):
+                gate.validate_parent_cpu_baseline()
 
 
 if __name__ == "__main__":

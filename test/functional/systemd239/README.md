@@ -66,6 +66,11 @@ identified package build. The runner never builds or substitutes a binary.
 It verifies the package identity and digest, installs that exact file in the
 guest, provisions the Python runtime required by the qualification program,
 and executes the existing native package lifecycle against genuine PAM sessions.
+On systemd 239 the CPU controller file below `user.slice` can remain absent
+until the first CPU property is applied. The preflight accepts that
+unmaterialized state only when systemd independently reports
+`CPUQuotaPerSecUSec=infinity`; either a finite kernel value or a finite or
+unreadable systemd value blocks the campaign.
 CPU, RAM, and strong per-device I/O use the guest SATA root device at `8:0`.
 Graceful stop, forced restart, lease recovery, exact restoration, the repaired
 blackout assertion, and a masked-cgroup negative identity probe are mandatory.

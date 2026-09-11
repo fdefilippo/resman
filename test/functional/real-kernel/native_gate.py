@@ -130,6 +130,36 @@ class NativeGate:
         self.checks[name] = "PASS"
         print("PASS:", name, flush=True)
 
+    def parent_cpu_baseline(self):
+        kernel_quota = field(self.parent / "cpu.max", "unavailable")
+        response = self.command(
+            "systemctl", "show", "user.slice", "-p", "CPUQuotaPerSecUSec", check=False,
+        )
+        properties = response.stdout.strip().splitlines() if response.returncode == 0 else []
+        quota_properties = [line.partition("=")[2] for line in properties
+                            if line.startswith("CPUQuotaPerSecUSec=")]
+        configured_quota = quota_properties[0] if len(quota_properties) == 1 else "unavailable"
+        return {
+            "kernel_cpu_max": kernel_quota,
+            "systemd_cpu_quota_per_sec_usec": configured_quota,
+        }
+
+    def parent_cpu_is_unlimited(self):
+        kernel_quota = field(self.parent / "cpu.max", "unavailable")
+        if kernel_quota != "unavailable":
+            return kernel_quota.split()[0] == "max"
+        return self.parent_cpu_baseline()["systemd_cpu_quota_per_sec_usec"] == "infinity"
+
+    def validate_parent_cpu_baseline(self):
+        baseline = self.parent_cpu_baseline()
+        self.save("parent-cpu-baseline", baseline)
+        kernel_quota = baseline["kernel_cpu_max"]
+        configured_quota = baseline["systemd_cpu_quota_per_sec_usec"]
+        if kernel_quota != "unavailable" and kernel_quota.split()[0] != "max":
+            raise Blocked("user.slice has a finite kernel CPU quota: " + kernel_quota)
+        if configured_quota != "infinity":
+            raise Blocked("user.slice does not have an explicit unlimited systemd CPU quota: " + configured_quota)
+
     def preflight(self):
         if os.geteuid() != 0 or not Path("/run/systemd/system").is_dir():
             raise Blocked("root on a disposable systemd host is required")
@@ -144,8 +174,10 @@ class NativeGate:
             raise Blocked("an existing ownership journal must be resolved by its owner")
         if list(Path("/run/systemd/system.control").glob("user*.slice.d")):
             raise Blocked("existing user-slice runtime overrides are not disposable")
-        if field(self.parent / "cpu.max", "unavailable").split()[0] != "max":
-            raise Blocked("user.slice already has a finite quota")
+        # Older systemd may leave the CPU controller disabled below the root until
+        # the first CPU property is applied. In that state cpu.max is absent, not
+        # finite, so corroborate the kernel view with systemd's configured value.
+        self.validate_parent_cpu_baseline()
         for name in ("resman-t1", "resman-t2", "resman-t3"):
             try:
                 account = pwd.getpwnam(name)
@@ -298,7 +330,7 @@ class NativeGate:
         text = field(self.log, "")[start:]
         require("requested_policy_intent=activate" not in text,
                 "blackout emitted activation intent")
-        require(field(self.parent / "cpu.max").split()[0] == "max", "blackout applied the pool")
+        require(self.parent_cpu_is_unlimited(), "blackout applied the pool")
         require(not self.journal.exists(), "blackout created leases")
         scrape = self.scrape()
         (self.evidence / "blackout.prom").write_text(scrape)
@@ -387,7 +419,7 @@ class NativeGate:
         self.passed("crash-reclaim", {"before_units": len(before["units"]), "log": field(self.log)[start:]})
 
     def assert_released(self):
-        eventually(lambda: field(self.parent / "cpu.max").split()[0] == "max", "parent quota survived release")
+        eventually(self.parent_cpu_is_unlimited, "parent quota survived release")
         try:
             eventually(lambda: not self.journal.exists(), "ownership journal survived release")
         except AssertionError:

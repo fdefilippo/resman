@@ -228,7 +228,7 @@ scp "${ssh_options[@]}" "$package" "$script_dir/native_gate.py" "$script_dir/nat
 	root@"$address":/root/resman-systemd239/ >"$evidence_dir/transfer.log" 2>&1
 guest 'dnf install -y /root/resman-systemd239/package.rpm' >"$evidence_dir/package-install.log"
 set +e
-guest "cd /root/resman-systemd239 && python3 el8_package.py '$run_id' '$package_source_revision'" \
+guest "python3 /root/resman-systemd239/el8_package.py '$run_id' '$package_source_revision'" \
 	>"$evidence_dir/guest-run.log" 2>&1
 guest_status=$?
 set -e
@@ -253,8 +253,8 @@ fi
 [[ $(<"$evidence_dir/guest/result") == PASS ]]
 # This program is evaluated by the guest shell, not expanded on terra.
 # shellcheck disable=SC2016
-guest 'test ! -e /var/lib/resman/systemd-property-leases.json; test -z "$(find /run/systemd/system.control -mindepth 1 -print -quit)"; test "$(systemctl show resman -p ActiveState --value)" = inactive; test "$(cat /sys/fs/cgroup/user.slice/cpu.max | awk '\''{print $1}'\'')" = max'
-guest 'systemctl show resman -p ActiveState -p SubState -p Result; cat /sys/fs/cgroup/user.slice/cpu.max; find /run/systemd/system.control -mindepth 1 -maxdepth 3 -print; test ! -e /var/lib/resman/systemd-property-leases.json' \
+guest 'test ! -e /var/lib/resman/systemd-property-leases.json && test -z "$(find /run/systemd/system.control -mindepth 1 -print -quit)" && test "$(systemctl show resman -p ActiveState --value)" = inactive && { test ! -e /sys/fs/cgroup/user.slice/cpu.max || test "$(awk '\''{print $1}'\'' /sys/fs/cgroup/user.slice/cpu.max)" = max; } && test "$(systemctl show user.slice -p CPUQuotaPerSecUSec)" = CPUQuotaPerSecUSec=infinity'
+guest 'systemctl show resman -p ActiveState -p SubState -p Result; if test -e /sys/fs/cgroup/user.slice/cpu.max; then cat /sys/fs/cgroup/user.slice/cpu.max; else printf "cpu.max=unavailable\n"; fi; systemctl show user.slice -p CPUQuotaPerSecUSec; find /run/systemd/system.control -mindepth 1 -maxdepth 3 -print; test ! -e /var/lib/resman/systemd-property-leases.json' \
 	>"$evidence_dir/post-run.txt"
 
 result=PASS
