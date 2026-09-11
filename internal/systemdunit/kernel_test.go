@@ -341,8 +341,11 @@ func TestApplyPreflightOnlyDefersAnAbsentMaterializableIOInterface(t *testing.T)
 	if err := os.MkdirAll(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	controllers := filepath.Join(root, "user.slice", "cgroup.controllers")
-	if err := os.WriteFile(controllers, []byte("cpu io memory\n"), 0600); err != nil {
+	rootControllers := filepath.Join(root, "cgroup.controllers")
+	if err := os.WriteFile(rootControllers, []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu memory\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice"}, ControlGroup: "/user.slice/user-1000.slice"}
@@ -358,13 +361,13 @@ func TestApplyPreflightOnlyDefersAnAbsentMaterializableIOInterface(t *testing.T)
 		t.Fatalf("preflightApply() rejected materializable io.max: %v", err)
 	}
 
-	if err := os.WriteFile(controllers, []byte("cpu memory\n"), 0600); err != nil {
+	if err := os.WriteFile(rootControllers, []byte("cpu memory\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := verifier.preflightApply(snapshot, []PropertyAssignment{ioLimit}); err == nil {
-		t.Fatal("preflightApply() accepted a missing parent I/O controller")
+		t.Fatal("preflightApply() accepted a missing root I/O controller")
 	}
-	if err := os.WriteFile(controllers, []byte("cpu io memory\n"), 0600); err != nil {
+	if err := os.WriteFile(rootControllers, []byte("cpu io memory\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -387,6 +390,26 @@ func TestApplyPreflightOnlyDefersAnAbsentMaterializableIOInterface(t *testing.T)
 		if err := verifier.preflightApply(snapshot, []PropertyAssignment{assignment}); err == nil {
 			t.Fatalf("preflightApply() accepted absent interface for %s", assignment.Name())
 		}
+	}
+}
+
+func TestPostApplyVerificationRejectsMissingIOMaxWhenDeviceLimitsAreExpected(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{
+		Identity:     UnitIdentity{Name: "user-1000.slice"},
+		ControlGroup: "/user.slice/user-1000.slice",
+		Properties:   newPropertySet(map[PropertyName]propertyValue{assignment.Name(): assignment.value}),
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{assignment}); err == nil {
+		t.Fatal("post-Apply verification accepted absent io.max with a device limit expected")
 	}
 }
 

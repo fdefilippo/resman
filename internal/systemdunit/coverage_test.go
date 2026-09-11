@@ -107,7 +107,10 @@ func TestCheckResourceAuthorityAcceptsIOThatSystemdWillMaterializeOnApply(t *tes
 	if err := os.MkdirAll(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu io memory\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "cgroup.controllers"), []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu memory\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	transport := newFakeUnitTransport(1000)

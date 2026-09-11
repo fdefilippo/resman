@@ -240,8 +240,15 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 		}
 	}
 	if requiresIO {
-		parent := filepath.Dir(path)
-		controllers, err := v.readFile(filepath.Join(parent, "cgroup.controllers"))
+		controllerOwner := filepath.Dir(path)
+		if allowMissingIO {
+			// systemd 239 may not expose io in an intermediate slice until
+			// the first child I/O property asks PID 1 to enable it there.
+			// Root support is the precondition for that materialization; the
+			// strict post-Apply readback remains the acknowledgement.
+			controllerOwner = v.root
+		}
+		controllers, err := v.readFile(filepath.Join(controllerOwner, "cgroup.controllers"))
 		if err != nil {
 			return fmt.Errorf("inspect available I/O controller for %s: %w", snapshot.Identity.Name, err)
 		}
