@@ -85,6 +85,10 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 		}
 	}
 	if requirements.IO {
+		ioActivation, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 100)
+		if assignmentErr != nil {
+			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOWeight, assignmentErr)
+		}
 		ioProbe, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 101)
 		if assignmentErr != nil {
 			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOWeight, assignmentErr)
@@ -92,7 +96,9 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 		requiredIO := PropertyAssignment{name: PropertyIOReadBandwidthMax}
 		result = append(result, startupCapability{
 			feature: "I/O limiting", controller: "io", interfaceName: "io.max",
-			initialAssignments: []PropertyAssignment{activation},
+			// systemd 239 does not materialize io.max for a new slice until an
+			// I/O property enables the controller in the parent hierarchy.
+			initialAssignments: []PropertyAssignment{activation, ioActivation},
 			probeAssignments:   []PropertyAssignment{ioProbe}, requiredAssignments: []PropertyAssignment{ioProbe, requiredIO},
 		})
 	}

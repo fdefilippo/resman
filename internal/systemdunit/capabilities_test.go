@@ -71,6 +71,12 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T
 	}) {
 		t.Fatal("the exact bounded CPU quota and explicit period never reached SetUnitProperties")
 	}
+	if !setCallsContainScalarValues(transport.probeStarts, map[PropertyName]uint64{
+		PropertyCPUWeight: 100,
+		PropertyIOWeight:  100,
+	}) {
+		t.Fatal("the I/O capability probe did not materialize its controller through systemd")
+	}
 	if verifier.calls != capabilityCount*4 {
 		t.Fatalf("kernel verification calls = %d, want apply, confirmation, baseline reset and final restoration for every probe", verifier.calls)
 	}

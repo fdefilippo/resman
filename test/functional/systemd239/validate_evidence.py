@@ -10,7 +10,7 @@ import sys
 REQUIRED_CONTROLLERS = {"cpu", "io", "memory"}
 REQUIRED_PSI = {"cpu", "io", "memory"}
 BASE_SHA256 = "cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c"
-PACKAGE_IDENTITY = "resman-1.36.2-1.el8.x86_64"
+PACKAGE_IDENTITY = "resman-1.36.3-1.el8.x86_64"
 
 
 def require(condition, message):

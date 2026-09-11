@@ -1,3 +1,10 @@
+resman (1.36.3-1) stable; urgency=medium
+
+  * Materialize the I/O controller before validating io.max on systemd 239.
+  * Preserve fail-closed startup when an enabled I/O interface is genuinely unavailable.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Fri, 11 Sep 2026 05:10:00 +0200
+
 resman (1.36.2-1) stable; urgency=medium
 
   * Restore systemd-native enforcement on EL8 when systemd omits ControlGroupId.

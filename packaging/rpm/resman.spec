@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.36.2
+Version: 1.36.3
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -77,8 +77,9 @@ v1.35.4: declare the capability-probe payload and distinguish probe startup fail
 v1.36.0: bound the packaged service privilege and filesystem surface.
 v1.36.1: report observation-only enforcement intent separately from applied action.
 v1.36.2: restore systemd-native enforcement on EL8 systemd 239 without ControlGroupId.
+v1.36.3: materialize the I/O controller before probing io.max on systemd 239.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.2.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.3.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -297,6 +298,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Sep 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.3-1
+- Materialize the I/O controller before validating io.max on systemd 239.
+- Preserve fail-closed startup when an enabled I/O interface is genuinely unavailable.
+
 * Thu Sep 10 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.2-1
 - Restore systemd-native enforcement on EL8 when systemd omits ControlGroupId.
 - Prove native capability apply, readback and restoration before selecting enforcement.
