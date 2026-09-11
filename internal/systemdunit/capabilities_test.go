@@ -71,6 +71,14 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T
 	}) {
 		t.Fatal("the exact bounded CPU quota and explicit period never reached SetUnitProperties")
 	}
+	if !setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{
+		PropertyIOWeight: 1_000,
+	}) {
+		t.Fatal("the non-vacuous I/O weight never reached SetUnitProperties")
+	}
+	if bfqWeight(1_000) == 100 {
+		t.Fatal("the I/O capability probe collapses to the default after BFQ scaling")
+	}
 	if !setCallsContainScalarValues(transport.probeStarts, map[PropertyName]uint64{
 		PropertyCPUWeight: 100,
 		PropertyIOWeight:  100,

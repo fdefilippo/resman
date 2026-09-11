@@ -89,7 +89,10 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 		if assignmentErr != nil {
 			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOWeight, assignmentErr)
 		}
-		ioProbe, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 101)
+		// Keep both the direct cgroup-v2 representation and the scaled BFQ
+		// representation distinct from the default. A value close to 100 can
+		// collapse back to the default when an older kernel scales the weight.
+		ioProbe, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 1_000)
 		if assignmentErr != nil {
 			return nil, requiredCapabilityError("I/O limiting", "io", "io.max", PropertyIOWeight, assignmentErr)
 		}

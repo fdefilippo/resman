@@ -1,3 +1,10 @@
+resman (1.36.4-1) stable; urgency=medium
+
+  * Accept direct and scaled BFQ kernel representations for systemd I/O weights.
+  * Make the startup I/O probe distinguish every supported representation from baseline.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Fri, 11 Sep 2026 05:50:00 +0200
+
 resman (1.36.3-1) stable; urgency=medium
 
   * Materialize the I/O controller before validating io.max on systemd 239.

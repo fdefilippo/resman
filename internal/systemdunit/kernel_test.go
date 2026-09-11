@@ -287,7 +287,24 @@ func TestReadOnlyKernelVerifierChecksSystemdWeightThroughBFQInterface(t *testing
 		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyIOWeight: 456}),
 	}
 	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err != nil {
-		t.Fatalf("verify() error = %v", err)
+		t.Fatalf("verify(scaled BFQ weight) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 456\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 456)}); err != nil {
+		t.Fatalf("verify(direct BFQ weight) error = %v", err)
+	}
+	snapshot = UnitSnapshot{
+		Identity:     UnitIdentity{Name: "user-1000.slice"},
+		ControlGroup: "/user.slice/user-1000.slice",
+		Properties:   newScalarTestPropertySet(map[PropertyName]uint64{PropertyIOWeight: 1_000}),
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 100\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCgroupVerifier(root).verify(snapshot, []PropertyAssignment{mustAssignment(t, PropertyIOWeight, 1_000)}); err == nil {
+		t.Fatal("verify() accepted the unchanged BFQ baseline for the startup probe")
 	}
 	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 131\n"), 0600); err != nil {
 		t.Fatal(err)

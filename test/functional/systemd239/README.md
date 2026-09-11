@@ -49,7 +49,7 @@ the absence of `ControlGroupId` before installing the package:
 
 ```bash
 RESMAN_EL8_QEMU_HOST=root@terra \
-RESMAN_EL8_RPM=/absolute/path/to/resman-1.36.3-1.el8.x86_64.rpm \
+RESMAN_EL8_RPM=/absolute/path/to/resman-1.36.4-1.el8.x86_64.rpm \
 RESMAN_EL8_RPM_MANIFEST=/absolute/path/to/build-manifest.txt \
   make test-functional-systemd239-qemu
 ```

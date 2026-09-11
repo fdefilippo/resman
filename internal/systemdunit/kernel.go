@@ -296,13 +296,13 @@ func pageAlignedMemoryLimit(value, pageSize uint64) uint64 {
 }
 
 func (v cgroupVerifier) verifyIOWeight(path string, snapshot UnitSnapshot) error {
-	expected, ok := snapshot.Properties.Value(PropertyIOWeight)
+	systemdExpected, ok := snapshot.Properties.Value(PropertyIOWeight)
 	if !ok {
 		return fmt.Errorf("systemd readback omitted %s", PropertyIOWeight)
 	}
-	expectedUnset := expected == SystemdUnset
-	if expected == SystemdUnset {
-		expected = 100
+	expectedUnset := systemdExpected == SystemdUnset
+	if systemdExpected == SystemdUnset {
+		systemdExpected = 100
 	}
 	filename := "io.weight"
 	data, err := v.readFile(filepath.Join(path, filename))
@@ -322,11 +322,12 @@ func (v cgroupVerifier) verifyIOWeight(path string, snapshot UnitSnapshot) error
 	if err != nil {
 		return fmt.Errorf("parse effective %s for %s: %w", filename, snapshot.Identity.Name, err)
 	}
+	scaledExpected := systemdExpected
 	if bfq {
-		expected = bfqWeight(expected)
+		scaledExpected = bfqWeight(systemdExpected)
 	}
-	if actual != expected {
-		return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s: systemd=%d kernel=%d", PropertyIOWeight, snapshot.Identity.Name, expected, actual)}
+	if actual != systemdExpected && actual != scaledExpected {
+		return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s: systemd=%d bfq_scaled=%d kernel=%d", PropertyIOWeight, snapshot.Identity.Name, systemdExpected, scaledExpected, actual)}
 	}
 	return nil
 }
