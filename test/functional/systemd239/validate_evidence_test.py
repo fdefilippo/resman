@@ -13,6 +13,25 @@ spec.loader.exec_module(validator)
 
 
 class EvidenceConsumerTests(unittest.TestCase):
+    def test_post_run_accepts_explicit_and_unmaterialized_unlimited_cpu(self):
+        prefix = "Result=success\nActiveState=inactive\nSubState=dead\n"
+        suffix = "CPUQuotaPerSecUSec=infinity\n"
+        for kernel in ("max 100000\n", "cpu.max=unavailable\n"):
+            with self.subTest(kernel=kernel.strip()):
+                validator.verify_post_run(prefix + kernel + suffix)
+
+    def test_post_run_rejects_incomplete_or_finite_cleanup(self):
+        valid = "Result=success\nActiveState=inactive\nSubState=dead\ncpu.max=unavailable\nCPUQuotaPerSecUSec=infinity\n"
+        for name, mutated in (
+                ("active service", valid.replace("ActiveState=inactive", "ActiveState=active")),
+                ("failed service", valid.replace("Result=success", "Result=exit-code")),
+                ("finite kernel quota", valid.replace("cpu.max=unavailable", "90000 100000")),
+                ("malformed absent marker", valid.replace("cpu.max=unavailable", "cpu.max=")),
+                ("finite systemd quota", valid.replace("CPUQuotaPerSecUSec=infinity",
+                                                         "CPUQuotaPerSecUSec=900ms"))):
+            with self.subTest(name=name), self.assertRaisesRegex(AssertionError, "parent baseline"):
+                validator.verify_post_run(mutated)
+
     def test_fields_reject_duplicate_keys(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "fields.txt"

@@ -60,6 +60,17 @@ def verify_revision_provenance(environment, build, qualification_revision):
             "package source revision differs across evidence")
 
 
+def verify_post_run(post):
+    service_stopped = (re.search(r"(?m)^Result=success$", post) and
+                       re.search(r"(?m)^ActiveState=inactive$", post) and
+                       re.search(r"(?m)^SubState=dead$", post))
+    systemd_unlimited = re.search(r"(?m)^CPUQuotaPerSecUSec=infinity$", post)
+    kernel_unlimited = (re.search(r"(?m)^max 100000$", post) or
+                        re.search(r"(?m)^cpu\.max=unavailable$", post))
+    require(service_stopped and systemd_unlimited and kernel_unlimited,
+            "post-run service or parent baseline is wrong")
+
+
 def validate(root, qualification_revision, package, build_manifest):
     root = Path(root)
     package = Path(package)
@@ -147,9 +158,7 @@ def validate(root, qualification_revision, package, build_manifest):
     require(negative == {"exit_code": negative["exit_code"], "systemd_native_absent": True,
                         "journal_absent": True, "probe_drop_ins_absent": True},
             "negative identity proof is incomplete")
-    post = (root / "post-run.txt").read_text()
-    require("ActiveState=inactive" in post and re.search(r"(?m)^max 100000$", post),
-            "post-run service or parent baseline is wrong")
+    verify_post_run((root / "post-run.txt").read_text())
 
 
 if __name__ == "__main__":
