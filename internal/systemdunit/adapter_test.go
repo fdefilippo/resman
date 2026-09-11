@@ -311,14 +311,15 @@ func (s *memoryLeaseJournalStore) Save(journal durableLeaseJournal) error {
 }
 
 type fakeKernelVerifier struct {
-	calls            int
-	err              error
-	identityErr      error
-	identityCalls    map[string]int
-	identityByCgroup map[string]uint64
-	onIdentity       func(*fakeKernelVerifier, string, int)
-	preflightCalls   [][]PropertyAssignment
-	preflightByName  map[PropertyName]error
+	calls               int
+	err                 error
+	identityErr         error
+	identityCalls       map[string]int
+	identityByCgroup    map[string]uint64
+	onIdentity          func(*fakeKernelVerifier, string, int)
+	preflightCalls      [][]PropertyAssignment
+	preflightApplyCalls [][]PropertyAssignment
+	preflightByName     map[PropertyName]error
 }
 
 func (v *fakeKernelVerifier) identity(controlGroup string) (uint64, error) {
@@ -345,6 +346,15 @@ func (v *fakeKernelVerifier) verify(UnitSnapshot, []PropertyAssignment) error {
 
 func (v *fakeKernelVerifier) preflight(_ UnitSnapshot, assignments []PropertyAssignment) error {
 	v.preflightCalls = append(v.preflightCalls, append([]PropertyAssignment(nil), assignments...))
+	return v.preflightResult(assignments)
+}
+
+func (v *fakeKernelVerifier) preflightApply(_ UnitSnapshot, assignments []PropertyAssignment) error {
+	v.preflightApplyCalls = append(v.preflightApplyCalls, append([]PropertyAssignment(nil), assignments...))
+	return v.preflightResult(assignments)
+}
+
+func (v *fakeKernelVerifier) preflightResult(assignments []PropertyAssignment) error {
 	for _, assignment := range assignments {
 		if err := v.preflightByName[assignment.Name()]; err != nil {
 			return err

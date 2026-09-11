@@ -101,6 +101,39 @@ func TestCheckResourceAuthorityRejectsMissingControllerBeforeMutation(t *testing
 	}
 }
 
+func TestCheckResourceAuthorityAcceptsIOThatSystemdWillMaterializeOnApply(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	transport := newFakeUnitTransport(1000)
+	for _, unit := range transport.units {
+		delete(unit.slice, "ControlGroupId")
+	}
+	verifier := newCgroupVerifier(root)
+	adapter := mustTestAdapter(t, transport, verifier)
+	adapter.coverage = staticCoverageInspector{authority: ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}}
+	assignment, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := adapter.CheckResourceAuthority(context.Background(), topology.Users[0].Unit.Identity, 1000, ResourceIO, []PropertyAssignment{assignment})
+	if err != nil || got.State != ResourceCoverageComplete || got.Reason != ResourceCoverageVerified {
+		t.Fatalf("authority=%+v error=%v, want complete authority before transactional materialization", got, err)
+	}
+	if len(transport.setCalls) != 0 {
+		t.Fatalf("authority inspection performed %d mutations", len(transport.setCalls))
+	}
+}
+
 func TestCheckResourceAuthoritiesUsesOneProcSnapshotForAllUsersAndResources(t *testing.T) {
 	root := t.TempDir()
 	hostNS := filepath.Join(root, "host-pid-ns")

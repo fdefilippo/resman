@@ -197,6 +197,17 @@ func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssi
 }
 
 func (v cgroupVerifier) preflight(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
+	return v.preflightWithMaterialization(snapshot, assignments, false)
+}
+
+// preflightApply permits systemd to materialize io.max through the first
+// transactional I/O property write. Startup probing remains strict and proves
+// this host capability before any production resource plan can reach here.
+func (v cgroupVerifier) preflightApply(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
+	return v.preflightWithMaterialization(snapshot, assignments, true)
+}
+
+func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assignments []PropertyAssignment, allowMissingIO bool) error {
 	path, err := v.controlGroupPath(snapshot.ControlGroup)
 	if err != nil {
 		return err
@@ -222,6 +233,9 @@ func (v cgroupVerifier) preflight(snapshot UnitSnapshot, assignments []PropertyA
 	}
 	for filename := range required {
 		if _, err := v.readFile(filepath.Join(path, filename)); err != nil {
+			if allowMissingIO && filename == "io.max" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return fmt.Errorf("required controller interface %s is unavailable for %s: %w", filename, snapshot.Identity.Name, err)
 		}
 	}

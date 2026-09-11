@@ -335,6 +335,61 @@ func TestIOPreflightAcceptsControllerThatSystemdCanEnableOnTheParent(t *testing.
 	}
 }
 
+func TestApplyPreflightOnlyDefersAnAbsentMaterializableIOInterface(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	controllers := filepath.Join(root, "user.slice", "cgroup.controllers")
+	if err := os.WriteFile(controllers, []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice"}, ControlGroup: "/user.slice/user-1000.slice"}
+	ioLimit, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := newCgroupVerifier(root)
+	if err := verifier.preflight(snapshot, []PropertyAssignment{ioLimit}); err == nil {
+		t.Fatal("strict startup preflight accepted an absent io.max")
+	}
+	if err := verifier.preflightApply(snapshot, []PropertyAssignment{ioLimit}); err != nil {
+		t.Fatalf("preflightApply() rejected materializable io.max: %v", err)
+	}
+
+	if err := os.WriteFile(controllers, []byte("cpu memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.preflightApply(snapshot, []PropertyAssignment{ioLimit}); err == nil {
+		t.Fatal("preflightApply() accepted a missing parent I/O controller")
+	}
+	if err := os.WriteFile(controllers, []byte("cpu io memory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	readFile := verifier.readFile
+	verifier.readFile = func(filename string) ([]byte, error) {
+		if filepath.Base(filename) == "io.max" {
+			return nil, os.ErrPermission
+		}
+		return readFile(filename)
+	}
+	if err := verifier.preflightApply(snapshot, []PropertyAssignment{ioLimit}); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("preflightApply() error = %v, want io.max permission failure", err)
+	}
+
+	verifier = newCgroupVerifier(root)
+	for _, assignment := range []PropertyAssignment{
+		mustAssignment(t, PropertyCPUQuotaPerSecUSec, 50_000),
+		mustAssignment(t, PropertyMemoryHigh, 64<<20),
+	} {
+		if err := verifier.preflightApply(snapshot, []PropertyAssignment{assignment}); err == nil {
+			t.Fatalf("preflightApply() accepted absent interface for %s", assignment.Name())
+		}
+	}
+}
+
 func TestPreflightRequiresEveryEnabledControllerInterface(t *testing.T) {
 	for _, test := range []struct {
 		name          string

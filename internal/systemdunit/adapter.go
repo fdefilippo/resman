@@ -39,6 +39,7 @@ type kernelVerifier interface {
 	identity(string) (uint64, error)
 	verify(UnitSnapshot, []PropertyAssignment) error
 	preflight(UnitSnapshot, []PropertyAssignment) error
+	preflightApply(UnitSnapshot, []PropertyAssignment) error
 }
 
 // Adapter is the narrow, runtime-only systemd resource-control boundary.
@@ -174,7 +175,7 @@ func (a *Adapter) CheckResourceAuthorities(ctx context.Context, requests []Resou
 			results[item.index].Err = &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: inspections[preparedIndex].err}
 			continue
 		}
-		if err := a.verifier.preflight(item.snapshot, item.validated); err != nil {
+		if err := a.verifier.preflightApply(item.snapshot, item.validated); err != nil {
 			authority = ResourceAuthority{Resource: item.request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
 			results[item.index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: err}}
 		}

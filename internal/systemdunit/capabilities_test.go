@@ -56,6 +56,9 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T
 	if len(verifier.preflightCalls) != capabilityCount {
 		t.Fatalf("preflight calls = %d, want %d", len(verifier.preflightCalls), capabilityCount)
 	}
+	if len(verifier.preflightApplyCalls) != 0 {
+		t.Fatalf("startup capability probing used the materializable runtime preflight %d times", len(verifier.preflightApplyCalls))
+	}
 	if len(transport.setCalls) != capabilityCount*2 {
 		t.Fatalf("SetUnitProperties calls = %d, want one apply and one baseline restore for each probe", len(transport.setCalls))
 	}
