@@ -1,3 +1,10 @@
+resman (1.36.6-2) stable; urgency=medium
+
+  * Preserve the rejected duplicate 1.36.6-1 package identity.
+  * Rebuild the reviewed EL8 correction under a unique package release.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Fri, 11 Sep 2026 07:35:00 +0200
+
 resman (1.36.6-1) stable; urgency=medium
 
   * Let systemd 239 enable I/O through an unmaterialized slice ancestor.
