@@ -53,7 +53,14 @@ def all_pass(path, required=None):
     return values
 
 
-def validate(root, revision, package, build_manifest):
+def verify_revision_provenance(environment, build, qualification_revision):
+    require(environment["qualification_revision"] == qualification_revision,
+            "qualification revision differs across evidence")
+    require(environment["source_revision"] == build["source_revision"],
+            "package source revision differs across evidence")
+
+
+def validate(root, qualification_revision, package, build_manifest):
     root = Path(root)
     package = Path(package)
     build_manifest = Path(build_manifest)
@@ -64,8 +71,7 @@ def validate(root, revision, package, build_manifest):
     require(build == expected_build, "retained build manifest differs from supplied manifest")
     require(environment["result"] == "PASS" and environment["cleanup"] == "PASS",
             "host run or cleanup did not pass")
-    require(environment["source_revision"] == revision == build["source_revision"],
-            "source revision differs across evidence")
+    verify_revision_provenance(environment, build, qualification_revision)
     require(build.get("build_kind") == "el8-rootful-podman",
             "RPM was not produced by the declared EL8 container path")
     for key in ("source_tree", "source_archive_sha256", "builder_image",
@@ -148,5 +154,5 @@ def validate(root, revision, package, build_manifest):
 
 if __name__ == "__main__":
     require(len(sys.argv) == 5,
-            "usage: validate_evidence.py EVIDENCE REVISION PACKAGE BUILD_MANIFEST")
+            "usage: validate_evidence.py EVIDENCE QUALIFICATION_REVISION PACKAGE BUILD_MANIFEST")
     validate(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]))

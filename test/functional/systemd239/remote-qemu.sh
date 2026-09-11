@@ -8,7 +8,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 evidence_root=${SYSTEMD239_EVIDENCE_ROOT:-$repo_root/build/functional/systemd239}
 run_id=r$(date -u +%Y%m%d%H%M%S)-$$
-source_revision=$(git -C "$repo_root" rev-parse HEAD)
+qualification_revision=$(git -C "$repo_root" rev-parse HEAD)
 remote_root=/tmp/resman-systemd239-$run_id
 evidence_dir=$evidence_root/$run_id
 scratch_dir=
@@ -23,9 +23,24 @@ case "$remote_host" in root@*[A-Za-z0-9.-]) ;; *) echo "a root SSH target is req
 manifest_revision=$(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest")
 manifest_tree=$(awk -F= '$1 == "source_tree" {print $2}' "$build_manifest")
 manifest_package_sha=$(awk -F= '$1 == "package_sha256" {print $2}' "$build_manifest")
-[[ $manifest_revision == "$source_revision" ]] || { echo "build manifest revision differs from HEAD" >&2; exit 1; }
-[[ $manifest_tree == "$(git -C "$repo_root" rev-parse 'HEAD^{tree}')" ]] \
-	|| { echo "build manifest tree differs from HEAD" >&2; exit 1; }
+[[ $manifest_revision =~ ^[0-9a-f]{40}$ ]] \
+	|| { echo "build manifest does not contain a full source revision" >&2; exit 1; }
+git -C "$repo_root" cat-file -e "$manifest_revision^{commit}" \
+	|| { echo "build manifest revision is unavailable in the local repository" >&2; exit 1; }
+git -C "$repo_root" merge-base --is-ancestor "$manifest_revision" "$qualification_revision" \
+	|| { echo "package source is not an ancestor of the qualification revision" >&2; exit 1; }
+[[ $manifest_tree == "$(git -C "$repo_root" rev-parse "$manifest_revision^{tree}")" ]] \
+	|| { echo "build manifest tree differs from its source revision" >&2; exit 1; }
+while IFS= read -r -d '' changed_path; do
+	case "$changed_path" in
+		test/functional/systemd239/*) ;;
+		*)
+			echo "package input changed after the recorded build: $changed_path" >&2
+			exit 1
+			;;
+	esac
+done < <(git -C "$repo_root" diff --name-only -z --no-renames \
+	"$manifest_revision..$qualification_revision")
 [[ $manifest_package_sha == "$(sha256sum "$package" | awk '{print $1}')" ]] \
 	|| { echo "build manifest package digest differs from the supplied RPM" >&2; exit 1; }
 
@@ -50,7 +65,7 @@ cleanup() {
 	fi
 	if [[ $status -eq 0 ]]; then
 		if PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
-			"$evidence_dir/remote" "$source_revision" "$package" "$build_manifest" \
+			"$evidence_dir/remote" "$qualification_revision" "$package" "$build_manifest" \
 			>>"$evidence_dir/collect.log" 2>&1; then
 			final_result=PASS
 		else
@@ -86,8 +101,10 @@ install -m 0644 "$script_dir/../real-kernel/native_package.py" "$scratch_dir/bun
 install -m 0755 "$script_dir/../real-kernel/native-workload.py" "$scratch_dir/bundle/native-workload.py"
 
 {
-	printf 'run_id=%s\nsource_revision=%s\nremote_host=%s\n' "$run_id" "$source_revision" "$remote_host"
-	printf 'source_tree=%s\n' "$manifest_tree"
+	printf 'run_id=%s\nqualification_revision=%s\nremote_host=%s\n' \
+		"$run_id" "$qualification_revision" "$remote_host"
+	printf 'package_source_revision=%s\npackage_source_tree=%s\n' \
+		"$manifest_revision" "$manifest_tree"
 	printf 'package_sha256=%s\n' "$(sha256sum "$package" | awk '{print $1}')"
 } >"$evidence_dir/request.txt"
 
@@ -96,4 +113,4 @@ tar -C "$scratch_dir/bundle" -cf - . \
 		"test ! -e '$remote_root' && install -d -m 0700 '$remote_root' && tar --no-same-owner -C '$remote_root' -xf -"
 remote_started=1
 ssh -q -o BatchMode=yes "$remote_host" \
-	"'$remote_root/qemu-host.sh' '$run_id' '$source_revision'"
+	"'$remote_root/qemu-host.sh' '$run_id' '$qualification_revision' '$manifest_revision'"

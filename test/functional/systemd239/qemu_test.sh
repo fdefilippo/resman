@@ -23,7 +23,12 @@ grep -q 'ControlGroupId' "$script_dir/el8_package.py"
 grep -q 'negative-identity' "$script_dir/el8_package.py"
 grep -q 'systemd_native_absent' "$script_dir/el8_package.py"
 grep -q 'tar --no-same-owner' "$script_dir/remote-qemu.sh"
-grep -q "manifest_tree.*rev-parse 'HEAD\^{tree\}'" "$script_dir/remote-qemu.sh"
+grep -q 'merge-base --is-ancestor.*manifest_revision.*qualification_revision' \
+	"$script_dir/remote-qemu.sh"
+grep -q 'manifest_tree.*rev-parse.*manifest_revision.*tree' "$script_dir/remote-qemu.sh"
+grep -q 'test/functional/systemd239/\*)' "$script_dir/remote-qemu.sh"
+grep -q 'package input changed after the recorded build' "$script_dir/remote-qemu.sh"
+grep -q 'qualification_revision.*source_revision' "$script_dir/qemu-host.sh"
 grep -q 'manifest_package_sha.*sha256sum' "$script_dir/remote-qemu.sh"
 grep -q 'validate_evidence.py' "$script_dir/remote-qemu.sh"
 

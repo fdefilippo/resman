@@ -47,6 +47,23 @@ class EvidenceConsumerTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "non-PASS"):
                 validator.all_pass(fixture, {"one", "two"})
 
+    def test_revision_provenance_separates_package_from_qualification(self):
+        environment = {
+            "qualification_revision": "b" * 40,
+            "source_revision": "a" * 40,
+        }
+        build = {"source_revision": "a" * 40}
+        validator.verify_revision_provenance(environment, build, "b" * 40)
+
+        for key, value, message in (
+                ("qualification_revision", "c" * 40, "qualification"),
+                ("source_revision", "c" * 40, "package source")):
+            with self.subTest(key=key):
+                mutated = dict(environment)
+                mutated[key] = value
+                with self.assertRaisesRegex(AssertionError, message):
+                    validator.verify_revision_provenance(mutated, build, "b" * 40)
+
 
 if __name__ == "__main__":
     unittest.main()

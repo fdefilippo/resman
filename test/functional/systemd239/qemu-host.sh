@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 run_id=${1:?run id is required}
-source_revision=${2:?source revision is required}
+qualification_revision=${2:?qualification revision is required}
+package_source_revision=${3:?package source revision is required}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 evidence_dir=$script_dir/evidence
 package=$script_dir/package.rpm
@@ -21,7 +22,10 @@ result=FAIL
 detail="EL8 QEMU qualification did not complete"
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run id: $run_id" >&2; exit 2; }
-[[ $source_revision =~ ^[0-9a-f]{40}$ ]] || { echo "a full source revision is required" >&2; exit 2; }
+[[ $qualification_revision =~ ^[0-9a-f]{40}$ ]] \
+	|| { echo "a full qualification revision is required" >&2; exit 2; }
+[[ $package_source_revision =~ ^[0-9a-f]{40}$ ]] \
+	|| { echo "a full package source revision is required" >&2; exit 2; }
 [[ $work_dir == /var/lib/libvirt/images/resman-systemd239-* ]] \
 	|| { echo "unsafe work directory: $work_dir" >&2; exit 2; }
 
@@ -88,7 +92,7 @@ done
 package_identity=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$package")
 [[ $package_identity == resman-1.36.2-1.el8.x86_64 ]] \
 	|| { echo "unexpected package identity: $package_identity" >&2; exit 1; }
-[[ $(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest") == "$source_revision" ]] \
+[[ $(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest") == "$package_source_revision" ]] \
 	|| { echo "build manifest revision differs from the requested revision" >&2; exit 1; }
 [[ $(awk -F= '$1 == "package_sha256" {print $2}' "$build_manifest") == "$(sha256sum "$package" | awk '{print $1}')" ]] \
 	|| { echo "build manifest does not identify the supplied RPM" >&2; exit 1; }
@@ -97,7 +101,8 @@ package_identity=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$packag
 	|| { echo "QEMU domain already exists: $vm_name" >&2; exit 75; }
 
 {
-	printf 'run_id=%s\nsource_revision=%s\n' "$run_id" "$source_revision"
+	printf 'run_id=%s\nqualification_revision=%s\nsource_revision=%s\n' \
+		"$run_id" "$qualification_revision" "$package_source_revision"
 	printf 'base_image=%s\nbase_url=%s\nbase_sha256=%s\n' "$base_image" "$base_url" "$base_sha256"
 	printf 'package_identity=%s\npackage_sha256=%s\n' "$package_identity" "$(sha256sum "$package" | awk '{print $1}')"
 	printf 'build_manifest_sha256=%s\n' "$(sha256sum "$build_manifest" | awk '{print $1}')"
@@ -223,7 +228,7 @@ scp "${ssh_options[@]}" "$package" "$script_dir/native_gate.py" "$script_dir/nat
 	root@"$address":/root/resman-systemd239/ >"$evidence_dir/transfer.log" 2>&1
 guest 'dnf install -y /root/resman-systemd239/package.rpm' >"$evidence_dir/package-install.log"
 set +e
-guest "cd /root/resman-systemd239 && python3 el8_package.py '$run_id' '$source_revision'" \
+guest "cd /root/resman-systemd239 && python3 el8_package.py '$run_id' '$package_source_revision'" \
 	>"$evidence_dir/guest-run.log" 2>&1
 guest_status=$?
 set -e

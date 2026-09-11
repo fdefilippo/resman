@@ -55,9 +55,13 @@ RESMAN_EL8_RPM_MANIFEST=/absolute/path/to/build-manifest.txt \
 ```
 
 The RPM must already have been built by the EL8 container packaging path from
-the frozen source revision. Its manifest must bind `source_revision`,
+its recorded package source revision. Its manifest must bind `source_revision`,
 `source_tree`, and `package_sha256`; the runner checks all three before transfer.
-The runner never builds or substitutes a binary.
+The qualification harness revision is recorded separately. It may be newer than
+the package source only when the package revision is its ancestor and every
+intervening change is confined to `test/functional/systemd239/`. Any product,
+packaging, or other test change fails closed and requires a newly identified
+package build. The runner never builds or substitutes a binary.
 It verifies the package identity and digest, installs that exact file in the
 guest, and executes the existing native package lifecycle against genuine PAM
 sessions. CPU, RAM, and strong per-device I/O use the guest SATA root device at
