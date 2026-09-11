@@ -30,6 +30,23 @@ class EL8PackageContractTests(unittest.TestCase):
         self.assertIs(observed, expected)
         connect.assert_called_once_with(str(database_path), uri=True)
 
+    def test_guest_uses_the_systemd_239_kill_option(self):
+        tree = ast.parse((directory.parent / "real-kernel" / "native_gate.py").read_text())
+        commands = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "command"):
+                continue
+            arguments = [argument.value for argument in node.args
+                         if isinstance(argument, ast.Constant) and isinstance(argument.value, str)]
+            if arguments[:2] == ["systemctl", "kill"]:
+                commands.append(arguments)
+        self.assertEqual(commands, [
+            ["systemctl", "kill", "--kill-who=main", "--signal=HUP"],
+            ["systemctl", "kill", "--kill-who=main", "--signal=KILL"],
+        ])
+
     def test_systemd_contract_requires_exact_major_version(self):
         self.assertEqual(el8.systemd_major_version("systemd 239 (239-82.el8)\n"), 239)
         self.assertEqual(el8.systemd_major_version("systemd 252 (252.1)\n"), 252)

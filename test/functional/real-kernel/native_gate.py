@@ -341,7 +341,7 @@ class NativeGate:
         self.save("blackout-observation", {"native_mode_published": observed, "host_sample_available": available})
         print(self.checks["blackout-observation"] + ": blackout-observation", flush=True)
         self.write_config(blackout=False)
-        self.command("systemctl", "kill", "--kill-whom=main", "--signal=HUP", self.unit)
+        self.command("systemctl", "kill", "--kill-who=main", "--signal=HUP", self.unit)
 
     def slice(self, uid):
         return self.parent / ("user-%d.slice" % uid)
@@ -407,7 +407,7 @@ class NativeGate:
     def restart(self):
         before = json.loads(self.journal.read_text())
         self.save("journal-before-crash", before)
-        self.command("systemctl", "kill", "--kill-whom=main", "--signal=KILL", self.unit)
+        self.command("systemctl", "kill", "--kill-who=main", "--signal=KILL", self.unit)
         eventually(lambda: self.command("systemctl", "is-active", self.unit, check=False).stdout.strip() != "active",
                    "daemon survived kill -9")
         start = len(field(self.log))
