@@ -1466,7 +1466,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.36.6-2'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.36.6-3'" -o resman .
 ```
 
 **Build RPM:**

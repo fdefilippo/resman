@@ -90,7 +90,7 @@ done
 [[ $(sha256sum "$base_image" | awk '{print $1}') == "$base_sha256" ]] \
 	|| { echo "EL8 base image does not match the reviewed Oracle digest" >&2; exit 1; }
 package_identity=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$package")
-[[ $package_identity == resman-1.36.6-2.el8.x86_64 ]] \
+[[ $package_identity == resman-1.36.6-3.el8.x86_64 ]] \
 	|| { echo "unexpected package identity: $package_identity" >&2; exit 1; }
 [[ $(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest") == "$package_source_revision" ]] \
 	|| { echo "build manifest revision differs from the requested revision" >&2; exit 1; }

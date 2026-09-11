@@ -1,3 +1,10 @@
+resman (1.36.6-3) stable; urgency=medium
+
+  * Document the qualified EL8 systemd 239 enforcement contract.
+  * Distinguish package ABI, EL8 runtime and newer-systemd evidence.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Fri, 11 Sep 2026 10:15:00 +0200
+
 resman (1.36.6-2) stable; urgency=medium
 
   * Preserve the rejected duplicate 1.36.6-1 package identity.

@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.36.6
-Release: 2%{?dist}
+Release: 3%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -301,6 +301,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Fri Sep 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-3
+- Document the qualified EL8 systemd 239 enforcement contract.
+- Distinguish package ABI, EL8 runtime and newer-systemd evidence.
+
 * Fri Sep 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-2
 - Preserve the rejected duplicate 1.36.6-1 package identity.
 - Rebuild the reviewed EL8 correction under a unique package release.

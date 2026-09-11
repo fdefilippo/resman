@@ -2,7 +2,7 @@
 
 ## Overview
 
-ResMan 1.35 uses cgroup v2 through authoritative systemd units. It never creates a
+ResMan 1.36.6 uses cgroup v2 through authoritative systemd units. It never creates a
 parallel enforcement hierarchy and never changes process membership. systemd and
 logind remain the owners of sessions, services, transient units, and rootless
 container descendants.
@@ -26,6 +26,24 @@ decisions remain available, but no resource property is changed.
 The native adapter discovers unit identities over D-Bus, applies runtime-only
 systemd properties, reads the normalized property back, and verifies the
 corresponding kernel interface before publishing success.
+
+### Enterprise Linux 8 and systemd 239
+
+EL8 enforcement requires the unified cgroup v2 hierarchy. The configured cgroup
+root must be a real directory; a symbolic-link root fails closed because every
+path component is opened without following links.
+
+The verified systemd 239 contract exposes `ControlGroup` and `InvocationID` but
+may omit `ControlGroupId`. ResMan resolves the validated `ControlGroup` path below
+the cgroup root, uses the kernel cgroup inode as the durable identity, and
+reconfirms the complete unit identity around each read. On newer systemd,
+`ControlGroupId` remains an additional mandatory cross-check against that kernel
+identity. A missing, mismatched, or changing identity is never authoritative.
+
+Before selecting `systemd_native`, ResMan creates a reserved disposable slice and
+proves the configured CPU, memory, and I/O property path through application,
+kernel readback, and exact restoration. The probe is capability-based and never
+selects behavior from a systemd version number.
 
 ## CPU control
 
@@ -136,6 +154,6 @@ is outside the prohibited enforcement mutations above.
 
 ---
 
-**Document version:** 3.0
-**Last updated:** 2026-09-08
-**Applies to:** ResMan 1.35.0 and later
+**Document version:** 3.1
+**Last updated:** 2026-09-11
+**Applies to:** ResMan 1.36.6 and later

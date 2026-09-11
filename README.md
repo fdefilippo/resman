@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.36.6-2_<architecture>.deb
+# Creates build/deb/resman_1.36.6-3_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -64,6 +64,21 @@ minimum supported RPM userspace baseline (glibc 2.28); building on that baseline
 keeps the package compatible with EL8 and later compatible Enterprise Linux
 releases. The RPM is not a static binary, because static builds cannot preserve
 the required NSS/LDAP/SSSD user resolution behavior.
+
+EL8 enforcement requires the unified cgroup v2 hierarchy. ResMan supports the
+systemd 239 contract in which `ControlGroup` and `InvocationID` are available but
+`ControlGroupId` is absent: it derives the cgroup identity from the validated
+kernel path and confirms it around every unit read. Before announcing
+`systemd_native`, startup proves apply, kernel readback, and exact restoration on
+a disposable slice for every enabled resource. See
+[Cgroup v2 technical reference](docs/CGROUP-V2-TECHNICAL.md) for the complete
+capability contract and [Upgrading](docs/UPGRADING.md) for host preparation.
+
+The evidence boundaries are intentionally separate. The EL8 container build
+proves the glibc and package baseline; the EL8 QEMU qualification proves the exact
+RPM against systemd 239 and genuine PAM sessions; the Oracle Linux 9 SmolVM and
+real-kernel rows prove the newer-systemd behavior. Passing one row never
+substitutes for another.
 
 The `.deb` is a native CGO build. `dpkg-shlibdeps` records the actual minimum
 runtime library versions, so release artifacts should be built on the oldest

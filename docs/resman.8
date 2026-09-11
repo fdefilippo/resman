@@ -111,6 +111,21 @@ userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
 Enterprise Linux releases. The RPM is not statically linked because NSS, LDAP,
 NIS, and SSSD username resolution require CGO and the system C library.
 .PP
+EL8 enforcement requires the unified cgroup v2 hierarchy. On systemd 239,
+.B ControlGroup
+and
+.B InvocationID
+are available while
+.B ControlGroupId
+may be absent. ResMan derives the authoritative identity from the validated
+kernel cgroup path and reconfirms it around each unit read. On newer systemd,
+.B ControlGroupId
+must agree with the kernel identity. Startup selects
+.B systemd_native
+only after a disposable slice proves application, kernel readback and exact
+restoration for every enabled resource interface. A configured cgroup root that
+is a symbolic link is rejected.
+.PP
 PSI event\-driven operation additionally requires kernel PSI support. On
 Enterprise Linux systems where PSI is disabled at boot, enable it with
 .BR psi=1
