@@ -17,6 +17,10 @@ grep -q -- '--boot uefi' "$script_dir/qemu-host.sh"
 grep -q 'systemd.unified_cgroup_hierarchy=1 psi=1' "$script_dir/qemu-host.sh"
 grep -q 'bootloader-before/grubby-info.txt' "$script_dir/qemu-host.sh"
 grep -q 'bootloader-after/grubenv.txt' "$script_dir/qemu-host.sh"
+grep -Fq "if ! grep -qw \"\$argument\" \"\$evidence_dir/bootloader-after/grubby-info.txt\"; then" \
+	"$script_dir/qemu-host.sh"
+grep -Fq "if ! grep -qw \"\$argument\" \"\$evidence_dir/bootloader-after/grubenv.txt\"; then" \
+	"$script_dir/qemu-host.sh"
 grep -q 'dnf install -y cpio cronie python3 util-linux.*command -v python3' \
 	"$script_dir/qemu-host.sh"
 grep -q 'if grep -q.*ControlGroupId=' "$script_dir/qemu-host.sh"

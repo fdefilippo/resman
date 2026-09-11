@@ -71,30 +71,8 @@ def verify_post_run(post):
             "post-run service or parent baseline is wrong")
 
 
-def validate(root, qualification_revision, package, build_manifest):
+def verify_el8_boot_contract(root):
     root = Path(root)
-    package = Path(package)
-    build_manifest = Path(build_manifest)
-    verify_manifest(root)
-    environment = fields(root / "environment.txt")
-    build = fields(root / "build-manifest.txt")
-    expected_build = fields(build_manifest)
-    require(build == expected_build, "retained build manifest differs from supplied manifest")
-    require(environment["result"] == "PASS" and environment["cleanup"] == "PASS",
-            "host run or cleanup did not pass")
-    verify_revision_provenance(environment, build, qualification_revision)
-    require(build.get("build_kind") == "el8-rootful-podman",
-            "RPM was not produced by the declared EL8 container path")
-    for key in ("source_tree", "source_archive_sha256", "builder_image",
-                "builder_image_digest", "go_version", "package_identity"):
-        require(build.get(key), "build manifest lacks " + key)
-    require(build["package_identity"] == PACKAGE_IDENTITY,
-            "build manifest identifies another RPM")
-    require(environment["base_sha256"] == BASE_SHA256, "unreviewed EL8 base image")
-    require(environment["package_identity"] == PACKAGE_IDENTITY, "unexpected RPM identity")
-    require(environment["package_sha256"] == digest(package) == build["package_sha256"],
-            "RPM digest differs across build, request and runtime")
-
     initial = root / "initial-boot"
     qualified = root / "qualified-boot"
     require((initial / "cgroup-filesystem.txt").read_text().strip() != "cgroup2fs",
@@ -139,6 +117,33 @@ def validate(root, qualification_revision, package, build_manifest):
             "systemd interface unexpectedly exposes ControlGroupId")
     require(re.search(r"(?m)^sda\s+8:0\s+disk", (qualified / "block-devices.txt").read_text()),
             "qualified guest does not expose the tested 8:0 device")
+
+
+def validate(root, qualification_revision, package, build_manifest):
+    root = Path(root)
+    package = Path(package)
+    build_manifest = Path(build_manifest)
+    verify_manifest(root)
+    environment = fields(root / "environment.txt")
+    build = fields(root / "build-manifest.txt")
+    expected_build = fields(build_manifest)
+    require(build == expected_build, "retained build manifest differs from supplied manifest")
+    require(environment["result"] == "PASS" and environment["cleanup"] == "PASS",
+            "host run or cleanup did not pass")
+    verify_revision_provenance(environment, build, qualification_revision)
+    require(build.get("build_kind") == "el8-rootful-podman",
+            "RPM was not produced by the declared EL8 container path")
+    for key in ("source_tree", "source_archive_sha256", "builder_image",
+                "builder_image_digest", "go_version", "package_identity"):
+        require(build.get(key), "build manifest lacks " + key)
+    require(build["package_identity"] == PACKAGE_IDENTITY,
+            "build manifest identifies another RPM")
+    require(environment["base_sha256"] == BASE_SHA256, "unreviewed EL8 base image")
+    require(environment["package_identity"] == PACKAGE_IDENTITY, "unexpected RPM identity")
+    require(environment["package_sha256"] == digest(package) == build["package_sha256"],
+            "RPM digest differs across build, request and runtime")
+
+    verify_el8_boot_contract(root)
 
     guest = root / "guest"
     require((guest / "result").read_text().strip() == "PASS", "guest package gate failed")
