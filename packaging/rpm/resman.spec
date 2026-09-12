@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.36.6
-Release: 4%{?dist}
+Release: 5%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -301,6 +301,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Sep 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-5
+- Build and publish distinct RPMs for Enterprise Linux 8, 9, and 10.
+- Verify each package identity and its distribution-specific glibc baseline.
+- Require the complete six-RPM set before publishing a GitHub release.
+
 * Sat Sep 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-4
 - Pin the reviewed ShellCheck version in GitHub quality and release gates.
 - Verify the downloaded analyzer against its published SHA-256 digest.

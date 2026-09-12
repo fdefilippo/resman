@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.36.6-4_<architecture>.deb
+# Creates build/deb/resman_1.36.6-5_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -59,11 +59,11 @@ CGO must be enabled for LDAP/NIS support:
 CGO_ENABLED=1 go build -v -ldflags="-s -w" -o resman .
 ```
 
-The release RPM is a CGO build produced on Enterprise Linux 8. EL8 is the
-minimum supported RPM userspace baseline (glibc 2.28); building on that baseline
-keeps the package compatible with EL8 and later compatible Enterprise Linux
-releases. The RPM is not a static binary, because static builds cannot preserve
-the required NSS/LDAP/SSSD user resolution behavior.
+Release RPMs are native CGO builds produced separately on Enterprise Linux 8,
+9, and 10. Each package carries its matching distribution tag and is checked
+against that platform's glibc baseline. The RPMs are not static binaries,
+because static builds cannot preserve the required NSS/LDAP/SSSD user resolution
+behavior.
 
 EL8 enforcement requires the unified cgroup v2 hierarchy. ResMan supports the
 systemd 239 contract in which `ControlGroup` and `InvocationID` are available but
@@ -80,11 +80,12 @@ RPM against systemd 239 and genuine PAM sessions; the Oracle Linux 9 SmolVM and
 real-kernel rows prove the newer-systemd behavior. Passing one row never
 substitutes for another.
 
-Release `1.36.6-4` contains the same production implementation as the accepted
+Release `1.36.6-5` contains the same production implementation as the accepted
 `1.36.6-2` package built from revision `685cb6977789361a4533b43bf92792bbfcab76e6`
 and qualified by revision `7ef74dd5f7c8be35299c0d36f5b1ed95006185b0` in QEMU run
 `r20260911055235-2418721`; only documentation, qualification expectations,
-package metadata, and release automation differ.
+package metadata, and release automation differ. Its release automation builds
+separate RPM pairs for EL8, EL9, and EL10.
 
 The `.deb` is a native CGO build. `dpkg-shlibdeps` records the actual minimum
 runtime library versions, so release artifacts should be built on the oldest

@@ -171,15 +171,71 @@ func TestReleaseRPMWorkflowUsesOneFreshAuthoritativeDirectory(t *testing.T) {
 	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))
 
 	for _, required := range []string{
-		`RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ github.run_id }}-${{ github.run_attempt }}`,
+		`RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ matrix.dist }}-${{ github.run_id }}-${{ github.run_attempt }}`,
 		`test ! -e "$RPMBUILD_DIR"`,
 		`make RPMBUILD_DIR="$RPMBUILD_DIR" rpm`,
 		`bash packaging/rpm/collect-release-artifacts.sh "$RPMBUILD_DIR" build/release`,
-		"expected one DEB, one binary RPM, one source RPM and SHA256SUMS",
+		"expected one DEB, six RPMs and SHA256SUMS",
 	} {
 		assertContains(t, releaseWorkflow, required)
 	}
 	assertNotContains(t, releaseWorkflow, `$HOME/rpmbuild`)
+}
+
+func TestReleaseRPMWorkflowBuildsEveryEnterpriseLinuxTarget(t *testing.T) {
+	root := repositoryRoot(t)
+	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))
+	if err := validateReleaseRPMWorkflow(releaseWorkflow); err != nil {
+		t.Fatalf("validate release RPM workflow: %v", err)
+	}
+}
+
+func TestReleaseRPMWorkflowContractRejectsIncompleteOrDivergentMatrices(t *testing.T) {
+	root := repositoryRoot(t)
+	releaseWorkflow := readFile(t, filepath.Join(root, ".github/workflows/release.yml"))
+
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{
+			name: "missing platform",
+			old: "          - major: \"10\"\n" +
+				"            dist: el10\n" +
+				"            image: quay.io/rockylinux/rockylinux:10.0\n" +
+				"            repo_base: https://dl.rockylinux.org/pub/rocky/10\n" +
+				"            max_glibc: \"2.39\"\n" +
+				"            artifact: rpm-package-el10\n",
+		},
+		{
+			name: "duplicate artifact name",
+			old:  "artifact: rpm-package-el10",
+			new:  "artifact: rpm-package-el9",
+		},
+		{
+			name: "wrong glibc baseline",
+			old:  `max_glibc: "2.34"`,
+			new:  `max_glibc: "2.28"`,
+		},
+		{
+			name: "obsolete asset count",
+			old:  `${#rpm_assets[@]} != 6`,
+			new:  `${#rpm_assets[@]} != 2`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(releaseWorkflow, tt.old) {
+				t.Fatalf("mutation source is absent: %q", tt.old)
+			}
+			mutated := strings.Replace(releaseWorkflow, tt.old, tt.new, 1)
+			if err := validateReleaseRPMWorkflow(mutated); err == nil {
+				t.Fatal("release RPM workflow contract accepted the mutation")
+			}
+		})
+	}
 }
 
 func TestRPMArtifactCollectionRejectsDivergentOrStaleTrees(t *testing.T) {
@@ -413,6 +469,147 @@ func TestCITestRejectsADeliberatelyFailingTest(t *testing.T) {
 	if !strings.Contains(output, "deliberate CI mutation") || !strings.Contains(output, "FAIL") {
 		t.Fatalf("ci-test failure did not preserve the test evidence; output=%s", output)
 	}
+}
+
+type releaseWorkflowDocument struct {
+	Jobs map[string]releaseWorkflowJob `yaml:"jobs"`
+}
+
+type releaseWorkflowJob struct {
+	Strategy struct {
+		Matrix struct {
+			Include []releaseRPMTarget `yaml:"include"`
+		} `yaml:"matrix"`
+	} `yaml:"strategy"`
+	Env       map[string]string `yaml:"env"`
+	Container struct {
+		Image string `yaml:"image"`
+	} `yaml:"container"`
+	Steps []releaseWorkflowStep `yaml:"steps"`
+}
+
+type releaseRPMTarget struct {
+	Major    string `yaml:"major"`
+	Dist     string `yaml:"dist"`
+	Image    string `yaml:"image"`
+	RepoBase string `yaml:"repo_base"`
+	MaxGLIBC string `yaml:"max_glibc"`
+	Artifact string `yaml:"artifact"`
+}
+
+type releaseWorkflowStep struct {
+	Name string            `yaml:"name"`
+	Run  string            `yaml:"run"`
+	With map[string]string `yaml:"with"`
+}
+
+func validateReleaseRPMWorkflow(content string) error {
+	var document releaseWorkflowDocument
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+		return fmt.Errorf("decode release workflow: %w", err)
+	}
+
+	rpmJob, ok := document.Jobs["rpm"]
+	if !ok {
+		return fmt.Errorf("RPM job is missing")
+	}
+	want := map[string]releaseRPMTarget{
+		"el8": {
+			Major: "8", Dist: "el8", Image: "quay.io/rockylinux/rockylinux:8.10",
+			RepoBase: "https://dl.rockylinux.org/pub/rocky/8",
+			MaxGLIBC: "2.28", Artifact: "rpm-package-el8",
+		},
+		"el9": {
+			Major: "9", Dist: "el9", Image: "quay.io/rockylinux/rockylinux:9.6",
+			RepoBase: "https://dl.rockylinux.org/pub/rocky/9",
+			MaxGLIBC: "2.34", Artifact: "rpm-package-el9",
+		},
+		"el10": {
+			Major: "10", Dist: "el10", Image: "quay.io/rockylinux/rockylinux:10.0",
+			RepoBase: "https://dl.rockylinux.org/pub/rocky/10",
+			MaxGLIBC: "2.39", Artifact: "rpm-package-el10",
+		},
+	}
+	if len(rpmJob.Strategy.Matrix.Include) != len(want) {
+		return fmt.Errorf("RPM matrix has %d targets, want %d", len(rpmJob.Strategy.Matrix.Include), len(want))
+	}
+	artifacts := make(map[string]struct{}, len(want))
+	for _, target := range rpmJob.Strategy.Matrix.Include {
+		expected, ok := want[target.Dist]
+		if !ok {
+			return fmt.Errorf("RPM matrix contains unexpected target %q", target.Dist)
+		}
+		if target != expected {
+			return fmt.Errorf("RPM matrix target %s = %+v, want %+v", target.Dist, target, expected)
+		}
+		if _, duplicate := artifacts[target.Artifact]; duplicate {
+			return fmt.Errorf("RPM matrix repeats artifact name %q", target.Artifact)
+		}
+		artifacts[target.Artifact] = struct{}{}
+	}
+
+	for key, expected := range map[string]string{
+		"EXPECTED_DIST":   `${{ matrix.dist }}`,
+		"MAX_GLIBC":       `${{ matrix.max_glibc }}`,
+		"ROCKY_REPO_BASE": `${{ matrix.repo_base }}`,
+	} {
+		if rpmJob.Env[key] != expected {
+			return fmt.Errorf("RPM job environment %s = %q, want %q", key, rpmJob.Env[key], expected)
+		}
+	}
+	if rpmJob.Container.Image != `${{ matrix.image }}` {
+		return fmt.Errorf("RPM container image = %q, want matrix image", rpmJob.Container.Image)
+	}
+
+	upload, ok := findReleaseWorkflowStep(rpmJob.Steps, "Upload RPM package")
+	if !ok || upload.With["name"] != `${{ matrix.artifact }}` {
+		return fmt.Errorf("RPM artifact upload is not bound to the matrix artifact name")
+	}
+	verify, ok := findReleaseWorkflowStep(rpmJob.Steps, "Collect and verify RPM package")
+	if !ok {
+		return fmt.Errorf("RPM verification step is missing")
+	}
+	for _, required := range []string{
+		`expected_binary="resman-${version}-${release}.${EXPECTED_DIST}.x86_64.rpm"`,
+		`expected_source="resman-${version}-${release}.${EXPECTED_DIST}.src.rpm"`,
+		`"$MAX_GLIBC" "$max_glibc"`,
+	} {
+		if !strings.Contains(verify.Run, required) {
+			return fmt.Errorf("RPM verification step is missing %q", required)
+		}
+	}
+
+	publishJob, ok := document.Jobs["publish"]
+	if !ok {
+		return fmt.Errorf("publish job is missing")
+	}
+	download, ok := findReleaseWorkflowStep(publishJob.Steps, "Download packages")
+	if !ok || download.With["pattern"] != "*-package*" {
+		return fmt.Errorf("publication does not download every platform artifact")
+	}
+	publish, ok := findReleaseWorkflowStep(publishJob.Steps, "Create or update GitHub release")
+	if !ok {
+		return fmt.Errorf("release publication step is missing")
+	}
+	for _, required := range []string{
+		`${#deb_assets[@]} != 1 || ${#rpm_assets[@]} != 6`,
+		`for dist in el8 el9 el10`,
+		`${#assets[@]} != 8`,
+	} {
+		if !strings.Contains(publish.Run, required) {
+			return fmt.Errorf("release publication guard is missing %q", required)
+		}
+	}
+	return nil
+}
+
+func findReleaseWorkflowStep(steps []releaseWorkflowStep, name string) (releaseWorkflowStep, bool) {
+	for _, step := range steps {
+		if step.Name == name {
+			return step, true
+		}
+	}
+	return releaseWorkflowStep{}, false
 }
 
 func repositoryRoot(t *testing.T) string {

@@ -151,23 +151,55 @@ jobs:
           if-no-files-found: error
 
   rpm:
-    name: Build RPM on Enterprise Linux 8
+    name: Build RPM on Enterprise Linux ${{ matrix.major }}
     needs: quality
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: "8"
+            dist: el8
+            image: quay.io/rockylinux/rockylinux:8.10
+            repo_base: https://dl.rockylinux.org/pub/rocky/8
+            max_glibc: "2.28"
+            artifact: rpm-package-el8
+          - major: "9"
+            dist: el9
+            image: quay.io/rockylinux/rockylinux:9.6
+            repo_base: https://dl.rockylinux.org/pub/rocky/9
+            max_glibc: "2.34"
+            artifact: rpm-package-el9
+          - major: "10"
+            dist: el10
+            image: quay.io/rockylinux/rockylinux:10.0
+            repo_base: https://dl.rockylinux.org/pub/rocky/10
+            max_glibc: "2.39"
+            artifact: rpm-package-el10
     env:
-      RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ github.run_id }}-${{ github.run_attempt }}
+      EXPECTED_DIST: ${{ matrix.dist }}
+      MAX_GLIBC: ${{ matrix.max_glibc }}
+      ROCKY_REPO_BASE: ${{ matrix.repo_base }}
+      RPMBUILD_DIR: /tmp/resman-rpmbuild-${{ matrix.dist }}-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: quay.io/rockylinux/rockylinux:8
+      image: ${{ matrix.image }}
       env:
         PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     steps:
       - name: Install RPM build tools
         run: |
-          dnf install --assumeyes --setopt=install_weak_deps=False \
+          arch=$(uname -m)
+          dnf clean all
+          dnf install --assumeyes \
+            --setopt=baseos.mirrorlist= \
+            --setopt=baseos.baseurl="$ROCKY_REPO_BASE/BaseOS/$arch/os/" \
+            --setopt=appstream.mirrorlist= \
+            --setopt=appstream.baseurl="$ROCKY_REPO_BASE/AppStream/$arch/os/" \
+            --setopt=extras.enabled=0 \
+            --setopt=install_weak_deps=False \
             gcc \
             git \
             glibc-devel \
-            golang \
             groff-base \
             gzip \
             make \
@@ -201,6 +233,20 @@ jobs:
           source_package=$(find build/release -maxdepth 1 -type f -name 'resman-*.src.rpm' -print -quit)
           test -n "$binary_package"
           test -n "$source_package"
+
+          version=$(awk '$1 == "VERSION" && $2 == "=" { print $3; exit }' Makefile)
+          release=$(awk '$1 == "RELEASE" && $2 == "=" { print $3; exit }' Makefile)
+          expected_binary="resman-${version}-${release}.${EXPECTED_DIST}.x86_64.rpm"
+          expected_source="resman-${version}-${release}.${EXPECTED_DIST}.src.rpm"
+          if [[ $(basename "$binary_package") != "$expected_binary" ]]; then
+            echo "expected binary RPM $expected_binary, found $(basename "$binary_package")" >&2
+            exit 1
+          fi
+          if [[ $(basename "$source_package") != "$expected_source" ]]; then
+            echo "expected source RPM $expected_source, found $(basename "$source_package")" >&2
+            exit 1
+          fi
+
           rpm --checksig "$binary_package" "$source_package"
           rpm --query --package --info "$binary_package" "$source_package"
           rpm --query --package --list "$binary_package"
@@ -212,15 +258,15 @@ jobs:
           )
           test -n "$glibc_versions"
           max_glibc=$(printf '%s\n' "$glibc_versions" | sort --version-sort | tail -n 1)
-          if [[ "$(printf '%s\n' 2.28 "$max_glibc" | sort --version-sort | tail -n 1)" != "2.28" ]]; then
-            echo "RPM requires GLIBC_$max_glibc, newer than the EL8 baseline GLIBC_2.28" >&2
+          if [[ "$(printf '%s\n' "$MAX_GLIBC" "$max_glibc" | sort --version-sort | tail -n 1)" != "$MAX_GLIBC" ]]; then
+            echo "RPM requires GLIBC_$max_glibc, newer than the $EXPECTED_DIST baseline GLIBC_$MAX_GLIBC" >&2
             exit 1
           fi
 
       - name: Upload RPM package
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-package
+          name: ${{ matrix.artifact }}
           path: build/release/resman-*.rpm
           if-no-files-found: error
 
@@ -236,7 +282,7 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
-          pattern: "*-package"
+          pattern: "*-package*"
           path: release-assets
           merge-multiple: true
 
@@ -251,9 +297,26 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(release-assets/resman_*.deb release-assets/resman-*.rpm release-assets/SHA256SUMS)
-          if (( ${#assets[@]} != 4 )); then
-            echo "expected one DEB, one binary RPM, one source RPM and SHA256SUMS, found ${#assets[@]} assets" >&2
+
+          deb_assets=(release-assets/resman_*.deb)
+          rpm_assets=(release-assets/resman-*.rpm)
+          if (( ${#deb_assets[@]} != 1 || ${#rpm_assets[@]} != 6 )); then
+            echo "expected one DEB, three binary RPMs and three source RPMs, found ${#deb_assets[@]} DEB and ${#rpm_assets[@]} RPM assets" >&2
+            exit 1
+          fi
+
+          for dist in el8 el9 el10; do
+            binary_assets=(release-assets/resman-*."$dist".x86_64.rpm)
+            source_assets=(release-assets/resman-*."$dist".src.rpm)
+            if (( ${#binary_assets[@]} != 1 || ${#source_assets[@]} != 1 )); then
+              echo "expected one binary and one source RPM for $dist, found ${#binary_assets[@]} binary and ${#source_assets[@]} source RPMs" >&2
+              exit 1
+            fi
+          done
+
+          assets=("${deb_assets[@]}" "${rpm_assets[@]}" release-assets/SHA256SUMS)
+          if (( ${#assets[@]} != 8 )); then
+            echo "expected one DEB, six RPMs and SHA256SUMS, found ${#assets[@]} assets" >&2
             exit 1
           fi
 
