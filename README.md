@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.36.6-3_<architecture>.deb
+# Creates build/deb/resman_1.36.6-4_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -80,11 +80,11 @@ RPM against systemd 239 and genuine PAM sessions; the Oracle Linux 9 SmolVM and
 real-kernel rows prove the newer-systemd behavior. Passing one row never
 substitutes for another.
 
-Release `1.36.6-3` contains the same production implementation as the accepted
+Release `1.36.6-4` contains the same production implementation as the accepted
 `1.36.6-2` package built from revision `685cb6977789361a4533b43bf92792bbfcab76e6`
 and qualified by revision `7ef74dd5f7c8be35299c0d36f5b1ed95006185b0` in QEMU run
-`r20260911055235-2418721`; only documentation, qualification expectations, and
-package metadata differ.
+`r20260911055235-2418721`; only documentation, qualification expectations,
+package metadata, and release automation differ.
 
 The `.deb` is a native CGO build. `dpkg-shlibdeps` records the actual minimum
 runtime library versions, so release artifacts should be built on the oldest

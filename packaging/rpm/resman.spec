@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.36.6
-Release: 3%{?dist}
+Release: 4%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -301,6 +301,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sat Sep 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-4
+- Pin the reviewed ShellCheck version in GitHub quality and release gates.
+- Verify the downloaded analyzer against its published SHA-256 digest.
+- Update golangci-lint for Go 1.27 compatibility in the shared quality gate.
+
 * Fri Sep 11 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-3
 - Document the qualified EL8 systemd 239 enforcement contract.
 - Distinguish package ABI, EL8 runtime and newer-systemd evidence.

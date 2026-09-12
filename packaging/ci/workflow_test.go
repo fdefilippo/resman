@@ -30,7 +30,7 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertContains(t, qualityWorkflow, "workflow_call:")
 	assertContains(t, qualityWorkflow, `CGO_ENABLED: "1"`)
 	assertContains(t, qualityWorkflow, "go-version-file: go.mod")
-	assertContains(t, qualityWorkflow, "sudo apt-get install --yes prometheus shellcheck")
+	assertContains(t, qualityWorkflow, "sudo apt-get install --yes prometheus xz-utils")
 	assertContains(t, qualityWorkflow, "make lint-install")
 	assertContains(t, qualityWorkflow, `REQUIRE_SHELLCHECK: "1"`)
 	assertContains(t, qualityWorkflow, `run: make ci-quality GOLANGCI_LINT="$(go env GOPATH)/bin/golangci-lint"`)
@@ -50,6 +50,26 @@ func TestWorkflowUsesOneSharedQualityDefinition(t *testing.T) {
 	assertContains(t, moduleTarget, "git diff --exit-code -- go.mod go.sum")
 	lintTarget := makeTarget(t, makefile, "lint-required")
 	assertNotContains(t, lintTarget, "version --short")
+}
+
+func TestQualityWorkflowPinsVerifiedShellCheck(t *testing.T) {
+	root := repositoryRoot(t)
+	qualityWorkflow := readFile(t, filepath.Join(root, ".github/workflows/quality.yml"))
+	makefile := readFile(t, filepath.Join(root, "Makefile"))
+
+	for _, required := range []string{
+		`SHELLCHECK_VERSION: "0.11.0"`,
+		`SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"`,
+		`https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz`,
+		`sha256sum --check --strict -`,
+		`test "$installed_version" = "$SHELLCHECK_VERSION"`,
+	} {
+		assertContains(t, qualityWorkflow, required)
+	}
+	assertNotContains(t, qualityWorkflow, "apt-get install --yes prometheus shellcheck")
+	assertContains(t, makefile, "GOLANGCI_LINT_VERSION = v2.13.2")
+	assertContains(t, makeTarget(t, makefile, "lint-install"),
+		"github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)")
 }
 
 func TestFuzzWorkflowGeneratesInputsAndPreservesFailureEvidence(t *testing.T) {
