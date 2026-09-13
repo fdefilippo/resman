@@ -95,43 +95,60 @@ and Go fuzz cache. The local `make fuzz` default remains 30 seconds per target.
 
 # Part 0 — Project policy
 
-## Rule 1 — No backward compatibility. Breaking is allowed; silence is not
+## Rule 1 — Backward compatibility is the default; silence is never allowed
 
-resman has **no backward-compatibility requirement**. When a contract is wrong, it is
-changed, not wrapped.
+For changes after release `v1.36.6`, resman **MUST preserve backward compatibility
+whenever reasonably possible**. Published database schemas, configuration keys,
+metric keys, API fields, and MCP protocol behaviour are operator contracts, not
+implementation details.
 
-- Obsolete database schemas, configuration keys, metric keys, MCP protocol revisions,
-  and behavioural aliases **MUST NOT** be preserved.
-- Compatibility shims, deprecation periods, dual-read paths, silent migrations, and
-  "accept both spellings" aliases are **forbidden**.
-- A breaking change **MUST** fail clearly or require an explicit operator reset. It
-  **MUST NOT** silently reinterpret old state. Deleting a knob and ignoring it is not
-  a breaking change, it is a hidden one.
+- Prefer additive evolution, versioned migrations, and documented deprecation periods
+  over removal or reinterpretation.
+- A compatibility path **MUST** preserve the old contract's meaning, have a real
+  runtime consumer, and be covered by upgrade and regression tests. Compatibility
+  **MUST NOT** mean retaining inert settings, fabricating values, accepting invalid
+  input, or silently giving an old field a new meaning.
+- An incompatible change is allowed only when compatibility is technically impossible,
+  would preserve incorrect or unsafe semantics, or would impose cost disproportionate
+  to the supported use. The change **MUST** record that reason, the alternatives
+  considered, the affected versions and surfaces, and the operator migration or reset
+  procedure. It also **MUST** use the release increment required by the package identity
+  policy.
+- An unavoidable break **MUST** fail clearly. Deleting a knob and ignoring it is not a
+  breaking change; it is a hidden one.
 - Concretely:
-  - **Removed configuration key** → startup fails with the offending key and file
-    named. Not warned, not ignored.
-  - **Incompatible persisted schema** → refuse to open the store, tell the operator
-    what to do (delete/reset), and stop. No in-place migration, no best-effort read of
-    the old shape.
-  - **Removed API field, metric key, or protocol revision** → absent and rejected, not
-    aliased to the replacement.
-- The freedom to break is not a licence to break casually. It removes the *shim* from
-  the menu, not the *thinking*: the replacement must be right, documented in the same
-  change, and reflected in `config/resman.conf.example`, `docs/`, and the man page.
+  - **Renamed or replaced configuration key** → accept and translate the old key during
+    a documented deprecation period when the mapping is exact, and emit an actionable
+    warning. If no faithful mapping exists, startup fails with the offending key and
+    file named.
+  - **Changed persisted schema** → use an explicit, atomic, versioned migration when
+    the stored meaning can be preserved. Otherwise refuse to open the store, identify
+    the incompatible version, tell the operator what to migrate or reset, and stop. No
+    best-effort read or silent reinterpretation is allowed.
+  - **Changed API field, metric key, or protocol revision** → prefer an additive field
+    or a tested overlap window. If the contracts cannot coexist faithfully, reject the
+    unsupported form explicitly and publish the replacement and upgrade path.
+- Every affected surface — including `config/resman.conf.example`, `docs/`, the man
+  page, public schemas, and upgrade notes — **MUST** change together.
 
-This policy is a current product decision recorded in epic `resman-4pw`. Only a later
-explicit product decision reverses it — not an individual pull request.
+This policy is prospective: it does not retroactively turn inputs already rejected by
+`v1.36.6` into supported contracts. Existing explicit support boundaries remain in
+force until deliberately revised, but every future change to them must perform this
+compatibility assessment.
 
-**Why.** Compatibility debt is what made the audit findings survivable in the first
-place: an inert `CPU_QUOTA_LIMITED` that still validates, the former
+**Why.** The original no-compatibility policy prevented old names from concealing
+broken semantics: an inert `CPU_QUOTA_LIMITED` that still validated, the former
 `total_user_cpu_usage` consumer key that never had a producer, and the removed
-`reload=false` parameter that did not mean what it said. Each was cheaper to leave
-than to remove — until there were sixteen of them.
+`reload=false` parameter that did not mean what it said. Those lessons still forbid
+false compatibility. Now that resman is released and operated as a stable product,
+truthful compatibility is the default and an operator-visible break is the exception
+that requires evidence and justification.
 
-**Resolution.** `setConfigField` now rejects every key absent from
+**Historical resolution.** `setConfigField` rejects every key absent from
 `configFieldHandlers`, so file typos fail with the key, line, and file named. Removed
-public keys have explicit rejection tombstones so the same failure also applies to
-environment overrides; no tombstone parses or aliases a value.
+public keys whose historical behaviour could not be preserved have explicit rejection
+tombstones, so environment overrides fail just as clearly; no tombstone parses or
+aliases a value.
 
 *Source: epic `resman-4pw` policy; findings `resman-4pw.7`, `resman-4pw.12`*
 
@@ -161,10 +178,13 @@ For every user and every resource, resman deals with three distinct facts:
 - Repeated publication of the same blocked system-wide intent **MUST NOT** create a
   transition event or increment an enforcement transition counter. A changed intent
   or enforcement mode is a new observable state.
-- When a persisted field changes meaning, the schema change is **intentionally
-  breaking** (Rule 1): the store refuses to open old data and the operator resets it.
-  Reading old rows under the new meaning is forbidden — historical rows written under
-  the previous semantics would silently corrupt every dashboard built on them.
+- When a persisted field changes meaning, compatibility **MUST** be assessed under
+  Rule 1. A versioned migration is permitted only when it preserves the historical
+  meaning and tests prove the conversion. If the old and new meanings cannot be
+  distinguished safely, the store refuses to open old data and gives the operator an
+  explicit migration or reset procedure. Reading old rows under the new meaning is
+  forbidden — historical rows written under the previous semantics would silently
+  corrupt every dashboard built on them.
 
 **Why.** Before `resman-4pw.1`, `UserMetrics.IsLimited` was assigned from CPU policy
 eligibility in the collector, overwritten with runtime state before database writes,
@@ -248,7 +268,8 @@ verified unit properties; the non-systemd relocation backend was retired in
 
 If the configuration exposes N dimensions for a resource, the decision engine
 **MUST** evaluate all N, or the unevaluated ones **MUST** be removed from the
-configuration surface — removed and rejected, per Rule 1, never left inert.
+configuration surface. An inert input has no truthful behaviour to preserve, so it is
+removed and rejected explicitly under Rule 1 rather than left in place.
 
 - Each dimension needs explicit activation, maintenance, and release semantics.
 - The rule combining dimensions (any-of, all-of, weighted) **MUST** be documented next
@@ -286,9 +307,12 @@ Every public configuration key **MUST** have a runtime consumer.
 - **Validating an inert key is worse than not having it.** Validation is an implicit
   promise that the value matters. A key that validates successfully while doing nothing
   **MUST NOT** exist.
-- Removing a key is **immediate and breaking** (Rule 1): the handler is deleted, the
-  key is rejected at load, and the documentation, example config, and man page are
-  updated in the same change. No deprecation window, no alias, no silent ignore.
+- Renaming or removing a working key follows Rule 1: preserve it through a tested,
+  documented deprecation path when its semantics can be translated exactly. A key
+  with no runtime effect, or one whose meaning cannot be preserved faithfully, is
+  rejected at load with an actionable replacement or removal message. It is never
+  silently ignored. The handler, documentation, example config, and man page are
+  updated in the same change.
 
 **Why.** Before `resman-4pw.12`, `CPU_QUOTA_LIMITED` and `RAM_QUOTA_LIMITED` were parsed
 and validated with no runtime consumer. `METRICS_CACHE_FILE` and `PROMETHEUS_FILE`
@@ -320,8 +344,9 @@ constants referenced by both sides.
 - Counts that mean different things get **different names**: users observed is not
   users eligible is not users actively limited. Do not reuse one key for whichever the
   caller happened to want.
-- A key that does not exist is **removed from the consumer**, never aliased into
-  existence (Rule 1).
+- A key that has no producer is **removed from the consumer**, never fabricated for
+  compatibility. A compatibility adapter is valid only when it derives equivalent
+  semantics from an authoritative typed source and is tested as required by Rule 1.
 - Producer and consumer **MUST** share a test that round-trips the contract, covering
   every sibling tool/resource surface and transport that carries it.
 
@@ -435,8 +460,9 @@ explicitly, and uses one configuration epoch across control-cycle consumers.
   transfer it to an explicitly tracked lifecycle. Cancellation without draining is
   not completion when the worker can still mutate enforcement state.
 - A parameter that claims to control whether runtime state changes (`reload=false`)
-  **MUST** actually control it, or be **removed immediately** as a breaking change
-  (Rule 1). A parameter kept for compatibility while meaning nothing is forbidden.
+  **MUST** actually control it. If its promised behaviour cannot be implemented, it is
+  rejected through the explicit breaking-change process in Rule 1. A parameter kept
+  for compatibility while meaning nothing is forbidden.
 - Persisted configuration and the published runtime snapshot are separate concepts;
   writing one **MUST NOT** implicitly publish the other.
 - A daemon-wide shutdown deadline **MUST** have its own configuration contract rather
@@ -471,9 +497,12 @@ newer**, serving **only** protocol revision **2026-07-28**, over both HTTP and s
 - **Protocol-stateless is not application-stateless.** The resource manager's own state
   — active users, cgroup membership, configuration — remains shared and authoritative.
   This rule constrains the transport, not the domain.
-- The SDK can still accept older revisions; a **latest-only boundary MUST be enforced
-  explicitly** in resman. Pre-2026-07-28 revisions, `initialize`/`initialized` legacy
-  flows, and legacy session identifiers are **rejected**, not tolerated (Rule 1).
+- The SDK can still accept older revisions; the currently published **latest-only
+  boundary MUST be enforced explicitly** in resman. Pre-2026-07-28 revisions,
+  `initialize`/`initialized` legacy flows, and legacy session identifiers are rejected
+  because no supported compatibility contract exists for them. A future protocol
+  change must assess and test an overlap window under Rule 1; merely enabling SDK
+  fallback is not a compatibility design.
 - `MCPGODEBUG` compatibility flags, protocol aliases, and fallback modes **MUST NOT**
   appear in the tree **[checkable]**.
 - Authentication and authorisation stay **per-request middleware**. Anything that has
@@ -965,8 +994,9 @@ class. A branch name alone never determines the version.
       `VERSION`, `RELEASE` is incremented by exactly one in both `Makefile` and the
       RPM spec (for example, `1.31.1-1` is followed by `1.31.1-2`). `RELEASE` returns
       to `1` only when `VERSION` changes, and the RPM and DEB identities agree.
-- [ ] Nothing was kept for compatibility; anything removed is rejected loudly, not
-      ignored (Rule 1).
+- [ ] Backward compatibility is preserved and tested wherever reasonably possible;
+      every unavoidable break records its rationale, affected versions, rejected
+      alternatives, and actionable upgrade or reset path (Rule 1).
 - [ ] No field carries more than one of eligibility / intent / observation (Rule 2).
 - [ ] Per-resource policy lists used for their own resource; empty-list behaviour tested
       (Rule 3).
@@ -1054,7 +1084,7 @@ only because the named issue owns the violation; they are intentionally visible.
 
 | Rule | Audit finding |
 |---|---|
-| 1. No backward compatibility | epic `resman-4pw` policy; `resman-4pw.7`, `resman-4pw.12` |
+| 1. Compatibility by default; no silent breaks | epic `resman-4pw` policy; `resman-4pw.7`, `resman-4pw.12`; `resman-346` |
 | 2. Eligibility / intent / observation | `resman-4pw.1`, `resman-4pw.6` |
 | 3. Resource policy lists | `resman-4pw.1` |
 | 4. All decision dimensions evaluated | `resman-4pw.4` |
