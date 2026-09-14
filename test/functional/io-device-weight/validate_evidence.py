@@ -52,7 +52,7 @@ def verify_manifest(root):
     actual = {
         "./" + str(path.relative_to(root)): digest(path)
         for path in root.rglob("*")
-        if path.is_file() and path != manifest
+        if path.is_file() and path.name != "SHA256SUMS"
     }
     require(entries == actual, "evidence files and SHA256SUMS differ: " + str(root))
 
