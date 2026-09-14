@@ -235,6 +235,9 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 			requiresIO = true
 		case PropertyIODeviceWeight:
 			requiresIO = true
+			if err := v.preflightIODeviceWeightTargets(assignment); err != nil {
+				return err
+			}
 			for _, target := range assignment.ioDeviceWeightTargets {
 				required[ioDeviceWeightKernelFile(target.mechanism)] = true
 			}
@@ -267,6 +270,21 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 		if !containsWord(string(controllers), "io") {
 			return fmt.Errorf("required I/O controller is unavailable for %s", snapshot.Identity.Name)
 		}
+	}
+	return nil
+}
+
+func (v cgroupVerifier) preflightIODeviceWeightTargets(assignment PropertyAssignment) error {
+	seen := make(map[string]string, len(assignment.ioDeviceWeightTargets))
+	for _, target := range assignment.ioDeviceWeightTargets {
+		device, err := v.deviceNumber(target.path)
+		if err != nil {
+			return fmt.Errorf("resolve block device %s for %s preflight: %w", target.path, PropertyIODeviceWeight, err)
+		}
+		if previous, duplicated := seen[device]; duplicated {
+			return fmt.Errorf("%s paths %s and %s resolve to the same device %s", PropertyIODeviceWeight, previous, target.path, device)
+		}
+		seen[device] = target.path
 	}
 	return nil
 }

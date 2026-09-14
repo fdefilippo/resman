@@ -384,6 +384,14 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	if err := a.requireManagedUnitFileFootprint("apply", before, currentOverride, trackedOverride); err != nil {
 		return UnitSnapshot{}, err
 	}
+	for _, assignment := range validated {
+		if assignment.name != PropertyIODeviceWeight {
+			continue
+		}
+		if err := a.verifier.preflightApply(before, []PropertyAssignment{assignment}); err != nil {
+			return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "apply_preflight", Unit: identity.Name, Property: assignment.name, Err: err}
+		}
+	}
 	if trackedOverride && a.phases[identity.Name] == leasePhaseApplied {
 		fingerprints, err := a.captureFootprint(before)
 		if err != nil {
@@ -1302,7 +1310,7 @@ func validateResourceAssignments(resource ResourceKind, assignments []PropertyAs
 			PropertyMemoryHigh: true, PropertyMemoryMax: true, PropertyMemorySwapMax: true,
 		},
 		ResourceIO: {
-			PropertyIOWeight: true, PropertyIODeviceWeight: true, PropertyIOReadBandwidthMax: true, PropertyIOWriteBandwidthMax: true,
+			PropertyIOWeight: true, PropertyIOReadBandwidthMax: true, PropertyIOWriteBandwidthMax: true,
 			PropertyIOReadIOPSMax: true, PropertyIOWriteIOPSMax: true,
 		},
 	}

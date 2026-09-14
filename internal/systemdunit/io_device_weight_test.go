@@ -160,6 +160,7 @@ func TestIODeviceWeightPreflightRequiresSelectedMechanismInterface(t *testing.T)
 		t.Fatal(err)
 	}
 	verifier := newCgroupVerifier(root)
+	verifier.stat = func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
 	if err := verifier.preflight(UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice"}, ControlGroup: "/user.slice/user-1000.slice"}, []PropertyAssignment{assignment}); err == nil {
 		t.Fatal("strict preflight accepted an absent io.bfq.weight")
 	}
@@ -248,8 +249,15 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	verifier := &fakeKernelVerifier{}
 	store := newMemoryLeaseJournalStore()
 	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
-	request := IODeviceWeightRequest{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}
-	if err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{IODeviceWeights: []IODeviceWeightRequest{request}}); err != nil {
+	requests := []IODeviceWeightRequest{
+		{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismIOCost},
+	}
+	wantProbe := []IODeviceWeightRequest{
+		{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vdb", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost},
+	}
+	if err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{IODeviceWeights: requests}); err != nil {
 		t.Fatalf("requireStartupCapabilities() error = %v", err)
 	}
 	if len(transport.probeStarts) != 2 || len(transport.probeStops) != 2 || len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
@@ -258,10 +266,13 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	if len(verifier.preflightCalls) != 2 || verifier.preflightCalls[1][0].name != PropertyIODeviceWeight {
 		t.Fatalf("strict typed preflight calls = %+v", verifier.preflightCalls)
 	}
+	if len(verifier.preflightApplyCalls) != 1 || verifier.preflightApplyCalls[0][0].name != PropertyIODeviceWeight {
+		t.Fatalf("pre-mutation typed preflight calls = %+v", verifier.preflightApplyCalls)
+	}
 	found := false
 	for _, call := range transport.setCalls {
 		for _, applied := range call.assignments {
-			if applied.name == PropertyIODeviceWeight && reflect.DeepEqual(applied.IODeviceWeightRequests(), []IODeviceWeightRequest{request}) {
+			if applied.name == PropertyIODeviceWeight && reflect.DeepEqual(applied.IODeviceWeightRequests(), wantProbe) {
 				found = true
 			}
 		}
@@ -293,5 +304,95 @@ func TestIODeviceWeightUsesNativeDBusDeviceTuple(t *testing.T) {
 	got, ok := dbusPropertyValue(assignment).([]dbusDeviceLimit)
 	if !ok || !reflect.DeepEqual(got, []dbusDeviceLimit{{Path: "/dev/vda", Value: 331}}) {
 		t.Fatalf("dbusPropertyValue() = %#v, want native a(st) tuple", got)
+	}
+}
+
+func TestIODeviceWeightIsIndependentFromHardIOAuthority(t *testing.T) {
+	assignment, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource, ok := PropertyIODeviceWeight.Resource(); !ok || resource != ResourceIOWeight {
+		t.Fatalf("IODeviceWeight resource = %q, present=%t, want %q", resource, ok, ResourceIOWeight)
+	}
+	if _, err := validateResourceAssignments(ResourceIO, []PropertyAssignment{assignment}); err == nil {
+		t.Fatal("hard-I/O authority accepted an IODeviceWeight assignment")
+	}
+}
+
+func TestApplyRejectsChangedIODeviceWeightMechanismOnActiveLease(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	bfq, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ioCost, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismIOCost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{bfq}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Apply(context.Background(), identity, []PropertyAssignment{ioCost})
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonExternalConflict {
+		t.Fatalf("Apply(changed mechanism) error = %v, want external conflict", err)
+	}
+}
+
+func TestConfirmAppliedRejectsChangedIODeviceWeightMechanism(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	bfq, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ioCost, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismIOCost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{bfq}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.ConfirmApplied(context.Background(), identity, []PropertyAssignment{ioCost})
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonReadbackMismatch {
+		t.Fatalf("ConfirmApplied(changed mechanism) error = %v, want readback mismatch", err)
+	}
+}
+
+func TestApplyRejectsIODeviceWeightAliasesBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{"user.slice", "user.slice/user-1001.slice"} {
+		if err := os.MkdirAll(filepath.Join(root, relative), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	transport := newFakeUnitTransport(1001)
+	delete(transport.units[parentUserSlice].slice, "ControlGroupId")
+	delete(transport.units["user-1001.slice"].slice, "ControlGroupId")
+	verifier := newCgroupVerifier(root)
+	verifier.stat = func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
+	store := newMemoryLeaseJournalStore()
+	adapter, err := newAdapter(context.Background(), transport, verifier, transport, store, DefaultCallTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := identityFor(t, adapter, 1001)
+	assignment, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{
+		{Path: "/dev/disk/by-path/alias", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{assignment}); err == nil {
+		t.Fatal("Apply() accepted two paths for the same block device")
+	}
+	if len(transport.setCalls) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("alias rejection occurred after mutation: calls=%+v journal=%+v", transport.setCalls, store.journal)
 	}
 }

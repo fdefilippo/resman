@@ -16,8 +16,9 @@ import (
 type ResourceKind string
 
 const (
-	ResourceMemory ResourceKind = "memory"
-	ResourceIO     ResourceKind = "io"
+	ResourceMemory   ResourceKind = "memory"
+	ResourceIO       ResourceKind = "io"
+	ResourceIOWeight ResourceKind = "io_weight"
 )
 
 // ResourceCoverageState describes whether one user slice covers its workload.

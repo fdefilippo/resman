@@ -283,7 +283,7 @@ func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []
 	for property := range properties {
 		lease := systemdunit.PropertyLease{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1}
 		switch property {
-		case systemdunit.PropertyIOReadBandwidthMax, systemdunit.PropertyIOWriteBandwidthMax, systemdunit.PropertyIOReadIOPSMax, systemdunit.PropertyIOWriteIOPSMax:
+		case systemdunit.PropertyIODeviceWeight, systemdunit.PropertyIOReadBandwidthMax, systemdunit.PropertyIOWriteBandwidthMax, systemdunit.PropertyIOReadIOPSMax, systemdunit.PropertyIOWriteIOPSMax:
 			lease.LastAppliedDeviceLimits = []systemdunit.DeviceLimit{{Path: "/dev/vda", Value: 1}}
 		}
 		result = append(result, lease)

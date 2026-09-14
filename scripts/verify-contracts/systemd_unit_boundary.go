@@ -218,7 +218,7 @@ func systemdIORestoreException(source goSource, result *checkResult) map[ast.Nod
 	if source.path != systemdResourcePolicyPath {
 		return allowed
 	}
-	want := []string{"PropertyIOWeight", "PropertyIODeviceWeight", "PropertyIOReadBandwidthMax", "PropertyIOWriteBandwidthMax", "PropertyIOReadIOPSMax", "PropertyIOWriteIOPSMax"}
+	want := []string{"PropertyIOWeight", "PropertyIOReadBandwidthMax", "PropertyIOWriteBandwidthMax", "PropertyIOReadIOPSMax", "PropertyIOWriteIOPSMax"}
 	declarations, consumers := 0, 0
 	for _, declaration := range source.file.Decls {
 		switch typed := declaration.(type) {
@@ -240,7 +240,6 @@ func systemdIORestoreException(source goSource, result *checkResult) map[ast.Nod
 					declarations++
 					allowed[value.Names[0]] = true
 					allowed[literal.Elts[0].(*ast.SelectorExpr).Sel] = true
-					allowed[literal.Elts[1].(*ast.SelectorExpr).Sel] = true
 				}
 			}
 		case *ast.FuncDecl:

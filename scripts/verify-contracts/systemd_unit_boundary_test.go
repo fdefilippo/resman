@@ -12,7 +12,6 @@ const ioRestoreFixture = `package state
 import systemdunit "github.com/fdefilippo/resman/internal/systemdunit"
 var ioSystemdProperties = []systemdunit.PropertyName{
  systemdunit.PropertyIOWeight,
- systemdunit.PropertyIODeviceWeight,
  systemdunit.PropertyIOReadBandwidthMax,
  systemdunit.PropertyIOWriteBandwidthMax,
  systemdunit.PropertyIOReadIOPSMax,
@@ -72,7 +71,6 @@ func TestSystemdIOWeightExceptionIsExactAndRestoreOnly(t *testing.T) {
 		content string
 	}{
 		{"inventory removed", strings.Replace(ioRestoreFixture, "systemdunit.PropertyIOWeight,", "", 1)},
-		{"device inventory removed", strings.Replace(ioRestoreFixture, "systemdunit.PropertyIODeviceWeight,", "", 1)},
 		{"inventory duplicated", ioRestoreFixture + "\nvar ioSystemdProperties = []systemdunit.PropertyName{systemdunit.PropertyIOWeight}\n"},
 		{"inventory renamed", strings.ReplaceAll(ioRestoreFixture, "ioSystemdProperties", "newInventory")},
 		{"exception consumed by apply", strings.Replace(ioRestoreFixture, "RestoreProperties", "Apply", 1)},

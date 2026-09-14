@@ -59,7 +59,8 @@ func WithSystemdCPUEnforcement(adapter SystemdCPUUnitAdapter) ManagerOption {
 						m.systemdCPUSlices[uid] = identity
 					}
 				}
-				if _, resourceProperty := lease.Property.Resource(); resourceProperty {
+				resource, resourceProperty := lease.Property.Resource()
+				if resourceProperty && (resource == systemdunit.ResourceMemory || resource == systemdunit.ResourceIO) {
 					m.systemdResourcesRequested = true
 					if uid, ok := systemdUserSliceUID(identity.Name); ok {
 						m.systemdResourceUnits[uid] = identity
@@ -350,7 +351,7 @@ func (m *Manager) restoreSystemdCPUProperties(ctx context.Context) error {
 		}
 		state := resources[uid]
 		var err error
-		if state.ramApplied || state.ioApplied {
+		if state.ramApplied || state.ioApplied || hasActiveNonCPUProperty(m.systemdUnits.Leases(identity)) {
 			_, err = m.systemdUnits.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyCPUWeight})
 		} else {
 			_, err = m.systemdUnits.Restore(ctx, identity)
@@ -387,6 +388,15 @@ func (m *Manager) restoreSystemdCPUProperties(ctx context.Context) error {
 		m.logger.Info("Systemd-native CPU Points plan released")
 	}
 	return nil
+}
+
+func hasActiveNonCPUProperty(leases []systemdunit.PropertyLease) bool {
+	for _, lease := range leases {
+		if lease.Active() && !lease.Property.IsCPU() {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {

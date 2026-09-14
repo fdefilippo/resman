@@ -111,7 +111,15 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 		if assignmentErr != nil {
 			return nil, assignmentErr
 		}
-		deviceWeights, assignmentErr := NewIODeviceWeightAssignment(requirements.IODeviceWeights)
+		probeRequests := make([]IODeviceWeightRequest, len(requirements.IODeviceWeights))
+		for index, request := range requirements.IODeviceWeights {
+			request.Weight = 333
+			if request.Mechanism == IODeviceWeightMechanismBFQ {
+				request.Weight = 121
+			}
+			probeRequests[index] = request
+		}
+		deviceWeights, assignmentErr := NewIODeviceWeightAssignment(probeRequests)
 		if assignmentErr != nil {
 			return nil, assignmentErr
 		}

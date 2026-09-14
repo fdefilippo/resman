@@ -17,6 +17,78 @@ var expectedMemorySystemdProperties = []systemdunit.PropertyName{
 	systemdunit.PropertyMemorySwapMax,
 }
 
+func TestHardIORestorePreservesIndependentIODeviceWeight(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	identity := topology.Users[0].Unit.Identity
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: topology,
+		owned:    map[string]systemdunit.UnitIdentity{identity.Name: identity},
+		activeProperties: map[string]map[systemdunit.PropertyName]bool{
+			identity.Name: {
+				systemdunit.PropertyIODeviceWeight:     true,
+				systemdunit.PropertyIOReadBandwidthMax: true,
+			},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.systemdResourceUnits[1000] = identity
+	manager.resourceLimits[1000] = userResourceLimitState{io: true, ioApplied: true}
+	if err := manager.restoreSystemdResource(context.Background(), 1000, identity, systemdunit.ResourceIO); err != nil {
+		t.Fatal(err)
+	}
+	active := adapter.activeProperties[identity.Name]
+	if !active[systemdunit.PropertyIODeviceWeight] || active[systemdunit.PropertyIOReadBandwidthMax] {
+		t.Fatalf("hard-I/O restore left active properties %+v", active)
+	}
+	for _, restored := range adapter.propertyRestores[0].properties {
+		if restored == systemdunit.PropertyIODeviceWeight {
+			t.Fatal("hard-I/O restore included IODeviceWeight")
+		}
+	}
+}
+
+func TestRecoveredIODeviceWeightDoesNotActivateHardIOState(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	identity := topology.Users[0].Unit.Identity
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: topology,
+		owned:    map[string]systemdunit.UnitIdentity{identity.Name: identity},
+		activeProperties: map[string]map[systemdunit.PropertyName]bool{
+			identity.Name: {systemdunit.PropertyIODeviceWeight: true},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	if manager.systemdResourcesRequested || len(manager.systemdResourceUnits) != 0 {
+		t.Fatalf("recovered weight activated hard-resource state: requested=%t units=%+v", manager.systemdResourcesRequested, manager.systemdResourceUnits)
+	}
+}
+
+func TestCPUReleasePreservesIndependentIODeviceWeight(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	identity := topology.Users[0].Unit.Identity
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: topology,
+		owned:    map[string]systemdunit.UnitIdentity{identity.Name: identity},
+		activeProperties: map[string]map[systemdunit.PropertyName]bool{
+			identity.Name: {
+				systemdunit.PropertyCPUWeight:      true,
+				systemdunit.PropertyIODeviceWeight: true,
+			},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	if err := manager.restoreSystemdCPUProperties(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	active := adapter.activeProperties[identity.Name]
+	if !active[systemdunit.PropertyIODeviceWeight] || active[systemdunit.PropertyCPUWeight] {
+		t.Fatalf("CPU restore left active properties %+v", active)
+	}
+	if len(adapter.restores) != 1 || len(adapter.propertyRestores) != 1 || !reflect.DeepEqual(adapter.propertyRestores[0].properties, []systemdunit.PropertyName{systemdunit.PropertyCPUWeight}) {
+		t.Fatalf("CPU restore calls full=%+v selective=%+v", adapter.restores, adapter.propertyRestores)
+	}
+}
+
 func TestSystemdNativeMemoryAndIOPlansAreIndependentFromCPUEligibility(t *testing.T) {
 	policy := testCPUPointsPolicy(t, nil)
 	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000, 1001)}

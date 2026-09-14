@@ -27,6 +27,9 @@ BFQ or `io.cost` verification mechanism for every ResMan-owned tuple. This conte
 part of the lease because the D-Bus `a(st)` value does not identify which kernel file
 must contain the corresponding `major:minor` override. Recovery never infers the
 mechanism from whichever weight file happens to exist.
+`IODeviceWeight` is classified as the independent `ResourceIOWeight`; hard-I/O
+`ResourceIO` restoration never includes it, and CPU release uses a selective property
+restore whenever another active resource lease shares the user slice.
 
 ## Resource-specific workload authority
 

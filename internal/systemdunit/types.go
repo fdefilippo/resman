@@ -472,8 +472,10 @@ func (n PropertyName) Resource() (ResourceKind, bool) {
 	switch n {
 	case PropertyMemoryHigh, PropertyMemoryMax, PropertyMemorySwapMax:
 		return ResourceMemory, true
-	case PropertyIOWeight, PropertyIODeviceWeight, PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
+	case PropertyIOWeight, PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
 		return ResourceIO, true
+	case PropertyIODeviceWeight:
+		return ResourceIOWeight, true
 	default:
 		return "", false
 	}
