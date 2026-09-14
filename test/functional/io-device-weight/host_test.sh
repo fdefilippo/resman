@@ -35,7 +35,9 @@ grep -q 'unsupported outcome lacks a typed reason' "$script_dir/validate_evidenc
 grep -q 'NOT_APPLICABLE' "$script_dir/validate_evidence.py"
 grep -q 'OL8/UEK' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'OL8/RHCK' "$script_dir/CAPABILITY-MATRIX.md"
-grep -q 'UEK is an optional' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'UEK is an extension kernel available within the same release' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'are two kernel configurations of Oracle' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'Linux 9 rather than two releases' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'normal errata only inside' "$script_dir/CAPABILITY-MATRIX.md"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" \

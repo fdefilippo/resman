@@ -1,10 +1,12 @@
 # IODeviceWeight platform characterization
 
-This test-only harness first produced the retained Oracle Linux plus UEK evidence
-for `resman-nq6.40.6`. Its current campaign resolves `resman-nq6.40.8` by booting
-RHCK on the same three immutable Oracle Linux images before the weighted-I/O
-operator contract selects a generic Enterprise Linux release line. It measures
-the complete systemd-to-kernel `IODeviceWeight` path; it does not run ResMan,
+This test-only harness first produced retained evidence with the UEK extension
+kernel for `resman-nq6.40.6`. Its current campaign resolves `resman-nq6.40.8` by
+booting RHCK, the base kernel, on the same three immutable Oracle Linux release
+images. RHCK and UEK are therefore two kernel configurations of each Oracle
+Linux release, not distinct releases. The weighted-I/O operator contract selects
+only the RHCK path for its first production version. The harness measures the
+complete systemd-to-kernel `IODeviceWeight` path; it does not run ResMan,
 implement daemon policy, or claim throughput delivery.
 
 Each guest is a fresh overlay of an immutable Oracle KVM image with a second,

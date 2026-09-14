@@ -1,11 +1,13 @@
 # IODeviceWeight capability matrix
 
-The product baseline is Enterprise Linux with RHCK. Oracle UEK is an optional
-Oracle Linux extension and never represents or constrains the base release.
-Exact guest identities below are retained evidence; the product contract may
-authorize normal errata only inside the same distribution-major, systemd-major,
-kernel-family/series and mechanism line, and only with a successful live startup
-probe on every configured device.
+The qualified release remains Oracle Linux in both tables below. RHCK is its
+base kernel and UEK is an extension kernel available within the same release;
+`OL9/RHCK` and `OL9/UEK`, for example, are two kernel configurations of Oracle
+Linux 9 rather than two releases. Exact guest identities below are retained
+evidence. The product contract may authorize normal errata only inside the same
+distribution-major, systemd-major, kernel-family/series and mechanism line, and
+only with a successful live startup probe on every configured device. Evidence
+for one kernel family never authorizes the other.
 
 ## RHCK baseline characterization
 
@@ -44,7 +46,7 @@ Every guest restored the scheduler selection, disabled io.cost, removed the
 per-device property and transient unit state, and passed cleanup. The host
 removed all matrix VMs, overlays, probe disks and the remote run bundle.
 
-## Retained UEK extension characterization
+## Retained same-release UEK extension-kernel characterization
 
 The earlier run `r20260914060753-2990457` exercised revision
 `91b9876dab9786192ea5c193d234345cdbde9163`. Its independently reviewed,
@@ -57,9 +59,9 @@ manifest-covered evidence remains in
 | OL9/UEK | Oracle Linux 9.8 | `systemd-252-67.0.1.el9_8.2.x86_64` | `6.12.0-204.92.4.2.el9uek.x86_64` | SUPPORTED | UNSUPPORTED | NOT_APPLICABLE | `not applicable` |
 | OL10/UEK | Oracle Linux 10.1 | `systemd-257-23.0.1.el10_2.2.x86_64` | `6.12.0-202.76.4.4.el10uek.x86_64` | SUPPORTED | UNSUPPORTED | NOT_APPLICABLE | `not applicable` |
 
-These rows are extension-specific historical evidence. They do not authorize a
-generic Enterprise Linux or RHCK production claim and are not selected for the
-first-release baseline contract.
+These rows characterize the UEK extension kernel on the same Oracle Linux
+releases. They do not authorize the RHCK kernel path and are not selected for
+the first-release production contract.
 
 `UNSUPPORTED` is a valid technical result for its characterized line and does
 not block a capable newer line. `BLOCKED` is reserved for missing or invalid
