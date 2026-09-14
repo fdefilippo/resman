@@ -66,8 +66,11 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	currentUnits := make(map[int]systemdunit.UnitIdentity)
 	users := make(map[int]resmanmetrics.UserPersistenceMetrics)
 	reader, readable := m.systemdUnits.(systemdAccountingReader)
+	sample.systemdAuthorityInventory = nil
+	sample.systemdAuthorityInventoryErr = nil
 	topology, topologyErr := m.systemdUnits.Discover(context.Background())
 	if topologyErr != nil {
+		sample.systemdAuthorityInventoryErr = &systemdAuthorityInventoryError{Failure: systemdAuthorityInventoryDiscoveryFailed, Err: topologyErr}
 		m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, topologyErr)
 	} else {
 		sample.systemdObservationContext = persistenceTopologyFingerprint(topology)
@@ -78,6 +81,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		includeResourceDetail := (cfg.RAMEnabled && len(sample.RAMEligibleUsers) > 0) || (cfg.IOEnabled && len(sample.IOEligibleUsers) > 0)
 		inventory, err := m.systemdUnits.CaptureProcessAuthorityInventory(context.Background(), topology, system.SampleEpochID, includeResourceDetail)
 		if err != nil {
+			sample.systemdAuthorityInventoryErr = &systemdAuthorityInventoryError{Failure: systemdAuthorityInventoryInspectionFailed, Err: err}
 			m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, err)
 		} else {
 			sample.systemdAuthorityInventory = &inventory

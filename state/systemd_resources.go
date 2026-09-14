@@ -109,8 +109,13 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	var inventory systemdunit.ProcessAuthorityInventory
 	if len(desiredUIDs) > 0 {
 		var inventoryReason systemdunit.ResourceCoverageReason
-		inventory, inventoryReason, err = processAuthorityInventoryForTopology(metrics, topology)
+		inventory, inventoryReason, err = processAuthorityInventoryForSample(metrics)
 		if err != nil {
+			var inventoryErr *systemdAuthorityInventoryError
+			if errors.As(err, &inventoryErr) && inventoryErr.Failure == systemdAuthorityInventoryDiscoveryFailed {
+				invalidateCycleResourceAuthorities(metrics)
+				return &SystemdResourceReconciliationError{Step: "sample_discovery", Err: inventoryErr}
+			}
 			var inventoryErrors []error
 			for _, uid := range desiredUIDs {
 				for _, resource := range []systemdunit.ResourceKind{systemdunit.ResourceMemory, systemdunit.ResourceIO} {
@@ -271,8 +276,11 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	return errors.Join(reconcileErrors...)
 }
 
-func processAuthorityInventoryForTopology(metrics *SystemMetrics, topology systemdunit.TopologySnapshot) (systemdunit.ProcessAuthorityInventory, systemdunit.ResourceCoverageReason, error) {
+func processAuthorityInventoryForSample(metrics *SystemMetrics) (systemdunit.ProcessAuthorityInventory, systemdunit.ResourceCoverageReason, error) {
 	if metrics == nil || metrics.systemdAuthorityInventory == nil {
+		if metrics != nil && metrics.systemdAuthorityInventoryErr != nil {
+			return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageInspectionFailed, metrics.systemdAuthorityInventoryErr
+		}
 		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageInspectionFailed, fmt.Errorf("decision sample has no process-authority inventory")
 	}
 	inventory := *metrics.systemdAuthorityInventory
@@ -282,10 +290,6 @@ func processAuthorityInventoryForTopology(metrics *SystemMetrics, topology syste
 	}
 	if inventory.SampleEpochID() != sampleEpochID {
 		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageTopologyChanged, fmt.Errorf("process-authority inventory sample epoch %d does not match decision sample %d", inventory.SampleEpochID(), sampleEpochID)
-	}
-	currentFingerprint := persistenceTopologyFingerprint(topology)
-	if inventory.TopologyFingerprint() != currentFingerprint {
-		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageTopologyChanged, fmt.Errorf("systemd topology differs from the process-authority inventory captured for sample %d", sampleEpochID)
 	}
 	if !inventory.HasResourceDetail() {
 		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageInspectionFailed, fmt.Errorf("decision sample inventory has no RAM/I/O authority detail")

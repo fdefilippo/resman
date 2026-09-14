@@ -81,7 +81,8 @@ func NewProcessAuthorityInventory(sampleEpochID int64, topologyFingerprint strin
 // SampleEpochID returns the decision sample that owns the inventory.
 func (i ProcessAuthorityInventory) SampleEpochID() int64 { return i.sampleEpochID }
 
-// TopologyFingerprint returns the authoritative unit topology captured with the inventory.
+// TopologyFingerprint returns capture provenance for diagnostics. Authority is
+// validated per observed UID and exact unit identity, not as one global gate.
 func (i ProcessAuthorityInventory) TopologyFingerprint() string { return i.topologyFingerprint }
 
 // HasResourceDetail reports whether RAM/I/O membership data was captured.
@@ -96,7 +97,8 @@ func (i ProcessAuthorityInventory) CPUCoverage() map[uint32]bool {
 	return result
 }
 
-func (i ProcessAuthorityInventory) observation(uid uint32, identity UnitIdentity) (ProcessAuthorityObservation, bool) {
+// Observation returns the classification captured for an exact UID and unit lifetime.
+func (i ProcessAuthorityInventory) Observation(uid uint32, identity UnitIdentity) (ProcessAuthorityObservation, bool) {
 	for _, observation := range i.observations {
 		if observation.UID == uid && observation.Identity == identity {
 			return observation, true

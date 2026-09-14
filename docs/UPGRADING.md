@@ -46,8 +46,10 @@ effective-kernel confirmation still run before acknowledgement.
 **Cause.** A second `/proc` pass only moved the membership race to the instant after
 that pass while multiplying work on process-dense hosts. The control contract is
 sampled and convergent: the inventory spans one traversal and is frozen afterward,
-not an atomic kernel snapshot. It is bound to the sample epoch and exact systemd
-topology, so an old inventory cannot authorize a new, missing, or recreated unit.
+not an atomic kernel snapshot. It is bound to the sample epoch, and each observation is
+bound to an exact UID and systemd unit identity. Unrelated session churn does not
+invalidate an unchanged target, while an old inventory still cannot authorize a new,
+missing, or recreated target.
 
 **Action.** Size the convergence window deliberately. Polling normally reclassifies a
 late process within `POLLING_INTERVAL` plus cycle processing. With an active PSI
@@ -57,6 +59,11 @@ A new descendant inherits existing `memory.high`, `memory.max`, `memory.swap.max
 `io.max` values until then; any resulting OOM or OOM kill is irreversible. Reduce the
 relevant interval if that risk is unacceptable. A process that appears and disappears
 entirely between samples may remain unobserved.
+
+If the persistence-phase D-Bus discovery fails before the process capture starts,
+reconciliation reports that failure without restoring already-applied resources. A
+`/proc` capture failure remains an authority refusal and restores the affected owned
+RAM/I/O properties.
 
 ## BREAKING: the packaged service runs in a bounded systemd sandbox
 

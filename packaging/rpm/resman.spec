@@ -304,6 +304,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %changelog
 * Mon Sep 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.37.0-1
 - Share one frozen process-authority inventory across each decision sample.
+- Preserve unchanged RAM/I/O targets across unrelated topology churn and persistence discovery failure.
 - Preserve live unit, topology, lease, property and effective-kernel confirmation.
 - Document polling and PSI convergence bounds for later process membership.
 

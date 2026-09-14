@@ -376,8 +376,10 @@ may remain active. The durable systemd-property-leases.json journal is not a cac
 See /usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md for guarded restoration and
 operator-conflict recovery. Never delete this journal during a metrics reset.
 .PP
-One process-authority inventory is captured per decision sample and bound to both its
-SampleEpochID and the complete systemd topology. The /proc reads span one traversal;
+One process-authority inventory is captured per decision sample and bound to its
+SampleEpochID. Each observation is bound to an exact UID and systemd unit identity, so
+unrelated session churn does not invalidate an unchanged target while a new, missing,
+or recreated target cannot use an old observation. The /proc reads span one traversal;
 the result is frozen after capture, not atomic or instantaneous. CPU-only samples avoid
 all-process cgroup reads and PID-namespace inspection. RAM or I/O samples collect the
 extended detail once and reuse it through Apply and ConfirmApplied; unit identity,
@@ -393,6 +395,10 @@ memory.swap.max and io.max values meanwhile; an OOM or OOM kill cannot be undone
 later restoration. ACTIVATE_LIMITS also reconciles CPU Points after inventory capture
 and before RAM/I/O Apply. MAINTAIN_CURRENT_STATE proceeds directly to resource
 reconciliation because its pipeline CPU reconciliation preceded metrics collection.
+.PP
+A persistence-phase D-Bus discovery failure before process capture aborts resource
+reconciliation without restoring already-applied properties. A /proc capture failure
+remains an authority refusal and restores the affected owned RAM/I/O properties.
 .PP
 If the adapter cannot establish authority, ResMan remains in
 .B observation_only

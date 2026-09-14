@@ -179,7 +179,7 @@ func (a *fakeSystemdCPUUnitAdapter) CaptureProcessAuthorityInventory(_ context.C
 	return systemdunit.NewProcessAuthorityInventory(sampleEpochID, systemdunit.TopologyFingerprint(topology), includeResourceDetail, observations), nil
 }
 
-func (a *fakeSystemdCPUUnitAdapter) CheckCapturedResourceAuthorities(_ context.Context, _ systemdunit.ProcessAuthorityInventory, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
+func (a *fakeSystemdCPUUnitAdapter) CheckCapturedResourceAuthorities(_ context.Context, inventory systemdunit.ProcessAuthorityInventory, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.authorityChecks++
@@ -189,6 +189,11 @@ func (a *fakeSystemdCPUUnitAdapter) CheckCapturedResourceAuthorities(_ context.C
 	results := make([]systemdunit.ResourceAuthorityResult, len(requests))
 	for index, request := range requests {
 		a.resourceChecks = append(a.resourceChecks, systemdResourceCheckCall{uid: request.UID, resource: request.Resource})
+		if _, found := inventory.Observation(request.UID, request.Identity); !found {
+			authority := systemdunit.ResourceAuthority{Resource: request.Resource, State: systemdunit.ResourceCoverageRefused, Reason: systemdunit.ResourceCoverageTopologyChanged}
+			results[index] = systemdunit.ResourceAuthorityResult{Authority: authority, Err: &systemdunit.ResourceAuthorityError{UID: request.UID, Authority: authority, Err: errors.New("unit is absent from the sample authority inventory")}}
+			continue
+		}
 		authority, ok := a.authority[request.Resource]
 		if !ok {
 			authority = systemdunit.ResourceAuthority{Resource: request.Resource, State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified}
@@ -262,7 +267,8 @@ func (a *fakeSystemdCPUUnitAdapter) OwnedUnits() []systemdunit.UnitIdentity {
 func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []systemdunit.PropertyLease {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.owned[identity.Name]; !ok {
+	ownedIdentity, ok := a.owned[identity.Name]
+	if !ok || ownedIdentity != identity {
 		return nil
 	}
 	properties := a.activeProperties[identity.Name]
@@ -275,7 +281,12 @@ func (a *fakeSystemdCPUUnitAdapter) Leases(identity systemdunit.UnitIdentity) []
 	}
 	result := make([]systemdunit.PropertyLease, 0, len(properties))
 	for property := range properties {
-		result = append(result, systemdunit.PropertyLease{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1})
+		lease := systemdunit.PropertyLease{Property: property, Baseline: systemdunit.SystemdUnset, LastApplied: 1}
+		switch property {
+		case systemdunit.PropertyIOReadBandwidthMax, systemdunit.PropertyIOWriteBandwidthMax, systemdunit.PropertyIOReadIOPSMax, systemdunit.PropertyIOWriteIOPSMax:
+			lease.LastAppliedDeviceLimits = []systemdunit.DeviceLimit{{Path: "/dev/vda", Value: 1}}
+		}
+		result = append(result, lease)
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Property < result[right].Property })
 	return result

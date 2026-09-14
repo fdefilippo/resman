@@ -247,6 +247,36 @@ func TestCapturedInventoryRefusesTargetAbsentFromCapturedTopology(t *testing.T) 
 	}
 }
 
+func TestCapturedInventoryRefusesRecreatedTargetFromCapturedTopology(t *testing.T) {
+	transport := newFakeUnitTransport(1000)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	capturedTopology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := NewProcessAuthorityInventory(7, TopologyFingerprint(capturedTopology), true, []ProcessAuthorityObservation{{
+		UID:               capturedTopology.Users[0].UID,
+		Identity:          capturedTopology.Users[0].Unit.Identity,
+		CPUCoverage:       true,
+		ResourceAuthority: ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified},
+	}})
+	transport.units["user-1000.slice"].unit["InvocationID"] = invocationBytes(9001)
+	recreatedTopology, err := adapter.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := mustAssignment(t, PropertyMemoryHigh, 64<<20)
+	request := ResourceAuthorityRequest{Identity: recreatedTopology.Users[0].Unit.Identity, UID: 1000, Resource: ResourceMemory, Assignments: []PropertyAssignment{assignment}}
+	results, err := adapter.CheckCapturedResourceAuthorities(context.Background(), inventory, []ResourceAuthorityRequest{request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authorityErr *ResourceAuthorityError
+	if len(results) != 1 || !errors.As(results[0].Err, &authorityErr) || results[0].Authority.Reason != ResourceCoverageTopologyChanged {
+		t.Fatalf("recreated target result = %+v, want typed sample-topology refusal", results)
+	}
+}
+
 func TestCapturedInventoryDefersLaterMembershipToTheNextSample(t *testing.T) {
 	root := t.TempDir()
 	hostNS := filepath.Join(root, "host-pid-ns")

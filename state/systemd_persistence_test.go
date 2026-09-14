@@ -76,6 +76,53 @@ func TestSystemdPersistenceCapturesOneCostAwareInventoryPerSample(t *testing.T) 
 	}
 }
 
+func TestSystemdPersistenceRecordsTypedInventoryFailureCause(t *testing.T) {
+	tests := []struct {
+		name        string
+		failure     systemdAuthorityInventoryFailure
+		configure   func(*accountingSystemdAdapter, error)
+		wantCapture int
+	}{
+		{
+			name:    "topology discovery",
+			failure: systemdAuthorityInventoryDiscoveryFailed,
+			configure: func(adapter *accountingSystemdAdapter, err error) {
+				adapter.discoverError = err
+			},
+		},
+		{
+			name:    "process inspection",
+			failure: systemdAuthorityInventoryInspectionFailed,
+			configure: func(adapter *accountingSystemdAdapter, err error) {
+				adapter.coverageError = err
+			},
+			wantCapture: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, adapter := accountingManager(t)
+			manager.cfg.RAMEnabled = true
+			injected := errors.New("injected inventory failure")
+			test.configure(adapter, injected)
+			sample := persistenceSample(time.Now().UTC())
+			sample.RAMEligibleUsers = []int{1000}
+
+			manager.collectPersistenceInterval(sample)
+
+			if sample.systemdAuthorityInventory != nil {
+				t.Fatalf("inventory = %+v, want unavailable", sample.systemdAuthorityInventory)
+			}
+			if sample.systemdAuthorityInventoryErr == nil || sample.systemdAuthorityInventoryErr.Failure != test.failure || !errors.Is(sample.systemdAuthorityInventoryErr, injected) {
+				t.Fatalf("inventory failure = %+v, want %s wrapping injected error", sample.systemdAuthorityInventoryErr, test.failure)
+			}
+			if adapter.inventoryCaptures != test.wantCapture {
+				t.Fatalf("inventory captures = %d, want %d", adapter.inventoryCaptures, test.wantCapture)
+			}
+		})
+	}
+}
+
 type persistenceObservationLogger struct {
 	failingCompletionLogger
 	warns      []string

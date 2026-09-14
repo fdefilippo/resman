@@ -283,7 +283,8 @@ independent authority; authority_split and runtime_owned_descendant trigger rele
 of the affected resource's owned properties while preserving CPU scheduling.
 
 One typed process-authority inventory is captured per decision sample over one `/proc`
-traversal and bound to both `SampleEpochID` and the complete topology fingerprint. The
+traversal and bound to `SampleEpochID`; every observation is bound to an exact UID and
+unit identity. Unrelated topology changes do not invalidate an unchanged target. The
 directory and per-PID reads span an interval; the inventory is frozen after capture,
 not atomic. CPU-only capture reads cgroup membership only for tracked UIDs and avoids
 PID namespaces. A sample that may request RAM or I/O collects all-process cgroup and
@@ -291,6 +292,10 @@ relevant PID-namespace detail once. `Apply` and `ConfirmApplied` reuse the captu
 classification while retaining live unit-identity, topology, lease, D-Bus property and
 effective-kernel checks. A new, missing or recreated unit cannot be approved from an
 old inventory or an empty process set.
+
+A persistence-phase D-Bus discovery failure prevents capture and aborts resource
+reconciliation without restoring already-applied properties. A `/proc` capture failure
+is an authority inspection failure and restores the affected owned resource properties.
 
 Membership arriving later converges on the next successful sample: approximately
 `POLLING_INTERVAL` plus cycle processing in polling mode, or the first relevant PSI

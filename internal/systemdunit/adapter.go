@@ -216,7 +216,7 @@ func (a *Adapter) CheckCapturedResourceAuthorities(ctx context.Context, inventor
 			results[index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: fmt.Errorf("sample inventory has no RAM/I/O authority detail")}}
 			continue
 		}
-		observation, found := inventory.observation(request.UID, snapshot.Identity)
+		observation, found := inventory.Observation(request.UID, snapshot.Identity)
 		if !found {
 			authority := ResourceAuthority{Resource: request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageTopologyChanged}
 			results[index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: fmt.Errorf("unit is absent from the sample authority inventory")}}

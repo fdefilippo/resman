@@ -403,6 +403,7 @@ type SystemMetrics struct {
 	systemdRAMAuthority           map[int]*systemdunit.ResourceAuthority
 	systemdIOAuthority            map[int]*systemdunit.ResourceAuthority
 	systemdAuthorityInventory     *systemdunit.ProcessAuthorityInventory
+	systemdAuthorityInventoryErr  *systemdAuthorityInventoryError
 	systemdObservationFailures    []persistenceObservationFailure
 	systemdObservationContext     string
 
@@ -440,6 +441,24 @@ type SystemMetrics struct {
 	RAMEligibleUsers []int
 	IOEligibleUsers  []int
 }
+
+type systemdAuthorityInventoryFailure string
+
+const (
+	systemdAuthorityInventoryDiscoveryFailed  systemdAuthorityInventoryFailure = "topology_discovery_failed"
+	systemdAuthorityInventoryInspectionFailed systemdAuthorityInventoryFailure = "process_inspection_failed"
+)
+
+type systemdAuthorityInventoryError struct {
+	Failure systemdAuthorityInventoryFailure
+	Err     error
+}
+
+func (e *systemdAuthorityInventoryError) Error() string {
+	return fmt.Sprintf("capture systemd process-authority inventory (%s): %v", e.Failure, e.Err)
+}
+
+func (e *systemdAuthorityInventoryError) Unwrap() error { return e.Err }
 
 func (m *Manager) collectSystemMetrics() (*SystemMetrics, error) {
 	return m.collectSystemMetricsForPurpose(true)

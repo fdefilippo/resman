@@ -38,7 +38,11 @@ CPU scheduling may continue, but ResMan does not claim or apply a complete memor
 I/O policy. If a later decision sample observes that authority was lost, ResMan restores
 only that resource's owned properties before publishing the refusal; CPU and the other
 independently authorized resource remain untouched. Failure to inspect the process set
-or the required controller also refuses that resource before mutation.
+or the required controller also refuses that resource before mutation. If the
+persistence-phase D-Bus discovery fails before process capture can start,
+reconciliation reports the discovery failure without restoring an already applied
+resource. A `/proc` capture failure remains an authority refusal and restores the
+affected owned resource properties.
 
 Each decision sample captures one process-authority inventory over one `/proc`
 traversal. The read is temporally smeared across directory enumeration and per-PID
@@ -47,9 +51,10 @@ snapshot. CPU coverage and RAM/I/O authority are independent projections of that
 inventory. CPU-only samples read cgroup membership only for tracked UIDs and never
 inspect PID namespaces. If RAM or I/O may be requested, the capture reads cgroup
 membership for the full process population and the relevant PID namespaces. The
-inventory is bound to both the decision `SampleEpochID` and the complete authoritative
-unit-topology fingerprint. A missing, new, or recreated unit cannot be authorized from
-an old inventory or from an empty observed process set.
+inventory is bound to the decision `SampleEpochID`, and each observation is bound to
+its exact UID and unit identity. A topology change unrelated to a requested target does
+not invalidate that target's observation. A missing, new, or recreated target still
+cannot be authorized from an old inventory or from an empty observed process set.
 
 Processes and runtime descendants that arrive after capture are classified by the next
 successful decision sample, not by another scan after `Apply`. With polling, the normal
