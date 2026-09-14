@@ -121,6 +121,16 @@ class EvidenceValidatorTests(unittest.TestCase):
                 {"io.bfq.weight": "default 100"}),
             "iocost disabled": lambda value: value["rows"]["iocost"]["phase"]["during"]["kernel"].update(
                 {"root.io.cost.qos": "252:16 enable=0"}),
+            "simultaneous BFQ absent": lambda value: (
+                value["rows"]["simultaneous"]["phase"]["during"].update(
+                    scheduler="[none] mq-deadline bfq"),
+                value["rows"]["simultaneous"]["phase"]["during"]["kernel"].update(
+                    {"io.bfq.weight": "default 100"})),
+            "simultaneous io.cost absent": lambda value: (
+                value["rows"]["simultaneous"]["phase"]["during"]["kernel"].update(
+                    {"root.io.cost.qos": "252:16 enable=0"}),
+                value["rows"]["simultaneous"]["phase"]["during"]["kernel"].update(
+                    {"io.weight": "default 100"})),
             "precedence invented": lambda value: value["rows"]["simultaneous"].update(
                 policy_status="bfq_wins"),
             "scheduler leaked": lambda value: value["cleanup"]["all_schedulers_after"].update(

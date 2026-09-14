@@ -290,6 +290,17 @@ def validate_guest(result, platform, revision, retained_probe, expected_kernel_f
                 "simultaneous row lacks both individual mechanisms")
         require(simultaneous.get("policy_status") == "mechanism_ambiguous",
                 "simultaneous mechanisms were assigned an unproved precedence")
+        during = simultaneous["phase"]["during"]
+        require("[bfq]" in during["scheduler"],
+                "simultaneous phase did not select BFQ")
+        require(keyed_weight(during["kernel"]["io.bfq.weight"], device) ==
+                bfq_weight(WEIGHT),
+                "simultaneous phase did not read the expected BFQ device value")
+        require(keyed_weight(during["kernel"]["io.weight"], device) == WEIGHT,
+                "simultaneous phase did not read the expected io.cost device value")
+        qos = keyed_line(during["kernel"]["root.io.cost.qos"], device)
+        require(qos and "enable=1" in qos.split()[1:],
+                "simultaneous phase did not enable io.cost")
     simultaneous_outcome = ("NOT_APPLICABLE"
                             if reason_codes.get("simultaneous") ==
                             REASON_MECHANISM_PREREQUISITE_UNAVAILABLE

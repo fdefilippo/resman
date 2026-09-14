@@ -34,7 +34,7 @@ controller through `user.slice`, and accepted an empty-array reset.
 - OL8/RHCK selected BFQ but produced no per-device `io.bfq.weight` entry; root
   `io.cost.qos` and `io.cost.model` were absent. Both individual mechanisms are
   therefore `UNSUPPORTED` for that line candidate.
-- OL9/RHCK and OL10/RHCK wrote `251:0 121` through BFQ and `252:0 333` through
+- OL9/RHCK and OL10/RHCK wrote `252:0 121` through BFQ and `252:0 333` through
   io.cost when each mechanism was active individually. Both paths are
   `SUPPORTED`.
 - OL9/RHCK and OL10/RHCK also exposed both footprints during the simultaneous
