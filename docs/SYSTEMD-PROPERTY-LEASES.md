@@ -22,6 +22,12 @@ fills those digests before success is reported. This file is an ownership journa
 not a disposable cache. Removing it while a lease is active makes automatic ownership
 recovery impossible.
 
+For `IODeviceWeight`, the record also retains the canonical device path and the typed
+BFQ or `io.cost` verification mechanism for every ResMan-owned tuple. This context is
+part of the lease because the D-Bus `a(st)` value does not identify which kernel file
+must contain the corresponding `major:minor` override. Recovery never infers the
+mechanism from whichever weight file happens to exist.
+
 ## Resource-specific workload authority
 
 CPU, memory, and I/O authority are evaluated independently. A finite CPU envelope on
@@ -121,7 +127,7 @@ install -m 0600 -o root -g root \
 systemctl show user-1000.slice \
   -p FragmentPath -p DropInPaths \
   -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec \
-  -p MemoryHigh -p MemoryMax -p MemorySwapMax -p IOWeight
+  -p MemoryHigh -p MemoryMax -p MemorySwapMax -p IOWeight -p IODeviceWeight
 find /etc/systemd/system /run/systemd/system \
   /etc/systemd/system.control /run/systemd/system.control \
   -path '*user-1000.slice*' -ls

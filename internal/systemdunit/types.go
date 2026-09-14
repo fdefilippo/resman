@@ -31,6 +31,7 @@ const (
 	PropertyMemoryMax           PropertyName = "MemoryMax"
 	PropertyMemorySwapMax       PropertyName = "MemorySwapMax"
 	PropertyIOWeight            PropertyName = "IOWeight"
+	PropertyIODeviceWeight      PropertyName = "IODeviceWeight"
 	PropertyIOReadBandwidthMax  PropertyName = "IOReadBandwidthMax"
 	PropertyIOWriteBandwidthMax PropertyName = "IOWriteBandwidthMax"
 	PropertyIOReadIOPSMax       PropertyName = "IOReadIOPSMax"
@@ -48,6 +49,7 @@ var approvedScalarProperties = map[PropertyName]struct{}{
 }
 
 var approvedDeviceProperties = map[PropertyName]struct{}{
+	PropertyIODeviceWeight:      {},
 	PropertyIOReadBandwidthMax:  {},
 	PropertyIOWriteBandwidthMax: {},
 	PropertyIOReadIOPSMax:       {},
@@ -215,8 +217,9 @@ func parseDeviceLimitTuple(item reflect.Value) (string, uint64, error) {
 
 // PropertyAssignment is one validated runtime-only resource property mutation.
 type PropertyAssignment struct {
-	name  PropertyName
-	value propertyValue
+	name                  PropertyName
+	value                 propertyValue
+	ioDeviceWeightTargets []ioDeviceWeightTarget
 }
 
 // NewPropertyAssignment validates an assignment against the positive property allowlist.
@@ -246,6 +249,12 @@ func NewDevicePropertyAssignment(name PropertyName, values []DeviceLimit) (Prope
 			Err: fmt.Errorf("property is outside the approved per-device resource-control set"),
 		}
 	}
+	if name == PropertyIODeviceWeight {
+		return PropertyAssignment{}, &AdapterError{
+			Reason: ReasonInvalidValue, Property: name,
+			Err: fmt.Errorf("property requires NewIODeviceWeightAssignment with typed mechanism context"),
+		}
+	}
 	canonical := cloneDeviceLimits(values)
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].Path < canonical[j].Path })
 	if err := validateDeviceLimits(canonical); err != nil {
@@ -262,6 +271,14 @@ func (a PropertyAssignment) Value() uint64 { return a.value.scalar }
 
 // DeviceLimits returns a defensive copy of a per-device assignment.
 func (a PropertyAssignment) DeviceLimits() []DeviceLimit { return cloneDeviceLimits(a.value.devices) }
+
+func clonePropertyAssignment(assignment PropertyAssignment) PropertyAssignment {
+	return PropertyAssignment{
+		name:                  assignment.name,
+		value:                 clonePropertyValue(assignment.name, assignment.value),
+		ioDeviceWeightTargets: cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets),
+	}
+}
 
 // NewCPUQuotaAssignmentsFromCgroupMax converts one exact cgroup v2 quota and
 // period into systemd's normalized per-second quota plus explicit period.
@@ -368,7 +385,7 @@ func (s PropertySet) propertyValue(name PropertyName) (propertyValue, bool) {
 func (s PropertySet) Assignments() []PropertyAssignment {
 	result := make([]PropertyAssignment, 0, len(s.values))
 	for name, value := range s.values {
-		result = append(result, PropertyAssignment{name: name, value: value})
+		result = append(result, PropertyAssignment{name: name, value: clonePropertyValue(name, value)})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].name < result[j].name })
 	return result
@@ -455,7 +472,7 @@ func (n PropertyName) Resource() (ResourceKind, bool) {
 	switch n {
 	case PropertyMemoryHigh, PropertyMemoryMax, PropertyMemorySwapMax:
 		return ResourceMemory, true
-	case PropertyIOWeight, PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
+	case PropertyIOWeight, PropertyIODeviceWeight, PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
 		return ResourceIO, true
 	default:
 		return "", false

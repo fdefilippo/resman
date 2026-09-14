@@ -120,7 +120,9 @@ func TestEL8Systemd239ContractPinsTheAdapterDBusSurface(t *testing.T) {
 	for property := range approvedScalarProperties {
 		assertObservedSignatures(t, sliceInterface.Properties, map[string]string{string(property): "t"})
 	}
-	for property := range approvedDeviceProperties {
+	// IODeviceWeight was characterized later by the dedicated nq6.40 QEMU
+	// archive. Keep this older immutable contract tied to its original capture.
+	for _, property := range []PropertyName{PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax} {
 		assertObservedSignatures(t, sliceInterface.Properties, map[string]string{string(property): "a(st)"})
 	}
 

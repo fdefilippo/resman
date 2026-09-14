@@ -20,6 +20,7 @@ type propertyLeaseState struct {
 	baseline        propertyValue
 	lastApplied     propertyValue
 	previousApplied propertyValue
+	ioWeightTargets []ioDeviceWeightTarget
 	uncertain       bool
 	newLease        bool
 }
@@ -414,6 +415,10 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		key := propertyLeaseKey{identity: identity, property: assignment.name}
 		state, tracked := a.leases[key]
 		if tracked {
+			if assignment.name == PropertyIODeviceWeight && !ioDeviceWeightTargetsEqual(state.ioWeightTargets, assignment.ioDeviceWeightTargets) {
+				return UnitSnapshot{}, &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: identity.Name, Property: assignment.name,
+					Err: fmt.Errorf("qualified device mechanism context changed while the property lease is active")}
+			}
 			owned, resolved := resolveUncertainOwnership(current, state)
 			if !owned {
 				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lastApplied, current)
@@ -421,6 +426,7 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 			state = resolved
 		} else {
 			state = newPropertyLeaseState(assignment.name, current)
+			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)
 			state.newLease = true
 		}
 		state.previousApplied = state.lastApplied
@@ -515,7 +521,8 @@ func (a *Adapter) ConfirmApplied(ctx context.Context, identity UnitIdentity, ass
 	for _, assignment := range validated {
 		key := propertyLeaseKey{identity: identity, property: assignment.name}
 		state, exists := a.leases[key]
-		if !exists || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) {
+		if !exists || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) ||
+			!ioDeviceWeightTargetsEqual(state.ioWeightTargets, assignment.ioDeviceWeightTargets) {
 			return UnitSnapshot{}, &AdapterError{Reason: ReasonReadbackMismatch, Operation: "confirm_applied", Unit: identity.Name, Property: assignment.name, Err: fmt.Errorf("requested value does not match the durable lease")}
 		}
 		current, exists := snapshot.Properties.propertyValue(assignment.name)
@@ -535,7 +542,8 @@ func (a *Adapter) ConfirmApplied(ctx context.Context, identity UnitIdentity, ass
 func (a *Adapter) appliedAssignmentsMatch(identity UnitIdentity, snapshot UnitSnapshot, assignments []PropertyAssignment) bool {
 	for _, assignment := range assignments {
 		state, ok := a.leases[propertyLeaseKey{identity: identity, property: assignment.name}]
-		if !ok || state.uncertain || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) {
+		if !ok || state.uncertain || !propertyValuesEqual(assignment.name, state.lastApplied, assignment.value) ||
+			!ioDeviceWeightTargetsEqual(state.ioWeightTargets, assignment.ioDeviceWeightTargets) {
 			return false
 		}
 		current, ok := snapshot.Properties.propertyValue(assignment.name)
@@ -608,7 +616,7 @@ func (a *Adapter) RestoreProperties(ctx context.Context, identity UnitIdentity, 
 			result.Restored = append(result.Restored, property)
 			continue
 		}
-		assignments = append(assignments, PropertyAssignment{name: property, value: clonePropertyValue(property, resolved.baseline)})
+		assignments = append(assignments, PropertyAssignment{name: property, value: clonePropertyValue(property, resolved.baseline), ioDeviceWeightTargets: cloneIODeviceWeightTargets(resolved.ioWeightTargets)})
 		keys = append(keys, key)
 	}
 	if len(assignments) != 0 {
@@ -722,7 +730,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 			continue
 		}
 		a.leases[key] = resolved
-		assignment := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, resolved.baseline)}
+		assignment := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, resolved.baseline), ioDeviceWeightTargets: cloneIODeviceWeightTargets(resolved.ioWeightTargets)}
 		restore = append(restore, assignment)
 		ownedKeys = append(ownedKeys, key)
 		if propertyValuesEqual(key.property, value, resolved.baseline) {
@@ -893,7 +901,7 @@ func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, ident
 func effectiveBaselineAssignments(baselines []PropertyAssignment) []PropertyAssignment {
 	result := make([]PropertyAssignment, len(baselines))
 	for index, baseline := range baselines {
-		result[index] = PropertyAssignment{name: baseline.name, value: clonePropertyValue(baseline.name, baseline.value)}
+		result[index] = clonePropertyAssignment(baseline)
 		if (baseline.name == PropertyCPUWeight || baseline.name == PropertyIOWeight) && baseline.value.scalar == SystemdUnset {
 			// An empty weight assignment changes systemd's normalized property but
 			// does not reliably reset the live cgroup. Program the kernel default
@@ -1015,6 +1023,11 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 		if err != nil {
 			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s is absent or malformed: %v", property, err))
 		}
+		if property == PropertyIODeviceWeight {
+			if err := validateIODeviceWeightValues(value); err != nil {
+				return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s has invalid value: %v", property, err))
+			}
+		}
 		properties[property] = devicePropertyValue(value)
 	}
 	unitFiles, err := parseUnitFileSnapshot(unit, unitAfter)
@@ -1097,6 +1110,7 @@ func managedRuntimeDropInPath(unit string, property PropertyName) string {
 		PropertyMemoryMax:           "50-MemoryMax.conf",
 		PropertyMemorySwapMax:       "50-MemorySwapMax.conf",
 		PropertyIOWeight:            "50-IOWeight.conf",
+		PropertyIODeviceWeight:      "50-IODeviceWeight.conf",
 		PropertyIOReadBandwidthMax:  "50-IOReadBandwidthMax.conf",
 		PropertyIOWriteBandwidthMax: "50-IOWriteBandwidthMax.conf",
 		PropertyIOReadIOPSMax:       "50-IOReadIOPSMax.conf",
@@ -1250,7 +1264,10 @@ func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment
 	if len(assignments) > len(approvedScalarProperties)+len(approvedDeviceProperties) {
 		return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Err: fmt.Errorf("too many property assignments")}
 	}
-	result := append([]PropertyAssignment(nil), assignments...)
+	result := make([]PropertyAssignment, len(assignments))
+	for index, assignment := range assignments {
+		result[index] = clonePropertyAssignment(assignment)
+	}
 	seen := make(map[PropertyName]bool, len(result))
 	for _, assignment := range result {
 		if seen[assignment.name] {
@@ -1262,6 +1279,9 @@ func validateAssignments(assignments []PropertyAssignment) ([]PropertyAssignment
 		}
 		if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
 			if err := validateDeviceLimits(assignment.value.devices); err != nil {
+				return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Property: assignment.name, Err: err}
+			}
+			if err := validateIODeviceWeightAssignment(assignment); err != nil {
 				return nil, &AdapterError{Reason: ReasonInvalidValue, Operation: "apply", Property: assignment.name, Err: err}
 			}
 		} else if err := validatePropertyValue(assignment.name, assignment.value.scalar); err != nil {
@@ -1282,7 +1302,7 @@ func validateResourceAssignments(resource ResourceKind, assignments []PropertyAs
 			PropertyMemoryHigh: true, PropertyMemoryMax: true, PropertyMemorySwapMax: true,
 		},
 		ResourceIO: {
-			PropertyIOWeight: true, PropertyIOReadBandwidthMax: true, PropertyIOWriteBandwidthMax: true,
+			PropertyIOWeight: true, PropertyIODeviceWeight: true, PropertyIOReadBandwidthMax: true, PropertyIOWriteBandwidthMax: true,
 			PropertyIOReadIOPSMax: true, PropertyIOWriteIOPSMax: true,
 		},
 	}

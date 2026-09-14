@@ -54,20 +54,42 @@ type durableUnitIdentity struct {
 }
 
 type durablePropertyLease struct {
-	Property                PropertyName         `json:"property"`
-	Baseline                uint64               `json:"baseline,omitempty"`
-	PreviousApplied         uint64               `json:"previous_applied,omitempty"`
-	LastApplied             uint64               `json:"last_applied,omitempty"`
-	BaselineDeviceLimits    []durableDeviceLimit `json:"baseline_device_limits,omitempty"`
-	PreviousDeviceLimits    []durableDeviceLimit `json:"previous_device_limits,omitempty"`
-	LastAppliedDeviceLimits []durableDeviceLimit `json:"last_applied_device_limits,omitempty"`
-	Uncertain               bool                 `json:"uncertain"`
-	NewLease                bool                 `json:"new_lease"`
+	Property                PropertyName                  `json:"property"`
+	Baseline                uint64                        `json:"baseline,omitempty"`
+	PreviousApplied         uint64                        `json:"previous_applied,omitempty"`
+	LastApplied             uint64                        `json:"last_applied,omitempty"`
+	BaselineDeviceLimits    []durableDeviceLimit          `json:"baseline_device_limits,omitempty"`
+	PreviousDeviceLimits    []durableDeviceLimit          `json:"previous_device_limits,omitempty"`
+	LastAppliedDeviceLimits []durableDeviceLimit          `json:"last_applied_device_limits,omitempty"`
+	IODeviceWeightTargets   []durableIODeviceWeightTarget `json:"io_device_weight_targets,omitempty"`
+	Uncertain               bool                          `json:"uncertain"`
+	NewLease                bool                          `json:"new_lease"`
 }
 
 type durableDeviceLimit struct {
 	Path  string `json:"path"`
 	Value uint64 `json:"value"`
+}
+
+type durableIODeviceWeightTarget struct {
+	Path      string                  `json:"path"`
+	Mechanism IODeviceWeightMechanism `json:"mechanism"`
+}
+
+func ioDeviceWeightTargetsToDurable(values []ioDeviceWeightTarget) []durableIODeviceWeightTarget {
+	result := make([]durableIODeviceWeightTarget, len(values))
+	for index, value := range values {
+		result[index] = durableIODeviceWeightTarget{Path: value.path, Mechanism: value.mechanism}
+	}
+	return result
+}
+
+func ioDeviceWeightTargetsFromDurable(values []durableIODeviceWeightTarget) []ioDeviceWeightTarget {
+	result := make([]ioDeviceWeightTarget, len(values))
+	for index, value := range values {
+		result[index] = ioDeviceWeightTarget{path: value.Path, mechanism: value.Mechanism}
+	}
+	return result
 }
 
 func deviceLimitsToDurable(values []DeviceLimit) []durableDeviceLimit {
@@ -397,8 +419,29 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 					if err := validateDeviceLimits(deviceLimitsFromDurable(values)); err != nil {
 						return fmt.Errorf("unit %s property %s has invalid value: %w", unit.Unit, property.Property, err)
 					}
+					if property.Property == PropertyIODeviceWeight {
+						if err := validateIODeviceWeightValues(deviceLimitsFromDurable(values)); err != nil {
+							return fmt.Errorf("unit %s property %s has invalid value: %w", unit.Unit, property.Property, err)
+						}
+					}
+				}
+				if property.Property == PropertyIODeviceWeight {
+					targets := ioDeviceWeightTargetsFromDurable(property.IODeviceWeightTargets)
+					if len(targets) == 0 {
+						return fmt.Errorf("unit %s property %s has no typed mechanism context", unit.Unit, property.Property)
+					}
+					for index, target := range targets {
+						if !validIODeviceWeightMechanism(target.mechanism) || !validAbsolutePath(target.path) || (index > 0 && targets[index-1].path >= target.path) {
+							return fmt.Errorf("unit %s property %s has invalid typed mechanism context", unit.Unit, property.Property)
+						}
+					}
+				} else if len(property.IODeviceWeightTargets) != 0 {
+					return fmt.Errorf("unit %s property %s contains IODeviceWeight mechanism context", unit.Unit, property.Property)
 				}
 			} else {
+				if len(property.IODeviceWeightTargets) != 0 {
+					return fmt.Errorf("unit %s scalar property %s contains IODeviceWeight mechanism context", unit.Unit, property.Property)
+				}
 				if len(property.BaselineDeviceLimits)+len(property.PreviousDeviceLimits)+len(property.LastAppliedDeviceLimits) != 0 {
 					return fmt.Errorf("unit %s scalar property %s contains device limits", unit.Unit, property.Property)
 				}

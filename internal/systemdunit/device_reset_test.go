@@ -14,7 +14,13 @@ func TestRestoreResetsDeviceLimitsBeforeRevertWhilePeerKeepsController(t *testin
 				store := newMemoryLeaseJournalStore()
 				adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 				identity := identityFor(t, adapter, 1001)
-				assignment, err := NewDevicePropertyAssignment(property, []DeviceLimit{{Path: "/dev/vda", Value: 500}})
+				var assignment PropertyAssignment
+				var err error
+				if property == PropertyIODeviceWeight {
+					assignment, err = NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 500, Mechanism: IODeviceWeightMechanismBFQ}})
+				} else {
+					assignment, err = NewDevicePropertyAssignment(property, []DeviceLimit{{Path: "/dev/vda", Value: 500}})
+				}
 				if err != nil {
 					t.Fatal(err)
 				}

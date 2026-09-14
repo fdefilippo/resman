@@ -188,6 +188,13 @@ func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssi
 	}
 	for property := range approvedDeviceProperties {
 		if touched[property] {
+			if property == PropertyIODeviceWeight {
+				assignment := findAssignmentByProperty(assignments, property)
+				if err := v.verifyIODeviceWeight(path, snapshot, assignment); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := v.verifyDeviceLimits(path, snapshot, property); err != nil {
 				return err
 			}
@@ -226,6 +233,11 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 			required["memory.swap.max"] = true
 		case PropertyIOWeight:
 			requiresIO = true
+		case PropertyIODeviceWeight:
+			requiresIO = true
+			for _, target := range assignment.ioDeviceWeightTargets {
+				required[ioDeviceWeightKernelFile(target.mechanism)] = true
+			}
 		case PropertyIOReadBandwidthMax, PropertyIOWriteBandwidthMax, PropertyIOReadIOPSMax, PropertyIOWriteIOPSMax:
 			required["io.max"] = true
 			requiresIO = true
@@ -233,7 +245,7 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 	}
 	for filename := range required {
 		if _, err := v.readFile(filepath.Join(path, filename)); err != nil {
-			if allowMissingIO && filename == "io.max" && errors.Is(err, os.ErrNotExist) {
+			if allowMissingIO && strings.HasPrefix(filename, "io.") && errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return fmt.Errorf("required controller interface %s is unavailable for %s: %w", filename, snapshot.Identity.Name, err)
@@ -481,6 +493,90 @@ func (v cgroupVerifier) verifyDeviceLimits(path string, snapshot UnitSnapshot, p
 	return nil
 }
 
+func findAssignmentByProperty(assignments []PropertyAssignment, property PropertyName) PropertyAssignment {
+	for _, assignment := range assignments {
+		if assignment.name == property {
+			return assignment
+		}
+	}
+	return PropertyAssignment{}
+}
+
+func ioDeviceWeightKernelFile(mechanism IODeviceWeightMechanism) string {
+	if mechanism == IODeviceWeightMechanismBFQ {
+		return "io.bfq.weight"
+	}
+	return "io.weight"
+}
+
+func (v cgroupVerifier) verifyIODeviceWeight(path string, snapshot UnitSnapshot, assignment PropertyAssignment) error {
+	expected, ok := snapshot.Properties.DeviceLimits(PropertyIODeviceWeight)
+	if !ok {
+		return fmt.Errorf("systemd readback omitted %s", PropertyIODeviceWeight)
+	}
+	if err := validateIODeviceWeightAssignment(assignment); err != nil {
+		return fmt.Errorf("invalid typed %s verification context: %w", PropertyIODeviceWeight, err)
+	}
+	valuesByPath := make(map[string]uint64, len(expected))
+	for _, value := range expected {
+		valuesByPath[value.Path] = value.Value
+	}
+	parsedFiles := make(map[string]map[string]uint64)
+	seenDevices := make(map[string]string, len(assignment.ioDeviceWeightTargets))
+	for _, target := range assignment.ioDeviceWeightTargets {
+		device, err := v.deviceNumber(target.path)
+		if err != nil {
+			return fmt.Errorf("resolve block device %s for %s: %w", target.path, PropertyIODeviceWeight, err)
+		}
+		if previous, duplicated := seenDevices[device]; duplicated {
+			return fmt.Errorf("%s paths %s and %s resolve to the same device %s", PropertyIODeviceWeight, previous, target.path, device)
+		}
+		seenDevices[device] = target.path
+		filename := ioDeviceWeightKernelFile(target.mechanism)
+		actual, loaded := parsedFiles[filename]
+		if !loaded {
+			data, readErr := v.readFile(filepath.Join(path, filename))
+			if readErr != nil {
+				if errors.Is(readErr, os.ErrNotExist) && !ioDeviceWeightMechanismHasExpectedOverride(valuesByPath, assignment.ioDeviceWeightTargets, target.mechanism) {
+					actual = map[string]uint64{}
+					parsedFiles[filename] = actual
+					continue
+				}
+				return fmt.Errorf("read effective %s for %s: %w", filename, snapshot.Identity.Name, readErr)
+			}
+			actual, err = parseKernelIODeviceWeights(string(data))
+			if err != nil {
+				return fmt.Errorf("parse effective %s for %s: %w", filename, snapshot.Identity.Name, err)
+			}
+			parsedFiles[filename] = actual
+		}
+		systemdValue, present := valuesByPath[target.path]
+		kernelValue, kernelPresent := actual[device]
+		if !present {
+			if kernelPresent {
+				return &kernelValueMismatch{fmt.Errorf("effective %s retains unexpected device override for %s device %s: %d", PropertyIODeviceWeight, snapshot.Identity.Name, device, kernelValue)}
+			}
+			continue
+		}
+		wanted := kernelIODeviceWeight(systemdValue, target.mechanism)
+		if !kernelPresent || kernelValue != wanted {
+			return &kernelValueMismatch{fmt.Errorf("effective %s mismatch for %s device %s through %s: systemd=%d kernel_expected=%d kernel=%d present=%t", PropertyIODeviceWeight, snapshot.Identity.Name, device, target.mechanism, systemdValue, wanted, kernelValue, kernelPresent)}
+		}
+	}
+	return nil
+}
+
+func ioDeviceWeightMechanismHasExpectedOverride(valuesByPath map[string]uint64, targets []ioDeviceWeightTarget, mechanism IODeviceWeightMechanism) bool {
+	for _, target := range targets {
+		if target.mechanism == mechanism {
+			if _, present := valuesByPath[target.path]; present {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (v cgroupVerifier) deviceNumber(path string) (string, error) {
 	stat := v.stat
 	if stat == nil {
@@ -556,4 +652,41 @@ func parseKernelDefaultIOWeight(value string) (uint64, error) {
 		}
 	}
 	return 0, fmt.Errorf("default I/O weight is absent")
+}
+
+func parseKernelIODeviceWeights(value string) (map[string]uint64, error) {
+	result := make(map[string]uint64)
+	for _, line := range strings.Split(strings.TrimSpace(value), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("expected a device and weight, got %q", line)
+		}
+		if fields[0] == "default" {
+			if _, err := strconv.ParseUint(fields[1], 10, 64); err != nil {
+				return nil, fmt.Errorf("parse default I/O weight %q: %w", fields[1], err)
+			}
+			continue
+		}
+		parts := strings.Split(fields[0], ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid device field %q", fields[0])
+		}
+		for _, part := range parts {
+			if _, err := strconv.ParseUint(part, 10, 32); err != nil {
+				return nil, fmt.Errorf("invalid device field %q", fields[0])
+			}
+		}
+		if _, duplicate := result[fields[0]]; duplicate {
+			return nil, fmt.Errorf("duplicate device field %q", fields[0])
+		}
+		weight, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil || weight == 0 {
+			return nil, fmt.Errorf("invalid device weight %q", fields[1])
+		}
+		result[fields[0]] = weight
+	}
+	return result, nil
 }

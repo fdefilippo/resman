@@ -107,21 +107,21 @@ func checkSystemdIOWeightPolicy(source goSource, node ast.Node, allowed map[ast.
 	forbidden := false
 	switch typed := node.(type) {
 	case *ast.Ident:
-		forbidden = typed.Name == "PropertyIOWeight" || typed.Name == "IOWeight" || typed.Name == "ioSystemdProperties"
+		forbidden = typed.Name == "PropertyIOWeight" || typed.Name == "PropertyIODeviceWeight" || typed.Name == "IOWeight" || strings.HasPrefix(typed.Name, "IODeviceWeight") || typed.Name == "NewIODeviceWeightAssignment" || typed.Name == "ioSystemdProperties"
 	case *ast.BasicLit:
 		value, err := strconv.Unquote(typed.Value)
-		forbidden = err == nil && value == "IOWeight"
+		forbidden = err == nil && (value == "IOWeight" || value == "IODeviceWeight")
 	case *ast.BinaryExpr:
 		expansion := systemdStringExpansion{remaining: 1000, visiting: map[string]bool{}, memo: map[ast.Expr][]string{}}
 		for _, value := range systemdStringValues(typed, constants, &expansion) {
-			forbidden = forbidden || value == "IOWeight"
+			forbidden = forbidden || value == "IOWeight" || value == "IODeviceWeight"
 		}
 		if expansion.exhausted {
 			result.fail(source.path, sourceLine(source, node.Pos()), "IOWeight constant inspection exceeded its bounded expansion; simplify the ambiguous source expression")
 		}
 	}
 	if forbidden {
-		result.fail(source.path, sourceLine(source, node.Pos()), "IOWeight is adapter-only; production policy cannot construct or acquire it outside the exact restoration inventory")
+		result.fail(source.path, sourceLine(source, node.Pos()), "I/O weight properties are adapter-only; production policy cannot construct or acquire them outside the exact restoration inventory")
 	}
 }
 
@@ -168,9 +168,9 @@ func systemdStringValues(expression ast.Expr, definitions map[string][]ast.Expr,
 	defer func() { expansion.memo[expression] = result }()
 	unique := map[string]bool{}
 	add := func(value string) {
-		// Any component of a concatenation yielding IOWeight must itself be a
-		// substring. This caps each expansion at 37 values, including empty.
-		if strings.Contains("IOWeight", value) && !unique[value] {
+		// Any component of a concatenation yielding an approved weight property
+		// must itself be a substring. This keeps the expansion bounded.
+		if (strings.Contains("IOWeight", value) || strings.Contains("IODeviceWeight", value)) && !unique[value] {
 			unique[value] = true
 			result = append(result, value)
 		}
@@ -218,7 +218,7 @@ func systemdIORestoreException(source goSource, result *checkResult) map[ast.Nod
 	if source.path != systemdResourcePolicyPath {
 		return allowed
 	}
-	want := []string{"PropertyIOWeight", "PropertyIOReadBandwidthMax", "PropertyIOWriteBandwidthMax", "PropertyIOReadIOPSMax", "PropertyIOWriteIOPSMax"}
+	want := []string{"PropertyIOWeight", "PropertyIODeviceWeight", "PropertyIOReadBandwidthMax", "PropertyIOWriteBandwidthMax", "PropertyIOReadIOPSMax", "PropertyIOWriteIOPSMax"}
 	declarations, consumers := 0, 0
 	for _, declaration := range source.file.Decls {
 		switch typed := declaration.(type) {
@@ -240,6 +240,7 @@ func systemdIORestoreException(source goSource, result *checkResult) map[ast.Nod
 					declarations++
 					allowed[value.Names[0]] = true
 					allowed[literal.Elts[0].(*ast.SelectorExpr).Sel] = true
+					allowed[literal.Elts[1].(*ast.SelectorExpr).Sel] = true
 				}
 			}
 		case *ast.FuncDecl:

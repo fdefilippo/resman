@@ -12,8 +12,9 @@ import (
 // StartupRequirements names the optional resource features enabled by the
 // operator. CPU quota is always mandatory for systemd-native enforcement.
 type StartupRequirements struct {
-	Memory bool
-	IO     bool
+	Memory          bool
+	IO              bool
+	IODeviceWeights []IODeviceWeightRequest
 }
 
 type startupCapability struct {
@@ -103,6 +104,22 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 			// I/O property enables the controller in the parent hierarchy.
 			initialAssignments: []PropertyAssignment{activation, ioActivation},
 			probeAssignments:   []PropertyAssignment{ioProbe}, requiredAssignments: []PropertyAssignment{ioProbe, requiredIO},
+		})
+	}
+	if len(requirements.IODeviceWeights) != 0 {
+		ioActivation, assignmentErr := NewPropertyAssignment(PropertyIOWeight, 100)
+		if assignmentErr != nil {
+			return nil, assignmentErr
+		}
+		deviceWeights, assignmentErr := NewIODeviceWeightAssignment(requirements.IODeviceWeights)
+		if assignmentErr != nil {
+			return nil, assignmentErr
+		}
+		result = append(result, startupCapability{
+			feature: "weighted I/O", controller: "io", interfaceName: "qualified per-device weight interface",
+			initialAssignments:  []PropertyAssignment{activation, ioActivation},
+			probeAssignments:    []PropertyAssignment{deviceWeights},
+			requiredAssignments: []PropertyAssignment{deviceWeights},
 		})
 	}
 	return result, nil

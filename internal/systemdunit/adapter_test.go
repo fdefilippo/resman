@@ -1525,6 +1525,7 @@ func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 		string(PropertyMemoryMax):           uint64(SystemdUnset),
 		string(PropertyMemorySwapMax):       uint64(SystemdUnset),
 		string(PropertyIOWeight):            uint64(SystemdUnset),
+		string(PropertyIODeviceWeight):      []dbusDeviceLimit{},
 		string(PropertyIOReadBandwidthMax):  []dbusDeviceLimit{},
 		string(PropertyIOWriteBandwidthMax): []dbusDeviceLimit{},
 		string(PropertyIOReadIOPSMax):       []dbusDeviceLimit{},

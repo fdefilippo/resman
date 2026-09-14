@@ -425,6 +425,7 @@ func (a *Adapter) importJournal(journal durableLeaseJournal) error {
 				baseline:        baseline,
 				lastApplied:     lastApplied,
 				previousApplied: durablePropertyValue(property.Property, property.PreviousApplied, property.PreviousDeviceLimits),
+				ioWeightTargets: ioDeviceWeightTargetsFromDurable(property.IODeviceWeightTargets),
 				uncertain:       property.Uncertain,
 				newLease:        property.NewLease,
 			}
@@ -467,6 +468,7 @@ func (a *Adapter) exportJournal(generation uint64) (durableLeaseJournal, error) 
 				continue
 			}
 			property := durablePropertyLease{Property: key.property, Uncertain: state.uncertain, NewLease: state.newLease}
+			property.IODeviceWeightTargets = ioDeviceWeightTargetsToDurable(state.ioWeightTargets)
 			if _, deviceProperty := approvedDeviceProperties[key.property]; deviceProperty {
 				property.BaselineDeviceLimits = deviceLimitsToDurable(state.baseline.devices)
 				property.PreviousDeviceLimits = deviceLimitsToDurable(state.previousApplied.devices)
@@ -493,6 +495,7 @@ func (a *Adapter) snapshotLeaseState() adapterLeaseSnapshot {
 		phases: make(map[string]leasePhase, len(a.phases)), generation: a.generation,
 	}
 	for key, value := range a.leases {
+		value.ioWeightTargets = cloneIODeviceWeightTargets(value.ioWeightTargets)
 		result.leases[key] = value
 	}
 	for key, value := range a.overrides {

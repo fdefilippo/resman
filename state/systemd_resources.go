@@ -24,6 +24,7 @@ var memorySystemdProperties = []systemdunit.PropertyName{
 // weighted I/O is an adapter capability and no native policy produces it.
 var ioSystemdProperties = []systemdunit.PropertyName{
 	systemdunit.PropertyIOWeight,
+	systemdunit.PropertyIODeviceWeight,
 	systemdunit.PropertyIOReadBandwidthMax,
 	systemdunit.PropertyIOWriteBandwidthMax,
 	systemdunit.PropertyIOReadIOPSMax,

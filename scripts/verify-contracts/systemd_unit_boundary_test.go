@@ -12,6 +12,7 @@ const ioRestoreFixture = `package state
 import systemdunit "github.com/fdefilippo/resman/internal/systemdunit"
 var ioSystemdProperties = []systemdunit.PropertyName{
  systemdunit.PropertyIOWeight,
+ systemdunit.PropertyIODeviceWeight,
  systemdunit.PropertyIOReadBandwidthMax,
  systemdunit.PropertyIOWriteBandwidthMax,
  systemdunit.PropertyIOReadIOPSMax,
@@ -40,6 +41,12 @@ func TestSystemdIOWeightCannotBecomeProductionPolicyThroughAliases(t *testing.T)
 		{"constant concatenation", `func apply(){ systemdunit.NewPropertyAssignment(systemdunit.PropertyName("IO" + "Weight"), 100) }`},
 		{"concatenated aliases", `const prefix = "IO"; const suffix = "Weight"; const property = prefix + suffix; func apply(){ systemdunit.NewPropertyAssignment(property, 100) }`},
 		{"inventory selected indirectly", `func apply(){ name := ioSystemdProperties[0]; systemdunit.NewPropertyAssignment(name, 100) }`},
+		{"device-weight constructor", `func apply(){ systemdunit.NewIODeviceWeightAssignment(nil) }`},
+		{"device-weight request", `var request = systemdunit.IODeviceWeightRequest{}`},
+		{"startup requirement field", `func apply(requirements *systemdunit.StartupRequirements){ requirements.IODeviceWeights = nil }`},
+		{"device-weight property", `func apply(){ systemdunit.NewDevicePropertyAssignment(systemdunit.PropertyIODeviceWeight, nil) }`},
+		{"raw device-weight property", `func apply(){ systemdunit.NewDevicePropertyAssignment("IODeviceWeight", nil) }`},
+		{"concatenated device-weight property", `const middle = "Device"; func apply(){ systemdunit.NewDevicePropertyAssignment(systemdunit.PropertyName("IO" + middle + "Weight"), nil) }`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,6 +72,7 @@ func TestSystemdIOWeightExceptionIsExactAndRestoreOnly(t *testing.T) {
 		content string
 	}{
 		{"inventory removed", strings.Replace(ioRestoreFixture, "systemdunit.PropertyIOWeight,", "", 1)},
+		{"device inventory removed", strings.Replace(ioRestoreFixture, "systemdunit.PropertyIODeviceWeight,", "", 1)},
 		{"inventory duplicated", ioRestoreFixture + "\nvar ioSystemdProperties = []systemdunit.PropertyName{systemdunit.PropertyIOWeight}\n"},
 		{"inventory renamed", strings.ReplaceAll(ioRestoreFixture, "ioSystemdProperties", "newInventory")},
 		{"exception consumed by apply", strings.Replace(ioRestoreFixture, "RestoreProperties", "Apply", 1)},
