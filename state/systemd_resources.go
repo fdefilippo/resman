@@ -192,9 +192,9 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 		invalidateCycleResourceAuthorities(metrics)
 		return fmt.Errorf("inspect systemd resource authority: adapter returned %d results for %d requests", len(authorities), len(planned))
 	}
-	// The first authority pass builds a complete process snapshot. Reconfirm the
-	// unit identity set immediately before any apply or restore so no mutation is
-	// based on a topology that already changed while the plan was assembled.
+	// The authority classification comes from the inventory captured with the
+	// decision sample. Reconfirm the unit identity set immediately before any
+	// apply or restore so no mutation uses a topology that changed afterward.
 	if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
 		invalidateCycleResourceAuthorities(metrics)
 		return &SystemdResourceReconciliationError{Step: "pre_mutation_identity", Err: err}
