@@ -4,10 +4,11 @@ set -Eeuo pipefail
 platform=${1:?platform is required}
 run_id=${2:?run ID is required}
 source_revision=${3:?source revision is required}
+kernel_family=${4:-rhck}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 evidence_dir=$script_dir/evidence/$platform
-serial=resmaniow$platform
-vm_name=resman-iow-$run_id-$platform
+serial=resmaniow${kernel_family}${platform}
+vm_name=resman-iow-$run_id-$platform-$kernel_family
 work_dir=/var/lib/libvirt/images/$vm_name
 overlay=$work_dir/root.qcow2
 probe_disk=$work_dir/probe.raw
@@ -42,7 +43,8 @@ esac
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run ID: $run_id" >&2; exit 2; }
 [[ $source_revision =~ ^[0-9a-f]{40}$ ]] || { echo "full source revision required" >&2; exit 2; }
-[[ $work_dir == /var/lib/libvirt/images/resman-iow-r*-*-el* ]] \
+[[ $kernel_family == rhck ]] || { echo "unsupported kernel family: $kernel_family" >&2; exit 2; }
+[[ $work_dir == /var/lib/libvirt/images/resman-iow-r*-*-el*-rhck ]] \
 	|| { echo "unsafe work directory: $work_dir" >&2; exit 2; }
 
 mkdir -p "$evidence_dir"
@@ -146,7 +148,8 @@ fi
 	|| { echo "QEMU domain already exists: $vm_name" >&2; exit 75; }
 
 {
-	printf 'platform=%s\nrun_id=%s\nsource_revision=%s\n' "$platform" "$run_id" "$source_revision"
+	printf 'platform=%s\nkernel_family=%s\nrun_id=%s\nsource_revision=%s\n' \
+		"$platform" "$kernel_family" "$run_id" "$source_revision"
 	printf 'base_image=%s\nbase_url=%s\nbase_sha256=%s\n' "$base_image" "$base_url" "$base_sha256"
 	printf 'probe_serial=%s\nos_variant=%s\n' "$serial" "$os_variant"
 	printf 'qemu_version=%s\n' "$(qemu-system-x86_64 --version | head -n 1)"
@@ -181,21 +184,36 @@ guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/initial-boot/cgroup-filesyste
 guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINT,SERIAL' >"$evidence_dir/initial-boot/block-devices.txt"
 guest 'dnf install -y python3 util-linux systemd-udev' >"$evidence_dir/provision.log"
 
+guest 'grubby --info=ALL' >"$evidence_dir/grubby-before.txt"
+guest 'dnf install -y kernel' >"$evidence_dir/rhck-install.log"
+# Expand the package and boot-image expressions inside the guest shell.
+# shellcheck disable=SC2016
+guest 'set -eu; release=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel-core | sort -V | tail -n 1); test -n "$release"; image=/boot/vmlinuz-$release; test -f "$image"; grubby --set-default "$image"; grubby --update-kernel="$image" --args="systemd.unified_cgroup_hierarchy=1"; printf "release=%s\nimage=%s\n" "$release" "$image"' \
+	>"$evidence_dir/rhck-selection.txt"
+guest 'grubby --info=ALL' >"$evidence_dir/grubby-after.txt"
+selected_image=$(awk -F= '$1 == "image" {print $2}' "$evidence_dir/rhck-selection.txt")
+[[ $selected_image == /boot/vmlinuz-* && $selected_image != *uek* ]] \
+	|| { echo "$platform did not select an RHCK image" >&2; exit 77; }
+grep -Fq "kernel=\"$selected_image\"" "$evidence_dir/grubby-after.txt" \
+	|| { echo "$platform grubby inventory lacks the selected RHCK image" >&2; exit 77; }
+initial_boot_id=$(<"$evidence_dir/initial-boot/boot-id.txt")
+guest 'sync; systemctl reboot' >/dev/null 2>&1 || true
+address=
+wait_for_guest || { echo "$platform guest did not return after the RHCK boot" >&2; exit 77; }
+qualified_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
+[[ $qualified_boot_id != "$initial_boot_id" ]] \
+	|| { echo "$platform did not complete a distinct RHCK boot" >&2; exit 77; }
+running_kernel=$(guest 'uname -r')
+[[ $running_kernel != *uek* && "/boot/vmlinuz-$running_kernel" == "$selected_image" ]] \
+	|| { echo "$platform did not boot the selected RHCK kernel" >&2; exit 77; }
+# Expand uname inside the guest shell.
+# shellcheck disable=SC2016
+guest 'rpm -q --whatprovides "/boot/vmlinuz-$(uname -r)"' >"$evidence_dir/rhck-running-package.txt"
+grep -q '^kernel-core-' "$evidence_dir/rhck-running-package.txt" \
+	|| { echo "$platform running kernel is not owned by kernel-core" >&2; exit 77; }
+
 if [[ $(<"$evidence_dir/initial-boot/cgroup-filesystem.txt") != cgroup2fs ]]; then
-	[[ $platform == el8 ]] || { echo "$platform does not use its expected cgroup v2 default" >&2; exit 77; }
-	guest 'grubby --info=ALL' >"$evidence_dir/grubby-before.txt"
-	guest 'grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"'
-	guest 'grubby --info=ALL' >"$evidence_dir/grubby-after.txt"
-	guest 'grub2-editenv /boot/grub2/grubenv list' >"$evidence_dir/grubenv-after.txt"
-	grep -qw systemd.unified_cgroup_hierarchy=1 "$evidence_dir/grubby-after.txt"
-	grep -qw systemd.unified_cgroup_hierarchy=1 "$evidence_dir/grubenv-after.txt"
-	initial_boot_id=$(<"$evidence_dir/initial-boot/boot-id.txt")
-	guest 'sync; systemctl reboot' >/dev/null 2>&1 || true
-	address=
-	wait_for_guest || { echo "$platform guest did not return after cgroup v2 reboot" >&2; exit 77; }
-	qualified_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
-	[[ $qualified_boot_id != "$initial_boot_id" ]] \
-		|| { echo "$platform did not complete a distinct cgroup v2 boot" >&2; exit 77; }
+	[[ $platform == el8 ]] || { echo "$platform RHCK boot did not materialize cgroup v2" >&2; exit 77; }
 fi
 
 guest 'systemctl --version' >"$evidence_dir/qualified-boot/systemd-version.txt"

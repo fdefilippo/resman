@@ -50,7 +50,7 @@ blocked=0
 failed=0
 for platform in el8 el9 el10; do
 	set +e
-	"$script_dir/qemu-platform.sh" "$platform" "$run_id" "$source_revision"
+	"$script_dir/qemu-platform.sh" "$platform" "$run_id" "$source_revision" rhck
 	status=$?
 	set -e
 	case "$status" in
@@ -71,4 +71,4 @@ if [[ $blocked -eq 1 ]]; then
 	exit 77
 fi
 result=PASS
-detail="EL8, EL9 and EL10 produced valid IODeviceWeight characterization"
+detail="EL8, EL9 and EL10 RHCK representatives produced valid IODeviceWeight characterization"

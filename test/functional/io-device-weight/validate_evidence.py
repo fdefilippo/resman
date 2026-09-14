@@ -206,7 +206,7 @@ def verify_unsupported_row(result, mechanism, row, rows, transport, device, cgro
     return code
 
 
-def validate_guest(result, platform, revision, retained_probe):
+def validate_guest(result, platform, revision, retained_probe, expected_kernel_family=None):
     schema_version = result["schema_version"]
     require(schema_version in {1, 2} and
             result["scope"] == "test-only-systemd-iodeviceweight-platform-characterization",
@@ -297,7 +297,11 @@ def validate_guest(result, platform, revision, retained_probe):
     simultaneous_policy = ("not applicable" if simultaneous_outcome == "NOT_APPLICABLE" else
                            simultaneous.get("policy_status", "not available"))
     kernel = result["environment"]["kernel"]
-    kernel_family = "UEK" if "uek" in kernel.lower() else "non-UEK"
+    if expected_kernel_family == "rhck":
+        require("uek" not in kernel.lower(), "RHCK evidence booted UEK")
+        kernel_family = "RHCK"
+    else:
+        kernel_family = "UEK" if "uek" in kernel.lower() else "non-UEK"
     cleanup = result["cleanup"]
     expected_property_reset = True if result["dbus"]["property_signature"] == "a(st)" else None
     require(cleanup["result"] == "PASS" and not cleanup["errors"] and
@@ -339,9 +343,17 @@ def validate(root, revision):
                 "platform run or cleanup did not pass")
         require((platform_root / "result").read_text().strip() == "PASS",
                 "platform terminal result differs")
+        kernel_family = environment.get("kernel_family")
+        if kernel_family is not None:
+            require(kernel_family == "rhck", "unexpected characterized kernel family")
+            running_package = (platform_root / "rhck-running-package.txt").read_text().strip()
+            require(running_package.startswith("kernel-core-"),
+                    "RHCK evidence lacks the running kernel-core package")
+            qualified_kernel = (platform_root / "qualified-boot/kernel.txt").read_text().strip()
+            require("uek" not in qualified_kernel.lower(), "qualified RHCK boot used UEK")
         guest = json.loads((platform_root / "guest/result.json").read_text())
         rows.append(validate_guest(guest, platform, revision,
-                                   platform_root / "guest-probe.py"))
+                                   platform_root / "guest-probe.py", kernel_family))
     return rows
 
 
@@ -358,8 +370,9 @@ def table(rows, revision):
     for row in rows:
         lines.append("| {platform} | Oracle Linux {os_version} | `{systemd}` | `{kernel}` | "
                      "{bfq} | {iocost} | {simultaneous} | `{simultaneous_policy}` |".format(**row))
-    lines.extend(("", "Each row applies only to the exact distribution, systemd, and kernel family/version "
-                       "shown. An unlisted kernel family is uncharacterized.", "",
+    lines.extend(("", "Each row is exact retained evidence. A product contract may authorize its reviewed "
+                       "distribution-major, systemd-major, kernel-family/series line only with a mandatory "
+                       "live startup probe; no claim crosses those line coordinates.", "",
                        "`NOT_APPLICABLE` means that BFQ and io.cost were not both individually supported, "
                        "so no simultaneous phase was run. A simultaneous `SUPPORTED` result records observed "
                        "availability only and does not establish precedence or composition.", ""))

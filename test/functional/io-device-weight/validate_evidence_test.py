@@ -101,6 +101,18 @@ class EvidenceValidatorTests(unittest.TestCase):
             self.assertEqual(row["bfq"], "SUPPORTED")
             self.assertEqual(row["simultaneous_policy"], "mechanism_ambiguous")
 
+    def test_rhck_evidence_requires_and_labels_a_non_uek_kernel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / "guest_probe.py"
+            probe.write_text("probe\n")
+            result = self.fixture(probe)
+            row = validator.validate_guest(result, "el9", self.revision, probe, "rhck")
+            self.assertEqual(row["platform"], "OL9/RHCK")
+
+            result["environment"]["kernel"] = "6.12.0-test.el9uek"
+            with self.assertRaisesRegex(AssertionError, "RHCK evidence booted UEK"):
+                validator.validate_guest(result, "el9", self.revision, probe, "rhck")
+
     def test_mutations_are_rejected(self):
         mutations = {
             "signature": lambda value: value["dbus"].update(property_signature="t"),
@@ -244,7 +256,7 @@ class EvidenceValidatorTests(unittest.TestCase):
         }], self.revision)
         self.assertIn("UNSUPPORTED", rendered)
         self.assertIn("NOT_APPLICABLE", rendered)
-        self.assertIn("unlisted kernel family is uncharacterized", rendered)
+        self.assertIn("no claim crosses those line coordinates", rendered)
         self.assertIn("`BLOCKED` is not published", rendered)
 
 
