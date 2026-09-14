@@ -194,7 +194,7 @@ guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINT,SERIAL' >"$evidence_dir
 guest 'dnf install -y python3 util-linux systemd-udev' >"$evidence_dir/provision.log"
 
 guest 'grubby --info=ALL' >"$evidence_dir/grubby-before.txt"
-guest 'dnf install -y kernel' >"$evidence_dir/rhck-install.log"
+guest 'dnf install -y --setopt=install_weak_deps=False kernel' >"$evidence_dir/rhck-install.log"
 # Expand the package and boot-image expressions inside the guest shell.
 # shellcheck disable=SC2016
 guest 'set -eu; release=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel-core | sort -V | tail -n 1); test -n "$release"; image=/boot/vmlinuz-$release; test -f "$image"; grubby --set-default "$image"; grubby --update-kernel="$image" --args="systemd.unified_cgroup_hierarchy=1"; printf "release=%s\nimage=%s\n" "$release" "$image"' \
