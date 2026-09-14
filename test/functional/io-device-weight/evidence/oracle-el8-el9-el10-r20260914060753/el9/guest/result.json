@@ -1,0 +1,310 @@
+{
+  "cleanup": {
+    "all_schedulers_after": {
+      "/sys/block/sda/queue/scheduler": "none [mq-deadline] kyber bfq",
+      "/sys/block/vda/queue/scheduler": "[none] mq-deadline kyber bfq"
+    },
+    "errors": [],
+    "io_cost_disabled": true,
+    "owned_drop_ins": [],
+    "property_reset": true,
+    "result": "PASS",
+    "scheduler_after": "[none] mq-deadline kyber bfq",
+    "service_active_state": "inactive"
+  },
+  "dbus": {
+    "interface": "org.freedesktop.systemd1.Slice",
+    "introspection": ".AttachProcesses               method    sau       -                                        -\n.GetProcesses                  method    -         a(sus)                                   -\n.AllowedCPUs                   property  ay        0                                        -\n.AllowedMemoryNodes            property  ay        0                                        -\n.BPFProgram                    property  a(ss)     0                                        -\n.BlockIOAccounting             property  b         false                                    -\n.BlockIODeviceWeight           property  a(st)     0                                        -\n.BlockIOReadBandwidth          property  a(st)     0                                        -\n.BlockIOWeight                 property  t         18446744073709551615                     -\n.BlockIOWriteBandwidth         property  a(st)     0                                        -\n.CPUAccounting                 property  b         true                                     -\n.CPUQuotaPerSecUSec            property  t         18446744073709551615                     -\n.CPUQuotaPeriodUSec            property  t         18446744073709551615                     -\n.CPUShares                     property  t         18446744073709551615                     -\n.CPUUsageNSec                  property  t         2949000                                  -\n.CPUWeight                     property  t         18446744073709551615                     -\n.ControlGroup                  property  s         \"/user.slice/user-resman_iow_8fd6152d8d\u2026 -\n.ControlGroupId                property  t         5104                                     -\n.DefaultMemoryLow              property  t         0                                        -\n.DefaultMemoryMin              property  t         0                                        -\n.Delegate                      property  b         false                                    -\n.DelegateControllers           property  as        0                                        -\n.DeviceAllow                   property  a(ss)     0                                        -\n.DevicePolicy                  property  s         \"auto\"                                   -\n.DisableControllers            property  as        0                                        -\n.EffectiveCPUs                 property  ay        0                                        -\n.EffectiveMemoryNodes          property  ay        0                                        -\n.IOAccounting                  property  b         false                                    -\n.IODeviceLatencyTargetUSec     property  a(st)     0                                        -\n.IODeviceWeight                property  a(st)     0                                        -\n.IOReadBandwidthMax            property  a(st)     0                                        -\n.IOReadBytes                   property  t         18446744073709551615                     -\n.IOReadIOPSMax                 property  a(st)     0                                        -\n.IOReadOperations              property  t         18446744073709551615                     -\n.IOWeight                      property  t         18446744073709551615                     -\n.IOWriteBandwidthMax           property  a(st)     0                                        -\n.IOWriteBytes                  property  t         18446744073709551615                     -\n.IOWriteIOPSMax                property  a(st)     0                                        -\n.IOWriteOperations             property  t         18446744073709551615                     -\n.IPAccounting                  property  b         false                                    -\n.IPAddressAllow                property  a(iayu)   0                                        -\n.IPAddressDeny                 property  a(iayu)   0                                        -\n.IPEgressBytes                 property  t         18446744073709551615                     -\n.IPEgressFilterPath            property  as        0                                        -\n.IPEgressPackets               property  t         18446744073709551615                     -\n.IPIngressBytes                property  t         18446744073709551615                     -\n.IPIngressFilterPath           property  as        0                                        -\n.IPIngressPackets              property  t         18446744073709551615                     -\n.ManagedOOMMemoryPressure      property  s         \"auto\"                                   -\n.ManagedOOMMemoryPressureLimit property  u         0                                        -\n.ManagedOOMPreference          property  s         \"none\"                                   -\n.ManagedOOMSwap                property  s         \"auto\"                                   -\n.MemoryAccounting              property  b         true                                     -\n.MemoryAvailable               property  t         18446744073709551615                     -\n.MemoryCurrent                 property  t         589824                                   -\n.MemoryHigh                    property  t         18446744073709551615                     -\n.MemoryLimit                   property  t         18446744073709551615                     -\n.MemoryLow                     property  t         0                                        -\n.MemoryMax                     property  t         18446744073709551615                     -\n.MemoryMin                     property  t         0                                        -\n.MemoryPeak                    property  t         610304                                   -\n.MemorySwapMax                 property  t         18446744073709551615                     -\n.RestrictNetworkInterfaces     property  (bas)     false 0                                  -\n.Slice                         property  s         \"user.slice\"                             -\n.SocketBindAllow               property  a(iiqq)   0                                        -\n.SocketBindDeny                property  a(iiqq)   0                                        -\n.StartupAllowedCPUs            property  ay        0                                        -\n.StartupAllowedMemoryNodes     property  ay        0                                        -\n.StartupBlockIOWeight          property  t         18446744073709551615                     -\n.StartupCPUShares              property  t         18446744073709551615                     -\n.StartupCPUWeight              property  t         18446744073709551615                     -\n.StartupIOWeight               property  t         18446744073709551615                     -\n.TasksAccounting               property  b         true                                     -\n.TasksCurrent                  property  t         1                                        -\n.TasksMax                      property  t         7367                                     -\n",
+    "introspection_exit_code": 0,
+    "object_path": "/org/freedesktop/systemd1/unit/user_2dresman_5fiow_5f8fd6152d8df1_2eslice",
+    "property": "IODeviceWeight",
+    "property_signature": "a(st)",
+    "request": {
+      "destination": "org.freedesktop.systemd1",
+      "device": "/dev/vda",
+      "interface": "org.freedesktop.systemd1.Manager",
+      "method": "SetUnitProperties",
+      "object_path": "/org/freedesktop/systemd1",
+      "property": "IODeviceWeight",
+      "runtime": true,
+      "signature": "sba(sv)",
+      "unit": "user-resman_iow_8fd6152d8df1.slice",
+      "variant_signature": "a(st)",
+      "weight": 333
+    }
+  },
+  "environment": {
+    "all_schedulers_before": {
+      "/sys/block/sda/queue/scheduler": "none [mq-deadline] kyber bfq",
+      "/sys/block/vda/queue/scheduler": "[none] mq-deadline kyber bfq"
+    },
+    "bfq_module_probe": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "boot_id": "0c3220d4-8cfa-4904-bf61-2772d4e46981",
+    "cgroup_controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+    "device": "/dev/vda",
+    "device_size_bytes": 536870912,
+    "kernel": "6.12.0-204.92.4.2.el9uek.x86_64",
+    "machine_id": "9c968d5ee9c293a72d19157bd4bd0f17",
+    "major_minor": "251:0",
+    "os_release": "NAME=\"Oracle Linux Server\"\nVERSION=\"9.8\"\nID=\"ol\"\nID_LIKE=\"fedora\"\nVARIANT=\"Server\"\nVARIANT_ID=\"server\"\nVERSION_ID=\"9.8\"\nPLATFORM_ID=\"platform:el9\"\nPRETTY_NAME=\"Oracle Linux Server 9.8\"\nANSI_COLOR=\"0;31\"\nCPE_NAME=\"cpe:/o:oracle:linux:9:8:server\"\nHOME_URL=\"https://linux.oracle.com/\"\nBUG_REPORT_URL=\"https://github.com/oracle/oracle-linux\"\n\nORACLE_BUGZILLA_PRODUCT=\"Oracle Linux 9\"\nORACLE_BUGZILLA_PRODUCT_VERSION=9.8\nORACLE_SUPPORT_PRODUCT=\"Oracle Linux\"\nORACLE_SUPPORT_PRODUCT_VERSION=9.8",
+    "scheduler_before": "[none] mq-deadline kyber bfq",
+    "systemd_package": "systemd-252-67.0.1.el9_8.2.x86_64",
+    "systemd_version": "systemd 252 (252-67.0.1.el9_8.2)\n+PAM +AUDIT +SELINUX -APPARMOR +IMA +SMACK +SECCOMP +GCRYPT +GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN -IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT -QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK +XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified\n"
+  },
+  "platform": "el9",
+  "probe_sha256": "0592f697ec02e7cfce9a65585892290ffd86fa0264bb9104c8580b58c2d5b731",
+  "requested_weight": 333,
+  "result": "CHARACTERIZED",
+  "rows": {
+    "bfq": {
+      "expected_weight": 121,
+      "mechanism": "bfq",
+      "observed_weight": 121,
+      "outcome": "SUPPORTED",
+      "phase": {
+        "after": {
+          "controller_chain": [
+            {
+              "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+              "inode": 1,
+              "path": "/sys/fs/cgroup",
+              "subtree_control": "io memory pids"
+            },
+            {
+              "controllers": "io memory pids",
+              "inode": 1401,
+              "path": "/sys/fs/cgroup/user.slice",
+              "subtree_control": "memory pids"
+            },
+            {
+              "controllers": "memory pids",
+              "inode": 5104,
+              "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+              "subtree_control": "memory pids"
+            }
+          ],
+          "kernel": {
+            "io.bfq.weight": null,
+            "io.weight": null,
+            "root.io.cost.model": null,
+            "root.io.cost.qos": null
+          },
+          "low_latency": "0",
+          "property": {
+            "exit_code": 0,
+            "value": "a(st) 0"
+          },
+          "scheduler": "none mq-deadline kyber [bfq]"
+        },
+        "before": {
+          "controller_chain": [
+            {
+              "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+              "inode": 1,
+              "path": "/sys/fs/cgroup",
+              "subtree_control": "io memory pids"
+            },
+            {
+              "controllers": "io memory pids",
+              "inode": 1401,
+              "path": "/sys/fs/cgroup/user.slice",
+              "subtree_control": "memory pids"
+            },
+            {
+              "controllers": "memory pids",
+              "inode": 5104,
+              "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+              "subtree_control": "memory pids"
+            }
+          ],
+          "kernel": {
+            "io.bfq.weight": null,
+            "io.weight": null,
+            "root.io.cost.model": null,
+            "root.io.cost.qos": null
+          },
+          "low_latency": "0",
+          "property": {
+            "exit_code": 0,
+            "value": "a(st) 0"
+          },
+          "scheduler": "none mq-deadline kyber [bfq]"
+        },
+        "during": {
+          "controller_chain": [
+            {
+              "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+              "inode": 1,
+              "path": "/sys/fs/cgroup",
+              "subtree_control": "io memory pids"
+            },
+            {
+              "controllers": "io memory pids",
+              "inode": 1401,
+              "path": "/sys/fs/cgroup/user.slice",
+              "subtree_control": "io memory pids"
+            },
+            {
+              "controllers": "io memory pids",
+              "inode": 5104,
+              "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+              "subtree_control": "memory pids"
+            }
+          ],
+          "kernel": {
+            "io.bfq.weight": "default 100\n251:0 121",
+            "io.weight": null,
+            "root.io.cost.model": null,
+            "root.io.cost.qos": null
+          },
+          "low_latency": "0",
+          "property": {
+            "exit_code": 0,
+            "value": "a(st) 1 \"/dev/vda\" 333"
+          },
+          "scheduler": "none mq-deadline kyber [bfq]"
+        },
+        "name": "bfq",
+        "request_exit_code": 0,
+        "request_output": "",
+        "reset_exit_code": 0,
+        "reset_output": ""
+      },
+      "reason": "active BFQ read the systemd per-device weight"
+    },
+    "iocost": {
+      "mechanism": "iocost",
+      "outcome": "UNSUPPORTED",
+      "reason": "kernel does not expose root io.cost.qos and io.cost.model"
+    },
+    "simultaneous": {
+      "mechanism": "simultaneous",
+      "outcome": "UNSUPPORTED",
+      "reason": "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"
+    }
+  },
+  "run_id": "r20260914060753-2990457",
+  "schema_version": 1,
+  "scope": "test-only-systemd-iodeviceweight-platform-characterization",
+  "source_revision": "91b9876dab9786192ea5c193d234345cdbde9163",
+  "transport": {
+    "after": {
+      "controller_chain": [
+        {
+          "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+          "inode": 1,
+          "path": "/sys/fs/cgroup",
+          "subtree_control": "io memory pids"
+        },
+        {
+          "controllers": "io memory pids",
+          "inode": 1401,
+          "path": "/sys/fs/cgroup/user.slice",
+          "subtree_control": "memory pids"
+        },
+        {
+          "controllers": "memory pids",
+          "inode": 5104,
+          "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+          "subtree_control": "memory pids"
+        }
+      ],
+      "kernel": {
+        "io.bfq.weight": null,
+        "io.weight": null,
+        "root.io.cost.model": null,
+        "root.io.cost.qos": null
+      },
+      "low_latency": null,
+      "property": {
+        "exit_code": 0,
+        "value": "a(st) 0"
+      },
+      "scheduler": "[none] mq-deadline kyber bfq"
+    },
+    "before": {
+      "controller_chain": [
+        {
+          "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+          "inode": 1,
+          "path": "/sys/fs/cgroup",
+          "subtree_control": "io memory pids"
+        },
+        {
+          "controllers": "io memory pids",
+          "inode": 1401,
+          "path": "/sys/fs/cgroup/user.slice",
+          "subtree_control": "memory pids"
+        },
+        {
+          "controllers": "memory pids",
+          "inode": 5104,
+          "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+          "subtree_control": "memory pids"
+        }
+      ],
+      "kernel": {
+        "io.bfq.weight": null,
+        "io.weight": null,
+        "root.io.cost.model": null,
+        "root.io.cost.qos": null
+      },
+      "low_latency": null,
+      "property": {
+        "exit_code": 0,
+        "value": "a(st) 0"
+      },
+      "scheduler": "[none] mq-deadline kyber bfq"
+    },
+    "during": {
+      "controller_chain": [
+        {
+          "controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+          "inode": 1,
+          "path": "/sys/fs/cgroup",
+          "subtree_control": "io memory pids"
+        },
+        {
+          "controllers": "io memory pids",
+          "inode": 1401,
+          "path": "/sys/fs/cgroup/user.slice",
+          "subtree_control": "io memory pids"
+        },
+        {
+          "controllers": "io memory pids",
+          "inode": 5104,
+          "path": "/sys/fs/cgroup/user.slice/user-resman_iow_8fd6152d8df1.slice",
+          "subtree_control": "memory pids"
+        }
+      ],
+      "kernel": {
+        "io.bfq.weight": "default 100",
+        "io.weight": null,
+        "root.io.cost.model": null,
+        "root.io.cost.qos": null
+      },
+      "low_latency": null,
+      "property": {
+        "exit_code": 0,
+        "value": "a(st) 1 \"/dev/vda\" 333"
+      },
+      "scheduler": "[none] mq-deadline kyber bfq"
+    },
+    "name": "transport",
+    "outcome": "SUPPORTED",
+    "reason": "D-Bus request and empty-array reset succeeded",
+    "request_exit_code": 0,
+    "request_output": "",
+    "reset_exit_code": 0,
+    "reset_output": ""
+  },
+  "unit": {
+    "control_group": "/user.slice/user-resman_iow_8fd6152d8df1.slice",
+    "control_group_inode": 5104,
+    "service": "resman-iow-8fd6152d8df1.service",
+    "slice": "user-resman_iow_8fd6152d8df1.slice"
+  }
+}

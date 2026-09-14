@@ -1,0 +1,1 @@
+BOOT_IMAGE=(hd0,gpt3)/vmlinuz-6.12.0-202.76.4.4.el10uek.x86_64 root=/dev/mapper/vg_main-lv_root ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=UUID=b47d24c4-c7f5-4776-aa2a-fc9555795846 rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0

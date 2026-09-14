@@ -1,0 +1,9 @@
+run_id=r20260914060753-2990457
+source_revision=91b9876dab9786192ea5c193d234345cdbde9163
+host=caronte.test.caronte.io
+host_kernel=6.12.0-205.92.4.2.el9uek.x86_64
+qemu_version=QEMU emulator version 10.1.4 (qemu-kvm-10.1.4-3.el9)
+libvirt_version=Compiled against library: libvirt 12.0.0 Using library: libvirt 12.0.0 Using API: QEMU 12.0.0 Running hypervisor: QEMU 10.1.4 Running against daemon: 12.0.0  
+result=PASS
+detail=EL8, EL9 and EL10 produced valid IODeviceWeight characterization
+exit_code=0

@@ -1,0 +1,1 @@
+BOOT_IMAGE=(hd0,gpt3)/vmlinuz-5.15.0-320.202.8.5.el8uek.x86_64 root=/dev/mapper/vg_main-lv_root ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=/dev/mapper/vg_main-lv_swap rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0 systemd.unified_cgroup_hierarchy=1

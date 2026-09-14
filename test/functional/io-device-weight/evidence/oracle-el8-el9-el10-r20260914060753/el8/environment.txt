@@ -1,0 +1,15 @@
+platform=el8
+run_id=r20260914060753-2990457
+source_revision=91b9876dab9786192ea5c193d234345cdbde9163
+base_image=/var/lib/libvirt/images/OL8U10-base.qcow2
+base_url=https://yum.oracle.com/templates/OracleLinux/OL8/u10/x86_64/OL8U10_x86_64-kvm-b287.qcow2
+base_sha256=cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c
+probe_serial=resmaniowel8
+os_variant=ol8.10
+qemu_version=QEMU emulator version 10.1.4 (qemu-kvm-10.1.4-3.el9)
+libvirt_version=Compiled against library: libvirt 12.0.0 Using library: libvirt 12.0.0 Using API: QEMU 12.0.0 Running hypervisor: QEMU 10.1.4 Running against daemon: 12.0.0  
+guest_exit_code=0
+cleanup=PASS
+result=PASS
+detail=el8 IODeviceWeight characterization completed
+exit_code=0

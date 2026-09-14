@@ -81,3 +81,8 @@ Successful local evidence is written under
 only after the independent validator recalculates every manifest and validates
 all three platform rows. Publish that table and the raw evidence reference in
 `resman-nq6.40.1` before selecting the production contract.
+
+The retained repository evidence and its interpretation are recorded in
+[`CAPABILITY-MATRIX.md`](CAPABILITY-MATRIX.md). The host-side unit target
+revalidates every committed evidence bundle so a changed file, missing row, or
+weakened cleanup proof cannot remain unnoticed.
