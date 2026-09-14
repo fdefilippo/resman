@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -394,5 +395,35 @@ func TestApplyRejectsIODeviceWeightAliasesBeforeMutation(t *testing.T) {
 	}
 	if len(transport.setCalls) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("alias rejection occurred after mutation: calls=%+v journal=%+v", transport.setCalls, store.journal)
+	}
+}
+
+func TestKernelVerifierPreflightRejectsIODeviceWeightAliases(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1001.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "user.slice", "cgroup.controllers"), []byte("io\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "io.bfq.weight"), []byte("default 100\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{
+		{Path: "/dev/disk/by-path/alias", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := newCgroupVerifier(root)
+	verifier.stat = func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
+	snapshot := UnitSnapshot{
+		Identity:     UnitIdentity{Name: "user-1001.slice"},
+		ControlGroup: "/user.slice/user-1001.slice",
+	}
+	if err := verifier.preflight(snapshot, []PropertyAssignment{assignment}); err == nil || !strings.Contains(err.Error(), "same device 8:0") {
+		t.Fatalf("preflight() error = %v, want duplicate device 8:0", err)
 	}
 }
