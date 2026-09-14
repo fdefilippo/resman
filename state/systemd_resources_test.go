@@ -29,7 +29,7 @@ func TestSystemdNativeMemoryAndIOPlansAreIndependentFromCPUEligibility(t *testin
 	manager.cfg.IOUserIncludeList = []string{"bob"}
 	manager.resolveSystemdIODevices = func(string) ([]string, error) { return []string{"/dev/vda"}, nil }
 
-	metrics := &SystemMetrics{RAMEligibleUsers: []int{1000}, IOEligibleUsers: []int{1001}}
+	metrics := sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}, IOEligibleUsers: []int{1001}})
 	if err := manager.activateLimits(metrics); err != nil {
 		t.Fatalf("activateLimits() error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSystemdNativeResourceRefusalDoesNotDisableCPUPlan(t *testing.T) {
 	manager.cfg.RAMEnabled = true
 	manager.cfg.RAMUserIncludeList = []string{"alice"}
 
-	err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}})
+	err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}}))
 	var reconciliationErr *SystemdResourceReconciliationError
 	if !errors.As(err, &reconciliationErr) || reconciliationErr.Resource != systemdunit.ResourceMemory {
 		t.Fatalf("activateLimits() error = %v, want typed memory refusal", err)
@@ -101,7 +101,7 @@ func TestSystemdNativeAuthorityLossReleasesOnlyTheRefusedResource(t *testing.T) 
 	manager.cfg.UserIncludeList = []string{"alice"}
 	manager.cfg.RAMEnabled = true
 	manager.cfg.RAMUserIncludeList = []string{"alice"}
-	metrics := &SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}}
+	metrics := sampleWithProcessAuthority(adapter.topology, &SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}})
 	if err := manager.activateLimits(metrics); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestSystemdNativeMissingUserSliceReportsAuthoritySplit(t *testing.T) {
 	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology()}
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
-	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
+	err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}}))
 	var authorityErr *systemdunit.ResourceAuthorityError
 	if !errors.As(err, &authorityErr) || authorityErr.Authority.State != systemdunit.ResourceCoveragePartial || authorityErr.Authority.Reason != systemdunit.ResourceCoverageAuthoritySplit {
 		t.Fatalf("activateLimits() error = %v, want typed authority_split partial coverage", err)
@@ -154,7 +154,7 @@ func TestSystemdNativeResourceBusLossDoesNotPublishAppliedState(t *testing.T) {
 	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000), failApplyUnit: "user-1000.slice"}
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
-	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
+	err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}}))
 	var reconciliationErr *SystemdResourceReconciliationError
 	if !errors.As(err, &reconciliationErr) || reconciliationErr.Resource != systemdunit.ResourceMemory || reconciliationErr.Step != "apply" {
 		t.Fatalf("activateLimits() error = %v, want typed memory apply failure", err)
@@ -174,18 +174,18 @@ func TestSystemdNativeResourceAuthorityResultMismatchInvalidatesTheCycle(t *test
 	adapter := &fakeSystemdCPUUnitAdapter{
 		topology:        testSystemdTopology(1000),
 		authority:       map[systemdunit.ResourceKind]systemdunit.ResourceAuthority{systemdunit.ResourceIO: ioAuthority},
-		authorityCounts: map[int]int{2: 0},
+		authorityCounts: map[int]int{1: 0},
 	}
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
 	manager.cfg.IOEnabled = true
 	manager.resolveSystemdIODevices = func(string) ([]string, error) { return []string{"/dev/vda"}, nil }
-	metrics := &SystemMetrics{RAMEligibleUsers: []int{1000}, IOEligibleUsers: []int{1000}}
+	metrics := sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}, IOEligibleUsers: []int{1000}})
 	initializeCycleResourceAuthorities(metrics)
 	resetCycleResourceAuthorities(metrics, manager.cfg)
 
 	err := manager.reconcileSystemdResourcesAttempt(context.Background(), metrics, manager.cfg)
-	if err == nil || !strings.Contains(err.Error(), "before acknowledgement: adapter returned 0 results for 1 requests") {
+	if err == nil || !strings.Contains(err.Error(), "adapter returned 0 results for 2 requests") {
 		t.Fatalf("resource reconciliation error = %v, want result-count mismatch", err)
 	}
 	if authority := metrics.systemdRAMAuthority[1000]; authority != nil {
@@ -196,7 +196,7 @@ func TestSystemdNativeResourceAuthorityResultMismatchInvalidatesTheCycle(t *test
 	}
 }
 
-func TestSystemdNativeResourceAuthorityIsReconfirmedBeforeAppliedStateIsPublished(t *testing.T) {
+func TestSystemdNativeResourceAuthorityIsNotRescannedAfterApply(t *testing.T) {
 	policy := testCPUPointsPolicy(t, nil)
 	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
 	adapter.authorityHook = func(call int) {
@@ -216,17 +216,22 @@ func TestSystemdNativeResourceAuthorityIsReconfirmedBeforeAppliedStateIsPublishe
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
 
-	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
-	var reconciliationErr *SystemdResourceReconciliationError
-	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "pre_acknowledgement_authority" {
-		t.Fatalf("activateLimits() error = %v, want final authority refusal", err)
+	err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}}))
+	if err != nil {
+		t.Fatalf("activateLimits() error = %v", err)
 	}
 	state := manager.resourceLimits[1000]
-	if state.ramApplied || state.ramAuthority.Reason != systemdunit.ResourceCoverageAuthoritySplit {
-		t.Fatalf("lost authority was acknowledged as applied: %+v", state)
+	if !state.ramApplied || state.ramAuthority.Reason != systemdunit.ResourceCoverageVerified {
+		t.Fatalf("captured authority was not acknowledged: %+v", state)
 	}
-	if _, ok := findPropertyRestore(adapter.propertyRestores, systemdunit.PropertyMemoryHigh); !ok {
-		t.Fatalf("lost authority did not compensate the applied memory properties: %+v", adapter.propertyRestores)
+	if adapter.authorityChecks != 1 {
+		t.Fatalf("resource authority checks = %d, want one sample-scoped classification", adapter.authorityChecks)
+	}
+	if adapter.confirmCalls != 2 || len(adapter.confirmedApplied) != 1 || adapter.confirmedApplied[0] != "user-1000.slice" {
+		t.Fatalf("live confirmations = topology:%d applied:%v, want two topology checks and one property/kernel readback", adapter.confirmCalls, adapter.confirmedApplied)
+	}
+	if _, ok := findPropertyRestore(adapter.propertyRestores, systemdunit.PropertyMemoryHigh); ok {
+		t.Fatalf("sample-scoped authority caused an unexpected restore: %+v", adapter.propertyRestores)
 	}
 }
 
@@ -241,7 +246,7 @@ func TestSystemdNativeResourceTopologyIsReconfirmedBeforeAcknowledgement(t *test
 	}
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
-	metrics := &SystemMetrics{RAMEligibleUsers: []int{1000}}
+	metrics := sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}})
 	initializeCycleResourceAuthorities(metrics)
 	resetCycleResourceAuthorities(metrics, manager.cfg)
 
@@ -258,6 +263,63 @@ func TestSystemdNativeResourceTopologyIsReconfirmedBeforeAcknowledgement(t *test
 	}
 }
 
+func TestSystemdNativeResourceAuthorityRejectsInventoryIdentityMismatch(t *testing.T) {
+	captured := testSystemdTopology(1000)
+	tests := []struct {
+		name   string
+		mutate func(*fakeSystemdCPUUnitAdapter, *SystemMetrics)
+	}{
+		{name: "new unit", mutate: func(adapter *fakeSystemdCPUUnitAdapter, _ *SystemMetrics) {
+			adapter.topology = testSystemdTopology(1000, 1001)
+		}},
+		{name: "missing unit", mutate: func(adapter *fakeSystemdCPUUnitAdapter, _ *SystemMetrics) { adapter.topology = testSystemdTopology() }},
+		{name: "recreated unit", mutate: func(adapter *fakeSystemdCPUUnitAdapter, _ *SystemMetrics) {
+			adapter.topology.Users[0].Unit.Identity.InvocationID[0]++
+		}},
+		{name: "different sample epoch", mutate: func(_ *fakeSystemdCPUUnitAdapter, sample *SystemMetrics) { sample.PersistenceSystem.SampleEpochID++ }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &fakeSystemdCPUUnitAdapter{topology: captured}
+			manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+			manager.cfg.RAMEnabled = true
+			sample := sampleWithProcessAuthority(captured, &SystemMetrics{RAMEligibleUsers: []int{1000}})
+			test.mutate(adapter, sample)
+
+			err := manager.activateLimits(sample)
+			var authorityErr *systemdunit.ResourceAuthorityError
+			if !errors.As(err, &authorityErr) || authorityErr.Authority.Reason != systemdunit.ResourceCoverageTopologyChanged {
+				t.Fatalf("activateLimits() error = %v, want typed sample-topology refusal", err)
+			}
+			if adapter.authorityChecks != 0 || len(adapter.applies) != 0 {
+				t.Fatalf("mismatched inventory performed checks=%d applies=%v", adapter.authorityChecks, adapter.applies)
+			}
+		})
+	}
+}
+
+func TestSystemdNativeResourceRetryReusesOnlyTheCapturedSample(t *testing.T) {
+	captured := testSystemdTopology(1000)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: captured}
+	adapter.confirmHook = func(call int) {
+		if call == 1 {
+			adapter.topology = testSystemdTopology(1000, 1001)
+		}
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.RAMEnabled = true
+	sample := sampleWithProcessAuthority(captured, &SystemMetrics{RAMEligibleUsers: []int{1000}})
+
+	err := manager.reconcileSystemdResources(context.Background(), sample, manager.cfg)
+	var authorityErr *systemdunit.ResourceAuthorityError
+	if !errors.As(err, &authorityErr) || authorityErr.Authority.Reason != systemdunit.ResourceCoverageTopologyChanged {
+		t.Fatalf("reconcileSystemdResources() error = %v, want sample-topology refusal after retry", err)
+	}
+	if adapter.authorityChecks != 1 || adapter.inventoryCaptures != 0 {
+		t.Fatalf("retry checks=%d captures=%d, want one captured-authority check and no new inventory", adapter.authorityChecks, adapter.inventoryCaptures)
+	}
+}
+
 func TestSystemdNativeResourceFinalReadbackPreservesAnExternalPropertyChange(t *testing.T) {
 	policy := testCPUPointsPolicy(t, nil)
 	adapter := &fakeSystemdCPUUnitAdapter{
@@ -269,7 +331,7 @@ func TestSystemdNativeResourceFinalReadbackPreservesAnExternalPropertyChange(t *
 	manager := testSystemdCPUPointsManager(t, policy, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
 	manager.cfg.RAMEnabled = true
 
-	err := manager.activateLimits(&SystemMetrics{RAMEligibleUsers: []int{1000}})
+	err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{RAMEligibleUsers: []int{1000}}))
 	var reconciliationErr *SystemdResourceReconciliationError
 	if !errors.As(err, &reconciliationErr) || reconciliationErr.Step != "pre_acknowledgement_readback" {
 		t.Fatalf("activateLimits() error = %v, want final readback conflict", err)
@@ -293,7 +355,7 @@ func TestSystemdNativeResourceReleaseDoesNotRemoveActiveCPUWeight(t *testing.T) 
 	manager.cfg.UserIncludeList = []string{"alice"}
 	manager.cfg.RAMEnabled = true
 	manager.cfg.RAMUserIncludeList = []string{"alice"}
-	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}}); err != nil {
+	if err := manager.activateLimits(sampleWithProcessAuthority(adapter.topology, &SystemMetrics{CPUEligibleUsers: []int{1000}, RAMEligibleUsers: []int{1000}})); err != nil {
 		t.Fatal(err)
 	}
 	manager.cfg.RAMEnabled = false
@@ -354,6 +416,23 @@ func TestDesiredResourceUsersRequiresTheResourceToBeEnabled(t *testing.T) {
 	if got := desiredResourceUsers(true, []int{1000, 1001}); !got[1000] || !got[1001] || len(got) != 2 {
 		t.Fatalf("enabled resource users = %v", got)
 	}
+}
+
+func sampleWithProcessAuthority(topology systemdunit.TopologySnapshot, sample *SystemMetrics) *SystemMetrics {
+	const sampleEpochID = int64(1)
+	sample.PersistenceSystem.SampleEpochID = sampleEpochID
+	observations := make([]systemdunit.ProcessAuthorityObservation, 0, len(topology.Users))
+	for _, user := range topology.Users {
+		observations = append(observations, systemdunit.ProcessAuthorityObservation{
+			UID:               user.UID,
+			Identity:          user.Unit.Identity,
+			CPUCoverage:       true,
+			ResourceAuthority: systemdunit.ResourceAuthority{State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified},
+		})
+	}
+	inventory := systemdunit.NewProcessAuthorityInventory(sampleEpochID, systemdunit.TopologyFingerprint(topology), true, observations)
+	sample.systemdAuthorityInventory = &inventory
+	return sample
 }
 
 func hasSystemdProperty(calls []systemdCPUApplyCall, property systemdunit.PropertyName) bool {

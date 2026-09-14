@@ -1,4 +1,4 @@
-.TH RESMAN 8 "September 2026" "v1.36.6" "System Administration"
+.TH RESMAN 8 "September 2026" "v1.37.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -376,6 +376,24 @@ may remain active. The durable systemd-property-leases.json journal is not a cac
 See /usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md for guarded restoration and
 operator-conflict recovery. Never delete this journal during a metrics reset.
 .PP
+One process-authority inventory is captured per decision sample and bound to both its
+SampleEpochID and the complete systemd topology. The /proc reads span one traversal;
+the result is frozen after capture, not atomic or instantaneous. CPU-only samples avoid
+all-process cgroup reads and PID-namespace inspection. RAM or I/O samples collect the
+extended detail once and reuse it through Apply and ConfirmApplied; unit identity,
+topology, lease, property readback and effective-kernel checks remain live.
+.PP
+A process arriving after capture is evaluated by the next successful decision sample.
+In polling mode this is normally within POLLING_INTERVAL plus cycle processing. With
+an active PSI watcher it is the first relevant event or, at latest,
+PSI_FALLBACK_INTERVAL plus cycle processing. Failed reconciliation can extend the
+delay, and a process that appears and disappears entirely between samples can remain
+unobserved. A late descendant inherits active memory.high, memory.max,
+memory.swap.max and io.max values meanwhile; an OOM or OOM kill cannot be undone by
+later restoration. ACTIVATE_LIMITS also reconciles CPU Points after inventory capture
+and before RAM/I/O Apply. MAINTAIN_CURRENT_STATE proceeds directly to resource
+reconciliation because its pipeline CPU reconciliation preceded metrics collection.
+.PP
 If the adapter cannot establish authority, ResMan remains in
 .B observation_only
 mode without a fallback. This includes non-systemd hosts. Observation-only mode
@@ -649,9 +667,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.35.4 to 1.36.6
+.B Upgrade from 1.25.x through 1.35.4 to 1.37.0
 .PP
-ResMan 1.36.6 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.37.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

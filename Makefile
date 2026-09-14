@@ -8,8 +8,8 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.36.6
-RELEASE = 5
+VERSION = 1.37.0
+RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths

@@ -3,8 +3,6 @@ package state
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/internal/cpupoints"
@@ -14,7 +12,6 @@ import (
 
 type systemdAccountingReader interface {
 	ObserveAccounting(context.Context, systemdunit.UnitIdentity) (systemdunit.UnitAccounting, error)
-	ObserveCPUCoverage(context.Context, systemdunit.TopologySnapshot) (map[uint32]bool, error)
 }
 
 // collectSystemdPersistenceInterval owns one observation baseline per unit and
@@ -76,11 +73,15 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		sample.systemdObservationContext = persistenceTopologyFingerprint(topology)
 	}
 	var coverage map[uint32]bool
-	if readable && topologyErr == nil {
-		var err error
-		coverage, err = reader.ObserveCPUCoverage(context.Background(), topology)
+	if topologyErr == nil {
+		cfg := m.GetConfig()
+		includeResourceDetail := (cfg.RAMEnabled && len(sample.RAMEligibleUsers) > 0) || (cfg.IOEnabled && len(sample.IOEligibleUsers) > 0)
+		inventory, err := m.systemdUnits.CaptureProcessAuthorityInventory(context.Background(), topology, system.SampleEpochID, includeResourceDetail)
 		if err != nil {
 			m.recordPersistenceObservationError(sample, metricsDatabaseCPUPointsReadFailure, 0, err)
+		} else {
+			sample.systemdAuthorityInventory = &inventory
+			coverage = inventory.CPUCoverage()
 		}
 	}
 	allocations := make(map[int]cpupoints.FlatSlicePlan)
@@ -360,11 +361,5 @@ func accountingIdentityKey(identity systemdunit.UnitIdentity) string {
 }
 
 func persistenceTopologyFingerprint(topology systemdunit.TopologySnapshot) string {
-	parts := make([]string, 0, len(topology.Users)+1)
-	parts = append(parts, "parent:"+accountingIdentityKey(topology.Parent.Identity))
-	for _, user := range topology.Users {
-		parts = append(parts, fmt.Sprintf("uid:%d:%s", user.UID, accountingIdentityKey(user.Unit.Identity)))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, "\x00")
+	return systemdunit.TopologyFingerprint(topology)
 }

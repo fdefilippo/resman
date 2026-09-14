@@ -20,7 +20,8 @@ type SystemdCPUUnitAdapter interface {
 	Discover(context.Context) (systemdunit.TopologySnapshot, error)
 	ConfirmTopology(context.Context, systemdunit.TopologySnapshot) error
 	ConfirmApplied(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
-	CheckResourceAuthorities(context.Context, []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error)
+	CaptureProcessAuthorityInventory(context.Context, systemdunit.TopologySnapshot, int64, bool) (systemdunit.ProcessAuthorityInventory, error)
+	CheckCapturedResourceAuthorities(context.Context, systemdunit.ProcessAuthorityInventory, []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error)
 	Apply(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
 	Restore(context.Context, systemdunit.UnitIdentity) (systemdunit.RestoreResult, error)
 	RestoreProperties(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyName) (systemdunit.RestoreResult, error)

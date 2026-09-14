@@ -2,7 +2,7 @@
 
 ## Overview
 
-ResMan 1.36.6 uses cgroup v2 through authoritative systemd units. It never creates a
+ResMan 1.37.0 uses cgroup v2 through authoritative systemd units. It never creates a
 parallel enforcement hierarchy and never changes process membership. systemd and
 logind remain the owners of sessions, services, transient units, and rootless
 container descendants.
@@ -156,4 +156,4 @@ is outside the prohibited enforcement mutations above.
 
 **Document version:** 3.1
 **Last updated:** 2026-09-11
-**Applies to:** ResMan 1.36.6 and later
+**Applies to:** ResMan 1.37.0 and later

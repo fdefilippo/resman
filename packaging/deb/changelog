@@ -1,3 +1,11 @@
+resman (1.37.0-1) stable; urgency=medium
+
+  * Share one frozen process-authority inventory across each decision sample.
+  * Preserve live unit, topology, lease, property and effective-kernel confirmation.
+  * Document polling and PSI convergence bounds for later process membership.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 14 Sep 2026 05:30:00 +0200
+
 resman (1.36.6-5) stable; urgency=medium
 
   * Build and publish distinct RPMs for Enterprise Linux 8, 9, and 10.

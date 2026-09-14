@@ -35,33 +35,35 @@ type systemdPropertyRestoreCall struct {
 }
 
 type fakeSystemdCPUUnitAdapter struct {
-	mu               sync.Mutex
-	topology         systemdunit.TopologySnapshot
-	applies          []systemdCPUApplyCall
-	restores         []string
-	propertyRestores []systemdPropertyRestoreCall
-	inactiveClean    []string
-	owned            map[string]systemdunit.UnitIdentity
-	activeProperties map[string]map[systemdunit.PropertyName]bool
-	failApplyUnit    string
-	failRestoreUnit  string
-	applyHook        func(string)
-	reconcileError   error
-	discoverError    error
-	authority        map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
-	authorityError   map[systemdunit.ResourceKind]error
-	resourceChecks   []systemdResourceCheckCall
-	authorityChecks  int
-	authorityHook    func(int)
-	authorityCounts  map[int]int
-	confirmCalls     int
-	confirmHook      func(int)
-	confirmError     error
-	confirmedApplied []string
-	confirmApplyErr  map[string]error
-	confirmStarted   chan struct{}
-	confirmProceed   chan struct{}
-	closed           bool
+	mu                sync.Mutex
+	topology          systemdunit.TopologySnapshot
+	applies           []systemdCPUApplyCall
+	restores          []string
+	propertyRestores  []systemdPropertyRestoreCall
+	inactiveClean     []string
+	owned             map[string]systemdunit.UnitIdentity
+	activeProperties  map[string]map[systemdunit.PropertyName]bool
+	failApplyUnit     string
+	failRestoreUnit   string
+	applyHook         func(string)
+	reconcileError    error
+	discoverError     error
+	authority         map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
+	authorityError    map[systemdunit.ResourceKind]error
+	resourceChecks    []systemdResourceCheckCall
+	authorityChecks   int
+	authorityHook     func(int)
+	authorityCounts   map[int]int
+	confirmCalls      int
+	confirmHook       func(int)
+	confirmError      error
+	confirmedApplied  []string
+	confirmApplyErr   map[string]error
+	confirmStarted    chan struct{}
+	confirmProceed    chan struct{}
+	closed            bool
+	inventoryCaptures int
+	inventoryDetails  []bool
 }
 
 type systemdPlanCaptureLogger struct {
@@ -160,7 +162,24 @@ func (a *fakeSystemdCPUUnitAdapter) Apply(_ context.Context, identity systemduni
 	return systemdunit.UnitSnapshot{Identity: identity}, nil
 }
 
-func (a *fakeSystemdCPUUnitAdapter) CheckResourceAuthorities(_ context.Context, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
+func (a *fakeSystemdCPUUnitAdapter) CaptureProcessAuthorityInventory(_ context.Context, topology systemdunit.TopologySnapshot, sampleEpochID int64, includeResourceDetail bool) (systemdunit.ProcessAuthorityInventory, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.inventoryCaptures++
+	a.inventoryDetails = append(a.inventoryDetails, includeResourceDetail)
+	observations := make([]systemdunit.ProcessAuthorityObservation, 0, len(topology.Users))
+	for _, user := range topology.Users {
+		observations = append(observations, systemdunit.ProcessAuthorityObservation{
+			UID:               user.UID,
+			Identity:          user.Unit.Identity,
+			CPUCoverage:       true,
+			ResourceAuthority: systemdunit.ResourceAuthority{State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified},
+		})
+	}
+	return systemdunit.NewProcessAuthorityInventory(sampleEpochID, systemdunit.TopologyFingerprint(topology), includeResourceDetail, observations), nil
+}
+
+func (a *fakeSystemdCPUUnitAdapter) CheckCapturedResourceAuthorities(_ context.Context, _ systemdunit.ProcessAuthorityInventory, requests []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.authorityChecks++

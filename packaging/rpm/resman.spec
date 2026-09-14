@@ -11,8 +11,8 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.36.6
-Release: 5%{?dist}
+Version: 1.37.0
+Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -81,8 +81,9 @@ v1.36.3: materialize the I/O controller before probing io.max on systemd 239.
 v1.36.4: verify direct and scaled BFQ weight representations without a vacuous probe.
 v1.36.5: permit verified per-slice I/O controller materialization on systemd 239.
 v1.36.6: permit systemd 239 to enable I/O through an unmaterialized slice ancestor.
+v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and I/O.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.36.6.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.37.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -301,6 +302,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Mon Sep 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.37.0-1
+- Share one frozen process-authority inventory across each decision sample.
+- Preserve live unit, topology, lease, property and effective-kernel confirmation.
+- Document polling and PSI convergence bounds for later process membership.
+
 * Sat Sep 12 2026 Francesco Defilippo <francesco@defilippo.org> - 1.36.6-5
 - Build and publish distinct RPMs for Enterprise Linux 8, 9, and 10.
 - Verify each package identity and its distribution-specific glibc baseline.

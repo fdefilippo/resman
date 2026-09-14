@@ -35,17 +35,42 @@ that every process already below it shares the host PID namespace. A UID split a
 another parent is reported as partial `authority_split` coverage. A rootless-container
 descendant is reported as refused `runtime_owned_descendant` coverage. In both cases
 CPU scheduling may continue, but ResMan does not claim or apply a complete memory or
-I/O policy. If authority is lost after a resource was applied, ResMan restores only
-that resource's owned properties before publishing the refusal; CPU and the other
+I/O policy. If a later decision sample observes that authority was lost, ResMan restores
+only that resource's owned properties before publishing the refusal; CPU and the other
 independently authorized resource remain untouched. Failure to inspect the process set
 or the required controller also refuses that resource before mutation.
 
-One immutable `/proc` observation is shared by every user and both resource checks in
-one reconciliation pass. This keeps the authority decision consistent across memory
-and I/O and prevents inspection cost from multiplying by the number of users. Finite
-memory values are rounded down to the host page size before they are written. The
-systemd readback remains exact, while kernel verification compares the corresponding
-page-normalized value exposed by `memory.high`, `memory.max`, or `memory.swap.max`.
+Each decision sample captures one process-authority inventory over one `/proc`
+traversal. The read is temporally smeared across directory enumeration and per-PID
+operations; it is frozen after capture, but it is not an atomic or instantaneous kernel
+snapshot. CPU coverage and RAM/I/O authority are independent projections of that same
+inventory. CPU-only samples read cgroup membership only for tracked UIDs and never
+inspect PID namespaces. If RAM or I/O may be requested, the capture reads cgroup
+membership for the full process population and the relevant PID namespaces. The
+inventory is bound to both the decision `SampleEpochID` and the complete authoritative
+unit-topology fingerprint. A missing, new, or recreated unit cannot be authorized from
+an old inventory or from an empty observed process set.
+
+Processes and runtime descendants that arrive after capture are classified by the next
+successful decision sample, not by another scan after `Apply`. With polling, the normal
+upper bound is approximately `POLLING_INTERVAL` plus cycle processing. With an active
+PSI watcher, it is the first relevant event or, at latest,
+`PSI_FALLBACK_INTERVAL` plus cycle processing. Failed reconciliation can extend either
+delay, and a process that appears and disappears entirely between samples can remain
+unobserved. During the interval, a new descendant inherits active `memory.high`,
+`memory.max`, `memory.swap.max`, and `io.max` policy from its slice. Any OOM or OOM kill
+that occurs before restoration is irreversible.
+
+After capture, every resource path still performs the remaining persistence/accounting
+work and decision construction before RAM/I/O application. `ACTIVATE_LIMITS` also
+reconciles CPU Points inside `activateSystemdEnforcement`; `MAINTAIN_CURRENT_STATE`
+enters resource reconciliation directly because the pipeline reconciled CPU Points
+before metrics collection and inventory capture. D-Bus unit identity, topology, lease,
+property readback, and effective-kernel verification remain live checks through
+acknowledgement. Finite memory values are rounded down to the host page size before
+they are written. The systemd readback remains exact, while kernel verification compares
+the corresponding page-normalized value exposed by `memory.high`, `memory.max`, or
+`memory.swap.max`.
 
 This conservative rule avoids presenting a leaf-only memory or I/O limit as coverage
 of a workload whose runtime owns a nested resource boundary. It does not provide a

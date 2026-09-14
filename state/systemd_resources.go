@@ -106,6 +106,31 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	ramDesired := desiredResourceUsers(cfg.RAMEnabled, metrics.RAMEligibleUsers)
 	ioDesired := desiredResourceUsers(cfg.IOEnabled, metrics.IOEligibleUsers)
 	desiredUIDs := unionResourceUIDs(ramDesired, ioDesired)
+	var inventory systemdunit.ProcessAuthorityInventory
+	if len(desiredUIDs) > 0 {
+		var inventoryReason systemdunit.ResourceCoverageReason
+		inventory, inventoryReason, err = processAuthorityInventoryForTopology(metrics, topology)
+		if err != nil {
+			var inventoryErrors []error
+			for _, uid := range desiredUIDs {
+				for _, resource := range []systemdunit.ResourceKind{systemdunit.ResourceMemory, systemdunit.ResourceIO} {
+					if resource == systemdunit.ResourceMemory && !ramDesired[uid] || resource == systemdunit.ResourceIO && !ioDesired[uid] {
+						continue
+					}
+					authority := systemdunit.ResourceAuthority{Resource: resource, State: systemdunit.ResourceCoverageRefused, Reason: inventoryReason}
+					recordCycleResourceAuthority(metrics, uid, resource, authority)
+					authorityErr := &systemdunit.ResourceAuthorityError{UID: uint32(uid), Authority: authority, Err: err}
+					if identity, present := units[uid]; present {
+						inventoryErrors = append(inventoryErrors, m.refuseSystemdResource(ctx, uid, identity, resource, authority, authorityErr))
+					} else {
+						m.recordSystemdResourceAuthority(uid, resource, authority)
+						inventoryErrors = append(inventoryErrors, &SystemdResourceReconciliationError{UID: uid, Resource: resource, Step: "authority", Err: authorityErr})
+					}
+				}
+			}
+			return errors.Join(inventoryErrors...)
+		}
+	}
 
 	var ioAssignments []systemdunit.PropertyAssignment
 	if len(ioDesired) > 0 {
@@ -121,6 +146,7 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 		resource    systemdunit.ResourceKind
 		assignments []systemdunit.PropertyAssignment
 		swap        bool
+		authority   systemdunit.ResourceAuthority
 	}
 	planned := make([]plannedResource, 0, len(desiredUIDs)*2)
 	for _, uid := range desiredUIDs {
@@ -154,10 +180,13 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	for index, plan := range planned {
 		requests[index] = systemdunit.ResourceAuthorityRequest{Identity: plan.identity, UID: uint32(plan.uid), Resource: plan.resource, Assignments: plan.assignments}
 	}
-	authorities, err := m.systemdUnits.CheckResourceAuthorities(ctx, requests)
-	if err != nil {
-		invalidateCycleResourceAuthorities(metrics)
-		return fmt.Errorf("inspect systemd resource authority: %w", err)
+	authorities := make([]systemdunit.ResourceAuthorityResult, len(planned))
+	if len(planned) > 0 {
+		authorities, err = m.systemdUnits.CheckCapturedResourceAuthorities(ctx, inventory, requests)
+		if err != nil {
+			invalidateCycleResourceAuthorities(metrics)
+			return fmt.Errorf("inspect systemd resource authority: %w", err)
+		}
 	}
 	if len(authorities) != len(planned) {
 		invalidateCycleResourceAuthorities(metrics)
@@ -187,6 +216,7 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 			reconcileErrors = append(reconcileErrors, err)
 			continue
 		}
+		plan.authority = result.Authority
 		applied = append(applied, plan)
 	}
 
@@ -206,39 +236,13 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 			}
 			readbackConfirmed = append(readbackConfirmed, plan)
 		}
-		confirmedRequests := make([]systemdunit.ResourceAuthorityRequest, len(readbackConfirmed))
-		for index, plan := range readbackConfirmed {
-			confirmedRequests[index] = systemdunit.ResourceAuthorityRequest{Identity: plan.identity, UID: uint32(plan.uid), Resource: plan.resource, Assignments: plan.assignments}
-		}
-		confirmed, err := m.systemdUnits.CheckResourceAuthorities(ctx, confirmedRequests)
-		if err != nil {
-			invalidateCycleResourceAuthorities(metrics)
-			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: %w", err))
-		}
-		if len(confirmed) != len(readbackConfirmed) {
-			invalidateCycleResourceAuthorities(metrics)
-			return errors.Join(errors.Join(reconcileErrors...), fmt.Errorf("confirm systemd resource authority before acknowledgement: adapter returned %d results for %d requests", len(confirmed), len(readbackConfirmed)))
-		}
 		if err := m.systemdUnits.ConfirmTopology(ctx, topology); err != nil {
 			invalidateCycleResourceAuthorities(metrics)
 			return errors.Join(errors.Join(reconcileErrors...), &SystemdResourceReconciliationError{Step: "pre_acknowledgement_identity", Err: err})
 		}
-		for index, plan := range readbackConfirmed {
-			result := confirmed[index]
-			recordCycleResourceAuthority(metrics, plan.uid, plan.resource, result.Authority)
-			if result.Err != nil || result.Authority.State != systemdunit.ResourceCoverageComplete || result.Authority.Reason != systemdunit.ResourceCoverageVerified {
-				if result.Err == nil {
-					result.Err = &systemdunit.ResourceAuthorityError{UID: uint32(plan.uid), Authority: result.Authority, Err: fmt.Errorf("adapter did not reconfirm complete resource authority")}
-				}
-				restoreErr := m.restoreSystemdResource(ctx, plan.uid, plan.identity, plan.resource)
-				m.recordSystemdResourceAuthority(plan.uid, plan.resource, result.Authority)
-				reconcileErrors = append(reconcileErrors,
-					&SystemdResourceReconciliationError{UID: plan.uid, Resource: plan.resource, Step: "pre_acknowledgement_authority", Err: result.Err},
-					restoreErr,
-				)
-				continue
-			}
-			m.publishSystemdResource(plan.uid, plan.identity, plan.resource, plan.swap, result.Authority)
+		for _, plan := range readbackConfirmed {
+			recordCycleResourceAuthority(metrics, plan.uid, plan.resource, plan.authority)
+			m.publishSystemdResource(plan.uid, plan.identity, plan.resource, plan.swap, plan.authority)
 		}
 	}
 
@@ -265,6 +269,28 @@ func (m *Manager) reconcileSystemdResourcesAttempt(ctx context.Context, metrics 
 	m.refreshResourceLimitsActiveLocked(time.Now())
 	m.mu.Unlock()
 	return errors.Join(reconcileErrors...)
+}
+
+func processAuthorityInventoryForTopology(metrics *SystemMetrics, topology systemdunit.TopologySnapshot) (systemdunit.ProcessAuthorityInventory, systemdunit.ResourceCoverageReason, error) {
+	if metrics == nil || metrics.systemdAuthorityInventory == nil {
+		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageInspectionFailed, fmt.Errorf("decision sample has no process-authority inventory")
+	}
+	inventory := *metrics.systemdAuthorityInventory
+	sampleEpochID := metrics.PersistenceSystem.SampleEpochID
+	if sampleEpochID == 0 {
+		sampleEpochID = metrics.Timestamp.UnixNano()
+	}
+	if inventory.SampleEpochID() != sampleEpochID {
+		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageTopologyChanged, fmt.Errorf("process-authority inventory sample epoch %d does not match decision sample %d", inventory.SampleEpochID(), sampleEpochID)
+	}
+	currentFingerprint := persistenceTopologyFingerprint(topology)
+	if inventory.TopologyFingerprint() != currentFingerprint {
+		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageTopologyChanged, fmt.Errorf("systemd topology differs from the process-authority inventory captured for sample %d", sampleEpochID)
+	}
+	if !inventory.HasResourceDetail() {
+		return systemdunit.ProcessAuthorityInventory{}, systemdunit.ResourceCoverageInspectionFailed, fmt.Errorf("decision sample inventory has no RAM/I/O authority detail")
+	}
+	return inventory, "", nil
 }
 
 func initializeCycleResourceAuthorities(metrics *SystemMetrics) {

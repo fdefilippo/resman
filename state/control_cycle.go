@@ -402,6 +402,7 @@ type SystemMetrics struct {
 	CPUPointsUsers                map[int]resmanmetrics.CPUPointsUserSnapshot
 	systemdRAMAuthority           map[int]*systemdunit.ResourceAuthority
 	systemdIOAuthority            map[int]*systemdunit.ResourceAuthority
+	systemdAuthorityInventory     *systemdunit.ProcessAuthorityInventory
 	systemdObservationFailures    []persistenceObservationFailure
 	systemdObservationContext     string
 

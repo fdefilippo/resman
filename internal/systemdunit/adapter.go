@@ -166,7 +166,7 @@ func (a *Adapter) CheckResourceAuthorities(ctx context.Context, requests []Resou
 		prepared = append(prepared, preparedRequest{index: index, request: request, validated: validated, snapshot: snapshot})
 		targets = append(targets, coverageTargetFor(request.UID, snapshot))
 	}
-	inspections := a.coverage.inspectMany(callCtx, targets)
+	inspections := a.coverage.capture(callCtx, targets, true).resources
 	for preparedIndex, item := range prepared {
 		authority := inspections[preparedIndex].authority
 		authority.Resource = item.request.Resource
@@ -178,6 +178,60 @@ func (a *Adapter) CheckResourceAuthorities(ctx context.Context, requests []Resou
 		if err := a.verifier.preflightApply(item.snapshot, item.validated); err != nil {
 			authority = ResourceAuthority{Resource: item.request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
 			results[item.index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: item.request.UID, Authority: authority, Err: err}}
+		}
+	}
+	return results, nil
+}
+
+// CheckCapturedResourceAuthorities confirms resource plans against one frozen
+// process-authority inventory while retaining live unit and kernel preflight checks.
+func (a *Adapter) CheckCapturedResourceAuthorities(ctx context.Context, inventory ProcessAuthorityInventory, requests []ResourceAuthorityRequest) ([]ResourceAuthorityResult, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("check_captured_resource_authorities"); err != nil {
+		return nil, err
+	}
+	results := make([]ResourceAuthorityResult, len(requests))
+	if len(requests) == 0 {
+		return results, nil
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	for index, request := range requests {
+		validated, err := validateResourceAssignments(request.Resource, request.Assignments)
+		if err != nil {
+			results[index].Err = err
+			continue
+		}
+		snapshot, err := a.readUnit(callCtx, request.Identity.Name, request.Identity.ObjectPath)
+		if err == nil {
+			err = requireSameIdentity("check_captured_resource_authorities", request.Identity, snapshot.Identity)
+		}
+		if err != nil {
+			results[index].Err = err
+			continue
+		}
+		if !inventory.HasResourceDetail() {
+			authority := ResourceAuthority{Resource: request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageInspectionFailed}
+			results[index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: fmt.Errorf("sample inventory has no RAM/I/O authority detail")}}
+			continue
+		}
+		observation, found := inventory.observation(request.UID, snapshot.Identity)
+		if !found {
+			authority := ResourceAuthority{Resource: request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageTopologyChanged}
+			results[index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: fmt.Errorf("unit is absent from the sample authority inventory")}}
+			continue
+		}
+		authority := observation.ResourceAuthority
+		authority.Resource = request.Resource
+		results[index].Authority = authority
+		if observation.ResourceError != nil || authority.State != ResourceCoverageComplete {
+			results[index].Err = &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: observation.ResourceError}
+			continue
+		}
+		if err := a.verifier.preflightApply(snapshot, validated); err != nil {
+			authority = ResourceAuthority{Resource: request.Resource, State: ResourceCoverageRefused, Reason: ResourceCoverageControllerMissing}
+			results[index] = ResourceAuthorityResult{Authority: authority, Err: &ResourceAuthorityError{UID: request.UID, Authority: authority, Err: err}}
 		}
 	}
 	return results, nil

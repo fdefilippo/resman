@@ -282,6 +282,27 @@ A UID split across parents has partial CPU coverage. Memory and I/O require comp
 independent authority; authority_split and runtime_owned_descendant trigger release
 of the affected resource's owned properties while preserving CPU scheduling.
 
+One typed process-authority inventory is captured per decision sample over one `/proc`
+traversal and bound to both `SampleEpochID` and the complete topology fingerprint. The
+directory and per-PID reads span an interval; the inventory is frozen after capture,
+not atomic. CPU-only capture reads cgroup membership only for tracked UIDs and avoids
+PID namespaces. A sample that may request RAM or I/O collects all-process cgroup and
+relevant PID-namespace detail once. `Apply` and `ConfirmApplied` reuse the captured
+classification while retaining live unit-identity, topology, lease, D-Bus property and
+effective-kernel checks. A new, missing or recreated unit cannot be approved from an
+old inventory or an empty process set.
+
+Membership arriving later converges on the next successful sample: approximately
+`POLLING_INTERVAL` plus cycle processing in polling mode, or the first relevant PSI
+event and no later than `PSI_FALLBACK_INTERVAL` plus cycle processing with an active
+watcher. Failed reconciliation extends that delay, and a process may appear and vanish
+between samples without observation. A late descendant inherits active `memory.high`,
+`memory.max`, `memory.swap.max`, and `io.max`; an intervening OOM or OOM kill is
+irreversible. After capture, all paths complete persistence/accounting and decision
+construction. `ACTIVATE_LIMITS` additionally reconciles CPU Points before RAM/I/O
+application; `MAINTAIN_CURRENT_STATE` enters resource reconciliation directly because
+the pipeline CPU stage preceded collection.
+
 Runtime-property ownership and crash recovery use the durable private journal in
 [SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). Startup reclaims exact
 footprints; release compares before restoring and guarded unit-file cleanup never
@@ -1466,7 +1487,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.36.6-5'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.37.0-1'" -o resman .
 ```
 
 **Build RPM:**

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,6 +39,7 @@ const (
 	ResourceCoverageInspectionFailed  ResourceCoverageReason = "inspection_unavailable"
 	ResourceCoverageControllerMissing ResourceCoverageReason = "controller_unavailable"
 	ResourceCoverageApplyFailed       ResourceCoverageReason = "apply_failed"
+	ResourceCoverageTopologyChanged   ResourceCoverageReason = "sample_topology_changed"
 )
 
 // ResourceAuthority records one complete, partial or refused authority decision.
@@ -47,79 +49,118 @@ type ResourceAuthority struct {
 	Reason   ResourceCoverageReason
 }
 
-// ObserveCPUCoverage checks UID-wide membership without excluding rootless
-// descendants: CPU authority covers the entire user slice, including containers.
-func (a *Adapter) ObserveCPUCoverage(ctx context.Context, topology TopologySnapshot) (map[uint32]bool, error) {
+// ProcessAuthorityObservation freezes the CPU and optional RAM/I/O authority
+// classification for one user slice captured during a decision sample.
+type ProcessAuthorityObservation struct {
+	UID               uint32
+	Identity          UnitIdentity
+	CPUCoverage       bool
+	ResourceAuthority ResourceAuthority
+	ResourceError     error
+}
+
+// ProcessAuthorityInventory is one sample-scoped process-membership view. Its
+// observations are collected over one /proc traversal and are frozen afterward.
+type ProcessAuthorityInventory struct {
+	sampleEpochID       int64
+	topologyFingerprint string
+	resourceDetail      bool
+	observations        []ProcessAuthorityObservation
+}
+
+// NewProcessAuthorityInventory builds a defensive copy of a captured inventory.
+func NewProcessAuthorityInventory(sampleEpochID int64, topologyFingerprint string, resourceDetail bool, observations []ProcessAuthorityObservation) ProcessAuthorityInventory {
+	return ProcessAuthorityInventory{
+		sampleEpochID:       sampleEpochID,
+		topologyFingerprint: topologyFingerprint,
+		resourceDetail:      resourceDetail,
+		observations:        append([]ProcessAuthorityObservation(nil), observations...),
+	}
+}
+
+// SampleEpochID returns the decision sample that owns the inventory.
+func (i ProcessAuthorityInventory) SampleEpochID() int64 { return i.sampleEpochID }
+
+// TopologyFingerprint returns the authoritative unit topology captured with the inventory.
+func (i ProcessAuthorityInventory) TopologyFingerprint() string { return i.topologyFingerprint }
+
+// HasResourceDetail reports whether RAM/I/O membership data was captured.
+func (i ProcessAuthorityInventory) HasResourceDetail() bool { return i.resourceDetail }
+
+// CPUCoverage returns a detached UID-wide CPU coverage projection.
+func (i ProcessAuthorityInventory) CPUCoverage() map[uint32]bool {
+	result := make(map[uint32]bool, len(i.observations))
+	for _, observation := range i.observations {
+		result[observation.UID] = observation.CPUCoverage
+	}
+	return result
+}
+
+func (i ProcessAuthorityInventory) observation(uid uint32, identity UnitIdentity) (ProcessAuthorityObservation, bool) {
+	for _, observation := range i.observations {
+		if observation.UID == uid && observation.Identity == identity {
+			return observation, true
+		}
+	}
+	return ProcessAuthorityObservation{}, false
+}
+
+// TopologyFingerprint identifies the complete authoritative systemd topology.
+func TopologyFingerprint(topology TopologySnapshot) string {
+	identityKey := func(identity UnitIdentity) string {
+		return fmt.Sprintf("%s:%s:%d", identity.Name, identity.InvocationIDString(), identity.ControlGroupID)
+	}
+	parts := make([]string, 0, len(topology.Users)+1)
+	parts = append(parts, "parent:"+identityKey(topology.Parent.Identity))
+	for _, user := range topology.Users {
+		parts = append(parts, fmt.Sprintf("uid:%d:%s", user.UID, identityKey(user.Unit.Identity)))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
+}
+
+// CaptureProcessAuthorityInventory observes CPU coverage and optional RAM/I/O
+// authority from one process-population traversal for a decision sample.
+func (a *Adapter) CaptureProcessAuthorityInventory(ctx context.Context, topology TopologySnapshot, sampleEpochID int64, includeResourceDetail bool) (ProcessAuthorityInventory, error) {
 	leave := a.opGate.Enter()
 	defer leave()
-	if err := a.requireOpen("observe_cpu_coverage"); err != nil {
-		return nil, err
+	if err := a.requireOpen("capture_process_authority_inventory"); err != nil {
+		return ProcessAuthorityInventory{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	inspector, ok := a.coverage.(procCoverageInspector)
-	if !ok {
-		return nil, fmt.Errorf("CPU coverage inspector is unavailable")
-	}
 	targets := make([]resourceCoverageTarget, 0, len(topology.Users))
 	for _, user := range topology.Users {
 		targets = append(targets, coverageTargetFor(user.UID, user.Unit))
 	}
-	return inspector.observeCPU(ctx, targets)
+	captured := a.coverage.capture(callCtx, targets, includeResourceDetail)
+	if captured.err != nil {
+		return ProcessAuthorityInventory{}, captured.err
+	}
+	observations := make([]ProcessAuthorityObservation, len(targets))
+	for index, target := range targets {
+		observations[index] = ProcessAuthorityObservation{UID: target.uid, Identity: topology.Users[index].Unit.Identity, CPUCoverage: captured.cpuCoverage[target.uid]}
+		if includeResourceDetail {
+			observations[index].ResourceAuthority = captured.resources[index].authority
+			observations[index].ResourceError = captured.resources[index].err
+		}
+	}
+	return NewProcessAuthorityInventory(sampleEpochID, TopologyFingerprint(topology), includeResourceDetail, observations), nil
+}
+
+// ObserveCPUCoverage checks UID-wide membership without excluding rootless
+// descendants: CPU authority covers the entire user slice, including containers.
+func (a *Adapter) ObserveCPUCoverage(ctx context.Context, topology TopologySnapshot) (map[uint32]bool, error) {
+	inventory, err := a.CaptureProcessAuthorityInventory(ctx, topology, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return inventory.CPUCoverage(), nil
 }
 
 func (i procCoverageInspector) observeCPU(ctx context.Context, targets []resourceCoverageTarget) (map[uint32]bool, error) {
-	result := make(map[uint32]bool, len(targets))
-	paths := make(map[uint32]string, len(targets))
-	for _, target := range targets {
-		result[target.uid] = true
-		paths[target.uid] = target.controlGroup
-	}
-	entries, err := i.readDir(i.root)
-	if err != nil {
-		return nil, fmt.Errorf("scan CPU authority: %w", err)
-	}
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if _, err := strconv.ParseUint(entry.Name(), 10, 32); err != nil {
-			continue
-		}
-		path := filepath.Join(i.root, entry.Name())
-		info, err := i.stat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect CPU authority process: %w", err)
-		}
-		uid := i.ownerUID(info)
-		parent, tracked := paths[uid]
-		if !tracked {
-			continue
-		}
-		data, err := i.readFile(filepath.Join(path, "cgroup"))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read CPU authority process: %w", err)
-		}
-		member := ""
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "0::") {
-				member = strings.TrimPrefix(line, "0::")
-			}
-		}
-		if member == "" {
-			return nil, fmt.Errorf("CPU authority process has no unified cgroup")
-		}
-		if member != parent && !strings.HasPrefix(member, strings.TrimSuffix(parent, "/")+"/") {
-			result[uid] = false
-		}
-	}
-	return result, nil
+	captured := i.capture(ctx, targets, false)
+	return captured.cpuCoverage, captured.err
 }
 
 // ResourceAuthorityRequest describes one resource-specific authority check.
@@ -155,7 +196,7 @@ func (e *ResourceAuthorityError) Error() string {
 func (e *ResourceAuthorityError) Unwrap() error { return e.Err }
 
 type resourceCoverageInspector interface {
-	inspectMany(context.Context, []resourceCoverageTarget) []resourceCoverageInspection
+	capture(context.Context, []resourceCoverageTarget, bool) processAuthorityCapture
 }
 
 type resourceCoverageTarget struct {
@@ -166,6 +207,12 @@ type resourceCoverageTarget struct {
 type resourceCoverageInspection struct {
 	authority ResourceAuthority
 	err       error
+}
+
+type processAuthorityCapture struct {
+	cpuCoverage map[uint32]bool
+	resources   []resourceCoverageInspection
+	err         error
 }
 
 func coverageTargetFor(uid uint32, snapshot UnitSnapshot) resourceCoverageTarget {
@@ -193,22 +240,36 @@ func (i procCoverageInspector) inspect(ctx context.Context, uid uint32, controlG
 }
 
 func (i procCoverageInspector) inspectMany(ctx context.Context, targets []resourceCoverageTarget) []resourceCoverageInspection {
-	results := make([]resourceCoverageInspection, len(targets))
-	for index := range results {
-		results[index].authority = ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}
+	return i.capture(ctx, targets, true).resources
+}
+
+func (i procCoverageInspector) capture(ctx context.Context, targets []resourceCoverageTarget, includeResourceDetail bool) processAuthorityCapture {
+	if !includeResourceDetail {
+		return i.captureCPUOnly(ctx, targets)
 	}
-	refuseAll := func(reason ResourceCoverageReason, err error) []resourceCoverageInspection {
-		for index := range results {
-			results[index].authority, results[index].err = refusedAuthority(reason, err)
+	captured := processAuthorityCapture{
+		cpuCoverage: make(map[uint32]bool, len(targets)),
+		resources:   make([]resourceCoverageInspection, len(targets)),
+	}
+	paths := make(map[uint32]string, len(targets))
+	for index, target := range targets {
+		captured.cpuCoverage[target.uid] = true
+		paths[target.uid] = target.controlGroup
+		captured.resources[index].authority = ResourceAuthority{State: ResourceCoverageComplete, Reason: ResourceCoverageVerified}
+	}
+	refuseAll := func(reason ResourceCoverageReason, err error) processAuthorityCapture {
+		captured.err = err
+		for index := range captured.resources {
+			captured.resources[index].authority, captured.resources[index].err = refusedAuthority(reason, err)
 		}
-		return results
+		return captured
 	}
 	if len(targets) == 0 {
-		return results
+		return captured
 	}
 	entries, err := i.readDir(i.root)
 	if err != nil {
-		return refuseAll(ResourceCoverageInspectionFailed, err)
+		return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("scan process authority: %w", err))
 	}
 	hostNamespace, err := i.stat(filepath.Join(i.root, "1", "ns", "pid"))
 	if err != nil {
@@ -230,6 +291,12 @@ func (i procCoverageInspector) inspectMany(ctx context.Context, targets []resour
 		if err != nil {
 			return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d: %w", pid, err))
 		}
+		ownerUID := i.ownerUID
+		if ownerUID == nil {
+			ownerUID = processOwnerUID
+		}
+		uid := ownerUID(processInfo)
+		parent, tracked := paths[uid]
 		processCgroup, err := readUnifiedProcessCgroup(i.readFile, filepath.Join(processRoot, "cgroup"))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -237,26 +304,24 @@ func (i procCoverageInspector) inspectMany(ctx context.Context, targets []resour
 		if err != nil {
 			return refuseAll(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d cgroup: %w", pid, err))
 		}
-		ownerUID := i.ownerUID
-		if ownerUID == nil {
-			ownerUID = processOwnerUID
+		if tracked && !controlGroupContains(parent, processCgroup) {
+			captured.cpuCoverage[uid] = false
 		}
-		uid := ownerUID(processInfo)
 		var processNamespace os.FileInfo
 		var namespaceErr error
 		namespaceRead := false
 		for index, target := range targets {
-			if results[index].authority.State != ResourceCoverageComplete {
+			if captured.resources[index].authority.State != ResourceCoverageComplete {
 				continue
 			}
 			if !controlGroupContains(target.controlGroup, processCgroup) {
 				if uid == target.uid {
-					results[index].authority = ResourceAuthority{State: ResourceCoveragePartial, Reason: ResourceCoverageAuthoritySplit}
+					captured.resources[index].authority = ResourceAuthority{State: ResourceCoveragePartial, Reason: ResourceCoverageAuthoritySplit}
 				}
 				continue
 			}
 			if runtimeOwnedCgroupPath(processCgroup) {
-				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
+				captured.resources[index].authority, captured.resources[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
 				continue
 			}
 			if !namespaceRead {
@@ -267,15 +332,69 @@ func (i procCoverageInspector) inspectMany(ctx context.Context, targets []resour
 				continue
 			}
 			if namespaceErr != nil {
-				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d PID namespace: %w", pid, namespaceErr))
+				captured.resources[index].authority, captured.resources[index].err = refusedAuthority(ResourceCoverageInspectionFailed, fmt.Errorf("inspect process %d PID namespace: %w", pid, namespaceErr))
 				continue
 			}
 			if !os.SameFile(hostNamespace, processNamespace) {
-				results[index].authority, results[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
+				captured.resources[index].authority, captured.resources[index].err = refusedAuthority(ResourceCoverageRuntimeDescendant, nil)
 			}
 		}
 	}
-	return results
+	return captured
+}
+
+func (i procCoverageInspector) captureCPUOnly(ctx context.Context, targets []resourceCoverageTarget) processAuthorityCapture {
+	result := make(map[uint32]bool, len(targets))
+	paths := make(map[uint32]string, len(targets))
+	for _, target := range targets {
+		result[target.uid] = true
+		paths[target.uid] = target.controlGroup
+	}
+	entries, err := i.readDir(i.root)
+	if err != nil {
+		return processAuthorityCapture{cpuCoverage: result, err: fmt.Errorf("scan CPU authority: %w", err)}
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return processAuthorityCapture{cpuCoverage: result, err: err}
+		}
+		if _, err := strconv.ParseUint(entry.Name(), 10, 32); err != nil {
+			continue
+		}
+		path := filepath.Join(i.root, entry.Name())
+		info, err := i.stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return processAuthorityCapture{cpuCoverage: result, err: fmt.Errorf("inspect CPU authority process: %w", err)}
+		}
+		uid := i.ownerUID(info)
+		parent, tracked := paths[uid]
+		if !tracked {
+			continue
+		}
+		data, err := i.readFile(filepath.Join(path, "cgroup"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return processAuthorityCapture{cpuCoverage: result, err: fmt.Errorf("read CPU authority process: %w", err)}
+		}
+		member := ""
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "0::") {
+				member = strings.TrimPrefix(line, "0::")
+			}
+		}
+		if member == "" {
+			return processAuthorityCapture{cpuCoverage: result, err: fmt.Errorf("CPU authority process has no unified cgroup")}
+		}
+		if member != parent && !strings.HasPrefix(member, strings.TrimSuffix(parent, "/")+"/") {
+			result[uid] = false
+		}
+	}
+	return processAuthorityCapture{cpuCoverage: result}
 }
 
 func runtimeOwnedCgroupPath(path string) bool {

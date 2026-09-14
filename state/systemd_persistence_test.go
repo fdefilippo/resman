@@ -31,8 +31,49 @@ func (a *accountingSystemdAdapter) ObserveAccounting(_ context.Context, identity
 	}
 	return a.values[identity.Name], nil
 }
-func (a *accountingSystemdAdapter) ObserveCPUCoverage(context.Context, systemdunit.TopologySnapshot) (map[uint32]bool, error) {
-	return a.coverage, a.coverageError
+func (a *accountingSystemdAdapter) CaptureProcessAuthorityInventory(_ context.Context, topology systemdunit.TopologySnapshot, sampleEpochID int64, includeResourceDetail bool) (systemdunit.ProcessAuthorityInventory, error) {
+	a.inventoryCaptures++
+	a.inventoryDetails = append(a.inventoryDetails, includeResourceDetail)
+	if a.coverageError != nil {
+		return systemdunit.ProcessAuthorityInventory{}, a.coverageError
+	}
+	observations := make([]systemdunit.ProcessAuthorityObservation, 0, len(topology.Users))
+	for _, user := range topology.Users {
+		observations = append(observations, systemdunit.ProcessAuthorityObservation{
+			UID:               user.UID,
+			Identity:          user.Unit.Identity,
+			CPUCoverage:       a.coverage[user.UID],
+			ResourceAuthority: systemdunit.ResourceAuthority{State: systemdunit.ResourceCoverageComplete, Reason: systemdunit.ResourceCoverageVerified},
+		})
+	}
+	return systemdunit.NewProcessAuthorityInventory(sampleEpochID, systemdunit.TopologyFingerprint(topology), includeResourceDetail, observations), nil
+}
+
+func TestSystemdPersistenceCapturesOneCostAwareInventoryPerSample(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		resourceEnabled    bool
+		wantResourceDetail bool
+	}{
+		{name: "CPU only"},
+		{name: "RAM requested", resourceEnabled: true, wantResourceDetail: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, adapter := accountingManager(t)
+			manager.cfg.RAMEnabled = test.resourceEnabled
+			sample := persistenceSample(time.Now().UTC())
+			if test.resourceEnabled {
+				sample.RAMEligibleUsers = []int{1000}
+			}
+			manager.collectPersistenceInterval(sample)
+			if adapter.inventoryCaptures != 1 || len(adapter.inventoryDetails) != 1 || adapter.inventoryDetails[0] != test.wantResourceDetail {
+				t.Fatalf("inventory captures=%d details=%v, want one detail=%t", adapter.inventoryCaptures, adapter.inventoryDetails, test.wantResourceDetail)
+			}
+			if sample.systemdAuthorityInventory == nil || sample.systemdAuthorityInventory.SampleEpochID() != sample.Timestamp.UnixNano() {
+				t.Fatalf("sample inventory = %+v, want matching sample epoch", sample.systemdAuthorityInventory)
+			}
+		})
+	}
 }
 
 type persistenceObservationLogger struct {
