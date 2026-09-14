@@ -81,7 +81,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
-.PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu
+.PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu
 
 .PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
@@ -241,6 +241,14 @@ test-functional-systemd239-unit:
 # Qualify an exact EL8 RPM inside a disposable QEMU guest on terra.
 test-functional-systemd239-qemu:
 	test/functional/systemd239/remote-qemu.sh "$(RESMAN_EL8_QEMU_HOST)" "$(RESMAN_EL8_RPM)" "$(RESMAN_EL8_RPM_MANIFEST)"
+
+# Exercise the IODeviceWeight platform-characterization harness without KVM.
+test-functional-io-device-weight-unit:
+	test/functional/io-device-weight/host_test.sh
+
+# Characterize IODeviceWeight on the pinned EL8, EL9, and EL10 QEMU matrix.
+test-functional-io-device-weight-qemu:
+	test/functional/io-device-weight/remote-qemu.sh "$(RESMAN_IODEVICEWEIGHT_QEMU_HOST)"
 
 # Run current-revision evidence on an explicitly selected disposable real-kernel host.
 test-functional-real-kernel-psi:
@@ -679,6 +687,8 @@ help:
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
 	@echo "    test-functional-systemd239-unit - Test the EL8/systemd 239 QEMU harness"
 	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
+	@echo "    test-functional-io-device-weight-unit - Test the IODeviceWeight QEMU harness"
+	@echo "    test-functional-io-device-weight-qemu - Characterize IODeviceWeight on EL8/EL9/EL10"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-cpu-points - Prove CPU Points on RESMAN_REAL_KERNEL_HOST"
