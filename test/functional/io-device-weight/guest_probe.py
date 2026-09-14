@@ -160,6 +160,8 @@ class Probe:
         names = self.command("lsblk", "-nrpo", "NAME", str(resolved)).stdout.splitlines()
         if names != [str(resolved)]:
             raise Blocked("the dedicated probe device has dependent block devices")
+        if self.command("lsblk", "-nrpo", "MOUNTPOINT", str(resolved)).stdout.strip():
+            raise Blocked("the dedicated probe device or a dependent device is mounted")
         self.device = resolved
         self.block = Path("/sys/class/block") / resolved.name
         self.dev = optional_text(self.block / "dev")

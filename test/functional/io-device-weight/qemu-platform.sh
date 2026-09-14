@@ -178,7 +178,7 @@ guest 'uname -r' >"$evidence_dir/initial-boot/kernel.txt"
 guest 'cat /proc/cmdline' >"$evidence_dir/initial-boot/cmdline.txt"
 guest 'cat /proc/sys/kernel/random/boot_id' >"$evidence_dir/initial-boot/boot-id.txt"
 guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/initial-boot/cgroup-filesystem.txt"
-guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINTS,SERIAL' >"$evidence_dir/initial-boot/block-devices.txt"
+guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINT,SERIAL' >"$evidence_dir/initial-boot/block-devices.txt"
 guest 'dnf install -y python3 util-linux systemd-udev' >"$evidence_dir/provision.log"
 
 if [[ $(<"$evidence_dir/initial-boot/cgroup-filesystem.txt") != cgroup2fs ]]; then
@@ -206,7 +206,7 @@ guest 'cat /proc/cmdline' >"$evidence_dir/qualified-boot/cmdline.txt"
 guest 'cat /proc/sys/kernel/random/boot_id' >"$evidence_dir/qualified-boot/boot-id.txt"
 guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/qualified-boot/cgroup-filesystem.txt"
 guest 'cat /sys/fs/cgroup/cgroup.controllers' >"$evidence_dir/qualified-boot/controllers.txt"
-guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINTS,SERIAL' >"$evidence_dir/qualified-boot/block-devices.txt"
+guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINT,SERIAL' >"$evidence_dir/qualified-boot/block-devices.txt"
 [[ $(<"$evidence_dir/qualified-boot/cgroup-filesystem.txt") == cgroup2fs ]] \
 	|| { echo "$platform qualified boot is not cgroup v2" >&2; exit 77; }
 grep -q "$serial" "$evidence_dir/qualified-boot/block-devices.txt" \
