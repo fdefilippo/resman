@@ -60,21 +60,30 @@ guest() {
 }
 
 wait_for_guest() {
-	local candidate
+	local candidate stable=0
 	for _ in $(seq 1 150); do
 		candidate=$(virsh domifaddr "$vm_name" --source lease 2>/dev/null \
 			| awk '/ipv4/ {sub("/.*", "", $4); print $4; exit}')
 		if [[ -z $candidate ]]; then
+			stable=0
 			sleep 2
 			continue
 		fi
 		ssh-keyscan -T 2 -H "$candidate" >"$known_hosts.tmp" 2>/dev/null || {
+			stable=0
 			sleep 2
 			continue
 		}
 		mv "$known_hosts.tmp" "$known_hosts"
 		address=$candidate
-		guest true 2>/dev/null && return 0
+		if guest true 2>/dev/null; then
+			stable=$((stable + 1))
+			if [[ $stable -ge 3 ]]; then
+				return 0
+			fi
+		else
+			stable=0
+		fi
 		sleep 2
 	done
 	return 1
