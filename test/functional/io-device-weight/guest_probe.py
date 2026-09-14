@@ -111,7 +111,7 @@ class Probe:
             json.dumps(self.record, indent=2, sort_keys=True) + "\n")
 
     def command(self, *args, check=True, timeout=45):
-        result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
+        result = subprocess.run(args, universal_newlines=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=timeout, check=False)
         with (self.evidence / "commands.jsonl").open("a") as log:
             log.write(json.dumps({"argv": list(args), "exit_code": result.returncode,
