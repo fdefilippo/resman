@@ -129,6 +129,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	$(MAKE) test-functional-final-unit
 	$(MAKE) test-functional-real-kernel-unit
 	$(MAKE) test-functional-systemd239-unit
+	$(MAKE) test-functional-io-device-weight-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
