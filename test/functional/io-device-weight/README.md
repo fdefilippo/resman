@@ -2,9 +2,9 @@
 
 This test-only campaign resolves `resman-nq6.40.6` before the weighted-I/O
 operator contract selects any production mechanism. It measures the complete
-systemd-to-kernel `IODeviceWeight` path on representative Oracle Linux 8, 9 and
-10 guests. It does not run ResMan, implement daemon policy, or claim throughput
-delivery.
+systemd-to-kernel `IODeviceWeight` path on three exact Oracle Linux plus UEK
+guest combinations. It does not characterize EL8, EL9, or EL10 kernel families
+in general, run ResMan, implement daemon policy, or claim throughput delivery.
 
 Each guest is a fresh overlay of an immutable Oracle KVM image with a second,
 512 MiB disposable virtio block device. The probe device has no filesystem,
@@ -25,7 +25,7 @@ control-file write, and cleanup state.
 
 ## Outcome model
 
-Every BFQ, io.cost, and simultaneous-mechanism row is one of:
+Every BFQ and io.cost row is one of:
 
 - `SUPPORTED`: the valid representative exposed the complete measured path;
 - `UNSUPPORTED`: the valid representative demonstrated a technical limitation;
@@ -33,24 +33,36 @@ Every BFQ, io.cost, and simultaneous-mechanism row is one of:
   not a platform capability result, and cannot be published as support or lack
   of support.
 
-An `UNSUPPORTED` result is useful evidence and never restricts a later
-distribution. When BFQ and io.cost are active on the same owned device, the
-harness records both footprints but labels the policy state
+The simultaneous characterization additionally uses `NOT_APPLICABLE` when BFQ
+and io.cost did not both pass individually and no simultaneous phase ran. This
+is not evidence that the combined path is technically unsupported.
+
+An `UNSUPPORTED` result is useful evidence for the exact listed distribution,
+systemd, kernel family/version, and mechanism. It never restricts another kernel
+family or later distribution. When BFQ and io.cost are active on the same owned
+device, the harness records both footprints but labels the policy state
 `mechanism_ambiguous`; it does not infer precedence or double application.
 
 ## Pinned representatives
 
-| Platform | Oracle image | SHA-256 |
+| Tested pair | Oracle image | SHA-256 |
 |---|---|---|
-| EL8 | `OL8U10_x86_64-kvm-b287.qcow2` | `cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c` |
-| EL9 | `OL9U8_x86_64-kvm-b293.qcow2` | `b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b` |
-| EL10 | `OL10U1_x86_64-kvm-b291.qcow2` | `8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f` |
+| OL8/UEK | `OL8U10_x86_64-kvm-b287.qcow2` | `cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c` |
+| OL9/UEK | `OL9U8_x86_64-kvm-b293.qcow2` | `b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b` |
+| OL10/UEK | `OL10U1_x86_64-kvm-b291.qcow2` | `8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f` |
+
+The exact kernel package is retained in each result and in the published table.
+No RHCK representative was run, so RHEL, Rocky Linux, AlmaLinux, and Oracle Linux
+with RHCK remain uncharacterized.
 
 EL9 and EL10 boot cgroup v2 by default. The EL8 runner records its initial
 hierarchy, enables `systemd.unified_cgroup_hierarchy=1` through the image's BLS
 configuration, records the changed boot state, and proves a distinct qualified
 boot before running the probe. A container is never accepted as kernel-version
 evidence.
+
+All guest probes require cgroup v2. PSI is not enabled by the harness, is not a
+prerequisite for `IODeviceWeight`, and is not qualified by this campaign.
 
 ## Execution
 

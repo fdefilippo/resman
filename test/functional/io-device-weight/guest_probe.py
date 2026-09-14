@@ -16,7 +16,15 @@ import time
 
 
 WEIGHT = 333
-OUTCOMES = frozenset({"SUPPORTED", "UNSUPPORTED"})
+OUTCOMES = frozenset({"SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE"})
+
+REASON_SYSTEMD_PROPERTY_UNAVAILABLE = "systemd_property_unavailable"
+REASON_SYSTEMD_REQUEST_REJECTED = "systemd_request_rejected"
+REASON_BFQ_SCHEDULER_UNAVAILABLE = "bfq_scheduler_unavailable"
+REASON_BFQ_WEIGHT_NOT_APPLIED = "bfq_device_weight_not_applied"
+REASON_IOCOST_INTERFACE_UNAVAILABLE = "iocost_interface_unavailable"
+REASON_IOCOST_WEIGHT_NOT_APPLIED = "iocost_device_weight_not_applied"
+REASON_MECHANISM_PREREQUISITE_UNAVAILABLE = "mechanism_prerequisite_unavailable"
 
 
 class Blocked(RuntimeError):
@@ -96,7 +104,7 @@ class Probe:
         self.cgroup = None
         self.object_path = None
         self.record = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scope": "test-only-systemd-iodeviceweight-platform-characterization",
             "platform": platform,
             "run_id": run_id,
@@ -338,12 +346,14 @@ class Probe:
         if self.record["dbus"]["property_signature"] != "a(st)":
             self.record["transport"] = {
                 "outcome": "UNSUPPORTED",
+                "reason_code": REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
                 "reason": "systemd does not expose IODeviceWeight with signature a(st)",
             }
             return
         phase = self.property_phase("transport")
         if phase["request_exit_code"] != 0:
             phase.update(outcome="UNSUPPORTED",
+                         reason_code=REASON_SYSTEMD_REQUEST_REJECTED,
                          reason="systemd rejected the IODeviceWeight D-Bus request")
         elif phase["reset_exit_code"] != 0:
             raise RuntimeError("systemd accepted IODeviceWeight but rejected its exact reset")
@@ -371,20 +381,21 @@ class Probe:
         qos = Path("/sys/fs/cgroup/io.cost.qos")
         model = Path("/sys/fs/cgroup/io.cost.model")
         if not qos.is_file() or not model.is_file():
-            return False, "kernel does not expose root io.cost.qos and io.cost.model"
+            return (False, REASON_IOCOST_INTERFACE_UNAVAILABLE,
+                    "kernel does not expose root io.cost.qos and io.cost.model")
         initial = keyed_line(optional_text(qos), self.dev)
         if initial is not None and "enable=1" in initial.split()[1:]:
             raise Blocked("owned device unexpectedly has a pre-enabled io.cost policy")
         try:
             write = self.write_control(qos, self.dev + " enable=1 ctrl=auto\n")
         except RuntimeError as error:
-            return False, str(error)
+            raise Blocked("io.cost activation could not be characterized: " + str(error))
         self.iocost_touched = True
         active = keyed_line(optional_text(qos), self.dev)
         if active is None or "enable=1" not in active.split()[1:]:
-            return False, "kernel did not acknowledge io.cost enable=1"
+            raise Blocked("kernel did not acknowledge io.cost enable=1")
         self.record.setdefault("io_cost_writes", []).append(write)
-        return True, "root io.cost policy enabled on the owned device"
+        return True, None, "root io.cost policy enabled on the owned device"
 
     def disable_iocost(self):
         if not self.iocost_touched:
@@ -397,14 +408,19 @@ class Probe:
         self.record.setdefault("io_cost_writes", []).append(write)
         self.iocost_touched = False
 
-    def row(self, mechanism, ready, reason, phase=None):
-        row = {"mechanism": mechanism, "outcome": "UNSUPPORTED", "reason": reason}
+    def row(self, mechanism, ready, reason_code, reason, phase=None):
+        outcome = ("NOT_APPLICABLE" if mechanism == "simultaneous" and
+                   reason_code == REASON_MECHANISM_PREREQUISITE_UNAVAILABLE else
+                   "UNSUPPORTED")
+        row = {"mechanism": mechanism, "outcome": outcome,
+               "reason_code": reason_code, "reason": reason}
         if phase is not None:
             row["phase"] = phase
         if not ready:
             self.record["rows"][mechanism] = row
             return row
         if phase["request_exit_code"] != 0:
+            row["reason_code"] = REASON_SYSTEMD_REQUEST_REJECTED
             row["reason"] = "systemd rejected IODeviceWeight while the mechanism was active"
         elif phase["reset_exit_code"] != 0:
             raise RuntimeError("systemd could not reset IODeviceWeight for " + mechanism)
@@ -413,7 +429,9 @@ class Probe:
             if weight == bfq_weight(WEIGHT):
                 row.update(outcome="SUPPORTED", reason="active BFQ read the systemd per-device weight",
                            observed_weight=weight, expected_weight=bfq_weight(WEIGHT))
+                row.pop("reason_code")
             else:
+                row["reason_code"] = REASON_BFQ_WEIGHT_NOT_APPLIED
                 row["reason"] = "active BFQ did not expose the expected per-device weight"
         elif mechanism == "iocost":
             weight = keyed_weight(phase["during"]["kernel"]["io.weight"], self.dev)
@@ -421,12 +439,15 @@ class Probe:
             if weight == WEIGHT and qos and "enable=1" in qos.split()[1:]:
                 row.update(outcome="SUPPORTED", reason="active io.cost read the systemd per-device weight",
                            observed_weight=weight, expected_weight=WEIGHT)
+                row.pop("reason_code")
             else:
+                row["reason_code"] = REASON_IOCOST_WEIGHT_NOT_APPLIED
                 row["reason"] = "active io.cost did not expose the expected per-device weight"
         else:
             row.update(outcome="SUPPORTED",
                        reason="BFQ and io.cost were active for the same owned device",
                        policy_status="mechanism_ambiguous")
+            row.pop("reason_code")
         self.record["rows"][mechanism] = row
         return row
 
@@ -434,29 +455,39 @@ class Probe:
         self.transport_probe()
         if self.record["transport"]["outcome"] != "SUPPORTED":
             reason = self.record["transport"]["reason"]
+            reason_code = self.record["transport"]["reason_code"]
             for mechanism in ("bfq", "iocost", "simultaneous"):
-                self.row(mechanism, False, reason)
+                if mechanism == "simultaneous":
+                    self.row(mechanism, False, REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+                             "BFQ and io.cost did not both pass their individual systemd-to-kernel paths")
+                else:
+                    self.row(mechanism, False, reason_code, reason)
             return
 
         bfq_ready = self.select_scheduler("bfq")
         bfq_phase = self.property_phase("bfq") if bfq_ready else None
-        bfq_row = self.row("bfq", bfq_ready, "BFQ is unavailable on the owned virtual device", bfq_phase)
+        bfq_row = self.row("bfq", bfq_ready, REASON_BFQ_SCHEDULER_UNAVAILABLE,
+                           "BFQ is unavailable on the owned virtual device", bfq_phase)
         self.select_scheduler(self.initial_scheduler)
 
-        iocost_ready, iocost_reason = self.prepare_iocost()
+        iocost_ready, iocost_reason_code, iocost_reason = self.prepare_iocost()
         iocost_phase = self.property_phase("iocost") if iocost_ready else None
-        iocost_row = self.row("iocost", iocost_ready, iocost_reason, iocost_phase)
+        iocost_row = self.row("iocost", iocost_ready, iocost_reason_code,
+                              iocost_reason, iocost_phase)
         self.disable_iocost()
 
         both_individually_supported = (
             bfq_row["outcome"] == "SUPPORTED" and iocost_row["outcome"] == "SUPPORTED")
         if both_individually_supported:
             self.select_scheduler("bfq")
-        simultaneous_iocost, simultaneous_reason = self.prepare_iocost() if both_individually_supported else (
-            False, "BFQ and io.cost did not both pass their individual systemd-to-kernel paths")
+        simultaneous_iocost, simultaneous_reason_code, simultaneous_reason = (
+            self.prepare_iocost() if both_individually_supported else
+            (False, REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+             "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"))
         simultaneous_ready = both_individually_supported and simultaneous_iocost
         simultaneous_phase = self.property_phase("simultaneous") if simultaneous_ready else None
-        self.row("simultaneous", simultaneous_ready, simultaneous_reason, simultaneous_phase)
+        self.row("simultaneous", simultaneous_ready, simultaneous_reason_code,
+                 simultaneous_reason, simultaneous_phase)
         self.disable_iocost()
         self.select_scheduler(self.initial_scheduler)
         self.save()
@@ -501,7 +532,9 @@ class Probe:
         self.record["cleanup"] = {
             "result": "FAIL" if errors else "PASS",
             "errors": errors,
-            "property_reset": True if self.object_path else None,
+            "property_reset": (True if self.object_path and
+                               self.record.get("dbus", {}).get("property_signature") == "a(st)"
+                               else None),
             "io_cost_disabled": not self.iocost_touched,
             "scheduler_after": optional_text(self.block / "queue/scheduler") if self.block else None,
             "all_schedulers_after": observed,

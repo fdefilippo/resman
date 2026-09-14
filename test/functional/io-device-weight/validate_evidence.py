@@ -7,7 +7,19 @@ import json
 from pathlib import Path
 import re
 
-from guest_probe import WEIGHT, bfq_weight, keyed_line, keyed_weight
+from guest_probe import (
+    REASON_BFQ_SCHEDULER_UNAVAILABLE,
+    REASON_BFQ_WEIGHT_NOT_APPLIED,
+    REASON_IOCOST_INTERFACE_UNAVAILABLE,
+    REASON_IOCOST_WEIGHT_NOT_APPLIED,
+    REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+    REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
+    REASON_SYSTEMD_REQUEST_REJECTED,
+    WEIGHT,
+    bfq_weight,
+    keyed_line,
+    keyed_weight,
+)
 
 
 PLATFORMS = ("el8", "el9", "el10")
@@ -15,6 +27,24 @@ BASE_SHA256 = {
     "el8": "cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c",
     "el9": "b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b",
     "el10": "8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f",
+}
+LEGACY_REASON_CODES = {
+    "systemd does not expose IODeviceWeight with signature a(st)":
+        REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
+    "systemd rejected the IODeviceWeight D-Bus request":
+        REASON_SYSTEMD_REQUEST_REJECTED,
+    "systemd rejected IODeviceWeight while the mechanism was active":
+        REASON_SYSTEMD_REQUEST_REJECTED,
+    "BFQ is unavailable on the owned virtual device":
+        REASON_BFQ_SCHEDULER_UNAVAILABLE,
+    "active BFQ did not expose the expected per-device weight":
+        REASON_BFQ_WEIGHT_NOT_APPLIED,
+    "kernel does not expose root io.cost.qos and io.cost.model":
+        REASON_IOCOST_INTERFACE_UNAVAILABLE,
+    "active io.cost did not expose the expected per-device weight":
+        REASON_IOCOST_WEIGHT_NOT_APPLIED,
+    "BFQ and io.cost did not both pass their individual systemd-to-kernel paths":
+        REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
 }
 
 
@@ -88,8 +118,97 @@ def verify_property_phase(phase, device, property_device, cgroup):
                 filename + " was not reset exactly")
 
 
+def verify_rejected_property_phase(phase, device, cgroup):
+    require(phase["request_exit_code"] != 0 and phase["reset_exit_code"] == 0,
+            "rejected request evidence lacks a failed request and acknowledged reset")
+    for name in ("before", "during", "after"):
+        snapshot = phase[name]
+        require(snapshot["property"]["exit_code"] == 0,
+                "D-Bus property readback failed during " + name)
+        require([item["path"] for item in snapshot["controller_chain"]] == [
+            "/sys/fs/cgroup", "/sys/fs/cgroup/user.slice", cgroup],
+            "controller ancestry differs")
+        require(all(item["inode"] for item in snapshot["controller_chain"]),
+                "controller ancestry was not materialized")
+    require(phase["after"]["property"]["value"].split()[-1:] == ["0"],
+            "empty IODeviceWeight reset is absent from D-Bus readback")
+    for filename in ("io.weight", "io.bfq.weight"):
+        require(keyed_line(phase["before"]["kernel"][filename], device) ==
+                keyed_line(phase["after"]["kernel"][filename], device),
+                filename + " was not reset exactly")
+
+
+def unsupported_reason_code(row, schema_version):
+    require(row.get("reason"), "unsupported outcome lacks an explanation")
+    if schema_version >= 2:
+        require(row.get("reason_code"), "unsupported outcome lacks a typed reason")
+        return row["reason_code"]
+    code = row.get("reason_code") or LEGACY_REASON_CODES.get(row["reason"])
+    require(code, "legacy unsupported outcome has an unknown reason")
+    return code
+
+
+def verify_unsupported_row(result, mechanism, row, rows, transport, device, cgroup,
+                           schema_version):
+    code = unsupported_reason_code(row, schema_version)
+    phase = row.get("phase")
+    if code == REASON_SYSTEMD_PROPERTY_UNAVAILABLE:
+        require(result["dbus"]["property_signature"] != "a(st)" and phase is None,
+                "systemd property absence is inconsistent with the retained evidence")
+    elif code == REASON_SYSTEMD_REQUEST_REJECTED:
+        if phase is None:
+            require(transport["outcome"] == "UNSUPPORTED" and
+                    unsupported_reason_code(transport, schema_version) == code,
+                    "row does not inherit a demonstrated transport rejection")
+        else:
+            verify_rejected_property_phase(phase, device, cgroup)
+            if mechanism == "bfq":
+                require("[bfq]" in phase["during"]["scheduler"],
+                        "BFQ request rejection lacks an active BFQ scheduler")
+            elif mechanism == "iocost":
+                qos = keyed_line(phase["during"]["kernel"]["root.io.cost.qos"], device)
+                require(qos and "enable=1" in qos.split()[1:],
+                        "io.cost request rejection lacks an active io.cost policy")
+    elif code == REASON_BFQ_SCHEDULER_UNAVAILABLE:
+        require(mechanism == "bfq" and phase is None and
+                "bfq" not in {word.strip("[]") for word in
+                              result["environment"]["scheduler_before"].split()},
+                "BFQ absence is not demonstrated by the scheduler inventory")
+    elif code == REASON_BFQ_WEIGHT_NOT_APPLIED:
+        require(mechanism == "bfq" and phase is not None,
+                "BFQ path limitation lacks a property phase")
+        verify_property_phase(phase, device, result["dbus"]["request"]["device"], cgroup)
+        weight_file = phase["during"]["kernel"]["io.bfq.weight"]
+        require("[bfq]" in phase["during"]["scheduler"] and weight_file is not None and
+                keyed_weight(weight_file, device) != bfq_weight(WEIGHT),
+                "BFQ path limitation is not demonstrated")
+    elif code == REASON_IOCOST_INTERFACE_UNAVAILABLE:
+        require(mechanism == "iocost" and phase is None and
+                all(snapshot["kernel"]["root.io.cost.qos"] is None and
+                    snapshot["kernel"]["root.io.cost.model"] is None
+                    for snapshot in (transport["before"], transport["during"], transport["after"])),
+                "io.cost interface absence is not demonstrated")
+    elif code == REASON_IOCOST_WEIGHT_NOT_APPLIED:
+        require(mechanism == "iocost" and phase is not None,
+                "io.cost path limitation lacks a property phase")
+        verify_property_phase(phase, device, result["dbus"]["request"]["device"], cgroup)
+        weight_file = phase["during"]["kernel"]["io.weight"]
+        qos = keyed_line(phase["during"]["kernel"]["root.io.cost.qos"], device)
+        require(weight_file is not None and qos and "enable=1" in qos.split()[1:] and
+                keyed_weight(weight_file, device) != WEIGHT,
+                "io.cost path limitation is not demonstrated")
+    elif code == REASON_MECHANISM_PREREQUISITE_UNAVAILABLE:
+        require(mechanism == "simultaneous" and phase is None and
+                not (rows["bfq"]["outcome"] == rows["iocost"]["outcome"] == "SUPPORTED"),
+                "simultaneous prerequisites are not demonstrated as unavailable")
+    else:
+        raise AssertionError("unknown unsupported reason code: " + str(code))
+    return code
+
+
 def validate_guest(result, platform, revision, retained_probe):
-    require(result["schema_version"] == 1 and
+    schema_version = result["schema_version"]
+    require(schema_version in {1, 2} and
             result["scope"] == "test-only-systemd-iodeviceweight-platform-characterization",
             "wrong characterization schema or scope")
     require(result["result"] == "CHARACTERIZED", "guest did not produce valid characterization")
@@ -97,7 +216,8 @@ def validate_guest(result, platform, revision, retained_probe):
             "guest provenance differs")
     require(result["probe_sha256"] == digest(retained_probe), "guest probe digest differs")
     version_match = re.search(r'(?m)^VERSION_ID="?([^"\n]+)', result["environment"]["os_release"])
-    require(version_match and version_match.group(1).split(".")[0] == platform[2:],
+    oracle_match = re.search(r'(?m)^ID="?ol"?$', result["environment"]["os_release"])
+    require(version_match and oracle_match and version_match.group(1).split(".")[0] == platform[2:],
             "guest distribution major version differs")
     require(result["environment"]["systemd_package"], "systemd package identity is absent")
     require(result["requested_weight"] == WEIGHT, "unexpected characterization weight")
@@ -118,21 +238,40 @@ def validate_guest(result, platform, revision, retained_probe):
             "probe slice is not directly below user.slice")
     transport = result["transport"]
     if result["dbus"]["property_signature"] == "a(st)":
-        require(transport["outcome"] == "SUPPORTED", "D-Bus transport was not exercised")
-        verify_property_phase(transport, device, request["device"], cgroup)
+        if transport["outcome"] == "SUPPORTED":
+            verify_property_phase(transport, device, request["device"], cgroup)
+        else:
+            require(transport["outcome"] == "UNSUPPORTED" and
+                    unsupported_reason_code(transport, schema_version) ==
+                    REASON_SYSTEMD_REQUEST_REJECTED,
+                    "D-Bus transport was not exercised")
+            verify_rejected_property_phase(transport, device, cgroup)
     else:
-        require(transport["outcome"] == "UNSUPPORTED" and transport["reason"],
+        require(transport["outcome"] == "UNSUPPORTED" and
+                unsupported_reason_code(transport, schema_version) ==
+                REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
                 "missing IODeviceWeight property was not classified as unsupported")
 
     rows = result["rows"]
     require(set(rows) == {"bfq", "iocost", "simultaneous"}, "mechanism row inventory differs")
+    reason_codes = {}
     for mechanism, row in rows.items():
-        require(row["mechanism"] == mechanism and row["outcome"] in {"SUPPORTED", "UNSUPPORTED"} and
-                row["reason"], "invalid platform-mechanism outcome")
+        allowed = ({"SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE"}
+                   if mechanism == "simultaneous" else {"SUPPORTED", "UNSUPPORTED"})
+        require(row["mechanism"] == mechanism and row["outcome"] in allowed and row["reason"],
+                "invalid platform-mechanism outcome")
         if row["outcome"] == "SUPPORTED":
             verify_property_phase(row["phase"], device, request["device"], cgroup)
+        else:
+            reason_codes[mechanism] = verify_unsupported_row(
+                result, mechanism, row, rows, transport, device, cgroup, schema_version)
+    if schema_version >= 2 and reason_codes.get("simultaneous") == \
+            REASON_MECHANISM_PREREQUISITE_UNAVAILABLE:
+        require(rows["simultaneous"]["outcome"] == "NOT_APPLICABLE",
+                "unavailable simultaneous prerequisites must be not applicable")
     if result["dbus"]["property_signature"] != "a(st)":
-        require({row["outcome"] for row in rows.values()} == {"UNSUPPORTED"},
+        require(rows["bfq"]["outcome"] == rows["iocost"]["outcome"] == "UNSUPPORTED" and
+                rows["simultaneous"]["outcome"] in {"UNSUPPORTED", "NOT_APPLICABLE"},
                 "mechanism support was claimed without the required D-Bus property")
     if rows["bfq"]["outcome"] == "SUPPORTED":
         phase = rows["bfq"]["phase"]
@@ -151,6 +290,14 @@ def validate_guest(result, platform, revision, retained_probe):
                 "simultaneous row lacks both individual mechanisms")
         require(simultaneous.get("policy_status") == "mechanism_ambiguous",
                 "simultaneous mechanisms were assigned an unproved precedence")
+    simultaneous_outcome = ("NOT_APPLICABLE"
+                            if reason_codes.get("simultaneous") ==
+                            REASON_MECHANISM_PREREQUISITE_UNAVAILABLE
+                            else simultaneous["outcome"])
+    simultaneous_policy = ("not applicable" if simultaneous_outcome == "NOT_APPLICABLE" else
+                           simultaneous.get("policy_status", "not available"))
+    kernel = result["environment"]["kernel"]
+    kernel_family = "UEK" if "uek" in kernel.lower() else "non-UEK"
     cleanup = result["cleanup"]
     expected_property_reset = True if result["dbus"]["property_signature"] == "a(st)" else None
     require(cleanup["result"] == "PASS" and not cleanup["errors"] and
@@ -160,14 +307,14 @@ def validate_guest(result, platform, revision, retained_probe):
             cleanup["all_schedulers_after"] == result["environment"]["all_schedulers_before"],
             "guest cleanup is incomplete")
     return {
-        "platform": platform,
+        "platform": "OL%s/%s" % (platform[2:], kernel_family),
         "os_version": version_match.group(1),
         "systemd": result["environment"]["systemd_package"],
-        "kernel": result["environment"]["kernel"],
+        "kernel": kernel,
         "bfq": rows["bfq"]["outcome"],
         "iocost": rows["iocost"]["outcome"],
-        "simultaneous": rows["simultaneous"]["outcome"],
-        "simultaneous_policy": rows["simultaneous"].get("policy_status", "not available"),
+        "simultaneous": simultaneous_outcome,
+        "simultaneous_policy": simultaneous_policy,
     }
 
 
@@ -205,14 +352,17 @@ def table(rows, revision):
         "Source revision: `%s`. `UNSUPPORTED` is a valid platform result; "
         "`BLOCKED` is not published by this table." % revision,
         "",
-        "| Platform | Representative | systemd | Kernel | BFQ | io.cost | Both active | Policy status |",
+        "| Tested pair | Representative | systemd | Kernel | BFQ | io.cost | Both active | Policy status |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for row in rows:
         lines.append("| {platform} | Oracle Linux {os_version} | `{systemd}` | `{kernel}` | "
                      "{bfq} | {iocost} | {simultaneous} | `{simultaneous_policy}` |".format(**row))
-    lines.extend(("", "The simultaneous row records observed availability only. It does not establish "
-                       "precedence or composition between BFQ and io.cost.", ""))
+    lines.extend(("", "Each row applies only to the exact distribution, systemd, and kernel family/version "
+                       "shown. An unlisted kernel family is uncharacterized.", "",
+                       "`NOT_APPLICABLE` means that BFQ and io.cost were not both individually supported, "
+                       "so no simultaneous phase was run. A simultaneous `SUPPORTED` result records observed "
+                       "availability only and does not establish precedence or composition.", ""))
     return "\n".join(lines)
 
 

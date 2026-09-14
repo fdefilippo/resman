@@ -62,16 +62,17 @@ class EvidenceValidatorTests(unittest.TestCase):
                              "phase": self.phase("simultaneous")},
         }
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "scope": "test-only-systemd-iodeviceweight-platform-characterization",
             "result": "CHARACTERIZED",
             "platform": "el9", "run_id": "r20260914070000-1",
             "source_revision": self.revision,
             "probe_sha256": validator.digest(probe_path), "requested_weight": validator.WEIGHT,
             "environment": {
-                "os_release": 'NAME="Oracle Linux"\nVERSION_ID="9.8"\n',
+                "os_release": 'NAME="Oracle Linux"\nID="ol"\nVERSION_ID="9.8"\n',
                 "systemd_package": systemd, "kernel": "6.12.0-test",
                 "major_minor": self.device, "device": "/dev/vdb",
+                "scheduler_before": "[none] mq-deadline bfq",
                 "all_schedulers_before": {"/sys/block/vda/queue/scheduler": "[none]"},
             },
             "dbus": {
@@ -125,17 +126,74 @@ class EvidenceValidatorTests(unittest.TestCase):
                     with self.assertRaises((AssertionError, RuntimeError)):
                         validator.validate_guest(result, "el9", self.revision, probe)
 
-    def test_unsupported_is_valid_but_requires_a_reason(self):
+    def test_bfq_unsupported_requires_the_measured_failed_path(self):
         with tempfile.TemporaryDirectory() as directory:
             probe = Path(directory) / "guest_probe.py"
             probe.write_text("probe\n")
             result = self.fixture(probe)
+            phase = self.phase("bfq")
+            phase["during"]["kernel"]["io.bfq.weight"] = "default 100"
             result["rows"]["bfq"] = {
-                "mechanism": "bfq", "outcome": "UNSUPPORTED", "reason": "scheduler absent"}
+                "mechanism": "bfq", "outcome": "UNSUPPORTED",
+                "reason_code": validator.REASON_BFQ_WEIGHT_NOT_APPLIED,
+                "reason": "active BFQ did not expose the expected per-device weight",
+                "phase": phase}
             result["rows"]["simultaneous"] = {
-                "mechanism": "simultaneous", "outcome": "UNSUPPORTED", "reason": "BFQ absent"}
+                "mechanism": "simultaneous", "outcome": "NOT_APPLICABLE",
+                "reason_code": validator.REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+                "reason": "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"}
             validator.validate_guest(result, "el9", self.revision, probe)
-            result["rows"]["bfq"]["reason"] = ""
+            mutations = {
+                "phase absent": lambda value: value["rows"]["bfq"].pop("phase"),
+                "BFQ not selected": lambda value: value["rows"]["bfq"]["phase"]["during"].update(
+                    scheduler="[none] mq-deadline bfq"),
+                "tuple not read back": lambda value: value["rows"]["bfq"]["phase"]["during"][
+                    "property"].update(value="a(st) 0"),
+                "request failed": lambda value: value["rows"]["bfq"]["phase"].update(
+                    request_exit_code=1),
+            }
+            for name, mutation in mutations.items():
+                with self.subTest(name=name):
+                    changed = copy.deepcopy(result)
+                    mutation(changed)
+                    with self.assertRaises(AssertionError):
+                        validator.validate_guest(changed, "el9", self.revision, probe)
+
+    def test_vacuous_bfq_unsupported_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / "guest_probe.py"
+            probe.write_text("probe\n")
+            result = self.fixture(probe)
+            result["schema_version"] = 1
+            result["rows"]["bfq"] = {
+                "mechanism": "bfq", "outcome": "UNSUPPORTED",
+                "reason": "active BFQ did not expose the expected per-device weight"}
+            result["rows"]["simultaneous"] = {
+                "mechanism": "simultaneous", "outcome": "UNSUPPORTED",
+                "reason": "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"}
+            with self.assertRaises(AssertionError):
+                validator.validate_guest(result, "el9", self.revision, probe)
+
+    def test_iocost_unsupported_requires_typed_coherent_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / "guest_probe.py"
+            probe.write_text("probe\n")
+            result = self.fixture(probe)
+            for name in ("before", "during", "after"):
+                result["transport"][name]["kernel"]["root.io.cost.qos"] = None
+                result["transport"][name]["kernel"]["root.io.cost.model"] = None
+            result["rows"]["iocost"] = {
+                "mechanism": "iocost", "outcome": "UNSUPPORTED",
+                "reason_code": validator.REASON_IOCOST_INTERFACE_UNAVAILABLE,
+                "reason": "kernel does not expose root io.cost.qos and io.cost.model"}
+            result["rows"]["simultaneous"] = {
+                "mechanism": "simultaneous", "outcome": "NOT_APPLICABLE",
+                "reason_code": validator.REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+                "reason": "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"}
+            validator.validate_guest(result, "el9", self.revision, probe)
+            result["schema_version"] = 1
+            result["rows"]["iocost"].pop("reason_code")
+            result["rows"]["iocost"]["reason"] = "not tried"
             with self.assertRaises(AssertionError):
                 validator.validate_guest(result, "el9", self.revision, probe)
 
@@ -145,12 +203,22 @@ class EvidenceValidatorTests(unittest.TestCase):
             probe.write_text("probe\n")
             result = self.fixture(probe)
             result["dbus"]["property_signature"] = None
-            result["transport"] = {"outcome": "UNSUPPORTED", "reason": "property absent"}
+            result["transport"] = {
+                "outcome": "UNSUPPORTED",
+                "reason_code": validator.REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
+                "reason": "systemd does not expose IODeviceWeight with signature a(st)"}
             result["cleanup"]["property_reset"] = None
             result["rows"] = {
-                mechanism: {"mechanism": mechanism, "outcome": "UNSUPPORTED",
-                            "reason": "property absent"}
-                for mechanism in ("bfq", "iocost", "simultaneous")
+                "bfq": {"mechanism": "bfq", "outcome": "UNSUPPORTED",
+                        "reason_code": validator.REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
+                        "reason": "systemd does not expose IODeviceWeight with signature a(st)"},
+                "iocost": {"mechanism": "iocost", "outcome": "UNSUPPORTED",
+                           "reason_code": validator.REASON_SYSTEMD_PROPERTY_UNAVAILABLE,
+                           "reason": "systemd does not expose IODeviceWeight with signature a(st)"},
+                "simultaneous": {
+                    "mechanism": "simultaneous", "outcome": "NOT_APPLICABLE",
+                    "reason_code": validator.REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+                    "reason": "BFQ and io.cost did not both pass their individual systemd-to-kernel paths"},
             }
             validator.validate_guest(result, "el9", self.revision, probe)
 
@@ -170,11 +238,13 @@ class EvidenceValidatorTests(unittest.TestCase):
 
     def test_table_keeps_unsupported_distinct_from_blocked(self):
         rendered = validator.table([{
-            "platform": "el8", "os_version": "8.10", "systemd": "systemd-239",
+            "platform": "OL8/UEK", "os_version": "8.10", "systemd": "systemd-239",
             "kernel": "5.15", "bfq": "UNSUPPORTED", "iocost": "SUPPORTED",
-            "simultaneous": "UNSUPPORTED", "simultaneous_policy": "not available",
+            "simultaneous": "NOT_APPLICABLE", "simultaneous_policy": "not available",
         }], self.revision)
         self.assertIn("UNSUPPORTED", rendered)
+        self.assertIn("NOT_APPLICABLE", rendered)
+        self.assertIn("unlisted kernel family is uncharacterized", rendered)
         self.assertIn("`BLOCKED` is not published", rendered)
 
 

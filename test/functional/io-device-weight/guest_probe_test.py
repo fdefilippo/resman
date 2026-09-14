@@ -75,6 +75,19 @@ class GuestProbeTests(unittest.TestCase):
                      self.assertRaises(RuntimeError):
                     guest_probe.Probe(evidence, platform, run_id, revision, "/dev/vdb")
 
+    def test_simultaneous_prerequisite_absence_is_not_applicable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = self.make_probe(directory)
+            row = probe.row(
+                "simultaneous", False,
+                guest_probe.REASON_MECHANISM_PREREQUISITE_UNAVAILABLE,
+                "BFQ and io.cost did not both pass their individual systemd-to-kernel paths")
+            self.assertEqual(probe.record["schema_version"], 2)
+            self.assertEqual(row["outcome"], "NOT_APPLICABLE")
+            self.assertEqual(
+                row["reason_code"],
+                guest_probe.REASON_MECHANISM_PREREQUISITE_UNAVAILABLE)
+
 
 if __name__ == "__main__":
     unittest.main()
