@@ -1,0 +1,49 @@
+Last metadata expiration check: 0:00:35 ago on Mon 14 Sep 2026 09:33:06 AM UTC.
+Dependencies resolved.
+================================================================================
+ Package              Arch    Version                 Repository           Size
+================================================================================
+Installing:
+ kernel               x86_64  6.12.0-211.53.1.el10_2  ol10_baseos_latest  1.6 M
+Installing dependencies:
+ kernel-core          x86_64  6.12.0-211.53.1.el10_2  ol10_baseos_latest   19 M
+ kernel-modules       x86_64  6.12.0-211.53.1.el10_2  ol10_baseos_latest   43 M
+ kernel-modules-core  x86_64  6.12.0-211.53.1.el10_2  ol10_baseos_latest   31 M
+
+Transaction Summary
+================================================================================
+Install  4 Packages
+
+Total download size: 95 M
+Installed size: 136 M
+Downloading Packages:
+(1/4): kernel-6.12.0-211.53.1.el10_2.x86_64.rpm 2.0 MB/s | 1.6 MB     00:00    
+(2/4): kernel-core-6.12.0-211.53.1.el10_2.x86_6 1.5 MB/s |  19 MB     00:12    
+(3/4): kernel-modules-core-6.12.0-211.53.1.el10 1.9 MB/s |  31 MB     00:16    
+(4/4): kernel-modules-6.12.0-211.53.1.el10_2.x8 2.2 MB/s |  43 MB     00:19    
+--------------------------------------------------------------------------------
+Total                                           4.9 MB/s |  95 MB     00:19     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : kernel-modules-core-6.12.0-211.53.1.el10_2.x86_64      1/4 
+  Installing       : kernel-core-6.12.0-211.53.1.el10_2.x86_64              2/4 
+  Running scriptlet: kernel-core-6.12.0-211.53.1.el10_2.x86_64              2/4 
+  Installing       : kernel-modules-6.12.0-211.53.1.el10_2.x86_64           3/4 
+  Running scriptlet: kernel-modules-6.12.0-211.53.1.el10_2.x86_64           3/4 
+  Installing       : kernel-6.12.0-211.53.1.el10_2.x86_64                   4/4 
+  Running scriptlet: kernel-modules-core-6.12.0-211.53.1.el10_2.x86_64      4/4 
+  Running scriptlet: kernel-core-6.12.0-211.53.1.el10_2.x86_64              4/4 
+  Running scriptlet: kernel-modules-6.12.0-211.53.1.el10_2.x86_64           4/4 
+  Running scriptlet: kernel-6.12.0-211.53.1.el10_2.x86_64                   4/4 
+
+Installed:
+  kernel-6.12.0-211.53.1.el10_2.x86_64                                          
+  kernel-core-6.12.0-211.53.1.el10_2.x86_64                                     
+  kernel-modules-6.12.0-211.53.1.el10_2.x86_64                                  
+  kernel-modules-core-6.12.0-211.53.1.el10_2.x86_64                             
+
+Complete!

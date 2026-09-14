@@ -1,0 +1,16 @@
+platform=el10
+kernel_family=rhck
+run_id=r20260914092100-3057235
+source_revision=a9d6c9608296b42e45ee390b756cefbb3f8a1de5
+base_image=/var/lib/libvirt/images/OL10U1-base.qcow2
+base_url=https://yum.oracle.com/templates/OracleLinux/OL10/u1/x86_64/OL10U1_x86_64-kvm-b291.qcow2
+base_sha256=8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f
+probe_serial=resmaniowrhckel10
+os_variant=ol9-unknown
+qemu_version=QEMU emulator version 10.1.4 (qemu-kvm-10.1.4-3.el9)
+libvirt_version=Compiled against library: libvirt 12.0.0 Using library: libvirt 12.0.0 Using API: QEMU 12.0.0 Running hypervisor: QEMU 10.1.4 Running against daemon: 12.0.0  
+guest_exit_code=0
+cleanup=PASS
+result=PASS
+detail=el10 IODeviceWeight characterization completed
+exit_code=0

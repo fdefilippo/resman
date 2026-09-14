@@ -1,0 +1,9 @@
+NAME                MAJ:MIN  SIZE TYPE FSTYPE      MOUNTPOINT SERIAL
+sda                   8:0     37G disk                        QM00001
+├─sda1                8:1      1M part                        
+├─sda2                8:2    200M part vfat        /boot/efi  
+├─sda3                8:3      1G part xfs         /boot      
+└─sda4                8:4   35.8G part LVM2_member            
+  ├─vg_main-lv_root 253:0   31.8G lvm  xfs         /          
+  └─vg_main-lv_swap 253:1      4G lvm  swap        [SWAP]     
+vda                 252:0    512M disk                        resmaniowrhckel10

@@ -1,0 +1,14 @@
+index=0
+kernel="/boot/vmlinuz-4.18.0-553.162.1.el8_10.x86_64"
+args="ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=/dev/mapper/vg_main-lv_swap rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0 systemd.unified_cgroup_hierarchy=1"
+root="/dev/mapper/vg_main-lv_root"
+initrd="/boot/initramfs-4.18.0-553.162.1.el8_10.x86_64.img"
+title="Oracle Linux Server (4.18.0-553.162.1.el8_10.x86_64) 8.10"
+id="1a1f92cced12595537bcee033d9be78b-4.18.0-553.162.1.el8_10.x86_64"
+index=1
+kernel="/boot/vmlinuz-5.15.0-320.202.8.5.el8uek.x86_64"
+args="ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=/dev/mapper/vg_main-lv_swap rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0"
+root="/dev/mapper/vg_main-lv_root"
+initrd="/boot/initramfs-5.15.0-320.202.8.5.el8uek.x86_64.img"
+title="Oracle Linux Server (5.15.0-320.202.8.5.el8uek.x86_64 with Unbreakable Enterprise Kernel) 8.10"
+id="a5a785dfae524b58a9f4c3fb46917901-5.15.0-320.202.8.5.el8uek.x86_64"

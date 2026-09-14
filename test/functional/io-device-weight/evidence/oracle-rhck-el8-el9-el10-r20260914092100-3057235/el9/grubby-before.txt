@@ -1,0 +1,7 @@
+index=0
+kernel="/boot/vmlinuz-6.12.0-204.92.4.2.el9uek.x86_64"
+args="ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=/dev/mapper/vg_main-lv_swap rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0"
+root="/dev/mapper/vg_main-lv_root"
+initrd="/boot/initramfs-6.12.0-204.92.4.2.el9uek.x86_64.img"
+title="Oracle Linux Server (6.12.0-204.92.4.2.el9uek.x86_64 with Unbreakable Enterprise Kernel) 9.8"
+id="28b6bc1da5f141b4815de7f7addff370-6.12.0-204.92.4.2.el9uek.x86_64"

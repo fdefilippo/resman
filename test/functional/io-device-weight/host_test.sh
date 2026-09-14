@@ -34,8 +34,9 @@ grep -q 'UNSUPPORTED.*valid platform result' "$script_dir/validate_evidence.py"
 grep -q 'unsupported outcome lacks a typed reason' "$script_dir/validate_evidence.py"
 grep -q 'NOT_APPLICABLE' "$script_dir/validate_evidence.py"
 grep -q 'OL8/UEK' "$script_dir/CAPABILITY-MATRIX.md"
-grep -q 'RHCK combinations' "$script_dir/CAPABILITY-MATRIX.md"
-grep -q 'remain uncharacterized' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'OL8/RHCK' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'UEK is an optional' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'normal errata only inside' "$script_dir/CAPABILITY-MATRIX.md"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" \
 	"$script_dir/qemu-platform.sh" "$script_dir/remote-qemu.sh"; then
