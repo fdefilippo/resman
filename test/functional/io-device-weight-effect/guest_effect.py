@@ -367,17 +367,16 @@ while not stop:
         return {"bytes": values, "shares": [values[0] / total, values[1] / total],
                 "duration_ns": sum(item["duration_ns"] for item in intervals)}
 
-    def configure_mechanism(self, mechanism):
-        first = self.devices[0]
-        scheduler_path = first["block"] / "queue/scheduler"
+    def configure_device_mechanism(self, device, mechanism):
+        scheduler_path = device["block"] / "queue/scheduler"
         values = self.read(scheduler_path).replace("[", "").replace("]", "").split()
         qos_path = Path("/sys/fs/cgroup/io.cost.qos")
         if mechanism == "bfq":
             require("bfq" in values, "BFQ is unavailable on the owned device")
             if qos_path.exists():
-                qos_path.write_text(first["major_minor"] + " enable=0\n")
+                qos_path.write_text(device["major_minor"] + " enable=0\n")
             scheduler_path.write_text("bfq\n")
-            low_latency = first["block"] / "queue/iosched/low_latency"
+            low_latency = device["block"] / "queue/iosched/low_latency"
             if low_latency.exists():
                 low_latency.write_text("0\n")
             require(selected_scheduler(self.read(scheduler_path)) == "bfq", "BFQ selection failed")
@@ -389,12 +388,15 @@ while not stop:
         scheduler_path.write_text(alternatives[0] + "\n")
         require(qos_path.exists() and Path("/sys/fs/cgroup/io.cost.model").exists(),
                 "io.cost interfaces are unavailable")
-        qos_path.write_text(first["major_minor"] + " enable=1 ctrl=auto\n")
-        row = device_row(self.read(qos_path), first["major_minor"])
+        qos_path.write_text(device["major_minor"] + " enable=1 ctrl=auto\n")
+        row = device_row(self.read(qos_path), device["major_minor"])
         require(row is not None and "enable=1" in row.split(), "io.cost activation failed")
         return {"selected_scheduler": alternatives[0], "io_cost_enabled": True,
                 "owned_disposable_device": True,
                 "daemon_mutated_scheduler_or_iocost": False}
+
+    def configure_mechanism(self, mechanism):
+        return self.configure_device_mechanism(self.devices[0], mechanism)
 
     def common_config(self, selector):
         self.set_config({"IO_WEIGHT_DEVICES": selector, "IO_ROOT_WEIGHT": 100,
@@ -528,10 +530,13 @@ while not stop:
 
     def composition_evidence(self):
         first, second = [item["major_minor"] for item in self.devices]
+        self.configure_device_mechanism(self.devices[1], "bfq")
         self.set_config({"IO_WEIGHT_DEVICES": first + "," + second, "IO_LIMIT_ENABLED": "true",
                          "IO_DEVICE_FILTER": first, "IO_THRESHOLD": 2, "IO_RELEASE_THRESHOLD": 1,
                          "IO_READ_BPS": "32M", "IO_WRITE_BPS": "max", "IO_READ_IOPS": 0,
-                         "IO_WRITE_IOPS": 0, "IO_THRESHOLD_DURATION": 0})
+                         "IO_WRITE_IOPS": 0, "IO_THRESHOLD_DURATION": 0,
+                         "CPU_THRESHOLD": 2, "CPU_RELEASE_THRESHOLD": 1,
+                         "CPU_THRESHOLD_DURATION": 0, "IGNORE_SYSTEM_LOAD": "true"})
         def first_layout():
             return (self.property_contains(self.slices[0], "IODeviceWeight", first) and
                     self.property_contains(self.slices[0], "IODeviceWeight", second) and
@@ -642,6 +647,22 @@ while not stop:
                 "scheduler_restored": scheduler_restored, "io_cost_restored": io_cost_restored,
                 "units_removed": units_removed, "leases_removed": leases_removed}
 
+    def capture_diagnostics(self):
+        diagnostics = {}
+        if self.log.exists():
+            diagnostics["daemon_log"] = "daemon-log.json"
+            self.record("daemon-log.json", {"text": self.log.read_text(errors="replace")})
+        journal = self.command("journalctl", "--no-pager", "-u", "resman", check=False).stdout
+        diagnostics["systemd_journal"] = "systemd-journal.json"
+        self.record("systemd-journal.json", {"text": journal})
+        try:
+            metrics = self.metrics()
+        except Exception as error:
+            metrics = "unavailable: " + str(error)
+        diagnostics["final_prometheus"] = "final-prometheus.json"
+        self.record("final-prometheus.json", {"text": metrics})
+        return diagnostics
+
     def run(self):
         exit_code = 1
         cleanup = {"result": "FAIL", "scheduler_restored": False, "io_cost_restored": False,
@@ -670,6 +691,11 @@ while not stop:
             self.error = str(error)
             exit_code = 1
         finally:
+            diagnostics = {}
+            try:
+                diagnostics = self.capture_diagnostics()
+            except Exception as error:
+                diagnostics = {"capture_error": str(error)}
             try:
                 cleanup = self.cleanup()
                 if cleanup["result"] != "PASS":
@@ -685,7 +711,7 @@ while not stop:
                                   "qualification_revision": self.qualification_revision,
                                   "qualification_tree": self.qualification_tree},
                        "result": self.result, "cleanup": cleanup,
-                       "raw_files": self.raw_files}
+                       "raw_files": self.raw_files, "diagnostics": diagnostics}
             for name in ("package_info", "platform"):
                 if hasattr(self, name):
                     summary["package" if name == "package_info" else name] = getattr(self, name)

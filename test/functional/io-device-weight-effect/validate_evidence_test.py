@@ -41,9 +41,11 @@ def fixture(directory):
                           "kernel_values": [100, 1000]},
             "phases": copy.deepcopy(phases), "reported_aggregates": copy.deepcopy(aggregates),
         }
-    raw = directory / "raw.json"
-    raw.write_text('{"measured":true}\n')
-    raw_sha = hashlib.sha256(raw.read_bytes()).hexdigest()
+    raw_files = {}
+    for name in ("raw.json", "daemon-log.json", "systemd-journal.json", "final-prometheus.json"):
+        raw = directory / name
+        raw.write_text('{"measured":true}\n')
+        raw_files[name] = hashlib.sha256(raw.read_bytes()).hexdigest()
     summary = {
         "schema": 1, "scope": "packaged-daemon-controlled-contention",
         "provenance": validator.PROVENANCE,
@@ -75,7 +77,7 @@ def fixture(directory):
                       "capability_loss_release": "PASS", "compare_before_restore": "PASS"},
         "cleanup": {"result": "PASS", "scheduler_restored": True,
                     "io_cost_restored": True, "units_removed": True, "leases_removed": True},
-        "raw_files": {"raw.json": raw_sha},
+        "raw_files": raw_files,
     }
     (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
     with (directory / "SHA256SUMS").open("w") as manifest:

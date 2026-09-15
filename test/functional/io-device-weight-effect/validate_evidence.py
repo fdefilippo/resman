@@ -182,7 +182,8 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
             cleanup["io_cost_restored"] and cleanup["units_removed"] and
             cleanup["leases_removed"], "cleanup is incomplete")
     raw = summary["raw_files"]
-    require(raw and set(raw).issubset(declared), "raw evidence references are incomplete")
+    require({"daemon-log.json", "systemd-journal.json", "final-prometheus.json"}.issubset(raw) and
+            set(raw).issubset(declared), "raw evidence references are incomplete")
     for name, digest in raw.items():
         require(declared[name] == digest, "raw evidence digest differs: " + name)
     return summary
