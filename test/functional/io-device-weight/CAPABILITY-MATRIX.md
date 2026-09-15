@@ -4,10 +4,10 @@ The qualified release remains Oracle Linux in both tables below. RHCK is its
 base kernel and UEK is an extension kernel available within the same release;
 `OL9/RHCK` and `OL9/UEK`, for example, are two kernel configurations of Oracle
 Linux 9 rather than two releases. Exact guest identities below are retained
-evidence. The product contract may authorize normal errata only inside the same
-distribution-major, systemd-major, kernel-family/series and mechanism line, and
-only with a successful live startup probe on every configured device. Evidence
-for one kernel family never authorizes the other.
+qualification evidence and regression fixtures, not a runtime allowlist. ResMan
+authorizes weighted I/O from observed capabilities and a successful owned live
+startup probe on every configured device. Distribution, systemd and kernel
+identities remain diagnostic provenance and never substitute for that proof.
 
 ## RHCK baseline characterization
 
@@ -60,8 +60,8 @@ manifest-covered evidence remains in
 | OL10/UEK | Oracle Linux 10.1 | `systemd-257-23.0.1.el10_2.2.x86_64` | `6.12.0-202.76.4.4.el10uek.x86_64` | SUPPORTED | UNSUPPORTED | NOT_APPLICABLE | `not applicable` |
 
 These rows characterize the UEK extension kernel on the same Oracle Linux
-releases. They do not authorize the RHCK kernel path and are not selected for
-the first-release production contract.
+releases. They neither authorize nor exclude another runtime: every enabled
+host is classified and probed from its observed capabilities.
 
 `UNSUPPORTED` is a valid technical result for its characterized line and does
 not block a capable newer line. `BLOCKED` is reserved for missing or invalid

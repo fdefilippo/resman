@@ -148,6 +148,9 @@ func (c *IODeviceWeightCapabilityClassifier) resolveDevice(number IODeviceWeight
 	if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "..") {
 		return ioDeviceWeightResolvedDevice{}, newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("invalid DEVNAME %q", name))
 	}
+	if !approvedDirectIODevice(resolved, name) {
+		return ioDeviceWeightResolvedDevice{}, newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device %s is not an approved direct virtio, SCSI or NVMe request queue", name))
+	}
 	deviceNode := filepath.Join(c.io.devRoot, name)
 	actual, err := c.deviceNumber(deviceNode)
 	if err != nil {
@@ -173,6 +176,64 @@ func (c *IODeviceWeightCapabilityClassifier) resolveDevice(number IODeviceWeight
 		},
 		sysfs: resolved,
 	}, nil
+}
+
+func approvedDirectIODevice(sysfsPath, name string) bool {
+	if filepath.Base(sysfsPath) != name || strings.Contains(name, "/") {
+		return false
+	}
+	components := strings.Split(filepath.Clean(sysfsPath), string(filepath.Separator))
+	switch {
+	case strings.HasPrefix(name, "vd"):
+		return hasPathComponentPrefix(components, "virtio")
+	case strings.HasPrefix(name, "sd"):
+		return hasPathComponentPrefix(components, "host") && hasPathComponentPrefix(components, "target")
+	default:
+		controller, ok := directNVMeNamespace(name)
+		return ok && !hasPathComponent(components, "virtual") && !hasPathComponentPrefix(components, "nvme-subsys") && hasPathComponent(components, controller)
+	}
+}
+
+func directNVMeNamespace(name string) (string, bool) {
+	if !strings.HasPrefix(name, "nvme") {
+		return "", false
+	}
+	remainder := strings.TrimPrefix(name, "nvme")
+	controllerEnd := 0
+	for controllerEnd < len(remainder) && remainder[controllerEnd] >= '0' && remainder[controllerEnd] <= '9' {
+		controllerEnd++
+	}
+	if controllerEnd == 0 || controllerEnd >= len(remainder) || remainder[controllerEnd] != 'n' {
+		return "", false
+	}
+	namespace := remainder[controllerEnd+1:]
+	if namespace == "" {
+		return "", false
+	}
+	for _, character := range namespace {
+		if character < '0' || character > '9' {
+			return "", false
+		}
+	}
+	return "nvme" + remainder[:controllerEnd], true
+}
+
+func hasPathComponent(components []string, wanted string) bool {
+	for _, component := range components {
+		if component == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPathComponentPrefix(components []string, prefix string) bool {
+	for _, component := range components {
+		if strings.HasPrefix(component, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *IODeviceWeightCapabilityClassifier) deviceNumber(path string) (string, error) {

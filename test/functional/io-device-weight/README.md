@@ -4,10 +4,11 @@ This test-only harness first produced retained evidence with the UEK extension
 kernel for `resman-nq6.40.6`. Its current campaign resolves `resman-nq6.40.8` by
 booting RHCK, the base kernel, on the same three immutable Oracle Linux release
 images. RHCK and UEK are therefore two kernel configurations of each Oracle
-Linux release, not distinct releases. The weighted-I/O operator contract selects
-only the RHCK path for its first production version. The harness measures the
-complete systemd-to-kernel `IODeviceWeight` path; it does not run ResMan,
-implement daemon policy, or claim throughput delivery.
+Linux release, not distinct releases. The weighted-I/O operator contract uses
+neither family as a runtime allowlist. The harness measures representative
+complete systemd-to-kernel `IODeviceWeight` paths for qualification and
+regression evidence; it does not run ResMan, implement daemon policy, authorize
+other hosts by version, or claim throughput delivery.
 
 Each guest is a fresh overlay of an immutable Oracle KVM image with a second,
 512 MiB disposable virtio block device. The probe device has no filesystem,
@@ -57,9 +58,9 @@ device, the harness records both footprints but labels the policy state
 The runner installs `kernel`, selects the newest `kernel-core` image explicitly,
 reboots, and proves that the running `/boot/vmlinuz-$(uname -r)` belongs to that
 RHCK package rather than `kernel-uek-core`. The exact package remains evidence
-provenance. The reviewed product contract may generalize only across errata in
-the same EL major, systemd major, RHCK generation and kernel series, and only
-with the mandatory live per-device startup probe.
+provenance. Runtime authorization depends on observed controller, topology and
+mechanism capabilities plus the mandatory live per-device startup probe, never
+on matching this package or software-version tuple.
 
 The selected RHCK image receives `systemd.unified_cgroup_hierarchy=1`; the runner
 records the initial hierarchy, kernel installation, BLS selection and a distinct

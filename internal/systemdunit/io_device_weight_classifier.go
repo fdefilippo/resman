@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,7 +18,6 @@ type IODeviceWeightCapabilityOutcome string
 const (
 	IODeviceWeightSupportedActive      IODeviceWeightCapabilityOutcome = "supported_active"
 	IODeviceWeightSupportedInactive    IODeviceWeightCapabilityOutcome = "supported_inactive"
-	IODeviceWeightUnsupportedPlatform  IODeviceWeightCapabilityOutcome = "unsupported_platform"
 	IODeviceWeightUnsupportedMechanism IODeviceWeightCapabilityOutcome = "unsupported_mechanism"
 	IODeviceWeightEvidenceUnavailable  IODeviceWeightCapabilityOutcome = "evidence_unavailable"
 	IODeviceWeightAmbiguousTopology    IODeviceWeightCapabilityOutcome = "ambiguous_topology"
@@ -40,13 +37,11 @@ const (
 	IODeviceWeightReasonDeviceIdentityChanged IODeviceWeightCapabilityReason = "device_identity_changed"
 	IODeviceWeightReasonEvidenceUnavailable   IODeviceWeightCapabilityReason = "evidence_unavailable"
 	IODeviceWeightReasonAmbiguousTopology     IODeviceWeightCapabilityReason = "ambiguous_topology"
-	IODeviceWeightReasonPlatformUnclaimed     IODeviceWeightCapabilityReason = "platform_unclaimed"
 	IODeviceWeightReasonMechanismUnsupported  IODeviceWeightCapabilityReason = "mechanism_unsupported"
 	IODeviceWeightReasonNoActiveMechanism     IODeviceWeightCapabilityReason = "no_active_mechanism"
 	IODeviceWeightReasonMechanismAmbiguous    IODeviceWeightCapabilityReason = "mechanism_ambiguous"
 	IODeviceWeightReasonSchedulerChanged      IODeviceWeightCapabilityReason = "scheduler_changed"
 	IODeviceWeightReasonIOCostChanged         IODeviceWeightCapabilityReason = "io_cost_changed"
-	IODeviceWeightReasonPlatformChanged       IODeviceWeightCapabilityReason = "platform_changed"
 	IODeviceWeightReasonCapabilityChanged     IODeviceWeightCapabilityReason = "capability_changed"
 )
 
@@ -71,22 +66,11 @@ func newIODeviceWeightCapabilityError(reason IODeviceWeightCapabilityReason, dev
 	return &IODeviceWeightCapabilityError{Reason: reason, Device: device, Err: err}
 }
 
-// IODeviceWeightKernelFamily identifies the kernel family independently from
-// the Oracle Linux release that ships it.
-type IODeviceWeightKernelFamily string
-
-const (
-	IODeviceWeightKernelRHCK IODeviceWeightKernelFamily = "rhck"
-	IODeviceWeightKernelUEK  IODeviceWeightKernelFamily = "uek"
-)
-
-// IODeviceWeightPlatformIdentity is the exact runtime line evidence used by
-// the first-release Oracle Linux support matrix.
+// IODeviceWeightPlatformIdentity is best-effort diagnostic provenance. None of
+// its fields authorize or refuse weighted I/O at runtime.
 type IODeviceWeightPlatformIdentity struct {
 	DistributionID    string
 	DistributionMajor int
-	SystemdMajor      int
-	KernelFamily      IODeviceWeightKernelFamily
 	KernelSeries      string
 	KernelRelease     string
 }
@@ -114,8 +98,6 @@ const (
 // one possible kernel consumer.
 type IODeviceWeightMechanismEvidence struct {
 	Mechanism           IODeviceWeightMechanism
-	PlatformSupported   bool
-	Compiled            bool
 	InterfaceAvailable  bool
 	SchedulerAvailable  bool
 	SchedulerSelected   bool
@@ -157,7 +139,7 @@ type IODeviceWeightCapabilitySnapshot struct {
 // Selector returns the canonical sorted major:minor selector.
 func (s IODeviceWeightCapabilitySnapshot) Selector() string { return s.selector }
 
-// Platform returns the observed runtime platform coordinates.
+// Platform returns best-effort diagnostic runtime coordinates.
 func (s IODeviceWeightCapabilitySnapshot) Platform() IODeviceWeightPlatformIdentity {
 	return s.platform
 }
@@ -198,16 +180,15 @@ func (s IODeviceWeightCapabilitySnapshot) QualifiedTargets() []IODeviceWeightQua
 
 type ioDeviceWeightClassifierIO struct {
 	osReleasePath   string
-	bootConfigRoot  string
 	sysRoot         string
 	sysDevBlockRoot string
 	cgroupRoot      string
+	weightCgroup    string
 	devRoot         string
 	readFile        func(string) ([]byte, error)
 	readDir         func(string) ([]os.DirEntry, error)
 	evalSymlinks    func(string) (string, error)
 	stat            func(string) (os.FileInfo, error)
-	systemdVersion  func(context.Context) (string, error)
 	kernelRelease   func() (string, error)
 }
 
@@ -222,16 +203,15 @@ type IODeviceWeightCapabilityClassifier struct {
 func NewIODeviceWeightCapabilityClassifier() *IODeviceWeightCapabilityClassifier {
 	return &IODeviceWeightCapabilityClassifier{io: ioDeviceWeightClassifierIO{
 		osReleasePath:   "/etc/os-release",
-		bootConfigRoot:  "/boot",
 		sysRoot:         "/sys",
 		sysDevBlockRoot: "/sys/dev/block",
 		cgroupRoot:      defaultCgroupRoot,
+		weightCgroup:    filepath.Join(defaultCgroupRoot, "system.slice"),
 		devRoot:         "/dev",
 		readFile:        os.ReadFile,
 		readDir:         os.ReadDir,
 		evalSymlinks:    filepath.EvalSymlinks,
 		stat:            os.Stat,
-		systemdVersion:  readSystemdVersion,
 		kernelRelease:   readKernelRelease,
 	}}
 }
@@ -244,15 +224,8 @@ func (c *IODeviceWeightCapabilityClassifier) Classify(ctx context.Context, selec
 		return IODeviceWeightCapabilitySnapshot{}, err
 	}
 	canonical := canonicalIODeviceWeightSelector(devices)
-	platform, platformOutcome, platformReason, platformErr := c.classifyPlatform(ctx)
-	if platformOutcome != IODeviceWeightSupportedActive {
-		detail := ""
-		if platformErr != nil {
-			detail = platformErr.Error()
-		}
-		return uniformIODeviceWeightSnapshot(canonical, platform, devices, platformOutcome, platformReason, detail), nil
-	}
-	environment := c.readMechanismEnvironment(platform.KernelRelease)
+	platform := c.observePlatformDiagnostics()
+	environment := c.readMechanismEnvironment()
 	classified := make([]IODeviceWeightDeviceCapability, 0, len(devices))
 	for _, number := range devices {
 		if err := ctx.Err(); err != nil {
@@ -266,99 +239,42 @@ func (c *IODeviceWeightCapabilityClassifier) Classify(ctx context.Context, selec
 			classified = append(classified, deviceCapabilityFromError(number, resolveErr))
 			continue
 		}
-		classified = append(classified, c.classifyResolvedDevice(resolved, platform, environment))
+		classified = append(classified, c.classifyResolvedDevice(resolved, environment))
 	}
 	outcome, reason, detail := aggregateIODeviceWeightCapability(classified)
 	return newIODeviceWeightCapabilitySnapshot(canonical, platform, outcome, reason, detail, classified), nil
 }
 
-// Confirm repeats read-only discovery and rejects every changed identity,
-// scheduler, io.cost state, platform coordinate or capability result.
+// Confirm repeats read-only discovery and rejects changes relevant to the
+// selected mechanism. Diagnostic platform text is deliberately ignored.
 func (c *IODeviceWeightCapabilityClassifier) Confirm(ctx context.Context, previous IODeviceWeightCapabilitySnapshot) (IODeviceWeightCapabilitySnapshot, error) {
 	current, err := c.Classify(ctx, previous.selector)
 	if err != nil {
 		return IODeviceWeightCapabilitySnapshot{}, err
 	}
-	if reflect.DeepEqual(previous, current) {
+	if ioDeviceWeightSnapshotsEquivalent(previous, current) {
 		return current, nil
 	}
 	reason, device := classifyIODeviceWeightSnapshotChange(previous, current)
 	return current, newIODeviceWeightCapabilityError(reason, device, fmt.Errorf("read-only capability evidence changed"))
 }
 
-type ioDeviceWeightPlatformSupport struct {
-	claimed bool
-	bfq     bool
-	ioCost  bool
-}
-
-func (c *IODeviceWeightCapabilityClassifier) classifyPlatform(ctx context.Context) (IODeviceWeightPlatformIdentity, IODeviceWeightCapabilityOutcome, IODeviceWeightCapabilityReason, error) {
-	data, err := c.io.readFile(c.io.osReleasePath)
-	if err != nil {
-		return IODeviceWeightPlatformIdentity{}, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, fmt.Errorf("read %s: %w", c.io.osReleasePath, err)
+func (c *IODeviceWeightCapabilityClassifier) observePlatformDiagnostics() IODeviceWeightPlatformIdentity {
+	platform := IODeviceWeightPlatformIdentity{}
+	if data, err := c.io.readFile(c.io.osReleasePath); err == nil {
+		if values, parseErr := parseOSReleaseIdentity(string(data)); parseErr == nil {
+			platform.DistributionID = values["ID"]
+			platform.DistributionMajor, _ = parseVersionMajor(values["VERSION_ID"])
+		}
 	}
-	values, err := parseOSReleaseIdentity(string(data))
-	if err != nil {
-		return IODeviceWeightPlatformIdentity{}, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
+	if release, err := c.io.kernelRelease(); err == nil {
+		platform.KernelRelease = release
+		platform.KernelSeries, _ = parseKernelSeries(release)
 	}
-	platform := IODeviceWeightPlatformIdentity{DistributionID: values["ID"]}
-	major, err := parseVersionMajor(values["VERSION_ID"])
-	if err != nil {
-		return platform, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
-	}
-	platform.DistributionMajor = major
-	if platform.DistributionID != "ol" {
-		return platform, IODeviceWeightUnsupportedPlatform, IODeviceWeightReasonPlatformUnclaimed, nil
-	}
-	systemdVersion, err := c.io.systemdVersion(ctx)
-	if err != nil {
-		return platform, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
-	}
-	platform.SystemdMajor, err = parseSystemdMajor(systemdVersion)
-	if err != nil {
-		return platform, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
-	}
-	platform.KernelRelease, err = c.io.kernelRelease()
-	if err != nil {
-		return platform, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
-	}
-	platform.KernelSeries, err = parseKernelSeries(platform.KernelRelease)
-	if err != nil {
-		return platform, IODeviceWeightEvidenceUnavailable, IODeviceWeightReasonEvidenceUnavailable, err
-	}
-	platform.KernelFamily = IODeviceWeightKernelRHCK
-	if strings.Contains(strings.ToLower(platform.KernelRelease), "uek") {
-		platform.KernelFamily = IODeviceWeightKernelUEK
-	}
-	support := ioDeviceWeightSupport(platform)
-	if !support.claimed {
-		return platform, IODeviceWeightUnsupportedPlatform, IODeviceWeightReasonPlatformUnclaimed, nil
-	}
-	if !support.bfq && !support.ioCost {
-		return platform, IODeviceWeightUnsupportedMechanism, IODeviceWeightReasonMechanismUnsupported, nil
-	}
-	return platform, IODeviceWeightSupportedActive, IODeviceWeightReasonNone, nil
-}
-
-func ioDeviceWeightSupport(platform IODeviceWeightPlatformIdentity) ioDeviceWeightPlatformSupport {
-	if platform.DistributionID != "ol" || platform.KernelFamily != IODeviceWeightKernelRHCK {
-		return ioDeviceWeightPlatformSupport{}
-	}
-	switch {
-	case platform.DistributionMajor == 8 && platform.SystemdMajor == 239 && platform.KernelSeries == "4.18":
-		return ioDeviceWeightPlatformSupport{claimed: true}
-	case platform.DistributionMajor == 9 && platform.SystemdMajor == 252 && platform.KernelSeries == "5.14":
-		return ioDeviceWeightPlatformSupport{claimed: true, bfq: true, ioCost: true}
-	case platform.DistributionMajor == 10 && platform.SystemdMajor == 257 && platform.KernelSeries == "6.12":
-		return ioDeviceWeightPlatformSupport{claimed: true, bfq: true, ioCost: true}
-	default:
-		return ioDeviceWeightPlatformSupport{}
-	}
+	return platform
 }
 
 type ioDeviceWeightMechanismEnvironment struct {
-	config               []byte
-	configErr            error
 	controllers          []byte
 	controllersAvailable bool
 	controllersErr       error
@@ -373,14 +289,13 @@ type ioDeviceWeightMechanismEnvironment struct {
 	ioWeightInterfaceErr error
 }
 
-func (c *IODeviceWeightCapabilityClassifier) readMechanismEnvironment(kernelRelease string) ioDeviceWeightMechanismEnvironment {
+func (c *IODeviceWeightCapabilityClassifier) readMechanismEnvironment() ioDeviceWeightMechanismEnvironment {
 	environment := ioDeviceWeightMechanismEnvironment{}
-	environment.config, environment.configErr = c.io.readFile(filepath.Join(c.io.bootConfigRoot, "config-"+kernelRelease))
 	environment.controllers, environment.controllersAvailable, environment.controllersErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "cgroup.controllers"))
-	_, environment.bfqInterface, environment.bfqInterfaceErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.bfq.weight"))
+	_, environment.bfqInterface, environment.bfqInterfaceErr = c.readOptionalFile(filepath.Join(c.io.weightCgroup, "io.bfq.weight"))
 	environment.ioCostQOS, environment.ioCostQOSAvailable, environment.ioCostQOSErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.cost.qos"))
 	_, environment.ioCostModel, environment.ioCostModelErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.cost.model"))
-	_, environment.ioWeightInterface, environment.ioWeightInterfaceErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.weight"))
+	_, environment.ioWeightInterface, environment.ioWeightInterfaceErr = c.readOptionalFile(filepath.Join(c.io.weightCgroup, "io.weight"))
 	return environment
 }
 
@@ -392,10 +307,9 @@ func (c *IODeviceWeightCapabilityClassifier) readOptionalFile(path string) ([]by
 	return data, err == nil, err
 }
 
-func (c *IODeviceWeightCapabilityClassifier) classifyResolvedDevice(resolved ioDeviceWeightResolvedDevice, platform IODeviceWeightPlatformIdentity, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightDeviceCapability {
-	support := ioDeviceWeightSupport(platform)
-	bfq := c.inspectBFQ(resolved, support.bfq, environment)
-	ioCost := c.inspectIOCost(resolved, support.ioCost, environment)
+func (c *IODeviceWeightCapabilityClassifier) classifyResolvedDevice(resolved ioDeviceWeightResolvedDevice, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightDeviceCapability {
+	bfq := c.inspectBFQ(resolved, environment)
+	ioCost := c.inspectIOCost(resolved, environment)
 	result := IODeviceWeightDeviceCapability{Identity: resolved.identity, BFQ: bfq, IOCost: ioCost}
 	bfqState := bfq.State
 	ioCostState := ioCost.State
@@ -422,8 +336,8 @@ func (c *IODeviceWeightCapabilityClassifier) classifyResolvedDevice(resolved ioD
 	return result
 }
 
-func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightResolvedDevice, platformSupported bool, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightMechanismEvidence {
-	evidence := IODeviceWeightMechanismEvidence{Mechanism: IODeviceWeightMechanismBFQ, PlatformSupported: platformSupported}
+func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightResolvedDevice, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightMechanismEvidence {
+	evidence := IODeviceWeightMechanismEvidence{Mechanism: IODeviceWeightMechanismBFQ}
 	scheduler, err := c.io.readFile(filepath.Join(resolved.sysfs, "queue", "scheduler"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -436,14 +350,13 @@ func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightR
 	}
 	evidence.ObservedScheduler = strings.TrimSpace(string(scheduler))
 	evidence.SchedulerAvailable, evidence.SchedulerSelected = schedulerBFQState(evidence.ObservedScheduler)
-	evidence.Compiled = kernelConfigEnabled(environment.config, "CONFIG_BFQ_GROUP_IOSCHED")
 	evidence.InterfaceAvailable = environment.bfqInterface && environment.controllersAvailable && containsWord(string(environment.controllers), "io")
-	if environment.configErr != nil || environment.controllersErr != nil || environment.bfqInterfaceErr != nil {
+	if environment.controllersErr != nil || environment.bfqInterfaceErr != nil {
 		evidence.State = IODeviceWeightMechanismStateUnavailable
-		evidence.UnavailableEvidence = firstErrorText(environment.configErr, environment.controllersErr, environment.bfqInterfaceErr)
+		evidence.UnavailableEvidence = firstErrorText(environment.controllersErr, environment.bfqInterfaceErr)
 		return evidence
 	}
-	if !platformSupported || !evidence.Compiled || !evidence.SchedulerAvailable || !evidence.InterfaceAvailable {
+	if !evidence.SchedulerAvailable || !evidence.InterfaceAvailable {
 		evidence.State = IODeviceWeightMechanismStateUnsupported
 		return evidence
 	}
@@ -455,16 +368,15 @@ func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightR
 	return evidence
 }
 
-func (c *IODeviceWeightCapabilityClassifier) inspectIOCost(resolved ioDeviceWeightResolvedDevice, platformSupported bool, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightMechanismEvidence {
-	evidence := IODeviceWeightMechanismEvidence{Mechanism: IODeviceWeightMechanismIOCost, PlatformSupported: platformSupported}
-	evidence.Compiled = kernelConfigEnabled(environment.config, "CONFIG_BLK_CGROUP_IOCOST")
+func (c *IODeviceWeightCapabilityClassifier) inspectIOCost(resolved ioDeviceWeightResolvedDevice, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightMechanismEvidence {
+	evidence := IODeviceWeightMechanismEvidence{Mechanism: IODeviceWeightMechanismIOCost}
 	evidence.InterfaceAvailable = environment.ioCostQOSAvailable && environment.ioCostModel && environment.ioWeightInterface && environment.controllersAvailable && containsWord(string(environment.controllers), "io")
-	if environment.configErr != nil || environment.controllersErr != nil || environment.ioCostQOSErr != nil || environment.ioCostModelErr != nil || environment.ioWeightInterfaceErr != nil {
+	if environment.controllersErr != nil || environment.ioCostQOSErr != nil || environment.ioCostModelErr != nil || environment.ioWeightInterfaceErr != nil {
 		evidence.State = IODeviceWeightMechanismStateUnavailable
-		evidence.UnavailableEvidence = firstErrorText(environment.configErr, environment.controllersErr, environment.ioCostQOSErr, environment.ioCostModelErr, environment.ioWeightInterfaceErr)
+		evidence.UnavailableEvidence = firstErrorText(environment.controllersErr, environment.ioCostQOSErr, environment.ioCostModelErr, environment.ioWeightInterfaceErr)
 		return evidence
 	}
-	if !platformSupported || !evidence.Compiled || !evidence.InterfaceAvailable {
+	if !evidence.InterfaceAvailable {
 		evidence.State = IODeviceWeightMechanismStateUnsupported
 		return evidence
 	}
@@ -493,15 +405,6 @@ func schedulerBFQState(value string) (available, selected bool) {
 		selected = strings.HasPrefix(field, "[") && strings.HasSuffix(field, "]")
 	}
 	return available, selected
-}
-
-func kernelConfigEnabled(data []byte, key string) bool {
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == key+"=y" {
-			return true
-		}
-	}
-	return false
 }
 
 func ioCostEnabledForDevice(data, device string) (bool, error) {
@@ -537,14 +440,6 @@ func canonicalIODeviceWeightSelector(devices []IODeviceWeightDeviceNumber) strin
 	return strings.Join(values, ",")
 }
 
-func uniformIODeviceWeightSnapshot(selector string, platform IODeviceWeightPlatformIdentity, devices []IODeviceWeightDeviceNumber, outcome IODeviceWeightCapabilityOutcome, reason IODeviceWeightCapabilityReason, detail string) IODeviceWeightCapabilitySnapshot {
-	classified := make([]IODeviceWeightDeviceCapability, len(devices))
-	for index, number := range devices {
-		classified[index] = IODeviceWeightDeviceCapability{Identity: IODeviceWeightDeviceIdentity{Number: number}, Outcome: outcome, Reason: reason, Detail: detail}
-	}
-	return newIODeviceWeightCapabilitySnapshot(selector, platform, outcome, reason, detail, classified)
-}
-
 func newIODeviceWeightCapabilitySnapshot(selector string, platform IODeviceWeightPlatformIdentity, outcome IODeviceWeightCapabilityOutcome, reason IODeviceWeightCapabilityReason, detail string, devices []IODeviceWeightDeviceCapability) IODeviceWeightCapabilitySnapshot {
 	return IODeviceWeightCapabilitySnapshot{selector: selector, platform: platform, outcome: outcome, reason: reason, detail: detail, devices: append([]IODeviceWeightDeviceCapability(nil), devices...)}
 }
@@ -566,10 +461,10 @@ func deviceCapabilityFromError(number IODeviceWeightDeviceNumber, err error) IOD
 
 func aggregateIODeviceWeightCapability(devices []IODeviceWeightDeviceCapability) (IODeviceWeightCapabilityOutcome, IODeviceWeightCapabilityReason, string) {
 	for _, candidate := range []IODeviceWeightCapabilityOutcome{
-		IODeviceWeightEvidenceUnavailable,
 		IODeviceWeightAmbiguousTopology,
 		IODeviceWeightMechanismAmbiguous,
 		IODeviceWeightUnsupportedMechanism,
+		IODeviceWeightEvidenceUnavailable,
 		IODeviceWeightSupportedInactive,
 	} {
 		for _, device := range devices {
@@ -581,10 +476,42 @@ func aggregateIODeviceWeightCapability(devices []IODeviceWeightDeviceCapability)
 	return IODeviceWeightSupportedActive, IODeviceWeightReasonNone, ""
 }
 
-func classifyIODeviceWeightSnapshotChange(previous, current IODeviceWeightCapabilitySnapshot) (IODeviceWeightCapabilityReason, string) {
-	if previous.platform != current.platform {
-		return IODeviceWeightReasonPlatformChanged, ""
+func ioDeviceWeightSnapshotsEquivalent(previous, current IODeviceWeightCapabilitySnapshot) bool {
+	if previous.selector != current.selector || previous.outcome != current.outcome || previous.reason != current.reason || len(previous.devices) != len(current.devices) {
+		return false
 	}
+	for index := range previous.devices {
+		if !ioDeviceWeightDeviceCapabilitiesEquivalent(previous.devices[index], current.devices[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func ioDeviceWeightDeviceCapabilitiesEquivalent(before, after IODeviceWeightDeviceCapability) bool {
+	if before.Identity != after.Identity || before.Outcome != after.Outcome || before.Reason != after.Reason || before.Mechanism != after.Mechanism {
+		return false
+	}
+	switch before.Mechanism {
+	case IODeviceWeightMechanismBFQ:
+		return before.BFQ.State == after.BFQ.State && before.BFQ.SchedulerSelected == after.BFQ.SchedulerSelected && before.BFQ.InterfaceAvailable == after.BFQ.InterfaceAvailable
+	case IODeviceWeightMechanismIOCost:
+		return before.IOCost.State == after.IOCost.State && before.IOCost.IOCostEnabled == after.IOCost.IOCostEnabled && before.IOCost.InterfaceAvailable == after.IOCost.InterfaceAvailable
+	default:
+		return ioDeviceWeightMechanismEvidenceEquivalent(before.BFQ, after.BFQ) && ioDeviceWeightMechanismEvidenceEquivalent(before.IOCost, after.IOCost)
+	}
+}
+
+func ioDeviceWeightMechanismEvidenceEquivalent(left, right IODeviceWeightMechanismEvidence) bool {
+	return left.Mechanism == right.Mechanism &&
+		left.InterfaceAvailable == right.InterfaceAvailable &&
+		left.SchedulerAvailable == right.SchedulerAvailable &&
+		left.SchedulerSelected == right.SchedulerSelected &&
+		left.IOCostEnabled == right.IOCostEnabled &&
+		left.State == right.State
+}
+
+func classifyIODeviceWeightSnapshotChange(previous, current IODeviceWeightCapabilitySnapshot) (IODeviceWeightCapabilityReason, string) {
 	if len(previous.devices) != len(current.devices) {
 		return IODeviceWeightReasonCapabilityChanged, ""
 	}
@@ -598,13 +525,13 @@ func classifyIODeviceWeightSnapshotChange(previous, current IODeviceWeightCapabi
 		if before.Identity != after.Identity {
 			return IODeviceWeightReasonDeviceIdentityChanged, device
 		}
-		if before.BFQ.ObservedScheduler != after.BFQ.ObservedScheduler || before.BFQ.SchedulerSelected != after.BFQ.SchedulerSelected {
+		if before.BFQ.SchedulerSelected != after.BFQ.SchedulerSelected {
 			return IODeviceWeightReasonSchedulerChanged, device
 		}
 		if before.IOCost.IOCostEnabled != after.IOCost.IOCostEnabled {
 			return IODeviceWeightReasonIOCostChanged, device
 		}
-		if before != after {
+		if !ioDeviceWeightDeviceCapabilitiesEquivalent(before, after) {
 			return IODeviceWeightReasonCapabilityChanged, device
 		}
 	}
@@ -653,20 +580,6 @@ func parseVersionMajor(value string) (int, error) {
 	return parsed, nil
 }
 
-func parseSystemdMajor(value string) (int, error) {
-	fields := strings.Fields(value)
-	if len(fields) < 2 || fields[0] != "systemd" {
-		return 0, fmt.Errorf("invalid systemd version output %q", value)
-	}
-	major := strings.TrimPrefix(fields[1], "v")
-	major = strings.SplitN(major, ".", 2)[0]
-	parsed, err := strconv.Atoi(major)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("invalid systemd major %q", fields[1])
-	}
-	return parsed, nil
-}
-
 func parseKernelSeries(release string) (string, error) {
 	fields := strings.Split(release, ".")
 	if len(fields) < 2 {
@@ -690,14 +603,6 @@ func firstErrorText(errors ...error) string {
 		}
 	}
 	return ""
-}
-
-func readSystemdVersion(ctx context.Context) (string, error) {
-	output, err := exec.CommandContext(ctx, "systemctl", "--version").Output()
-	if err != nil {
-		return "", fmt.Errorf("read systemd version: %w", err)
-	}
-	return string(output), nil
 }
 
 func readKernelRelease() (string, error) {

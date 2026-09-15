@@ -38,7 +38,9 @@ grep -q 'OL8/RHCK' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'UEK is an extension kernel available within the same release' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'are two kernel configurations of Oracle' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'Linux 9 rather than two releases' "$script_dir/CAPABILITY-MATRIX.md"
-grep -q 'normal errata only inside' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'not a runtime allowlist' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'observed capabilities' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'Runtime authorization depends on observed controller' "$script_dir/README.md"
 grep -q '252:0 121.*through BFQ' "$script_dir/CAPABILITY-MATRIX.md"
 if grep -q '251:0 121.*through BFQ' "$script_dir/CAPABILITY-MATRIX.md"; then
 	echo "RHCK matrix uses the UEK campaign device identity" >&2

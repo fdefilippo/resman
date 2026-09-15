@@ -69,15 +69,8 @@ func checkIODeviceWeightClassifierReadOnly(source goSource, call *ast.CallExpr, 
 			return
 		}
 	}
-	if systemdNamedSelector(call.Fun, "exec", "Command") {
-		result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O classifier commands require context and may read only systemd version")
-		return
-	}
-	if !systemdNamedSelector(call.Fun, "exec", "CommandContext") {
-		return
-	}
-	if len(call.Args) != 3 || !systemdStringLiteral(call.Args[1], "systemctl") || !systemdStringLiteral(call.Args[2], "--version") {
-		result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O classifier may execute only systemctl --version")
+	if systemdNamedSelector(call.Fun, "exec", "Command") || systemdNamedSelector(call.Fun, "exec", "CommandContext") {
+		result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O capability classification must not execute commands")
 	}
 }
 
@@ -90,15 +83,6 @@ func selectorOwner(selector *ast.SelectorExpr) (string, bool) {
 		return "", false
 	}
 	return identifier.Name, true
-}
-
-func systemdStringLiteral(expression ast.Expr, expected string) bool {
-	literal, ok := expression.(*ast.BasicLit)
-	if !ok || literal.Kind != token.STRING {
-		return false
-	}
-	value, err := strconv.Unquote(literal.Value)
-	return err == nil && value == expected
 }
 
 // systemdCapabilityProbeExceptions permits exactly one start and stop call in
