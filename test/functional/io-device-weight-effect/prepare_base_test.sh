@@ -17,6 +17,7 @@ cleanup_test() {
 trap cleanup_test EXIT
 
 mkdir -p "$test_root/bin"
+parent_mode=$(stat -c %a "$test_root")
 printf 'reviewed base\n' >"$base"
 base_sha=$(sha256sum "$base" | awk '{print $1}')
 cat >"$test_root/bin/qemu-img" <<'EOF'
@@ -47,6 +48,7 @@ prepare() {
 
 [[ $(prepare) == "$prepared" ]]
 grep -q '^virt-customize ' "$calls"
+[[ $(stat -c %a "$test_root") == "$parent_mode" ]]
 first_calls=$(wc -l <"$calls")
 [[ $(prepare) == "$prepared" ]]
 [[ $(wc -l <"$calls") -eq $first_calls ]]

@@ -36,7 +36,11 @@ done
 [[ -f $base_image && ! -L $base_image ]] || { echo "base image is unavailable" >&2; exit 77; }
 [[ $(sha256sum "$base_image" | awk '{print $1}') == "$base_sha256" ]] \
 	|| { echo "base image differs from the reviewed Oracle digest" >&2; exit 1; }
-install -d -m 0710 "$parent"
+if [[ -e $parent || -L $parent ]]; then
+	[[ -d $parent && ! -L $parent ]] || { echo "unsafe prepared image parent" >&2; exit 2; }
+else
+	install -d -m 0710 "$parent"
+fi
 
 cache_is_valid() {
 	[[ -f $prepared_image && ! -L $prepared_image && -f $manifest && ! -L $manifest ]] || return 1
