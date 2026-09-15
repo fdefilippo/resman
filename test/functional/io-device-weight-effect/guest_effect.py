@@ -143,7 +143,7 @@ class Campaign:
         self.weight_map = Path("/etc/resman/io-weights.map")
         self.database = Path("/var/lib/resman/metrics.db")
         self.journal = Path("/var/lib/resman/systemd-property-leases.json")
-        self.log = Path("/var/log/resman/resman.log")
+        self.log = Path("/var/log/resman.log")
         self.users = [pwd.getpwnam("resman-t1"), pwd.getpwnam("resman-t2")]
         self.slices = ["user-%d.slice" % user.pw_uid for user in self.users]
         self.devices = []
@@ -429,7 +429,9 @@ while not stop:
                          "PROMETHEUS_METRICS_BIND_PORT": 1974, "PROMETHEUS_TLS_ENABLED": "false",
                          "PROMETHEUS_AUTH_TYPE": "none", "METRICS_DB_ENABLED": "true",
                          "METRICS_DB_PATH": str(self.database), "METRICS_DB_WRITE_INTERVAL": 5,
-                         "POLLING_INTERVAL": 5, "PSI_EVENT_DRIVEN": "false"}, reload_daemon=False)
+                         "POLLING_INTERVAL": 5, "PSI_EVENT_DRIVEN": "false",
+                         "USE_SYSLOG": "false", "LOG_FILE": str(self.log),
+                         "LOG_LEVEL": "DEBUG"}, reload_daemon=False)
 
     def start_resman(self):
         self.command("systemctl", "reset-failed", "resman", check=False)
@@ -683,6 +685,25 @@ while not stop:
             metrics = "unavailable: " + str(error)
         diagnostics["final_prometheus"] = "final-prometheus.json"
         self.record("final-prometheus.json", {"text": metrics})
+        if self.journal.exists():
+            diagnostics["ownership_journal"] = "ownership-journal.json"
+            self.record("ownership-journal.json", {"text": self.journal.read_text(errors="replace")})
+        unit_state = {}
+        for unit in self.slices:
+            unit_state[unit] = self.command(
+                "systemctl", "show", unit, "--property=DropInPaths",
+                "--property=IODeviceWeight", "--property=IOReadBandwidthMax",
+                check=False).stdout
+        diagnostics["unit_state"] = "unit-state.json"
+        self.record("unit-state.json", unit_state)
+        drop_ins = {}
+        for unit in self.slices:
+            directory = Path("/run/systemd/system.control") / (unit + ".d")
+            if directory.is_dir():
+                drop_ins[unit] = {path.name: path.read_text(errors="replace")
+                                  for path in sorted(directory.glob("*.conf"))}
+        diagnostics["unit_drop_ins"] = "unit-drop-ins.json"
+        self.record("unit-drop-ins.json", drop_ins)
         return diagnostics
 
     def run(self):

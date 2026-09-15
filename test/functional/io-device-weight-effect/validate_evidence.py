@@ -204,7 +204,8 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
             cleanup["io_cost_restored"] and cleanup["units_removed"] and
             cleanup["leases_removed"], "cleanup is incomplete")
     raw = summary["raw_files"]
-    require({"daemon-log.json", "systemd-journal.json", "final-prometheus.json"}.issubset(raw) and
+    require({"daemon-log.json", "systemd-journal.json", "final-prometheus.json",
+             "unit-state.json", "unit-drop-ins.json"}.issubset(raw) and
             set(raw).issubset(declared), "raw evidence references are incomplete")
     for index, stage in enumerate(COMPLETED_STAGES, start=1):
         name = "checkpoint-%02d-%s.json" % (index, stage)

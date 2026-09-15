@@ -390,6 +390,46 @@ func TestApplyAllowsOwnedIODeviceWeightTargetSetChangesWithStableMechanisms(t *t
 	}
 }
 
+func TestIODeviceWeightSelectorChangeComposesWithHardIOLimit(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	two, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{
+		{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vdb, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hard, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 32 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, assignments := range [][]PropertyAssignment{{two}, {hard}, {vdb}} {
+		if _, err := adapter.Apply(context.Background(), identity, assignments); err != nil {
+			t.Fatalf("Apply(%v) error = %v", assignments, err)
+		}
+		if _, err := adapter.ConfirmApplied(context.Background(), identity, assignments); err != nil {
+			t.Fatalf("ConfirmApplied(%v) error = %v", assignments, err)
+		}
+	}
+	result, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight})
+	if err != nil {
+		t.Fatalf("RestoreProperties(IODeviceWeight) error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Restored, []PropertyName{PropertyIODeviceWeight}) {
+		t.Fatalf("restored properties = %v", result.Restored)
+	}
+	got := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit)
+	if !reflect.DeepEqual(got, []dbusDeviceLimit{{Path: "/dev/vda", Value: 32 << 20}}) {
+		t.Fatalf("hard I/O limit changed with weight release: %+v", got)
+	}
+}
+
 func TestConfirmAppliedRejectsChangedIODeviceWeightMechanism(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
