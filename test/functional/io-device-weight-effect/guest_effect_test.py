@@ -45,6 +45,14 @@ class GuestEffectTests(unittest.TestCase):
             "owned_disposable": True,
         }])
 
+    def test_profiles_separate_smoke_from_retained_qualification(self):
+        self.assertEqual(guest_effect.PROFILES["smoke"]["interval_count"], 1)
+        self.assertEqual(guest_effect.PROFILES["smoke"]["interval_seconds"], 1)
+        self.assertEqual(guest_effect.PROFILES["qualification"]["interval_count"], 3)
+        self.assertEqual(guest_effect.PROFILES["qualification"]["interval_seconds"], 10)
+        self.assertNotEqual(guest_effect.PROFILES["smoke"]["scope"],
+                            guest_effect.PROFILES["qualification"]["scope"])
+
 
 if __name__ == "__main__":
     unittest.main()

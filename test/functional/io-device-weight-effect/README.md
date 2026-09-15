@@ -39,6 +39,15 @@ The packaged daemon never performs those setup mutations. Missing KVM, the exact
 RHCK package, or another campaign prerequisite produces `BLOCKED`; it cannot be
 published as effect qualification.
 
+The QEMU runner prepares the exact OL9.8/RHCK image once in an integrity-checked
+cache and creates a fresh copy-on-write overlay for every run. It first executes
+a non-retained smoke profile with one one-second interval per phase. Every major
+step writes a named checkpoint. The retained three-by-ten-second qualification
+profile starts only after the smoke bundle passes the same structural, transport,
+lifecycle, composition, and delivery-direction checks. Interruptions invoke an
+exact run-owned cleanup helper and verify that the domain and its three disks no
+longer exist; the reusable prepared image is deliberately retained.
+
 ## Execution
 
 Run the validator and its mutation tests without KVM:

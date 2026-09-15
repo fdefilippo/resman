@@ -101,7 +101,8 @@ cleanup() {
 	fi
 	if [[ $status -eq 0 ]]; then
 		python3 "$script_dir/validate_evidence.py" "$evidence_dir/remote/guest" \
-			--revision "$source_revision" --package-sha "$(sha256sum "$package" | awk '{print $1}')" \
+			--profile qualification --revision "$source_revision" \
+			--package-sha "$(sha256sum "$package" | awk '{print $1}')" \
 			>>"$evidence_dir/collect.log" 2>&1 && final_result=PASS || status=1
 	fi
 	printf 'cleanup=%s\nresult=%s\nexit_code=%d\n' "$cleanup_status" "$final_result" "$status" \
@@ -127,6 +128,7 @@ install -m 0600 "$build_manifest" "$scratch_dir/bundle/build-manifest.txt"
 install -m 0755 "$script_dir/qemu-host.sh" "$scratch_dir/bundle/qemu-host.sh"
 install -m 0755 "$script_dir/qemu-run.sh" "$scratch_dir/bundle/run.sh"
 install -m 0755 "$script_dir/cleanup-owned.sh" "$scratch_dir/bundle/cleanup-owned.sh"
+install -m 0755 "$script_dir/prepare-base.sh" "$scratch_dir/bundle/prepare-base.sh"
 install -m 0755 "$script_dir/../real-kernel/remote-control.sh" "$scratch_dir/bundle/control.sh"
 install -m 0755 "$script_dir/guest_effect.py" "$scratch_dir/bundle/guest_effect.py"
 install -m 0755 "$script_dir/validate_evidence.py" "$scratch_dir/bundle/validate_evidence.py"

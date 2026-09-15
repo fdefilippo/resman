@@ -19,6 +19,14 @@ PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
 EXPECTED_KERNEL = "5.14.0-687.46.1.el9_8.x86_64"
 EXPECTED_MANAGER = "252-67.0.1.el9_8.2"
 EXPECTED_PACKAGE = "resman-1.38.0-3.el9.x86_64"
+COMPLETED_STAGES = ("preflight", "workloads", "bfq", "authority", "public",
+                    "composition", "lifecycle", "io_cost", "release")
+PROFILES = {
+    "smoke": {"interval_count": 1, "interval_seconds": 1,
+              "scope": "packaged-daemon-controlled-contention-smoke"},
+    "qualification": {"interval_count": 3, "interval_seconds": 10,
+                      "scope": "packaged-daemon-controlled-contention"},
+}
 
 
 class Blocked(RuntimeError):
@@ -117,7 +125,8 @@ def eventually(check, message, timeout=75, interval=1):
 
 class Campaign:
     def __init__(self, bundle, evidence, run_id, revision, source_tree,
-                 qualification_revision, qualification_tree, package, devices):
+                 qualification_revision, qualification_tree, package, devices,
+                 profile="qualification"):
         self.bundle = bundle
         self.evidence = evidence
         self.run_id = run_id
@@ -127,6 +136,9 @@ class Campaign:
         self.qualification_tree = qualification_tree
         self.package = package
         self.device_paths = devices
+        require(profile in PROFILES, "unknown campaign profile")
+        self.profile = profile
+        self.profile_config = PROFILES[profile]
         self.config = Path("/etc/resman/resman.conf")
         self.weight_map = Path("/etc/resman/io-weights.map")
         self.database = Path("/var/lib/resman/metrics.db")
@@ -141,6 +153,7 @@ class Campaign:
         self.original_map = None
         self.result = "FAIL"
         self.summary = {}
+        self.completed_stages = []
 
     def command(self, *args, check=True, timeout=90, input_text=None):
         result = subprocess.run(args, input=input_text, text=True, stdout=subprocess.PIPE,
@@ -157,6 +170,15 @@ class Campaign:
         path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
         self.raw_files[name] = sha256(path)
         return value
+
+    def checkpoint(self, stage):
+        require(stage in COMPLETED_STAGES, "unknown campaign checkpoint")
+        require(stage not in self.completed_stages, "campaign checkpoint repeated")
+        self.completed_stages.append(stage)
+        self.record("checkpoint-%02d-%s.json" % (len(self.completed_stages), stage), {
+            "profile": self.profile, "stage": stage, "status": "PASS",
+            "completed_stages": list(self.completed_stages), "time_ns": time.time_ns(),
+        })
 
     def preflight(self):
         if os.geteuid() != 0 or not Path("/run/systemd/system").is_dir():
@@ -348,9 +370,9 @@ while not stop:
         intervals = []
         raw = []
         device = self.devices[0]["major_minor"]
-        for index in range(3):
+        for index in range(self.profile_config["interval_count"]):
             before = self.snapshot_io()
-            time.sleep(10)
+            time.sleep(self.profile_config["interval_seconds"])
             after = self.snapshot_io()
             delta = [io_stat_read_bytes(after["slices"][item]["io_stat"], device) -
                      io_stat_read_bytes(before["slices"][item]["io_stat"], device) for item in range(2)]
@@ -669,17 +691,26 @@ while not stop:
                    "units_removed": False, "leases_removed": False}
         try:
             self.preflight()
+            self.checkpoint("preflight")
             self.start_workloads()
+            self.checkpoint("workloads")
             mechanisms = {}
             mechanisms["bfq"] = self.mechanism_campaign("bfq")
+            self.checkpoint("bfq")
             authority = self.authority_evidence()
+            self.checkpoint("authority")
             public = self.public_observability()
+            self.checkpoint("public")
             composition = self.composition_evidence()
+            self.checkpoint("composition")
             lifecycle = self.lifecycle_evidence()
+            self.checkpoint("lifecycle")
             self.stop_resman()
             mechanisms["io_cost"] = self.mechanism_campaign("io_cost")
+            self.checkpoint("io_cost")
             self.set_config({"IO_WEIGHT_DEVICES": ""})
             self.wait_released()
+            self.checkpoint("release")
             self.result = "PASS"
             exit_code = 0
         except Blocked as error:
@@ -704,7 +735,11 @@ while not stop:
                 cleanup = {"result": "FAIL", "error": str(error), "scheduler_restored": False,
                            "io_cost_restored": False, "units_removed": False, "leases_removed": False}
                 self.result, exit_code = "FAIL", 1
-            summary = {"schema": 1, "scope": "packaged-daemon-controlled-contention",
+            summary = {"schema": 1, "scope": self.profile_config["scope"],
+                       "profile": self.profile,
+                       "cadence": {"interval_count": self.profile_config["interval_count"],
+                                   "interval_seconds": self.profile_config["interval_seconds"]},
+                       "completed_stages": self.completed_stages,
                        "provenance": PROVENANCE,
                        "source": {"revision": self.revision,
                                   "tree": self.source_tree,
@@ -738,10 +773,12 @@ def main():
     parser.add_argument("--qualification-tree", required=True)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--device", action="append", type=Path, required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES), default="qualification")
     args = parser.parse_args()
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     campaign = Campaign(args.bundle, args.evidence, args.run_id, args.revision, args.source_tree,
-                        args.qualification_revision, args.qualification_tree, args.package, args.device)
+                        args.qualification_revision, args.qualification_tree, args.package, args.device,
+                        args.profile)
     raise SystemExit(campaign.run())
 
 

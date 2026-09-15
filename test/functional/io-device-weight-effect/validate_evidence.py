@@ -17,6 +17,16 @@ PHASES = {
     "unequal": (100, 1000),
     "reversed": (1000, 100),
 }
+PROFILES = {
+    "smoke": {"interval_count": 1, "minimum_duration_ns": 500_000_000,
+              "interval_seconds": 1,
+              "scope": "packaged-daemon-controlled-contention-smoke"},
+    "qualification": {"interval_count": 3, "minimum_duration_ns": 5_000_000_000,
+                      "interval_seconds": 10,
+                      "scope": "packaged-daemon-controlled-contention"},
+}
+COMPLETED_STAGES = ("preflight", "workloads", "bfq", "authority", "public",
+                    "composition", "lifecycle", "io_cost", "release")
 
 
 def require(condition, message):
@@ -52,12 +62,15 @@ def validate_manifest(directory):
     return declared
 
 
-def aggregate(intervals, device):
-    require(len(intervals) >= 3, "each delivery phase requires at least three raw intervals")
+def aggregate(intervals, device, profile="qualification"):
+    profile_config = PROFILES[profile]
+    require(len(intervals) >= profile_config["interval_count"],
+            "delivery phase has too few raw intervals")
     totals = [0, 0]
     elapsed = 0
     for item in intervals:
-        require(item["device"] == device and item["duration_ns"] >= 5_000_000_000,
+        require(item["device"] == device and
+                item["duration_ns"] >= profile_config["minimum_duration_ns"],
                 "invalid delivery interval identity or duration")
         deltas = item["read_bytes_delta"]
         require(len(deltas) == 2 and all(isinstance(value, int) and value > 0 for value in deltas),
@@ -69,7 +82,7 @@ def aggregate(intervals, device):
     return {"bytes": totals, "shares": [totals[0] / total, totals[1] / total], "duration_ns": elapsed}
 
 
-def validate_delivery(mechanism, evidence, devices):
+def validate_delivery(mechanism, evidence, devices, profile):
     require(evidence["outcome"] == "EFFECT_QUALIFIED", mechanism + " is not effect-qualified")
     device = evidence["device"]
     require(device in devices, mechanism + " uses an unowned device")
@@ -101,7 +114,7 @@ def validate_delivery(mechanism, evidence, devices):
     for name, weights in PHASES.items():
         phase = evidence["phases"][name]
         require(tuple(phase["public_weights"]) == weights, "wrong public weights in " + name)
-        computed[name] = aggregate(phase["intervals"], device)
+        computed[name] = aggregate(phase["intervals"], device, profile)
     require(0.30 <= computed["equal"]["shares"][0] <= 0.70,
             mechanism + " equal-weight control is materially asymmetric")
     unequal = computed["unequal"]["bytes"]
@@ -114,12 +127,21 @@ def validate_delivery(mechanism, evidence, devices):
             mechanism + " reported delivery does not match raw intervals")
 
 
-def validate(directory, expected_revision=None, expected_package_sha=None):
+def validate(directory, expected_revision=None, expected_package_sha=None,
+             profile="qualification"):
+    require(profile in PROFILES, "unknown evidence profile")
+    profile_config = PROFILES[profile]
     directory = Path(directory)
     declared = validate_manifest(directory)
     summary = json.loads((directory / "summary.json").read_text())
-    require(summary["schema"] == 1 and summary["scope"] == "packaged-daemon-controlled-contention",
+    require(summary["schema"] == 1 and summary["scope"] == profile_config["scope"] and
+            summary["profile"] == profile,
             "wrong evidence schema or scope")
+    require(summary["cadence"] == {"interval_count": profile_config["interval_count"],
+                                    "interval_seconds": profile_config["interval_seconds"]},
+            "wrong evidence cadence")
+    require(tuple(summary["completed_stages"]) == COMPLETED_STAGES,
+            "campaign checkpoints are incomplete")
     require(summary["provenance"] == PROVENANCE, "wrong qualification provenance")
     require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["revision"]) is not None,
             "source revision is not immutable")
@@ -148,7 +170,7 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
     require(len(devices) == 2, "two stable disposable device identities are required")
     require(set(summary["mechanisms"]) == set(MECHANISMS), "mechanism evidence is incomplete")
     for mechanism in MECHANISMS:
-        validate_delivery(mechanism, summary["mechanisms"][mechanism], devices)
+        validate_delivery(mechanism, summary["mechanisms"][mechanism], devices, profile)
     authority = summary["authority"]
     require(authority["complete"]["coverage"] == "complete" and
             authority["complete"]["complete_users"] >= 2 and
@@ -184,6 +206,14 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
     raw = summary["raw_files"]
     require({"daemon-log.json", "systemd-journal.json", "final-prometheus.json"}.issubset(raw) and
             set(raw).issubset(declared), "raw evidence references are incomplete")
+    for index, stage in enumerate(COMPLETED_STAGES, start=1):
+        name = "checkpoint-%02d-%s.json" % (index, stage)
+        require(name in raw, "missing retained campaign checkpoint: " + stage)
+        checkpoint = json.loads((directory / name).read_text())
+        require(checkpoint["profile"] == profile and checkpoint["stage"] == stage and
+                checkpoint["status"] == "PASS" and
+                tuple(checkpoint["completed_stages"]) == COMPLETED_STAGES[:index],
+                "invalid retained campaign checkpoint: " + stage)
     for name, digest in raw.items():
         require(declared[name] == digest, "raw evidence digest differs: " + name)
     return summary
@@ -194,9 +224,10 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--revision")
     parser.add_argument("--package-sha")
+    parser.add_argument("--profile", choices=tuple(PROFILES), default="qualification")
     args = parser.parse_args()
-    validate(args.directory, args.revision, args.package_sha)
-    print("PASS: packaged-daemon weighted-I/O effect evidence")
+    validate(args.directory, args.revision, args.package_sha, args.profile)
+    print("PASS: packaged-daemon weighted-I/O %s evidence" % args.profile)
 
 
 if __name__ == "__main__":

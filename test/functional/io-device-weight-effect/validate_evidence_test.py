@@ -10,22 +10,25 @@ import unittest
 import validate_evidence as validator
 
 
-def make_interval(device, first, second):
-    return {"device": device, "duration_ns": 10_000_000_000,
+def make_interval(device, first, second, duration_ns=10_000_000_000):
+    return {"device": device, "duration_ns": duration_ns,
             "read_bytes_delta": [first, second]}
 
 
-def fixture(directory):
+def fixture(directory, profile="qualification"):
     device = "252:16"
+    profile_config = validator.PROFILES[profile]
+    count = profile_config["interval_count"]
+    duration = profile_config["minimum_duration_ns"]
     phases = {
         "equal": {"public_weights": [100, 100],
-                  "intervals": [make_interval(device, 100, 110) for _ in range(3)]},
+                  "intervals": [make_interval(device, 100, 110, duration) for _ in range(count)]},
         "unequal": {"public_weights": [100, 1000],
-                    "intervals": [make_interval(device, 100, 400) for _ in range(3)]},
+                    "intervals": [make_interval(device, 100, 400, duration) for _ in range(count)]},
         "reversed": {"public_weights": [1000, 100],
-                     "intervals": [make_interval(device, 400, 100) for _ in range(3)]},
+                     "intervals": [make_interval(device, 400, 100, duration) for _ in range(count)]},
     }
-    aggregates = {name: validator.aggregate(value["intervals"], device)
+    aggregates = {name: validator.aggregate(value["intervals"], device, profile)
                   for name, value in phases.items()}
     mechanisms = {}
     for name in validator.MECHANISMS:
@@ -46,8 +49,18 @@ def fixture(directory):
         raw = directory / name
         raw.write_text('{"measured":true}\n')
         raw_files[name] = hashlib.sha256(raw.read_bytes()).hexdigest()
+    for index, stage in enumerate(validator.COMPLETED_STAGES, start=1):
+        name = "checkpoint-%02d-%s.json" % (index, stage)
+        raw = directory / name
+        raw.write_text(json.dumps({"profile": profile, "stage": stage, "status": "PASS",
+                                   "completed_stages": list(validator.COMPLETED_STAGES[:index]),
+                                   "time_ns": index}, sort_keys=True) + "\n")
+        raw_files[name] = hashlib.sha256(raw.read_bytes()).hexdigest()
     summary = {
-        "schema": 1, "scope": "packaged-daemon-controlled-contention",
+        "schema": 1, "scope": profile_config["scope"], "profile": profile,
+        "cadence": {"interval_count": count,
+                    "interval_seconds": profile_config["interval_seconds"]},
+        "completed_stages": list(validator.COMPLETED_STAGES),
         "provenance": validator.PROVENANCE,
         "source": {"revision": "a" * 40, "tree": "b" * 40,
                    "qualification_revision": "d" * 40, "qualification_tree": "e" * 40},
@@ -94,6 +107,12 @@ class EvidenceTests(unittest.TestCase):
             fixture(directory)
             validator.validate(directory, "a" * 40, "c" * 64)
 
+    def test_valid_smoke_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            fixture(directory, "smoke")
+            validator.validate(directory, "a" * 40, "c" * 64, "smoke")
+
     def test_mutations_are_rejected(self):
         cases = [
             lambda x: x.update(scope="adapter-only"),
@@ -113,6 +132,7 @@ class EvidenceTests(unittest.TestCase):
             lambda x: x["composition"]["weight_only"].update(hard_cap=True),
             lambda x: x["lifecycle"].update(compare_before_restore="FAIL"),
             lambda x: x["cleanup"].update(io_cost_restored=False),
+            lambda x: x["completed_stages"].pop(),
             lambda x: x.update(raw_files={}),
         ]
         for index, mutate in enumerate(cases):
