@@ -15,15 +15,40 @@ var ioWeightRetryDelays = [...]time.Duration{
 	30 * time.Second,
 }
 
+type ioWeightRetryTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+}
+
+type ioWeightRetryClock interface {
+	NewTimer(time.Duration) ioWeightRetryTimer
+}
+
+type systemIOWeightRetryClock struct{}
+
+func (systemIOWeightRetryClock) NewTimer(delay time.Duration) ioWeightRetryTimer {
+	return systemIOWeightRetryTimer{timer: time.NewTimer(delay)}
+}
+
+type systemIOWeightRetryTimer struct{ timer *time.Timer }
+
+func (t systemIOWeightRetryTimer) C() <-chan time.Time { return t.timer.C }
+func (t systemIOWeightRetryTimer) Stop() bool          { return t.timer.Stop() }
+
 type ioWeightRetryController struct {
-	timer *time.Timer
+	clock ioWeightRetryClock
+	timer ioWeightRetryTimer
 	c     <-chan time.Time
 	step  int
 	delay time.Duration
 }
 
 func newIOWeightRetryController() *ioWeightRetryController {
-	return &ioWeightRetryController{}
+	return newIOWeightRetryControllerWithClock(systemIOWeightRetryClock{})
+}
+
+func newIOWeightRetryControllerWithClock(clock ioWeightRetryClock) *ioWeightRetryController {
+	return &ioWeightRetryController{clock: clock}
 }
 
 func (c *ioWeightRetryController) C() <-chan time.Time { return c.c }
@@ -51,8 +76,8 @@ func (c *ioWeightRetryController) Schedule(result state.IODeviceWeightAttemptRes
 	} else {
 		c.step = len(ioWeightRetryDelays) - 1
 	}
-	c.timer = time.NewTimer(delay)
-	c.c = c.timer.C
+	c.timer = c.clock.NewTimer(delay)
+	c.c = c.timer.C()
 	c.delay = delay
 }
 
@@ -60,7 +85,7 @@ func (c *ioWeightRetryController) Stop() {
 	if c.timer != nil {
 		if !c.timer.Stop() {
 			select {
-			case <-c.timer.C:
+			case <-c.timer.C():
 			default:
 			}
 		}

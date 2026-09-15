@@ -2,12 +2,38 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/state"
 )
 
+type fakeIOWeightRetryTimer struct {
+	channel chan time.Time
+	stopped bool
+}
+
+func (t *fakeIOWeightRetryTimer) C() <-chan time.Time { return t.channel }
+func (t *fakeIOWeightRetryTimer) Stop() bool {
+	wasActive := !t.stopped
+	t.stopped = true
+	return wasActive
+}
+
+type fakeIOWeightRetryClock struct {
+	delays []time.Duration
+	timers []*fakeIOWeightRetryTimer
+}
+
+func (c *fakeIOWeightRetryClock) NewTimer(delay time.Duration) ioWeightRetryTimer {
+	timer := &fakeIOWeightRetryTimer{channel: make(chan time.Time, 1)}
+	c.delays = append(c.delays, delay)
+	c.timers = append(c.timers, timer)
+	return timer
+}
+
 func TestIOWeightRetryControllerUsesApprovedCappedBackoff(t *testing.T) {
-	controller := newIOWeightRetryController()
+	clock := &fakeIOWeightRetryClock{}
+	controller := newIOWeightRetryControllerWithClock(clock)
 	defer controller.Stop()
 	want := ioWeightRetryDelays[:]
 	for index, expected := range want {
@@ -17,6 +43,9 @@ func TestIOWeightRetryControllerUsesApprovedCappedBackoff(t *testing.T) {
 		}
 		if controller.delay != expected {
 			t.Fatalf("step %d delay = %s, want %s", index, controller.delay, expected)
+		}
+		if clock.delays[index] != expected {
+			t.Fatalf("fake clock step %d = %s, want %s", index, clock.delays[index], expected)
 		}
 	}
 	if controller.step != len(ioWeightRetryDelays)-1 {
