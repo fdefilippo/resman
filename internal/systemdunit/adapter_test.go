@@ -1254,6 +1254,27 @@ func TestStartupCleansAnExactRecordedFootprintForAnInactiveUnitWithoutLoadingIt(
 	}
 }
 
+func TestStartupRetainsMissingFootprintForAnInactiveOrdinaryUnit(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	first := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	identity := identityFor(t, first, 1001)
+	if _, err := first.Apply(context.Background(), identity, []PropertyAssignment{mustAssignment(t, PropertyCPUWeight, 321)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	transport.diskPaths = map[string][]string{identity.Name: nil}
+	delete(transport.units, identity.Name)
+
+	restarted := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	want := []LeaseRecoveryOutcome{{Unit: identity.Name, State: LeaseRecoveryConflict}}
+	if got := restarted.RecoveryReport(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoveryReport() = %+v, want %+v", got, want)
+	}
+	if len(store.journal.Units) != 1 || len(transport.revertCalls) != 0 {
+		t.Fatalf("missing ordinary footprint was discarded: journal=%+v revert=%v", store.journal, transport.revertCalls)
+	}
+}
+
 func TestStartupReportsExactInactiveLeaseAsPendingWhenCleanupCannotComplete(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	store := newMemoryLeaseJournalStore()

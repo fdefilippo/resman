@@ -1,3 +1,9 @@
+resman (1.38.0-7) stable; urgency=medium
+
+  * Drop vanished transient-probe leases after proving no runtime state remains.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 19:32:00 +0200
+
 resman (1.38.0-6) stable; urgency=medium
 
   * Reconcile transient capability-probe leases only after their unit stops.

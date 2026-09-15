@@ -103,6 +103,28 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndInactiveCleanup(t *t
 	}
 }
 
+func TestStartupCapabilityAcceptsStoppedProbeWithVanishedRuntimeFootprint(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.onProbeStop = func(f *fakeUnitTransport, unit string, _ *fakeUnitState) {
+		// Real systemd can remove the transient slice and its complete runtime
+		// property footprint as one stop operation.
+		f.diskPaths[unit] = nil
+	}
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
+
+	if err := adapter.probeStartupCapability(context.Background(), transport, capability); err != nil {
+		t.Fatalf("probeStartupCapability() error = %v", err)
+	}
+	if len(transport.revertCalls) != 0 || transport.reloadCalls != 0 {
+		t.Fatalf("vanished probe footprint triggered revert=%v reload=%d", transport.revertCalls, transport.reloadCalls)
+	}
+	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("vanished probe footprint left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+	}
+}
+
 func TestStartupValidatesParentThroughProductionPropertyAndIdentityPathBeforeProbing(t *testing.T) {
 	transport := newFakeUnitTransport()
 	delete(transport.units[parentUserSlice].slice, string(PropertyCPUQuotaPeriodUSec))

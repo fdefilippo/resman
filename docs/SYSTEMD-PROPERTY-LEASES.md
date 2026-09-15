@@ -39,7 +39,11 @@ and is never restored without compare-before-restore proof.
 An owned transient capability probe is stopped before its journal and runtime
 drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
 must be retained; reconciling the now-inactive footprint avoids placing a full
-daemon reload inside the active `io.cost` probe transaction.
+daemon reload inside the active `io.cost` probe transaction. Systemd may remove the
+entire transient runtime footprint as part of that stop. For the exact reserved,
+random probe namespace only, absence of both the unit and every mutable file proves
+that no property remains to restore, so ResMan removes the stale probe lease without
+weakening inactive-unit conflict checks for ordinary user slices.
 
 ## Resource-specific workload authority
 

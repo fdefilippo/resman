@@ -304,6 +304,19 @@ func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
 		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
 		return nil
 	}
+	if len(actual) == 0 && isCapabilityProbeUnit(unit) &&
+		(phase == leasePhaseApplied || phase == leasePhaseApplying) {
+		// A stopped transient capability probe may disappear together with its
+		// complete runtime drop-in footprint. The reserved random unit has no
+		// persistent baseline and no surviving cgroup state, so only its durable
+		// ownership record remains. Keep this exception out of ordinary user
+		// slices, where an absent footprint is still an external conflict.
+		if err := a.removeUnitLeaseDurably(unit); err != nil {
+			return err
+		}
+		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
+		return nil
+	}
 	if len(actual) == 0 && (phase == leasePhaseRestoring || phase == leasePhaseReloading) {
 		if err := a.transport.reload(ctx); err != nil {
 			return classifyTransportError("recover_inactive_reload", unit, err)
