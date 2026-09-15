@@ -244,7 +244,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 7"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 8"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -265,8 +265,8 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	}
 }
 
-func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T) {
-	for _, version := range []int{1, 2, 3, 4, 5} {
+func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) {
+	for _, version := range []int{1, 2, 3, 4, 5, 6} {
 		t.Run(fmt.Sprintf("schema version %d", version), func(t *testing.T) {
 			dbPath := privateTestDatabasePath(t, fmt.Sprintf("version-%d.db", version))
 			legacyDB, err := sql.Open("sqlite3", dbPath)
@@ -292,12 +292,119 @@ func TestNewDatabaseManagerRejectsPreviousVersionsWithoutMigration(t *testing.T)
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 7"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 8"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
 			}
 		})
+	}
+}
+
+func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "schema-7.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("create schema 8 fixture: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now, TotalCores: 4}); err != nil {
+		_ = manager.Close()
+		t.Fatalf("write pre-migration row: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("close schema 8 fixture: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open schema fixture: %v", err)
+	}
+	_, err = raw.Exec(`
+		ALTER TABLE system_metrics RENAME TO system_metrics_v8;
+		CREATE TABLE system_metrics AS SELECT
+			id, timestamp, sample_epoch_id, interval_start, interval_end,
+			total_cpu_usage_percent, total_cores, system_load,
+			cpu_limits_active, resource_limits_active, any_limits_active,
+			cpu_actively_limited_users_count, actively_limited_users_count,
+			nominal_parent_pool_points, cpu_capacity_available, online_cpus,
+			programmed_parent_quota_usec, programmed_parent_period_usec,
+			cpu_points_degraded, applied_guarantee_points, programmed_guarantee_weight,
+			configured_best_effort_points, parent_cpu_quota,
+			programmed_sibling_weight_sum, programmed_best_effort_weight,
+			parent_cpu_usage_usec_delta, observed_sibling_weight_sum,
+			configured_root_points, parent_cpu_periods_delta,
+			parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta,
+			denominator_state, enforcement_mode
+		FROM system_metrics_v8;
+		DROP TABLE system_metrics_v8;
+		PRAGMA user_version = 7;
+	`)
+	if err != nil {
+		_ = raw.Close()
+		t.Fatalf("construct schema 7 fixture: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close schema 7 fixture: %v", err)
+	}
+
+	manager, err = NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("migrate schema 7 fixture: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+	var version int
+	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != 8 {
+		t.Fatalf("migrated schema version = %d, want 8", version)
+	}
+	var state, delivery string
+	var totalCores int
+	if err := manager.db.QueryRow("SELECT io_device_weight_state, io_device_weight_observed_delivery, total_cores FROM system_metrics").Scan(&state, &delivery, &totalCores); err != nil {
+		t.Fatalf("read migrated history: %v", err)
+	}
+	if state != "disabled" || delivery != "not_measured" || totalCores != 4 {
+		t.Fatalf("migrated historical semantics = state %q delivery %q cores %d", state, delivery, totalCores)
+	}
+}
+
+func TestSchema7MigrationRollsBackWhenMetricsTableIsMissing(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "broken-schema-7.db")
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec("PRAGMA user_version = 7"); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("broken schema 7 unexpectedly migrated")
+	}
+	if err == nil || !strings.Contains(err.Error(), "schema 7 to 8") {
+		t.Fatalf("migration error = %v, want typed migration context", err)
+	}
+	raw, err = sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var version int
+	if err := raw.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 7 {
+		t.Fatalf("failed migration changed schema version to %d", version)
 	}
 }
 
@@ -420,15 +527,26 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	// Write system metrics.
 	now := time.Now()
 	record := &SystemMetricsRecord{
-		TotalCPUUsagePercent:         75.2,
-		TotalCores:                   4,
-		SystemLoad:                   2.5,
-		CPULimitsActive:              true,
-		ResourceLimitsActive:         true,
-		AnyLimitsActive:              true,
-		CPUActivelyLimitedUsersCount: 2,
-		ActivelyLimitedUsersCount:    3,
-		Timestamp:                    now,
+		IODeviceWeightState:                  "functionally_accepted",
+		IODeviceWeightReason:                 "",
+		IODeviceWeightSelector:               "8:0",
+		IODeviceWeightClassificationAttempts: 5,
+		IODeviceWeightProbeAttempts:          2,
+		IODeviceWeightProgrammed:             true,
+		IODeviceWeightReadBack:               true,
+		IODeviceWeightFunctionallyAccepted:   true,
+		IODeviceWeightEffectQualified:        false,
+		IODeviceWeightPartialUsers:           1,
+		IODeviceWeightObservedDelivery:       "not_measured",
+		TotalCPUUsagePercent:                 75.2,
+		TotalCores:                           4,
+		SystemLoad:                           2.5,
+		CPULimitsActive:                      true,
+		ResourceLimitsActive:                 true,
+		AnyLimitsActive:                      true,
+		CPUActivelyLimitedUsersCount:         2,
+		ActivelyLimitedUsersCount:            3,
+		Timestamp:                            now,
 	}
 
 	err = manager.writeSystemMetricsForTest(record)
@@ -456,6 +574,13 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	}
 	if records[0].CPUActivelyLimitedUsersCount != 2 || records[0].ActivelyLimitedUsersCount != 3 {
 		t.Errorf("system enforcement counts = CPU %d, any %d; want 2, 3", records[0].CPUActivelyLimitedUsersCount, records[0].ActivelyLimitedUsersCount)
+	}
+	if records[0].IODeviceWeightState != "functionally_accepted" || records[0].IODeviceWeightSelector != "8:0" ||
+		records[0].IODeviceWeightClassificationAttempts != 5 || records[0].IODeviceWeightProbeAttempts != 2 ||
+		!records[0].IODeviceWeightProgrammed || !records[0].IODeviceWeightReadBack ||
+		!records[0].IODeviceWeightFunctionallyAccepted || records[0].IODeviceWeightEffectQualified ||
+		records[0].IODeviceWeightPartialUsers != 1 || records[0].IODeviceWeightObservedDelivery != "not_measured" {
+		t.Errorf("weighted-I/O state was not preserved: %+v", records[0])
 	}
 }
 

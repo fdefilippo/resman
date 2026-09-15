@@ -56,7 +56,16 @@ func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) error {
 	system := batch.System
 	timestamp := system.IntervalEnd.UTC()
 	systemRecord := &database.SystemMetricsRecord{
-		DenominatorState: string(system.DenominatorState), EnforcementMode: system.EnforcementMode,
+		IODeviceWeightState: system.IODeviceWeightState, IODeviceWeightReason: system.IODeviceWeightReason,
+		IODeviceWeightSelector:               system.IODeviceWeightSelector,
+		IODeviceWeightClassificationAttempts: system.IODeviceWeightClassificationAttempts,
+		IODeviceWeightProbeAttempts:          system.IODeviceWeightProbeAttempts,
+		IODeviceWeightProgrammed:             system.IODeviceWeightProgrammed, IODeviceWeightReadBack: system.IODeviceWeightReadBack,
+		IODeviceWeightFunctionallyAccepted: system.IODeviceWeightFunctionallyAccepted,
+		IODeviceWeightEffectQualified:      system.IODeviceWeightEffectQualified,
+		IODeviceWeightPartialUsers:         system.IODeviceWeightPartialUsers,
+		IODeviceWeightObservedDelivery:     system.IODeviceWeightObservedDelivery,
+		DenominatorState:                   string(system.DenominatorState), EnforcementMode: system.EnforcementMode,
 		SampleEpochID:                  system.SampleEpochID,
 		IntervalStart:                  system.IntervalStart,
 		IntervalEnd:                    timestamp,

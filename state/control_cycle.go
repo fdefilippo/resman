@@ -772,6 +772,18 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	summary := m.getEnforcementSummary()
 
 	persistenceSystem := metrics.PersistenceSystem
+	ioWeight := m.GetIODeviceWeightStatus()
+	persistenceSystem.IODeviceWeightState = string(ioWeight.State)
+	persistenceSystem.IODeviceWeightReason = ioWeight.Reason
+	persistenceSystem.IODeviceWeightSelector = ioWeight.Selector
+	persistenceSystem.IODeviceWeightClassificationAttempts = ioWeight.ClassificationAttempts
+	persistenceSystem.IODeviceWeightProbeAttempts = ioWeight.ProbeAttempts
+	persistenceSystem.IODeviceWeightProgrammed = ioWeight.Programmed
+	persistenceSystem.IODeviceWeightReadBack = ioWeight.ReadBack
+	persistenceSystem.IODeviceWeightFunctionallyAccepted = ioWeight.State == IODeviceWeightFunctionallyAccepted
+	persistenceSystem.IODeviceWeightEffectQualified = ioWeight.EffectQualified
+	persistenceSystem.IODeviceWeightPartialUsers = ioWeight.PartialUsers
+	persistenceSystem.IODeviceWeightObservedDelivery = ioWeight.ObservedDelivery
 	persistenceSystem.CPULimitsActive = summary.cpuLimitsActive
 	persistenceSystem.ResourceLimitsActive = summary.resourceLimitsActive
 	persistenceSystem.AnyLimitsActive = summary.cpuLimitsActive || summary.resourceLimitsActive
