@@ -201,7 +201,7 @@ func (l *PolicyLoader) validateAncestors(path PolicyMapPath) error {
 		if owner != 0 && owner != euid {
 			return fmt.Errorf("weighted I/O map ancestor %s is owned by untrusted UID %d", current, owner)
 		}
-		if info.Mode().Perm()&0022 != 0 && !(info.Mode()&os.ModeSticky != 0 && owner == 0) {
+		if info.Mode().Perm()&0022 != 0 && (info.Mode()&os.ModeSticky == 0 || owner != 0) {
 			return fmt.Errorf("weighted I/O map ancestor %s is writable by group or other users", current)
 		}
 		if filepath.Dir(current) == current {

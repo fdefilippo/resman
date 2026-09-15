@@ -45,6 +45,7 @@ type fakeSystemdCPUUnitAdapter struct {
 	activeProperties   map[string]map[systemdunit.PropertyName]bool
 	failApplyUnit      string
 	failRestoreUnit    string
+	propertyConflicts  map[string][]systemdunit.PropertyName
 	applyHook          func(string)
 	reconcileError     error
 	discoverError      error
@@ -232,10 +233,26 @@ func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identit
 	defer a.mu.Unlock()
 	a.restores = append(a.restores, identity.Name)
 	a.propertyRestores = append(a.propertyRestores, systemdPropertyRestoreCall{unit: identity.Name, properties: append([]systemdunit.PropertyName(nil), properties...)})
-	for _, property := range properties {
-		delete(a.activeProperties[identity.Name], property)
+	conflictProperties := append([]systemdunit.PropertyName(nil), a.propertyConflicts[identity.Name]...)
+	conflictSet := make(map[systemdunit.PropertyName]struct{}, len(conflictProperties))
+	conflicts := make([]systemdunit.PropertyConflict, 0, len(conflictProperties))
+	for _, property := range conflictProperties {
+		conflictSet[property] = struct{}{}
+		conflicts = append(conflicts, systemdunit.PropertyConflict{Property: property})
 	}
-	return systemdunit.RestoreResult{Restored: append([]systemdunit.PropertyName(nil), properties...)}, nil
+	restored := make([]systemdunit.PropertyName, 0, len(properties))
+	for _, property := range properties {
+		if _, conflict := conflictSet[property]; conflict {
+			continue
+		}
+		delete(a.activeProperties[identity.Name], property)
+		restored = append(restored, property)
+	}
+	result := systemdunit.RestoreResult{Restored: restored, Conflicts: conflicts}
+	if len(conflicts) != 0 {
+		return result, &systemdunit.RestoreConflictError{Unit: identity.Name, Conflicts: conflicts}
+	}
+	return result, nil
 }
 
 func (a *fakeSystemdCPUUnitAdapter) ReconcileOwned(context.Context) error {

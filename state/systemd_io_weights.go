@@ -93,7 +93,8 @@ func (m *Manager) PublishIODeviceWeightPolicy(policy ioweights.PolicySnapshot) {
 	m.mu.Lock()
 	m.ioWeightPolicy = policy
 	m.ioWeightCapability = systemdunit.IODeviceWeightCapabilitySnapshot{}
-	m.ioWeightStatus.Programmed = false
+	m.ioWeightStatus.State = IODeviceWeightRequestedPending
+	m.ioWeightStatus.Reason = "configuration_changed"
 	m.ioWeightStatus.ReadBack = false
 	m.ioWeightUnavailableCycles = 0
 	m.mu.Unlock()
@@ -123,6 +124,12 @@ func (m *Manager) AttemptIODeviceWeightCapability(ctx context.Context) IODeviceW
 
 	cfg := m.GetConfig()
 	selector := cfg.GetIOWeightDevices()
+	m.mu.RLock()
+	interventionStopped := m.ioWeightStatus.State == IODeviceWeightRefusedIntervention && m.ioWeightStatus.Selector == selector
+	m.mu.RUnlock()
+	if interventionStopped {
+		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus()}
+	}
 	if selector == "" {
 		err := m.restoreAllSystemdIODeviceWeights(ctx)
 		state := IODeviceWeightDisabled
@@ -134,8 +141,7 @@ func (m *Manager) AttemptIODeviceWeightCapability(ctx context.Context) IODeviceW
 		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus()}
 	}
 	if m.systemdIOWeights == nil || m.ioWeightClassifier == nil || m.enforcementStatus.Mode != cgroup.EnforcementModeSystemdNative {
-		m.publishIODeviceWeightCapability(IODeviceWeightRequestedPending, "adapter_unavailable", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, true, false)
-		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+		return m.publishIODeviceWeightCapabilityFailure(ctx, IODeviceWeightRequestedPending, "adapter_unavailable", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, true)
 	}
 
 	probeCtx, cancel := context.WithCancel(ctx)
@@ -163,43 +169,39 @@ func (m *Manager) AttemptIODeviceWeightCapability(ctx context.Context) IODeviceW
 			return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
 		}
 		if probeCtx.Err() != nil {
-			m.publishIODeviceWeightCapability(IODeviceWeightRequestedPending, "cancelled_generation", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, false, false)
-			return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+			return m.publishIODeviceWeightCapabilityFailure(ctx, IODeviceWeightRequestedPending, "cancelled_generation", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, true)
 		}
 	}
 
 	m.incrementIODeviceWeightClassificationAttempts()
 	snapshot, err := m.ioWeightClassifier.Classify(probeCtx, selector)
 	if err != nil {
-		m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, "invalid_classifier_input", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, false, false)
+		_ = m.releaseFailedIODeviceWeightPlan(ctx, IODeviceWeightRefusedIntervention, "invalid_classifier_input", selector, systemdunit.IODeviceWeightCapabilitySnapshot{}, err)
 		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus()}
 	}
 	switch snapshot.Outcome() {
 	case systemdunit.IODeviceWeightProbeCandidate:
-		m.publishIODeviceWeightCapability(IODeviceWeightProbeCandidateState, string(snapshot.Reason()), selector, snapshot, false, false)
+		m.publishIODeviceWeightCapability(IODeviceWeightProbeCandidateState, string(snapshot.Reason()), selector, snapshot, true, false)
 	case systemdunit.IODeviceWeightMechanismInactive, systemdunit.IODeviceWeightEvidenceUnavailable:
-		m.publishIODeviceWeightCapability(IODeviceWeightRequestedPending, string(snapshot.Reason()), selector, snapshot, false, false)
-		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+		return m.publishIODeviceWeightCapabilityFailure(ctx, IODeviceWeightRequestedPending, string(snapshot.Reason()), selector, snapshot, true)
 	default:
-		m.publishIODeviceWeightCapability(IODeviceWeightRefusedObservation, string(snapshot.Reason()), selector, snapshot, false, false)
-		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+		return m.publishIODeviceWeightCapabilityFailure(ctx, IODeviceWeightRefusedObservation, string(snapshot.Reason()), selector, snapshot, true)
 	}
 
 	m.incrementIODeviceWeightProbeAttempts()
 	if err := m.systemdIOWeights.ProbeIODeviceWeights(probeCtx, snapshot.ProbeTargets()); err != nil {
 		if probeCtx.Err() != nil || ioWeightProbeRetryable(err) {
-			m.publishIODeviceWeightCapability(IODeviceWeightRequestedPending, "probe_unavailable", selector, snapshot, false, false)
-			return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+			return m.publishIODeviceWeightCapabilityFailure(ctx, IODeviceWeightRequestedPending, "probe_unavailable", selector, snapshot, true)
 		}
-		m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, ioWeightProbeReason(err), selector, snapshot, false, false)
+		_ = m.releaseFailedIODeviceWeightPlan(ctx, IODeviceWeightRefusedIntervention, ioWeightProbeReason(err), selector, snapshot, err)
 		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus()}
 	}
 	confirmed, err := m.ioWeightClassifier.Confirm(probeCtx, snapshot)
 	if err != nil {
-		m.publishIODeviceWeightCapability(IODeviceWeightRefusedObservation, "capability_changed", selector, confirmed, false, false)
-		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true}
+		state, reason := ioWeightCapabilityLoss(err)
+		return m.publishIODeviceWeightCapabilityFailure(ctx, state, reason, selector, confirmed, true)
 	}
-	m.publishIODeviceWeightCapability(IODeviceWeightFunctionallyAccepted, "", selector, confirmed, false, false)
+	m.publishIODeviceWeightCapability(IODeviceWeightFunctionallyAccepted, "", selector, confirmed, true, false)
 	return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true, ActivateCycle: true}
 }
 
@@ -258,10 +260,33 @@ func (m *Manager) publishIODeviceWeightCapability(state IODeviceWeightActivation
 	status.ObservedDelivery = "not_measured"
 	m.ioWeightStatus = status
 	m.ioWeightCapability = snapshot
+	if state == IODeviceWeightFunctionallyAccepted {
+		m.ioWeightUnavailableCycles = 0
+	}
 	m.mu.Unlock()
 	if changed && m.logger != nil {
 		m.logger.Info("Weighted I/O lifecycle changed", "state", state, "reason", reason, "programmed", status.Programmed, "read_back", status.ReadBack)
 	}
+}
+
+func (m *Manager) publishIODeviceWeightCapabilityFailure(ctx context.Context, state IODeviceWeightActivationState, reason, selector string, snapshot systemdunit.IODeviceWeightCapabilitySnapshot, retry bool) IODeviceWeightAttemptResult {
+	m.mu.Lock()
+	programmed := m.ioWeightStatus.Programmed
+	if programmed {
+		m.ioWeightUnavailableCycles++
+	}
+	cycles := m.ioWeightUnavailableCycles
+	m.mu.Unlock()
+	if programmed && cycles > 1 {
+		if err := m.restoreAllSystemdIODeviceWeights(ctx); err != nil {
+			m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, "unsafe_restore", selector, snapshot, true, false)
+			return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus()}
+		}
+		m.publishIODeviceWeightCapability(state, reason, selector, snapshot, false, false)
+		return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: retry}
+	}
+	m.publishIODeviceWeightCapability(state, reason, selector, snapshot, true, false)
+	return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: retry}
 }
 
 func (m *Manager) stageReconcileIODeviceWeights(run *controlCycleContext) error {
@@ -289,14 +314,15 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 	m.mu.RUnlock()
 	confirmed, err := m.ioWeightClassifier.Confirm(ctx, snapshot)
 	if err != nil {
-		return m.deferOrReleaseIODeviceWeights(ctx, "capability_changed", err)
+		state, reason := ioWeightCapabilityLoss(err)
+		return m.deferOrReleaseIODeviceWeights(ctx, state, reason, err)
 	}
 	topology, err := m.systemdIOWeights.Discover(ctx)
 	if err != nil {
-		return m.deferOrReleaseIODeviceWeights(ctx, "topology_unavailable", err)
+		return m.deferOrReleaseIODeviceWeights(ctx, IODeviceWeightRequestedPending, "topology_unavailable", err)
 	}
 	if sample == nil || sample.systemdAuthorityInventory == nil || sample.systemdAuthorityInventory.SampleEpochID() != sample.Timestamp.UnixNano() {
-		return m.deferOrReleaseIODeviceWeights(ctx, "authority_unavailable", fmt.Errorf("current sample has no exact authority inventory"))
+		return m.deferOrReleaseIODeviceWeights(ctx, IODeviceWeightRequestedPending, "authority_unavailable", fmt.Errorf("current sample has no exact authority inventory"))
 	}
 	participants := make([]ioweights.ActiveUserSlice, 0, len(topology.Users))
 	identities := make(map[int]systemdunit.UnitIdentity, len(topology.Users))
@@ -316,7 +342,7 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 		return err
 	}
 	if err := m.systemdIOWeights.ConfirmTopology(ctx, topology); err != nil {
-		return m.deferOrReleaseIODeviceWeights(ctx, "topology_changed", err)
+		return m.deferOrReleaseIODeviceWeights(ctx, IODeviceWeightRefusedObservation, "topology_changed", err)
 	}
 	targets := confirmed.ProbeTargets()
 	applied := make([]struct {
@@ -335,10 +361,12 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 		}
 		identity := identities[slice.UID()]
 		if _, applyErr := m.systemdIOWeights.Apply(ctx, identity, []systemdunit.PropertyAssignment{assignment}); applyErr != nil {
+			state := IODeviceWeightRequestedPending
+			reason := "apply_unavailable"
 			if !ioWeightProbeRetryable(applyErr) {
-				m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, ioWeightProbeReason(applyErr), cfg.GetIOWeightDevices(), confirmed, true, true)
+				state, reason = IODeviceWeightRefusedIntervention, ioWeightProbeReason(applyErr)
 			}
-			return applyErr
+			return m.releaseFailedIODeviceWeightPlan(ctx, state, reason, cfg.GetIOWeightDevices(), confirmed, applyErr)
 		}
 		applied = append(applied, struct {
 			uid         int
@@ -348,11 +376,16 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 	}
 	for _, item := range applied {
 		if _, err := m.systemdIOWeights.ConfirmApplied(ctx, item.identity, item.assignments); err != nil {
-			return err
+			state := IODeviceWeightRequestedPending
+			reason := "readback_unavailable"
+			if !ioWeightProbeRetryable(err) {
+				state, reason = IODeviceWeightRefusedIntervention, ioWeightProbeReason(err)
+			}
+			return m.releaseFailedIODeviceWeightPlan(ctx, state, reason, cfg.GetIOWeightDevices(), confirmed, err)
 		}
 	}
 	if err := m.systemdIOWeights.ConfirmTopology(ctx, topology); err != nil {
-		return err
+		return m.releaseFailedIODeviceWeightPlan(ctx, IODeviceWeightRefusedObservation, "topology_changed", cfg.GetIOWeightDevices(), confirmed, err)
 	}
 	current := make(map[int]systemdunit.UnitIdentity, len(applied))
 	partialCount := 0
@@ -363,7 +396,7 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 		}
 	}
 	if err := m.restoreStaleSystemdIODeviceWeights(ctx, current); err != nil {
-		return err
+		return m.releaseFailedIODeviceWeightPlan(ctx, IODeviceWeightRefusedIntervention, "external_property_conflict", cfg.GetIOWeightDevices(), confirmed, err)
 	}
 	m.mu.Lock()
 	m.ioWeightCapability = confirmed
@@ -377,18 +410,45 @@ func (m *Manager) reconcileSystemdIODeviceWeights(ctx context.Context, sample *S
 	return nil
 }
 
-func (m *Manager) deferOrReleaseIODeviceWeights(ctx context.Context, reason string, cause error) error {
+func ioWeightCapabilityLoss(err error) (IODeviceWeightActivationState, string) {
+	var capabilityErr *systemdunit.IODeviceWeightCapabilityError
+	if !errors.As(err, &capabilityErr) {
+		return IODeviceWeightRequestedPending, "capability_changed"
+	}
+	switch capabilityErr.Reason {
+	case systemdunit.IODeviceWeightReasonEvidenceUnavailable, systemdunit.IODeviceWeightReasonDeviceMissing:
+		return IODeviceWeightRequestedPending, string(capabilityErr.Reason)
+	default:
+		return IODeviceWeightRefusedObservation, string(capabilityErr.Reason)
+	}
+}
+
+func (m *Manager) deferOrReleaseIODeviceWeights(ctx context.Context, state IODeviceWeightActivationState, reason string, cause error) error {
 	m.mu.Lock()
 	m.ioWeightUnavailableCycles++
 	cycles := m.ioWeightUnavailableCycles
-	m.ioWeightStatus.State = IODeviceWeightRequestedPending
+	m.ioWeightStatus.State = state
 	m.ioWeightStatus.Reason = reason
 	m.ioWeightStatus.ReadBack = false
 	m.mu.Unlock()
 	if cycles <= 1 {
 		return cause
 	}
-	return errors.Join(cause, m.restoreAllSystemdIODeviceWeights(ctx))
+	if restoreErr := m.restoreAllSystemdIODeviceWeights(ctx); restoreErr != nil {
+		m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, "unsafe_restore", m.GetConfig().GetIOWeightDevices(), systemdunit.IODeviceWeightCapabilitySnapshot{}, true, false)
+		return errors.Join(cause, restoreErr)
+	}
+	return cause
+}
+
+func (m *Manager) releaseFailedIODeviceWeightPlan(ctx context.Context, state IODeviceWeightActivationState, reason, selector string, snapshot systemdunit.IODeviceWeightCapabilitySnapshot, cause error) error {
+	restoreErr := m.restoreAllSystemdIODeviceWeights(ctx)
+	if restoreErr != nil {
+		m.publishIODeviceWeightCapability(IODeviceWeightRefusedIntervention, "unsafe_restore", selector, snapshot, true, false)
+		return errors.Join(cause, restoreErr)
+	}
+	m.publishIODeviceWeightCapability(state, reason, selector, snapshot, false, false)
+	return cause
 }
 
 func (m *Manager) restoreStaleSystemdIODeviceWeights(ctx context.Context, current map[int]systemdunit.UnitIdentity) error {
@@ -403,8 +463,11 @@ func (m *Manager) restoreStaleSystemdIODeviceWeights(ctx context.Context, curren
 		if current[uid] == identity {
 			continue
 		}
-		if _, err := m.systemdIOWeights.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyIODeviceWeight}); err != nil {
+		result, err := m.systemdIOWeights.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyIODeviceWeight})
+		if err != nil {
 			restoreErrors = append(restoreErrors, fmt.Errorf("restore stale weighted I/O for %s: %w", identity.Name, err))
+		} else if len(result.Conflicts) != 0 {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore stale weighted I/O for %s preserved %d external conflicts", identity.Name, len(result.Conflicts)))
 		}
 	}
 	return errors.Join(restoreErrors...)

@@ -77,11 +77,11 @@ func validIODeviceWeightState(value string) bool {
 
 func validIODeviceWeightReason(value string) bool {
 	switch value {
-	case "adapter_unavailable", "ambiguous_topology", "authority_unavailable", "cancelled_generation",
-		"capability_changed", "device_identity_changed", "device_missing", "duplicate_device",
+	case "adapter_unavailable", "ambiguous_topology", "authority_unavailable", "cancelled_generation", "configuration_changed",
+		"apply_unavailable", "capability_changed", "device_identity_changed", "device_missing", "duplicate_device",
 		"empty_enabled_plan", "evidence_unavailable", "invalid_classifier_input", "invalid_selector",
 		"io_cost_changed", "mechanism_ambiguous", "mechanism_unsupported", "no_active_mechanism",
-		"probe_failed", "probe_unavailable", "scheduler_changed", "topology_changed",
+		"probe_failed", "probe_unavailable", "readback_unavailable", "scheduler_changed", "topology_changed",
 		"topology_unavailable", "unsafe_restore", "adapter_closed", "authorization_denied",
 		"bus_unavailable", "capability_probe_failed", "external_property_conflict", "invalid_value",
 		"kernel_verification_failed", "lease_store_failed", "malformed_reply", "property_not_allowed",
