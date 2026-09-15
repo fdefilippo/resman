@@ -62,7 +62,7 @@ def validate_manifest(directory):
     return declared
 
 
-def aggregate(intervals, device, profile="qualification"):
+def aggregate(intervals, device, profile="qualification", phase="equal"):
     profile_config = PROFILES[profile]
     require(len(intervals) >= profile_config["interval_count"],
             "delivery phase has too few raw intervals")
@@ -73,8 +73,14 @@ def aggregate(intervals, device, profile="qualification"):
                 item["duration_ns"] >= profile_config["minimum_duration_ns"],
                 "invalid delivery interval identity or duration")
         deltas = item["read_bytes_delta"]
-        require(len(deltas) == 2 and all(isinstance(value, int) and value > 0 for value in deltas),
-                "both sibling slices must deliver nonzero measured I/O")
+        require(len(deltas) == 2 and all(isinstance(value, int) for value in deltas),
+                "delivery values must be two integers")
+        if profile == "qualification" or phase == "equal":
+            require(all(value > 0 for value in deltas),
+                    "both sibling slices must deliver nonzero measured I/O")
+        else:
+            require(all(value >= 0 for value in deltas) and sum(deltas) > 0,
+                    "smoke control must deliver measured I/O")
         totals[0] += deltas[0]
         totals[1] += deltas[1]
         elapsed += item["duration_ns"]
@@ -114,14 +120,14 @@ def validate_delivery(mechanism, evidence, devices, profile):
     for name, weights in PHASES.items():
         phase = evidence["phases"][name]
         require(tuple(phase["public_weights"]) == weights, "wrong public weights in " + name)
-        computed[name] = aggregate(phase["intervals"], device, profile)
+        computed[name] = aggregate(phase["intervals"], device, profile, name)
     require(0.30 <= computed["equal"]["shares"][0] <= 0.70,
             mechanism + " equal-weight control is materially asymmetric")
     unequal = computed["unequal"]["bytes"]
     reversed_values = computed["reversed"]["bytes"]
-    require(unequal[1] / unequal[0] >= 1.5 and computed["unequal"]["shares"][1] >= 0.60,
+    require(unequal[1] >= 1.5 * unequal[0] and computed["unequal"]["shares"][1] >= 0.60,
             mechanism + " did not favor the higher-weight second slice")
-    require(reversed_values[0] / reversed_values[1] >= 1.5 and computed["reversed"]["shares"][0] >= 0.60,
+    require(reversed_values[0] >= 1.5 * reversed_values[1] and computed["reversed"]["shares"][0] >= 0.60,
             mechanism + " reversed control did not reverse delivery")
     require(evidence["reported_aggregates"] == computed,
             mechanism + " reported delivery does not match raw intervals")

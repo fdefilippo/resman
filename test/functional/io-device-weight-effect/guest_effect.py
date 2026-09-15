@@ -376,7 +376,12 @@ while not stop:
             after = self.snapshot_io()
             delta = [io_stat_read_bytes(after["slices"][item]["io_stat"], device) -
                      io_stat_read_bytes(before["slices"][item]["io_stat"], device) for item in range(2)]
-            require(all(value > 0 for value in delta), "delivery interval contains no I/O")
+            if self.profile == "qualification" or name == "equal":
+                require(all(value > 0 for value in delta),
+                        "delivery interval contains no I/O for one sibling")
+            else:
+                require(all(value >= 0 for value in delta) and sum(delta) > 0,
+                        "smoke delivery interval contains no I/O")
             intervals.append({"device": device, "duration_ns": after["time_ns"] - before["time_ns"],
                               "read_bytes_delta": delta})
             raw.append({"index": index, "before": before, "after": after, "delta": delta})

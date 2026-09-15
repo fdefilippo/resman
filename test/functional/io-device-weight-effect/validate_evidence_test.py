@@ -28,7 +28,7 @@ def fixture(directory, profile="qualification"):
         "reversed": {"public_weights": [1000, 100],
                      "intervals": [make_interval(device, 400, 100, duration) for _ in range(count)]},
     }
-    aggregates = {name: validator.aggregate(value["intervals"], device, profile)
+    aggregates = {name: validator.aggregate(value["intervals"], device, profile, name)
                   for name, value in phases.items()}
     mechanisms = {}
     for name in validator.MECHANISMS:
@@ -113,6 +113,16 @@ class EvidenceTests(unittest.TestCase):
             directory = Path(tmp)
             fixture(directory, "smoke")
             validator.validate(directory, "a" * 40, "c" * 64, "smoke")
+
+    def test_smoke_allows_starved_low_weight_control_but_not_equal_or_qualification(self):
+        interval = [make_interval("252:16", 0, 400, 1_000_000_000)]
+        self.assertEqual(validator.aggregate(interval, "252:16", "smoke", "unequal")["bytes"],
+                         [0, 400])
+        with self.assertRaisesRegex(ValueError, "both sibling slices"):
+            validator.aggregate(interval, "252:16", "smoke", "equal")
+        qualification = [make_interval("252:16", 0, 400) for _ in range(3)]
+        with self.assertRaisesRegex(ValueError, "both sibling slices"):
+            validator.aggregate(qualification, "252:16", "qualification", "unequal")
 
     def test_mutations_are_rejected(self):
         cases = [
