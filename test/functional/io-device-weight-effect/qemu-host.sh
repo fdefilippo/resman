@@ -162,7 +162,8 @@ chown qemu:qemu "$overlay" "$device_a" "$device_b"
 chmod 0600 "$overlay" "$device_a" "$device_b"
 ssh-keygen -q -t ed25519 -N '' -f "$private_key"
 LIBGUESTFS_BACKEND=direct virt-customize -q -a "$overlay" \
-	--ssh-inject "root:file:$private_key.pub" --selinux-relabel
+	--ssh-inject "root:file:$private_key.pub" \
+	--run-command 'restorecon -RF /root/.ssh'
 virt-install --connect qemu:///system --name "$vm_name" --memory 3072 --vcpus 2 \
 	--cpu host-passthrough --import \
 	--disk "path=$overlay,format=qcow2,bus=sata" \
