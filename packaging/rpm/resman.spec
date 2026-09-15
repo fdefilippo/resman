@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.38.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -310,6 +310,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-2
+- Match effect-qualification coordinates against the running D-Bus Manager.Version value
+
 * Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-1
 - Add capability-probed relative block-I/O weights for user slices
 - Keep weighted-I/O activation asynchronous and independent from hard I/O caps

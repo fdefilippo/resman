@@ -8,7 +8,8 @@ import re
 
 
 PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
-MANAGER_VERSION = "252 (252-67.0.1.el9_8.2)"
+MANAGER_VERSION = "252-67.0.1.el9_8.2"
+PACKAGE_IDENTITY = "resman-1.38.0-2.el9.x86_64"
 KERNEL_RELEASE = "5.14.0-687.46.1.el9_8.x86_64"
 MECHANISMS = ("bfq", "io_cost")
 PHASES = {
@@ -130,7 +131,7 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
             re.fullmatch(r"[0-9a-f]{40}", summary["source"]["qualification_tree"]) is not None,
             "qualification harness revision is not immutable")
     package = summary["package"]
-    require(package["identity"] == "resman-1.38.0-1.el9.x86_64" and
+    require(package["identity"] == PACKAGE_IDENTITY and
             re.fullmatch(r"[0-9a-f]{64}", package["sha256"]) is not None and
             package["installed_binary_matches_payload"] is True,
             "package identity or installed payload proof is invalid")

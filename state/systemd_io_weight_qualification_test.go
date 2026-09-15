@@ -33,7 +33,7 @@ func qualifiedIODeviceWeightCandidate(t *testing.T, mechanisms ...systemdunit.IO
 }
 
 func TestIODeviceWeightEffectQualificationRequiresEveryExactCoordinate(t *testing.T) {
-	managerVersion := "252 (252-67.0.1.el9_8.2)"
+	managerVersion := "252-67.0.1.el9_8.2"
 	for _, mechanisms := range [][]systemdunit.IODeviceWeightMechanism{
 		{systemdunit.IODeviceWeightMechanismBFQ},
 		{systemdunit.IODeviceWeightMechanismIOCost},
@@ -45,7 +45,7 @@ func TestIODeviceWeightEffectQualificationRequiresEveryExactCoordinate(t *testin
 	}
 
 	snapshot := qualifiedIODeviceWeightCandidate(t, systemdunit.IODeviceWeightMechanismBFQ)
-	if got := ioDeviceWeightEffectQualification(snapshot, "252 (different build)"); got != ioweights.EffectQualificationNone {
+	if got := ioDeviceWeightEffectQualification(snapshot, "252 (252-67.0.1.el9_8.2)"); got != ioweights.EffectQualificationNone {
 		t.Fatalf("mismatched Manager version qualified as %q", got)
 	}
 	platform := snapshot.Platform()
@@ -64,7 +64,7 @@ func TestIODeviceWeightFunctionalAcceptancePublishesExactQualificationProvenance
 	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), &fakeSystemdCPUUnitAdapter{}, &forbiddenSystemdNativeCgroupManager{}, 4)
 	adapter := &fakeSystemdCPUUnitAdapter{
 		topology:              testSystemdTopology(1000),
-		systemdManagerVersion: "252 (252-67.0.1.el9_8.2)",
+		systemdManagerVersion: "252-67.0.1.el9_8.2",
 	}
 	manager.cfg.IOWeightDevices = "8:0"
 	classifier := &fakeIODeviceWeightClassifier{snapshot: qualifiedIODeviceWeightCandidate(t, systemdunit.IODeviceWeightMechanismBFQ)}

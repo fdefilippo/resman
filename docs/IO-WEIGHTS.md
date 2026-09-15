@@ -97,7 +97,7 @@ reported as `observed_delivery=not_measured`.
 
 The bounded provenance value `resman-nq6.40.5-ol9-rhck-20260915` identifies the
 retained packaged-daemon campaign on Oracle Linux 9.8, systemd Manager
-`252 (252-67.0.1.el9_8.2)`, and RHCK
+`252-67.0.1.el9_8.2` from `Manager.Version` over D-Bus, and RHCK
 `5.14.0-687.46.1.el9_8.x86_64`. It covers BFQ and io.cost only if the retained
 campaign proves both. A runtime identity match adds this diagnostic label after the
 owned live probe succeeds; it never authorizes a mutation, bypasses the probe, or

@@ -1398,7 +1398,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 
 func TestAdapterManagerVersionUsesRunningManagerDiagnostic(t *testing.T) {
 	transport := newFakeUnitTransport()
-	transport.managerVersion = "252 (252-67.0.1.el9_8.2)"
+	transport.managerVersion = "252-67.0.1.el9_8.2"
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	if got, err := adapter.ManagerVersion(context.Background()); err != nil || got != transport.managerVersion {
 		t.Fatalf("ManagerVersion() = %q, %v", got, err)

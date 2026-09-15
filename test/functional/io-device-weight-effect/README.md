@@ -10,7 +10,7 @@ user slices on run-owned disposable virtio devices.
 
 The initial retained provenance is
 `resman-nq6.40.5-ol9-rhck-20260915`. It names Oracle Linux 9.8, systemd Manager
-`252 (252-67.0.1.el9_8.2)`, and RHCK
+`252-67.0.1.el9_8.2` from `Manager.Version` over D-Bus, and RHCK
 `5.14.0-687.46.1.el9_8.x86_64`. The campaign covers BFQ and io.cost separately.
 This exact identity is evidence provenance, never a runtime authorization rule:
 any host that passes the owned live probe remains usable as
@@ -52,8 +52,8 @@ manifest:
 
 ```sh
 RESMAN_IO_EFFECT_QEMU_HOST=root@terra \
-RESMAN_EL9_RPM=build/packages/resman-1.38.0-1.el9.x86_64.rpm \
-RESMAN_EL9_RPM_MANIFEST=build/packages/resman-1.38.0-1.el9.x86_64.manifest \
+RESMAN_EL9_RPM=build/packages/resman-1.38.0-2.el9.x86_64.rpm \
+RESMAN_EL9_RPM_MANIFEST=build/packages/resman-1.38.0-2.el9.x86_64.manifest \
 make test-functional-io-device-weight-effect-qemu
 ```
 

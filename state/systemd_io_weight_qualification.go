@@ -24,7 +24,7 @@ var ioDeviceWeightQualificationCoordinates = []ioDeviceWeightQualificationCoordi
 	{
 		distributionID:      "ol",
 		distributionVersion: "9.8",
-		systemdManager:      "252 (252-67.0.1.el9_8.2)",
+		systemdManager:      "252-67.0.1.el9_8.2",
 		kernelRelease:       "5.14.0-687.46.1.el9_8.x86_64",
 		mechanism:           systemdunit.IODeviceWeightMechanismBFQ,
 		provenance:          ioweights.EffectQualificationOL9RHCK20260915,
@@ -32,7 +32,7 @@ var ioDeviceWeightQualificationCoordinates = []ioDeviceWeightQualificationCoordi
 	{
 		distributionID:      "ol",
 		distributionVersion: "9.8",
-		systemdManager:      "252 (252-67.0.1.el9_8.2)",
+		systemdManager:      "252-67.0.1.el9_8.2",
 		kernelRelease:       "5.14.0-687.46.1.el9_8.x86_64",
 		mechanism:           systemdunit.IODeviceWeightMechanismIOCost,
 		provenance:          ioweights.EffectQualificationOL9RHCK20260915,

@@ -17,7 +17,8 @@ import urllib.request
 
 PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
 EXPECTED_KERNEL = "5.14.0-687.46.1.el9_8.x86_64"
-EXPECTED_MANAGER = "252 (252-67.0.1.el9_8.2)"
+EXPECTED_MANAGER = "252-67.0.1.el9_8.2"
+EXPECTED_PACKAGE = "resman-1.38.0-2.el9.x86_64"
 
 
 class Blocked(RuntimeError):
@@ -141,7 +142,7 @@ class Campaign:
         require(self.package.is_file() and not self.package.is_symlink(), "exact RPM is unavailable")
         package_identity = self.command("rpm", "-qp", "--qf", "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}",
                                         str(self.package)).stdout
-        require(package_identity == "resman-1.38.0-1.el9.x86_64", "unexpected package identity")
+        require(package_identity == EXPECTED_PACKAGE, "unexpected package identity: " + package_identity)
         installed_identity = self.command("rpm", "-q", "--qf", "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}",
                                           "resman").stdout
         require(installed_identity == package_identity, "installed package differs")
@@ -176,7 +177,8 @@ class Campaign:
                                    "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
                                    "Version").stdout.strip()
         manager = shlex.split(manager_raw)[1]
-        require(manager == EXPECTED_MANAGER, "running systemd Manager differs from retained representative")
+        require(manager == EXPECTED_MANAGER,
+                "running systemd Manager differs from retained representative: " + repr(manager))
         kernel_owner = self.command("rpm", "-q", "--whatprovides",
                                     "/boot/vmlinuz-" + os.uname().release).stdout.strip()
         require(kernel_owner.startswith("kernel-core-"), "running kernel is not RHCK")
