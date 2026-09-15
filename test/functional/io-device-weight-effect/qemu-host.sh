@@ -220,10 +220,10 @@ run_guest_campaign() {
 }
 
 reset_guest_after_smoke() {
-	# The smoke cleanup restores package-owned configuration bytes and modes. Restore
-	# their RPM metadata as well, then remove only campaign-owned runtime output so
-	# the retained profile cannot satisfy an assertion with a smoke database row.
-	guest 'set -eu; rpm --restore resman; rm -f -- /var/lib/resman/effect-metrics.db /var/lib/resman/effect-metrics.db-shm /var/lib/resman/effect-metrics.db-wal /var/log/resman/effect.log; test -z "$(rpm -V resman)"'
+	# Smoke cleanup has already restored package-owned configuration bytes and
+	# modes. Remove only campaign-owned runtime output; retained preflight accepts
+	# the resulting exact RPM timestamp markers but no other package drift.
+	guest 'set -eu; rm -f -- /var/lib/resman/metrics.db /var/lib/resman/metrics.db-shm /var/lib/resman/metrics.db-wal /var/log/resman.log'
 }
 
 run_guest_campaign smoke /root/resman-iow-effect/evidence-smoke \

@@ -55,6 +55,17 @@ class GuestEffectTests(unittest.TestCase):
         self.assertNotEqual(guest_effect.PROFILES["smoke"]["scope"],
                             guest_effect.PROFILES["qualification"]["scope"])
 
+    def test_rpm_verification_accepts_only_expected_smoke_mtime_drift(self):
+        self.assertEqual(guest_effect.classify_rpm_verification(""), "clean")
+        rows = "\n".join(sorted(guest_effect.CONFIG_MTIME_VERIFY_ROWS))
+        self.assertEqual(guest_effect.classify_rpm_verification(rows), "config_mtime_only")
+        with self.assertRaisesRegex(RuntimeError, "fail rpm verification"):
+            guest_effect.classify_rpm_verification(
+                "S.5....T.  c /etc/resman/resman.conf")
+        with self.assertRaisesRegex(RuntimeError, "fail rpm verification"):
+            guest_effect.classify_rpm_verification(
+                ".......T.  c /etc/resman/another.conf")
+
 
 if __name__ == "__main__":
     unittest.main()

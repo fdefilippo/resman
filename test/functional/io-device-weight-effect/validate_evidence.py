@@ -166,6 +166,9 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
             re.fullmatch(r"[0-9a-f]{64}", package["sha256"]) is not None and
             package["installed_binary_matches_payload"] is True,
             "package identity or installed payload proof is invalid")
+    allowed_verification = {"clean"} if profile == "smoke" else {"clean", "config_mtime_only"}
+    require(package["verification"] in allowed_verification,
+            "package verification does not match the campaign profile")
     if expected_package_sha is not None:
         require(package["sha256"] == expected_package_sha, "unexpected package digest")
     platform = summary["platform"]

@@ -71,7 +71,8 @@ def fixture(directory, profile="qualification"):
         "source": {"revision": "a" * 40, "tree": "b" * 40,
                    "qualification_revision": "d" * 40, "qualification_tree": "e" * 40},
         "package": {"identity": "resman-1.38.0-8.el9.x86_64", "sha256": "c" * 64,
-                    "installed_binary_matches_payload": True},
+                    "installed_binary_matches_payload": True,
+                    "verification": "clean" if profile == "smoke" else "config_mtime_only"},
         "platform": {"id": "ol", "version_id": "9.8",
                      "manager_version": validator.MANAGER_VERSION,
                      "kernel_release": validator.KERNEL_RELEASE,
@@ -120,6 +121,19 @@ class EvidenceTests(unittest.TestCase):
             fixture(directory, "smoke")
             validator.validate(directory, "a" * 40, "c" * 64, "smoke")
 
+    def test_qualification_accepts_a_clean_package_without_smoke_mtime_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            summary = fixture(directory)
+            summary["package"]["verification"] = "clean"
+            (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
+            with (directory / "SHA256SUMS").open("w") as manifest:
+                for path in sorted(directory.iterdir()):
+                    if path.name != "SHA256SUMS":
+                        manifest.write(hashlib.sha256(path.read_bytes()).hexdigest() +
+                                       "  " + path.name + "\n")
+            validator.validate(directory, "a" * 40, "c" * 64)
+
     def test_smoke_allows_starved_low_weight_control_but_not_equal_or_qualification(self):
         interval = [make_interval("252:16", 0, 400,
                                   validator.PROFILES["smoke"]["minimum_duration_ns"])]
@@ -135,6 +149,7 @@ class EvidenceTests(unittest.TestCase):
         cases = [
             lambda x: x.update(scope="adapter-only"),
             lambda x: x["package"].update(installed_binary_matches_payload=False),
+            lambda x: x["package"].update(verification="content_changed"),
             lambda x: x["platform"].update(kernel_release="later-kernel"),
             lambda x: x["mechanisms"].pop("io_cost"),
             lambda x: x["mechanisms"]["bfq"]["transport"].update(exact_kernel_entry=False),

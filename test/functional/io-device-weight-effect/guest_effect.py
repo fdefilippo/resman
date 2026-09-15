@@ -27,6 +27,10 @@ PROFILES = {
     "qualification": {"interval_count": 3, "interval_seconds": 10, "settle_seconds": 2,
                        "scope": "packaged-daemon-controlled-contention"},
 }
+CONFIG_MTIME_VERIFY_ROWS = {
+    ".......T.  c /etc/resman/io-weights.map",
+    ".......T.  c /etc/resman/resman.conf",
+}
 
 
 class Blocked(RuntimeError):
@@ -50,6 +54,15 @@ def selected_scheduler(text):
     selected = re.findall(r"\[([^\]\s]+)\]", text)
     require(len(selected) == 1, "scheduler has no unique selected value")
     return selected[0]
+
+
+def classify_rpm_verification(text):
+    rows = [row for row in text.splitlines() if row]
+    if not rows:
+        return "clean"
+    if len(rows) == len(set(rows)) and set(rows).issubset(CONFIG_MTIME_VERIFY_ROWS):
+        return "config_mtime_only"
+    raise RuntimeError("installed package files fail rpm verification: " + text)
 
 
 def device_row(text, device):
@@ -205,8 +218,12 @@ class Campaign:
         archive_status = archive.wait(timeout=30)
         require(archive_status == 0 and extracted.returncode == 0 and extracted.stdout,
                 "package payload extraction failed: " + archive_stderr + extracted.stderr.decode(errors="replace"))
-        verify = self.command("rpm", "-V", "resman", check=False).stdout.strip()
-        require(not verify, "installed package files fail rpm verification: " + verify)
+        verify_result = self.command("rpm", "-V", "resman", check=False)
+        require(verify_result.returncode in (0, 1), "rpm verification command failed: " +
+                verify_result.stdout.strip())
+        verification = classify_rpm_verification(verify_result.stdout.strip())
+        if self.profile == "smoke":
+            require(verification == "clean", "smoke profile did not start from a clean package")
         package_digest = sha256(self.package)
         binary_digest = sha256("/usr/bin/resman")
         payload_digest = hashlib.sha256(extracted.stdout).hexdigest()
@@ -215,7 +232,7 @@ class Campaign:
                              "installed_binary_sha256": binary_digest,
                              "payload_binary_sha256": payload_digest,
                              "installed_binary_matches_payload": True,
-                             "verification": "rpm -V returned no differences"}
+                             "verification": verification}
         os_release = {}
         for line in self.read("/etc/os-release").splitlines():
             if "=" in line:

@@ -32,11 +32,10 @@ grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/prepare-base.sh"
 grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/qemu-host.sh"
 grep -q 'restorecon -RF /root/.ssh' "$script_dir/qemu-host.sh"
 grep -q '^reset_guest_after_smoke()' "$script_dir/qemu-host.sh"
-grep -Fq 'rpm --restore resman' "$script_dir/qemu-host.sh"
-grep -Fq 'test -z "$(rpm -V resman)"' "$script_dir/qemu-host.sh"
-grep -Fq '/var/lib/resman/effect-metrics.db-wal' "$script_dir/qemu-host.sh"
-grep -Fq '/var/log/resman/effect.log' "$script_dir/qemu-host.sh"
+grep -Fq '/var/lib/resman/metrics.db-wal' "$script_dir/qemu-host.sh"
+grep -Fq '/var/log/resman.log' "$script_dir/qemu-host.sh"
 grep -Fq 'reset_guest_after_smoke >"$evidence_dir/profile-reset.log"' "$script_dir/qemu-host.sh"
+grep -Fq 'CONFIG_MTIME_VERIFY_ROWS' "$script_dir/guest_effect.py"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; then
 	echo "effect qualification must use the QEMU guest kernel" >&2
