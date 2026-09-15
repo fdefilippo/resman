@@ -613,7 +613,10 @@ while not stop:
         scheduler_path.write_text("bfq\n")
         self.wait_programmed()
         unit = self.slices[0]
-        path = str(self.device_paths[0])
+        # Exercise an external write against the same canonical tuple that the
+        # classifier hands to the daemon. A by-id alias is a distinct systemd
+        # array key even when it resolves to the same block device.
+        path = first["path"]
         self.command("systemctl", "set-property", "--runtime", unit,
                      "IODeviceWeight=%s 777" % path)
         self.set_config({"IO_WEIGHT_DEVICES": ""})
