@@ -178,16 +178,12 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	listed, started, err := transport.startCapabilityProbe(callCtx, unit, capability.initialAssignments)
 	cancel()
-	var identity UnitIdentity
 	if started {
 		defer func() {
-			if identity.Name != "" && len(a.Leases(identity)) != 0 {
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), a.timeout)
-				if _, cleanupErr := a.Restore(cleanupCtx, identity); cleanupErr != nil {
-					retErr = errors.Join(retErr, fmt.Errorf("restore transient capability probe %s: %w", unit, cleanupErr))
-				}
-				cleanupCancel()
-			}
+			// Stop the owned transient cgroup before reconciling its durable
+			// property lease. A full active-unit Restore includes daemon-reload
+			// and can consume the bounded adapter deadline when io.cost is active;
+			// the disappearing probe cgroup has no baseline that must remain live.
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), a.timeout)
 			if cleanupErr := transport.stopCapabilityProbe(cleanupCtx, unit); cleanupErr != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("stop transient capability probe %s: %w", unit, cleanupErr))
@@ -219,7 +215,6 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 	if err != nil {
 		return fmt.Errorf("read transient capability probe %s through the production adapter: %w", unit, err)
 	}
-	identity = snapshot.Identity
 	if err := a.verifier.preflight(snapshot, capability.requiredAssignments); err != nil {
 		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignments[0].name, err)
 	}
@@ -229,14 +224,6 @@ func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupC
 	}
 	if _, err := a.ConfirmApplied(ctx, applied.Identity, capability.probeAssignments); err != nil {
 		return fmt.Errorf("confirm %s startup capability probe: %w", capability.feature, err)
-	}
-	result, err := a.Restore(ctx, applied.Identity)
-	if err != nil {
-		return fmt.Errorf("restore %s startup capability probe: %w", capability.feature, err)
-	}
-	if len(result.Restored) != len(capability.probeAssignments) || len(a.Leases(applied.Identity)) != 0 {
-		return &AdapterError{Reason: ReasonCapabilityProbe, Operation: "startup_capabilities", Unit: unit,
-			Err: fmt.Errorf("capability probe restoration did not release every temporary property lease")}
 	}
 	return nil
 }

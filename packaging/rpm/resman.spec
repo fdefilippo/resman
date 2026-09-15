@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.38.0
-Release: 5%{?dist}
+Release: 6%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -310,6 +310,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-6
+- Reconcile transient capability-probe leases only after their unit stops
+
 * Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-5
 - Rebuild the selector-replacement correction with the explicit EL9 identity
 

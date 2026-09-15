@@ -1,3 +1,9 @@
+resman (1.38.0-6) stable; urgency=medium
+
+  * Reconcile transient capability-probe leases only after their unit stops.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 19:20:00 +0200
+
 resman (1.38.0-5) stable; urgency=medium
 
   * Rebuild the selector-replacement correction with the explicit EL9 identity.

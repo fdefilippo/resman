@@ -2,7 +2,6 @@ package systemdunit
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -40,7 +39,7 @@ func TestCapabilityProbeUnitIsOneReservedTopLevelSlice(t *testing.T) {
 	}
 }
 
-func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T) {
+func TestStartupCapabilitiesUseProductionReadApplyConfirmAndInactiveCleanup(t *testing.T) {
 	transport := newFakeUnitTransport()
 	verifier := &fakeKernelVerifier{}
 	store := newMemoryLeaseJournalStore()
@@ -59,8 +58,8 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T
 	if len(verifier.preflightApplyCalls) != 0 {
 		t.Fatalf("startup capability probing used the materializable runtime preflight %d times", len(verifier.preflightApplyCalls))
 	}
-	if len(transport.setCalls) != capabilityCount*2 {
-		t.Fatalf("SetUnitProperties calls = %d, want one apply and one baseline restore for each probe", len(transport.setCalls))
+	if len(transport.setCalls) != capabilityCount {
+		t.Fatalf("SetUnitProperties calls = %d, want one apply before stopping each probe", len(transport.setCalls))
 	}
 	if len(transport.revertCalls) != capabilityCount || transport.reloadCalls != capabilityCount {
 		t.Fatalf("restore calls: revert=%d reload=%d, want %d each", len(transport.revertCalls), transport.reloadCalls, capabilityCount)
@@ -88,8 +87,8 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndRestore(t *testing.T
 	}) {
 		t.Fatal("the I/O capability probe did not materialize its controller through systemd")
 	}
-	if verifier.calls != capabilityCount*4 {
-		t.Fatalf("kernel verification calls = %d, want apply, confirmation, baseline reset and final restoration for every probe", verifier.calls)
+	if verifier.calls != capabilityCount*2 {
+		t.Fatalf("kernel verification calls = %d, want apply and confirmation before each probe stops", verifier.calls)
 	}
 	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("capability probe left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
@@ -206,24 +205,13 @@ func TestStartupCapabilityReportsDurableLeaseLeftAfterCleanup(t *testing.T) {
 	store := newMemoryLeaseJournalStore()
 	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
-	var stoppedIdentity UnitIdentity
-	transport.onProbeStop = func(_ *fakeUnitTransport, _ string, state *fakeUnitState) {
-		stoppedIdentity = fakeStateIdentity(state)
-	}
-	injected := false
-	transport.onMutablePaths = func(f *fakeUnitTransport, unit string) {
-		if injected || len(f.probeStops) == 0 || stoppedIdentity.Name != unit {
-			return
-		}
-		injectReleasedProbeLease(adapter, stoppedIdentity)
-		if err := adapter.persistLeaseState(); err != nil {
-			t.Fatalf("persist injected probe residue: %v", err)
-		}
-		injected = true
+	transport.onProbeStop = func(_ *fakeUnitTransport, _ string, _ *fakeUnitState) {
+		store.saveErr = errors.New("injected journal cleanup failure")
 	}
 
 	err := adapter.probeStartupCapability(context.Background(), transport, capability)
-	if err == nil || !strings.Contains(err.Error(), "left a durable property lease") {
+	if err == nil || !strings.Contains(err.Error(), "injected journal cleanup failure") ||
+		!strings.Contains(err.Error(), "left a durable property lease") {
 		t.Fatalf("probeStartupCapability() error = %v, want durable lease residue", err)
 	}
 	if len(store.journal.Units) != 1 {
@@ -231,31 +219,27 @@ func TestStartupCapabilityReportsDurableLeaseLeftAfterCleanup(t *testing.T) {
 	}
 }
 
-func TestStartupCapabilityRequiresRestoreToReleaseEveryLease(t *testing.T) {
+func TestStartupCapabilityRequiresInactiveReconciliationToReleaseEveryLease(t *testing.T) {
 	transport := newFakeUnitTransport()
+	transport.revertErr = errors.New("injected inactive cleanup failure")
 	store := newMemoryLeaseJournalStore()
 	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
-	armed := true
-	store.onSave = func(journal durableLeaseJournal) {
-		if !armed || len(journal.Units) != 0 || len(transport.probeStarts) == 0 {
-			return
-		}
-		unit := transport.probeStarts[0].unit
-		state, exists := transport.units[unit]
-		if !exists {
-			return
-		}
-		injectReleasedProbeLease(adapter, fakeStateIdentity(state))
-		armed = false
-	}
 
 	err := adapter.probeStartupCapability(context.Background(), transport, capability)
-	if !IsCapabilityProbeError(err) || !strings.Contains(err.Error(), "restoration did not release every temporary property lease") {
-		t.Fatalf("probeStartupCapability() error = %v, want incomplete restoration", err)
+	if err == nil || !strings.Contains(err.Error(), "injected inactive cleanup failure") ||
+		!strings.Contains(err.Error(), "left a durable property lease") {
+		t.Fatalf("probeStartupCapability() error = %v, want incomplete inactive reconciliation", err)
+	}
+	if len(adapter.OwnedUnits()) != 1 || len(store.journal.Units) != 1 {
+		t.Fatalf("failed inactive reconciliation lost ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+	}
+	transport.revertErr = nil
+	if err := adapter.ReconcileOwned(context.Background()); err != nil {
+		t.Fatalf("ReconcileOwned() retry error = %v", err)
 	}
 	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
-		t.Fatalf("deferred cleanup left injected ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+		t.Fatalf("inactive reconciliation retry left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
 	}
 }
 
@@ -382,31 +366,4 @@ func setCallsContainScalarValues(calls []fakeSetCall, wanted map[PropertyName]ui
 		}
 	}
 	return false
-}
-
-func fakeStateIdentity(state *fakeUnitState) UnitIdentity {
-	var invocationID [16]byte
-	copy(invocationID[:], state.unit["InvocationID"].([]byte))
-	return UnitIdentity{
-		Name:           state.listed.name,
-		ObjectPath:     state.listed.objectPath,
-		InvocationID:   invocationID,
-		ControlGroupID: state.slice["ControlGroupId"].(uint64),
-	}
-}
-
-func injectReleasedProbeLease(adapter *Adapter, identity UnitIdentity) {
-	property := PropertyCPUWeight
-	baseline := scalarPropertyValue(100)
-	state := newPropertyLeaseState(property, baseline)
-	state.lastApplied = clonePropertyValue(property, baseline)
-	state.previousApplied = clonePropertyValue(property, baseline)
-	state.lease = publicPropertyLease(property, baseline, baseline)
-	adapter.leases[propertyLeaseKey{identity: identity, property: property}] = state
-	override := extendManagedUnitFileFootprint(identity.Name, unitOverrideLease{}, []PropertyAssignment{{name: property, value: baseline}})
-	for _, path := range override.managedPaths {
-		override.fingerprints = append(override.fingerprints, unitFileFingerprint{path: path, digest: sha256.Sum256([]byte(path))})
-	}
-	adapter.overrides[identity] = override
-	adapter.phases[identity.Name] = leasePhaseApplied
 }

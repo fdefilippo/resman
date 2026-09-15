@@ -36,6 +36,10 @@ the adapter therefore sends an empty reset followed by the desired replacement i
 one ordered `SetUnitProperties` call. The durable lease and readback retain only the
 logical replacement value; an interrupted or divergent mutation remains uncertain
 and is never restored without compare-before-restore proof.
+An owned transient capability probe is stopped before its journal and runtime
+drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
+must be retained; reconciling the now-inactive footprint avoids placing a full
+daemon reload inside the active `io.cost` probe transaction.
 
 ## Resource-specific workload authority
 

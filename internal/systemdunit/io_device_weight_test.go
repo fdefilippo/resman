@@ -247,6 +247,13 @@ func TestIODeviceWeightRestorePreservesExternalChange(t *testing.T) {
 
 func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *testing.T) {
 	transport := newFakeUnitTransport()
+	probeStopped := false
+	transport.onProbeStop = func(*fakeUnitTransport, string, *fakeUnitState) { probeStopped = true }
+	transport.onRevert = func(*fakeUnitTransport, string) {
+		if !probeStopped {
+			t.Fatal("probe runtime files were reverted before the transient unit stopped")
+		}
+	}
 	verifier := &fakeKernelVerifier{}
 	store := newMemoryLeaseJournalStore()
 	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
@@ -263,6 +270,9 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	}
 	if len(transport.probeStarts) != 1 || len(transport.probeStops) != 1 || len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("probe residue starts=%v stops=%v owned=%v journal=%+v", transport.probeStarts, transport.probeStops, adapter.OwnedUnits(), store.journal)
+	}
+	if len(transport.revertCalls) != 1 || transport.reloadCalls != 1 {
+		t.Fatalf("inactive probe reconciliation revert=%v reloads=%d", transport.revertCalls, transport.reloadCalls)
 	}
 	if len(verifier.preflightCalls) != 1 || verifier.preflightCalls[0][0].name != PropertyIODeviceWeight {
 		t.Fatalf("strict typed preflight calls = %+v", verifier.preflightCalls)
