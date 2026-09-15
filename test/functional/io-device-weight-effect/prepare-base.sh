@@ -67,7 +67,7 @@ if [[ -n $prepared_owner ]]; then
 	chmod 0710 "$temporary_dir"
 	chmod 0600 "$temporary_image"
 fi
-virt-customize -q -a "$temporary_image" --network \
+LIBGUESTFS_BACKEND=direct virt-customize -q -a "$temporary_image" --network \
 	--install "cpio,curl,python3,util-linux,systemd-udev,kernel-$kernel_release" \
 	--run-command "test -f /boot/vmlinuz-$kernel_release" \
 	--run-command "grubby --set-default /boot/vmlinuz-$kernel_release" \

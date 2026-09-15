@@ -25,6 +25,8 @@ grep -q 'remote-control.sh.*control.sh' "$script_dir/remote-qemu.sh"
 grep -q 'stop_remote' "$script_dir/remote-qemu.sh"
 grep -q 'cleanup_remote_owned_run' "$script_dir/remote-qemu.sh"
 grep -q 'prepare-base.sh' "$script_dir/qemu-host.sh"
+grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/prepare-base.sh"
+grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/qemu-host.sh"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; then
 	echo "effect qualification must use the QEMU guest kernel" >&2
