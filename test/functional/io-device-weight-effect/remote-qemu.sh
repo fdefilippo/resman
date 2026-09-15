@@ -52,6 +52,13 @@ stop_remote() {
 	control stop
 }
 
+# Invoked from the cleanup trap after the remote controller has stopped.
+# shellcheck disable=SC2329
+cleanup_remote_owned_run() {
+	ssh -q -o BatchMode=yes "$remote_host" \
+		"'$remote_root/cleanup-owned.sh' '$run_id'"
+}
+
 run_remote() {
 	control start &
 	remote_ssh_pid=$!
@@ -71,6 +78,8 @@ cleanup() {
 		if [[ $remote_execution_started -eq 1 ]]; then
 			stop_remote >>"$evidence_dir/collect.log" 2>&1 || { status=1; cleanup_status=FAIL; }
 		fi
+		cleanup_remote_owned_run >>"$evidence_dir/collect.log" 2>&1 \
+			|| { status=1; cleanup_status=FAIL; }
 		mkdir -p "$evidence_dir/remote"
 		ssh -q -o BatchMode=yes "$remote_host" \
 			"test ! -d '$remote_root/evidence' || tar -C '$remote_root/evidence' -cf - ." \
@@ -117,6 +126,7 @@ install -m 0600 "$package" "$scratch_dir/bundle/package.rpm"
 install -m 0600 "$build_manifest" "$scratch_dir/bundle/build-manifest.txt"
 install -m 0755 "$script_dir/qemu-host.sh" "$scratch_dir/bundle/qemu-host.sh"
 install -m 0755 "$script_dir/qemu-run.sh" "$scratch_dir/bundle/run.sh"
+install -m 0755 "$script_dir/cleanup-owned.sh" "$scratch_dir/bundle/cleanup-owned.sh"
 install -m 0755 "$script_dir/../real-kernel/remote-control.sh" "$scratch_dir/bundle/control.sh"
 install -m 0755 "$script_dir/guest_effect.py" "$scratch_dir/bundle/guest_effect.py"
 install -m 0755 "$script_dir/validate_evidence.py" "$scratch_dir/bundle/validate_evidence.py"

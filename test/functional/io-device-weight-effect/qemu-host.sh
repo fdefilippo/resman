@@ -22,7 +22,6 @@ device_b=$work_dir/effect-b.raw
 private_key=$script_dir/guest-key
 known_hosts=$script_dir/known-hosts
 address=
-vm_defined=0
 result=FAIL
 detail="effect qualification did not complete"
 guest_status=not-run
@@ -91,16 +90,8 @@ cleanup() {
 		result=BLOCKED
 		detail="QEMU infrastructure or exact representative was unavailable"
 	fi
-	if [[ $vm_defined -eq 1 ]] && virsh dominfo "$vm_name" >/dev/null 2>&1; then
-		virsh destroy "$vm_name" >>"$evidence_dir/cleanup.log" 2>&1 || true
-		virsh undefine "$vm_name" --nvram >>"$evidence_dir/cleanup.log" 2>&1 \
-			|| virsh undefine "$vm_name" >>"$evidence_dir/cleanup.log" 2>&1 \
-			|| cleanup_status=FAIL
-	fi
-	if [[ -d $work_dir ]]; then
-		rm -f -- "$overlay" "$device_a" "$device_b"
-		rmdir -- "$work_dir" >>"$evidence_dir/cleanup.log" 2>&1 || cleanup_status=FAIL
-	fi
+	"$script_dir/cleanup-owned.sh" "$run_id" >>"$evidence_dir/cleanup.log" 2>&1 \
+		|| cleanup_status=FAIL
 	rm -f -- "$private_key" "$private_key.pub" "$known_hosts" "$known_hosts.tmp"
 	if [[ $cleanup_status != PASS ]]; then
 		status=1
@@ -160,7 +151,6 @@ chown qemu:qemu "$overlay" "$device_a" "$device_b"
 chmod 0600 "$overlay" "$device_a" "$device_b"
 ssh-keygen -q -t ed25519 -N '' -f "$private_key"
 virt-customize -q -a "$overlay" --ssh-inject "root:file:$private_key.pub" --selinux-relabel
-vm_defined=1
 virt-install --connect qemu:///system --name "$vm_name" --memory 3072 --vcpus 2 \
 	--cpu host-passthrough --import \
 	--disk "path=$overlay,format=qcow2,bus=sata" \
