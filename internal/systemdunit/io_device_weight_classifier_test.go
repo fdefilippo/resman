@@ -327,34 +327,60 @@ func TestApprovedDirectIODeviceFailsClosedForUnknownAndStackedClasses(t *testing
 	}
 }
 
-func TestIODeviceWeightClassifierRejectsMultipathAndRAIDHoldersButAcceptsLVM(t *testing.T) {
+func TestIODeviceWeightClassifierAcceptsOnlyTerminalSingleQueueLVMHolders(t *testing.T) {
 	tests := []struct {
 		name    string
-		holder  string
-		uuid    string
-		raid    bool
+		mutate  func(*ioDeviceWeightClassifierFixture)
 		outcome IODeviceWeightCapabilityOutcome
 	}{
-		{name: "multipath member", holder: "dm-0", uuid: "mpath-test-wwid", outcome: IODeviceWeightAmbiguousTopology},
-		{name: "LVM member", holder: "dm-0", uuid: "LVM-test-volume", outcome: IODeviceWeightProbeCandidate},
-		{name: "unmodeled device mapper member", holder: "dm-0", uuid: "CRYPT-test-volume", outcome: IODeviceWeightAmbiguousTopology},
-		{name: "unmodeled holder", holder: "bcache0", outcome: IODeviceWeightAmbiguousTopology},
-		{name: "RAID member", holder: "md0", raid: true, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "linear LVM on selected disk", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", []string{f.sysfsDevice})
+		}, outcome: IODeviceWeightProbeCandidate},
+		{name: "linear LVM on selected partition", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			partition := f.addPartition("vda1")
+			f.addDeviceMapperHolder(partition, "dm-0", "LVM-test-volume", []string{partition})
+		}, outcome: IODeviceWeightProbeCandidate},
+		{name: "LVM spans two disks", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			other := filepath.Join(f.classifier.io.sysRoot, "devices", "pci0000:00", "0000:00:06.0", "virtio3", "block", "vdb")
+			f.mkdir(other)
+			f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", []string{f.sysfsDevice, other})
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "partition LVM spans another disk", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			partition := f.addPartition("vda1")
+			other := filepath.Join(f.classifier.io.sysRoot, "devices", "pci0000:00", "0000:00:06.0", "virtio3", "block", "vdb")
+			f.mkdir(other)
+			f.addDeviceMapperHolder(partition, "dm-0", "LVM-test-volume", []string{partition, other})
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "LVM has higher holder", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			holder := f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", []string{f.sysfsDevice})
+			upper := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "dm-1")
+			f.mkdir(upper)
+			f.symlink(upper, filepath.Join(holder, "holders", "dm-1"))
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "LVM has no slaves", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", nil)
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "multipath member", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "mpath-test-wwid", []string{f.sysfsDevice})
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "unmodeled device mapper member", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "CRYPT-test-volume", []string{f.sysfsDevice})
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "unmodeled holder", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			holder := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "bcache0")
+			f.mkdir(holder)
+			f.symlink(holder, filepath.Join(f.sysfsDevice, "holders", "bcache0"))
+		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "RAID member", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			holder := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "md0")
+			f.mkdir(filepath.Join(holder, "md"))
+			f.symlink(holder, filepath.Join(f.sysfsDevice, "holders", "md0"))
+		}, outcome: IODeviceWeightAmbiguousTopology},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newIODeviceWeightClassifierFixture(t)
-			holderPath := filepath.Join(fixture.classifier.io.sysRoot, "devices", "virtual", "block", test.holder)
-			fixture.mkdir(holderPath)
-			if test.raid {
-				fixture.mkdir(filepath.Join(holderPath, "md"))
-			} else if test.uuid != "" {
-				fixture.mkdir(filepath.Join(holderPath, "dm"))
-				fixture.write(filepath.Join(holderPath, "dm", "uuid"), test.uuid+"\n")
-			}
-			if err := os.Symlink(holderPath, filepath.Join(fixture.sysfsDevice, "holders", test.holder)); err != nil {
-				t.Fatal(err)
-			}
+			test.mutate(fixture)
 			snapshot, err := fixture.classifier.Classify(context.Background(), "8:0")
 			if err != nil {
 				t.Fatal(err)
@@ -514,6 +540,35 @@ func (f *ioDeviceWeightClassifierFixture) mkdir(path string) {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+func (f *ioDeviceWeightClassifierFixture) symlink(target, link string) {
+	f.t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *ioDeviceWeightClassifierFixture) addPartition(name string) string {
+	f.t.Helper()
+	partition := filepath.Join(f.sysfsDevice, name)
+	f.mkdir(filepath.Join(partition, "holders"))
+	f.write(filepath.Join(partition, "partition"), "1\n")
+	return partition
+}
+
+func (f *ioDeviceWeightClassifierFixture) addDeviceMapperHolder(source, name, uuid string, slaves []string) string {
+	f.t.Helper()
+	holder := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", name)
+	f.mkdir(filepath.Join(holder, "dm"))
+	f.mkdir(filepath.Join(holder, "slaves"))
+	f.mkdir(filepath.Join(holder, "holders"))
+	f.write(filepath.Join(holder, "dm", "uuid"), uuid+"\n")
+	f.symlink(holder, filepath.Join(source, "holders", name))
+	for _, slave := range slaves {
+		f.symlink(slave, filepath.Join(holder, "slaves", filepath.Base(slave)))
+	}
+	return holder
 }
 
 type classifierFileInfo struct {

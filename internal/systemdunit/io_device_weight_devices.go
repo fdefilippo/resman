@@ -182,15 +182,53 @@ func (c *IODeviceWeightCapabilityClassifier) resolveDevice(number IODeviceWeight
 }
 
 func (c *IODeviceWeightCapabilityClassifier) rejectUnsupportedHolders(devicePath, requested string) error {
-	holders, err := c.io.readDir(filepath.Join(devicePath, "holders"))
+	holderSources, err := c.ioDeviceWeightHolderSources(devicePath, requested)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool)
+	for _, sourcePath := range holderSources {
+		if err := c.inspectIODeviceWeightHolders(sourcePath, devicePath, requested, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *IODeviceWeightCapabilityClassifier) ioDeviceWeightHolderSources(devicePath, requested string) ([]string, error) {
+	entries, err := c.io.readDir(devicePath)
+	if err != nil {
+		return nil, newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect device partitions: %w", err))
+	}
+	sources := []string{devicePath}
+	for _, entry := range entries {
+		candidate := filepath.Join(devicePath, entry.Name())
+		info, statErr := c.io.stat(candidate)
+		if statErr != nil {
+			return nil, newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect device child %s: %w", entry.Name(), statErr))
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if _, readErr := c.io.readFile(filepath.Join(candidate, "partition")); readErr == nil {
+			sources = append(sources, candidate)
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return nil, newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect partition %s: %w", entry.Name(), readErr))
+		}
+	}
+	return sources, nil
+}
+
+func (c *IODeviceWeightCapabilityClassifier) inspectIODeviceWeightHolders(sourcePath, devicePath, requested string, seen map[string]bool) error {
+	holders, err := c.io.readDir(filepath.Join(sourcePath, "holders"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device holders topology is unavailable"))
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("holders topology for %s is unavailable", filepath.Base(sourcePath)))
 		}
 		return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect request-queue holders: %w", err))
 	}
 	for _, holder := range holders {
-		holderPath, resolveErr := c.io.evalSymlinks(filepath.Join(devicePath, "holders", holder.Name()))
+		holderPath, resolveErr := c.io.evalSymlinks(filepath.Join(sourcePath, "holders", holder.Name()))
 		if resolveErr != nil {
 			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("resolve holder %s: %w", holder.Name(), resolveErr))
 		}
@@ -198,6 +236,10 @@ func (c *IODeviceWeightCapabilityClassifier) rejectUnsupportedHolders(devicePath
 		if !pathWithin(c.io.sysRoot, holderPath) {
 			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("holder %s escapes %s", holderPath, c.io.sysRoot))
 		}
+		if seen[holderPath] {
+			continue
+		}
+		seen[holderPath] = true
 		if _, statErr := c.io.stat(filepath.Join(holderPath, "md")); statErr == nil {
 			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device is a member of RAID holder %s", holder.Name()))
 		} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -217,6 +259,57 @@ func (c *IODeviceWeightCapabilityClassifier) rejectUnsupportedHolders(devicePath
 		if !strings.HasPrefix(normalizedUUID, "lvm-") {
 			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device has unmodeled device-mapper holder %s", holder.Name()))
 		}
+		if err := c.validateIODeviceWeightLVMHolder(holderPath, devicePath, requested); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateIODeviceWeightLVMHolder accepts only a terminal LVM mapping whose
+// inputs all resolve to the selected originating request queue.
+func (c *IODeviceWeightCapabilityClassifier) validateIODeviceWeightLVMHolder(holderPath, devicePath, requested string) error {
+	slaves, err := c.io.readDir(filepath.Join(holderPath, "slaves"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s has no slave topology", filepath.Base(holderPath)))
+		}
+		return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect LVM holder %s slaves: %w", filepath.Base(holderPath), err))
+	}
+	if len(slaves) == 0 {
+		return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s has no request-queue source", filepath.Base(holderPath)))
+	}
+	for _, slave := range slaves {
+		slavePath, resolveErr := c.io.evalSymlinks(filepath.Join(holderPath, "slaves", slave.Name()))
+		if resolveErr != nil {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("resolve LVM holder %s slave %s: %w", filepath.Base(holderPath), slave.Name(), resolveErr))
+		}
+		slavePath = filepath.Clean(slavePath)
+		if !pathWithin(c.io.sysRoot, slavePath) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s slave %s escapes %s", filepath.Base(holderPath), slavePath, c.io.sysRoot))
+		}
+		if slavePath == devicePath {
+			continue
+		}
+		if filepath.Dir(slavePath) != devicePath {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s spans request queues through slave %s", filepath.Base(holderPath), slave.Name()))
+		}
+		if _, readErr := c.io.readFile(filepath.Join(slavePath, "partition")); readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s has unmodeled slave %s", filepath.Base(holderPath), slave.Name()))
+			}
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect LVM holder %s slave %s: %w", filepath.Base(holderPath), slave.Name(), readErr))
+		}
+	}
+	higherHolders, err := c.io.readDir(filepath.Join(holderPath, "holders"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s upper topology is unavailable", filepath.Base(holderPath)))
+		}
+		return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect LVM holder %s upper topology: %w", filepath.Base(holderPath), err))
+	}
+	if len(higherHolders) != 0 {
+		return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("LVM holder %s has %d higher-level holders", filepath.Base(holderPath), len(higherHolders)))
 	}
 	return nil
 }
