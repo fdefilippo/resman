@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestNewIODeviceWeightAssignmentCanonicalizesAndMapsMechanisms(t *testing.T) {
@@ -371,6 +374,22 @@ func TestApplyRejectsChangedIODeviceWeightMechanismOnActiveLease(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsUnownedIODeviceWeightBeforeMutation(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	transport.units["user-1001.slice"].slice[string(PropertyIODeviceWeight)] = []dbusDeviceLimit{{Path: "/dev/vdb", Value: 333}}
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	assignment, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Apply(context.Background(), identity, []PropertyAssignment{assignment})
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonExternalConflict || len(transport.setCalls) != 0 {
+		t.Fatalf("Apply() error=%v set calls=%v", err, transport.setCalls)
+	}
+}
+
 func TestApplyAllowsOwnedIODeviceWeightTargetSetChangesWithStableMechanisms(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
@@ -404,6 +423,347 @@ func TestApplyAllowsOwnedIODeviceWeightTargetSetChangesWithStableMechanisms(t *t
 		!propertyValuesEqual(PropertyIODeviceWeight, lastCall.assignments[1].value, vdb.value) {
 		t.Fatalf("shrinking IODeviceWeight D-Bus mutation = %+v, want reset then replacement", lastCall.assignments)
 	}
+	verifier := adapter.verifier.(*fakeKernelVerifier)
+	if len(verifier.resetCalls) != 1 || len(verifier.resetCalls[0]) != 1 || verifier.resetCalls[0][0].path != "/dev/vda" ||
+		verifier.resetCalls[0][0].device != "8:0" || verifier.resetCalls[0][0].mechanism != IODeviceWeightMechanismBFQ || verifier.resetCalls[0][0].expected != 100 {
+		t.Fatalf("selector reduction keyed resets = %+v", verifier.resetCalls)
+	}
+}
+
+func TestIODeviceWeightRestoreUsesDurableExactKernelResetAndPreservesHardCap(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	verifier := &fakeKernelVerifier{}
+	store := newMemoryLeaseJournalStore()
+	var observed durableIODeviceWeightReset
+	store.onSave = func(journal durableLeaseJournal) {
+		if len(journal.Units) != 1 || journal.Units[0].Phase != leasePhaseApplying {
+			return
+		}
+		for _, property := range journal.Units[0].Properties {
+			if property.Property == PropertyIODeviceWeight && len(property.PendingIODeviceWeightResets) == 1 {
+				observed = property.PendingIODeviceWeightResets[0]
+			}
+		}
+	}
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+	identity := identityFor(t, adapter, 1001)
+	weight, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardCap, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight, hardCap}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Restored, []PropertyName{PropertyIODeviceWeight}) {
+		t.Fatalf("RestoreProperties() = %+v", result)
+	}
+	if observed.Path != "/dev/vda" || observed.Device != "8:0" || observed.Mechanism != IODeviceWeightMechanismBFQ || observed.Expected != 121 {
+		t.Fatalf("durable keyed reset = %+v", observed)
+	}
+	if len(verifier.resetCalls) != 1 || len(verifier.resetCalls[0]) != 1 {
+		t.Fatalf("kernel keyed reset calls = %+v", verifier.resetCalls)
+	}
+	gotCap := transport.units[identity.Name].slice[string(PropertyIOReadBandwidthMax)].([]dbusDeviceLimit)
+	if !reflect.DeepEqual(gotCap, []dbusDeviceLimit{{Path: "/dev/vda", Value: 1 << 20}}) {
+		t.Fatalf("hard cap changed during weight cleanup: %+v", gotCap)
+	}
+}
+
+func TestIODeviceWeightKernelResetConflictPreservesPendingLease(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	verifier := &fakeKernelVerifier{resetErr: &ioDeviceWeightResetConflict{err: errors.New("kernel value changed")}}
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+	identity := identityFor(t, adapter, 1001)
+	weight, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight})
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonExternalConflict {
+		t.Fatalf("RestoreProperties() error = %v, want external conflict", err)
+	}
+	if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplying ||
+		len(store.journal.Units[0].Properties[0].PendingIODeviceWeightResets) != 1 {
+		t.Fatalf("conflicting cleanup did not preserve durable intent: %+v", store.journal)
+	}
+}
+
+func TestIODeviceWeightKeyedResetRecoversAfterDBusSucceeded(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	verifier := &fakeKernelVerifier{}
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+	identity := identityFor(t, adapter, 1001)
+	two, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{
+		{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vdb", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vdb", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{two}); err != nil {
+		t.Fatal(err)
+	}
+	verifier.resetErr = errors.New("simulated crash before keyed reset")
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{one}); err == nil {
+		t.Fatal("Apply() unexpectedly completed")
+	}
+	if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplying ||
+		len(store.journal.Units[0].Properties[0].PendingIODeviceWeightResets) != 1 {
+		t.Fatalf("interrupted journal = %+v", store.journal)
+	}
+	recoveryVerifier := &fakeKernelVerifier{}
+	restarted := mustTestAdapterWithStore(t, transport, recoveryVerifier, store)
+	if len(recoveryVerifier.resetCalls) != 1 || len(recoveryVerifier.resetCalls[0]) != 1 || recoveryVerifier.resetCalls[0][0].device != "8:0" {
+		t.Fatalf("recovery keyed resets = %+v", recoveryVerifier.resetCalls)
+	}
+	if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplied ||
+		len(store.journal.Units[0].Properties[0].PendingIODeviceWeightResets) != 0 {
+		t.Fatalf("recovered journal = %+v", store.journal)
+	}
+	if _, err := restarted.ConfirmApplied(context.Background(), identity, []PropertyAssignment{one}); err != nil {
+		t.Fatalf("ConfirmApplied() after recovery error = %v", err)
+	}
+}
+
+func TestIODeviceWeightRecoveryUpgradesLegacyInterruptedRestoreBeforeKernelWrite(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	verifier := &fakeKernelVerifier{}
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+	identity := identityFor(t, adapter, 1001)
+	weight, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight}); err != nil {
+		t.Fatal(err)
+	}
+	verifier.resetErr = errors.New("simulated old-daemon interruption")
+	if _, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight}); err == nil {
+		t.Fatal("RestoreProperties() unexpectedly completed")
+	}
+	property := &store.journal.Units[0].Properties[0]
+	property.PreviousIODeviceWeightTargets = nil
+	property.PendingIODeviceWeightResets = nil
+	if err := validateDurableLeaseJournal(store.journal); err != nil {
+		t.Fatalf("legacy version-1 journal rejected: %v", err)
+	}
+	persistedBeforeReset := false
+	store.onSave = func(journal durableLeaseJournal) {
+		if len(journal.Units) == 1 && journal.Units[0].Phase == leasePhaseApplying &&
+			len(journal.Units[0].Properties[0].PendingIODeviceWeightResets) == 1 {
+			persistedBeforeReset = true
+		}
+	}
+	recoveryVerifier := &fakeKernelVerifier{}
+	_ = mustTestAdapterWithStore(t, transport, recoveryVerifier, store)
+	if !persistedBeforeReset || len(recoveryVerifier.resetCalls) != 1 || len(store.journal.Units) != 0 {
+		t.Fatalf("legacy recovery persisted=%t resets=%+v journal=%+v", persistedBeforeReset, recoveryVerifier.resetCalls, store.journal)
+	}
+}
+
+func TestIODeviceWeightRestoreResetsBFQAndIOCost(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		path      string
+		weight    uint64
+		mechanism IODeviceWeightMechanism
+		device    string
+	}{
+		{name: "bfq", path: "/dev/vda", weight: 121, mechanism: IODeviceWeightMechanismBFQ, device: "8:0"},
+		{name: "io cost", path: "/dev/vdb", weight: 333, mechanism: IODeviceWeightMechanismIOCost, device: "8:16"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeUnitTransport(1001)
+			verifier := &fakeKernelVerifier{}
+			adapter := mustTestAdapter(t, transport, verifier)
+			identity := identityFor(t, adapter, 1001)
+			assignment, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: test.path, Weight: test.weight, Mechanism: test.mechanism}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{assignment}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight}); err != nil {
+				t.Fatal(err)
+			}
+			if len(verifier.resetCalls) != 1 || len(verifier.resetCalls[0]) != 1 || verifier.resetCalls[0][0].device != test.device || verifier.resetCalls[0][0].mechanism != test.mechanism || verifier.resetCalls[0][0].expected != test.weight {
+				t.Fatalf("keyed reset = %+v", verifier.resetCalls)
+			}
+		})
+	}
+}
+
+func TestKernelVerifierRemovesOnlyExactIODeviceWeightTuples(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	verifier := newCgroupVerifier(root)
+	verifier.stat = func(string) (os.FileInfo, error) { return fakeBlockDeviceInfo{}, nil }
+	identity, err := verifier.identity("/user.slice/user-1000.slice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice", ControlGroupID: identity}, ControlGroup: "/user.slice/user-1000.slice"}
+	contents := map[string]string{filepath.Join(path, "io.bfq.weight"): "default 100\n8:0 121\n8:16 200\n"}
+	verifier.readFile = func(filename string) ([]byte, error) { return []byte(contents[filename]), nil }
+	var writes []string
+	verifier.resetIODeviceWeight = func(_ string, _ string, gotIdentity uint64, reset ioDeviceWeightReset) error {
+		if gotIdentity != identity || reset.device != "8:0" || reset.expected != 121 {
+			t.Fatalf("unsafe reset context identity=%d reset=%+v", gotIdentity, reset)
+		}
+		writes = append(writes, reset.device+" default")
+		contents[filepath.Join(path, "io.bfq.weight")] = "default 100\n8:16 200\n"
+		return nil
+	}
+	reset := ioDeviceWeightReset{path: "/dev/vda", device: "8:0", mechanism: IODeviceWeightMechanismBFQ, expected: 121}
+	if err := verifier.resetIODeviceWeightOverrides(snapshot, []ioDeviceWeightReset{reset}); err != nil {
+		t.Fatalf("resetIODeviceWeightOverrides() error = %v", err)
+	}
+	if !reflect.DeepEqual(writes, []string{"8:0 default"}) || !strings.Contains(contents[filepath.Join(path, "io.bfq.weight")], "8:16 200") {
+		t.Fatalf("writes=%v contents=%q", writes, contents[filepath.Join(path, "io.bfq.weight")])
+	}
+	writes = nil
+	contents[filepath.Join(path, "io.bfq.weight")] = "default 100\n8:0 122\n8:16 200\n"
+	err = verifier.resetIODeviceWeightOverrides(snapshot, []ioDeviceWeightReset{reset})
+	var conflict *ioDeviceWeightResetConflict
+	if !errors.As(err, &conflict) || len(writes) != 0 {
+		t.Fatalf("divergent reset error=%v writes=%v", err, writes)
+	}
+	changedIdentity := reset
+	changedIdentity.device = "8:16"
+	contents[filepath.Join(path, "io.bfq.weight")] = "default 100\n8:16 121\n"
+	err = verifier.resetIODeviceWeightOverrides(snapshot, []ioDeviceWeightReset{changedIdentity})
+	if !errors.As(err, &conflict) || len(writes) != 0 {
+		t.Fatalf("reused device path error=%v writes=%v", err, writes)
+	}
+}
+
+func TestIODeviceWeightResetWriterUsesExactTokenAndRefusesIdentityOrSymlink(t *testing.T) {
+	root := t.TempDir()
+	controlGroup := "/user.slice/user-1000.slice"
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(path, "io.weight")
+	original := "default 100\n8:0 333\n"
+	if err := os.WriteFile(filename, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := newCgroupVerifier(root).identity(controlGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := ioDeviceWeightReset{path: "/dev/vda", device: "8:0", mechanism: IODeviceWeightMechanismIOCost, expected: 333}
+	if err := writeIODeviceWeightReset(root, controlGroup, identity, reset); err != nil {
+		t.Fatalf("writeIODeviceWeightReset() error = %v", err)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "8:0 default\n") {
+		t.Fatalf("writer payload = %q", data)
+	}
+	if err := os.WriteFile(filename, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIODeviceWeightReset(root, controlGroup, identity+1, reset); err == nil {
+		t.Fatal("writer accepted a different cgroup inode")
+	}
+	data, _ = os.ReadFile(filename)
+	if string(data) != original {
+		t.Fatalf("identity conflict changed file to %q", data)
+	}
+	if err := os.Remove(filename); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "outside-weight")
+	if err := os.WriteFile(target, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filename); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIODeviceWeightReset(root, controlGroup, identity, reset); err == nil {
+		t.Fatal("writer followed a symbolic-link controller file")
+	}
+	data, _ = os.ReadFile(target)
+	if string(data) != original {
+		t.Fatalf("symbolic-link rejection changed target to %q", data)
+	}
+}
+
+func TestIODeviceWeightResetPreflightsWholeSetBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "user.slice", "user-1000.slice")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	verifier := newCgroupVerifier(root)
+	verifier.stat = func(path string) (os.FileInfo, error) {
+		if path == "/dev/vdb" {
+			return fakeBlockDeviceNumberInfo{major: 8, minor: 16}, nil
+		}
+		return fakeBlockDeviceNumberInfo{major: 8}, nil
+	}
+	identity, err := verifier.identity("/user.slice/user-1000.slice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier.readFile = func(filename string) ([]byte, error) {
+		if strings.HasSuffix(filename, "io.bfq.weight") {
+			return []byte("default 100\n8:0 121\n"), nil
+		}
+		return []byte("default 100\n8:16 334\n"), nil
+	}
+	writes := 0
+	verifier.resetIODeviceWeight = func(string, string, uint64, ioDeviceWeightReset) error {
+		writes++
+		return nil
+	}
+	snapshot := UnitSnapshot{Identity: UnitIdentity{Name: "user-1000.slice", ControlGroupID: identity}, ControlGroup: "/user.slice/user-1000.slice"}
+	resets := []ioDeviceWeightReset{
+		{path: "/dev/vda", device: "8:0", mechanism: IODeviceWeightMechanismBFQ, expected: 121},
+		{path: "/dev/vdb", device: "8:16", mechanism: IODeviceWeightMechanismIOCost, expected: 333},
+	}
+	err = verifier.resetIODeviceWeightOverrides(snapshot, resets)
+	var conflict *ioDeviceWeightResetConflict
+	if !errors.As(err, &conflict) || writes != 0 {
+		t.Fatalf("reset error=%v writes=%d", err, writes)
+	}
+}
+
+type fakeBlockDeviceNumberInfo struct {
+	fakeBlockDeviceInfo
+	major uint32
+	minor uint32
+}
+
+func (i fakeBlockDeviceNumberInfo) Sys() any {
+	return &syscall.Stat_t{Rdev: uint64(unix.Mkdev(i.major, i.minor))}
 }
 
 func TestConfirmAppliedRejectsChangedIODeviceWeightMechanism(t *testing.T) {

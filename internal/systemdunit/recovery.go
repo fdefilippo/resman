@@ -206,6 +206,43 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 		return nil
 	case leasePhaseApplying:
 		if a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.lastApplied }, current) && pendingFootprintMatches(actual, override) {
+			if !sameIdentity && a.needsLegacyIODeviceWeightResetIntent(unit) {
+				return externalRecoveryConflict(unit, "unit identity changed before legacy IODeviceWeight cleanup intent could be upgraded")
+			}
+			if sameIdentity {
+				if err := a.stageLegacyIODeviceWeightResetIntent(current); err != nil {
+					return err
+				}
+			}
+			hasPendingReset := a.hasPendingIODeviceWeightResets(unit)
+			if !sameIdentity && hasPendingReset {
+				return externalRecoveryConflict(unit, "unit identity changed while an exact IODeviceWeight keyed reset was pending")
+			}
+			if hasPendingReset {
+				if _, err := a.completePendingIODeviceWeightResets(current, "recover_apply"); err != nil {
+					return err
+				}
+				current, err = a.readUnit(ctx, unit, current.Identity.ObjectPath)
+				if err != nil {
+					return err
+				}
+				if err := requireSameIdentity("recover_apply_reset_confirmation", identity, current.Identity); err != nil {
+					return err
+				}
+				if !a.propertiesMatch(unit, func(state propertyLeaseState) propertyValue { return state.lastApplied }, current) {
+					return externalRecoveryConflict(unit, "property changed after IODeviceWeight keyed reset")
+				}
+				actual, err = a.captureFootprint(current)
+				if err != nil || !pendingFootprintMatches(actual, override) {
+					if err != nil {
+						return err
+					}
+					return externalRecoveryConflict(unit, "managed unit-file footprint changed after IODeviceWeight keyed reset")
+				}
+				if err := a.verifier.verify(current, a.lastAppliedAssignments(unit)); err != nil {
+					return &AdapterError{Reason: ReasonKernelVerification, Operation: "recover_apply_readback", Unit: unit, Err: err}
+				}
+			}
 			before := a.snapshotLeaseState()
 			a.rebindUnit(identity, current.Identity)
 			a.confirmAppliedUnit(unit, actual)
@@ -230,6 +267,66 @@ func (a *Adapter) recoverActive(ctx context.Context, unit string, current UnitSn
 	default:
 		return fmt.Errorf("unit %s has unsupported recovery phase %q", unit, phase)
 	}
+}
+
+func (a *Adapter) needsLegacyIODeviceWeightResetIntent(unit string) bool {
+	for key, state := range a.leases {
+		if key.identity.Name == unit && key.property == PropertyIODeviceWeight && state.uncertain &&
+			len(state.pendingIOWeightResets) == 0 && len(state.previousIOWeightTargets) == 0 &&
+			ioDeviceWeightValueRemoved(state.previousApplied, state.lastApplied) {
+			return true
+		}
+	}
+	return false
+}
+
+func ioDeviceWeightValueRemoved(previous, desired propertyValue) bool {
+	desiredPaths := make(map[string]bool, len(desired.devices))
+	for _, value := range desired.devices {
+		desiredPaths[value.Path] = true
+	}
+	for _, value := range previous.devices {
+		if !desiredPaths[value.Path] {
+			return true
+		}
+	}
+	return false
+}
+
+// stageLegacyIODeviceWeightResetIntent upgrades an interrupted pre-fix restore
+// only when the old journal still carries enough typed context to identify every
+// removed tuple. The upgraded intent is persisted before any kernel write.
+func (a *Adapter) stageLegacyIODeviceWeightResetIntent(snapshot UnitSnapshot) error {
+	before := a.snapshotLeaseState()
+	changed := false
+	for key, state := range a.leases {
+		if key.identity != snapshot.Identity || key.property != PropertyIODeviceWeight || !state.uncertain ||
+			len(state.pendingIOWeightResets) != 0 || len(state.previousIOWeightTargets) != 0 ||
+			!ioDeviceWeightValueRemoved(state.previousApplied, state.lastApplied) {
+			continue
+		}
+		previous := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, state.previousApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(state.ioWeightTargets)}
+		desired := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, state.lastApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(state.ioWeightTargets)}
+		resets, err := a.verifier.prepareIODeviceWeightResets(snapshot, previous, desired)
+		if err != nil || len(resets) == 0 {
+			if err == nil {
+				err = fmt.Errorf("legacy journal lacks exact mechanism context for removed tuples")
+			}
+			return &AdapterError{Reason: ReasonExternalConflict, Operation: "recover_keyed_reset_upgrade", Unit: snapshot.Identity.Name, Property: key.property, Err: err}
+		}
+		state.previousIOWeightTargets = cloneIODeviceWeightTargets(state.ioWeightTargets)
+		state.pendingIOWeightResets = resets
+		a.leases[key] = state
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(before)
+		return err
+	}
+	return nil
 }
 
 // finishResetUnit removes owned drop-ins when a crash left an acknowledged or
@@ -434,13 +531,15 @@ func (a *Adapter) importJournal(journal durableLeaseJournal) error {
 			baseline := durablePropertyValue(property.Property, property.Baseline, property.BaselineDeviceLimits)
 			lastApplied := durablePropertyValue(property.Property, property.LastApplied, property.LastAppliedDeviceLimits)
 			a.leases[propertyLeaseKey{identity: identity, property: property.Property}] = propertyLeaseState{
-				lease:           publicPropertyLease(property.Property, baseline, lastApplied),
-				baseline:        baseline,
-				lastApplied:     lastApplied,
-				previousApplied: durablePropertyValue(property.Property, property.PreviousApplied, property.PreviousDeviceLimits),
-				ioWeightTargets: ioDeviceWeightTargetsFromDurable(property.IODeviceWeightTargets),
-				uncertain:       property.Uncertain,
-				newLease:        property.NewLease,
+				lease:                   publicPropertyLease(property.Property, baseline, lastApplied),
+				baseline:                baseline,
+				lastApplied:             lastApplied,
+				previousApplied:         durablePropertyValue(property.Property, property.PreviousApplied, property.PreviousDeviceLimits),
+				ioWeightTargets:         ioDeviceWeightTargetsFromDurable(property.IODeviceWeightTargets),
+				previousIOWeightTargets: ioDeviceWeightTargetsFromDurable(property.PreviousIODeviceWeightTargets),
+				pendingIOWeightResets:   ioDeviceWeightResetsFromDurable(property.PendingIODeviceWeightResets),
+				uncertain:               property.Uncertain,
+				newLease:                property.NewLease,
 			}
 		}
 	}
@@ -482,6 +581,8 @@ func (a *Adapter) exportJournal(generation uint64) (durableLeaseJournal, error) 
 			}
 			property := durablePropertyLease{Property: key.property, Uncertain: state.uncertain, NewLease: state.newLease}
 			property.IODeviceWeightTargets = ioDeviceWeightTargetsToDurable(state.ioWeightTargets)
+			property.PreviousIODeviceWeightTargets = ioDeviceWeightTargetsToDurable(state.previousIOWeightTargets)
+			property.PendingIODeviceWeightResets = ioDeviceWeightResetsToDurable(state.pendingIOWeightResets)
 			if _, deviceProperty := approvedDeviceProperties[key.property]; deviceProperty {
 				property.BaselineDeviceLimits = deviceLimitsToDurable(state.baseline.devices)
 				property.PreviousDeviceLimits = deviceLimitsToDurable(state.previousApplied.devices)
@@ -509,6 +610,8 @@ func (a *Adapter) snapshotLeaseState() adapterLeaseSnapshot {
 	}
 	for key, value := range a.leases {
 		value.ioWeightTargets = cloneIODeviceWeightTargets(value.ioWeightTargets)
+		value.previousIOWeightTargets = cloneIODeviceWeightTargets(value.previousIOWeightTargets)
+		value.pendingIOWeightResets = cloneIODeviceWeightResets(value.pendingIOWeightResets)
 		result.leases[key] = value
 	}
 	for key, value := range a.overrides {
@@ -587,6 +690,8 @@ func (a *Adapter) confirmAppliedUnit(unit string, actual []unitFileFingerprint) 
 		}
 		state.uncertain = false
 		state.newLease = false
+		state.previousIOWeightTargets = nil
+		state.pendingIOWeightResets = nil
 		a.leases[key] = state
 	}
 }
@@ -601,6 +706,7 @@ func (a *Adapter) stageUnitRestore(unit string) {
 			continue
 		}
 		state.previousApplied = state.lastApplied
+		state.previousIOWeightTargets = cloneIODeviceWeightTargets(state.ioWeightTargets)
 		state.lastApplied = clonePropertyValue(key.property, state.baseline)
 		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = true
@@ -622,6 +728,9 @@ func (a *Adapter) rollbackUndispatchedApply(unit string) error {
 			continue
 		}
 		state.lastApplied = clonePropertyValue(key.property, state.previousApplied)
+		state.ioWeightTargets = cloneIODeviceWeightTargets(state.previousIOWeightTargets)
+		state.previousIOWeightTargets = nil
+		state.pendingIOWeightResets = nil
 		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = false
 		state.newLease = false

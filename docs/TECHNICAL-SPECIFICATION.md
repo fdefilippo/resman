@@ -337,6 +337,14 @@ Observation-derived refusals and boot-time inactive mechanisms are reclassified 
 1, 2, 4, 8, 16, and 30-second capped retries. Deterministic post-materialization
 mismatch, unsafe cleanup, or ownership conflict stops only the weighted-I/O generation.
 The daemon never writes a scheduler, `io.cost.qos`, or `io.cost.model`.
+Systemd 252 does not remove an existing per-device kernel weight when its D-Bus
+`IODeviceWeight` list is cleared. Selector reduction and owned restoration therefore
+use one adapter-only completion primitive: after persisting the exact removed tuple
+and confirming the D-Bus replacement, ResMan writes only the kernel removal token
+`MAJ:MIN default` to the typed active weight file. It securely rechecks the cgroup
+inode, device number, mechanism, runtime footprint and expected old value, then
+confirms absence. Divergence preserves the durable lease; no generic cgroup mutation
+API or unit-lifecycle workaround exists.
 
 Capability discovery is a startup snapshot. If `memory.max` or `io.max` was
 unusable during that probe, a reload that requests its feature reports the
@@ -1508,7 +1516,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.38.0-7'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.38.0-8'" -o resman .
 ```
 
 **Build RPM:**

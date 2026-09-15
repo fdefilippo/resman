@@ -243,6 +243,17 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   rejects raw property names, constant concatenations, aliases and alternate mutation
   paths; read-only status and persistence types may cross package boundaries without
   conveying mutation authority.
+- `IODeviceWeight` removal has one narrower kernel exception inside the typed
+  adapter. After systemd has acknowledged the exact D-Bus replacement or empty
+  baseline, the durable lease may write only `MAJ:MIN default` to the typed active
+  `io.weight` or `io.bfq.weight` file. The adapter **MUST** persist the removed path,
+  device number, mechanism and expected owned kernel value before the D-Bus call;
+  recheck the unit cgroup inode, device identity, D-Bus value, unit-file footprint and
+  kernel value around the write; and confirm that the keyed override disappeared.
+  Any divergence preserves the lease as an intervention-required conflict. This does
+  not authorize a generic raw-cgroup writer, another token, another controller file,
+  PID movement, or user-slice stop/recreation. The AST gate **MUST** pin the single
+  writer and exact token.
 - Startup capability checks may create one transient slice directly below `user.slice`
   and one dedicated, finite-lived probe process inside it solely to make the requested
   controller interface materialize for kernel verification. No existing PID may be
@@ -674,6 +685,12 @@ against it. Remote wildcard binds remain explicit, non-default security decision
   a secure write-ahead journal. Persist ownership before mutation, acknowledge success
   only after verified durable publication, and never reconstruct ownership from a
   filename or current value that an operator could have produced independently.
+- A kernel pseudo-file write used to complete restoration of an external-property
+  lease **MUST** be narrower than the leased property itself: one typed adapter
+  operation, one documented kernel removal token, secure component-wise opens,
+  exact identity and value comparison immediately before mutation, post-readback,
+  and durable idempotent recovery. It **MUST NOT** become a reusable filesystem or
+  cgroup mutation helper.
 
 **Why.** Before `resman-4pw.5`, `config/config.go` wrote both the timestamped backup
 and the temporary file with mode `0644` before renaming, with no inspection of the
@@ -689,6 +706,10 @@ before it can acquire an MCP token. `resman-4pw.66` applies the same boundary to
 SQLite history: a private parent protects sidecars before SQLite-created modes are
 normalized, while unsafe pre-existing directories and files are rejected with an
 explicit ownership and permission remedy.
+`resman-nq6.40.10` adds the sole kernel pseudo-file exception: systemd 252 clears its
+`IODeviceWeight` list but does not remove the live keyed override, while cgroup v2
+requires `MAJ:MIN default`. The write-ahead reset tuple and exact architecture gate
+keep that compatibility repair inside the existing ownership transaction.
 
 *Findings: resman-4pw.5, resman-4pw.26, resman-4pw.48, resman-4pw.66, resman-nq6.13*
 
@@ -1026,7 +1047,9 @@ class. A branch name alone never determines the version.
       (Rule 11).
 - [ ] Capability requirements match enabled features, and packaging agrees (Rule 12).
 - [ ] Shipped assets updated for any changed default, name, path, or port (Rule 13).
-- [ ] Files written by resman are no more permissive than their source (Rule 14).
+- [ ] Files written by resman are no more permissive than their source; any kernel
+      pseudo-file restoration is an exact, durable, mechanically pinned exception
+      rather than a generic writer (Rule 14).
 - [ ] Shared-state changes validated under `-race` (Rule 15).
 - [ ] Table-driven test that fails without the change; functional evidence recorded if
       the harness was used (Rule 16).
@@ -1079,7 +1102,7 @@ archive without Git metadata, every file below the declared shipped paths is sca
 | Every registered Prometheus metric has a production call site | 7 | AST scan of `metrics/prometheus.go` recorders vs callers |
 | No `time.Sleep` in non-test files outside allowed backoff sites | 10 | AST scan with an explicit allowlist |
 | Every production named struct declaring `sync.Mutex`, `sync.RWMutex`, or `operationgate.Gate` is recorded exactly once in the lock-boundary inventory | 15 | AST field/import scan matched to machine-readable inventory identifiers; test and generated files excluded; no call-graph proof |
-| systemd-owned user slices are mutated only through the runtime-only D-Bus adapter; raw user-slice cgroup paths and general unit lifecycle methods are forbidden | 14, 15 | AST scan of production literals, client imports, raw D-Bus members, control-group-path consumers and mutation calls; the adapter permits only read-only cgroup verification plus its guarded unit-file cleanup |
+| systemd-owned user slices are mutated only through the runtime-only D-Bus adapter, except for its exact durable `IODeviceWeight` `MAJ:MIN default` completion; other raw user-slice cgroup paths and general unit lifecycle methods are forbidden | 14, 15 | AST scan of production literals, client imports, raw D-Bus members, control-group-path consumers and mutation calls; the adapter permits read-only cgroup verification, its guarded unit-file cleanup and one pinned device-weight reset writer |
 | PID relocation, origin/recovery state and the retired enforcement vocabulary cannot return | 3, 5, 16 | Repository-wide production-Go AST scan rejects direct, concatenated, variable-aliased and `fmt.Sprintf`-constructed `cgroup.procs` or `migration_enabled` strings plus the retired placement API identifiers |
 | go-sdk is at least v1.7.0; HTTP sets `Stateless: true`; no `MCPGODEBUG`, session storage, or pre-2026-07-28 revision | 11 | module and AST scan, with exact rejection literals allowlisted |
 | Shipped assets contain no stale port/namespace | 13 | scan ports `9100`/`9101` and case-insensitive obsolete product/namespace forms in shipped assets and production Go identifiers/string literals/comments, excluding historical RPM `%changelog` entries and checker fixtures |

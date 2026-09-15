@@ -13,6 +13,7 @@ const systemdUnitErrorsPath = "internal/systemdunit/errors.go"
 const systemdUnitJournalPath = "internal/systemdunit/journal.go"
 const systemdUnitFilesPath = "internal/systemdunit/unit_files.go"
 const systemdUnitCoveragePath = "internal/systemdunit/coverage.go"
+const systemdIODeviceWeightCleanupPath = "internal/systemdunit/io_device_weight_cleanup.go"
 const systemdResourcePolicyPath = "state/systemd_resources.go"
 const systemdIOWeightPolicyPath = "state/systemd_io_weights.go"
 
@@ -35,6 +36,7 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 			ioRestore[node] = true
 		}
 		capabilityProbes := systemdCapabilityProbeExceptions(source)
+		kernelResets := systemdIODeviceWeightKernelResetExceptions(source, &result)
 		constants := packages[path.Dir(source.path)]
 		ast.Inspect(source.file, func(node ast.Node) bool {
 			checkSystemdIOWeightPolicy(source, node, ioRestore, constants, &result)
@@ -43,7 +45,7 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 				checkSystemdOwnedCgroupLiteral(source, typed, &result)
 			case *ast.CallExpr:
 				checkIODeviceWeightClassifierReadOnly(source, typed, &result)
-				checkSystemdMutationCall(source, typed, capabilityProbes, &result)
+				checkSystemdMutationCall(source, typed, capabilityProbes, kernelResets, &result)
 			case *ast.SelectorExpr:
 				checkSystemdControlGroupCapability(source, typed, &result)
 			}
@@ -51,6 +53,52 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 		})
 	}
 	return result
+}
+
+// systemdIODeviceWeightKernelResetExceptions admits exactly one raw write in
+// the adapter: file.Write(payload) inside writeIODeviceWeightReset, with the
+// literal kernel removal token " default\n". The production function performs
+// the remaining typed tuple, inode, mechanism and compare-before-restore checks.
+func systemdIODeviceWeightKernelResetExceptions(source goSource, result *checkResult) map[ast.Node]bool {
+	allowed := map[ast.Node]bool{}
+	if source.path != systemdIODeviceWeightCleanupPath {
+		return allowed
+	}
+	functions := 0
+	for _, declaration := range source.file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "writeIODeviceWeightReset" || function.Body == nil {
+			continue
+		}
+		functions++
+		writes, tokens := 0, 0
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.BasicLit:
+				if value, err := strconv.Unquote(typed.Value); err == nil && value == " default\n" {
+					tokens++
+				}
+			case *ast.CallExpr:
+				selector, ok := typed.Fun.(*ast.SelectorExpr)
+				owner, ownerOK := selectorOwner(selector)
+				if ok && ownerOK && owner == "file" && selector.Sel.Name == "Write" && len(typed.Args) == 1 && systemdNamedIdentifier(typed.Args[0], "payload") {
+					writes++
+					allowed[typed] = true
+				}
+			}
+			return true
+		})
+		if writes != 1 || tokens != 1 {
+			result.fail(source.path, sourceLine(source, function.Pos()), "IODeviceWeight kernel cleanup must contain one exact MAJ:MIN default write")
+			for node := range allowed {
+				delete(allowed, node)
+			}
+		}
+	}
+	if functions != 1 {
+		result.fail(source.path, 1, "IODeviceWeight kernel cleanup must define one exact writeIODeviceWeightReset function")
+	}
+	return allowed
 }
 
 func checkIODeviceWeightClassifierReadOnly(source goSource, call *ast.CallExpr, result *checkResult) {
@@ -423,12 +471,12 @@ func checkSystemdOwnedCgroupLiteral(source goSource, literal *ast.BasicLit, resu
 }
 
 func checkSystemdControlGroupCapability(source goSource, selector *ast.SelectorExpr, result *checkResult) {
-	if selector.Sel.Name == "ControlGroup" && source.path != "internal/systemdunit/kernel.go" && source.path != systemdUnitCoveragePath {
-		result.fail(source.path, sourceLine(source, selector.Pos()), "the authoritative systemd control-group path is restricted to read-only kernel verification and workload-coverage inspection")
+	if selector.Sel.Name == "ControlGroup" && source.path != "internal/systemdunit/kernel.go" && source.path != systemdUnitCoveragePath && source.path != systemdIODeviceWeightCleanupPath {
+		result.fail(source.path, sourceLine(source, selector.Pos()), "the authoritative systemd control-group path is restricted to kernel verification, exact IODeviceWeight keyed reset and workload-coverage inspection")
 	}
 }
 
-func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityProbes map[ast.Node]bool, result *checkResult) {
+func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityProbes, kernelResets map[ast.Node]bool, result *checkResult) {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -457,14 +505,19 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityPro
 	if !strings.HasPrefix(source.path, "internal/systemdunit/") {
 		return
 	}
+	if source.path == systemdIODeviceWeightCleanupPath && !kernelResets[call] &&
+		(strings.HasPrefix(method, "Write") || strings.HasPrefix(method, "Fprint") || method == "Copy" || method == "CopyN") {
+		result.fail(source.path, sourceLine(source, call.Pos()), "%s is outside the one exact IODeviceWeight keyed-reset write", method)
+		return
+	}
 	switch method {
 	case "OpenFile":
 		if source.path != systemdUnitJournalPath && source.path != systemdUnitFilesPath {
 			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to read-only footprint inspection and the durable lease journal", method)
 		}
 	case "WriteFile", "Create", "CreateTemp", "Mkdir", "MkdirAll", "Remove", "RemoveAll", "Rename", "Truncate", "Write", "WriteString":
-		if source.path != systemdUnitJournalPath {
-			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the durable lease journal inside the systemd adapter", method)
+		if source.path != systemdUnitJournalPath && !kernelResets[call] {
+			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the durable lease journal or the exact IODeviceWeight keyed reset inside the systemd adapter", method)
 		}
 	}
 }

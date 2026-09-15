@@ -341,6 +341,8 @@ type fakeKernelVerifier struct {
 	preflightCalls      [][]PropertyAssignment
 	preflightApplyCalls [][]PropertyAssignment
 	preflightByName     map[PropertyName]error
+	resetCalls          [][]ioDeviceWeightReset
+	resetErr            error
 }
 
 func (v *fakeKernelVerifier) identity(controlGroup string) (uint64, error) {
@@ -382,6 +384,22 @@ func (v *fakeKernelVerifier) preflightResult(assignments []PropertyAssignment) e
 		}
 	}
 	return nil
+}
+
+func (v *fakeKernelVerifier) prepareIODeviceWeightResets(_ UnitSnapshot, previous, desired PropertyAssignment) ([]ioDeviceWeightReset, error) {
+	return prepareIODeviceWeightResets(previous, desired, func(path string) (string, error) {
+		for index, candidate := range []string{"/dev/vda", "/dev/vdb", "/dev/vdc", "/dev/vdd"} {
+			if path == candidate {
+				return fmt.Sprintf("8:%d", index*16), nil
+			}
+		}
+		return "", fmt.Errorf("unknown fake block device %s", path)
+	})
+}
+
+func (v *fakeKernelVerifier) resetIODeviceWeightOverrides(_ UnitSnapshot, resets []ioDeviceWeightReset) error {
+	v.resetCalls = append(v.resetCalls, cloneIODeviceWeightResets(resets))
+	return v.resetErr
 }
 
 func TestDiscoverReturnsAuthoritativeSortedUserSlices(t *testing.T) {

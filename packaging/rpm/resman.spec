@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.38.0
-Release: 7%{?dist}
+Release: 8%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -310,6 +310,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-8
+- Complete exact IODeviceWeight keyed cleanup after systemd D-Bus reset
+
 * Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-7
 - Drop vanished transient-probe leases after proving no runtime state remains
 

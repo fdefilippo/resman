@@ -88,6 +88,11 @@ Reducing a live weighted-device selector clears and replaces the owned
 `IODeviceWeight` tuple array within one ordered systemd D-Bus method call; this is
 required because a non-empty systemd assignment is additive. Independent hard-I/O
 properties on devices removed from the weighted selector remain unchanged.
+On systemd 252, clearing the D-Bus array does not itself remove the live cgroup keyed
+weight. ResMan now records the exact removed tuple before mutation and completes the
+owned reset with the kernel-defined `MAJ:MIN default` token after D-Bus readback.
+Identity or value divergence stops cleanup, preserves the lease, and reports an
+intervention-required conflict; no user slice is stopped or recreated.
 
 **Persistence and clients.** SQLite schema 7 is migrated atomically through schema 8
 to schema 9. Old

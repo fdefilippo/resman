@@ -106,17 +106,22 @@ func (e *kernelValueMismatch) Error() string { return e.err.Error() }
 func (e *kernelValueMismatch) Unwrap() error { return e.err }
 
 type cgroupVerifier struct {
-	root     string
-	readFile func(string) ([]byte, error)
-	stat     func(string) (os.FileInfo, error)
-	pageSize uint64
+	root                string
+	readFile            func(string) ([]byte, error)
+	stat                func(string) (os.FileInfo, error)
+	resetIODeviceWeight func(string, string, uint64, ioDeviceWeightReset) error
+	pageSize            uint64
 }
 
 func newCgroupVerifier(root string) cgroupVerifier {
 	if root == "" {
 		root = defaultCgroupRoot
 	}
-	return cgroupVerifier{root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat, pageSize: uint64(os.Getpagesize())}
+	return cgroupVerifier{
+		root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat,
+		resetIODeviceWeight: writeIODeviceWeightReset,
+		pageSize:            uint64(os.Getpagesize()),
+	}
 }
 
 // identity opens every component beneath the configured cgroup root without

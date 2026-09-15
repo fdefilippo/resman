@@ -677,6 +677,66 @@ func (t *dbusTransport) stopCapabilityProbe(){ t.conn.StopUnitContext(nil, "prob
 			wantFailed: true,
 		},
 		{
+			name: "exact IODeviceWeight keyed reset",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type snapshot struct{ ControlGroup string }
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, value snapshot, reset reset) error {
+ _ = value.ControlGroup
+ payload := []byte(reset.device + " default\n")
+ _, _ = file.Write(payload)
+ return nil
+}`,
+		},
+		{
+			name: "changed IODeviceWeight keyed reset token",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, reset reset) error {
+ payload := []byte(reset.device + " 100\n")
+ _, _ = file.Write(payload)
+ return nil
+}`,
+			wantFailed: true,
+		},
+		{
+			name: "second cgroup write beside exact keyed reset",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, reset reset) error {
+ payload := []byte(reset.device + " default\n")
+ _, _ = file.Write(payload)
+ return nil
+}
+func escape(file writer) { _, _ = file.Write([]byte("8:0 default\n")) }`,
+			wantFailed: true,
+		},
+		{
+			name: "alternate cgroup writer beside exact keyed reset",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func (writer) WriteAt([]byte, int64) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, reset reset) error {
+ payload := []byte(reset.device + " default\n")
+ _, _ = file.Write(payload)
+ return nil
+}
+func escape(file writer) { _, _ = file.WriteAt([]byte("8:0 default\n"), 0) }`,
+			wantFailed: true,
+		},
+		{
 			name:    "durable lease journal write",
 			path:    systemdUnitJournalPath,
 			content: `package systemdunit; import "os"; func persist(path string){ _ = os.WriteFile(path, nil, 0600) }`,

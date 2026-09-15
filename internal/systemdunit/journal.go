@@ -54,16 +54,18 @@ type durableUnitIdentity struct {
 }
 
 type durablePropertyLease struct {
-	Property                PropertyName                  `json:"property"`
-	Baseline                uint64                        `json:"baseline,omitempty"`
-	PreviousApplied         uint64                        `json:"previous_applied,omitempty"`
-	LastApplied             uint64                        `json:"last_applied,omitempty"`
-	BaselineDeviceLimits    []durableDeviceLimit          `json:"baseline_device_limits,omitempty"`
-	PreviousDeviceLimits    []durableDeviceLimit          `json:"previous_device_limits,omitempty"`
-	LastAppliedDeviceLimits []durableDeviceLimit          `json:"last_applied_device_limits,omitempty"`
-	IODeviceWeightTargets   []durableIODeviceWeightTarget `json:"io_device_weight_targets,omitempty"`
-	Uncertain               bool                          `json:"uncertain"`
-	NewLease                bool                          `json:"new_lease"`
+	Property                      PropertyName                  `json:"property"`
+	Baseline                      uint64                        `json:"baseline,omitempty"`
+	PreviousApplied               uint64                        `json:"previous_applied,omitempty"`
+	LastApplied                   uint64                        `json:"last_applied,omitempty"`
+	BaselineDeviceLimits          []durableDeviceLimit          `json:"baseline_device_limits,omitempty"`
+	PreviousDeviceLimits          []durableDeviceLimit          `json:"previous_device_limits,omitempty"`
+	LastAppliedDeviceLimits       []durableDeviceLimit          `json:"last_applied_device_limits,omitempty"`
+	IODeviceWeightTargets         []durableIODeviceWeightTarget `json:"io_device_weight_targets,omitempty"`
+	PreviousIODeviceWeightTargets []durableIODeviceWeightTarget `json:"previous_io_device_weight_targets,omitempty"`
+	PendingIODeviceWeightResets   []durableIODeviceWeightReset  `json:"pending_io_device_weight_resets,omitempty"`
+	Uncertain                     bool                          `json:"uncertain"`
+	NewLease                      bool                          `json:"new_lease"`
 }
 
 type durableDeviceLimit struct {
@@ -74,6 +76,13 @@ type durableDeviceLimit struct {
 type durableIODeviceWeightTarget struct {
 	Path      string                  `json:"path"`
 	Mechanism IODeviceWeightMechanism `json:"mechanism"`
+}
+
+type durableIODeviceWeightReset struct {
+	Path      string                  `json:"path"`
+	Device    string                  `json:"device"`
+	Mechanism IODeviceWeightMechanism `json:"mechanism"`
+	Expected  uint64                  `json:"expected"`
 }
 
 func ioDeviceWeightTargetsToDurable(values []ioDeviceWeightTarget) []durableIODeviceWeightTarget {
@@ -88,6 +97,22 @@ func ioDeviceWeightTargetsFromDurable(values []durableIODeviceWeightTarget) []io
 	result := make([]ioDeviceWeightTarget, len(values))
 	for index, value := range values {
 		result[index] = ioDeviceWeightTarget{path: value.Path, mechanism: value.Mechanism}
+	}
+	return result
+}
+
+func ioDeviceWeightResetsToDurable(values []ioDeviceWeightReset) []durableIODeviceWeightReset {
+	result := make([]durableIODeviceWeightReset, len(values))
+	for index, value := range values {
+		result[index] = durableIODeviceWeightReset{Path: value.path, Device: value.device, Mechanism: value.mechanism, Expected: value.expected}
+	}
+	return result
+}
+
+func ioDeviceWeightResetsFromDurable(values []durableIODeviceWeightReset) []ioDeviceWeightReset {
+	result := make([]ioDeviceWeightReset, len(values))
+	for index, value := range values {
+		result[index] = ioDeviceWeightReset{path: value.Path, device: value.Device, mechanism: value.Mechanism, expected: value.Expected}
 	}
 	return result
 }
@@ -435,11 +460,20 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 							return fmt.Errorf("unit %s property %s has invalid typed mechanism context", unit.Unit, property.Property)
 						}
 					}
-				} else if len(property.IODeviceWeightTargets) != 0 {
+					previousTargets := ioDeviceWeightTargetsFromDurable(property.PreviousIODeviceWeightTargets)
+					for index, target := range previousTargets {
+						if !validIODeviceWeightMechanism(target.mechanism) || !validAbsolutePath(target.path) || (index > 0 && previousTargets[index-1].path >= target.path) {
+							return fmt.Errorf("unit %s property %s has invalid previous typed mechanism context", unit.Unit, property.Property)
+						}
+					}
+					if err := validateDurableIODeviceWeightResets(unit.Unit, unit.Phase, property, previousTargets); err != nil {
+						return err
+					}
+				} else if len(property.IODeviceWeightTargets)+len(property.PreviousIODeviceWeightTargets)+len(property.PendingIODeviceWeightResets) != 0 {
 					return fmt.Errorf("unit %s property %s contains IODeviceWeight mechanism context", unit.Unit, property.Property)
 				}
 			} else {
-				if len(property.IODeviceWeightTargets) != 0 {
+				if len(property.IODeviceWeightTargets)+len(property.PreviousIODeviceWeightTargets)+len(property.PendingIODeviceWeightResets) != 0 {
 					return fmt.Errorf("unit %s scalar property %s contains IODeviceWeight mechanism context", unit.Unit, property.Property)
 				}
 				if len(property.BaselineDeviceLimits)+len(property.PreviousDeviceLimits)+len(property.LastAppliedDeviceLimits) != 0 {
@@ -456,6 +490,12 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 			}
 			if property.NewLease && (!property.Uncertain || unit.Phase != leasePhaseApplying) {
 				return fmt.Errorf("unit %s property %s has new_lease outside an uncertain apply", unit.Unit, property.Property)
+			}
+			if len(property.PendingIODeviceWeightResets) != 0 && (!property.Uncertain || unit.Phase != leasePhaseApplying) {
+				return fmt.Errorf("unit %s property %s retains keyed resets outside an uncertain apply", unit.Unit, property.Property)
+			}
+			if len(property.PreviousIODeviceWeightTargets) != 0 && !property.Uncertain {
+				return fmt.Errorf("unit %s property %s retains previous mechanism context outside an uncertain mutation", unit.Unit, property.Property)
 			}
 		}
 		if unit.Phase == leasePhaseApplied && uncertainProperties != 0 {
@@ -483,6 +523,54 @@ func validateDurableLeaseJournal(journal durableLeaseJournal) error {
 		sort.Strings(expectedPaths)
 		if !equalStrings(durableFootprintPaths(unit.Footprint), expectedPaths) {
 			return fmt.Errorf("unit %s footprint does not match its leased properties", unit.Unit)
+		}
+	}
+	return nil
+}
+
+func validateDurableIODeviceWeightResets(unit string, phase leasePhase, property durablePropertyLease, previousTargets []ioDeviceWeightTarget) error {
+	previousValues := make(map[string]uint64, len(property.PreviousDeviceLimits))
+	for _, value := range property.PreviousDeviceLimits {
+		previousValues[value.Path] = value.Value
+	}
+	lastPaths := make(map[string]bool, len(property.LastAppliedDeviceLimits))
+	for _, value := range property.LastAppliedDeviceLimits {
+		lastPaths[value.Path] = true
+	}
+	previousMechanisms := make(map[string]IODeviceWeightMechanism, len(previousTargets))
+	for _, target := range previousTargets {
+		previousMechanisms[target.path] = target.mechanism
+	}
+	wantResets := 0
+	for _, target := range previousTargets {
+		if _, hadValue := previousValues[target.path]; hadValue && !lastPaths[target.path] {
+			wantResets++
+		}
+	}
+	if phase != leasePhaseApplying {
+		wantResets = 0
+	}
+	if len(property.PendingIODeviceWeightResets) != wantResets {
+		return fmt.Errorf("unit %s property %s has %d keyed resets, expected %d removed owned tuples", unit, property.Property, len(property.PendingIODeviceWeightResets), wantResets)
+	}
+	seenDevices := make(map[string]bool, len(property.PendingIODeviceWeightResets))
+	for index, reset := range property.PendingIODeviceWeightResets {
+		if !validAbsolutePath(reset.Path) || !validIODeviceWeightMechanism(reset.Mechanism) || reset.Expected == 0 ||
+			(index > 0 && property.PendingIODeviceWeightResets[index-1].Path >= reset.Path) {
+			return fmt.Errorf("unit %s property %s has invalid keyed-reset context", unit, property.Property)
+		}
+		numbers, err := ParseIODeviceWeightDevices(reset.Device)
+		if err != nil || len(numbers) != 1 || numbers[0].String() != reset.Device {
+			return fmt.Errorf("unit %s property %s has invalid keyed-reset device %q", unit, property.Property, reset.Device)
+		}
+		if seenDevices[reset.Device] {
+			return fmt.Errorf("unit %s property %s has duplicate keyed-reset device %s", unit, property.Property, reset.Device)
+		}
+		seenDevices[reset.Device] = true
+		previous, present := previousValues[reset.Path]
+		mechanism, typed := previousMechanisms[reset.Path]
+		if !present || !typed || mechanism != reset.Mechanism || lastPaths[reset.Path] || kernelIODeviceWeight(previous, mechanism) != reset.Expected {
+			return fmt.Errorf("unit %s property %s keyed reset is not the exact removed owned tuple for %s", unit, property.Property, reset.Path)
 		}
 	}
 	return nil

@@ -36,6 +36,18 @@ the adapter therefore sends an empty reset followed by the desired replacement i
 one ordered `SetUnitProperties` call. The durable lease and readback retain only the
 logical replacement value; an interrupted or divergent mutation remains uncertain
 and is never restored without compare-before-restore proof.
+Systemd 252 also acknowledges an empty device-weight list without removing the old
+per-device entry from the live cgroup. Linux cgroup v2 removes that keyed entry only
+when the active mechanism file receives `MAJ:MIN default`. For a selector reduction
+or baseline restore, the write-ahead lease therefore records every removed canonical
+path, resolved device number, BFQ or io.cost mechanism, and expected owned kernel
+value before the D-Bus mutation. Only after systemd reports the replacement does the
+adapter recheck the unit inode, runtime footprint, device identity and exact kernel
+value, issue that single removal token through a no-symlink descriptor, and confirm
+both D-Bus and kernel state again. An absent entry is an idempotent recovery success;
+another value or identity is an external conflict that leaves the lease pending.
+No other raw cgroup mutation is authorized, and cleanup never stops or recreates a
+user slice.
 An owned transient capability probe is stopped before its journal and runtime
 drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
 must be retained; reconciling the now-inactive footprint avoids placing a full

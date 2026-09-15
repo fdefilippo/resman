@@ -57,3 +57,13 @@ func (a *Adapter) baselineAssignments(unit string) []PropertyAssignment {
 	}
 	return result
 }
+
+func (a *Adapter) lastAppliedAssignments(unit string) []PropertyAssignment {
+	var result []PropertyAssignment
+	for key, value := range a.leases {
+		if key.identity.Name == unit {
+			result = append(result, PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, value.lastApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(value.ioWeightTargets)})
+		}
+	}
+	return result
+}

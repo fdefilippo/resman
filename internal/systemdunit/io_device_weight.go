@@ -32,6 +32,15 @@ type ioDeviceWeightTarget struct {
 	mechanism IODeviceWeightMechanism
 }
 
+// ioDeviceWeightReset is the durable, exact kernel tuple that must be removed
+// after systemd has acknowledged removal of the corresponding D-Bus entry.
+type ioDeviceWeightReset struct {
+	path      string
+	device    string
+	mechanism IODeviceWeightMechanism
+	expected  uint64
+}
+
 // NewIODeviceWeightAssignment validates, canonicalizes and converts typed
 // per-device weights into systemd's native IODeviceWeight a(st) value.
 func NewIODeviceWeightAssignment(requests []IODeviceWeightRequest) (PropertyAssignment, error) {
@@ -96,6 +105,19 @@ func validIODeviceWeightMechanism(mechanism IODeviceWeightMechanism) bool {
 
 func cloneIODeviceWeightTargets(targets []ioDeviceWeightTarget) []ioDeviceWeightTarget {
 	return append([]ioDeviceWeightTarget(nil), targets...)
+}
+
+func cloneIODeviceWeightResets(resets []ioDeviceWeightReset) []ioDeviceWeightReset {
+	return append([]ioDeviceWeightReset(nil), resets...)
+}
+
+func ioDeviceWeightTargetByPath(targets []ioDeviceWeightTarget, path string) (ioDeviceWeightTarget, bool) {
+	for _, target := range targets {
+		if target.path == path {
+			return target, true
+		}
+	}
+	return ioDeviceWeightTarget{}, false
 }
 
 func ioDeviceWeightTargetsEqual(left, right []ioDeviceWeightTarget) bool {

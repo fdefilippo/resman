@@ -16,13 +16,15 @@ import (
 const parentUserSlice = "user.slice"
 
 type propertyLeaseState struct {
-	lease           PropertyLease
-	baseline        propertyValue
-	lastApplied     propertyValue
-	previousApplied propertyValue
-	ioWeightTargets []ioDeviceWeightTarget
-	uncertain       bool
-	newLease        bool
+	lease                   PropertyLease
+	baseline                propertyValue
+	lastApplied             propertyValue
+	previousApplied         propertyValue
+	ioWeightTargets         []ioDeviceWeightTarget
+	previousIOWeightTargets []ioDeviceWeightTarget
+	pendingIOWeightResets   []ioDeviceWeightReset
+	uncertain               bool
+	newLease                bool
 }
 
 type propertyLeaseKey struct {
@@ -41,10 +43,13 @@ type kernelVerifier interface {
 	verify(UnitSnapshot, []PropertyAssignment) error
 	preflight(UnitSnapshot, []PropertyAssignment) error
 	preflightApply(UnitSnapshot, []PropertyAssignment) error
+	prepareIODeviceWeightResets(UnitSnapshot, PropertyAssignment, PropertyAssignment) ([]ioDeviceWeightReset, error)
+	resetIODeviceWeightOverrides(UnitSnapshot, []ioDeviceWeightReset) error
 }
 
 // Adapter is the narrow, runtime-only systemd resource-control boundary.
-// The operation gate may span D-Bus and read-only cgroup verification I/O.
+// The operation gate may span D-Bus, cgroup verification I/O and the guarded
+// IODeviceWeight keyed-reset primitive used only after a durable D-Bus reset.
 type Adapter struct {
 	transport  unitTransport
 	verifier   kernelVerifier
@@ -88,7 +93,7 @@ func (a *Adapter) ManagerVersion(ctx context.Context) (string, error) {
 	return strings.TrimSpace(value), nil
 }
 
-// New opens the authoritative system bus and a read-only cgroup verifier. The
+// New opens the authoritative system bus and the guarded cgroup boundary. The
 // supplied context bounds startup recovery only; Close owns the connection lifetime.
 func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements StartupRequirements) (*Adapter, error) {
 	if timeout <= 0 {
@@ -115,7 +120,7 @@ func newAdapter(ctx context.Context, transport unitTransport, verifier kernelVer
 		return nil, &AdapterError{Reason: ReasonBusUnavailable, Operation: "construct", Err: fmt.Errorf("systemd transport is required")}
 	}
 	if verifier == nil {
-		return nil, &AdapterError{Reason: ReasonKernelVerification, Operation: "construct", Err: fmt.Errorf("read-only cgroup verifier is required")}
+		return nil, &AdapterError{Reason: ReasonKernelVerification, Operation: "construct", Err: fmt.Errorf("guarded cgroup verifier is required")}
 	}
 	if unitFiles == nil {
 		return nil, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "construct", Err: fmt.Errorf("unit-file inspector is required")}
@@ -458,13 +463,28 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lastApplied, current)
 			}
 			state = resolved
-			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)
 		} else {
+			if assignment.name == PropertyIODeviceWeight && len(current.devices) != 0 {
+				return UnitSnapshot{}, &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: identity.Name, Property: assignment.name,
+					Err: fmt.Errorf("cannot acquire IODeviceWeight while an unowned device tuple is present")}
+			}
 			state = newPropertyLeaseState(assignment.name, current)
-			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)
 			state.newLease = true
 		}
 		state.previousApplied = state.lastApplied
+		state.previousIOWeightTargets = cloneIODeviceWeightTargets(state.ioWeightTargets)
+		state.pendingIOWeightResets = nil
+		if tracked && assignment.name == PropertyIODeviceWeight {
+			previous := PropertyAssignment{name: PropertyIODeviceWeight, value: clonePropertyValue(PropertyIODeviceWeight, state.lastApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(state.ioWeightTargets)}
+			resets, err := a.verifier.prepareIODeviceWeightResets(before, previous, assignment)
+			if err != nil {
+				return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "apply_reset_preflight", Unit: identity.Name, Property: PropertyIODeviceWeight, Err: err}
+			}
+			state.pendingIOWeightResets = resets
+		}
+		if assignment.name == PropertyIODeviceWeight {
+			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)
+		}
 		state.lastApplied = clonePropertyValue(assignment.name, assignment.value)
 		state.lease = publicPropertyLease(assignment.name, state.baseline, state.lastApplied)
 		state.uncertain = true
@@ -504,6 +524,25 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	}
 	if err := a.requireManagedUnitFileFootprint("apply_readback", after, stagedOverride, true); err != nil {
 		return UnitSnapshot{}, err
+	}
+	resetCompleted, err := a.completePendingIODeviceWeightResets(after, "apply_readback")
+	if err != nil {
+		return UnitSnapshot{}, err
+	}
+	if resetCompleted {
+		after, err = a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+		if err != nil {
+			return UnitSnapshot{}, err
+		}
+		if err := requireSameIdentity("apply_reset_confirmation", identity, after.Identity); err != nil {
+			return UnitSnapshot{}, err
+		}
+		if err := verifyReadback("apply_reset_confirmation", after, validated); err != nil {
+			return UnitSnapshot{}, err
+		}
+		if err := a.requireManagedUnitFileFootprint("apply_reset_confirmation", after, stagedOverride, true); err != nil {
+			return UnitSnapshot{}, err
+		}
 	}
 	if err := a.verifier.verify(after, validated); err != nil {
 		return UnitSnapshot{}, &AdapterError{Reason: ReasonKernelVerification, Operation: "apply_readback", Unit: identity.Name, Err: err}
@@ -688,9 +727,21 @@ func (a *Adapter) RestoreProperties(ctx context.Context, identity UnitIdentity, 
 	}
 	if len(assignments) != 0 {
 		before := a.snapshotLeaseState()
-		for _, key := range keys {
+		for index, key := range keys {
 			state := a.leases[key]
 			state.previousApplied = state.lastApplied
+			state.previousIOWeightTargets = cloneIODeviceWeightTargets(state.ioWeightTargets)
+			state.pendingIOWeightResets = nil
+			if key.property == PropertyIODeviceWeight {
+				previous := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, state.lastApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(state.ioWeightTargets)}
+				assignment := assignments[index]
+				resets, err := a.verifier.prepareIODeviceWeightResets(current, previous, assignment)
+				if err != nil {
+					a.restoreLeaseState(before)
+					return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_reset_preflight", Unit: identity.Name, Property: key.property, Err: err}
+				}
+				state.pendingIOWeightResets = resets
+			}
 			state.lastApplied = clonePropertyValue(key.property, state.baseline)
 			state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 			state.uncertain = true
@@ -713,6 +764,25 @@ func (a *Adapter) RestoreProperties(ctx context.Context, identity UnitIdentity, 
 		}
 		if err := verifyReadback("restore_properties_readback", after, assignments); err != nil {
 			return result, err
+		}
+		resetCompleted, err := a.completePendingIODeviceWeightResets(after, "restore_properties_readback")
+		if err != nil {
+			return result, err
+		}
+		if resetCompleted {
+			after, err = a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+			if err != nil {
+				return result, err
+			}
+			if err := requireSameIdentity("restore_properties_reset_confirmation", identity, after.Identity); err != nil {
+				return result, err
+			}
+			if err := verifyReadback("restore_properties_reset_confirmation", after, assignments); err != nil {
+				return result, err
+			}
+			if err := a.requireManagedUnitFileFootprint("restore_properties_reset_confirmation", after, a.overrides[identity], true); err != nil {
+				return result, err
+			}
 		}
 		if err := a.verifier.verify(after, assignments); err != nil {
 			return result, &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_readback", Unit: identity.Name, Err: err}
@@ -923,6 +993,17 @@ func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, ident
 		}
 		state := a.leases[key]
 		state.previousApplied = state.lastApplied
+		state.previousIOWeightTargets = cloneIODeviceWeightTargets(state.ioWeightTargets)
+		state.pendingIOWeightResets = nil
+		if key.property == PropertyIODeviceWeight {
+			previous := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, state.lastApplied), ioDeviceWeightTargets: cloneIODeviceWeightTargets(state.ioWeightTargets)}
+			resets, err := a.verifier.prepareIODeviceWeightResets(UnitSnapshot{Identity: identity, ControlGroup: ""}, previous, assignments[index])
+			if err != nil {
+				a.restoreLeaseState(before)
+				return &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_reset_preflight", Unit: identity.Name, Property: key.property, Err: err}
+			}
+			state.pendingIOWeightResets = resets
+		}
 		state.lastApplied = clonePropertyValue(key.property, assignments[index].value)
 		state.lease = publicPropertyLease(key.property, state.baseline, state.lastApplied)
 		state.uncertain = true
@@ -946,6 +1027,25 @@ func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, ident
 	if err := verifyReadback("restore_properties_readback", after, assignments); err != nil {
 		return err
 	}
+	resetCompleted, err := a.completePendingIODeviceWeightResets(after, "restore_properties_readback")
+	if err != nil {
+		return err
+	}
+	if resetCompleted {
+		after, err = a.readUnit(ctx, identity.Name, identity.ObjectPath)
+		if err != nil {
+			return err
+		}
+		if err := requireSameIdentity("restore_properties_reset_confirmation", identity, after.Identity); err != nil {
+			return err
+		}
+		if err := verifyReadback("restore_properties_reset_confirmation", after, assignments); err != nil {
+			return err
+		}
+		if err := a.requireManagedUnitFileFootprint("restore_properties_reset_confirmation", after, a.overrides[identity], true); err != nil {
+			return err
+		}
+	}
 	if err := a.verifier.verify(after, assignments); err != nil {
 		return &AdapterError{Reason: ReasonKernelVerification, Operation: "restore_properties_readback", Unit: identity.Name, Err: err}
 	}
@@ -963,6 +1063,36 @@ func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, ident
 		result.Restored = append(result.Restored, key.property)
 	}
 	return nil
+}
+
+func (a *Adapter) completePendingIODeviceWeightResets(snapshot UnitSnapshot, operation string) (bool, error) {
+	var resets []ioDeviceWeightReset
+	for key, state := range a.leases {
+		if key.identity == snapshot.Identity {
+			resets = append(resets, state.pendingIOWeightResets...)
+		}
+	}
+	if len(resets) == 0 {
+		return false, nil
+	}
+	if err := a.verifier.resetIODeviceWeightOverrides(snapshot, resets); err != nil {
+		reason := ReasonKernelVerification
+		var conflict *ioDeviceWeightResetConflict
+		if errors.As(err, &conflict) {
+			reason = ReasonExternalConflict
+		}
+		return false, &AdapterError{Reason: reason, Operation: operation + "_keyed_reset", Unit: snapshot.Identity.Name, Property: PropertyIODeviceWeight, Err: err}
+	}
+	return true, nil
+}
+
+func (a *Adapter) hasPendingIODeviceWeightResets(unit string) bool {
+	for key, state := range a.leases {
+		if key.identity.Name == unit && len(state.pendingIOWeightResets) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func effectiveBaselineAssignments(baselines []PropertyAssignment) []PropertyAssignment {
@@ -1430,12 +1560,19 @@ func resolveUncertainOwnership(current propertyValue, state propertyLeaseState) 
 		return propertyValuesEqual(state.lease.Property, current, state.lastApplied), state
 	}
 	if propertyValuesEqual(state.lease.Property, current, state.lastApplied) {
+		if len(state.pendingIOWeightResets) != 0 {
+			return true, state
+		}
 		state.uncertain = false
 		state.newLease = false
+		state.previousIOWeightTargets = nil
 		return true, state
 	}
 	if propertyValuesEqual(state.lease.Property, current, state.previousApplied) {
 		state.lastApplied = clonePropertyValue(state.lease.Property, state.previousApplied)
+		state.ioWeightTargets = cloneIODeviceWeightTargets(state.previousIOWeightTargets)
+		state.previousIOWeightTargets = nil
+		state.pendingIOWeightResets = nil
 		state.lease = publicPropertyLease(state.lease.Property, state.baseline, state.lastApplied)
 		state.uncertain = false
 		return true, state

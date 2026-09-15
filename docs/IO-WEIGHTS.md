@@ -113,6 +113,13 @@ releases all owned weights rather than writing blindly. Reload, blackout, empty
 use the property lease journal and compare-before-restore. Externally changed values
 are preserved and become an intervention-required conflict.
 
+On systemd versions that clear the D-Bus `IODeviceWeight` list without deleting the
+live keyed cgroup entry, the adapter completes the same durable transaction with the
+kernel-defined `MAJ:MIN default` removal token. The token is permitted only for a
+previously recorded ResMan-owned tuple after exact D-Bus, unit, device, mechanism and
+kernel comparison. It applies equally to BFQ, io.cost, complete release and selector
+reduction; it never changes `io.max` or any unrelated device entry.
+
 Hard I/O limits and weights have separate property leases. For
 `W=IO_WEIGHT_DEVICES` and `H=IO_DEVICE_FILTER`, devices in both receive both policies,
 devices only in W receive only weights, and devices only in H receive only hard caps.
