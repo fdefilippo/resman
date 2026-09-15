@@ -62,6 +62,11 @@ temporary_image=$temporary_dir/image.qcow2
 temporary_manifest=$temporary_dir/manifest
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$base_image" "$temporary_image"
+if [[ -n $prepared_owner ]]; then
+	chown "$prepared_owner" "$temporary_dir" "$temporary_image"
+	chmod 0710 "$temporary_dir"
+	chmod 0600 "$temporary_image"
+fi
 virt-customize -q -a "$temporary_image" --network \
 	--install "cpio,curl,python3,util-linux,systemd-udev,kernel-$kernel_release" \
 	--run-command "test -f /boot/vmlinuz-$kernel_release" \

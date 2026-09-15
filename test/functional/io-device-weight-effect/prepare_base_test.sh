@@ -6,6 +6,7 @@ test_root=$(mktemp -d "${TMPDIR:-/tmp}/resman-iow-effect-base.XXXXXX")
 base=$test_root/base.qcow2
 prepared=$test_root/resman-iow-effect-prepared-test.qcow2
 calls=$test_root/calls
+test_owner=$(id -u):$(id -g)
 
 cleanup_test() {
 	local status=$?
@@ -30,6 +31,7 @@ cat >"$test_root/bin/virt-customize" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf 'virt-customize %s\n' "$*" >>"$RESMAN_IO_EFFECT_TEST_CALLS"
+[[ $(stat -c %a "$(dirname -- "$3")") == 710 ]]
 printf 'customized\n' >>"$3"
 EOF
 chmod 0755 "$test_root/bin/qemu-img" "$test_root/bin/virt-customize"
@@ -38,7 +40,7 @@ prepare() {
 	PATH=$test_root/bin:/usr/bin:/bin \
 	RESMAN_IO_EFFECT_BASE_SHA256=$base_sha \
 	RESMAN_IO_EFFECT_KERNEL_RELEASE=1.2.3-test \
-	RESMAN_IO_EFFECT_PREPARED_OWNER='' \
+	RESMAN_IO_EFFECT_PREPARED_OWNER=$test_owner \
 	RESMAN_IO_EFFECT_TEST_CALLS=$calls \
 	"$script_dir/prepare-base.sh" "$base" "$prepared"
 }
