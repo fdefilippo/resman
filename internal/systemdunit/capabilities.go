@@ -17,6 +17,34 @@ type StartupRequirements struct {
 	IODeviceWeights []IODeviceWeightRequest
 }
 
+// ProbeIODeviceWeights proves the complete systemd-to-kernel path for one
+// read-only classifier snapshot. The probe owns a disposable transient unit,
+// uses non-default values and restores every temporary property before return.
+func (a *Adapter) ProbeIODeviceWeights(ctx context.Context, targets []IODeviceWeightProbeTarget) error {
+	if len(targets) == 0 {
+		return &AdapterError{
+			Reason: ReasonCapabilityProbe, Operation: "io_device_weight_probe",
+			Err: fmt.Errorf("weighted I/O probe requires at least one classified target"),
+		}
+	}
+	requests := make([]IODeviceWeightRequest, 0, len(targets))
+	for _, target := range targets {
+		if target.Identity.DeviceNode == "" || !validIODeviceWeightMechanism(target.Mechanism) {
+			return &AdapterError{
+				Reason: ReasonCapabilityProbe, Operation: "io_device_weight_probe",
+				Err: fmt.Errorf("weighted I/O probe target %s has incomplete typed identity or mechanism", target.Identity.Number),
+			}
+		}
+		requests = append(requests, IODeviceWeightRequest{
+			Path: target.Identity.DeviceNode, Weight: 100, Mechanism: target.Mechanism,
+		})
+	}
+	if err := a.requireStartupCapabilities(ctx, StartupRequirements{IODeviceWeights: requests}); err != nil {
+		return fmt.Errorf("probe weighted I/O capability: %w", err)
+	}
+	return nil
+}
+
 type startupCapability struct {
 	feature             string
 	controller          string

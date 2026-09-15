@@ -1381,7 +1381,7 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
+	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ProbeIODeviceWeights", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}

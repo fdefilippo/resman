@@ -250,16 +250,16 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	verifier := &fakeKernelVerifier{}
 	store := newMemoryLeaseJournalStore()
 	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
-	requests := []IODeviceWeightRequest{
-		{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
-		{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismIOCost},
+	targets := []IODeviceWeightProbeTarget{
+		{Identity: IODeviceWeightDeviceIdentity{Number: IODeviceWeightDeviceNumber{Major: 8}, DeviceNode: "/dev/vda"}, Mechanism: IODeviceWeightMechanismBFQ},
+		{Identity: IODeviceWeightDeviceIdentity{Number: IODeviceWeightDeviceNumber{Major: 8, Minor: 16}, DeviceNode: "/dev/vdb"}, Mechanism: IODeviceWeightMechanismIOCost},
 	}
 	wantProbe := []IODeviceWeightRequest{
 		{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ},
 		{Path: "/dev/vdb", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost},
 	}
-	if err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{IODeviceWeights: requests}); err != nil {
-		t.Fatalf("requireStartupCapabilities() error = %v", err)
+	if err := adapter.ProbeIODeviceWeights(context.Background(), targets); err != nil {
+		t.Fatalf("ProbeIODeviceWeights() error = %v", err)
 	}
 	if len(transport.probeStarts) != 2 || len(transport.probeStops) != 2 || len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("probe residue starts=%v stops=%v owned=%v journal=%+v", transport.probeStarts, transport.probeStops, adapter.OwnedUnits(), store.journal)
@@ -280,6 +280,24 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	}
 	if !found {
 		t.Fatal("typed IODeviceWeight never reached SetUnitProperties")
+	}
+}
+
+func TestProbeIODeviceWeightsRejectsIncompleteClassifierHandoffWithoutMutation(t *testing.T) {
+	transport := newFakeUnitTransport()
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	tests := [][]IODeviceWeightProbeTarget{
+		nil,
+		{{Identity: IODeviceWeightDeviceIdentity{Number: IODeviceWeightDeviceNumber{Major: 8}}, Mechanism: IODeviceWeightMechanismBFQ}},
+		{{Identity: IODeviceWeightDeviceIdentity{Number: IODeviceWeightDeviceNumber{Major: 8}, DeviceNode: "/dev/vda"}}},
+	}
+	for _, targets := range tests {
+		if err := adapter.ProbeIODeviceWeights(context.Background(), targets); err == nil {
+			t.Fatalf("ProbeIODeviceWeights(%+v) unexpectedly succeeded", targets)
+		}
+	}
+	if len(transport.probeStarts) != 0 || len(transport.setCalls) != 0 {
+		t.Fatalf("invalid classifier handoff mutated systemd: starts=%v sets=%v", transport.probeStarts, transport.setCalls)
 	}
 }
 
