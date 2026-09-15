@@ -41,16 +41,17 @@ func (m *DatabaseManager) writeUserMetricsForTest(record *UserMetricsRecord) err
 		record.CPUPointsLifecycleState = "eligible_inactive"
 	}
 	return m.WriteMetricsBatch(&SystemMetricsRecord{
-		SampleEpochID:                   record.SampleEpochID,
-		IntervalEnd:                     record.Timestamp,
-		Timestamp:                       record.Timestamp,
-		IODeviceWeightState:             "disabled",
-		IODeviceWeightMechanism:         "none",
-		IODeviceWeightProgrammedState:   "not_attempted",
-		IODeviceWeightReadBackState:     "not_attempted",
-		IODeviceWeightAuthorityCoverage: "unavailable",
-		IODeviceWeightValuesJSON:        "[]",
-		IODeviceWeightObservedDelivery:  "not_measured",
+		SampleEpochID:                               record.SampleEpochID,
+		IntervalEnd:                                 record.Timestamp,
+		Timestamp:                                   record.Timestamp,
+		IODeviceWeightState:                         "disabled",
+		IODeviceWeightMechanism:                     "none",
+		IODeviceWeightProgrammedState:               "not_attempted",
+		IODeviceWeightReadBackState:                 "not_attempted",
+		IODeviceWeightAuthorityCoverage:             "unavailable",
+		IODeviceWeightEffectQualificationProvenance: "none",
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              "not_measured",
 	}, []*UserMetricsRecord{record})
 }
 
@@ -78,6 +79,9 @@ func (m *DatabaseManager) writeSystemMetricsForTest(record *SystemMetricsRecord)
 	}
 	if record.IODeviceWeightAuthorityCoverage == "" {
 		record.IODeviceWeightAuthorityCoverage = "unavailable"
+	}
+	if record.IODeviceWeightEffectQualificationProvenance == "" {
+		record.IODeviceWeightEffectQualificationProvenance = "none"
 	}
 	if record.IODeviceWeightValuesJSON == "" {
 		record.IODeviceWeightValuesJSON = "[]"
@@ -143,16 +147,17 @@ func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
 	now := time.Now().UTC()
 	go func() {
 		writeDone <- manager.WriteMetricsBatch(&SystemMetricsRecord{
-			SampleEpochID:                   now.UnixNano(),
-			IntervalEnd:                     now,
-			Timestamp:                       now,
-			IODeviceWeightState:             "disabled",
-			IODeviceWeightMechanism:         "none",
-			IODeviceWeightProgrammedState:   "not_attempted",
-			IODeviceWeightReadBackState:     "not_attempted",
-			IODeviceWeightAuthorityCoverage: "unavailable",
-			IODeviceWeightValuesJSON:        "[]",
-			IODeviceWeightObservedDelivery:  "not_measured",
+			SampleEpochID:                               now.UnixNano(),
+			IntervalEnd:                                 now,
+			Timestamp:                                   now,
+			IODeviceWeightState:                         "disabled",
+			IODeviceWeightMechanism:                     "none",
+			IODeviceWeightProgrammedState:               "not_attempted",
+			IODeviceWeightReadBackState:                 "not_attempted",
+			IODeviceWeightAuthorityCoverage:             "unavailable",
+			IODeviceWeightValuesJSON:                    "[]",
+			IODeviceWeightObservedDelivery:              "not_measured",
+			IODeviceWeightEffectQualificationProvenance: "none",
 		}, nil)
 	}()
 	<-started
@@ -279,7 +284,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 8"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 9"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -327,7 +332,7 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 8"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 9"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -336,11 +341,11 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 	}
 }
 
-func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
+func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
 	dbPath := privateTestDatabasePath(t, "schema-7.db")
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
-		t.Fatalf("create schema 8 fixture: %v", err)
+		t.Fatalf("create schema 9 fixture: %v", err)
 	}
 	now := time.Now().UTC()
 	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now.Add(-time.Second), TotalCores: 4}); err != nil {
@@ -352,7 +357,7 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 		t.Fatalf("write second pre-migration row: %v", err)
 	}
 	if err := manager.Close(); err != nil {
-		t.Fatalf("close schema 8 fixture: %v", err)
+		t.Fatalf("close schema 9 fixture: %v", err)
 	}
 
 	raw, err := sql.Open("sqlite3", dbPath)
@@ -365,6 +370,7 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
 		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
 		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
+		"io_device_weight_effect_qualification_provenance",
 		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users", "io_device_weight_unavailable_users",
 		"io_device_weight_sibling_slices", "io_device_weight_total_points", "io_device_weight_requested_at", "io_device_weight_next_retry_at",
 		"io_device_weight_values_json", "io_device_weight_observed_delivery",
@@ -402,23 +408,23 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read migrated schema version: %v", err)
 	}
-	if version != 8 {
-		t.Fatalf("migrated schema version = %d, want 8", version)
+	if version != 9 {
+		t.Fatalf("migrated schema version = %d, want 9", version)
 	}
-	rows, err := manager.db.Query("SELECT io_device_weight_state, io_device_weight_observed_delivery, total_cores FROM system_metrics ORDER BY timestamp")
+	rows, err := manager.db.Query("SELECT io_device_weight_state, io_device_weight_observed_delivery, io_device_weight_effect_qualification_provenance, total_cores FROM system_metrics ORDER BY timestamp")
 	if err != nil {
 		t.Fatalf("read migrated history: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var cores []int
 	for rows.Next() {
-		var state, delivery string
+		var state, delivery, provenance string
 		var totalCores int
-		if err := rows.Scan(&state, &delivery, &totalCores); err != nil {
+		if err := rows.Scan(&state, &delivery, &provenance, &totalCores); err != nil {
 			t.Fatal(err)
 		}
-		if state != "disabled" || delivery != "not_measured" {
-			t.Fatalf("migrated historical semantics = state %q delivery %q", state, delivery)
+		if state != "disabled" || delivery != "not_measured" || provenance != "none" {
+			t.Fatalf("migrated historical semantics = state %q delivery %q provenance %q", state, delivery, provenance)
 		}
 		cores = append(cores, totalCores)
 	}
@@ -586,36 +592,37 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 	requestedAt := now.Add(-time.Minute)
 	nextRetryAt := now.Add(time.Minute)
 	record := &SystemMetricsRecord{
-		IODeviceWeightState:                  "functionally_accepted",
-		IODeviceWeightReason:                 "",
-		IODeviceWeightSelector:               "8:0",
-		IODeviceWeightMechanism:              "bfq",
-		IODeviceWeightClassificationAttempts: 5,
-		IODeviceWeightProbeAttempts:          2,
-		IODeviceWeightProgrammed:             true,
-		IODeviceWeightProgrammedState:        "confirmed",
-		IODeviceWeightReadBack:               true,
-		IODeviceWeightReadBackState:          "confirmed",
-		IODeviceWeightFunctionallyAccepted:   true,
-		IODeviceWeightEffectQualified:        false,
-		IODeviceWeightAuthorityCoverage:      "partial",
-		IODeviceWeightCompleteUsers:          2,
-		IODeviceWeightPartialUsers:           1,
-		IODeviceWeightSiblingSlices:          3,
-		IODeviceWeightTotalPoints:            900,
-		IODeviceWeightRequestedAt:            &requestedAt,
-		IODeviceWeightNextRetryAt:            &nextRetryAt,
-		IODeviceWeightValuesJSON:             "[{\"uid\":1000,\"requested_value\":700}]",
-		IODeviceWeightObservedDelivery:       "not_measured",
-		TotalCPUUsagePercent:                 75.2,
-		TotalCores:                           4,
-		SystemLoad:                           2.5,
-		CPULimitsActive:                      true,
-		ResourceLimitsActive:                 true,
-		AnyLimitsActive:                      true,
-		CPUActivelyLimitedUsersCount:         2,
-		ActivelyLimitedUsersCount:            3,
-		Timestamp:                            now,
+		IODeviceWeightState:                         "functionally_accepted",
+		IODeviceWeightReason:                        "",
+		IODeviceWeightSelector:                      "8:0",
+		IODeviceWeightMechanism:                     "bfq",
+		IODeviceWeightClassificationAttempts:        5,
+		IODeviceWeightProbeAttempts:                 2,
+		IODeviceWeightProgrammed:                    true,
+		IODeviceWeightProgrammedState:               "confirmed",
+		IODeviceWeightReadBack:                      true,
+		IODeviceWeightReadBackState:                 "confirmed",
+		IODeviceWeightFunctionallyAccepted:          true,
+		IODeviceWeightEffectQualified:               false,
+		IODeviceWeightEffectQualificationProvenance: "none",
+		IODeviceWeightAuthorityCoverage:             "partial",
+		IODeviceWeightCompleteUsers:                 2,
+		IODeviceWeightPartialUsers:                  1,
+		IODeviceWeightSiblingSlices:                 3,
+		IODeviceWeightTotalPoints:                   900,
+		IODeviceWeightRequestedAt:                   &requestedAt,
+		IODeviceWeightNextRetryAt:                   &nextRetryAt,
+		IODeviceWeightValuesJSON:                    "[{\"uid\":1000,\"requested_value\":700}]",
+		IODeviceWeightObservedDelivery:              "not_measured",
+		TotalCPUUsagePercent:                        75.2,
+		TotalCores:                                  4,
+		SystemLoad:                                  2.5,
+		CPULimitsActive:                             true,
+		ResourceLimitsActive:                        true,
+		AnyLimitsActive:                             true,
+		CPUActivelyLimitedUsersCount:                2,
+		ActivelyLimitedUsersCount:                   3,
+		Timestamp:                                   now,
 	}
 
 	err = manager.writeSystemMetricsForTest(record)
@@ -648,6 +655,7 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 		records[0].IODeviceWeightClassificationAttempts != 5 || records[0].IODeviceWeightProbeAttempts != 2 ||
 		!records[0].IODeviceWeightProgrammed || !records[0].IODeviceWeightReadBack ||
 		!records[0].IODeviceWeightFunctionallyAccepted || records[0].IODeviceWeightEffectQualified ||
+		records[0].IODeviceWeightEffectQualificationProvenance != "none" ||
 		records[0].IODeviceWeightMechanism != "bfq" || records[0].IODeviceWeightProgrammedState != "confirmed" ||
 		records[0].IODeviceWeightAuthorityCoverage != "partial" || records[0].IODeviceWeightCompleteUsers != 2 ||
 		records[0].IODeviceWeightPartialUsers != 1 || records[0].IODeviceWeightSiblingSlices != 3 ||
@@ -681,7 +689,7 @@ func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
 		&SystemMetricsRecord{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, TotalCores: 4,
 			IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
 			IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
-			IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured"},
+			IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured", IODeviceWeightEffectQualificationProvenance: "none"},
 		[]*UserMetricsRecord{
 			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1000, Username: "accepted", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
 			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1001, Username: "rejected", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
@@ -719,7 +727,7 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 		SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
 		IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
 		IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
-		IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured",
+		IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured", IODeviceWeightEffectQualificationProvenance: "none",
 		TotalCPUUsagePercent: 82, TotalCores: 4, SystemLoad: 3.5,
 		CPULimitsActive: true, AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 2,
 		NominalParentPoolPoints: 900, CPUCapacityAvailable: true, OnlineCPUs: u64(4),
@@ -823,6 +831,7 @@ func TestWriteMetricsBatchRejectsIncompleteOrMixedObservationIntervals(t *testin
 			system.IODeviceWeightAuthorityCoverage = "unavailable"
 			system.IODeviceWeightValuesJSON = "[]"
 			system.IODeviceWeightObservedDelivery = "not_measured"
+			system.IODeviceWeightEffectQualificationProvenance = "none"
 			user := &UserMetricsRecord{
 				SampleEpochID: 10, IntervalStart: &start, IntervalEnd: now, Timestamp: now, UID: 1000, Username: "alice",
 				ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
@@ -847,7 +856,8 @@ func TestWriteMetricsBatchRejectsMissingOrUnboundedIODeviceWeightState(t *testin
 			IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none",
 			IODeviceWeightProgrammedState: "not_attempted", IODeviceWeightReadBackState: "not_attempted",
 			IODeviceWeightAuthorityCoverage: "unavailable", IODeviceWeightValuesJSON: "[]",
-			IODeviceWeightObservedDelivery: "not_measured",
+			IODeviceWeightObservedDelivery:              "not_measured",
+			IODeviceWeightEffectQualificationProvenance: "none",
 		}
 	}
 	tests := []struct {
@@ -857,6 +867,11 @@ func TestWriteMetricsBatchRejectsMissingOrUnboundedIODeviceWeightState(t *testin
 		{name: "missing lifecycle producer", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightState = "" }},
 		{name: "unbounded reason", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightReason = "device-/tmp/operator-value" }},
 		{name: "missing delivery producer", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightObservedDelivery = "" }},
+		{name: "missing qualification producer", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightEffectQualificationProvenance = "" }},
+		{name: "unbounded qualification provenance", mutate: func(record *SystemMetricsRecord) {
+			record.IODeviceWeightEffectQualificationProvenance = "operator-value"
+		}},
+		{name: "inconsistent qualification", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightEffectQualified = true }},
 		{name: "invalid value document", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightValuesJSON = "{" }},
 		{name: "value document is not an array", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightValuesJSON = "{}" }},
 	}
@@ -896,6 +911,7 @@ func TestCPUPointsLifecycleStatesRemainDistinct(t *testing.T) {
 		IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
 		IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
 		IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured",
+		IODeviceWeightEffectQualificationProvenance: "none",
 	}, users); err != nil {
 		t.Fatalf("WriteMetricsBatch() error = %v", err)
 	}

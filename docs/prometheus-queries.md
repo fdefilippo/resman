@@ -268,6 +268,7 @@ resman_io_device_weight_read_back
 
 # Retained controlled-contention qualification; never an authorization gate
 resman_io_device_weight_effect_qualified
+resman_io_device_weight_effect_qualification_info == 1
 
 # Programmed slices whose UID workload coverage is partial
 resman_io_device_weight_partial_users

@@ -49,16 +49,17 @@ func writeUserHistoryFixture(manager *database.DatabaseManager, record *database
 		record.CPUPointsLifecycleState = "eligible_inactive"
 	}
 	return manager.WriteMetricsBatch(&database.SystemMetricsRecord{
-		IODeviceWeightState:             "disabled",
-		IODeviceWeightMechanism:         "none",
-		IODeviceWeightProgrammedState:   "not_attempted",
-		IODeviceWeightReadBackState:     "not_attempted",
-		IODeviceWeightAuthorityCoverage: "unavailable",
-		IODeviceWeightValuesJSON:        "[]",
-		IODeviceWeightObservedDelivery:  "not_measured",
-		SampleEpochID:                   record.SampleEpochID,
-		IntervalEnd:                     record.Timestamp,
-		Timestamp:                       record.Timestamp,
+		IODeviceWeightState:                         "disabled",
+		IODeviceWeightMechanism:                     "none",
+		IODeviceWeightProgrammedState:               "not_attempted",
+		IODeviceWeightReadBackState:                 "not_attempted",
+		IODeviceWeightAuthorityCoverage:             "unavailable",
+		IODeviceWeightEffectQualificationProvenance: "none",
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              "not_measured",
+		SampleEpochID:                               record.SampleEpochID,
+		IntervalEnd:                                 record.Timestamp,
+		Timestamp:                                   record.Timestamp,
 	}, []*database.UserMetricsRecord{record})
 }
 

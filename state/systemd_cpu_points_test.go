@@ -35,38 +35,44 @@ type systemdPropertyRestoreCall struct {
 }
 
 type fakeSystemdCPUUnitAdapter struct {
-	mu                 sync.Mutex
-	topology           systemdunit.TopologySnapshot
-	applies            []systemdCPUApplyCall
-	restores           []string
-	propertyRestores   []systemdPropertyRestoreCall
-	inactiveClean      []string
-	owned              map[string]systemdunit.UnitIdentity
-	activeProperties   map[string]map[systemdunit.PropertyName]bool
-	failApplyUnit      string
-	failRestoreUnit    string
-	propertyConflicts  map[string][]systemdunit.PropertyName
-	applyHook          func(string)
-	reconcileError     error
-	discoverError      error
-	authority          map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
-	authorityError     map[systemdunit.ResourceKind]error
-	resourceChecks     []systemdResourceCheckCall
-	authorityChecks    int
-	authorityHook      func(int)
-	authorityCounts    map[int]int
-	confirmCalls       int
-	confirmHook        func(int)
-	confirmError       error
-	confirmedApplied   []string
-	confirmApplyErr    map[string]error
-	confirmStarted     chan struct{}
-	confirmProceed     chan struct{}
-	closed             bool
-	inventoryCaptures  int
-	inventoryDetails   []bool
-	ioWeightProbeCalls int
-	ioWeightProbeError error
+	mu                         sync.Mutex
+	topology                   systemdunit.TopologySnapshot
+	applies                    []systemdCPUApplyCall
+	restores                   []string
+	propertyRestores           []systemdPropertyRestoreCall
+	inactiveClean              []string
+	owned                      map[string]systemdunit.UnitIdentity
+	activeProperties           map[string]map[systemdunit.PropertyName]bool
+	failApplyUnit              string
+	failRestoreUnit            string
+	propertyConflicts          map[string][]systemdunit.PropertyName
+	applyHook                  func(string)
+	reconcileError             error
+	discoverError              error
+	authority                  map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
+	authorityError             map[systemdunit.ResourceKind]error
+	resourceChecks             []systemdResourceCheckCall
+	authorityChecks            int
+	authorityHook              func(int)
+	authorityCounts            map[int]int
+	confirmCalls               int
+	confirmHook                func(int)
+	confirmError               error
+	confirmedApplied           []string
+	confirmApplyErr            map[string]error
+	confirmStarted             chan struct{}
+	confirmProceed             chan struct{}
+	closed                     bool
+	inventoryCaptures          int
+	inventoryDetails           []bool
+	ioWeightProbeCalls         int
+	ioWeightProbeError         error
+	systemdManagerVersion      string
+	systemdManagerVersionError error
+}
+
+func (a *fakeSystemdCPUUnitAdapter) ManagerVersion(context.Context) (string, error) {
+	return a.systemdManagerVersion, a.systemdManagerVersionError
 }
 
 func (a *fakeSystemdCPUUnitAdapter) ProbeIODeviceWeights(_ context.Context, _ []systemdunit.IODeviceWeightProbeTarget) error {

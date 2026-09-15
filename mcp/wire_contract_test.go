@@ -138,7 +138,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		})
 	}
 	assertExactJSONKeys(t, newIODeviceWeightPayload(state.IODeviceWeightStatus{}), []string{
-		"authority_coverage", "classification_attempts", "complete_users", "effect_qualified", "functionally_accepted",
+		"authority_coverage", "classification_attempts", "complete_users", "effect_qualification_provenance", "effect_qualified", "functionally_accepted",
 		"mechanism", "observed_delivery", "partial_users", "probe_attempts", "programmed", "programmed_state",
 		"read_back", "read_back_state", "reason", "selector", "sibling_slices", "state", "total_points",
 		"unavailable_users", "values",
@@ -164,7 +164,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		"io_device_weight_mechanism",
 		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
 		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
-		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
+		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualification_provenance", "io_device_weight_effect_qualified",
 		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users",
 		"io_device_weight_unavailable_users", "io_device_weight_sibling_slices", "io_device_weight_total_points",
 		"io_device_weight_requested_at", "io_device_weight_next_retry_at", "io_device_weight_values",

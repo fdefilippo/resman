@@ -2,7 +2,7 @@ resman (1.38.0-1) stable; urgency=medium
 
   * Add capability-probed relative block-I/O weights for user slices.
   * Keep weighted-I/O activation asynchronous and independent from hard I/O caps.
-  * Migrate metrics schema 7 atomically to schema 8 with typed lifecycle history.
+  * Migrate metrics schema 7 atomically to schema 9 with typed lifecycle and qualification provenance.
 
  -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 12:30:00 +0200
 

@@ -642,7 +642,8 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		ProgrammedState: string(ioWeightStatus.ProgrammedState), ReadBackState: string(ioWeightStatus.ReadBackState),
 		FunctionallyAccepted: ioWeightStatus.State == IODeviceWeightFunctionallyAccepted,
 		EffectQualified:      ioWeightStatus.EffectQualified, PartialUsers: ioWeightStatus.PartialUsers,
-		AuthorityCoverage: string(ioWeightStatus.AuthorityCoverage), CompleteUsers: ioWeightStatus.CompleteUsers,
+		EffectQualificationProvenance: string(ioWeightStatus.EffectQualificationProvenance),
+		AuthorityCoverage:             string(ioWeightStatus.AuthorityCoverage), CompleteUsers: ioWeightStatus.CompleteUsers,
 		UnavailableUsers: ioWeightStatus.UnavailableUsers, SiblingSlices: ioWeightStatus.SiblingSlices,
 		TotalPoints: ioWeightStatus.TotalPoints, RequestedAt: ioWeightStatus.RequestedAt, NextRetryAt: ioWeightStatus.NextRetryAt,
 		ObservedDelivery: ioWeightStatus.ObservedDelivery,
@@ -806,6 +807,7 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	persistenceSystem.IODeviceWeightReadBackState = string(ioWeight.ReadBackState)
 	persistenceSystem.IODeviceWeightFunctionallyAccepted = ioWeight.State == IODeviceWeightFunctionallyAccepted
 	persistenceSystem.IODeviceWeightEffectQualified = ioWeight.EffectQualified
+	persistenceSystem.IODeviceWeightEffectQualificationProvenance = string(ioWeight.EffectQualificationProvenance)
 	persistenceSystem.IODeviceWeightAuthorityCoverage = string(ioWeight.AuthorityCoverage)
 	persistenceSystem.IODeviceWeightCompleteUsers = ioWeight.CompleteUsers
 	persistenceSystem.IODeviceWeightPartialUsers = ioWeight.PartialUsers

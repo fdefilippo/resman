@@ -516,6 +516,15 @@ func TestIODeviceWeightCapabilitySnapshotAccessorsAreDefensive(t *testing.T) {
 	}
 }
 
+func TestIODeviceWeightPlatformDiagnosticsRetainExactDistributionVersion(t *testing.T) {
+	fixture := newIODeviceWeightClassifierFixture(t)
+	platform := fixture.classify(t).Platform()
+	if platform.DistributionID != "ol" || platform.DistributionVersion != "9.8" ||
+		platform.DistributionMajor != 9 || platform.KernelRelease != defaultIODeviceWeightKernelRelease {
+		t.Fatalf("platform diagnostics = %+v", platform)
+	}
+}
+
 const defaultIODeviceWeightKernelRelease = "5.14.0-687.el9.x86_64"
 
 type ioDeviceWeightClassifierFixture struct {

@@ -69,10 +69,11 @@ func newIODeviceWeightCapabilityError(reason IODeviceWeightCapabilityReason, dev
 // IODeviceWeightPlatformIdentity is best-effort diagnostic provenance. None of
 // its fields authorize or refuse weighted I/O at runtime.
 type IODeviceWeightPlatformIdentity struct {
-	DistributionID    string
-	DistributionMajor int
-	KernelSeries      string
-	KernelRelease     string
+	DistributionID      string
+	DistributionVersion string
+	DistributionMajor   int
+	KernelSeries        string
+	KernelRelease       string
 }
 
 // IODeviceWeightDeviceIdentity binds a major:minor request to one live sysfs
@@ -313,6 +314,7 @@ func (c *IODeviceWeightCapabilityClassifier) observePlatformDiagnostics() IODevi
 	if data, err := c.io.readFile(c.io.osReleasePath); err == nil {
 		if values, parseErr := parseOSReleaseIdentity(string(data)); parseErr == nil {
 			platform.DistributionID = values["ID"]
+			platform.DistributionVersion = values["VERSION_ID"]
 			platform.DistributionMajor, _ = parseVersionMajor(values["VERSION_ID"])
 		}
 	}

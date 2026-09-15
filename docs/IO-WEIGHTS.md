@@ -95,6 +95,14 @@ evidence for an exact representative and mechanism. A host that passes the live 
 is usable even when its delivery effect has not been independently qualified; it is
 reported as `observed_delivery=not_measured`.
 
+The bounded provenance value `resman-nq6.40.5-ol9-rhck-20260915` identifies the
+retained packaged-daemon campaign on Oracle Linux 9.8, systemd Manager
+`252 (252-67.0.1.el9_8.2)`, and RHCK
+`5.14.0-687.46.1.el9_8.x86_64`. It covers BFQ and io.cost only if the retained
+campaign proves both. A runtime identity match adds this diagnostic label after the
+owned live probe succeeds; it never authorizes a mutation, bypasses the probe, or
+refuses another functionally accepted host.
+
 ## Reconciliation and recovery
 
 The complete configured device set is one atomic property assignment per slice. Only
@@ -123,8 +131,10 @@ authority is unavailable when any sibling is unavailable, while the separate cou
 retain the complete distribution. Read-only post-readiness classifications and
 mutating probes have separate
 counters. The same typed object appears in the latest-only MCP system and limits
-status. SQLite schema 8 stores these dimensions with every system sample; schema 7 is
-migrated atomically, and its historical rows become `disabled` and `not_measured`.
+status. SQLite schema 9 stores these dimensions and the bounded qualification
+provenance with every system sample. Schema 7 is migrated atomically through schema 8
+to schema 9; historical rows become `disabled`, `not_measured`, and provenance
+`none`.
 
 The shipped Grafana dashboard distinguishes `refused_observation` from
 `refused_intervention`. Alerting asks for operator action only for the intervention

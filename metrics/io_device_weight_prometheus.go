@@ -11,25 +11,26 @@ import (
 
 // IODeviceWeightExporterMetrics is the bounded weighted-I/O lifecycle view.
 type IODeviceWeightExporterMetrics struct {
-	State                string
-	Reason               string
-	Mechanism            string
-	Programmed           bool
-	ProgrammedState      string
-	ReadBack             bool
-	ReadBackState        string
-	FunctionallyAccepted bool
-	EffectQualified      bool
-	AuthorityCoverage    string
-	CompleteUsers        int
-	PartialUsers         int
-	UnavailableUsers     int
-	SiblingSlices        int
-	TotalPoints          uint64
-	RequestedAt          time.Time
-	NextRetryAt          time.Time
-	Values               []IODeviceWeightValueMetrics
-	ObservedDelivery     string
+	State                         string
+	Reason                        string
+	Mechanism                     string
+	Programmed                    bool
+	ProgrammedState               string
+	ReadBack                      bool
+	ReadBackState                 string
+	FunctionallyAccepted          bool
+	EffectQualified               bool
+	EffectQualificationProvenance string
+	AuthorityCoverage             string
+	CompleteUsers                 int
+	PartialUsers                  int
+	UnavailableUsers              int
+	SiblingSlices                 int
+	TotalPoints                   uint64
+	RequestedAt                   time.Time
+	NextRetryAt                   time.Time
+	Values                        []IODeviceWeightValueMetrics
+	ObservedDelivery              string
 }
 
 // IODeviceWeightValueMetrics is one bounded per-slice, per-device value path.
@@ -58,6 +59,7 @@ type ioDeviceWeightPrometheusMetrics struct {
 	readBack               prometheus.Gauge
 	functionallyAccepted   prometheus.Gauge
 	effectQualified        prometheus.Gauge
+	effectQualification    *prometheus.GaugeVec
 	partialUsers           prometheus.Gauge
 	completeUsers          prometheus.Gauge
 	unavailableUsers       prometheus.Gauge
@@ -86,6 +88,7 @@ func (m *ioDeviceWeightPrometheusMetrics) register(registry prometheus.Registere
 	m.readBack = gauge("io_device_weight_read_back", "Whether the complete programmed weighted-I/O plan was read back from systemd and the active kernel mechanism")
 	m.functionallyAccepted = gauge("io_device_weight_functionally_accepted", "Whether the owned live probe accepted the configured device set")
 	m.effectQualified = gauge("io_device_weight_effect_qualified", "Whether retained controlled-contention evidence qualifies this exact representative and mechanism")
+	m.effectQualification = promauto.With(registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "io_device_weight_effect_qualification_info", Help: "Exact retained controlled-contention evidence provenance, or none; diagnostic only and never an authorization gate", ConstLabels: labels}, []string{"provenance"})
 	m.partialUsers = gauge("io_device_weight_partial_users", "Number of programmed user slices whose observed UID workload coverage is partial")
 	m.completeUsers = gauge("io_device_weight_complete_users", "Number of sibling slices with complete authority coverage")
 	m.unavailableUsers = gauge("io_device_weight_unavailable_users", "Number of sibling slices unavailable in the captured authority inventory")
@@ -140,6 +143,13 @@ func (m *ioDeviceWeightPrometheusMetrics) update(snapshot IODeviceWeightExporter
 	m.readBack.Set(boolMetricValue(snapshot.ReadBack))
 	m.functionallyAccepted.Set(boolMetricValue(snapshot.FunctionallyAccepted))
 	m.effectQualified.Set(boolMetricValue(snapshot.EffectQualified))
+	m.effectQualification.Reset()
+	provenance := snapshot.EffectQualificationProvenance
+	if !ioweights.ValidEffectQualificationProvenance(provenance) ||
+		(snapshot.EffectQualified != (provenance != string(ioweights.EffectQualificationNone))) {
+		provenance = "unknown"
+	}
+	m.effectQualification.WithLabelValues(provenance).Set(1)
 	m.partialUsers.Set(float64(snapshot.PartialUsers))
 	m.completeUsers.Set(float64(snapshot.CompleteUsers))
 	m.unavailableUsers.Set(float64(snapshot.UnavailableUsers))

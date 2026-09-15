@@ -28,36 +28,45 @@ type fakeSetCall struct {
 }
 
 type fakeUnitTransport struct {
-	units            map[string]*fakeUnitState
-	setCalls         []fakeSetCall
-	listErr          error
-	unitErr          error
-	sliceErr         error
-	setErr           error
-	revertErr        error
-	reloadErr        error
-	ignoreWrites     bool
-	blockList        bool
-	unitReads        int
-	onUnitRead       func(*fakeUnitTransport, string, int)
-	onSet            func(*fakeUnitTransport, string, []PropertyAssignment)
-	onRevert         func(*fakeUnitTransport, string)
-	onReload         func(*fakeUnitTransport)
-	skipRevertEffect bool
-	revertCalls      []string
-	reloadCalls      int
-	diskPaths        map[string][]string
-	fingerprintSalt  map[string]string
-	closed           bool
-	probeStartErr    error
-	probeStarted     bool
-	probeStopErr     error
-	probeStarts      []fakeSetCall
-	probeStops       []string
-	onProbeStart     func(*fakeUnitTransport, string)
-	onProbeStop      func(*fakeUnitTransport, string, *fakeUnitState)
-	onMutablePaths   func(*fakeUnitTransport, string)
-	probeBaselines   map[string]map[PropertyName]propertyValue
+	units             map[string]*fakeUnitState
+	setCalls          []fakeSetCall
+	listErr           error
+	unitErr           error
+	sliceErr          error
+	setErr            error
+	revertErr         error
+	reloadErr         error
+	ignoreWrites      bool
+	blockList         bool
+	unitReads         int
+	onUnitRead        func(*fakeUnitTransport, string, int)
+	onSet             func(*fakeUnitTransport, string, []PropertyAssignment)
+	onRevert          func(*fakeUnitTransport, string)
+	onReload          func(*fakeUnitTransport)
+	skipRevertEffect  bool
+	revertCalls       []string
+	reloadCalls       int
+	diskPaths         map[string][]string
+	fingerprintSalt   map[string]string
+	closed            bool
+	probeStartErr     error
+	probeStarted      bool
+	probeStopErr      error
+	probeStarts       []fakeSetCall
+	probeStops        []string
+	onProbeStart      func(*fakeUnitTransport, string)
+	onProbeStop       func(*fakeUnitTransport, string, *fakeUnitState)
+	onMutablePaths    func(*fakeUnitTransport, string)
+	probeBaselines    map[string]map[PropertyName]propertyValue
+	managerVersion    string
+	managerVersionErr error
+}
+
+func (f *fakeUnitTransport) managerProperty(_ context.Context, property string) (string, error) {
+	if property != "Version" {
+		return "", fmt.Errorf("unexpected Manager property %s", property)
+	}
+	return f.managerVersion, f.managerVersionErr
 }
 
 func (f *fakeUnitTransport) listUserSlices(ctx context.Context) ([]listedUnit, error) {
@@ -1381,9 +1390,22 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 		methods = append(methods, typeOfAdapter.Method(index).Name)
 	}
 	sort.Strings(methods)
-	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ProbeIODeviceWeights", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
+	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ManagerVersion", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ProbeIODeviceWeights", "ReconcileOwned", "RecoveryReport", "Restore", "RestoreProperties"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
+	}
+}
+
+func TestAdapterManagerVersionUsesRunningManagerDiagnostic(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.managerVersion = "252 (252-67.0.1.el9_8.2)"
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	if got, err := adapter.ManagerVersion(context.Background()); err != nil || got != transport.managerVersion {
+		t.Fatalf("ManagerVersion() = %q, %v", got, err)
+	}
+	transport.managerVersionErr = context.DeadlineExceeded
+	if _, err := adapter.ManagerVersion(context.Background()); err == nil {
+		t.Fatal("ManagerVersion() accepted failed diagnostic read")
 	}
 }
 

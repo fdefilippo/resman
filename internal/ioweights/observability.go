@@ -7,6 +7,27 @@ type ActivationState string
 // MechanismState is the bounded aggregate mechanism vocabulary.
 type MechanismState string
 
+// EffectQualificationProvenance is the bounded identifier of retained
+// packaged-daemon contention evidence. It is diagnostic only and never
+// authorizes weighted-I/O mutations.
+type EffectQualificationProvenance string
+
+const (
+	EffectQualificationNone            EffectQualificationProvenance = "none"
+	EffectQualificationOL9RHCK20260915 EffectQualificationProvenance = "resman-nq6.40.5-ol9-rhck-20260915"
+)
+
+// ValidEffectQualificationProvenance reports whether value is a retained,
+// bounded evidence identifier or the explicit absence marker.
+func ValidEffectQualificationProvenance(value string) bool {
+	switch EffectQualificationProvenance(value) {
+	case EffectQualificationNone, EffectQualificationOL9RHCK20260915:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	MechanismNone   MechanismState = "none"
 	MechanismBFQ    MechanismState = "bfq"

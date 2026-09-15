@@ -62,6 +62,32 @@ type Adapter struct {
 	closed     bool
 }
 
+// ManagerVersion returns the running systemd Manager version as diagnostic
+// provenance. Weighted-I/O authorization never depends on this value.
+func (a *Adapter) ManagerVersion(ctx context.Context) (string, error) {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("manager_version"); err != nil {
+		return "", err
+	}
+	transport, ok := a.transport.(managerDiagnosticTransport)
+	if !ok {
+		return "", &AdapterError{Reason: ReasonMalformedReply, Operation: "manager_version",
+			Err: fmt.Errorf("systemd transport has no Manager diagnostic property reader")}
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	value, err := transport.managerProperty(callCtx, "Version")
+	if err != nil {
+		return "", classifyTransportError("manager_version", "", err)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", &AdapterError{Reason: ReasonMalformedReply, Operation: "manager_version",
+			Err: fmt.Errorf("systemd Manager.Version is empty")}
+	}
+	return strings.TrimSpace(value), nil
+}
+
 // New opens the authoritative system bus and a read-only cgroup verifier. The
 // supplied context bounds startup recovery only; Close owns the connection lifetime.
 func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements StartupRequirements) (*Adapter, error) {

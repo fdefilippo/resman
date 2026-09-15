@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -67,18 +68,26 @@ func (m *Manager) collectPersistenceInterval(sample *SystemMetrics) {
 
 	rootPoints := policy.Root().Value()
 	system := resmanmetrics.SystemPersistenceMetrics{
-		EnforcementMode:            string(m.enforcementStatus.Mode),
-		DenominatorState:           resmanmetrics.CPUPointsDenominatorUnavailable,
-		SampleEpochID:              sample.Timestamp.UnixNano(),
-		IntervalEnd:                sample.Timestamp,
-		TotalCPUUsagePercent:       sample.TotalCPUUsage,
-		TotalCores:                 sample.TotalCores,
-		SystemLoad:                 sample.SystemLoad,
-		NominalParentPoolPoints:    policy.Pool().Value(),
-		ConfiguredRootPoints:       &rootPoints,
-		ConfiguredBestEffortPoints: policy.BestEffort().Value(),
-		CPUCapacityAvailable:       false,
-		CPUPointsDegraded:          degraded,
+		IODeviceWeightState:                         string(IODeviceWeightDisabled),
+		IODeviceWeightMechanism:                     string(ioweights.MechanismNone),
+		IODeviceWeightProgrammedState:               string(IODeviceWeightNotAttempted),
+		IODeviceWeightReadBackState:                 string(IODeviceWeightNotAttempted),
+		IODeviceWeightEffectQualificationProvenance: string(ioweights.EffectQualificationNone),
+		IODeviceWeightAuthorityCoverage:             string(ioweights.AuthorityUnavailable),
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              ioweights.DeliveryNotMeasured,
+		EnforcementMode:                             string(m.enforcementStatus.Mode),
+		DenominatorState:                            resmanmetrics.CPUPointsDenominatorUnavailable,
+		SampleEpochID:                               sample.Timestamp.UnixNano(),
+		IntervalEnd:                                 sample.Timestamp,
+		TotalCPUUsagePercent:                        sample.TotalCPUUsage,
+		TotalCores:                                  sample.TotalCores,
+		SystemLoad:                                  sample.SystemLoad,
+		NominalParentPoolPoints:                     policy.Pool().Value(),
+		ConfiguredRootPoints:                        &rootPoints,
+		ConfiguredBestEffortPoints:                  policy.BestEffort().Value(),
+		CPUCapacityAvailable:                        false,
+		CPUPointsDegraded:                           degraded,
 	}
 	if !previousTime.IsZero() {
 		start := previousTime

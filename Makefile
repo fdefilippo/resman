@@ -251,6 +251,14 @@ test-functional-io-device-weight-unit:
 test-functional-io-device-weight-qemu:
 	test/functional/io-device-weight/remote-qemu.sh "$(RESMAN_IODEVICEWEIGHT_QEMU_HOST)"
 
+# Exercise the packaged-daemon weighted-I/O effect harness without KVM.
+test-functional-io-device-weight-effect-unit:
+	test/functional/io-device-weight-effect/host_test.sh
+
+# Qualify BFQ and io.cost delivery on the exact OL9/RHCK representative.
+test-functional-io-device-weight-effect-qemu:
+	test/functional/io-device-weight-effect/remote-qemu.sh "$(RESMAN_IO_EFFECT_QEMU_HOST)" "$(RESMAN_EL9_RPM)" "$(RESMAN_EL9_RPM_MANIFEST)"
+
 # Run current-revision evidence on an explicitly selected disposable real-kernel host.
 test-functional-real-kernel-psi:
 	test/functional/real-kernel/remote.sh psi-refresh-neutrality "$(RESMAN_REAL_KERNEL_HOST)"
@@ -696,6 +704,8 @@ help:
 	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
 	@echo "    test-functional-io-device-weight-unit - Test the IODeviceWeight QEMU harness"
 	@echo "    test-functional-io-device-weight-qemu - Characterize IODeviceWeight on EL8/EL9/EL10"
+	@echo "    test-functional-io-device-weight-effect-unit - Test the packaged-daemon contention harness"
+	@echo "    test-functional-io-device-weight-effect-qemu - Qualify BFQ/io.cost effect on exact OL9/RHCK"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-block-io - Collect all-dimension I/O evidence on RESMAN_REAL_KERNEL_HOST"
 	@echo "    test-functional-real-kernel-cpu-points - Prove CPU Points on RESMAN_REAL_KERNEL_HOST"

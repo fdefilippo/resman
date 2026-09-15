@@ -1,6 +1,6 @@
 # Upgrading from ResMan 1.25.x through 1.37.0 to ResMan 1.38.0
 
-Current metrics schema: 8. Schema 7 is migrated atomically.
+Current metrics schema: 9. Schema 7 is migrated atomically through schema 8.
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.37.0 to
 ResMan 1.38.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
@@ -8,7 +8,7 @@ cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
 on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
-Except for the explicit schema-7-to-8 migration below, it does not migrate older
+Except for the explicit schema-7-to-9 migration below, it does not migrate older
 database schemas, accept removed configuration keys, preserve old MCP shapes, or alias
 renamed metrics.
 
@@ -85,9 +85,11 @@ safely when the new configuration leaves the feature disabled. Only
 `evidence_unavailable` receives one successful-control-cadence grace; observation
 refusals release immediately.
 
-**Persistence and clients.** SQLite schema 7 is migrated atomically to schema 8. Old
+**Persistence and clients.** SQLite schema 7 is migrated atomically through schema 8
+to schema 9. Old
 rows receive the historically truthful `disabled` and `not_measured` weighted-I/O
-state; all existing columns and rows are preserved. Schemas 6 and older remain
+state and qualification provenance `none`; all existing columns and rows are
+preserved. Schemas 6 and older remain
 incompatible. Prometheus and latest-only MCP add typed weighted-I/O state without
 compatibility aliases. See [weighted block-I/O policy](IO-WEIGHTS.md) before enabling
 the feature.
@@ -98,9 +100,16 @@ qualified the delivered effect; that separate state is `effect_qualified`. Betwe
 `READY=1` and functional acceptance, sessions deliberately run without ResMan-owned
 device weights while CPU, RAM, and hard-I/O policy continue normally.
 
-Schema 8 is not readable by older ResMan releases. Before downgrading, archive the
-schema-8 database outside ResMan and start the older release with a new database; do
-not point an older daemon at the schema-8 history.
+When retained packaged-daemon evidence matches the exact observed representative and
+mechanism, Prometheus, SQLite, MCP, and logs also publish its bounded provenance. The
+initial value is `resman-nq6.40.5-ol9-rhck-20260915`. It is diagnostic only: runtime
+authorization remains the observed capability classification plus the owned live
+probe, and a host without matching retained evidence remains usable as
+`functionally_accepted` with provenance `none`.
+
+Schema 9 is not readable by older ResMan releases. Before downgrading, archive the
+schema-9 database outside ResMan and start the older release with a new database; do
+not point an older daemon at the schema-9 history.
 
 ## CHANGED: systemd process authority is sampled once per decision
 

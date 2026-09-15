@@ -898,18 +898,19 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 		},
 	}
 	sample.PersistenceSystem = metrics.SystemPersistenceMetrics{
-		SampleEpochID:                   sample.Timestamp.UnixNano(),
-		IntervalEnd:                     sample.Timestamp,
-		IODeviceWeightState:             "disabled",
-		IODeviceWeightMechanism:         "none",
-		IODeviceWeightProgrammedState:   "not_attempted",
-		IODeviceWeightReadBackState:     "not_attempted",
-		IODeviceWeightAuthorityCoverage: "unavailable",
-		IODeviceWeightValuesJSON:        "[]",
-		IODeviceWeightObservedDelivery:  "not_measured",
-		TotalCPUUsagePercent:            sample.TotalCPUUsage,
-		TotalCores:                      sample.TotalCores,
-		SystemLoad:                      sample.SystemLoad,
+		SampleEpochID:                               sample.Timestamp.UnixNano(),
+		IntervalEnd:                                 sample.Timestamp,
+		IODeviceWeightState:                         "disabled",
+		IODeviceWeightMechanism:                     "none",
+		IODeviceWeightProgrammedState:               "not_attempted",
+		IODeviceWeightReadBackState:                 "not_attempted",
+		IODeviceWeightAuthorityCoverage:             "unavailable",
+		IODeviceWeightEffectQualificationProvenance: "none",
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              "not_measured",
+		TotalCPUUsagePercent:                        sample.TotalCPUUsage,
+		TotalCores:                                  sample.TotalCores,
+		SystemLoad:                                  sample.SystemLoad,
 	}
 	sample.PersistenceUsers = map[int]metrics.UserPersistenceMetrics{
 		1001: {

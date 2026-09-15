@@ -32,6 +32,10 @@ type startupCapabilityTransport interface {
 	stopCapabilityProbe(context.Context, string) error
 }
 
+type managerDiagnosticTransport interface {
+	managerProperty(context.Context, string) (string, error)
+}
+
 type dbusTransport struct {
 	conn       *systemdbus.Conn
 	revertConn *godbus.Conn
@@ -104,6 +108,19 @@ func (t *dbusTransport) unitProperties(ctx context.Context, unit string) (map[st
 
 func (t *dbusTransport) sliceProperties(ctx context.Context, unit string) (map[string]any, error) {
 	return t.conn.GetUnitTypePropertiesContext(ctx, unit, "Slice")
+}
+
+func (t *dbusTransport) managerProperty(ctx context.Context, property string) (string, error) {
+	var value godbus.Variant
+	if err := t.revertObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0,
+		"org.freedesktop.systemd1.Manager", property).Store(&value); err != nil {
+		return "", err
+	}
+	var result string
+	if err := value.Store(&result); err != nil {
+		return "", fmt.Errorf("decode Manager.%s: %w", property, err)
+	}
+	return result, nil
 }
 
 func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runtime bool, assignments []PropertyAssignment) error {

@@ -89,11 +89,11 @@ To show only limited users in dashboards, filter by `resman_user_cpu_limit_activ
 
 CPU Points observations use one synchronized decision interval for parent and slice
 CPU deltas and resource coverage. See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md)
-for the CPU Points contract and operator measurement procedure in schema 8.
+for the CPU Points contract and operator measurement procedure in schema 9.
 
 ## Cgroup Hierarchy
 
-Current metrics schema: 8.
+Current metrics schema: 9.
 
 On systemd hosts the authoritative topology is flat:
 

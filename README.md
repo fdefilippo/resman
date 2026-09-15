@@ -1,6 +1,6 @@
 # ResMan
 
-Current metrics schema: 8.
+Current metrics schema: 9.
 
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
@@ -271,7 +271,7 @@ swap or reclaimable pages, a process can stay alive but effectively stall at hig
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 8 records each decision
+When metrics persistence is enabled, SQLite schema version 9 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
 applied CPU class and weight, delivered parent/slice bandwidth and throttling, raw
 unit diagnostics, independent resource authority, and process-derived memory from

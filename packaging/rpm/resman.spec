@@ -313,7 +313,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 * Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-1
 - Add capability-probed relative block-I/O weights for user slices
 - Keep weighted-I/O activation asynchronous and independent from hard I/O caps
-- Migrate metrics schema 7 atomically to schema 8 with typed lifecycle history
+- Migrate metrics schema 7 atomically to schema 9 with typed lifecycle and qualification provenance
 
 * Mon Sep 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.37.0-1
 - Share one frozen process-authority inventory across each decision sample.

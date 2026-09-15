@@ -88,27 +88,28 @@ func optionalIODeviceWeightTime(value time.Time) *time.Time {
 
 // IODeviceWeightStatus is one lock-safe capability and policy snapshot.
 type IODeviceWeightStatus struct {
-	State                  IODeviceWeightActivationState
-	Reason                 string
-	Selector               string
-	Mechanism              ioweights.MechanismState
-	ClassificationAttempts uint64
-	ProbeAttempts          uint64
-	Programmed             bool
-	ProgrammedState        IODeviceWeightVerificationState
-	ReadBack               bool
-	ReadBackState          IODeviceWeightVerificationState
-	EffectQualified        bool
-	AuthorityCoverage      ioweights.AuthorityCoverage
-	CompleteUsers          int
-	PartialUsers           int
-	UnavailableUsers       int
-	SiblingSlices          int
-	TotalPoints            uint64
-	RequestedAt            time.Time
-	NextRetryAt            time.Time
-	Values                 []IODeviceWeightValueStatus
-	ObservedDelivery       string
+	State                         IODeviceWeightActivationState
+	Reason                        string
+	Selector                      string
+	Mechanism                     ioweights.MechanismState
+	ClassificationAttempts        uint64
+	ProbeAttempts                 uint64
+	Programmed                    bool
+	ProgrammedState               IODeviceWeightVerificationState
+	ReadBack                      bool
+	ReadBackState                 IODeviceWeightVerificationState
+	EffectQualified               bool
+	EffectQualificationProvenance ioweights.EffectQualificationProvenance
+	AuthorityCoverage             ioweights.AuthorityCoverage
+	CompleteUsers                 int
+	PartialUsers                  int
+	UnavailableUsers              int
+	SiblingSlices                 int
+	TotalPoints                   uint64
+	RequestedAt                   time.Time
+	NextRetryAt                   time.Time
+	Values                        []IODeviceWeightValueStatus
+	ObservedDelivery              string
 }
 
 // IODeviceWeightAttemptResult tells the post-READY scheduler whether another
@@ -203,6 +204,7 @@ func newDisabledIODeviceWeightStatus() IODeviceWeightStatus {
 		State: IODeviceWeightDisabled, ProgrammedState: IODeviceWeightNotAttempted,
 		ReadBackState: IODeviceWeightNotAttempted, AuthorityCoverage: ioweights.AuthorityUnavailable,
 		Mechanism: ioweights.MechanismNone, ObservedDelivery: ioweights.DeliveryNotMeasured,
+		EffectQualificationProvenance: ioweights.EffectQualificationNone,
 	}
 }
 
@@ -279,6 +281,7 @@ func (m *Manager) AttemptIODeviceWeightCapability(ctx context.Context) IODeviceW
 			m.ioWeightPolicyReconcilePending = false
 			m.mu.Unlock()
 			m.publishIODeviceWeightCapability(IODeviceWeightFunctionallyAccepted, "", selector, confirmed, true, true)
+			m.publishIODeviceWeightEffectQualification(ctx, confirmed)
 			return IODeviceWeightAttemptResult{Status: m.GetIODeviceWeightStatus(), Retry: true, ActivateCycle: activateCycle}
 		}
 		if probeCtx.Err() != nil {
@@ -318,6 +321,7 @@ func (m *Manager) AttemptIODeviceWeightCapability(ctx context.Context) IODeviceW
 		return m.publishIODeviceWeightCapabilityFailure(ctx, state, reason, selector, confirmed, true)
 	}
 	m.publishIODeviceWeightCapability(IODeviceWeightFunctionallyAccepted, "", selector, confirmed, true, false)
+	m.publishIODeviceWeightEffectQualification(ctx, confirmed)
 	m.mu.Lock()
 	m.ioWeightPolicyReconcilePending = false
 	m.mu.Unlock()
@@ -418,6 +422,10 @@ func (m *Manager) publishIODeviceWeightCapability(state IODeviceWeightActivation
 		}
 	}
 	status.ObservedDelivery = ioweights.DeliveryNotMeasured
+	if state != IODeviceWeightFunctionallyAccepted {
+		status.EffectQualified = false
+		status.EffectQualificationProvenance = ioweights.EffectQualificationNone
+	}
 	m.ioWeightCapability = snapshot
 	if state == IODeviceWeightFunctionallyAccepted {
 		m.ioWeightCapabilityUnavailableAttempts = 0

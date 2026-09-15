@@ -10,7 +10,7 @@ func TestIODeviceWeightPrometheusPublishesIndependentLifecycleDimensions(t *test
 	exporter.UpdateSystemSnapshot(SystemExporterMetrics{IODeviceWeight: &IODeviceWeightExporterMetrics{
 		State: "refused_observation", Reason: "ambiguous_topology", Mechanism: "bfq", Programmed: true,
 		ProgrammedState: "confirmed", ReadBack: false, ReadBackState: "failed",
-		FunctionallyAccepted: false, EffectQualified: false, AuthorityCoverage: "partial",
+		FunctionallyAccepted: false, EffectQualified: false, EffectQualificationProvenance: "none", AuthorityCoverage: "partial",
 		CompleteUsers: 3, PartialUsers: 2, UnavailableUsers: 1, SiblingSlices: 6, TotalPoints: 1500,
 		RequestedAt: time.Now().Add(-time.Minute), NextRetryAt: time.Now().Add(time.Minute),
 		Values:           []IODeviceWeightValueMetrics{{UID: 1000, Class: "mapped", Device: "8:0", Mechanism: "bfq", Coverage: "partial", RequestedValue: 700, SystemdValue: 6700, NominalShare: 0.5, Programmed: true}},
@@ -21,6 +21,7 @@ func TestIODeviceWeightPrometheusPublishesIndependentLifecycleDimensions(t *test
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_reason", "reason", "ambiguous_topology", 1)
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_observed_delivery", "state", "not_measured", 1)
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_mechanism", "mechanism", "bfq", 1)
+	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_effect_qualification_info", "provenance", "none", 1)
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_programming_state", "state", "confirmed", 1)
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_readback_state", "state", "failed", 1)
 	assertGaugeLabelValue(t, exporter, "resman_io_device_weight_authority_coverage", "coverage", "partial", 1)

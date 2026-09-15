@@ -159,7 +159,7 @@ than retrying forever. After correcting the transient cause, run
 before starting the service when the start limit was reached. A clean stop is not
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
-Current metrics schema: 8.
+Current metrics schema: 9.
 .PP
 The system normalizes current online CPU capacity to 1000 CPU Points and uses a
 flat systemd-owned hierarchy. The finite parent user.slice contains active user
@@ -395,7 +395,9 @@ retried at a cadence capped at 30 seconds. refused_observation remains automatic
 re-evaluated; refused_intervention requires reload, restart, or operator repair.
 functionally_accepted proves transport and exact readback only. effect_qualified and
 observed_delivery remain separate and do not claim throughput without controlled
-contention evidence. See /usr/share/doc/resman/IO-WEIGHTS.md.
+contention evidence. The bounded effect_qualification_provenance names the exact
+retained campaign or `none`; it is diagnostic only and never authorizes a mutation.
+See /usr/share/doc/resman/IO-WEIGHTS.md.
 .SH SYSTEMD NATIVE ENFORCEMENT
 On a host booted with systemd, ResMan uses
 .B systemd_native
@@ -684,7 +686,7 @@ When metrics persistence is enabled at its default
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
 Earlier database schemas are incompatible: archive or delete the database
-and restart so resman can create the current schema. The supported schema-7-to-8
+and restart so resman can create the current schema. The supported schema-7-through-8-to-9
 migration applies only to a database already at the selected current path; older
 schemas are never migrated or opened under the new path.
 .PP

@@ -250,7 +250,7 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
-Current metrics schema: 8.
+Current metrics schema: 9.
 
 **Responsibilities:**
 - Verify the cgroup v2 observation boundary
@@ -669,10 +669,11 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. Schema 7 at the current path is migrated atomically to schema
-8, preserving all rows and assigning historical weighted-I/O state `disabled` with
-`not_measured` delivery. A pre-version-7 database must be archived or deleted so schema
-version 8 can be created; it is not moved or migrated. Schema 8 persists one common
+component construction. Schema 7 at the current path is migrated atomically through
+schema 8 to schema 9, preserving all rows and assigning historical weighted-I/O state
+`disabled` with `not_measured` delivery and qualification provenance `none`. A
+pre-version-7 database must be archived or deleted so schema version 9 can be created;
+it is not moved or migrated. Schema 9 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
 nullable identity-safe unit deltas, independent resource authority and RAM-charge
 coverage, and distinct memory high/max/OOM/kill deltas. First baselines, counter resets and unit

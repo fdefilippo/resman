@@ -81,60 +81,61 @@ type UserMetricsRecord struct {
 
 // SystemMetricsRecord represents one persisted system metrics sample.
 type SystemMetricsRecord struct {
-	IODeviceWeightState                  string
-	IODeviceWeightReason                 string
-	IODeviceWeightSelector               string
-	IODeviceWeightMechanism              string
-	IODeviceWeightClassificationAttempts uint64
-	IODeviceWeightProbeAttempts          uint64
-	IODeviceWeightProgrammed             bool
-	IODeviceWeightProgrammedState        string
-	IODeviceWeightReadBack               bool
-	IODeviceWeightReadBackState          string
-	IODeviceWeightFunctionallyAccepted   bool
-	IODeviceWeightEffectQualified        bool
-	IODeviceWeightAuthorityCoverage      string
-	IODeviceWeightCompleteUsers          int
-	IODeviceWeightPartialUsers           int
-	IODeviceWeightUnavailableUsers       int
-	IODeviceWeightSiblingSlices          int
-	IODeviceWeightTotalPoints            uint64
-	IODeviceWeightRequestedAt            *time.Time
-	IODeviceWeightNextRetryAt            *time.Time
-	IODeviceWeightValuesJSON             string
-	IODeviceWeightObservedDelivery       string
-	DenominatorState                     string
-	EnforcementMode                      string
-	SampleEpochID                        int64
-	IntervalStart                        *time.Time
-	IntervalEnd                          time.Time
-	TotalCPUUsagePercent                 float64
-	TotalCores                           int
-	SystemLoad                           float64
-	CPULimitsActive                      bool
-	ResourceLimitsActive                 bool
-	AnyLimitsActive                      bool
-	CPUActivelyLimitedUsersCount         int
-	ActivelyLimitedUsersCount            int
-	NominalParentPoolPoints              uint64
-	CPUCapacityAvailable                 bool
-	OnlineCPUs                           *uint64
-	ProgrammedParentQuotaUsec            *uint64
-	ProgrammedParentPeriodUsec           *uint64
-	CPUPointsDegraded                    bool
-	AppliedGuaranteePoints               uint64
-	ProgrammedGuaranteeWeight            uint64
-	ConfiguredBestEffortPoints           uint64
-	ParentCPUQuota                       *string
-	ProgrammedSiblingWeightSum           *uint64
-	ProgrammedBestEffortWeight           *uint64
-	ParentCPUUsageUsecDelta              *uint64
-	ObservedSiblingWeightSum             *uint64
-	ConfiguredRootPoints                 *uint64
-	ParentCPUPeriodsDelta                *uint64
-	ParentCPUThrottledPeriodsDelta       *uint64
-	ParentCPUThrottledUsecDelta          *uint64
-	Timestamp                            time.Time
+	IODeviceWeightState                         string
+	IODeviceWeightReason                        string
+	IODeviceWeightSelector                      string
+	IODeviceWeightMechanism                     string
+	IODeviceWeightClassificationAttempts        uint64
+	IODeviceWeightProbeAttempts                 uint64
+	IODeviceWeightProgrammed                    bool
+	IODeviceWeightProgrammedState               string
+	IODeviceWeightReadBack                      bool
+	IODeviceWeightReadBackState                 string
+	IODeviceWeightFunctionallyAccepted          bool
+	IODeviceWeightEffectQualified               bool
+	IODeviceWeightEffectQualificationProvenance string
+	IODeviceWeightAuthorityCoverage             string
+	IODeviceWeightCompleteUsers                 int
+	IODeviceWeightPartialUsers                  int
+	IODeviceWeightUnavailableUsers              int
+	IODeviceWeightSiblingSlices                 int
+	IODeviceWeightTotalPoints                   uint64
+	IODeviceWeightRequestedAt                   *time.Time
+	IODeviceWeightNextRetryAt                   *time.Time
+	IODeviceWeightValuesJSON                    string
+	IODeviceWeightObservedDelivery              string
+	DenominatorState                            string
+	EnforcementMode                             string
+	SampleEpochID                               int64
+	IntervalStart                               *time.Time
+	IntervalEnd                                 time.Time
+	TotalCPUUsagePercent                        float64
+	TotalCores                                  int
+	SystemLoad                                  float64
+	CPULimitsActive                             bool
+	ResourceLimitsActive                        bool
+	AnyLimitsActive                             bool
+	CPUActivelyLimitedUsersCount                int
+	ActivelyLimitedUsersCount                   int
+	NominalParentPoolPoints                     uint64
+	CPUCapacityAvailable                        bool
+	OnlineCPUs                                  *uint64
+	ProgrammedParentQuotaUsec                   *uint64
+	ProgrammedParentPeriodUsec                  *uint64
+	CPUPointsDegraded                           bool
+	AppliedGuaranteePoints                      uint64
+	ProgrammedGuaranteeWeight                   uint64
+	ConfiguredBestEffortPoints                  uint64
+	ParentCPUQuota                              *string
+	ProgrammedSiblingWeightSum                  *uint64
+	ProgrammedBestEffortWeight                  *uint64
+	ParentCPUUsageUsecDelta                     *uint64
+	ObservedSiblingWeightSum                    *uint64
+	ConfiguredRootPoints                        *uint64
+	ParentCPUPeriodsDelta                       *uint64
+	ParentCPUThrottledPeriodsDelta              *uint64
+	ParentCPUThrottledUsecDelta                 *uint64
+	Timestamp                                   time.Time
 }
 
 // UserSummary contains aggregate metrics for one user and time range.
@@ -178,7 +179,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 8
+	metricsSchemaVersion   = 9
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
 							  uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -203,6 +204,7 @@ const (
 								io_device_weight_programmed, io_device_weight_programmed_state,
 								io_device_weight_read_back, io_device_weight_read_back_state,
 								io_device_weight_functionally_accepted, io_device_weight_effect_qualified,
+								io_device_weight_effect_qualification_provenance,
 								io_device_weight_authority_coverage, io_device_weight_complete_users,
 								io_device_weight_partial_users, io_device_weight_unavailable_users,
 								io_device_weight_sibling_slices, io_device_weight_total_points,
@@ -220,7 +222,7 @@ const (
 								parent_cpu_usage_usec_delta, observed_sibling_weight_sum,
 								configured_root_points, parent_cpu_periods_delta,
 								parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta, denominator_state, enforcement_mode)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
 
@@ -314,6 +316,12 @@ func (m *DatabaseManager) InitSchema() error {
 		if err := m.migrateMetricsSchema7To8(); err != nil {
 			return err
 		}
+		version = 8
+	}
+	if version == 8 {
+		if err := m.migrateMetricsSchema8To9(); err != nil {
+			return err
+		}
 		version = metricsSchemaVersion
 	}
 	if version != 0 && version != metricsSchemaVersion {
@@ -390,6 +398,7 @@ func (m *DatabaseManager) InitSchema() error {
 		io_device_weight_read_back_state TEXT NOT NULL CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
 		io_device_weight_functionally_accepted BOOLEAN NOT NULL,
 		io_device_weight_effect_qualified BOOLEAN NOT NULL,
+		io_device_weight_effect_qualification_provenance TEXT NOT NULL CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915')),
 		io_device_weight_authority_coverage TEXT NOT NULL CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable')),
 		io_device_weight_complete_users INTEGER NOT NULL,
 		io_device_weight_partial_users INTEGER NOT NULL,
@@ -494,12 +503,34 @@ func (m *DatabaseManager) migrateMetricsSchema7To8() error {
 			return fmt.Errorf("failed to migrate metrics schema 7 to 8: %w", err)
 		}
 	}
+	if _, err := tx.Exec("PRAGMA user_version = 8"); err != nil {
+		rollback()
+		return fmt.Errorf("failed to record migrated metrics schema version 8: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit metrics schema 7 to 8 migration: %w", err)
+	}
+	return nil
+}
+
+// migrateMetricsSchema8To9 records the exact retained effect-qualification
+// provenance without changing whether historical rows were qualified.
+func (m *DatabaseManager) migrateMetricsSchema8To9() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start metrics schema 8 to 9 migration: %w", err)
+	}
+	rollback := func() { _ = tx.Rollback() }
+	if _, err := tx.Exec(`ALTER TABLE system_metrics ADD COLUMN io_device_weight_effect_qualification_provenance TEXT NOT NULL DEFAULT 'none' CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915'))`); err != nil {
+		rollback()
+		return fmt.Errorf("failed to migrate metrics schema 8 to 9: %w", err)
+	}
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion)); err != nil {
 		rollback()
 		return fmt.Errorf("failed to record migrated metrics schema version %d: %w", metricsSchemaVersion, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit metrics schema 7 to 8 migration: %w", err)
+		return fmt.Errorf("failed to commit metrics schema 8 to 9 migration: %w", err)
 	}
 	return nil
 }
@@ -610,7 +641,7 @@ func (m *DatabaseManager) validateSystemMetricsSchema() error {
 		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector", "io_device_weight_mechanism",
 		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
 		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
-		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
+		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified", "io_device_weight_effect_qualification_provenance",
 		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users", "io_device_weight_unavailable_users",
 		"io_device_weight_sibling_slices", "io_device_weight_total_points", "io_device_weight_requested_at", "io_device_weight_next_retry_at",
 		"io_device_weight_values_json", "io_device_weight_observed_delivery",
@@ -764,6 +795,10 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 	if !ioweights.ValidDeliveryState(system.IODeviceWeightObservedDelivery) {
 		return fmt.Errorf("metrics batch has invalid weighted-I/O delivery %q", system.IODeviceWeightObservedDelivery)
 	}
+	if !ioweights.ValidEffectQualificationProvenance(system.IODeviceWeightEffectQualificationProvenance) ||
+		system.IODeviceWeightEffectQualified != (system.IODeviceWeightEffectQualificationProvenance != string(ioweights.EffectQualificationNone)) {
+		return fmt.Errorf("metrics batch has inconsistent weighted-I/O effect qualification %t/%q", system.IODeviceWeightEffectQualified, system.IODeviceWeightEffectQualificationProvenance)
+	}
 	if !ioweights.ValidMechanismState(system.IODeviceWeightMechanism) {
 		return fmt.Errorf("metrics batch has invalid weighted-I/O mechanism %q", system.IODeviceWeightMechanism)
 	}
@@ -815,6 +850,7 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 		system.IODeviceWeightReadBackState,
 		system.IODeviceWeightFunctionallyAccepted,
 		system.IODeviceWeightEffectQualified,
+		system.IODeviceWeightEffectQualificationProvenance,
 		system.IODeviceWeightAuthorityCoverage,
 		system.IODeviceWeightCompleteUsers,
 		system.IODeviceWeightPartialUsers,
@@ -1044,6 +1080,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 		   io_device_weight_programmed, io_device_weight_programmed_state,
 		   io_device_weight_read_back, io_device_weight_read_back_state,
 		   io_device_weight_functionally_accepted, io_device_weight_effect_qualified,
+		   io_device_weight_effect_qualification_provenance,
 		   io_device_weight_authority_coverage, io_device_weight_complete_users,
 		   io_device_weight_partial_users, io_device_weight_unavailable_users,
 		   io_device_weight_sibling_slices, io_device_weight_total_points,
@@ -1081,6 +1118,7 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 			&r.IODeviceWeightProgrammed, &r.IODeviceWeightProgrammedState,
 			&r.IODeviceWeightReadBack, &r.IODeviceWeightReadBackState,
 			&r.IODeviceWeightFunctionallyAccepted, &r.IODeviceWeightEffectQualified,
+			&r.IODeviceWeightEffectQualificationProvenance,
 			&r.IODeviceWeightAuthorityCoverage, &r.IODeviceWeightCompleteUsers,
 			&r.IODeviceWeightPartialUsers, &r.IODeviceWeightUnavailableUsers,
 			&r.IODeviceWeightSiblingSlices, &r.IODeviceWeightTotalPoints,
