@@ -40,7 +40,12 @@ grep -q 'are two kernel configurations of Oracle' "$script_dir/CAPABILITY-MATRIX
 grep -q 'Linux 9 rather than two releases' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'not a runtime allowlist' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'observed capabilities' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'probe_candidate' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'functionally_accepted' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'effect_qualified' "$script_dir/CAPABILITY-MATRIX.md"
+grep -q 'tables below do not confer' "$script_dir/CAPABILITY-MATRIX.md"
 grep -q 'Runtime authorization depends on observed controller' "$script_dir/README.md"
+grep -q 'systemd is responsible for materializing' "$script_dir/README.md"
 grep -q '252:0 121.*through BFQ' "$script_dir/CAPABILITY-MATRIX.md"
 if grep -q '251:0 121.*through BFQ' "$script_dir/CAPABILITY-MATRIX.md"; then
 	echo "RHCK matrix uses the UEK campaign device identity" >&2

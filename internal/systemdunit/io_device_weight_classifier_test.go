@@ -46,6 +46,15 @@ func TestParseIODeviceWeightDevicesRequiresCanonicalUniqueExplicitNumbers(t *tes
 	}
 }
 
+func TestIODeviceWeightCapabilityOutcomeNamesPreservePhaseBoundaries(t *testing.T) {
+	if got := string(IODeviceWeightProbeCandidate); got != "probe_candidate" {
+		t.Fatalf("probe candidate outcome = %q", got)
+	}
+	if got := string(IODeviceWeightMechanismInactive); got != "mechanism_inactive" {
+		t.Fatalf("inactive mechanism outcome = %q", got)
+	}
+}
+
 func TestIODeviceWeightClassifierUsesSoftwareIdentityOnlyAsDiagnostics(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -67,8 +76,8 @@ func TestIODeviceWeightClassifierUsesSoftwareIdentityOnlyAsDiagnostics(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if snapshot.Outcome() != IODeviceWeightSupportedActive {
-				t.Fatalf("outcome/reason = %s/%s, want capability-based support", snapshot.Outcome(), snapshot.Reason())
+			if snapshot.Outcome() != IODeviceWeightProbeCandidate {
+				t.Fatalf("outcome/reason = %s/%s, want probe candidate", snapshot.Outcome(), snapshot.Reason())
 			}
 		})
 	}
@@ -99,11 +108,11 @@ func TestIODeviceWeightClassifierRequiresActiveMechanismEvidence(t *testing.T) {
 		reason    IODeviceWeightCapabilityReason
 		mechanism IODeviceWeightMechanism
 	}{
-		{name: "BFQ active", scheduler: "mq-deadline [bfq] none", qos: "8:0 enable=0 ctrl=user\n", outcome: IODeviceWeightSupportedActive, mechanism: IODeviceWeightMechanismBFQ},
-		{name: "io cost active", scheduler: "[mq-deadline] bfq none", qos: "8:0 enable=1 ctrl=user\n", outcome: IODeviceWeightSupportedActive, mechanism: IODeviceWeightMechanismIOCost},
+		{name: "BFQ active", scheduler: "mq-deadline [bfq] none", qos: "8:0 enable=0 ctrl=user\n", outcome: IODeviceWeightProbeCandidate, mechanism: IODeviceWeightMechanismBFQ},
+		{name: "io cost active", scheduler: "[mq-deadline] bfq none", qos: "8:0 enable=1 ctrl=user\n", outcome: IODeviceWeightProbeCandidate, mechanism: IODeviceWeightMechanismIOCost},
 		{name: "both active", scheduler: "mq-deadline [bfq] none", qos: "8:0 enable=1 ctrl=user\n", outcome: IODeviceWeightMechanismAmbiguous, reason: IODeviceWeightReasonMechanismAmbiguous},
-		{name: "both inactive", scheduler: "[mq-deadline] bfq none", qos: "8:0 enable=0 ctrl=user\n", outcome: IODeviceWeightSupportedInactive, reason: IODeviceWeightReasonNoActiveMechanism},
-		{name: "io cost enabled only for another device", scheduler: "[mq-deadline] bfq none", qos: "8:16 enable=1 ctrl=user\n", outcome: IODeviceWeightSupportedInactive, reason: IODeviceWeightReasonNoActiveMechanism},
+		{name: "both inactive", scheduler: "[mq-deadline] bfq none", qos: "8:0 enable=0 ctrl=user\n", outcome: IODeviceWeightMechanismInactive, reason: IODeviceWeightReasonNoActiveMechanism},
+		{name: "io cost enabled only for another device", scheduler: "[mq-deadline] bfq none", qos: "8:16 enable=1 ctrl=user\n", outcome: IODeviceWeightMechanismInactive, reason: IODeviceWeightReasonNoActiveMechanism},
 		{name: "invalid io cost evidence", scheduler: "[mq-deadline] bfq none", qos: "8:0 enable=maybe ctrl=user\n", outcome: IODeviceWeightEvidenceUnavailable, reason: IODeviceWeightReasonEvidenceUnavailable},
 	}
 	for _, test := range tests {
@@ -118,29 +127,29 @@ func TestIODeviceWeightClassifierRequiresActiveMechanismEvidence(t *testing.T) {
 			if snapshot.Outcome() != test.outcome || snapshot.Reason() != test.reason {
 				t.Fatalf("outcome/reason = %s/%s, want %s/%s", snapshot.Outcome(), snapshot.Reason(), test.outcome, test.reason)
 			}
-			targets := snapshot.QualifiedTargets()
-			if test.outcome != IODeviceWeightSupportedActive {
+			targets := snapshot.ProbeTargets()
+			if test.outcome != IODeviceWeightProbeCandidate {
 				if targets != nil {
-					t.Fatalf("QualifiedTargets() = %+v for negative outcome", targets)
+					t.Fatalf("ProbeTargets() = %+v for negative outcome", targets)
 				}
 				return
 			}
 			if len(targets) != 1 || targets[0].Mechanism != test.mechanism || targets[0].Identity.Number.String() != "8:0" {
-				t.Fatalf("QualifiedTargets() = %+v, want mechanism %s on 8:0", targets, test.mechanism)
+				t.Fatalf("ProbeTargets() = %+v, want mechanism %s on 8:0", targets, test.mechanism)
 			}
 		})
 	}
 }
 
 func TestIODeviceWeightCapabilityAggregationKeepsTheDeviceSetAtomic(t *testing.T) {
-	active := IODeviceWeightDeviceCapability{Outcome: IODeviceWeightSupportedActive}
+	active := IODeviceWeightDeviceCapability{Outcome: IODeviceWeightProbeCandidate}
 	tests := []struct {
 		name    string
 		devices []IODeviceWeightDeviceCapability
 		outcome IODeviceWeightCapabilityOutcome
 		reason  IODeviceWeightCapabilityReason
 	}{
-		{name: "inactive member", devices: []IODeviceWeightDeviceCapability{active, {Outcome: IODeviceWeightSupportedInactive, Reason: IODeviceWeightReasonNoActiveMechanism}}, outcome: IODeviceWeightSupportedInactive, reason: IODeviceWeightReasonNoActiveMechanism},
+		{name: "inactive member", devices: []IODeviceWeightDeviceCapability{active, {Outcome: IODeviceWeightMechanismInactive, Reason: IODeviceWeightReasonNoActiveMechanism}}, outcome: IODeviceWeightMechanismInactive, reason: IODeviceWeightReasonNoActiveMechanism},
 		{name: "ambiguous member", devices: []IODeviceWeightDeviceCapability{active, {Outcome: IODeviceWeightMechanismAmbiguous, Reason: IODeviceWeightReasonMechanismAmbiguous}}, outcome: IODeviceWeightMechanismAmbiguous, reason: IODeviceWeightReasonMechanismAmbiguous},
 		{name: "definitive ambiguity dominates unavailable", devices: []IODeviceWeightDeviceCapability{{Outcome: IODeviceWeightMechanismAmbiguous, Reason: IODeviceWeightReasonMechanismAmbiguous}, {Outcome: IODeviceWeightEvidenceUnavailable, Reason: IODeviceWeightReasonDeviceMissing}}, outcome: IODeviceWeightMechanismAmbiguous, reason: IODeviceWeightReasonMechanismAmbiguous},
 		{name: "definitive unsupported dominates unavailable", devices: []IODeviceWeightDeviceCapability{{Outcome: IODeviceWeightUnsupportedMechanism, Reason: IODeviceWeightReasonMechanismUnsupported}, {Outcome: IODeviceWeightEvidenceUnavailable, Reason: IODeviceWeightReasonEvidenceUnavailable}}, outcome: IODeviceWeightUnsupportedMechanism, reason: IODeviceWeightReasonMechanismUnsupported},
@@ -173,16 +182,11 @@ func TestIODeviceWeightClassifierKeepsUnavailableEvidenceDistinct(t *testing.T) 
 	}
 }
 
-func TestIODeviceWeightClassifierTreatsObservedMissingInterfacesAsUnsupported(t *testing.T) {
+func TestIODeviceWeightClassifierTreatsMissingMechanismFactsAsUnsupported(t *testing.T) {
 	fixture := newIODeviceWeightClassifierFixture(t)
-	for _, path := range []string{
-		filepath.Join(fixture.classifier.io.weightCgroup, "io.bfq.weight"),
-		fixture.ioCostQOSPath,
-		filepath.Join(fixture.classifier.io.cgroupRoot, "io.cost.model"),
-	} {
-		if err := os.Remove(path); err != nil {
-			t.Fatal(err)
-		}
+	fixture.write(fixture.schedulerPath, "[mq-deadline] none\n")
+	if err := os.Remove(fixture.ioCostQOSPath); err != nil {
+		t.Fatal(err)
 	}
 	snapshot, err := fixture.classifier.Classify(context.Background(), "8:0")
 	if err != nil {
@@ -193,17 +197,47 @@ func TestIODeviceWeightClassifierTreatsObservedMissingInterfacesAsUnsupported(t 
 	}
 }
 
-func TestIODeviceWeightClassifierNeverLooksForWeightInterfacesAtCgroupRoot(t *testing.T) {
-	fixture := newIODeviceWeightClassifierFixture(t)
-	readFile := fixture.classifier.io.readFile
-	fixture.classifier.io.readFile = func(path string) ([]byte, error) {
-		if path == filepath.Join(fixture.classifier.io.cgroupRoot, "io.weight") || path == filepath.Join(fixture.classifier.io.cgroupRoot, "io.bfq.weight") {
-			t.Fatalf("classifier read root-only weight interface %s", path)
-		}
-		return readFile(path)
+func TestIODeviceWeightClassifierSelectsMechanismBeforeControllerMaterialization(t *testing.T) {
+	tests := []struct {
+		name      string
+		scheduler string
+		qos       string
+		mechanism IODeviceWeightMechanism
+	}{
+		{name: "BFQ", scheduler: "mq-deadline [bfq] none\n", qos: "8:0 enable=0 ctrl=user\n", mechanism: IODeviceWeightMechanismBFQ},
+		{name: "io cost", scheduler: "[mq-deadline] bfq none\n", qos: "8:0 enable=1 ctrl=user\n", mechanism: IODeviceWeightMechanismIOCost},
 	}
-	if snapshot := fixture.classify(t); snapshot.Outcome() != IODeviceWeightSupportedActive {
-		t.Fatalf("outcome = %s", snapshot.Outcome())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newIODeviceWeightClassifierFixture(t)
+			fixture.write(fixture.schedulerPath, test.scheduler)
+			fixture.write(fixture.ioCostQOSPath, test.qos)
+			fixture.write(filepath.Join(fixture.classifier.io.cgroupRoot, "cgroup.subtree_control"), "memory pids\n")
+			readFile := fixture.classifier.io.readFile
+			fixture.classifier.io.readFile = func(path string) ([]byte, error) {
+				if filepath.Base(path) == "io.weight" || filepath.Base(path) == "io.bfq.weight" {
+					t.Fatalf("classifier read weight interface before probe materialization: %s", path)
+				}
+				return readFile(path)
+			}
+			snapshot := fixture.classify(t)
+			targets := snapshot.ProbeTargets()
+			if len(targets) != 1 || targets[0].Mechanism != test.mechanism {
+				t.Fatalf("ProbeTargets() = %+v, want %s candidate", targets, test.mechanism)
+			}
+		})
+	}
+}
+
+func TestIODeviceWeightClassifierRequiresRootIOControllerAvailability(t *testing.T) {
+	fixture := newIODeviceWeightClassifierFixture(t)
+	fixture.write(filepath.Join(fixture.classifier.io.cgroupRoot, "cgroup.controllers"), "cpu memory pids\n")
+	snapshot, err := fixture.classifier.Classify(context.Background(), "8:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Outcome() != IODeviceWeightUnsupportedMechanism || snapshot.Reason() != IODeviceWeightReasonMechanismUnsupported {
+		t.Fatalf("outcome/reason = %s/%s, want unsupported without root io controller", snapshot.Outcome(), snapshot.Reason())
 	}
 }
 
@@ -231,10 +265,16 @@ func TestIODeviceWeightClassifierRejectsUnsupportedTopologyAndMissingDevices(t *
 				f.t.Fatal(err)
 			}
 		}, outcome: IODeviceWeightAmbiguousTopology, reason: IODeviceWeightReasonAmbiguousTopology},
+		{name: "missing holders topology", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			if err := os.Remove(filepath.Join(f.sysfsDevice, "holders")); err != nil {
+				f.t.Fatal(err)
+			}
+		}, outcome: IODeviceWeightAmbiguousTopology, reason: IODeviceWeightReasonAmbiguousTopology},
 		{name: "unknown device class", mutate: func(f *ioDeviceWeightClassifierFixture) {
 			loop := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "loop0")
 			f.mkdir(filepath.Join(loop, "queue"))
 			f.mkdir(filepath.Join(loop, "slaves"))
+			f.mkdir(filepath.Join(loop, "holders"))
 			f.write(filepath.Join(loop, "dev"), "8:0\n")
 			f.write(filepath.Join(loop, "uevent"), "DEVNAME=loop0\n")
 			f.write(filepath.Join(loop, "queue", "scheduler"), "[none]\n")
@@ -282,6 +322,45 @@ func TestApprovedDirectIODeviceFailsClosedForUnknownAndStackedClasses(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			if got := approvedDirectIODevice(test.path, test.dev); got != test.allow {
 				t.Fatalf("approvedDirectIODevice(%q, %q) = %t, want %t", test.path, test.dev, got, test.allow)
+			}
+		})
+	}
+}
+
+func TestIODeviceWeightClassifierRejectsMultipathAndRAIDHoldersButAcceptsLVM(t *testing.T) {
+	tests := []struct {
+		name    string
+		holder  string
+		uuid    string
+		raid    bool
+		outcome IODeviceWeightCapabilityOutcome
+	}{
+		{name: "multipath member", holder: "dm-0", uuid: "mpath-test-wwid", outcome: IODeviceWeightAmbiguousTopology},
+		{name: "LVM member", holder: "dm-0", uuid: "LVM-test-volume", outcome: IODeviceWeightProbeCandidate},
+		{name: "unmodeled device mapper member", holder: "dm-0", uuid: "CRYPT-test-volume", outcome: IODeviceWeightAmbiguousTopology},
+		{name: "unmodeled holder", holder: "bcache0", outcome: IODeviceWeightAmbiguousTopology},
+		{name: "RAID member", holder: "md0", raid: true, outcome: IODeviceWeightAmbiguousTopology},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newIODeviceWeightClassifierFixture(t)
+			holderPath := filepath.Join(fixture.classifier.io.sysRoot, "devices", "virtual", "block", test.holder)
+			fixture.mkdir(holderPath)
+			if test.raid {
+				fixture.mkdir(filepath.Join(holderPath, "md"))
+			} else if test.uuid != "" {
+				fixture.mkdir(filepath.Join(holderPath, "dm"))
+				fixture.write(filepath.Join(holderPath, "dm", "uuid"), test.uuid+"\n")
+			}
+			if err := os.Symlink(holderPath, filepath.Join(fixture.sysfsDevice, "holders", test.holder)); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := fixture.classifier.Classify(context.Background(), "8:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Outcome() != test.outcome {
+				t.Fatalf("Outcome() = %s/%s, want %s", snapshot.Outcome(), snapshot.Reason(), test.outcome)
 			}
 		})
 	}
@@ -343,9 +422,9 @@ func TestIODeviceWeightCapabilitySnapshotAccessorsAreDefensive(t *testing.T) {
 	snapshot := fixture.classify(t)
 	devices := snapshot.Devices()
 	devices[0].Identity.DeviceNode = "/dev/changed"
-	targets := snapshot.QualifiedTargets()
+	targets := snapshot.ProbeTargets()
 	targets[0].Identity.DeviceNode = "/dev/changed"
-	if snapshot.Devices()[0].Identity.DeviceNode != fixture.deviceNode || snapshot.QualifiedTargets()[0].Identity.DeviceNode != fixture.deviceNode {
+	if snapshot.Devices()[0].Identity.DeviceNode != fixture.deviceNode || snapshot.ProbeTargets()[0].Identity.DeviceNode != fixture.deviceNode {
 		t.Fatal("snapshot changed through a returned slice")
 	}
 }
@@ -374,13 +453,12 @@ func newIODeviceWeightClassifierFixture(t *testing.T) *ioDeviceWeightClassifierF
 	sysfsDevice := filepath.Join(sysRoot, "devices", "pci0000:00", "0000:00:05.0", "virtio2", "block", "vda")
 	devRoot := filepath.Join(root, "dev")
 	cgroupRoot := filepath.Join(root, "cgroup")
-	weightCgroup := filepath.Join(cgroupRoot, "system.slice")
 	fixture := &ioDeviceWeightClassifierFixture{
 		t: t, root: root, sysfsLink: filepath.Join(sysDevBlockRoot, "8:0"), sysfsDevice: sysfsDevice,
 		deviceNode: filepath.Join(devRoot, "vda"), schedulerPath: filepath.Join(sysfsDevice, "queue", "scheduler"),
 		ioCostQOSPath: filepath.Join(cgroupRoot, "io.cost.qos"), sysfsInode: 1001, deviceMajor: 8,
 	}
-	for _, directory := range []string{sysDevBlockRoot, filepath.Join(sysfsDevice, "queue"), filepath.Join(sysfsDevice, "slaves"), devRoot, cgroupRoot, weightCgroup, filepath.Join(root, "etc")} {
+	for _, directory := range []string{sysDevBlockRoot, filepath.Join(sysfsDevice, "queue"), filepath.Join(sysfsDevice, "slaves"), filepath.Join(sysfsDevice, "holders"), devRoot, cgroupRoot, filepath.Join(root, "etc")} {
 		fixture.mkdir(directory)
 	}
 	if err := os.Symlink(filepath.Join("..", "..", "devices", "pci0000:00", "0000:00:05.0", "virtio2", "block", "vda"), fixture.sysfsLink); err != nil {
@@ -390,17 +468,13 @@ func newIODeviceWeightClassifierFixture(t *testing.T) *ioDeviceWeightClassifierF
 	fixture.write(filepath.Join(sysfsDevice, "uevent"), "DEVNAME=vda\n")
 	fixture.write(fixture.schedulerPath, "mq-deadline [bfq] none\n")
 	fixture.write(filepath.Join(cgroupRoot, "cgroup.controllers"), "cpu io memory\n")
-	fixture.write(filepath.Join(weightCgroup, "io.bfq.weight"), "default 100\n")
-	fixture.write(filepath.Join(weightCgroup, "io.weight"), "default 100\n")
 	fixture.write(fixture.ioCostQOSPath, "8:0 enable=0 ctrl=user\n")
-	fixture.write(filepath.Join(cgroupRoot, "io.cost.model"), "8:0 ctrl=user model=linear\n")
 	fixture.write(filepath.Join(root, "etc", "os-release"), "ID=ol\nVERSION_ID=9.8\n")
 	classifier := NewIODeviceWeightCapabilityClassifier()
 	classifier.io.osReleasePath = filepath.Join(root, "etc", "os-release")
 	classifier.io.sysRoot = sysRoot
 	classifier.io.sysDevBlockRoot = sysDevBlockRoot
 	classifier.io.cgroupRoot = cgroupRoot
-	classifier.io.weightCgroup = weightCgroup
 	classifier.io.devRoot = devRoot
 	classifier.io.kernelRelease = func() (string, error) { return defaultIODeviceWeightKernelRelease, nil }
 	classifier.io.stat = func(path string) (os.FileInfo, error) {
@@ -422,8 +496,8 @@ func (f *ioDeviceWeightClassifierFixture) classify(t *testing.T) IODeviceWeightC
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Outcome() != IODeviceWeightSupportedActive {
-		t.Fatalf("Classify() outcome = %s/%s, want supported_active", snapshot.Outcome(), snapshot.Reason())
+	if snapshot.Outcome() != IODeviceWeightProbeCandidate {
+		t.Fatalf("Classify() outcome = %s/%s, want probe_candidate", snapshot.Outcome(), snapshot.Reason())
 	}
 	return snapshot
 }

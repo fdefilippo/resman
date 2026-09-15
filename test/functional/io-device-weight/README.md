@@ -6,9 +6,10 @@ booting RHCK, the base kernel, on the same three immutable Oracle Linux release
 images. RHCK and UEK are therefore two kernel configurations of each Oracle
 Linux release, not distinct releases. The weighted-I/O operator contract uses
 neither family as a runtime allowlist. The harness measures representative
-complete systemd-to-kernel `IODeviceWeight` paths for qualification and
-regression evidence; it does not run ResMan, implement daemon policy, authorize
-other hosts by version, or claim throughput delivery.
+complete systemd-to-kernel `IODeviceWeight` paths for transport characterization
+and regression evidence; it does not run ResMan, implement daemon policy,
+authorize other hosts by version, qualify the effect under contention, or claim
+throughput delivery.
 
 Each guest is a fresh overlay of an immutable Oracle KVM image with a second,
 512 MiB disposable virtio block device. The probe device has no filesystem,
@@ -47,7 +48,17 @@ family or later distribution. When BFQ and io.cost are active on the same owned
 device, the harness records both footprints but labels the policy state
 `mechanism_ambiguous`; it does not infer precedence or double application.
 
-## Pinned base images and qualified kernels
+These matrix outcomes are not runtime support levels. The read-only classifier
+may hand a `probe_candidate` to the owned adapter probe without finding a
+pre-existing non-root weight file: systemd is responsible for materializing the
+controller during that probe. Exact kernel readback and reset make the host
+`functionally_accepted`. Only the later packaged-daemon contention campaign in
+`resman-nq6.40.5` may label an exact representative and mechanism
+`effect_qualified`. Functionally accepted hosts without that label remain usable;
+their unqualified delivery effect must remain explicit in observability and
+operator documentation.
+
+## Pinned base images and characterized kernels
 
 | Base image | Oracle image | SHA-256 |
 |---|---|---|
@@ -64,7 +75,7 @@ on matching this package or software-version tuple.
 
 The selected RHCK image receives `systemd.unified_cgroup_hierarchy=1`; the runner
 records the initial hierarchy, kernel installation, BLS selection and a distinct
-qualified boot before probing. A container is never accepted as kernel-version
+characterization boot before probing. A container is never accepted as kernel-version
 evidence.
 
 All guest probes require cgroup v2. PSI is not enabled by the harness, is not a

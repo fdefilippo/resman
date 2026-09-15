@@ -1,13 +1,33 @@
 # IODeviceWeight capability matrix
 
-The qualified release remains Oracle Linux in both tables below. RHCK is its
+The characterized release remains Oracle Linux in both tables below. RHCK is its
 base kernel and UEK is an extension kernel available within the same release;
 `OL9/RHCK` and `OL9/UEK`, for example, are two kernel configurations of Oracle
 Linux 9 rather than two releases. Exact guest identities below are retained
-qualification evidence and regression fixtures, not a runtime allowlist. ResMan
-authorizes weighted I/O from observed capabilities and a successful owned live
-startup probe on every configured device. Distribution, systemd and kernel
-identities remain diagnostic provenance and never substitute for that proof.
+transport characterization and regression fixtures, not a runtime allowlist or
+proof of the effect under contention. ResMan authorizes weighted I/O from
+observed capabilities and a successful owned live startup probe on every
+configured device. Distribution, systemd and kernel identities remain diagnostic
+provenance and never substitute for that proof.
+
+## Runtime acceptance and effect qualification
+
+The read-only classifier can report only a `probe_candidate`: the root exposes
+the `io` controller and exactly one mechanism is active for the device. It does
+not require `io.weight` or `io.bfq.weight` to exist before systemd materializes
+the controller. The owned adapter probe then programs and resets a non-default
+value and verifies the exact `MAJ:MIN` entry. A host that passes that complete
+probe is `functionally_accepted`, regardless of its software identity.
+
+`effect_qualified` is a narrower evidence label. It requires the packaged daemon
+and public configuration to demonstrate the intended relative delivery under a
+controlled sibling-slice contention workload in `resman-nq6.40.5`. It applies
+only to the exact representative and mechanism exercised by that evidence. A
+functionally accepted but not effect-qualified host is allowed to use the
+feature, but documentation, release notes and runtime observability must say that
+its delivery effect is not qualified. The tables below do not confer the
+`effect_qualified` label because their probes did not run ResMan or a contention
+workload.
 
 ## RHCK baseline characterization
 
@@ -24,7 +44,7 @@ retained in
 
 Each guest began from the pinned Oracle image, installed `kernel`, explicitly
 selected the newest `kernel-core` BLS entry, rebooted and proved that the running
-`/boot/vmlinuz-$(uname -r)` belonged to that RHCK package. All qualified boots
+`/boot/vmlinuz-$(uname -r)` belonged to that RHCK package. All characterized boots
 used cgroup v2.
 
 All three systemd versions exposed `IODeviceWeight` as `a(st)`, accepted and

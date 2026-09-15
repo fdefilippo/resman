@@ -130,6 +130,9 @@ func (c *IODeviceWeightCapabilityClassifier) resolveDevice(number IODeviceWeight
 	if len(slaves) != 0 {
 		return ioDeviceWeightResolvedDevice{}, newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("stacked or fan-out block topology has %d request-queue parents", len(slaves)))
 	}
+	if err := c.rejectUnsupportedHolders(resolved, requested); err != nil {
+		return ioDeviceWeightResolvedDevice{}, err
+	}
 	queue, err := c.io.stat(filepath.Join(resolved, "queue"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -176,6 +179,46 @@ func (c *IODeviceWeightCapabilityClassifier) resolveDevice(number IODeviceWeight
 		},
 		sysfs: resolved,
 	}, nil
+}
+
+func (c *IODeviceWeightCapabilityClassifier) rejectUnsupportedHolders(devicePath, requested string) error {
+	holders, err := c.io.readDir(filepath.Join(devicePath, "holders"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device holders topology is unavailable"))
+		}
+		return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect request-queue holders: %w", err))
+	}
+	for _, holder := range holders {
+		holderPath, resolveErr := c.io.evalSymlinks(filepath.Join(devicePath, "holders", holder.Name()))
+		if resolveErr != nil {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("resolve holder %s: %w", holder.Name(), resolveErr))
+		}
+		holderPath = filepath.Clean(holderPath)
+		if !pathWithin(c.io.sysRoot, holderPath) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("holder %s escapes %s", holderPath, c.io.sysRoot))
+		}
+		if _, statErr := c.io.stat(filepath.Join(holderPath, "md")); statErr == nil {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device is a member of RAID holder %s", holder.Name()))
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("inspect holder %s RAID marker: %w", holder.Name(), statErr))
+		}
+		uuid, readErr := c.io.readFile(filepath.Join(holderPath, "dm", "uuid"))
+		if errors.Is(readErr, os.ErrNotExist) {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device has unmodeled holder %s", holder.Name()))
+		}
+		if readErr != nil {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonEvidenceUnavailable, requested, fmt.Errorf("read holder %s device-mapper identity: %w", holder.Name(), readErr))
+		}
+		normalizedUUID := strings.ToLower(strings.TrimSpace(string(uuid)))
+		if strings.HasPrefix(normalizedUUID, "mpath-") {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device is a member of multipath holder %s", holder.Name()))
+		}
+		if !strings.HasPrefix(normalizedUUID, "lvm-") {
+			return newIODeviceWeightCapabilityError(IODeviceWeightReasonAmbiguousTopology, requested, fmt.Errorf("device has unmodeled device-mapper holder %s", holder.Name()))
+		}
+	}
+	return nil
 }
 
 func approvedDirectIODevice(sysfsPath, name string) bool {

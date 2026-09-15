@@ -16,8 +16,8 @@ import (
 type IODeviceWeightCapabilityOutcome string
 
 const (
-	IODeviceWeightSupportedActive      IODeviceWeightCapabilityOutcome = "supported_active"
-	IODeviceWeightSupportedInactive    IODeviceWeightCapabilityOutcome = "supported_inactive"
+	IODeviceWeightProbeCandidate       IODeviceWeightCapabilityOutcome = "probe_candidate"
+	IODeviceWeightMechanismInactive    IODeviceWeightCapabilityOutcome = "mechanism_inactive"
 	IODeviceWeightUnsupportedMechanism IODeviceWeightCapabilityOutcome = "unsupported_mechanism"
 	IODeviceWeightEvidenceUnavailable  IODeviceWeightCapabilityOutcome = "evidence_unavailable"
 	IODeviceWeightAmbiguousTopology    IODeviceWeightCapabilityOutcome = "ambiguous_topology"
@@ -25,7 +25,7 @@ const (
 )
 
 // IODeviceWeightCapabilityReason identifies why classification or confirmation
-// did not produce an unchanged supported-active target.
+// did not produce an unchanged probe candidate.
 type IODeviceWeightCapabilityReason string
 
 const (
@@ -98,7 +98,8 @@ const (
 // one possible kernel consumer.
 type IODeviceWeightMechanismEvidence struct {
 	Mechanism           IODeviceWeightMechanism
-	InterfaceAvailable  bool
+	ControllerAvailable bool
+	RuntimeAvailable    bool
 	SchedulerAvailable  bool
 	SchedulerSelected   bool
 	IOCostEnabled       bool
@@ -119,8 +120,9 @@ type IODeviceWeightDeviceCapability struct {
 	IOCost    IODeviceWeightMechanismEvidence
 }
 
-// IODeviceWeightQualifiedTarget is the typed handoff to the mutating adapter.
-type IODeviceWeightQualifiedTarget struct {
+// IODeviceWeightProbeTarget is the typed handoff to the owned mutating probe.
+// It does not assert that the systemd-to-kernel path works.
+type IODeviceWeightProbeTarget struct {
 	Identity  IODeviceWeightDeviceIdentity
 	Mechanism IODeviceWeightMechanism
 }
@@ -162,18 +164,19 @@ func (s IODeviceWeightCapabilitySnapshot) Devices() []IODeviceWeightDeviceCapabi
 	return append([]IODeviceWeightDeviceCapability(nil), s.devices...)
 }
 
-// QualifiedTargets returns the adapter handoff only for a completely
-// supported-active atomic device set.
-func (s IODeviceWeightCapabilitySnapshot) QualifiedTargets() []IODeviceWeightQualifiedTarget {
-	if s.outcome != IODeviceWeightSupportedActive {
+// ProbeTargets returns the adapter handoff only when the complete atomic device
+// set has one mechanism candidate per device. The adapter must still prove the
+// systemd-to-kernel path before production policy may use these targets.
+func (s IODeviceWeightCapabilitySnapshot) ProbeTargets() []IODeviceWeightProbeTarget {
+	if s.outcome != IODeviceWeightProbeCandidate {
 		return nil
 	}
-	result := make([]IODeviceWeightQualifiedTarget, 0, len(s.devices))
+	result := make([]IODeviceWeightProbeTarget, 0, len(s.devices))
 	for _, device := range s.devices {
-		if device.Outcome != IODeviceWeightSupportedActive || !validIODeviceWeightMechanism(device.Mechanism) {
+		if device.Outcome != IODeviceWeightProbeCandidate || !validIODeviceWeightMechanism(device.Mechanism) {
 			return nil
 		}
-		result = append(result, IODeviceWeightQualifiedTarget{Identity: device.Identity, Mechanism: device.Mechanism})
+		result = append(result, IODeviceWeightProbeTarget{Identity: device.Identity, Mechanism: device.Mechanism})
 	}
 	return result
 }
@@ -183,7 +186,6 @@ type ioDeviceWeightClassifierIO struct {
 	sysRoot         string
 	sysDevBlockRoot string
 	cgroupRoot      string
-	weightCgroup    string
 	devRoot         string
 	readFile        func(string) ([]byte, error)
 	readDir         func(string) ([]os.DirEntry, error)
@@ -206,7 +208,6 @@ func NewIODeviceWeightCapabilityClassifier() *IODeviceWeightCapabilityClassifier
 		sysRoot:         "/sys",
 		sysDevBlockRoot: "/sys/dev/block",
 		cgroupRoot:      defaultCgroupRoot,
-		weightCgroup:    filepath.Join(defaultCgroupRoot, "system.slice"),
 		devRoot:         "/dev",
 		readFile:        os.ReadFile,
 		readDir:         os.ReadDir,
@@ -278,24 +279,15 @@ type ioDeviceWeightMechanismEnvironment struct {
 	controllers          []byte
 	controllersAvailable bool
 	controllersErr       error
-	bfqInterface         bool
-	bfqInterfaceErr      error
 	ioCostQOS            []byte
 	ioCostQOSAvailable   bool
 	ioCostQOSErr         error
-	ioCostModel          bool
-	ioCostModelErr       error
-	ioWeightInterface    bool
-	ioWeightInterfaceErr error
 }
 
 func (c *IODeviceWeightCapabilityClassifier) readMechanismEnvironment() ioDeviceWeightMechanismEnvironment {
 	environment := ioDeviceWeightMechanismEnvironment{}
 	environment.controllers, environment.controllersAvailable, environment.controllersErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "cgroup.controllers"))
-	_, environment.bfqInterface, environment.bfqInterfaceErr = c.readOptionalFile(filepath.Join(c.io.weightCgroup, "io.bfq.weight"))
 	environment.ioCostQOS, environment.ioCostQOSAvailable, environment.ioCostQOSErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.cost.qos"))
-	_, environment.ioCostModel, environment.ioCostModelErr = c.readOptionalFile(filepath.Join(c.io.cgroupRoot, "io.cost.model"))
-	_, environment.ioWeightInterface, environment.ioWeightInterfaceErr = c.readOptionalFile(filepath.Join(c.io.weightCgroup, "io.weight"))
 	return environment
 }
 
@@ -321,13 +313,13 @@ func (c *IODeviceWeightCapabilityClassifier) classifyResolvedDevice(resolved ioD
 		result.Outcome = IODeviceWeightMechanismAmbiguous
 		result.Reason = IODeviceWeightReasonMechanismAmbiguous
 	case bfqState == IODeviceWeightMechanismStateActive:
-		result.Outcome = IODeviceWeightSupportedActive
+		result.Outcome = IODeviceWeightProbeCandidate
 		result.Mechanism = IODeviceWeightMechanismBFQ
 	case ioCostState == IODeviceWeightMechanismStateActive:
-		result.Outcome = IODeviceWeightSupportedActive
+		result.Outcome = IODeviceWeightProbeCandidate
 		result.Mechanism = IODeviceWeightMechanismIOCost
 	case bfqState == IODeviceWeightMechanismStateInactive || ioCostState == IODeviceWeightMechanismStateInactive:
-		result.Outcome = IODeviceWeightSupportedInactive
+		result.Outcome = IODeviceWeightMechanismInactive
 		result.Reason = IODeviceWeightReasonNoActiveMechanism
 	default:
 		result.Outcome = IODeviceWeightUnsupportedMechanism
@@ -350,13 +342,14 @@ func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightR
 	}
 	evidence.ObservedScheduler = strings.TrimSpace(string(scheduler))
 	evidence.SchedulerAvailable, evidence.SchedulerSelected = schedulerBFQState(evidence.ObservedScheduler)
-	evidence.InterfaceAvailable = environment.bfqInterface && environment.controllersAvailable && containsWord(string(environment.controllers), "io")
-	if environment.controllersErr != nil || environment.bfqInterfaceErr != nil {
+	evidence.ControllerAvailable = environment.controllersAvailable && containsWord(string(environment.controllers), "io")
+	evidence.RuntimeAvailable = evidence.SchedulerAvailable
+	if environment.controllersErr != nil {
 		evidence.State = IODeviceWeightMechanismStateUnavailable
-		evidence.UnavailableEvidence = firstErrorText(environment.controllersErr, environment.bfqInterfaceErr)
+		evidence.UnavailableEvidence = environment.controllersErr.Error()
 		return evidence
 	}
-	if !evidence.SchedulerAvailable || !evidence.InterfaceAvailable {
+	if !evidence.ControllerAvailable || !evidence.SchedulerAvailable {
 		evidence.State = IODeviceWeightMechanismStateUnsupported
 		return evidence
 	}
@@ -370,13 +363,14 @@ func (c *IODeviceWeightCapabilityClassifier) inspectBFQ(resolved ioDeviceWeightR
 
 func (c *IODeviceWeightCapabilityClassifier) inspectIOCost(resolved ioDeviceWeightResolvedDevice, environment ioDeviceWeightMechanismEnvironment) IODeviceWeightMechanismEvidence {
 	evidence := IODeviceWeightMechanismEvidence{Mechanism: IODeviceWeightMechanismIOCost}
-	evidence.InterfaceAvailable = environment.ioCostQOSAvailable && environment.ioCostModel && environment.ioWeightInterface && environment.controllersAvailable && containsWord(string(environment.controllers), "io")
-	if environment.controllersErr != nil || environment.ioCostQOSErr != nil || environment.ioCostModelErr != nil || environment.ioWeightInterfaceErr != nil {
+	evidence.ControllerAvailable = environment.controllersAvailable && containsWord(string(environment.controllers), "io")
+	evidence.RuntimeAvailable = environment.ioCostQOSAvailable
+	if environment.controllersErr != nil || environment.ioCostQOSErr != nil {
 		evidence.State = IODeviceWeightMechanismStateUnavailable
-		evidence.UnavailableEvidence = firstErrorText(environment.controllersErr, environment.ioCostQOSErr, environment.ioCostModelErr, environment.ioWeightInterfaceErr)
+		evidence.UnavailableEvidence = firstErrorText(environment.controllersErr, environment.ioCostQOSErr)
 		return evidence
 	}
-	if !evidence.InterfaceAvailable {
+	if !evidence.ControllerAvailable || !evidence.RuntimeAvailable {
 		evidence.State = IODeviceWeightMechanismStateUnsupported
 		return evidence
 	}
@@ -465,7 +459,7 @@ func aggregateIODeviceWeightCapability(devices []IODeviceWeightDeviceCapability)
 		IODeviceWeightMechanismAmbiguous,
 		IODeviceWeightUnsupportedMechanism,
 		IODeviceWeightEvidenceUnavailable,
-		IODeviceWeightSupportedInactive,
+		IODeviceWeightMechanismInactive,
 	} {
 		for _, device := range devices {
 			if device.Outcome == candidate {
@@ -473,7 +467,7 @@ func aggregateIODeviceWeightCapability(devices []IODeviceWeightDeviceCapability)
 			}
 		}
 	}
-	return IODeviceWeightSupportedActive, IODeviceWeightReasonNone, ""
+	return IODeviceWeightProbeCandidate, IODeviceWeightReasonNone, ""
 }
 
 func ioDeviceWeightSnapshotsEquivalent(previous, current IODeviceWeightCapabilitySnapshot) bool {
@@ -494,9 +488,9 @@ func ioDeviceWeightDeviceCapabilitiesEquivalent(before, after IODeviceWeightDevi
 	}
 	switch before.Mechanism {
 	case IODeviceWeightMechanismBFQ:
-		return before.BFQ.State == after.BFQ.State && before.BFQ.SchedulerSelected == after.BFQ.SchedulerSelected && before.BFQ.InterfaceAvailable == after.BFQ.InterfaceAvailable
+		return before.BFQ.State == after.BFQ.State && before.BFQ.SchedulerSelected == after.BFQ.SchedulerSelected && before.BFQ.ControllerAvailable == after.BFQ.ControllerAvailable && before.BFQ.RuntimeAvailable == after.BFQ.RuntimeAvailable
 	case IODeviceWeightMechanismIOCost:
-		return before.IOCost.State == after.IOCost.State && before.IOCost.IOCostEnabled == after.IOCost.IOCostEnabled && before.IOCost.InterfaceAvailable == after.IOCost.InterfaceAvailable
+		return before.IOCost.State == after.IOCost.State && before.IOCost.IOCostEnabled == after.IOCost.IOCostEnabled && before.IOCost.ControllerAvailable == after.IOCost.ControllerAvailable && before.IOCost.RuntimeAvailable == after.IOCost.RuntimeAvailable
 	default:
 		return ioDeviceWeightMechanismEvidenceEquivalent(before.BFQ, after.BFQ) && ioDeviceWeightMechanismEvidenceEquivalent(before.IOCost, after.IOCost)
 	}
@@ -504,7 +498,8 @@ func ioDeviceWeightDeviceCapabilitiesEquivalent(before, after IODeviceWeightDevi
 
 func ioDeviceWeightMechanismEvidenceEquivalent(left, right IODeviceWeightMechanismEvidence) bool {
 	return left.Mechanism == right.Mechanism &&
-		left.InterfaceAvailable == right.InterfaceAvailable &&
+		left.ControllerAvailable == right.ControllerAvailable &&
+		left.RuntimeAvailable == right.RuntimeAvailable &&
 		left.SchedulerAvailable == right.SchedulerAvailable &&
 		left.SchedulerSelected == right.SchedulerSelected &&
 		left.IOCostEnabled == right.IOCostEnabled &&
