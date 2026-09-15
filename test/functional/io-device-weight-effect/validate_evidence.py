@@ -151,8 +151,10 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
         validate_delivery(mechanism, summary["mechanisms"][mechanism], devices)
     authority = summary["authority"]
     require(authority["complete"]["coverage"] == "complete" and
+            authority["complete"]["complete_users"] >= 2 and
             authority["partial"]["coverage"] == "partial" and
-            authority["partial"]["partial_users"] >= 1 and
+            authority["partial"]["complete_users"] < authority["complete"]["complete_users"] and
+            authority["partial"]["partial_users"] > authority["complete"]["partial_users"] and
             authority["partial"]["programmed"] is True,
             "complete and partial authority paths were not both observed")
     public = summary["public_observability"]

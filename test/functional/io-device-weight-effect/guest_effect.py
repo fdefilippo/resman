@@ -74,6 +74,22 @@ def parse_metric(text, name, labels=None):
     raise KeyError("metric not found: " + name + " " + repr(labels))
 
 
+def active_metric_label(text, name, label):
+    """Return the label value of the unique active sample in a gauge vector."""
+    active = []
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([^\s{]+)(?:\{([^}]*)\})?\s+([^\s]+)", line)
+        if not match or match.group(1) != name or float(match.group(3)) != 1:
+            continue
+        labels = dict(re.findall(r'(\w+)="((?:[^"\\]|\\.)*)"', match.group(2) or ""))
+        if label in labels:
+            active.append(labels[label])
+    require(len(active) == 1, "metric has no unique active label: " + name)
+    return active[0]
+
+
 def device_evidence(devices):
     """Project internal device state into the retained JSON contract."""
     result = []
@@ -445,20 +461,34 @@ while not stop:
 
     def authority_evidence(self):
         complete_metrics = self.wait_programmed()
-        complete = {"coverage": "complete" if parse_metric(
-            complete_metrics, "resman_io_device_weight_authority_coverage", {"coverage": "complete"}) == 1 else "",
-                    "complete_users": int(parse_metric(complete_metrics,
-                                                        "resman_io_device_weight_complete_users"))}
+        complete_users = int(parse_metric(complete_metrics,
+                                          "resman_io_device_weight_complete_users"))
+        partial_users = int(parse_metric(complete_metrics,
+                                         "resman_io_device_weight_partial_users"))
+        require(complete_users >= 2, "test users did not start with complete authority")
+        complete = {"coverage": "complete", "complete_users": complete_users,
+                    "partial_users": partial_users,
+                    "aggregate_coverage": active_metric_label(
+                        complete_metrics, "resman_io_device_weight_authority_coverage", "coverage")}
         stray = "resman-iow-effect-stray.service"
         self.command("systemd-run", "--unit", stray, "--uid", self.users[0].pw_name,
                      "--slice", "system.slice", "--property=Type=exec",
                      str(self.workload_path), str(self.device_paths[0]))
         try:
-            partial_metrics = eventually(lambda: self.metrics() if parse_metric(
-                self.metrics(), "resman_io_device_weight_partial_users") >= 1 else None,
+            def partial_snapshot():
+                metrics = self.metrics()
+                if (parse_metric(metrics, "resman_io_device_weight_complete_users") <= complete_users - 1 and
+                        parse_metric(metrics, "resman_io_device_weight_partial_users") >= partial_users + 1):
+                    return metrics
+                return None
+            partial_metrics = eventually(partial_snapshot,
                 "partial authority was not published", 60)
             partial = {"coverage": "partial", "partial_users": int(parse_metric(
                 partial_metrics, "resman_io_device_weight_partial_users")),
+                       "complete_users": int(parse_metric(
+                           partial_metrics, "resman_io_device_weight_complete_users")),
+                       "aggregate_coverage": active_metric_label(
+                           partial_metrics, "resman_io_device_weight_authority_coverage", "coverage"),
                        "programmed": parse_metric(partial_metrics,
                                                   "resman_io_device_weight_programmed") == 1}
         finally:

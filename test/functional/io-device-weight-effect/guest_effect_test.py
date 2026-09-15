@@ -21,6 +21,15 @@ class GuestEffectTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             guest_effect.parse_metric(text, "resman_missing")
 
+    def test_active_metric_label_requires_one_active_sample(self):
+        text = ('resman_authority{coverage="complete"} 0\n'
+                'resman_authority{coverage="partial"} 1\n')
+        self.assertEqual(guest_effect.active_metric_label(
+            text, "resman_authority", "coverage"), "partial")
+        with self.assertRaisesRegex(RuntimeError, "unique active"):
+            guest_effect.active_metric_label(text.replace(" 0", " 1"),
+                                              "resman_authority", "coverage")
+
     def test_selected_scheduler_is_unambiguous(self):
         self.assertEqual(guest_effect.selected_scheduler("none [bfq] mq-deadline"), "bfq")
         with self.assertRaisesRegex(RuntimeError, "unique"):

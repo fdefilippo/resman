@@ -58,8 +58,11 @@ def fixture(directory):
         "devices": [{"major_minor": device, "owned_disposable": True, "identity_stable": True},
                     {"major_minor": "252:32", "owned_disposable": True, "identity_stable": True}],
         "mechanisms": mechanisms,
-        "authority": {"complete": {"coverage": "complete"},
-                      "partial": {"coverage": "partial", "partial_users": 1, "programmed": True}},
+        "authority": {"complete": {"coverage": "complete", "complete_users": 2,
+                                     "partial_users": 1, "aggregate_coverage": "partial"},
+                      "partial": {"coverage": "partial", "complete_users": 1,
+                                  "partial_users": 2, "aggregate_coverage": "partial",
+                                  "programmed": True}},
         "public_observability": {
             "prometheus": {"functionally_accepted": 1, "effect_qualified": 1,
                            "provenance": validator.PROVENANCE},
