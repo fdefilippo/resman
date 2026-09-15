@@ -156,7 +156,8 @@ var sensitivePublicFields = map[string]bool{
 }
 
 var nonEditablePublicFields = map[string]string{
-	"CPU_POINTS_FILE": "Change the policy-map path in the configuration file and restart resman; MCP map updates target the currently authoritative path only.",
+	"CPU_POINTS_FILE":     "Change the policy-map path in the configuration file and restart resman; MCP map updates target the currently authoritative path only.",
+	"IO_USER_WEIGHT_FILE": "Change the weighted-I/O map path in the configuration file and restart resman.",
 }
 
 var publicFieldRemedies = map[string]string{
@@ -220,6 +221,10 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 	"IO_READ_IOPS":                 {Minimum: number(0)},
 	"IO_WRITE_IOPS":                {Minimum: number(0)},
 	"IO_DEVICE_FILTER":             {Format: "all-or-device-number"},
+	"IO_WEIGHT_DEVICES":            {Format: "comma-separated-device-numbers"},
+	"IO_ROOT_WEIGHT":               {Minimum: number(1), Maximum: number(1000)},
+	"IO_DEFAULT_WEIGHT":            {Minimum: number(1), Maximum: number(1000)},
+	"IO_USER_WEIGHT_FILE":          {Format: "absolute-clean-path"},
 	"IO_THRESHOLD_DURATION":        {Minimum: number(0)},
 	"IO_USER_INCLUDE_LIST":         {Format: "comma-separated-regex-list"},
 	"IO_USER_EXCLUDE_LIST":         {Format: "comma-separated-regex-list"},
@@ -242,6 +247,10 @@ var specialFieldMeanings = map[string]string{
 	"CPU_POINTS_FILE":            "Absolute restart-required path to the strict direct username guarantee map.",
 	"ENABLE_PROMETHEUS":          "false creates no Prometheus listener.",
 	"IO_DEVICE_FILTER":           "all selects every eligible whole block device.",
+	"IO_WEIGHT_DEVICES":          "Empty disables weighted I/O and creates no new weight; recovered owned weights are safely restored.",
+	"IO_ROOT_WEIGHT":             "Relative per-device weight for the active user-0.slice sibling.",
+	"IO_DEFAULT_WEIGHT":          "Relative per-device weight assigned independently to each active unmapped or I/O-ineligible user slice.",
+	"IO_USER_WEIGHT_FILE":        "Absolute restart-required path to the strict direct username weight map.",
 	"IO_LIMIT_ENABLED":           "false disables I/O enforcement while observation remains available.",
 	"IO_READ_BPS":                "max disables the read-bandwidth decision and limit dimension.",
 	"IO_READ_IOPS":               "0 disables the read-IOPS decision and limit dimension.",

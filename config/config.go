@@ -33,6 +33,7 @@ import (
 	"unicode"
 
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/limithook"
 	"github.com/fdefilippo/resman/internal/operationgate"
 )
@@ -112,6 +113,11 @@ type Config struct {
 	IOWriteIOPS         int    `config:"IO_WRITE_IOPS"`         // Write IOPS limit (0 = unlimited)
 	IODeviceFilter      string `config:"IO_DEVICE_FILTER"`      // "all" or "major:minor" (default "all")
 	IOThresholdDuration int    `config:"IO_THRESHOLD_DURATION"` // Seconds to wait before activating IO limits (0 = immediate)
+	// Weighted I/O is a continuous, relative policy independent of hard limits.
+	IOWeightDevices  string `config:"IO_WEIGHT_DEVICES"`
+	IORootWeight     int    `config:"IO_ROOT_WEIGHT"`
+	IODefaultWeight  int    `config:"IO_DEFAULT_WEIGHT"`
+	IOUserWeightFile string `config:"IO_USER_WEIGHT_FILE"`
 
 	// IO User Include/Exclude Lists (regex support)
 	IOUserIncludeList []string `config:"IO_USER_INCLUDE_LIST"`
@@ -285,6 +291,10 @@ func DefaultConfig() *Config {
 		IOWriteIOPS:         500,
 		IODeviceFilter:      "all",
 		IOThresholdDuration: 0, // 0 = immediate (no duration check)
+		IOWeightDevices:     "",
+		IORootWeight:        100,
+		IODefaultWeight:     100,
+		IOUserWeightFile:    DefaultIOWeightMapPath,
 
 		IOUserIncludeList: nil,
 		IOUserExcludeList: nil,
@@ -717,6 +727,10 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"IO_WRITE_IOPS":                 setInt(func(cfg *Config, value int) { cfg.IOWriteIOPS = value }),
 	"IO_DEVICE_FILTER":              setString(func(cfg *Config, value string) { cfg.IODeviceFilter = value }),
 	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
+	"IO_WEIGHT_DEVICES":             setString(func(cfg *Config, value string) { cfg.IOWeightDevices = value }),
+	"IO_ROOT_WEIGHT":                setInt(func(cfg *Config, value int) { cfg.IORootWeight = value }),
+	"IO_DEFAULT_WEIGHT":             setInt(func(cfg *Config, value int) { cfg.IODefaultWeight = value }),
+	"IO_USER_WEIGHT_FILE":           setString(func(cfg *Config, value string) { cfg.IOUserWeightFile = value }),
 	"IO_USER_INCLUDE_LIST":          setRegexList("IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
 	"IO_USER_EXCLUDE_LIST":          setRegexList("IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
 	"AUTODETECT_PATTERNS":           setBool(func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
@@ -1065,6 +1079,22 @@ func validateConfig(cfg *Config) error {
 	// Validate IO limits
 	if !isValidIODeviceFilter(cfg.IODeviceFilter) {
 		errors = append(errors, "IO_DEVICE_FILTER must be 'all' or a 'major:minor' device number")
+	}
+	if cfg.IOWeightDevices != "" {
+		if err := ioweights.ValidateDeviceSelector(cfg.IOWeightDevices); err != nil {
+			errors = append(errors, fmt.Sprintf("IO_WEIGHT_DEVICES is invalid: %v", err))
+		}
+	}
+	if cfg.IOWeightDevices != "" || cfg.IORootWeight != 0 || cfg.IODefaultWeight != 0 || cfg.IOUserWeightFile != "" {
+		if _, err := ioweights.NewWeight(uint64(max(cfg.IORootWeight, 0))); cfg.IORootWeight < 0 || err != nil {
+			errors = append(errors, "IO_ROOT_WEIGHT must be between 1 and 1000")
+		}
+		if _, err := ioweights.NewWeight(uint64(max(cfg.IODefaultWeight, 0))); cfg.IODefaultWeight < 0 || err != nil {
+			errors = append(errors, "IO_DEFAULT_WEIGHT must be between 1 and 1000")
+		}
+		if _, err := ioweights.NewPolicyMapPath(cfg.IOUserWeightFile); err != nil {
+			errors = append(errors, fmt.Sprintf("IO_USER_WEIGHT_FILE is invalid: %v", err))
+		}
 	}
 	if cfg.IOEnabled {
 		if cfg.IOThreshold < 1 || cfg.IOThreshold > 100 {
@@ -2048,6 +2078,34 @@ func (c *Config) GetIODeviceFilter() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IODeviceFilter
+}
+
+// GetIOWeightDevices returns the canonical explicit weighted-I/O selector.
+func (c *Config) GetIOWeightDevices() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOWeightDevices
+}
+
+// GetIORootWeight returns the relative weight for user-0.slice.
+func (c *Config) GetIORootWeight() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IORootWeight
+}
+
+// GetIODefaultWeight returns the per-slice weight for unmapped or ineligible users.
+func (c *Config) GetIODefaultWeight() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IODefaultWeight
+}
+
+// GetIOUserWeightFile returns the strict per-user weighted-I/O map path.
+func (c *Config) GetIOUserWeightFile() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IOUserWeightFile
 }
 
 // GetIOThresholdDuration returns the IO threshold duration in seconds.

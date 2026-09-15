@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -30,6 +31,43 @@ func NewWeight(value uint64) (Weight, error) {
 		return 0, fmt.Errorf("weighted I/O value %d is outside 1..1000", value)
 	}
 	return Weight(value), nil
+}
+
+// ValidateDeviceSelector validates the default-empty public major:minor list.
+func ValidateDeviceSelector(selector string) error {
+	if selector == "" {
+		return nil
+	}
+	seen := make(map[uint64]struct{})
+	for _, part := range strings.Split(selector, ",") {
+		if strings.TrimSpace(part) != part {
+			return fmt.Errorf("weighted I/O device %q has surrounding whitespace", part)
+		}
+		fields := strings.Split(part, ":")
+		if len(fields) != 2 {
+			return fmt.Errorf("weighted I/O device %q must use major:minor", part)
+		}
+		components := [2]uint64{}
+		for index, field := range fields {
+			value, err := strconv.ParseUint(field, 10, 32)
+			if err != nil || strconv.FormatUint(value, 10) != field {
+				return fmt.Errorf("weighted I/O device %q is not canonical", part)
+			}
+			components[index] = value
+		}
+		if components[0] == 0 && components[1] == 0 {
+			return fmt.Errorf("weighted I/O device 0:0 is invalid")
+		}
+		encoded := unix.Mkdev(uint32(components[0]), uint32(components[1]))
+		if uint64(unix.Major(encoded)) != components[0] || uint64(unix.Minor(encoded)) != components[1] {
+			return fmt.Errorf("weighted I/O device %q exceeds dev_t", part)
+		}
+		if _, duplicate := seen[encoded]; duplicate {
+			return fmt.Errorf("weighted I/O device %q is duplicated", part)
+		}
+		seen[encoded] = struct{}{}
+	}
+	return nil
 }
 
 // Value returns the public integer representation.

@@ -781,6 +781,49 @@ func TestWatcherTreatsMainConfigAndCPUPointsMapAsOneCandidateEpoch(t *testing.T)
 	}
 }
 
+func TestWatcherTreatsEnabledIODeviceWeightMapAsPartOfTheCandidateEpoch(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "resman.conf")
+	cpuMapPath := filepath.Join(dir, "cpu-points.map")
+	ioMapPath := filepath.Join(dir, "io-weights.map")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(cpuMapPath, "[resman-cpu-points-map-v1]\n")
+	write(ioMapPath, "[resman-io-weights-map-v1]\nalice=700\n")
+	write(configPath, fmt.Sprintf("CPU_POINTS_FILE=%s\nIO_WEIGHT_DEVICES=8:0\nIO_USER_WEIGHT_FILE=%s\n", cpuMapPath, ioMapPath))
+	initial := DefaultConfig()
+	initial.CPUPointsFile = cpuMapPath
+	initial.IOWeightDevices = "8:0"
+	initial.IOUserWeightFile = ioMapPath
+	handler := &compositeConfigChangeHandler{outcome: ReloadApplyOutcome{Published: true, Processed: true}}
+	watcher, err := NewWatcher(configPath, initial, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Stop() })
+
+	write(ioMapPath, "[resman-io-weights-map-v1]\nalice=800\n")
+	if err := watcher.Reload(context.Background()); err != nil {
+		t.Fatalf("weighted-I/O map-only Reload() error = %v", err)
+	}
+	if handler.calls != 1 {
+		t.Fatalf("weighted-I/O map-only candidate calls = %d, want 1", handler.calls)
+	}
+	if err := os.Remove(ioMapPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot read weighted-I/O map") {
+		t.Fatalf("deleted weighted-I/O map Reload() error = %v", err)
+	}
+}
+
 func TestWatcherRevisionBoundReloadRejectsEitherSourceBeforeAndDuringApply(t *testing.T) {
 	directory := t.TempDir()
 	configPath := filepath.Join(directory, "resman.conf")

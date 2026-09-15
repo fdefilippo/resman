@@ -37,6 +37,8 @@ const (
 	LegacyMetricsDBPath = "/etc/resman/metrics.db"
 	// DefaultCPUPointsMapPath is the authoritative direct username guarantee map.
 	DefaultCPUPointsMapPath = "/etc/resman/cpu-points.map"
+	// DefaultIOWeightMapPath is the authoritative per-user weighted-I/O map.
+	DefaultIOWeightMapPath = "/etc/resman/io-weights.map"
 )
 
 type diskLayout struct {

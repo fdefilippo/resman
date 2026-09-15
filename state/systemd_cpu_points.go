@@ -447,6 +447,10 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 	m.systemdCPUPlanSignature = ""
 	m.systemdResourcesRequested = false
 	m.systemdResourceUnits = make(map[int]systemdunit.UnitIdentity)
+	m.ioWeightUnits = make(map[int]systemdunit.UnitIdentity)
+	m.ioWeightStatus.Programmed = false
+	m.ioWeightStatus.ReadBack = false
+	m.ioWeightStatus.PartialUsers = 0
 	m.requestedCPUUsers = make(map[int]bool)
 	m.activeUsers = make(map[int]bool)
 	m.userLimitedAt = make(map[int]time.Time)

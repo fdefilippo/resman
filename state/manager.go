@@ -32,6 +32,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/configepoch"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/limithook"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/systemdunit"
@@ -92,6 +93,15 @@ type Manager struct {
 	systemdResourcesRequested  bool
 	systemdResourceUnits       map[int]systemdunit.UnitIdentity
 	resolveSystemdIODevices    func(string) ([]string, error)
+	systemdIOWeights           SystemdIODeviceWeightAdapter
+	ioWeightClassifier         IODeviceWeightClassifier
+	ioWeightPolicy             ioweights.PolicySnapshot
+	ioWeightCapability         systemdunit.IODeviceWeightCapabilitySnapshot
+	ioWeightStatus             IODeviceWeightStatus
+	ioWeightUnits              map[int]systemdunit.UnitIdentity
+	ioWeightProbeCancel        context.CancelFunc
+	ioWeightProbeToken         uint64
+	ioWeightUnavailableCycles  int
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -283,6 +293,7 @@ func NewManager(
 		cpuPointsUserSnapshots:    make(map[int]resmanmetrics.CPUPointsUserSnapshot),
 		systemdCPUSlices:          make(map[int]systemdunit.UnitIdentity),
 		systemdResourceUnits:      make(map[int]systemdunit.UnitIdentity),
+		ioWeightUnits:             make(map[int]systemdunit.UnitIdentity),
 		resolveSystemdIODevices:   systemdunit.ResolveBlockDevices,
 		enforcementStatus: cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeObservationOnly,
@@ -639,6 +650,15 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	)
 	m.mu.Lock()
 	m.cfg = newConfig
+	if oldConfig == nil || oldConfig.GetIOWeightDevices() != newConfig.GetIOWeightDevices() {
+		m.ioWeightCapability = systemdunit.IODeviceWeightCapabilitySnapshot{}
+		m.ioWeightStatus.State = IODeviceWeightRequestedPending
+		m.ioWeightStatus.Reason = "configuration_changed"
+		m.ioWeightStatus.Selector = newConfig.GetIOWeightDevices()
+		m.ioWeightStatus.Programmed = len(m.ioWeightUnits) > 0
+		m.ioWeightStatus.ReadBack = false
+		m.ioWeightUnavailableCycles = 0
+	}
 	if processPolicyChanged {
 		m.previousIOEligibleUsers = make(map[int]struct{})
 		m.prevIOTime = time.Time{}
@@ -656,6 +676,13 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 // BeginConfigUpdate starts an exclusive configuration epoch update. Component
 // callbacks may perform I/O because the epoch barrier does not remain locked.
 func (m *Manager) BeginConfigUpdate() func() {
+	m.mu.Lock()
+	cancel := m.ioWeightProbeCancel
+	m.ioWeightProbeCancel = nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return m.epoch.BeginUpdate()
 }
 

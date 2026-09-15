@@ -1,0 +1,5 @@
+[resman-io-weights-map-v1]
+# Direct username-to-weight mappings use the injective public 1..1000 domain.
+# Unmapped, excluded and otherwise ineligible active slices receive
+# IO_DEFAULT_WEIGHT independently.
+# alice=700

@@ -982,6 +982,29 @@ func TestValidateConfigRejectsInvalidCPUPointsAndTimeouts(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRejectsInvalidIODeviceWeightPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "all selector", mutate: func(cfg *Config) { cfg.IOWeightDevices = "all" }},
+		{name: "path selector", mutate: func(cfg *Config) { cfg.IOWeightDevices = "/dev/vda" }},
+		{name: "duplicate selector", mutate: func(cfg *Config) { cfg.IOWeightDevices = "8:0,8:0" }},
+		{name: "zero root", mutate: func(cfg *Config) { cfg.IORootWeight = 0 }},
+		{name: "default above domain", mutate: func(cfg *Config) { cfg.IODefaultWeight = 1001 }},
+		{name: "relative map path", mutate: func(cfg *Config) { cfg.IOUserWeightFile = "io-weights.map" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			test.mutate(cfg)
+			if err := validateConfig(cfg); err == nil {
+				t.Fatal("validateConfig() unexpectedly succeeded")
+			}
+		})
+	}
+}
+
 func TestValidateConfigReportsEveryBaseCPUPointsBudgetTermOnce(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CPUReservePoints = 900

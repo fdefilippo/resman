@@ -41,8 +41,7 @@ func TestSystemdIOWeightCannotBecomeProductionPolicyThroughAliases(t *testing.T)
 		{"concatenated aliases", `const prefix = "IO"; const suffix = "Weight"; const property = prefix + suffix; func apply(){ systemdunit.NewPropertyAssignment(property, 100) }`},
 		{"inventory selected indirectly", `func apply(){ name := ioSystemdProperties[0]; systemdunit.NewPropertyAssignment(name, 100) }`},
 		{"device-weight constructor", `func apply(){ systemdunit.NewIODeviceWeightAssignment(nil) }`},
-		{"device-weight request", `var request = systemdunit.IODeviceWeightRequest{}`},
-		{"startup requirement field", `func apply(requirements *systemdunit.StartupRequirements){ requirements.IODeviceWeights = nil }`},
+		{"device-weight probe", `func apply(adapter *systemdunit.Adapter){ adapter.ProbeIODeviceWeights(nil, nil) }`},
 		{"device-weight property", `func apply(){ systemdunit.NewDevicePropertyAssignment(systemdunit.PropertyIODeviceWeight, nil) }`},
 		{"raw device-weight property", `func apply(){ systemdunit.NewDevicePropertyAssignment("IODeviceWeight", nil) }`},
 		{"concatenated device-weight property", `const middle = "Device"; func apply(){ systemdunit.NewDevicePropertyAssignment(systemdunit.PropertyName("IO" + middle + "Weight"), nil) }`},
@@ -62,6 +61,44 @@ func TestSystemdIOWeightCannotBecomeProductionPolicyThroughAliases(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestSystemdIODeviceWeightPolicyAllowsOnlyTypedMutationAndRestore(t *testing.T) {
+	const approved = `package state
+import systemdunit "github.com/fdefilippo/resman/internal/systemdunit"
+func apply(m *Manager, ctx context.Context, identity systemdunit.UnitIdentity) {
+ requests := []systemdunit.IODeviceWeightRequest{}
+ _, _ = systemdunit.NewIODeviceWeightAssignment(requests)
+ _ = m.systemdIOWeights.ProbeIODeviceWeights(ctx, nil)
+ _, _ = m.systemdIOWeights.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyIODeviceWeight})
+}`
+	root := newCheckerFixture(t)
+	writeFixture(t, root, systemdResourcePolicyPath, ioRestoreFixture)
+	writeFixture(t, root, systemdIOWeightPolicyPath, approved)
+	if result := inspectSystemdBoundaryFixture(t, root); len(result.findings) != 0 {
+		t.Fatalf("typed weighted-I/O policy was rejected: %+v", result.findings)
+	}
+
+	root = newCheckerFixture(t)
+	writeFixture(t, root, systemdResourcePolicyPath, ioRestoreFixture)
+	writeFixture(t, root, systemdIOWeightPolicyPath, approved+`
+func escape(){ systemdunit.NewDevicePropertyAssignment(systemdunit.PropertyIODeviceWeight, nil) }
+`)
+	if result := inspectSystemdBoundaryFixture(t, root); len(result.findings) == 0 {
+		t.Fatal("raw device-weight construction escaped from the authorized policy file")
+	}
+}
+
+func TestSystemdIODeviceWeightDataMayCrossReadOnlyBoundaries(t *testing.T) {
+	root := newCheckerFixture(t)
+	writeFixture(t, root, systemdResourcePolicyPath, ioRestoreFixture)
+	writeFixture(t, root, "metrics/status.go", `package metrics
+import systemdunit "github.com/fdefilippo/resman/internal/systemdunit"
+type Status struct { Request systemdunit.IODeviceWeightRequest }
+`)
+	if result := inspectSystemdBoundaryFixture(t, root); len(result.findings) != 0 {
+		t.Fatalf("typed read-only data was mistaken for mutation authority: %+v", result.findings)
 	}
 }
 

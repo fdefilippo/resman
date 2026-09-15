@@ -35,35 +35,44 @@ type systemdPropertyRestoreCall struct {
 }
 
 type fakeSystemdCPUUnitAdapter struct {
-	mu                sync.Mutex
-	topology          systemdunit.TopologySnapshot
-	applies           []systemdCPUApplyCall
-	restores          []string
-	propertyRestores  []systemdPropertyRestoreCall
-	inactiveClean     []string
-	owned             map[string]systemdunit.UnitIdentity
-	activeProperties  map[string]map[systemdunit.PropertyName]bool
-	failApplyUnit     string
-	failRestoreUnit   string
-	applyHook         func(string)
-	reconcileError    error
-	discoverError     error
-	authority         map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
-	authorityError    map[systemdunit.ResourceKind]error
-	resourceChecks    []systemdResourceCheckCall
-	authorityChecks   int
-	authorityHook     func(int)
-	authorityCounts   map[int]int
-	confirmCalls      int
-	confirmHook       func(int)
-	confirmError      error
-	confirmedApplied  []string
-	confirmApplyErr   map[string]error
-	confirmStarted    chan struct{}
-	confirmProceed    chan struct{}
-	closed            bool
-	inventoryCaptures int
-	inventoryDetails  []bool
+	mu                 sync.Mutex
+	topology           systemdunit.TopologySnapshot
+	applies            []systemdCPUApplyCall
+	restores           []string
+	propertyRestores   []systemdPropertyRestoreCall
+	inactiveClean      []string
+	owned              map[string]systemdunit.UnitIdentity
+	activeProperties   map[string]map[systemdunit.PropertyName]bool
+	failApplyUnit      string
+	failRestoreUnit    string
+	applyHook          func(string)
+	reconcileError     error
+	discoverError      error
+	authority          map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
+	authorityError     map[systemdunit.ResourceKind]error
+	resourceChecks     []systemdResourceCheckCall
+	authorityChecks    int
+	authorityHook      func(int)
+	authorityCounts    map[int]int
+	confirmCalls       int
+	confirmHook        func(int)
+	confirmError       error
+	confirmedApplied   []string
+	confirmApplyErr    map[string]error
+	confirmStarted     chan struct{}
+	confirmProceed     chan struct{}
+	closed             bool
+	inventoryCaptures  int
+	inventoryDetails   []bool
+	ioWeightProbeCalls int
+	ioWeightProbeError error
+}
+
+func (a *fakeSystemdCPUUnitAdapter) ProbeIODeviceWeights(_ context.Context, _ []systemdunit.IODeviceWeightProbeTarget) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ioWeightProbeCalls++
+	return a.ioWeightProbeError
 }
 
 type systemdPlanCaptureLogger struct {

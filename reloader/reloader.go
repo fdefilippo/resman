@@ -24,6 +24,7 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/logging"
 )
 
@@ -37,6 +38,11 @@ type cpuPointsStateManager interface {
 	CurrentCPUPointsPolicy() cpupoints.PolicySnapshot
 	ReconcileCPUPointsPolicy(cpupoints.PolicySnapshot, cpupoints.PolicySnapshot) error
 	PublishCPUPointsPolicy(cpupoints.PolicySnapshot)
+}
+
+type ioWeightsStateManager interface {
+	CurrentIODeviceWeightPolicy() ioweights.PolicySnapshot
+	PublishIODeviceWeightPolicy(ioweights.PolicySnapshot)
 }
 
 type cgroupConfigManager interface {
@@ -60,6 +66,7 @@ type Reloader struct {
 	applying         atomic.Bool
 	policyLoader     *cpupoints.PolicyLoader
 	identityResolver cpupoints.ExactIdentityResolver
+	ioWeightLoader   *ioweights.PolicyLoader
 }
 
 // NewReloader creates a configuration reloader.
@@ -79,6 +86,7 @@ func NewReloader(
 		logger:           logger,
 		policyLoader:     cpupoints.NewPolicyLoader(),
 		identityResolver: cpupoints.NSSIdentityResolver{},
+		ioWeightLoader:   ioweights.NewPolicyLoader(),
 	}
 	if len(hooks) > 0 {
 		reloader.applyHook = hooks[0]
@@ -187,6 +195,35 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 		outcome.Err = err
 		return outcome
 	}
+	ioRoot, err := ioweights.NewWeight(uint64(newConfig.GetIORootWeight()))
+	if err != nil {
+		outcome.Err = fmt.Errorf("build weighted-I/O candidate root weight: %w", err)
+		return outcome
+	}
+	ioDefault, err := ioweights.NewWeight(uint64(newConfig.GetIODefaultWeight()))
+	if err != nil {
+		outcome.Err = fmt.Errorf("build weighted-I/O candidate default weight: %w", err)
+		return outcome
+	}
+	ioCandidate := ioweights.NewEmptyPolicySnapshot(ioRoot, ioDefault)
+	ioSourceLoaded := false
+	if newConfig.GetIOWeightDevices() != "" {
+		ioMapPath, pathErr := ioweights.NewPolicyMapPath(newConfig.GetIOUserWeightFile())
+		if pathErr != nil {
+			outcome.Err = fmt.Errorf("build weighted-I/O candidate map path: %w", pathErr)
+			return outcome
+		}
+		ioCandidate, err = r.ioWeightLoader.Load(ioweights.PolicyInputs{Root: ioRoot, Default: ioDefault, MapPath: ioMapPath}, r.identityResolver)
+		if err != nil {
+			outcome.Err = fmt.Errorf("load weighted-I/O candidate: %w", err)
+			return outcome
+		}
+		ioSourceLoaded = true
+		if err := r.ioWeightLoader.ConfirmSource(ioCandidate.Source()); err != nil {
+			outcome.Err = err
+			return outcome
+		}
+	}
 
 	finishEpochUpdate := r.stateManager.BeginConfigUpdate()
 	defer finishEpochUpdate()
@@ -196,13 +233,18 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 		return outcome
 	}
 	oldPolicy := policyManager.CurrentCPUPointsPolicy()
+	ioPolicyManager, supportsIOWeights := r.stateManager.(ioWeightsStateManager)
+	if newConfig.GetIOWeightDevices() != "" && !supportsIOWeights {
+		outcome.Err = fmt.Errorf("state manager does not support weighted-I/O policy publication")
+		return outcome
+	}
 	if err := policyManager.ReconcileCPUPointsPolicy(candidate, oldPolicy); err != nil {
 		outcome.Processed = !isCPUPointsPreflightError(err)
 		outcome.Err = err
 		return outcome
 	}
 
-	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source()); err != nil {
+	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source(), r.ioWeightLoader, ioCandidate.Source(), ioSourceLoaded); err != nil {
 		restoreErr := policyManager.ReconcileCPUPointsPolicy(oldPolicy, oldPolicy)
 		outcome.Processed = false
 		outcome.Err = errors.Join(err, restoreErr)
@@ -210,7 +252,7 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 	}
 
 	applyErrors := r.applyEffectiveConfig(newConfig)
-	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source()); err != nil {
+	if err := confirmCompositeSources(confirm, r.policyLoader, candidate.Source(), r.ioWeightLoader, ioCandidate.Source(), ioSourceLoaded); err != nil {
 		rollbackErrors := r.applyEffectiveConfig(currentConfig)
 		restoreErr := policyManager.ReconcileCPUPointsPolicy(oldPolicy, oldPolicy)
 		outcome.Processed = false
@@ -219,6 +261,9 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 	}
 
 	policyManager.PublishCPUPointsPolicy(candidate)
+	if supportsIOWeights {
+		ioPolicyManager.PublishIODeviceWeightPolicy(ioCandidate)
+	}
 	outcome.Published = true
 	outcome.Processed = true
 	reloadErrors = append(reloadErrors, applyErrors...)
@@ -226,12 +271,15 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 	return outcome
 }
 
-func confirmCompositeSources(confirm config.ReloadSourceConfirmation, loader *cpupoints.PolicyLoader, source cpupoints.PolicySource) error {
+func confirmCompositeSources(confirm config.ReloadSourceConfirmation, loader *cpupoints.PolicyLoader, source cpupoints.PolicySource, ioLoader *ioweights.PolicyLoader, ioSource ioweights.PolicySource, confirmIO bool) error {
 	var errs []error
 	if confirm != nil {
 		errs = append(errs, confirm())
 	}
 	errs = append(errs, loader.ConfirmSource(source))
+	if confirmIO {
+		errs = append(errs, ioLoader.ConfirmSource(ioSource))
+	}
 	return errors.Join(errs...)
 }
 

@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	ControlCycleTriggerInitial = "initial"
-	ControlCycleTriggerTicker  = "ticker"
-	ControlCycleTriggerManual  = "manual"
+	ControlCycleTriggerInitial  = "initial"
+	ControlCycleTriggerTicker   = "ticker"
+	ControlCycleTriggerManual   = "manual"
+	ControlCycleTriggerIOWeight = "io_weight_activation"
 )
 
 type controlCycleContext struct {
@@ -49,6 +50,7 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "reconcile_cpu_points", run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
 	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
 	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
+	{name: "reconcile_io_weights", run: (*Manager).stageReconcileIODeviceWeights, continueAfterError: true},
 	{name: "make_decision", run: (*Manager).stageMakeDecision},
 	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
 	{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
@@ -185,7 +187,7 @@ func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	nextEnd := run.cfg.GetNextBlackoutEnd()
 	if nextEnd != nil {
 		m.mu.RLock()
-		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0
+		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0 || m.ioWeightStatus.Programmed
 		m.mu.RUnlock()
 		if limitsNeedDeactivation {
 			if err := m.deactivateLimits(); err != nil {

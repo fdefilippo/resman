@@ -12,6 +12,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	"github.com/fdefilippo/resman/internal/cpupoints"
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/mcp"
 	"github.com/fdefilippo/resman/metrics"
@@ -238,6 +239,30 @@ func (a *App) WithStateManager() *App {
 			)
 		}
 	}
+	rootWeight, err := ioweights.NewWeight(uint64(a.cfg.GetIORootWeight()))
+	if err != nil {
+		return a.failWeightedIOStartup("invalid weighted-I/O root weight", err)
+	}
+	defaultWeight, err := ioweights.NewWeight(uint64(a.cfg.GetIODefaultWeight()))
+	if err != nil {
+		return a.failWeightedIOStartup("invalid weighted-I/O default weight", err)
+	}
+	weightPolicy := ioweights.NewEmptyPolicySnapshot(rootWeight, defaultWeight)
+	if a.cfg.GetIOWeightDevices() != "" {
+		weightMapPath, pathErr := ioweights.NewPolicyMapPath(a.cfg.GetIOUserWeightFile())
+		if pathErr != nil {
+			return a.failWeightedIOStartup("invalid weighted-I/O map path", pathErr)
+		}
+		weightPolicy, err = ioweights.NewPolicyLoader().Load(ioweights.PolicyInputs{
+			Root: rootWeight, Default: defaultWeight, MapPath: weightMapPath,
+		}, ioweights.NSSIdentityResolver{})
+		if err != nil {
+			return a.failWeightedIOStartup("load weighted-I/O policy", err)
+		}
+	}
+	if systemdAdapter != nil {
+		options = append(options, state.WithSystemdIODeviceWeights(systemdAdapter, systemdunit.NewIODeviceWeightCapabilityClassifier(), weightPolicy))
+	}
 
 	stateManager, err := state.NewManager(
 		a.cfg,
@@ -256,6 +281,13 @@ func (a *App) WithStateManager() *App {
 		return a
 	}
 	a.stateManager = stateManager
+	return a
+}
+
+func (a *App) failWeightedIOStartup(operation string, err error) *App {
+	a.logger.Error("Weighted-I/O policy startup rejected", "operation", operation, "error", err)
+	fmt.Fprintf(os.Stderr, "\nWeighted-I/O policy startup rejected: %s: %v\n", operation, err)
+	a.err = NewPermanentStartupError(fmt.Errorf("%s: %w", operation, err))
 	return a
 }
 

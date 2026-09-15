@@ -140,16 +140,19 @@ type Watcher struct {
 	onChange ConfigChangeHandler
 
 	// Internal lifecycle state.
-	isRunning     bool
-	isStopped     bool
-	stopChan      chan struct{}
-	lastModTime   time.Time
-	lastFileSize  int64
-	lastDigest    [sha256.Size]byte
-	hasDigest     bool
-	mapPath       string
-	lastMapDigest [sha256.Size]byte
-	hasMapDigest  bool
+	isRunning             bool
+	isStopped             bool
+	stopChan              chan struct{}
+	lastModTime           time.Time
+	lastFileSize          int64
+	lastDigest            [sha256.Size]byte
+	hasDigest             bool
+	mapPath               string
+	lastMapDigest         [sha256.Size]byte
+	hasMapDigest          bool
+	ioWeightMapPath       string
+	lastIOWeightMapDigest [sha256.Size]byte
+	hasIOWeightMapDigest  bool
 
 	reloadObserver       ReloadObserver
 	lastAutomaticFailure [sha256.Size]byte
@@ -260,6 +263,13 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 			watcher.lastMapDigest = sha256.Sum256(mapContent)
 			watcher.hasMapDigest = true
 		}
+		if initialConfig.GetIOWeightDevices() != "" {
+			watcher.ioWeightMapPath = filepath.Clean(initialConfig.GetIOUserWeightFile())
+			if mapContent, mapErr := os.ReadFile(watcher.ioWeightMapPath); mapErr == nil {
+				watcher.lastIOWeightMapDigest = sha256.Sum256(mapContent)
+				watcher.hasIOWeightMapDigest = true
+			}
+		}
 	}
 	watcher.reloadGate <- struct{}{}
 
@@ -274,6 +284,15 @@ func NewWatcher(configPath string, initialConfig *Config, onChange ConfigChangeH
 			if err := fswatcher.Add(mapDirectory); err != nil {
 				_ = fswatcher.Close()
 				return nil, fmt.Errorf("failed to watch CPU Points map directory %s: %w", mapDirectory, err)
+			}
+		}
+	}
+	if watcher.ioWeightMapPath != "" {
+		mapDirectory := filepath.Dir(watcher.ioWeightMapPath)
+		if mapDirectory != watchPath && (watcher.mapPath == "" || mapDirectory != filepath.Dir(watcher.mapPath)) {
+			if err := fswatcher.Add(mapDirectory); err != nil {
+				_ = fswatcher.Close()
+				return nil, fmt.Errorf("failed to watch weighted-I/O map directory %s: %w", mapDirectory, err)
 			}
 		}
 	}
@@ -360,7 +379,10 @@ func (w *Watcher) watchLoop() {
 			// Ignore unrelated directory events before logging. Logging them can
 			// feed back into fsnotify when the log shares the config directory.
 			eventPath := filepath.Clean(event.Name)
-			if eventPath != w.configPath && eventPath != w.mapPath {
+			w.mu.RLock()
+			ioWeightMapPath := w.ioWeightMapPath
+			w.mu.RUnlock()
+			if eventPath != w.configPath && eventPath != w.mapPath && eventPath != ioWeightMapPath {
 				continue
 			}
 
@@ -533,6 +555,7 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 
 	w.mu.RLock()
 	running := w.isRunning
+	ioWeightMapPath := w.ioWeightMapPath
 	w.mu.RUnlock()
 	if !running {
 		return false, ErrWatcherStopped
@@ -566,6 +589,7 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	}
 	digest := sha256.Sum256(fileContent)
 	var mapDigest [sha256.Size]byte
+	var ioWeightMapDigest [sha256.Size]byte
 	var mapIdentity EditorSourceIdentity
 	if w.mapPath != "" {
 		var mapContent []byte
@@ -585,6 +609,13 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	} else if expected != nil {
 		return false, fmt.Errorf("revision-bound reload requires a CPU Points map")
 	}
+	if ioWeightMapPath != "" {
+		mapContent, mapErr := os.ReadFile(ioWeightMapPath)
+		if mapErr != nil {
+			return false, fmt.Errorf("cannot read weighted-I/O map %s: %w", ioWeightMapPath, mapErr)
+		}
+		ioWeightMapDigest = sha256.Sum256(mapContent)
+	}
 
 	// Avoid processing the same content twice. Metadata alone is insufficient:
 	// atomic replacements can preserve both size and timestamp resolution.
@@ -592,6 +623,9 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	sameContent := w.hasDigest && digest == w.lastDigest
 	if w.mapPath != "" {
 		sameContent = sameContent && w.hasMapDigest && mapDigest == w.lastMapDigest
+	}
+	if ioWeightMapPath != "" {
+		sameContent = sameContent && w.hasIOWeightMapDigest && ioWeightMapDigest == w.lastIOWeightMapDigest
 	}
 	w.mu.RUnlock()
 
@@ -653,6 +687,15 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 				return fmt.Errorf("CPU Points map %s changed during composite reload", w.mapPath)
 			}
 		}
+		if ioWeightMapPath != "" {
+			currentMap, mapErr := os.ReadFile(ioWeightMapPath)
+			if mapErr != nil {
+				return fmt.Errorf("confirm weighted-I/O map %s: %w", ioWeightMapPath, mapErr)
+			}
+			if sha256.Sum256(currentMap) != ioWeightMapDigest {
+				return fmt.Errorf("weighted-I/O map %s changed during composite reload", ioWeightMapPath)
+			}
+		}
 		return nil
 	}
 
@@ -681,6 +724,15 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	w.mu.Lock()
 	if applyOutcome.Published {
 		w.currentConfig = newConfig
+		if newConfig.GetIOWeightDevices() == "" {
+			w.ioWeightMapPath = ""
+			w.hasIOWeightMapDigest = false
+		} else if w.ioWeightMapPath == "" {
+			w.ioWeightMapPath = filepath.Clean(newConfig.GetIOUserWeightFile())
+			if content, readErr := os.ReadFile(w.ioWeightMapPath); readErr == nil {
+				ioWeightMapDigest = sha256.Sum256(content)
+			}
+		}
 	}
 	if confirmationErr == nil && applyOutcome.Processed {
 		w.lastModTime = fileInfo.ModTime()
@@ -690,6 +742,10 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 		if w.mapPath != "" {
 			w.lastMapDigest = mapDigest
 			w.hasMapDigest = true
+		}
+		if w.ioWeightMapPath != "" {
+			w.lastIOWeightMapDigest = ioWeightMapDigest
+			w.hasIOWeightMapDigest = true
 		}
 	}
 	w.mu.Unlock()

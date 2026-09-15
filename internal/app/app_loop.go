@@ -60,6 +60,9 @@ func (a *App) runControlLoop() error {
 			retentionTicker.Stop()
 		}
 	}()
+	ioWeightRetry := newIOWeightRetryController()
+	defer ioWeightRetry.Stop()
+	ioWeightRetry.Schedule(a.stateManager.AttemptIODeviceWeightCapability(a.ctx))
 
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil && !a.reportShutdownCycleCancellation(err, state.ControlCycleTriggerInitial) {
 		a.logger.Error("Error in initial control cycle",
@@ -92,11 +95,29 @@ func (a *App) runControlLoop() error {
 		case <-a.configReloaded:
 			ticker = a.refreshControlTicker(ticker, &pollingInterval)
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
+			ioWeightRetry.Reset()
+			result := a.stateManager.AttemptIODeviceWeightCapability(a.ctx)
+			ioWeightRetry.Schedule(result)
+			if result.ActivateCycle {
+				a.runIODeviceWeightActivationCycle()
+			}
+		case <-ioWeightRetry.C():
+			result := a.stateManager.AttemptIODeviceWeightCapability(a.ctx)
+			ioWeightRetry.Schedule(result)
+			if result.ActivateCycle {
+				a.runIODeviceWeightActivationCycle()
+			}
 		case psiEvent, ok := <-a.psiEventChannel():
 			if ok {
 				a.handlePSIEvent(psiEvent, &cycleComplete)
 			}
 		}
+	}
+}
+
+func (a *App) runIODeviceWeightActivationCycle() {
+	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerIOWeight); err != nil && !a.reportShutdownCycleCancellation(err, state.ControlCycleTriggerIOWeight) {
+		a.logger.Error("Error in weighted-I/O activation cycle", "error", err)
 	}
 }
 

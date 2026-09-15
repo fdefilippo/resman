@@ -14,6 +14,7 @@ const systemdUnitJournalPath = "internal/systemdunit/journal.go"
 const systemdUnitFilesPath = "internal/systemdunit/unit_files.go"
 const systemdUnitCoveragePath = "internal/systemdunit/coverage.go"
 const systemdResourcePolicyPath = "state/systemd_resources.go"
+const systemdIOWeightPolicyPath = "state/systemd_io_weights.go"
 
 func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 	result := checkResult{name: "systemd-unit-mutation-boundary"}
@@ -30,6 +31,9 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 	}
 	for _, source := range production {
 		ioRestore := systemdIORestoreException(source, &result)
+		for node := range systemdIODeviceWeightPolicyExceptions(source) {
+			ioRestore[node] = true
+		}
 		capabilityProbes := systemdCapabilityProbeExceptions(source)
 		constants := packages[path.Dir(source.path)]
 		ast.Inspect(source.file, func(node ast.Node) bool {
@@ -144,7 +148,7 @@ func checkSystemdIOWeightPolicy(source goSource, node ast.Node, allowed map[ast.
 	forbidden := false
 	switch typed := node.(type) {
 	case *ast.Ident:
-		forbidden = typed.Name == "PropertyIOWeight" || typed.Name == "PropertyIODeviceWeight" || typed.Name == "IOWeight" || strings.HasPrefix(typed.Name, "IODeviceWeight") || typed.Name == "NewIODeviceWeightAssignment" || typed.Name == "ioSystemdProperties"
+		forbidden = typed.Name == "PropertyIOWeight" || typed.Name == "PropertyIODeviceWeight" || typed.Name == "IOWeight" || typed.Name == "NewIODeviceWeightAssignment" || (typed.Name == "ProbeIODeviceWeights" && source.path != systemdIOWeightPolicyPath) || typed.Name == "ioSystemdProperties"
 	case *ast.BasicLit:
 		value, err := strconv.Unquote(typed.Value)
 		forbidden = err == nil && (value == "IOWeight" || value == "IODeviceWeight")
@@ -158,8 +162,54 @@ func checkSystemdIOWeightPolicy(source goSource, node ast.Node, allowed map[ast.
 		}
 	}
 	if forbidden {
-		result.fail(source.path, sourceLine(source, node.Pos()), "I/O weight properties are adapter-only; production policy cannot construct or acquire them outside the exact restoration inventory")
+		result.fail(source.path, sourceLine(source, node.Pos()), "I/O weight mutation is restricted to the adapter, the exact restoration inventory and the dedicated typed policy")
 	}
+}
+
+// systemdIODeviceWeightPolicyExceptions admits only the typed mutation entry
+// points used by the dedicated production policy. IODeviceWeight data types are
+// intentionally not restricted: status, persistence and public adapters must be
+// able to carry typed values without gaining authority to mutate a unit.
+func systemdIODeviceWeightPolicyExceptions(source goSource) map[ast.Node]bool {
+	allowed := map[ast.Node]bool{}
+	if source.path != systemdIOWeightPolicyPath {
+		return allowed
+	}
+	ast.Inspect(source.file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if systemdNamedSelector(call.Fun, "systemdunit", "NewIODeviceWeightAssignment") {
+			allowed[call.Fun.(*ast.SelectorExpr).Sel] = true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "ProbeIODeviceWeights" {
+			return true
+		}
+		allowed[selector.Sel] = true
+		return true
+	})
+	ast.Inspect(source.file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) != 3 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "RestoreProperties" {
+			return true
+		}
+		properties, ok := call.Args[2].(*ast.CompositeLit)
+		if !ok || !systemdPropertySlice(properties.Type) || len(properties.Elts) != 1 {
+			return true
+		}
+		property, ok := properties.Elts[0].(*ast.SelectorExpr)
+		if ok && systemdNamedSelector(property, "systemdunit", "PropertyIODeviceWeight") {
+			allowed[property.Sel] = true
+		}
+		return true
+	})
+	return allowed
 }
 
 // systemdStringDefinitions intentionally retains shadowed candidates. The gate

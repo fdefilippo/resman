@@ -284,6 +284,25 @@ func TestCPUPointsPublicKeysLandTogetherAtTheEnforcementCutover(t *testing.T) {
 	}
 }
 
+func TestIODeviceWeightPublicKeysLandTogetherAtTheRuntimeCutover(t *testing.T) {
+	want := map[string]bool{
+		"IO_WEIGHT_DEVICES":   false,
+		"IO_ROOT_WEIGHT":      false,
+		"IO_DEFAULT_WEIGHT":   false,
+		"IO_USER_WEIGHT_FILE": false,
+	}
+	for _, contract := range PublicFieldContracts() {
+		if _, exists := want[contract.Key]; exists {
+			want[contract.Key] = true
+		}
+	}
+	for key, present := range want {
+		if !present {
+			t.Errorf("%s is absent from the atomic weighted-I/O cutover", key)
+		}
+	}
+}
+
 func TestRemovedCPUAllocationContractsStayOutOfTheLiveTree(t *testing.T) {
 	root := filepath.Join("..")
 	removedCPUKeys := []string{

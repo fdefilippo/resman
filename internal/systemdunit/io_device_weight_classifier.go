@@ -138,6 +138,25 @@ type IODeviceWeightCapabilitySnapshot struct {
 	devices  []IODeviceWeightDeviceCapability
 }
 
+// NewIODeviceWeightProbeCandidateSnapshot constructs a validated immutable
+// classifier handoff for alternate read-only classifier implementations and
+// tests. Production discovery uses IODeviceWeightCapabilityClassifier.
+func NewIODeviceWeightProbeCandidateSnapshot(selector string, platform IODeviceWeightPlatformIdentity, devices []IODeviceWeightDeviceCapability) (IODeviceWeightCapabilitySnapshot, error) {
+	parsed, err := ParseIODeviceWeightDevices(selector)
+	if err != nil {
+		return IODeviceWeightCapabilitySnapshot{}, err
+	}
+	if len(parsed) != len(devices) {
+		return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O candidate has %d identities and %d device observations", len(parsed), len(devices))
+	}
+	for index, device := range devices {
+		if device.Identity.Number != parsed[index] || device.Outcome != IODeviceWeightProbeCandidate || !validIODeviceWeightMechanism(device.Mechanism) || device.Identity.DeviceNode == "" {
+			return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O candidate device %d is incomplete or does not match selector", index)
+		}
+	}
+	return newIODeviceWeightCapabilitySnapshot(canonicalIODeviceWeightSelector(parsed), platform, IODeviceWeightProbeCandidate, IODeviceWeightReasonNone, "", devices), nil
+}
+
 // Selector returns the canonical sorted major:minor selector.
 func (s IODeviceWeightCapabilitySnapshot) Selector() string { return s.selector }
 
