@@ -110,6 +110,19 @@ func ioDeviceWeightTargetsEqual(left, right []ioDeviceWeightTarget) bool {
 	return true
 }
 
+func ioDeviceWeightTargetMechanismsCompatible(left, right []ioDeviceWeightTarget) bool {
+	leftByPath := make(map[string]IODeviceWeightMechanism, len(left))
+	for _, target := range left {
+		leftByPath[target.path] = target.mechanism
+	}
+	for _, target := range right {
+		if mechanism, present := leftByPath[target.path]; present && mechanism != target.mechanism {
+			return false
+		}
+	}
+	return true
+}
+
 func validateIODeviceWeightAssignment(assignment PropertyAssignment) error {
 	if assignment.name != PropertyIODeviceWeight {
 		return nil

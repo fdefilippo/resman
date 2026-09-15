@@ -449,15 +449,16 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		key := propertyLeaseKey{identity: identity, property: assignment.name}
 		state, tracked := a.leases[key]
 		if tracked {
-			if assignment.name == PropertyIODeviceWeight && !ioDeviceWeightTargetsEqual(state.ioWeightTargets, assignment.ioDeviceWeightTargets) {
+			if assignment.name == PropertyIODeviceWeight && !ioDeviceWeightTargetMechanismsCompatible(state.ioWeightTargets, assignment.ioDeviceWeightTargets) {
 				return UnitSnapshot{}, &AdapterError{Reason: ReasonExternalConflict, Operation: "apply", Unit: identity.Name, Property: assignment.name,
-					Err: fmt.Errorf("qualified device mechanism context changed while the property lease is active")}
+					Err: fmt.Errorf("qualified mechanism changed for an existing device while the property lease is active")}
 			}
 			owned, resolved := resolveUncertainOwnership(current, state)
 			if !owned {
 				return UnitSnapshot{}, externalConflict(identity.Name, assignment.name, state.lastApplied, current)
 			}
 			state = resolved
+			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)
 		} else {
 			state = newPropertyLeaseState(assignment.name, current)
 			state.ioWeightTargets = cloneIODeviceWeightTargets(assignment.ioDeviceWeightTargets)

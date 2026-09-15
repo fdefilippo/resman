@@ -51,7 +51,7 @@ def fixture(directory):
         "provenance": validator.PROVENANCE,
         "source": {"revision": "a" * 40, "tree": "b" * 40,
                    "qualification_revision": "d" * 40, "qualification_tree": "e" * 40},
-        "package": {"identity": "resman-1.38.0-2.el9.x86_64", "sha256": "c" * 64,
+        "package": {"identity": "resman-1.38.0-3.el9.x86_64", "sha256": "c" * 64,
                     "installed_binary_matches_payload": True},
         "platform": {"id": "ol", "version_id": "9.8",
                      "manager_version": validator.MANAGER_VERSION,

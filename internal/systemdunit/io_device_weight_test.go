@@ -361,6 +361,35 @@ func TestApplyRejectsChangedIODeviceWeightMechanismOnActiveLease(t *testing.T) {
 	}
 }
 
+func TestApplyAllowsOwnedIODeviceWeightTargetSetChangesWithStableMechanisms(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	identity := identityFor(t, adapter, 1001)
+	one, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{
+		{Path: "/dev/vda", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
+		{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vdb, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vdb", Weight: 100, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, assignment := range []PropertyAssignment{one, two, vdb} {
+		if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{assignment}); err != nil {
+			t.Fatalf("Apply(%v) error = %v", assignment.DeviceLimits(), err)
+		}
+		if _, err := adapter.ConfirmApplied(context.Background(), identity, []PropertyAssignment{assignment}); err != nil {
+			t.Fatalf("ConfirmApplied(%v) error = %v", assignment.DeviceLimits(), err)
+		}
+	}
+}
+
 func TestConfirmAppliedRejectsChangedIODeviceWeightMechanism(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})

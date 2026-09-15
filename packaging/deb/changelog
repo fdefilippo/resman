@@ -1,3 +1,9 @@
+resman (1.38.0-3) stable; urgency=medium
+
+  * Preserve owned weighted-I/O leases across atomic device-selector changes.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 18:05:00 +0200
+
 resman (1.38.0-2) stable; urgency=medium
 
   * Match effect-qualification coordinates against the running D-Bus Manager.Version value.

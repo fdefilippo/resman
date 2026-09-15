@@ -52,8 +52,8 @@ manifest:
 
 ```sh
 RESMAN_IO_EFFECT_QEMU_HOST=root@terra \
-RESMAN_EL9_RPM=build/packages/resman-1.38.0-2.el9.x86_64.rpm \
-RESMAN_EL9_RPM_MANIFEST=build/packages/resman-1.38.0-2.el9.x86_64.manifest \
+RESMAN_EL9_RPM=build/packages/resman-1.38.0-3.el9.x86_64.rpm \
+RESMAN_EL9_RPM_MANIFEST=build/packages/resman-1.38.0-3.el9.x86_64.manifest \
 make test-functional-io-device-weight-effect-qemu
 ```
 

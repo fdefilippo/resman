@@ -18,7 +18,7 @@ import urllib.request
 PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
 EXPECTED_KERNEL = "5.14.0-687.46.1.el9_8.x86_64"
 EXPECTED_MANAGER = "252-67.0.1.el9_8.2"
-EXPECTED_PACKAGE = "resman-1.38.0-2.el9.x86_64"
+EXPECTED_PACKAGE = "resman-1.38.0-3.el9.x86_64"
 
 
 class Blocked(RuntimeError):
