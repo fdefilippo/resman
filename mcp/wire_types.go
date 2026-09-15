@@ -15,7 +15,33 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
+	"github.com/fdefilippo/resman/state"
 )
+
+type ioDeviceWeightPayload struct {
+	State                  string `json:"state"`
+	Reason                 string `json:"reason"`
+	Selector               string `json:"selector"`
+	ClassificationAttempts uint64 `json:"classification_attempts"`
+	ProbeAttempts          uint64 `json:"probe_attempts"`
+	Programmed             bool   `json:"programmed"`
+	ReadBack               bool   `json:"read_back"`
+	FunctionallyAccepted   bool   `json:"functionally_accepted"`
+	EffectQualified        bool   `json:"effect_qualified"`
+	PartialUsers           int    `json:"partial_users"`
+	ObservedDelivery       string `json:"observed_delivery"`
+}
+
+func newIODeviceWeightPayload(status state.IODeviceWeightStatus) ioDeviceWeightPayload {
+	return ioDeviceWeightPayload{
+		State: string(status.State), Reason: status.Reason, Selector: status.Selector,
+		ClassificationAttempts: status.ClassificationAttempts, ProbeAttempts: status.ProbeAttempts,
+		Programmed: status.Programmed, ReadBack: status.ReadBack,
+		FunctionallyAccepted: status.State == state.IODeviceWeightFunctionallyAccepted,
+		EffectQualified:      status.EffectQualified, PartialUsers: status.PartialUsers,
+		ObservedDelivery: status.ObservedDelivery,
+	}
+}
 
 type cpuPointsSystemPayload struct {
 	EnforcementMode                string  `json:"enforcement_mode"`
@@ -181,6 +207,10 @@ type resourcePolicyConfigurationPayload struct {
 	IOReadIOPS           int     `json:"io_read_iops"`
 	IOWriteIOPS          int     `json:"io_write_iops"`
 	IODeviceFilter       string  `json:"io_device_filter"`
+	IOWeightDevices      string  `json:"io_weight_devices"`
+	IORootWeight         int     `json:"io_root_weight"`
+	IODefaultWeight      int     `json:"io_default_weight"`
+	IOUserWeightFile     string  `json:"io_user_weight_file"`
 }
 
 func newResourcePolicyConfigurationPayload(hostname string, cfg *config.Config) resourcePolicyConfigurationPayload {
@@ -214,6 +244,10 @@ func newResourcePolicyConfigurationPayload(hostname string, cfg *config.Config) 
 		IOReadIOPS:           cfg.IOReadIOPS,
 		IOWriteIOPS:          cfg.IOWriteIOPS,
 		IODeviceFilter:       cfg.IODeviceFilter,
+		IOWeightDevices:      cfg.IOWeightDevices,
+		IORootWeight:         cfg.IORootWeight,
+		IODefaultWeight:      cfg.IODefaultWeight,
+		IOUserWeightFile:     cfg.IOUserWeightFile,
 	}
 }
 
@@ -361,38 +395,49 @@ func newUserHistoryRecord(record database.UserMetricsRecord) userHistoryRecord {
 }
 
 type systemHistoryRecord struct {
-	DenominatorState               string  `json:"denominator_state"`
-	EnforcementMode                string  `json:"enforcement_mode"`
-	Timestamp                      string  `json:"timestamp"`
-	SampleEpochID                  int64   `json:"sample_epoch_id"`
-	IntervalStart                  *string `json:"interval_start"`
-	IntervalEnd                    string  `json:"interval_end"`
-	TotalCPUUsage                  float64 `json:"total_cpu_usage"`
-	TotalCores                     int     `json:"total_cores"`
-	SystemLoad                     float64 `json:"system_load"`
-	CPULimitsActive                bool    `json:"cpu_limits_active"`
-	ResourceLimitsActive           bool    `json:"resource_limits_active"`
-	AnyLimitsActive                bool    `json:"any_limits_active"`
-	CPUActivelyLimitedUsersCount   int     `json:"cpu_actively_limited_users_count"`
-	ActivelyLimitedUsersCount      int     `json:"actively_limited_users_count"`
-	NominalParentPoolPoints        uint64  `json:"nominal_parent_pool_points"`
-	CPUCapacityAvailable           bool    `json:"cpu_capacity_available"`
-	OnlineCPUs                     *uint64 `json:"online_cpus"`
-	ProgrammedParentQuotaUsec      *uint64 `json:"programmed_parent_quota_usec"`
-	ProgrammedParentPeriodUsec     *uint64 `json:"programmed_parent_period_usec"`
-	CPUPointsDegraded              bool    `json:"cpu_points_degraded"`
-	AppliedGuaranteePoints         uint64  `json:"applied_guarantee_points"`
-	ProgrammedGuaranteeWeight      uint64  `json:"programmed_guarantee_weight"`
-	ConfiguredBestEffortPoints     uint64  `json:"configured_best_effort_points"`
-	ParentCPUQuota                 *string `json:"parent_cpu_quota"`
-	ProgrammedSiblingWeightSum     *uint64 `json:"programmed_sibling_weight_sum"`
-	ProgrammedBestEffortWeight     *uint64 `json:"programmed_best_effort_weight"`
-	ParentCPUUsageUsecDelta        *uint64 `json:"parent_cpu_usage_usec_delta"`
-	ObservedSiblingWeightSum       *uint64 `json:"observed_sibling_weight_sum"`
-	ConfiguredRootPoints           *uint64 `json:"configured_root_points"`
-	ParentCPUPeriodsDelta          *uint64 `json:"parent_cpu_periods_delta"`
-	ParentCPUThrottledPeriodsDelta *uint64 `json:"parent_cpu_throttled_periods_delta"`
-	ParentCPUThrottledUsecDelta    *uint64 `json:"parent_cpu_throttled_usec_delta"`
+	IODeviceWeightState                  string  `json:"io_device_weight_state"`
+	IODeviceWeightReason                 string  `json:"io_device_weight_reason"`
+	IODeviceWeightSelector               string  `json:"io_device_weight_selector"`
+	IODeviceWeightClassificationAttempts uint64  `json:"io_device_weight_classification_attempts"`
+	IODeviceWeightProbeAttempts          uint64  `json:"io_device_weight_probe_attempts"`
+	IODeviceWeightProgrammed             bool    `json:"io_device_weight_programmed"`
+	IODeviceWeightReadBack               bool    `json:"io_device_weight_read_back"`
+	IODeviceWeightFunctionallyAccepted   bool    `json:"io_device_weight_functionally_accepted"`
+	IODeviceWeightEffectQualified        bool    `json:"io_device_weight_effect_qualified"`
+	IODeviceWeightPartialUsers           int     `json:"io_device_weight_partial_users"`
+	IODeviceWeightObservedDelivery       string  `json:"io_device_weight_observed_delivery"`
+	DenominatorState                     string  `json:"denominator_state"`
+	EnforcementMode                      string  `json:"enforcement_mode"`
+	Timestamp                            string  `json:"timestamp"`
+	SampleEpochID                        int64   `json:"sample_epoch_id"`
+	IntervalStart                        *string `json:"interval_start"`
+	IntervalEnd                          string  `json:"interval_end"`
+	TotalCPUUsage                        float64 `json:"total_cpu_usage"`
+	TotalCores                           int     `json:"total_cores"`
+	SystemLoad                           float64 `json:"system_load"`
+	CPULimitsActive                      bool    `json:"cpu_limits_active"`
+	ResourceLimitsActive                 bool    `json:"resource_limits_active"`
+	AnyLimitsActive                      bool    `json:"any_limits_active"`
+	CPUActivelyLimitedUsersCount         int     `json:"cpu_actively_limited_users_count"`
+	ActivelyLimitedUsersCount            int     `json:"actively_limited_users_count"`
+	NominalParentPoolPoints              uint64  `json:"nominal_parent_pool_points"`
+	CPUCapacityAvailable                 bool    `json:"cpu_capacity_available"`
+	OnlineCPUs                           *uint64 `json:"online_cpus"`
+	ProgrammedParentQuotaUsec            *uint64 `json:"programmed_parent_quota_usec"`
+	ProgrammedParentPeriodUsec           *uint64 `json:"programmed_parent_period_usec"`
+	CPUPointsDegraded                    bool    `json:"cpu_points_degraded"`
+	AppliedGuaranteePoints               uint64  `json:"applied_guarantee_points"`
+	ProgrammedGuaranteeWeight            uint64  `json:"programmed_guarantee_weight"`
+	ConfiguredBestEffortPoints           uint64  `json:"configured_best_effort_points"`
+	ParentCPUQuota                       *string `json:"parent_cpu_quota"`
+	ProgrammedSiblingWeightSum           *uint64 `json:"programmed_sibling_weight_sum"`
+	ProgrammedBestEffortWeight           *uint64 `json:"programmed_best_effort_weight"`
+	ParentCPUUsageUsecDelta              *uint64 `json:"parent_cpu_usage_usec_delta"`
+	ObservedSiblingWeightSum             *uint64 `json:"observed_sibling_weight_sum"`
+	ConfiguredRootPoints                 *uint64 `json:"configured_root_points"`
+	ParentCPUPeriodsDelta                *uint64 `json:"parent_cpu_periods_delta"`
+	ParentCPUThrottledPeriodsDelta       *uint64 `json:"parent_cpu_throttled_periods_delta"`
+	ParentCPUThrottledUsecDelta          *uint64 `json:"parent_cpu_throttled_usec_delta"`
 }
 
 type getSystemHistoryResult struct {
@@ -404,7 +449,16 @@ type getSystemHistoryResult struct {
 
 func newSystemHistoryRecord(record database.SystemMetricsRecord) systemHistoryRecord {
 	return systemHistoryRecord{
-		DenominatorState: record.DenominatorState, EnforcementMode: record.EnforcementMode,
+		IODeviceWeightState: record.IODeviceWeightState, IODeviceWeightReason: record.IODeviceWeightReason,
+		IODeviceWeightSelector:               record.IODeviceWeightSelector,
+		IODeviceWeightClassificationAttempts: record.IODeviceWeightClassificationAttempts,
+		IODeviceWeightProbeAttempts:          record.IODeviceWeightProbeAttempts,
+		IODeviceWeightProgrammed:             record.IODeviceWeightProgrammed, IODeviceWeightReadBack: record.IODeviceWeightReadBack,
+		IODeviceWeightFunctionallyAccepted: record.IODeviceWeightFunctionallyAccepted,
+		IODeviceWeightEffectQualified:      record.IODeviceWeightEffectQualified,
+		IODeviceWeightPartialUsers:         record.IODeviceWeightPartialUsers,
+		IODeviceWeightObservedDelivery:     record.IODeviceWeightObservedDelivery,
+		DenominatorState:                   record.DenominatorState, EnforcementMode: record.EnforcementMode,
 		Timestamp:                      record.Timestamp.Format(time.RFC3339),
 		SampleEpochID:                  record.SampleEpochID,
 		IntervalStart:                  formatOptionalHistoryTime(record.IntervalStart),

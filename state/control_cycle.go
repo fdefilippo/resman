@@ -634,6 +634,14 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	if metrics.CPUPointsUsers != nil {
 		cpuPoints = &metrics.CPUPointsSystem
 	}
+	ioWeightStatus := m.GetIODeviceWeightStatus()
+	ioWeight := &resmanmetrics.IODeviceWeightExporterMetrics{
+		State: string(ioWeightStatus.State), Reason: ioWeightStatus.Reason,
+		Programmed: ioWeightStatus.Programmed, ReadBack: ioWeightStatus.ReadBack,
+		FunctionallyAccepted: ioWeightStatus.State == IODeviceWeightFunctionallyAccepted,
+		EffectQualified:      ioWeightStatus.EffectQualified, PartialUsers: ioWeightStatus.PartialUsers,
+		ObservedDelivery: ioWeightStatus.ObservedDelivery,
+	}
 
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
 		EnforcementMode:                              m.enforcementStatus.Mode,
@@ -642,6 +650,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		TotalCPUUsageAvailable:                       metrics.HostCPUUsageAvailable,
 		TotalCores:                                   metrics.TotalCores,
 		CPUPoints:                                    cpuPoints,
+		IODeviceWeight:                               ioWeight,
 		ObservedUsersCPUUsage:                        metrics.AllUsersCPUUsage,
 		ObservedUsersCount:                           metrics.AllUsersCount,
 		ObservedUsersMemoryUsage:                     metrics.AllUsersMemoryUsage,

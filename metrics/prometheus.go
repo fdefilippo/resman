@@ -128,6 +128,7 @@ type PrometheusExporter struct {
 	procFSUnavailableProcesses *prometheus.GaugeVec
 	cpuPoints                  cpuPointsPrometheusMetrics
 	configReload               configReloadPrometheusMetrics
+	ioDeviceWeight             ioDeviceWeightPrometheusMetrics
 
 	// Metrics with additional labels.
 	userCPUUsage         *prometheus.GaugeVec
@@ -573,6 +574,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 	)
 	exp.cpuPoints.register(exp.registry, namespace, staticLabels)
 	exp.configReload.register(exp.registry, namespace, staticLabels)
+	exp.ioDeviceWeight.register(exp.registry, namespace, staticLabels)
 
 	// === Metrics with dynamic labels ===
 
@@ -875,6 +877,7 @@ type SystemExporterMetrics struct {
 	TotalCPUUsageAvailable                       bool
 	TotalCores                                   int
 	CPUPoints                                    *CPUPointsSystemSnapshot
+	IODeviceWeight                               *IODeviceWeightExporterMetrics
 	ObservedUsersCPUUsage                        float64
 	ObservedUsersCount                           int
 	ObservedUsersMemoryUsage                     uint64
@@ -913,6 +916,9 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 	exp.totalCores.Set(float64(metrics.TotalCores))
 	if metrics.CPUPoints != nil {
 		exp.cpuPoints.updateSystem(*metrics.CPUPoints)
+	}
+	if metrics.IODeviceWeight != nil {
+		exp.ioDeviceWeight.update(*metrics.IODeviceWeight)
 	}
 	exp.allUsersCPUUsage.Set(metrics.ObservedUsersCPUUsage)
 	exp.allUsersCount.Set(float64(metrics.ObservedUsersCount))
@@ -1374,6 +1380,20 @@ func (exp *PrometheusExporter) RecordError(component, errorType string) {
 		return
 	}
 	exp.errorsTotal.WithLabelValues(component, errorType).Inc()
+}
+
+// IncrementIODeviceWeightClassification records one read-only capability pass.
+func (exp *PrometheusExporter) IncrementIODeviceWeightClassification() {
+	if exp != nil {
+		exp.ioDeviceWeight.classificationAttempts.Inc()
+	}
+}
+
+// IncrementIODeviceWeightProbe records one owned transient probe attempt.
+func (exp *PrometheusExporter) IncrementIODeviceWeightProbe() {
+	if exp != nil {
+		exp.ioDeviceWeight.probeAttempts.Inc()
+	}
 }
 
 // RecordLimitHookExecution records one terminal hook outcome using bounded labels.

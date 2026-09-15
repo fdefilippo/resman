@@ -574,6 +574,7 @@ func TestMCPSharedWireContractsAgreeAcrossSurfacesAndTransports(t *testing.T) {
 			expectedKeys: []string{
 				"cpu_best_effort_points", "cpu_points_file", "cpu_release_threshold", "cpu_reserve_points", "cpu_threshold", "cpu_threshold_duration",
 				"disable_swap", "enable_prometheus", "hostname", "ignore_system_load", "io_device_filter",
+				"io_default_weight", "io_root_weight", "io_user_weight_file", "io_weight_devices",
 				"io_enabled", "io_read_bps", "io_read_iops", "io_release_threshold", "io_threshold",
 				"io_threshold_duration", "io_write_bps", "io_write_iops", "polling_interval",
 				"prometheus_port", "ram_enabled", "ram_high_ratio", "ram_quota_per_user", "ram_release_threshold",
@@ -779,6 +780,7 @@ func assertCurrentStatusFields(t *testing.T, status map[string]any) {
 		"resource_limits_active",
 		"requested_policy_intent",
 		"cpu_points",
+		"io_device_weight",
 	} {
 		if _, exists := status[key]; !exists {
 			t.Errorf("status is missing %q: %+v", key, status)

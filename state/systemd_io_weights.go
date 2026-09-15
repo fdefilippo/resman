@@ -230,17 +230,24 @@ func (m *Manager) incrementIODeviceWeightClassificationAttempts() {
 	m.mu.Lock()
 	m.ioWeightStatus.ClassificationAttempts++
 	m.mu.Unlock()
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.IncrementIODeviceWeightClassification()
+	}
 }
 
 func (m *Manager) incrementIODeviceWeightProbeAttempts() {
 	m.mu.Lock()
 	m.ioWeightStatus.ProbeAttempts++
 	m.mu.Unlock()
+	if m.prometheusExporter != nil {
+		m.prometheusExporter.IncrementIODeviceWeightProbe()
+	}
 }
 
 func (m *Manager) publishIODeviceWeightCapability(state IODeviceWeightActivationState, reason, selector string, snapshot systemdunit.IODeviceWeightCapabilitySnapshot, preserveProgrammed, preserveReadback bool) {
 	m.mu.Lock()
 	status := m.ioWeightStatus
+	changed := status.State != state || status.Reason != reason
 	status.State, status.Reason, status.Selector = state, reason, selector
 	if !preserveProgrammed {
 		status.Programmed = false
@@ -252,6 +259,9 @@ func (m *Manager) publishIODeviceWeightCapability(state IODeviceWeightActivation
 	m.ioWeightStatus = status
 	m.ioWeightCapability = snapshot
 	m.mu.Unlock()
+	if changed && m.logger != nil {
+		m.logger.Info("Weighted I/O lifecycle changed", "state", state, "reason", reason, "programmed", status.Programmed, "read_back", status.ReadBack)
+	}
 }
 
 func (m *Manager) stageReconcileIODeviceWeights(run *controlCycleContext) error {

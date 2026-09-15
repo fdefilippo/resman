@@ -201,6 +201,7 @@ type systemStatusPayload struct {
 	CPULimitsAppliedTime      string                 `json:"cpu_limits_applied_time"`
 	ResourceLimitsAppliedTime string                 `json:"resource_limits_applied_time"`
 	CPUPoints                 cpuPointsSystemPayload `json:"cpu_points"`
+	IODeviceWeight            ioDeviceWeightPayload  `json:"io_device_weight"`
 }
 
 type limitsStatusPayload struct {
@@ -222,6 +223,7 @@ type limitsStatusPayload struct {
 	CPUActivelyLimitedUsers      []int                  `json:"cpu_actively_limited_users"`
 	CPUPoints                    cpuPointsSystemPayload `json:"cpu_points"`
 	CPUPointUsers                []cpuPointsUserPayload `json:"cpu_point_users"`
+	IODeviceWeight               ioDeviceWeightPayload  `json:"io_device_weight"`
 }
 
 func newSystemStatusPayload(hostname, serverRole string, observation resmanmetrics.ObservationMetrics, runtime state.RuntimeStatus) systemStatusPayload {
@@ -248,6 +250,7 @@ func newSystemStatusPayload(hostname, serverRole string, observation resmanmetri
 		CPULimitsAppliedTime:      formatOptionalTime(runtime.CPULimitsAppliedTime),
 		ResourceLimitsAppliedTime: formatOptionalTime(runtime.ResourceLimitsAppliedTime),
 		CPUPoints:                 newCPUPointsSystemPayload(runtime.CPUPoints),
+		IODeviceWeight:            newIODeviceWeightPayload(runtime.IODeviceWeight),
 	}
 }
 
@@ -270,6 +273,7 @@ func newLimitsStatusPayload(hostname, serverRole string, runtime state.RuntimeSt
 		CPUActivelyLimitedUsersCount: runtime.CPUActivelyLimitedUsersCount,
 		CPUActivelyLimitedUsers:      runtime.CPUActivelyLimitedUsers,
 		CPUPoints:                    newCPUPointsSystemPayload(runtime.CPUPoints),
+		IODeviceWeight:               newIODeviceWeightPayload(runtime.IODeviceWeight),
 		CPUPointUsers:                make([]cpuPointsUserPayload, 0, len(runtime.CPUPointUsers)),
 	}
 	for _, user := range runtime.CPUPointUsers {

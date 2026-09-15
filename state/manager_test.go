@@ -284,6 +284,8 @@ func (m *mockPrometheusExporter) RecordError(component, errorType string) {
 	defer m.mu.Unlock()
 	m.errors = append(m.errors, prometheusErrorRecord{component: component, errorType: errorType})
 }
+func (m *mockPrometheusExporter) IncrementIODeviceWeightClassification() {}
+func (m *mockPrometheusExporter) IncrementIODeviceWeightProbe()          {}
 
 func (m *mockPrometheusExporter) RecordLimitHookExecution(hookType metrics.LimitHookType, outcome metrics.LimitHookOutcome) {
 	m.mu.Lock()

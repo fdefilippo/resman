@@ -35,6 +35,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 				"actively_limited_users_count", "any_limits_active", "cpu_limits_active", "cpu_limits_applied_time",
 				"applied_enforcement_action", "cpu_points", "enforcement_block_reason", "enforcement_mode", "enforcement_reason", "hostname", "memory_usage_mb",
 				"observed_users_count", "observed_users_cpu_usage",
+				"io_device_weight",
 				"requested_policy_intent",
 				"resource_limits_active", "resource_limits_applied_time", "server_role",
 				"system_under_load", "total_cores", "total_cpu_usage", "total_cpu_usage_available",
@@ -50,6 +51,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 				"actively_limited_users", "actively_limited_users_count", "any_limits_active", "cpu_actively_limited_users",
 				"cpu_actively_limited_users_count", "cpu_limits_active", "cpu_limits_applied_time", "cpu_point_users",
 				"applied_enforcement_action", "cpu_points", "enforcement_block_reason", "enforcement_mode", "enforcement_reason", "hostname",
+				"io_device_weight",
 				"requested_policy_intent",
 				"resource_limits_active", "resource_limits_applied_time", "server_role",
 			},
@@ -74,6 +76,7 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			keys: []string{
 				"cpu_best_effort_points", "cpu_points_file", "cpu_release_threshold", "cpu_reserve_points", "cpu_threshold", "cpu_threshold_duration",
 				"disable_swap", "enable_prometheus", "hostname", "ignore_system_load", "io_device_filter",
+				"io_default_weight", "io_root_weight", "io_user_weight_file", "io_weight_devices",
 				"io_enabled", "io_read_bps", "io_read_iops", "io_release_threshold", "io_threshold",
 				"io_threshold_duration", "io_write_bps", "io_write_iops", "polling_interval",
 				"prometheus_port", "ram_enabled", "ram_high_ratio", "ram_quota_per_user", "ram_release_threshold",
@@ -134,6 +137,10 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 			assertExactJSONKeys(t, tt.value, tt.keys)
 		})
 	}
+	assertExactJSONKeys(t, newIODeviceWeightPayload(state.IODeviceWeightStatus{}), []string{
+		"classification_attempts", "effect_qualified", "functionally_accepted", "observed_delivery",
+		"partial_users", "probe_attempts", "programmed", "read_back", "reason", "selector", "state",
+	})
 
 	assertExactNestedJSONKeys(t, getUserHistoryResult{Records: []userHistoryRecord{{}}}, "records", []string{
 		"cpu_authority_coverage", "io_coverage",
@@ -148,6 +155,11 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 	})
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
 		"denominator_state", "enforcement_mode",
+		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector",
+		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
+		"io_device_weight_programmed", "io_device_weight_read_back",
+		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
+		"io_device_weight_partial_users", "io_device_weight_observed_delivery",
 		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "configured_root_points",
 		"programmed_best_effort_weight", "configured_best_effort_points", "cpu_actively_limited_users_count", "cpu_capacity_available",
 		"cpu_limits_active", "cpu_points_degraded", "observed_sibling_weight_sum", "programmed_sibling_weight_sum",
@@ -288,12 +300,19 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 	}
 	systemRecord := newSystemHistoryRecord(database.SystemMetricsRecord{
 		Timestamp: now, SampleEpochID: 7, IntervalStart: &start, IntervalEnd: now,
+		IODeviceWeightState: "refused_observation", IODeviceWeightReason: "ambiguous_topology",
+		IODeviceWeightSelector: "8:0", IODeviceWeightClassificationAttempts: 4,
+		IODeviceWeightProbeAttempts: 1, IODeviceWeightProgrammed: true,
+		IODeviceWeightPartialUsers: 2, IODeviceWeightObservedDelivery: "not_measured",
 		CPULimitsActive: true, ResourceLimitsActive: true,
 		AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 3,
 		ParentCPUUsageUsecDelta: &delta,
 	})
 	if systemRecord.Timestamp != now.Format(time.RFC3339) || systemRecord.SampleEpochID != 7 ||
 		systemRecord.CPUActivelyLimitedUsersCount != 2 || systemRecord.ActivelyLimitedUsersCount != 3 ||
+		systemRecord.IODeviceWeightState != "refused_observation" || systemRecord.IODeviceWeightReason != "ambiguous_topology" ||
+		systemRecord.IODeviceWeightClassificationAttempts != 4 || systemRecord.IODeviceWeightProbeAttempts != 1 ||
+		!systemRecord.IODeviceWeightProgrammed || systemRecord.IODeviceWeightPartialUsers != 2 ||
 		systemRecord.ParentCPUUsageUsecDelta == nil || *systemRecord.ParentCPUUsageUsecDelta != 90 {
 		t.Fatalf("system history projection = %+v", systemRecord)
 	}

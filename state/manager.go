@@ -252,6 +252,8 @@ type PrometheusExporter interface {
 	CleanupUserMetrics(activeUids map[int]bool)
 	IncrementCPULimitsActivated()
 	IncrementCPULimitsDeactivated()
+	IncrementIODeviceWeightClassification()
+	IncrementIODeviceWeightProbe()
 }
 
 // NewManager creates a resource manager with the supplied dependencies.
@@ -456,6 +458,7 @@ type RuntimeStatus struct {
 	CPUActivelyLimitedUsersCount int
 	CPUPoints                    resmanmetrics.CPUPointsSystemSnapshot
 	CPUPointUsers                []resmanmetrics.CPUPointsUserSnapshot
+	IODeviceWeight               IODeviceWeightStatus
 }
 
 type enforcementSummary struct {
@@ -522,6 +525,7 @@ func (m *Manager) GetStatus() RuntimeStatus {
 		CPUActivelyLimitedUsersCount: len(summary.cpuUsers),
 	}
 	m.mu.RLock()
+	status.IODeviceWeight = m.ioWeightStatus
 	status.CPUPoints = m.cpuPointsSystemSnapshot
 	status.CPUPointUsers = make([]resmanmetrics.CPUPointsUserSnapshot, 0, len(m.cpuPointsUserSnapshots))
 	for _, snapshot := range m.cpuPointsUserSnapshots {
