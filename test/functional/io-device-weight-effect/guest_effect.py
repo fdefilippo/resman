@@ -74,6 +74,16 @@ def parse_metric(text, name, labels=None):
     raise KeyError("metric not found: " + name + " " + repr(labels))
 
 
+def device_evidence(devices):
+    """Project internal device state into the retained JSON contract."""
+    result = []
+    for device in devices:
+        projected = {key: value for key, value in device.items() if key != "block"}
+        projected["sysfs_path"] = str(device["block"])
+        result.append(projected)
+    return result
+
+
 def eventually(check, message, timeout=75, interval=1):
     deadline = time.monotonic() + timeout
     last = None
@@ -646,9 +656,11 @@ while not stop:
                                   "qualification_tree": self.qualification_tree},
                        "result": self.result, "cleanup": cleanup,
                        "raw_files": self.raw_files}
-            for name in ("package_info", "platform", "devices"):
+            for name in ("package_info", "platform"):
                 if hasattr(self, name):
                     summary["package" if name == "package_info" else name] = getattr(self, name)
+            if self.devices:
+                summary["devices"] = device_evidence(self.devices)
             for name in ("mechanisms", "authority", "public", "composition", "lifecycle"):
                 if name in locals():
                     summary["public_observability" if name == "public" else name] = locals()[name]

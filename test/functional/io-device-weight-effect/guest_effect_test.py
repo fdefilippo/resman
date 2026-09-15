@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure guest-runner parsing tests."""
 import unittest
+from pathlib import Path
 
 import guest_effect
 
@@ -24,6 +25,16 @@ class GuestEffectTests(unittest.TestCase):
         self.assertEqual(guest_effect.selected_scheduler("none [bfq] mq-deadline"), "bfq")
         with self.assertRaisesRegex(RuntimeError, "unique"):
             guest_effect.selected_scheduler("none bfq")
+
+    def test_device_evidence_converts_internal_sysfs_path(self):
+        projected = guest_effect.device_evidence([{
+            "major_minor": "252:0", "block": Path("/sys/block/vda"),
+            "owned_disposable": True,
+        }])
+        self.assertEqual(projected, [{
+            "major_minor": "252:0", "sysfs_path": "/sys/block/vda",
+            "owned_disposable": True,
+        }])
 
 
 if __name__ == "__main__":
