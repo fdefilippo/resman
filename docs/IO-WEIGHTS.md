@@ -56,6 +56,11 @@ For example, one slice at 1000 competing with 99 default slices at 100 has a nom
 share of `1000 / (1000 + 99 * 100)`, about 9.17 percent, before device and workload
 effects. ResMan does not aggregate defaults into a finite pool.
 
+The public denominator includes every discovered sibling slice, including a slice
+whose authority is currently unavailable and which therefore is not programmed in
+that sample. The per-value coverage and programming state distinguish that condition;
+the nominal share is a policy denominator, not a claim about the active kernel set.
+
 Rootless descendants remain inside their authoritative user slice and participate in
 the slice weight. When part of a UID workload is outside that slice, ResMan applies the
 weight to the known slice but reports `authority_split` and partial coverage; it never
@@ -109,11 +114,14 @@ safely released at startup even when the feature is currently disabled.
 ## Observability
 
 Prometheus publishes the bounded state and reason plus independent gauges for
-the selected mechanism; programming and read-back attempt state; exact requested,
-systemd-derived and kernel-read values; complete, partial and unavailable authority;
-the sibling denominator and total points; request age and next retry; functional
-acceptance; effect qualification; and observed delivery. Read-only post-readiness
-classifications and mutating probes have separate
+the selected mechanism; programming and read-back attempt state; exact requested and
+systemd-derived values; the expected kernel-domain value whose exact presence was
+confirmed rather than a raw kernel-file capture; complete, partial and unavailable
+authority; the sibling denominator and total points; request age and next retry;
+functional acceptance; effect qualification; and observed delivery. Aggregate
+authority is unavailable when any sibling is unavailable, while the separate counts
+retain the complete distribution. Read-only post-readiness classifications and
+mutating probes have separate
 counters. The same typed object appears in the latest-only MCP system and limits
 status. SQLite schema 8 stores these dimensions with every system sample; schema 7 is
 migrated atomically, and its historical rows become `disabled` and `not_measured`.

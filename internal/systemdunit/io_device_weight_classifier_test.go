@@ -141,6 +141,59 @@ func TestIODeviceWeightClassifierRequiresActiveMechanismEvidence(t *testing.T) {
 	}
 }
 
+func TestIODeviceWeightClassifierReevaluatesChangingBootObservations(t *testing.T) {
+	tests := []struct {
+		name           string
+		prepare        func(*ioDeviceWeightClassifierFixture)
+		initialOutcome IODeviceWeightCapabilityOutcome
+		initialReason  IODeviceWeightCapabilityReason
+		stabilize      func(*ioDeviceWeightClassifierFixture)
+	}{
+		{
+			name: "BFQ becomes active after udev selection",
+			prepare: func(f *ioDeviceWeightClassifierFixture) {
+				f.write(f.schedulerPath, "[mq-deadline] bfq none\n")
+			},
+			initialOutcome: IODeviceWeightMechanismInactive,
+			initialReason:  IODeviceWeightReasonNoActiveMechanism,
+			stabilize: func(f *ioDeviceWeightClassifierFixture) {
+				f.write(f.schedulerPath, "mq-deadline [bfq] none\n")
+			},
+		},
+		{
+			name: "incomplete LVM holder becomes a terminal single-queue holder",
+			prepare: func(f *ioDeviceWeightClassifierFixture) {
+				f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", nil)
+			},
+			initialOutcome: IODeviceWeightAmbiguousTopology,
+			initialReason:  IODeviceWeightReasonAmbiguousTopology,
+			stabilize: func(f *ioDeviceWeightClassifierFixture) {
+				holder := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "dm-0")
+				f.symlink(f.sysfsDevice, filepath.Join(holder, "slaves", filepath.Base(f.sysfsDevice)))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newIODeviceWeightClassifierFixture(t)
+			test.prepare(fixture)
+			initial, err := fixture.classifier.Classify(context.Background(), "8:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if initial.Outcome() != test.initialOutcome || initial.Reason() != test.initialReason || initial.ProbeTargets() != nil {
+				t.Fatalf("initial outcome/reason/targets = %s/%s/%+v, want %s/%s/no targets", initial.Outcome(), initial.Reason(), initial.ProbeTargets(), test.initialOutcome, test.initialReason)
+			}
+
+			test.stabilize(fixture)
+			stable := fixture.classify(t)
+			if targets := stable.ProbeTargets(); len(targets) != 1 || targets[0].Identity.Number.String() != "8:0" || targets[0].Mechanism != IODeviceWeightMechanismBFQ {
+				t.Fatalf("stabilized ProbeTargets() = %+v, want BFQ candidate on 8:0", targets)
+			}
+		})
+	}
+}
+
 func TestIODeviceWeightCapabilityAggregationKeepsTheDeviceSetAtomic(t *testing.T) {
 	active := IODeviceWeightDeviceCapability{Outcome: IODeviceWeightProbeCandidate}
 	tests := []struct {

@@ -84,6 +84,19 @@ func testIODeviceWeightCandidate(t *testing.T) systemdunit.IODeviceWeightCapabil
 	return snapshot
 }
 
+func testIODeviceWeightObservation(t *testing.T, outcome systemdunit.IODeviceWeightCapabilityOutcome, reason systemdunit.IODeviceWeightCapabilityReason) systemdunit.IODeviceWeightCapabilitySnapshot {
+	t.Helper()
+	number := systemdunit.IODeviceWeightDeviceNumber{Major: 8}
+	snapshot, err := systemdunit.NewIODeviceWeightCapabilitySnapshot("8:0", systemdunit.IODeviceWeightPlatformIdentity{}, []systemdunit.IODeviceWeightDeviceCapability{{
+		Identity: systemdunit.IODeviceWeightDeviceIdentity{Number: number, DeviceNode: "/dev/vda", SysfsPath: "/sys/devices/vda", SysfsInode: 10},
+		Outcome:  outcome, Reason: reason,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func TestIODeviceWeightCapabilityProbePrecedesProductionMutation(t *testing.T) {
 	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
 	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
@@ -98,6 +111,50 @@ func TestIODeviceWeightCapabilityProbePrecedesProductionMutation(t *testing.T) {
 	}
 	if len(adapter.applies) != 0 {
 		t.Fatalf("capability probe used production slice Apply: %+v", adapter.applies)
+	}
+}
+
+func TestIODeviceWeightCapabilityReevaluatesBootObservationsUntilAccepted(t *testing.T) {
+	tests := []struct {
+		name          string
+		initial       systemdunit.IODeviceWeightCapabilitySnapshot
+		initialState  IODeviceWeightActivationState
+		initialReason string
+	}{
+		{
+			name:          "BFQ becomes active after startup",
+			initial:       testIODeviceWeightObservation(t, systemdunit.IODeviceWeightMechanismInactive, systemdunit.IODeviceWeightReasonNoActiveMechanism),
+			initialState:  IODeviceWeightRequestedPending,
+			initialReason: string(systemdunit.IODeviceWeightReasonNoActiveMechanism),
+		},
+		{
+			name:          "incomplete LVM topology stabilizes",
+			initial:       testIODeviceWeightObservation(t, systemdunit.IODeviceWeightAmbiguousTopology, systemdunit.IODeviceWeightReasonAmbiguousTopology),
+			initialState:  IODeviceWeightRefusedObservation,
+			initialReason: string(systemdunit.IODeviceWeightReasonAmbiguousTopology),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+			manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+			manager.cfg.IOWeightDevices = "8:0"
+			classifier := &fakeIODeviceWeightClassifier{snapshot: test.initial}
+			if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+				t.Fatal(err)
+			}
+
+			first := manager.AttemptIODeviceWeightCapability(context.Background())
+			if first.Status.State != test.initialState || first.Status.Reason != test.initialReason || !first.Retry || adapter.ioWeightProbeCalls != 0 {
+				t.Fatalf("initial observation result=%+v probe_calls=%d", first, adapter.ioWeightProbeCalls)
+			}
+
+			classifier.snapshot = testIODeviceWeightCandidate(t)
+			second := manager.AttemptIODeviceWeightCapability(context.Background())
+			if second.Status.State != IODeviceWeightFunctionallyAccepted || !second.Retry || !second.ActivateCycle || adapter.ioWeightProbeCalls != 1 {
+				t.Fatalf("stabilized observation result=%+v probe_calls=%d", second, adapter.ioWeightProbeCalls)
+			}
+		})
 	}
 }
 
@@ -508,7 +565,43 @@ func TestIODeviceWeightObservationRefusalReleasesWithoutGrace(t *testing.T) {
 	}
 }
 
-func TestIODeviceWeightTransientProbeErrorRemainsRetryable(t *testing.T) {
+func TestIODeviceWeightAsyncObservationRefusalReleasesWithoutGrace(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: topology}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	if result := manager.AttemptIODeviceWeightCapability(context.Background()); result.Status.State != IODeviceWeightFunctionallyAccepted {
+		t.Fatalf("AttemptIODeviceWeightCapability() = %+v", result)
+	}
+	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), completeIODeviceWeightSample(topology), manager.cfg); err != nil {
+		t.Fatalf("initial reconciliation error = %v", err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	classifier.snapshot = testIODeviceWeightObservation(t, systemdunit.IODeviceWeightMechanismAmbiguous, systemdunit.IODeviceWeightReasonMechanismAmbiguous)
+	classifier.confirmErr = &systemdunit.IODeviceWeightCapabilityError{
+		Reason: systemdunit.IODeviceWeightReasonMechanismAmbiguous,
+		Device: "8:0",
+		Err:    errors.New("injected mechanism ambiguity"),
+	}
+	probes := adapter.ioWeightProbeCalls
+
+	result := manager.AttemptIODeviceWeightCapability(context.Background())
+	if result.Status.State != IODeviceWeightRefusedObservation || result.Status.Reason != string(systemdunit.IODeviceWeightReasonMechanismAmbiguous) || !result.Retry {
+		t.Fatalf("asynchronous observation refusal = %+v", result)
+	}
+	if result.Status.Programmed || result.Status.ReadBack || adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
+		t.Fatalf("asynchronous observation refusal retained a weight through evidence-only grace: status=%+v active=%+v", result.Status, adapter.activeProperties)
+	}
+	if adapter.ioWeightProbeCalls != probes {
+		t.Fatalf("observation refusal repeated the mutating probe: %d -> %d", probes, adapter.ioWeightProbeCalls)
+	}
+}
+
+func TestIODeviceWeightRepeatedTransientProbeErrorsRemainRetryable(t *testing.T) {
 	adapter := &fakeSystemdCPUUnitAdapter{
 		topology: testSystemdTopology(1000),
 		ioWeightProbeError: &systemdunit.AdapterError{
@@ -522,9 +615,18 @@ func TestIODeviceWeightTransientProbeErrorRemainsRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := manager.AttemptIODeviceWeightCapability(context.Background())
-	if result.Status.State != IODeviceWeightRequestedPending || result.Status.Reason != string(systemdunit.IODeviceWeightReasonEvidenceUnavailable) || !result.Retry {
-		t.Fatalf("transient probe result = %+v", result)
+	const attempts = 8
+	for attempt := 1; attempt <= attempts; attempt++ {
+		result := manager.AttemptIODeviceWeightCapability(context.Background())
+		if result.Status.State != IODeviceWeightRequestedPending || result.Status.Reason != string(systemdunit.IODeviceWeightReasonEvidenceUnavailable) || !result.Retry {
+			t.Fatalf("transient probe attempt %d result = %+v", attempt, result)
+		}
+		if result.Status.ClassificationAttempts != uint64(attempt) || result.Status.ProbeAttempts != uint64(attempt) {
+			t.Fatalf("transient probe attempt %d counters = classify %d probe %d", attempt, result.Status.ClassificationAttempts, result.Status.ProbeAttempts)
+		}
+	}
+	if adapter.ioWeightProbeCalls != attempts {
+		t.Fatalf("mutating probe calls = %d, want %d", adapter.ioWeightProbeCalls, attempts)
 	}
 }
 

@@ -138,23 +138,52 @@ type IODeviceWeightCapabilitySnapshot struct {
 	devices  []IODeviceWeightDeviceCapability
 }
 
-// NewIODeviceWeightProbeCandidateSnapshot constructs a validated immutable
-// classifier handoff for alternate read-only classifier implementations and
-// tests. Production discovery uses IODeviceWeightCapabilityClassifier.
-func NewIODeviceWeightProbeCandidateSnapshot(selector string, platform IODeviceWeightPlatformIdentity, devices []IODeviceWeightDeviceCapability) (IODeviceWeightCapabilitySnapshot, error) {
+// NewIODeviceWeightCapabilitySnapshot constructs a validated immutable handoff
+// for alternate read-only classifier implementations and tests. The aggregate
+// outcome and reason are derived from the per-device observations.
+func NewIODeviceWeightCapabilitySnapshot(selector string, platform IODeviceWeightPlatformIdentity, devices []IODeviceWeightDeviceCapability) (IODeviceWeightCapabilitySnapshot, error) {
 	parsed, err := ParseIODeviceWeightDevices(selector)
 	if err != nil {
 		return IODeviceWeightCapabilitySnapshot{}, err
 	}
 	if len(parsed) != len(devices) {
-		return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O candidate has %d identities and %d device observations", len(parsed), len(devices))
+		return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O snapshot has %d identities and %d device observations", len(parsed), len(devices))
 	}
 	for index, device := range devices {
-		if device.Identity.Number != parsed[index] || device.Outcome != IODeviceWeightProbeCandidate || !validIODeviceWeightMechanism(device.Mechanism) || device.Identity.DeviceNode == "" {
-			return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O candidate device %d is incomplete or does not match selector", index)
+		if device.Identity.Number != parsed[index] {
+			return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O snapshot device %d does not match selector", index)
+		}
+		switch device.Outcome {
+		case IODeviceWeightProbeCandidate:
+			if device.Reason != IODeviceWeightReasonNone || !validIODeviceWeightMechanism(device.Mechanism) || device.Identity.DeviceNode == "" {
+				return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O candidate device %d is incomplete", index)
+			}
+		case IODeviceWeightMechanismInactive, IODeviceWeightUnsupportedMechanism,
+			IODeviceWeightEvidenceUnavailable, IODeviceWeightAmbiguousTopology,
+			IODeviceWeightMechanismAmbiguous:
+			if device.Reason == IODeviceWeightReasonNone {
+				return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O negative device %d has no reason", index)
+			}
+		default:
+			return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O snapshot device %d has unknown outcome %q", index, device.Outcome)
 		}
 	}
-	return newIODeviceWeightCapabilitySnapshot(canonicalIODeviceWeightSelector(parsed), platform, IODeviceWeightProbeCandidate, IODeviceWeightReasonNone, "", devices), nil
+	outcome, reason, detail := aggregateIODeviceWeightCapability(devices)
+	return newIODeviceWeightCapabilitySnapshot(canonicalIODeviceWeightSelector(parsed), platform, outcome, reason, detail, devices), nil
+}
+
+// NewIODeviceWeightProbeCandidateSnapshot constructs a validated immutable
+// probe candidate for alternate read-only classifier implementations and tests.
+// Production discovery uses IODeviceWeightCapabilityClassifier.
+func NewIODeviceWeightProbeCandidateSnapshot(selector string, platform IODeviceWeightPlatformIdentity, devices []IODeviceWeightDeviceCapability) (IODeviceWeightCapabilitySnapshot, error) {
+	snapshot, err := NewIODeviceWeightCapabilitySnapshot(selector, platform, devices)
+	if err != nil {
+		return IODeviceWeightCapabilitySnapshot{}, err
+	}
+	if snapshot.Outcome() != IODeviceWeightProbeCandidate {
+		return IODeviceWeightCapabilitySnapshot{}, fmt.Errorf("weighted I/O snapshot outcome is %q, not a probe candidate", snapshot.Outcome())
+	}
+	return snapshot, nil
 }
 
 // Selector returns the canonical sorted major:minor selector.

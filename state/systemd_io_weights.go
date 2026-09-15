@@ -50,8 +50,9 @@ const (
 	IODeviceWeightReleased     = ioweights.VerificationReleased
 )
 
-// IODeviceWeightValueStatus records the exact public, systemd, and kernel
-// values for one sibling slice and selected device.
+// IODeviceWeightValueStatus records the public and systemd values plus the
+// expected kernel-domain value whose exact presence was confirmed for one
+// sibling slice and selected device. KernelValue is not a raw file capture.
 type IODeviceWeightValueStatus struct {
 	UID            int                         `json:"uid"`
 	Class          string                      `json:"class"`
