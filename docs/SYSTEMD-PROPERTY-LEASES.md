@@ -30,6 +30,12 @@ mechanism from whichever weight file happens to exist.
 `IODeviceWeight` is classified as the independent `ResourceIOWeight`; hard-I/O
 `ResourceIO` restoration never includes it, and CPU release uses a selective property
 restore whenever another active resource lease shares the user slice.
+Systemd treats a non-empty `IODeviceWeight` array as an update of the named device
+tuples, not as replacement of the complete array. When an owned selector shrinks,
+the adapter therefore sends an empty reset followed by the desired replacement in
+one ordered `SetUnitProperties` call. The durable lease and readback retain only the
+logical replacement value; an interrupted or divergent mutation remains uncertain
+and is never restored without compare-before-restore proof.
 
 ## Resource-specific workload authority
 

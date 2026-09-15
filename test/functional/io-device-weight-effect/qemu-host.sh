@@ -124,7 +124,7 @@ done
 	|| { echo "OL9 base image differs from reviewed Oracle digest" >&2; exit 1; }
 package_identity=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$package")
 package_sha=$(sha256sum "$package" | awk '{print $1}')
-[[ $package_identity == resman-1.38.0-3.el9.x86_64 ]] \
+[[ $package_identity == resman-1.38.0-4.el9.x86_64 ]] \
 	|| { echo "unexpected package identity: $package_identity" >&2; exit 1; }
 [[ $(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest") == "$source_revision" && \
 	$(awk -F= '$1 == "source_tree" {print $2}' "$build_manifest") == "$source_tree" && \

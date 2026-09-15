@@ -484,8 +484,12 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		return UnitSnapshot{}, err
 	}
 
+	// systemd treats non-empty per-device arrays as upserts. Prepend an empty
+	// IODeviceWeight value when the owned target set shrinks so the reset and
+	// replacement are processed in order by one SetUnitProperties method call.
+	mutationAssignments := systemdMutationAssignments(before, validated)
 	// runtime=true is deliberately fixed here. The public adapter cannot persist unit changes.
-	if err := a.transport.setUnitProperties(callCtx, identity.Name, true, validated); err != nil {
+	if err := a.transport.setUnitProperties(callCtx, identity.Name, true, mutationAssignments); err != nil {
 		return UnitSnapshot{}, classifyTransportError("apply", identity.Name, err)
 	}
 	after, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
@@ -515,6 +519,34 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 		return UnitSnapshot{}, err
 	}
 	return after, nil
+}
+
+func systemdMutationAssignments(before UnitSnapshot, assignments []PropertyAssignment) []PropertyAssignment {
+	result := make([]PropertyAssignment, 0, len(assignments)+1)
+	for _, assignment := range assignments {
+		if assignment.name == PropertyIODeviceWeight && ioDeviceWeightTargetRemoved(before, assignment) {
+			result = append(result, PropertyAssignment{name: PropertyIODeviceWeight, value: devicePropertyValue(nil)})
+		}
+		result = append(result, assignment)
+	}
+	return result
+}
+
+func ioDeviceWeightTargetRemoved(before UnitSnapshot, desired PropertyAssignment) bool {
+	current, ok := before.Properties.propertyValue(PropertyIODeviceWeight)
+	if !ok || len(current.devices) == 0 {
+		return false
+	}
+	desiredPaths := make(map[string]bool, len(desired.value.devices))
+	for _, device := range desired.value.devices {
+		desiredPaths[device.Path] = true
+	}
+	for _, device := range current.devices {
+		if !desiredPaths[device.Path] {
+			return true
+		}
+	}
+	return false
 }
 
 // ConfirmApplied performs a read-only final confirmation of one exact unit

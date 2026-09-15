@@ -9,7 +9,7 @@ import re
 
 PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
 MANAGER_VERSION = "252-67.0.1.el9_8.2"
-PACKAGE_IDENTITY = "resman-1.38.0-3.el9.x86_64"
+PACKAGE_IDENTITY = "resman-1.38.0-4.el9.x86_64"
 KERNEL_RELEASE = "5.14.0-687.46.1.el9_8.x86_64"
 MECHANISMS = ("bfq", "io_cost")
 PHASES = {

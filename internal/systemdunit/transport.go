@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 
 	systemdbus "github.com/coreos/go-systemd/v22/dbus"
 	godbus "github.com/godbus/dbus/v5"
@@ -125,9 +124,10 @@ func (t *dbusTransport) managerProperty(ctx context.Context, property string) (s
 
 func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runtime bool, assignments []PropertyAssignment) error {
 	properties := make([]systemdbus.Property, len(assignments))
-	ordered := append([]PropertyAssignment(nil), assignments...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].name < ordered[j].name })
-	for index, assignment := range ordered {
+	// The adapter has already canonicalized ordinary assignments. Preserve its
+	// order because a repeated per-device property may encode reset followed by
+	// replacement within this single method call.
+	for index, assignment := range assignments {
 		properties[index] = systemdbus.Property{
 			Name:  string(assignment.name),
 			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),

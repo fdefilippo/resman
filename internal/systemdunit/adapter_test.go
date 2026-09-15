@@ -210,10 +210,22 @@ func (f *fakeUnitTransport) applyAssignments(unit string, assignments []Property
 	}
 	for _, assignment := range assignments {
 		if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
-			values := make([]dbusDeviceLimit, len(assignment.value.devices))
-			for index, value := range assignment.value.devices {
-				values[index] = dbusDeviceLimit(value)
+			values := make([]dbusDeviceLimit, 0, len(assignment.value.devices))
+			if assignment.name == PropertyIODeviceWeight && len(assignment.value.devices) != 0 {
+				values = append(values, state.slice[string(assignment.name)].([]dbusDeviceLimit)...)
 			}
+			byPath := make(map[string]dbusDeviceLimit, len(values)+len(assignment.value.devices))
+			for _, value := range values {
+				byPath[value.Path] = value
+			}
+			for _, value := range assignment.value.devices {
+				byPath[value.Path] = dbusDeviceLimit(value)
+			}
+			values = values[:0]
+			for _, value := range byPath {
+				values = append(values, value)
+			}
+			sort.Slice(values, func(i, j int) bool { return values[i].Path < values[j].Path })
 			state.slice[string(assignment.name)] = values
 		} else {
 			state.slice[string(assignment.name)] = assignment.value.scalar

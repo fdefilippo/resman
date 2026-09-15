@@ -1,3 +1,9 @@
+resman (1.38.0-4) stable; urgency=medium
+
+  * Replace reduced weighted-I/O device sets through one ordered D-Bus mutation.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 18:50:00 +0200
+
 resman (1.38.0-3) stable; urgency=medium
 
   * Preserve owned weighted-I/O leases across atomic device-selector changes.

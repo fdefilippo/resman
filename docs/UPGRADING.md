@@ -84,6 +84,10 @@ compare-before-restores only owned weights. A recovered weight lease is also cle
 safely when the new configuration leaves the feature disabled. Only
 `evidence_unavailable` receives one successful-control-cadence grace; observation
 refusals release immediately.
+Reducing a live weighted-device selector clears and replaces the owned
+`IODeviceWeight` tuple array within one ordered systemd D-Bus method call; this is
+required because a non-empty systemd assignment is additive. Independent hard-I/O
+properties on devices removed from the weighted selector remain unchanged.
 
 **Persistence and clients.** SQLite schema 7 is migrated atomically through schema 8
 to schema 9. Old

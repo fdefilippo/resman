@@ -388,6 +388,12 @@ func TestApplyAllowsOwnedIODeviceWeightTargetSetChangesWithStableMechanisms(t *t
 			t.Fatalf("ConfirmApplied(%v) error = %v", assignment.DeviceLimits(), err)
 		}
 	}
+	lastCall := transport.setCalls[len(transport.setCalls)-1]
+	if len(lastCall.assignments) != 2 || lastCall.assignments[0].name != PropertyIODeviceWeight ||
+		len(lastCall.assignments[0].value.devices) != 0 ||
+		!propertyValuesEqual(PropertyIODeviceWeight, lastCall.assignments[1].value, vdb.value) {
+		t.Fatalf("shrinking IODeviceWeight D-Bus mutation = %+v, want reset then replacement", lastCall.assignments)
+	}
 }
 
 func TestConfirmAppliedRejectsChangedIODeviceWeightMechanism(t *testing.T) {
