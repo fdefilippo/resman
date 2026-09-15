@@ -139,6 +139,59 @@ func TestSystemdIOWeightConstantInspectionFailsClosedAtItsBudget(t *testing.T) {
 	}
 }
 
+func TestIODeviceWeightClassifierCannotAcquireMutationPrimitives(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "file write", content: `package systemdunit
+import "os"
+func classify(){ _ = os.WriteFile("/sys/block/vda/queue/scheduler", nil, 0600) }`},
+		{name: "rename", content: `package systemdunit
+import "os"
+func classify(){ _ = os.Rename("a", "b") }`},
+		{name: "arbitrary command", content: `package systemdunit
+import (
+ "context"
+ "os/exec"
+)
+func classify(ctx context.Context){ _ = exec.CommandContext(ctx, "sh", "-c", "true") }`},
+		{name: "command without context", content: `package systemdunit
+import "os/exec"
+func classify(){ _ = exec.Command("systemctl", "--version") }`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := newCheckerFixture(t)
+			writeFixture(t, root, systemdResourcePolicyPath, ioRestoreFixture)
+			writeFixture(t, root, "internal/systemdunit/io_device_weight_classifier.go", test.content)
+			result := inspectSystemdBoundaryFixture(t, root)
+			if len(result.findings) == 0 {
+				t.Fatal("weighted-I/O classifier acquired a mutation primitive")
+			}
+		})
+	}
+}
+
+func TestIODeviceWeightClassifierMayReadEvidenceAndSystemdVersion(t *testing.T) {
+	root := newCheckerFixture(t)
+	writeFixture(t, root, systemdResourcePolicyPath, ioRestoreFixture)
+	writeFixture(t, root, "internal/systemdunit/io_device_weight_classifier.go", `package systemdunit
+import (
+ "context"
+ "os"
+ "os/exec"
+)
+func classify(ctx context.Context){
+ _, _ = os.ReadFile("/sys/block/vda/queue/scheduler")
+ _ = exec.CommandContext(ctx, "systemctl", "--version")
+}`)
+	result := inspectSystemdBoundaryFixture(t, root)
+	if len(result.findings) != 0 {
+		t.Fatalf("read-only classifier rejected: %+v", result.findings)
+	}
+}
+
 func inspectSystemdBoundaryFixture(t *testing.T, root string) checkResult {
 	t.Helper()
 	sources, findings := loadGoFiles(root)

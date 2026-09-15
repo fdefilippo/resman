@@ -38,6 +38,7 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 			case *ast.BasicLit:
 				checkSystemdOwnedCgroupLiteral(source, typed, &result)
 			case *ast.CallExpr:
+				checkIODeviceWeightClassifierReadOnly(source, typed, &result)
 				checkSystemdMutationCall(source, typed, capabilityProbes, &result)
 			case *ast.SelectorExpr:
 				checkSystemdControlGroupCapability(source, typed, &result)
@@ -46,6 +47,58 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 		})
 	}
 	return result
+}
+
+func checkIODeviceWeightClassifierReadOnly(source goSource, call *ast.CallExpr, result *checkResult) {
+	if source.path != "internal/systemdunit/io_device_weight_classifier.go" && source.path != "internal/systemdunit/io_device_weight_devices.go" {
+		return
+	}
+	for owner, members := range map[string]map[string]bool{
+		"os": {
+			"Chmod": true, "Chown": true, "Chtimes": true, "Create": true, "CreateTemp": true,
+			"Lchown": true, "Link": true, "Mkdir": true, "MkdirAll": true, "OpenFile": true,
+			"Remove": true, "RemoveAll": true, "Rename": true, "Symlink": true, "Truncate": true, "WriteFile": true,
+		},
+		"syscall": {"Mount": true, "Setxattr": true, "Unmount": true, "Write": true},
+		"unix":    {"Mount": true, "Setxattr": true, "Unmount": true, "Write": true},
+	} {
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		identifier, ownerOK := selectorOwner(selector)
+		if ok && ownerOK && identifier == owner && members[selector.Sel.Name] {
+			result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O capability classification must remain read-only")
+			return
+		}
+	}
+	if systemdNamedSelector(call.Fun, "exec", "Command") {
+		result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O classifier commands require context and may read only systemd version")
+		return
+	}
+	if !systemdNamedSelector(call.Fun, "exec", "CommandContext") {
+		return
+	}
+	if len(call.Args) != 3 || !systemdStringLiteral(call.Args[1], "systemctl") || !systemdStringLiteral(call.Args[2], "--version") {
+		result.fail(source.path, sourceLine(source, call.Pos()), "weighted-I/O classifier may execute only systemctl --version")
+	}
+}
+
+func selectorOwner(selector *ast.SelectorExpr) (string, bool) {
+	if selector == nil {
+		return "", false
+	}
+	identifier, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return identifier.Name, true
+}
+
+func systemdStringLiteral(expression ast.Expr, expected string) bool {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return false
+	}
+	value, err := strconv.Unquote(literal.Value)
+	return err == nil && value == expected
 }
 
 // systemdCapabilityProbeExceptions permits exactly one start and stop call in
