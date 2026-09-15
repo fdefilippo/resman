@@ -112,7 +112,7 @@ earlier release those panels show no data.
 |-------|--------|-------------|
 | **Weighted I/O lifecycle** | `resman_io_device_weight_state{state} == 1` | Distinguishes automatic `refused_observation` re-evaluation from `refused_intervention`, which requires host correction followed by reload or restart |
 | **Weighted I/O proof and application** | `resman_io_device_weight_functionally_accepted`, `..._programmed`, `..._read_back`, `..._effect_qualified` | Keeps functional proof, complete production application and retained contention qualification separate |
-| **Weighted I/O attempts and partial coverage** | `increase(resman_io_device_weight_classification_attempts_total)`, `increase(..._probe_attempts_total)`, `resman_io_device_weight_partial_users` | Shows read-only classifications separately from mutating transient probes and counts applied slices with partial UID workload coverage |
+| **Weighted I/O attempts and partial coverage** | `increase(resman_io_device_weight_classification_attempts_total)`, `increase(..._probe_attempts_total)`, `resman_io_device_weight_partial_users` | Shows read-only post-READY classifier calls separately from mutating transient probes and counts applied slices with partial UID workload coverage; the full API also exports mechanism, verification states, complete/unavailable coverage, denominator, exact value path and retry timing |
 
 When the feature is disabled, the lifecycle panel reports `disabled` and the other
 weighted-I/O gauges remain zero. A functionally accepted probe does not mean a

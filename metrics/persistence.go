@@ -47,13 +47,24 @@ type SystemPersistenceMetrics struct {
 	IODeviceWeightState                  string
 	IODeviceWeightReason                 string
 	IODeviceWeightSelector               string
+	IODeviceWeightMechanism              string
 	IODeviceWeightClassificationAttempts uint64
 	IODeviceWeightProbeAttempts          uint64
 	IODeviceWeightProgrammed             bool
+	IODeviceWeightProgrammedState        string
 	IODeviceWeightReadBack               bool
+	IODeviceWeightReadBackState          string
 	IODeviceWeightFunctionallyAccepted   bool
 	IODeviceWeightEffectQualified        bool
+	IODeviceWeightAuthorityCoverage      string
+	IODeviceWeightCompleteUsers          int
 	IODeviceWeightPartialUsers           int
+	IODeviceWeightUnavailableUsers       int
+	IODeviceWeightSiblingSlices          int
+	IODeviceWeightTotalPoints            uint64
+	IODeviceWeightRequestedAt            *time.Time
+	IODeviceWeightNextRetryAt            *time.Time
+	IODeviceWeightValuesJSON             string
 	IODeviceWeightObservedDelivery       string
 	DenominatorState                     CPUPointsDenominatorState
 	EnforcementMode                      string

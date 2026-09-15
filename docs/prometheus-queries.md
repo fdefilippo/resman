@@ -252,6 +252,9 @@ enforcement. Read the one-hot lifecycle before interpreting the application gaug
 # Current lifecycle and bounded reason
 resman_io_device_weight_state == 1
 resman_io_device_weight_reason == 1
+resman_io_device_weight_mechanism == 1
+resman_io_device_weight_programming_state == 1
+resman_io_device_weight_readback_state == 1
 ```
 
 `refused_observation` is re-evaluated automatically. Only
@@ -268,6 +271,19 @@ resman_io_device_weight_effect_qualified
 
 # Programmed slices whose UID workload coverage is partial
 resman_io_device_weight_partial_users
+resman_io_device_weight_complete_users
+resman_io_device_weight_unavailable_users
+resman_io_device_weight_authority_coverage == 1
+
+# Current sibling denominator and exact values along the programming path
+resman_io_device_weight_sibling_slices
+resman_io_device_weight_total_points
+resman_io_device_weight_value
+resman_io_device_weight_nominal_share
+
+# Time since request and time remaining until the scheduled retry
+resman_io_device_weight_requested_seconds
+resman_io_device_weight_next_retry_seconds
 
 # Keep read-only classification separate from mutating transient probes
 increase(resman_io_device_weight_classification_attempts_total[10m])

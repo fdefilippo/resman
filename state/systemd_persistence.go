@@ -36,6 +36,7 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 		resourceUnits[uid] = identity
 	}
 	degraded := m.cpuPointsDegraded
+	ioWeight := m.ioWeightStatus
 	m.mu.RUnlock()
 	capacity := cpupoints.CapacityState{}
 	if m.cpuCapacity != nil {
@@ -44,7 +45,19 @@ func (m *Manager) collectSystemdPersistenceInterval(sample *SystemMetrics) {
 	root := policy.Root().Value()
 	system := resmanmetrics.SystemPersistenceMetrics{
 		SampleEpochID: sample.Timestamp.UnixNano(), IntervalEnd: sample.Timestamp,
-		TotalCPUUsagePercent: sample.TotalCPUUsage, TotalCores: sample.TotalCores, SystemLoad: sample.SystemLoad,
+		IODeviceWeightState: string(ioWeight.State), IODeviceWeightReason: ioWeight.Reason,
+		IODeviceWeightSelector: ioWeight.Selector, IODeviceWeightMechanism: string(ioWeight.Mechanism),
+		IODeviceWeightClassificationAttempts: ioWeight.ClassificationAttempts,
+		IODeviceWeightProbeAttempts:          ioWeight.ProbeAttempts, IODeviceWeightProgrammed: ioWeight.Programmed,
+		IODeviceWeightProgrammedState: string(ioWeight.ProgrammedState), IODeviceWeightReadBack: ioWeight.ReadBack,
+		IODeviceWeightReadBackState: string(ioWeight.ReadBackState), IODeviceWeightFunctionallyAccepted: ioWeight.State == IODeviceWeightFunctionallyAccepted,
+		IODeviceWeightEffectQualified: ioWeight.EffectQualified, IODeviceWeightAuthorityCoverage: string(ioWeight.AuthorityCoverage),
+		IODeviceWeightCompleteUsers: ioWeight.CompleteUsers, IODeviceWeightPartialUsers: ioWeight.PartialUsers,
+		IODeviceWeightUnavailableUsers: ioWeight.UnavailableUsers, IODeviceWeightSiblingSlices: ioWeight.SiblingSlices,
+		IODeviceWeightTotalPoints: ioWeight.TotalPoints, IODeviceWeightRequestedAt: optionalIODeviceWeightTime(ioWeight.RequestedAt),
+		IODeviceWeightNextRetryAt: optionalIODeviceWeightTime(ioWeight.NextRetryAt), IODeviceWeightValuesJSON: ioDeviceWeightValuesJSON(ioWeight.Values),
+		IODeviceWeightObservedDelivery: ioWeight.ObservedDelivery,
+		TotalCPUUsagePercent:           sample.TotalCPUUsage, TotalCores: sample.TotalCores, SystemLoad: sample.SystemLoad,
 		NominalParentPoolPoints: policy.Pool().Value(), ConfiguredBestEffortPoints: policy.BestEffort().Value(),
 		ConfiguredRootPoints: &root, EnforcementMode: string(cgroup.EnforcementModeSystemdNative),
 		CPUCapacityAvailable: capacity.Available, DenominatorState: resmanmetrics.CPUPointsDenominatorUnavailable,

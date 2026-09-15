@@ -9,6 +9,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -19,28 +20,72 @@ import (
 )
 
 type ioDeviceWeightPayload struct {
-	State                  string `json:"state"`
-	Reason                 string `json:"reason"`
-	Selector               string `json:"selector"`
-	ClassificationAttempts uint64 `json:"classification_attempts"`
-	ProbeAttempts          uint64 `json:"probe_attempts"`
-	Programmed             bool   `json:"programmed"`
-	ReadBack               bool   `json:"read_back"`
-	FunctionallyAccepted   bool   `json:"functionally_accepted"`
-	EffectQualified        bool   `json:"effect_qualified"`
-	PartialUsers           int    `json:"partial_users"`
-	ObservedDelivery       string `json:"observed_delivery"`
+	State                  string                       `json:"state"`
+	Reason                 string                       `json:"reason"`
+	Selector               string                       `json:"selector"`
+	Mechanism              string                       `json:"mechanism"`
+	ClassificationAttempts uint64                       `json:"classification_attempts"`
+	ProbeAttempts          uint64                       `json:"probe_attempts"`
+	Programmed             bool                         `json:"programmed"`
+	ProgrammedState        string                       `json:"programmed_state"`
+	ReadBack               bool                         `json:"read_back"`
+	ReadBackState          string                       `json:"read_back_state"`
+	FunctionallyAccepted   bool                         `json:"functionally_accepted"`
+	EffectQualified        bool                         `json:"effect_qualified"`
+	AuthorityCoverage      string                       `json:"authority_coverage"`
+	CompleteUsers          int                          `json:"complete_users"`
+	PartialUsers           int                          `json:"partial_users"`
+	UnavailableUsers       int                          `json:"unavailable_users"`
+	SiblingSlices          int                          `json:"sibling_slices"`
+	TotalPoints            uint64                       `json:"total_points"`
+	RequestedAt            string                       `json:"requested_at,omitempty"`
+	NextRetryAt            string                       `json:"next_retry_at,omitempty"`
+	Values                 []ioDeviceWeightValuePayload `json:"values"`
+	ObservedDelivery       string                       `json:"observed_delivery"`
+}
+
+type ioDeviceWeightValuePayload struct {
+	UID            int     `json:"uid"`
+	Class          string  `json:"class"`
+	Device         string  `json:"device"`
+	Mechanism      string  `json:"mechanism"`
+	Coverage       string  `json:"coverage"`
+	RequestedValue uint64  `json:"requested_value"`
+	SystemdValue   uint64  `json:"systemd_value,omitempty"`
+	KernelValue    uint64  `json:"kernel_value,omitempty"`
+	NominalShare   float64 `json:"nominal_share"`
+	Programmed     bool    `json:"programmed"`
+	ReadBack       bool    `json:"read_back"`
 }
 
 func newIODeviceWeightPayload(status state.IODeviceWeightStatus) ioDeviceWeightPayload {
-	return ioDeviceWeightPayload{
+	result := ioDeviceWeightPayload{
 		State: string(status.State), Reason: status.Reason, Selector: status.Selector,
+		Mechanism:              string(status.Mechanism),
 		ClassificationAttempts: status.ClassificationAttempts, ProbeAttempts: status.ProbeAttempts,
 		Programmed: status.Programmed, ReadBack: status.ReadBack,
+		ProgrammedState: string(status.ProgrammedState), ReadBackState: string(status.ReadBackState),
 		FunctionallyAccepted: status.State == state.IODeviceWeightFunctionallyAccepted,
 		EffectQualified:      status.EffectQualified, PartialUsers: status.PartialUsers,
+		AuthorityCoverage: string(status.AuthorityCoverage), CompleteUsers: status.CompleteUsers,
+		UnavailableUsers: status.UnavailableUsers, SiblingSlices: status.SiblingSlices, TotalPoints: status.TotalPoints,
 		ObservedDelivery: status.ObservedDelivery,
 	}
+	if !status.RequestedAt.IsZero() {
+		result.RequestedAt = status.RequestedAt.Format(time.RFC3339Nano)
+	}
+	if !status.NextRetryAt.IsZero() {
+		result.NextRetryAt = status.NextRetryAt.Format(time.RFC3339Nano)
+	}
+	result.Values = make([]ioDeviceWeightValuePayload, 0, len(status.Values))
+	for _, value := range status.Values {
+		result.Values = append(result.Values, ioDeviceWeightValuePayload{
+			UID: value.UID, Class: value.Class, Device: value.Device, Mechanism: value.Mechanism, Coverage: string(value.Coverage),
+			RequestedValue: value.RequestedValue, SystemdValue: value.SystemdValue, KernelValue: value.KernelValue, NominalShare: value.NominalShare,
+			Programmed: value.Programmed, ReadBack: value.ReadBack,
+		})
+	}
+	return result
 }
 
 type cpuPointsSystemPayload struct {
@@ -395,49 +440,60 @@ func newUserHistoryRecord(record database.UserMetricsRecord) userHistoryRecord {
 }
 
 type systemHistoryRecord struct {
-	IODeviceWeightState                  string  `json:"io_device_weight_state"`
-	IODeviceWeightReason                 string  `json:"io_device_weight_reason"`
-	IODeviceWeightSelector               string  `json:"io_device_weight_selector"`
-	IODeviceWeightClassificationAttempts uint64  `json:"io_device_weight_classification_attempts"`
-	IODeviceWeightProbeAttempts          uint64  `json:"io_device_weight_probe_attempts"`
-	IODeviceWeightProgrammed             bool    `json:"io_device_weight_programmed"`
-	IODeviceWeightReadBack               bool    `json:"io_device_weight_read_back"`
-	IODeviceWeightFunctionallyAccepted   bool    `json:"io_device_weight_functionally_accepted"`
-	IODeviceWeightEffectQualified        bool    `json:"io_device_weight_effect_qualified"`
-	IODeviceWeightPartialUsers           int     `json:"io_device_weight_partial_users"`
-	IODeviceWeightObservedDelivery       string  `json:"io_device_weight_observed_delivery"`
-	DenominatorState                     string  `json:"denominator_state"`
-	EnforcementMode                      string  `json:"enforcement_mode"`
-	Timestamp                            string  `json:"timestamp"`
-	SampleEpochID                        int64   `json:"sample_epoch_id"`
-	IntervalStart                        *string `json:"interval_start"`
-	IntervalEnd                          string  `json:"interval_end"`
-	TotalCPUUsage                        float64 `json:"total_cpu_usage"`
-	TotalCores                           int     `json:"total_cores"`
-	SystemLoad                           float64 `json:"system_load"`
-	CPULimitsActive                      bool    `json:"cpu_limits_active"`
-	ResourceLimitsActive                 bool    `json:"resource_limits_active"`
-	AnyLimitsActive                      bool    `json:"any_limits_active"`
-	CPUActivelyLimitedUsersCount         int     `json:"cpu_actively_limited_users_count"`
-	ActivelyLimitedUsersCount            int     `json:"actively_limited_users_count"`
-	NominalParentPoolPoints              uint64  `json:"nominal_parent_pool_points"`
-	CPUCapacityAvailable                 bool    `json:"cpu_capacity_available"`
-	OnlineCPUs                           *uint64 `json:"online_cpus"`
-	ProgrammedParentQuotaUsec            *uint64 `json:"programmed_parent_quota_usec"`
-	ProgrammedParentPeriodUsec           *uint64 `json:"programmed_parent_period_usec"`
-	CPUPointsDegraded                    bool    `json:"cpu_points_degraded"`
-	AppliedGuaranteePoints               uint64  `json:"applied_guarantee_points"`
-	ProgrammedGuaranteeWeight            uint64  `json:"programmed_guarantee_weight"`
-	ConfiguredBestEffortPoints           uint64  `json:"configured_best_effort_points"`
-	ParentCPUQuota                       *string `json:"parent_cpu_quota"`
-	ProgrammedSiblingWeightSum           *uint64 `json:"programmed_sibling_weight_sum"`
-	ProgrammedBestEffortWeight           *uint64 `json:"programmed_best_effort_weight"`
-	ParentCPUUsageUsecDelta              *uint64 `json:"parent_cpu_usage_usec_delta"`
-	ObservedSiblingWeightSum             *uint64 `json:"observed_sibling_weight_sum"`
-	ConfiguredRootPoints                 *uint64 `json:"configured_root_points"`
-	ParentCPUPeriodsDelta                *uint64 `json:"parent_cpu_periods_delta"`
-	ParentCPUThrottledPeriodsDelta       *uint64 `json:"parent_cpu_throttled_periods_delta"`
-	ParentCPUThrottledUsecDelta          *uint64 `json:"parent_cpu_throttled_usec_delta"`
+	IODeviceWeightState                  string          `json:"io_device_weight_state"`
+	IODeviceWeightReason                 string          `json:"io_device_weight_reason"`
+	IODeviceWeightSelector               string          `json:"io_device_weight_selector"`
+	IODeviceWeightMechanism              string          `json:"io_device_weight_mechanism"`
+	IODeviceWeightClassificationAttempts uint64          `json:"io_device_weight_classification_attempts"`
+	IODeviceWeightProbeAttempts          uint64          `json:"io_device_weight_probe_attempts"`
+	IODeviceWeightProgrammed             bool            `json:"io_device_weight_programmed"`
+	IODeviceWeightProgrammedState        string          `json:"io_device_weight_programmed_state"`
+	IODeviceWeightReadBack               bool            `json:"io_device_weight_read_back"`
+	IODeviceWeightReadBackState          string          `json:"io_device_weight_read_back_state"`
+	IODeviceWeightFunctionallyAccepted   bool            `json:"io_device_weight_functionally_accepted"`
+	IODeviceWeightEffectQualified        bool            `json:"io_device_weight_effect_qualified"`
+	IODeviceWeightAuthorityCoverage      string          `json:"io_device_weight_authority_coverage"`
+	IODeviceWeightCompleteUsers          int             `json:"io_device_weight_complete_users"`
+	IODeviceWeightPartialUsers           int             `json:"io_device_weight_partial_users"`
+	IODeviceWeightUnavailableUsers       int             `json:"io_device_weight_unavailable_users"`
+	IODeviceWeightSiblingSlices          int             `json:"io_device_weight_sibling_slices"`
+	IODeviceWeightTotalPoints            uint64          `json:"io_device_weight_total_points"`
+	IODeviceWeightRequestedAt            *string         `json:"io_device_weight_requested_at"`
+	IODeviceWeightNextRetryAt            *string         `json:"io_device_weight_next_retry_at"`
+	IODeviceWeightValues                 json.RawMessage `json:"io_device_weight_values"`
+	IODeviceWeightObservedDelivery       string          `json:"io_device_weight_observed_delivery"`
+	DenominatorState                     string          `json:"denominator_state"`
+	EnforcementMode                      string          `json:"enforcement_mode"`
+	Timestamp                            string          `json:"timestamp"`
+	SampleEpochID                        int64           `json:"sample_epoch_id"`
+	IntervalStart                        *string         `json:"interval_start"`
+	IntervalEnd                          string          `json:"interval_end"`
+	TotalCPUUsage                        float64         `json:"total_cpu_usage"`
+	TotalCores                           int             `json:"total_cores"`
+	SystemLoad                           float64         `json:"system_load"`
+	CPULimitsActive                      bool            `json:"cpu_limits_active"`
+	ResourceLimitsActive                 bool            `json:"resource_limits_active"`
+	AnyLimitsActive                      bool            `json:"any_limits_active"`
+	CPUActivelyLimitedUsersCount         int             `json:"cpu_actively_limited_users_count"`
+	ActivelyLimitedUsersCount            int             `json:"actively_limited_users_count"`
+	NominalParentPoolPoints              uint64          `json:"nominal_parent_pool_points"`
+	CPUCapacityAvailable                 bool            `json:"cpu_capacity_available"`
+	OnlineCPUs                           *uint64         `json:"online_cpus"`
+	ProgrammedParentQuotaUsec            *uint64         `json:"programmed_parent_quota_usec"`
+	ProgrammedParentPeriodUsec           *uint64         `json:"programmed_parent_period_usec"`
+	CPUPointsDegraded                    bool            `json:"cpu_points_degraded"`
+	AppliedGuaranteePoints               uint64          `json:"applied_guarantee_points"`
+	ProgrammedGuaranteeWeight            uint64          `json:"programmed_guarantee_weight"`
+	ConfiguredBestEffortPoints           uint64          `json:"configured_best_effort_points"`
+	ParentCPUQuota                       *string         `json:"parent_cpu_quota"`
+	ProgrammedSiblingWeightSum           *uint64         `json:"programmed_sibling_weight_sum"`
+	ProgrammedBestEffortWeight           *uint64         `json:"programmed_best_effort_weight"`
+	ParentCPUUsageUsecDelta              *uint64         `json:"parent_cpu_usage_usec_delta"`
+	ObservedSiblingWeightSum             *uint64         `json:"observed_sibling_weight_sum"`
+	ConfiguredRootPoints                 *uint64         `json:"configured_root_points"`
+	ParentCPUPeriodsDelta                *uint64         `json:"parent_cpu_periods_delta"`
+	ParentCPUThrottledPeriodsDelta       *uint64         `json:"parent_cpu_throttled_periods_delta"`
+	ParentCPUThrottledUsecDelta          *uint64         `json:"parent_cpu_throttled_usec_delta"`
 }
 
 type getSystemHistoryResult struct {
@@ -451,14 +507,26 @@ func newSystemHistoryRecord(record database.SystemMetricsRecord) systemHistoryRe
 	return systemHistoryRecord{
 		IODeviceWeightState: record.IODeviceWeightState, IODeviceWeightReason: record.IODeviceWeightReason,
 		IODeviceWeightSelector:               record.IODeviceWeightSelector,
+		IODeviceWeightMechanism:              record.IODeviceWeightMechanism,
 		IODeviceWeightClassificationAttempts: record.IODeviceWeightClassificationAttempts,
 		IODeviceWeightProbeAttempts:          record.IODeviceWeightProbeAttempts,
-		IODeviceWeightProgrammed:             record.IODeviceWeightProgrammed, IODeviceWeightReadBack: record.IODeviceWeightReadBack,
-		IODeviceWeightFunctionallyAccepted: record.IODeviceWeightFunctionallyAccepted,
-		IODeviceWeightEffectQualified:      record.IODeviceWeightEffectQualified,
-		IODeviceWeightPartialUsers:         record.IODeviceWeightPartialUsers,
-		IODeviceWeightObservedDelivery:     record.IODeviceWeightObservedDelivery,
-		DenominatorState:                   record.DenominatorState, EnforcementMode: record.EnforcementMode,
+		IODeviceWeightProgrammed:             record.IODeviceWeightProgrammed,
+		IODeviceWeightProgrammedState:        record.IODeviceWeightProgrammedState,
+		IODeviceWeightReadBack:               record.IODeviceWeightReadBack,
+		IODeviceWeightReadBackState:          record.IODeviceWeightReadBackState,
+		IODeviceWeightFunctionallyAccepted:   record.IODeviceWeightFunctionallyAccepted,
+		IODeviceWeightEffectQualified:        record.IODeviceWeightEffectQualified,
+		IODeviceWeightAuthorityCoverage:      record.IODeviceWeightAuthorityCoverage,
+		IODeviceWeightCompleteUsers:          record.IODeviceWeightCompleteUsers,
+		IODeviceWeightPartialUsers:           record.IODeviceWeightPartialUsers,
+		IODeviceWeightUnavailableUsers:       record.IODeviceWeightUnavailableUsers,
+		IODeviceWeightSiblingSlices:          record.IODeviceWeightSiblingSlices,
+		IODeviceWeightTotalPoints:            record.IODeviceWeightTotalPoints,
+		IODeviceWeightRequestedAt:            formatOptionalHistoryTime(record.IODeviceWeightRequestedAt),
+		IODeviceWeightNextRetryAt:            formatOptionalHistoryTime(record.IODeviceWeightNextRetryAt),
+		IODeviceWeightValues:                 json.RawMessage(record.IODeviceWeightValuesJSON),
+		IODeviceWeightObservedDelivery:       record.IODeviceWeightObservedDelivery,
+		DenominatorState:                     record.DenominatorState, EnforcementMode: record.EnforcementMode,
 		Timestamp:                      record.Timestamp.Format(time.RFC3339),
 		SampleEpochID:                  record.SampleEpochID,
 		IntervalStart:                  formatOptionalHistoryTime(record.IntervalStart),

@@ -637,10 +637,22 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 	ioWeightStatus := m.GetIODeviceWeightStatus()
 	ioWeight := &resmanmetrics.IODeviceWeightExporterMetrics{
 		State: string(ioWeightStatus.State), Reason: ioWeightStatus.Reason,
+		Mechanism:  string(ioWeightStatus.Mechanism),
 		Programmed: ioWeightStatus.Programmed, ReadBack: ioWeightStatus.ReadBack,
+		ProgrammedState: string(ioWeightStatus.ProgrammedState), ReadBackState: string(ioWeightStatus.ReadBackState),
 		FunctionallyAccepted: ioWeightStatus.State == IODeviceWeightFunctionallyAccepted,
 		EffectQualified:      ioWeightStatus.EffectQualified, PartialUsers: ioWeightStatus.PartialUsers,
+		AuthorityCoverage: string(ioWeightStatus.AuthorityCoverage), CompleteUsers: ioWeightStatus.CompleteUsers,
+		UnavailableUsers: ioWeightStatus.UnavailableUsers, SiblingSlices: ioWeightStatus.SiblingSlices,
+		TotalPoints: ioWeightStatus.TotalPoints, RequestedAt: ioWeightStatus.RequestedAt, NextRetryAt: ioWeightStatus.NextRetryAt,
 		ObservedDelivery: ioWeightStatus.ObservedDelivery,
+	}
+	for _, value := range ioWeightStatus.Values {
+		ioWeight.Values = append(ioWeight.Values, resmanmetrics.IODeviceWeightValueMetrics{
+			UID: value.UID, Class: value.Class, Device: value.Device, Mechanism: value.Mechanism, Coverage: string(value.Coverage),
+			RequestedValue: value.RequestedValue, SystemdValue: value.SystemdValue, KernelValue: value.KernelValue, NominalShare: value.NominalShare,
+			Programmed: value.Programmed, ReadBack: value.ReadBack,
+		})
 	}
 
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
@@ -785,13 +797,24 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	persistenceSystem.IODeviceWeightState = string(ioWeight.State)
 	persistenceSystem.IODeviceWeightReason = ioWeight.Reason
 	persistenceSystem.IODeviceWeightSelector = ioWeight.Selector
+	persistenceSystem.IODeviceWeightMechanism = string(ioWeight.Mechanism)
 	persistenceSystem.IODeviceWeightClassificationAttempts = ioWeight.ClassificationAttempts
 	persistenceSystem.IODeviceWeightProbeAttempts = ioWeight.ProbeAttempts
 	persistenceSystem.IODeviceWeightProgrammed = ioWeight.Programmed
+	persistenceSystem.IODeviceWeightProgrammedState = string(ioWeight.ProgrammedState)
 	persistenceSystem.IODeviceWeightReadBack = ioWeight.ReadBack
+	persistenceSystem.IODeviceWeightReadBackState = string(ioWeight.ReadBackState)
 	persistenceSystem.IODeviceWeightFunctionallyAccepted = ioWeight.State == IODeviceWeightFunctionallyAccepted
 	persistenceSystem.IODeviceWeightEffectQualified = ioWeight.EffectQualified
+	persistenceSystem.IODeviceWeightAuthorityCoverage = string(ioWeight.AuthorityCoverage)
+	persistenceSystem.IODeviceWeightCompleteUsers = ioWeight.CompleteUsers
 	persistenceSystem.IODeviceWeightPartialUsers = ioWeight.PartialUsers
+	persistenceSystem.IODeviceWeightUnavailableUsers = ioWeight.UnavailableUsers
+	persistenceSystem.IODeviceWeightSiblingSlices = ioWeight.SiblingSlices
+	persistenceSystem.IODeviceWeightTotalPoints = ioWeight.TotalPoints
+	persistenceSystem.IODeviceWeightRequestedAt = optionalIODeviceWeightTime(ioWeight.RequestedAt)
+	persistenceSystem.IODeviceWeightNextRetryAt = optionalIODeviceWeightTime(ioWeight.NextRetryAt)
+	persistenceSystem.IODeviceWeightValuesJSON = ioDeviceWeightValuesJSON(ioWeight.Values)
 	persistenceSystem.IODeviceWeightObservedDelivery = ioWeight.ObservedDelivery
 	persistenceSystem.CPULimitsActive = summary.cpuLimitsActive
 	persistenceSystem.ResourceLimitsActive = summary.resourceLimitsActive

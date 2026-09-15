@@ -39,7 +39,9 @@ func (a *Adapter) ProbeIODeviceWeights(ctx context.Context, targets []IODeviceWe
 			Path: target.Identity.DeviceNode, Weight: 100, Mechanism: target.Mechanism,
 		})
 	}
-	if err := a.requireStartupCapabilities(ctx, StartupRequirements{IODeviceWeights: requests}); err != nil {
+	if err := a.requireCapabilities(ctx, StartupRequirements{IODeviceWeights: requests}, func(capability startupCapability) bool {
+		return capability.feature == "weighted I/O"
+	}); err != nil {
 		return fmt.Errorf("probe weighted I/O capability: %w", err)
 	}
 	return nil
@@ -55,6 +57,10 @@ type startupCapability struct {
 }
 
 func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements StartupRequirements) error {
+	return a.requireCapabilities(ctx, requirements, nil)
+}
+
+func (a *Adapter) requireCapabilities(ctx context.Context, requirements StartupRequirements, include func(startupCapability) bool) error {
 	transport, ok := a.transport.(startupCapabilityTransport)
 	if !ok {
 		return &AdapterError{
@@ -73,6 +79,9 @@ func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements S
 		return err
 	}
 	for _, capability := range capabilities {
+		if include != nil && !include(capability) {
+			continue
+		}
 		if err := a.probeStartupCapability(ctx, transport, capability); err != nil {
 			return err
 		}
@@ -319,10 +328,17 @@ func capabilityProbePreparationError(feature string, err error) error {
 }
 
 func capabilityProbeStartError(feature string, err error) error {
-	return &AdapterError{
-		Reason: ReasonCapabilityProbe, Operation: "startup_capabilities",
-		Err: fmt.Errorf("enabled feature %s could not start capability probe executable %q: %w", feature, capabilityProbeExecutable, err),
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("enabled feature %s could not start capability probe executable %q: %w",
+			feature, capabilityProbeExecutable, classifyTransportError("startup_capabilities", "", err))
 	}
+	var adapterErr *AdapterError
+	if errors.As(err, &adapterErr) && (adapterErr.Reason == ReasonBusUnavailable || adapterErr.Reason == ReasonTimeout) {
+		return fmt.Errorf("enabled feature %s could not start capability probe executable %q: %w",
+			feature, capabilityProbeExecutable, err)
+	}
+	return fmt.Errorf("enabled feature %s could not start capability probe executable %q: %w",
+		feature, capabilityProbeExecutable, &AdapterError{Reason: ReasonCapabilityProbe, Operation: "startup_capabilities", Err: err})
 }
 
 func newCapabilityProbeUnit() (string, error) {

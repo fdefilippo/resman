@@ -20,6 +20,12 @@ partitions, stacked devices, RAID, multipath, loop, zram, network block devices,
 unknown topologies. A direct virtio, SCSI, or NVMe request queue may have a terminal
 LVM holder only when every holder slave is that same disk or one of its partitions.
 
+The map path and schema marker are stable public names:
+`IO_USER_WEIGHT_FILE` defaults to `/etc/resman/io-weights.map`, and the first
+non-comment line is `[resman-io-weights-map-v1]`. A custom map path on a separate
+mount is not added automatically to the packaged unit's `RequiresMountsFor`; add an
+appropriate unit override when that mount must be ready before configuration loading.
+
 Weights use the injective public domain 1 through 1000. `IO_ROOT_WEIGHT` applies to
 `user-0.slice`; `IO_DEFAULT_WEIGHT` applies independently to every active unmapped or
 excluded user slice. Mapped values come from the root-owned mode-0600 map:
@@ -86,10 +92,11 @@ reported as `observed_delivery=not_measured`.
 
 ## Reconciliation and recovery
 
-The complete configured device set is one atomic property assignment per slice. If a
-device disappears, evidence becomes unavailable for one control cadence; a second
-consecutive unavailable reconciliation releases all owned weights rather than writing
-blindly. Reload, blackout, empty `IO_WEIGHT_DEVICES`, shutdown, and stale unit cleanup
+The complete configured device set is one atomic property assignment per slice. Only
+an `evidence_unavailable` reconciliation receives one successful-control-cadence
+grace; a second consecutive unavailable reconciliation, or any observation refusal,
+releases all owned weights rather than writing blindly. Reload, blackout, empty
+`IO_WEIGHT_DEVICES`, shutdown, and stale unit cleanup
 use the property lease journal and compare-before-restore. Externally changed values
 are preserved and become an intervention-required conflict.
 
@@ -102,8 +109,11 @@ safely released at startup even when the feature is currently disabled.
 ## Observability
 
 Prometheus publishes the bounded state and reason plus independent gauges for
-programmed, read-back, functionally accepted, effect qualified, partial users, and
-observed delivery. Read-only classifications and mutating probes have separate
+the selected mechanism; programming and read-back attempt state; exact requested,
+systemd-derived and kernel-read values; complete, partial and unavailable authority;
+the sibling denominator and total points; request age and next retry; functional
+acceptance; effect qualification; and observed delivery. Read-only post-readiness
+classifications and mutating probes have separate
 counters. The same typed object appears in the latest-only MCP system and limits
 status. SQLite schema 8 stores these dimensions with every system sample; schema 7 is
 migrated atomically, and its historical rows become `disabled` and `not_measured`.

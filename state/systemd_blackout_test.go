@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/metrics"
 )
 
@@ -47,5 +48,40 @@ func TestSystemdNativeBlackoutSuppressesIntentWhileObservationRemainsIndependent
 				t.Fatal("same above-threshold fixture without blackout did not activate through systemd")
 			}
 		})
+	}
+}
+
+func TestSystemdNativeBlackoutReleasesStandaloneIODeviceWeights(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: topology}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	if result := manager.AttemptIODeviceWeightCapability(context.Background()); result.Status.State != IODeviceWeightFunctionallyAccepted {
+		t.Fatalf("AttemptIODeviceWeightCapability() = %+v", result)
+	}
+	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), completeIODeviceWeightSample(topology), manager.cfg); err != nil {
+		t.Fatalf("reconcileSystemdIODeviceWeights() error = %v", err)
+	}
+	identity := topology.Users[0].Unit.Identity
+	if !adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
+		t.Fatal("weighted-I/O plan was not active before blackout")
+	}
+	manager.cfg.BlackoutSpec = "* 00-24"
+	var err error
+	manager.cfg.BlackoutTimeframes, err = config.ParseTimeframe(manager.cfg.BlackoutSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &controlCycleContext{ctx: context.Background(), cfg: manager.cfg, cycleID: 1, trigger: "test"}
+	if err := manager.stageCheckBlackout(run); err != nil {
+		t.Fatalf("stageCheckBlackout() error = %v", err)
+	}
+	status := manager.GetIODeviceWeightStatus()
+	if status.State != IODeviceWeightFunctionallyAccepted || status.Programmed || status.ReadBack || adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
+		t.Fatalf("blackout did not release standalone weights truthfully: status=%+v active=%+v", status, adapter.activeProperties)
 	}
 }

@@ -449,8 +449,16 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 	m.systemdResourceUnits = make(map[int]systemdunit.UnitIdentity)
 	m.ioWeightUnits = make(map[int]systemdunit.UnitIdentity)
 	m.ioWeightStatus.Programmed = false
+	m.ioWeightStatus.ProgrammedState = IODeviceWeightReleased
 	m.ioWeightStatus.ReadBack = false
+	m.ioWeightStatus.ReadBackState = IODeviceWeightReleased
 	m.ioWeightStatus.PartialUsers = 0
+	m.ioWeightStatus.CompleteUsers = 0
+	m.ioWeightStatus.UnavailableUsers = 0
+	m.ioWeightStatus.AuthorityCoverage = "unavailable"
+	m.ioWeightStatus.SiblingSlices = 0
+	m.ioWeightStatus.TotalPoints = 0
+	m.ioWeightStatus.Values = nil
 	m.requestedCPUUsers = make(map[int]bool)
 	m.activeUsers = make(map[int]bool)
 	m.userLimitedAt = make(map[int]time.Time)

@@ -72,11 +72,18 @@ about a 9.17 percent nominal share. Rootless descendants participate inside thei
 slice. An authority split is applied only to the known slice and is reported as partial,
 never as a UID-wide guarantee.
 
+ResMan acquires `IODeviceWeight` on every participating sibling, including
+`user-0.slice` and excluded users, because root and excluded users receive the
+configured root/default weights. A pre-existing operator value is therefore an
+ownership conflict and is preserved rather than overwritten.
+
 **Composition and recovery.** `IO_WEIGHT_DEVICES` does not alter `IO_DEVICE_FILTER`.
 Weights and hard `io.max` caps have separate leases and release independently. Emptying
-the selector, blackout, shutdown, device loss after one-cadence grace, or removal of a
-slice compare-before-restores only owned weights. A recovered weight lease is also
-cleaned safely when the new configuration leaves the feature disabled.
+the selector, blackout, shutdown, a definitive device loss, or removal of a slice
+compare-before-restores only owned weights. A recovered weight lease is also cleaned
+safely when the new configuration leaves the feature disabled. Only
+`evidence_unavailable` receives one successful-control-cadence grace; observation
+refusals release immediately.
 
 **Persistence and clients.** SQLite schema 7 is migrated atomically to schema 8. Old
 rows receive the historically truthful `disabled` and `not_measured` weighted-I/O
@@ -84,6 +91,16 @@ state; all existing columns and rows are preserved. Schemas 6 and older remain
 incompatible. Prometheus and latest-only MCP add typed weighted-I/O state without
 compatibility aliases. See [weighted block-I/O policy](IO-WEIGHTS.md) before enabling
 the feature.
+
+`functionally_accepted` means the owned live probe reached the systemd property and
+the active kernel file. It does not mean that a controlled contention experiment has
+qualified the delivered effect; that separate state is `effect_qualified`. Between
+`READY=1` and functional acceptance, sessions deliberately run without ResMan-owned
+device weights while CPU, RAM, and hard-I/O policy continue normally.
+
+Schema 8 is not readable by older ResMan releases. Before downgrading, archive the
+schema-8 database outside ResMan and start the older release with a new database; do
+not point an older daemon at the schema-8 history.
 
 ## CHANGED: systemd process authority is sampled once per decision
 

@@ -54,9 +54,10 @@ func TestPolicyRejectsUnsafeOrAmbiguousContentAtomically(t *testing.T) {
 	path, _ := NewPolicyMapPath("/etc/resman/io-weights.map")
 	inputs := PolicyInputs{Root: root, Default: defaultIO, MapPath: path}
 	resolver := exactResolver{
-		"root":  {{Username: "root", UID: 0}},
-		"alice": {{Username: "alice", UID: 1000}},
-		"alias": {{Username: "alias", UID: 1000}},
+		"root":        {{Username: "root", UID: 0}},
+		"alice":       {{Username: "alice", UID: 1000}},
+		"alias":       {{Username: "alias", UID: 1000}},
+		"bad\x7fuser": {{Username: "bad\x7fuser", UID: 1001}},
 	}
 	tests := []string{
 		"alice=100\n",
@@ -64,6 +65,7 @@ func TestPolicyRejectsUnsafeOrAmbiguousContentAtomically(t *testing.T) {
 		PolicyMapMarker + "\nalice=0\n",
 		PolicyMapMarker + "\nroot=100\n",
 		PolicyMapMarker + "\nalice=100\nalias=200\n",
+		PolicyMapMarker + "\nbad\x7fuser=100\n",
 	}
 	for _, content := range tests {
 		if _, err := NewPolicyLoader().LoadContent(inputs, []byte(content), resolver); err == nil {

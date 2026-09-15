@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,25 @@ func TestNotifySystemdReady(t *testing.T) {
 				t.Fatalf("notifySystemdReady() error = %v, want text %q", err, tt.wantError)
 			}
 		})
+	}
+}
+
+func TestRunPublishesReadyBeforeWeightedIODeviceCapabilityWork(t *testing.T) {
+	source, err := os.ReadFile("app_loop.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	runStart := strings.Index(text, "func (a *App) Run() error")
+	if runStart < 0 {
+		t.Fatal("App.Run not found")
+	}
+	runSource := text[runStart:]
+	ready := strings.Index(runSource, "a.notifyReady()")
+	loop := strings.Index(runSource, "a.runControlLoop()")
+	attempt := strings.Index(runSource, "a.stateManager.AttemptIODeviceWeightCapability")
+	if ready < 0 || loop < 0 || attempt < 0 || ready >= loop || loop >= attempt {
+		t.Fatalf("READY must precede the control loop and its first weighted-I/O capability attempt")
 	}
 }
 

@@ -60,48 +60,50 @@ type Manager struct {
 	hookWG sync.WaitGroup
 
 	// Internal control and observed enforcement state.
-	limitsActive               bool
-	limitsAppliedTime          time.Time
-	resourceLimitsActive       bool
-	resourceLimitsAppliedTime  time.Time
-	requestedCPUUsers          map[int]bool
-	activeUsers                map[int]bool // UID -> user with an authoritative applied CPU plan
-	userLimitedAt              map[int]time.Time
-	resourceLimits             map[int]userResourceLimitState
-	cpuPointsPolicy            cpupoints.PolicySnapshot
-	cpuCapacity                CPUCapacityProvider
-	persistencePreviousCPU     map[string]cgroup.CPUPointsNodeSnapshot
-	persistencePreviousRAM     map[int]cgroup.MemoryAccountingSnapshot
-	persistencePreviousTime    time.Time
-	persistenceFailureState    string
-	persistenceFailureActive   bool
-	cpuPointsLifecycleEvents   map[int]cpuPointsLifecycleEvent
-	cpuPointsSystemSnapshot    resmanmetrics.CPUPointsSystemSnapshot
-	cpuPointsUserSnapshots     map[int]resmanmetrics.CPUPointsUserSnapshot
-	pendingCPUPointsPolicy     *cpupoints.PolicySnapshot
-	cpuPointsDegraded          bool
-	enforcementStatus          cgroup.EnforcementStatus
-	enforcementCycleState      cgroup.EnforcementCycleState
-	systemdUnits               SystemdCPUUnitAdapter
-	systemdCPURequested        bool
-	systemdCPUComplete         bool
-	systemdCPUParent           systemdunit.UnitIdentity
-	systemdCPUSlices           map[int]systemdunit.UnitIdentity
-	systemdCPUPlanSignature    string
-	systemdCPUPlan             cpupoints.FlatPlan
-	persistencePreviousSystemd map[int]systemdunit.UnitIdentity
-	systemdResourcesRequested  bool
-	systemdResourceUnits       map[int]systemdunit.UnitIdentity
-	resolveSystemdIODevices    func(string) ([]string, error)
-	systemdIOWeights           SystemdIODeviceWeightAdapter
-	ioWeightClassifier         IODeviceWeightClassifier
-	ioWeightPolicy             ioweights.PolicySnapshot
-	ioWeightCapability         systemdunit.IODeviceWeightCapabilitySnapshot
-	ioWeightStatus             IODeviceWeightStatus
-	ioWeightUnits              map[int]systemdunit.UnitIdentity
-	ioWeightProbeCancel        context.CancelFunc
-	ioWeightProbeToken         uint64
-	ioWeightUnavailableCycles  int
+	limitsActive                          bool
+	limitsAppliedTime                     time.Time
+	resourceLimitsActive                  bool
+	resourceLimitsAppliedTime             time.Time
+	requestedCPUUsers                     map[int]bool
+	activeUsers                           map[int]bool // UID -> user with an authoritative applied CPU plan
+	userLimitedAt                         map[int]time.Time
+	resourceLimits                        map[int]userResourceLimitState
+	cpuPointsPolicy                       cpupoints.PolicySnapshot
+	cpuCapacity                           CPUCapacityProvider
+	persistencePreviousCPU                map[string]cgroup.CPUPointsNodeSnapshot
+	persistencePreviousRAM                map[int]cgroup.MemoryAccountingSnapshot
+	persistencePreviousTime               time.Time
+	persistenceFailureState               string
+	persistenceFailureActive              bool
+	cpuPointsLifecycleEvents              map[int]cpuPointsLifecycleEvent
+	cpuPointsSystemSnapshot               resmanmetrics.CPUPointsSystemSnapshot
+	cpuPointsUserSnapshots                map[int]resmanmetrics.CPUPointsUserSnapshot
+	pendingCPUPointsPolicy                *cpupoints.PolicySnapshot
+	cpuPointsDegraded                     bool
+	enforcementStatus                     cgroup.EnforcementStatus
+	enforcementCycleState                 cgroup.EnforcementCycleState
+	systemdUnits                          SystemdCPUUnitAdapter
+	systemdCPURequested                   bool
+	systemdCPUComplete                    bool
+	systemdCPUParent                      systemdunit.UnitIdentity
+	systemdCPUSlices                      map[int]systemdunit.UnitIdentity
+	systemdCPUPlanSignature               string
+	systemdCPUPlan                        cpupoints.FlatPlan
+	persistencePreviousSystemd            map[int]systemdunit.UnitIdentity
+	systemdResourcesRequested             bool
+	systemdResourceUnits                  map[int]systemdunit.UnitIdentity
+	resolveSystemdIODevices               func(string) ([]string, error)
+	systemdIOWeights                      SystemdIODeviceWeightAdapter
+	ioWeightClassifier                    IODeviceWeightClassifier
+	ioWeightPolicy                        ioweights.PolicySnapshot
+	ioWeightPolicyReconcilePending        bool
+	ioWeightCapability                    systemdunit.IODeviceWeightCapabilitySnapshot
+	ioWeightStatus                        IODeviceWeightStatus
+	ioWeightUnits                         map[int]systemdunit.UnitIdentity
+	ioWeightProbeCancel                   context.CancelFunc
+	ioWeightProbeToken                    uint64
+	ioWeightCapabilityUnavailableAttempts int
+	ioWeightControlUnavailableCycles      int
 
 	// Threshold monitoring
 	thresholdTracker    *ThresholdTracker
@@ -296,6 +298,7 @@ func NewManager(
 		systemdCPUSlices:          make(map[int]systemdunit.UnitIdentity),
 		systemdResourceUnits:      make(map[int]systemdunit.UnitIdentity),
 		ioWeightUnits:             make(map[int]systemdunit.UnitIdentity),
+		ioWeightStatus:            newDisabledIODeviceWeightStatus(),
 		resolveSystemdIODevices:   systemdunit.ResolveBlockDevices,
 		enforcementStatus: cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeObservationOnly,
@@ -655,13 +658,26 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	m.mu.Lock()
 	m.cfg = newConfig
 	if oldConfig == nil || oldConfig.GetIOWeightDevices() != newConfig.GetIOWeightDevices() {
+		selector := newConfig.GetIOWeightDevices()
+		hadProgrammedWeights := m.ioWeightStatus.Programmed || len(m.ioWeightUnits) > 0
 		m.ioWeightCapability = systemdunit.IODeviceWeightCapabilitySnapshot{}
-		m.ioWeightStatus.State = IODeviceWeightRequestedPending
+		if selector == "" {
+			m.ioWeightStatus.State = IODeviceWeightDisabled
+			if hadProgrammedWeights {
+				m.ioWeightStatus.State = IODeviceWeightReleasePending
+			}
+		} else {
+			m.ioWeightStatus.State = IODeviceWeightRequestedPending
+			m.ioWeightStatus.RequestedAt = time.Now()
+		}
 		m.ioWeightStatus.Reason = "configuration_changed"
-		m.ioWeightStatus.Selector = newConfig.GetIOWeightDevices()
-		m.ioWeightStatus.Programmed = len(m.ioWeightUnits) > 0
+		m.ioWeightStatus.Selector = selector
+		m.ioWeightStatus.Programmed = hadProgrammedWeights
 		m.ioWeightStatus.ReadBack = false
-		m.ioWeightUnavailableCycles = 0
+		m.ioWeightStatus.ReadBackState = IODeviceWeightNotAttempted
+		m.ioWeightStatus.NextRetryAt = time.Time{}
+		m.ioWeightCapabilityUnavailableAttempts = 0
+		m.ioWeightControlUnavailableCycles = 0
 	}
 	if processPolicyChanged {
 		m.previousIOEligibleUsers = make(map[int]struct{})

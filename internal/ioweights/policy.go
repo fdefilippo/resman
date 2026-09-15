@@ -263,6 +263,9 @@ func parsePolicyMap(data []byte) ([]rawPolicyEntry, error) {
 		if !found || username == "" || rawWeight == "" || strings.Contains(rawWeight, "=") {
 			return nil, fmt.Errorf("weighted I/O map line %d must be username=weight", lineNumber)
 		}
+		if strings.IndexFunc(username, func(r rune) bool { return r < ' ' || r == 0x7f }) >= 0 {
+			return nil, fmt.Errorf("weighted I/O map line %d username contains a control character", lineNumber)
+		}
 		if prior, duplicate := seen[username]; duplicate {
 			return nil, fmt.Errorf("weighted I/O map username %q is duplicated at lines %d and %d", username, prior, lineNumber)
 		}
@@ -281,6 +284,22 @@ func parsePolicyMap(data []byte) ([]rawPolicyEntry, error) {
 		entries = append(entries, rawPolicyEntry{username: username, weight: weight, line: lineNumber})
 	}
 	return entries, nil
+}
+
+// Equal reports whether two snapshots express the same runtime policy. Source
+// file identity is intentionally excluded: replacing a map with identical
+// validated content must not force a new capability probe.
+func (s PolicySnapshot) Equal(other PolicySnapshot) bool {
+	if s.root != other.root || s.defaultIO != other.defaultIO || len(s.entries) != len(other.entries) {
+		return false
+	}
+	for index := range s.entries {
+		left, right := s.entries[index], other.entries[index]
+		if left.username != right.username || left.uid != right.uid || left.weight != right.weight {
+			return false
+		}
+	}
+	return true
 }
 
 // ExactIdentityResolver uses the established exact NSS result contract.

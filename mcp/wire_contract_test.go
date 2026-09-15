@@ -138,8 +138,13 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 		})
 	}
 	assertExactJSONKeys(t, newIODeviceWeightPayload(state.IODeviceWeightStatus{}), []string{
-		"classification_attempts", "effect_qualified", "functionally_accepted", "observed_delivery",
-		"partial_users", "probe_attempts", "programmed", "read_back", "reason", "selector", "state",
+		"authority_coverage", "classification_attempts", "complete_users", "effect_qualified", "functionally_accepted",
+		"mechanism", "observed_delivery", "partial_users", "probe_attempts", "programmed", "programmed_state",
+		"read_back", "read_back_state", "reason", "selector", "sibling_slices", "state", "total_points",
+		"unavailable_users", "values",
+	})
+	assertExactJSONKeys(t, ioDeviceWeightValuePayload{}, []string{
+		"class", "coverage", "device", "mechanism", "nominal_share", "programmed", "read_back", "requested_value", "uid",
 	})
 
 	assertExactNestedJSONKeys(t, getUserHistoryResult{Records: []userHistoryRecord{{}}}, "records", []string{
@@ -156,10 +161,14 @@ func TestMCPWireDTOJSONContracts(t *testing.T) {
 	assertExactNestedJSONKeys(t, getSystemHistoryResult{Records: []systemHistoryRecord{{}}}, "records", []string{
 		"denominator_state", "enforcement_mode",
 		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector",
+		"io_device_weight_mechanism",
 		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
-		"io_device_weight_programmed", "io_device_weight_read_back",
+		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
 		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
-		"io_device_weight_partial_users", "io_device_weight_observed_delivery",
+		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users",
+		"io_device_weight_unavailable_users", "io_device_weight_sibling_slices", "io_device_weight_total_points",
+		"io_device_weight_requested_at", "io_device_weight_next_retry_at", "io_device_weight_values",
+		"io_device_weight_observed_delivery",
 		"actively_limited_users_count", "any_limits_active", "applied_guarantee_points", "configured_root_points",
 		"programmed_best_effort_weight", "configured_best_effort_points", "cpu_actively_limited_users_count", "cpu_capacity_available",
 		"cpu_limits_active", "cpu_points_degraded", "observed_sibling_weight_sum", "programmed_sibling_weight_sum",
@@ -301,9 +310,14 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 	systemRecord := newSystemHistoryRecord(database.SystemMetricsRecord{
 		Timestamp: now, SampleEpochID: 7, IntervalStart: &start, IntervalEnd: now,
 		IODeviceWeightState: "refused_observation", IODeviceWeightReason: "ambiguous_topology",
-		IODeviceWeightSelector: "8:0", IODeviceWeightClassificationAttempts: 4,
+		IODeviceWeightSelector: "8:0", IODeviceWeightMechanism: "bfq", IODeviceWeightClassificationAttempts: 4,
 		IODeviceWeightProbeAttempts: 1, IODeviceWeightProgrammed: true,
-		IODeviceWeightPartialUsers: 2, IODeviceWeightObservedDelivery: "not_measured",
+		IODeviceWeightProgrammedState: "confirmed", IODeviceWeightReadBackState: "failed",
+		IODeviceWeightAuthorityCoverage: "partial", IODeviceWeightCompleteUsers: 3,
+		IODeviceWeightPartialUsers: 2, IODeviceWeightUnavailableUsers: 1,
+		IODeviceWeightSiblingSlices: 6, IODeviceWeightTotalPoints: 1500,
+		IODeviceWeightRequestedAt: &start, IODeviceWeightNextRetryAt: &now,
+		IODeviceWeightValuesJSON: "[{\"uid\":1000}]", IODeviceWeightObservedDelivery: "not_measured",
 		CPULimitsActive: true, ResourceLimitsActive: true,
 		AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 3,
 		ParentCPUUsageUsecDelta: &delta,
@@ -313,6 +327,9 @@ func TestMCPWireProjectionsPreserveTypedContracts(t *testing.T) {
 		systemRecord.IODeviceWeightState != "refused_observation" || systemRecord.IODeviceWeightReason != "ambiguous_topology" ||
 		systemRecord.IODeviceWeightClassificationAttempts != 4 || systemRecord.IODeviceWeightProbeAttempts != 1 ||
 		!systemRecord.IODeviceWeightProgrammed || systemRecord.IODeviceWeightPartialUsers != 2 ||
+		systemRecord.IODeviceWeightMechanism != "bfq" || systemRecord.IODeviceWeightProgrammedState != "confirmed" ||
+		systemRecord.IODeviceWeightAuthorityCoverage != "partial" || systemRecord.IODeviceWeightSiblingSlices != 6 ||
+		string(systemRecord.IODeviceWeightValues) != "[{\"uid\":1000}]" ||
 		systemRecord.ParentCPUUsageUsecDelta == nil || *systemRecord.ParentCPUUsageUsecDelta != 90 {
 		t.Fatalf("system history projection = %+v", systemRecord)
 	}

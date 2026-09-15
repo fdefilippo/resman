@@ -41,9 +41,16 @@ func (m *DatabaseManager) writeUserMetricsForTest(record *UserMetricsRecord) err
 		record.CPUPointsLifecycleState = "eligible_inactive"
 	}
 	return m.WriteMetricsBatch(&SystemMetricsRecord{
-		SampleEpochID: record.SampleEpochID,
-		IntervalEnd:   record.Timestamp,
-		Timestamp:     record.Timestamp,
+		SampleEpochID:                   record.SampleEpochID,
+		IntervalEnd:                     record.Timestamp,
+		Timestamp:                       record.Timestamp,
+		IODeviceWeightState:             "disabled",
+		IODeviceWeightMechanism:         "none",
+		IODeviceWeightProgrammedState:   "not_attempted",
+		IODeviceWeightReadBackState:     "not_attempted",
+		IODeviceWeightAuthorityCoverage: "unavailable",
+		IODeviceWeightValuesJSON:        "[]",
+		IODeviceWeightObservedDelivery:  "not_measured",
 	}, []*UserMetricsRecord{record})
 }
 
@@ -54,6 +61,27 @@ func (m *DatabaseManager) writeSystemMetricsForTest(record *SystemMetricsRecord)
 	record.Timestamp = record.Timestamp.UTC()
 	record.SampleEpochID = record.Timestamp.UnixNano()
 	record.IntervalEnd = record.Timestamp
+	if record.IODeviceWeightState == "" {
+		record.IODeviceWeightState = "disabled"
+	}
+	if record.IODeviceWeightObservedDelivery == "" {
+		record.IODeviceWeightObservedDelivery = "not_measured"
+	}
+	if record.IODeviceWeightMechanism == "" {
+		record.IODeviceWeightMechanism = "none"
+	}
+	if record.IODeviceWeightProgrammedState == "" {
+		record.IODeviceWeightProgrammedState = "not_attempted"
+	}
+	if record.IODeviceWeightReadBackState == "" {
+		record.IODeviceWeightReadBackState = "not_attempted"
+	}
+	if record.IODeviceWeightAuthorityCoverage == "" {
+		record.IODeviceWeightAuthorityCoverage = "unavailable"
+	}
+	if record.IODeviceWeightValuesJSON == "" {
+		record.IODeviceWeightValuesJSON = "[]"
+	}
 	return m.WriteMetricsBatch(record, nil)
 }
 
@@ -115,9 +143,16 @@ func TestDatabasePathRemainsAvailableWhileWriteBlocks(t *testing.T) {
 	now := time.Now().UTC()
 	go func() {
 		writeDone <- manager.WriteMetricsBatch(&SystemMetricsRecord{
-			SampleEpochID: now.UnixNano(),
-			IntervalEnd:   now,
-			Timestamp:     now,
+			SampleEpochID:                   now.UnixNano(),
+			IntervalEnd:                     now,
+			Timestamp:                       now,
+			IODeviceWeightState:             "disabled",
+			IODeviceWeightMechanism:         "none",
+			IODeviceWeightProgrammedState:   "not_attempted",
+			IODeviceWeightReadBackState:     "not_attempted",
+			IODeviceWeightAuthorityCoverage: "unavailable",
+			IODeviceWeightValuesJSON:        "[]",
+			IODeviceWeightObservedDelivery:  "not_measured",
 		}, nil)
 	}()
 	<-started
@@ -308,9 +343,13 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 		t.Fatalf("create schema 8 fixture: %v", err)
 	}
 	now := time.Now().UTC()
-	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now, TotalCores: 4}); err != nil {
+	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now.Add(-time.Second), TotalCores: 4}); err != nil {
 		_ = manager.Close()
 		t.Fatalf("write pre-migration row: %v", err)
+	}
+	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now, TotalCores: 8}); err != nil {
+		_ = manager.Close()
+		t.Fatalf("write second pre-migration row: %v", err)
 	}
 	if err := manager.Close(); err != nil {
 		t.Fatalf("close schema 8 fixture: %v", err)
@@ -320,29 +359,35 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open schema fixture: %v", err)
 	}
-	_, err = raw.Exec(`
-		ALTER TABLE system_metrics RENAME TO system_metrics_v8;
-		CREATE TABLE system_metrics AS SELECT
-			id, timestamp, sample_epoch_id, interval_start, interval_end,
-			total_cpu_usage_percent, total_cores, system_load,
-			cpu_limits_active, resource_limits_active, any_limits_active,
-			cpu_actively_limited_users_count, actively_limited_users_count,
-			nominal_parent_pool_points, cpu_capacity_available, online_cpus,
-			programmed_parent_quota_usec, programmed_parent_period_usec,
-			cpu_points_degraded, applied_guarantee_points, programmed_guarantee_weight,
-			configured_best_effort_points, parent_cpu_quota,
-			programmed_sibling_weight_sum, programmed_best_effort_weight,
-			parent_cpu_usage_usec_delta, observed_sibling_weight_sum,
-			configured_root_points, parent_cpu_periods_delta,
-			parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta,
-			denominator_state, enforcement_mode
-		FROM system_metrics_v8;
-		DROP TABLE system_metrics_v8;
-		PRAGMA user_version = 7;
-	`)
-	if err != nil {
+	for _, column := range []string{
+		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector",
+		"io_device_weight_mechanism",
+		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
+		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
+		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
+		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users", "io_device_weight_unavailable_users",
+		"io_device_weight_sibling_slices", "io_device_weight_total_points", "io_device_weight_requested_at", "io_device_weight_next_retry_at",
+		"io_device_weight_values_json", "io_device_weight_observed_delivery",
+	} {
+		if _, err := raw.Exec("ALTER TABLE system_metrics DROP COLUMN " + column); err != nil {
+			_ = raw.Close()
+			t.Fatalf("construct schema 7 fixture by dropping %s: %v", column, err)
+		}
+	}
+	if _, err := raw.Exec("PRAGMA user_version = 7"); err != nil {
 		_ = raw.Close()
-		t.Fatalf("construct schema 7 fixture: %v", err)
+		t.Fatalf("mark schema 7 fixture: %v", err)
+	}
+	var schemaSQL string
+	if err := raw.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'system_metrics'").Scan(&schemaSQL); err != nil {
+		_ = raw.Close()
+		t.Fatalf("read schema 7 fixture definition: %v", err)
+	}
+	for _, fragment := range []string{"PRIMARY KEY AUTOINCREMENT", "DEFAULT CURRENT_TIMESTAMP", "NOT NULL"} {
+		if !strings.Contains(schemaSQL, fragment) {
+			_ = raw.Close()
+			t.Fatalf("schema 7 fixture lost %q: %s", fragment, schemaSQL)
+		}
 	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close schema 7 fixture: %v", err)
@@ -360,13 +405,25 @@ func TestNewDatabaseManagerMigratesSchema7To8Atomically(t *testing.T) {
 	if version != 8 {
 		t.Fatalf("migrated schema version = %d, want 8", version)
 	}
-	var state, delivery string
-	var totalCores int
-	if err := manager.db.QueryRow("SELECT io_device_weight_state, io_device_weight_observed_delivery, total_cores FROM system_metrics").Scan(&state, &delivery, &totalCores); err != nil {
+	rows, err := manager.db.Query("SELECT io_device_weight_state, io_device_weight_observed_delivery, total_cores FROM system_metrics ORDER BY timestamp")
+	if err != nil {
 		t.Fatalf("read migrated history: %v", err)
 	}
-	if state != "disabled" || delivery != "not_measured" || totalCores != 4 {
-		t.Fatalf("migrated historical semantics = state %q delivery %q cores %d", state, delivery, totalCores)
+	defer func() { _ = rows.Close() }()
+	var cores []int
+	for rows.Next() {
+		var state, delivery string
+		var totalCores int
+		if err := rows.Scan(&state, &delivery, &totalCores); err != nil {
+			t.Fatal(err)
+		}
+		if state != "disabled" || delivery != "not_measured" {
+			t.Fatalf("migrated historical semantics = state %q delivery %q", state, delivery)
+		}
+		cores = append(cores, totalCores)
+	}
+	if fmt.Sprint(cores) != "[4 8]" {
+		t.Fatalf("migrated historical rows = %v, want [4 8]", cores)
 	}
 }
 
@@ -526,17 +583,29 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 
 	// Write system metrics.
 	now := time.Now()
+	requestedAt := now.Add(-time.Minute)
+	nextRetryAt := now.Add(time.Minute)
 	record := &SystemMetricsRecord{
 		IODeviceWeightState:                  "functionally_accepted",
 		IODeviceWeightReason:                 "",
 		IODeviceWeightSelector:               "8:0",
+		IODeviceWeightMechanism:              "bfq",
 		IODeviceWeightClassificationAttempts: 5,
 		IODeviceWeightProbeAttempts:          2,
 		IODeviceWeightProgrammed:             true,
+		IODeviceWeightProgrammedState:        "confirmed",
 		IODeviceWeightReadBack:               true,
+		IODeviceWeightReadBackState:          "confirmed",
 		IODeviceWeightFunctionallyAccepted:   true,
 		IODeviceWeightEffectQualified:        false,
+		IODeviceWeightAuthorityCoverage:      "partial",
+		IODeviceWeightCompleteUsers:          2,
 		IODeviceWeightPartialUsers:           1,
+		IODeviceWeightSiblingSlices:          3,
+		IODeviceWeightTotalPoints:            900,
+		IODeviceWeightRequestedAt:            &requestedAt,
+		IODeviceWeightNextRetryAt:            &nextRetryAt,
+		IODeviceWeightValuesJSON:             "[{\"uid\":1000,\"requested_value\":700}]",
 		IODeviceWeightObservedDelivery:       "not_measured",
 		TotalCPUUsagePercent:                 75.2,
 		TotalCores:                           4,
@@ -579,7 +648,12 @@ func TestWriteAndReadSystemMetrics(t *testing.T) {
 		records[0].IODeviceWeightClassificationAttempts != 5 || records[0].IODeviceWeightProbeAttempts != 2 ||
 		!records[0].IODeviceWeightProgrammed || !records[0].IODeviceWeightReadBack ||
 		!records[0].IODeviceWeightFunctionallyAccepted || records[0].IODeviceWeightEffectQualified ||
-		records[0].IODeviceWeightPartialUsers != 1 || records[0].IODeviceWeightObservedDelivery != "not_measured" {
+		records[0].IODeviceWeightMechanism != "bfq" || records[0].IODeviceWeightProgrammedState != "confirmed" ||
+		records[0].IODeviceWeightAuthorityCoverage != "partial" || records[0].IODeviceWeightCompleteUsers != 2 ||
+		records[0].IODeviceWeightPartialUsers != 1 || records[0].IODeviceWeightSiblingSlices != 3 ||
+		records[0].IODeviceWeightTotalPoints != 900 || records[0].IODeviceWeightRequestedAt == nil ||
+		records[0].IODeviceWeightNextRetryAt == nil || records[0].IODeviceWeightValuesJSON != record.IODeviceWeightValuesJSON ||
+		records[0].IODeviceWeightObservedDelivery != "not_measured" {
 		t.Errorf("weighted-I/O state was not preserved: %+v", records[0])
 	}
 }
@@ -604,7 +678,10 @@ func TestWriteMetricsBatchRollsBackWholeCycle(t *testing.T) {
 
 	now := time.Now()
 	err = manager.WriteMetricsBatch(
-		&SystemMetricsRecord{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, TotalCores: 4},
+		&SystemMetricsRecord{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, TotalCores: 4,
+			IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
+			IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
+			IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured"},
 		[]*UserMetricsRecord{
 			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1000, Username: "accepted", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
 			{SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now, UID: 1001, Username: "rejected", ProcessCount: 1, ConfiguredCPUClass: "best_effort", CPUPointsLifecycleState: "eligible_inactive"},
@@ -640,6 +717,9 @@ func TestCPUPointsMetricsBatchRoundTripsTypedAllocationAndAccounting(t *testing.
 	boolean := func(value bool) *bool { return &value }
 	system := &SystemMetricsRecord{
 		SampleEpochID: epoch, IntervalStart: &start, IntervalEnd: end, Timestamp: end,
+		IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
+		IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
+		IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured",
 		TotalCPUUsagePercent: 82, TotalCores: 4, SystemLoad: 3.5,
 		CPULimitsActive: true, AnyLimitsActive: true, CPUActivelyLimitedUsersCount: 2, ActivelyLimitedUsersCount: 2,
 		NominalParentPoolPoints: 900, CPUCapacityAvailable: true, OnlineCPUs: u64(4),
@@ -736,6 +816,13 @@ func TestWriteMetricsBatchRejectsIncompleteOrMixedObservationIntervals(t *testin
 			}
 			defer func() { _ = manager.Close() }()
 			system := &SystemMetricsRecord{SampleEpochID: 10, IntervalStart: &start, IntervalEnd: now, Timestamp: now}
+			system.IODeviceWeightState = "disabled"
+			system.IODeviceWeightMechanism = "none"
+			system.IODeviceWeightProgrammedState = "not_attempted"
+			system.IODeviceWeightReadBackState = "not_attempted"
+			system.IODeviceWeightAuthorityCoverage = "unavailable"
+			system.IODeviceWeightValuesJSON = "[]"
+			system.IODeviceWeightObservedDelivery = "not_measured"
 			user := &UserMetricsRecord{
 				SampleEpochID: 10, IntervalStart: &start, IntervalEnd: now, Timestamp: now, UID: 1000, Username: "alice",
 				ConfiguredCPUClass: "guaranteed", CPUPointsLifecycleState: "applied",
@@ -747,6 +834,43 @@ func TestWriteMetricsBatchRejectsIncompleteOrMixedObservationIntervals(t *testin
 			}
 			if err := manager.WriteMetricsBatch(system, users); err == nil {
 				t.Fatal("WriteMetricsBatch() error = nil")
+			}
+		})
+	}
+}
+
+func TestWriteMetricsBatchRejectsMissingOrUnboundedIODeviceWeightState(t *testing.T) {
+	now := time.Now().UTC()
+	valid := func() *SystemMetricsRecord {
+		return &SystemMetricsRecord{
+			SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now,
+			IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none",
+			IODeviceWeightProgrammedState: "not_attempted", IODeviceWeightReadBackState: "not_attempted",
+			IODeviceWeightAuthorityCoverage: "unavailable", IODeviceWeightValuesJSON: "[]",
+			IODeviceWeightObservedDelivery: "not_measured",
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*SystemMetricsRecord)
+	}{
+		{name: "missing lifecycle producer", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightState = "" }},
+		{name: "unbounded reason", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightReason = "device-/tmp/operator-value" }},
+		{name: "missing delivery producer", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightObservedDelivery = "" }},
+		{name: "invalid value document", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightValuesJSON = "{" }},
+		{name: "value document is not an array", mutate: func(record *SystemMetricsRecord) { record.IODeviceWeightValuesJSON = "{}" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = manager.Close() }()
+			record := valid()
+			tt.mutate(record)
+			if err := manager.WriteMetricsBatch(record, nil); err == nil {
+				t.Fatal("WriteMetricsBatch() accepted missing or unbounded weighted-I/O state")
 			}
 		})
 	}
@@ -769,6 +893,9 @@ func TestCPUPointsLifecycleStatesRemainDistinct(t *testing.T) {
 	}
 	if err := manager.WriteMetricsBatch(&SystemMetricsRecord{
 		SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now,
+		IODeviceWeightState: "disabled", IODeviceWeightMechanism: "none", IODeviceWeightProgrammedState: "not_attempted",
+		IODeviceWeightReadBackState: "not_attempted", IODeviceWeightAuthorityCoverage: "unavailable",
+		IODeviceWeightValuesJSON: "[]", IODeviceWeightObservedDelivery: "not_measured",
 	}, users); err != nil {
 		t.Fatalf("WriteMetricsBatch() error = %v", err)
 	}

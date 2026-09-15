@@ -62,7 +62,8 @@ func (a *App) runControlLoop() error {
 	}()
 	ioWeightRetry := newIOWeightRetryController()
 	defer ioWeightRetry.Stop()
-	ioWeightRetry.Schedule(a.stateManager.AttemptIODeviceWeightCapability(a.ctx))
+	result := a.stateManager.AttemptIODeviceWeightCapability(a.ctx)
+	a.stateManager.SetIODeviceWeightNextRetry(ioWeightRetry.Schedule(result))
 
 	if err := a.stateManager.RunControlCycleWithTrigger(a.ctx, state.ControlCycleTriggerInitial); err != nil && !a.reportShutdownCycleCancellation(err, state.ControlCycleTriggerInitial) {
 		a.logger.Error("Error in initial control cycle",
@@ -97,13 +98,13 @@ func (a *App) runControlLoop() error {
 			metricsTicker, metricsRefreshC = a.refreshMetricsTicker(metricsTicker, metricsRefreshC, &metricsRefreshInterval)
 			ioWeightRetry.Reset()
 			result := a.stateManager.AttemptIODeviceWeightCapability(a.ctx)
-			ioWeightRetry.Schedule(result)
+			a.stateManager.SetIODeviceWeightNextRetry(ioWeightRetry.Schedule(result))
 			if result.ActivateCycle {
 				a.runIODeviceWeightActivationCycle()
 			}
 		case <-ioWeightRetry.C():
 			result := a.stateManager.AttemptIODeviceWeightCapability(a.ctx)
-			ioWeightRetry.Schedule(result)
+			a.stateManager.SetIODeviceWeightNextRetry(ioWeightRetry.Schedule(result))
 			if result.ActivateCycle {
 				a.runIODeviceWeightActivationCycle()
 			}

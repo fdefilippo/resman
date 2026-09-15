@@ -2722,7 +2722,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*(requested_pending|refused_observation|probe_candidate)$",
+                "pattern": ".*(requested_pending|release_pending|refused_observation|probe_candidate)$",
                 "result": {
                   "color": "yellow",
                   "index": 2

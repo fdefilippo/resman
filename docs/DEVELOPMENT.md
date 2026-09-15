@@ -531,8 +531,9 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - An enabled capability may be **mandatory asynchronously** only when a demonstrated
   boot-order dependency makes a pre-`READY=1` proof unsafe or host-blocking. This class
   **MUST** validate configuration synchronously, publish a bounded pending or refusal
-  state after readiness, perform no feature mutation before an owned end-to-end proof,
-  retry with a bounded cancellation-aware cadence, preserve unrelated startup
+  state dedicated to that feature after readiness, perform no feature mutation before
+  an owned end-to-end proof, and use one cancellation-aware in-flight attempt with a
+  bounded retry cadence per configuration generation. It **MUST** preserve unrelated startup
   requirements and enforcement, and never label an unproved path supported. An
   observation-derived refusal remains eligible for read-only reclassification; a
   deterministic post-proof mismatch, unsafe cleanup, or ownership conflict may stop

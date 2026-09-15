@@ -297,6 +297,22 @@ func TestStartupCapabilityProbeFailureNamesPayloadWithoutClaimingMissingInterfac
 	}
 }
 
+func TestStartupCapabilityProbeTimeoutPreservesRetryableReason(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.probeStartErr = context.DeadlineExceeded
+	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
+
+	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonTimeout {
+		t.Fatalf("probeStartupCapability() error = %v, want timeout reason", err)
+	}
+	if IsCapabilityProbeError(err) {
+		t.Fatalf("timeout was flattened into a permanent capability-probe error: %v", err)
+	}
+}
+
 func TestStartupCleansAnInterruptedReservedProbeBeforeValidation(t *testing.T) {
 	transport := newFakeUnitTransport()
 	stale := capabilityProbeUnitPrefix + "0123456789abcdef.slice"

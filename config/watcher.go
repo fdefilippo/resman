@@ -555,7 +555,7 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 
 	w.mu.RLock()
 	running := w.isRunning
-	ioWeightMapPath := w.ioWeightMapPath
+	previousIOWeightMapPath := w.ioWeightMapPath
 	w.mu.RUnlock()
 	if !running {
 		return false, ErrWatcherStopped
@@ -609,7 +609,14 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	} else if expected != nil {
 		return false, fmt.Errorf("revision-bound reload requires a CPU Points map")
 	}
-	if ioWeightMapPath != "" {
+	// Load and validate a detached configuration snapshot.
+	newConfig, err := LoadAndValidate(w.configPath)
+	if err != nil {
+		return true, fmt.Errorf("reload configuration from %s: %w", w.configPath, err)
+	}
+	ioWeightMapPath := ""
+	if newConfig.GetIOWeightDevices() != "" {
+		ioWeightMapPath = filepath.Clean(newConfig.GetIOUserWeightFile())
 		mapContent, mapErr := os.ReadFile(ioWeightMapPath)
 		if mapErr != nil {
 			return false, fmt.Errorf("cannot read weighted-I/O map %s: %w", ioWeightMapPath, mapErr)
@@ -617,10 +624,11 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 		ioWeightMapDigest = sha256.Sum256(mapContent)
 	}
 
-	// Avoid processing the same content twice. Metadata alone is insufficient:
-	// atomic replacements can preserve both size and timestamp resolution.
+	// Avoid processing the same composite content twice. The weighted-I/O map
+	// path and digest come from this candidate, never from a second post-apply
+	// read that could hide a concurrent atomic replacement.
 	w.mu.RLock()
-	sameContent := w.hasDigest && digest == w.lastDigest
+	sameContent := w.hasDigest && digest == w.lastDigest && previousIOWeightMapPath == ioWeightMapPath
 	if w.mapPath != "" {
 		sameContent = sameContent && w.hasMapDigest && mapDigest == w.lastMapDigest
 	}
@@ -628,18 +636,11 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 		sameContent = sameContent && w.hasIOWeightMapDigest && ioWeightMapDigest == w.lastIOWeightMapDigest
 	}
 	w.mu.RUnlock()
-
 	if !force && sameContent {
 		w.logger.Debug("Config file content has not changed")
 		return false, nil
 	}
 	w.logger.Info("Configuration file changed, attempting to reload")
-
-	// Load and validate a detached configuration snapshot.
-	newConfig, err := LoadAndValidate(w.configPath)
-	if err != nil {
-		return true, fmt.Errorf("reload configuration from %s: %w", w.configPath, err)
-	}
 
 	w.logger.Info("Configuration validated successfully")
 	if err := ctx.Err(); err != nil {
@@ -724,15 +725,8 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	w.mu.Lock()
 	if applyOutcome.Published {
 		w.currentConfig = newConfig
-		if newConfig.GetIOWeightDevices() == "" {
-			w.ioWeightMapPath = ""
-			w.hasIOWeightMapDigest = false
-		} else if w.ioWeightMapPath == "" {
-			w.ioWeightMapPath = filepath.Clean(newConfig.GetIOUserWeightFile())
-			if content, readErr := os.ReadFile(w.ioWeightMapPath); readErr == nil {
-				ioWeightMapDigest = sha256.Sum256(content)
-			}
-		}
+		w.ioWeightMapPath = ioWeightMapPath
+		w.hasIOWeightMapDigest = ioWeightMapPath != ""
 	}
 	if confirmationErr == nil && applyOutcome.Processed {
 		w.lastModTime = fileInfo.ModTime()

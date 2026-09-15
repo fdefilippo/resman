@@ -878,6 +878,7 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 		prometheusExporter:       exporter,
 		activeUsers:              map[int]bool{1001: true},
 		cpuPointsLifecycleEvents: map[int]cpuPointsLifecycleEvent{1001: {state: metrics.CPUPointsLifecycleFailed}},
+		ioWeightStatus:           newDisabledIODeviceWeightStatus(),
 	}
 	sample := &SystemMetrics{
 		Timestamp:     time.Now().UTC(),
@@ -897,11 +898,18 @@ func TestWriteDatabaseMetricsReportsTransactionFailureAndRetries(t *testing.T) {
 		},
 	}
 	sample.PersistenceSystem = metrics.SystemPersistenceMetrics{
-		SampleEpochID:        sample.Timestamp.UnixNano(),
-		IntervalEnd:          sample.Timestamp,
-		TotalCPUUsagePercent: sample.TotalCPUUsage,
-		TotalCores:           sample.TotalCores,
-		SystemLoad:           sample.SystemLoad,
+		SampleEpochID:                   sample.Timestamp.UnixNano(),
+		IntervalEnd:                     sample.Timestamp,
+		IODeviceWeightState:             "disabled",
+		IODeviceWeightMechanism:         "none",
+		IODeviceWeightProgrammedState:   "not_attempted",
+		IODeviceWeightReadBackState:     "not_attempted",
+		IODeviceWeightAuthorityCoverage: "unavailable",
+		IODeviceWeightValuesJSON:        "[]",
+		IODeviceWeightObservedDelivery:  "not_measured",
+		TotalCPUUsagePercent:            sample.TotalCPUUsage,
+		TotalCores:                      sample.TotalCores,
+		SystemLoad:                      sample.SystemLoad,
 	}
 	sample.PersistenceUsers = map[int]metrics.UserPersistenceMetrics{
 		1001: {

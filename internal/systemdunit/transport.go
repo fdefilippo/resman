@@ -137,7 +137,7 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	if _, err := t.conn.StartTransientUnitAux(ctx, service, "fail", serviceProperties, []systemdbus.PropertyCollection{{
 		Name: unit, Properties: properties,
 	}}, result); err != nil {
-		return listedUnit{}, false, err
+		return listedUnit{}, false, classifyTransportError("start_capability_probe", unit, err)
 	}
 	select {
 	case outcome := <-result:
@@ -149,7 +149,7 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	}
 	statuses, err := t.conn.ListUnitsByPatternsContext(ctx, []string{"active"}, []string{unit})
 	if err != nil {
-		return listedUnit{}, true, err
+		return listedUnit{}, true, classifyTransportError("list_capability_probe", unit, err)
 	}
 	if len(statuses) != 1 || statuses[0].Name != unit || statuses[0].LoadState != "loaded" || statuses[0].ActiveState != "active" {
 		return listedUnit{}, true, fmt.Errorf("transient capability probe was not returned as one active loaded unit")
@@ -169,7 +169,7 @@ func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) er
 			if errors.As(classified, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
 				return nil
 			}
-			return err
+			return classified
 		}
 		select {
 		case outcome := <-result:

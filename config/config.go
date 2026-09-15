@@ -1085,16 +1085,14 @@ func validateConfig(cfg *Config) error {
 			errors = append(errors, fmt.Sprintf("IO_WEIGHT_DEVICES is invalid: %v", err))
 		}
 	}
-	if cfg.IOWeightDevices != "" || cfg.IORootWeight != 0 || cfg.IODefaultWeight != 0 || cfg.IOUserWeightFile != "" {
-		if _, err := ioweights.NewWeight(uint64(max(cfg.IORootWeight, 0))); cfg.IORootWeight < 0 || err != nil {
-			errors = append(errors, "IO_ROOT_WEIGHT must be between 1 and 1000")
-		}
-		if _, err := ioweights.NewWeight(uint64(max(cfg.IODefaultWeight, 0))); cfg.IODefaultWeight < 0 || err != nil {
-			errors = append(errors, "IO_DEFAULT_WEIGHT must be between 1 and 1000")
-		}
-		if _, err := ioweights.NewPolicyMapPath(cfg.IOUserWeightFile); err != nil {
-			errors = append(errors, fmt.Sprintf("IO_USER_WEIGHT_FILE is invalid: %v", err))
-		}
+	if _, err := ioweights.NewWeight(uint64(max(cfg.IORootWeight, 0))); cfg.IORootWeight < 0 || err != nil {
+		errors = append(errors, "IO_ROOT_WEIGHT must be between 1 and 1000")
+	}
+	if _, err := ioweights.NewWeight(uint64(max(cfg.IODefaultWeight, 0))); cfg.IODefaultWeight < 0 || err != nil {
+		errors = append(errors, "IO_DEFAULT_WEIGHT must be between 1 and 1000")
+	}
+	if _, err := ioweights.NewPolicyMapPath(cfg.IOUserWeightFile); err != nil {
+		errors = append(errors, fmt.Sprintf("IO_USER_WEIGHT_FILE is invalid: %v", err))
 	}
 	if cfg.IOEnabled {
 		if cfg.IOThreshold < 1 || cfg.IOThreshold > 100 {

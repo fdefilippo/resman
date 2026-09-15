@@ -3,9 +3,11 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/systemdunit"
@@ -17,6 +19,22 @@ type fakeIODeviceWeightClassifier struct {
 	confirmErr   error
 	classifyCall int
 	confirmCall  int
+}
+
+type blockingIODeviceWeightClassifier struct {
+	entered  chan struct{}
+	canceled chan struct{}
+}
+
+func (f *blockingIODeviceWeightClassifier) Classify(ctx context.Context, _ string) (systemdunit.IODeviceWeightCapabilitySnapshot, error) {
+	close(f.entered)
+	<-ctx.Done()
+	close(f.canceled)
+	return systemdunit.IODeviceWeightCapabilitySnapshot{}, ctx.Err()
+}
+
+func (*blockingIODeviceWeightClassifier) Confirm(context.Context, systemdunit.IODeviceWeightCapabilitySnapshot) (systemdunit.IODeviceWeightCapabilitySnapshot, error) {
+	return systemdunit.IODeviceWeightCapabilitySnapshot{}, errors.New("unexpected confirmation")
 }
 
 func (f *fakeIODeviceWeightClassifier) Classify(context.Context, string) (systemdunit.IODeviceWeightCapabilitySnapshot, error) {
@@ -83,6 +101,26 @@ func TestIODeviceWeightCapabilityProbePrecedesProductionMutation(t *testing.T) {
 	}
 }
 
+func TestIODeviceWeightConfigGenerationCancelsInFlightClassification(t *testing.T) {
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &blockingIODeviceWeightClassifier{entered: make(chan struct{}), canceled: make(chan struct{})}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan IODeviceWeightAttemptResult, 1)
+	go func() { done <- manager.AttemptIODeviceWeightCapability(context.Background()) }()
+	<-classifier.entered
+	finishUpdate := manager.BeginConfigUpdate()
+	finishUpdate()
+	<-classifier.canceled
+	result := <-done
+	if result.Status.State != IODeviceWeightRequestedPending || result.Status.Reason != "cancelled_generation" || !result.Retry {
+		t.Fatalf("canceled generation result = %+v", result)
+	}
+}
+
 func TestIODeviceWeightReconciliationAppliesRootMappedAndDefaultWithPartialAuthority(t *testing.T) {
 	topology := testSystemdTopology(0, 1000, 1001)
 	adapter := &fakeSystemdCPUUnitAdapter{topology: topology}
@@ -116,8 +154,11 @@ func TestIODeviceWeightReconciliationAppliesRootMappedAndDefaultWithPartialAutho
 		}
 	}
 	status := manager.GetIODeviceWeightStatus()
-	if !status.Programmed || !status.ReadBack || status.PartialUsers != 1 {
+	if !status.Programmed || !status.ReadBack || status.PartialUsers != 1 || status.CompleteUsers != 2 || status.UnavailableUsers != 0 || status.AuthorityCoverage != "partial" {
 		t.Fatalf("weighted-I/O status = %+v", status)
+	}
+	if len(status.Values) != 3 || status.Values[1].RequestedValue != 700 || status.Values[1].SystemdValue != 6700 || status.Values[1].KernelValue != 700 || status.Values[1].NominalShare <= 0 {
+		t.Fatalf("weighted-I/O value path = %+v", status.Values)
 	}
 }
 
@@ -174,6 +215,40 @@ func TestIODeviceWeightReconciliationReleasesWholePlanAfterPartialReadbackFailur
 	}
 }
 
+func TestIODeviceWeightInvalidPlanReplacesPreviouslyAcceptedStatus(t *testing.T) {
+	topology := testSystemdTopology(1000, 1000)
+	identity := topology.Users[0].Unit.Identity
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: topology,
+		owned:    map[string]systemdunit.UnitIdentity{identity.Name: identity},
+		activeProperties: map[string]map[systemdunit.PropertyName]bool{
+			identity.Name: {systemdunit.PropertyIODeviceWeight: true},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.ioWeightUnits[1000] = identity
+	manager.ioWeightStatus.State = IODeviceWeightFunctionallyAccepted
+	manager.ioWeightStatus.Programmed = true
+	manager.ioWeightStatus.ReadBack = true
+	manager.ioWeightCapability = testIODeviceWeightCandidate(t)
+	manager.mu.Unlock()
+
+	err := manager.reconcileSystemdIODeviceWeights(context.Background(), completeIODeviceWeightSample(topology), manager.cfg)
+	if err == nil {
+		t.Fatal("reconcileSystemdIODeviceWeights() accepted duplicate plan participants")
+	}
+	status := manager.GetIODeviceWeightStatus()
+	if status.State != IODeviceWeightRefusedIntervention || status.Reason != "invalid_policy_plan" || status.Programmed || status.ReadBack {
+		t.Fatalf("invalid plan left stale accepted status: %+v", status)
+	}
+}
+
 func completeIODeviceWeightSample(topology systemdunit.TopologySnapshot) *SystemMetrics {
 	now := time.Now()
 	observations := make([]systemdunit.ProcessAuthorityObservation, 0, len(topology.Users))
@@ -208,6 +283,10 @@ func TestIODeviceWeightReconciliationIgnoresUnobservedUnrelatedSession(t *testin
 	if len(adapter.applies) != 1 || adapter.applies[0].unit != "user-1000.slice" {
 		t.Fatalf("unrelated unobserved session changed the sampled plan: %+v", adapter.applies)
 	}
+	status := manager.GetIODeviceWeightStatus()
+	if status.SiblingSlices != 2 || status.UnavailableUsers != 1 || status.AuthorityCoverage != "unavailable" {
+		t.Fatalf("unobserved sibling was omitted from public denominator: %+v", status)
+	}
 }
 
 func TestIODeviceWeightReconciliationDoesNotApplyToRecreatedUnit(t *testing.T) {
@@ -233,7 +312,7 @@ func TestIODeviceWeightReconciliationDoesNotApplyToRecreatedUnit(t *testing.T) {
 	}
 }
 
-func TestIODeviceWeightDeviceLossUsesOneControlCadenceGrace(t *testing.T) {
+func TestIODeviceWeightEvidenceUnavailableUsesOneControlCadenceGrace(t *testing.T) {
 	topology := testSystemdTopology(1000)
 	adapter := &fakeSystemdCPUUnitAdapter{topology: topology}
 	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
@@ -251,27 +330,60 @@ func TestIODeviceWeightDeviceLossUsesOneControlCadenceGrace(t *testing.T) {
 	}
 	identity := topology.Users[0].Unit.Identity
 	classifier.confirmErr = &systemdunit.IODeviceWeightCapabilityError{
-		Reason: systemdunit.IODeviceWeightReasonDeviceMissing,
+		Reason: systemdunit.IODeviceWeightReasonEvidenceUnavailable,
 		Device: "8:0",
 		Err:    errors.New("injected device loss"),
 	}
 
 	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), sample, manager.cfg); err == nil {
-		t.Fatal("first device-loss reconciliation unexpectedly succeeded")
+		t.Fatal("first evidence-unavailable reconciliation unexpectedly succeeded")
 	}
 	first := manager.GetIODeviceWeightStatus()
 	if first.State != IODeviceWeightRequestedPending || !first.Programmed || first.ReadBack {
-		t.Fatalf("first device-loss cadence = %+v", first)
+		t.Fatalf("first evidence-unavailable cadence = %+v", first)
 	}
 	if !adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
-		t.Fatal("first device-loss cadence released the weight before the grace elapsed")
+		t.Fatal("first evidence-unavailable cadence released the weight before the grace elapsed")
 	}
 	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), sample, manager.cfg); err == nil {
-		t.Fatal("second device-loss reconciliation unexpectedly succeeded")
+		t.Fatal("second evidence-unavailable reconciliation unexpectedly succeeded")
 	}
 	second := manager.GetIODeviceWeightStatus()
 	if second.Programmed || second.ReadBack || adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
-		t.Fatalf("second device-loss cadence did not release the weight: status=%+v active=%+v", second, adapter.activeProperties)
+		t.Fatalf("second evidence-unavailable cadence did not release the weight: status=%+v active=%+v", second, adapter.activeProperties)
+	}
+}
+
+func TestIODeviceWeightCapabilityRetryDoesNotConsumeControlCadenceGrace(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	identity := topology.Users[0].Unit.Identity
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: topology,
+		owned:    map[string]systemdunit.UnitIdentity{identity.Name: identity},
+		activeProperties: map[string]map[systemdunit.PropertyName]bool{
+			identity.Name: {systemdunit.PropertyIODeviceWeight: true},
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.ioWeightUnits[1000] = identity
+	manager.ioWeightStatus.State = IODeviceWeightFunctionallyAccepted
+	manager.ioWeightStatus.Programmed = true
+	manager.mu.Unlock()
+
+	manager.publishIODeviceWeightCapabilityFailure(context.Background(), IODeviceWeightRequestedPending,
+		string(systemdunit.IODeviceWeightReasonEvidenceUnavailable), "8:0", systemdunit.IODeviceWeightCapabilitySnapshot{}, true)
+	if err := manager.deferOrReleaseIODeviceWeights(context.Background(), IODeviceWeightRequestedPending,
+		string(systemdunit.IODeviceWeightReasonEvidenceUnavailable), errors.New("control evidence unavailable")); err == nil {
+		t.Fatal("control-cycle evidence failure unexpectedly succeeded")
+	}
+	if !manager.GetIODeviceWeightStatus().Programmed || !adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
+		t.Fatal("asynchronous retry consumed the independent control-cadence grace")
 	}
 }
 
@@ -361,5 +473,141 @@ func TestRecoveredIODeviceWeightUsesOneRetryGraceBeforeSafeRelease(t *testing.T)
 	}
 	if len(adapter.propertyRestores) != 1 || adapter.propertyRestores[0].unit != identity.Name {
 		t.Fatalf("recovered weight release calls = %+v", adapter.propertyRestores)
+	}
+}
+
+func TestIODeviceWeightObservationRefusalReleasesWithoutGrace(t *testing.T) {
+	topology := testSystemdTopology(1000)
+	adapter := &fakeSystemdCPUUnitAdapter{topology: topology}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	if result := manager.AttemptIODeviceWeightCapability(context.Background()); result.Status.State != IODeviceWeightFunctionallyAccepted {
+		t.Fatalf("AttemptIODeviceWeightCapability() = %+v", result)
+	}
+	sample := completeIODeviceWeightSample(topology)
+	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), sample, manager.cfg); err != nil {
+		t.Fatalf("initial reconciliation error = %v", err)
+	}
+	classifier.confirmErr = &systemdunit.IODeviceWeightCapabilityError{
+		Reason: systemdunit.IODeviceWeightReasonMechanismAmbiguous,
+		Device: "8:0",
+		Err:    errors.New("injected mechanism ambiguity"),
+	}
+
+	if err := manager.reconcileSystemdIODeviceWeights(context.Background(), sample, manager.cfg); err == nil {
+		t.Fatal("ambiguous mechanism reconciliation unexpectedly succeeded")
+	}
+	status := manager.GetIODeviceWeightStatus()
+	identity := topology.Users[0].Unit.Identity
+	if status.State != IODeviceWeightRefusedObservation || status.Programmed || status.ReadBack || adapter.activeProperties[identity.Name][systemdunit.PropertyIODeviceWeight] {
+		t.Fatalf("observation refusal retained a weight through the evidence-only grace: status=%+v active=%+v", status, adapter.activeProperties)
+	}
+}
+
+func TestIODeviceWeightTransientProbeErrorRemainsRetryable(t *testing.T) {
+	adapter := &fakeSystemdCPUUnitAdapter{
+		topology: testSystemdTopology(1000),
+		ioWeightProbeError: &systemdunit.AdapterError{
+			Reason: systemdunit.ReasonTimeout, Operation: "startup_capabilities", Err: context.DeadlineExceeded,
+		},
+	}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+
+	result := manager.AttemptIODeviceWeightCapability(context.Background())
+	if result.Status.State != IODeviceWeightRequestedPending || result.Status.Reason != string(systemdunit.IODeviceWeightReasonEvidenceUnavailable) || !result.Retry {
+		t.Fatalf("transient probe result = %+v", result)
+	}
+}
+
+func TestIODeviceWeightNestedProbeCleanupBusErrorRemainsRetryable(t *testing.T) {
+	err := &systemdunit.AdapterError{
+		Reason:    systemdunit.ReasonCapabilityProbe,
+		Operation: "startup_capabilities",
+		Err: fmt.Errorf("cleanup transient unit: %w", &systemdunit.AdapterError{
+			Reason: systemdunit.ReasonBusUnavailable, Operation: "stop_capability_probe", Err: errors.New("connection reset"),
+		}),
+	}
+	if !ioWeightProbeRetryable(err) {
+		t.Fatalf("nested transient D-Bus cleanup error was classified as intervention: %v", err)
+	}
+}
+
+func TestPublishingEquivalentIODeviceWeightPolicyPreservesAcceptedCapability(t *testing.T) {
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	policy := testIODeviceWeightPolicy(t)
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, policy)(manager); err != nil {
+		t.Fatal(err)
+	}
+	if result := manager.AttemptIODeviceWeightCapability(context.Background()); result.Status.State != IODeviceWeightFunctionallyAccepted {
+		t.Fatalf("AttemptIODeviceWeightCapability() = %+v", result)
+	}
+	classifications := classifier.classifyCall
+
+	manager.PublishIODeviceWeightPolicy(policy)
+	result := manager.AttemptIODeviceWeightCapability(context.Background())
+	if result.Status.State != IODeviceWeightFunctionallyAccepted || classifier.classifyCall != classifications || classifier.confirmCall == 0 {
+		t.Fatalf("equivalent publication reset capability: result=%+v classify=%d confirm=%d", result, classifier.classifyCall, classifier.confirmCall)
+	}
+}
+
+func TestPublishingChangedIODeviceWeightPolicyQueuesCycleWithoutRepeatingProbe(t *testing.T) {
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.IOWeightDevices = "8:0"
+	classifier := &fakeIODeviceWeightClassifier{snapshot: testIODeviceWeightCandidate(t)}
+	if err := WithSystemdIODeviceWeights(adapter, classifier, testIODeviceWeightPolicy(t))(manager); err != nil {
+		t.Fatal(err)
+	}
+	if result := manager.AttemptIODeviceWeightCapability(context.Background()); result.Status.State != IODeviceWeightFunctionallyAccepted {
+		t.Fatalf("AttemptIODeviceWeightCapability() = %+v", result)
+	}
+	root, _ := ioweights.NewWeight(250)
+	defaultIO, _ := ioweights.NewWeight(100)
+	changed := ioweights.NewEmptyPolicySnapshot(root, defaultIO)
+	probes := adapter.ioWeightProbeCalls
+
+	manager.PublishIODeviceWeightPolicy(changed)
+	result := manager.AttemptIODeviceWeightCapability(context.Background())
+	if !result.ActivateCycle || result.Status.State != IODeviceWeightFunctionallyAccepted || adapter.ioWeightProbeCalls != probes {
+		t.Fatalf("changed policy result=%+v probes=%d->%d", result, probes, adapter.ioWeightProbeCalls)
+	}
+}
+
+func TestPublishingDisabledIODeviceWeightPolicyRemainsDisabled(t *testing.T) {
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}, &forbiddenSystemdNativeCgroupManager{}, 4)
+	root, _ := ioweights.NewWeight(250)
+	defaultIO, _ := ioweights.NewWeight(100)
+	manager.PublishIODeviceWeightPolicy(ioweights.NewEmptyPolicySnapshot(root, defaultIO))
+	status := manager.GetIODeviceWeightStatus()
+	if status.State != IODeviceWeightDisabled || !status.RequestedAt.IsZero() {
+		t.Fatalf("disabled policy publication fabricated a request: %+v", status)
+	}
+}
+
+func TestDisablingProgrammedIODeviceWeightPublishesReleasePending(t *testing.T) {
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(1000)}, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.mu.Lock()
+	manager.ioWeightUnits[1000] = testSystemdTopology(1000).Users[0].Unit.Identity
+	manager.ioWeightStatus.Programmed = true
+	manager.mu.Unlock()
+	reloaded := config.DefaultConfig()
+	manager.cfg.IOWeightDevices = "8:0"
+
+	manager.UpdateConfig(reloaded)
+	status := manager.GetIODeviceWeightStatus()
+	if status.State != IODeviceWeightReleasePending || !status.Programmed {
+		t.Fatalf("disabled programmed policy status = %+v", status)
 	}
 }

@@ -271,15 +271,22 @@ func TestWriteMetricsToDatabasePreservesRuntimeState(t *testing.T) {
 	now := time.Now().UTC()
 	if err := collector.WriteMetricsToDatabase(PersistenceBatch{
 		System: SystemPersistenceMetrics{
-			SampleEpochID:                now.UnixNano(),
-			IntervalEnd:                  now,
-			TotalCPUUsagePercent:         50,
-			TotalCores:                   4,
-			SystemLoad:                   2.5,
-			CPULimitsActive:              true,
-			AnyLimitsActive:              true,
-			CPUActivelyLimitedUsersCount: 1,
-			ActivelyLimitedUsersCount:    1,
+			SampleEpochID:                   now.UnixNano(),
+			IntervalEnd:                     now,
+			IODeviceWeightState:             "disabled",
+			IODeviceWeightMechanism:         "none",
+			IODeviceWeightProgrammedState:   "not_attempted",
+			IODeviceWeightReadBackState:     "not_attempted",
+			IODeviceWeightAuthorityCoverage: "unavailable",
+			IODeviceWeightValuesJSON:        "[]",
+			IODeviceWeightObservedDelivery:  "not_measured",
+			TotalCPUUsagePercent:            50,
+			TotalCores:                      4,
+			SystemLoad:                      2.5,
+			CPULimitsActive:                 true,
+			AnyLimitsActive:                 true,
+			CPUActivelyLimitedUsersCount:    1,
+			ActivelyLimitedUsersCount:       1,
 		},
 		Users: map[int]UserPersistenceMetrics{
 			1000: {

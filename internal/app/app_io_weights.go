@@ -58,10 +58,10 @@ func (c *ioWeightRetryController) Reset() {
 	c.step = 0
 }
 
-func (c *ioWeightRetryController) Schedule(result state.IODeviceWeightAttemptResult) {
+func (c *ioWeightRetryController) Schedule(result state.IODeviceWeightAttemptResult) time.Duration {
 	c.Stop()
 	if !result.Retry {
-		return
+		return 0
 	}
 	delay := ioWeightRetryDelays[len(ioWeightRetryDelays)-1]
 	if result.Status.State != state.IODeviceWeightFunctionallyAccepted {
@@ -79,6 +79,7 @@ func (c *ioWeightRetryController) Schedule(result state.IODeviceWeightAttemptRes
 	c.timer = c.clock.NewTimer(delay)
 	c.c = c.timer.C()
 	c.delay = delay
+	return delay
 }
 
 func (c *ioWeightRetryController) Stop() {

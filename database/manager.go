@@ -19,6 +19,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/logging"
 	_ "github.com/mattn/go-sqlite3"
@@ -82,13 +84,24 @@ type SystemMetricsRecord struct {
 	IODeviceWeightState                  string
 	IODeviceWeightReason                 string
 	IODeviceWeightSelector               string
+	IODeviceWeightMechanism              string
 	IODeviceWeightClassificationAttempts uint64
 	IODeviceWeightProbeAttempts          uint64
 	IODeviceWeightProgrammed             bool
+	IODeviceWeightProgrammedState        string
 	IODeviceWeightReadBack               bool
+	IODeviceWeightReadBackState          string
 	IODeviceWeightFunctionallyAccepted   bool
 	IODeviceWeightEffectQualified        bool
+	IODeviceWeightAuthorityCoverage      string
+	IODeviceWeightCompleteUsers          int
 	IODeviceWeightPartialUsers           int
+	IODeviceWeightUnavailableUsers       int
+	IODeviceWeightSiblingSlices          int
+	IODeviceWeightTotalPoints            uint64
+	IODeviceWeightRequestedAt            *time.Time
+	IODeviceWeightNextRetryAt            *time.Time
+	IODeviceWeightValuesJSON             string
 	IODeviceWeightObservedDelivery       string
 	DenominatorState                     string
 	EnforcementMode                      string
@@ -185,11 +198,16 @@ const (
     `
 	insertSystemMetricsQuery = `
 	INSERT INTO system_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
-								io_device_weight_state, io_device_weight_reason, io_device_weight_selector,
+								io_device_weight_state, io_device_weight_reason, io_device_weight_selector, io_device_weight_mechanism,
 								io_device_weight_classification_attempts, io_device_weight_probe_attempts,
-								io_device_weight_programmed, io_device_weight_read_back,
+								io_device_weight_programmed, io_device_weight_programmed_state,
+								io_device_weight_read_back, io_device_weight_read_back_state,
 								io_device_weight_functionally_accepted, io_device_weight_effect_qualified,
-								io_device_weight_partial_users, io_device_weight_observed_delivery,
+								io_device_weight_authority_coverage, io_device_weight_complete_users,
+								io_device_weight_partial_users, io_device_weight_unavailable_users,
+								io_device_weight_sibling_slices, io_device_weight_total_points,
+								io_device_weight_requested_at, io_device_weight_next_retry_at,
+								io_device_weight_values_json, io_device_weight_observed_delivery,
 								total_cpu_usage_percent, total_cores,
 								system_load, cpu_limits_active, resource_limits_active,
 								any_limits_active, cpu_actively_limited_users_count,
@@ -202,7 +220,7 @@ const (
 								parent_cpu_usage_usec_delta, observed_sibling_weight_sum,
 								configured_root_points, parent_cpu_periods_delta,
 								parent_cpu_throttled_periods_delta, parent_cpu_throttled_usec_delta, denominator_state, enforcement_mode)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
 
@@ -360,16 +378,27 @@ func (m *DatabaseManager) InitSchema() error {
 		sample_epoch_id INTEGER NOT NULL,
 		interval_start DATETIME,
 		interval_end DATETIME NOT NULL,
-		io_device_weight_state TEXT NOT NULL CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted')),
+		io_device_weight_state TEXT NOT NULL CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'release_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted')),
 		io_device_weight_reason TEXT NOT NULL,
 		io_device_weight_selector TEXT NOT NULL,
+		io_device_weight_mechanism TEXT NOT NULL CHECK (io_device_weight_mechanism IN ('none', 'bfq', 'io_cost', 'mixed')),
 		io_device_weight_classification_attempts INTEGER NOT NULL,
 		io_device_weight_probe_attempts INTEGER NOT NULL,
 		io_device_weight_programmed BOOLEAN NOT NULL,
+		io_device_weight_programmed_state TEXT NOT NULL CHECK (io_device_weight_programmed_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
 		io_device_weight_read_back BOOLEAN NOT NULL,
+		io_device_weight_read_back_state TEXT NOT NULL CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
 		io_device_weight_functionally_accepted BOOLEAN NOT NULL,
 		io_device_weight_effect_qualified BOOLEAN NOT NULL,
+		io_device_weight_authority_coverage TEXT NOT NULL CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable')),
+		io_device_weight_complete_users INTEGER NOT NULL,
 		io_device_weight_partial_users INTEGER NOT NULL,
+		io_device_weight_unavailable_users INTEGER NOT NULL,
+		io_device_weight_sibling_slices INTEGER NOT NULL,
+		io_device_weight_total_points INTEGER NOT NULL,
+		io_device_weight_requested_at DATETIME,
+		io_device_weight_next_retry_at DATETIME,
+		io_device_weight_values_json TEXT NOT NULL,
 		io_device_weight_observed_delivery TEXT NOT NULL,
         total_cpu_usage_percent REAL NOT NULL,
         total_cores INTEGER NOT NULL,
@@ -436,16 +465,27 @@ func (m *DatabaseManager) migrateMetricsSchema7To8() error {
 	}
 	rollback := func() { _ = tx.Rollback() }
 	statements := []string{
-		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_state TEXT NOT NULL DEFAULT 'disabled' CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted'))`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_state TEXT NOT NULL DEFAULT 'disabled' CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'release_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted'))`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_selector TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_mechanism TEXT NOT NULL DEFAULT 'none' CHECK (io_device_weight_mechanism IN ('none', 'bfq', 'io_cost', 'mixed'))`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_classification_attempts INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_probe_attempts INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_programmed BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_programmed_state TEXT NOT NULL DEFAULT 'not_attempted' CHECK (io_device_weight_programmed_state IN ('not_attempted', 'confirmed', 'failed', 'released'))`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_read_back BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_read_back_state TEXT NOT NULL DEFAULT 'not_attempted' CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released'))`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_functionally_accepted BOOLEAN NOT NULL DEFAULT 0`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_effect_qualified BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_authority_coverage TEXT NOT NULL DEFAULT 'unavailable' CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable'))`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_complete_users INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_partial_users INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_unavailable_users INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_sibling_slices INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_total_points INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_requested_at DATETIME`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_next_retry_at DATETIME`,
+		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_values_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE system_metrics ADD COLUMN io_device_weight_observed_delivery TEXT NOT NULL DEFAULT 'not_measured'`,
 	}
 	for _, statement := range statements {
@@ -567,11 +607,13 @@ func (m *DatabaseManager) validateSystemMetricsSchema() error {
 		}
 	}
 	for _, required := range []string{
-		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector",
+		"io_device_weight_state", "io_device_weight_reason", "io_device_weight_selector", "io_device_weight_mechanism",
 		"io_device_weight_classification_attempts", "io_device_weight_probe_attempts",
-		"io_device_weight_programmed", "io_device_weight_read_back",
+		"io_device_weight_programmed", "io_device_weight_programmed_state", "io_device_weight_read_back", "io_device_weight_read_back_state",
 		"io_device_weight_functionally_accepted", "io_device_weight_effect_qualified",
-		"io_device_weight_partial_users", "io_device_weight_observed_delivery",
+		"io_device_weight_authority_coverage", "io_device_weight_complete_users", "io_device_weight_partial_users", "io_device_weight_unavailable_users",
+		"io_device_weight_sibling_slices", "io_device_weight_total_points", "io_device_weight_requested_at", "io_device_weight_next_retry_at",
+		"io_device_weight_values_json", "io_device_weight_observed_delivery",
 		"sample_epoch_id", "interval_start", "interval_end", "nominal_parent_pool_points",
 		"denominator_state", "enforcement_mode",
 		"cpu_capacity_available", "online_cpus", "programmed_parent_quota_usec",
@@ -713,6 +755,28 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 	if system.SampleEpochID == 0 || system.IntervalEnd.IsZero() || system.Timestamp.IsZero() {
 		return fmt.Errorf("metrics batch system interval identity is incomplete")
 	}
+	if !ioweights.ValidActivationState(system.IODeviceWeightState) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O state %q", system.IODeviceWeightState)
+	}
+	if !ioweights.ValidReason(system.IODeviceWeightReason) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O reason %q", system.IODeviceWeightReason)
+	}
+	if !ioweights.ValidDeliveryState(system.IODeviceWeightObservedDelivery) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O delivery %q", system.IODeviceWeightObservedDelivery)
+	}
+	if !ioweights.ValidMechanismState(system.IODeviceWeightMechanism) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O mechanism %q", system.IODeviceWeightMechanism)
+	}
+	if !ioweights.ValidVerificationState(system.IODeviceWeightProgrammedState) || !ioweights.ValidVerificationState(system.IODeviceWeightReadBackState) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O verification states %q/%q", system.IODeviceWeightProgrammedState, system.IODeviceWeightReadBackState)
+	}
+	if !ioweights.ValidAuthorityCoverage(system.IODeviceWeightAuthorityCoverage) {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O authority coverage %q", system.IODeviceWeightAuthorityCoverage)
+	}
+	var ioWeightValues []json.RawMessage
+	if err := json.Unmarshal([]byte(system.IODeviceWeightValuesJSON), &ioWeightValues); err != nil || ioWeightValues == nil {
+		return fmt.Errorf("metrics batch has invalid weighted-I/O values JSON array")
+	}
 	for _, record := range users {
 		if record == nil {
 			return fmt.Errorf("user metrics batch contains a nil record")
@@ -739,17 +803,28 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 		system.SampleEpochID,
 		utcOptionalTime(system.IntervalStart),
 		system.IntervalEnd.UTC(),
-		normalizedIODeviceWeightState(system.IODeviceWeightState),
+		system.IODeviceWeightState,
 		system.IODeviceWeightReason,
 		system.IODeviceWeightSelector,
+		system.IODeviceWeightMechanism,
 		system.IODeviceWeightClassificationAttempts,
 		system.IODeviceWeightProbeAttempts,
 		system.IODeviceWeightProgrammed,
+		system.IODeviceWeightProgrammedState,
 		system.IODeviceWeightReadBack,
+		system.IODeviceWeightReadBackState,
 		system.IODeviceWeightFunctionallyAccepted,
 		system.IODeviceWeightEffectQualified,
+		system.IODeviceWeightAuthorityCoverage,
+		system.IODeviceWeightCompleteUsers,
 		system.IODeviceWeightPartialUsers,
-		normalizedIODeviceWeightDelivery(system.IODeviceWeightObservedDelivery),
+		system.IODeviceWeightUnavailableUsers,
+		system.IODeviceWeightSiblingSlices,
+		system.IODeviceWeightTotalPoints,
+		utcOptionalTime(system.IODeviceWeightRequestedAt),
+		utcOptionalTime(system.IODeviceWeightNextRetryAt),
+		system.IODeviceWeightValuesJSON,
+		system.IODeviceWeightObservedDelivery,
 		system.TotalCPUUsagePercent,
 		system.TotalCores,
 		system.SystemLoad,
@@ -846,20 +921,6 @@ func (m *DatabaseManager) WriteMetricsBatch(system *SystemMetricsRecord, users [
 		return fmt.Errorf("failed to commit metrics batch transaction: %w", err)
 	}
 	return nil
-}
-
-func normalizedIODeviceWeightState(value string) string {
-	if value == "" {
-		return "disabled"
-	}
-	return value
-}
-
-func normalizedIODeviceWeightDelivery(value string) string {
-	if value == "" {
-		return "not_measured"
-	}
-	return value
 }
 
 func sameOptionalTime(left, right *time.Time) bool {
@@ -978,11 +1039,16 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 
 	query := `
 	SELECT timestamp, sample_epoch_id, interval_start, interval_end,
-		   io_device_weight_state, io_device_weight_reason, io_device_weight_selector,
+		   io_device_weight_state, io_device_weight_reason, io_device_weight_selector, io_device_weight_mechanism,
 		   io_device_weight_classification_attempts, io_device_weight_probe_attempts,
-		   io_device_weight_programmed, io_device_weight_read_back,
+		   io_device_weight_programmed, io_device_weight_programmed_state,
+		   io_device_weight_read_back, io_device_weight_read_back_state,
 		   io_device_weight_functionally_accepted, io_device_weight_effect_qualified,
-		   io_device_weight_partial_users, io_device_weight_observed_delivery,
+		   io_device_weight_authority_coverage, io_device_weight_complete_users,
+		   io_device_weight_partial_users, io_device_weight_unavailable_users,
+		   io_device_weight_sibling_slices, io_device_weight_total_points,
+		   io_device_weight_requested_at, io_device_weight_next_retry_at,
+		   io_device_weight_values_json, io_device_weight_observed_delivery,
 		   total_cpu_usage_percent, total_cores, system_load,
 		   cpu_limits_active, resource_limits_active, any_limits_active,
 		   cpu_actively_limited_users_count, actively_limited_users_count,
@@ -1010,11 +1076,16 @@ func (m *DatabaseManager) GetSystemHistory(startTime, endTime time.Time, limit i
 	for rows.Next() {
 		var r SystemMetricsRecord
 		err := rows.Scan(&r.Timestamp, &r.SampleEpochID, &r.IntervalStart, &r.IntervalEnd,
-			&r.IODeviceWeightState, &r.IODeviceWeightReason, &r.IODeviceWeightSelector,
+			&r.IODeviceWeightState, &r.IODeviceWeightReason, &r.IODeviceWeightSelector, &r.IODeviceWeightMechanism,
 			&r.IODeviceWeightClassificationAttempts, &r.IODeviceWeightProbeAttempts,
-			&r.IODeviceWeightProgrammed, &r.IODeviceWeightReadBack,
+			&r.IODeviceWeightProgrammed, &r.IODeviceWeightProgrammedState,
+			&r.IODeviceWeightReadBack, &r.IODeviceWeightReadBackState,
 			&r.IODeviceWeightFunctionallyAccepted, &r.IODeviceWeightEffectQualified,
-			&r.IODeviceWeightPartialUsers, &r.IODeviceWeightObservedDelivery,
+			&r.IODeviceWeightAuthorityCoverage, &r.IODeviceWeightCompleteUsers,
+			&r.IODeviceWeightPartialUsers, &r.IODeviceWeightUnavailableUsers,
+			&r.IODeviceWeightSiblingSlices, &r.IODeviceWeightTotalPoints,
+			&r.IODeviceWeightRequestedAt, &r.IODeviceWeightNextRetryAt,
+			&r.IODeviceWeightValuesJSON, &r.IODeviceWeightObservedDelivery,
 			&r.TotalCPUUsagePercent, &r.TotalCores,
 			&r.SystemLoad, &r.CPULimitsActive, &r.ResourceLimitsActive,
 			&r.AnyLimitsActive, &r.CPUActivelyLimitedUsersCount,

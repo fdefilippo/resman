@@ -261,10 +261,10 @@ func TestProbeIODeviceWeightUsesOwnedTransientUnitAndCleansSynchronously(t *test
 	if err := adapter.ProbeIODeviceWeights(context.Background(), targets); err != nil {
 		t.Fatalf("ProbeIODeviceWeights() error = %v", err)
 	}
-	if len(transport.probeStarts) != 2 || len(transport.probeStops) != 2 || len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+	if len(transport.probeStarts) != 1 || len(transport.probeStops) != 1 || len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("probe residue starts=%v stops=%v owned=%v journal=%+v", transport.probeStarts, transport.probeStops, adapter.OwnedUnits(), store.journal)
 	}
-	if len(verifier.preflightCalls) != 2 || verifier.preflightCalls[1][0].name != PropertyIODeviceWeight {
+	if len(verifier.preflightCalls) != 1 || verifier.preflightCalls[0][0].name != PropertyIODeviceWeight {
 		t.Fatalf("strict typed preflight calls = %+v", verifier.preflightCalls)
 	}
 	if len(verifier.preflightApplyCalls) != 1 || verifier.preflightApplyCalls[0][0].name != PropertyIODeviceWeight {
