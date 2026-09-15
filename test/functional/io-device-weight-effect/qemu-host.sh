@@ -219,8 +219,16 @@ run_guest_campaign() {
 		--revision "$source_revision" --package-sha "$package_sha" >"$validation_file"
 }
 
+reset_guest_after_smoke() {
+	# The smoke cleanup restores package-owned configuration bytes and modes. Restore
+	# their RPM metadata as well, then remove only campaign-owned runtime output so
+	# the retained profile cannot satisfy an assertion with a smoke database row.
+	guest 'set -eu; rpm --restore resman; rm -f -- /var/lib/resman/effect-metrics.db /var/lib/resman/effect-metrics.db-shm /var/lib/resman/effect-metrics.db-wal /var/log/resman/effect.log; test -z "$(rpm -V resman)"'
+}
+
 run_guest_campaign smoke /root/resman-iow-effect/evidence-smoke \
 	"$evidence_dir/guest-smoke" "$evidence_dir/guest-smoke.log" "$evidence_dir/validation-smoke.log"
+reset_guest_after_smoke >"$evidence_dir/profile-reset.log" 2>&1
 run_guest_campaign qualification /root/resman-iow-effect/evidence \
 	"$evidence_dir/guest" "$evidence_dir/guest-run.log" "$evidence_dir/validation.log"
 result=PASS

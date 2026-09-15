@@ -663,6 +663,23 @@ while not stop:
             self.stop_resman()
         except Exception as error:
             errors.append("daemon cleanup: " + str(error))
+        kernel_weights_removed = True
+        systemd_weights_removed = True
+        for user, unit in zip(self.users, self.slices):
+            cgroup = Path("/sys/fs/cgroup/user.slice") / unit
+            for name in ("io.weight", "io.bfq.weight"):
+                path = cgroup / name
+                if path.exists():
+                    text = self.read(path)
+                    if any(device_row(text, item["major_minor"]) is not None
+                           for item in self.devices):
+                        kernel_weights_removed = False
+            try:
+                text = self.systemd_weight_text(unit)
+                if any(item["path"] in text for item in self.devices):
+                    systemd_weights_removed = False
+            except Exception:
+                systemd_weights_removed = False
         for unit in self.workloads + ["resman-iow-effect-stray.service"]:
             self.command("systemctl", "stop", unit, check=False)
             self.command("systemctl", "reset-failed", unit, check=False)
@@ -688,9 +705,12 @@ while not stop:
                             for unit in self.workloads)
         leases_removed = not self.journal.exists()
         return {"result": "PASS" if not errors and scheduler_restored and io_cost_restored and
-                units_removed and leases_removed else "FAIL", "errors": errors,
+                units_removed and leases_removed and kernel_weights_removed and
+                systemd_weights_removed else "FAIL", "errors": errors,
                 "scheduler_restored": scheduler_restored, "io_cost_restored": io_cost_restored,
-                "units_removed": units_removed, "leases_removed": leases_removed}
+                "units_removed": units_removed, "leases_removed": leases_removed,
+                "kernel_weights_removed": kernel_weights_removed,
+                "systemd_weights_removed": systemd_weights_removed}
 
     def capture_diagnostics(self):
         diagnostics = {}

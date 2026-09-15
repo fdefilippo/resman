@@ -95,7 +95,8 @@ def fixture(directory, profile="qualification"):
         "lifecycle": {"blackout_release": "PASS", "restart_recovery": "PASS",
                       "capability_loss_release": "PASS", "compare_before_restore": "PASS"},
         "cleanup": {"result": "PASS", "scheduler_restored": True,
-                    "io_cost_restored": True, "units_removed": True, "leases_removed": True},
+                    "io_cost_restored": True, "units_removed": True, "leases_removed": True,
+                    "kernel_weights_removed": True, "systemd_weights_removed": True},
         "raw_files": raw_files,
     }
     (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
@@ -150,6 +151,8 @@ class EvidenceTests(unittest.TestCase):
             lambda x: x["composition"]["weight_only"].update(hard_cap=True),
             lambda x: x["lifecycle"].update(compare_before_restore="FAIL"),
             lambda x: x["cleanup"].update(io_cost_restored=False),
+            lambda x: x["cleanup"].update(kernel_weights_removed=False),
+            lambda x: x["cleanup"].update(systemd_weights_removed=False),
             lambda x: x["completed_stages"].pop(),
             lambda x: x.update(raw_files={}),
         ]

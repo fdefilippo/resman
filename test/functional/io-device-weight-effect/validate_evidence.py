@@ -211,7 +211,8 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
     cleanup = summary["cleanup"]
     require(cleanup["result"] == "PASS" and cleanup["scheduler_restored"] and
             cleanup["io_cost_restored"] and cleanup["units_removed"] and
-            cleanup["leases_removed"], "cleanup is incomplete")
+            cleanup["leases_removed"] and cleanup["kernel_weights_removed"] and
+            cleanup["systemd_weights_removed"], "cleanup is incomplete")
     raw = summary["raw_files"]
     require({"daemon-log.json", "systemd-journal.json", "capability-probe-journal.json",
              "final-prometheus.json",
