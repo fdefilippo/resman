@@ -2,8 +2,7 @@
 set -Eeuo pipefail
 
 run_id=${1:?run ID is required}
-source_revision=${2:?source revision is required}
-source_tree=${3:?source tree is required}
+qualification_revision=${2:?qualification revision is required}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 evidence_dir=$script_dir/evidence
 package=$script_dir/package.rpm
@@ -12,6 +11,9 @@ base_image=${RESMAN_IO_EFFECT_OL9_BASE_IMAGE:-/var/lib/libvirt/images/OL9U8-base
 base_url=https://yum.oracle.com/templates/OracleLinux/OL9/u8/x86_64/OL9U8_x86_64-kvm-b293.qcow2
 base_sha256=b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b
 kernel_release=5.14.0-687.46.1.el9_8.x86_64
+source_revision=$(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest")
+source_tree=$(awk -F= '$1 == "source_tree" {print $2}' "$build_manifest")
+qualification_tree=$(awk -F= '$1 == "qualification_tree" {print $2}' "$script_dir/qualification.txt")
 vm_name=resman-iow-effect-$run_id
 work_dir=/var/lib/libvirt/images/$vm_name
 overlay=$work_dir/root.qcow2
@@ -26,8 +28,9 @@ detail="effect qualification did not complete"
 guest_status=not-run
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run ID: $run_id" >&2; exit 2; }
-[[ $source_revision =~ ^[0-9a-f]{40}$ && $source_tree =~ ^[0-9a-f]{40}$ ]] \
-	|| { echo "immutable source revision and tree are required" >&2; exit 2; }
+[[ $source_revision =~ ^[0-9a-f]{40}$ && $source_tree =~ ^[0-9a-f]{40}$ &&
+	$qualification_revision =~ ^[0-9a-f]{40}$ && $qualification_tree =~ ^[0-9a-f]{40}$ ]] \
+	|| { echo "immutable package and qualification source identities are required" >&2; exit 2; }
 [[ $work_dir == /var/lib/libvirt/images/resman-iow-effect-r*-* ]] \
 	|| { echo "unsafe work directory: $work_dir" >&2; exit 2; }
 [[ ! -e $evidence_dir ]] || { echo "evidence directory already exists" >&2; exit 75; }
@@ -141,6 +144,7 @@ package_sha=$(sha256sum "$package" | awk '{print $1}')
 
 {
 	printf 'run_id=%s\nsource_revision=%s\nsource_tree=%s\n' "$run_id" "$source_revision" "$source_tree"
+	printf 'qualification_revision=%s\nqualification_tree=%s\n' "$qualification_revision" "$qualification_tree"
 	printf 'base_image=%s\nbase_url=%s\nbase_sha256=%s\n' "$base_image" "$base_url" "$base_sha256"
 	printf 'package_identity=%s\npackage_sha256=%s\n' "$package_identity" "$package_sha"
 	printf 'qemu_version=%s\n' "$(qemu-system-x86_64 --version | head -n 1)"
@@ -169,7 +173,7 @@ wait_for_guest || { echo "OL9 guest SSH did not become ready" >&2; exit 77; }
 initial_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
 guest 'cat /etc/os-release; systemctl --version; uname -r; stat -fc %T /sys/fs/cgroup; lsblk -o NAME,MAJ:MIN,SIZE,TYPE,SERIAL' \
 	>"$evidence_dir/initial-boot.txt"
-guest 'dnf install -y cpio curl python3 util-linux systemd-udev kernel-5.14.0-687.46.1.el9_8.x86_64' \
+guest 'dnf install -y --setopt=install_weak_deps=False cpio curl python3 util-linux systemd-udev kernel-5.14.0-687.46.1.el9_8.x86_64' \
 	>"$evidence_dir/provision.log"
 guest "test -f /boot/vmlinuz-$kernel_release && grubby --set-default /boot/vmlinuz-$kernel_release && grubby --update-kernel=/boot/vmlinuz-$kernel_release --args=systemd.unified_cgroup_hierarchy=1"
 guest 'sync; systemctl reboot' >/dev/null 2>&1 || true
@@ -193,7 +197,7 @@ scp "${ssh_options[@]}" "$package" "$script_dir/guest_effect.py" \
 	root@"$address":/root/resman-iow-effect/ >"$evidence_dir/transfer.log" 2>&1
 guest 'dnf install -y /root/resman-iow-effect/package.rpm' >"$evidence_dir/package-install.log"
 set +e
-guest "python3 /root/resman-iow-effect/guest_effect.py --bundle /root/resman-iow-effect --evidence /root/resman-iow-effect/evidence --run-id '$run_id' --revision '$source_revision' --source-tree '$source_tree' --package /root/resman-iow-effect/package.rpm --device /dev/disk/by-id/virtio-resmaneffecta --device /dev/disk/by-id/virtio-resmaneffectb" \
+guest "python3 /root/resman-iow-effect/guest_effect.py --bundle /root/resman-iow-effect --evidence /root/resman-iow-effect/evidence --run-id '$run_id' --revision '$source_revision' --source-tree '$source_tree' --qualification-revision '$qualification_revision' --qualification-tree '$qualification_tree' --package /root/resman-iow-effect/package.rpm --device /dev/disk/by-id/virtio-resmaneffecta --device /dev/disk/by-id/virtio-resmaneffectb" \
 	>"$evidence_dir/guest-run.log" 2>&1
 guest_status=$?
 set -e

@@ -89,12 +89,15 @@ def eventually(check, message, timeout=75, interval=1):
 
 
 class Campaign:
-    def __init__(self, bundle, evidence, run_id, revision, source_tree, package, devices):
+    def __init__(self, bundle, evidence, run_id, revision, source_tree,
+                 qualification_revision, qualification_tree, package, devices):
         self.bundle = bundle
         self.evidence = evidence
         self.run_id = run_id
         self.revision = revision
         self.source_tree = source_tree
+        self.qualification_revision = qualification_revision
+        self.qualification_tree = qualification_tree
         self.package = package
         self.device_paths = devices
         self.config = Path("/etc/resman/resman.conf")
@@ -636,7 +639,9 @@ while not stop:
             summary = {"schema": 1, "scope": "packaged-daemon-controlled-contention",
                        "provenance": PROVENANCE,
                        "source": {"revision": self.revision,
-                                  "tree": self.source_tree},
+                                  "tree": self.source_tree,
+                                  "qualification_revision": self.qualification_revision,
+                                  "qualification_tree": self.qualification_tree},
                        "result": self.result, "cleanup": cleanup,
                        "raw_files": self.raw_files}
             for name in ("package_info", "platform", "devices"):
@@ -659,12 +664,14 @@ def main():
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--source-tree", required=True)
+    parser.add_argument("--qualification-revision", required=True)
+    parser.add_argument("--qualification-tree", required=True)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--device", action="append", type=Path, required=True)
     args = parser.parse_args()
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     campaign = Campaign(args.bundle, args.evidence, args.run_id, args.revision, args.source_tree,
-                        args.package, args.device)
+                        args.qualification_revision, args.qualification_tree, args.package, args.device)
     raise SystemExit(campaign.run())
 
 

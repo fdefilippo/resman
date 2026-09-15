@@ -126,6 +126,9 @@ def validate(directory, expected_revision=None, expected_package_sha=None):
         require(summary["source"]["revision"] == expected_revision, "unexpected source revision")
     require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["tree"]) is not None,
             "source tree is not immutable")
+    require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["qualification_revision"]) is not None and
+            re.fullmatch(r"[0-9a-f]{40}", summary["source"]["qualification_tree"]) is not None,
+            "qualification harness revision is not immutable")
     package = summary["package"]
     require(package["identity"] == "resman-1.38.0-1.el9.x86_64" and
             re.fullmatch(r"[0-9a-f]{64}", package["sha256"]) is not None and

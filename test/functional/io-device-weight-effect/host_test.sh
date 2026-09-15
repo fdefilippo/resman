@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
-for script in "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; do
+for script in "$script_dir/qemu-host.sh" "$script_dir/qemu-run.sh" "$script_dir/remote-qemu.sh"; do
 	bash -n "$script"
 done
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence_test.py"
@@ -17,6 +17,8 @@ grep -q 'compare_before_restore' "$script_dir/validate_evidence.py"
 grep -q 'kernel-5.14.0-687.46.1.el9_8' "$script_dir/qemu-host.sh"
 grep -q 'bus=virtio,serial=' "$script_dir/qemu-host.sh"
 grep -q 'tar --no-same-owner' "$script_dir/remote-qemu.sh"
+grep -q 'remote-control.sh.*control.sh' "$script_dir/remote-qemu.sh"
+grep -q 'stop_remote' "$script_dir/remote-qemu.sh"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; then
 	echo "effect qualification must use the QEMU guest kernel" >&2

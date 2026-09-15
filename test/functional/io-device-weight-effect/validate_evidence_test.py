@@ -47,7 +47,8 @@ def fixture(directory):
     summary = {
         "schema": 1, "scope": "packaged-daemon-controlled-contention",
         "provenance": validator.PROVENANCE,
-        "source": {"revision": "a" * 40, "tree": "b" * 40},
+        "source": {"revision": "a" * 40, "tree": "b" * 40,
+                   "qualification_revision": "d" * 40, "qualification_tree": "e" * 40},
         "package": {"identity": "resman-1.38.0-1.el9.x86_64", "sha256": "c" * 64,
                     "installed_binary_matches_payload": True},
         "platform": {"id": "ol", "version_id": "9.8",
