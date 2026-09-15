@@ -36,6 +36,7 @@ the image:
 sudo install -d -m 0700 /etc/resman
 sudo install -m 0600 config/resman.conf.example /etc/resman/resman.conf
 sudo install -m 0600 config/cpu-points.map.example /etc/resman/cpu-points.map
+sudo install -m 0600 config/io-weights.map.example /etc/resman/io-weights.map
 sudo install -d -m 0700 /var/lib/resman
 sudo install -d -m 0750 /var/log/resman
 make container-build
@@ -59,7 +60,7 @@ sudo podman run --rm --name resman \
   -v /etc/nsswitch.conf:/etc/nsswitch.conf:ro \
   -v /var/lib/resman:/var/lib/resman:rw \
   -v /var/log/resman:/var/log/resman:rw \
-resman:1.37.0
+resman:1.38.0
 ```
 
 `--pid=host` makes `/proc` describe the processes resman controls.

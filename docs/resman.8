@@ -1,4 +1,4 @@
-.TH RESMAN 8 "September 2026" "v1.37.0" "System Administration"
+.TH RESMAN 8 "September 2026" "v1.38.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -159,7 +159,7 @@ than retrying forever. After correcting the transient cause, run
 before starting the service when the start limit was reached. A clean stop is not
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
-Current metrics schema: 7.
+Current metrics schema: 8.
 .PP
 The system normalizes current online CPU capacity to 1000 CPU Points and uses a
 flat systemd-owned hierarchy. The finite parent user.slice contains active user
@@ -356,6 +356,23 @@ coverage failures are exported through
 - Device specification. "all" enumerates all whole block devices in /sys/block;
   alternatively specify one "major:minor" device.
 .IP \(bu
+.B IO_WEIGHT_DEVICES
+- Empty disables relative block-I/O weights. Otherwise, a comma-separated list of
+  unique canonical nonzero major:minor whole-device identities. Paths, all, globs,
+  partitions, RAID, multipath, stacked and unknown devices are rejected.
+.IP \(bu
+.B IO_ROOT_WEIGHT
+- Relative weight 1 through 1000 for user-0.slice (default 100).
+.IP \(bu
+.B IO_DEFAULT_WEIGHT
+- Relative weight 1 through 1000 assigned independently to every active unmapped or
+  excluded user slice (default 100).
+.IP \(bu
+.B IO_USER_WEIGHT_FILE
+- Root-owned mode-0600 map with marker [resman-io-weights-map-v1] and exact
+  username=weight entries. Content hot-reloads atomically; a path change requires a
+  restart. Default: /etc/resman/io-weights.map.
+.IP \(bu
 .B IO_THRESHOLD_DURATION
 - Seconds to wait before activating IO limits (0 = immediate)
 .IP \(bu
@@ -364,15 +381,34 @@ coverage failures are exported through
 .IP \(bu
 .B IO_USER_EXCLUDE_LIST
 - Regex patterns for users excluded from IO limits
+.PP
+Weighted I/O is continuous and independent of IO_LIMIT_ENABLED and its thresholds.
+It is a relative work-conserving share among user-slice siblings, not a bandwidth
+reservation. Each default slice contributes separately to the denominator: one slice
+at 1000 competing with 99 slices at 100 has a nominal share of about 9.17 percent.
+ResMan never changes a scheduler or enables io.cost.qos/io.cost.model.
+.PP
+After READY, read-only classification selects a probe candidate. An owned transient
+systemd unit must then materialize and verify the complete property-to-kernel path
+before any production weight is applied. Late or observation-derived conditions are
+retried at a cadence capped at 30 seconds. refused_observation remains automatically
+re-evaluated; refused_intervention requires reload, restart, or operator repair.
+functionally_accepted proves transport and exact readback only. effect_qualified and
+observed_delivery remain separate and do not claim throughput without controlled
+contention evidence. See /usr/share/doc/resman/IO-WEIGHTS.md.
 .SH SYSTEMD NATIVE ENFORCEMENT
 On a host booted with systemd, ResMan uses
 .B systemd_native
 when the authoritative adapter is available. It applies runtime-only properties to
 user.slice and user-UID.slice without moving PIDs out of their session or service.
 The finite CPU parent indirectly bounds excluded users and rootless descendants.
-RAM and I/O require complete independent authority; authority_split or
+RAM and hard I/O limits require complete independent authority; authority_split or
 runtime_owned_descendant refuses them and releases their owned properties while CPU
-may remain active. The durable systemd-property-leases.json journal is not a cache.
+may remain active. Weighted I/O follows CPU-style slice authority: a rootless
+descendant remains covered, while authority_split applies only to the known slice and
+is reported as partial without a UID-wide guarantee. Weight and hard-I/O leases are
+separate and releasing either never changes the other. The durable
+systemd-property-leases.json journal is not a cache.
 See /usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md for guarded restoration and
 operator-conflict recovery. Never delete this journal during a metrics reset.
 .PP
@@ -648,8 +684,9 @@ When metrics persistence is enabled at its default
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
 Earlier database schemas are incompatible: archive or delete the database
-and restart so resman can create schema version 7. It is never migrated or opened
-under the new path.
+and restart so resman can create the current schema. The supported schema-7-to-8
+migration applies only to a database already at the selected current path; older
+schemas are never migrated or opened under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
 Symbolic links, including dangling links, are rejected without replacing the link or
@@ -673,9 +710,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.35.4 to 1.37.0
+.B Upgrade from 1.25.x through 1.37.0 to 1.38.0
 .PP
-ResMan 1.37.0 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.38.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

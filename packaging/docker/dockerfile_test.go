@@ -20,8 +20,10 @@ func TestShippedContainerPreservesRuntimePrivilegeContract(t *testing.T) {
 		"/etc/resman/tls",
 		"COPY config/resman.conf.example /etc/resman/resman.conf",
 		"COPY config/cpu-points.map.example /etc/resman/cpu-points.map",
+		"COPY config/io-weights.map.example /etc/resman/io-weights.map",
 		"chmod 0600 /etc/resman/resman.conf",
 		"chmod 0600 /etc/resman/cpu-points.map",
+		"chmod 0600 /etc/resman/io-weights.map",
 		`CMD ["--config", "/etc/resman/resman.conf"]`,
 		"USER 0",
 	} {

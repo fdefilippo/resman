@@ -212,6 +212,32 @@ groups:
           description: "{{ $value }} errors in the last 5 minutes. Check logs for details."
 
       # -------------------------------------------------------------------------
+      # Weighted I/O Requires Intervention
+      # -------------------------------------------------------------------------
+      - alert: ResManIODeviceWeightInterventionRequired
+        expr: resman_io_device_weight_state{state="refused_intervention"} == 1
+        for: 2m
+        labels:
+          severity: warning
+          category: io
+        annotations:
+          summary: "Weighted I/O requires operator intervention"
+          description: "ResMan stopped weighted-I/O attempts after a deterministic probe, cleanup or ownership failure. Inspect resman_io_device_weight_reason, correct the host or ownership conflict, then reload or restart ResMan. CPU, RAM and hard-I/O enforcement continue independently."
+
+      # -------------------------------------------------------------------------
+      # Weighted I/O Activation Delayed
+      # -------------------------------------------------------------------------
+      - alert: ResManIODeviceWeightActivationDelayed
+        expr: max by (cluster, environment, hostname, server_role) (resman_io_device_weight_state{state=~"requested_pending|refused_observation"}) == 1
+        for: 10m
+        labels:
+          severity: info
+          category: io
+        annotations:
+          summary: "Weighted I/O activation is delayed"
+          description: "Weighted I/O is pending or refused from a changeable observation. ResMan continues read-only classification at the bounded retry cadence; no immediate operator action is required."
+
+      # -------------------------------------------------------------------------
       # Required Procfs Access Unavailable
       # -------------------------------------------------------------------------
       - alert: ResManProcFSAccessIncomplete

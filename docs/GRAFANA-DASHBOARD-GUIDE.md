@@ -33,7 +33,7 @@ grafana-cli --pluginUrl https://github.com/fdefilippo/resman/raw/main/docs/dashb
 
 ## Dashboard Panels
 
-The dashboard is organized in seven rows. Every query is filtered by the `cluster`,
+The dashboard is organized in eight rows. Every query is filtered by the `cluster`,
 `environment`, `server_role` and `hostname` variables; per-user series also honor
 `username`. The previous layout is archived as
 `docs/archive/dashboard-grafana-operations-2026-09-06.json`.
@@ -103,8 +103,20 @@ acknowledged action and its bounded block reason.
 | **Control cycle duration p95** | `histogram_quantile(0.95, rate(resman_control_cycle_duration_seconds_bucket))` | Daemon latency |
 | **Control cycles by trigger** | `increase(resman_control_cycle_triggers_total{trigger})` | Polling against PSI-triggered cycles |
 
-Rows 5 and 6 depend on the schema-7 CPU Points telemetry; on an
+Rows 5 and 6 depend on the CPU Points telemetry retained in schema 8; on an
 earlier release those panels show no data.
+
+### Row 8: Weighted I/O policy
+
+| Panel | Metric | Description |
+|-------|--------|-------------|
+| **Weighted I/O lifecycle** | `resman_io_device_weight_state{state} == 1` | Distinguishes automatic `refused_observation` re-evaluation from `refused_intervention`, which requires host correction followed by reload or restart |
+| **Weighted I/O proof and application** | `resman_io_device_weight_functionally_accepted`, `..._programmed`, `..._read_back`, `..._effect_qualified` | Keeps functional proof, complete production application and retained contention qualification separate |
+| **Weighted I/O attempts and partial coverage** | `increase(resman_io_device_weight_classification_attempts_total)`, `increase(..._probe_attempts_total)`, `resman_io_device_weight_partial_users` | Shows read-only classifications separately from mutating transient probes and counts applied slices with partial UID workload coverage |
+
+When the feature is disabled, the lifecycle panel reports `disabled` and the other
+weighted-I/O gauges remain zero. A functionally accepted probe does not mean a
+production plan is programmed, and `effect_qualified` never authorizes the feature.
 
 ## User Policy Configuration Impact
 

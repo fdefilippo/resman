@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.37.0
+Version: 1.38.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -82,8 +82,9 @@ v1.36.4: verify direct and scaled BFQ weight representations without a vacuous p
 v1.36.5: permit verified per-slice I/O controller materialization on systemd 239.
 v1.36.6: permit systemd 239 to enable I/O through an unmaterialized slice ancestor.
 v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and I/O.
+v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.35.4 to 1.37.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.37.0 to 1.38.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -97,6 +98,7 @@ Features:
 - Configurable activation/release thresholds
 - Flat CPU Points with CPU_ROOT_POINTS=100 and aggregate best-effort scheduling
 - RAM limiting with memory.high (soft) and memory.max (hard) limits
+- Capability-probed relative per-slice I/O weights on explicit direct devices
 - Graceful memory throttling before OOM killer (v1.19.0+)
 - Block I/O limiting with io.max (bandwidth and IOPS) (v1.20.0+)
 - Prometheus metrics export with comprehensive dashboard
@@ -166,6 +168,7 @@ install -m 755 %{name} %{buildroot}/%{_bindir}/%{name}
 install -d -m 700 %{buildroot}/%{_sysconfdir}/resman
 install -m 600 config/resman.conf.example %{buildroot}/%{_sysconfdir}/resman/resman.conf
 install -m 600 config/cpu-points.map.example %{buildroot}/%{_sysconfdir}/resman/cpu-points.map
+install -m 600 config/io-weights.map.example %{buildroot}/%{_sysconfdir}/resman/io-weights.map
 
 # Install the systemd service.
 install -m 644 packaging/systemd/resman.service %{buildroot}/%{_unitdir}/
@@ -178,11 +181,13 @@ install -m 644 README.md %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 LICENSE %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
 install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 config/cpu-points.map.example %{buildroot}/%{_docdir}/%{name}/
+install -m 644 config/io-weights.map.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/SYSTEMD-PROPERTY-LEASES.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CPU-POINTS-OBSERVABILITY.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/IO-WEIGHTS.md %{buildroot}/%{_docdir}/%{name}/
 
 # Install TLS and monitoring documentation.
 install -m 644 docs/alerting-rules.yml %{buildroot}/%{_docdir}/%{name}/ 2>/dev/null || true
@@ -281,6 +286,7 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %dir %attr(0700,root,root) %{_sysconfdir}/resman
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/resman.conf
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/cpu-points.map
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/resman/io-weights.map
 %{_unitdir}/resman.service
 %{_mandir}/man8/resman.8.gz
 %dir %attr(0700,root,root) %{_sharedstatedir}/resman
@@ -292,16 +298,23 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/resman.conf.example
 %doc %{_docdir}/%{name}/cpu-points.map.example
+%doc %{_docdir}/%{name}/io-weights.map.example
 %doc %{_docdir}/%{name}/CONFIGURATION.md
 %doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/LIMIT-HOOKS.md
 %doc %{_docdir}/%{name}/SYSTEMD-PROPERTY-LEASES.md
 %doc %{_docdir}/%{name}/CPU-POINTS-OBSERVABILITY.md
+%doc %{_docdir}/%{name}/IO-WEIGHTS.md
 %doc %{_docdir}/%{name}/alerting-rules.yml
 %doc %{_docdir}/%{name}/dashboard-grafana-operations.json
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-1
+- Add capability-probed relative block-I/O weights for user slices
+- Keep weighted-I/O activation asynchronous and independent from hard I/O caps
+- Migrate metrics schema 7 atomically to schema 8 with typed lifecycle history
+
 * Mon Sep 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.37.0-1
 - Share one frozen process-authority inventory across each decision sample.
 - Preserve unchanged RAM/I/O targets across unrelated topology churn and persistence discovery failure.

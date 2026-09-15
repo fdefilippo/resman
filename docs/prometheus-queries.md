@@ -9,6 +9,7 @@ This document provides example PromQL queries for monitoring ResMan metrics.
 - [Memory Analysis](#memory-analysis)
 - [Process Analysis](#process-analysis)
 - [Limit Status](#limit-status)
+- [Weighted I/O Policy](#weighted-io-policy)
 - [Performance Metrics](#performance-metrics)
 - [Error Tracking](#error-tracking)
 - [Alerting Queries](#alerting-queries)
@@ -239,6 +240,43 @@ increase(resman_cpu_limits_deactivated_total[1h])
 # Activations per minute
 rate(resman_cpu_limits_activated_total[5m]) * 60
 ```
+
+---
+
+## Weighted I/O Policy
+
+Weighted I/O activation is asynchronous and independent from CPU, RAM and hard-I/O
+enforcement. Read the one-hot lifecycle before interpreting the application gauges:
+
+```promql
+# Current lifecycle and bounded reason
+resman_io_device_weight_state == 1
+resman_io_device_weight_reason == 1
+```
+
+`refused_observation` is re-evaluated automatically. Only
+`refused_intervention` requires host correction followed by a reload or restart.
+
+```promql
+# Functional proof versus complete production application
+resman_io_device_weight_functionally_accepted
+resman_io_device_weight_programmed
+resman_io_device_weight_read_back
+
+# Retained controlled-contention qualification; never an authorization gate
+resman_io_device_weight_effect_qualified
+
+# Programmed slices whose UID workload coverage is partial
+resman_io_device_weight_partial_users
+
+# Keep read-only classification separate from mutating transient probes
+increase(resman_io_device_weight_classification_attempts_total[10m])
+increase(resman_io_device_weight_probe_attempts_total[10m])
+```
+
+Production observation of the delivered share is intentionally not inferred from
+programming. The current release publishes
+`resman_io_device_weight_observed_delivery{state="not_measured"} == 1`.
 
 ---
 

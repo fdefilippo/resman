@@ -252,14 +252,14 @@ func TestNativeReferencesAreShippedAndOperatorFilesPreserved(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, path := range []string{"Makefile", "packaging/deb/prepare-package.sh", "packaging/rpm/resman.spec", "packaging/docker/Dockerfile", "packaging/layout/verify-package-layout.sh"} {
 		body := readTextFile(t, filepath.Join(root, path))
-		for _, doc := range []string{"CPU-POINTS-OBSERVABILITY.md", "SYSTEMD-PROPERTY-LEASES.md", "UPGRADING.md", "CONFIGURATION.md"} {
+		for _, doc := range []string{"CPU-POINTS-OBSERVABILITY.md", "IO-WEIGHTS.md", "SYSTEMD-PROPERTY-LEASES.md", "UPGRADING.md", "CONFIGURATION.md"} {
 			if !strings.Contains(body, doc) {
 				t.Errorf("%s omits %s", path, doc)
 			}
 		}
 	}
 	makefile := readTextFile(t, filepath.Join(root, "Makefile"))
-	for _, name := range []string{"resman.conf", "cpu-points.map"} {
+	for _, name := range []string{"resman.conf", "cpu-points.map", "io-weights.map"} {
 		guard := "sudo test -e $(CONF_DIR)/" + name + " || sudo test -L $(CONF_DIR)/" + name
 		if !strings.Contains(makefile, guard) {
 			t.Errorf("make install can overwrite existing %s", name)

@@ -1,6 +1,6 @@
 # ResMan
 
-Current metrics schema: 7.
+Current metrics schema: 8.
 
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.37.0-1_<architecture>.deb
+# Creates build/deb/resman_1.38.0-1_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -112,10 +112,10 @@ Package installation does not enable or start the service automatically. Review
 `/etc/resman/resman.conf`, then use `systemctl enable --now resman`. During an upgrade,
 an already active service is restarted after the new package is configured.
 
-Upgrading any ResMan release from 1.25.x through 1.35.4 to 1.37.0 is intentionally
+Upgrading any ResMan release from 1.25.x through 1.37.0 to 1.38.0 is intentionally
 breaking. Complete the filesystem, database, configuration, MCP, Prometheus, hook,
 capability, and container actions in [`docs/UPGRADING.md`](docs/UPGRADING.md) before
-installing ResMan 1.37.0.
+installing ResMan 1.38.0.
 
 The packaged unit does not retry configuration, required cgroup-capability, or MCP TLS
 credential rejections: these exit with status 78 and remain failed until the operator
@@ -142,6 +142,12 @@ CPU_RESERVE_POINTS=100
 CPU_ROOT_POINTS=100
 CPU_BEST_EFFORT_POINTS=100
 CPU_POINTS_FILE=/etc/resman/cpu-points.map
+
+# Relative per-device I/O weights (disabled while the device list is empty)
+IO_WEIGHT_DEVICES=
+IO_ROOT_WEIGHT=100
+IO_DEFAULT_WEIGHT=100
+IO_USER_WEIGHT_FILE=/etc/resman/io-weights.map
 
 # User filtering (empty = no users limited, .* = all users)
 USER_INCLUDE_LIST=.*
@@ -246,6 +252,13 @@ Reserve, root, best-effort, and map-content changes form one atomic hot-reload e
 `CPU_POINTS_FILE` path changes require a restart. Active class and weight changes
 reconcile in place without moving processes.
 
+Weighted block I/O is a separate continuously active relative-share policy. An
+explicit `IO_WEIGHT_DEVICES` list enables post-READY capability classification and an
+owned systemd-to-kernel probe before production mutation. `IO_USER_WEIGHT_FILE`
+content hot-reloads atomically; its path is restart-required. ResMan does not select a
+scheduler or enable io.cost, and `functionally_accepted` does not claim measured
+throughput. See [weighted block-I/O policy](docs/IO-WEIGHTS.md).
+
 For accounting, coverage, schema 7 and operator measurements, see
 [CPU Points observability](docs/CPU-POINTS-OBSERVABILITY.md). Use the daemon's
 synchronized deltas and a 60-second observation window; raw weights do not prove delivery.
@@ -258,12 +271,14 @@ swap or reclaimable pages, a process can stay alive but effectively stall at hig
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 7 records each decision
+When metrics persistence is enabled, SQLite schema version 8 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
 applied CPU class and weight, delivered parent/slice bandwidth and throttling, raw
 unit diagnostics, independent resource authority, and process-derived memory from
-slice RAM charges and high/max/OOM events. Missing comparable baselines are `null`, not
-zero; incompatible older databases must be archived or deleted before restart. See
+slice RAM charges and high/max/OOM events, plus independent weighted-I/O lifecycle,
+probe, read-back, qualification, coverage, and delivery state. Schema 7 is migrated
+atomically; schema 6 and older must be archived or deleted before restart. Missing
+comparable baselines are `null`, not zero. See
 [`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md).
 
 `total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
@@ -384,7 +399,7 @@ curl -s http://localhost:1974/metrics | grep resman
 - Architecture: `docs/ARCHITECTURE.md`
 - IO limits: `docs/IO-LIMITS.md`
 - Authoritative defaults and lifecycle reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
-- Upgrade guide from 1.25.x through 1.35.4 to 1.37.0: [`docs/UPGRADING.md`](docs/UPGRADING.md)
+- Upgrade guide from 1.25.x through 1.37.0 to 1.38.0: [`docs/UPGRADING.md`](docs/UPGRADING.md)
 - Copyable configuration: `config/resman.conf.example`
 
 ## License

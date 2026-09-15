@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.37.0
+VERSION = 1.38.0
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -418,9 +418,14 @@ install: build
 	else \
 		sudo install -m 0600 config/cpu-points.map.example $(CONF_DIR)/cpu-points.map; \
 	fi
+	@if sudo test -e $(CONF_DIR)/io-weights.map || sudo test -L $(CONF_DIR)/io-weights.map; then \
+		echo "Preserving existing $(CONF_DIR)/io-weights.map"; \
+	else \
+		sudo install -m 0600 config/io-weights.map.example $(CONF_DIR)/io-weights.map; \
+	fi
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo install -d -m 0755 /usr/share/doc/resman
-	sudo install -m 0644 docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
+	sudo install -m 0644 docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
 	@echo "Configuration: $(CONF_DIR)/resman.conf"
@@ -432,6 +437,7 @@ uninstall:
 	sudo rm -f $(BIN_DIR)/$(PROJECT_NAME)
 	sudo rm -f $(CONF_DIR)/resman.conf
 	sudo rm -f $(CONF_DIR)/cpu-points.map
+	sudo rm -f $(CONF_DIR)/io-weights.map
 	sudo rm -f $(SYSTEMD_DIR)/resman.service
 	sudo systemctl daemon-reload
 	@echo "Uninstallation completed!"

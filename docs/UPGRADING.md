@@ -1,17 +1,18 @@
-# Upgrading from ResMan 1.25.x through 1.35.4 to ResMan 1.37.0
+# Upgrading from ResMan 1.25.x through 1.37.0 to ResMan 1.38.0
 
-Current metrics schema: 7.
+Current metrics schema: 8. Schema 7 is migrated atomically.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.35.4 to
-ResMan 1.37.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.37.0 to
+ResMan 1.38.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
 on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
-It does not migrate old database schemas, accept removed configuration keys, preserve
-old MCP shapes, or alias renamed metrics.
+Except for the explicit schema-7-to-8 migration below, it does not migrate older
+database schemas, accept removed configuration keys, preserve old MCP shapes, or alias
+renamed metrics.
 
-ResMan 1.37.0 validates the systemd-native
+ResMan 1.38.0 validates the systemd-native
 interfaces used by enabled resource policies. CPU enforcement requires `cpu.max`;
 enabled RAM enforcement requires `memory.high` and `memory.max`; enabled strong I/O
 enforcement requires the `io` controller and `io.max`. If one is unavailable, startup
@@ -26,7 +27,7 @@ transactional systemd write. On systemd 239 the immediate parent may also omit `
 from `cgroup.controllers` until that write enables the controller through the slice
 hierarchy; ResMan therefore requires root support before the write and acknowledges
 the limit only after exact kernel readback from the target slice.
-This does not enable weighted-I/O policy or change the configured strong I/O limits.
+These checks do not enable the new weighted-I/O policy or change configured strong I/O limits.
 
 The packaged startup probe uses `/usr/bin/sleep`, supplied by the declared
 `coreutils` dependency. A failure to start that executable is reported as a probe
@@ -35,6 +36,54 @@ failure with its path, separately from a missing controller or cgroup interface.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## NEW: weighted block-I/O policy, disabled by default
+
+**Visible change.** `IO_WEIGHT_DEVICES` enables continuously active relative weights
+for authoritative `user-UID.slice` siblings on an explicit list of whole block
+devices. The default is empty, so an unchanged installation creates no new weight.
+`IO_ROOT_WEIGHT` and `IO_DEFAULT_WEIGHT` default to 100. Per-user values come from the
+new root-owned mode-0600 `/etc/resman/io-weights.map` file. Existing operator-authored
+files are preserved by RPM, Debian, container, and local installation paths.
+
+**Cause.** Weighted I/O is a new, explicitly enabled policy whose live functional
+proof can depend on devices and scheduler state that appear after ResMan reaches
+system readiness. It therefore uses the narrowly defined asynchronously mandatory
+capability lifecycle instead of weakening the existing startup requirements.
+
+**Action.** Leave `IO_WEIGHT_DEVICES` empty to retain the previous behavior. Before
+enabling it, install and validate the weight map, select only modeled direct devices,
+and arrange BFQ or operator-owned `io.cost.qos` independently. Then monitor the
+weighted-I/O lifecycle and reason metrics described below.
+
+**Capability behavior.** Valid configuration no longer makes the whole daemon wait for
+a late device or boot-time scheduler selection. ResMan publishes `READY=1`, continues
+CPU, RAM, and hard-I/O work, then classifies and probes weighted I/O asynchronously.
+Classification and transient probe retries are capped at 30 seconds and are independent
+of PSI. `refused_observation` keeps rechecking facts that can settle during boot;
+`refused_intervention` stops the configuration generation because an operator must
+resolve a post-materialization mismatch, unsafe cleanup, or ownership conflict.
+ResMan never changes a device scheduler or enables `io.cost.qos`/`io.cost.model`.
+
+**Semantics.** Weights are relative and work-conserving, not throughput guarantees.
+Every unmapped or excluded slice gets its own default weight, so many active default
+slices dilute a mapped slice. A mapped 1000 competing with 99 default slices at 100 has
+about a 9.17 percent nominal share. Rootless descendants participate inside their user
+slice. An authority split is applied only to the known slice and is reported as partial,
+never as a UID-wide guarantee.
+
+**Composition and recovery.** `IO_WEIGHT_DEVICES` does not alter `IO_DEVICE_FILTER`.
+Weights and hard `io.max` caps have separate leases and release independently. Emptying
+the selector, blackout, shutdown, device loss after one-cadence grace, or removal of a
+slice compare-before-restores only owned weights. A recovered weight lease is also
+cleaned safely when the new configuration leaves the feature disabled.
+
+**Persistence and clients.** SQLite schema 7 is migrated atomically to schema 8. Old
+rows receive the historically truthful `disabled` and `not_measured` weighted-I/O
+state; all existing columns and rows are preserved. Schemas 6 and older remain
+incompatible. Prometheus and latest-only MCP add typed weighted-I/O state without
+compatibility aliases. See [weighted block-I/O policy](IO-WEIGHTS.md) before enabling
+the feature.
 
 ## CHANGED: systemd process authority is sampled once per decision
 

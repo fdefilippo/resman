@@ -234,14 +234,15 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   slices still participate in the parent envelope, and RAM/I/O require independent
   complete authority. Native active class changes modify weights in place. Unavailable
   authority remains observation-only and never selects another enforcement backend.
-- Native weighted I/O is an adapter capability, not a daemon policy. Production
-  code outside `internal/systemdunit` **MUST NOT** construct an `IOWeight`
-  assignment. The exact `ioSystemdProperties` restoration inventory remains a
-  superset of policy output so unexpected recovered leases can be released. Its
-  only permitted consumer is resource restoration, never an assignment producer.
-  The AST gate conservatively rejects property names, constant concatenations,
-  aliases and other uses of that inventory; this is a structural source boundary,
-  not a claim of arbitrary whole-program data-flow analysis.
+- Native weighted I/O is a dedicated daemon policy over the typed systemd adapter.
+  Production code **MUST NOT** construct a scalar `IOWeight` policy assignment.
+  `state/systemd_io_weights.go` is the only production consumer allowed to construct
+  typed `IODeviceWeight` assignments, invoke the owned device-weight probe, or select
+  that property for compare-before-restore. The hard-I/O restoration inventory remains
+  separate and cannot acquire, release, or classify device weights. The AST gate
+  rejects raw property names, constant concatenations, aliases and alternate mutation
+  paths; read-only status and persistence types may cross package boundaries without
+  conveying mutation authority.
 - Startup capability checks may create one transient slice directly below `user.slice`
   and one dedicated, finite-lived probe process inside it solely to make the requested
   controller interface materialize for kernel verification. No existing PID may be
@@ -527,6 +528,16 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 
 - Kernel/cgroup capabilities **MUST** be discovered once and classified as **mandatory**
   for an enabled feature or **optional** (degrade explicitly).
+- An enabled capability may be **mandatory asynchronously** only when a demonstrated
+  boot-order dependency makes a pre-`READY=1` proof unsafe or host-blocking. This class
+  **MUST** validate configuration synchronously, publish a bounded pending or refusal
+  state after readiness, perform no feature mutation before an owned end-to-end proof,
+  retry with a bounded cancellation-aware cadence, preserve unrelated startup
+  requirements and enforcement, and never label an unproved path supported. An
+  observation-derived refusal remains eligible for read-only reclassification; a
+  deterministic post-proof mismatch, unsafe cleanup, or ownership conflict may stop
+  the current configuration generation. This is not a general exception to mandatory
+  startup validation.
 - A controller that enforcement does not use **MUST NOT** be a hard startup
   requirement. CPU quota enforcement uses the `cpu` controller; `cpuset` is optional
   placement.

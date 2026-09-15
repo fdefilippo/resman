@@ -61,6 +61,7 @@ install -d -m 0700 \
 install -m 0755 "$binary" "$package_dir/usr/bin/resman"
 install -m 0600 "$project_dir/config/resman.conf.example" "$package_dir/etc/resman/resman.conf"
 install -m 0600 "$project_dir/config/cpu-points.map.example" "$package_dir/etc/resman/cpu-points.map"
+install -m 0600 "$project_dir/config/io-weights.map.example" "$package_dir/etc/resman/io-weights.map"
 install -m 0644 "$project_dir/packaging/systemd/resman.service" \
     "$package_dir/usr/lib/systemd/system/resman.service"
 install -m 0644 "$project_dir/packaging/syslog/resman" \
@@ -79,6 +80,8 @@ install -m 0644 "$project_dir/docs/SYSTEMD-PROPERTY-LEASES.md" \
     "$package_dir/usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md"
 install -m 0644 "$project_dir/docs/CPU-POINTS-OBSERVABILITY.md" \
     "$package_dir/usr/share/doc/resman/CPU-POINTS-OBSERVABILITY.md"
+install -m 0644 "$project_dir/docs/IO-WEIGHTS.md" \
+    "$package_dir/usr/share/doc/resman/IO-WEIGHTS.md"
 install -m 0644 "$script_dir/copyright" "$package_dir/usr/share/doc/resman/copyright"
 install -m 0644 "$project_dir/docs/alerting-rules.yml" \
     "$package_dir/usr/share/doc/resman/alerting-rules.yml"

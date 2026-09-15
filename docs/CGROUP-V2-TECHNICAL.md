@@ -2,7 +2,7 @@
 
 ## Overview
 
-ResMan 1.37.0 uses cgroup v2 through authoritative systemd units. It never creates a
+ResMan 1.38.0 uses cgroup v2 through authoritative systemd units. It never creates a
 parallel enforcement hierarchy and never changes process membership. systemd and
 logind remain the owners of sessions, services, transient units, and rootless
 container descendants.
@@ -92,10 +92,13 @@ Strong I/O limits are applied as per-device systemd properties and verified agai
 `io.max`. The device identity is part of the property lease and exact restoration
 contract.
 
-Weighted I/O remains an adapter capability only. No production policy constructs an
-`IOWeight` assignment because a readable weight file does not prove that the
-device scheduler honors the value. A future weighted-I/O policy must verify the
-scheduler per device and distinguish programmed state from effective enforcement.
+Weighted I/O is a dedicated continuous policy over typed per-device
+`IODeviceWeight` assignments; scalar `IOWeight` is not a production policy knob.
+Read-only classification selects a candidate from stable device topology and an
+active scheduler or io.cost mechanism. An owned transient unit then proves systemd
+transport, controller materialization, exact per-device kernel readback, reset, and
+cleanup before production mutation. Programmed, read-back, functionally accepted,
+effect qualified, partial coverage, and observed delivery remain separate states.
 
 ## Property ownership and restoration
 
@@ -119,7 +122,8 @@ authoritative unit paths. Missing observations are represented as unavailable, n
 as fabricated zeroes. Unit recreation, counter decrease, daemon restart, and identity
 changes reset delta baselines.
 
-The current SQLite schema is version 7. Prometheus, MCP, and SQLite consume the same
+The current SQLite schema is version 8; schema 7 migrates atomically with historically
+disabled weighted-I/O fields. Prometheus, MCP, and SQLite consume the same
 typed control-cycle snapshot and the same bounded enforcement modes:
 
 - `systemd_native`
@@ -156,4 +160,4 @@ is outside the prohibited enforcement mutations above.
 
 **Document version:** 3.1
 **Last updated:** 2026-09-11
-**Applies to:** ResMan 1.37.0 and later
+**Applies to:** ResMan 1.38.0 and later

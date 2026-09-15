@@ -38,7 +38,7 @@ CPU, memory, and I/O authority are evaluated independently. A finite CPU envelop
 including a rootless container. ResMan never acquires or migrates the container's
 processes.
 
-Memory and I/O are stricter. Before their first property mutation, ResMan verifies
+Memory and hard I/O limits are stricter. Before their first property mutation, ResMan verifies
 that every process owned by the UID is below the authoritative `user-UID.slice` and
 that every process already below it shares the host PID namespace. A UID split across
 another parent is reported as partial `authority_split` coverage. A rootless-container

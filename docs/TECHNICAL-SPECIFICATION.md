@@ -250,7 +250,7 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
-Current metrics schema: 7.
+Current metrics schema: 8.
 
 **Responsibilities:**
 - Verify the cgroup v2 observation boundary
@@ -324,6 +324,19 @@ required interface aborts startup with the feature, controller, and interface in
 the error. Controllers for disabled RAM or I/O features may be absent. `cpuset`
 is optional because quota and proportional CPU enforcement use the `cpu`
 controller.
+
+Weighted block I/O is disabled when `IO_WEIGHT_DEVICES` is empty and is not part of
+the synchronous startup-requirement snapshot. After `READY=1`, the read-only
+classifier selects a complete `probe_candidate` from device identity, approved
+topology, the root `io` controller, and exactly one active BFQ or io.cost mechanism.
+An owned transient systemd probe must then materialize and verify `IODeviceWeight`
+through D-Bus and the exact active kernel file before the first production mutation.
+Successful proof produces `functionally_accepted`; retained contention qualification
+and `observed_delivery` remain separate information and never authorize a host.
+Observation-derived refusals and boot-time inactive mechanisms are reclassified with
+1, 2, 4, 8, 16, and 30-second capped retries. Deterministic post-materialization
+mismatch, unsafe cleanup, or ownership conflict stops only the weighted-I/O generation.
+The daemon never writes a scheduler, `io.cost.qos`, or `io.cost.model`.
 
 Capability discovery is a startup snapshot. If `memory.max` or `io.max` was
 unusable during that probe, a reload that requests its feature reports the
@@ -656,8 +669,10 @@ artifacts, and restart. A custom `--config` path is authoritative and does not t
 this default-layout guard.
 When metrics persistence is enabled at
 the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected before
-component construction. A pre-version-7 database must be archived or deleted so schema
-version 7 can be created; it is not moved or migrated. Version 7 persists one common
+component construction. Schema 7 at the current path is migrated atomically to schema
+8, preserving all rows and assigning historical weighted-I/O state `disabled` with
+`not_measured` delivery. A pre-version-7 database must be archived or deleted so schema
+version 8 can be created; it is not moved or migrated. Schema 8 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
 nullable identity-safe unit deltas, independent resource authority and RAM-charge
 coverage, and distinct memory high/max/OOM/kill deltas. First baselines, counter resets and unit
@@ -1492,7 +1507,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.37.0-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.38.0-1'" -o resman .
 ```
 
 **Build RPM:**
