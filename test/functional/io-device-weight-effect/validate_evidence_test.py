@@ -22,10 +22,13 @@ def fixture(directory, profile="qualification"):
     duration = profile_config["minimum_duration_ns"]
     phases = {
         "equal": {"public_weights": [100, 100],
+                  "settle_duration_ns": profile_config["settle_seconds"] * 1_000_000_000,
                   "intervals": [make_interval(device, 100, 110, duration) for _ in range(count)]},
         "unequal": {"public_weights": [100, 1000],
+                    "settle_duration_ns": profile_config["settle_seconds"] * 1_000_000_000,
                     "intervals": [make_interval(device, 100, 400, duration) for _ in range(count)]},
         "reversed": {"public_weights": [1000, 100],
+                     "settle_duration_ns": profile_config["settle_seconds"] * 1_000_000_000,
                      "intervals": [make_interval(device, 400, 100, duration) for _ in range(count)]},
     }
     aggregates = {name: validator.aggregate(value["intervals"], device, profile, name)
@@ -61,7 +64,8 @@ def fixture(directory, profile="qualification"):
     summary = {
         "schema": 1, "scope": profile_config["scope"], "profile": profile,
         "cadence": {"interval_count": count,
-                    "interval_seconds": profile_config["interval_seconds"]},
+                    "interval_seconds": profile_config["interval_seconds"],
+                    "settle_seconds": profile_config["settle_seconds"]},
         "completed_stages": list(validator.COMPLETED_STAGES),
         "provenance": validator.PROVENANCE,
         "source": {"revision": "a" * 40, "tree": "b" * 40,
@@ -116,7 +120,8 @@ class EvidenceTests(unittest.TestCase):
             validator.validate(directory, "a" * 40, "c" * 64, "smoke")
 
     def test_smoke_allows_starved_low_weight_control_but_not_equal_or_qualification(self):
-        interval = [make_interval("252:16", 0, 400, 1_000_000_000)]
+        interval = [make_interval("252:16", 0, 400,
+                                  validator.PROFILES["smoke"]["minimum_duration_ns"])]
         self.assertEqual(validator.aggregate(interval, "252:16", "smoke", "unequal")["bytes"],
                          [0, 400])
         with self.assertRaisesRegex(ValueError, "both sibling slices"):
@@ -135,6 +140,7 @@ class EvidenceTests(unittest.TestCase):
             lambda x: x["mechanisms"]["bfq"]["setup"].update(daemon_mutated_scheduler_or_iocost=True),
             lambda x: x["mechanisms"]["io_cost"]["setup"].update(io_cost_enabled=False),
             lambda x: x["mechanisms"]["bfq"]["phases"]["equal"]["intervals"].clear(),
+            lambda x: x["mechanisms"]["bfq"]["phases"]["equal"].update(settle_duration_ns=0),
             lambda x: x["mechanisms"]["bfq"]["phases"]["unequal"]["intervals"][0].update(read_bytes_delta=[0, 0]),
             lambda x: x["mechanisms"]["bfq"]["phases"]["unequal"]["intervals"][0].update(read_bytes_delta=[400, 100]),
             lambda x: x["mechanisms"]["bfq"]["phases"]["reversed"].update(public_weights=[100, 1000]),

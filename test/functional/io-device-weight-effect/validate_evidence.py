@@ -18,11 +18,11 @@ PHASES = {
     "reversed": (1000, 100),
 }
 PROFILES = {
-    "smoke": {"interval_count": 1, "minimum_duration_ns": 500_000_000,
-              "interval_seconds": 1,
+    "smoke": {"interval_count": 1, "minimum_duration_ns": 1_500_000_000,
+              "interval_seconds": 2, "settle_seconds": 2,
               "scope": "packaged-daemon-controlled-contention-smoke"},
     "qualification": {"interval_count": 3, "minimum_duration_ns": 5_000_000_000,
-                      "interval_seconds": 10,
+                      "interval_seconds": 10, "settle_seconds": 2,
                       "scope": "packaged-daemon-controlled-contention"},
 }
 COMPLETED_STAGES = ("preflight", "workloads", "io_cost", "bfq", "authority", "public",
@@ -120,6 +120,8 @@ def validate_delivery(mechanism, evidence, devices, profile):
     for name, weights in PHASES.items():
         phase = evidence["phases"][name]
         require(tuple(phase["public_weights"]) == weights, "wrong public weights in " + name)
+        require(phase["settle_duration_ns"] >= PROFILES[profile]["settle_seconds"] * 1_000_000_000,
+                "delivery phase lacks the declared scheduler settling interval")
         computed[name] = aggregate(phase["intervals"], device, profile, name)
     require(0.30 <= computed["equal"]["shares"][0] <= 0.70,
             mechanism + " equal-weight control is materially asymmetric")
@@ -144,7 +146,8 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
             summary["profile"] == profile,
             "wrong evidence schema or scope")
     require(summary["cadence"] == {"interval_count": profile_config["interval_count"],
-                                    "interval_seconds": profile_config["interval_seconds"]},
+                                    "interval_seconds": profile_config["interval_seconds"],
+                                    "settle_seconds": profile_config["settle_seconds"]},
             "wrong evidence cadence")
     require(tuple(summary["completed_stages"]) == COMPLETED_STAGES,
             "campaign checkpoints are incomplete")

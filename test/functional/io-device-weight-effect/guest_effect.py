@@ -22,10 +22,10 @@ EXPECTED_PACKAGE = "resman-1.38.0-8.el9.x86_64"
 COMPLETED_STAGES = ("preflight", "workloads", "io_cost", "bfq", "authority", "public",
                     "composition", "lifecycle", "release")
 PROFILES = {
-    "smoke": {"interval_count": 1, "interval_seconds": 1,
+    "smoke": {"interval_count": 1, "interval_seconds": 2, "settle_seconds": 2,
               "scope": "packaged-daemon-controlled-contention-smoke"},
-    "qualification": {"interval_count": 3, "interval_seconds": 10,
-                      "scope": "packaged-daemon-controlled-contention"},
+    "qualification": {"interval_count": 3, "interval_seconds": 10, "settle_seconds": 2,
+                       "scope": "packaged-daemon-controlled-contention"},
 }
 
 
@@ -367,6 +367,9 @@ while not stop:
         expected = list(weights)
         self.wait_programmed()
         self.wait_weights(mechanism, expected)
+        settle_started_ns = time.monotonic_ns()
+        time.sleep(self.profile_config["settle_seconds"])
+        settle_duration_ns = time.monotonic_ns() - settle_started_ns
         intervals = []
         raw = []
         device = self.devices[0]["major_minor"]
@@ -386,7 +389,8 @@ while not stop:
                               "read_bytes_delta": delta})
             raw.append({"index": index, "before": before, "after": after, "delta": delta})
         self.record("%s-%s-intervals.json" % (mechanism, name), raw)
-        return {"public_weights": list(weights), "intervals": intervals}
+        return {"public_weights": list(weights), "settle_duration_ns": settle_duration_ns,
+                "intervals": intervals}
 
     def aggregate(self, intervals):
         values = [sum(item["read_bytes_delta"][index] for item in intervals) for index in range(2)]
@@ -780,7 +784,8 @@ while not stop:
             summary = {"schema": 1, "scope": self.profile_config["scope"],
                        "profile": self.profile,
                        "cadence": {"interval_count": self.profile_config["interval_count"],
-                                   "interval_seconds": self.profile_config["interval_seconds"]},
+                                   "interval_seconds": self.profile_config["interval_seconds"],
+                                   "settle_seconds": self.profile_config["settle_seconds"]},
                        "completed_stages": self.completed_stages,
                        "provenance": PROVENANCE,
                        "source": {"revision": self.revision,

@@ -41,9 +41,12 @@ published as effect qualification.
 
 The QEMU runner prepares the exact OL9.8/RHCK image once in an integrity-checked
 cache and creates a fresh copy-on-write overlay for every run. It first executes
-a non-retained smoke profile with one one-second interval per phase. Every major
-step writes a named checkpoint. The retained three-by-ten-second qualification
-profile starts only after the smoke bundle passes the same structural, transport,
+a non-retained smoke profile with one two-second interval per phase. Each phase
+also records a two-second scheduler-settling interval after the exact kernel
+weight appears and before delivery measurement begins; this prevents BFQ queue
+history from being mistaken for the newly programmed ratio. Every major step
+writes a named checkpoint. The retained three-by-ten-second qualification profile
+starts only after the smoke bundle passes the same structural, transport,
 lifecycle, composition, and delivery-direction checks. Interruptions invoke an
 exact run-owned cleanup helper and verify that the domain and its three disks no
 longer exist; the reusable prepared image is deliberately retained.

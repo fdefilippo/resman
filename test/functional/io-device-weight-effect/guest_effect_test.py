@@ -47,9 +47,11 @@ class GuestEffectTests(unittest.TestCase):
 
     def test_profiles_separate_smoke_from_retained_qualification(self):
         self.assertEqual(guest_effect.PROFILES["smoke"]["interval_count"], 1)
-        self.assertEqual(guest_effect.PROFILES["smoke"]["interval_seconds"], 1)
+        self.assertEqual(guest_effect.PROFILES["smoke"]["interval_seconds"], 2)
+        self.assertEqual(guest_effect.PROFILES["smoke"]["settle_seconds"], 2)
         self.assertEqual(guest_effect.PROFILES["qualification"]["interval_count"], 3)
         self.assertEqual(guest_effect.PROFILES["qualification"]["interval_seconds"], 10)
+        self.assertEqual(guest_effect.PROFILES["qualification"]["settle_seconds"], 2)
         self.assertNotEqual(guest_effect.PROFILES["smoke"]["scope"],
                             guest_effect.PROFILES["qualification"]["scope"])
 
