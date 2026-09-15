@@ -45,8 +45,9 @@ def fixture(directory, profile="qualification"):
             "phases": copy.deepcopy(phases), "reported_aggregates": copy.deepcopy(aggregates),
         }
     raw_files = {}
-    for name in ("raw.json", "daemon-log.json", "systemd-journal.json", "final-prometheus.json",
-                 "unit-state.json", "unit-drop-ins.json"):
+    for name in ("raw.json", "daemon-log.json", "systemd-journal.json",
+                 "capability-probe-journal.json", "final-prometheus.json", "unit-state.json",
+                 "unit-drop-ins.json"):
         raw = directory / name
         raw.write_text('{"measured":true}\n')
         raw_files[name] = hashlib.sha256(raw.read_bytes()).hexdigest()

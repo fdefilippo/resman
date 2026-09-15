@@ -19,8 +19,8 @@ PROVENANCE = "resman-nq6.40.5-ol9-rhck-20260915"
 EXPECTED_KERNEL = "5.14.0-687.46.1.el9_8.x86_64"
 EXPECTED_MANAGER = "252-67.0.1.el9_8.2"
 EXPECTED_PACKAGE = "resman-1.38.0-5.el9.x86_64"
-COMPLETED_STAGES = ("preflight", "workloads", "bfq", "authority", "public",
-                    "composition", "lifecycle", "io_cost", "release")
+COMPLETED_STAGES = ("preflight", "workloads", "io_cost", "bfq", "authority", "public",
+                    "composition", "lifecycle", "release")
 PROFILES = {
     "smoke": {"interval_count": 1, "interval_seconds": 1,
               "scope": "packaged-daemon-controlled-contention-smoke"},
@@ -448,15 +448,24 @@ while not stop:
     def stop_resman(self):
         self.command("systemctl", "stop", "resman", check=False, timeout=90)
 
+    def signal_workloads(self, signal_name):
+        for unit in self.workloads:
+            self.command("systemctl", "kill", "--kill-whom=all", "--signal=" + signal_name,
+                         unit)
+
     def mechanism_campaign(self, mechanism):
         self.stop_resman()
-        self.set_map(100, 100)
-        setup = self.configure_mechanism(mechanism)
-        self.common_config(self.devices[0]["major_minor"])
-        scheduler_before = self.read(self.devices[0]["block"] / "queue/scheduler")
-        qos_before = self.read("/sys/fs/cgroup/io.cost.qos") if Path("/sys/fs/cgroup/io.cost.qos").exists() else None
-        self.start_resman()
-        self.wait_programmed()
+        self.signal_workloads("STOP")
+        try:
+            self.set_map(100, 100)
+            setup = self.configure_mechanism(mechanism)
+            self.common_config(self.devices[0]["major_minor"])
+            scheduler_before = self.read(self.devices[0]["block"] / "queue/scheduler")
+            qos_before = self.read("/sys/fs/cgroup/io.cost.qos") if Path("/sys/fs/cgroup/io.cost.qos").exists() else None
+            self.start_resman()
+            self.wait_programmed()
+        finally:
+            self.signal_workloads("CONT")
         require(self.read(self.devices[0]["block"] / "queue/scheduler") == scheduler_before,
                 "daemon changed the selected scheduler")
         if qos_before is not None:
@@ -687,6 +696,11 @@ while not stop:
         journal = self.command("journalctl", "--no-pager", "-u", "resman", check=False).stdout
         diagnostics["systemd_journal"] = "systemd-journal.json"
         self.record("systemd-journal.json", {"text": journal})
+        probe_journal = self.command(
+            "sh", "-c", "journalctl --no-pager -b | grep -E 'resmancapprobe|resman' || true",
+            check=False).stdout
+        diagnostics["capability_probe_journal"] = "capability-probe-journal.json"
+        self.record("capability-probe-journal.json", {"text": probe_journal})
         try:
             metrics = self.metrics()
         except Exception as error:
@@ -724,6 +738,8 @@ while not stop:
             self.start_workloads()
             self.checkpoint("workloads")
             mechanisms = {}
+            mechanisms["io_cost"] = self.mechanism_campaign("io_cost")
+            self.checkpoint("io_cost")
             mechanisms["bfq"] = self.mechanism_campaign("bfq")
             self.checkpoint("bfq")
             authority = self.authority_evidence()
@@ -734,9 +750,6 @@ while not stop:
             self.checkpoint("composition")
             lifecycle = self.lifecycle_evidence()
             self.checkpoint("lifecycle")
-            self.stop_resman()
-            mechanisms["io_cost"] = self.mechanism_campaign("io_cost")
-            self.checkpoint("io_cost")
             self.set_config({"IO_WEIGHT_DEVICES": ""})
             self.wait_released()
             self.checkpoint("release")

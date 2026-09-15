@@ -47,6 +47,10 @@ profile starts only after the smoke bundle passes the same structural, transport
 lifecycle, composition, and delivery-direction checks. Interruptions invoke an
 exact run-owned cleanup helper and verify that the domain and its three disks no
 longer exist; the reusable prepared image is deliberately retained.
+The smoke exercises `io.cost` first because its owned probe is the costliest
+capability transition. Workloads are stopped only while each mechanism is selected
+and probed, then resumed before every controlled-delivery interval. The retained
+diagnostics include systemd events for the transient probe units.
 
 ## Execution
 
