@@ -351,6 +351,14 @@ func TestIODeviceWeightClassifierAcceptsOnlyTerminalSingleQueueLVMHolders(t *tes
 			f.mkdir(other)
 			f.addDeviceMapperHolder(partition, "dm-0", "LVM-test-volume", []string{partition, other})
 		}, outcome: IODeviceWeightAmbiguousTopology},
+		{name: "partition LVM spans a partition on another disk", mutate: func(f *ioDeviceWeightClassifierFixture) {
+			partition := f.addPartition("vda1")
+			other := filepath.Join(f.classifier.io.sysRoot, "devices", "pci0000:00", "0000:00:06.0", "virtio3", "block", "vdb")
+			otherPartition := filepath.Join(other, "vdb1")
+			f.mkdir(otherPartition)
+			f.write(filepath.Join(otherPartition, "partition"), "1\n")
+			f.addDeviceMapperHolder(partition, "dm-0", "LVM-test-volume", []string{partition, otherPartition})
+		}, outcome: IODeviceWeightAmbiguousTopology},
 		{name: "LVM has higher holder", mutate: func(f *ioDeviceWeightClassifierFixture) {
 			holder := f.addDeviceMapperHolder(f.sysfsDevice, "dm-0", "LVM-test-volume", []string{f.sysfsDevice})
 			upper := filepath.Join(f.classifier.io.sysRoot, "devices", "virtual", "block", "dm-1")
