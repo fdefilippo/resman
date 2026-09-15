@@ -1,3 +1,9 @@
+resman (1.38.0-5) stable; urgency=medium
+
+  * Rebuild the selector-replacement correction with the explicit EL9 identity.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 15 Sep 2026 18:57:00 +0200
+
 resman (1.38.0-4) stable; urgency=medium
 
   * Replace reduced weighted-I/O device sets through one ordered D-Bus mutation.
