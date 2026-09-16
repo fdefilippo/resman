@@ -1,0 +1,10 @@
+build_kind=el9-rootful-podman
+source_revision=314d767e297217d44b0e887f9e8d80a2dcb79cbb
+source_tree=5f62047512524f2a55af1bc6e0acf520f7b6024d
+builder_image=quay.io/rockylinux/rockylinux:9.6
+builder_image_digest=sha256:7620071ad66949c3aef9fd313151f0cfee46b75485990c3b03710624f5e1b7b3
+go_version=go1.27.1
+package_identity=resman-1.38.0-9.el9.x86_64
+package_sha256=7d23a486104553b652ad1521d0e6c60af2c8cc53c54baf6cbabb9fe52d007072
+rpmbuild_status=PASS
+build_workspace=/tmp/resman-rpm-el9.l0b6Fg

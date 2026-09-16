@@ -1,0 +1,35 @@
+kernel-core-5.14.0-687.46.1.el9_8.x86_64
+NAME="Oracle Linux Server"
+VERSION="9.8"
+ID="ol"
+ID_LIKE="fedora"
+VARIANT="Server"
+VARIANT_ID="server"
+VERSION_ID="9.8"
+PLATFORM_ID="platform:el9"
+PRETTY_NAME="Oracle Linux Server 9.8"
+ANSI_COLOR="0;31"
+CPE_NAME="cpe:/o:oracle:linux:9:8:server"
+HOME_URL="https://linux.oracle.com/"
+BUG_REPORT_URL="https://github.com/oracle/oracle-linux"
+
+ORACLE_BUGZILLA_PRODUCT="Oracle Linux 9"
+ORACLE_BUGZILLA_PRODUCT_VERSION=9.8
+ORACLE_SUPPORT_PRODUCT="Oracle Linux"
+ORACLE_SUPPORT_PRODUCT_VERSION=9.8
+systemd 252 (252-67.0.1.el9_8.2)
++PAM +AUDIT +SELINUX -APPARMOR +IMA +SMACK +SECCOMP +GCRYPT +GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN -IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT -QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK +XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified
+5.14.0-687.46.1.el9_8.x86_64
+BOOT_IMAGE=(hd0,gpt3)/vmlinuz-5.14.0-687.46.1.el9_8.x86_64 root=/dev/mapper/vg_main-lv_root ro console=tty0 console=ttyS0,115200n8 no_timer_check biosdevname=0 resume=/dev/mapper/vg_main-lv_swap rd.lvm.lv=vg_main/lv_root rd.lvm.lv=vg_main/lv_swap net.ifnames=0 crashkernel=1G-64G:448M,64G-:512M systemd.unified_cgroup_hierarchy=1
+cgroup2fs
+cpuset cpu io memory hugetlb pids rdma misc
+NAME                MAJ:MIN  SIZE TYPE SERIAL
+sda                   8:0     37G disk QM00001
+├─sda1                8:1      1M part 
+├─sda2                8:2    200M part 
+├─sda3                8:3      1G part 
+└─sda4                8:4   35.8G part 
+  ├─vg_main-lv_root 253:0   31.8G lvm  
+  └─vg_main-lv_swap 253:1      4G lvm  
+vda                 252:0      8G disk resmaneffecta
+vdb                 252:16     8G disk resmaneffectb

@@ -96,7 +96,11 @@ list. The guest may retain diagnostics for both mechanisms, but only the selecte
 mechanisms contribute qualification verdicts and future registry entries.
 
 Output is written below `build/functional/io-device-weight-effect/RUN_ID`.
-Only a bundle accepted by `validate_evidence.py` may be copied into `evidence/`.
-The committed evidence manifest is revalidated by the unit target. Independent
-review of the evidence and mutation protections is required before the Beads
-child or parent epic closes.
+Only a complete run accepted by `validate_evidence.py` may be copied into
+`evidence/PROVENANCE`. The retained archive includes the outer request, selected
+mechanisms, remote controller cleanup and nested guest evidence; every layer is
+covered by the outer `SHA256SUMS`. The unit target revalidates the exact selected
+mechanism set rather than treating unselected diagnostic measurements as
+qualification claims. Independent review of the archive and mutation protections
+is required before a qualification coordinate is added or the Beads child or
+parent epic closes.

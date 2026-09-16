@@ -1,0 +1,5 @@
+schema=1
+base_image=/var/lib/libvirt/images/OL9U8-base.qcow2
+base_sha256=b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b
+kernel_release=5.14.0-687.46.1.el9_8.x86_64
+prepared_sha256=e7d50bef6cfda468812b48cfd1d597083310e81ccb36f378478449a50d25f664

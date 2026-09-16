@@ -1,0 +1,13 @@
+{
+  "completed_stages": [
+    "preflight",
+    "workloads",
+    "io_cost",
+    "bfq",
+    "authority"
+  ],
+  "profile": "qualification",
+  "stage": "authority",
+  "status": "PASS",
+  "time_ns": 1789532368997553209
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 4634,
+          "invocation_id": "674ebc295f6947c4bb71b8e5a4310765",
+          "io_stat": "252:0 rbytes=501088256 wbytes=0 rios=3823 wios=0 dbytes=0 dios=0 cost.usage=2779678\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 4712,
+          "invocation_id": "2f62148974074f688e5842bbecd406d9",
+          "io_stat": "252:0 rbytes=1264058368 wbytes=0 rios=9644 wios=0 dbytes=0 dios=0 cost.usage=6558250\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 38379736756
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 4634,
+          "invocation_id": "674ebc295f6947c4bb71b8e5a4310765",
+          "io_stat": "252:0 rbytes=464519168 wbytes=0 rios=3544 wios=0 dbytes=0 dios=0 cost.usage=2596016\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 4712,
+          "invocation_id": "2f62148974074f688e5842bbecd406d9",
+          "io_stat": "252:0 rbytes=899809280 wbytes=0 rios=6865 wios=0 dbytes=0 dios=0 cost.usage=4729718\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 36350207945
+    },
+    "delta": [
+      36569088,
+      364249088
+    ],
+    "index": 0
+  }
+]

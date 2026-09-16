@@ -1,0 +1,131 @@
+[
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=39617036288 wbytes=0 rios=302254 wios=0 dbytes=0 dios=0 cost.usage=21310703\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=40112095232 wbytes=0 rios=306031 wios=0 dbytes=0 dios=0 cost.usage=21293506\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 197647323820
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=17778212864 wbytes=0 rios=135637 wios=0 dbytes=0 dios=0 cost.usage=16918632\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=17682399232 wbytes=0 rios=134906 wios=0 dbytes=0 dios=0 cost.usage=16787767\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 187609469211
+    },
+    "delta": [
+      21838823424,
+      22429696000
+    ],
+    "index": 0
+  },
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=54811426816 wbytes=0 rios=418178 wios=0 dbytes=0 dios=0 cost.usage=24107250\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=55236624384 wbytes=0 rios=421422 wios=0 dbytes=0 dios=0 cost.usage=24072365\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 207726045711
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=39649280000 wbytes=0 rios=302500 wios=0 dbytes=0 dios=0 cost.usage=21310703\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=40143159296 wbytes=0 rios=306268 wios=0 dbytes=0 dios=0 cost.usage=21293506\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 197686144022
+    },
+    "delta": [
+      15162146816,
+      15093465088
+    ],
+    "index": 1
+  },
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=73100820480 wbytes=0 rios=557715 wios=0 dbytes=0 dios=0 cost.usage=27398415\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=75225628672 wbytes=0 rios=573926 wios=0 dbytes=0 dios=0 cost.usage=27668516\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 217784932528
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=54862544896 wbytes=0 rios=418568 wios=0 dbytes=0 dios=0 cost.usage=24107250\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=55295344640 wbytes=0 rios=421870 wios=0 dbytes=0 dios=0 cost.usage=24072365\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 207749542491
+    },
+    "delta": [
+      18238275584,
+      19930284032
+    ],
+    "index": 2
+  }
+]

@@ -1,0 +1,4 @@
+{
+  "user-1006.slice": "DropInPaths=/usr/lib/systemd/system/user-.slice.d/10-defaults.conf\n",
+  "user-1007.slice": "DropInPaths=/usr/lib/systemd/system/user-.slice.d/10-defaults.conf\n"
+}

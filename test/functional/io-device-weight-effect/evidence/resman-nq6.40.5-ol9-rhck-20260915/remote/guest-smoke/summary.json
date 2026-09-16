@@ -1,0 +1,396 @@
+{
+  "authority": {
+    "complete": {
+      "aggregate_coverage": "partial",
+      "complete_users": 2,
+      "coverage": "complete",
+      "partial_users": 1
+    },
+    "partial": {
+      "aggregate_coverage": "partial",
+      "complete_users": 1,
+      "coverage": "partial",
+      "partial_users": 2,
+      "programmed": true
+    }
+  },
+  "cadence": {
+    "interval_count": 1,
+    "interval_seconds": 2,
+    "settle_seconds": 2
+  },
+  "cleanup": {
+    "errors": [],
+    "io_cost_restored": true,
+    "kernel_weights_removed": true,
+    "leases_removed": true,
+    "result": "PASS",
+    "scheduler_restored": true,
+    "systemd_weights_removed": true,
+    "units_removed": true
+  },
+  "completed_stages": [
+    "preflight",
+    "workloads",
+    "io_cost",
+    "bfq",
+    "authority",
+    "public",
+    "composition",
+    "lifecycle",
+    "release"
+  ],
+  "composition": {
+    "hard_cap_only": {
+      "hard_cap": true,
+      "weight": false
+    },
+    "independent_release": true,
+    "intersection": {
+      "hard_cap": true,
+      "weight": true
+    },
+    "separate_leases": true,
+    "weight_only": {
+      "hard_cap": false,
+      "weight": true
+    }
+  },
+  "devices": [
+    {
+      "identity_stable": true,
+      "initial_mode": 432,
+      "initial_qos": "",
+      "initial_scheduler": "[none] mq-deadline kyber bfq",
+      "major_minor": "252:0",
+      "name": "vda",
+      "owned_disposable": true,
+      "path": "/dev/vda",
+      "supplied_path": "/dev/disk/by-id/virtio-resmaneffecta",
+      "sysfs_path": "/sys/block/vda"
+    },
+    {
+      "identity_stable": true,
+      "initial_mode": 432,
+      "initial_qos": "",
+      "initial_scheduler": "[none] mq-deadline kyber bfq",
+      "major_minor": "252:16",
+      "name": "vdb",
+      "owned_disposable": true,
+      "path": "/dev/vdb",
+      "supplied_path": "/dev/disk/by-id/virtio-resmaneffectb",
+      "sysfs_path": "/sys/block/vdb"
+    }
+  ],
+  "diagnostics": {
+    "capability_probe_journal": "capability-probe-journal.json",
+    "daemon_log": "daemon-log.json",
+    "final_prometheus": "final-prometheus.json",
+    "systemd_journal": "systemd-journal.json",
+    "unit_drop_ins": "unit-drop-ins.json",
+    "unit_state": "unit-state.json"
+  },
+  "lifecycle": {
+    "blackout_release": "PASS",
+    "capability_loss_release": "PASS",
+    "compare_before_restore": "PASS",
+    "restart_recovery": "PASS"
+  },
+  "mechanisms": {
+    "bfq": {
+      "device": "252:0",
+      "outcome": "MEASURED",
+      "phases": {
+        "equal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2040020283,
+              "read_bytes_delta": [
+                2910453760,
+                2671771648
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            100
+          ],
+          "settle_duration_ns": 2001655334
+        },
+        "reversed": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2027826947,
+              "read_bytes_delta": [
+                4821483520,
+                1637875712
+              ]
+            }
+          ],
+          "public_weights": [
+            1000,
+            100
+          ],
+          "settle_duration_ns": 2002049105
+        },
+        "unequal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2024794315,
+              "read_bytes_delta": [
+                799801344,
+                5241438208
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            1000
+          ],
+          "settle_duration_ns": 2002052480
+        }
+      },
+      "reported_aggregates": {
+        "equal": {
+          "bytes": [
+            2910453760,
+            2671771648
+          ],
+          "duration_ns": 2040020283,
+          "shares": [
+            0.5213787597736504,
+            0.47862124022634955
+          ]
+        },
+        "reversed": {
+          "bytes": [
+            4821483520,
+            1637875712
+          ],
+          "duration_ns": 2027826947,
+          "shares": [
+            0.7464337168482782,
+            0.25356628315172175
+          ]
+        },
+        "unequal": {
+          "bytes": [
+            799801344,
+            5241438208
+          ],
+          "duration_ns": 2024794315,
+          "shares": [
+            0.132390271419583,
+            0.867609728580417
+          ]
+        }
+      },
+      "setup": {
+        "daemon_mutated_scheduler_or_iocost": false,
+        "io_cost_enabled": false,
+        "owned_disposable_device": true,
+        "selected_scheduler": "bfq"
+      },
+      "transport": {
+        "dbus_property": "IODeviceWeight",
+        "dbus_readback": [
+          "a(st) 1 \"/dev/vda\" 100",
+          "a(st) 1 \"/dev/vda\" 10000"
+        ],
+        "dbus_signature": "a(st)",
+        "exact_kernel_entry": true,
+        "exact_readback": true,
+        "kernel_values": [
+          100,
+          1000
+        ],
+        "systemd_values": [
+          100,
+          10000
+        ]
+      }
+    },
+    "io_cost": {
+      "device": "252:0",
+      "outcome": "MEASURED",
+      "phases": {
+        "equal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2029912651,
+              "read_bytes_delta": [
+                181010432,
+                181665792
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            100
+          ],
+          "settle_duration_ns": 2001392969
+        },
+        "reversed": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2024458350,
+              "read_bytes_delta": [
+                431226880,
+                43253760
+              ]
+            }
+          ],
+          "public_weights": [
+            1000,
+            100
+          ],
+          "settle_duration_ns": 2002055461
+        },
+        "unequal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 2029528811,
+              "read_bytes_delta": [
+                36569088,
+                364249088
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            1000
+          ],
+          "settle_duration_ns": 2002670601
+        }
+      },
+      "reported_aggregates": {
+        "equal": {
+          "bytes": [
+            181010432,
+            181665792
+          ],
+          "duration_ns": 2029912651,
+          "shares": [
+            0.49909649439826526,
+            0.5009035056017347
+          ]
+        },
+        "reversed": {
+          "bytes": [
+            431226880,
+            43253760
+          ],
+          "duration_ns": 2024458350,
+          "shares": [
+            0.9088397790055248,
+            0.09116022099447514
+          ]
+        },
+        "unequal": {
+          "bytes": [
+            36569088,
+            364249088
+          ],
+          "duration_ns": 2029528811,
+          "shares": [
+            0.09123610202746893,
+            0.9087638979725311
+          ]
+        }
+      },
+      "setup": {
+        "daemon_mutated_scheduler_or_iocost": false,
+        "io_cost_enabled": true,
+        "owned_disposable_device": true,
+        "selected_scheduler": "mq-deadline"
+      },
+      "transport": {
+        "dbus_property": "IODeviceWeight",
+        "dbus_readback": [
+          "a(st) 1 \"/dev/vda\" 100",
+          "a(st) 1 \"/dev/vda\" 1000"
+        ],
+        "dbus_signature": "a(st)",
+        "exact_kernel_entry": true,
+        "exact_readback": true,
+        "kernel_values": [
+          100,
+          1000
+        ],
+        "systemd_values": [
+          100,
+          1000
+        ]
+      }
+    }
+  },
+  "package": {
+    "identity": "resman-1.38.0-9.el9.x86_64",
+    "installed_binary_matches_payload": true,
+    "installed_binary_sha256": "df14692255e6dd6e6f53bd78b463cb561879220ad102ec63bfdd43e179fae7d5",
+    "payload_binary_sha256": "df14692255e6dd6e6f53bd78b463cb561879220ad102ec63bfdd43e179fae7d5",
+    "sha256": "7d23a486104553b652ad1521d0e6c60af2c8cc53c54baf6cbabb9fe52d007072",
+    "verification": "clean"
+  },
+  "platform": {
+    "id": "ol",
+    "kernel_package_owner": "kernel-core-5.14.0-687.46.1.el9_8.x86_64",
+    "kernel_release": "5.14.0-687.46.1.el9_8.x86_64",
+    "manager_version": "252-67.0.1.el9_8.2",
+    "version_id": "9.8"
+  },
+  "profile": "smoke",
+  "provenance": "resman-nq6.40.5-ol9-rhck-20260915",
+  "public_observability": {
+    "prometheus": {
+      "effect_qualified": 0,
+      "functionally_accepted": 1,
+      "provenance": "none"
+    },
+    "sqlite": {
+      "effect_qualified": 0,
+      "provenance": "none",
+      "schema": 9
+    }
+  },
+  "raw_files": {
+    "bfq-equal-intervals.json": "431b669509492f32bd27b6e10bb0d05fa25216e9c61ea5eebe811afe61485215",
+    "bfq-reversed-intervals.json": "0617e5315ebff835ae4372a2e9f7fba065f6fd7dca70d67c64c4be5d8f48ad02",
+    "bfq-unequal-intervals.json": "37e0709392b9b45de777ff09a6d557f35ab55e737a5365ba706753cc7ef93c91",
+    "capability-probe-journal.json": "fe5da80d5e32d9684ab7b598c273ed40b714e60c3a634dd333869ea8f0794c29",
+    "checkpoint-01-preflight.json": "0170ece49143af6e69dbe172218462f102d11738cf3d6d6bd451b5032ebad0c4",
+    "checkpoint-02-workloads.json": "8ee6c3bc0dcd7ba7f3eaa07887d0eff92be994c3a531b3b6655f51fdcc4fb631",
+    "checkpoint-03-io_cost.json": "67baf972a594fcbd5efd8328d66f2e2f497595de06dafeb1e28052bd9e7e84ed",
+    "checkpoint-04-bfq.json": "a99b3c2eeffbdce0d7cd5e6be84327ae8c102804e05168c7e8b76f2cb41b27f6",
+    "checkpoint-05-authority.json": "e411e5ccd1836c5b86d0b9f417ceb00545547601dc4699659ef9fa33ebd2ba4d",
+    "checkpoint-06-public.json": "967814ea010bdf356e8e6722d32a6cb60df4522b0cbfc9f54664e5f7786f6f48",
+    "checkpoint-07-composition.json": "8e8a203a6c22c91935d2ef25c85449c48b2ce1d5f456d884e722b7f70bc89426",
+    "checkpoint-08-lifecycle.json": "6d1a3cbeacf53f160b2492962b07f3dc4678f62b8e96ef2c3370493fc679ee5d",
+    "checkpoint-09-release.json": "f9fa67d154d891b0c189a7be7824ee133f7a8f51216cceeeb82d0a6278b37fd4",
+    "daemon-log.json": "e0fdbfcfe7f81fc74394d32763ee21103ffe8c54d6941a0495612e88ffe1432a",
+    "final-prometheus.json": "df62797296703bf17d51eb328e8a7a568342c3fb6d63a7f05bc6293fa6e863b2",
+    "io_cost-equal-intervals.json": "e5edaca616ba83ed762029f6a17b3efe778b124224ba5eae7afc787ec76d9cc6",
+    "io_cost-reversed-intervals.json": "47ac0e264011384a7b82c36df93c52efa23bba9ba09cfcbbba6dde2e66d1bf0a",
+    "io_cost-unequal-intervals.json": "6c67c7443efe32b1c1e1e9ba6d58a797acc60b3a2b13ae5beac1d1b38cb05266",
+    "public-prometheus.json": "dedb96b0c18c68c5e4c98d5fb8a90e5a615d93b884e5bb7ecf94b64152c88553",
+    "public-sqlite.json": "1715406e7435fbd4890c3f94945cc5348a83620894ca98be8fed7f2018159ee8",
+    "systemd-journal.json": "33f23d8a810af8dd2cd9446521d23ee71b3c971da1c0889d1c8f14a0bbeb80a3",
+    "unit-drop-ins.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "unit-state.json": "3585529011b864a29eff68ac3a759dd2a8ab19c8d35308dff31e9e2023306f69"
+  },
+  "result": "PASS",
+  "schema": 1,
+  "scope": "packaged-daemon-controlled-contention-smoke",
+  "source": {
+    "qualification_revision": "314d767e297217d44b0e887f9e8d80a2dcb79cbb",
+    "qualification_tree": "5f62047512524f2a55af1bc6e0acf520f7b6024d",
+    "revision": "314d767e297217d44b0e887f9e8d80a2dcb79cbb",
+    "tree": "5f62047512524f2a55af1bc6e0acf520f7b6024d"
+  }
+}

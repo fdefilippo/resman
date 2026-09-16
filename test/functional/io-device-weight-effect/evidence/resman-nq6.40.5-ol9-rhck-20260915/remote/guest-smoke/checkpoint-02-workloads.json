@@ -1,0 +1,10 @@
+{
+  "completed_stages": [
+    "preflight",
+    "workloads"
+  ],
+  "profile": "smoke",
+  "stage": "workloads",
+  "status": "PASS",
+  "time_ns": 1789532035673800761
+}

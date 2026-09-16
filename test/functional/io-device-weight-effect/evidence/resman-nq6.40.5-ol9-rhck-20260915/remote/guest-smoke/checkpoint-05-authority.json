@@ -1,0 +1,13 @@
+{
+  "completed_stages": [
+    "preflight",
+    "workloads",
+    "io_cost",
+    "bfq",
+    "authority"
+  ],
+  "profile": "smoke",
+  "stage": "authority",
+  "status": "PASS",
+  "time_ns": 1789532075865366529
+}

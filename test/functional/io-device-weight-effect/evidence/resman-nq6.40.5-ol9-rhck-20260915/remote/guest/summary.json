@@ -1,0 +1,492 @@
+{
+  "authority": {
+    "complete": {
+      "aggregate_coverage": "partial",
+      "complete_users": 2,
+      "coverage": "complete",
+      "partial_users": 1
+    },
+    "partial": {
+      "aggregate_coverage": "partial",
+      "complete_users": 1,
+      "coverage": "partial",
+      "partial_users": 2,
+      "programmed": true
+    }
+  },
+  "cadence": {
+    "interval_count": 3,
+    "interval_seconds": 10,
+    "settle_seconds": 2
+  },
+  "cleanup": {
+    "errors": [],
+    "io_cost_restored": true,
+    "kernel_weights_removed": true,
+    "leases_removed": true,
+    "result": "PASS",
+    "scheduler_restored": true,
+    "systemd_weights_removed": true,
+    "units_removed": true
+  },
+  "completed_stages": [
+    "preflight",
+    "workloads",
+    "io_cost",
+    "bfq",
+    "authority",
+    "public",
+    "composition",
+    "lifecycle",
+    "release"
+  ],
+  "composition": {
+    "hard_cap_only": {
+      "hard_cap": true,
+      "weight": false
+    },
+    "independent_release": true,
+    "intersection": {
+      "hard_cap": true,
+      "weight": true
+    },
+    "separate_leases": true,
+    "weight_only": {
+      "hard_cap": false,
+      "weight": true
+    }
+  },
+  "devices": [
+    {
+      "identity_stable": true,
+      "initial_mode": 432,
+      "initial_qos": "252:16 enable=0 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00\n252:0 enable=0 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00\n",
+      "initial_scheduler": "[none] mq-deadline kyber bfq",
+      "major_minor": "252:0",
+      "name": "vda",
+      "owned_disposable": true,
+      "path": "/dev/vda",
+      "supplied_path": "/dev/disk/by-id/virtio-resmaneffecta",
+      "sysfs_path": "/sys/block/vda"
+    },
+    {
+      "identity_stable": true,
+      "initial_mode": 432,
+      "initial_qos": "252:16 enable=0 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00\n252:0 enable=0 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00\n",
+      "initial_scheduler": "[none] mq-deadline kyber bfq",
+      "major_minor": "252:16",
+      "name": "vdb",
+      "owned_disposable": true,
+      "path": "/dev/vdb",
+      "supplied_path": "/dev/disk/by-id/virtio-resmaneffectb",
+      "sysfs_path": "/sys/block/vdb"
+    }
+  ],
+  "diagnostics": {
+    "capability_probe_journal": "capability-probe-journal.json",
+    "daemon_log": "daemon-log.json",
+    "final_prometheus": "final-prometheus.json",
+    "systemd_journal": "systemd-journal.json",
+    "unit_drop_ins": "unit-drop-ins.json",
+    "unit_state": "unit-state.json"
+  },
+  "lifecycle": {
+    "blackout_release": "PASS",
+    "capability_loss_release": "PASS",
+    "compare_before_restore": "PASS",
+    "restart_recovery": "PASS"
+  },
+  "mechanisms": {
+    "bfq": {
+      "device": "252:0",
+      "outcome": "MEASURED",
+      "phases": {
+        "equal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10024966647,
+              "read_bytes_delta": [
+                14731968512,
+                13413908480
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10035016243,
+              "read_bytes_delta": [
+                16581132288,
+                17240817664
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10030968075,
+              "read_bytes_delta": [
+                13675397120,
+                13645905920
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            100
+          ],
+          "settle_duration_ns": 2000076435
+        },
+        "reversed": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10025007776,
+              "read_bytes_delta": [
+                23283761152,
+                2696019968
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10042363437,
+              "read_bytes_delta": [
+                24618729472,
+                3113222144
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10036324793,
+              "read_bytes_delta": [
+                24404164608,
+                2845179904
+              ]
+            }
+          ],
+          "public_weights": [
+            1000,
+            100
+          ],
+          "settle_duration_ns": 2000425422
+        },
+        "unequal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10035598364,
+              "read_bytes_delta": [
+                3732275200,
+                22949265408
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10041195077,
+              "read_bytes_delta": [
+                3435659264,
+                25441861632
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10038670054,
+              "read_bytes_delta": [
+                2875064320,
+                24380571648
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            1000
+          ],
+          "settle_duration_ns": 2002025482
+        }
+      },
+      "reported_aggregates": {
+        "equal": {
+          "bytes": [
+            44988497920,
+            44300632064
+          ],
+          "duration_ns": 30090950965,
+          "shares": [
+            0.5038519014359489,
+            0.49614809856405107
+          ]
+        },
+        "reversed": {
+          "bytes": [
+            72306655232,
+            8654422016
+          ],
+          "duration_ns": 30103696006,
+          "shares": [
+            0.8931039172133324,
+            0.10689608278666762
+          ]
+        },
+        "unequal": {
+          "bytes": [
+            10042998784,
+            72771698688
+          ],
+          "duration_ns": 30115463495,
+          "shares": [
+            0.12127072959960496,
+            0.8787292704003951
+          ]
+        }
+      },
+      "setup": {
+        "daemon_mutated_scheduler_or_iocost": false,
+        "io_cost_enabled": false,
+        "owned_disposable_device": true,
+        "selected_scheduler": "bfq"
+      },
+      "transport": {
+        "dbus_property": "IODeviceWeight",
+        "dbus_readback": [
+          "a(st) 1 \"/dev/vda\" 100",
+          "a(st) 1 \"/dev/vda\" 10000"
+        ],
+        "dbus_signature": "a(st)",
+        "exact_kernel_entry": true,
+        "exact_readback": true,
+        "kernel_values": [
+          100,
+          1000
+        ],
+        "systemd_values": [
+          100,
+          10000
+        ]
+      }
+    },
+    "io_cost": {
+      "device": "252:0",
+      "outcome": "MEASURED",
+      "phases": {
+        "equal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10052375330,
+              "read_bytes_delta": [
+                1483210752,
+                1482948608
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10026705951,
+              "read_bytes_delta": [
+                2174615552,
+                2174877696
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10032978540,
+              "read_bytes_delta": [
+                9209380864,
+                9146204160
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            100
+          ],
+          "settle_duration_ns": 2002120966
+        },
+        "reversed": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10045848702,
+              "read_bytes_delta": [
+                18876858368,
+                18819579904
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10033631669,
+              "read_bytes_delta": [
+                15689580544,
+                18139709440
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10043856068,
+              "read_bytes_delta": [
+                19588055040,
+                19242418176
+              ]
+            }
+          ],
+          "public_weights": [
+            1000,
+            100
+          ],
+          "settle_duration_ns": 2001698042
+        },
+        "unequal": {
+          "intervals": [
+            {
+              "device": "252:0",
+              "duration_ns": 10037854609,
+              "read_bytes_delta": [
+                21838823424,
+                22429696000
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10039901689,
+              "read_bytes_delta": [
+                15162146816,
+                15093465088
+              ]
+            },
+            {
+              "device": "252:0",
+              "duration_ns": 10035390037,
+              "read_bytes_delta": [
+                18238275584,
+                19930284032
+              ]
+            }
+          ],
+          "public_weights": [
+            100,
+            1000
+          ],
+          "settle_duration_ns": 2002068124
+        }
+      },
+      "reported_aggregates": {
+        "equal": {
+          "bytes": [
+            12867207168,
+            12804030464
+          ],
+          "duration_ns": 30112059821,
+          "shares": [
+            0.5012304958745201,
+            0.49876950412547993
+          ]
+        },
+        "reversed": {
+          "bytes": [
+            54154493952,
+            56201707520
+          ],
+          "duration_ns": 30123336439,
+          "shares": [
+            0.49072451959793384,
+            0.5092754804020662
+          ]
+        },
+        "unequal": {
+          "bytes": [
+            55239245824,
+            57453445120
+          ],
+          "duration_ns": 30113146335,
+          "shares": [
+            0.4901759409707401,
+            0.5098240590292599
+          ]
+        }
+      },
+      "setup": {
+        "daemon_mutated_scheduler_or_iocost": false,
+        "io_cost_enabled": true,
+        "owned_disposable_device": true,
+        "selected_scheduler": "mq-deadline"
+      },
+      "transport": {
+        "dbus_property": "IODeviceWeight",
+        "dbus_readback": [
+          "a(st) 1 \"/dev/vda\" 100",
+          "a(st) 1 \"/dev/vda\" 1000"
+        ],
+        "dbus_signature": "a(st)",
+        "exact_kernel_entry": true,
+        "exact_readback": true,
+        "kernel_values": [
+          100,
+          1000
+        ],
+        "systemd_values": [
+          100,
+          1000
+        ]
+      }
+    }
+  },
+  "package": {
+    "identity": "resman-1.38.0-9.el9.x86_64",
+    "installed_binary_matches_payload": true,
+    "installed_binary_sha256": "df14692255e6dd6e6f53bd78b463cb561879220ad102ec63bfdd43e179fae7d5",
+    "payload_binary_sha256": "df14692255e6dd6e6f53bd78b463cb561879220ad102ec63bfdd43e179fae7d5",
+    "sha256": "7d23a486104553b652ad1521d0e6c60af2c8cc53c54baf6cbabb9fe52d007072",
+    "verification": "config_mtime_only"
+  },
+  "platform": {
+    "id": "ol",
+    "kernel_package_owner": "kernel-core-5.14.0-687.46.1.el9_8.x86_64",
+    "kernel_release": "5.14.0-687.46.1.el9_8.x86_64",
+    "manager_version": "252-67.0.1.el9_8.2",
+    "version_id": "9.8"
+  },
+  "profile": "qualification",
+  "provenance": "resman-nq6.40.5-ol9-rhck-20260915",
+  "public_observability": {
+    "prometheus": {
+      "effect_qualified": 0,
+      "functionally_accepted": 1,
+      "provenance": "none"
+    },
+    "sqlite": {
+      "effect_qualified": 0,
+      "provenance": "none",
+      "schema": 9
+    }
+  },
+  "raw_files": {
+    "bfq-equal-intervals.json": "8817b9b71e07f7cdb188bcc4c86e07410754d1b3e0736cdc30451d8d296c8505",
+    "bfq-reversed-intervals.json": "e6159547814944d901f7e6646c83a150b3dfe92a38df8a67f355dd077fd12bf2",
+    "bfq-unequal-intervals.json": "744f273cd60b215adfa7ca99cf6e053ef49ab1351913f8ff631bb31b42dd8219",
+    "capability-probe-journal.json": "2cc3b2c6d34a82b58754644a015434181746eff7e4fc3547a2822a3fd984ad86",
+    "checkpoint-01-preflight.json": "92507ad4464a33bccb3c85c12208e70a394468cf9b32f76500abd1e3e6f104b7",
+    "checkpoint-02-workloads.json": "4c4cc3175649ec341b5d4cec959dd4c7b29969ca2f2b31ee1c60fe2e42546ce4",
+    "checkpoint-03-io_cost.json": "a94ae9da031034dd86a06794b39edb8b4d3a70e6cbc261438fb1c655ebe86a0f",
+    "checkpoint-04-bfq.json": "c6119da5e1ce8ec0beb27504082c62d4acb31191d7376fd33e79fcbb94a1fce0",
+    "checkpoint-05-authority.json": "45a2d330aed4bb215d7ce0b07991ddd412e68e1de22e807c5b1e66beb03c2466",
+    "checkpoint-06-public.json": "0d13a343d00d98da83a2a71fec1cecc078a470d56da8867660e29a8861925276",
+    "checkpoint-07-composition.json": "af903a8c330e92b93d85ba6cfbbe18ced144dd6e31941a2ffcc7de9a93db079d",
+    "checkpoint-08-lifecycle.json": "eb01965f26e6418f6889c82f083fc55d2260392be11b1a0f78a5e3e32e275caf",
+    "checkpoint-09-release.json": "ddb9707c5b068503d81b2f75086351062ece142e497eeaad0779e3105b68b0b0",
+    "daemon-log.json": "09c12b55df2cef97261a48298d5cb2ddd81d6f7e006b6048b82ed31e5a73e6da",
+    "final-prometheus.json": "b4fed8b331473d03a0c9170f7cfdd4795148d22448b9f95c892ca8370e783756",
+    "io_cost-equal-intervals.json": "09f6aaafd47592e3b897baff64d2b6810fc02096f53842eb9b24a39f94a6b11b",
+    "io_cost-reversed-intervals.json": "2d5374792f2791a0b5e4bdadc805e757417ed591c532890919c70c9c1a944bf3",
+    "io_cost-unequal-intervals.json": "b2090c09df9d021867784b46bc9cfb1ff26fe6df2160334279d3bb1efb263941",
+    "public-prometheus.json": "67d2d326f0c6dca5a300493c9fa994765ac68d80ec9d2bfeabf4ae65eecdf666",
+    "public-sqlite.json": "1715406e7435fbd4890c3f94945cc5348a83620894ca98be8fed7f2018159ee8",
+    "systemd-journal.json": "540631a8d3d6677ad405a11d8f43f1be7f35741d8c8d1029023fd530ceba9910",
+    "unit-drop-ins.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "unit-state.json": "3585529011b864a29eff68ac3a759dd2a8ab19c8d35308dff31e9e2023306f69"
+  },
+  "result": "PASS",
+  "schema": 1,
+  "scope": "packaged-daemon-controlled-contention",
+  "source": {
+    "qualification_revision": "314d767e297217d44b0e887f9e8d80a2dcb79cbb",
+    "qualification_tree": "5f62047512524f2a55af1bc6e0acf520f7b6024d",
+    "revision": "314d767e297217d44b0e887f9e8d80a2dcb79cbb",
+    "tree": "5f62047512524f2a55af1bc6e0acf520f7b6024d"
+  }
+}

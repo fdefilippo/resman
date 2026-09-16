@@ -49,12 +49,32 @@ if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote
 	exit 1
 fi
 
-for evidence_dir in "$script_dir"/evidence/*; do
-	[[ -d $evidence_dir ]] || continue
+for archive_dir in "$script_dir"/evidence/*; do
+	[[ -d $archive_dir ]] || continue
+	(
+		cd "$archive_dir"
+		sha256sum --check --strict SHA256SUMS >/dev/null
+	)
+	grep -qx 'PASS' "$archive_dir/result"
+	grep -qx 'cleanup=PASS' "$archive_dir/request.txt"
+	grep -qx 'PASS' "$archive_dir/remote/result"
+	grep -qx 'cleanup=PASS' "$archive_dir/remote/environment.txt"
+	[[ $(grep -c '^mechanisms=' "$archive_dir/request.txt") -eq 1 ]]
+	mechanisms=$(awk -F= '$1 == "mechanisms" {print $2}' "$archive_dir/request.txt")
+	case ",$mechanisms," in
+		,bfq,|,io_cost,|,bfq,io_cost,|,io_cost,bfq,) ;;
+		*) echo "retained archive has an invalid mechanism selection: $mechanisms" >&2; exit 1 ;;
+	esac
+	evidence_dir=$archive_dir/remote/guest
 	revision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["revision"])' "$evidence_dir/summary.json")
 	package_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["package"]["sha256"])' "$evidence_dir/summary.json")
+	mechanism_args=()
+	IFS=, read -r -a selected_mechanisms <<<"$mechanisms"
+	for mechanism in "${selected_mechanisms[@]}"; do
+		mechanism_args+=(--mechanism "$mechanism")
+	done
 	PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" "$evidence_dir" \
-		--revision "$revision" --package-sha "$package_sha"
+		--revision "$revision" --package-sha "$package_sha" "${mechanism_args[@]}"
 done
 
 printf 'PASS: weighted-I/O effect qualification harness contract\n'

@@ -1,0 +1,131 @@
+[
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=17473863680 wbytes=0 rios=133315 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=16472997888 wbytes=0 rios=125679 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 267761060018
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=2741895168 wbytes=0 rios=20919 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=3059089408 wbytes=0 rios=23339 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 257736093371
+    },
+    "delta": [
+      14731968512,
+      13413908480
+    ],
+    "index": 0
+  },
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=34094579712 wbytes=0 rios=260121 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=33713815552 wbytes=0 rios=257216 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 277824823329
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=17513447424 wbytes=0 rios=133617 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=16472997888 wbytes=0 rios=125679 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 267789807086
+    },
+    "delta": [
+      16581132288,
+      17240817664
+    ],
+    "index": 1
+  },
+  {
+    "after": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=47842721792 wbytes=0 rios=365011 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=47423684608 wbytes=0 rios=361814 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 287889059804
+    },
+    "before": {
+      "device": "252:0",
+      "slices": [
+        {
+          "cgroup_inode": 7237,
+          "invocation_id": "fc947564093b419e853f8454a9155594",
+          "io_stat": "252:0 rbytes=34167324672 wbytes=0 rios=260676 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1006.slice"
+        },
+        {
+          "cgroup_inode": 7315,
+          "invocation_id": "dedc68e2e9f0479d9df964f84b97df40",
+          "io_stat": "252:0 rbytes=33777778688 wbytes=0 rios=257704 wios=0 dbytes=0 dios=0\n",
+          "unit": "user-1007.slice"
+        }
+      ],
+      "time_ns": 277858091729
+    },
+    "delta": [
+      13675397120,
+      13645905920
+    ],
+    "index": 2
+  }
+]

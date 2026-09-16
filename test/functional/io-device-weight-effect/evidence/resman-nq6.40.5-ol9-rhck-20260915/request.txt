@@ -1,0 +1,11 @@
+run_id=r20260916041239-3793107
+source_revision=314d767e297217d44b0e887f9e8d80a2dcb79cbb
+source_tree=5f62047512524f2a55af1bc6e0acf520f7b6024d
+qualification_revision=314d767e297217d44b0e887f9e8d80a2dcb79cbb
+qualification_tree=5f62047512524f2a55af1bc6e0acf520f7b6024d
+remote_host=root@terra
+mechanisms=bfq
+package_sha256=7d23a486104553b652ad1521d0e6c60af2c8cc53c54baf6cbabb9fe52d007072
+cleanup=PASS
+result=PASS
+exit_code=0
