@@ -3,6 +3,7 @@ package systemdunit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -477,6 +478,97 @@ func TestIODeviceWeightRestoreUsesDurableExactKernelResetAndPreservesHardCap(t *
 	}
 }
 
+func TestIODeviceWeightRestoreRecoveryAcceptsOnlyTheExpectedDropInRewrite(t *testing.T) {
+	for _, uid := range []uint32{0, 1001} {
+		t.Run(fmt.Sprintf("uid_%d", uid), func(t *testing.T) {
+			transport := newFakeUnitTransport(uid)
+			store := newMemoryLeaseJournalStore()
+			verifier := &fakeKernelVerifier{}
+			adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+			identity := identityFor(t, adapter, uid)
+			weight, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hardCap, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight, hardCap}); err != nil {
+				t.Fatal(err)
+			}
+
+			weightDropIn := managedRuntimeDropInPath(identity.Name, PropertyIODeviceWeight)
+			transport.fingerprintSalt = make(map[string]string)
+			transport.onSet = func(f *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
+				for _, assignment := range assignments {
+					if unit == identity.Name && assignment.name == PropertyIODeviceWeight && len(assignment.value.devices) == 0 {
+						f.fingerprintSalt[weightDropIn] = "rewritten-by-systemd"
+					}
+				}
+			}
+			verifier.resetErr = errors.New("simulated interruption after the D-Bus reset")
+			if _, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight}); err == nil {
+				t.Fatal("RestoreProperties() unexpectedly completed")
+			}
+
+			recoveryVerifier := &fakeKernelVerifier{}
+			restarted := mustTestAdapterWithStore(t, transport, recoveryVerifier, store)
+			if len(recoveryVerifier.resetCalls) != 1 || len(recoveryVerifier.resetCalls[0]) != 1 {
+				t.Fatalf("recovery keyed resets = %+v", recoveryVerifier.resetCalls)
+			}
+			if len(store.journal.Units) != 1 || store.journal.Units[0].Phase != leasePhaseApplied {
+				t.Fatalf("recovered journal = %+v", store.journal)
+			}
+			if _, err := restarted.ConfirmApplied(context.Background(), identity, []PropertyAssignment{hardCap}); err != nil {
+				t.Fatalf("hard-cap lease after recovery: %v", err)
+			}
+		})
+	}
+}
+
+func TestIODeviceWeightRestoreRecoveryRejectsAnUnrelatedDropInRewrite(t *testing.T) {
+	transport := newFakeUnitTransport(1001)
+	store := newMemoryLeaseJournalStore()
+	verifier := &fakeKernelVerifier{}
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+	identity := identityFor(t, adapter, 1001)
+	weight, err := NewIODeviceWeightAssignment([]IODeviceWeightRequest{{Path: "/dev/vda", Weight: 121, Mechanism: IODeviceWeightMechanismBFQ}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardCap, err := NewDevicePropertyAssignment(PropertyIOReadBandwidthMax, []DeviceLimit{{Path: "/dev/vda", Value: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{weight, hardCap}); err != nil {
+		t.Fatal(err)
+	}
+
+	transport.fingerprintSalt = make(map[string]string)
+	transport.onSet = func(f *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
+		for _, assignment := range assignments {
+			if unit == identity.Name && assignment.name == PropertyIODeviceWeight && len(assignment.value.devices) == 0 {
+				f.fingerprintSalt[managedRuntimeDropInPath(unit, PropertyIODeviceWeight)] = "rewritten-by-systemd"
+				f.fingerprintSalt[managedRuntimeDropInPath(unit, PropertyIOReadBandwidthMax)] = "operator-change"
+			}
+		}
+	}
+	verifier.resetErr = errors.New("simulated interruption after the D-Bus reset")
+	if _, err := adapter.RestoreProperties(context.Background(), identity, []PropertyName{PropertyIODeviceWeight}); err == nil {
+		t.Fatal("RestoreProperties() unexpectedly completed")
+	}
+
+	recoveryVerifier := &fakeKernelVerifier{}
+	restarted := mustTestAdapterWithStore(t, transport, recoveryVerifier, store)
+	if len(recoveryVerifier.resetCalls) != 0 {
+		t.Fatalf("recovery wrote through an unrelated footprint change: %+v", recoveryVerifier.resetCalls)
+	}
+	if report := restarted.RecoveryReport(); len(report) != 1 || report[0].State != LeaseRecoveryConflict {
+		t.Fatalf("RecoveryReport() = %+v, want one conflict", report)
+	}
+}
+
 func TestIODeviceWeightKernelResetConflictPreservesPendingLease(t *testing.T) {
 	transport := newFakeUnitTransport(1001)
 	verifier := &fakeKernelVerifier{resetErr: &ioDeviceWeightResetConflict{err: errors.New("kernel value changed")}}
@@ -520,6 +612,14 @@ func TestIODeviceWeightKeyedResetRecoversAfterDBusSucceeded(t *testing.T) {
 	}
 	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{two}); err != nil {
 		t.Fatal(err)
+	}
+	transport.fingerprintSalt = make(map[string]string)
+	transport.onSet = func(f *fakeUnitTransport, unit string, assignments []PropertyAssignment) {
+		for _, assignment := range assignments {
+			if unit == identity.Name && assignment.name == PropertyIODeviceWeight {
+				f.fingerprintSalt[managedRuntimeDropInPath(unit, PropertyIODeviceWeight)] = "rewritten-by-systemd"
+			}
+		}
 	}
 	verifier.resetErr = errors.New("simulated crash before keyed reset")
 	if _, err := adapter.Apply(context.Background(), identity, []PropertyAssignment{one}); err == nil {

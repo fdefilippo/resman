@@ -494,9 +494,7 @@ func (a *Adapter) Apply(ctx context.Context, identity UnitIdentity, assignments 
 	for key, state := range staged {
 		a.leases[key] = state
 	}
-	stagedOverride := extendManagedUnitFileFootprint(identity.Name, currentOverride, validated)
-	stagedOverride.fingerprints = append([]unitFileFingerprint(nil), currentOverride.fingerprints...)
-	stagedOverride.previousFingerprint = append([]unitFileFingerprint(nil), currentOverride.fingerprints...)
+	stagedOverride := stageManagedUnitFileMutation(identity.Name, currentOverride, validated)
 	a.overrides[identity] = stagedOverride
 	a.phases[identity.Name] = leasePhaseApplying
 	if err := a.persistLeaseState(); err != nil {
@@ -747,6 +745,7 @@ func (a *Adapter) RestoreProperties(ctx context.Context, identity UnitIdentity, 
 			state.uncertain = true
 			a.leases[key] = state
 		}
+		a.overrides[identity] = stageManagedUnitFileMutation(identity.Name, override, assignments)
 		a.phases[identity.Name] = leasePhaseApplying
 		if err := a.persistLeaseState(); err != nil {
 			a.restoreLeaseState(before)
@@ -1295,6 +1294,25 @@ func extendManagedUnitFileFootprint(unit string, current unitOverrideLease, assi
 		result.managedPaths = append(result.managedPaths, path)
 	}
 	sort.Strings(result.managedPaths)
+	return result
+}
+
+func stageManagedUnitFileMutation(unit string, current unitOverrideLease, assignments []PropertyAssignment) unitOverrideLease {
+	result := extendManagedUnitFileFootprint(unit, current, assignments)
+	// Preserve the complete pre-write footprint for rollback, but require its
+	// exact digest during forward recovery only for files outside this D-Bus
+	// mutation. The assigned properties are authenticated by typed readback;
+	// their drop-ins are expected to be rewritten by systemd.
+	result.previousFingerprint = append([]unitFileFingerprint(nil), current.fingerprints...)
+	mutable := make(map[string]bool, len(assignments))
+	for _, assignment := range assignments {
+		mutable[managedRuntimeDropInPath(unit, assignment.name)] = true
+	}
+	for _, fingerprint := range current.fingerprints {
+		if !mutable[fingerprint.path] {
+			result.fingerprints = append(result.fingerprints, fingerprint)
+		}
+	}
 	return result
 }
 
