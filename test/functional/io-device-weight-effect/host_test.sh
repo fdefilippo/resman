@@ -13,6 +13,11 @@ done
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/guest_effect_test.py"
 
+if grep -Fq '"outcome": "EFFECT_QUALIFIED"' "$script_dir/guest_effect.py"; then
+	echo "raw campaign output must not pre-claim effect qualification" >&2
+	exit 1
+fi
+
 grep -q 'packaged-daemon-controlled-contention' "$script_dir/validate_evidence.py"
 grep -q 'daemon_mutated_scheduler_or_iocost' "$script_dir/validate_evidence.py"
 grep -q 'reversed' "$script_dir/validate_evidence.py"
@@ -27,6 +32,8 @@ grep -q 'tar --no-same-owner' "$script_dir/remote-qemu.sh"
 grep -q 'remote-control.sh.*control.sh' "$script_dir/remote-qemu.sh"
 grep -q 'stop_remote' "$script_dir/remote-qemu.sh"
 grep -q 'cleanup_remote_owned_run' "$script_dir/remote-qemu.sh"
+grep -q 'RESMAN_IO_EFFECT_MECHANISMS' "$script_dir/remote-qemu.sh"
+grep -q 'mechanism_args' "$script_dir/qemu-host.sh"
 grep -q 'prepare-base.sh' "$script_dir/qemu-host.sh"
 grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/prepare-base.sh"
 grep -q 'LIBGUESTFS_BACKEND=direct' "$script_dir/qemu-host.sh"

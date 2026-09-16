@@ -89,7 +89,7 @@ def aggregate(intervals, device, profile="qualification", phase="equal"):
 
 
 def validate_delivery(mechanism, evidence, devices, profile):
-    require(evidence["outcome"] == "EFFECT_QUALIFIED", mechanism + " is not effect-qualified")
+    require(evidence["outcome"] == "MEASURED", mechanism + " is not a completed measurement")
     device = evidence["device"]
     require(device in devices, mechanism + " uses an unowned device")
     require(evidence["setup"]["daemon_mutated_scheduler_or_iocost"] is False,
@@ -125,6 +125,12 @@ def validate_delivery(mechanism, evidence, devices, profile):
         computed[name] = aggregate(phase["intervals"], device, profile, name)
     require(0.30 <= computed["equal"]["shares"][0] <= 0.70,
             mechanism + " equal-weight control is materially asymmetric")
+    for interval in evidence["phases"]["unequal"]["intervals"]:
+        require(interval["read_bytes_delta"][1] >= 1.5 * interval["read_bytes_delta"][0],
+                mechanism + " unequal-weight effect is not stable in every interval")
+    for interval in evidence["phases"]["reversed"]["intervals"]:
+        require(interval["read_bytes_delta"][0] >= 1.5 * interval["read_bytes_delta"][1],
+                mechanism + " reversed effect is not stable in every interval")
     unequal = computed["unequal"]["bytes"]
     reversed_values = computed["reversed"]["bytes"]
     require(unequal[1] >= 1.5 * unequal[0] and computed["unequal"]["shares"][1] >= 0.60,
@@ -136,7 +142,9 @@ def validate_delivery(mechanism, evidence, devices, profile):
 
 
 def validate(directory, expected_revision=None, expected_package_sha=None,
-             profile="qualification"):
+             profile="qualification", mechanisms=None, expected_provenance=PROVENANCE,
+             expected_source_tree=None, expected_package_identity=PACKAGE_IDENTITY,
+             expected_platform=None):
     require(profile in PROFILES, "unknown evidence profile")
     profile_config = PROFILES[profile]
     directory = Path(directory)
@@ -151,18 +159,20 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
             "wrong evidence cadence")
     require(tuple(summary["completed_stages"]) == COMPLETED_STAGES,
             "campaign checkpoints are incomplete")
-    require(summary["provenance"] == PROVENANCE, "wrong qualification provenance")
+    require(summary["provenance"] == expected_provenance, "wrong qualification provenance")
     require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["revision"]) is not None,
             "source revision is not immutable")
     if expected_revision is not None:
         require(summary["source"]["revision"] == expected_revision, "unexpected source revision")
     require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["tree"]) is not None,
             "source tree is not immutable")
+    if expected_source_tree is not None:
+        require(summary["source"]["tree"] == expected_source_tree, "unexpected source tree")
     require(re.fullmatch(r"[0-9a-f]{40}", summary["source"]["qualification_revision"]) is not None and
             re.fullmatch(r"[0-9a-f]{40}", summary["source"]["qualification_tree"]) is not None,
             "qualification harness revision is not immutable")
     package = summary["package"]
-    require(package["identity"] == PACKAGE_IDENTITY and
+    require(package["identity"] == expected_package_identity and
             re.fullmatch(r"[0-9a-f]{64}", package["sha256"]) is not None and
             package["installed_binary_matches_payload"] is True,
             "package identity or installed payload proof is invalid")
@@ -172,16 +182,25 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
     if expected_package_sha is not None:
         require(package["sha256"] == expected_package_sha, "unexpected package digest")
     platform = summary["platform"]
-    require(platform["id"] == "ol" and platform["version_id"] == "9.8" and
-            platform["manager_version"] == MANAGER_VERSION and
-            platform["kernel_release"] == KERNEL_RELEASE and
+    if expected_platform is None:
+        expected_platform = {"id": "ol", "version_id": "9.8",
+                             "manager_version": MANAGER_VERSION,
+                             "kernel_release": KERNEL_RELEASE}
+    require(platform["id"] == expected_platform["id"] and
+            platform["version_id"] == expected_platform["version_id"] and
+            platform["manager_version"] == expected_platform["manager_version"] and
+            platform["kernel_release"] == expected_platform["kernel_release"] and
             platform["kernel_package_owner"].startswith("kernel-core-"),
             "platform is not the exact retained OL9/RHCK representative")
     devices = {item["major_minor"] for item in summary["devices"]
                if item["owned_disposable"] and item["identity_stable"]}
     require(len(devices) == 2, "two stable disposable device identities are required")
-    require(set(summary["mechanisms"]) == set(MECHANISMS), "mechanism evidence is incomplete")
-    for mechanism in MECHANISMS:
+    selected_mechanisms = tuple(MECHANISMS if mechanisms is None else mechanisms)
+    require(selected_mechanisms and set(selected_mechanisms).issubset(MECHANISMS),
+            "unknown or empty mechanism selection")
+    require(set(selected_mechanisms).issubset(summary["mechanisms"]),
+            "selected mechanism evidence is incomplete")
+    for mechanism in selected_mechanisms:
         validate_delivery(mechanism, summary["mechanisms"][mechanism], devices, profile)
     authority = summary["authority"]
     require(authority["complete"]["coverage"] == "complete" and
@@ -193,12 +212,12 @@ def validate(directory, expected_revision=None, expected_package_sha=None,
             "complete and partial authority paths were not both observed")
     public = summary["public_observability"]
     require(public["prometheus"]["functionally_accepted"] == 1 and
-            public["prometheus"]["effect_qualified"] == 1 and
-            public["prometheus"]["provenance"] == PROVENANCE and
+            public["prometheus"]["effect_qualified"] == 0 and
+            public["prometheus"]["provenance"] == "none" and
             public["sqlite"]["schema"] == 9 and
-            public["sqlite"]["effect_qualified"] == 1 and
-            public["sqlite"]["provenance"] == PROVENANCE,
-            "public functional and qualification dimensions are incomplete")
+            public["sqlite"]["effect_qualified"] == 0 and
+            public["sqlite"]["provenance"] == "none",
+            "first-campaign public state pre-claims effect qualification")
     composition = summary["composition"]
     require(composition == {
         "intersection": {"weight": True, "hard_cap": True},
@@ -238,11 +257,26 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--revision")
+    parser.add_argument("--source-tree")
+    parser.add_argument("--package-identity", default=PACKAGE_IDENTITY)
     parser.add_argument("--package-sha")
+    parser.add_argument("--provenance", default=PROVENANCE)
+    parser.add_argument("--mechanism", action="append", choices=MECHANISMS)
+    parser.add_argument("--distribution-id", default="ol")
+    parser.add_argument("--distribution-version", default="9.8")
+    parser.add_argument("--manager-version", default=MANAGER_VERSION)
+    parser.add_argument("--kernel-release", default=KERNEL_RELEASE)
     parser.add_argument("--profile", choices=tuple(PROFILES), default="qualification")
     args = parser.parse_args()
-    validate(args.directory, args.revision, args.package_sha, args.profile)
-    print("PASS: packaged-daemon weighted-I/O %s evidence" % args.profile)
+    mechanisms = tuple(args.mechanism) if args.mechanism else MECHANISMS
+    expected_platform = {"id": args.distribution_id,
+                         "version_id": args.distribution_version,
+                         "manager_version": args.manager_version,
+                         "kernel_release": args.kernel_release}
+    validate(args.directory, args.revision, args.package_sha, args.profile, mechanisms,
+             args.provenance, args.source_tree, args.package_identity, expected_platform)
+    print("PASS: packaged-daemon weighted-I/O %s evidence for %s" %
+          (args.profile, ",".join(mechanisms)))
 
 
 if __name__ == "__main__":

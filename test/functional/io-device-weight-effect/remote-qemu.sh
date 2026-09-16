@@ -7,6 +7,7 @@ build_manifest=${3:?usage: remote-qemu.sh ROOT_AT_QEMU_HOST RPM BUILD_MANIFEST}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 evidence_root=${IODEVICEWEIGHT_EFFECT_EVIDENCE_ROOT:-$repo_root/build/functional/io-device-weight-effect}
+qualification_mechanisms=${RESMAN_IO_EFFECT_MECHANISMS:-bfq,io_cost}
 run_id=r$(date -u +%Y%m%d%H%M%S)-$$
 qualification_revision=$(git -C "$repo_root" rev-parse HEAD)
 qualification_tree=$(git -C "$repo_root" rev-parse 'HEAD^{tree}')
@@ -18,6 +19,11 @@ scratch_dir=
 remote_started=0
 remote_execution_started=0
 remote_ssh_pid=
+
+case ",$qualification_mechanisms," in
+	,bfq,|,io_cost,|,bfq,io_cost,|,io_cost,bfq,) ;;
+	*) echo "RESMAN_IO_EFFECT_MECHANISMS must select bfq, io_cost, or both exactly once" >&2; exit 2 ;;
+esac
 
 case "$remote_host" in root@*[A-Za-z0-9.-]) ;; *) echo "a root SSH target is required" >&2; exit 2 ;; esac
 [[ -f $package && ! -L $package && -f $build_manifest && ! -L $build_manifest ]] \
@@ -100,9 +106,15 @@ cleanup() {
 		esac
 	fi
 	if [[ $status -eq 0 ]]; then
+		mechanism_args=()
+		IFS=, read -r -a selected_mechanisms <<<"$qualification_mechanisms"
+		for mechanism in "${selected_mechanisms[@]}"; do
+			mechanism_args+=(--mechanism "$mechanism")
+		done
 		python3 "$script_dir/validate_evidence.py" "$evidence_dir/remote/guest" \
 			--profile qualification --revision "$source_revision" \
 			--package-sha "$(sha256sum "$package" | awk '{print $1}')" \
+			"${mechanism_args[@]}" \
 			>>"$evidence_dir/collect.log" 2>&1 && final_result=PASS || status=1
 	fi
 	printf 'cleanup=%s\nresult=%s\nexit_code=%d\n' "$cleanup_status" "$final_result" "$status" \
@@ -132,12 +144,14 @@ install -m 0755 "$script_dir/prepare-base.sh" "$scratch_dir/bundle/prepare-base.
 install -m 0755 "$script_dir/../real-kernel/remote-control.sh" "$scratch_dir/bundle/control.sh"
 install -m 0755 "$script_dir/guest_effect.py" "$scratch_dir/bundle/guest_effect.py"
 install -m 0755 "$script_dir/validate_evidence.py" "$scratch_dir/bundle/validate_evidence.py"
-printf 'qualification_tree=%s\n' "$qualification_tree" >"$scratch_dir/bundle/qualification.txt"
+printf 'qualification_tree=%s\nmechanisms=%s\n' "$qualification_tree" "$qualification_mechanisms" \
+	>"$scratch_dir/bundle/qualification.txt"
 
 {
 	printf 'run_id=%s\nsource_revision=%s\nsource_tree=%s\n' "$run_id" "$source_revision" "$source_tree"
 	printf 'qualification_revision=%s\nqualification_tree=%s\nremote_host=%s\n' \
 		"$qualification_revision" "$qualification_tree" "$remote_host"
+	printf 'mechanisms=%s\n' "$qualification_mechanisms"
 	printf 'package_sha256=%s\n' "$(sha256sum "$package" | awk '{print $1}')"
 } >"$evidence_dir/request.txt"
 

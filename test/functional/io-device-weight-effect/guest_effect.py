@@ -512,7 +512,7 @@ while not stop:
         require(re.search(r"IODeviceWeight\s+property\s+a\(st\)", introspection) is not None,
                 "D-Bus IODeviceWeight signature differs")
         aggregates = {name: self.aggregate(phase["intervals"]) for name, phase in phases.items()}
-        return {"outcome": "EFFECT_QUALIFIED", "device": self.devices[0]["major_minor"],
+        return {"outcome": "MEASURED", "device": self.devices[0]["major_minor"],
                 "setup": setup,
                 "transport": {"dbus_property": "IODeviceWeight", "dbus_signature": "a(st)",
                               "dbus_readback": dbus_text, "exact_readback": True,
@@ -560,7 +560,7 @@ while not stop:
     def public_observability(self):
         metrics = self.wait_programmed()
         provenance_value = parse_metric(metrics, "resman_io_device_weight_effect_qualification_info",
-                                        {"provenance": PROVENANCE})
+                                        {"provenance": "none"})
         def database_row():
             if not self.database.exists():
                 return None
@@ -569,7 +569,7 @@ while not stop:
                 row = database.execute("SELECT io_device_weight_effect_qualified, "
                     "io_device_weight_effect_qualification_provenance FROM system_metrics "
                     "ORDER BY timestamp DESC LIMIT 1").fetchone()
-            return (version, row) if row and row[0] == 1 and row[1] == PROVENANCE else None
+            return (version, row) if row and row[0] == 0 and row[1] == "none" else None
         version, row = eventually(database_row, "SQLite did not persist qualification provenance", 30)
         self.record("public-prometheus.json", {"text": metrics})
         self.record("public-sqlite.json", {"schema": version, "row": list(row)})
@@ -577,7 +577,7 @@ while not stop:
                     metrics, "resman_io_device_weight_functionally_accepted")),
                     "effect_qualified": int(parse_metric(metrics,
                                                            "resman_io_device_weight_effect_qualified")),
-                    "provenance": PROVENANCE if provenance_value == 1 else "none"},
+                    "provenance": "none" if provenance_value == 1 else "invalid"},
                 "sqlite": {"schema": version, "effect_qualified": row[0], "provenance": row[1]}}
 
     def property_contains(self, unit, prop, device):

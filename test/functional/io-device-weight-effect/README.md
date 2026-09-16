@@ -8,11 +8,12 @@ fresh Oracle Linux 9.8 QEMU guest booted with the exact retained RHCK, configure
 the packaged daemon through its public files, and measures two competing sibling
 user slices on run-owned disposable virtio devices.
 
-The initial retained provenance is
+The candidate provenance is
 `resman-nq6.40.5-ol9-rhck-20260915`. It names Oracle Linux 9.8, systemd Manager
 `252-67.0.1.el9_8.2` from `Manager.Version` over D-Bus, and RHCK
 `5.14.0-687.46.1.el9_8.x86_64`. The campaign covers BFQ and io.cost separately.
-This exact identity is evidence provenance, never a runtime authorization rule:
+It is not retained or published unless the complete archive passes validation and
+independent review. This exact identity is evidence provenance, never a runtime authorization rule:
 any host that passes the owned live probe remains usable as
 `functionally_accepted` without the label.
 
@@ -24,7 +25,9 @@ For each mechanism the guest records three fixed-window direct-read phases:
 - unequal weights `100:1000`;
 - a reversed control `1000:100`.
 
-The validator recomputes every share from raw `io.stat` snapshots. Both slices
+The guest labels each completed mechanism result `MEASURED`; it never assigns the
+qualification verdict. The validator recomputes every share from raw `io.stat`
+snapshots. Both slices
 must perform nonzero I/O, equal delivery must remain bounded, and the favored
 slice must beat its sibling in both opposite directions. It also requires exact
 D-Bus `IODeviceWeight` readback, exact per-device kernel entries, authority
@@ -32,6 +35,10 @@ transition from complete to partial, Prometheus and SQLite provenance, the three
 `W`/`H` selector regions, restart recovery, blackout release, capability-loss
 release, compare-before-restore preservation, package/source hashes, and exact
 cleanup.
+
+The first campaign must observe `effect_qualified=0` and provenance `none` from the
+daemon. After independent acceptance, publication of a retained per-mechanism label is
+verified separately; the evidence under evaluation cannot pre-authorize itself.
 
 The harness may select BFQ or enable io.cost only on its two disposable virtual
 devices. It records and restores their original scheduler and io.cost state.
@@ -76,8 +83,13 @@ manifest:
 RESMAN_IO_EFFECT_QEMU_HOST=root@terra \
 RESMAN_EL9_RPM=build/packages/resman-1.38.0-8.el9.x86_64.rpm \
 RESMAN_EL9_RPM_MANIFEST=build/packages/resman-1.38.0-8.el9.x86_64.manifest \
+RESMAN_IO_EFFECT_MECHANISMS=bfq \
 make test-functional-io-device-weight-effect-qemu
 ```
+
+`RESMAN_IO_EFFECT_MECHANISMS` accepts `bfq`, `io_cost`, or both as a comma-separated
+list. The guest may retain diagnostics for both mechanisms, but only the selected
+mechanisms contribute qualification verdicts and future registry entries.
 
 Output is written below `build/functional/io-device-weight-effect/RUN_ID`.
 Only a bundle accepted by `validate_evidence.py` may be copied into `evidence/`.

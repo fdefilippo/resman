@@ -109,12 +109,12 @@ qualified the delivered effect; that separate state is `effect_qualified`. Betwe
 `READY=1` and functional acceptance, sessions deliberately run without ResMan-owned
 device weights while CPU, RAM, and hard-I/O policy continue normally.
 
-When retained packaged-daemon evidence matches the exact observed representative and
-mechanism, Prometheus, SQLite, MCP, and logs also publish its bounded provenance. The
-initial value is `resman-nq6.40.5-ol9-rhck-20260915`. It is diagnostic only: runtime
-authorization remains the observed capability classification plus the owned live
-probe, and a host without matching retained evidence remains usable as
-`functionally_accepted` with provenance `none`.
+When independently accepted retained packaged-daemon evidence matches the exact
+observed representative and mechanism, Prometheus, SQLite, MCP, and logs may also
+publish its bounded provenance. No campaign is currently accepted, so the only
+published value is `none`. Qualification is diagnostic only: runtime authorization
+remains the observed capability classification plus the owned live probe, and a host
+without matching retained evidence remains usable as `functionally_accepted`.
 
 Schema 9 is not readable by older ResMan releases. Before downgrading, archive the
 schema-9 database outside ResMan and start the older release with a new database; do

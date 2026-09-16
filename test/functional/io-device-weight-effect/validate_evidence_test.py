@@ -36,7 +36,7 @@ def fixture(directory, profile="qualification"):
     mechanisms = {}
     for name in validator.MECHANISMS:
         mechanisms[name] = {
-            "outcome": "EFFECT_QUALIFIED", "device": device,
+            "outcome": "MEASURED", "device": device,
             "setup": {"daemon_mutated_scheduler_or_iocost": False,
                       "owned_disposable_device": True,
                       "selected_scheduler": "bfq" if name == "bfq" else "mq-deadline",
@@ -86,9 +86,9 @@ def fixture(directory, profile="qualification"):
                                   "partial_users": 2, "aggregate_coverage": "partial",
                                   "programmed": True}},
         "public_observability": {
-            "prometheus": {"functionally_accepted": 1, "effect_qualified": 1,
-                           "provenance": validator.PROVENANCE},
-            "sqlite": {"schema": 9, "effect_qualified": 1, "provenance": validator.PROVENANCE}},
+            "prometheus": {"functionally_accepted": 1, "effect_qualified": 0,
+                           "provenance": "none"},
+            "sqlite": {"schema": 9, "effect_qualified": 0, "provenance": "none"}},
         "composition": {"intersection": {"weight": True, "hard_cap": True},
                         "weight_only": {"weight": True, "hard_cap": False},
                         "hard_cap_only": {"weight": False, "hard_cap": True},
@@ -159,10 +159,12 @@ class EvidenceTests(unittest.TestCase):
             lambda x: x["mechanisms"]["bfq"]["phases"]["equal"].update(settle_duration_ns=0),
             lambda x: x["mechanisms"]["bfq"]["phases"]["unequal"]["intervals"][0].update(read_bytes_delta=[0, 0]),
             lambda x: x["mechanisms"]["bfq"]["phases"]["unequal"]["intervals"][0].update(read_bytes_delta=[400, 100]),
+            lambda x: x["mechanisms"]["bfq"]["phases"]["unequal"]["intervals"][0].update(read_bytes_delta=[100, 149]),
             lambda x: x["mechanisms"]["bfq"]["phases"]["reversed"].update(public_weights=[100, 1000]),
             lambda x: x["mechanisms"]["bfq"].update(reported_aggregates={}),
             lambda x: x["authority"]["partial"].update(coverage="complete"),
-            lambda x: x["public_observability"]["sqlite"].update(provenance="none"),
+            lambda x: x["public_observability"]["sqlite"].update(provenance=validator.PROVENANCE),
+            lambda x: x["public_observability"]["prometheus"].update(effect_qualified=1),
             lambda x: x["composition"]["weight_only"].update(hard_cap=True),
             lambda x: x["lifecycle"].update(compare_before_restore="FAIL"),
             lambda x: x["cleanup"].update(io_cost_restored=False),
@@ -184,6 +186,21 @@ class EvidenceTests(unittest.TestCase):
                             manifest.write(hashlib.sha256(path.read_bytes()).hexdigest() + "  " + path.name + "\n")
                 with self.assertRaises((ValueError, KeyError, ZeroDivisionError)):
                     validator.validate(directory)
+
+    def test_mechanisms_are_qualified_independently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            summary = fixture(directory)
+            summary["mechanisms"]["io_cost"]["outcome"] = "BROKEN"
+            (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
+            with (directory / "SHA256SUMS").open("w") as manifest:
+                for path in sorted(directory.iterdir()):
+                    if path.name != "SHA256SUMS":
+                        manifest.write(hashlib.sha256(path.read_bytes()).hexdigest() +
+                                       "  " + path.name + "\n")
+            validator.validate(directory, mechanisms=("bfq",))
+            with self.assertRaisesRegex(ValueError, "completed measurement"):
+                validator.validate(directory, mechanisms=("io_cost",))
 
     def test_manifest_mutation_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -15,6 +15,7 @@ kernel_release=5.14.0-687.46.1.el9_8.x86_64
 source_revision=$(awk -F= '$1 == "source_revision" {print $2}' "$build_manifest")
 source_tree=$(awk -F= '$1 == "source_tree" {print $2}' "$build_manifest")
 qualification_tree=$(awk -F= '$1 == "qualification_tree" {print $2}' "$script_dir/qualification.txt")
+qualification_mechanisms=$(awk -F= '$1 == "mechanisms" {print $2}' "$script_dir/qualification.txt")
 vm_name=resman-iow-effect-$run_id
 work_dir=/var/lib/libvirt/images/$vm_name
 overlay=$work_dir/root.qcow2
@@ -26,6 +27,16 @@ address=
 result=FAIL
 detail="effect qualification did not complete"
 guest_status=not-run
+
+case ",$qualification_mechanisms," in
+	,bfq,|,io_cost,|,bfq,io_cost,|,io_cost,bfq,) ;;
+	*) echo "qualification.txt contains an invalid mechanism selection" >&2; exit 2 ;;
+esac
+mechanism_args=()
+IFS=, read -r -a selected_mechanisms <<<"$qualification_mechanisms"
+for mechanism in "${selected_mechanisms[@]}"; do
+	mechanism_args+=(--mechanism "$mechanism")
+done
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run ID: $run_id" >&2; exit 2; }
 [[ $source_revision =~ ^[0-9a-f]{40}$ && $source_tree =~ ^[0-9a-f]{40}$ &&
@@ -216,7 +227,8 @@ run_guest_campaign() {
 		mv "$manifest_tmp" SHA256SUMS
 	)
 	python3 "$script_dir/validate_evidence.py" "$host_evidence" --profile "$profile" \
-		--revision "$source_revision" --package-sha "$package_sha" >"$validation_file"
+		--revision "$source_revision" --package-sha "$package_sha" \
+		"${mechanism_args[@]}" >"$validation_file"
 }
 
 reset_guest_after_smoke() {
@@ -232,4 +244,4 @@ reset_guest_after_smoke >"$evidence_dir/profile-reset.log" 2>&1
 run_guest_campaign qualification /root/resman-iow-effect/evidence \
 	"$evidence_dir/guest" "$evidence_dir/guest-run.log" "$evidence_dir/validation.log"
 result=PASS
-detail="exact OL9/RHCK packaged daemon qualified BFQ and io.cost delivery"
+detail="exact OL9/RHCK packaged daemon qualified selected delivery mechanisms: $qualification_mechanisms"

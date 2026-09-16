@@ -18,26 +18,16 @@ type ioDeviceWeightQualificationCoordinate struct {
 	kernelRelease       string
 	mechanism           systemdunit.IODeviceWeightMechanism
 	provenance          ioweights.EffectQualificationProvenance
+	sourceRevision      string
+	sourceTree          string
+	packageIdentity     string
+	packageSHA256       string
 }
 
-var ioDeviceWeightQualificationCoordinates = []ioDeviceWeightQualificationCoordinate{
-	{
-		distributionID:      "ol",
-		distributionVersion: "9.8",
-		systemdManager:      "252-67.0.1.el9_8.2",
-		kernelRelease:       "5.14.0-687.46.1.el9_8.x86_64",
-		mechanism:           systemdunit.IODeviceWeightMechanismBFQ,
-		provenance:          ioweights.EffectQualificationOL9RHCK20260915,
-	},
-	{
-		distributionID:      "ol",
-		distributionVersion: "9.8",
-		systemdManager:      "252-67.0.1.el9_8.2",
-		kernelRelease:       "5.14.0-687.46.1.el9_8.x86_64",
-		mechanism:           systemdunit.IODeviceWeightMechanismIOCost,
-		provenance:          ioweights.EffectQualificationOL9RHCK20260915,
-	},
-}
+// ioDeviceWeightQualificationCoordinates is empty until a retained per-mechanism
+// archive passes the repository evidence gate and independent review. Host and
+// mechanism identity alone never create an effect claim.
+var ioDeviceWeightQualificationCoordinates = []ioDeviceWeightQualificationCoordinate{}
 
 func ioDeviceWeightEffectQualification(snapshot systemdunit.IODeviceWeightCapabilitySnapshot, systemdManager string) ioweights.EffectQualificationProvenance {
 	platform := snapshot.Platform()
