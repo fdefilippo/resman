@@ -97,6 +97,21 @@ RESMAN_IODEVICEWEIGHT_QEMU_HOST=root@terra \
   make test-functional-io-device-weight-qemu
 ```
 
+The non-blocking OL8/UEK attribution campaign reuses the same pinned OL8 image
+and disposable virtio device, but runs only the direct BFQ kernel-write probe:
+
+```sh
+RESMAN_IODEVICEWEIGHT_QEMU_HOST=root@terra \
+  make test-functional-io-device-weight-attribution-qemu
+```
+
+That campaign creates one owned child cgroup, records and restores the root
+`io` controller state and disposable-device scheduler, writes the exact
+`MAJ:MIN 121` BFQ value, reads it back, removes it with `MAJ:MIN default`, and
+captures the running kernel configuration. It attributes the already reviewed
+OL8/UEK complete-path limitation; it does not change the matrix outcome or any
+runtime support decision.
+
 The remote runner owns `/tmp/resman-iow-RUN_ID`, and the QEMU host serializes the
 matrix with `/run/lock/resman-iodeviceweight-qemu.lock`. Interrupting the local
 runner collects any available evidence and removes the remote bundle. Each VM

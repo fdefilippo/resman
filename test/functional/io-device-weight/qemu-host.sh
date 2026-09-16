@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 run_id=${1:?run ID is required}
 source_revision=${2:?source revision is required}
+campaign=${3:-matrix}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 evidence_dir=$script_dir/evidence
 result=FAIL
@@ -10,6 +11,8 @@ detail="matrix did not complete"
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run ID: $run_id" >&2; exit 2; }
 [[ $source_revision =~ ^[0-9a-f]{40}$ ]] || { echo "full source revision required" >&2; exit 2; }
+[[ $campaign == matrix || $campaign == ol8-uek-attribution ]] \
+	|| { echo "unsupported campaign: $campaign" >&2; exit 2; }
 [[ ! -e $evidence_dir ]] || { echo "evidence directory already exists" >&2; exit 75; }
 mkdir -m 0700 "$evidence_dir"
 
@@ -40,7 +43,10 @@ exec 9>/run/lock/resman-iodeviceweight-qemu.lock
 flock -n 9 || { echo "another IODeviceWeight QEMU matrix owns this host" >&2; exit 75; }
 
 {
-	printf 'run_id=%s\nsource_revision=%s\nhost=%s\n' "$run_id" "$source_revision" "$(hostname -f)"
+	printf 'run_id=%s\nsource_revision=%s\ncampaign=%s\nhost=%s\n' \
+		"$run_id" "$source_revision" \
+		"$([[ $campaign == matrix ]] && printf '%s' systemd-kernel-matrix || printf '%s' ol8-uek-direct-bfq-attribution)" \
+		"$(hostname -f)"
 	printf 'host_kernel=%s\n' "$(uname -r)"
 	printf 'qemu_version=%s\n' "$(qemu-system-x86_64 --version | head -n 1)"
 	printf 'libvirt_version=%s\n' "$(virsh version --daemon 2>/dev/null | tr '\n' ' ')"
@@ -48,9 +54,15 @@ flock -n 9 || { echo "another IODeviceWeight QEMU matrix owns this host" >&2; ex
 
 blocked=0
 failed=0
-for platform in el8 el9 el10; do
+platforms=(el8 el9 el10)
+kernel_family=rhck
+if [[ $campaign == ol8-uek-attribution ]]; then
+	platforms=(el8)
+	kernel_family=uek
+fi
+for platform in "${platforms[@]}"; do
 	set +e
-	"$script_dir/qemu-platform.sh" "$platform" "$run_id" "$source_revision" rhck
+	"$script_dir/qemu-platform.sh" "$platform" "$run_id" "$source_revision" "$kernel_family"
 	status=$?
 	set -e
 	case "$status" in
@@ -71,4 +83,8 @@ if [[ $blocked -eq 1 ]]; then
 	exit 77
 fi
 result=PASS
-detail="EL8, EL9 and EL10 RHCK representatives produced valid IODeviceWeight characterization"
+if [[ $campaign == matrix ]]; then
+	detail="EL8, EL9 and EL10 RHCK representatives produced valid IODeviceWeight characterization"
+else
+	detail="EL8/UEK produced valid direct BFQ attribution evidence"
+fi

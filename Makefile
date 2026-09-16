@@ -81,7 +81,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 .PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
-.PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu
+.PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu test-functional-io-device-weight-attribution-qemu
 
 .PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
@@ -250,6 +250,9 @@ test-functional-io-device-weight-unit:
 # Characterize IODeviceWeight on the pinned EL8, EL9, and EL10 QEMU matrix.
 test-functional-io-device-weight-qemu:
 	test/functional/io-device-weight/remote-qemu.sh "$(RESMAN_IODEVICEWEIGHT_QEMU_HOST)"
+
+test-functional-io-device-weight-attribution-qemu:
+	test/functional/io-device-weight/remote-qemu.sh "$(RESMAN_IODEVICEWEIGHT_QEMU_HOST)" io-device-weight-ol8-uek-attribution
 
 # Exercise the packaged-daemon weighted-I/O effect harness without KVM.
 test-functional-io-device-weight-effect-unit:
@@ -704,6 +707,7 @@ help:
 	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
 	@echo "    test-functional-io-device-weight-unit - Test the IODeviceWeight QEMU harness"
 	@echo "    test-functional-io-device-weight-qemu - Characterize IODeviceWeight on EL8/EL9/EL10"
+	@echo "    test-functional-io-device-weight-attribution-qemu - Attribute the EL8/UEK BFQ path limit"
 	@echo "    test-functional-io-device-weight-effect-unit - Test the packaged-daemon contention harness"
 	@echo "    test-functional-io-device-weight-effect-qemu - Qualify BFQ/io.cost effect on exact OL9/RHCK"
 	@echo "    test-functional-real-kernel-psi - Collect PSI evidence on RESMAN_REAL_KERNEL_HOST"

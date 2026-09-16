@@ -18,6 +18,12 @@ address=
 vm_defined=0
 result=FAIL
 detail="platform characterization did not complete"
+probe_script=guest_probe.py
+probe_result=CHARACTERIZED
+if [[ $kernel_family == uek ]]; then
+	probe_script=guest_attribution.py
+	probe_result=ATTRIBUTED
+fi
 
 case "$platform" in
 	el8)
@@ -43,7 +49,10 @@ esac
 
 [[ $run_id =~ ^r[0-9]{14}-[0-9]+$ ]] || { echo "unsafe run ID: $run_id" >&2; exit 2; }
 [[ $source_revision =~ ^[0-9a-f]{40}$ ]] || { echo "full source revision required" >&2; exit 2; }
-[[ $kernel_family == rhck ]] || { echo "unsupported kernel family: $kernel_family" >&2; exit 2; }
+[[ $kernel_family == rhck || $kernel_family == uek ]] \
+	|| { echo "unsupported kernel family: $kernel_family" >&2; exit 2; }
+[[ $kernel_family == rhck || $platform == el8 ]] \
+	|| { echo "UEK attribution is limited to EL8" >&2; exit 2; }
 [[ $work_dir == /var/lib/libvirt/images/resman-iow-r*-*-el*-rhck ]] \
 	|| { echo "unsafe work directory: $work_dir" >&2; exit 2; }
 
@@ -164,7 +173,7 @@ fi
 	printf 'qemu_version=%s\n' "$(qemu-system-x86_64 --version | head -n 1)"
 	printf 'libvirt_version=%s\n' "$(virsh version --daemon 2>/dev/null | tr '\n' ' ')"
 } >"$evidence_dir/environment.txt"
-install -m 0600 "$script_dir/guest_probe.py" "$evidence_dir/guest-probe.py"
+install -m 0600 "$script_dir/$probe_script" "$evidence_dir/${probe_script/_/-}"
 
 install -d -o qemu -g qemu -m 0710 "$work_dir"
 qemu-img create -q -f qcow2 -F qcow2 -b "$base_image" "$overlay"
@@ -193,36 +202,51 @@ guest 'stat -fc %T /sys/fs/cgroup' >"$evidence_dir/initial-boot/cgroup-filesyste
 guest 'lsblk -o NAME,MAJ:MIN,SIZE,TYPE,FSTYPE,MOUNTPOINT,SERIAL' >"$evidence_dir/initial-boot/block-devices.txt"
 guest 'dnf install -y python3 util-linux systemd-udev' >"$evidence_dir/provision.log"
 
-guest 'grubby --info=ALL' >"$evidence_dir/grubby-before.txt"
-guest 'dnf install -y --setopt=install_weak_deps=False kernel' >"$evidence_dir/rhck-install.log"
-# Expand the package and boot-image expressions inside the guest shell.
-# shellcheck disable=SC2016
-guest 'set -eu; release=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel-core | sort -V | tail -n 1); test -n "$release"; image=/boot/vmlinuz-$release; test -f "$image"; grubby --set-default "$image"; grubby --update-kernel="$image" --args="systemd.unified_cgroup_hierarchy=1"; printf "release=%s\nimage=%s\n" "$release" "$image"' \
-	>"$evidence_dir/rhck-selection.txt"
-guest 'grubby --info=ALL' >"$evidence_dir/grubby-after.txt"
-selected_image=$(awk -F= '$1 == "image" {print $2}' "$evidence_dir/rhck-selection.txt")
-[[ $selected_image == /boot/vmlinuz-* && $selected_image != *uek* ]] \
-	|| { echo "$platform did not select an RHCK image" >&2; exit 77; }
-grep -Fq "kernel=\"$selected_image\"" "$evidence_dir/grubby-after.txt" \
-	|| { echo "$platform grubby inventory lacks the selected RHCK image" >&2; exit 77; }
 initial_boot_id=$(<"$evidence_dir/initial-boot/boot-id.txt")
+guest 'grubby --info=ALL' >"$evidence_dir/grubby-before.txt"
+if [[ $kernel_family == rhck ]]; then
+	guest 'dnf install -y --setopt=install_weak_deps=False kernel' >"$evidence_dir/rhck-install.log"
+	# Expand the package and boot-image expressions inside the guest shell.
+	# shellcheck disable=SC2016
+	guest 'set -eu; release=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel-core | sort -V | tail -n 1); test -n "$release"; image=/boot/vmlinuz-$release; test -f "$image"; grubby --set-default "$image"; grubby --update-kernel="$image" --args="systemd.unified_cgroup_hierarchy=1"; printf "release=%s\nimage=%s\n" "$release" "$image"' \
+		>"$evidence_dir/rhck-selection.txt"
+	selected_image=$(awk -F= '$1 == "image" {print $2}' "$evidence_dir/rhck-selection.txt")
+	[[ $selected_image == /boot/vmlinuz-* && $selected_image != *uek* ]] \
+		|| { echo "$platform did not select an RHCK image" >&2; exit 77; }
+else
+	running_kernel=$(<"$evidence_dir/initial-boot/kernel.txt")
+	[[ $running_kernel == *uek* ]] \
+		|| { echo "$platform initial boot is not UEK" >&2; exit 77; }
+	selected_image=/boot/vmlinuz-$running_kernel
+	# Expand the selected image only inside the guest shell.
+	guest "grubby --set-default '$selected_image'; grubby --update-kernel='$selected_image' --args='systemd.unified_cgroup_hierarchy=1'"
+fi
+guest 'grubby --info=ALL' >"$evidence_dir/grubby-after.txt"
+grep -Fq "kernel=\"$selected_image\"" "$evidence_dir/grubby-after.txt" \
+	|| { echo "$platform grubby inventory lacks the selected kernel image" >&2; exit 77; }
 guest 'sync; systemctl reboot' >/dev/null 2>&1 || true
 address=
-wait_for_guest || { echo "$platform guest did not return after the RHCK boot" >&2; exit 77; }
+wait_for_guest || { echo "$platform guest did not return after the qualified boot" >&2; exit 77; }
 qualified_boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
 [[ $qualified_boot_id != "$initial_boot_id" ]] \
-	|| { echo "$platform did not complete a distinct RHCK boot" >&2; exit 77; }
+	|| { echo "$platform did not complete a distinct qualified boot" >&2; exit 77; }
 running_kernel=$(guest 'uname -r')
-[[ $running_kernel != *uek* && "/boot/vmlinuz-$running_kernel" == "$selected_image" ]] \
-	|| { echo "$platform did not boot the selected RHCK kernel" >&2; exit 77; }
-# Expand uname inside the guest shell.
-# shellcheck disable=SC2016
-guest 'rpm -q --whatprovides "/boot/vmlinuz-$(uname -r)"' >"$evidence_dir/rhck-running-package.txt"
-grep -q '^kernel-core-' "$evidence_dir/rhck-running-package.txt" \
-	|| { echo "$platform running kernel is not owned by kernel-core" >&2; exit 77; }
-
-if [[ $(<"$evidence_dir/initial-boot/cgroup-filesystem.txt") != cgroup2fs ]]; then
-	[[ $platform == el8 ]] || { echo "$platform RHCK boot did not materialize cgroup v2" >&2; exit 77; }
+if [[ $kernel_family == rhck ]]; then
+	[[ $running_kernel != *uek* && "/boot/vmlinuz-$running_kernel" == "$selected_image" ]] \
+		|| { echo "$platform did not boot the selected RHCK kernel" >&2; exit 77; }
+	# Expand uname inside the guest shell.
+	# shellcheck disable=SC2016
+	guest 'rpm -q --whatprovides "/boot/vmlinuz-$(uname -r)"' >"$evidence_dir/rhck-running-package.txt"
+	grep -q '^kernel-core-' "$evidence_dir/rhck-running-package.txt" \
+		|| { echo "$platform running kernel is not owned by kernel-core" >&2; exit 77; }
+else
+	[[ $running_kernel == *uek* && "/boot/vmlinuz-$running_kernel" == "$selected_image" ]] \
+		|| { echo "$platform did not retain the selected UEK kernel" >&2; exit 77; }
+	# Expand uname inside the guest shell.
+	# shellcheck disable=SC2016
+	guest 'rpm -q --whatprovides "/boot/vmlinuz-$(uname -r)"' >"$evidence_dir/uek-running-package.txt"
+	grep -q '^kernel-uek-core-' "$evidence_dir/uek-running-package.txt" \
+		|| { echo "$platform running kernel is not owned by kernel-uek-core" >&2; exit 77; }
 fi
 
 guest 'systemctl --version' >"$evidence_dir/qualified-boot/systemd-version.txt"
@@ -240,11 +264,16 @@ grep -q "$serial" "$evidence_dir/qualified-boot/block-devices.txt" \
 	|| { echo "$platform guest lacks the owned virtual device" >&2; exit 77; }
 
 guest 'install -d -m 0700 /root/resman-iow'
-scp "${ssh_options[@]}" "$script_dir/guest_probe.py" \
-	root@"$address":/root/resman-iow/guest_probe.py >"$evidence_dir/transfer.log" 2>&1
+scp "${ssh_options[@]}" "$script_dir/$probe_script" \
+	root@"$address":/root/resman-iow/"$probe_script" >"$evidence_dir/transfer.log" 2>&1
 set +e
-guest "python3 /root/resman-iow/guest_probe.py --evidence /root/resman-iow/evidence --platform '$platform' --run-id '$run_id' --source-revision '$source_revision' --device '/dev/disk/by-id/virtio-$serial'" \
-	>"$evidence_dir/guest-run.log" 2>&1
+if [[ $kernel_family == rhck ]]; then
+	guest "python3 /root/resman-iow/$probe_script --evidence /root/resman-iow/evidence --platform '$platform' --run-id '$run_id' --source-revision '$source_revision' --device '/dev/disk/by-id/virtio-$serial'" \
+		>"$evidence_dir/guest-run.log" 2>&1
+else
+	guest "python3 /root/resman-iow/$probe_script --evidence /root/resman-iow/evidence --run-id '$run_id' --source-revision '$source_revision' --device '/dev/disk/by-id/virtio-$serial'" \
+		>"$evidence_dir/guest-run.log" 2>&1
+fi
 guest_status=$?
 set -e
 mkdir -p "$evidence_dir/guest"
@@ -261,9 +290,9 @@ fi
 case "$guest_status" in
 	0)
 		[[ $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"])' \
-			"$evidence_dir/guest/result.json") == CHARACTERIZED ]]
+			"$evidence_dir/guest/result.json") == "$probe_result" ]]
 		result=PASS
-		detail="$platform IODeviceWeight characterization completed"
+		detail="$platform/$kernel_family IODeviceWeight characterization completed"
 		;;
 	77)
 		result=BLOCKED
