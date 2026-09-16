@@ -27,6 +27,10 @@ PROFILES = {
 }
 COMPLETED_STAGES = ("preflight", "workloads", "io_cost", "bfq", "authority", "public",
                     "composition", "lifecycle", "release")
+SMOKE_EQUAL_SHARE = (0.30, 0.70)
+SMOKE_FAVORED_SHARE = 0.60
+QUALIFICATION_EQUAL_SHARE = (0.40, 0.60)
+QUALIFICATION_FAVORED_SHARE = 0.80
 
 
 def require(condition, message):
@@ -123,7 +127,11 @@ def validate_delivery(mechanism, evidence, devices, profile):
         require(phase["settle_duration_ns"] >= PROFILES[profile]["settle_seconds"] * 1_000_000_000,
                 "delivery phase lacks the declared scheduler settling interval")
         computed[name] = aggregate(phase["intervals"], device, profile, name)
-    require(0.30 <= computed["equal"]["shares"][0] <= 0.70,
+    equal_share = (QUALIFICATION_EQUAL_SHARE if profile == "qualification"
+                   else SMOKE_EQUAL_SHARE)
+    favored_share = (QUALIFICATION_FAVORED_SHARE if profile == "qualification"
+                     else SMOKE_FAVORED_SHARE)
+    require(equal_share[0] <= computed["equal"]["shares"][0] <= equal_share[1],
             mechanism + " equal-weight control is materially asymmetric")
     for interval in evidence["phases"]["unequal"]["intervals"]:
         require(interval["read_bytes_delta"][1] >= 1.5 * interval["read_bytes_delta"][0],
@@ -133,9 +141,11 @@ def validate_delivery(mechanism, evidence, devices, profile):
                 mechanism + " reversed effect is not stable in every interval")
     unequal = computed["unequal"]["bytes"]
     reversed_values = computed["reversed"]["bytes"]
-    require(unequal[1] >= 1.5 * unequal[0] and computed["unequal"]["shares"][1] >= 0.60,
+    require(unequal[1] >= 1.5 * unequal[0] and
+            computed["unequal"]["shares"][1] >= favored_share,
             mechanism + " did not favor the higher-weight second slice")
-    require(reversed_values[0] >= 1.5 * reversed_values[1] and computed["reversed"]["shares"][0] >= 0.60,
+    require(reversed_values[0] >= 1.5 * reversed_values[1] and
+            computed["reversed"]["shares"][0] >= favored_share,
             mechanism + " reversed control did not reverse delivery")
     require(evidence["reported_aggregates"] == computed,
             mechanism + " reported delivery does not match raw intervals")

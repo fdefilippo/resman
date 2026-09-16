@@ -15,6 +15,15 @@ def make_interval(device, first, second, duration_ns=10_000_000_000):
             "read_bytes_delta": [first, second]}
 
 
+def persist_summary(directory, summary):
+    (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
+    with (directory / "SHA256SUMS").open("w") as manifest:
+        for path in sorted(directory.iterdir()):
+            if path.name != "SHA256SUMS":
+                manifest.write(hashlib.sha256(path.read_bytes()).hexdigest() +
+                               "  " + path.name + "\n")
+
+
 def fixture(directory, profile="qualification"):
     device = "252:16"
     profile_config = validator.PROFILES[profile]
@@ -100,11 +109,7 @@ def fixture(directory, profile="qualification"):
                     "kernel_weights_removed": True, "systemd_weights_removed": True},
         "raw_files": raw_files,
     }
-    (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
-    with (directory / "SHA256SUMS").open("w") as manifest:
-        for path in sorted(directory.iterdir()):
-            if path.name != "SHA256SUMS":
-                manifest.write(hashlib.sha256(path.read_bytes()).hexdigest() + "  " + path.name + "\n")
+    persist_summary(directory, summary)
     return summary
 
 
@@ -144,6 +149,29 @@ class EvidenceTests(unittest.TestCase):
         qualification = [make_interval("252:16", 0, 400) for _ in range(3)]
         with self.assertRaisesRegex(ValueError, "both sibling slices"):
             validator.aggregate(qualification, "252:16", "qualification", "unequal")
+
+    def test_qualification_rejects_weak_directional_or_asymmetric_effects(self):
+        cases = (
+            ("equal", 65, 35, "equal-weight control"),
+            ("unequal", 300, 700, "higher-weight second slice"),
+            ("reversed", 700, 300, "reversed control"),
+        )
+        for phase, first, second, message in cases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                summary = fixture(directory)
+                evidence = summary["mechanisms"]["bfq"]
+                duration = validator.PROFILES["qualification"]["minimum_duration_ns"]
+                evidence["phases"][phase]["intervals"] = [
+                    make_interval(evidence["device"], first, second, duration)
+                    for _ in range(validator.PROFILES["qualification"]["interval_count"])
+                ]
+                evidence["reported_aggregates"][phase] = validator.aggregate(
+                    evidence["phases"][phase]["intervals"], evidence["device"],
+                    "qualification", phase)
+                persist_summary(directory, summary)
+                with self.assertRaisesRegex(ValueError, message):
+                    validator.validate(directory, mechanisms=("bfq",))
 
     def test_mutations_are_rejected(self):
         cases = [

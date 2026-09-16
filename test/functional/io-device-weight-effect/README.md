@@ -28,8 +28,12 @@ For each mechanism the guest records three fixed-window direct-read phases:
 The guest labels each completed mechanism result `MEASURED`; it never assigns the
 qualification verdict. The validator recomputes every share from raw `io.stat`
 snapshots. Both slices
-must perform nonzero I/O, equal delivery must remain bounded, and the favored
-slice must beat its sibling in both opposite directions. It also requires exact
+must perform nonzero I/O. In retained qualification evidence, equal delivery must
+remain within `0.40..0.60`, and the favored slice must receive at least `0.80` of
+measured bytes in both opposite `1:10` phases while winning every raw interval by
+at least `1.5:1`. The non-retained smoke profile keeps the wider `0.30..0.70` and
+`0.60` aggregate controls because its single short interval is only a gross activity
+check, never qualification evidence. The validator also requires exact
 D-Bus `IODeviceWeight` readback, exact per-device kernel entries, authority
 transition from complete to partial, Prometheus and SQLite provenance, the three
 `W`/`H` selector regions, restart recovery, blackout release, capability-loss
