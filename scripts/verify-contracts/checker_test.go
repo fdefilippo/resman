@@ -285,6 +285,35 @@ var sdk struct{ StreamableHTTPOptions StreamableHTTPOptions }
 	}
 }
 
+func TestMCPCheckerScansLongTextLines(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		suffix     string
+		wantFailed bool
+	}{
+		{name: "clean long line"},
+		{name: "forbidden token after scanner-sized prefix", suffix: "MCPGODEBUG=legacy", wantFailed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := newCheckerFixture(t)
+			writeFixture(t, root, "go.mod", "module example.test/checker\n\ngo 1.27.1\n\nrequire github.com/modelcontextprotocol/go-sdk v1.7.0\n")
+			writeFixture(t, root, "mcp/server.go", `package mcp
+const protocolVersion = "2026-07-28"
+type StreamableHTTPOptions struct{ Stateless bool }
+func serve(){ _ = sdk.StreamableHTTPOptions{Stateless: true} }
+var sdk struct{ StreamableHTTPOptions StreamableHTTPOptions }
+`)
+			writeFixture(t, root, "docs/evidence.json", `{"text":"`+strings.Repeat("x", 128*1024)+tt.suffix+`"}`)
+			writeFixture(t, root, "scripts/verify-contracts/mcp-literals.allowlist", "# empty\n")
+			sources, _ := loadGoFiles(root)
+			result := checkMCPContracts(root, sources)
+			if got := len(result.findings) > 0; got != tt.wantFailed {
+				t.Fatalf("failed = %v, want %v; findings=%v", got, tt.wantFailed, result.findings)
+			}
+		})
+	}
+}
+
 func TestShippedAssetCheckerRejectsTokensAndStaleAllowlist(t *testing.T) {
 	tests := []struct {
 		name       string

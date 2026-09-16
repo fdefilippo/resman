@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"go/ast"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -845,14 +846,19 @@ func checkMCPGoDebug(root string, result *checkResult) {
 				result.fail(rel, 1, "close after MCPGODEBUG scan: %v", err)
 			}
 		}()
-		scanner := bufio.NewScanner(file)
-		for line := 1; scanner.Scan(); line++ {
-			if strings.Contains(scanner.Text(), "MCPGODEBUG") {
+		reader := bufio.NewReader(file)
+		for line := 1; ; line++ {
+			text, readErr := reader.ReadString('\n')
+			if strings.Contains(text, "MCPGODEBUG") {
 				result.fail(rel, line, "MCPGODEBUG compatibility flags are forbidden")
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			result.fail(rel, 1, "scan for MCPGODEBUG: %v", err)
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				result.fail(rel, line, "scan for MCPGODEBUG: %v", readErr)
+				break
+			}
 		}
 		return nil
 	})
