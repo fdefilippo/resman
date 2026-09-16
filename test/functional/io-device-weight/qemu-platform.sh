@@ -53,7 +53,7 @@ esac
 	|| { echo "unsupported kernel family: $kernel_family" >&2; exit 2; }
 [[ $kernel_family == rhck || $platform == el8 ]] \
 	|| { echo "UEK attribution is limited to EL8" >&2; exit 2; }
-[[ $work_dir == /var/lib/libvirt/images/resman-iow-r*-*-el*-rhck ]] \
+[[ $work_dir =~ ^/var/lib/libvirt/images/resman-iow-r[0-9]{14}-[0-9]+-el(8|9|10)-(rhck|uek)$ ]] \
 	|| { echo "unsafe work directory: $work_dir" >&2; exit 2; }
 
 mkdir -p "$evidence_dir"
