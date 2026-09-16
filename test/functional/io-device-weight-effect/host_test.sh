@@ -41,7 +41,7 @@ grep -q 'restorecon -RF /root/.ssh' "$script_dir/qemu-host.sh"
 grep -q '^reset_guest_after_smoke()' "$script_dir/qemu-host.sh"
 grep -Fq '/var/lib/resman/metrics.db-wal' "$script_dir/qemu-host.sh"
 grep -Fq '/var/log/resman.log' "$script_dir/qemu-host.sh"
-grep -Fq 'reset_guest_after_smoke >"$evidence_dir/profile-reset.log"' "$script_dir/qemu-host.sh"
+grep -Fq "reset_guest_after_smoke >\"\$evidence_dir/profile-reset.log\"" "$script_dir/qemu-host.sh"
 grep -Fq 'CONFIG_MTIME_VERIFY_ROWS' "$script_dir/guest_effect.py"
 
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; then
