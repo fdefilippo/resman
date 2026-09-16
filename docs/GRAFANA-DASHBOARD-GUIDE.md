@@ -103,7 +103,7 @@ acknowledged action and its bounded block reason.
 | **Control cycle duration p95** | `histogram_quantile(0.95, rate(resman_control_cycle_duration_seconds_bucket))` | Daemon latency |
 | **Control cycles by trigger** | `increase(resman_control_cycle_triggers_total{trigger})` | Polling against PSI-triggered cycles |
 
-Rows 5 and 6 depend on the CPU Points telemetry retained in schema 9; on an
+Rows 5 and 6 depend on the CPU Points telemetry retained in schema 10; on an
 earlier release those panels show no data.
 
 ### Row 8: Weighted I/O policy

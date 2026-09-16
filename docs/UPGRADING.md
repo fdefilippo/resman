@@ -1,6 +1,6 @@
 # Upgrading from ResMan 1.25.x through 1.37.0 to ResMan 1.38.0
 
-Current metrics schema: 9. Schema 7 is migrated atomically through schema 8.
+Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.37.0 to
 ResMan 1.38.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
@@ -94,12 +94,11 @@ owned reset with the kernel-defined `MAJ:MIN default` token after D-Bus readback
 Identity or value divergence stops cleanup, preserves the lease, and reports an
 intervention-required conflict; no user slice is stopped or recreated.
 
-**Persistence and clients.** SQLite schema 7 is migrated atomically through schema 8
-to schema 9. Old
-rows receive the historically truthful `disabled` and `not_measured` weighted-I/O
-state and qualification provenance `none`; all existing columns and rows are
-preserved. Schemas 6 and older remain
-incompatible. Prometheus and latest-only MCP add typed weighted-I/O state without
+**Persistence and clients.** SQLite schema 7 is migrated atomically through schemas 8
+and 9 to schema 10. Old rows receive the historically truthful `disabled` and
+`not_measured` weighted-I/O state and qualification provenance `none`; all existing
+columns and rows are preserved. Schemas 6 and older remain incompatible. Prometheus
+and latest-only MCP add typed weighted-I/O state without
 compatibility aliases. See [weighted block-I/O policy](IO-WEIGHTS.md) before enabling
 the feature.
 
@@ -119,9 +118,13 @@ diagnostic only: runtime authorization remains the observed capability classific
 plus the owned live probe, and a host without matching retained evidence remains usable
 as `functionally_accepted` with provenance `none`.
 
-Schema 9 is not readable by older ResMan releases. Before downgrading, archive the
-schema-9 database outside ResMan and start the older release with a new database; do
-not point an older daemon at the schema-9 history.
+Development schema-9 databases created by pre-release 1.38.0 packages are migrated
+atomically to schema 10. The migration rebuilds only `system_metrics`, preserves every
+row and AUTOINCREMENT identity, and widens the bounded qualification-provenance CHECK.
+
+Schema 10 is not readable by older ResMan releases. Before downgrading, archive the
+schema-10 database outside ResMan and start the older release with a new database; do
+not point an older daemon at the schema-10 history.
 
 ## CHANGED: systemd process authority is sampled once per decision
 

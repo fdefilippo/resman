@@ -286,7 +286,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 9"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 10"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -334,7 +334,7 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 9"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 10"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -343,11 +343,11 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 	}
 }
 
-func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
+func TestNewDatabaseManagerMigratesSchema7To10Atomically(t *testing.T) {
 	dbPath := privateTestDatabasePath(t, "schema-7.db")
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
-		t.Fatalf("create schema 9 fixture: %v", err)
+		t.Fatalf("create schema 10 fixture: %v", err)
 	}
 	now := time.Now().UTC()
 	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now.Add(-time.Second), TotalCores: 4}); err != nil {
@@ -359,7 +359,7 @@ func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
 		t.Fatalf("write second pre-migration row: %v", err)
 	}
 	if err := manager.Close(); err != nil {
-		t.Fatalf("close schema 9 fixture: %v", err)
+		t.Fatalf("close schema 10 fixture: %v", err)
 	}
 
 	raw, err := sql.Open("sqlite3", dbPath)
@@ -410,8 +410,8 @@ func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
 	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read migrated schema version: %v", err)
 	}
-	if version != 9 {
-		t.Fatalf("migrated schema version = %d, want 9", version)
+	if version != 10 {
+		t.Fatalf("migrated schema version = %d, want 10", version)
 	}
 	rows, err := manager.db.Query("SELECT io_device_weight_state, io_device_weight_observed_delivery, io_device_weight_effect_qualification_provenance, total_cores FROM system_metrics ORDER BY timestamp")
 	if err != nil {
@@ -438,6 +438,186 @@ func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
 	}
 	if !strings.Contains(schemaSQL, string(ioweights.EffectQualificationOL9RHCK20260915)) {
 		t.Fatalf("migrated schema does not admit retained qualification provenance: %s", schemaSQL)
+	}
+}
+
+func makeDevelopmentSchema9Fixture(t *testing.T, dbPath string, addUnexpectedColumn bool) {
+	t.Helper()
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	tx, err := raw.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollback := func() { _ = tx.Rollback() }
+	currentConstraint := "CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915'))"
+	legacyConstraint := "CHECK (io_device_weight_effect_qualification_provenance IN ('none'))"
+	legacyTable := strings.Replace(systemMetricsTableStatement("system_metrics", false), currentConstraint, legacyConstraint, 1)
+	if legacyTable == systemMetricsTableStatement("system_metrics", false) {
+		rollback()
+		t.Fatal("schema-9 fixture did not narrow the qualification provenance CHECK")
+	}
+	for _, statement := range []string{
+		"DROP INDEX idx_system_metrics_timestamp",
+		"ALTER TABLE system_metrics RENAME TO system_metrics_schema10",
+		legacyTable,
+		"INSERT INTO system_metrics SELECT * FROM system_metrics_schema10",
+		"DROP TABLE system_metrics_schema10",
+		"CREATE INDEX idx_system_metrics_timestamp ON system_metrics(timestamp)",
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			rollback()
+			t.Fatalf("construct development schema-9 fixture: %v", err)
+		}
+	}
+	if addUnexpectedColumn {
+		if _, err := tx.Exec("ALTER TABLE system_metrics ADD COLUMN unexpected_schema9_column TEXT"); err != nil {
+			rollback()
+			t.Fatalf("add malformed schema-9 column: %v", err)
+		}
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 9"); err != nil {
+		rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewDatabaseManagerMigratesDevelopmentSchema9To10(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "schema-9.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for index, cores := range []int{4, 8} {
+		if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now.Add(time.Duration(index) * time.Second), TotalCores: cores}); err != nil {
+			_ = manager.Close()
+			t.Fatalf("write schema-9 fixture row: %v", err)
+		}
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	makeDevelopmentSchema9Fixture(t, dbPath, false)
+
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec("UPDATE system_metrics SET io_device_weight_effect_qualification_provenance = ?", string(ioweights.EffectQualificationOL9RHCK20260915)); err == nil {
+		_ = raw.Close()
+		t.Fatal("development schema 9 accepted the retained provenance before migration")
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err = NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatalf("migrate development schema 9: %v", err)
+	}
+	defer func() { _ = manager.Close() }()
+	var version int
+	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 10 {
+		t.Fatalf("migrated schema version = %d, want 10", version)
+	}
+	rows, err := manager.db.Query("SELECT id, total_cores, io_device_weight_effect_qualification_provenance FROM system_metrics ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids, cores []int
+	for rows.Next() {
+		var id, totalCores int
+		var provenance string
+		if err := rows.Scan(&id, &totalCores, &provenance); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		if provenance != string(ioweights.EffectQualificationNone) {
+			_ = rows.Close()
+			t.Fatalf("historical provenance = %q", provenance)
+		}
+		ids = append(ids, id)
+		cores = append(cores, totalCores)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(ids) != "[1 2]" || fmt.Sprint(cores) != "[4 8]" {
+		t.Fatalf("migrated rows ids=%v cores=%v", ids, cores)
+	}
+	qualified := &SystemMetricsRecord{
+		Timestamp: now.Add(2 * time.Second), TotalCores: 16,
+		IODeviceWeightState: "functionally_accepted", IODeviceWeightMechanism: "bfq",
+		IODeviceWeightProgrammed: true, IODeviceWeightProgrammedState: "confirmed",
+		IODeviceWeightReadBack: true, IODeviceWeightReadBackState: "confirmed",
+		IODeviceWeightFunctionallyAccepted: true, IODeviceWeightEffectQualified: true,
+		IODeviceWeightEffectQualificationProvenance: string(ioweights.EffectQualificationOL9RHCK20260915),
+		IODeviceWeightAuthorityCoverage:             "complete",
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              "not_measured",
+	}
+	if err := manager.writeSystemMetricsForTest(qualified); err != nil {
+		t.Fatalf("write retained provenance after schema-10 migration: %v", err)
+	}
+	var nextID int
+	if err := manager.db.QueryRow("SELECT id FROM system_metrics WHERE total_cores = 16").Scan(&nextID); err != nil {
+		t.Fatal(err)
+	}
+	if nextID != 3 {
+		t.Fatalf("post-migration AUTOINCREMENT id = %d, want 3", nextID)
+	}
+}
+
+func TestSchema9To10MigrationRollsBackMalformedTable(t *testing.T) {
+	dbPath := privateTestDatabasePath(t, "broken-schema-9.db")
+	manager, err := NewDatabaseManager(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{TotalCores: 4}); err != nil {
+		_ = manager.Close()
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	makeDevelopmentSchema9Fixture(t, dbPath, true)
+
+	manager, err = NewDatabaseManager(dbPath)
+	if manager != nil {
+		_ = manager.Close()
+		t.Fatal("malformed schema 9 unexpectedly migrated")
+	}
+	if err == nil || !strings.Contains(err.Error(), "schema 9 to 10") {
+		t.Fatalf("migration error = %v, want schema 9 to 10 context", err)
+	}
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var version, rows, replacementTables int
+	if err := raw.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.QueryRow("SELECT COUNT(*) FROM system_metrics").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_metrics_schema10'").Scan(&replacementTables); err != nil {
+		t.Fatal(err)
+	}
+	if version != 9 || rows != 1 || replacementTables != 0 {
+		t.Fatalf("failed migration state: version=%d rows=%d replacement_tables=%d", version, rows, replacementTables)
 	}
 }
 

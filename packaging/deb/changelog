@@ -1,3 +1,9 @@
+resman (1.38.0-10) stable; urgency=medium
+
+  * Migrate development schema 9 atomically before publishing BFQ qualification.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 16 Sep 2026 07:13:00 +0200
+
 resman (1.38.0-9) stable; urgency=medium
 
   * Harden weighted-I/O cleanup recovery and retained effect qualification.

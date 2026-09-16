@@ -1,6 +1,6 @@
 # CPU Points observation under systemd
 
-Current metrics schema: 9.
+Current metrics schema: 10.
 
 On a systemd host, `systemd_native` enforcement keeps processes in their existing
 units. The finite parent is `user.slice`; its active `user-UID.slice` children
@@ -103,9 +103,9 @@ does not expose or create a separate managed-cgroup hierarchy.
 
 Schema 7 rejects all prior versioned and unversioned incompatible archives. Stop
 ResMan, archive or delete the old metrics database together with its WAL/SHM
-sidecars, then restart to create a private schema-9 store. Schema 7 is migrated
-atomically through schema 8 for weighted-I/O fields and qualification provenance;
-there is no migration
+sidecars, then restart to create a private schema-10 store. Schema 7 is migrated
+atomically through schemas 8 and 9 to schema 10 for weighted-I/O fields, qualification
+provenance, and its bounded CHECK; there is no migration
 or alias. The three-level domain columns, domain metrics and lending-state field
 have been removed. Use flat sibling weights, coverage and measured delivery.
 

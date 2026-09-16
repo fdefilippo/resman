@@ -80,7 +80,7 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 9 and contains `user_metrics` and
+The current store uses schema version 10 and contains `user_metrics` and
 `system_metrics` tables. Every transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
@@ -115,7 +115,7 @@ programmed value is not proof of delivery, and `functionally_accepted` does not 
 provenance is diagnostic and never authorizes runtime mutation.
 User rows include independent CPU authority and I/O coverage in addition to RAM.
 See [CPU Points observability](CPU-POINTS-OBSERVABILITY.md) and
-[weighted block-I/O policy](IO-WEIGHTS.md) for the complete schema-9 contract. A
+[weighted block-I/O policy](IO-WEIGHTS.md) for the complete schema-10 contract. A
 missing observation never claims measured zero or runnable capacity.
 
 The current Prometheus and MCP projections use the same typed control-cycle snapshot
@@ -131,16 +131,18 @@ sparse stored deltas as a total: skipped intervals are not included and cannot b
 reconstructed from later rows.
 
 The schema is versioned with SQLite `PRAGMA user_version`. ResMan atomically migrates
-schema 7 through schema 8 to schema 9 by adding weighted-I/O system columns and then
-the exact evidence provenance. Historical rows are marked `disabled` with
-`not_measured` delivery and provenance `none` because the feature did not exist in
-schema 7. Each step is transactional; a failed step rolls back to its input version.
+schema 7 through schemas 8 and 9 to schema 10 by adding weighted-I/O system columns,
+the evidence provenance, and the widened bounded-provenance CHECK. Historical rows are
+marked `disabled` with `not_measured` delivery and provenance `none` because the
+feature did not exist in schema 7. Each step is transactional; a failed step rolls
+back to its input version.
 Version 3 and unversioned stores are rejected
 by the CPU Points cutover because they cannot express allocation class, guarantee,
 common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
 rejected by the ownership-containment release. Version 5 cannot represent the native
 flat plan, and version 6 still contains the retired PID-relocation lifecycle. Move or
-delete a schema-6-or-older store and restart to create version 9. No alias or dual-read
+delete a schema-6-or-older store and restart to create version 10. Development schema-9
+stores are rebuilt transactionally without changing row meaning. No alias or dual-read
 path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
@@ -160,7 +162,7 @@ expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday
 
 ## Direct inspection
 
-Current metrics schema: 9.
+Current metrics schema: 10.
 
 Stop ResMan before maintenance that modifies the database. For live inspection,
 explicitly open SQLite in read-only mode: a `SELECT` alone does not make the

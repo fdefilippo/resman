@@ -1,6 +1,6 @@
 # ResMan
 
-Current metrics schema: 9.
+Current metrics schema: 10.
 
 Dynamic CPU, RAM, and IO resource manager for Linux using cgroups v2.
 
@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.38.0-9_<architecture>.deb
+# Creates build/deb/resman_1.38.0-10_<architecture>.deb
 
 # All packages
 make all-with-packages
@@ -271,13 +271,13 @@ swap or reclaimable pages, a process can stay alive but effectively stall at hig
 or disable `memory.high`, provide reclaimable capacity or swap, or release the RAM
 limit. An explicit `memory.high = memory.max` control has different max/OOM behavior.
 
-When metrics persistence is enabled, SQLite schema version 9 records each decision
+When metrics persistence is enabled, SQLite schema version 10 records each decision
 sample as one common system/user epoch. History distinguishes configured guarantee,
 applied CPU class and weight, delivered parent/slice bandwidth and throttling, raw
 unit diagnostics, independent resource authority, and process-derived memory from
 slice RAM charges and high/max/OOM events, plus independent weighted-I/O lifecycle,
-probe, read-back, qualification, coverage, and delivery state. Schema 7 is migrated
-atomically; schema 6 and older must be archived or deleted before restart. Missing
+probe, read-back, qualification, coverage, and delivery state. Schemas 7 through 9 are
+migrated atomically; schema 6 and older must be archived or deleted before restart. Missing
 comparable baselines are `null`, not zero. See
 [`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md).
 

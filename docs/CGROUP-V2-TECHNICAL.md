@@ -122,8 +122,9 @@ authoritative unit paths. Missing observations are represented as unavailable, n
 as fabricated zeroes. Unit recreation, counter decrease, daemon restart, and identity
 changes reset delta baselines.
 
-The current SQLite schema is version 9; schema 7 migrates atomically through schema 8
-with historically disabled weighted-I/O fields and provenance `none`. Prometheus,
+The current SQLite schema is version 10; schema 7 migrates atomically through schemas
+8 and 9 to schema 10 with historically disabled weighted-I/O fields and provenance
+`none`. Prometheus,
 MCP, and SQLite consume the same
 typed control-cycle snapshot and the same bounded enforcement modes:
 

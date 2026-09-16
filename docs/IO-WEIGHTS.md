@@ -139,10 +139,11 @@ authority is unavailable when any sibling is unavailable, while the separate cou
 retain the complete distribution. Read-only post-readiness classifications and
 mutating probes have separate
 counters. The same typed object appears in the latest-only MCP system and limits
-status. SQLite schema 9 stores these dimensions and the bounded qualification
-provenance with every system sample. Schema 7 is migrated atomically through schema 8
-to schema 9; historical rows become `disabled`, `not_measured`, and provenance
-`none`.
+status. SQLite schema 10 stores these dimensions and the bounded qualification
+provenance with every system sample. Schema 7 is migrated atomically through schemas 8,
+9, and 10; historical rows become `disabled`, `not_measured`, and provenance `none`.
+Development schema-9 stores are rebuilt transactionally so their provenance CHECK
+admits the independently accepted BFQ evidence without losing existing rows.
 
 The shipped Grafana dashboard distinguishes `refused_observation` from
 `refused_intervention`. Alerting asks for operator action only for the intervention

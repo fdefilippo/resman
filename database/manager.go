@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/fdefilippo/resman/internal/ioweights"
@@ -179,7 +181,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 9
+	metricsSchemaVersion   = 10
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
 							  uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -225,6 +227,78 @@ const (
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 )
+
+const systemMetricsTableColumns = `
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	sample_epoch_id INTEGER NOT NULL,
+	interval_start DATETIME,
+	interval_end DATETIME NOT NULL,
+	io_device_weight_state TEXT NOT NULL CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'release_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted')),
+	io_device_weight_reason TEXT NOT NULL,
+	io_device_weight_selector TEXT NOT NULL,
+	io_device_weight_mechanism TEXT NOT NULL CHECK (io_device_weight_mechanism IN ('none', 'bfq', 'io_cost', 'mixed')),
+	io_device_weight_classification_attempts INTEGER NOT NULL,
+	io_device_weight_probe_attempts INTEGER NOT NULL,
+	io_device_weight_programmed BOOLEAN NOT NULL,
+	io_device_weight_programmed_state TEXT NOT NULL CHECK (io_device_weight_programmed_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
+	io_device_weight_read_back BOOLEAN NOT NULL,
+	io_device_weight_read_back_state TEXT NOT NULL CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
+	io_device_weight_functionally_accepted BOOLEAN NOT NULL,
+	io_device_weight_effect_qualified BOOLEAN NOT NULL,
+	io_device_weight_effect_qualification_provenance TEXT NOT NULL CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915')),
+	io_device_weight_authority_coverage TEXT NOT NULL CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable')),
+	io_device_weight_complete_users INTEGER NOT NULL,
+	io_device_weight_partial_users INTEGER NOT NULL,
+	io_device_weight_unavailable_users INTEGER NOT NULL,
+	io_device_weight_sibling_slices INTEGER NOT NULL,
+	io_device_weight_total_points INTEGER NOT NULL,
+	io_device_weight_requested_at DATETIME,
+	io_device_weight_next_retry_at DATETIME,
+	io_device_weight_values_json TEXT NOT NULL,
+	io_device_weight_observed_delivery TEXT NOT NULL,
+	total_cpu_usage_percent REAL NOT NULL,
+	total_cores INTEGER NOT NULL,
+	system_load REAL,
+	cpu_limits_active BOOLEAN NOT NULL,
+	resource_limits_active BOOLEAN NOT NULL,
+	any_limits_active BOOLEAN NOT NULL,
+	cpu_actively_limited_users_count INTEGER NOT NULL,
+	actively_limited_users_count INTEGER NOT NULL,
+	nominal_parent_pool_points INTEGER NOT NULL,
+	cpu_capacity_available BOOLEAN NOT NULL,
+	online_cpus INTEGER,
+	programmed_parent_quota_usec INTEGER,
+	programmed_parent_period_usec INTEGER,
+	cpu_points_degraded BOOLEAN NOT NULL,
+	applied_guarantee_points INTEGER NOT NULL,
+	programmed_guarantee_weight INTEGER NOT NULL,
+	configured_best_effort_points INTEGER NOT NULL,
+	parent_cpu_quota TEXT,
+	programmed_sibling_weight_sum INTEGER,
+	programmed_best_effort_weight INTEGER,
+	parent_cpu_usage_usec_delta INTEGER,
+	observed_sibling_weight_sum INTEGER,
+	configured_root_points INTEGER,
+	parent_cpu_periods_delta INTEGER,
+	parent_cpu_throttled_periods_delta INTEGER,
+	parent_cpu_throttled_usec_delta INTEGER,
+	denominator_state TEXT NOT NULL,
+	enforcement_mode TEXT NOT NULL
+`
+
+func systemMetricsTableStatement(tableName string, ifNotExists bool) string {
+	switch tableName {
+	case "system_metrics", "system_metrics_schema10":
+	default:
+		panic("unsupported system metrics table name")
+	}
+	clause := ""
+	if ifNotExists {
+		clause = "IF NOT EXISTS "
+	}
+	return "CREATE TABLE " + clause + tableName + " (" + systemMetricsTableColumns + ")"
+}
 
 // NewDatabaseManager creates a metrics database manager.
 func NewDatabaseManager(dbPath string) (*DatabaseManager, error) {
@@ -322,6 +396,12 @@ func (m *DatabaseManager) InitSchema() error {
 		if err := m.migrateMetricsSchema8To9(); err != nil {
 			return err
 		}
+		version = 9
+	}
+	if version == 9 {
+		if err := m.migrateMetricsSchema9To10(); err != nil {
+			return err
+		}
 		version = metricsSchemaVersion
 	}
 	if version != 0 && version != metricsSchemaVersion {
@@ -379,65 +459,7 @@ func (m *DatabaseManager) InitSchema() error {
 		io_coverage TEXT
     );
 
-    -- System-wide observation and explicit enforcement state.
-    CREATE TABLE IF NOT EXISTS system_metrics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-		sample_epoch_id INTEGER NOT NULL,
-		interval_start DATETIME,
-		interval_end DATETIME NOT NULL,
-		io_device_weight_state TEXT NOT NULL CHECK (io_device_weight_state IN ('disabled', 'requested_pending', 'release_pending', 'refused_observation', 'refused_intervention', 'probe_candidate', 'functionally_accepted')),
-		io_device_weight_reason TEXT NOT NULL,
-		io_device_weight_selector TEXT NOT NULL,
-		io_device_weight_mechanism TEXT NOT NULL CHECK (io_device_weight_mechanism IN ('none', 'bfq', 'io_cost', 'mixed')),
-		io_device_weight_classification_attempts INTEGER NOT NULL,
-		io_device_weight_probe_attempts INTEGER NOT NULL,
-		io_device_weight_programmed BOOLEAN NOT NULL,
-		io_device_weight_programmed_state TEXT NOT NULL CHECK (io_device_weight_programmed_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
-		io_device_weight_read_back BOOLEAN NOT NULL,
-		io_device_weight_read_back_state TEXT NOT NULL CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
-		io_device_weight_functionally_accepted BOOLEAN NOT NULL,
-		io_device_weight_effect_qualified BOOLEAN NOT NULL,
-		io_device_weight_effect_qualification_provenance TEXT NOT NULL CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915')),
-		io_device_weight_authority_coverage TEXT NOT NULL CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable')),
-		io_device_weight_complete_users INTEGER NOT NULL,
-		io_device_weight_partial_users INTEGER NOT NULL,
-		io_device_weight_unavailable_users INTEGER NOT NULL,
-		io_device_weight_sibling_slices INTEGER NOT NULL,
-		io_device_weight_total_points INTEGER NOT NULL,
-		io_device_weight_requested_at DATETIME,
-		io_device_weight_next_retry_at DATETIME,
-		io_device_weight_values_json TEXT NOT NULL,
-		io_device_weight_observed_delivery TEXT NOT NULL,
-        total_cpu_usage_percent REAL NOT NULL,
-        total_cores INTEGER NOT NULL,
-        system_load REAL,
-		cpu_limits_active BOOLEAN NOT NULL,
-		resource_limits_active BOOLEAN NOT NULL,
-		any_limits_active BOOLEAN NOT NULL,
-		cpu_actively_limited_users_count INTEGER NOT NULL,
-		actively_limited_users_count INTEGER NOT NULL,
-		nominal_parent_pool_points INTEGER NOT NULL,
-		cpu_capacity_available BOOLEAN NOT NULL,
-		online_cpus INTEGER,
-		programmed_parent_quota_usec INTEGER,
-		programmed_parent_period_usec INTEGER,
-		cpu_points_degraded BOOLEAN NOT NULL,
-		applied_guarantee_points INTEGER NOT NULL,
-		programmed_guarantee_weight INTEGER NOT NULL,
-		configured_best_effort_points INTEGER NOT NULL,
-		parent_cpu_quota TEXT,
-		programmed_sibling_weight_sum INTEGER,
-		programmed_best_effort_weight INTEGER,
-		parent_cpu_usage_usec_delta INTEGER,
-		observed_sibling_weight_sum INTEGER,
-		configured_root_points INTEGER,
-		parent_cpu_periods_delta INTEGER,
-		parent_cpu_throttled_periods_delta INTEGER,
-		parent_cpu_throttled_usec_delta INTEGER,
-		denominator_state TEXT NOT NULL,
-		enforcement_mode TEXT NOT NULL
-    );
+	` + systemMetricsTableStatement("system_metrics", true) + `;
 
     -- Query indexes.
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
@@ -525,14 +547,118 @@ func (m *DatabaseManager) migrateMetricsSchema8To9() error {
 		rollback()
 		return fmt.Errorf("failed to migrate metrics schema 8 to 9: %w", err)
 	}
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion)); err != nil {
+	if _, err := tx.Exec("PRAGMA user_version = 9"); err != nil {
 		rollback()
-		return fmt.Errorf("failed to record migrated metrics schema version %d: %w", metricsSchemaVersion, err)
+		return fmt.Errorf("failed to record migrated metrics schema version 9: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit metrics schema 8 to 9 migration: %w", err)
 	}
 	return nil
+}
+
+// migrateMetricsSchema9To10 widens the bounded qualification provenance CHECK
+// for databases created before the first retained coordinate was accepted.
+func (m *DatabaseManager) migrateMetricsSchema9To10() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start metrics schema 9 to 10 migration: %w", err)
+	}
+	rollback := func() { _ = tx.Rollback() }
+
+	oldColumns, err := sqliteTableColumns(tx, "system_metrics")
+	if err != nil {
+		rollback()
+		return fmt.Errorf("failed to inspect schema 9 system_metrics columns: %w", err)
+	}
+	if _, err := tx.Exec(systemMetricsTableStatement("system_metrics_schema10", false)); err != nil {
+		rollback()
+		return fmt.Errorf("failed to create schema 10 system_metrics replacement: %w", err)
+	}
+	newColumns, err := sqliteTableColumns(tx, "system_metrics_schema10")
+	if err != nil {
+		rollback()
+		return fmt.Errorf("failed to inspect schema 10 system_metrics columns: %w", err)
+	}
+	oldColumnSet := slices.Clone(oldColumns)
+	newColumnSet := slices.Clone(newColumns)
+	slices.Sort(oldColumnSet)
+	slices.Sort(newColumnSet)
+	if !slices.Equal(oldColumnSet, newColumnSet) {
+		rollback()
+		return fmt.Errorf("failed to migrate metrics schema 9 to 10: system_metrics columns differ: old=%v new=%v", oldColumns, newColumns)
+	}
+
+	var oldRows int64
+	if err := tx.QueryRow("SELECT COUNT(*) FROM system_metrics").Scan(&oldRows); err != nil {
+		rollback()
+		return fmt.Errorf("failed to count schema 9 system_metrics rows: %w", err)
+	}
+	quotedColumns := make([]string, 0, len(oldColumns))
+	for _, column := range oldColumns {
+		quotedColumns = append(quotedColumns, `"`+strings.ReplaceAll(column, `"`, `""`)+`"`)
+	}
+	columnList := strings.Join(quotedColumns, ", ")
+	result, err := tx.Exec("INSERT INTO system_metrics_schema10 (" + columnList + ") SELECT " + columnList + " FROM system_metrics")
+	if err != nil {
+		rollback()
+		return fmt.Errorf("failed to copy schema 9 system_metrics rows: %w", err)
+	}
+	copiedRows, err := result.RowsAffected()
+	if err != nil {
+		rollback()
+		return fmt.Errorf("failed to confirm copied schema 9 system_metrics rows: %w", err)
+	}
+	if copiedRows != oldRows {
+		rollback()
+		return fmt.Errorf("failed to migrate metrics schema 9 to 10: copied %d of %d system_metrics rows", copiedRows, oldRows)
+	}
+	for _, statement := range []string{
+		"DROP TABLE system_metrics",
+		"ALTER TABLE system_metrics_schema10 RENAME TO system_metrics",
+		"CREATE INDEX idx_system_metrics_timestamp ON system_metrics(timestamp)",
+		fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion),
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			rollback()
+			return fmt.Errorf("failed to migrate metrics schema 9 to 10: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit metrics schema 9 to 10 migration: %w", err)
+	}
+	return nil
+}
+
+func sqliteTableColumns(tx *sql.Tx, tableName string) ([]string, error) {
+	switch tableName {
+	case "system_metrics", "system_metrics_schema10":
+	default:
+		return nil, fmt.Errorf("unsupported SQLite table %q", tableName)
+	}
+	rows, err := tx.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var columns []string
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, err
+		}
+		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("table %s has no columns", tableName)
+	}
+	return columns, nil
 }
 
 func optionalCgroupText(value string) any {
