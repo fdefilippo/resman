@@ -1,0 +1,1 @@
+kernel-uek-core-5.15.0-320.202.8.5.el8uek.x86_64

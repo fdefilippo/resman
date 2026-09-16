@@ -17,6 +17,12 @@ for evidence_dir in "$script_dir"/evidence/*; do
 	PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
 		"$evidence_dir" "$revision"
 done
+for evidence_dir in "$script_dir"/attribution-evidence/*; do
+	[[ -d $evidence_dir ]] || continue
+	revision=$(awk -F= '$1 == "source_revision" {print $2}' "$evidence_dir/matrix.txt")
+	PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_attribution.py" \
+		"$evidence_dir" "$revision"
+done
 
 grep -q 'IODeviceWeight.*a(st)' "$script_dir/guest_probe.py"
 grep -q 'SetUnitProperties.*sba(sv)' "$script_dir/validate_evidence.py"

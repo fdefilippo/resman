@@ -1,0 +1,69 @@
+{
+  "cleanup": {
+    "cgroup_removed": true,
+    "errors": [],
+    "result": "PASS",
+    "root_subtree_after": "memory pids",
+    "scheduler_after": "[none] mq-deadline kyber bfq"
+  },
+  "direct_bfq": {
+    "after": "default 100",
+    "before": "default 100",
+    "cgroup": "/sys/fs/cgroup/resman-iow-direct-9fc699cbb29a",
+    "during": "default 100\n251:0 121",
+    "expected_weight": 121,
+    "major_minor": "251:0",
+    "outcome": "KERNEL_ACCEPTS",
+    "reason": "the UEK kernel accepted and exposed the direct BFQ device weight",
+    "reset": {
+      "after": "default 100",
+      "before": "default 100\n251:0 121",
+      "error": null,
+      "path": "/sys/fs/cgroup/resman-iow-direct-9fc699cbb29a/io.bfq.weight",
+      "request": "251:0 default\n"
+    },
+    "scheduler_during": "mq-deadline kyber [bfq] none",
+    "weight_file": "/sys/fs/cgroup/resman-iow-direct-9fc699cbb29a/io.bfq.weight",
+    "write": {
+      "after": "default 100\n251:0 121",
+      "before": "default 100",
+      "error": null,
+      "path": "/sys/fs/cgroup/resman-iow-direct-9fc699cbb29a/io.bfq.weight",
+      "request": "251:0 121\n"
+    }
+  },
+  "environment": {
+    "bfq_module_probe": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "device": "/dev/vda",
+    "kernel": "5.15.0-320.202.8.5.el8uek.x86_64",
+    "kernel_config": {
+      "options": {
+        "CONFIG_BFQ_GROUP_IOSCHED": "y",
+        "CONFIG_BLK_CGROUP_IOCOST": "not_set"
+      },
+      "retained_file": "kernel-config.txt",
+      "sha256": "1b217f79bd37925100045d6c3bb08c81a8c0e81f21c8309b1bc44ea447ddf671",
+      "source": "/boot/config-5.15.0-320.202.8.5.el8uek.x86_64",
+      "status": "captured"
+    },
+    "kernel_package": "kernel-uek-core-5.15.0-320.202.8.5.el8uek.x86_64",
+    "major_minor": "251:0",
+    "os_release": "NAME=\"Oracle Linux Server\"\nVERSION=\"8.10\"\nID=\"ol\"\nID_LIKE=\"fedora\"\nVARIANT=\"Server\"\nVARIANT_ID=\"server\"\nVERSION_ID=\"8.10\"\nPLATFORM_ID=\"platform:el8\"\nPRETTY_NAME=\"Oracle Linux Server 8.10\"\nANSI_COLOR=\"0;31\"\nCPE_NAME=\"cpe:/o:oracle:linux:8:10:server\"\nHOME_URL=\"https://linux.oracle.com/\"\nBUG_REPORT_URL=\"https://github.com/oracle/oracle-linux\"\n\nORACLE_BUGZILLA_PRODUCT=\"Oracle Linux 8\"\nORACLE_BUGZILLA_PRODUCT_VERSION=8.10\nORACLE_SUPPORT_PRODUCT=\"Oracle Linux\"\nORACLE_SUPPORT_PRODUCT_VERSION=8.10",
+    "root_controllers": "cpuset cpu io memory hugetlb pids rdma misc",
+    "root_subtree_before": "memory pids",
+    "scheduler_before": "[none] mq-deadline kyber bfq",
+    "systemd_package": "systemd-239-82.0.13.el8_10.19.x86_64",
+    "systemd_version": "systemd 239 (239-82.0.13.el8_10.19)\n+PAM +AUDIT +SELINUX +IMA -APPARMOR +SMACK +SYSVINIT +UTMP +LIBCRYPTSETUP +GCRYPT +GNUTLS +ACL +XZ +LZ4 +SECCOMP +BLKID +ELFUTILS +KMOD +IDN2 -IDN +PCRE2 default-hierarchy=legacy\n"
+  },
+  "expected_bfq_weight": 121,
+  "probe_sha256": "7006723261f7fc4a272c279bac8285a7c98fc22ee9122e4b5c3c7495f4253ae6",
+  "requested_systemd_weight": 333,
+  "result": "ATTRIBUTED",
+  "run_id": "r20260916054742-3862268",
+  "schema_version": 1,
+  "scope": "test-only-ol8-uek-bfq-direct-write-attribution",
+  "source_revision": "378ae544a893182b2712d45d71423e83c5dba21a"
+}

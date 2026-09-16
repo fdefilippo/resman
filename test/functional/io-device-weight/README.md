@@ -112,6 +112,9 @@ captures the running kernel configuration. It attributes the already reviewed
 OL8/UEK complete-path limitation; it does not change the matrix outcome or any
 runtime support decision.
 
+The accepted retained attribution archive is
+[`attribution-evidence/oracle-ol8-uek-direct-bfq-r20260916054742-3862268`](attribution-evidence/oracle-ol8-uek-direct-bfq-r20260916054742-3862268).
+
 The remote runner owns `/tmp/resman-iow-RUN_ID`, and the QEMU host serializes the
 matrix with `/run/lock/resman-iodeviceweight-qemu.lock`. Interrupting the local
 runner collects any available evidence and removes the remote bundle. Each VM

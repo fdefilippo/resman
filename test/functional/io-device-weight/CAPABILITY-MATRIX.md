@@ -83,6 +83,30 @@ These rows characterize the UEK extension kernel on the same Oracle Linux
 releases. They neither authorize nor exclude another runtime: every enabled
 host is classified and probed from its observed capabilities.
 
+### OL8/UEK direct BFQ attribution
+
+Run `r20260916054742-3862268` exercised revision
+`378ae544a893182b2712d45d71423e83c5dba21a` on the same Oracle Linux 8.10,
+`systemd-239-82.0.13.el8_10.19.x86_64`, and
+`kernel-uek-core-5.15.0-320.202.8.5.el8uek.x86_64` representative as the
+retained UEK matrix. Its manifest-covered evidence is retained in
+[`attribution-evidence/oracle-ol8-uek-direct-bfq-r20260916054742-3862268`](attribution-evidence/oracle-ol8-uek-direct-bfq-r20260916054742-3862268).
+
+The isolated probe selected BFQ on the owned `251:0` virtio disk, enabled the
+`io` controller for one owned child cgroup, and wrote `251:0 121` directly to
+that cgroup's `io.bfq.weight`. The kernel read back the exact entry. The probe
+then wrote `251:0 default`, confirmed the entry disappeared, removed the cgroup,
+restored the root controller state and scheduler, and removed the VM and disks.
+The running configuration records `CONFIG_BFQ_GROUP_IOSCHED=y` and
+`CONFIG_BLK_CGROUP_IOCOST` not set.
+
+This narrows the OL8/UEK result: the UEK kernel accepts the exact per-device BFQ
+entry that systemd 239 accepted and read back over D-Bus but did not emit into
+the target cgroup. The demonstrated limitation is therefore in the systemd 239
+`IODeviceWeight` delivery path, not in that UEK kernel's BFQ per-device-weight
+support. The complete OL8/UEK path remains `UNSUPPORTED`; direct kernel writes
+are test-only and do not create a production fallback.
+
 `UNSUPPORTED` is a valid technical result for its characterized line and does
 not block a capable newer line. `BLOCKED` is reserved for missing or invalid
 qualification infrastructure; neither retained matrix has a `BLOCKED` row.

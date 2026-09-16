@@ -1,0 +1,10 @@
+run_id=r20260916054742-3862268
+source_revision=378ae544a893182b2712d45d71423e83c5dba21a
+campaign=ol8-uek-direct-bfq-attribution
+host=caronte.test.caronte.io
+host_kernel=6.12.0-206.104.3.3.el9uek.x86_64
+qemu_version=QEMU emulator version 10.1.4 (qemu-kvm-10.1.4-3.el9)
+libvirt_version=Compiled against library: libvirt 12.0.0 Using library: libvirt 12.0.0 Using API: QEMU 12.0.0 Running hypervisor: QEMU 10.1.4 Running against daemon: 12.0.0  
+result=PASS
+detail=EL8/UEK produced valid direct BFQ attribution evidence
+exit_code=0

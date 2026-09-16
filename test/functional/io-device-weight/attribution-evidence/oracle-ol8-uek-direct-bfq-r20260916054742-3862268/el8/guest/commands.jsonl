@@ -1,0 +1,7 @@
+{"argv": ["stat", "-fc", "%T", "/sys/fs/cgroup"], "exit_code": 0, "output": "cgroup2fs\n"}
+{"argv": ["findmnt", "--noheadings", "--source", "/dev/vda"], "exit_code": 1, "output": ""}
+{"argv": ["lsblk", "-nrpo", "NAME", "/dev/vda"], "exit_code": 0, "output": "/dev/vda\n"}
+{"argv": ["modprobe", "bfq"], "exit_code": 0, "output": ""}
+{"argv": ["systemctl", "--version"], "exit_code": 0, "output": "systemd 239 (239-82.0.13.el8_10.19)\n+PAM +AUDIT +SELINUX +IMA -APPARMOR +SMACK +SYSVINIT +UTMP +LIBCRYPTSETUP +GCRYPT +GNUTLS +ACL +XZ +LZ4 +SECCOMP +BLKID +ELFUTILS +KMOD +IDN2 -IDN +PCRE2 default-hierarchy=legacy\n"}
+{"argv": ["rpm", "-q", "systemd"], "exit_code": 0, "output": "systemd-239-82.0.13.el8_10.19.x86_64\n"}
+{"argv": ["rpm", "-q", "--whatprovides", "/boot/vmlinuz-5.15.0-320.202.8.5.el8uek.x86_64"], "exit_code": 0, "output": "kernel-uek-core-5.15.0-320.202.8.5.el8uek.x86_64\n"}
