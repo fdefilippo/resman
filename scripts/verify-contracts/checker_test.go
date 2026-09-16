@@ -636,6 +636,12 @@ func TestSystemdUnitMutationBoundaryRejectsEverySideDoor(t *testing.T) {
 			content: `package systemdunit; type object struct{}; func (object) CallWithContext(...any){}; func restore(o object){ o.CallWithContext(nil, "org.freedesktop.systemd1.Manager.RevertUnitFiles", 0, []string{"unit"}) }`,
 		},
 		{
+			name:       "systemd client version substituted for Manager property",
+			path:       systemdUnitAdapterPath,
+			content:    `package systemdunit; import "os/exec"; func managerVersion(){ _ = exec.Command("systemctl", "--version") }`,
+			wantFailed: true,
+		},
+		{
 			name:       "general unit lifecycle method",
 			path:       systemdUnitAdapterPath,
 			content:    `package systemdunit; type connection struct{}; func (connection) StartUnitContext(...any){}; func apply(c connection){ c.StartUnitContext(nil, "unit") }`,
@@ -686,10 +692,24 @@ type writer struct{}
 func (writer) Write([]byte) (int, error) { return 0, nil }
 func writeIODeviceWeightReset(file writer, value snapshot, reset reset) error {
  _ = value.ControlGroup
- payload := []byte(reset.device + " default\n")
+ _, _ = file.Write([]byte(reset.device + " default\n"))
+ return nil
+}`,
+		},
+		{
+			name: "unrelated token does not authorize another payload",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, reset reset) error {
+ _ = " default\n"
+ payload := []byte(reset.device + " 100\n")
  _, _ = file.Write(payload)
  return nil
 }`,
+			wantFailed: true,
 		},
 		{
 			name: "changed IODeviceWeight keyed reset token",
@@ -734,6 +754,20 @@ func writeIODeviceWeightReset(file writer, reset reset) error {
  return nil
 }
 func escape(file writer) { _, _ = file.WriteAt([]byte("8:0 default\n"), 0) }`,
+			wantFailed: true,
+		},
+		{
+			name: "raw syscall beside exact keyed reset",
+			path: systemdIODeviceWeightCleanupPath,
+			content: `package systemdunit
+type reset struct{ device string }
+type writer struct{}
+func (writer) Write([]byte) (int, error) { return 0, nil }
+func writeIODeviceWeightReset(file writer, reset reset) error {
+ _, _ = file.Write([]byte(reset.device + " default\n"))
+ _, _, _ = unix.Syscall(unix.SYS_WRITE, 1, 2, 3)
+ return nil
+}`,
 			wantFailed: true,
 		},
 		{

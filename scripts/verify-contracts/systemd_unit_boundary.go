@@ -56,9 +56,9 @@ func checkSystemdUnitMutationBoundary(sources []goSource) checkResult {
 }
 
 // systemdIODeviceWeightKernelResetExceptions admits exactly one raw write in
-// the adapter: file.Write(payload) inside writeIODeviceWeightReset, with the
-// literal kernel removal token " default\n". The production function performs
-// the remaining typed tuple, inode, mechanism and compare-before-restore checks.
+// the adapter: file.Write([]byte(reset.device + " default\n")) inside
+// writeIODeviceWeightReset. The production function performs the remaining
+// typed tuple, inode, mechanism and compare-before-restore checks.
 func systemdIODeviceWeightKernelResetExceptions(source goSource, result *checkResult) map[ast.Node]bool {
 	allowed := map[ast.Node]bool{}
 	if source.path != systemdIODeviceWeightCleanupPath {
@@ -71,24 +71,19 @@ func systemdIODeviceWeightKernelResetExceptions(source goSource, result *checkRe
 			continue
 		}
 		functions++
-		writes, tokens := 0, 0
+		writes := 0
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.BasicLit:
-				if value, err := strconv.Unquote(typed.Value); err == nil && value == " default\n" {
-					tokens++
-				}
-			case *ast.CallExpr:
+			if typed, ok := node.(*ast.CallExpr); ok {
 				selector, ok := typed.Fun.(*ast.SelectorExpr)
 				owner, ownerOK := selectorOwner(selector)
-				if ok && ownerOK && owner == "file" && selector.Sel.Name == "Write" && len(typed.Args) == 1 && systemdNamedIdentifier(typed.Args[0], "payload") {
+				if ok && ownerOK && owner == "file" && selector.Sel.Name == "Write" && len(typed.Args) == 1 && systemdExactIODeviceWeightResetPayload(typed.Args[0]) {
 					writes++
 					allowed[typed] = true
 				}
 			}
 			return true
 		})
-		if writes != 1 || tokens != 1 {
+		if writes != 1 {
 			result.fail(source.path, sourceLine(source, function.Pos()), "IODeviceWeight kernel cleanup must contain one exact MAJ:MIN default write")
 			for node := range allowed {
 				delete(allowed, node)
@@ -99,6 +94,27 @@ func systemdIODeviceWeightKernelResetExceptions(source goSource, result *checkRe
 		result.fail(source.path, 1, "IODeviceWeight kernel cleanup must define one exact writeIODeviceWeightReset function")
 	}
 	return allowed
+}
+
+func systemdExactIODeviceWeightResetPayload(expression ast.Expr) bool {
+	conversion, ok := expression.(*ast.CallExpr)
+	if !ok || len(conversion.Args) != 1 {
+		return false
+	}
+	byteSlice, ok := conversion.Fun.(*ast.ArrayType)
+	if !ok || byteSlice.Len != nil || !systemdNamedIdentifier(byteSlice.Elt, "byte") {
+		return false
+	}
+	concatenation, ok := conversion.Args[0].(*ast.BinaryExpr)
+	if !ok || concatenation.Op != token.ADD || !systemdNamedSelector(concatenation.X, "reset", "device") {
+		return false
+	}
+	literal, ok := concatenation.Y.(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return false
+	}
+	value, err := strconv.Unquote(literal.Value)
+	return err == nil && value == " default\n"
 }
 
 func checkIODeviceWeightClassifierReadOnly(source goSource, call *ast.CallExpr, result *checkResult) {
@@ -468,6 +484,9 @@ func checkSystemdOwnedCgroupLiteral(source goSource, literal *ast.BasicLit, resu
 	if value == "github.com/godbus/dbus/v5" && source.path != systemdUnitAdapterPath && source.path != systemdUnitErrorsPath {
 		result.fail(source.path, sourceLine(source, literal.Pos()), "the raw D-Bus client is restricted to the authoritative systemd transport and typed error classifier")
 	}
+	if value == "os/exec" && source.path == systemdUnitAdapterPath {
+		result.fail(source.path, sourceLine(source, literal.Pos()), "the systemd transport must read the running Manager identity over D-Bus and cannot execute a client binary")
+	}
 }
 
 func checkSystemdControlGroupCapability(source goSource, selector *ast.SelectorExpr, result *checkResult) {
@@ -505,8 +524,10 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityPro
 	if !strings.HasPrefix(source.path, "internal/systemdunit/") {
 		return
 	}
+	owner, _ := selectorOwner(selector)
 	if source.path == systemdIODeviceWeightCleanupPath && !kernelResets[call] &&
-		(strings.HasPrefix(method, "Write") || strings.HasPrefix(method, "Fprint") || method == "Copy" || method == "CopyN") {
+		(strings.HasPrefix(method, "Write") || strings.HasPrefix(method, "Pwrite") || strings.HasPrefix(method, "Fprint") ||
+			method == "Copy" || method == "CopyN" || systemdRawWritePrimitive(owner, method)) {
 		result.fail(source.path, sourceLine(source, call.Pos()), "%s is outside the one exact IODeviceWeight keyed-reset write", method)
 		return
 	}
@@ -520,4 +541,12 @@ func checkSystemdMutationCall(source goSource, call *ast.CallExpr, capabilityPro
 			result.fail(source.path, sourceLine(source, call.Pos()), "%s is restricted to the durable lease journal or the exact IODeviceWeight keyed reset inside the systemd adapter", method)
 		}
 	}
+}
+
+func systemdRawWritePrimitive(owner, method string) bool {
+	if owner != "unix" && owner != "syscall" {
+		return false
+	}
+	return method == "Sendfile" || method == "Splice" || method == "Tee" ||
+		method == "Syscall" || method == "Syscall6" || method == "RawSyscall" || method == "RawSyscall6"
 }

@@ -48,6 +48,14 @@ both D-Bus and kernel state again. An absent entry is an idempotent recovery suc
 another value or identity is an external conflict that leaves the lease pending.
 No other raw cgroup mutation is authorized, and cleanup never stops or recreates a
 user slice.
+While a property mutation is in the durable `applying` phase, systemd is expected to
+rewrite that property's runtime drop-in. Forward recovery therefore authenticates the
+mutated property through typed D-Bus readback and the exact managed path rather than
+requiring its pre-write digest. The complete pre-write footprint remains required for
+rollback, every unrelated managed drop-in remains bound to its recorded digest, and
+successful confirmation records the rewritten drop-in's new digest. Consequently, an
+equivalent systemd rewrite that preserves the effective typed value is accepted; a
+change to another managed file is an external conflict.
 An owned transient capability probe is stopped before its journal and runtime
 drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
 must be retained; reconciling the now-inactive footprint avoids placing a full

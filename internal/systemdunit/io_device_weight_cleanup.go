@@ -206,15 +206,14 @@ func writeIODeviceWeightReset(root, controlGroup string, identity uint64, reset 
 		_ = file.Close()
 		return fmt.Errorf("rewind %s before exact keyed reset: %w", filename, err)
 	}
-	payload := []byte(reset.device + " default\n")
-	written, err := file.Write(payload)
+	written, err := file.Write([]byte(reset.device + " default\n"))
 	if err != nil {
 		_ = file.Close()
 		return fmt.Errorf("write exact keyed reset to %s: %w", filename, err)
 	}
-	if written != len(payload) {
+	if written != len(reset.device)+len(" default\n") {
 		_ = file.Close()
-		return fmt.Errorf("write exact keyed reset to %s: wrote %d of %d bytes", filename, written, len(payload))
+		return fmt.Errorf("write exact keyed reset to %s: wrote %d of %d bytes", filename, written, len(reset.device)+len(" default\n"))
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close %s after exact keyed reset: %w", filename, err)
