@@ -495,7 +495,7 @@ func TestNewDatabaseManagerMigratesDevelopmentSchema9To10(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	for index, cores := range []int{4, 8} {
+	for index, cores := range []int{4, 6, 8, 10} {
 		if err := manager.writeSystemMetricsForTest(&SystemMetricsRecord{Timestamp: now.Add(time.Duration(index) * time.Second), TotalCores: cores}); err != nil {
 			_ = manager.Close()
 			t.Fatalf("write schema-9 fixture row: %v", err)
@@ -509,6 +509,19 @@ func TestNewDatabaseManagerMigratesDevelopmentSchema9To10(t *testing.T) {
 	raw, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := raw.Exec("DELETE FROM system_metrics WHERE id IN (2, 4)"); err != nil {
+		_ = raw.Close()
+		t.Fatalf("create non-contiguous schema-9 history: %v", err)
+	}
+	var oldSequence int
+	if err := raw.QueryRow("SELECT seq FROM sqlite_sequence WHERE name = 'system_metrics'").Scan(&oldSequence); err != nil {
+		_ = raw.Close()
+		t.Fatalf("read schema-9 AUTOINCREMENT sequence: %v", err)
+	}
+	if oldSequence != 4 {
+		_ = raw.Close()
+		t.Fatalf("schema-9 AUTOINCREMENT sequence = %d, want 4", oldSequence)
 	}
 	if _, err := raw.Exec("UPDATE system_metrics SET io_device_weight_effect_qualification_provenance = ?", string(ioweights.EffectQualificationOL9RHCK20260915)); err == nil {
 		_ = raw.Close()
@@ -552,11 +565,25 @@ func TestNewDatabaseManagerMigratesDevelopmentSchema9To10(t *testing.T) {
 	if err := rows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(ids) != "[1 2]" || fmt.Sprint(cores) != "[4 8]" {
+	if fmt.Sprint(ids) != "[1 3]" || fmt.Sprint(cores) != "[4 8]" {
 		t.Fatalf("migrated rows ids=%v cores=%v", ids, cores)
 	}
+	var indexSQL string
+	if err := manager.db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_system_metrics_timestamp' AND tbl_name = 'system_metrics'").Scan(&indexSQL); err != nil {
+		t.Fatalf("read migrated timestamp index: %v", err)
+	}
+	if !strings.Contains(indexSQL, "ON system_metrics(timestamp)") {
+		t.Fatalf("migrated timestamp index = %q", indexSQL)
+	}
+	var migratedSequence int
+	if err := manager.db.QueryRow("SELECT seq FROM sqlite_sequence WHERE name = 'system_metrics'").Scan(&migratedSequence); err != nil {
+		t.Fatalf("read migrated AUTOINCREMENT sequence: %v", err)
+	}
+	if migratedSequence != oldSequence {
+		t.Fatalf("migrated AUTOINCREMENT sequence = %d, want %d", migratedSequence, oldSequence)
+	}
 	qualified := &SystemMetricsRecord{
-		Timestamp: now.Add(2 * time.Second), TotalCores: 16,
+		Timestamp: now.Add(4 * time.Second), TotalCores: 16,
 		IODeviceWeightState: "functionally_accepted", IODeviceWeightMechanism: "bfq",
 		IODeviceWeightProgrammed: true, IODeviceWeightProgrammedState: "confirmed",
 		IODeviceWeightReadBack: true, IODeviceWeightReadBackState: "confirmed",
@@ -573,8 +600,8 @@ func TestNewDatabaseManagerMigratesDevelopmentSchema9To10(t *testing.T) {
 	if err := manager.db.QueryRow("SELECT id FROM system_metrics WHERE total_cores = 16").Scan(&nextID); err != nil {
 		t.Fatal(err)
 	}
-	if nextID != 3 {
-		t.Fatalf("post-migration AUTOINCREMENT id = %d, want 3", nextID)
+	if nextID != 5 {
+		t.Fatalf("post-migration AUTOINCREMENT id = %d, want 5", nextID)
 	}
 }
 

@@ -120,7 +120,8 @@ as `functionally_accepted` with provenance `none`.
 
 Development schema-9 databases created by pre-release 1.38.0 packages are migrated
 atomically to schema 10. The migration rebuilds only `system_metrics`, preserves every
-row and AUTOINCREMENT identity, and widens the bounded qualification-provenance CHECK.
+row, retained row ID, and the maximum historical AUTOINCREMENT sequence, recreates the
+timestamp index, and widens the bounded qualification-provenance CHECK.
 
 Schema 10 is not readable by older ResMan releases. Before downgrading, archive the
 schema-10 database outside ResMan and start the older release with a new database; do

@@ -571,6 +571,11 @@ func (m *DatabaseManager) migrateMetricsSchema9To10() error {
 		rollback()
 		return fmt.Errorf("failed to inspect schema 9 system_metrics columns: %w", err)
 	}
+	var oldSequence sql.NullInt64
+	if err := tx.QueryRow("SELECT seq FROM sqlite_sequence WHERE name = 'system_metrics'").Scan(&oldSequence); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return fmt.Errorf("failed to read schema 9 system_metrics sequence: %w", err)
+	}
 	if _, err := tx.Exec(systemMetricsTableStatement("system_metrics_schema10", false)); err != nil {
 		rollback()
 		return fmt.Errorf("failed to create schema 10 system_metrics replacement: %w", err)
@@ -616,6 +621,33 @@ func (m *DatabaseManager) migrateMetricsSchema9To10() error {
 	for _, statement := range []string{
 		"DROP TABLE system_metrics",
 		"ALTER TABLE system_metrics_schema10 RENAME TO system_metrics",
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			rollback()
+			return fmt.Errorf("failed to migrate metrics schema 9 to 10: %w", err)
+		}
+	}
+	if oldSequence.Valid {
+		result, err := tx.Exec(`UPDATE sqlite_sequence
+            SET seq = CASE WHEN seq > ? THEN seq ELSE ? END
+            WHERE name = 'system_metrics'`, oldSequence.Int64, oldSequence.Int64)
+		if err != nil {
+			rollback()
+			return fmt.Errorf("failed to restore schema 9 system_metrics sequence: %w", err)
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			rollback()
+			return fmt.Errorf("failed to confirm restored schema 9 system_metrics sequence: %w", err)
+		}
+		if updated == 0 {
+			if _, err := tx.Exec("INSERT INTO sqlite_sequence(name, seq) VALUES ('system_metrics', ?)", oldSequence.Int64); err != nil {
+				rollback()
+				return fmt.Errorf("failed to recreate schema 9 system_metrics sequence: %w", err)
+			}
+		}
+	}
+	for _, statement := range []string{
 		"CREATE INDEX idx_system_metrics_timestamp ON system_metrics(timestamp)",
 		fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion),
 	} {
