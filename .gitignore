@@ -28,6 +28,12 @@ build/
 # Logs
 *.log
 
+# Retained weighted-I/O evidence is byte-exact and may include logs covered by
+# SHA256SUMS. These files must survive a fresh checkout.
+!test/functional/io-device-weight/evidence/**/*.log
+!test/functional/io-device-weight/attribution-evidence/**/*.log
+!test/functional/io-device-weight-effect/evidence/**/*.log
+
 # Temporary files
 /tmp/
 *.tmp

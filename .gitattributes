@@ -1,2 +1,4 @@
 # Preserve byte-exact characterization evidence covered by SHA256SUMS.
 test/functional/io-device-weight/evidence/** -text whitespace=-trailing-space
+test/functional/io-device-weight/attribution-evidence/** -text whitespace=-trailing-space
+test/functional/io-device-weight-effect/evidence/** -text whitespace=-trailing-space

@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
+
+assert_manifest_members_tracked() {
+	local manifest=$1
+	local manifest_dir member relative
+	manifest_dir=$(dirname -- "$manifest")
+	while IFS= read -r line; do
+		member=${line#*  }
+		if [[ $member != ./* ]]; then
+			echo "retained evidence manifest has an invalid member: $manifest: $member" >&2
+			return 1
+		fi
+		relative=${manifest_dir#"$repo_root"/}/${member#./}
+		if ! git -C "$repo_root" ls-files --error-unmatch -- "$relative" >/dev/null 2>&1; then
+			echo "retained evidence manifest member is not tracked: $relative" >&2
+			return 1
+		fi
+	done <"$manifest"
+}
 
 for script in "$script_dir/qemu-host.sh" "$script_dir/qemu-platform.sh" \
 	"$script_dir/qemu-run.sh" "$script_dir/remote-qemu.sh"; do
@@ -13,12 +32,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence_test.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_attribution_test.py"
 for evidence_dir in "$script_dir"/evidence/*; do
 	[[ -d $evidence_dir ]] || continue
+	assert_manifest_members_tracked "$evidence_dir/SHA256SUMS"
 	revision=$(awk -F= '$1 == "source_revision" {print $2}' "$evidence_dir/matrix.txt")
 	PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
 		"$evidence_dir" "$revision"
 done
 for evidence_dir in "$script_dir"/attribution-evidence/*; do
 	[[ -d $evidence_dir ]] || continue
+	assert_manifest_members_tracked "$evidence_dir/SHA256SUMS"
 	revision=$(awk -F= '$1 == "source_revision" {print $2}' "$evidence_dir/matrix.txt")
 	PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_attribution.py" \
 		"$evidence_dir" "$revision"

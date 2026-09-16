@@ -1,0 +1,116 @@
+Oracle Linux 10 BaseOS Latest (x86_64)          4.4 MB/s |  67 MB     00:15    
+Oracle Linux 10 Application Stream Packages (x8 4.1 MB/s | 5.7 MB     00:01    
+Oracle Linux 10 UEK Release 8 (x86_64)          4.9 MB/s |  36 MB     00:07    
+Last metadata expiration check: 0:00:01 ago on Mon 14 Sep 2026 06:16:27 AM UTC.
+Package python3-3.12.12-3.0.1.el10_1.3.x86_64 is already installed.
+Package util-linux-2.40.2-16.el10_1.x86_64 is already installed.
+Package systemd-udev-257-13.0.1.el10_1.3.x86_64 is already installed.
+Dependencies resolved.
+======================================================================================
+ Package                      Arch    Version                Repository           Size
+======================================================================================
+Upgrading:
+ expat                        x86_64  2.7.3-1.el10_2.3       ol10_baseos_latest  140 k
+ libblkid                     x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  201 k
+ libfdisk                     x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  237 k
+ libmount                     x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  231 k
+ libsmartcols                 x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  159 k
+ libuuid                      x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  104 k
+ python-unversioned-command   noarch  3.12.13-2.0.1.el10_2.1 ol10_appstream       15 k
+ python3                      x86_64  3.12.13-2.0.1.el10_2.1 ol10_baseos_latest   36 k
+ python3-libs                 x86_64  3.12.13-2.0.1.el10_2.1 ol10_baseos_latest   11 M
+ systemd                      x86_64  257-23.0.1.el10_2.2    ol10_baseos_latest  6.2 M
+ systemd-libs                 x86_64  257-23.0.1.el10_2.2    ol10_baseos_latest  849 k
+ systemd-pam                  x86_64  257-23.0.1.el10_2.2    ol10_baseos_latest  328 k
+ systemd-udev                 x86_64  257-23.0.1.el10_2.2    ol10_baseos_latest  2.5 M
+ util-linux                   x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  1.5 M
+ util-linux-core              x86_64  2.40.2-18.0.1.el10     ol10_baseos_latest  697 k
+
+Transaction Summary
+======================================================================================
+Upgrade  15 Packages
+
+Total download size: 24 M
+Downloading Packages:
+(1/15): libfdisk-2.40.2-18.0.1.el10.x86_64.rpm  1.4 MB/s | 237 kB     00:00    
+(2/15): expat-2.7.3-1.el10_2.3.x86_64.rpm       782 kB/s | 140 kB     00:00    
+(3/15): libblkid-2.40.2-18.0.1.el10.x86_64.rpm  1.0 MB/s | 201 kB     00:00    
+(4/15): libuuid-2.40.2-18.0.1.el10.x86_64.rpm   1.4 MB/s | 104 kB     00:00    
+(5/15): libmount-2.40.2-18.0.1.el10.x86_64.rpm  1.5 MB/s | 231 kB     00:00    
+(6/15): libsmartcols-2.40.2-18.0.1.el10.x86_64. 1.2 MB/s | 159 kB     00:00    
+(7/15): python3-3.12.13-2.0.1.el10_2.1.x86_64.r 606 kB/s |  36 kB     00:00    
+(8/15): systemd-libs-257-23.0.1.el10_2.2.x86_64 1.2 MB/s | 849 kB     00:00    
+(9/15): systemd-pam-257-23.0.1.el10_2.2.x86_64. 1.0 MB/s | 328 kB     00:00    
+(10/15): systemd-udev-257-23.0.1.el10_2.2.x86_6 1.2 MB/s | 2.5 MB     00:02    
+(11/15): systemd-257-23.0.1.el10_2.2.x86_64.rpm 1.6 MB/s | 6.2 MB     00:03    
+(12/15): util-linux-2.40.2-18.0.1.el10.x86_64.r 1.4 MB/s | 1.5 MB     00:01    
+(13/15): python-unversioned-command-3.12.13-2.0 610 kB/s |  15 kB     00:00    
+(14/15): util-linux-core-2.40.2-18.0.1.el10.x86 1.5 MB/s | 697 kB     00:00    
+(15/15): python3-libs-3.12.13-2.0.1.el10_2.1.x8 2.3 MB/s |  11 MB     00:04    
+--------------------------------------------------------------------------------
+Total                                           4.8 MB/s |  24 MB     00:05     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Upgrading        : libuuid-2.40.2-18.0.1.el10.x86_64                     1/30 
+  Upgrading        : libblkid-2.40.2-18.0.1.el10.x86_64                    2/30 
+  Upgrading        : libfdisk-2.40.2-18.0.1.el10.x86_64                    3/30 
+  Upgrading        : libmount-2.40.2-18.0.1.el10.x86_64                    4/30 
+  Upgrading        : systemd-libs-257-23.0.1.el10_2.2.x86_64               5/30 
+  Upgrading        : libsmartcols-2.40.2-18.0.1.el10.x86_64                6/30 
+  Upgrading        : util-linux-core-2.40.2-18.0.1.el10.x86_64             7/30 
+  Upgrading        : systemd-pam-257-23.0.1.el10_2.2.x86_64                8/30 
+  Running scriptlet: systemd-257-23.0.1.el10_2.2.x86_64                    9/30 
+  Upgrading        : systemd-257-23.0.1.el10_2.2.x86_64                    9/30 
+  Running scriptlet: systemd-257-23.0.1.el10_2.2.x86_64                    9/30 
+  Upgrading        : util-linux-2.40.2-18.0.1.el10.x86_64                 10/30 
+  Running scriptlet: util-linux-2.40.2-18.0.1.el10.x86_64                 10/30 
+  Upgrading        : expat-2.7.3-1.el10_2.3.x86_64                        11/30 
+  Upgrading        : python-unversioned-command-3.12.13-2.0.1.el10_2.1.   12/30 
+  Upgrading        : python3-3.12.13-2.0.1.el10_2.1.x86_64                13/30 
+  Upgrading        : python3-libs-3.12.13-2.0.1.el10_2.1.x86_64           14/30 
+  Upgrading        : systemd-udev-257-23.0.1.el10_2.2.x86_64              15/30 
+  Running scriptlet: systemd-udev-257-23.0.1.el10_2.2.x86_64              15/30 
+  Running scriptlet: systemd-udev-257-13.0.1.el10_1.3.x86_64              16/30 
+  Cleanup          : systemd-udev-257-13.0.1.el10_1.3.x86_64              16/30 
+  Running scriptlet: systemd-udev-257-13.0.1.el10_1.3.x86_64              16/30 
+  Cleanup          : systemd-257-13.0.1.el10_1.3.x86_64                   17/30 
+  Running scriptlet: systemd-257-13.0.1.el10_1.3.x86_64                   17/30 
+  Running scriptlet: util-linux-2.40.2-16.el10_1.x86_64                   18/30 
+  Cleanup          : util-linux-2.40.2-16.el10_1.x86_64                   18/30 
+  Running scriptlet: util-linux-2.40.2-16.el10_1.x86_64                   18/30 
+  Cleanup          : util-linux-core-2.40.2-16.el10_1.x86_64              19/30 
+  Cleanup          : libfdisk-2.40.2-16.el10_1.x86_64                     20/30 
+  Cleanup          : libmount-2.40.2-16.el10_1.x86_64                     21/30 
+  Cleanup          : python3-3.12.12-3.0.1.el10_1.3.x86_64                22/30 
+  Cleanup          : python3-libs-3.12.12-3.0.1.el10_1.3.x86_64           23/30 
+  Cleanup          : libblkid-2.40.2-16.el10_1.x86_64                     24/30 
+  Cleanup          : python-unversioned-command-3.12.12-3.0.1.el10_1.3.   25/30 
+  Cleanup          : libuuid-2.40.2-16.el10_1.x86_64                      26/30 
+  Cleanup          : expat-2.7.1-1.el10_1.3.x86_64                        27/30 
+  Cleanup          : libsmartcols-2.40.2-16.el10_1.x86_64                 28/30 
+  Cleanup          : systemd-libs-257-13.0.1.el10_1.3.x86_64              29/30 
+  Cleanup          : systemd-pam-257-13.0.1.el10_1.3.x86_64               30/30 
+  Running scriptlet: systemd-pam-257-13.0.1.el10_1.3.x86_64               30/30 
+
+Upgraded:
+  expat-2.7.3-1.el10_2.3.x86_64                                                 
+  libblkid-2.40.2-18.0.1.el10.x86_64                                            
+  libfdisk-2.40.2-18.0.1.el10.x86_64                                            
+  libmount-2.40.2-18.0.1.el10.x86_64                                            
+  libsmartcols-2.40.2-18.0.1.el10.x86_64                                        
+  libuuid-2.40.2-18.0.1.el10.x86_64                                             
+  python-unversioned-command-3.12.13-2.0.1.el10_2.1.noarch                      
+  python3-3.12.13-2.0.1.el10_2.1.x86_64                                         
+  python3-libs-3.12.13-2.0.1.el10_2.1.x86_64                                    
+  systemd-257-23.0.1.el10_2.2.x86_64                                            
+  systemd-libs-257-23.0.1.el10_2.2.x86_64                                       
+  systemd-pam-257-23.0.1.el10_2.2.x86_64                                        
+  systemd-udev-257-23.0.1.el10_2.2.x86_64                                       
+  util-linux-2.40.2-18.0.1.el10.x86_64                                          
+  util-linux-core-2.40.2-18.0.1.el10.x86_64                                     
+
+Complete!

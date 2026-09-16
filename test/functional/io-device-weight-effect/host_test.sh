@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
+
+assert_manifest_members_tracked() {
+	local manifest=$1
+	local manifest_dir member relative
+	manifest_dir=$(dirname -- "$manifest")
+	while IFS= read -r line; do
+		member=${line#*  }
+		if [[ $member != ./* ]]; then
+			echo "retained evidence manifest has an invalid member: $manifest: $member" >&2
+			return 1
+		fi
+		relative=${manifest_dir#"$repo_root"/}/${member#./}
+		if ! git -C "$repo_root" ls-files --error-unmatch -- "$relative" >/dev/null 2>&1; then
+			echo "retained evidence manifest member is not tracked: $relative" >&2
+			return 1
+		fi
+	done <"$manifest"
+}
 
 for script in "$script_dir/qemu-host.sh" "$script_dir/qemu-run.sh" "$script_dir/remote-qemu.sh" \
 	"$script_dir/cleanup-owned.sh" "$script_dir/cleanup_owned_test.sh" \
@@ -51,6 +70,7 @@ fi
 
 for archive_dir in "$script_dir"/evidence/*; do
 	[[ -d $archive_dir ]] || continue
+	assert_manifest_members_tracked "$archive_dir/SHA256SUMS"
 	(
 		cd "$archive_dir"
 		sha256sum --check --strict SHA256SUMS >/dev/null
