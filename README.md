@@ -47,7 +47,7 @@ make rpm
 
 # Native Debian/Ubuntu package (amd64 or arm64)
 make deb
-# Creates build/deb/resman_1.38.0-8_<architecture>.deb
+# Creates build/deb/resman_1.38.0-9_<architecture>.deb
 
 # All packages
 make all-with-packages

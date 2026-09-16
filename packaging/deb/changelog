@@ -1,3 +1,9 @@
+resman (1.38.0-9) stable; urgency=medium
+
+  * Harden weighted-I/O cleanup recovery and retained effect qualification.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Wed, 16 Sep 2026 05:50:00 +0200
+
 resman (1.38.0-8) stable; urgency=medium
 
   * Complete exact IODeviceWeight keyed cleanup after systemd D-Bus reset.

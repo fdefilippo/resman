@@ -12,7 +12,7 @@
 
 Name:    resman
 Version: 1.38.0
-Release: 8%{?dist}
+Release: 9%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
 License: GPLv3
@@ -310,6 +310,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Wed Sep 16 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-9
+- Harden weighted-I/O cleanup recovery and retained effect qualification
+
 * Tue Sep 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.38.0-8
 - Complete exact IODeviceWeight keyed cleanup after systemd D-Bus reset
 
