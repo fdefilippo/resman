@@ -13,14 +13,15 @@ type MechanismState string
 type EffectQualificationProvenance string
 
 const (
-	EffectQualificationNone EffectQualificationProvenance = "none"
+	EffectQualificationNone            EffectQualificationProvenance = "none"
+	EffectQualificationOL9RHCK20260915 EffectQualificationProvenance = "resman-nq6.40.5-ol9-rhck-20260915"
 )
 
 // ValidEffectQualificationProvenance reports whether value is a retained,
 // bounded evidence identifier or the explicit absence marker.
 func ValidEffectQualificationProvenance(value string) bool {
 	switch EffectQualificationProvenance(value) {
-	case EffectQualificationNone:
+	case EffectQualificationNone, EffectQualificationOL9RHCK20260915:
 		return true
 	default:
 		return false

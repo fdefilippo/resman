@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fdefilippo/resman/internal/ioweights"
 )
 
 func (m *DatabaseManager) writeUserMetricsForTest(record *UserMetricsRecord) error {
@@ -430,6 +432,12 @@ func TestNewDatabaseManagerMigratesSchema7To9Atomically(t *testing.T) {
 	}
 	if fmt.Sprint(cores) != "[4 8]" {
 		t.Fatalf("migrated historical rows = %v, want [4 8]", cores)
+	}
+	if err := manager.db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'system_metrics'").Scan(&schemaSQL); err != nil {
+		t.Fatalf("read migrated schema definition: %v", err)
+	}
+	if !strings.Contains(schemaSQL, string(ioweights.EffectQualificationOL9RHCK20260915)) {
+		t.Fatalf("migrated schema does not admit retained qualification provenance: %s", schemaSQL)
 	}
 }
 
@@ -888,6 +896,36 @@ func TestWriteMetricsBatchRejectsMissingOrUnboundedIODeviceWeightState(t *testin
 				t.Fatal("WriteMetricsBatch() accepted missing or unbounded weighted-I/O state")
 			}
 		})
+	}
+}
+
+func TestWriteMetricsBatchPersistsRetainedEffectQualificationProvenance(t *testing.T) {
+	manager, err := NewDatabaseManager(privateTestDatabasePath(t, "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	now := time.Now().UTC()
+	record := &SystemMetricsRecord{
+		SampleEpochID: now.UnixNano(), IntervalEnd: now, Timestamp: now,
+		IODeviceWeightState: "functionally_accepted", IODeviceWeightMechanism: "bfq",
+		IODeviceWeightProgrammed: true, IODeviceWeightProgrammedState: "confirmed",
+		IODeviceWeightReadBack: true, IODeviceWeightReadBackState: "confirmed",
+		IODeviceWeightFunctionallyAccepted: true, IODeviceWeightEffectQualified: true,
+		IODeviceWeightEffectQualificationProvenance: string(ioweights.EffectQualificationOL9RHCK20260915),
+		IODeviceWeightAuthorityCoverage:             "complete",
+		IODeviceWeightValuesJSON:                    "[]",
+		IODeviceWeightObservedDelivery:              "not_measured",
+	}
+	if err := manager.WriteMetricsBatch(record, nil); err != nil {
+		t.Fatalf("WriteMetricsBatch() rejected retained qualification provenance: %v", err)
+	}
+	history, err := manager.GetSystemHistory(now.Add(-time.Second), now.Add(time.Second), 1)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("GetSystemHistory() records=%d error=%v", len(history), err)
+	}
+	if !history[0].IODeviceWeightEffectQualified || history[0].IODeviceWeightEffectQualificationProvenance != string(ioweights.EffectQualificationOL9RHCK20260915) {
+		t.Fatalf("persisted qualification = %t/%q", history[0].IODeviceWeightEffectQualified, history[0].IODeviceWeightEffectQualificationProvenance)
 	}
 }
 

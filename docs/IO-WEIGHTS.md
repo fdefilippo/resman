@@ -95,12 +95,14 @@ evidence for an exact representative, mechanism, source and package identity. A 
 that passes the live probe is usable even when its delivery effect has not been
 independently qualified; it is reported as `observed_delivery=not_measured`.
 
-No retained effect campaign is currently accepted, so every functionally accepted
-host reports qualification provenance `none`. A campaign records measurements while
-the daemon remains unqualified; only later independent acceptance may add a bounded
-per-mechanism provenance through the mechanically checked evidence registry. That
-diagnostic label never authorizes a mutation, bypasses the probe, or refuses another
-functionally accepted host.
+The retained BFQ campaign `resman-nq6.40.5-ol9-rhck-20260915` qualifies only the exact
+Oracle Linux 9.8, systemd Manager `252-67.0.1.el9_8.2`, RHCK
+`5.14.0-687.46.1.el9_8.x86_64` representative recorded in its mechanically checked
+archive. io.cost did not demonstrate a stable delivery effect and has no qualification
+coordinate. A campaign records measurements while the daemon remains unqualified;
+only later independent acceptance adds bounded per-mechanism provenance through the
+evidence registry. That diagnostic label never authorizes a mutation, bypasses the
+probe, or refuses another functionally accepted host.
 
 ## Reconciliation and recovery
 

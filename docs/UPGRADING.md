@@ -111,10 +111,13 @@ device weights while CPU, RAM, and hard-I/O policy continue normally.
 
 When independently accepted retained packaged-daemon evidence matches the exact
 observed representative and mechanism, Prometheus, SQLite, MCP, and logs may also
-publish its bounded provenance. No campaign is currently accepted, so the only
-published value is `none`. Qualification is diagnostic only: runtime authorization
-remains the observed capability classification plus the owned live probe, and a host
-without matching retained evidence remains usable as `functionally_accepted`.
+publish its bounded provenance. The first accepted coordinate is BFQ on the exact
+Oracle Linux 9.8, systemd Manager `252-67.0.1.el9_8.2`, RHCK
+`5.14.0-687.46.1.el9_8.x86_64` representative, with provenance
+`resman-nq6.40.5-ol9-rhck-20260915`; io.cost remains unqualified. Qualification is
+diagnostic only: runtime authorization remains the observed capability classification
+plus the owned live probe, and a host without matching retained evidence remains usable
+as `functionally_accepted` with provenance `none`.
 
 Schema 9 is not readable by older ResMan releases. Before downgrading, archive the
 schema-9 database outside ResMan and start the older release with a new database; do

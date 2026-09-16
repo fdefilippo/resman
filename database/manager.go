@@ -398,7 +398,7 @@ func (m *DatabaseManager) InitSchema() error {
 		io_device_weight_read_back_state TEXT NOT NULL CHECK (io_device_weight_read_back_state IN ('not_attempted', 'confirmed', 'failed', 'released')),
 		io_device_weight_functionally_accepted BOOLEAN NOT NULL,
 		io_device_weight_effect_qualified BOOLEAN NOT NULL,
-		io_device_weight_effect_qualification_provenance TEXT NOT NULL CHECK (io_device_weight_effect_qualification_provenance IN ('none')),
+		io_device_weight_effect_qualification_provenance TEXT NOT NULL CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915')),
 		io_device_weight_authority_coverage TEXT NOT NULL CHECK (io_device_weight_authority_coverage IN ('complete', 'partial', 'unavailable')),
 		io_device_weight_complete_users INTEGER NOT NULL,
 		io_device_weight_partial_users INTEGER NOT NULL,
@@ -521,7 +521,7 @@ func (m *DatabaseManager) migrateMetricsSchema8To9() error {
 		return fmt.Errorf("failed to start metrics schema 8 to 9 migration: %w", err)
 	}
 	rollback := func() { _ = tx.Rollback() }
-	if _, err := tx.Exec(`ALTER TABLE system_metrics ADD COLUMN io_device_weight_effect_qualification_provenance TEXT NOT NULL DEFAULT 'none' CHECK (io_device_weight_effect_qualification_provenance IN ('none'))`); err != nil {
+	if _, err := tx.Exec(`ALTER TABLE system_metrics ADD COLUMN io_device_weight_effect_qualification_provenance TEXT NOT NULL DEFAULT 'none' CHECK (io_device_weight_effect_qualification_provenance IN ('none', 'resman-nq6.40.5-ol9-rhck-20260915'))`); err != nil {
 		rollback()
 		return fmt.Errorf("failed to migrate metrics schema 8 to 9: %w", err)
 	}

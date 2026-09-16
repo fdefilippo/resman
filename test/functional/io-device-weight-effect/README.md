@@ -104,3 +104,13 @@ mechanism set rather than treating unselected diagnostic measurements as
 qualification claims. Independent review of the archive and mutation protections
 is required before a qualification coordinate is added or the Beads child or
 parent epic closes.
+
+## Accepted BFQ archive note
+
+The accepted BFQ qualification archive records package verification as
+`config_mtime_only`, while its preceding smoke archive records `clean`. The retained
+value is limited to the two expected RPM `T` markers for `resman.conf` and
+`io-weights.map` after the smoke phase restored their bytes, modes and ownership. The
+validator permits this result only for the retained qualification profile and rejects
+content, permission, ownership, or unrelated package drift. This timestamp-only
+difference does not extend the BFQ qualification to io.cost or to another platform.

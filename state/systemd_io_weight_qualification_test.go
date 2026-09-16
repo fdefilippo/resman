@@ -34,16 +34,22 @@ func qualifiedIODeviceWeightCandidate(t *testing.T, mechanisms ...systemdunit.IO
 	return snapshot
 }
 
-func TestIODeviceWeightEffectQualificationRequiresRetainedCoordinate(t *testing.T) {
+func TestIODeviceWeightEffectQualificationRequiresEveryExactCoordinate(t *testing.T) {
 	managerVersion := "252-67.0.1.el9_8.2"
-	for _, mechanisms := range [][]systemdunit.IODeviceWeightMechanism{
-		{systemdunit.IODeviceWeightMechanismBFQ},
-		{systemdunit.IODeviceWeightMechanismIOCost},
-		{systemdunit.IODeviceWeightMechanismBFQ, systemdunit.IODeviceWeightMechanismIOCost},
+	for _, tt := range []struct {
+		name       string
+		mechanisms []systemdunit.IODeviceWeightMechanism
+		want       ioweights.EffectQualificationProvenance
+	}{
+		{name: "retained BFQ coordinate", mechanisms: []systemdunit.IODeviceWeightMechanism{systemdunit.IODeviceWeightMechanismBFQ}, want: ioweights.EffectQualificationOL9RHCK20260915},
+		{name: "unqualified io.cost", mechanisms: []systemdunit.IODeviceWeightMechanism{systemdunit.IODeviceWeightMechanismIOCost}, want: ioweights.EffectQualificationNone},
+		{name: "mixed qualified and unqualified mechanisms", mechanisms: []systemdunit.IODeviceWeightMechanism{systemdunit.IODeviceWeightMechanismBFQ, systemdunit.IODeviceWeightMechanismIOCost}, want: ioweights.EffectQualificationNone},
 	} {
-		if got := ioDeviceWeightEffectQualification(qualifiedIODeviceWeightCandidate(t, mechanisms...), managerVersion); got != ioweights.EffectQualificationNone {
-			t.Fatalf("unretained qualification for %v = %q", mechanisms, got)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ioDeviceWeightEffectQualification(qualifiedIODeviceWeightCandidate(t, tt.mechanisms...), managerVersion); got != tt.want {
+				t.Fatalf("qualification for %v = %q, want %q", tt.mechanisms, got, tt.want)
+			}
+		})
 	}
 
 	snapshot := qualifiedIODeviceWeightCandidate(t, systemdunit.IODeviceWeightMechanismBFQ)
@@ -69,7 +75,7 @@ func TestIODeviceWeightQualificationCoordinatesHaveValidatedEvidence(t *testing.
 	}
 	validator := filepath.Join(repositoryRoot, "test", "functional", "io-device-weight-effect", "validate_evidence.py")
 	for _, coordinate := range ioDeviceWeightQualificationCoordinates {
-		evidence := filepath.Join(repositoryRoot, "test", "functional", "io-device-weight-effect", "evidence", string(coordinate.provenance))
+		evidence := filepath.Join(repositoryRoot, "test", "functional", "io-device-weight-effect", "evidence", string(coordinate.provenance), "remote", "guest")
 		command := exec.Command("python3", validator, evidence,
 			"--mechanism", string(coordinate.mechanism),
 			"--provenance", string(coordinate.provenance),
@@ -87,7 +93,7 @@ func TestIODeviceWeightQualificationCoordinatesHaveValidatedEvidence(t *testing.
 	}
 }
 
-func TestIODeviceWeightFunctionalAcceptancePublishesNoUnearnedQualification(t *testing.T) {
+func TestIODeviceWeightFunctionalAcceptancePublishesExactQualificationProvenance(t *testing.T) {
 	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), &fakeSystemdCPUUnitAdapter{}, &forbiddenSystemdNativeCgroupManager{}, 4)
 	adapter := &fakeSystemdCPUUnitAdapter{
 		topology:              testSystemdTopology(1000),
@@ -100,8 +106,8 @@ func TestIODeviceWeightFunctionalAcceptancePublishesNoUnearnedQualification(t *t
 	}
 
 	result := manager.AttemptIODeviceWeightCapability(context.Background())
-	if result.Status.EffectQualified || result.Status.EffectQualificationProvenance != ioweights.EffectQualificationNone {
-		t.Fatalf("functional acceptance published unearned qualification = %+v", result.Status)
+	if !result.Status.EffectQualified || result.Status.EffectQualificationProvenance != ioweights.EffectQualificationOL9RHCK20260915 {
+		t.Fatalf("qualification status = %+v", result.Status)
 	}
 
 	classifier.snapshot = testIODeviceWeightObservation(t, systemdunit.IODeviceWeightMechanismAmbiguous, systemdunit.IODeviceWeightReasonMechanismAmbiguous)
