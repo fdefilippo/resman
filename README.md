@@ -13,6 +13,27 @@ hot-reload configuration, and includes an MCP server for AI assistant integratio
 > authoritative systemd adapter is unavailable, it reports `observation_only` and
 > applies no CPU, RAM or I/O limits. Read the upgrade guide before installation.
 
+## Relationship with systemd-oomd
+
+ResMan complements rather than replaces
+[`systemd-oomd`](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html).
+`systemd-oomd` protects the host during severe memory or swap pressure by selecting
+and terminating an eligible cgroup. ResMan continuously governs and accounts for
+per-user CPU, memory, and block-I/O allocation during normal operation.
+
+| Concern | systemd-oomd | ResMan |
+|---|---|---|
+| Primary goal | Protect the host during severe memory pressure | Govern and account for per-user resource allocation |
+| Resources | Memory and swap | CPU, memory, and block I/O |
+| Typical action | Select and terminate an eligible cgroup | Assign weights, throttle, or enforce cgroup limits |
+| Policy scope | Configured systemd units and descendants | Eligible user slices with verified authority |
+| Observability | Monitored cgroups, pressure, and kill events | Decisions, authority, applied state, kernel read-back, and history |
+
+The two services can run together: ResMan governs ordinary contention while
+`systemd-oomd` remains an emergency memory-pressure response. ResMan does not select
+processes or cgroups to kill, although a configured `MemoryMax` can still cause the
+kernel to invoke the cgroup OOM killer.
+
 ## Features
 
 - Systemd-native CPU limiting without PID migration; RAM and I/O require complete independent authority
