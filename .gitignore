@@ -48,13 +48,9 @@ gha-creds-*.json
 .worktrees/
 
 # Beads / Dolt files (added by bd init)
-.beads/
+.beads*
 .dolt/
 *.db
-.beads-credential-key
-
-# Beads / Dolt files (added by bd init)
-.beads/proxieddb/
 
 # Local product page drafts
 docs/resman-product-page.html
