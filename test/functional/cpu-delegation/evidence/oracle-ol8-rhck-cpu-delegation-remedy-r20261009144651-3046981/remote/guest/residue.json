@@ -1,0 +1,193 @@
+{
+  "daemon": {
+    "command": [
+      "systemctl",
+      "show",
+      "resman",
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState",
+      "-p",
+      "Result",
+      "-p",
+      "ExecMainStatus",
+      "-p",
+      "ExecMainCode",
+      "-p",
+      "NRestarts",
+      "-p",
+      "InvocationID"
+    ],
+    "output": [
+      "Result=success",
+      "NRestarts=0",
+      "ExecMainCode=0",
+      "ExecMainStatus=0",
+      "ActiveState=inactive",
+      "SubState=dead",
+      "InvocationID="
+    ],
+    "status": 0
+  },
+  "fixture": {
+    "command": [
+      "systemctl",
+      "show",
+      "resman-cpudel-fixture",
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState"
+    ],
+    "output": [
+      "ActiveState=inactive",
+      "SubState=dead"
+    ],
+    "status": 0
+  },
+  "initial_subtree_control": [
+    "memory",
+    "pids"
+  ],
+  "leases_present": false,
+  "probe_slices": {
+    "cgroups": [],
+    "units": {
+      "command": [
+        "systemctl",
+        "list-units",
+        "--all",
+        "--no-legend",
+        "--no-pager",
+        "user-resmancapprobe*.slice"
+      ],
+      "output": [],
+      "status": 0
+    }
+  },
+  "realtime": {
+    "all": [
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 15
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 16
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 19
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 20
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 43
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 128
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 129
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 130
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 131
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 132
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 133
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 134
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 135
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 136
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 137
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 138
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 139
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 140
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 141
+      }
+    ],
+    "outside_root": []
+  },
+  "subtree_control": [
+    "memory",
+    "pids"
+  ],
+  "system_control": []
+}

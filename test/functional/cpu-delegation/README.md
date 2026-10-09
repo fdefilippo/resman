@@ -103,13 +103,22 @@ fails the run instead of passing quietly.
 
 ## Retained evidence
 
-`evidence/oracle-ol8-rhck-cpu-delegation-r20261009134755-2978178/` holds the
-reviewed archive of the first successful reproduction: Oracle Linux 8.10 on
-`4.18.0-553.171.1.el8_10.x86_64` with `CONFIG_RT_GROUP_SCHED=y`, systemd
-239-82.el8_10.1, and `resman-1.38.0-10.el8.x86_64`. Its computed verdict is
-`REPRODUCED`.
+Two archives are retained, both on Oracle Linux 8.10 with
+`4.18.0-553.171.1.el8_10.x86_64`, `CONFIG_RT_GROUP_SCHED=y` and systemd
+239-82.el8_10.1:
 
-The harness gate checks that the archive stays intact and keeps that verdict.
+* `oracle-ol8-rhck-cpu-delegation-r20261009134755-2978178/` proves the defect on
+  `resman-1.38.0-10.el8.x86_64`, the exact identity installed on the field
+  nodes. Verdict `REPRODUCED`; it predates `ENFORCEMENT_MODE`, so its remedy is
+  `NOT_MEASURED` by construction.
+* `oracle-ol8-rhck-cpu-delegation-remedy-r20261009144651-3046981/` proves the
+  defect and its correction on `resman-1.39.0-1.el8.x86_64`. Verdict
+  `REPRODUCED`, remedy `REMEDIED`: under `systemd_native` the same package still
+  exits 78, while `observation_only` and `auto` both activate against the very
+  same realtime task, each publishing its own reason.
+
+The harness gate checks that every archive stays intact and keeps its verdict,
+and that at least one of them proves the remedy.
 Recomputing every typed outcome also needs the package itself, which is not
 tracked:
 

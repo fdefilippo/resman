@@ -1,0 +1,98 @@
+{
+  "capability_errors": [
+    "[2026-10-09 14:52:29] [WARN] Mandatory enforcement capability unavailable; observing instead enforcement_mode=observation_only reason=mandatory_capability_unavailable feature=CPU limiting controller=cpu interface=cpu.max property=CPUQuotaPerSecUSec released_units=0 released_properties=0 error=systemd unit adapter startup_capabilities property CPUQuotaPerSecUSec failed (required_capability_unavailable): enabled feature CPU limiting requires controller \\\"cpu\\\" interface \\\"cpu.max\\\": required controller interface cpu.max is unavailable for user-resmancapprobe5cda00bbd3f3f21f.slice: open /sys/fs/cgroup/user.slice/user-resmancapprobe5cda00bbd3f3f21f.slice/cpu.max: no such file or directory"
+  ],
+  "declaration": {
+    "effective": [
+      "ENFORCEMENT_MODE=auto"
+    ],
+    "replaced_existing_line": true,
+    "requested": "auto"
+  },
+  "enforcement_mode": [
+    "[2026-10-09 14:52:29] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads",
+    "[2026-10-09 14:52:29] [WARN] Mandatory enforcement capability unavailable; observing instead enforcement_mode=observation_only reason=mandatory_capability_unavailable feature=CPU limiting controller=cpu interface=cpu.max property=CPUQuotaPerSecUSec released_units=0 released_properties=0 error=systemd unit adapter startup_capabilities property CPUQuotaPerSecUSec failed (required_capability_unavailable): enabled feature CPU limiting requires controller \\\"cpu\\\" interface \\\"cpu.max\\\": required controller interface cpu.max is unavailable for user-resmancapprobe5cda00bbd3f3f21f.slice: open /sys/fs/cgroup/user.slice/user-resmancapprobe5cda00bbd3f3f21f.slice/cpu.max: no such file or directory",
+    "[2026-10-09 14:52:29] [INFO] Enforcement action state changed enforcement_mode=observation_only requested_policy_intent=maintain applied_enforcement_action=none enforcement_block_reason=none",
+    "[2026-10-09 14:52:29] [INFO] Control cycle completed cycle_id=1791557549 trigger=initial requested_policy_intent=maintain applied_enforcement_action=none enforcement_block_reason=none decision_reason=All resources within normal range total_cpu_usage=0 cpu_eligible_users_cpu_usage=0 eligible_users=0 active_limited_users=0 enforcement_mode=observation_only ingress_refused_count=0 system_under_load=false ignore_system_load=false duration_ms=18 outcome=success deferred_error_count=0 degraded_warning_count=0"
+  ],
+  "label": "declared-auto",
+  "log": [
+    "[2026-10-09 14:52:29] [INFO] Logger initialized level=INFO file=/var/log/resman.log max_size=10485760 bytes",
+    "[2026-10-09 14:52:29] [INFO] Starting Resource Manager version=1.39.0-1.el8",
+    "[2026-10-09 14:52:29] [INFO] Configuration loaded successfully log_level=INFO log_file=/var/log/resman.log use_syslog=false",
+    "[2026-10-09 14:52:29] [INFO] Initializing components:",
+    "[2026-10-09 14:52:29] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads",
+    "[2026-10-09 14:52:29] [INFO] Metrics collector initialized",
+    "[2026-10-09 14:52:29] [INFO] Metrics database disabled by configuration",
+    "[2026-10-09 14:52:29] [INFO] Prometheus exporter disabled by configuration",
+    "[2026-10-09 14:52:29] [WARN] Mandatory enforcement capability unavailable; observing instead enforcement_mode=observation_only reason=mandatory_capability_unavailable feature=CPU limiting controller=cpu interface=cpu.max property=CPUQuotaPerSecUSec released_units=0 released_properties=0 error=systemd unit adapter startup_capabilities property CPUQuotaPerSecUSec failed (required_capability_unavailable): enabled feature CPU limiting requires controller \\\"cpu\\\" interface \\\"cpu.max\\\": required controller interface cpu.max is unavailable for user-resmancapprobe5cda00bbd3f3f21f.slice: open /sys/fs/cgroup/user.slice/user-resmancapprobe5cda00bbd3f3f21f.slice/cpu.max: no such file or directory",
+    "[2026-10-09 14:52:29] [INFO] State manager initialized polling_interval=30 cpu_threshold=75 cpu_release_threshold=40 cpu_threshold_duration=90 ignore_system_load=false",
+    "[2026-10-09 14:52:29] [INFO] Configuration watcher initialized file=/etc/resman/resman.conf directory=/etc/resman",
+    "[2026-10-09 14:52:29] [INFO] Starting configuration watcher",
+    "[2026-10-09 14:52:29] [INFO] Configuration auto-reload enabled file=/etc/resman/resman.conf",
+    "[2026-10-09 14:52:29] [INFO] MCP server disabled by configuration",
+    "[2026-10-09 14:52:29] [INFO] Entering main control loop polling_interval_seconds=30 metrics_refresh_interval_seconds=0 psi_event_driven_configured=false psi_event_driven_active=false",
+    "[2026-10-09 14:52:29] [INFO] Enforcement action state changed enforcement_mode=observation_only requested_policy_intent=maintain applied_enforcement_action=none enforcement_block_reason=none",
+    "[2026-10-09 14:52:29] [INFO] Control cycle completed cycle_id=1791557549 trigger=initial requested_policy_intent=maintain applied_enforcement_action=none enforcement_block_reason=none decision_reason=All resources within normal range total_cpu_usage=0 cpu_eligible_users_cpu_usage=0 eligible_users=0 active_limited_users=0 enforcement_mode=observation_only ingress_refused_count=0 system_under_load=false ignore_system_load=false duration_ms=18 outcome=success deferred_error_count=0 degraded_warning_count=0"
+  ],
+  "probe_slices": {
+    "cgroups": [],
+    "units": {
+      "command": [
+        "systemctl",
+        "list-units",
+        "--all",
+        "--no-legend",
+        "--no-pager",
+        "user-resmancapprobe*.slice"
+      ],
+      "output": [],
+      "status": 0
+    }
+  },
+  "start": {
+    "command": [
+      "systemctl",
+      "start",
+      "resman"
+    ],
+    "output": [],
+    "status": 0
+  },
+  "state": {
+    "command": [
+      "systemctl",
+      "show",
+      "resman",
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState",
+      "-p",
+      "Result",
+      "-p",
+      "ExecMainStatus",
+      "-p",
+      "ExecMainCode",
+      "-p",
+      "NRestarts",
+      "-p",
+      "InvocationID"
+    ],
+    "output": [
+      "Result=success",
+      "NRestarts=0",
+      "ExecMainCode=0",
+      "ExecMainStatus=0",
+      "ActiveState=active",
+      "SubState=running",
+      "InvocationID=7d9365c15c14483ca2fa650d513b71c3"
+    ],
+    "status": 0
+  },
+  "subtree_control": [
+    "memory",
+    "pids"
+  ],
+  "user_slice_cpu_max": null
+}
