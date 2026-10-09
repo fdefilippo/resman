@@ -1,0 +1,14 @@
+{
+  "kernel": "4.18.0-553.171.1.el8_10.x86_64",
+  "outcomes": {
+    "daemon_under_realtime": "REFUSED_CONFIGURATION",
+    "daemon_without_realtime": "STARTED",
+    "delegation_baseline": "DELEGABLE",
+    "delegation_under_realtime": "NOT_DELEGABLE",
+    "delegation_without_realtime": "DELEGABLE",
+    "realtime_fixture": "ESTABLISHED"
+  },
+  "package_identity": "resman-1.38.0-10.el8.x86_64",
+  "rt_group_sched": "CONFIG_RT_GROUP_SCHED=y",
+  "verdict": "REPRODUCED"
+}

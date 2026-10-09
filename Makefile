@@ -8,8 +8,8 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.38.0
-RELEASE = 10
+VERSION = 1.39.0
+RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
@@ -82,6 +82,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 .PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu test-functional-io-device-weight-attribution-qemu
+.PHONY: test-functional-cpu-delegation-unit test-functional-cpu-delegation-qemu
 
 .PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
@@ -130,6 +131,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	$(MAKE) test-functional-real-kernel-unit
 	$(MAKE) test-functional-systemd239-unit
 	$(MAKE) test-functional-io-device-weight-unit
+	$(MAKE) test-functional-cpu-delegation-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
@@ -242,6 +244,14 @@ test-functional-systemd239-unit:
 # Qualify an exact EL8 RPM inside a disposable QEMU guest on terra.
 test-functional-systemd239-qemu:
 	test/functional/systemd239/remote-qemu.sh "$(RESMAN_EL8_QEMU_HOST)" "$(RESMAN_EL8_RPM)" "$(RESMAN_EL8_RPM_MANIFEST)"
+
+# Exercise the EL8 cpu-delegation reproduction harness without starting a VM.
+test-functional-cpu-delegation-unit:
+	test/functional/cpu-delegation/host_test.sh
+
+# Reproduce the EL8 cpu-delegation refusal inside a disposable QEMU guest.
+test-functional-cpu-delegation-qemu:
+	test/functional/cpu-delegation/remote-qemu.sh "$(RESMAN_CPUDEL_QEMU_HOST)" "$(RESMAN_EL8_RPM)" "$(RESMAN_EL8_RPM_MANIFEST)"
 
 # Exercise the IODeviceWeight platform-characterization harness without KVM.
 test-functional-io-device-weight-unit:
@@ -705,6 +715,8 @@ help:
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"
 	@echo "    test-functional-systemd239-unit - Test the EL8/systemd 239 QEMU harness"
 	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
+	@echo "    test-functional-cpu-delegation-unit - Test the EL8 cpu-delegation harness"
+	@echo "    test-functional-cpu-delegation-qemu - Reproduce the EL8 cpu-delegation refusal"
 	@echo "    test-functional-io-device-weight-unit - Test the IODeviceWeight QEMU harness"
 	@echo "    test-functional-io-device-weight-qemu - Characterize IODeviceWeight on EL8/EL9/EL10"
 	@echo "    test-functional-io-device-weight-attribution-qemu - Attribute the EL8/UEK BFQ path limit"

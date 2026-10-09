@@ -56,6 +56,13 @@ const (
 	EnforcementBlockReasonSystemdRuntimeAbsent  EnforcementBlockReason = "systemd_runtime_absent"
 	EnforcementBlockReasonSystemdOwnsWorkloads  EnforcementBlockReason = "systemd_owns_host_workloads"
 	EnforcementBlockReasonAuthorityUnverifiable EnforcementBlockReason = "systemd_authority_unverifiable"
+	// EnforcementBlockReasonMandatoryCapability means the host cannot provide a
+	// mandatory enforcement capability, so no limit can be applied there.
+	EnforcementBlockReasonMandatoryCapability EnforcementBlockReason = "mandatory_capability_unavailable"
+	// EnforcementBlockReasonOperatorObservation means the operator declared
+	// that this host observes and never enforces. It is deliberately distinct
+	// from an inability: a declared choice must never read as a defect.
+	EnforcementBlockReasonOperatorObservation EnforcementBlockReason = "operator_requested_observation"
 )
 
 // EnforcementStatus is the bounded result of resolving the host ownership boundary.
@@ -69,6 +76,13 @@ const (
 	EnforcementReasonSystemdOwnsHostWorkloads = "systemd_owns_host_workloads"
 	EnforcementReasonAuthorityUnverifiable    = "systemd_authority_unverifiable"
 	EnforcementReasonSystemdNativeAdapter     = "systemd_native_adapter"
+	// EnforcementReasonMandatoryCapabilityUnavailable is published when the
+	// host refuses a mandatory enforcement capability and the operator asked
+	// for observation rather than a refusal to start.
+	EnforcementReasonMandatoryCapabilityUnavailable = "mandatory_capability_unavailable"
+	// EnforcementReasonOperatorObservationOnly is published when the operator
+	// declared observation in configuration, whatever the host could provide.
+	EnforcementReasonOperatorObservationOnly = "operator_requested_observation"
 )
 
 // InitialEnforcementCycleState returns the explicit state before the first
@@ -92,6 +106,10 @@ func BoundedEnforcementBlockReason(reason string) EnforcementBlockReason {
 		return EnforcementBlockReasonSystemdOwnsWorkloads
 	case EnforcementReasonAuthorityUnverifiable:
 		return EnforcementBlockReasonAuthorityUnverifiable
+	case EnforcementReasonMandatoryCapabilityUnavailable:
+		return EnforcementBlockReasonMandatoryCapability
+	case EnforcementReasonOperatorObservationOnly:
+		return EnforcementBlockReasonOperatorObservation
 	default:
 		return EnforcementBlockReasonAuthorityUnverifiable
 	}
@@ -148,7 +166,9 @@ func validAppliedAction(action AppliedEnforcementAction) bool {
 
 func validBlockReason(reason EnforcementBlockReason) bool {
 	switch reason {
-	case EnforcementBlockReasonNone, EnforcementBlockReasonSystemdRuntimeAbsent, EnforcementBlockReasonSystemdOwnsWorkloads, EnforcementBlockReasonAuthorityUnverifiable:
+	case EnforcementBlockReasonNone, EnforcementBlockReasonSystemdRuntimeAbsent,
+		EnforcementBlockReasonSystemdOwnsWorkloads, EnforcementBlockReasonAuthorityUnverifiable,
+		EnforcementBlockReasonMandatoryCapability, EnforcementBlockReasonOperatorObservation:
 		return true
 	default:
 		return false

@@ -1,0 +1,155 @@
+{
+  "attempt": {
+    "accepted": false,
+    "errno": 22,
+    "errno_name": "EINVAL",
+    "message": "Invalid argument",
+    "subtree_control": [
+      "memory",
+      "pids"
+    ],
+    "written": "+cpu"
+  },
+  "label": "under-realtime",
+  "realtime": {
+    "all": [
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 15
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 16
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 19
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 20
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 43
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 128
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 129
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 130
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 131
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 132
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 133
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 134
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 135
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 136
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 137
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 138
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 139
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 140
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 141
+      },
+      {
+        "cgroup": "0::/system.slice/resman-cpudel-fixture.service",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 1501
+      }
+    ],
+    "outside_root": [
+      {
+        "cgroup": "0::/system.slice/resman-cpudel-fixture.service",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 1501
+      }
+    ]
+  },
+  "revert": null,
+  "subtree_control_after": [
+    "memory",
+    "pids"
+  ],
+  "subtree_control_before": [
+    "memory",
+    "pids"
+  ]
+}

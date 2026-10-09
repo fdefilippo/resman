@@ -1,0 +1,11 @@
+run_id=r20261009144651-3046981
+qualification_revision=842384a89752f9cc5417df1ebabef7a7bd53e194
+remote_host=root@terra
+package_source_revision=8b6d841fe1b3795c71a1f128553288d2788d03f1
+package_source_tree=f4be0d8b2f39ce5656d8e3a215b1a383da0d04a4
+package_sha256=a15804d5a2131df1705667f7d7e3b7d36b6ab11a9dba9db3bb4859b16d1f60a5
+expected_verdict=REPRODUCED
+expected_remedy=REMEDIED
+cleanup=PASS
+result=PASS
+exit_code=0

@@ -1,0 +1,83 @@
+{
+  "capability_errors": [
+    "[2026-10-09 14:52:29] [ERROR] Failed to initialize systemd-native enforcement error=systemd unit adapter startup_capabilities property CPUQuotaPerSecUSec failed (required_capability_unavailable): enabled feature CPU limiting requires controller \\\"cpu\\\" interface \\\"cpu.max\\\": required controller interface cpu.max is unavailable for user-resmancapprobec348d554ab511ef5.slice: open /sys/fs/cgroup/user.slice/user-resmancapprobec348d554ab511ef5.slice/cpu.max: no such file or directory"
+  ],
+  "enforcement_mode": [
+    "[2026-10-09 14:52:28] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads"
+  ],
+  "label": "under-realtime",
+  "log": [
+    "[2026-10-09 14:52:28] [INFO] Logger initialized level=INFO file=/var/log/resman.log max_size=10485760 bytes",
+    "[2026-10-09 14:52:28] [INFO] Starting Resource Manager version=1.39.0-1.el8",
+    "[2026-10-09 14:52:28] [INFO] Configuration loaded successfully log_level=INFO log_file=/var/log/resman.log use_syslog=false",
+    "[2026-10-09 14:52:28] [INFO] Initializing components:",
+    "[2026-10-09 14:52:28] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads",
+    "[2026-10-09 14:52:28] [INFO] Metrics collector initialized",
+    "[2026-10-09 14:52:28] [INFO] Metrics database disabled by configuration",
+    "[2026-10-09 14:52:28] [INFO] Prometheus exporter disabled by configuration",
+    "[2026-10-09 14:52:29] [ERROR] Failed to initialize systemd-native enforcement error=systemd unit adapter startup_capabilities property CPUQuotaPerSecUSec failed (required_capability_unavailable): enabled feature CPU limiting requires controller \\\"cpu\\\" interface \\\"cpu.max\\\": required controller interface cpu.max is unavailable for user-resmancapprobec348d554ab511ef5.slice: open /sys/fs/cgroup/user.slice/user-resmancapprobec348d554ab511ef5.slice/cpu.max: no such file or directory"
+  ],
+  "probe_slices": {
+    "cgroups": [],
+    "units": {
+      "command": [
+        "systemctl",
+        "list-units",
+        "--all",
+        "--no-legend",
+        "--no-pager",
+        "user-resmancapprobe*.slice"
+      ],
+      "output": [],
+      "status": 0
+    }
+  },
+  "start": {
+    "command": [
+      "systemctl",
+      "start",
+      "resman"
+    ],
+    "output": [
+      "Job for resman.service failed because the control process exited with error code.",
+      "See \"systemctl status resman.service\" and \"journalctl -xe\" for details."
+    ],
+    "status": 1
+  },
+  "state": {
+    "command": [
+      "systemctl",
+      "show",
+      "resman",
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState",
+      "-p",
+      "Result",
+      "-p",
+      "ExecMainStatus",
+      "-p",
+      "ExecMainCode",
+      "-p",
+      "NRestarts",
+      "-p",
+      "InvocationID"
+    ],
+    "output": [
+      "Result=exit-code",
+      "NRestarts=0",
+      "ExecMainCode=1",
+      "ExecMainStatus=78",
+      "ActiveState=failed",
+      "SubState=failed",
+      "InvocationID=e687c55bae8c40a8946ac2157a76c7e7"
+    ],
+    "status": 0
+  },
+  "subtree_control": [
+    "memory",
+    "pids"
+  ],
+  "user_slice_cpu_max": null
+}

@@ -1,4 +1,4 @@
-# Upgrading from ResMan 1.25.x through 1.37.0 to ResMan 1.38.0
+# Upgrading from ResMan 1.25.x through 1.38.0 to ResMan 1.39.0
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
@@ -36,6 +36,71 @@ failure with its path, separately from a missing controller or cgroup interface.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## FIXED: a host that cannot delegate the cpu controller can run again
+
+**Compatibility regression, with the default unchanged.** From version 1.35.1 the
+startup capability probe is mandatory and fail-closed: a host that cannot provide
+`cpu.max` exits with status 78, and `RestartPreventExitStatus=78` keeps the unit
+failed. No configuration could reduce the scope, so such a host lost not only
+enforcement but also metrics history, Prometheus and MCP. Releases through 1.34.x
+ran there with the private migrated-PID model, which needed no delegated cpu
+controller. The behaviour changed without a decision and without a release note;
+this is that note.
+
+**The condition.** On a kernel built with `CONFIG_RT_GROUP_SCHED=y`, the cgroup v2
+cpu controller cannot distribute realtime bandwidth, so the kernel refuses `+cpu`
+in the root `cgroup.subtree_control` with `EINVAL` while any realtime task lives
+outside the root cgroup. No descendant can then expose `cpu.max`. Enterprise Linux
+8, 9 and 10 kernels all enable that option, and a cluster agent such as Veritas
+Cluster Server keeps SCHED_FIFO threads inside `system.slice`, which is enough.
+Confirm it on an affected host with:
+
+```bash
+grep CONFIG_RT_GROUP_SCHED "/boot/config-$(uname -r)"
+ps -eLo tid,cls,rtprio,cgroup --no-headers | awk '$2 == "FF" || $2 == "RR"'
+cat /sys/fs/cgroup/cgroup.subtree_control
+```
+
+A realtime thread whose cgroup is not the root, with `cpu` absent from the root
+delegation set, is the condition. A kernel thread reports the root cgroup and is
+never the cause.
+
+**The remedy.** `ENFORCEMENT_MODE` declares what such a host does. It is
+restart-required and defaults to `systemd_native`, so no installed host changes
+behaviour on upgrade.
+
+| Value | Behaviour |
+| --- | --- |
+| `systemd_native` | Unchanged: an unavailable mandatory capability is a permanent startup error with status 78. |
+| `observation_only` | This host never enforces. No capability probe runs, no transient unit is created and no limit is applied. Properties owned by an earlier enforcing run are released first. |
+| `auto` | Enforce when possible; observe when the kernel structurally refuses. An unavailable bus, a timeout or a probe that could not run still refuses to start. |
+
+On an affected host, set one of the two observing values and restart:
+
+```bash
+printf 'ENFORCEMENT_MODE=auto\n' >> /etc/resman/resman.conf
+systemctl restart resman
+systemctl show resman -p ActiveState -p Result
+```
+
+The daemon then starts, publishes `enforcement_mode=observation_only` with the
+bounded reason `mandatory_capability_unavailable`, names the feature, controller
+and interface it could not obtain, and keeps metrics history, Prometheus and MCP
+available. Requested-but-not-applied limits stay visible for every resource, so an
+operator still sees what the policy wanted. A declared observation is published as
+`operator_requested_observation` instead, because a choice must never read as a
+defect.
+
+**What this does not do.** It does not enforce where the kernel cannot, does not
+change the containment decision on a host whose workloads systemd owns, and does
+not promote a host to enforcement without a restart. A host that later gains the
+capability begins enforcing only when it is restarted.
+
+**Downgrading instead.** Returning to a release before 1.35.1 also restores
+startup on an affected host, but the metrics database is not downgraded: move
+`/var/lib/resman/metrics.db` aside first, because the current schema is unreadable
+by those releases and history is lost either way.
 
 ## NEW: weighted block-I/O policy, disabled by default
 

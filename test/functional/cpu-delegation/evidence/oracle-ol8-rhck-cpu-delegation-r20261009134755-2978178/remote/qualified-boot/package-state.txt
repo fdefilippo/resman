@@ -1,0 +1,4 @@
+resman-1.38.0-10.el8.x86_64
+Result=success
+ActiveState=inactive
+UnitFileState=disabled

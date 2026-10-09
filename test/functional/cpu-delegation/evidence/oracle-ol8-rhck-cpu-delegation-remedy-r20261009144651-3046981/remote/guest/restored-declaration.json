@@ -1,0 +1,7 @@
+{
+  "effective": [
+    "ENFORCEMENT_MODE=systemd_native"
+  ],
+  "replaced_existing_line": true,
+  "requested": "systemd_native"
+}
