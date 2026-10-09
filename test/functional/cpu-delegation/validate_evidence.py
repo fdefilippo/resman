@@ -208,8 +208,14 @@ def optional_record(root, name):
     return json.loads(path.read_text())
 
 
-def verify_declared_mode(run, mode, reason):
-    """Classify one start made under an explicit operator declaration."""
+def verify_declared_mode(run, mode, reason, names_capability):
+    """Classify one start made under an explicit operator declaration.
+
+    Both observing declarations must activate. They differ in what they are
+    allowed to publish: a host declared observation-only probes nothing and so
+    can name no missing capability, while auto must name the one it could not
+    obtain, because an unexplained downgrade would be a silent one.
+    """
     require(run["declaration"]["effective"] == ["ENFORCEMENT_MODE=" + mode],
             "the declaration was not the one measured: " + str(run["declaration"]["effective"]))
     state = run["state"]
@@ -218,14 +224,21 @@ def verify_declared_mode(run, mode, reason):
     require(shown(state, "Result") == "success", "the declared mode activated with a failed result")
     require(shown(state, "ExecMainStatus") == "0",
             "the declared mode activated with a non-zero main status")
-    require(not run["capability_errors"],
-            "a declared observing mode published a capability error as a failure")
     published = [line for line in run["enforcement_mode"] if reason in line]
     require(published, "the published state does not carry the reason " + reason)
     require(any("observation_only" in line for line in published),
             "the published state does not name observation_only")
     require(not run["probe_slices"]["cgroups"],
             "a declared observing mode left a capability probe slice behind")
+    if not names_capability:
+        require(not run["capability_errors"],
+                "a host declared observation-only probed a capability anyway")
+        return "OBSERVING"
+    detail = [line for line in published
+              if "feature=" in line and "controller=" in line and "interface=" in line]
+    require(detail, "the auto declaration did not name the capability it could not obtain")
+    require(CPU_INTERFACE in "\n".join(detail),
+            "the named capability is not the missing cpu interface")
     return "OBSERVING"
 
 
@@ -240,8 +253,9 @@ def verify_remedy(root):
             "only one of the two observing declarations was measured")
     outcomes = {
         "declared_observation": verify_declared_mode(
-            observation, "observation_only", OPERATOR_OBSERVATION),
-        "declared_auto": verify_declared_mode(auto, "auto", CAPABILITY_OBSERVATION),
+            observation, "observation_only", OPERATOR_OBSERVATION, names_capability=False),
+        "declared_auto": verify_declared_mode(
+            auto, "auto", CAPABILITY_OBSERVATION, names_capability=True),
     }
     require(not observation["probe_slices"]["units"]["output"],
             "a host declared observation-only created a capability probe unit")

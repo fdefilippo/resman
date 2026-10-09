@@ -46,9 +46,14 @@ FIXTURE_TASK = {"tid": 4242, "policy": "FF", "priority": "50",
                 "cgroup": "0::/system.slice/" + FIXTURE_UNIT + ".service"}
 
 
-def declared_run(mode, reason):
+def declared_run(mode, reason, capability=False):
     """One start made under an explicit operator declaration."""
     published = ("level=INFO event=startup enforcement_mode=observation_only reason=" + reason)
+    errors = []
+    if capability:
+        published += (" feature=CPU limiting controller=cpu interface=cpu.max"
+                      " property=CPUQuotaPerSecUSec error=required_capability_unavailable")
+        errors = [published]
     return {
         "label": "declared-" + mode,
         "declaration": {"requested": mode, "replaced_existing_line": True,
@@ -57,7 +62,7 @@ def declared_run(mode, reason):
         "state": shown("ActiveState=active", "SubState=running", "Result=success",
                        "ExecMainStatus=0", "ExecMainCode=0", "NRestarts=0"),
         "log": [published],
-        "capability_errors": [],
+        "capability_errors": errors,
         "enforcement_mode": [published],
         "user_slice_cpu_max": None,
         "subtree_control": list(INITIAL_SUBTREE),
@@ -127,7 +132,8 @@ def archive_records():
         },
         "declared-observation": declared_run("observation_only",
                                             "operator_requested_observation"),
-        "declared-auto": declared_run("auto", "mandatory_capability_unavailable"),
+        "declared-auto": declared_run("auto", "mandatory_capability_unavailable",
+                                      capability=True),
         "restored-declaration": {"requested": "systemd_native",
                                  "replaced_existing_line": True,
                                  "effective": ["ENFORCEMENT_MODE=systemd_native"]},
@@ -528,7 +534,7 @@ class ConsumerTests(unittest.TestCase):
     def test_declared_observation_must_not_borrow_the_capability_reason(self):
         def mutation(records):
             records["declared-observation"] = declared_run(
-                "observation_only", "mandatory_capability_unavailable")
+                "observation_only", "mandatory_capability_unavailable", capability=True)
         self.reject(mutation, "operator_requested_observation")
 
     def test_a_declaration_measured_under_another_mode_is_refused(self):
@@ -549,11 +555,25 @@ class ConsumerTests(unittest.TestCase):
                 "user-resmancapprobe0.slice loaded active active")
         self.reject(mutation, "created a capability probe unit")
 
-    def test_a_capability_error_during_a_declared_mode_is_refused(self):
+    def test_a_probe_under_declared_observation_is_refused(self):
         def mutation(records):
-            records["declared-auto"]["capability_errors"] = [
+            records["declared-observation"]["capability_errors"] = [
                 "reason=required_capability_unavailable detail=\"cpu.max is unavailable\""]
-        self.reject(mutation, "published a capability error as a failure")
+        self.reject(mutation, "probed a capability anyway")
+
+    def test_auto_must_name_the_capability_it_could_not_obtain(self):
+        # An unexplained downgrade would be a silent one.
+        def mutation(records):
+            records["declared-auto"] = declared_run(
+                "auto", "mandatory_capability_unavailable", capability=False)
+        self.reject(mutation, "did not name the capability")
+
+    def test_auto_must_name_the_cpu_interface_it_lost(self):
+        def mutation(records):
+            run = declared_run("auto", "mandatory_capability_unavailable", capability=True)
+            run["enforcement_mode"] = [run["enforcement_mode"][0].replace("cpu.max", "io.max")]
+            records["declared-auto"] = run
+        self.reject(mutation, "not the missing cpu interface")
 
     def test_a_measurement_that_does_not_restore_the_default_is_refused(self):
         def mutation(records):
