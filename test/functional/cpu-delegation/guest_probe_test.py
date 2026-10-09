@@ -15,36 +15,67 @@ probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
 
 
-PS_OUTPUT = """\
-    1 TS       0 0::/init.scope
-  900 TS       0 0::/system.slice/sshd.service
-10244 FF      97 0::/system.slice/vcs.service
-10255 FF      97 0::/system.slice/vcs.service
-   17 FF      99 0::/
-  120 RR      50 0::/system.slice/other.service
-"""
+def status(policy, priority, name="migration/0"):
+    """One synthetic /proc/<tid>/stat body with the numbered fields in place."""
+    tail = ["0"] * 39
+    tail[0] = "S"
+    tail[37] = str(priority)
+    tail[38] = str(policy)
+    return "4242 (" + name + ") " + " ".join(tail) + "\n"
 
 
 class RealtimeInventoryTests(unittest.TestCase):
-    def test_only_realtime_threads_are_selected(self):
-        tasks = probe.parse_realtime_tasks(PS_OUTPUT)
-        self.assertEqual([task["tid"] for task in tasks["all"]], [10244, 10255, 17, 120])
+    def test_policy_and_priority_are_read_from_the_numbered_fields(self):
+        self.assertEqual(probe.parse_task_policy(status(1, 97)), (1, 97))
 
-    def test_kernel_threads_in_the_root_are_not_counted_as_outside(self):
-        tasks = probe.parse_realtime_tasks(PS_OUTPUT)
-        self.assertEqual([task["tid"] for task in tasks["outside_root"]],
-                         [10244, 10255, 120])
+    def test_a_parenthesis_in_the_thread_name_does_not_shift_the_fields(self):
+        self.assertEqual(probe.parse_task_policy(status(2, 50, "odd) name")), (2, 50))
 
-    def test_round_robin_is_realtime(self):
-        tasks = probe.parse_realtime_tasks("  120 RR      50 0::/system.slice/other.service\n")
-        self.assertEqual(tasks["outside_root"][0]["policy"], "RR")
+    def test_a_truncated_status_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            probe.parse_task_policy("4242 (short) S 0 0 0\n")
 
-    def test_headers_and_short_lines_are_ignored(self):
-        tasks = probe.parse_realtime_tasks("  TID CLS RTPRIO CGROUP\n4242 FF\n")
-        self.assertEqual(tasks["all"], [])
+    def test_only_realtime_policies_are_selected(self):
+        inventory = probe.realtime_inventory([
+            (1, status(0, 0), "0::/init.scope"),
+            (2, status(1, 97), "0::/system.slice/vcs.service"),
+            (3, status(2, 50), "0::/system.slice/other.service"),
+            (4, status(5, 0), "0::/system.slice/idle.service"),
+        ])
+        self.assertEqual([task["tid"] for task in inventory["all"]], [2, 3])
+        self.assertEqual([task["policy"] for task in inventory["all"]], ["FF", "RR"])
 
-    def test_empty_inventory_is_empty(self):
-        self.assertEqual(probe.parse_realtime_tasks(""), {"all": [], "outside_root": []})
+    def test_a_kernel_thread_in_the_root_is_not_outside_it(self):
+        inventory = probe.realtime_inventory([(18, status(1, 99), "0::/\n")])
+        self.assertEqual(len(inventory["all"]), 1)
+        self.assertEqual(inventory["outside_root"], [])
+
+    def test_an_unreadable_cgroup_is_not_counted_as_outside_the_root(self):
+        inventory = probe.realtime_inventory([(18, status(1, 99), "")])
+        self.assertEqual(inventory["outside_root"], [])
+
+    def test_a_service_thread_is_outside_the_root(self):
+        inventory = probe.realtime_inventory([
+            (10244, status(1, 97), "0::/system.slice/vcs.service\n")])
+        self.assertEqual(inventory["outside_root"][0]["cgroup"],
+                         "0::/system.slice/vcs.service")
+        self.assertEqual(inventory["outside_root"][0]["priority"], "97")
+
+    def test_threads_are_reported_in_a_stable_order(self):
+        inventory = probe.realtime_inventory([
+            (99, status(1, 10), "0::/a.service"), (11, status(1, 10), "0::/b.service")])
+        self.assertEqual([task["tid"] for task in inventory["all"]], [11, 99])
+
+    def test_an_empty_inventory_is_empty(self):
+        self.assertEqual(probe.realtime_inventory([]), {"all": [], "outside_root": []})
+
+    def test_the_live_inventory_separates_the_root_consistently(self):
+        inventory = probe.realtime_tasks()
+        self.assertEqual(
+            [task for task in inventory["outside_root"]
+             if task["cgroup"] in probe.ROOT_CGROUPS], [])
+        self.assertTrue(set(task["tid"] for task in inventory["outside_root"])
+                        <= set(task["tid"] for task in inventory["all"]))
 
 
 class ConfiguredLogTests(unittest.TestCase):

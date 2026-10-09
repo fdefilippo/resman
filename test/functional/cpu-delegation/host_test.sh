@@ -37,6 +37,21 @@ grep -q 'expect_started=True' "$script_dir/validate_evidence.py"
 grep -q 'expect_started=False' "$script_dir/validate_evidence.py"
 grep -q 'without any realtime task outside the root' "$script_dir/validate_evidence.py"
 
+# The realtime inventory must come from the kernel, not from a ps column: ps
+# renders a kernel thread's cgroup as a dash, which once made every realtime
+# kernel thread look like a task outside the root cgroup.
+grep -q 'parse_task_policy' "$script_dir/guest_probe.py"
+grep -q 'ROOT_CGROUPS' "$script_dir/guest_probe.py"
+grep -q 'read_threads' "$script_dir/guest_probe.py"
+grep -q 'Path("/proc").glob' "$script_dir/guest_probe.py"
+if grep -q 'ps -eLo' "$script_dir/guest_probe.py"; then
+	echo "the realtime inventory must not depend on the ps cgroup column" >&2
+	exit 1
+fi
+
+# A blocked precondition must retain the evidence that justified the block.
+grep -q 'save(evidence, "preconditions"' "$script_dir/guest_probe.py"
+
 # The guest records measurements; the verdict belongs to the validator alone.
 if grep -qE '"(REPRODUCED|NOT_REPRODUCED)"' "$script_dir/guest_probe.py"; then
 	echo "the guest probe must not publish a campaign verdict" >&2

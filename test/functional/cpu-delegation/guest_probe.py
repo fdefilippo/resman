@@ -24,7 +24,9 @@ SYSTEM_CONTROL = "/run/systemd/system.control"
 LEASES = "/var/lib/resman/systemd-property-leases.json"
 DEFAULT_LOG = "/var/log/resman.log"
 CONFIG = "/etc/resman/resman.conf"
-REALTIME_CLASSES = frozenset({"FF", "RR"})
+# The kernel names the policies by number; only these two are realtime.
+REALTIME_POLICIES = {1: "FF", 2: "RR"}
+ROOT_CGROUPS = frozenset({"0::/", ""})
 CAPABILITY_MARKER = "required_capability_unavailable"
 
 
@@ -77,25 +79,53 @@ def write_subtree_control(value):
             "message": None, "subtree_control": text(ROOT_SUBTREE_CONTROL, "").split()}
 
 
-def parse_realtime_tasks(output):
-    """Select the realtime threads from one ps inventory."""
+def parse_task_policy(status):
+    """Read the scheduling policy and realtime priority of one thread.
+
+    The thread name is parenthesised and may itself contain spaces, so the
+    numbered fields are counted from the last closing parenthesis. Field 40 is
+    the realtime priority and field 41 the policy, and the first field after
+    that parenthesis is field 3.
+    """
+    tail = status.rpartition(")")[2].split()
+    require(len(tail) >= 39, "malformed thread status")
+    return int(tail[38]), int(tail[37])
+
+
+def realtime_inventory(threads):
+    """Select the realtime threads from (tid, status, cgroup) triples.
+
+    A kernel thread reports the root cgroup, which is where realtime bandwidth
+    may always live; only a realtime thread outside the root can block cpu
+    delegation, so the two sets are kept apart.
+    """
     tasks = []
-    for line in output.splitlines():
-        words = line.split()
-        if len(words) < 4 or not words[0].isdigit() or words[1] not in REALTIME_CLASSES:
+    for tid, status, cgroup in threads:
+        policy, priority = parse_task_policy(status)
+        name = REALTIME_POLICIES.get(policy)
+        if name is None:
             continue
-        tasks.append({"tid": int(words[0]), "policy": words[1],
-                      "priority": words[2], "cgroup": words[3]})
-    return {"all": tasks, "outside_root": [task for task in tasks if task["cgroup"] != "0::/"]}
+        tasks.append({"tid": tid, "policy": name, "priority": str(priority),
+                      "cgroup": cgroup.strip()})
+    tasks.sort(key=lambda task: task["tid"])
+    return {"all": tasks,
+            "outside_root": [task for task in tasks
+                             if task["cgroup"] not in ROOT_CGROUPS]}
+
+
+def read_threads():
+    """Yield every thread the kernel currently publishes."""
+    for task in Path("/proc").glob("[0-9]*/task/[0-9]*"):
+        try:
+            yield (int(task.name), (task / "stat").read_text(),
+                   (task / "cgroup").read_text())
+        except (OSError, ValueError):
+            continue
 
 
 def realtime_tasks():
     """Inventory realtime threads and the cgroup each one lives in."""
-    process = subprocess.run(["ps", "-eLo", "tid,cls,rtprio,cgroup", "--no-headers"],
-                             universal_newlines=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT)
-    require(process.returncode == 0, "ps could not inventory realtime threads")
-    return parse_realtime_tasks(process.stdout)
+    return realtime_inventory(read_threads())
 
 
 def delegation_attempt(label):
@@ -243,12 +273,18 @@ def measure(options, evidence):
     initial_subtree = text(ROOT_SUBTREE_CONTROL, "").split()
     platform = platform_record()
     save(evidence, "platform", platform)
+    preconditions = {"realtime": realtime_tasks(),
+                     "subtree_control": initial_subtree,
+                     "controllers": platform["controllers"]}
+    save(evidence, "preconditions", preconditions)
     require(platform["cgroup_filesystem"]["output"] == ["cgroup2fs"],
             "the guest does not use the unified cgroup v2 filesystem")
     require("cpu" in platform["controllers"],
             "the guest root cgroup does not even publish the cpu controller")
-    if realtime_tasks()["outside_root"]:
-        raise Blocked("the guest already has realtime tasks outside the root cgroup")
+    if preconditions["realtime"]["outside_root"]:
+        raise Blocked("the guest already has realtime tasks outside the root cgroup: "
+                      + ",".join(str(task["tid"]) + "@" + task["cgroup"]
+                                 for task in preconditions["realtime"]["outside_root"]))
 
     save(evidence, "baseline-delegation", delegation_attempt("baseline"))
     fixture = establish_realtime_fixture(options.unit, options.priority, options.seconds)
