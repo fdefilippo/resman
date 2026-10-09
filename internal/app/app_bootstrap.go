@@ -288,9 +288,14 @@ func (a *App) initializeSystemdEnforcement(status cgroup.EnforcementStatus) (*sy
 		if err != nil {
 			return nil, status, err
 		}
-		status = cgroup.EnforcementStatus{
-			Mode:   cgroup.EnforcementModeObservationOnly,
-			Reason: cgroup.EnforcementReasonOperatorObservationOnly,
+		// A host that could not have enforced anyway keeps its own, more
+		// specific reason: the declaration is then redundant, and the published
+		// reason must name the most precise truth available.
+		if status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
+			status = cgroup.EnforcementStatus{
+				Mode:   cgroup.EnforcementModeObservationOnly,
+				Reason: cgroup.EnforcementReasonOperatorObservationOnly,
+			}
 		}
 		a.logger.Info("Enforcement declared observation-only by configuration",
 			"enforcement_mode", status.Mode,

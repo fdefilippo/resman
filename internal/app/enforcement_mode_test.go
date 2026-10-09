@@ -149,6 +149,31 @@ func TestOnlyTheAutoDeclarationMayGiveUpEnforcement(t *testing.T) {
 	}
 }
 
+func TestADeclarationNeverOverwritesAMoreSpecificHostReason(t *testing.T) {
+	// On a host that could not have enforced anyway, the operator declaration
+	// is redundant; the published reason must stay the most precise one.
+	branch := declaredObservationBranch(t, enforcementInitialization(t))
+	guarded := false
+	ast.Inspect(branch, func(node ast.Node) bool {
+		statement, ok := node.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		binary, ok := statement.Cond.(*ast.BinaryExpr)
+		if !ok || !strings.Contains(exprText(binary.Y), "EnforcementReasonSystemdOwnsHostWorkloads") {
+			return true
+		}
+		if strings.Contains(exprSource(t, &ast.FuncDecl{Body: statement.Body}),
+			"EnforcementReasonOperatorObservationOnly") {
+			guarded = true
+		}
+		return false
+	})
+	if !guarded {
+		t.Fatal("the declared reason is published without checking what the host could do")
+	}
+}
+
 func TestADefinitiveRefusalIsPublishedWithItsOwnReason(t *testing.T) {
 	function := enforcementInitialization(t)
 	body := exprSource(t, function)
