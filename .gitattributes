@@ -2,3 +2,4 @@
 test/functional/io-device-weight/evidence/** -text whitespace=-trailing-space
 test/functional/io-device-weight/attribution-evidence/** -text whitespace=-trailing-space
 test/functional/io-device-weight-effect/evidence/** -text whitespace=-trailing-space
+test/functional/cpu-delegation/evidence/** -text whitespace=-trailing-space

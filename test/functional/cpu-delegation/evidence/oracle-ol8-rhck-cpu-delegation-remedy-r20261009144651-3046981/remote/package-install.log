@@ -1,0 +1,41 @@
+Last metadata expiration check: 0:02:22 ago on Fri 09 Oct 2026 02:49:59 PM UTC.
+Dependencies resolved.
+================================================================================
+ Package        Architecture   Version               Repository            Size
+================================================================================
+Installing:
+ resman         x86_64         1.39.0-1.el8          @commandline         5.6 M
+
+Transaction Summary
+================================================================================
+Install  1 Package
+
+Total size: 5.6 M
+Installed size: 17 M
+Downloading Packages:
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Running scriptlet: resman-1.39.0-1.el8.x86_64                             1/1 
+Preparing for Resource Manager installation...
+
+  Installing       : resman-1.39.0-1.el8.x86_64                             1/1 
+  Running scriptlet: resman-1.39.0-1.el8.x86_64                             1/1 
+Resource Manager installed successfully!
+
+Configuration file: /etc/resman/resman.conf
+Log file: /var/log/resman.log
+Service: systemctl start resman
+Documentation: man resman
+
+Please review /etc/resman/resman.conf before starting the service.
+
+  Verifying        : resman-1.39.0-1.el8.x86_64                             1/1 
+
+Installed:
+  resman-1.39.0-1.el8.x86_64                                                    
+
+Complete!

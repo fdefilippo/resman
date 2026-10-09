@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.39.0 to ResMan 1.39.1
+# Upgrading from ResMan 1.25.x through 1.39.1 to ResMan 1.39.2
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.39.0 to
-ResMan 1.39.1. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.39.1 to
+ResMan 1.39.2. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration

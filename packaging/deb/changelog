@@ -1,3 +1,9 @@
+resman (1.39.2-1) stable; urgency=medium
+
+  * Retain cpu-delegation evidence logs so a fresh checkout verifies its manifests.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 09 Oct 2026 18:15:00 +0200
+
 resman (1.39.1-1) stable; urgency=medium
 
   * Pin a golangci-lint that reads Go 1.27 export data so the release gate can run.
