@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.39.0
+Version: 1.39.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.38.0 to 1.39.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.39.0 to 1.39.1.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -311,6 +311,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Oct 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.39.1-1
+- Pin a golangci-lint that reads Go 1.27 export data so the release gate can run
+
 * Thu Oct 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.39.0-1
 - Add ENFORCEMENT_MODE so a host without cpu delegation can observe truthfully
 

@@ -67,7 +67,11 @@ func TestQualityWorkflowPinsVerifiedShellCheck(t *testing.T) {
 		assertContains(t, qualityWorkflow, required)
 	}
 	assertNotContains(t, qualityWorkflow, "apt-get install --yes prometheus shellcheck")
-	assertContains(t, makefile, "GOLANGCI_LINT_VERSION = v2.13.2")
+	// v2.13.2 was built with go1.27.0 and cannot read the export data that
+	// Go 1.27 emits, so it reported typecheck failures on untouched files and
+	// the release gate could not run at all. v2.14.0 reads it and reports no
+	// issue on this tree.
+	assertContains(t, makefile, "GOLANGCI_LINT_VERSION = v2.14.0")
 	assertContains(t, makeTarget(t, makefile, "lint-install"),
 		"github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)")
 }

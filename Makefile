@@ -8,14 +8,14 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.39.0
+VERSION = 1.39.1
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Paths
 GO = go
 GOLANGCI_LINT = golangci-lint
-GOLANGCI_LINT_VERSION = v2.13.2
+GOLANGCI_LINT_VERSION = v2.14.0
 GOVULNCHECK ?= $(shell command -v govulncheck 2>/dev/null || { if [ -x "$$HOME/go/bin/govulncheck" ]; then printf '%s\n' "$$HOME/go/bin/govulncheck"; fi; })
 GOVULNCHECK_VERSION = v1.8.0
 GORELEASER = goreleaser
