@@ -1,0 +1,11 @@
+build_kind=el8-rootful-podman
+source_revision=afa60976ff0b0963a8f5987817ec7791f0f0b5a5
+source_tree=8c52373fe1bb453a0e9064f0a1b35c9577042c29
+builder_image=quay.io/rockylinux/rockylinux:8.10
+builder_image_digest=sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+go_version=go1.27.2
+package_identity=resman-1.38.0-10.el8.x86_64
+package_sha256=d099a05264bdc5eed8211efe2211c432f47dc13633d9dd84412f9d6223b3b57d
+rpmbuild_status=PASS
+max_glibc=2.28
+build_workspace=/home/francesco/tmp/el8-build

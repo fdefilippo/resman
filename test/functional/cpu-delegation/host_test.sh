@@ -77,4 +77,17 @@ if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote
 	exit 1
 fi
 
+# The retained archive must stay intact and keep the verdict it was reviewed
+# with. Recomputing the typed outcomes needs the package as well, and the
+# README records that command; this gate covers integrity and provenance.
+archive=$(find "$script_dir/evidence" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)
+[[ -n $archive ]] || { echo "no retained cpu-delegation archive" >&2; exit 1; }
+(cd "$archive" && sha256sum --quiet --check SHA256SUMS)
+(cd "$archive/remote" && sha256sum --quiet --check SHA256SUMS)
+grep -qx PASS "$archive/result"
+grep -q '"verdict": "REPRODUCED"' "$archive/verdict.json"
+grep -q '"rt_group_sched": "CONFIG_RT_GROUP_SCHED=y"' "$archive/verdict.json"
+grep -q '"package_identity": "resman-1.38.0-10.el8.x86_64"' "$archive/verdict.json"
+grep -q 'kernel-core-' "$archive/remote/qualified-boot/running-kernel-package.txt"
+
 printf 'PASS: EL8 cpu delegation reproduction harness contract\n'

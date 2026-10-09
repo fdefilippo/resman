@@ -87,6 +87,25 @@ Set `CPUDEL_EXPECTED_VERDICT=NOT_REPRODUCED` to retain a falsifying run, or
 `any` to validate an archive without asserting a verdict. The default is
 `REPRODUCED`, so an unexpected outcome fails the run instead of passing quietly.
 
+## Retained evidence
+
+`evidence/oracle-ol8-rhck-cpu-delegation-r20261009134755-2978178/` holds the
+reviewed archive of the first successful reproduction: Oracle Linux 8.10 on
+`4.18.0-553.171.1.el8_10.x86_64` with `CONFIG_RT_GROUP_SCHED=y`, systemd
+239-82.el8_10.1, and `resman-1.38.0-10.el8.x86_64`. Its computed verdict is
+`REPRODUCED`.
+
+The harness gate checks that the archive stays intact and keeps that verdict.
+Recomputing every typed outcome also needs the package itself, which is not
+tracked:
+
+```bash
+python3 test/functional/cpu-delegation/validate_evidence.py \
+    test/functional/cpu-delegation/evidence/oracle-ol8-rhck-cpu-delegation-r20261009134755-2978178/remote \
+    <revision> build/packages/resman-1.38.0-10.el8.x86_64.rpm \
+    build/packages/resman-1.38.0-10.el8.x86_64.manifest
+```
+
 ## Provenance of the package under test
 
 The production nodes installed `resman-1.38.0-10.el8` on 16 September 2026. No

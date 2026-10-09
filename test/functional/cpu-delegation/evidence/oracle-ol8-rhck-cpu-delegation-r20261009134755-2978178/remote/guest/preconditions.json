@@ -1,0 +1,134 @@
+{
+  "controllers": [
+    "cpuset",
+    "cpu",
+    "io",
+    "memory",
+    "hugetlb",
+    "pids",
+    "rdma"
+  ],
+  "realtime": {
+    "all": [
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 15
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 16
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 19
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 20
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 43
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 128
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 129
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 130
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 131
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 132
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 133
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 134
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 135
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 136
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 137
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 138
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 139
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 140
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 141
+      }
+    ],
+    "outside_root": []
+  },
+  "subtree_control": [
+    "memory",
+    "pids"
+  ]
+}

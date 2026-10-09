@@ -1,0 +1,183 @@
+{
+  "cgroup": "0::/system.slice/resman-cpudel-fixture.service",
+  "main_pid": 1488,
+  "policy": {
+    "command": [
+      "chrt",
+      "-p",
+      "1488"
+    ],
+    "output": [
+      "pid 1488's current scheduling policy: SCHED_FIFO",
+      "pid 1488's current scheduling priority: 50"
+    ],
+    "status": 0
+  },
+  "realtime": {
+    "all": [
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 15
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 16
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 19
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 20
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "99",
+        "tid": 43
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 128
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 129
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 130
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 131
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 132
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 133
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 134
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 135
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 136
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 137
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 138
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 139
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 140
+      },
+      {
+        "cgroup": "0::/",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 141
+      },
+      {
+        "cgroup": "0::/system.slice/resman-cpudel-fixture.service",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 1488
+      }
+    ],
+    "outside_root": [
+      {
+        "cgroup": "0::/system.slice/resman-cpudel-fixture.service",
+        "policy": "FF",
+        "priority": "50",
+        "tid": 1488
+      }
+    ]
+  },
+  "requested_priority": 50,
+  "start": {
+    "command": [
+      "systemd-run",
+      "--unit=resman-cpudel-fixture",
+      "--slice=system.slice",
+      "--description=resman cpu delegation fixture",
+      "/usr/bin/chrt",
+      "-f",
+      "50",
+      "/bin/sleep",
+      "900"
+    ],
+    "output": [
+      "Running as unit: resman-cpudel-fixture.service"
+    ],
+    "status": 0
+  },
+  "state": {
+    "command": [
+      "systemctl",
+      "show",
+      "resman-cpudel-fixture",
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState"
+    ],
+    "output": [
+      "ActiveState=active",
+      "SubState=running"
+    ],
+    "status": 0
+  },
+  "unit": "resman-cpudel-fixture"
+}
