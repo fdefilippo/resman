@@ -20,10 +20,16 @@ jobs:
     env:
       CGO_ENABLED: "1"
       FUZZTIME: 2m
-      GOCACHE: ${{ runner.temp }}/resman-go-build
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      # The runner context does not exist yet in a job-level env, where it made
+      # the whole workflow file invalid and every push produced a failed run.
+      # The runner's own environment variable is available inside a step.
+      - name: Select a build cache outside the workspace
+        shell: bash
+        run: echo "GOCACHE=$RUNNER_TEMP/resman-go-build" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v6

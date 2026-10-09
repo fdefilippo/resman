@@ -95,9 +95,14 @@ func TestFuzzWorkflowGeneratesInputsAndPreservesFailureEvidence(t *testing.T) {
 		"fuzz.log",
 		"**/testdata/fuzz/**",
 		"resman-go-build/fuzz/**",
+		`echo "GOCACHE=$RUNNER_TEMP/resman-go-build" >> "$GITHUB_ENV"`,
 	} {
 		assertContains(t, fuzzWorkflow, required)
 	}
+	// The runner context does not exist in a job-level env. Using it there made
+	// the whole workflow file invalid, so GitHub refused to start it and every push
+	// produced a failed run with no job at all.
+	assertNotContains(t, fuzzWorkflow, "GOCACHE: ${{ runner.temp }}")
 	assertNotContains(t, ciWorkflow, "make fuzz")
 	assertNotContains(t, qualityWorkflow, "make fuzz")
 }
