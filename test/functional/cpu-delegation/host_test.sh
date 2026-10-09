@@ -69,7 +69,17 @@ grep -q 'package input changed after the recorded build' "$script_dir/remote-qem
 grep -q 'manifest_package_sha.*sha256sum' "$script_dir/remote-qemu.sh"
 grep -q 'validate_evidence.py' "$script_dir/remote-qemu.sh"
 grep -q 'tar --no-same-owner' "$script_dir/remote-qemu.sh"
-grep -q 'resman-1.38.0-10.el8.x86_64' "$script_dir/qemu-host.sh"
+grep -q 'resman-1.39.0-1.el8.x86_64' "$script_dir/qemu-host.sh"
+
+# The remedy must be measured against the very condition that broke the host:
+# all three declarations, on one guest, with one realtime task.
+grep -q 'declared-observation' "$script_dir/guest_probe.py"
+grep -q 'declared-auto' "$script_dir/guest_probe.py"
+grep -q 'restored-declaration' "$script_dir/guest_probe.py"
+grep -q 'operator_requested_observation' "$script_dir/validate_evidence.py"
+grep -q 'mandatory_capability_unavailable' "$script_dir/validate_evidence.py"
+grep -q 'created a capability probe unit' "$script_dir/validate_evidence.py"
+grep -q -- '--expect-remedy' "$script_dir/remote-qemu.sh"
 
 # The guest must be a distinct kernel, never a container sharing this one.
 if grep -Eq '\b(podman|docker)\b' "$script_dir/qemu-host.sh" "$script_dir/remote-qemu.sh"; then

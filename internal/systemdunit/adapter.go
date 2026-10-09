@@ -99,6 +99,21 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirem
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
+	adapter, err := newSystemAdapter(ctx, cgroupRoot, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.requireStartupCapabilities(ctx, requirements); err != nil {
+		adapter.Close()
+		return nil, err
+	}
+	return adapter, nil
+}
+
+// newSystemAdapter opens the system bus and recovers durable leases without
+// deciding whether the host can enforce. Capability requirements are a separate
+// step so that a caller may react to a refusal instead of only failing.
+func newSystemAdapter(ctx context.Context, cgroupRoot string, timeout time.Duration) (*Adapter, error) {
 	transport, err := openDBusTransport(ctx)
 	if err != nil {
 		return nil, classifyTransportError("connect", "", err)
@@ -106,10 +121,6 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirem
 	adapter, err := newAdapter(ctx, transport, newCgroupVerifier(cgroupRoot), localUnitFileInspector{}, newFileLeaseJournalStoreForOwner(DefaultLeaseJournalPath, 0), timeout)
 	if err != nil {
 		transport.close()
-		return nil, err
-	}
-	if err := adapter.requireStartupCapabilities(ctx, requirements); err != nil {
-		adapter.Close()
 		return nil, err
 	}
 	return adapter, nil

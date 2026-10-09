@@ -46,6 +46,25 @@ FIXTURE_TASK = {"tid": 4242, "policy": "FF", "priority": "50",
                 "cgroup": "0::/system.slice/" + FIXTURE_UNIT + ".service"}
 
 
+def declared_run(mode, reason):
+    """One start made under an explicit operator declaration."""
+    published = ("level=INFO event=startup enforcement_mode=observation_only reason=" + reason)
+    return {
+        "label": "declared-" + mode,
+        "declaration": {"requested": mode, "replaced_existing_line": True,
+                        "effective": ["ENFORCEMENT_MODE=" + mode]},
+        "start": {"command": ["systemctl", "start", "resman"], "status": 0, "output": []},
+        "state": shown("ActiveState=active", "SubState=running", "Result=success",
+                       "ExecMainStatus=0", "ExecMainCode=0", "NRestarts=0"),
+        "log": [published],
+        "capability_errors": [],
+        "enforcement_mode": [published],
+        "user_slice_cpu_max": None,
+        "subtree_control": list(INITIAL_SUBTREE),
+        "probe_slices": {"units": shown(), "cgroups": []},
+    }
+
+
 def archive_records():
     capability = ("level=ERROR event=startup_failed reason=required_capability_unavailable "
                   "detail=\"cpu.max is unavailable for user-resmancapprobe0.slice\"")
@@ -106,6 +125,12 @@ def archive_records():
                 "probe_slices": {"units": shown(), "cgroups": []},
             },
         },
+        "declared-observation": declared_run("observation_only",
+                                            "operator_requested_observation"),
+        "declared-auto": declared_run("auto", "mandatory_capability_unavailable"),
+        "restored-declaration": {"requested": "systemd_native",
+                                 "replaced_existing_line": True,
+                                 "effective": ["ENFORCEMENT_MODE=systemd_native"]},
         "residue": {
             "daemon": shown("ActiveState=inactive", "SubState=dead", "Result=success"),
             "fixture": shown("ActiveState=inactive", "SubState=dead"),
@@ -175,15 +200,21 @@ class ConsumerTests(unittest.TestCase):
             for item in sorted(root.rglob("*"))
             if item.is_file() and item.name != "SHA256SUMS"))
 
-    def validate(self, records=None, expect="REPRODUCED", **keywords):
+    def validate(self, records=None, expect="REPRODUCED", expect_remedy="REMEDIED", **keywords):
         with tempfile.TemporaryDirectory() as directory:
             root, package, manifest = self.build(directory, records, **keywords)
-            return validator.validate(root, QUALIFICATION, package, manifest, expect)
+            return validator.validate(root, QUALIFICATION, package, manifest, expect,
+                                      expect_remedy)
 
-    def test_complete_archive_is_reproduced(self):
+    def test_complete_archive_is_reproduced_and_remedied(self):
         summary = self.validate()
         self.assertEqual(summary["verdict"], "REPRODUCED")
+        self.assertEqual(summary["remedy"], "REMEDIED")
+        self.assertEqual(summary["outcomes"]["declared_observation"], "OBSERVING")
+        self.assertEqual(summary["outcomes"]["declared_auto"], "OBSERVING")
         self.assertEqual(summary["outcomes"], {
+            "declared_observation": "OBSERVING",
+            "declared_auto": "OBSERVING",
             "delegation_baseline": "DELEGABLE",
             "realtime_fixture": "ESTABLISHED",
             "delegation_under_realtime": "NOT_DELEGABLE",
@@ -479,6 +510,69 @@ class ConsumerTests(unittest.TestCase):
             with self.assertRaises(AssertionError) as caught:
                 validator.validate(root, QUALIFICATION, package, manifest, "REPRODUCED")
         self.assertIn("not an EL8 package", str(caught.exception))
+
+    # The declarations that rescue an affected host are recomputed too.
+    def test_a_refused_declared_start_is_not_a_remedy(self):
+        def mutation(records):
+            records["declared-auto"]["state"] = shown(
+                "ActiveState=failed", "SubState=failed", "Result=exit-code",
+                "ExecMainStatus=78")
+        self.reject(mutation, "did not activate")
+
+    def test_a_declaration_without_a_published_reason_is_refused(self):
+        def mutation(records):
+            records["declared-auto"]["enforcement_mode"] = [
+                "level=INFO event=startup enforcement_mode=observation_only"]
+        self.reject(mutation, "mandatory_capability_unavailable")
+
+    def test_declared_observation_must_not_borrow_the_capability_reason(self):
+        def mutation(records):
+            records["declared-observation"] = declared_run(
+                "observation_only", "mandatory_capability_unavailable")
+        self.reject(mutation, "operator_requested_observation")
+
+    def test_a_declaration_measured_under_another_mode_is_refused(self):
+        def mutation(records):
+            records["declared-auto"]["declaration"]["effective"] = [
+                "ENFORCEMENT_MODE=systemd_native"]
+        self.reject(mutation, "not the one measured")
+
+    def test_a_probe_slice_left_by_a_declared_mode_is_refused(self):
+        def mutation(records):
+            records["declared-observation"]["probe_slices"]["cgroups"] = [
+                "/sys/fs/cgroup/user-resmancapprobe0.slice"]
+        self.reject(mutation, "capability probe slice behind")
+
+    def test_a_probe_unit_created_under_declared_observation_is_refused(self):
+        def mutation(records):
+            records["declared-observation"]["probe_slices"]["units"] = shown(
+                "user-resmancapprobe0.slice loaded active active")
+        self.reject(mutation, "created a capability probe unit")
+
+    def test_a_capability_error_during_a_declared_mode_is_refused(self):
+        def mutation(records):
+            records["declared-auto"]["capability_errors"] = [
+                "reason=required_capability_unavailable detail=\"cpu.max is unavailable\""]
+        self.reject(mutation, "published a capability error as a failure")
+
+    def test_a_measurement_that_does_not_restore_the_default_is_refused(self):
+        def mutation(records):
+            records["restored-declaration"]["effective"] = ["ENFORCEMENT_MODE=auto"]
+        self.reject(mutation, "did not restore the default declaration")
+
+    def test_half_a_remedy_is_refused(self):
+        def mutation(records):
+            del records["declared-auto"]
+        self.reject(mutation, "only one of the two observing declarations")
+
+    def test_an_archive_without_the_remedy_is_only_accepted_explicitly(self):
+        records = archive_records()
+        for name in ("declared-observation", "declared-auto", "restored-declaration"):
+            del records[name]
+        with self.assertRaises(AssertionError):
+            self.validate(copy.deepcopy(records))
+        summary = self.validate(records, expect="REPRODUCED", expect_remedy="NOT_MEASURED")
+        self.assertEqual(summary["remedy"], "NOT_MEASURED")
 
     def test_absent_guest_record_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

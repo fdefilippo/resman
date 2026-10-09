@@ -201,6 +201,32 @@ def start_daemon(label):
             "probe_slices": probe_slices()}
 
 
+def set_enforcement_mode(value):
+    """Declare one enforcement boundary in the installed configuration."""
+    path = Path(CONFIG)
+    require(path.is_file(), "the installed configuration is absent")
+    lines = path.read_text().splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        if line.startswith("ENFORCEMENT_MODE="):
+            lines[index] = "ENFORCEMENT_MODE=" + value
+            replaced = True
+    if not replaced:
+        lines.append("ENFORCEMENT_MODE=" + value)
+    path.write_text("\n".join(lines) + "\n")
+    return {"requested": value, "replaced_existing_line": replaced,
+            "effective": [line for line in path.read_text().splitlines()
+                          if line.startswith("ENFORCEMENT_MODE=")]}
+
+
+def declared_mode_record(label, value):
+    """Declare one mode, start the installed service once and record it all."""
+    declaration = set_enforcement_mode(value)
+    record = start_daemon(label)
+    record["declaration"] = declaration
+    return record
+
+
 def platform_record():
     release = os.uname().release
     config = text("/boot/config-" + release, "")
@@ -291,6 +317,17 @@ def measure(options, evidence):
     save(evidence, "realtime-fixture", fixture)
     save(evidence, "delegation-under-realtime", delegation_attempt("under-realtime"))
     save(evidence, "daemon-under-realtime", start_daemon("under-realtime"))
+
+    # The same host, the same realtime task, the two declarations that let an
+    # operator keep observation instead of losing the daemon entirely.
+    for label, value in (("declared-observation", "observation_only"),
+                         ("declared-auto", "auto")):
+        run("systemctl", "stop", "resman")
+        run("systemctl", "reset-failed", "resman")
+        save(evidence, label, declared_mode_record(label, value))
+    run("systemctl", "stop", "resman")
+    run("systemctl", "reset-failed", "resman")
+    save(evidence, "restored-declaration", set_enforcement_mode("systemd_native"))
 
     run("systemctl", "stop", "resman")
     run("systemctl", "reset-failed", "resman")

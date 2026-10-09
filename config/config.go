@@ -57,6 +57,9 @@ type Config struct {
 	// Regex cache for pre-compiled patterns (performance optimization)
 	regexCache sync.Map // map[string]*regexp.Regexp
 
+	// Enforcement boundary declared by the operator
+	EnforcementMode string `config:"ENFORCEMENT_MODE"`
+
 	// Paths
 	CgroupRoot string `config:"CGROUP_ROOT"`
 	ConfigFile string `config:"-"` // Runtime path selected by the --config flag
@@ -245,11 +248,15 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		saveGate:   &operationgate.Gate{},
-		saveState:  &configPersistenceState{},
-		CgroupRoot: "/sys/fs/cgroup",
-		ConfigFile: DefaultConfigPath,
-		LogFile:    "/var/log/resman.log",
+		saveGate:  &operationgate.Gate{},
+		saveState: &configPersistenceState{},
+		// The default preserves the behaviour of every installed host: a
+		// mandatory capability the host cannot provide remains a refusal to
+		// start, never a silent downgrade.
+		EnforcementMode: string(EnforcementPolicySystemdNative),
+		CgroupRoot:      "/sys/fs/cgroup",
+		ConfigFile:      DefaultConfigPath,
+		LogFile:         "/var/log/resman.log",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -626,6 +633,7 @@ type configFieldHandler func(*Config, string) error
 
 var configFieldHandlers = map[string]configFieldHandler{
 	"CGROUP_ROOT":       setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
+	"ENFORCEMENT_MODE":  setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.EnforcementMode = value }),
 	"LOG_FILE":          setString(func(cfg *Config, value string) { cfg.LogFile = value }),
 	"POLLING_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
 	"MIN_ACTIVE_TIME":   setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
@@ -976,6 +984,13 @@ func validateConfig(cfg *Config) error {
 	// Validate threshold duration
 	if cfg.CPUThresholdDuration < 0 {
 		errors = append(errors, "CPU_THRESHOLD_DURATION cannot be negative")
+	}
+
+	// Validate the declared enforcement boundary
+	if cfg.EnforcementMode != "" {
+		if _, err := ParseEnforcementPolicy(cfg.EnforcementMode); err != nil {
+			errors = append(errors, err.Error())
+		}
 	}
 
 	// Validate metrics database configuration

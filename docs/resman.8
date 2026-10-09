@@ -1,4 +1,4 @@
-.TH RESMAN 8 "September 2026" "v1.38.0" "System Administration"
+.TH RESMAN 8 "October 2026" "v1.39.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -444,10 +444,30 @@ mode without a fallback. This includes non-systemd hosts. Observation-only mode
 and typed resource refusals are not enforcement. ResMan never creates its own
 enforcement hierarchy, records process origins, or writes process membership.
 .PP
+.B ENFORCEMENT_MODE
+declares what this host does when the kernel cannot provide a mandatory
+enforcement capability, such as a cgroup v2 cpu controller that cannot be
+delegated. The default
+.B systemd_native
+refuses to start and names the feature, controller and interface, so enforcement
+is never silently lost.
+.B observation_only
+declares that this host never enforces: no capability probe runs, no transient
+unit is created and no limit is ever applied, while properties owned by an
+earlier enforcing run are released first.
+.B auto
+enforces when it can and observes when the kernel structurally refuses, with the
+bounded reason mandatory_capability_unavailable and the missing capability named;
+an unavailable bus, a timeout or a probe that could not run still refuses to
+start, so a transient fault never removes enforcement. The key is
+restart-required and the mode never changes while the daemon runs.
+.PP
 Inspect
 .B resman_enforcement_mode
 or the MCP system and limits status before assuming that enforcement is available.
-There is no configuration override for the systemd containment decision.
+There is no configuration override for the systemd containment decision itself:
+ENFORCEMENT_MODE can only decline enforcement or accept observation, never create
+enforcement on a host where systemd owns the workloads.
 .PP
 Cycle status separates the requested policy intent from an action acknowledged by
 the enforcement adapter. In observation_only mode, activation or deactivation is
@@ -712,9 +732,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.37.0 to 1.38.0
+.B Upgrade from 1.25.x through 1.38.0 to 1.39.0
 .PP
-ResMan 1.38.0 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.39.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

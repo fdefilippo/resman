@@ -212,32 +212,17 @@ func (a *App) WithStateManager() *App {
 		return a.failCPUPointsStartup("initialize CPU Points live capacity", err, false)
 	}
 	status := a.cgroupMgr.EnforcementStatus()
+	systemdAdapter, status, fatal := a.initializeSystemdEnforcement(status)
+	if fatal != nil {
+		a.err = fatal
+		return a
+	}
 	options := []state.ManagerOption{
 		state.WithCPUPointsRuntime(policy, capacity),
 		state.WithEnforcementStatus(status),
 	}
-	var systemdAdapter *systemdunit.Adapter
-	if status.Mode == cgroup.EnforcementModeObservationOnly && status.Reason == cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
-		systemdAdapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
-		if err != nil {
-			if startupErr := classifySystemdAdapterStartupError(err); startupErr != nil {
-				a.logger.Error("Failed to initialize systemd-native enforcement", "error", err)
-				fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement: %v\n", err)
-				a.err = startupErr
-				return a
-			}
-			a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
-				"reason", status.Reason,
-				"error", err,
-			)
-		} else {
-			logSystemdLeaseRecovery(a.logger, systemdAdapter.RecoveryReport())
-			options = append(options, state.WithSystemdCPUEnforcement(systemdAdapter))
-			a.logger.Info("Systemd-native CPU enforcement selected",
-				"enforcement_mode", cgroup.EnforcementModeSystemdNative,
-				"reason", cgroup.EnforcementReasonSystemdNativeAdapter,
-			)
-		}
+	if systemdAdapter != nil {
+		options = append(options, state.WithSystemdCPUEnforcement(systemdAdapter))
 	}
 	rootWeight, err := ioweights.NewWeight(uint64(a.cfg.GetIORootWeight()))
 	if err != nil {
@@ -289,6 +274,107 @@ func (a *App) failWeightedIOStartup(operation string, err error) *App {
 	fmt.Fprintf(os.Stderr, "\nWeighted-I/O policy startup rejected: %s: %v\n", operation, err)
 	a.err = NewPermanentStartupError(fmt.Errorf("%s: %w", operation, err))
 	return a
+}
+
+// initializeSystemdEnforcement resolves the enforcement boundary of this host
+// from the operator declaration and from what the kernel can actually provide.
+// It returns the authoritative adapter when enforcement is selected, the status
+// to publish, and a permanent startup error when neither enforcing nor
+// observing can be done truthfully.
+func (a *App) initializeSystemdEnforcement(status cgroup.EnforcementStatus) (*systemdunit.Adapter, cgroup.EnforcementStatus, error) {
+	declared := a.cfg.GetEnforcementMode()
+	if declared == config.EnforcementPolicyObservationOnly {
+		observed, err := a.releaseBeforeDeclaredObservation()
+		if err != nil {
+			return nil, status, err
+		}
+		status = cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnly,
+			Reason: cgroup.EnforcementReasonOperatorObservationOnly,
+		}
+		a.logger.Info("Enforcement declared observation-only by configuration",
+			"enforcement_mode", status.Mode,
+			"reason", status.Reason,
+			"released_units", observed.Units,
+			"released_properties", observed.Properties,
+		)
+		return nil, status, nil
+	}
+	if status.Mode != cgroup.EnforcementModeObservationOnly || status.Reason != cgroup.EnforcementReasonSystemdOwnsHostWorkloads {
+		return nil, status, nil
+	}
+
+	var adapter *systemdunit.Adapter
+	var refusal *systemdunit.CapabilityRefusal
+	var err error
+	if declared == config.EnforcementPolicyAuto {
+		adapter, refusal, err = systemdunit.NewOrObserve(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
+	} else {
+		adapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
+	}
+	switch {
+	case err != nil:
+		if startupErr := classifySystemdAdapterStartupError(err); startupErr != nil {
+			a.logger.Error("Failed to initialize systemd-native enforcement", "error", err)
+			fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement: %v\n", err)
+			return nil, status, startupErr
+		}
+		a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
+			"reason", status.Reason,
+			"error", err,
+		)
+		return nil, status, nil
+	case refusal != nil:
+		// The host structurally cannot enforce and the operator asked to
+		// observe instead. Publish why, never silently.
+		status = cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnly,
+			Reason: cgroup.EnforcementReasonMandatoryCapabilityUnavailable,
+		}
+		a.logger.Warn("Mandatory enforcement capability unavailable; observing instead",
+			"enforcement_mode", status.Mode,
+			"reason", status.Reason,
+			"feature", refusal.Capability.Feature,
+			"controller", refusal.Capability.Controller,
+			"interface", refusal.Capability.InterfaceName,
+			"property", refusal.Capability.Property,
+			"released_units", refusal.Released.Units,
+			"released_properties", refusal.Released.Properties,
+			"error", refusal.Err,
+		)
+		return nil, status, nil
+	default:
+		logSystemdLeaseRecovery(a.logger, adapter.RecoveryReport())
+		a.logger.Info("Systemd-native CPU enforcement selected",
+			"enforcement_mode", cgroup.EnforcementModeSystemdNative,
+			"reason", cgroup.EnforcementReasonSystemdNativeAdapter,
+		)
+		return adapter, status, nil
+	}
+}
+
+// releaseBeforeDeclaredObservation gives up ownership of properties applied by
+// an earlier enforcing run. A host that never enforced needs no system bus for
+// this, and a lease that cannot be released safely is a permanent startup
+// error: applied limits with no owner are worse than a daemon that refuses to
+// start.
+func (a *App) releaseBeforeDeclaredObservation() (systemdunit.ReleaseReport, error) {
+	present, err := systemdunit.DurableLeasesPresent()
+	if err != nil {
+		a.logger.Error("Failed to inspect systemd property lease ownership", "error", err)
+		fmt.Fprintf(os.Stderr, "\nFailed to inspect systemd property lease ownership: %v\n", err)
+		return systemdunit.ReleaseReport{}, NewPermanentStartupError(fmt.Errorf("inspect systemd property lease ownership: %w", err))
+	}
+	if !present {
+		return systemdunit.ReleaseReport{}, nil
+	}
+	report, err := systemdunit.ReleaseForObservation(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout)
+	if err != nil {
+		a.logger.Error("Failed to release enforced properties before observation", "error", err)
+		fmt.Fprintf(os.Stderr, "\nFailed to release enforced properties before observation: %v\n", err)
+		return report, NewPermanentStartupError(fmt.Errorf("release enforced properties before observation: %w", err))
+	}
+	return report, nil
 }
 
 func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequirements {

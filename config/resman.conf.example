@@ -7,6 +7,24 @@
 # comma-free alternatives, for example ^(?:svc[0-9]{2}|svc[0-9]{3}|svc[0-9]{4})$.
 
 # ========================
+# ENFORCEMENT BOUNDARY
+# ========================
+# Declares how this host behaves when the kernel cannot provide a mandatory
+# enforcement capability, such as a cgroup v2 cpu controller that cannot be
+# delegated. Requires restart.
+#   systemd_native   enforce; refuse to start when a mandatory capability is
+#                    unavailable, so enforcement is never silently lost
+#   observation_only never enforce on this host; no capability probe runs and
+#                    no property is ever written
+#   auto             enforce when possible, observe when the kernel refuses a
+#                    mandatory capability; a transient bus or timeout failure
+#                    still refuses to start
+# A host with realtime tasks outside the root cgroup on a kernel built with
+# realtime group scheduling cannot delegate the cpu controller: observation_only
+# or auto keeps metrics, Prometheus and MCP available there.
+ENFORCEMENT_MODE=systemd_native
+
+# ========================
 # PATHS
 # ========================
 CGROUP_ROOT=/sys/fs/cgroup

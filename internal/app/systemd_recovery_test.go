@@ -15,24 +15,26 @@ type recoveryCaptureLogger struct {
 	fields   []interface{}
 }
 
-func TestWithStateManagerLogsRecoveredSystemdLeasesAtBootstrap(t *testing.T) {
+// The bootstrap resolves the enforcement boundary in a dedicated function, so
+// the recovery report is logged there rather than inside WithStateManager.
+func TestEnforcementInitializationLogsRecoveredSystemdLeasesAtBootstrap(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "app_bootstrap.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse app_bootstrap.go: %v", err)
 	}
-	var withStateManager *ast.FuncDecl
+	var initializeEnforcement *ast.FuncDecl
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Name.Name == "WithStateManager" {
-			withStateManager = function
+		if ok && function.Name.Name == "initializeSystemdEnforcement" {
+			initializeEnforcement = function
 			break
 		}
 	}
-	if withStateManager == nil {
-		t.Fatal("WithStateManager declaration not found")
+	if initializeEnforcement == nil {
+		t.Fatal("initializeSystemdEnforcement declaration not found")
 	}
 	found := false
-	ast.Inspect(withStateManager.Body, func(node ast.Node) bool {
+	ast.Inspect(initializeEnforcement.Body, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -45,14 +47,14 @@ func TestWithStateManagerLogsRecoveredSystemdLeasesAtBootstrap(t *testing.T) {
 			return true
 		}
 		report, ok := call.Args[1].(*ast.CallExpr)
-		if !ok || len(report.Args) != 0 || !isSelector(report.Fun, "systemdAdapter", "RecoveryReport") {
+		if !ok || len(report.Args) != 0 || !isSelector(report.Fun, "adapter", "RecoveryReport") {
 			return true
 		}
 		found = true
 		return false
 	})
 	if !found {
-		t.Fatal("WithStateManager does not log systemdAdapter.RecoveryReport() at bootstrap")
+		t.Fatal("initializeSystemdEnforcement does not log adapter.RecoveryReport() at bootstrap")
 	}
 }
 

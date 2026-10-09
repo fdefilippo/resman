@@ -20,6 +20,9 @@ CAPABILITY_MARKER = "required_capability_unavailable"
 CPU_INTERFACE = "cpu.max"
 CONFIGURATION_STATUS = 78
 VERDICTS = frozenset({"REPRODUCED", "NOT_REPRODUCED"})
+REMEDIES = frozenset({"REMEDIED", "NOT_REMEDIED", "NOT_MEASURED"})
+OPERATOR_OBSERVATION = "operator_requested_observation"
+CAPABILITY_OBSERVATION = "mandatory_capability_unavailable"
 
 
 def require(condition, message):
@@ -198,6 +201,57 @@ def verify_daemon(run, expect_started):
     return "REFUSED_CONFIGURATION"
 
 
+def optional_record(root, name):
+    path = root / "guest" / (name + ".json")
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
+
+
+def verify_declared_mode(run, mode, reason):
+    """Classify one start made under an explicit operator declaration."""
+    require(run["declaration"]["effective"] == ["ENFORCEMENT_MODE=" + mode],
+            "the declaration was not the one measured: " + str(run["declaration"]["effective"]))
+    state = run["state"]
+    active = shown(state, "ActiveState")
+    require(active == "active", "the declared mode did not activate: " + str(active))
+    require(shown(state, "Result") == "success", "the declared mode activated with a failed result")
+    require(shown(state, "ExecMainStatus") == "0",
+            "the declared mode activated with a non-zero main status")
+    require(not run["capability_errors"],
+            "a declared observing mode published a capability error as a failure")
+    published = [line for line in run["enforcement_mode"] if reason in line]
+    require(published, "the published state does not carry the reason " + reason)
+    require(any("observation_only" in line for line in published),
+            "the published state does not name observation_only")
+    require(not run["probe_slices"]["cgroups"],
+            "a declared observing mode left a capability probe slice behind")
+    return "OBSERVING"
+
+
+def verify_remedy(root):
+    """Recompute whether the two observing declarations rescued this host."""
+    observation = optional_record(root, "declared-observation")
+    auto = optional_record(root, "declared-auto")
+    restored = optional_record(root, "restored-declaration")
+    if observation is None and auto is None:
+        return "NOT_MEASURED", {}
+    require(observation is not None and auto is not None,
+            "only one of the two observing declarations was measured")
+    outcomes = {
+        "declared_observation": verify_declared_mode(
+            observation, "observation_only", OPERATOR_OBSERVATION),
+        "declared_auto": verify_declared_mode(auto, "auto", CAPABILITY_OBSERVATION),
+    }
+    require(not observation["probe_slices"]["units"]["output"],
+            "a host declared observation-only created a capability probe unit")
+    require(restored is not None
+            and restored["effective"] == ["ENFORCEMENT_MODE=systemd_native"],
+            "the measurement did not restore the default declaration")
+    remedied = set(outcomes.values()) == {"OBSERVING"}
+    return "REMEDIED" if remedied else "NOT_REMEDIED", outcomes
+
+
 def verify_control(root):
     control = record(root, "control-without-realtime")
     require(not control["realtime_after_removal"]["outside_root"],
@@ -225,7 +279,8 @@ def verify_residue(root):
             "a realtime task was left outside the root cgroup")
 
 
-def validate(root, qualification_revision, package, build_manifest, expect):
+def validate(root, qualification_revision, package, build_manifest, expect,
+             expect_remedy="REMEDIED"):
     root = Path(root)
     verify_manifest(root)
     environment = verify_provenance(root, qualification_revision, package, build_manifest)
@@ -259,7 +314,13 @@ def validate(root, qualification_revision, package, build_manifest, expect):
     require(expect in VERDICTS | {"any"}, "unsupported expected verdict: " + expect)
     require(expect == "any" or verdict == expect,
             "computed verdict " + verdict + " differs from the expected " + expect)
-    return {"verdict": verdict, "outcomes": outcomes, "kernel": kernel,
+    remedy, remedy_outcomes = verify_remedy(root)
+    require(expect_remedy in REMEDIES | {"any"},
+            "unsupported expected remedy: " + expect_remedy)
+    require(expect_remedy == "any" or remedy == expect_remedy,
+            "computed remedy " + remedy + " differs from the expected " + expect_remedy)
+    outcomes.update(remedy_outcomes)
+    return {"verdict": verdict, "remedy": remedy, "outcomes": outcomes, "kernel": kernel,
             "package_identity": environment["package_identity"],
             "rt_group_sched": platform["rt_group_sched"]}
 
@@ -271,9 +332,11 @@ def main(argv):
     parser.add_argument("package")
     parser.add_argument("build_manifest")
     parser.add_argument("--expect", default="REPRODUCED")
+    parser.add_argument("--expect-remedy", default="REMEDIED")
     options = parser.parse_args(argv)
     summary = validate(options.evidence, options.qualification_revision,
-                       options.package, options.build_manifest, options.expect)
+                       options.package, options.build_manifest, options.expect,
+                       options.expect_remedy)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

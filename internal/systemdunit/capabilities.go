@@ -300,10 +300,61 @@ func (a *Adapter) ownsUnitName(unit string) bool {
 	return false
 }
 
+// MissingCapability names one mandatory enforcement capability the host does
+// not provide. It is the bounded detail published beside the
+// mandatory_capability_unavailable enforcement reason, so an operator learns
+// which feature, controller and kernel interface is missing without parsing a
+// message.
+type MissingCapability struct {
+	Feature       string
+	Controller    string
+	InterfaceName string
+	Property      PropertyName
+}
+
+// Complete reports whether every bounded field names a value. An incomplete
+// capability must never be published as if it were a diagnosis.
+func (c MissingCapability) Complete() bool {
+	return c.Feature != "" && c.Controller != "" && c.InterfaceName != "" && c.Property != ""
+}
+
+// RequiredCapabilityError carries the typed identity of a mandatory capability
+// the host cannot provide at all, as distinct from a probe that could not run.
+type RequiredCapabilityError struct {
+	Capability MissingCapability
+	Err        error
+}
+
+func (e *RequiredCapabilityError) Error() string {
+	return fmt.Sprintf("enabled feature %s requires controller %q interface %q: %v",
+		e.Capability.Feature, e.Capability.Controller, e.Capability.InterfaceName, e.Err)
+}
+
+// Unwrap exposes the kernel or verification error behind the refusal.
+func (e *RequiredCapabilityError) Unwrap() error { return e.Err }
+
+// MissingCapabilityFromError extracts the typed capability identity from a
+// definitive refusal. It reports false for any other failure, including a probe
+// that could not run, so a transient fault can never be published as a
+// structural absence.
+func MissingCapabilityFromError(err error) (MissingCapability, bool) {
+	var refusal *RequiredCapabilityError
+	if !errors.As(err, &refusal) || !refusal.Capability.Complete() {
+		return MissingCapability{}, false
+	}
+	return refusal.Capability, true
+}
+
 func requiredCapabilityError(feature, controller, interfaceName string, property PropertyName, err error) error {
 	return &AdapterError{
 		Reason: ReasonRequiredCapability, Operation: "startup_capabilities", Property: property,
-		Err: fmt.Errorf("enabled feature %s requires controller %q interface %q: %w", feature, controller, interfaceName, err),
+		Err: &RequiredCapabilityError{
+			Capability: MissingCapability{
+				Feature: feature, Controller: controller,
+				InterfaceName: interfaceName, Property: property,
+			},
+			Err: err,
+		},
 	}
 }
 

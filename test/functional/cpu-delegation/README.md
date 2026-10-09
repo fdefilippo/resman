@@ -38,6 +38,9 @@ written by the guest that produced the data.
 | `realtime-fixture` | one owned SCHED_FIFO task placed in `system.slice/<unit>.service` |
 | `delegation-under-realtime` | `+cpu` at the root with that task in place, with its exact errno |
 | `daemon-under-realtime` | one start of the installed package: state, exit status, typed error |
+| `declared-observation` | the same host under `ENFORCEMENT_MODE=observation_only` |
+| `declared-auto` | the same host under `ENFORCEMENT_MODE=auto` |
+| `restored-declaration` | the default declaration put back before the control step |
 | `control-without-realtime` | the fixture removed: delegation and a second start of the same package |
 | `residue` | service, fixture, delegation set, leases, drop-ins and probe slices after the run |
 
@@ -45,6 +48,15 @@ The control step is what makes this an experiment rather than a confirmation:
 if removing the realtime task did not restore both the delegation and a clean
 activation, the field hypothesis would be wrong, and the validator would compute
 `NOT_REPRODUCED` instead.
+
+The two declared modes are measured against the very condition that broke the
+field hosts, with the realtime task still in place. The validator computes a
+second verdict for them: `REMEDIED` only when both declarations activate the
+service with `Result=success`, publish `observation_only` with their own reason —
+`operator_requested_observation` for the declaration, `mandatory_capability_unavailable`
+for `auto` — report no capability error as a failure, and leave no capability
+probe slice behind, with the declaration under observation creating no probe unit
+at all. The default declaration is restored before the control step.
 
 The validator returns `REPRODUCED` only when all of the following hold: the
 baseline is `DELEGABLE`, the fixture is `ESTABLISHED`, delegation under the
@@ -84,8 +96,10 @@ ancestor of `HEAD` with no package input changed since; only files under
 computed verdict in `verdict.json`.
 
 Set `CPUDEL_EXPECTED_VERDICT=NOT_REPRODUCED` to retain a falsifying run, or
-`any` to validate an archive without asserting a verdict. The default is
-`REPRODUCED`, so an unexpected outcome fails the run instead of passing quietly.
+`any` to validate an archive without asserting a verdict. `CPUDEL_EXPECTED_REMEDY`
+does the same for the remedy and accepts `NOT_MEASURED` for a package that
+predates `ENFORCEMENT_MODE`. Both default to the expected outcome, so a surprise
+fails the run instead of passing quietly.
 
 ## Retained evidence
 
@@ -102,9 +116,14 @@ tracked:
 ```bash
 python3 test/functional/cpu-delegation/validate_evidence.py \
     test/functional/cpu-delegation/evidence/oracle-ol8-rhck-cpu-delegation-r20261009134755-2978178/remote \
-    <revision> build/packages/resman-1.38.0-10.el8.x86_64.rpm \
-    build/packages/resman-1.38.0-10.el8.x86_64.manifest
+    "$(awk -F= '$1 == "qualification_revision" {print $2}' <archive>/remote/environment.txt)" \
+    build/packages/resman-1.38.0-10.el8.x86_64.rpm \
+    build/packages/resman-1.38.0-10.el8.x86_64.manifest --expect-remedy NOT_MEASURED
 ```
+
+That first archive was produced by `resman-1.38.0-10.el8`, which predates
+`ENFORCEMENT_MODE`, so its remedy is `NOT_MEASURED` by construction: it records
+the defect, not its correction.
 
 ## Provenance of the package under test
 

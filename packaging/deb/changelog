@@ -1,3 +1,9 @@
+resman (1.39.0-1) stable; urgency=medium
+
+  * Add ENFORCEMENT_MODE so a host without cpu delegation can observe truthfully.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 09 Oct 2026 16:00:00 +0200
+
 resman (1.38.0-10) stable; urgency=medium
 
   * Migrate development schema 9 atomically before publishing BFQ qualification.

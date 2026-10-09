@@ -6,6 +6,7 @@ remote_host=${1:?usage: remote-qemu.sh ROOT_AT_QEMU_HOST RPM BUILD_MANIFEST}
 package=${2:?usage: remote-qemu.sh ROOT_AT_QEMU_HOST RPM BUILD_MANIFEST}
 build_manifest=${3:?usage: remote-qemu.sh ROOT_AT_QEMU_HOST RPM BUILD_MANIFEST}
 expected_verdict=${CPUDEL_EXPECTED_VERDICT:-REPRODUCED}
+expected_remedy=${CPUDEL_EXPECTED_REMEDY:-REMEDIED}
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 evidence_root=${CPUDEL_EVIDENCE_ROOT:-$repo_root/build/functional/cpu-delegation}
@@ -20,6 +21,10 @@ case "$remote_host" in root@*[A-Za-z0-9.-]) ;; *) echo "a root SSH target is req
 case "$expected_verdict" in
 	REPRODUCED | NOT_REPRODUCED | any) ;;
 	*) echo "unsupported expected verdict: $expected_verdict" >&2; exit 2 ;;
+esac
+case "$expected_remedy" in
+	REMEDIED | NOT_REMEDIED | NOT_MEASURED | any) ;;
+	*) echo "unsupported expected remedy: $expected_remedy" >&2; exit 2 ;;
 esac
 [[ -f $package && ! -L $package ]] || { echo "a regular EL8 RPM is required" >&2; exit 2; }
 [[ -f $build_manifest && ! -L $build_manifest ]] \
@@ -74,7 +79,8 @@ cleanup() {
 	if [[ $status -eq 0 ]]; then
 		if PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_evidence.py" \
 			"$evidence_dir/remote" "$qualification_revision" "$package" "$build_manifest" \
-			--expect "$expected_verdict" >"$evidence_dir/verdict.json" \
+			--expect "$expected_verdict" --expect-remedy "$expected_remedy" \
+			>"$evidence_dir/verdict.json" \
 			2>>"$evidence_dir/collect.log"; then
 			final_result=PASS
 		else
@@ -111,8 +117,8 @@ install -m 0644 "$script_dir/guest_probe.py" "$scratch_dir/bundle/guest_probe.py
 		"$run_id" "$qualification_revision" "$remote_host"
 	printf 'package_source_revision=%s\npackage_source_tree=%s\n' \
 		"$manifest_revision" "$manifest_tree"
-	printf 'package_sha256=%s\nexpected_verdict=%s\n' \
-		"$(sha256sum "$package" | awk '{print $1}')" "$expected_verdict"
+	printf 'package_sha256=%s\nexpected_verdict=%s\nexpected_remedy=%s\n' \
+		"$(sha256sum "$package" | awk '{print $1}')" "$expected_verdict" "$expected_remedy"
 } >"$evidence_dir/request.txt"
 
 tar -C "$scratch_dir/bundle" -cf - . \
