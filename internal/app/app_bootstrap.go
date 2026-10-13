@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -312,23 +314,28 @@ func (a *App) initializeSystemdEnforcement(status cgroup.EnforcementStatus) (*sy
 	var adapter *systemdunit.Adapter
 	var refusal *systemdunit.CapabilityRefusal
 	var err error
+	constructors := a.systemdAdapterConstructors()
 	if declared == config.EnforcementPolicyAuto {
-		adapter, refusal, err = systemdunit.NewOrObserve(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
+		adapter, refusal, err = constructors.NewOrObserve(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
 	} else {
-		adapter, err = systemdunit.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
+		adapter, err = constructors.New(a.ctx, a.cfg.CgroupRoot, systemdunit.DefaultCallTimeout, systemdStartupRequirements(a.cfg))
 	}
 	switch {
 	case err != nil:
-		if startupErr := classifySystemdAdapterStartupError(err); startupErr != nil {
-			a.logger.Error("Failed to initialize systemd-native enforcement", "error", err)
-			fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement: %v\n", err)
-			return nil, status, startupErr
-		}
-		a.logger.Warn("Systemd-native CPU enforcement unavailable; remaining observation-only",
-			"reason", status.Reason,
+		// An operator who declared enforcement is never left observing because
+		// the adapter could not be opened: that state would publish a reason
+		// naming the opposite of the truth for the whole process lifetime.
+		startupErr := classifySystemdAdapterStartupError(err)
+		retryable := !IsPermanentStartupError(startupErr)
+		a.logger.Error("Failed to initialize systemd-native enforcement",
+			"declared_enforcement_mode", declared,
+			"failure_class", systemdAdapterFailureClass(err),
+			"retryable", retryable,
 			"error", err,
 		)
-		return nil, status, nil
+		fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement (%s, retryable=%t): %v\n",
+			systemdAdapterFailureClass(err), retryable, err)
+		return nil, status, startupErr
 	case refusal != nil:
 		// The host structurally cannot enforce and the operator asked to
 		// observe instead. Publish why, never silently.
@@ -386,11 +393,51 @@ func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequireme
 	return systemdunit.StartupRequirements{Memory: cfg.RAMEnabled, IO: cfg.IOEnabled}
 }
 
+// classifySystemdAdapterStartupError turns every adapter construction failure
+// into a startup error. A missing mandatory capability or a probe that could
+// not run needs operator action and is permanent (status 78). Any other
+// failure - the connection to systemd, a timeout, authorization, the lease
+// journal - can clear without a configuration change, so the service manager
+// retries it; once its start limit is reached the unit stays visibly failed.
 func classifySystemdAdapterStartupError(err error) error {
-	if !systemdunit.IsRequiredCapabilityError(err) && !systemdunit.IsCapabilityProbeError(err) {
-		return nil
+	wrapped := fmt.Errorf("initialize systemd-native enforcement: %w", err)
+	if systemdunit.IsRequiredCapabilityError(err) || systemdunit.IsCapabilityProbeError(err) {
+		return NewPermanentStartupError(wrapped)
 	}
-	return NewPermanentStartupError(fmt.Errorf("initialize systemd-native enforcement: %w", err))
+	return wrapped
+}
+
+// systemdAdapterFailureClass names the bounded adapter reason for diagnosis.
+func systemdAdapterFailureClass(err error) string {
+	var adapterErr *systemdunit.AdapterError
+	if errors.As(err, &adapterErr) {
+		return string(adapterErr.Reason)
+	}
+	return "unclassified"
+}
+
+// systemdAdapterConstructors opens the authoritative systemd adapter. The
+// production implementation reaches systemd; tests inject the outcome.
+type systemdAdapterConstructors interface {
+	New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements systemdunit.StartupRequirements) (*systemdunit.Adapter, error)
+	NewOrObserve(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements systemdunit.StartupRequirements) (*systemdunit.Adapter, *systemdunit.CapabilityRefusal, error)
+}
+
+type systemSystemdAdapters struct{}
+
+func (systemSystemdAdapters) New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements systemdunit.StartupRequirements) (*systemdunit.Adapter, error) {
+	return systemdunit.New(ctx, cgroupRoot, timeout, requirements)
+}
+
+func (systemSystemdAdapters) NewOrObserve(ctx context.Context, cgroupRoot string, timeout time.Duration, requirements systemdunit.StartupRequirements) (*systemdunit.Adapter, *systemdunit.CapabilityRefusal, error) {
+	return systemdunit.NewOrObserve(ctx, cgroupRoot, timeout, requirements)
+}
+
+func (a *App) systemdAdapterConstructors() systemdAdapterConstructors {
+	if a.systemdAdapters != nil {
+		return a.systemdAdapters
+	}
+	return systemSystemdAdapters{}
 }
 
 func logSystemdLeaseRecovery(logger appLogger, report []systemdunit.LeaseRecoveryOutcome) {

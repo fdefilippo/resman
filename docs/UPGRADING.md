@@ -93,6 +93,39 @@ printf 'SYSTEM_UID_MAX=%s\n' "$(cat /proc/sys/kernel/pid_max)" >> /etc/resman/re
 `SYSTEM_UID_MAX` is dynamic, so after the upgrade a later change applies on the
 next configuration reload without a restart.
 
+## FIXED: an adapter failure no longer leaves enforcement silently off
+
+**Visible change.** With `ENFORCEMENT_MODE` set to `systemd_native` (the default) or
+`auto`, a failure to open the systemd adapter at startup now stops the daemon. A
+missing mandatory capability keeps its previous outcome: status 78 under
+`systemd_native`, a published `mandatory_capability_unavailable` observation under
+`auto`. Every other failure, such as the connection to systemd, a timeout, an
+authorization refusal or an unreadable lease journal, exits with status 1. The
+packaged unit retries it after 10 seconds, at most three times per minute, and then
+leaves the unit failed. The journal names the cause with `failure_class`.
+
+**Cause.** Through 1.39.2 such a failure was logged once as a warning, and the daemon
+kept running in `observation_only` for its whole lifetime under the pre-adapter
+reason `systemd_owns_host_workloads`, which names the opposite of the truth.
+`ENFORCEMENT_MODE` is restart-required, so nothing ever retried. A host whose daemon
+started before the system bus was available could therefore run for days without
+enforcement while every cycle reported `enforcement_block_reason=none`. This also
+contradicted the documented `auto` behaviour, which already promised that an
+unavailable bus or a timeout refuses to start.
+
+**Action.** None is required. After upgrading, a host that shows
+`enforcement_mode=observation_only` with reason `systemd_owns_host_workloads` while
+`ENFORCEMENT_MODE` declares enforcement no longer exists: the daemon either enforces
+or is failed with its cause in the journal. Inspect a failed unit with:
+
+```bash
+systemctl status resman
+journalctl -u resman -b | grep 'Failed to initialize systemd-native enforcement'
+```
+
+A host that should never enforce declares `ENFORCEMENT_MODE=observation_only`, which
+never opens the adapter.
+
 ## FIXED: a host that cannot delegate the cpu controller can run again
 
 **Compatibility regression, with the default unchanged.** From version 1.35.1 the

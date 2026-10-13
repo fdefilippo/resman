@@ -26,7 +26,9 @@ func enforcementInitialization(t *testing.T) *ast.FuncDecl {
 	return nil
 }
 
-// callsInside names every package-qualified call reachable from one node.
+// callsInside names every selector call reachable from one node by its method
+// name, whatever the receiver: the adapter is opened through an injectable
+// constructor set, so a package-qualified match alone would miss it.
 func callsInside(node ast.Node) []string {
 	var calls []string
 	ast.Inspect(node, func(current ast.Node) bool {
@@ -35,9 +37,7 @@ func callsInside(node ast.Node) []string {
 			return true
 		}
 		if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
-			if receiver, ok := selector.X.(*ast.Ident); ok {
-				calls = append(calls, receiver.Name+"."+selector.Sel.Name)
-			}
+			calls = append(calls, selector.Sel.Name)
 		}
 		return true
 	})
@@ -89,8 +89,7 @@ func TestDeclaredObservationNeverOpensTheEnforcementAdapter(t *testing.T) {
 	branch := declaredObservationBranch(t, enforcementInitialization(t))
 	for _, call := range callsInside(branch) {
 		switch call {
-		case "systemdunit.New", "systemdunit.NewOrObserve", "state.WithSystemdCPUEnforcement",
-			"systemdunit.ProbeIODeviceWeights":
+		case "New", "NewOrObserve", "WithSystemdCPUEnforcement", "ProbeIODeviceWeights":
 			t.Fatalf("the declared observation-only branch calls %s", call)
 		}
 	}
@@ -133,14 +132,14 @@ func TestOnlyTheAutoDeclarationMayGiveUpEnforcement(t *testing.T) {
 			return true
 		}
 		for _, call := range callsInside(statement.Body) {
-			if call == "systemdunit.NewOrObserve" {
+			if call == "NewOrObserve" {
 				guarded++
 			}
 		}
 		return true
 	})
 	for _, call := range callsInside(function.Body) {
-		if call == "systemdunit.NewOrObserve" {
+		if call == "NewOrObserve" {
 			total++
 		}
 	}

@@ -54,6 +54,7 @@ type App struct {
 	psiEventDriven     bool
 	configReloaded     chan struct{}
 	notifyReady        func() error
+	systemdAdapters    systemdAdapterConstructors
 }
 
 func (a *App) currentConfig() *config.Config {

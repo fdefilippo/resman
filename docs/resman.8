@@ -438,9 +438,15 @@ A persistence-phase D-Bus discovery failure before process capture aborts resour
 reconciliation without restoring already-applied properties. A /proc capture failure
 remains an authority refusal and restores the affected owned RAM/I/O properties.
 .PP
-If the adapter cannot establish authority, ResMan remains in
+On a host whose workloads systemd does not own, including non-systemd hosts,
+ResMan remains in
 .B observation_only
-mode without a fallback. This includes non-systemd hosts. Observation-only mode
+mode without a fallback. On a systemd host that declared enforcement, an adapter
+that cannot be opened is a startup error, never a silent observation: a missing
+mandatory capability or a probe that could not run exits with status 78, and any
+other failure, such as the connection to systemd, a timeout or an authorization
+refusal, exits with status 1 so the service manager retries it until its start
+limit leaves the unit visibly failed. Observation-only mode
 and typed resource refusals are not enforcement. ResMan never creates its own
 enforcement hierarchy, records process origins, or writes process membership.
 .PP

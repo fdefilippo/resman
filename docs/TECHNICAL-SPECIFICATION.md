@@ -265,6 +265,16 @@ It verifies normalized properties and kernel values before acknowledging a plan.
 The fallback `observation_only` applies whenever authority is unavailable or cannot
 be verified. It never owns a cgroup hierarchy or changes process membership.
 
+Opening the adapter at startup is not such a fallback. On a host whose workloads
+systemd owns, with `ENFORCEMENT_MODE` set to `systemd_native` or `auto`, every
+construction failure stops startup. A missing mandatory capability or a probe that
+could not run is permanent (exit status 78); only `auto` turns a definitive
+capability refusal into a published `mandatory_capability_unavailable`
+observation. Any other failure (the connection to systemd, a timeout, an
+authorization refusal, the lease journal) exits with status 1, so
+`Restart=on-failure` retries it, and is logged with its bounded `failure_class`.
+No adapter failure can publish `systemd_owns_host_workloads`.
+
 **Native cgroup hierarchy:**
 ```text
 user.slice                  finite CPU pool
