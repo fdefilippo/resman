@@ -406,10 +406,14 @@ LOG_FILE=/var/log/resman.log
 SYSTEM_UID_MIN=1000
 
 # SYSTEM_UID_MAX: Maximum UID to monitor
-# Default: read automatically from /proc/sys/kernel/pid_max
-# Typically: 32768, 65536, or 4194304 on modern systems
-# Uncomment to override:
-# SYSTEM_UID_MAX=60000
+# Default: 4294967294, the largest valid UID, which means no upper bound.
+# 4294967295 is (uid_t)-1 and never owns a process.
+#
+# Directory accounts commonly have UIDs far above 60000: sssd ID mapping,
+# Active Directory and FreeIPA allocate them in the millions or more. Lower
+# this value only to deliberately hide such accounts from metrics and limits,
+# for example SYSTEM_UID_MAX=60000 for local accounts only.
+SYSTEM_UID_MAX=4294967294
 
 # ========================
 # USER INCLUDE LIST

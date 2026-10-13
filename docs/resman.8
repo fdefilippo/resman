@@ -750,10 +750,12 @@ A bind to
 .I 0.0.0.0
 is a non-default remote exposure and requires TLS, authentication, and firewall
 restrictions.
+When
 .B SYSTEM_UID_MAX
-is normally derived from
-.I /proc/sys/kernel/pid_max
-at startup, with 60000 used only if that file cannot be read. An empty
+is unset, no upper UID bound applies: every UID from
+.B SYSTEM_UID_MIN
+to 4294967294, the largest valid UID, is monitored, including directory
+accounts with very high UIDs. It is not derived from the host PID limit. An empty
 .B USER_INCLUDE_LIST
 makes nobody eligible for CPU limiting, while empty RAM and I/O include lists
 select every non-excluded user.

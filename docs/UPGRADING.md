@@ -37,6 +37,62 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## CHANGED: an unset SYSTEM_UID_MAX no longer hides high UIDs
+
+**Visible change.** When `SYSTEM_UID_MAX` is absent from the configuration and the
+environment, ResMan 1.40.0 monitors every UID from `SYSTEM_UID_MIN` to `4294967294`,
+the largest valid UID. Through 1.39.2 the default was the host's
+`/proc/sys/kernel/pid_max`, with `60000` when that file could not be read. An
+explicit `SYSTEM_UID_MAX` keeps exactly its previous meaning.
+
+**Cause.** PIDs and UIDs are unrelated identifier spaces, so the old default
+was an arbitrary, host-dependent cut: 32768 on one host, 4194304 on another.
+Directory accounts routinely sit above it, because sssd ID mapping, Active
+Directory and FreeIPA allocate UIDs in the millions. Their processes were never
+scanned. On a saturated 32-core Enterprise Linux 8 host whose heavy consumers had
+UIDs between 23 and 123 million, ResMan measured 0.55 cores of user load and
+never requested enforcement. Nothing reported that those users were invisible.
+
+**What changes on upgrade.** On a host with UIDs above the old bound, the users
+that were previously invisible now:
+
+- appear in per-user Prometheus series, the metrics database and MCP, so series
+  cardinality and database rows grow with them;
+- count towards host-load attribution, so a load that was attributed to "other
+  factors" can now be attributed to users;
+- become eligible for RAM and I/O limiting when those include lists are empty,
+  because an empty RAM or I/O include list selects every non-excluded user;
+- become eligible for CPU limiting only if `USER_INCLUDE_LIST` matches them, because
+  an empty CPU include list still selects nobody.
+
+A host whose UIDs all lie below its `pid_max` sees no difference.
+
+**Why this is not kept compatible.** Preserving the old default would preserve
+incorrect semantics: a UID bound derived from the PID space that silently hides
+real workloads. Three alternatives were rejected. A warning that keeps the bound
+would leave enforcement blind. A fixed bound such as 60000 would hide the same
+directory accounts on every host instead of on some. A new key to opt into the
+correct behaviour would add a knob whose only purpose is to keep a defect.
+
+**Action.** Before upgrading, list the UIDs currently running above the old
+bound:
+
+```bash
+ps -eo uid= | sort -un | awk -v max="$(cat /proc/sys/kernel/pid_max)" '$1 > max'
+```
+
+Empty output means nothing changes on this host at the moment of the check.
+
+To keep the previous population instead, record the current bound before
+upgrading and set it explicitly:
+
+```bash
+printf 'SYSTEM_UID_MAX=%s\n' "$(cat /proc/sys/kernel/pid_max)" >> /etc/resman/resman.conf
+```
+
+`SYSTEM_UID_MAX` is dynamic, so after the upgrade a later change applies on the
+next configuration reload without a restart.
+
 ## FIXED: a host that cannot delegate the cpu controller can run again
 
 **Compatibility regression, with the default unchanged.** From version 1.35.1 the
@@ -640,8 +696,9 @@ elsewhere.
 ### Defaults and eligibility semantics are explicit
 
 **Visible change.** The Prometheus exporter default bind is `127.0.0.1`, not
-`0.0.0.0`. `SYSTEM_UID_MAX` normally follows `/proc/sys/kernel/pid_max`, with `60000`
-only as a read-failure fallback. An empty `USER_INCLUDE_LIST` selects nobody for CPU
+`0.0.0.0`. An unset `SYSTEM_UID_MAX` applies no upper UID bound; see
+[the 1.40.0 change](#changed-an-unset-system_uid_max-no-longer-hides-high-uids).
+An empty `USER_INCLUDE_LIST` selects nobody for CPU
 limiting; empty RAM and I/O include lists select every non-excluded user. The shipped
 example now matches runtime defaults, including empty exclusion lists,
 `IGNORE_SYSTEM_LOAD=false`, and empty credential fields.

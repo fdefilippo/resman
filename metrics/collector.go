@@ -1014,9 +1014,11 @@ func (c *Collector) getLoadAverage() (float64, int, error) {
 }
 
 // isMonitoredUserUID checks if a UID falls within the monitored range.
+// (uid_t)-1 is never a process owner, so it stays outside the range even when
+// an explicit SYSTEM_UID_MAX reaches it.
 func (c *Collector) isMonitoredUserUID(uid int) bool {
 	cfg := c.getConfig()
-	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax()
+	return uid >= cfg.GetSystemUIDMin() && uid <= cfg.GetSystemUIDMax() && uid <= config.MaxValidUID
 }
 
 // getFromCache returns a cached value while its owning TTL remains valid.

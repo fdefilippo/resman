@@ -287,6 +287,7 @@ var specialFieldMeanings = map[string]string{
 	"RAM_USER_EXCLUDE_LIST":      "Empty excludes nobody from RAM eligibility.",
 	"RAM_USER_INCLUDE_LIST":      "Empty includes every non-excluded user for RAM eligibility.",
 	"SERVER_ROLE":                "Empty omits an operator-defined role value.",
+	"SYSTEM_UID_MAX":             "Unset applies no upper bound: every UID from SYSTEM_UID_MIN to 4294967294, the largest valid UID, is monitored. It does not depend on the host PID limit.",
 	"USER_EXCLUDE_LIST":          "Empty excludes nobody from CPU eligibility. Excluded native user slices remain inside the parent quota and share aggregate best effort.",
 	"USER_INCLUDE_LIST":          "Empty makes no user eligible for CPU Points enforcement; observation remains active. Use .* for every non-excluded user.",
 }
@@ -309,9 +310,6 @@ func PublicFieldContracts() []PublicFieldContract {
 			panic(fmt.Sprintf("configuration key %s has no lifecycle", key))
 		}
 		defaultValue := formatPublicDefault(valueOfConfig.Field(index))
-		if key == "SYSTEM_UID_MAX" {
-			defaultValue = "host /proc/sys/kernel/pid_max (fallback 60000)"
-		}
 		meaning := specialFieldMeanings[key]
 		if meaning == "" {
 			meaning = "—"

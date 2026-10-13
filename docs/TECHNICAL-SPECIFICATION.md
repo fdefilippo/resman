@@ -712,8 +712,10 @@ The core default contracts are:
 
 - Prometheus binds to `127.0.0.1`. Binding to `0.0.0.0` is a non-default remote
   exposure and requires TLS, authentication, and firewall restrictions.
-- `SYSTEM_UID_MAX` follows `/proc/sys/kernel/pid_max` at startup, with `60000`
-  only as the read-failure fallback. The example deliberately leaves it unset.
+- An unset `SYSTEM_UID_MAX` applies no upper UID bound: the default is
+  `4294967294`, the largest valid UID, because `4294967295` is `(uid_t)-1` and
+  never owns a process. The bound is independent of the PID space; directory
+  accounts mapped by sssd routinely have UIDs far above `pid_max`.
 - An empty `USER_INCLUDE_LIST` makes nobody eligible for CPU limiting. Empty
   RAM and I/O include lists select every non-excluded user for those resources.
 

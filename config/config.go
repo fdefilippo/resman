@@ -237,16 +237,13 @@ type IODecisionPolicy struct {
 	WriteIOPS         int
 }
 
+// MaxValidUID is the largest UID that can own a process. 4294967295 is
+// (uid_t)-1, which the kernel reserves as an invalid identity, so no process
+// can run under it. It is the upper bound applied when SYSTEM_UID_MAX is unset.
+const MaxValidUID = 4294967294
+
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
-	// Read pid_max dynamically for the SYSTEM_UID_MAX default.
-	pidMax := 60000 // Fallback value.
-	if data, err := os.ReadFile("/proc/sys/kernel/pid_max"); err == nil {
-		if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-			pidMax = val
-		}
-	}
-
 	return &Config{
 		saveGate:  &operationgate.Gate{},
 		saveState: &configPersistenceState{},
@@ -346,7 +343,7 @@ func DefaultConfig() *Config {
 		UseSyslog:  false,
 
 		SystemUIDMin:     1000,
-		SystemUIDMax:     pidMax,
+		SystemUIDMax:     MaxValidUID, // Unset means no upper bound.
 		IgnoreSystemLoad: false,
 		ServerRole:       "",  // Empty by default
 		UserIncludeList:  nil, // nil = no users eligible for CPU limits
