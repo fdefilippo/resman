@@ -25,6 +25,17 @@ func TestDetectEnforcementStatusAlwaysFailsClosedWithoutSystemdNativeAdapter(t *
 			wantReason: EnforcementReasonSystemdOwnsHostWorkloads,
 		},
 		{
+			// A container sharing the host PID namespace sees systemd as PID 1
+			// but not its runtime, so the adapter cannot reach systemd from
+			// here; this is not a host where opening the adapter may be tried.
+			name: "systemd PID 1 without a visible runtime",
+			prepare: func(t *testing.T, _, procRoot string) {
+				t.Helper()
+				writePIDOneComm(t, procRoot, "systemd")
+			},
+			wantReason: EnforcementReasonSystemdRuntimeUnreachable,
+		},
+		{
 			name: "non-systemd PID 1",
 			prepare: func(t *testing.T, _, procRoot string) {
 				t.Helper()
@@ -77,6 +88,7 @@ func TestEnforcementCycleStateUsesOnlyBoundedPublicVocabulary(t *testing.T) {
 	}{
 		{EnforcementReasonSystemdRuntimeAbsent, EnforcementBlockReasonSystemdRuntimeAbsent},
 		{EnforcementReasonSystemdOwnsHostWorkloads, EnforcementBlockReasonSystemdOwnsWorkloads},
+		{EnforcementReasonSystemdRuntimeUnreachable, EnforcementBlockReasonSystemdRuntimeUnreachable},
 		{EnforcementReasonAuthorityUnverifiable, EnforcementBlockReasonAuthorityUnverifiable},
 		{"unbounded detail with PID 1234", EnforcementBlockReasonAuthorityUnverifiable},
 	}

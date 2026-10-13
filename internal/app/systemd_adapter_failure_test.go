@@ -204,3 +204,30 @@ func TestDeclaredObservationNeverConstructsTheAdapterUnderInjectedFailure(t *tes
 		t.Fatalf("observation_only constructed the adapter %d times", adapters.calls())
 	}
 }
+
+func TestUnreachableSystemdRuntimeObservesWithoutOpeningTheAdapter(t *testing.T) {
+	// The documented container deployment sees systemd as PID 1 through the
+	// host PID namespace but not its runtime. It must keep observing under its
+	// own reason, whatever the declaration, instead of failing to start on an
+	// adapter that can never be reached from that mount namespace.
+	unreachable := cgroup.EnforcementStatus{
+		Mode:   cgroup.EnforcementModeObservationOnly,
+		Reason: cgroup.EnforcementReasonSystemdRuntimeUnreachable,
+	}
+	for _, declared := range []config.EnforcementPolicy{config.EnforcementPolicySystemdNative, config.EnforcementPolicyAuto} {
+		t.Run(string(declared), func(t *testing.T) {
+			adapters := &injectedSystemdAdapters{err: &systemdunit.AdapterError{Reason: systemdunit.ReasonBusUnavailable}}
+			application, _ := applicationWithInjectedAdapters(t, declared, adapters)
+			adapter, status, err := application.initializeSystemdEnforcement(unreachable)
+			if err != nil || adapter != nil {
+				t.Fatalf("unreachable runtime = (%v, %v), want observation without error", adapter, err)
+			}
+			if status != unreachable {
+				t.Fatalf("status = %+v, want %+v", status, unreachable)
+			}
+			if adapters.calls() != 0 {
+				t.Fatalf("the adapter was constructed %d times without a reachable runtime", adapters.calls())
+			}
+		})
+	}
+}

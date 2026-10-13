@@ -273,7 +273,10 @@ capability refusal into a published `mandatory_capability_unavailable`
 observation. Any other failure (the connection to systemd, a timeout, an
 authorization refusal, the lease journal) exits with status 1, so
 `Restart=on-failure` retries it, and is logged with its bounded `failure_class`.
-No adapter failure can publish `systemd_owns_host_workloads`.
+No adapter failure can publish `systemd_owns_host_workloads`. A process that sees
+systemd as PID 1 but not `/run/systemd/system`, such as the supported container
+sharing the host PID namespace, never opens the adapter: it observes under
+`systemd_runtime_unreachable`.
 
 **Native cgroup hierarchy:**
 ```text

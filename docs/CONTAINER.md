@@ -4,9 +4,11 @@ resman supports one container runtime contract: a rootful Podman container that
 observes the host. It is not an isolated or rootless workload. The daemon must see
 host PIDs, resolve host users through NSS, read trustworthy `/proc/PID/exe` and
 `/proc/PID/io` entries for foreign users, and inspect the host cgroup v2 hierarchy.
-The invocation below does not expose the host system bus or mutable systemd unit-file
-roots. It therefore remains `observation_only`; enforcement from this container
-layout is not claimed. For `systemd_native`, install the host package and verify its
+The invocation below does not expose the host systemd runtime or mutable systemd
+unit-file roots. It therefore remains `observation_only`, published with the reason
+`systemd_runtime_unreachable`: systemd is PID 1 of the shared host PID namespace,
+but the container cannot reach it. Enforcement from this container layout is not
+claimed. For `systemd_native`, install the host package and verify its
 adapter and property-lease recovery. Merely adding a bus socket does not prove that
 safe unit-file inspection and recovery work through container mounts.
 

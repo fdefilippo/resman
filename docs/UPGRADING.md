@@ -126,6 +126,13 @@ journalctl -u resman -b | grep 'Failed to initialize systemd-native enforcement'
 A host that should never enforce declares `ENFORCEMENT_MODE=observation_only`, which
 never opens the adapter.
 
+The supported rootful Podman container is unaffected in behaviour: it shares the
+host PID namespace but cannot see the systemd runtime, so it never opens the
+adapter and keeps observing. Its published reason changes from
+`systemd_owns_host_workloads` to `systemd_runtime_unreachable`, which states why. A
+dashboard or alert that matched the old reason value on a container should match
+the new one.
+
 ## FIXED: a host that cannot delegate the cpu controller can run again
 
 **Compatibility regression, with the default unchanged.** From version 1.35.1 the

@@ -439,7 +439,8 @@ reconciliation without restoring already-applied properties. A /proc capture fai
 remains an authority refusal and restores the affected owned RAM/I/O properties.
 .PP
 On a host whose workloads systemd does not own, including non-systemd hosts,
-ResMan remains in
+and in a container that shares the host PID namespace but cannot see the systemd
+runtime (reason systemd_runtime_unreachable), ResMan remains in
 .B observation_only
 mode without a fallback. On a systemd host that declared enforcement, an adapter
 that cannot be opened is a startup error, never a silent observation: a missing
