@@ -27,9 +27,17 @@ granted the request. Each scenario is one cold boot:
 | `protected-observation` | `auto`, default `REALTIME_PROTECTED_UNITS` | ResMan runs and observes with reason `realtime_admission_protected` for `vcs.service`; the fixture keeps `SCHED_FIFO`; the root does not delegate `cpu` |
 | `consented-enforcement` | `systemd_native`, empty `REALTIME_PROTECTED_UNITS` | ResMan selects systemd-native enforcement on the first start and is ready before `sysinit.target` and before `dbus.socket`; the fixture's outcome agrees with the delegation systemd leaves at the root after the probe restores `user.slice`: `EPERM` when `cpu` stays delegated, `SCHED_FIFO` when systemd withdraws it |
 
-On every boot the journal must contain no system bus failure, `sysinit.target`
-must be reached, and the kernel must report `CONFIG_RT_GROUP_SCHED=y` with a
-limited `sched_rt_runtime_us`. Readiness before `sysinit.target` is the
+The table applies to a kernel with realtime group scheduling. The validator pins
+that build option per platform: the EL8 distribution kernel has
+`CONFIG_RT_GROUP_SCHED=y`, while the EL9 (5.14) and EL10 (6.12) distribution
+kernels are built without it. There the kernel never refuses a realtime request,
+so every scenario must enforce on the first start, the guard must never publish
+`realtime_admission_protected`, and the fixture must keep `SCHED_FIFO` whatever
+the root delegates.
+
+On every boot the journal must contain no system bus failure and
+`sysinit.target` must be reached; a kernel with realtime group scheduling must
+also report a limited `sched_rt_runtime_us`. Readiness before `sysinit.target` is the
 measured proof that no transient probe unit waited for `sysinit.target`, which
 waits for ResMan.
 
@@ -45,7 +53,8 @@ fixture's outcome meaningless, so it fails the scenario rather than passing it.
   `OL8U10_x86_64-kvm-b287`, `OL9U8_x86_64-kvm-b293`, `OL10U1_x86_64-kvm-b291`.
 * The distribution kernel, selected with `grubby` after installing `kernel`;
   EL8 also boots with `systemd.unified_cgroup_hierarchy=1`.
-* systemd 239, 252 and 257 respectively.
+* systemd 239, 252 and 257 respectively, and the realtime group scheduling build
+  option of each distribution kernel (EL8 only).
 * The package by identity and SHA-256, bound to the revision and tree in its
   build manifest; only files under `test/functional/early-boot/` may differ
   between that revision and the qualification revision.

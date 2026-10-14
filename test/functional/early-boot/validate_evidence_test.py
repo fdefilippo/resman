@@ -34,6 +34,7 @@ def faithful_archive(root, platform="el8"):
           f"base_sha256={info['base_sha256']}\nkernel_family=rhck\n"
           f"package_identity=resman-1.39.2-1.el8.dev318.x86_64\npackage_sha256={digest}\n"
           "cleanup=PASS\nresult=PASS\n")
+    rt = info["rt_group_sched"]
     boot = 0
     for name, declared in validate_evidence.SCENARIOS.items():
         boot += 1
@@ -42,7 +43,8 @@ def faithful_archive(root, platform="el8"):
         write(directory / "kernel.txt", "4.18.0-553.el8_10.x86_64\n")
         write(directory / "systemd-version.txt", f"systemd {info['systemd']} (x)\n")
         write(directory / "cgroup-filesystem.txt", "cgroup2fs\n")
-        write(directory / "rt-group-sched.txt", "CONFIG_RT_GROUP_SCHED=y\n")
+        write(directory / "rt-group-sched.txt",
+              "CONFIG_RT_GROUP_SCHED=y\n" if rt else "# CONFIG_RT_GROUP_SCHED is not set\n")
         write(directory / "sched-rt-runtime-us.txt", "950000\n")
         write(directory / "declaration.txt",
               f"ENFORCEMENT_MODE={declared['mode']}\nREALTIME_PROTECTED_UNITS={declared['protected']}\n"
@@ -52,13 +54,16 @@ def faithful_archive(root, platform="el8"):
         write(directory / "bus-failures.txt", "0\n")
         write(directory / "resman-journal.log", "")
         write(directory / "user-slice-subtree-control.txt", "memory pids\n")
-        if name == "consented-enforcement":
+        if name == "consented-enforcement" or not rt:
             write(directory / "resman-unit.txt",
                   "ActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
                   "InactiveExitTimestampMonotonic=2000000\nActiveEnterTimestampMonotonic=2600000\n")
             write(directory / "resman.log", "[INFO] Systemd-native CPU enforcement selected enforcement_mode=systemd_native\n")
             write(directory / "root-subtree-control.txt", "cpu memory pids\n")
-            write(directory / "fixture.json", json.dumps({"result": "refused", "errno": 1, "error": "Operation not permitted"}))
+            if rt:
+                write(directory / "fixture.json", json.dumps({"result": "refused", "errno": 1, "error": "Operation not permitted"}))
+            else:
+                write(directory / "fixture.json", json.dumps({"result": "granted", "policy": 1}))
         else:
             write(directory / "root-subtree-control.txt", "memory pids\n")
             write(directory / "fixture.json", json.dumps({"result": "granted", "policy": 1}))
@@ -157,6 +162,19 @@ class VerdictTest(unittest.TestCase):
     def test_uek_kernel(self):
         self.assertNotQualified(lambda e: write(e / "protected-refusal/kernel.txt", "5.15.0-uek\n"),
                                 "protected-refusal")
+
+    def test_protection_on_a_kernel_that_cannot_revoke_realtime(self):
+        def mutate(e):
+            write(e / "protected-refusal/resman.log",
+                  "[ERROR] Failed to initialize systemd-native enforcement failure_class=realtime_admission_protected\n")
+        report = self.evaluate(mutate, platform="el9")
+        self.assertEqual(report["verdict"], "NOT_QUALIFIED", report)
+        self.assertEqual(report["scenarios"]["protected-refusal"]["verdict"], "FAIL", report)
+
+    def test_el9_kernel_gaining_realtime_group_scheduling_is_noticed(self):
+        report = self.evaluate(lambda e: write(e / "protected-observation/rt-group-sched.txt",
+                                               "CONFIG_RT_GROUP_SCHED=y\n"), platform="el9")
+        self.assertEqual(report["verdict"], "NOT_QUALIFIED", report)
 
     def test_kernel_without_realtime_group_scheduling(self):
         self.assertNotQualified(lambda e: write(e / "protected-observation/rt-group-sched.txt",

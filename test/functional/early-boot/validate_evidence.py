@@ -11,17 +11,23 @@ import json
 import pathlib
 import sys
 
+# rt_group_sched is the measured distribution-kernel build option: the EL8
+# kernel enables it, the EL9 and EL10 kernels do not. On a kernel without it no
+# realtime admission can be revoked, so nothing needs protecting.
 PLATFORMS = {
     "el8": {
         "systemd": "239",
+        "rt_group_sched": True,
         "base_sha256": "cf9eb243b7390311f1e2896e3e6849241e521e6592c8be9907956e3a6cee1f0c",
     },
     "el9": {
         "systemd": "252",
+        "rt_group_sched": False,
         "base_sha256": "b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b",
     },
     "el10": {
         "systemd": "257",
+        "rt_group_sched": False,
         "base_sha256": "8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f",
     },
 }
@@ -101,13 +107,15 @@ def check_boot(directory, platform):
         findings.append(f"systemd version {systemd[1:2]} is not {PLATFORMS[platform]['systemd']}")
     if read(directory, "cgroup-filesystem.txt").strip() != "cgroup2fs":
         findings.append("the unified cgroup v2 hierarchy is not mounted")
-    if read(directory, "rt-group-sched.txt").strip() != "CONFIG_RT_GROUP_SCHED=y":
-        findings.append("the kernel lacks CONFIG_RT_GROUP_SCHED=y")
+    rt_group_sched = read(directory, "rt-group-sched.txt").strip() == "CONFIG_RT_GROUP_SCHED=y"
+    if rt_group_sched != PLATFORMS[platform]["rt_group_sched"]:
+        findings.append(f"kernel realtime group scheduling is {rt_group_sched}, "
+                        f"not the {PLATFORMS[platform]['rt_group_sched']} recorded for {platform}")
     try:
         runtime = int(read(directory, "sched-rt-runtime-us.txt").strip())
     except ValueError:
         runtime = -1
-    if runtime < 0:
+    if rt_group_sched and runtime < 0:
         findings.append("kernel.sched_rt_runtime_us is unlimited, so no admission can be revoked")
     sysinit = key_values(read(directory, "sysinit-target.txt"))
     if monotonic(sysinit, "ActiveEnterTimestampMonotonic") <= 0:
@@ -132,7 +140,11 @@ def check_scenario(name, directory, platform):
     dbus = monotonic(key_values(read(directory, "dbus-socket.txt")), "ActiveEnterTimestampMonotonic")
     ready = monotonic(unit, "ActiveEnterTimestampMonotonic")
 
-    if name == "consented-enforcement":
+    if name == "consented-enforcement" or not PLATFORMS[platform]["rt_group_sched"]:
+        # Without realtime group scheduling the kernel never refuses a
+        # realtime request, so the guard must stay out of the way.
+        if not PLATFORMS[platform]["rt_group_sched"] and "realtime_admission_protected" in log:
+            findings.append("realtime admission was protected on a kernel that cannot revoke it")
         if unit.get("ActiveState") != "active" or unit.get("Result") != "success" or unit.get("NRestarts") != "0":
             findings.append(f"resman did not run first time: {unit}")
         if "Systemd-native CPU enforcement selected" not in log:
@@ -144,11 +156,12 @@ def check_scenario(name, directory, platform):
         # At an idle boot the probe restores user.slice, and whether systemd
         # then withdraws cpu from the root is a property of its version. The
         # kernel outcome must agree with the delegation actually left behind.
-        if "cpu" in root:
+        if "cpu" in root and PLATFORMS[platform]["rt_group_sched"]:
             if fixture.get("result") != "refused" or fixture.get("errno") != EPERM:
                 findings.append(f"root delegates cpu but the fixture's realtime request was not refused with EPERM: {fixture}")
-        elif fixture.get("result") != "granted" or fixture.get("policy") != SCHED_FIFO:
-            findings.append(f"root does not delegate cpu but the fixture did not get SCHED_FIFO: {fixture}")
+        elif ("cpu" not in root or not PLATFORMS[platform]["rt_group_sched"]) and \
+                (fixture.get("result") != "granted" or fixture.get("policy") != SCHED_FIFO):
+            findings.append(f"no realtime admission could be revoked but the fixture did not get SCHED_FIFO: {fixture}")
         return findings
 
     # Both protected scenarios require that nothing else enabled cpu at the
