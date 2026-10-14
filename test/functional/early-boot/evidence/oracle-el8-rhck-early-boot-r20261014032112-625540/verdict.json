@@ -1,0 +1,39 @@
+{
+  "package_identity": "resman-1.39.2-1.el8.dev318.x86_64",
+  "platform": "el8",
+  "platform_findings": [],
+  "scenarios": {
+    "consented-enforcement": {
+      "findings": [],
+      "fixture": {
+        "cgroup": "0::/system.slice/vcs.service",
+        "policy": 1,
+        "result": "granted"
+      },
+      "root_delegates_cpu_after_boot": false,
+      "verdict": "PASS"
+    },
+    "protected-observation": {
+      "findings": [],
+      "fixture": {
+        "cgroup": "0::/system.slice/vcs.service",
+        "policy": 1,
+        "result": "granted"
+      },
+      "root_delegates_cpu_after_boot": false,
+      "verdict": "PASS"
+    },
+    "protected-refusal": {
+      "findings": [],
+      "fixture": {
+        "cgroup": "0::/system.slice/vcs.service",
+        "policy": 1,
+        "result": "granted"
+      },
+      "root_delegates_cpu_after_boot": false,
+      "verdict": "PASS"
+    }
+  },
+  "source_revision": "aa4f73345e9eb4fd0db476cc24a0318196f54a43",
+  "verdict": "QUALIFIED"
+}

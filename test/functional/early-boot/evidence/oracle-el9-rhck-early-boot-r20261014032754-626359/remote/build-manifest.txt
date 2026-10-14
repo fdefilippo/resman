@@ -1,0 +1,9 @@
+source_revision=aa4f73345e9eb4fd0db476cc24a0318196f54a43
+source_tree=1a5c7aac12c1e08b0ce2a5469e5fb08bce7a4aae
+package_identity=resman-1.39.2-1.el8.dev318.x86_64
+package_sha256=0bfc2c79dde887d951141c06e3d41bfea07d62389ac6472b9804084970e4034e
+builder_image=docker.io/library/oraclelinux:8
+builder_image_digest=sha256:f5f85fd675fca8e5ba1f74a6d1f8303dc77300a8e58b168e8bc56988f68fd9d3
+go_version=go version go1.27.1 linux/amd64
+dist_suffix=.el8.dev318
+built_at=2026-10-14T02:58:25Z

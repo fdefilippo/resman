@@ -1,0 +1,34 @@
+[2026-10-14 03:33:43] [INFO] Configuration file changed, attempting to reload
+[2026-10-14 03:33:43] [INFO] Configuration validated successfully
+[2026-10-14 03:33:43] [INFO] Applying new configuration dynamically
+[2026-10-14 03:33:43] [INFO] Log level updated new_level=INFO
+[2026-10-14 03:33:43] [INFO] Cgroup manager configuration updated cgroup_root=/sys/fs/cgroup
+[2026-10-14 03:33:43] [INFO] State manager configuration updated polling_interval=30 cpu_threshold=75 cpu_release_threshold=40 cpu_threshold_duration=90
+[2026-10-14 03:33:43] [INFO] Metrics collector configuration updated metrics_cache_ttl=15 username_cache_ttl_minutes=60 system_uid_min=1000 system_uid_max=4294967294 user_exclude_list=[]
+[2026-10-14 03:33:43] [INFO] Metrics collector configuration updated cache_ttl=15 exclude_list=[]
+[2026-10-14 03:33:43] [WARN] Configuration change rejected until restart source=automatic processed=true rejected_fields=ENFORCEMENT_MODE,REALTIME_PROTECTED_UNITS
+[2026-10-14 03:33:44] [INFO] Received termination signal, initiating shutdown signal=terminated
+[2026-10-14 03:33:44] [INFO] Shutting down main control loop
+[2026-10-14 03:33:44] [INFO] Stopping configuration watcher
+[2026-10-14 03:33:44] [INFO] Metrics collector stopped
+[2026-10-14 03:33:44] [INFO] Cleaning up state manager
+[2026-10-14 03:33:44] [INFO] State manager cleanup completed
+[2026-10-14 03:33:44] [INFO] Shutdown completed
+[2026-10-14 03:33:58] [INFO] Logger initialized level=INFO file=/var/log/resman.log max_size=10485760 bytes
+[2026-10-14 03:33:58] [INFO] Starting Resource Manager version=1.39.2-1.el8.dev318
+[2026-10-14 03:33:58] [INFO] Configuration loaded successfully log_level=INFO log_file=/var/log/resman.log use_syslog=false
+[2026-10-14 03:33:58] [INFO] Initializing components:
+[2026-10-14 03:33:58] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads
+[2026-10-14 03:33:58] [INFO] Metrics collector initialized
+[2026-10-14 03:33:58] [INFO] Metrics database disabled by configuration
+[2026-10-14 03:33:58] [INFO] Prometheus exporter disabled by configuration
+[2026-10-14 03:33:59] [INFO] Systemd-native CPU enforcement selected enforcement_mode=systemd_native reason=systemd_native_adapter
+[2026-10-14 03:33:59] [INFO] State manager initialized polling_interval=30 cpu_threshold=75 cpu_release_threshold=40 cpu_threshold_duration=90 ignore_system_load=false
+[2026-10-14 03:33:59] [INFO] Configuration watcher initialized file=/etc/resman/resman.conf directory=/etc/resman
+[2026-10-14 03:33:59] [INFO] Starting configuration watcher
+[2026-10-14 03:33:59] [INFO] Configuration auto-reload enabled file=/etc/resman/resman.conf
+[2026-10-14 03:33:59] [INFO] MCP server disabled by configuration
+[2026-10-14 03:33:59] [INFO] Entering main control loop polling_interval_seconds=30 metrics_refresh_interval_seconds=0 psi_event_driven_configured=false psi_event_driven_active=false
+[2026-10-14 03:33:59] [INFO] Enforcement action state changed enforcement_mode=systemd_native requested_policy_intent=maintain applied_enforcement_action=maintain enforcement_block_reason=none
+[2026-10-14 03:33:59] [INFO] Control cycle completed cycle_id=1791948839 trigger=initial requested_policy_intent=maintain applied_enforcement_action=maintain enforcement_block_reason=none decision_reason=All resources within normal range total_cpu_usage=0 cpu_eligible_users_cpu_usage=0 eligible_users=0 active_limited_users=0 enforcement_mode=systemd_native ingress_refused_count=0 system_under_load=false ignore_system_load=false duration_ms=146 outcome=success deferred_error_count=0 degraded_warning_count=0
+Oct 14 03:33:58 localhost resman[810]: info: WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).

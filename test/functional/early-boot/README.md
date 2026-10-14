@@ -73,3 +73,24 @@ The tracked worktree must be clean. Evidence lands in
 `build/functional/early-boot/<platform>-<run id>/` with its own `SHA256SUMS` and
 the computed verdict in `verdict.json`. `EBOOT_EXPECTED_VERDICT` accepts
 `QUALIFIED` (default), `NOT_QUALIFIED` or `any`.
+
+## Retained evidence
+
+Three archives are retained, one per platform, all for the package
+`resman-1.39.2-1.el8.dev318.x86_64` built in a disposable `oraclelinux:8`
+container from revision `aa4f733` and qualified from revision `3205118`:
+
+| Archive | Kernel | systemd | Realtime group scheduling | Root delegates cpu after an idle boot |
+| --- | --- | --- | --- | --- |
+| `oracle-el8-rhck-early-boot-r20261014032112-625540` | 4.18.0-553 | 239 | yes | no |
+| `oracle-el9-rhck-early-boot-r20261014032754-626359` | 5.14.0-687 | 252 | no | no |
+| `oracle-el10-rhck-early-boot-r20261014033414-627180` | 6.12.0-211 | 257 | no | yes |
+
+All three are `QUALIFIED`. On EL8 the protected scenarios refuse with status 78
+or observe with `realtime_admission_protected` while the fixture keeps
+`SCHED_FIFO`, and the consented boot enforces before `sysinit.target` with the
+fixture still realtime, because systemd withdraws `cpu` from the root once the
+probe restores `user.slice`. On EL9 and EL10 every scenario enforces on the first
+start and the fixture keeps `SCHED_FIFO`, because those kernels never refuse a
+realtime request. `host_test.sh` checks that every archive stays intact, keeps its
+verdict, and that the three platforms remain covered.

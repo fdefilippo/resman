@@ -30,4 +30,22 @@ while IFS= read -r digest; do
 		|| { echo "validator does not pin template digest $digest" >&2; exit 1; }
 done < <(grep -oE 'base_sha256=[0-9a-f]{64}' "$script_dir/qemu-host.sh" | cut -d= -f2)
 
+# Every retained archive must stay intact and keep the verdict it was reviewed
+# with, and together they must cover the three platforms.
+archives=$(find "$script_dir/evidence" -mindepth 1 -maxdepth 1 -type d | sort)
+[[ -n $archives ]] || { echo "no retained early-boot archive" >&2; exit 1; }
+platforms=()
+while IFS= read -r archive; do
+	(cd "$archive" && sha256sum --quiet --check SHA256SUMS)
+	(cd "$archive/remote" && sha256sum --quiet --check SHA256SUMS)
+	grep -q '"verdict": "QUALIFIED"' "$archive/verdict.json" \
+		|| { echo "retained archive is not qualified: $archive" >&2; exit 1; }
+	grep -qE '"package_identity": "resman-[0-9.]+-[0-9]+\.el8(\.[a-z0-9]+)?\.x86_64"' "$archive/verdict.json"
+	platforms+=("$(sed -n 's/^  "platform": "\(el[0-9]*\)",$/\1/p' "$archive/verdict.json")")
+done <<<"$archives"
+for platform in el8 el9 el10; do
+	printf '%s\n' "${platforms[@]}" | grep -qx "$platform" \
+		|| { echo "no retained archive qualifies $platform" >&2; exit 1; }
+done
+
 echo "PASS: early-boot harness contract"

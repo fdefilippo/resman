@@ -1,0 +1,9 @@
+scenario=protected-refusal
+enforcement_mode=systemd_native
+realtime_protected_units=vcs.service
+scenario=protected-observation
+enforcement_mode=auto
+realtime_protected_units=vcs.service
+scenario=consented-enforcement
+enforcement_mode=systemd_native
+realtime_protected_units=

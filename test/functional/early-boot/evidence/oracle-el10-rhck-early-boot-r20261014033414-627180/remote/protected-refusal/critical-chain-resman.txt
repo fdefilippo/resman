@@ -1,0 +1,9 @@
+The time when unit became active or started is printed after the "@" character.
+The time the unit took to start is printed after the "+" character.
+
+resman.service +651ms
+└─systemd-tmpfiles-setup.service @2.299s +185ms
+  └─local-fs.target @2.279s
+    └─boot-efi.mount @2.219s +56ms
+      └─boot.mount @2.056s +130ms
+        └─dev-sda3.device
