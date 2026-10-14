@@ -11,12 +11,7 @@ memory_mib=${SMOLVM_MEMORY_MIB:-2048}
 storage_gib=${SMOLVM_STORAGE_GIB:-8}
 overlay_gib=${SMOLVM_OVERLAY_GIB:-2}
 require_psi=${SMOLVM_REQUIRE_PSI:-0}
-scenario=${SMOLVM_SCENARIO:-resource-only}
-if [[ $scenario == container-runtime && -z ${SMOLVM_OVERLAY_GIB+x} ]]; then
-	# Nested Podman uses the vfs driver because SmolVM does not expose /dev/fuse.
-	# Its full layer copies need more writable guest storage than other scenarios.
-	overlay_gib=8
-fi
+scenario=${SMOLVM_SCENARIO:-}
 evidence_root=${SMOLVM_EVIDENCE_ROOT:-$repo_root/build/functional/smolvm}
 command_log=
 evidence_dir=
@@ -25,13 +20,9 @@ scratch_dir=
 image_archive=
 image_ref=
 fixture_image_ref=
-container_image_archive=
-container_image_ref=
-container_image_cache_ref=${RESMAN_CONTAINER_IMAGE_CACHE_REF:-localhost/resman-container-cache:latest}
 vm_name=
 vm_started=0
 image_built=0
-container_image_built=0
 
 blocked() {
     echo "BLOCKED: $1" >&2
@@ -128,14 +119,6 @@ cleanup_resources() {
         [[ -z $remove_output ]] || printf '%s\n' "$remove_output" >>"$cleanup_log"
         image_built=0
     fi
-	if [[ $container_image_built -eq 1 && -n $container_image_ref ]]; then
-		record_command sudo podman image rm --force "$container_image_ref"
-		if ! remove_output=$(sudo podman image rm --force "$container_image_ref" 2>&1); then
-			failed=1
-		fi
-		[[ -z $remove_output ]] || printf '%s\n' "$remove_output" >>"$cleanup_log"
-		container_image_built=0
-	fi
     safe_remove_scratch || failed=1
     scratch_dir=
     return "$failed"
@@ -196,24 +179,18 @@ run_harness() {
 
 	[[ $require_psi == 0 || $require_psi == 1 ]] \
 		|| blocked "SMOLVM_REQUIRE_PSI must be 0 or 1"
-	[[ $scenario == resource-only || $scenario == memory-only || $scenario == process-membership \
-		|| $scenario == cpu-without-cpuset || $scenario == missing-io-startup \
-		|| $scenario == mcp-filter-reload || $scenario == container-runtime \
-		|| $scenario == block-iops || $scenario == psi-refresh-neutrality \
-		|| $scenario == limit-hook-executor || $scenario == host-cpu-sampling-cadence \
-		|| $scenario == non-systemd-observation ]] \
+	[[ $scenario == missing-io-startup || $scenario == mcp-filter-reload \
+		|| $scenario == psi-refresh-neutrality || $scenario == non-systemd-observation ]] \
 		|| blocked "SMOLVM_SCENARIO must name a documented functional scenario"
 
     local smolvm_version base_image_id base_image_digest fixture_image_id
-    local fixture_hash fixture_reused image_id container_image_id guest_status source_revision
+    local fixture_hash fixture_reused image_id guest_status source_revision
     source_revision=$(git -C "$repo_root" rev-parse HEAD)
     [[ -z $(git -C "$repo_root" status --porcelain --untracked-files=no) ]] \
         || blocked "source tree must be committed before a revision-bound SmolVM build"
     scratch_dir=$(mktemp -d "${TMPDIR:-/tmp}/resman-smolvm.XXXXXX")
     image_archive=$scratch_dir/resman-functional.tar
     image_ref=localhost/resman-functional:$run_id
-	container_image_archive=$scratch_dir/resman-container.tar
-	container_image_ref=localhost/resman-container:$run_id
     fixture_hash=$(sha256sum "$script_dir/Containerfile.base")
     fixture_hash=${fixture_hash%% *}
     fixture_image_ref=localhost/resman-functional-base:${fixture_hash:0:16}
@@ -240,17 +217,6 @@ run_harness() {
     sudo podman build --layers --build-arg "FUNCTIONAL_BASE_IMAGE=$fixture_image_ref" \
         --file "$script_dir/Containerfile" --tag "$image_ref" "$repo_root"
     image_built=1
-	if [[ $scenario == container-runtime ]]; then
-		record_command sudo podman build --layers --file "$repo_root/packaging/docker/Dockerfile" \
-			--tag "$container_image_ref" "$repo_root"
-		sudo podman build --layers --file "$repo_root/packaging/docker/Dockerfile" \
-			--tag "$container_image_ref" "$repo_root"
-		container_image_built=1
-		record_command sudo podman tag "$container_image_ref" "$container_image_cache_ref"
-		sudo podman tag "$container_image_ref" "$container_image_cache_ref"
-		record_command sudo podman save --output "$container_image_archive" "$container_image_ref"
-		sudo podman save --output "$container_image_archive" "$container_image_ref"
-	fi
     record_command sudo podman image inspect --format '{{.Id}}' docker.io/amd64/oraclelinux:9
     base_image_id=$(sudo podman image inspect --format '{{.Id}}' docker.io/amd64/oraclelinux:9)
     record_command sudo podman image inspect --format '{{.Digest}}' docker.io/amd64/oraclelinux:9
@@ -259,11 +225,6 @@ run_harness() {
     fixture_image_id=$(sudo podman image inspect --format '{{.Id}}' "$fixture_image_ref")
     record_command sudo podman image inspect --format '{{.Id}}' "$image_ref"
     image_id=$(sudo podman image inspect --format '{{.Id}}' "$image_ref")
-	container_image_id=not-requested
-	if [[ $scenario == container-runtime ]]; then
-		record_command sudo podman image inspect --format '{{.Id}}' "$container_image_ref"
-		container_image_id=$(sudo podman image inspect --format '{{.Id}}' "$container_image_ref")
-	fi
     {
         printf 'base_image=%s\n' 'docker.io/amd64/oraclelinux:9'
         printf 'base_image_id=%s\n' "$base_image_id"
@@ -271,9 +232,6 @@ run_harness() {
         printf 'fixture_image_id=%s\n' "$fixture_image_id"
         printf 'fixture_image_reused=%s\n' "$fixture_reused"
         printf 'image_id=%s\n' "$image_id"
-		printf 'container_image_reference=%s\n' "$container_image_ref"
-		printf 'container_image_id=%s\n' "$container_image_id"
-		printf 'container_image_cache_reference=%s\n' "$container_image_cache_ref"
     } >>"$evidence_dir/environment.txt"
 
     record_command sudo podman save --output "$image_archive" "$image_ref"
@@ -283,9 +241,6 @@ run_harness() {
 	machine_args=(machine run --detach --name "$vm_name" --cpus "$cpus" --mem "$memory_mib"
 		--storage "$storage_gib" --overlay "$overlay_gib"
 		--volume "$evidence_dir:/mnt/resman-artifacts")
-	if [[ $scenario == container-runtime ]]; then
-		machine_args+=(--volume "$scratch_dir:/mnt/resman-input")
-	fi
 	run_kvm "${machine_args[@]}" --image "$image_archive" -- /sbin/init
 
     run_kvm machine exec --name "$vm_name" --timeout 60s -- \

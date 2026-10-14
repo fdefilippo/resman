@@ -186,33 +186,40 @@ grep -q '^FROM docker.io/amd64/oraclelinux:9$' "$script_dir/Containerfile.base"
 grep -q '^FROM \${FUNCTIONAL_BASE_IMAGE}$' "$script_dir/Containerfile"
 grep -q '^CMD \["/sbin/init"\]$' "$script_dir/Containerfile.base"
 grep -q 'fixture_image_reused' "$script_dir/run.sh"
-grep -q 'container_image_cache_ref' "$script_dir/run.sh"
-grep -q 'podman tag.*container_image_cache_ref' "$script_dir/run.sh"
 grep -q 'SMOLVM_REQUIRE_PSI' "$script_dir/run.sh"
 grep -q 'SMOLVM_SCENARIO' "$script_dir/run.sh"
 grep -q 'pressure_summary cpu' "$script_dir/guest/run-functional.sh"
-grep -q 'memory-only' "$script_dir/guest/run-functional.sh"
 grep -q 'psi-refresh-neutrality' "$script_dir/guest/run-functional.sh"
-grep -q 'limit-hook-executor' "$script_dir/guest/run-functional.sh"
-grep -q 'host-cpu-sampling-cadence' "$script_dir/guest/run-functional.sh"
 render_line=$(grep -n 'sed "s/@RUN_ID@/' "$script_dir/guest/run-functional.sh" | head -n 1 | cut -d: -f1)
 # shellcheck disable=SC2016 # Match the literal shell condition in the guest runner.
-memory_config_line=$(grep -n 'if \[\[ \$scenario == memory-only \]\]' \
-	"$script_dir/guest/run-functional.sh" | tail -n 1 | cut -d: -f1)
-[[ $render_line -lt $memory_config_line ]] || {
-	echo "memory-only config mutation precedes fixture rendering" >&2
+psi_config_line=$(grep -n 'if \[\[ \$scenario == psi-refresh-neutrality \]\]' \
+	"$script_dir/guest/run-functional.sh" | head -n 1 | cut -d: -f1)
+[[ $render_line -lt $psi_config_line ]] || {
+	echo "PSI config mutation precedes fixture rendering" >&2
 	exit 1
 }
-grep -q 'process-membership' "$script_dir/guest/run-functional.sh"
-grep -q 'cpu-without-cpuset' "$script_dir/guest/run-functional.sh"
+# The retired PID-relocation hierarchy must not return: no scenario may expect a
+# ResMan-owned cgroup root, a limited/ subtree or a process-membership write.
+# shellcheck disable=SC2016 # Match the literal path expression.
+for retired in 'resman-functional-$run_id' 'limited/' 'cgroup.procs' 'best_effort/user_'; do
+	if grep -qF "$retired" "$script_dir/guest/run-functional.sh"; then
+		echo "the guest runner still references the retired hierarchy: $retired" >&2
+		exit 1
+	fi
+done
+for retired in resource-only memory-only process-membership cpu-without-cpuset \
+	container-runtime block-iops limit-hook-executor host-cpu-sampling-cadence; do
+	if grep -qw -- "$retired" "$script_dir/run.sh" "$script_dir/guest/run-functional.sh"; then
+		echo "a retired SmolVM scenario is still accepted: $retired" >&2
+		exit 1
+	fi
+done
 grep -q 'missing-io-startup' "$script_dir/guest/run-functional.sh"
 grep -q "systemctl list-units --all --plain --no-legend 'user-resmancapprobe\*.slice'" "$script_dir/guest/run-functional.sh"
 grep -q "systemctl list-units --all --plain --no-legend 'resmancapprobe\*.service'" "$script_dir/guest/run-functional.sh"
 grep -q "find /sys/fs/cgroup -type d -name 'user-resmancapprobe\*.slice'" "$script_dir/guest/run-functional.sh"
 grep -q "find /sys/fs/cgroup -type d -name 'resmancapprobe\*.service'" "$script_dir/guest/run-functional.sh"
 grep -q 'mcp-filter-reload' "$script_dir/guest/run-functional.sh"
-grep -q 'block-iops' "$script_dir/guest/run-functional.sh"
-grep -q 'io.stat wios' "$script_dir/guest/run-functional.sh"
 grep -q 'controller-startup-rejection.txt' "$script_dir/guest/run-functional.sh"
 grep -q 'expected_daemon_error_patterns' "$script_dir/guest/run-functional.sh"
 grep -q 'assert-daemon-errors.sh' "$script_dir/guest/run-functional.sh"
