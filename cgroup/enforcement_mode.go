@@ -66,6 +66,9 @@ const (
 	// that this host observes and never enforces. It is deliberately distinct
 	// from an inability: a declared choice must never read as a defect.
 	EnforcementBlockReasonOperatorObservation EnforcementBlockReason = "operator_requested_observation"
+	// EnforcementBlockReasonRealtimeAdmissionProtected means enforcement would
+	// deny realtime scheduling to a service the operator protects.
+	EnforcementBlockReasonRealtimeAdmissionProtected EnforcementBlockReason = "realtime_admission_protected"
 )
 
 // EnforcementStatus is the bounded result of resolving the host ownership boundary.
@@ -92,6 +95,11 @@ const (
 	// EnforcementReasonOperatorObservationOnly is published when the operator
 	// declared observation in configuration, whatever the host could provide.
 	EnforcementReasonOperatorObservationOnly = "operator_requested_observation"
+	// EnforcementReasonRealtimeAdmissionProtected is published under auto when
+	// enabling the cpu controller would deny realtime scheduling to a
+	// protected service (REALTIME_PROTECTED_UNITS or a realtime
+	// CPUSchedulingPolicy) on a kernel with realtime group scheduling.
+	EnforcementReasonRealtimeAdmissionProtected = "realtime_admission_protected"
 )
 
 // InitialEnforcementCycleState returns the explicit state before the first
@@ -121,6 +129,8 @@ func BoundedEnforcementBlockReason(reason string) EnforcementBlockReason {
 		return EnforcementBlockReasonMandatoryCapability
 	case EnforcementReasonOperatorObservationOnly:
 		return EnforcementBlockReasonOperatorObservation
+	case EnforcementReasonRealtimeAdmissionProtected:
+		return EnforcementBlockReasonRealtimeAdmissionProtected
 	default:
 		return EnforcementBlockReasonAuthorityUnverifiable
 	}
@@ -180,7 +190,8 @@ func validBlockReason(reason EnforcementBlockReason) bool {
 	case EnforcementBlockReasonNone, EnforcementBlockReasonSystemdRuntimeAbsent,
 		EnforcementBlockReasonSystemdOwnsWorkloads, EnforcementBlockReasonSystemdRuntimeUnreachable,
 		EnforcementBlockReasonAuthorityUnverifiable,
-		EnforcementBlockReasonMandatoryCapability, EnforcementBlockReasonOperatorObservation:
+		EnforcementBlockReasonMandatoryCapability, EnforcementBlockReasonOperatorObservation,
+		EnforcementBlockReasonRealtimeAdmissionProtected:
 		return true
 	default:
 		return false

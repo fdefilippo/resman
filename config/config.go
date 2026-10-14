@@ -59,6 +59,10 @@ type Config struct {
 
 	// Enforcement boundary declared by the operator
 	EnforcementMode string `config:"ENFORCEMENT_MODE"`
+	// RealtimeProtectedUnits names services that request realtime scheduling
+	// themselves, so their unit files do not show it. ResMan never makes the
+	// cpu controller deny them realtime admission unless the list is emptied.
+	RealtimeProtectedUnits []string `config:"REALTIME_PROTECTED_UNITS"`
 
 	// Paths
 	CgroupRoot string `config:"CGROUP_ROOT"`
@@ -251,9 +255,12 @@ func DefaultConfig() *Config {
 		// mandatory capability the host cannot provide remains a refusal to
 		// start, never a silent downgrade.
 		EnforcementMode: string(EnforcementPolicySystemdNative),
-		CgroupRoot:      "/sys/fs/cgroup",
-		ConfigFile:      DefaultConfigPath,
-		LogFile:         "/var/log/resman.log",
+		// Veritas Cluster Server's had requests SCHED_FIFO itself; it is the
+		// realtime service this protection was introduced for (resman-318.4).
+		RealtimeProtectedUnits: []string{"vcs.service"},
+		CgroupRoot:             "/sys/fs/cgroup",
+		ConfigFile:             DefaultConfigPath,
+		LogFile:                "/var/log/resman.log",
 
 		PollingInterval: 30,
 		MinActiveTime:   60,
@@ -629,8 +636,16 @@ func removedConfigKeyError(key string) error {
 type configFieldHandler func(*Config, string) error
 
 var configFieldHandlers = map[string]configFieldHandler{
-	"CGROUP_ROOT":       setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
-	"ENFORCEMENT_MODE":  setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.EnforcementMode = value }),
+	"CGROUP_ROOT":      setString(func(cfg *Config, value string) { cfg.CgroupRoot = value }),
+	"ENFORCEMENT_MODE": setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.EnforcementMode = value }),
+	"REALTIME_PROTECTED_UNITS": func(cfg *Config, value string) error {
+		units, err := parseRealtimeProtectedUnits(value)
+		if err != nil {
+			return err
+		}
+		cfg.RealtimeProtectedUnits = units
+		return nil
+	},
 	"LOG_FILE":          setString(func(cfg *Config, value string) { cfg.LogFile = value }),
 	"POLLING_INTERVAL":  setInt(func(cfg *Config, value int) { cfg.PollingInterval = value }),
 	"MIN_ACTIVE_TIME":   setInt(func(cfg *Config, value int) { cfg.MinActiveTime = value }),
@@ -842,6 +857,33 @@ func setBlackout(cfg *Config, value string) error {
 }
 
 const regexListRemedy = "A comma is the list separator and cannot appear inside a regex pattern, including a bounded quantifier such as {2,4}; rewrite the expression without a comma, for example by expanding the alternatives."
+
+// realtimeProtectedUnitPattern accepts a systemd service unit name, including a
+// template instance (name@instance.service) and the backslash of a
+// systemd-escape sequence such as \x2d.
+var realtimeProtectedUnitPattern = regexp.MustCompile(`^[A-Za-z0-9:_.\\-]+(@[A-Za-z0-9:_.\\-]*)?\.service$`)
+
+// parseRealtimeProtectedUnits splits the comma-separated service list. An empty
+// value is the operator's consent that no service needs protection.
+func parseRealtimeProtectedUnits(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{}, nil
+	}
+	seen := map[string]bool{}
+	units := []string{}
+	for _, raw := range strings.Split(value, ",") {
+		unit := strings.TrimSpace(raw)
+		if !realtimeProtectedUnitPattern.MatchString(unit) {
+			return nil, fmt.Errorf("REALTIME_PROTECTED_UNITS entry %q must be a service unit name such as vcs.service", unit)
+		}
+		if !seen[unit] {
+			seen[unit] = true
+			units = append(units, unit)
+		}
+	}
+	return units, nil
+}
 
 func setRegexList(key string, assign func(*Config, []string)) configFieldHandler {
 	return func(cfg *Config, value string) error {
@@ -1928,6 +1970,14 @@ func (c *Config) GetProcessMinAgeSeconds() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.ProcessMinAgeSeconds
+}
+
+// GetRealtimeProtectedUnits returns the services whose realtime admission the
+// cpu controller must not revoke without the operator's consent.
+func (c *Config) GetRealtimeProtectedUnits() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.RealtimeProtectedUnits...)
 }
 
 // GetSystemUIDMin returns the minimum UID to monitor.

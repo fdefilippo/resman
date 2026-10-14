@@ -1,7 +1,7 @@
 # Systemd Property Lease Recovery
 
-ResMan changes systemd-owned resource properties only through the system bus and only
-with `runtime=true`. Systemd represents those changes as files below
+ResMan changes systemd-owned resource properties only through systemd's D-Bus API, on
+PID 1's private socket `/run/systemd/private`, and only with `runtime=true`. Systemd represents those changes as files below
 `/run/systemd/system.control`. The files can outlive both the daemon process and the
 unit lifetime, so in-memory ownership is insufficient: after a crash, their names do
 not distinguish a ResMan write from an operator's `systemctl set-property --runtime`.

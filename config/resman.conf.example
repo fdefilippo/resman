@@ -24,6 +24,20 @@
 # or auto keeps metrics, Prometheus and MCP available there.
 ENFORCEMENT_MODE=systemd_native
 
+# Services that request realtime scheduling themselves, so their unit files do
+# not show it. On a kernel built with realtime group scheduling, enabling the
+# cgroup v2 cpu controller at the root gives every service a realtime budget of
+# zero: a realtime request made afterwards fails with EPERM. ResMan starts
+# before ordinary services, so it would be the one to enable the controller.
+# While a listed unit is loaded and the root does not already delegate cpu,
+# ResMan does not enable it: systemd_native refuses to start (status 78) and
+# auto observes with reason realtime_admission_protected. Units whose
+# CPUSchedulingPolicy is fifo or rr are protected automatically. Requires
+# restart.
+# Leave it empty only to accept that those services lose realtime scheduling,
+# for example where another component already enabled cpu before them.
+REALTIME_PROTECTED_UNITS=vcs.service
+
 # ========================
 # PATHS
 # ========================

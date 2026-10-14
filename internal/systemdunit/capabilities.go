@@ -15,6 +15,13 @@ type StartupRequirements struct {
 	Memory          bool
 	IO              bool
 	IODeviceWeights []IODeviceWeightRequest
+	// RealtimeProtectedUnits names services whose realtime admission the cpu
+	// controller must not revoke (REALTIME_PROTECTED_UNITS).
+	RealtimeProtectedUnits []string
+
+	// realtimeKernel is filled by the production constructors; without it the
+	// realtime admission guard has no kernel facts to decide on.
+	realtimeKernel *realtimeKernelFacts
 }
 
 // ProbeIODeviceWeights proves the complete systemd-to-kernel path for one
@@ -57,6 +64,11 @@ type startupCapability struct {
 }
 
 func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements StartupRequirements) error {
+	// The guard runs before any probe: the probe itself is what would make
+	// systemd enable the cpu controller at the root.
+	if err := a.checkRealtimeAdmission(ctx, requirements); err != nil {
+		return err
+	}
 	return a.requireCapabilities(ctx, requirements, nil)
 }
 

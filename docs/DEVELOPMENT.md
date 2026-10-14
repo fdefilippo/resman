@@ -568,8 +568,9 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - The packaged unit **MUST** bound the Linux capabilities it retains to the ones an
   enabled feature actually uses, and each retained capability **MUST** name the call
   site that needs it. ResMan stays root because systemd authorizes unit-property
-  mutation by user identity through polkit rather than by a capability, so the
-  bounding set and the read-only file system are the only boundary that remains.
+  mutation by user identity rather than by a capability: its private socket
+  `/run/systemd/private` serves only root. The bounding set and the read-only file
+  system are therefore the only boundary that remains.
   Registering a PSI poll trigger requires `CAP_SYS_RESOURCE`; omitting it silently
   disables event-driven pressure observation even when the pressure file is writable.
 - A sandboxing directive that would disable a shipped feature **MUST** be refused by a

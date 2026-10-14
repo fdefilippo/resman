@@ -37,6 +37,71 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## CHANGED: the systemd adapter talks to PID 1 directly at boot
+
+**Visible change.** The adapter now reaches systemd over PID 1's private socket
+`/run/systemd/private` instead of the system bus. The packaged unit already starts
+before `sysinit.target` and before `vcs.service`, so on a cold boot ResMan now
+establishes systemd-native enforcement before ordinary services start, instead of
+failing to connect. Enforcement no longer depends on dbus-daemon or on polkit, and a
+restart of the system bus no longer drops the adapter's connection. The transient
+capability probe service and slice now carry `DefaultDependencies=no`.
+
+**Cause.** `dbus.socket` is ordered after `sysinit.target`, and ResMan before it, so
+the system bus never existed when the adapter opened. Through 1.39.2 the early start
+therefore established nothing: the adapter failed with `bus_unavailable` and the
+host observed for its whole uptime. PID 1 serves the same `org.freedesktop.systemd1`
+objects on its private socket from the first instant of boot, which is also what
+`systemctl` uses when run as root.
+
+**Action.** None for an ordinary host. On a kernel with realtime group scheduling,
+establishing enforcement before `vcs.service` would take realtime scheduling away
+from Veritas Cluster Server; read the next section before upgrading such a host.
+
+## NEW: realtime admission protection with REALTIME_PROTECTED_UNITS
+
+**Visible change.** A new restart-required key, `REALTIME_PROTECTED_UNITS` (default
+`vcs.service`), names services that request realtime scheduling themselves. On a
+kernel with `CONFIG_RT_GROUP_SCHED=y` and a limited `kernel.sched_rt_runtime_us`,
+while such a unit, or any service whose `CPUSchedulingPolicy` is `fifo` or `rr`, is
+loaded and the root cgroup does not already delegate `cpu`, ResMan no longer enables
+the cpu controller. Under `systemd_native` it refuses to start with status 78 and
+`failure_class=realtime_admission_protected`, naming the unit. Under `auto` it
+observes with the reason `realtime_admission_protected`. A host without a protected
+unit is unaffected.
+
+**Cause.** Enabling the cgroup v2 cpu controller at the root gives `system.slice`
+and every other child a task group with zero realtime runtime, and cgroup v2 has no
+knob to raise it. Veritas Cluster Server's `had` then fails its own
+`sched_setscheduler(SCHED_FIFO)` with `EPERM` (engine log `V-16-1-16002`) and runs
+without realtime priority. Now that ResMan establishes enforcement at boot, before
+`vcs.service`, it would be the one causing that on nodes where `had` runs realtime
+today, without anyone deciding so.
+
+**Action.** Decide per host before upgrading.
+
+- To keep `had` realtime (the default), leave the key as shipped. Set
+  `ENFORCEMENT_MODE=auto` to keep metrics, Prometheus and MCP running while the host
+  observes; under `systemd_native` the unit stays failed with status 78.
+- To accept that `had` runs without realtime priority, which is already the case
+  when another component such as Microsoft Defender enables the cpu controller
+  before `vcs.service`, set an empty value and restart:
+
+```bash
+printf 'REALTIME_PROTECTED_UNITS=\n' >> /etc/resman/resman.conf
+```
+
+Check what a VCS node does today before choosing:
+
+```bash
+grep -h 'V-16-1-16002' /var/VRTSvcs/log/engine_A.log* | tail -n 3
+ps -eLo pid,tid,cls,rtprio,comm | awk '$5 == "had" || $5 == "hashadow"'
+```
+
+`cls` `FF` with a realtime priority means `had` is realtime and the default
+protects it; `TS` together with `V-16-1-16002` entries means it has already lost
+realtime scheduling.
+
 ## CHANGED: an unset SYSTEM_UID_MAX no longer hides high UIDs
 
 **Visible change.** When `SYSTEM_UID_MAX` is absent from the configuration and the

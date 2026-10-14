@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 
 	systemdbus "github.com/coreos/go-systemd/v22/dbus"
 	godbus "github.com/godbus/dbus/v5"
@@ -44,33 +46,31 @@ type dbusTransport struct {
 
 const capabilityProbeExecutable = "/usr/bin/sleep"
 
+// systemdPrivateSocket is the peer-to-peer D-Bus endpoint PID 1 listens on from
+// the first instant of boot, before dbus-daemon exists. It serves the same
+// org.freedesktop.systemd1 objects as the system bus, authorizes root by peer
+// credentials without polkit, and is what systemctl uses when run as root.
+// ResMan starts before sysinit.target, ahead of dbus.socket, so the system bus
+// is never available when it must establish enforcement (resman-318.2).
+const systemdPrivateSocket = "/run/systemd/private"
+
+const systemdPrivateAddress = "unix:path=" + systemdPrivateSocket
+
 func openDBusTransport(runCtx context.Context) (*dbusTransport, error) {
 	// The transport owns its connection lifetime. Operation contexts may be
 	// cancelled to stop the control loop, but Close is the only event that may
-	// tear down the bus while shutdown restoration is still in progress.
+	// tear down the connection while shutdown restoration is still in progress.
 	lifecycleCtx, cancel := newDBusTransportLifecycle(runCtx)
-	conn, err := systemdbus.NewSystemConnectionContext(lifecycleCtx)
+	conn, err := systemdbus.NewSystemdConnectionContext(lifecycleCtx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("connect to the system bus: %w", err)
+		return nil, fmt.Errorf("connect to systemd at %s: %w", systemdPrivateSocket, err)
 	}
-	revertConn, err := godbus.SystemBusPrivate()
+	revertConn, err := dialSystemdPrivate(lifecycleCtx)
 	if err != nil {
 		conn.Close()
 		cancel()
-		return nil, fmt.Errorf("open private system bus connection for guarded unit-file cleanup: %w", err)
-	}
-	if err := revertConn.Auth(nil); err != nil {
-		_ = revertConn.Close()
-		conn.Close()
-		cancel()
-		return nil, fmt.Errorf("authenticate private system bus connection for guarded unit-file cleanup: %w", err)
-	}
-	if err := revertConn.Hello(); err != nil {
-		_ = revertConn.Close()
-		conn.Close()
-		cancel()
-		return nil, fmt.Errorf("initialize private system bus connection for guarded unit-file cleanup: %w", err)
+		return nil, fmt.Errorf("open private systemd connection for guarded unit-file cleanup: %w", err)
 	}
 	return &dbusTransport{
 		conn:       conn,
@@ -78,6 +78,21 @@ func openDBusTransport(runCtx context.Context) (*dbusTransport, error) {
 		revertObj:  revertConn.Object("org.freedesktop.systemd1", godbus.ObjectPath("/org/freedesktop/systemd1")),
 		cancel:     cancel,
 	}, nil
+}
+
+// dialSystemdPrivate opens an authenticated peer-to-peer connection to PID 1.
+// There is no bus daemon on this socket, so no Hello is sent: the peer is
+// systemd itself, and EXTERNAL authentication by numeric uid needs no NSS.
+func dialSystemdPrivate(ctx context.Context) (*godbus.Conn, error) {
+	conn, err := godbus.Dial(systemdPrivateAddress, godbus.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.Auth([]godbus.Auth{godbus.AuthExternal(strconv.Itoa(os.Getuid()))}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("authenticate to systemd at %s: %w", systemdPrivateSocket, err)
+	}
+	return conn, nil
 }
 
 func newDBusTransportLifecycle(_ context.Context) (context.Context, context.CancelFunc) {
@@ -137,19 +152,8 @@ func (t *dbusTransport) setUnitProperties(ctx context.Context, unit string, runt
 }
 
 func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, assignments []PropertyAssignment) (listedUnit, bool, error) {
-	properties := []systemdbus.Property{systemdbus.PropDescription("ResMan cgroup interface capability probe")}
-	for _, assignment := range assignments {
-		properties = append(properties, systemdbus.Property{
-			Name:  string(assignment.name),
-			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
-		})
-	}
 	service := capabilityProbeServiceUnit(unit)
-	serviceProperties := []systemdbus.Property{
-		systemdbus.PropDescription("ResMan bounded cgroup interface capability probe"),
-		systemdbus.PropSlice(unit),
-		systemdbus.PropExecStart([]string{capabilityProbeExecutable, "30"}, false),
-	}
+	serviceProperties, properties := capabilityProbeProperties(unit, assignments)
 	result := make(chan string, 1)
 	if _, err := t.conn.StartTransientUnitAux(ctx, service, "fail", serviceProperties, []systemdbus.PropertyCollection{{
 		Name: unit, Properties: properties,
@@ -177,6 +181,35 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 	}, true, nil
 }
 
+// capabilityProbeProperties builds the transient probe service and its slice.
+// Both carry DefaultDependencies=no: ResMan starts before sysinit.target, and a
+// service with default dependencies is ordered after sysinit.target, which in
+// turn waits for ResMan's readiness. The probe job would then wait for its own
+// caller until the call timeout, and the boot with it.
+func capabilityProbeProperties(unit string, assignments []PropertyAssignment) ([]systemdbus.Property, []systemdbus.Property) {
+	sliceProperties := []systemdbus.Property{
+		systemdbus.PropDescription("ResMan cgroup interface capability probe"),
+		propNoDefaultDependencies(),
+	}
+	for _, assignment := range assignments {
+		sliceProperties = append(sliceProperties, systemdbus.Property{
+			Name:  string(assignment.name),
+			Value: godbus.MakeVariant(dbusPropertyValue(assignment)),
+		})
+	}
+	serviceProperties := []systemdbus.Property{
+		systemdbus.PropDescription("ResMan bounded cgroup interface capability probe"),
+		propNoDefaultDependencies(),
+		systemdbus.PropSlice(unit),
+		systemdbus.PropExecStart([]string{capabilityProbeExecutable, "30"}, false),
+	}
+	return serviceProperties, sliceProperties
+}
+
+func propNoDefaultDependencies() systemdbus.Property {
+	return systemdbus.Property{Name: "DefaultDependencies", Value: godbus.MakeVariant(false)}
+}
+
 func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {
 	stop := func(target string) error {
 		result := make(chan string, 1)
@@ -199,6 +232,51 @@ func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) er
 		return nil
 	}
 	return errors.Join(stop(capabilityProbeServiceUnit(unit)), stop(unit))
+}
+
+func (t *dbusTransport) loadedServices(ctx context.Context, names []string) ([]string, error) {
+	statuses, err := t.conn.ListUnitsByNamesContext(ctx, names)
+	if err != nil {
+		return nil, err
+	}
+	loaded := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.LoadState == "loaded" {
+			loaded = append(loaded, status.Name)
+		}
+	}
+	return loaded, nil
+}
+
+// Linux scheduling policies systemd reports in CPUSchedulingPolicy.
+const (
+	schedulingPolicyFIFO = 1
+	schedulingPolicyRR   = 2
+)
+
+func (t *dbusTransport) realtimeScheduledServices(ctx context.Context) ([]string, error) {
+	statuses, err := t.conn.ListUnitsByPatternsContext(ctx, nil, []string{"*.service"})
+	if err != nil {
+		return nil, err
+	}
+	var scheduled []string
+	for _, status := range statuses {
+		if status.LoadState != "loaded" {
+			continue
+		}
+		property, err := t.conn.GetServicePropertyContext(ctx, status.Name, "CPUSchedulingPolicy")
+		if err != nil {
+			return nil, err
+		}
+		policy, ok := property.Value.Value().(int32)
+		if !ok {
+			return nil, fmt.Errorf("decode %s CPUSchedulingPolicy: unexpected %s", status.Name, property.Value.Signature())
+		}
+		if policy == schedulingPolicyFIFO || policy == schedulingPolicyRR {
+			scheduled = append(scheduled, status.Name)
+		}
+	}
+	return scheduled, nil
 }
 
 type dbusDeviceLimit struct {

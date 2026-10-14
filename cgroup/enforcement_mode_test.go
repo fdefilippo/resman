@@ -89,6 +89,7 @@ func TestEnforcementCycleStateUsesOnlyBoundedPublicVocabulary(t *testing.T) {
 		{EnforcementReasonSystemdRuntimeAbsent, EnforcementBlockReasonSystemdRuntimeAbsent},
 		{EnforcementReasonSystemdOwnsHostWorkloads, EnforcementBlockReasonSystemdOwnsWorkloads},
 		{EnforcementReasonSystemdRuntimeUnreachable, EnforcementBlockReasonSystemdRuntimeUnreachable},
+		{EnforcementReasonRealtimeAdmissionProtected, EnforcementBlockReasonRealtimeAdmissionProtected},
 		{EnforcementReasonAuthorityUnverifiable, EnforcementBlockReasonAuthorityUnverifiable},
 		{"unbounded detail with PID 1234", EnforcementBlockReasonAuthorityUnverifiable},
 	}

@@ -14,8 +14,11 @@ import (
 // what ResMan released before giving up enforcement.
 type CapabilityRefusal struct {
 	Capability MissingCapability
-	Released   ReleaseReport
-	Err        error
+	// Realtime is set instead of Capability when the refusal protects a
+	// service's realtime admission rather than reporting a missing interface.
+	Realtime *RealtimeProtection
+	Released ReleaseReport
+	Err      error
 }
 
 func (r *CapabilityRefusal) Error() string {
@@ -83,7 +86,7 @@ func NewOrObserve(ctx context.Context, cgroupRoot string, timeout time.Duration,
 	if err != nil {
 		return nil, nil, err
 	}
-	refusal, err := adapter.resolveStartupCapabilities(ctx, requirements)
+	refusal, err := adapter.resolveStartupCapabilities(ctx, withRealtimeKernelFacts(requirements, cgroupRoot))
 	if err != nil || refusal != nil {
 		adapter.Close()
 		return nil, refusal, err
@@ -100,7 +103,8 @@ func (a *Adapter) resolveStartupCapabilities(ctx context.Context, requirements S
 		return nil, nil
 	}
 	capability, definitive := MissingCapabilityFromError(capabilityErr)
-	if !definitive {
+	protection, protected := RealtimeProtectionFromError(capabilityErr)
+	if !definitive && !protected {
 		return nil, capabilityErr
 	}
 	released, releaseErr := a.ReleaseOwnedLeases(ctx)
@@ -108,7 +112,11 @@ func (a *Adapter) resolveStartupCapabilities(ctx context.Context, requirements S
 		return nil, fmt.Errorf(
 			"release owned properties before observation after %w: %w", capabilityErr, releaseErr)
 	}
-	return &CapabilityRefusal{Capability: capability, Released: released, Err: capabilityErr}, nil
+	refusal := &CapabilityRefusal{Capability: capability, Released: released, Err: capabilityErr}
+	if protected {
+		refusal.Realtime = &protection
+	}
+	return refusal, nil
 }
 
 // DurableLeasesPresent reports whether an earlier enforcing run left durable

@@ -35,8 +35,10 @@ LimitNOFILE=65536
 LimitNPROC=65536
 
 # Privilege surface. ResMan must run as root because systemd authorizes unit
-# property mutation on the system bus by uid through polkit, not through a
-# Linux capability. The bounding set is therefore the boundary, and it holds
+# property mutation by uid, not through a Linux capability: the daemon talks to
+# PID 1 over /run/systemd/private, which systemd serves only to root. That
+# socket exists from the first instant of boot, so the early start below needs
+# no dbus-daemon. The bounding set is therefore the boundary, and it holds
 # only what the enabled features actually use:
 #   CAP_SYS_PTRACE        readlink /proc/PID/exe and read /proc/PID/io and
 #                         /proc/PID/smaps_rollup for processes of other users

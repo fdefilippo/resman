@@ -469,6 +469,25 @@ an unavailable bus, a timeout or a probe that could not run still refuses to
 start, so a transient fault never removes enforcement. The key is
 restart-required and the mode never changes while the daemon runs.
 .PP
+.B REALTIME_PROTECTED_UNITS
+names services that request realtime scheduling themselves (default
+.IR vcs.service ).
+On a kernel built with realtime group scheduling, enabling the cpu controller at
+the root makes a later SCHED_FIFO or SCHED_RR request fail with EPERM. ResMan
+starts before ordinary services, so while a listed unit, or any unit whose
+CPUSchedulingPolicy is fifo or rr, is loaded and the root does not already
+delegate cpu, it does not enable the controller:
+.B systemd_native
+refuses with status 78 and
+.B auto
+observes with reason realtime_admission_protected. Leave the key empty only to
+accept that those services lose realtime scheduling. The key is restart-required.
+.PP
+ResMan reaches systemd over PID 1's private socket
+.IR /run/systemd/private ,
+which exists from the first instant of boot, so its early start does not depend on
+dbus-daemon.
+.PP
 Inspect
 .B resman_enforcement_mode
 or the MCP system and limits status before assuming that enforcement is available.
@@ -1355,9 +1374,10 @@ deliberately escapes the group; such containment requires a separate systemd
 transient-unit or cgroup TasksMax design. See docs/LIMIT-HOOKS.md in the source and
 documentation package for operational details.
 .SH SERVICE PRIVILEGE BOUNDARY
-ResMan runs as root. Systemd authorizes unit-property mutation on the system bus by
-user identity through polkit rather than by a Linux capability, so no capability set
-can replace root for the enforcement path. The packaged unit therefore bounds what
+ResMan runs as root. It talks to systemd over PID 1's private socket
+.IR /run/systemd/private ,
+which systemd serves only to root and authorizes by peer credentials rather than by
+a Linux capability, so no capability set can replace root for the enforcement path. The packaged unit therefore bounds what
 root may do instead of changing who the daemon is.
 .PP
 The capability bounding set is limited to

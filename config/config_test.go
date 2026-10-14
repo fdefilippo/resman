@@ -1820,3 +1820,55 @@ func TestSystemUIDMaxDefaultDoesNotDependOnPIDSpace(t *testing.T) {
 		}
 	}
 }
+
+func TestRealtimeProtectedUnitsParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   *string
+		want    []string
+		wantErr bool
+	}{
+		{name: "default protects Veritas", value: nil, want: []string{"vcs.service"}},
+		{name: "empty is consent", value: ptr(""), want: []string{}},
+		{name: "blank is consent", value: ptr("  "), want: []string{}},
+		{name: "several units", value: ptr("vcs.service, rtapp.service"), want: []string{"vcs.service", "rtapp.service"}},
+		{name: "duplicates collapse", value: ptr("vcs.service,vcs.service"), want: []string{"vcs.service"}},
+		{name: "template instance", value: ptr("rt@a.service"), want: []string{"rt@a.service"}},
+		{name: "not a service", value: ptr("vcs.target"), wantErr: true},
+		{name: "path", value: ptr("/etc/systemd/system/vcs.service"), wantErr: true},
+		{name: "empty entry", value: ptr("vcs.service,,rt.service"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetEnvForTest(t, "REALTIME_PROTECTED_UNITS")
+			content := ""
+			if tt.value != nil {
+				content = "REALTIME_PROTECTED_UNITS=" + *tt.value + "\n"
+			}
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			writeConfigFixture(t, configPath, content)
+			cfg, err := LoadAndValidate(configPath)
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "REALTIME_PROTECTED_UNITS") {
+					t.Fatalf("LoadAndValidate() error = %v, want a REALTIME_PROTECTED_UNITS rejection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAndValidate() error = %v", err)
+			}
+			if got := cfg.GetRealtimeProtectedUnits(); !slices.Equal(got, tt.want) {
+				t.Fatalf("GetRealtimeProtectedUnits() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRealtimeProtectedUnitsRequireRestart(t *testing.T) {
+	lifecycle, ok := LifecycleForField("REALTIME_PROTECTED_UNITS")
+	if !ok || lifecycle != LifecycleRestartRequired {
+		t.Fatalf("REALTIME_PROTECTED_UNITS lifecycle = %q, %v; want restart-required", lifecycle, ok)
+	}
+}
+
+func ptr(value string) *string { return &value }

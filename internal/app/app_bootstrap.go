@@ -336,6 +336,23 @@ func (a *App) initializeSystemdEnforcement(status cgroup.EnforcementStatus) (*sy
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize systemd-native enforcement (%s, retryable=%t): %v\n",
 			systemdAdapterFailureClass(err), retryable, err)
 		return nil, status, startupErr
+	case refusal != nil && refusal.Realtime != nil:
+		// Enforcing would deny realtime scheduling to a protected service and
+		// the operator asked to observe rather than refuse. Publish which one.
+		status = cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnly,
+			Reason: cgroup.EnforcementReasonRealtimeAdmissionProtected,
+		}
+		a.logger.Warn("Realtime admission protected; observing instead of enabling the cpu controller",
+			"enforcement_mode", status.Mode,
+			"reason", status.Reason,
+			"protected_unit", refusal.Realtime.Unit,
+			"protection_source", refusal.Realtime.Source,
+			"kernel_realtime_group_scheduling", refusal.Realtime.KernelGroupScheduling,
+			"released_units", refusal.Released.Units,
+			"released_properties", refusal.Released.Properties,
+		)
+		return nil, status, nil
 	case refusal != nil:
 		// The host structurally cannot enforce and the operator asked to
 		// observe instead. Publish why, never silently.
@@ -390,18 +407,23 @@ func (a *App) releaseBeforeDeclaredObservation() (systemdunit.ReleaseReport, err
 }
 
 func systemdStartupRequirements(cfg *config.Config) systemdunit.StartupRequirements {
-	return systemdunit.StartupRequirements{Memory: cfg.RAMEnabled, IO: cfg.IOEnabled}
+	return systemdunit.StartupRequirements{
+		Memory: cfg.RAMEnabled, IO: cfg.IOEnabled,
+		RealtimeProtectedUnits: cfg.GetRealtimeProtectedUnits(),
+	}
 }
 
 // classifySystemdAdapterStartupError turns every adapter construction failure
-// into a startup error. A missing mandatory capability or a probe that could
-// not run needs operator action and is permanent (status 78). Any other
+// into a startup error. A missing mandatory capability, a probe that could
+// not run, or a protected realtime service needs operator action and is
+// permanent (status 78). Any other
 // failure - the connection to systemd, a timeout, authorization, the lease
 // journal - can clear without a configuration change, so the service manager
 // retries it; once its start limit is reached the unit stays visibly failed.
 func classifySystemdAdapterStartupError(err error) error {
 	wrapped := fmt.Errorf("initialize systemd-native enforcement: %w", err)
-	if systemdunit.IsRequiredCapabilityError(err) || systemdunit.IsCapabilityProbeError(err) {
+	if systemdunit.IsRequiredCapabilityError(err) || systemdunit.IsCapabilityProbeError(err) ||
+		systemdunit.IsRealtimeProtectionError(err) {
 		return NewPermanentStartupError(wrapped)
 	}
 	return wrapped

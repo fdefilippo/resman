@@ -261,6 +261,27 @@ Current metrics schema: 10.
 
 The `systemd_native` adapter uses authoritative D-Bus unit identities and
 runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
+It talks to PID 1 directly over `/run/systemd/private`, the peer-to-peer endpoint
+systemd serves to root from the first instant of boot, not through the system bus:
+the packaged unit starts before `sysinit.target`, ahead of `dbus.socket`, so the
+system bus is never available when enforcement must be established. The transient
+capability probe service and slice carry `DefaultDependencies=no`; with default
+dependencies they would be ordered after `sysinit.target`, which waits for ResMan.
+
+**Realtime admission protection.** On a kernel with `CONFIG_RT_GROUP_SCHED=y`,
+enabling the cgroup v2 cpu controller at the root gives every child cgroup a task
+group with zero realtime runtime, and while `kernel.sched_rt_runtime_us` is not
+`-1` a later `sched_setscheduler(SCHED_FIFO|SCHED_RR)` from such a group fails with
+`EPERM`. Before the first probe, the adapter therefore checks whether a protected
+service is loaded: a unit named in `REALTIME_PROTECTED_UNITS` (default
+`vcs.service`, whose `had` requests realtime itself) or any service whose
+`CPUSchedulingPolicy` is `fifo` or `rr`. When one is loaded, the kernel has (or may
+have, if its configuration is unreadable) realtime group scheduling, the realtime
+runtime is limited and the root does not already delegate `cpu`, ResMan does not
+enable the controller: `systemd_native` refuses with status 78 and
+`failure_class=realtime_admission_protected`, `auto` observes under the reason
+`realtime_admission_protected`. An empty `REALTIME_PROTECTED_UNITS` is the
+operator's consent; a unit with a realtime `CPUSchedulingPolicy` stays protected.
 It verifies normalized properties and kernel values before acknowledging a plan.
 The fallback `observation_only` applies whenever authority is unavailable or cannot
 be verified. It never owns a cgroup hierarchy or changes process membership.

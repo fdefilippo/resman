@@ -231,3 +231,55 @@ func TestUnreachableSystemdRuntimeObservesWithoutOpeningTheAdapter(t *testing.T)
 		})
 	}
 }
+
+func TestRealtimeProtectionOutcomeFollowsTheDeclaration(t *testing.T) {
+	protection := systemdunit.RealtimeProtection{
+		Unit: "vcs.service", Source: systemdunit.RealtimeProtectionConfigured, KernelGroupScheduling: "enabled",
+	}
+	protected := &systemdunit.AdapterError{
+		Reason: systemdunit.ReasonRealtimeAdmissionProtected, Operation: "realtime_admission", Unit: "vcs.service",
+		Err: &systemdunit.RealtimeProtectionError{Protection: protection},
+	}
+
+	t.Run("systemd_native refuses permanently", func(t *testing.T) {
+		adapters := &injectedSystemdAdapters{err: protected}
+		application, logger := applicationWithInjectedAdapters(t, config.EnforcementPolicySystemdNative, adapters)
+		_, _, err := application.initializeSystemdEnforcement(systemdOwnedHostStatus())
+		if err == nil || !IsPermanentStartupError(err) {
+			t.Fatalf("protected realtime service under systemd_native = %v, want a permanent startup error", err)
+		}
+		if logged := logger.joined(); !strings.Contains(logged, "failure_class "+string(systemdunit.ReasonRealtimeAdmissionProtected)) {
+			t.Fatalf("the protection was not logged as its failure class:\n%s", logged)
+		}
+	})
+
+	t.Run("auto observes with its own reason", func(t *testing.T) {
+		adapters := &injectedSystemdAdapters{refusal: &systemdunit.CapabilityRefusal{Realtime: &protection, Err: protected}}
+		application, logger := applicationWithInjectedAdapters(t, config.EnforcementPolicyAuto, adapters)
+		adapter, status, err := application.initializeSystemdEnforcement(systemdOwnedHostStatus())
+		if err != nil || adapter != nil {
+			t.Fatalf("protected realtime service under auto = (%v, %v), want observation without error", adapter, err)
+		}
+		want := cgroup.EnforcementStatus{
+			Mode:   cgroup.EnforcementModeObservationOnly,
+			Reason: cgroup.EnforcementReasonRealtimeAdmissionProtected,
+		}
+		if status != want {
+			t.Fatalf("status = %+v, want %+v", status, want)
+		}
+		if logged := logger.joined(); !strings.Contains(logged, "protected_unit vcs.service") {
+			t.Fatalf("the protected unit was not named:\n%s", logged)
+		}
+	})
+}
+
+func TestStartupRequirementsCarryRealtimeProtectedUnits(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if got := systemdStartupRequirements(cfg).RealtimeProtectedUnits; len(got) != 1 || got[0] != "vcs.service" {
+		t.Fatalf("default protected units reaching the adapter = %v, want [vcs.service]", got)
+	}
+	cfg.RealtimeProtectedUnits = []string{}
+	if got := systemdStartupRequirements(cfg).RealtimeProtectedUnits; len(got) != 0 {
+		t.Fatalf("consent reached the adapter as %v, want no protected unit", got)
+	}
+}
