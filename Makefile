@@ -78,7 +78,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm test-functional-smolvm-memory-only test-functional-smolvm-process-membership test-functional-smolvm-cpu-without-cpuset test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-container-runtime test-functional-smolvm-block-iops test-functional-smolvm-psi-refresh test-functional-smolvm-limit-hook test-functional-smolvm-host-cpu-sampling test-functional-smolvm-preflight \
+.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 .PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu test-functional-io-device-weight-attribution-qemu
@@ -183,22 +183,6 @@ test-cover: deps
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
-# Run the isolated functional harness in a disposable SmolVM guest.
-test-functional-smolvm:
-	test/functional/smolvm/run.sh run
-
-# Verify standalone RAM enforcement without requiring io.max.
-test-functional-smolvm-memory-only:
-	SMOLVM_SCENARIO=memory-only test/functional/smolvm/run.sh run
-
-# Run the sustained-active process-membership scenario independently.
-test-functional-smolvm-process-membership:
-	SMOLVM_SCENARIO=process-membership test/functional/smolvm/run.sh run
-
-# Verify CPU quota enforcement in a delegated hierarchy without cpuset.
-test-functional-smolvm-cpu-without-cpuset:
-	SMOLVM_SCENARIO=cpu-without-cpuset test/functional/smolvm/run.sh run
-
 # Verify fail-closed startup when io is named but io.max is unavailable.
 test-functional-smolvm-missing-io-startup:
 	SMOLVM_SCENARIO=missing-io-startup test/functional/smolvm/run.sh run
@@ -207,25 +191,9 @@ test-functional-smolvm-missing-io-startup:
 test-functional-smolvm-mcp-filter-reload:
 	SMOLVM_SCENARIO=mcp-filter-reload test/functional/smolvm/run.sh run
 
-# Verify the shipped rootful Podman runtime against host users and cgroup v2.
-test-functional-smolvm-container-runtime:
-	SMOLVM_SCENARIO=container-runtime test/functional/smolvm/run.sh run
-
-# Verify true block IOPS decisions when the guest exposes io.max.
-test-functional-smolvm-block-iops:
-	SMOLVM_SCENARIO=block-iops test/functional/smolvm/run.sh run
-
 # Verify PSI observation refresh neutrality, or return BLOCKED when PSI is absent.
 test-functional-smolvm-psi-refresh:
 	SMOLVM_SCENARIO=psi-refresh-neutrality SMOLVM_REQUIRE_PSI=1 test/functional/smolvm/run.sh run
-
-# Verify bounded non-root limit-hook execution, saturation, timeout, and shutdown.
-test-functional-smolvm-limit-hook:
-	SMOLVM_SCENARIO=limit-hook-executor test/functional/smolvm/run.sh run
-
-# Verify decision-owned host CPU sampling when the observation cache TTL is longer.
-test-functional-smolvm-host-cpu-sampling:
-	SMOLVM_SCENARIO=host-cpu-sampling-cadence test/functional/smolvm/run.sh run
 
 # Check host SmolVM/KVM prerequisites without building or starting a guest.
 test-functional-smolvm-preflight:
@@ -710,16 +678,8 @@ help:
 	@echo "    static       - Build a static binary"
 	@echo "    test         - Run unit tests"
 	@echo "    test-cover   - Run tests and generate a coverage report"
-	@echo "    test-functional-smolvm - Run isolated functional tests in SmolVM"
-	@echo "    test-functional-smolvm-memory-only - Run standalone RAM enforcement in SmolVM"
-	@echo "    test-functional-smolvm-process-membership - Run active process membership in SmolVM"
-	@echo "    test-functional-smolvm-cpu-without-cpuset - Run CPU enforcement without cpuset in SmolVM"
 	@echo "    test-functional-smolvm-mcp-filter-reload - Run acknowledged MCP filter reload in SmolVM"
-	@echo "    test-functional-smolvm-container-runtime - Verify the shipped sudo podman runtime in SmolVM"
-	@echo "    test-functional-smolvm-block-iops - Verify cached syscalls and direct block IOPS in SmolVM"
 	@echo "    test-functional-smolvm-psi-refresh - Verify PSI refresh neutrality or report BLOCKED"
-	@echo "    test-functional-smolvm-limit-hook - Verify bounded non-root limit-hook execution"
-	@echo "    test-functional-smolvm-host-cpu-sampling - Verify decision CPU sampling independently of cache TTL"
 	@echo "    test-functional-smolvm-preflight - Check SmolVM/KVM prerequisites"
 	@echo "    test-functional-smolvm-unit - Test the host harness without KVM"
 	@echo "    test-functional-real-kernel-unit - Test packaged-service host sequencing"

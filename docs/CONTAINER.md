@@ -115,13 +115,8 @@ output contains `read_bytes`, `write_bytes`, `syscr`, and `syscw`. Failure of an
 the runtime does not meet the supported contract and must not be treated as an
 enforcement-capable deployment.
 
-The reproducible product gate is:
-
-```bash
-make test-functional-smolvm-container-runtime
-```
-
-It runs the shipped image under rootful Podman inside a disposable SmolVM guest,
-resolves a host fixture user, reads the foreign-user executable identity, and
-observes a real finite `cpu.max` lifecycle. Exit status 77 is blocked evidence,
-not a pass.
+No automated container gate is retained. The former SmolVM
+`container-runtime` scenario asserted the retired PID-relocation hierarchy and a
+container-applied `cpu.max`, neither of which exists any more, and was removed.
+The checks above verify a deployment; a correctly configured container publishes
+`enforcement_mode=observation_only` with the reason `systemd_runtime_unreachable`.

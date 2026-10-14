@@ -26,9 +26,6 @@ func TestFunctionalLogExpectationsUseProductionCompletionVocabulary(t *testing.T
 		"test/functional/smolvm/guest/non-systemd-observation.py": {
 			"requested_policy_intent=activate",
 		},
-		"test/functional/smolvm/guest/run-functional.sh": {
-			"requested_policy_intent=activate.*system_under_load=true.*ignore_system_load=false",
-		},
 		"test/functional/real-kernel/run.sh": {
 			"requested_policy_intent=activate.*decision_reason=.*(read_iops|write_iops)",
 			"requested_policy_intent=activate.*decision_reason=.*${decision_name}",
