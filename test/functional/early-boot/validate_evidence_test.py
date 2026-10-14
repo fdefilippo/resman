@@ -117,9 +117,21 @@ class VerdictTest(unittest.TestCase):
             "ActiveState=active\nResult=success\nNRestarts=1\nActiveEnterTimestampMonotonic=2600000\n"),
             "consented-enforcement")
 
-    def test_consent_without_revocation_is_unmeasured(self):
+    def test_consent_with_cpu_delegated_must_revoke_realtime(self):
         self.assertNotQualified(lambda e: write(e / "consented-enforcement/fixture.json",
                                                 json.dumps({"result": "granted", "policy": 1})),
+                                "consented-enforcement")
+
+    def test_consent_with_cpu_withdrawn_after_the_probe_keeps_realtime(self):
+        def mutate(e):
+            write(e / "consented-enforcement/root-subtree-control.txt", "memory pids\n")
+            write(e / "consented-enforcement/fixture.json", json.dumps({"result": "granted", "policy": 1}))
+        report = self.evaluate(mutate)
+        self.assertEqual(report["verdict"], "QUALIFIED", report)
+        self.assertFalse(report["scenarios"]["consented-enforcement"]["root_delegates_cpu_after_boot"])
+
+    def test_consent_with_cpu_withdrawn_cannot_refuse_realtime(self):
+        self.assertNotQualified(lambda e: write(e / "consented-enforcement/root-subtree-control.txt", "memory pids\n"),
                                 "consented-enforcement")
 
     def test_protected_fixture_lost_realtime(self):

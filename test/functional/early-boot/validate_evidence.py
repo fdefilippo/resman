@@ -137,14 +137,18 @@ def check_scenario(name, directory, platform):
             findings.append(f"resman did not run first time: {unit}")
         if "Systemd-native CPU enforcement selected" not in log:
             findings.append("systemd-native enforcement was not selected at boot")
-        if "cpu" not in root:
-            findings.append("the root cgroup does not delegate cpu after an enforcing boot")
         if not (0 < ready < sysinit):
             findings.append(f"resman was not ready before sysinit.target (ready={ready}, sysinit={sysinit})")
         if dbus and not ready < dbus:
             findings.append(f"resman was not ready before dbus.socket (ready={ready}, dbus={dbus})")
-        if fixture.get("result") != "refused" or fixture.get("errno") != EPERM:
-            findings.append(f"the fixture's realtime request was not refused with EPERM: {fixture}")
+        # At an idle boot the probe restores user.slice, and whether systemd
+        # then withdraws cpu from the root is a property of its version. The
+        # kernel outcome must agree with the delegation actually left behind.
+        if "cpu" in root:
+            if fixture.get("result") != "refused" or fixture.get("errno") != EPERM:
+                findings.append(f"root delegates cpu but the fixture's realtime request was not refused with EPERM: {fixture}")
+        elif fixture.get("result") != "granted" or fixture.get("policy") != SCHED_FIFO:
+            findings.append(f"root does not delegate cpu but the fixture did not get SCHED_FIFO: {fixture}")
         return findings
 
     # Both protected scenarios require that nothing else enabled cpu at the
@@ -180,8 +184,12 @@ def evaluate(evidence, platform, revision, package, manifest_path):
             raise EvidenceError(f"scenario {name} was not measured")
         boot_ids.add(read(directory, "boot-id.txt").strip())
         scenario_findings = check_scenario(name, directory, platform)
-        report["scenarios"][name] = {"verdict": "PASS" if not scenario_findings else "FAIL",
-                                     "findings": scenario_findings}
+        report["scenarios"][name] = {
+            "verdict": "PASS" if not scenario_findings else "FAIL",
+            "findings": scenario_findings,
+            "root_delegates_cpu_after_boot": "cpu" in read(directory, "root-subtree-control.txt").split(),
+            "fixture": json.loads(read(directory, "fixture.json")),
+        }
     if len(boot_ids) != len(SCENARIOS):
         findings.append("the scenarios did not each run on a distinct boot")
     report["platform_findings"] = findings

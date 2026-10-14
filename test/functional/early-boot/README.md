@@ -25,7 +25,7 @@ granted the request. Each scenario is one cold boot:
 | --- | --- | --- |
 | `protected-refusal` | `systemd_native`, default `REALTIME_PROTECTED_UNITS` | ResMan fails with status 78, no restart, `failure_class=realtime_admission_protected` naming `vcs.service`; the fixture keeps `SCHED_FIFO`; the root does not delegate `cpu` |
 | `protected-observation` | `auto`, default `REALTIME_PROTECTED_UNITS` | ResMan runs and observes with reason `realtime_admission_protected` for `vcs.service`; the fixture keeps `SCHED_FIFO`; the root does not delegate `cpu` |
-| `consented-enforcement` | `systemd_native`, empty `REALTIME_PROTECTED_UNITS` | ResMan selects systemd-native enforcement on the first start, is ready before `sysinit.target` and before `dbus.socket`; the root delegates `cpu`; the fixture's realtime request fails with `EPERM`, the accepted trade-off |
+| `consented-enforcement` | `systemd_native`, empty `REALTIME_PROTECTED_UNITS` | ResMan selects systemd-native enforcement on the first start and is ready before `sysinit.target` and before `dbus.socket`; the fixture's outcome agrees with the delegation systemd leaves at the root after the probe restores `user.slice`: `EPERM` when `cpu` stays delegated, `SCHED_FIFO` when systemd withdraws it |
 
 On every boot the journal must contain no system bus failure, `sysinit.target`
 must be reached, and the kernel must report `CONFIG_RT_GROUP_SCHED=y` with a
