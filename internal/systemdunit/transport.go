@@ -182,14 +182,12 @@ func (t *dbusTransport) startCapabilityProbe(ctx context.Context, unit string, a
 }
 
 // capabilityProbeProperties builds the transient probe service and its slice.
-// Both carry DefaultDependencies=no: ResMan starts before sysinit.target, and a
-// service with default dependencies is ordered after sysinit.target, which in
-// turn waits for ResMan's readiness. The probe job would then wait for its own
-// caller until the call timeout, and the boot with it.
+// Only the weighted-I/O probe uses them, after readiness: a slice below
+// user.slice inherits After=systemd-user-sessions.service from systemd's
+// user-.slice.d drop-in, so it can never run before sysinit.target.
 func capabilityProbeProperties(unit string, assignments []PropertyAssignment) ([]systemdbus.Property, []systemdbus.Property) {
 	sliceProperties := []systemdbus.Property{
 		systemdbus.PropDescription("ResMan cgroup interface capability probe"),
-		propNoDefaultDependencies(),
 	}
 	for _, assignment := range assignments {
 		sliceProperties = append(sliceProperties, systemdbus.Property{
@@ -199,15 +197,10 @@ func capabilityProbeProperties(unit string, assignments []PropertyAssignment) ([
 	}
 	serviceProperties := []systemdbus.Property{
 		systemdbus.PropDescription("ResMan bounded cgroup interface capability probe"),
-		propNoDefaultDependencies(),
 		systemdbus.PropSlice(unit),
 		systemdbus.PropExecStart([]string{capabilityProbeExecutable, "30"}, false),
 	}
 	return serviceProperties, sliceProperties
-}
-
-func propNoDefaultDependencies() systemdbus.Property {
-	return systemdbus.Property{Name: "DefaultDependencies", Value: godbus.MakeVariant(false)}
 }
 
 func (t *dbusTransport) stopCapabilityProbe(ctx context.Context, unit string) error {

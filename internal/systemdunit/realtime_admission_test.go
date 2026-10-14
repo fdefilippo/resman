@@ -91,8 +91,9 @@ func TestRealtimeAdmissionGuardProtectsBeforeAnyProbe(t *testing.T) {
 			if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonRealtimeAdmissionProtected {
 				t.Fatalf("error %v does not carry %s", err, ReasonRealtimeAdmissionProtected)
 			}
-			if len(transport.probeStarts) != 0 {
-				t.Fatalf("a capability probe ran %d times while a realtime service was protected", len(transport.probeStarts))
+			if len(transport.setCalls) != 0 || len(transport.probeStarts) != 0 {
+				t.Fatalf("a capability probe ran while a realtime service was protected: set=%d starts=%d",
+					len(transport.setCalls), len(transport.probeStarts))
 			}
 		})
 	}
@@ -128,8 +129,8 @@ func TestRealtimeAdmissionGuardLetsEnforcementProceed(t *testing.T) {
 			if err != nil {
 				t.Fatalf("requireStartupCapabilities() error = %v, want the probe to proceed", err)
 			}
-			if len(transport.probeStarts) == 0 {
-				t.Fatal("the capability probe did not run")
+			if !setCallsTargetUnit(transport.setCalls, parentUserSlice) {
+				t.Fatal("the capability probe did not run on user.slice")
 			}
 			if (transport.inspectCalls > 0) != tt.wantInspects {
 				t.Fatalf("realtime service inspections = %d, want inspections %t", transport.inspectCalls, tt.wantInspects)
@@ -147,7 +148,7 @@ func TestRealtimeAdmissionInspectionFailureIsNotAProtection(t *testing.T) {
 	if err == nil || IsRealtimeProtectionError(err) {
 		t.Fatalf("inspection failure = %v, want a transport error that is not a realtime protection", err)
 	}
-	if len(transport.probeStarts) != 0 {
+	if len(transport.setCalls) != 0 || len(transport.probeStarts) != 0 {
 		t.Fatal("the probe ran although realtime services could not be inspected")
 	}
 }
@@ -246,6 +247,15 @@ func TestProductionConstructorsCollectRealtimeKernelFacts(t *testing.T) {
 }
 
 func text(value string) *string { return &value }
+
+func setCallsTargetUnit(calls []fakeSetCall, unit string) bool {
+	for _, call := range calls {
+		if call.unit == unit {
+			return true
+		}
+	}
+	return false
+}
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()

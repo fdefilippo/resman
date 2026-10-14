@@ -63,15 +63,126 @@ type startupCapability struct {
 	requiredAssignments []PropertyAssignment
 }
 
-func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements StartupRequirements) error {
+// requireStartupCapabilities proves every mandatory capability on user.slice
+// itself, through the production Apply, ConfirmApplied and Restore path. It
+// starts no unit: ResMan starts before sysinit.target, and systemd's
+// user-.slice.d drop-in orders every child of user.slice after
+// systemd-user-sessions.service, which waits for sysinit.target. A transient
+// probe slice would therefore wait for ResMan itself until the call timeout
+// (resman-318.2). The user-UID.slice level is verified when a limit is first
+// applied there.
+func (a *Adapter) requireStartupCapabilities(ctx context.Context, requirements StartupRequirements) (retErr error) {
 	// The guard runs before any probe: the probe itself is what would make
 	// systemd enable the cpu controller at the root.
 	if err := a.checkRealtimeAdmission(ctx, requirements); err != nil {
 		return err
 	}
-	return a.requireCapabilities(ctx, requirements, nil)
+	transport, ok := a.transport.(startupCapabilityTransport)
+	if !ok {
+		return &AdapterError{
+			Reason: ReasonRequiredCapability, Operation: "startup_capabilities",
+			Err: fmt.Errorf("systemd transport cannot remove interrupted capability probes"),
+		}
+	}
+	// Earlier releases and the weighted-I/O probe use transient units; one
+	// interrupted by a crash is removed before user.slice is examined.
+	if err := a.cleanInterruptedCapabilityProbes(ctx, transport); err != nil {
+		return err
+	}
+	parent, err := a.startupParent(ctx)
+	if err != nil {
+		return err
+	}
+	capabilities, err := startupCapabilities(requirements)
+	if err != nil {
+		return err
+	}
+	defer a.restoreStartupParent(parent.Identity, &retErr)
+	for _, capability := range capabilities {
+		if err := a.probeParentCapability(ctx, parent.Identity, capability); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
+// probeParentCapability writes one non-default value to user.slice, which
+// makes systemd realize the controller there, requires the interface and
+// confirms the value end to end. It writes only the probe value itself: the
+// baseline of a CPU quota or memory limit is "unset", whose restoration also
+// verifies where the kernel never exposed the interface, so a refused
+// controller never leaves a lease behind. A weight baseline is restored by
+// programming the kernel default, so the I/O controller must be offered by
+// the root before its weight is written.
+func (a *Adapter) probeParentCapability(ctx context.Context, identity UnitIdentity, capability startupCapability) error {
+	if capability.controller == "io" {
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+		before, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("read %s for the %s startup capability probe: %w", parentUserSlice, capability.feature, err)
+		}
+		if err := a.verifier.preflightApply(before, capability.requiredAssignments); err != nil {
+			return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignments[0].name, err)
+		}
+	}
+	applied, err := a.Apply(ctx, identity, capability.probeAssignments)
+	if err != nil {
+		// A controller the kernel refuses to delegate leaves its interface
+		// absent, and the readback then fails: report the missing capability,
+		// not a verification fault.
+		if missing := a.missingParentInterface(ctx, identity, capability); missing != nil {
+			return missing
+		}
+		return fmt.Errorf("apply %s startup capability probe: %w", capability.feature, err)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	snapshot, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("read %s for the %s startup capability probe: %w", parentUserSlice, capability.feature, err)
+	}
+	if err := a.verifier.preflight(snapshot, capability.requiredAssignments); err != nil {
+		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignments[0].name, err)
+	}
+	if _, err := a.ConfirmApplied(ctx, applied.Identity, capability.probeAssignments); err != nil {
+		return fmt.Errorf("confirm %s startup capability probe: %w", capability.feature, err)
+	}
+	return nil
+}
+
+func (a *Adapter) missingParentInterface(ctx context.Context, identity UnitIdentity, capability startupCapability) error {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	snapshot, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+	if err != nil {
+		return nil
+	}
+	if err := a.verifier.preflight(snapshot, capability.requiredAssignments); err != nil {
+		return requiredCapabilityError(capability.feature, capability.controller, capability.interfaceName, capability.requiredAssignments[0].name, err)
+	}
+	return nil
+}
+
+// restoreStartupParent returns user.slice to the exact baseline recorded
+// before the probe and requires that no property lease survives it.
+func (a *Adapter) restoreStartupParent(identity UnitIdentity, retErr *error) {
+	if !a.ownsUnitName(parentUserSlice) {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), a.timeout)
+	defer cancel()
+	if _, err := a.Restore(cleanupCtx, identity); err != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("restore %s after the startup capability probe: %w", parentUserSlice, err))
+	}
+	if a.ownsUnitName(parentUserSlice) {
+		*retErr = errors.Join(*retErr, fmt.Errorf("startup capability probe left a durable property lease on %s", parentUserSlice))
+	}
+}
+
+// requireCapabilities proves capabilities through a disposable transient
+// probe unit. Only the weighted-I/O probe uses it, after readiness, when
+// user.slice may carry live enforcement that a probe must not disturb.
 func (a *Adapter) requireCapabilities(ctx context.Context, requirements StartupRequirements, include func(startupCapability) bool) error {
 	transport, ok := a.transport.(startupCapabilityTransport)
 	if !ok {
@@ -94,7 +205,7 @@ func (a *Adapter) requireCapabilities(ctx context.Context, requirements StartupR
 		if include != nil && !include(capability) {
 			continue
 		}
-		if err := a.probeStartupCapability(ctx, transport, capability); err != nil {
+		if err := a.probeTransientCapability(ctx, transport, capability); err != nil {
 			return err
 		}
 	}
@@ -182,7 +293,7 @@ func startupCapabilities(requirements StartupRequirements) ([]startupCapability,
 	return result, nil
 }
 
-func (a *Adapter) probeStartupCapability(ctx context.Context, transport startupCapabilityTransport, capability startupCapability) (retErr error) {
+func (a *Adapter) probeTransientCapability(ctx context.Context, transport startupCapabilityTransport, capability startupCapability) (retErr error) {
 	unit, err := newCapabilityProbeUnit()
 	if err != nil {
 		return capabilityProbePreparationError(capability.feature, err)
@@ -274,11 +385,18 @@ func (a *Adapter) cleanInterruptedCapabilityProbes(ctx context.Context, transpor
 }
 
 func (a *Adapter) validateStartupParent(ctx context.Context) error {
+	_, err := a.startupParent(ctx)
+	return err
+}
+
+// startupParent returns the authoritative user.slice snapshot after checking
+// that systemd lists exactly one active, loaded parent slice.
+func (a *Adapter) startupParent(ctx context.Context) (UnitSnapshot, error) {
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	listed, err := a.transport.listUserSlices(callCtx)
 	if err != nil {
-		return classifyTransportError("startup_capabilities", parentUserSlice, err)
+		return UnitSnapshot{}, classifyTransportError("startup_capabilities", parentUserSlice, err)
 	}
 	var parent *listedUnit
 	for index := range listed {
@@ -287,20 +405,21 @@ func (a *Adapter) validateStartupParent(ctx context.Context) error {
 			continue
 		}
 		if parent != nil {
-			return malformedReply("startup_capabilities", parentUserSlice, "duplicate parent slice in ListUnitsByPatterns reply")
+			return UnitSnapshot{}, malformedReply("startup_capabilities", parentUserSlice, "duplicate parent slice in ListUnitsByPatterns reply")
 		}
 		parent = candidate
 	}
 	if parent == nil {
-		return &AdapterError{Reason: ReasonUnitMissing, Operation: "startup_capabilities", Unit: parentUserSlice, Err: fmt.Errorf("active parent slice was not returned by systemd")}
+		return UnitSnapshot{}, &AdapterError{Reason: ReasonUnitMissing, Operation: "startup_capabilities", Unit: parentUserSlice, Err: fmt.Errorf("active parent slice was not returned by systemd")}
 	}
 	if parent.loadState != "loaded" || parent.activeState != "active" || !strings.HasPrefix(parent.objectPath, "/org/freedesktop/systemd1/unit/") {
-		return malformedReply("startup_capabilities", parentUserSlice, "parent slice has an invalid state or object path")
+		return UnitSnapshot{}, malformedReply("startup_capabilities", parentUserSlice, "parent slice has an invalid state or object path")
 	}
-	if _, err := a.readUnit(callCtx, parent.name, parent.objectPath); err != nil {
-		return fmt.Errorf("validate parent slice through the production adapter: %w", err)
+	snapshot, err := a.readUnit(callCtx, parent.name, parent.objectPath)
+	if err != nil {
+		return UnitSnapshot{}, fmt.Errorf("validate parent slice through the production adapter: %w", err)
 	}
-	return nil
+	return snapshot, nil
 }
 
 func (a *Adapter) ownsUnitName(unit string) bool {

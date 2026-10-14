@@ -39,16 +39,16 @@ func TestTransientCapabilityFailureNeverBecomesAnObservationRefusal(t *testing.T
 	// A probe that cannot run is not evidence that the host lacks the
 	// interface, so enforcement must never be given up for it.
 	transport := newFakeUnitTransport()
-	transport.onProbeStart = func(f *fakeUnitTransport, unit string) {
-		delete(f.units[unit].slice, string(PropertyCPUQuotaPeriodUSec))
-	}
+	transport.setErr = errors.New("connection reset by peer")
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 
 	refusal, err := adapter.resolveStartupCapabilities(context.Background(), StartupRequirements{})
 	if refusal != nil {
 		t.Fatalf("transient failure produced an observation refusal: %+v", refusal)
 	}
-	assertAdapterReason(t, err, ReasonMalformedReply)
+	if err == nil || IsRequiredCapabilityError(err) {
+		t.Fatalf("resolveStartupCapabilities() error = %v, want a transient failure that is not a missing capability", err)
+	}
 }
 
 func TestAvailableCapabilitiesProduceNeitherRefusalNorError(t *testing.T) {

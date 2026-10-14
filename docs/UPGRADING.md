@@ -29,9 +29,11 @@ hierarchy; ResMan therefore requires root support before the write and acknowled
 the limit only after exact kernel readback from the target slice.
 These checks do not enable the new weighted-I/O policy or change configured strong I/O limits.
 
-The packaged startup probe uses `/usr/bin/sleep`, supplied by the declared
+The weighted-I/O capability probe uses `/usr/bin/sleep`, supplied by the declared
 `coreutils` dependency. A failure to start that executable is reported as a probe
-failure with its path, separately from a missing controller or cgroup interface.
+failure with its path, separately from a missing controller or cgroup interface. The
+startup capability probe starts no process: it writes runtime values to `user.slice`
+and restores them before readiness.
 
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
@@ -44,8 +46,11 @@ operator-authored configuration has been recovered.
 before `sysinit.target` and before `vcs.service`, so on a cold boot ResMan now
 establishes systemd-native enforcement before ordinary services start, instead of
 failing to connect. Enforcement no longer depends on dbus-daemon or on polkit, and a
-restart of the system bus no longer drops the adapter's connection. The transient
-capability probe service and slice now carry `DefaultDependencies=no`.
+restart of the system bus no longer drops the adapter's connection. The startup
+capability probe no longer creates transient units: it writes runtime values to
+`user.slice` itself and restores them before readiness, because systemd orders every
+child of `user.slice` after `systemd-user-sessions.service`, which would make a probe
+slice wait for ResMan itself at boot.
 
 **Cause.** `dbus.socket` is ordered after `sysinit.target`, and ResMan before it, so
 the system bus never existed when the adapter opened. Through 1.39.2 the early start

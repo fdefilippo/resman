@@ -264,9 +264,21 @@ runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
 It talks to PID 1 directly over `/run/systemd/private`, the peer-to-peer endpoint
 systemd serves to root from the first instant of boot, not through the system bus:
 the packaged unit starts before `sysinit.target`, ahead of `dbus.socket`, so the
-system bus is never available when enforcement must be established. The transient
-capability probe service and slice carry `DefaultDependencies=no`; with default
-dependencies they would be ordered after `sysinit.target`, which waits for ResMan.
+system bus is never available when enforcement must be established.
+
+The startup capability probe starts no unit. systemd's `user-.slice.d` drop-in
+orders every child of `user.slice` after `systemd-user-sessions.service`, which
+comes after `sysinit.target`, so a transient probe slice would wait for ResMan
+until the call timeout. The probe therefore writes a runtime CPU quota (and, when
+enabled, memory limits and an I/O weight) to `user.slice` itself through the
+production Apply and ConfirmApplied path, requires the interface, and restores
+`user.slice` with the lease mechanism before readiness. It writes only values whose
+"unset" baseline also verifies where the kernel never exposed the interface, and it
+requires the root to offer the I/O controller before writing an I/O weight, so a
+refused controller leaves no lease behind. The `user-UID.slice` level is verified
+when a limit is first applied there. Only the asynchronous weighted-I/O probe, run
+after readiness when `user.slice` may carry live enforcement, still uses a transient
+probe unit.
 
 **Realtime admission protection.** On a kernel with `CONFIG_RT_GROUP_SCHED=y`,
 enabling the cgroup v2 cpu controller at the root gives every child cgroup a task

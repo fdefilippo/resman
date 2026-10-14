@@ -56,8 +56,11 @@ rollback, every unrelated managed drop-in remains bound to its recorded digest, 
 successful confirmation records the rewritten drop-in's new digest. Consequently, an
 equivalent systemd rewrite that preserves the effective typed value is accepted; a
 change to another managed file is an external conflict.
-An owned transient capability probe is stopped before its journal and runtime
-drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
+The startup capability probe writes runtime values to `user.slice` itself and
+returns it to its recorded baselines with a complete restore before readiness; a
+crash in between leaves an ordinary `user.slice` lease that the next start recovers.
+An owned transient capability probe, used only by the weighted-I/O probe after
+readiness, is stopped before its journal and runtime drop-in are reconciled. Its cgroup disappears with the unit, so no active baseline
 must be retained; reconciling the now-inactive footprint avoids placing a full
 daemon reload inside the active `io.cost` probe transaction. Systemd may remove the
 entire transient runtime footprint as part of that stop. For the exact reserved,
