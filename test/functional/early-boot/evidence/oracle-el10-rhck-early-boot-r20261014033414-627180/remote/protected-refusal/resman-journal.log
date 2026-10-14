@@ -1,0 +1,3 @@
+[    7.268089] localhost.localdomain systemd[1]: Starting resman.service - ResMan - Dynamic CPU/RAM/IO Resource Management...
+[    7.368282] localhost.localdomain resman[962]: WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).
+[    7.919534] localhost.localdomain systemd[1]: Started resman.service - ResMan - Dynamic CPU/RAM/IO Resource Management.

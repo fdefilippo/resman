@@ -320,9 +320,9 @@ func TestProbeIODeviceWeightCleansTransientUnitWhenStrictPreflightFails(t *testi
 	verifier := &fakeKernelVerifier{preflightByName: map[PropertyName]error{PropertyIODeviceWeight: errors.New("qualified interface disappeared")}}
 	adapter := mustTestAdapter(t, transport, verifier)
 	capabilities := mustStartupCapabilities(t, StartupRequirements{IODeviceWeights: []IODeviceWeightRequest{{Path: "/dev/vda", Weight: 333, Mechanism: IODeviceWeightMechanismIOCost}}})
-	err := adapter.probeStartupCapability(context.Background(), transport, capabilities[len(capabilities)-1])
+	err := adapter.probeTransientCapability(context.Background(), transport, capabilities[len(capabilities)-1])
 	if !IsRequiredCapabilityError(err) {
-		t.Fatalf("probeStartupCapability() error = %v, want required capability", err)
+		t.Fatalf("probeTransientCapability() error = %v, want required capability", err)
 	}
 	if len(transport.probeStarts) != 1 || len(transport.probeStops) != 1 || len(adapter.OwnedUnits()) != 0 {
 		t.Fatalf("failed probe residue starts=%v stops=%v owned=%v", transport.probeStarts, transport.probeStops, adapter.OwnedUnits())

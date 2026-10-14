@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.39.2
+VERSION = 1.40.0
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -83,6 +83,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 
 .PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu test-functional-io-device-weight-attribution-qemu
 .PHONY: test-functional-cpu-delegation-unit test-functional-cpu-delegation-qemu
+.PHONY: test-functional-early-boot-unit test-functional-early-boot-qemu
 
 .PHONY: prepare-go-worktree deps-check deps-check-json deps-verify deps-vuln deps-vuln-install deps-audit deps-weekly deps-report deps-test deps-update deps-update-core
 
@@ -132,6 +133,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	$(MAKE) test-functional-systemd239-unit
 	$(MAKE) test-functional-io-device-weight-unit
 	$(MAKE) test-functional-cpu-delegation-unit
+	$(MAKE) test-functional-early-boot-unit
 	$(MAKE) ci-test GO="$(GO)"
 	$(MAKE) lint-required GO="$(GO)"
 
@@ -252,6 +254,14 @@ test-functional-cpu-delegation-unit:
 # Reproduce the EL8 cpu-delegation refusal inside a disposable QEMU guest.
 test-functional-cpu-delegation-qemu:
 	test/functional/cpu-delegation/remote-qemu.sh "$(RESMAN_CPUDEL_QEMU_HOST)" "$(RESMAN_EL8_RPM)" "$(RESMAN_EL8_RPM_MANIFEST)"
+
+# Exercise the early-boot qualification harness without starting a VM.
+test-functional-early-boot-unit:
+	test/functional/early-boot/host_test.sh
+
+# Qualify the early-boot start on one EL platform (el8, el9 or el10) in QEMU.
+test-functional-early-boot-qemu:
+	test/functional/early-boot/remote-qemu.sh "$(RESMAN_EBOOT_QEMU_HOST)" "$(RESMAN_EBOOT_PLATFORM)" "$(RESMAN_EBOOT_RPM)" "$(RESMAN_EBOOT_RPM_MANIFEST)"
 
 # Exercise the IODeviceWeight platform-characterization harness without KVM.
 test-functional-io-device-weight-unit:
@@ -717,6 +727,8 @@ help:
 	@echo "    test-functional-systemd239-qemu - Qualify RESMAN_EL8_RPM on RESMAN_EL8_QEMU_HOST"
 	@echo "    test-functional-cpu-delegation-unit - Test the EL8 cpu-delegation harness"
 	@echo "    test-functional-cpu-delegation-qemu - Reproduce the EL8 cpu-delegation refusal"
+	@echo "    test-functional-early-boot-unit - Test the early-boot qualification harness"
+	@echo "    test-functional-early-boot-qemu - Qualify the early-boot start on one EL platform"
 	@echo "    test-functional-io-device-weight-unit - Test the IODeviceWeight QEMU harness"
 	@echo "    test-functional-io-device-weight-qemu - Characterize IODeviceWeight on EL8/EL9/EL10"
 	@echo "    test-functional-io-device-weight-attribution-qemu - Attribute the EL8/UEK BFQ path limit"

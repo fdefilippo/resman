@@ -1,0 +1,11 @@
+run_id=r20261014032754-626359
+platform=el9
+qualification_revision=3205118543c6f6849a410462e4e0812bf2eee98a
+remote_host=root@terra
+package_source_revision=aa4f73345e9eb4fd0db476cc24a0318196f54a43
+package_source_tree=1a5c7aac12c1e08b0ce2a5469e5fb08bce7a4aae
+package_sha256=0bfc2c79dde887d951141c06e3d41bfea07d62389ac6472b9804084970e4034e
+expected=QUALIFIED
+cleanup=PASS
+result=PASS
+exit_code=0

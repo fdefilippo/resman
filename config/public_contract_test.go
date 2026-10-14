@@ -139,9 +139,6 @@ func TestExampleConfigMatchesRuntimeDefaults(t *testing.T) {
 	path := "resman.conf.example"
 	activeKeys := activeExampleKeys(t, path)
 	for _, contract := range PublicFieldContracts() {
-		if contract.Key == "SYSTEM_UID_MAX" {
-			continue
-		}
 		if activeKeys[contract.Key] != 1 {
 			t.Errorf("%s active assignments = %d, want exactly 1", contract.Key, activeKeys[contract.Key])
 		}

@@ -264,6 +264,59 @@ runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
 It verifies normalized properties and kernel values before acknowledging a plan.
 The fallback `observation_only` applies whenever authority is unavailable or cannot
 be verified. It never owns a cgroup hierarchy or changes process membership.
+It talks to PID 1 directly over `/run/systemd/private`, the peer-to-peer endpoint
+systemd serves to root from the first instant of boot, not through the system bus:
+the packaged unit starts before `sysinit.target`, ahead of `dbus.socket`, so the
+system bus is never available when enforcement must be established.
+
+The startup capability probe starts no unit. systemd's `user-.slice.d` drop-in
+orders every child of `user.slice` after `systemd-user-sessions.service`, which
+comes after `sysinit.target`, so a transient probe slice would wait for ResMan
+until the call timeout. The probe therefore writes a runtime CPU quota (and, when
+enabled, memory limits and an I/O weight) to `user.slice` itself through the
+production Apply and ConfirmApplied path, requires the interface, and restores
+`user.slice` with the lease mechanism before readiness. It writes only values whose
+"unset" baseline also verifies where the kernel never exposed the interface, and it
+requires the root to offer the I/O controller before writing an I/O weight, so a
+refused controller leaves no lease behind. The `user-UID.slice` level is verified
+when a limit is first applied there. Only the asynchronous weighted-I/O probe, run
+after readiness when `user.slice` may carry live enforcement, still uses a transient
+probe unit.
+
+**Realtime admission protection.** On a kernel with `CONFIG_RT_GROUP_SCHED=y`,
+enabling the cgroup v2 cpu controller at the root gives every child cgroup a task
+group with zero realtime runtime, and while `kernel.sched_rt_runtime_us` is not
+`-1` a later `sched_setscheduler(SCHED_FIFO|SCHED_RR)` from such a group fails with
+`EPERM`. Before the first probe, the adapter therefore checks whether a protected
+service is loaded: a unit named in `REALTIME_PROTECTED_UNITS` (default
+`vcs.service`, whose `had` requests realtime itself) or any service whose
+`CPUSchedulingPolicy` is `fifo` or `rr`. When one is loaded, the kernel has (or may
+have, if its configuration is unreadable) realtime group scheduling, the realtime
+runtime is limited and the root does not already delegate `cpu`, ResMan does not
+enable the controller: `systemd_native` refuses with status 78 and
+`failure_class=realtime_admission_protected`, `auto` observes under the reason
+`realtime_admission_protected`. An empty `REALTIME_PROTECTED_UNITS` is the
+operator's consent; a unit with a realtime `CPUSchedulingPolicy` stays protected.
+The risk is not the idle boot: the probe restores `user.slice` before readiness and
+the EL8 cold boots show systemd withdrawing `cpu` from the root before
+`vcs.service` starts. It is the window in which ResMan's CPU limits keep the
+controller enabled, during which a protected service that starts or restarts
+(`hastart` restarts `vcs.service`) loses realtime admission. The EL9 and EL10
+distribution kernels are built without realtime group scheduling, so the guard
+never protects there (`test/functional/early-boot`).
+
+Opening the adapter at startup is not an `observation_only` fallback. On a host whose workloads
+systemd owns, with `ENFORCEMENT_MODE` set to `systemd_native` or `auto`, every
+construction failure stops startup. A missing mandatory capability or a probe that
+could not run is permanent (exit status 78); only `auto` turns a definitive
+capability refusal into a published `mandatory_capability_unavailable`
+observation. Any other failure (the connection to systemd, a timeout, an
+authorization refusal, the lease journal) exits with status 1, so
+`Restart=on-failure` retries it, and is logged with its bounded `failure_class`.
+No adapter failure can publish `systemd_owns_host_workloads`. A process that sees
+systemd as PID 1 but not `/run/systemd/system`, such as the supported container
+sharing the host PID namespace, never opens the adapter: it observes under
+`systemd_runtime_unreachable`.
 
 **Native cgroup hierarchy:**
 ```text
@@ -712,8 +765,10 @@ The core default contracts are:
 
 - Prometheus binds to `127.0.0.1`. Binding to `0.0.0.0` is a non-default remote
   exposure and requires TLS, authentication, and firewall restrictions.
-- `SYSTEM_UID_MAX` follows `/proc/sys/kernel/pid_max` at startup, with `60000`
-  only as the read-failure fallback. The example deliberately leaves it unset.
+- An unset `SYSTEM_UID_MAX` applies no upper UID bound: the default is
+  `4294967294`, the largest valid UID, because `4294967295` is `(uid_t)-1` and
+  never owns a process. The bound is independent of the PID space; directory
+  accounts mapped by sssd routinely have UIDs far above `pid_max`.
 - An empty `USER_INCLUDE_LIST` makes nobody eligible for CPU limiting. Empty
   RAM and I/O include lists select every non-excluded user for those resources.
 
@@ -1517,7 +1572,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.39.2-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.40.0-1'" -o resman .
 ```
 
 **Build RPM:**

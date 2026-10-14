@@ -223,6 +223,7 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 	"IO_WRITE_IOPS":                {Minimum: number(0)},
 	"IO_DEVICE_FILTER":             {Format: "all-or-device-number"},
 	"IO_WEIGHT_DEVICES":            {Format: "comma-separated-device-numbers"},
+	"REALTIME_PROTECTED_UNITS":     {Format: "comma-separated-service-units"},
 	"IO_ROOT_WEIGHT":               {Minimum: number(1), Maximum: number(1000)},
 	"IO_DEFAULT_WEIGHT":            {Minimum: number(1), Maximum: number(1000)},
 	"IO_USER_WEIGHT_FILE":          {Format: "absolute-clean-path"},
@@ -286,7 +287,9 @@ var specialFieldMeanings = map[string]string{
 	"RAM_LIMIT_ENABLED":          "false disables RAM enforcement while observation remains available.",
 	"RAM_USER_EXCLUDE_LIST":      "Empty excludes nobody from RAM eligibility.",
 	"RAM_USER_INCLUDE_LIST":      "Empty includes every non-excluded user for RAM eligibility.",
+	"REALTIME_PROTECTED_UNITS":   "Empty is the operator's consent that ResMan may enable the cpu controller where realtime services run; on a CONFIG_RT_GROUP_SCHED kernel a listed service that starts or restarts while limits are applied then loses realtime admission. Units whose CPUSchedulingPolicy is fifo or rr stay protected.",
 	"SERVER_ROLE":                "Empty omits an operator-defined role value.",
+	"SYSTEM_UID_MAX":             "Unset applies no upper bound: every UID from SYSTEM_UID_MIN to 4294967294, the largest valid UID, is monitored. It does not depend on the host PID limit.",
 	"USER_EXCLUDE_LIST":          "Empty excludes nobody from CPU eligibility. Excluded native user slices remain inside the parent quota and share aggregate best effort.",
 	"USER_INCLUDE_LIST":          "Empty makes no user eligible for CPU Points enforcement; observation remains active. Use .* for every non-excluded user.",
 }
@@ -309,9 +312,6 @@ func PublicFieldContracts() []PublicFieldContract {
 			panic(fmt.Sprintf("configuration key %s has no lifecycle", key))
 		}
 		defaultValue := formatPublicDefault(valueOfConfig.Field(index))
-		if key == "SYSTEM_UID_MAX" {
-			defaultValue = "host /proc/sys/kernel/pid_max (fallback 60000)"
-		}
 		meaning := specialFieldMeanings[key]
 		if meaning == "" {
 			meaning = "—"

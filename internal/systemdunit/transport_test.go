@@ -22,3 +22,11 @@ func TestDBusTransportLifecycleSurvivesCancelledRunContextUntilExplicitClose(t *
 		t.Fatal("explicit transport close did not cancel its lifecycle")
 	}
 }
+
+func TestTransportReachesPIDOneWithoutTheSystemBus(t *testing.T) {
+	// resman-318.2: ResMan starts before sysinit.target, ahead of dbus.socket,
+	// so the adapter must talk to PID 1 over its private socket.
+	if systemdPrivateAddress != "unix:path=/run/systemd/private" {
+		t.Fatalf("systemd transport address = %q, want the PID 1 private socket", systemdPrivateAddress)
+	}
+}

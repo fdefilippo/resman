@@ -77,6 +77,9 @@ USERNAME_CACHE_TTL=60
 
 # Only UIDs at or above the configured system boundary are observed as users.
 SYSTEM_UID_MIN=1000
+
+# Leave unset: no upper bound, so directory UIDs in the millions are observed.
+# SYSTEM_UID_MAX=4294967294
 ```
 
 The exact public key set and defaults are in
@@ -138,7 +141,8 @@ timeouts belong in `sssd.conf`, not in ResMan configuration.
 2. Confirm the binary was built with `CGO_ENABLED=1` and links to libc.
 3. Check `/etc/nsswitch.conf` for the configured provider.
 4. Check SSSD, LDAP, NIS, DNS, and certificate logs.
-5. Confirm the UID is at or above `SYSTEM_UID_MIN`.
+5. Confirm the UID is at or above `SYSTEM_UID_MIN` and, if `SYSTEM_UID_MAX` is set,
+   not above it. Directory UIDs are often in the millions.
 6. Restart ResMan or wait for the username cache entry to expire after fixing NSS.
 
 ### Resolution is slow

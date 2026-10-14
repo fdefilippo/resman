@@ -152,8 +152,10 @@ func TestRequiredSystemdCapabilityFailureIsPermanent(t *testing.T) {
 	if err := classifySystemdAdapterStartupError(capabilityErr); !IsPermanentStartupError(err) {
 		t.Fatalf("classifySystemdAdapterStartupError() = %v, want permanent", err)
 	}
-	if err := classifySystemdAdapterStartupError(errors.New("system bus unavailable")); err != nil {
-		t.Fatalf("non-capability error classified as permanent: %v", err)
+	// A non-capability failure is still a startup error, never a silent
+	// observation, but the service manager may retry it (resman-318.3).
+	if err := classifySystemdAdapterStartupError(errors.New("system bus unavailable")); err == nil || IsPermanentStartupError(err) {
+		t.Fatalf("non-capability error = %v, want a retryable startup error", err)
 	}
 }
 

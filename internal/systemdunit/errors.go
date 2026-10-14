@@ -29,6 +29,9 @@ const (
 	ReasonExternalConflict     ErrorReason = "external_property_conflict"
 	ReasonTimeout              ErrorReason = "timeout"
 	ReasonClosed               ErrorReason = "adapter_closed"
+	// ReasonRealtimeAdmissionProtected means enabling the cpu controller would
+	// deny realtime scheduling to a protected service.
+	ReasonRealtimeAdmissionProtected ErrorReason = "realtime_admission_protected"
 )
 
 // AdapterError carries a bounded reason while retaining the underlying error for diagnosis.

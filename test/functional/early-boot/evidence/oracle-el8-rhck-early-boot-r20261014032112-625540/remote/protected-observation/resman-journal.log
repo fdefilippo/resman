@@ -1,0 +1,6 @@
+-- Logs begin at Wed 2026-10-14 03:27:07 UTC, end at Wed 2026-10-14 03:27:22 UTC. --
+[    5.708703] localhost.localdomain systemd[1]: /usr/lib/systemd/system/resman.service:63: Unknown lvalue 'ProtectKernelLogs' in section 'Service'
+[    5.708956] localhost.localdomain systemd[1]: /usr/lib/systemd/system/resman.service:64: Unknown lvalue 'ProtectClock' in section 'Service'
+[    6.646032] localhost.localdomain systemd[1]: Starting ResMan - Dynamic CPU/RAM/IO Resource Management...
+[    6.710584] localhost.localdomain resman[817]: WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).
+[    6.725563] localhost.localdomain systemd[1]: Started ResMan - Dynamic CPU/RAM/IO Resource Management.

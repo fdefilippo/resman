@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.39.1 to ResMan 1.39.2
+# Upgrading from ResMan 1.25.x through 1.39.2 to ResMan 1.40.0
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.39.1 to
-ResMan 1.39.2. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.39.2 to
+ResMan 1.40.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -29,13 +29,183 @@ hierarchy; ResMan therefore requires root support before the write and acknowled
 the limit only after exact kernel readback from the target slice.
 These checks do not enable the new weighted-I/O policy or change configured strong I/O limits.
 
-The packaged startup probe uses `/usr/bin/sleep`, supplied by the declared
+The weighted-I/O capability probe uses `/usr/bin/sleep`, supplied by the declared
 `coreutils` dependency. A failure to start that executable is reported as a probe
-failure with its path, separately from a missing controller or cgroup interface.
+failure with its path, separately from a missing controller or cgroup interface. The
+startup capability probe starts no process: it writes runtime values to `user.slice`
+and restores them before readiness.
 
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## CHANGED: the systemd adapter talks to PID 1 directly at boot
+
+**Visible change.** The adapter now reaches systemd over PID 1's private socket
+`/run/systemd/private` instead of the system bus. The packaged unit already starts
+before `sysinit.target` and before `vcs.service`, so on a cold boot ResMan now
+establishes systemd-native enforcement before ordinary services start, instead of
+failing to connect. Enforcement no longer depends on dbus-daemon or on polkit, and a
+restart of the system bus no longer drops the adapter's connection. The startup
+capability probe no longer creates transient units: it writes runtime values to
+`user.slice` itself and restores them before readiness, because systemd orders every
+child of `user.slice` after `systemd-user-sessions.service`, which would make a probe
+slice wait for ResMan itself at boot.
+
+**Cause.** `dbus.socket` is ordered after `sysinit.target`, and ResMan before it, so
+the system bus never existed when the adapter opened. Through 1.39.2 the early start
+therefore established nothing: the adapter failed with `bus_unavailable` and the
+host observed for its whole uptime. PID 1 serves the same `org.freedesktop.systemd1`
+objects on its private socket from the first instant of boot, which is also what
+`systemctl` uses when run as root.
+
+**Action.** None for an ordinary host. On an EL8 node running a realtime service
+such as Veritas Cluster Server, read the next section before upgrading.
+
+## NEW: realtime admission protection with REALTIME_PROTECTED_UNITS
+
+**Visible change.** A new restart-required key, `REALTIME_PROTECTED_UNITS` (default
+`vcs.service`), names services that request realtime scheduling themselves. On a
+kernel with `CONFIG_RT_GROUP_SCHED=y` and a limited `kernel.sched_rt_runtime_us`,
+while such a unit, or any service whose `CPUSchedulingPolicy` is `fifo` or `rr`, is
+loaded and the root cgroup does not already delegate `cpu`, ResMan no longer enables
+the cpu controller. Under `systemd_native` it refuses to start with status 78 and
+`failure_class=realtime_admission_protected`, naming the unit. Under `auto` it
+observes with the reason `realtime_admission_protected`. A host without a protected
+unit is unaffected.
+
+**Cause.** Enabling the cgroup v2 cpu controller at the root gives `system.slice`
+and every other child a task group with zero realtime runtime, and cgroup v2 has no
+knob to raise it. Veritas Cluster Server's `had` then fails its own
+`sched_setscheduler(SCHED_FIFO)` with `EPERM` (engine log `V-16-1-16002`) and runs
+without realtime priority. ResMan's CPU limits keep the controller enabled at the
+root while they are applied, so a `vcs.service` start or restart in that window,
+including `hastart`, which restarts the unit, would bring `had` back without
+realtime priority, without anyone deciding so. An idle boot does not cause it: the
+startup probe restores `user.slice` before readiness, and on the EL8 cold boots
+systemd withdraws the controller again before `vcs.service` starts. The EL9 and
+EL10 distribution kernels lack realtime group scheduling, so there nothing can be
+revoked and nothing is protected.
+
+**Action.** Decide per host before upgrading.
+
+- To keep `had` realtime (the default), leave the key as shipped. Set
+  `ENFORCEMENT_MODE=auto` to keep metrics, Prometheus and MCP running while the host
+  observes; under `systemd_native` the unit stays failed with status 78.
+- To accept that `had` runs without realtime priority, which is already the case
+  when another component such as Microsoft Defender enables the cpu controller
+  before `vcs.service`, set an empty value and restart:
+
+```bash
+printf 'REALTIME_PROTECTED_UNITS=\n' >> /etc/resman/resman.conf
+```
+
+Check what a VCS node does today before choosing:
+
+```bash
+grep -h 'V-16-1-16002' /var/VRTSvcs/log/engine_A.log* | tail -n 3
+ps -eLo pid,tid,cls,rtprio,comm | awk '$5 == "had" || $5 == "hashadow"'
+```
+
+`cls` `FF` with a realtime priority means `had` is realtime and the default
+protects it; `TS` together with `V-16-1-16002` entries means it has already lost
+realtime scheduling.
+
+## CHANGED: an unset SYSTEM_UID_MAX no longer hides high UIDs
+
+**Visible change.** When `SYSTEM_UID_MAX` is absent from the configuration and the
+environment, ResMan 1.40.0 monitors every UID from `SYSTEM_UID_MIN` to `4294967294`,
+the largest valid UID. Through 1.39.2 the default was the host's
+`/proc/sys/kernel/pid_max`, with `60000` when that file could not be read. An
+explicit `SYSTEM_UID_MAX` keeps exactly its previous meaning.
+
+**Cause.** PIDs and UIDs are unrelated identifier spaces, so the old default
+was an arbitrary, host-dependent cut: 32768 on one host, 4194304 on another.
+Directory accounts routinely sit above it, because sssd ID mapping, Active
+Directory and FreeIPA allocate UIDs in the millions. Their processes were never
+scanned. On a saturated 32-core Enterprise Linux 8 host whose heavy consumers had
+UIDs between 23 and 123 million, ResMan measured 0.55 cores of user load and
+never requested enforcement. Nothing reported that those users were invisible.
+
+**What changes on upgrade.** On a host with UIDs above the old bound, the users
+that were previously invisible now:
+
+- appear in per-user Prometheus series, the metrics database and MCP, so series
+  cardinality and database rows grow with them;
+- count towards host-load attribution, so a load that was attributed to "other
+  factors" can now be attributed to users;
+- become eligible for RAM and I/O limiting when those include lists are empty,
+  because an empty RAM or I/O include list selects every non-excluded user;
+- become eligible for CPU limiting only if `USER_INCLUDE_LIST` matches them, because
+  an empty CPU include list still selects nobody.
+
+A host whose UIDs all lie below its `pid_max` sees no difference.
+
+**Why this is not kept compatible.** Preserving the old default would preserve
+incorrect semantics: a UID bound derived from the PID space that silently hides
+real workloads. Three alternatives were rejected. A warning that keeps the bound
+would leave enforcement blind. A fixed bound such as 60000 would hide the same
+directory accounts on every host instead of on some. A new key to opt into the
+correct behaviour would add a knob whose only purpose is to keep a defect.
+
+**Action.** Before upgrading, list the UIDs currently running above the old
+bound:
+
+```bash
+ps -eo uid= | sort -un | awk -v max="$(cat /proc/sys/kernel/pid_max)" '$1 > max'
+```
+
+Empty output means nothing changes on this host at the moment of the check.
+
+To keep the previous population instead, record the current bound before
+upgrading and set it explicitly:
+
+```bash
+printf 'SYSTEM_UID_MAX=%s\n' "$(cat /proc/sys/kernel/pid_max)" >> /etc/resman/resman.conf
+```
+
+`SYSTEM_UID_MAX` is dynamic, so after the upgrade a later change applies on the
+next configuration reload without a restart.
+
+## FIXED: an adapter failure no longer leaves enforcement silently off
+
+**Visible change.** With `ENFORCEMENT_MODE` set to `systemd_native` (the default) or
+`auto`, a failure to open the systemd adapter at startup now stops the daemon. A
+missing mandatory capability keeps its previous outcome: status 78 under
+`systemd_native`, a published `mandatory_capability_unavailable` observation under
+`auto`. Every other failure, such as the connection to systemd, a timeout, an
+authorization refusal or an unreadable lease journal, exits with status 1. The
+packaged unit retries it after 10 seconds, at most three times per minute, and then
+leaves the unit failed. The journal names the cause with `failure_class`.
+
+**Cause.** Through 1.39.2 such a failure was logged once as a warning, and the daemon
+kept running in `observation_only` for its whole lifetime under the pre-adapter
+reason `systemd_owns_host_workloads`, which names the opposite of the truth.
+`ENFORCEMENT_MODE` is restart-required, so nothing ever retried. A host whose daemon
+started before the system bus was available could therefore run for days without
+enforcement while every cycle reported `enforcement_block_reason=none`. This also
+contradicted the documented `auto` behaviour, which already promised that an
+unavailable bus or a timeout refuses to start.
+
+**Action.** None is required. After upgrading, a host that shows
+`enforcement_mode=observation_only` with reason `systemd_owns_host_workloads` while
+`ENFORCEMENT_MODE` declares enforcement no longer exists: the daemon either enforces
+or is failed with its cause in the journal. Inspect a failed unit with:
+
+```bash
+systemctl status resman
+journalctl -u resman -b | grep 'Failed to initialize systemd-native enforcement'
+```
+
+A host that should never enforce declares `ENFORCEMENT_MODE=observation_only`, which
+never opens the adapter.
+
+The supported rootful Podman container is unaffected in behaviour: it shares the
+host PID namespace but cannot see the systemd runtime, so it never opens the
+adapter and keeps observing. Its published reason changes from
+`systemd_owns_host_workloads` to `systemd_runtime_unreachable`, which states why. A
+dashboard or alert that matched the old reason value on a container should match
+the new one.
 
 ## FIXED: a host that cannot delegate the cpu controller can run again
 
@@ -51,9 +221,11 @@ this is that note.
 **The condition.** On a kernel built with `CONFIG_RT_GROUP_SCHED=y`, the cgroup v2
 cpu controller cannot distribute realtime bandwidth, so the kernel refuses `+cpu`
 in the root `cgroup.subtree_control` with `EINVAL` while any realtime task lives
-outside the root cgroup. No descendant can then expose `cpu.max`. Enterprise Linux
-8, 9 and 10 kernels all enable that option, and a cluster agent such as Veritas
-Cluster Server keeps SCHED_FIFO threads inside `system.slice`, which is enough.
+outside the root cgroup. No descendant can then expose `cpu.max`. The Enterprise
+Linux 8 distribution kernel enables that option; the EL9 and EL10 distribution
+kernels measured by the early-boot qualification (5.14 and 6.12) do not. A cluster
+agent such as Veritas Cluster Server keeps SCHED_FIFO threads inside
+`system.slice`, which is enough.
 Confirm it on an affected host with:
 
 ```bash
@@ -640,8 +812,9 @@ elsewhere.
 ### Defaults and eligibility semantics are explicit
 
 **Visible change.** The Prometheus exporter default bind is `127.0.0.1`, not
-`0.0.0.0`. `SYSTEM_UID_MAX` normally follows `/proc/sys/kernel/pid_max`, with `60000`
-only as a read-failure fallback. An empty `USER_INCLUDE_LIST` selects nobody for CPU
+`0.0.0.0`. An unset `SYSTEM_UID_MAX` applies no upper UID bound; see
+[the 1.40.0 change](#changed-an-unset-system_uid_max-no-longer-hides-high-uids).
+An empty `USER_INCLUDE_LIST` selects nobody for CPU
 limiting; empty RAM and I/O include lists select every non-excluded user. The shipped
 example now matches runtime defaults, including empty exclusion lists,
 `IGNORE_SYSTEM_LOAD=false`, and empty credential fields.

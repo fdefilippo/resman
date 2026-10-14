@@ -1,0 +1,2 @@
+Created symlink /etc/systemd/system/multi-user.target.wants/resman.service → /usr/lib/systemd/system/resman.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/vcs.service → /etc/systemd/system/vcs.service.

@@ -1,0 +1,44 @@
+Last metadata expiration check: 0:01:53 ago on Wed 14 Oct 2026 03:24:22 AM UTC.
+Dependencies resolved.
+================================================================================
+ Package      Architecture Version                     Repository          Size
+================================================================================
+Installing:
+ resman       x86_64       1.39.2-1.el8.dev318         @commandline       5.6 M
+
+Transaction Summary
+================================================================================
+Install  1 Package
+
+Total size: 5.6 M
+Installed size: 17 M
+Downloading Packages:
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Running scriptlet: resman-1.39.2-1.el8.dev318.x86_64                      1/1 
+Preparing for Resource Manager installation...
+WARNING: cgroups v2 not detected. Please enable with:
+  grubby --update-kernel=ALL --args='systemd.unified_cgroup_hierarchy=1 psi=1'
+  reboot
+
+  Installing       : resman-1.39.2-1.el8.dev318.x86_64                      1/1 
+  Running scriptlet: resman-1.39.2-1.el8.dev318.x86_64                      1/1 
+Resource Manager installed successfully!
+
+Configuration file: /etc/resman/resman.conf
+Log file: /var/log/resman.log
+Service: systemctl start resman
+Documentation: man resman
+
+Please review /etc/resman/resman.conf before starting the service.
+
+  Verifying        : resman-1.39.2-1.el8.dev318.x86_64                      1/1 
+
+Installed:
+  resman-1.39.2-1.el8.dev318.x86_64                                             
+
+Complete!

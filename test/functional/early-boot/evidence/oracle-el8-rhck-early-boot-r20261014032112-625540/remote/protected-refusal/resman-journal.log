@@ -1,0 +1,9 @@
+-- Logs begin at Wed 2026-10-14 03:26:36 UTC, end at Wed 2026-10-14 03:26:52 UTC. --
+[    5.586903] localhost.localdomain systemd[1]: /usr/lib/systemd/system/resman.service:63: Unknown lvalue 'ProtectKernelLogs' in section 'Service'
+[    5.587116] localhost.localdomain systemd[1]: /usr/lib/systemd/system/resman.service:64: Unknown lvalue 'ProtectClock' in section 'Service'
+[    6.470760] localhost.localdomain systemd[1]: Starting ResMan - Dynamic CPU/RAM/IO Resource Management...
+[    6.556842] localhost.localdomain resman[806]: WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).
+[    6.570133] localhost.localdomain resman[806]: Failed to initialize systemd-native enforcement (realtime_admission_protected, retryable=false): systemd unit adapter realtime_admission for vcs.service failed (realtime_admission_protected): enabling the cpu controller would deny realtime scheduling to vcs.service (protected by configured; kernel realtime group scheduling enabled, root cpu delegation absent); empty REALTIME_PROTECTED_UNITS to accept that
+[    6.580531] localhost.localdomain systemd[1]: resman.service: Main process exited, code=exited, status=78/CONFIG
+[    6.580681] localhost.localdomain systemd[1]: resman.service: Failed with result 'exit-code'.
+[    6.582870] localhost.localdomain systemd[1]: Failed to start ResMan - Dynamic CPU/RAM/IO Resource Management.

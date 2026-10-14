@@ -1766,3 +1766,109 @@ func unsetEnvForTest(t *testing.T, key string) {
 		_ = os.Unsetenv(key)
 	})
 }
+
+func TestSystemUIDMaxUnsetMeansNoUpperBound(t *testing.T) {
+	tests := []struct {
+		name        string
+		authoredMax string
+		wantMax     int
+	}{
+		{name: "unset", wantMax: MaxValidUID},
+		{name: "explicit below former pid_max fallback", authoredMax: "60000", wantMax: 60000},
+		{name: "explicit largest valid UID", authoredMax: "4294967294", wantMax: MaxValidUID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetEnvForTest(t, "SYSTEM_UID_MAX")
+			content := "SYSTEM_UID_MIN=1000\n"
+			if tt.authoredMax != "" {
+				content += "SYSTEM_UID_MAX=" + tt.authoredMax + "\n"
+			}
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			writeConfigFixture(t, configPath, content)
+
+			cfg, err := LoadAndValidate(configPath)
+			if err != nil {
+				t.Fatalf("LoadAndValidate() error = %v", err)
+			}
+			if got := cfg.GetSystemUIDMax(); got != tt.wantMax {
+				t.Fatalf("GetSystemUIDMax() = %d, want %d", got, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestSystemUIDMaxDefaultDoesNotDependOnPIDSpace(t *testing.T) {
+	// PIDs and UIDs are unrelated identifier spaces. Configuration loading must
+	// not consult the kernel PID limit for any UID bound (resman-318.1).
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("os.ReadDir(.) error = %v", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("os.ReadFile(%s) error = %v", name, err)
+		}
+		if strings.Contains(string(source), "pid_max") {
+			t.Errorf("%s refers to the kernel PID limit", name)
+		}
+	}
+}
+
+func TestRealtimeProtectedUnitsParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   *string
+		want    []string
+		wantErr bool
+	}{
+		{name: "default protects Veritas", value: nil, want: []string{"vcs.service"}},
+		{name: "empty is consent", value: ptr(""), want: []string{}},
+		{name: "blank is consent", value: ptr("  "), want: []string{}},
+		{name: "several units", value: ptr("vcs.service, rtapp.service"), want: []string{"vcs.service", "rtapp.service"}},
+		{name: "duplicates collapse", value: ptr("vcs.service,vcs.service"), want: []string{"vcs.service"}},
+		{name: "template instance", value: ptr("rt@a.service"), want: []string{"rt@a.service"}},
+		{name: "not a service", value: ptr("vcs.target"), wantErr: true},
+		{name: "path", value: ptr("/etc/systemd/system/vcs.service"), wantErr: true},
+		{name: "empty entry", value: ptr("vcs.service,,rt.service"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetEnvForTest(t, "REALTIME_PROTECTED_UNITS")
+			content := ""
+			if tt.value != nil {
+				content = "REALTIME_PROTECTED_UNITS=" + *tt.value + "\n"
+			}
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			writeConfigFixture(t, configPath, content)
+			cfg, err := LoadAndValidate(configPath)
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "REALTIME_PROTECTED_UNITS") {
+					t.Fatalf("LoadAndValidate() error = %v, want a REALTIME_PROTECTED_UNITS rejection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAndValidate() error = %v", err)
+			}
+			if got := cfg.GetRealtimeProtectedUnits(); !slices.Equal(got, tt.want) {
+				t.Fatalf("GetRealtimeProtectedUnits() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRealtimeProtectedUnitsRequireRestart(t *testing.T) {
+	lifecycle, ok := LifecycleForField("REALTIME_PROTECTED_UNITS")
+	if !ok || lifecycle != LifecycleRestartRequired {
+		t.Fatalf("REALTIME_PROTECTED_UNITS lifecycle = %q, %v; want restart-required", lifecycle, ok)
+	}
+}
+
+func ptr(value string) *string { return &value }

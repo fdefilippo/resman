@@ -1,0 +1,15 @@
+The time after the unit is active or started is printed after the "@" character.
+The time the unit takes to start is printed after the "+" character.
+
+resman.service +80ms
+└─systemd-tmpfiles-setup.service @2.258s +37ms
+  └─import-state.service @2.215s +40ms
+    └─local-fs.target @2.213s
+      └─boot-efi.mount @2.188s +23ms
+        └─boot.mount @1.217s +967ms
+          └─local-fs-pre.target @1.212s
+            └─systemd-tmpfiles-setup-dev.service @705ms +61ms
+              └─kmod-static-nodes.service @570ms +118ms
+                └─systemd-journald.socket
+                  └─system.slice
+                    └─-.slice

@@ -52,10 +52,13 @@ const (
 )
 
 const (
-	EnforcementBlockReasonNone                  EnforcementBlockReason = "none"
-	EnforcementBlockReasonSystemdRuntimeAbsent  EnforcementBlockReason = "systemd_runtime_absent"
-	EnforcementBlockReasonSystemdOwnsWorkloads  EnforcementBlockReason = "systemd_owns_host_workloads"
-	EnforcementBlockReasonAuthorityUnverifiable EnforcementBlockReason = "systemd_authority_unverifiable"
+	EnforcementBlockReasonNone                 EnforcementBlockReason = "none"
+	EnforcementBlockReasonSystemdRuntimeAbsent EnforcementBlockReason = "systemd_runtime_absent"
+	EnforcementBlockReasonSystemdOwnsWorkloads EnforcementBlockReason = "systemd_owns_host_workloads"
+	// EnforcementBlockReasonSystemdRuntimeUnreachable means systemd owns the
+	// observed workloads but cannot be reached from this mount namespace.
+	EnforcementBlockReasonSystemdRuntimeUnreachable EnforcementBlockReason = "systemd_runtime_unreachable"
+	EnforcementBlockReasonAuthorityUnverifiable     EnforcementBlockReason = "systemd_authority_unverifiable"
 	// EnforcementBlockReasonMandatoryCapability means the host cannot provide a
 	// mandatory enforcement capability, so no limit can be applied there.
 	EnforcementBlockReasonMandatoryCapability EnforcementBlockReason = "mandatory_capability_unavailable"
@@ -63,6 +66,9 @@ const (
 	// that this host observes and never enforces. It is deliberately distinct
 	// from an inability: a declared choice must never read as a defect.
 	EnforcementBlockReasonOperatorObservation EnforcementBlockReason = "operator_requested_observation"
+	// EnforcementBlockReasonRealtimeAdmissionProtected means enforcement would
+	// deny realtime scheduling to a service the operator protects.
+	EnforcementBlockReasonRealtimeAdmissionProtected EnforcementBlockReason = "realtime_admission_protected"
 )
 
 // EnforcementStatus is the bounded result of resolving the host ownership boundary.
@@ -74,8 +80,14 @@ type EnforcementStatus struct {
 const (
 	EnforcementReasonSystemdRuntimeAbsent     = "systemd_runtime_absent"
 	EnforcementReasonSystemdOwnsHostWorkloads = "systemd_owns_host_workloads"
-	EnforcementReasonAuthorityUnverifiable    = "systemd_authority_unverifiable"
-	EnforcementReasonSystemdNativeAdapter     = "systemd_native_adapter"
+	// EnforcementReasonSystemdRuntimeUnreachable is published when systemd is
+	// PID 1 of the observed PID namespace but its runtime directory is not
+	// visible from this mount namespace, as in a container that shares the host
+	// PID namespace. The adapter cannot reach systemd from here, so the host is
+	// observed instead of retrying a connection that can never succeed.
+	EnforcementReasonSystemdRuntimeUnreachable = "systemd_runtime_unreachable"
+	EnforcementReasonAuthorityUnverifiable     = "systemd_authority_unverifiable"
+	EnforcementReasonSystemdNativeAdapter      = "systemd_native_adapter"
 	// EnforcementReasonMandatoryCapabilityUnavailable is published when the
 	// host refuses a mandatory enforcement capability and the operator asked
 	// for observation rather than a refusal to start.
@@ -83,6 +95,11 @@ const (
 	// EnforcementReasonOperatorObservationOnly is published when the operator
 	// declared observation in configuration, whatever the host could provide.
 	EnforcementReasonOperatorObservationOnly = "operator_requested_observation"
+	// EnforcementReasonRealtimeAdmissionProtected is published under auto when
+	// enabling the cpu controller would deny realtime scheduling to a
+	// protected service (REALTIME_PROTECTED_UNITS or a realtime
+	// CPUSchedulingPolicy) on a kernel with realtime group scheduling.
+	EnforcementReasonRealtimeAdmissionProtected = "realtime_admission_protected"
 )
 
 // InitialEnforcementCycleState returns the explicit state before the first
@@ -104,12 +121,16 @@ func BoundedEnforcementBlockReason(reason string) EnforcementBlockReason {
 		return EnforcementBlockReasonSystemdRuntimeAbsent
 	case EnforcementReasonSystemdOwnsHostWorkloads:
 		return EnforcementBlockReasonSystemdOwnsWorkloads
+	case EnforcementReasonSystemdRuntimeUnreachable:
+		return EnforcementBlockReasonSystemdRuntimeUnreachable
 	case EnforcementReasonAuthorityUnverifiable:
 		return EnforcementBlockReasonAuthorityUnverifiable
 	case EnforcementReasonMandatoryCapabilityUnavailable:
 		return EnforcementBlockReasonMandatoryCapability
 	case EnforcementReasonOperatorObservationOnly:
 		return EnforcementBlockReasonOperatorObservation
+	case EnforcementReasonRealtimeAdmissionProtected:
+		return EnforcementBlockReasonRealtimeAdmissionProtected
 	default:
 		return EnforcementBlockReasonAuthorityUnverifiable
 	}
@@ -167,8 +188,10 @@ func validAppliedAction(action AppliedEnforcementAction) bool {
 func validBlockReason(reason EnforcementBlockReason) bool {
 	switch reason {
 	case EnforcementBlockReasonNone, EnforcementBlockReasonSystemdRuntimeAbsent,
-		EnforcementBlockReasonSystemdOwnsWorkloads, EnforcementBlockReasonAuthorityUnverifiable,
-		EnforcementBlockReasonMandatoryCapability, EnforcementBlockReasonOperatorObservation:
+		EnforcementBlockReasonSystemdOwnsWorkloads, EnforcementBlockReasonSystemdRuntimeUnreachable,
+		EnforcementBlockReasonAuthorityUnverifiable,
+		EnforcementBlockReasonMandatoryCapability, EnforcementBlockReasonOperatorObservation,
+		EnforcementBlockReasonRealtimeAdmissionProtected:
 		return true
 	default:
 		return false
@@ -201,9 +224,12 @@ func detectEnforcementStatus(systemdRuntimePath, procRoot string) EnforcementSta
 			}
 		}
 		if strings.TrimSpace(string(pidOneComm)) == "systemd" {
+			// systemd creates its runtime directory before it starts any unit,
+			// so on the host itself this branch is unreachable: PID 1 is
+			// systemd, but this mount namespace cannot see it.
 			return EnforcementStatus{
 				Mode:   EnforcementModeObservationOnly,
-				Reason: EnforcementReasonSystemdOwnsHostWorkloads,
+				Reason: EnforcementReasonSystemdRuntimeUnreachable,
 			}
 		}
 		return EnforcementStatus{

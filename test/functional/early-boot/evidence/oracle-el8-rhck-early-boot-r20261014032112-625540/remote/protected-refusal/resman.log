@@ -1,0 +1,11 @@
+[2026-10-14 03:26:40] [INFO] Logger initialized level=INFO file=/var/log/resman.log max_size=10485760 bytes
+[2026-10-14 03:26:40] [INFO] Starting Resource Manager version=1.39.2-1.el8.dev318
+[2026-10-14 03:26:40] [INFO] Configuration loaded successfully log_level=INFO log_file=/var/log/resman.log use_syslog=false
+[2026-10-14 03:26:40] [INFO] Initializing components:
+[2026-10-14 03:26:40] [INFO] Cgroup observation manager initialized cgroup_root=/sys/fs/cgroup enforcement_mode=observation_only enforcement_reason=systemd_owns_host_workloads
+[2026-10-14 03:26:40] [INFO] Metrics collector initialized
+[2026-10-14 03:26:40] [INFO] Metrics database disabled by configuration
+[2026-10-14 03:26:40] [INFO] Prometheus exporter disabled by configuration
+[2026-10-14 03:26:40] [ERROR] Failed to initialize systemd-native enforcement declared_enforcement_mode=systemd_native failure_class=realtime_admission_protected retryable=false error=systemd unit adapter realtime_admission for vcs.service failed (realtime_admission_protected): enabling the cpu controller would deny realtime scheduling to vcs.service (protected by configured; kernel realtime group scheduling enabled, root cpu delegation absent); empty REALTIME_PROTECTED_UNITS to accept that
+Oct 14 03:26:40 localhost resman[806]: info: WARNING: USER_INCLUDE_LIST is empty - no users will be CPU limited. Set USER_INCLUDE_LIST=.* to make all non-excluded users CPU-eligible, or specify patterns (e.g., USER_INCLUDE_LIST=^www.*,^app.*).
+Oct 14 03:26:40 localhost resman[806]: info: Failed to initialize systemd-native enforcement (realtime_admission_protected, retryable=false): systemd unit adapter realtime_admission for vcs.service failed (realtime_admission_protected): enabling the cpu controller would deny realtime scheduling to vcs.service (protected by configured; kernel realtime group scheduling enabled, root cpu delegation absent); empty REALTIME_PROTECTED_UNITS to accept that

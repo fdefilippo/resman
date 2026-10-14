@@ -1523,31 +1523,63 @@ func TestClearCache(t *testing.T) {
 	}
 }
 
-func TestIsValidUserUID(t *testing.T) {
-	cfg := config.DefaultConfig()
-	collector, err := NewCollector(cfg)
-	if err != nil {
-		t.Fatalf("NewCollector() error: %v", err)
-	}
+func TestIsMonitoredUserUIDBounds(t *testing.T) {
+	// UIDs of directory accounts mapped by sssd on the vmgclalpr2111 incident
+	// host: all above its pid_max of 4194304, all invisible before resman-318.1.
+	const directoryUID = 123308130
 
 	tests := []struct {
-		uid      int
-		expected bool
+		name          string
+		authoredMax   string
+		uid           int
+		wantMonitored bool
 	}{
-		{500, false},                  // System user
-		{999, false},                  // Still system user
-		{1000, true},                  // Valid user
-		{1001, true},                  // Valid user
-		{-1, false},                   // Negative
-		{cfg.SystemUIDMax, true},      // Max valid (dynamic)
-		{cfg.SystemUIDMax + 1, false}, // Above max (dynamic)
+		{name: "unset max below minimum", uid: 999, wantMonitored: false},
+		{name: "unset max negative", uid: -1, wantMonitored: false},
+		{name: "unset max at minimum", uid: 1000, wantMonitored: true},
+		{name: "unset max above former pid_max fallback", uid: 60001, wantMonitored: true},
+		{name: "unset max above host pid_max", uid: 4194305, wantMonitored: true},
+		{name: "unset max directory UID", uid: directoryUID, wantMonitored: true},
+		{name: "unset max largest valid UID", uid: config.MaxValidUID, wantMonitored: true},
+		{name: "unset max invalid UID", uid: config.MaxValidUID + 1, wantMonitored: false},
+		{name: "explicit max at bound", authoredMax: "60000", uid: 60000, wantMonitored: true},
+		{name: "explicit max above bound", authoredMax: "60000", uid: 60001, wantMonitored: false},
+		{name: "explicit max excludes directory UID", authoredMax: "60000", uid: directoryUID, wantMonitored: false},
+		{name: "explicit max equal to minimum", authoredMax: "1000", uid: 1000, wantMonitored: true},
+		{name: "explicit max above invalid UID", authoredMax: "4294967295", uid: config.MaxValidUID + 1, wantMonitored: false},
+		{name: "explicit max above invalid UID keeps valid UID", authoredMax: "4294967295", uid: config.MaxValidUID, wantMonitored: true},
 	}
 
 	for _, tt := range tests {
-		got := collector.isMonitoredUserUID(tt.uid)
-		if got != tt.expected {
-			t.Errorf("isMonitoredUserUID(%d): got %v, expected %v (SystemUIDMax=%d)", tt.uid, got, tt.expected, cfg.SystemUIDMax)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			// Cross the boundary the defect lived on: the operator's file,
+			// through configuration loading, into the collector's scan gate.
+			t.Setenv("SYSTEM_UID_MAX", "")
+			if err := os.Unsetenv("SYSTEM_UID_MAX"); err != nil {
+				t.Fatalf("os.Unsetenv(SYSTEM_UID_MAX) error = %v", err)
+			}
+			content := "SYSTEM_UID_MIN=1000\n"
+			if tt.authoredMax != "" {
+				content += "SYSTEM_UID_MAX=" + tt.authoredMax + "\n"
+			}
+			configPath := filepath.Join(t.TempDir(), "resman.conf")
+			if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+				t.Fatalf("os.WriteFile(%s) error = %v", configPath, err)
+			}
+			cfg, err := config.LoadAndValidate(configPath)
+			if err != nil {
+				t.Fatalf("config.LoadAndValidate() error = %v", err)
+			}
+			collector, err := NewCollector(cfg)
+			if err != nil {
+				t.Fatalf("NewCollector() error = %v", err)
+			}
+
+			if got := collector.isMonitoredUserUID(tt.uid); got != tt.wantMonitored {
+				t.Fatalf("isMonitoredUserUID(%d) = %v, want %v (SYSTEM_UID_MAX=%d)",
+					tt.uid, got, tt.wantMonitored, cfg.GetSystemUIDMax())
+			}
+		})
 	}
 }
 

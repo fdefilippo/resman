@@ -24,6 +24,23 @@
 # or auto keeps metrics, Prometheus and MCP available there.
 ENFORCEMENT_MODE=systemd_native
 
+# Services that request realtime scheduling themselves, so their unit files do
+# not show it. On a kernel built with realtime group scheduling, enabling the
+# cgroup v2 cpu controller at the root gives every service a realtime budget of
+# zero: a realtime request made afterwards fails with EPERM. ResMan's CPU limits
+# keep the controller enabled while they are applied, so a listed service that
+# starts or restarts then (hastart restarts vcs.service) loses realtime
+# scheduling. The Enterprise Linux 8 kernel has that option; the EL9 and EL10
+# distribution kernels do not, and there nothing is protected.
+# While a listed unit is loaded and the root does not already delegate cpu,
+# ResMan does not enable it: systemd_native refuses to start (status 78) and
+# auto observes with reason realtime_admission_protected. Units whose
+# CPUSchedulingPolicy is fifo or rr are protected automatically. Requires
+# restart.
+# Leave it empty only to accept that those services lose realtime scheduling,
+# for example where another component already enabled cpu before them.
+REALTIME_PROTECTED_UNITS=vcs.service
+
 # ========================
 # PATHS
 # ========================
@@ -406,10 +423,14 @@ LOG_FILE=/var/log/resman.log
 SYSTEM_UID_MIN=1000
 
 # SYSTEM_UID_MAX: Maximum UID to monitor
-# Default: read automatically from /proc/sys/kernel/pid_max
-# Typically: 32768, 65536, or 4194304 on modern systems
-# Uncomment to override:
-# SYSTEM_UID_MAX=60000
+# Default: 4294967294, the largest valid UID, which means no upper bound.
+# 4294967295 is (uid_t)-1 and never owns a process.
+#
+# Directory accounts commonly have UIDs far above 60000: sssd ID mapping,
+# Active Directory and FreeIPA allocate them in the millions or more. Lower
+# this value only to deliberately hide such accounts from metrics and limits,
+# for example SYSTEM_UID_MAX=60000 for local accounts only.
+SYSTEM_UID_MAX=4294967294
 
 # ========================
 # USER INCLUDE LIST

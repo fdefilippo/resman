@@ -103,7 +103,7 @@ func New(ctx context.Context, cgroupRoot string, timeout time.Duration, requirem
 	if err != nil {
 		return nil, err
 	}
-	if err := adapter.requireStartupCapabilities(ctx, requirements); err != nil {
+	if err := adapter.requireStartupCapabilities(ctx, withRealtimeKernelFacts(requirements, cgroupRoot)); err != nil {
 		adapter.Close()
 		return nil, err
 	}

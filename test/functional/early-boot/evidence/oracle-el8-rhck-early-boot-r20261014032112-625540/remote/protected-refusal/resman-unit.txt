@@ -1,0 +1,7 @@
+Result=exit-code
+NRestarts=0
+ExecMainStatus=78
+ActiveState=failed
+SubState=failed
+InactiveExitTimestampMonotonic=6468815
+ActiveEnterTimestampMonotonic=0

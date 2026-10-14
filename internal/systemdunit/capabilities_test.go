@@ -39,7 +39,10 @@ func TestCapabilityProbeUnitIsOneReservedTopLevelSlice(t *testing.T) {
 	}
 }
 
-func TestStartupCapabilitiesUseProductionReadApplyConfirmAndInactiveCleanup(t *testing.T) {
+func TestStartupCapabilitiesProbeUserSliceWithoutTransientUnits(t *testing.T) {
+	// resman-318.2: a transient probe slice below user.slice inherits
+	// After=systemd-user-sessions.service and deadlocks the early start. The
+	// startup probe therefore writes user.slice itself and starts no unit.
 	transport := newFakeUnitTransport()
 	verifier := &fakeKernelVerifier{}
 	store := newMemoryLeaseJournalStore()
@@ -49,23 +52,16 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndInactiveCleanup(t *t
 		t.Fatalf("requireStartupCapabilities() error = %v", err)
 	}
 	const capabilityCount = 4
-	if len(transport.probeStarts) != capabilityCount || len(transport.probeStops) != capabilityCount {
-		t.Fatalf("probe calls: starts=%d stops=%d, want %d each", len(transport.probeStarts), len(transport.probeStops), capabilityCount)
+	if len(transport.probeStarts) != 0 || len(transport.probeStops) != 0 {
+		t.Fatalf("startup started transient units: starts=%v stops=%v", transport.probeStarts, transport.probeStops)
+	}
+	for _, call := range transport.setCalls {
+		if call.unit != parentUserSlice {
+			t.Fatalf("startup probe wrote %s, want only %s", call.unit, parentUserSlice)
+		}
 	}
 	if len(verifier.preflightCalls) != capabilityCount {
-		t.Fatalf("preflight calls = %d, want %d", len(verifier.preflightCalls), capabilityCount)
-	}
-	if len(verifier.preflightApplyCalls) != 0 {
-		t.Fatalf("startup capability probing used the materializable runtime preflight %d times", len(verifier.preflightApplyCalls))
-	}
-	if len(transport.setCalls) != capabilityCount {
-		t.Fatalf("SetUnitProperties calls = %d, want one apply before stopping each probe", len(transport.setCalls))
-	}
-	if len(transport.revertCalls) != capabilityCount || transport.reloadCalls != capabilityCount {
-		t.Fatalf("restore calls: revert=%d reload=%d, want %d each", len(transport.revertCalls), transport.reloadCalls, capabilityCount)
-	}
-	if verifier.identityCalls["/user.slice"] < 2 {
-		t.Fatalf("parent production identity reads = %d, want at least two", verifier.identityCalls["/user.slice"])
+		t.Fatalf("preflight calls = %d, want one interface check per capability", len(verifier.preflightCalls))
 	}
 	if !setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{
 		PropertyCPUQuotaPerSecUSec: 500_000,
@@ -73,33 +69,120 @@ func TestStartupCapabilitiesUseProductionReadApplyConfirmAndInactiveCleanup(t *t
 	}) {
 		t.Fatal("the exact bounded CPU quota and explicit period never reached SetUnitProperties")
 	}
-	if !setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{
-		PropertyIOWeight: 1_000,
-	}) {
+	if setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{PropertyCPUWeight: 100}) {
+		t.Fatal("the probe wrote a CPU weight, whose restoration fails where cpu is not delegated")
+	}
+	if !setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{PropertyIOWeight: 1_000}) {
 		t.Fatal("the non-vacuous I/O weight never reached SetUnitProperties")
 	}
-	if bfqWeight(1_000) == 100 {
-		t.Fatal("the I/O capability probe collapses to the default after BFQ scaling")
-	}
-	if !setCallsContainScalarValues(transport.probeStarts, map[PropertyName]uint64{
-		PropertyCPUWeight: 100,
-		PropertyIOWeight:  100,
-	}) {
-		t.Fatal("the I/O capability probe did not materialize its controller through systemd")
-	}
-	if verifier.calls != capabilityCount*2 {
-		t.Fatalf("kernel verification calls = %d, want apply and confirmation before each probe stops", verifier.calls)
+	if len(transport.revertCalls) != 1 || transport.revertCalls[0] != parentUserSlice || transport.reloadCalls != 1 {
+		t.Fatalf("restore calls: revert=%v reload=%d, want one complete user.slice restore", transport.revertCalls, transport.reloadCalls)
 	}
 	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("capability probe left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
 	}
-	for _, start := range transport.probeStarts {
-		if !isCapabilityProbeUnit(start.unit) {
-			t.Fatalf("unexpected probe unit %q", start.unit)
+	for _, property := range []PropertyName{PropertyCPUWeight, PropertyCPUQuotaPerSecUSec, PropertyIOWeight, PropertyMemoryMax} {
+		value, ok := transport.units[parentUserSlice].slice[string(property)]
+		if !ok || value != uint64(SystemdUnset) {
+			t.Fatalf("user.slice %s = %v after the probe, want its baseline", property, value)
 		}
-		if _, exists := transport.units[start.unit]; exists {
-			t.Fatalf("transient probe %s remained loaded in the fake transport", start.unit)
+	}
+}
+
+func TestStartupCapabilityMissingOnUserSliceIsADefinitiveRefusal(t *testing.T) {
+	// On a CONFIG_RT_GROUP_SCHED kernel with a realtime task outside the root,
+	// systemd's +cpu write fails and user.slice never exposes cpu.max: the
+	// activation readback fails, and that must read as a missing capability.
+	transport := newFakeUnitTransport()
+	verifier := &absentCPUInterfaceVerifier{fakeKernelVerifier: fakeKernelVerifier{
+		preflightByName: map[PropertyName]error{PropertyCPUQuotaPerSecUSec: errors.New("cpu.max is absent")},
+	}}
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+
+	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{})
+	if !IsRequiredCapabilityError(err) {
+		t.Fatalf("requireStartupCapabilities() error = %v, want required capability", err)
+	}
+	for _, part := range []string{"CPU limiting", `controller "cpu"`, `interface "cpu.max"`} {
+		if !strings.Contains(err.Error(), part) {
+			t.Fatalf("requireStartupCapabilities() error = %v, want %q", err, part)
 		}
+	}
+	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("refused probe left ownership (error %v): memory=%v journal=%+v", err, adapter.OwnedUnits(), store.journal)
+	}
+}
+
+// absentCPUInterfaceVerifier models a user.slice without cpu.max: like the
+// production verifier, a set CPU quota cannot be read back, while the unset
+// baseline of an absent interface verifies.
+type absentCPUInterfaceVerifier struct {
+	fakeKernelVerifier
+}
+
+func (v *absentCPUInterfaceVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssignment) error {
+	v.calls++
+	for _, assignment := range assignments {
+		if assignment.name != PropertyCPUQuotaPerSecUSec && assignment.name != PropertyCPUQuotaPeriodUSec {
+			continue
+		}
+		perSecond, _ := snapshot.Properties.Value(PropertyCPUQuotaPerSecUSec)
+		period, _ := snapshot.Properties.Value(PropertyCPUQuotaPeriodUSec)
+		if perSecond != SystemdUnset || period != SystemdUnset {
+			return errors.New("read effective cpu.max: no such file or directory")
+		}
+	}
+	return nil
+}
+
+func TestStartupCapabilityInterfaceMissingAfterActivationIsADefinitiveRefusal(t *testing.T) {
+	transport := newFakeUnitTransport()
+	verifier := &fakeKernelVerifier{preflightByName: map[PropertyName]error{
+		PropertyIOReadBandwidthMax: errors.New("io.max is absent"),
+	}}
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+
+	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{IO: true})
+	if !IsRequiredCapabilityError(err) {
+		t.Fatalf("requireStartupCapabilities() error = %v, want required capability", err)
+	}
+	for _, part := range []string{"I/O limiting", `controller "io"`, `interface "io.max"`} {
+		if !strings.Contains(err.Error(), part) {
+			t.Fatalf("requireStartupCapabilities() error = %v, want %q", err, part)
+		}
+	}
+	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("refused probe left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+	}
+}
+
+func TestStartupCapabilityApplyFailureIsNotAMissingCapability(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.setErr = errors.New("connection reset by peer")
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+
+	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{})
+	if err == nil || IsRequiredCapabilityError(err) || !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Fatalf("requireStartupCapabilities() error = %v, want the transport failure", err)
+	}
+}
+
+func TestStartupCapabilityRestoreFailureReportsTheSurvivingLease(t *testing.T) {
+	transport := newFakeUnitTransport()
+	transport.revertErr = errors.New("injected restore failure")
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
+
+	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{})
+	if err == nil || !strings.Contains(err.Error(), "injected restore failure") ||
+		!strings.Contains(err.Error(), "left a durable property lease on user.slice") {
+		t.Fatalf("requireStartupCapabilities() error = %v, want the restore failure and the surviving lease", err)
+	}
+	if len(store.journal.Units) != 1 {
+		t.Fatalf("durable lease after a failed restore = %+v, want it kept for recovery", store.journal)
 	}
 }
 
@@ -114,8 +197,8 @@ func TestStartupCapabilityAcceptsStoppedProbeWithVanishedRuntimeFootprint(t *tes
 	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	if err := adapter.probeStartupCapability(context.Background(), transport, capability); err != nil {
-		t.Fatalf("probeStartupCapability() error = %v", err)
+	if err := adapter.probeTransientCapability(context.Background(), transport, capability); err != nil {
+		t.Fatalf("probeTransientCapability() error = %v", err)
 	}
 	if len(transport.revertCalls) != 0 || transport.reloadCalls != 0 {
 		t.Fatalf("vanished probe footprint triggered revert=%v reload=%d", transport.revertCalls, transport.reloadCalls)
@@ -132,8 +215,8 @@ func TestStartupValidatesParentThroughProductionPropertyAndIdentityPathBeforePro
 
 	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{})
 	assertAdapterReason(t, err, ReasonMalformedReply)
-	if len(transport.probeStarts) != 0 {
-		t.Fatalf("capability probes started before parent validation: %+v", transport.probeStarts)
+	if len(transport.setCalls) != 0 || len(transport.probeStarts) != 0 {
+		t.Fatalf("the probe wrote before parent validation: set=%+v starts=%+v", transport.setCalls, transport.probeStarts)
 	}
 }
 
@@ -143,8 +226,9 @@ func TestStartupCapabilityMissingBackportedCPUPeriodFailsClosedAndCleansProbe(t 
 		delete(f.units[unit].slice, string(PropertyCPUQuotaPeriodUSec))
 	}
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
+	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{})
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	assertAdapterReason(t, err, ReasonMalformedReply)
 	if len(transport.probeStarts) != 1 || len(transport.probeStops) != 1 || len(adapter.OwnedUnits()) != 0 {
 		t.Fatalf("failed probe cleanup: starts=%v stops=%v owned=%v", transport.probeStarts, transport.probeStops, adapter.OwnedUnits())
@@ -160,13 +244,13 @@ func TestStartupCapabilitiesClassifyEnabledIOMissingInterfaceAndCleanProbe(t *te
 	capabilities := mustStartupCapabilities(t, StartupRequirements{IO: true})
 	capability := capabilities[len(capabilities)-1]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if !IsRequiredCapabilityError(err) {
-		t.Fatalf("probeStartupCapability() error = %v, want required capability", err)
+		t.Fatalf("probeTransientCapability() error = %v, want required capability", err)
 	}
 	for _, part := range []string{"I/O limiting", `controller "io"`, `interface "io.max"`} {
 		if !strings.Contains(err.Error(), part) {
-			t.Fatalf("probeStartupCapability() error = %v, want %q", err, part)
+			t.Fatalf("probeTransientCapability() error = %v, want %q", err, part)
 		}
 	}
 	if len(transport.probeStarts) != 1 || len(transport.probeStops) != 1 || len(adapter.OwnedUnits()) != 0 {
@@ -181,9 +265,9 @@ func TestStartupCapabilitiesCleanDurableIntentWhenApplyFails(t *testing.T) {
 	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if err == nil || !strings.Contains(err.Error(), "injected apply failure") {
-		t.Fatalf("probeStartupCapability() error = %v, want apply failure", err)
+		t.Fatalf("probeTransientCapability() error = %v, want apply failure", err)
 	}
 	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
 		t.Fatalf("failed apply left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
@@ -199,9 +283,9 @@ func TestStartupCapabilitiesPropagateProbeCleanupFailure(t *testing.T) {
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if err == nil || !strings.Contains(err.Error(), "injected cleanup failure") {
-		t.Fatalf("probeStartupCapability() error = %v, want cleanup failure", err)
+		t.Fatalf("probeTransientCapability() error = %v, want cleanup failure", err)
 	}
 }
 
@@ -216,9 +300,9 @@ func TestStartupCapabilityReportsMutableUnitFilesLeftAfterStop(t *testing.T) {
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if err == nil || !strings.Contains(err.Error(), "left mutable unit files") {
-		t.Fatalf("probeStartupCapability() error = %v, want mutable unit-file residue", err)
+		t.Fatalf("probeTransientCapability() error = %v, want mutable unit-file residue", err)
 	}
 }
 
@@ -231,10 +315,10 @@ func TestStartupCapabilityReportsDurableLeaseLeftAfterCleanup(t *testing.T) {
 		store.saveErr = errors.New("injected journal cleanup failure")
 	}
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if err == nil || !strings.Contains(err.Error(), "injected journal cleanup failure") ||
 		!strings.Contains(err.Error(), "left a durable property lease") {
-		t.Fatalf("probeStartupCapability() error = %v, want durable lease residue", err)
+		t.Fatalf("probeTransientCapability() error = %v, want durable lease residue", err)
 	}
 	if len(store.journal.Units) != 1 {
 		t.Fatalf("durable probe residue = %+v, want one unit", store.journal)
@@ -248,10 +332,10 @@ func TestStartupCapabilityRequiresInactiveReconciliationToReleaseEveryLease(t *t
 	adapter := mustTestAdapterWithStore(t, transport, &fakeKernelVerifier{}, store)
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if err == nil || !strings.Contains(err.Error(), "injected inactive cleanup failure") ||
 		!strings.Contains(err.Error(), "left a durable property lease") {
-		t.Fatalf("probeStartupCapability() error = %v, want incomplete inactive reconciliation", err)
+		t.Fatalf("probeTransientCapability() error = %v, want incomplete inactive reconciliation", err)
 	}
 	if len(adapter.OwnedUnits()) != 1 || len(store.journal.Units) != 1 {
 		t.Fatalf("failed inactive reconciliation lost ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
@@ -272,9 +356,9 @@ func TestStartupCapabilitiesCleanProbeWhenStartAcknowledgementFailsAfterCreation
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if !IsCapabilityProbeError(err) || !strings.Contains(err.Error(), "injected post-start failure") {
-		t.Fatalf("probeStartupCapability() error = %v, want typed probe-start failure", err)
+		t.Fatalf("probeTransientCapability() error = %v, want typed probe-start failure", err)
 	}
 	if len(transport.probeStops) != 1 || transport.probeStops[0] != transport.probeStarts[0].unit {
 		t.Fatalf("post-start failure cleanup start=%v stop=%v", transport.probeStarts, transport.probeStops)
@@ -287,18 +371,18 @@ func TestStartupCapabilityProbeFailureNamesPayloadWithoutClaimingMissingInterfac
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	if !IsCapabilityProbeError(err) || IsRequiredCapabilityError(err) {
-		t.Fatalf("probeStartupCapability() error = %v, want only typed probe failure", err)
+		t.Fatalf("probeTransientCapability() error = %v, want only typed probe failure", err)
 	}
 	for _, required := range []string{"could not start capability probe executable", capabilityProbeExecutable, "transient service failed before execution"} {
 		if !strings.Contains(err.Error(), required) {
-			t.Fatalf("probeStartupCapability() error = %v, want %q", err, required)
+			t.Fatalf("probeTransientCapability() error = %v, want %q", err, required)
 		}
 	}
 	for _, forbidden := range []string{`controller "cpu"`, `interface "cpu.max"`} {
 		if strings.Contains(err.Error(), forbidden) {
-			t.Fatalf("probeStartupCapability() error = %v, must not claim missing %s", err, forbidden)
+			t.Fatalf("probeTransientCapability() error = %v, must not claim missing %s", err, forbidden)
 		}
 	}
 }
@@ -309,10 +393,10 @@ func TestStartupCapabilityProbeTimeoutPreservesRetryableReason(t *testing.T) {
 	adapter := mustTestAdapter(t, transport, &fakeKernelVerifier{})
 	capability := mustStartupCapabilities(t, StartupRequirements{})[0]
 
-	err := adapter.probeStartupCapability(context.Background(), transport, capability)
+	err := adapter.probeTransientCapability(context.Background(), transport, capability)
 	var adapterErr *AdapterError
 	if !errors.As(err, &adapterErr) || adapterErr.Reason != ReasonTimeout {
-		t.Fatalf("probeStartupCapability() error = %v, want timeout reason", err)
+		t.Fatalf("probeTransientCapability() error = %v, want timeout reason", err)
 	}
 	if IsCapabilityProbeError(err) {
 		t.Fatalf("timeout was flattened into a permanent capability-probe error: %v", err)
@@ -328,8 +412,8 @@ func TestStartupCleansAnInterruptedReservedProbeBeforeValidation(t *testing.T) {
 	if err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{}); err != nil {
 		t.Fatalf("requireStartupCapabilities() error = %v", err)
 	}
-	if len(transport.probeStops) < 2 || transport.probeStops[0] != stale {
-		t.Fatalf("interrupted probe cleanup order = %v, want %s first", transport.probeStops, stale)
+	if len(transport.probeStops) != 1 || transport.probeStops[0] != stale {
+		t.Fatalf("interrupted probe cleanup = %v, want only %s", transport.probeStops, stale)
 	}
 }
 
@@ -388,4 +472,43 @@ func setCallsContainScalarValues(calls []fakeSetCall, wanted map[PropertyName]ui
 		}
 	}
 	return false
+}
+
+func TestAutoObservesWithoutResidueWhereTheKernelRefusesCPU(t *testing.T) {
+	// The resman-rho remedy for vmgclalpr2095/2098: under auto, a kernel that
+	// refuses +cpu must yield a typed refusal, and the user.slice probe must
+	// leave no property lease that a later release could fail to restore.
+	transport := newFakeUnitTransport()
+	verifier := &absentCPUInterfaceVerifier{fakeKernelVerifier: fakeKernelVerifier{
+		preflightByName: map[PropertyName]error{PropertyCPUQuotaPerSecUSec: errors.New("cpu.max is absent")},
+	}}
+	store := newMemoryLeaseJournalStore()
+	adapter := mustTestAdapterWithStore(t, transport, verifier, store)
+
+	refusal, err := adapter.resolveStartupCapabilities(context.Background(), StartupRequirements{})
+	if err != nil || refusal == nil {
+		t.Fatalf("resolveStartupCapabilities() = (%+v, %v), want a typed refusal", refusal, err)
+	}
+	if refusal.Capability.InterfaceName != "cpu.max" {
+		t.Fatalf("refusal names %+v, want cpu.max", refusal.Capability)
+	}
+	if len(adapter.OwnedUnits()) != 0 || len(store.journal.Units) != 0 {
+		t.Fatalf("refusal left ownership: memory=%v journal=%+v", adapter.OwnedUnits(), store.journal)
+	}
+}
+
+func TestStartupIOProbeRefusesBeforeWritingWithoutARootIOController(t *testing.T) {
+	transport := newFakeUnitTransport()
+	verifier := &fakeKernelVerifier{preflightByName: map[PropertyName]error{
+		PropertyIOReadBandwidthMax: errors.New("required I/O controller is unavailable"),
+	}}
+	adapter := mustTestAdapter(t, transport, verifier)
+
+	err := adapter.requireStartupCapabilities(context.Background(), StartupRequirements{IO: true})
+	if !IsRequiredCapabilityError(err) {
+		t.Fatalf("requireStartupCapabilities() error = %v, want required capability", err)
+	}
+	if setCallsContainScalarValues(transport.setCalls, map[PropertyName]uint64{PropertyIOWeight: 1_000}) {
+		t.Fatal("the I/O weight was written although the root offers no I/O controller")
+	}
 }

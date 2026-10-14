@@ -254,15 +254,25 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   not authorize a generic raw-cgroup writer, another token, another controller file,
   PID movement, or user-slice stop/recreation. The AST gate **MUST** pin the single
   writer and exact token.
-- Startup capability checks may create one transient slice directly below `user.slice`
-  and one dedicated, finite-lived probe process inside it solely to make the requested
-  controller interface materialize for kernel verification. No existing PID may be
-  moved. Both units must be removed synchronously on success and failure; after a daemon
-  crash the probe process must terminate by itself. Unit start/stop calls remain confined
-  to the two exact transport methods pinned by the architectural gate. This is neither
-  an enforcement workload nor a second placement backend. Any external probe executable
-  must be an explicit RPM and Debian package dependency. Failure to start that payload
-  must be typed and diagnosed separately from a missing controller or cgroup interface.
+- Startup capability checks **MUST NOT** start a unit. ResMan starts before
+  `sysinit.target`, and systemd's `user-.slice.d` drop-in orders every child of
+  `user.slice` after `systemd-user-sessions.service`, so a transient probe slice waits
+  for ResMan itself until the call timeout. The startup probe writes runtime values to
+  `user.slice` through the production Apply, ConfirmApplied and Restore path, requires
+  the controller interface, and restores `user.slice` before readiness. It writes only
+  values whose baseline restoration also verifies where the interface is absent, so a
+  controller the kernel refuses leaves no lease behind.
+- The asynchronous weighted-I/O capability check, which runs after readiness while
+  `user.slice` may carry live enforcement, may create one transient slice directly below
+  `user.slice` and one dedicated, finite-lived probe process inside it solely to make the
+  requested controller interface materialize for kernel verification. No existing PID
+  may be moved. Both units must be removed synchronously on success and failure; after a
+  daemon crash the probe process must terminate by itself. Unit start/stop calls remain
+  confined to the two exact transport methods pinned by the architectural gate. This is
+  neither an enforcement workload nor a second placement backend. Any external probe
+  executable must be an explicit RPM and Debian package dependency. Failure to start that
+  payload must be typed and diagnosed separately from a missing controller or cgroup
+  interface.
 
 **Why.** Before `resman-4pw.1`, the control cycle aggregated RAM and I/O usage inside
 the CPU-eligibility branch. An empty CPU include list therefore selected nobody for
@@ -568,8 +578,9 @@ explicitly, and imposes the single supported revision at the ResMan boundary.
 - The packaged unit **MUST** bound the Linux capabilities it retains to the ones an
   enabled feature actually uses, and each retained capability **MUST** name the call
   site that needs it. ResMan stays root because systemd authorizes unit-property
-  mutation by user identity through polkit rather than by a capability, so the
-  bounding set and the read-only file system are the only boundary that remains.
+  mutation by user identity rather than by a capability: its private socket
+  `/run/systemd/private` serves only root. The bounding set and the read-only file
+  system are therefore the only boundary that remains.
   Registering a PSI poll trigger requires `CAP_SYS_RESOURCE`; omitting it silently
   disables event-driven pressure observation even when the pressure file is writable.
 - A sandboxing directive that would disable a shipped feature **MUST** be refused by a

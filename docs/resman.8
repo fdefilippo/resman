@@ -1,4 +1,4 @@
-.TH RESMAN 8 "October 2026" "v1.39.2" "System Administration"
+.TH RESMAN 8 "October 2026" "v1.40.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -438,9 +438,16 @@ A persistence-phase D-Bus discovery failure before process capture aborts resour
 reconciliation without restoring already-applied properties. A /proc capture failure
 remains an authority refusal and restores the affected owned RAM/I/O properties.
 .PP
-If the adapter cannot establish authority, ResMan remains in
+On a host whose workloads systemd does not own, including non-systemd hosts,
+and in a container that shares the host PID namespace but cannot see the systemd
+runtime (reason systemd_runtime_unreachable), ResMan remains in
 .B observation_only
-mode without a fallback. This includes non-systemd hosts. Observation-only mode
+mode without a fallback. On a systemd host that declared enforcement, an adapter
+that cannot be opened is a startup error, never a silent observation: a missing
+mandatory capability or a probe that could not run exits with status 78, and any
+other failure, such as the connection to systemd, a timeout or an authorization
+refusal, exits with status 1 so the service manager retries it until its start
+limit leaves the unit visibly failed. Observation-only mode
 and typed resource refusals are not enforcement. ResMan never creates its own
 enforcement hierarchy, records process origins, or writes process membership.
 .PP
@@ -461,6 +468,28 @@ bounded reason mandatory_capability_unavailable and the missing capability named
 an unavailable bus, a timeout or a probe that could not run still refuses to
 start, so a transient fault never removes enforcement. The key is
 restart-required and the mode never changes while the daemon runs.
+.PP
+.B REALTIME_PROTECTED_UNITS
+names services that request realtime scheduling themselves (default
+.IR vcs.service ).
+On a kernel built with realtime group scheduling (the Enterprise Linux 8 kernel,
+not the EL9 or EL10 distribution kernels), enabling the cpu controller at the root
+makes a later SCHED_FIFO or SCHED_RR request fail with EPERM. ResMan's CPU limits
+keep the controller enabled while they are applied, so a listed service that starts
+or restarts then, for example through hastart, which restarts vcs.service, loses
+realtime scheduling. While a listed unit, or any unit whose CPUSchedulingPolicy is
+fifo or rr, is loaded and the root does not already delegate cpu, ResMan does not
+enable the controller:
+.B systemd_native
+refuses with status 78 and
+.B auto
+observes with reason realtime_admission_protected. Leave the key empty only to
+accept that those services lose realtime scheduling. The key is restart-required.
+.PP
+ResMan reaches systemd over PID 1's private socket
+.IR /run/systemd/private ,
+which exists from the first instant of boot, so its early start does not depend on
+dbus-daemon.
 .PP
 Inspect
 .B resman_enforcement_mode
@@ -732,9 +761,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.39.1 to 1.39.2
+.B Upgrade from 1.25.x through 1.39.2 to 1.40.0
 .PP
-ResMan 1.39.2 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.40.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
@@ -750,10 +779,12 @@ A bind to
 .I 0.0.0.0
 is a non-default remote exposure and requires TLS, authentication, and firewall
 restrictions.
+When
 .B SYSTEM_UID_MAX
-is normally derived from
-.I /proc/sys/kernel/pid_max
-at startup, with 60000 used only if that file cannot be read. An empty
+is unset, no upper UID bound applies: every UID from
+.B SYSTEM_UID_MIN
+to 4294967294, the largest valid UID, is monitored, including directory
+accounts with very high UIDs. It is not derived from the host PID limit. An empty
 .B USER_INCLUDE_LIST
 makes nobody eligible for CPU limiting, while empty RAM and I/O include lists
 select every non-excluded user.
@@ -1346,9 +1377,10 @@ deliberately escapes the group; such containment requires a separate systemd
 transient-unit or cgroup TasksMax design. See docs/LIMIT-HOOKS.md in the source and
 documentation package for operational details.
 .SH SERVICE PRIVILEGE BOUNDARY
-ResMan runs as root. Systemd authorizes unit-property mutation on the system bus by
-user identity through polkit rather than by a Linux capability, so no capability set
-can replace root for the enforcement path. The packaged unit therefore bounds what
+ResMan runs as root. It talks to systemd over PID 1's private socket
+.IR /run/systemd/private ,
+which systemd serves only to root and authorizes by peer credentials rather than by
+a Linux capability, so no capability set can replace root for the enforcement path. The packaged unit therefore bounds what
 root may do instead of changing who the daemon is.
 .PP
 The capability bounding set is limited to

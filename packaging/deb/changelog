@@ -1,3 +1,13 @@
+resman (1.40.0-1) stable; urgency=medium
+
+  * Monitor every UID above SYSTEM_UID_MIN when SYSTEM_UID_MAX is unset instead of bounding UIDs by pid_max.
+  * Stop startup with a retryable or permanent error when the systemd adapter cannot be opened, never observing silently.
+  * Observe with reason systemd_runtime_unreachable where systemd is PID 1 but its runtime is not visible.
+  * Reach systemd over /run/systemd/private at boot and probe startup capabilities on user.slice without transient units.
+  * Protect realtime services named in REALTIME_PROTECTED_UNITS (default vcs.service) on kernels with realtime group scheduling.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Tue, 14 Oct 2026 06:00:00 +0200
+
 resman (1.39.2-1) stable; urgency=medium
 
   * Retain cpu-delegation evidence logs so a fresh checkout verifies its manifests.

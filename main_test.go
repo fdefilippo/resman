@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/fdefilippo/resman/internal/app"
+	"github.com/fdefilippo/resman/internal/systemdunit"
 )
 
 func TestApplicationExitCode(t *testing.T) {
@@ -20,6 +22,8 @@ func TestApplicationExitCode(t *testing.T) {
 	}{
 		{name: "transient runtime failure", err: errors.New("listener temporarily unavailable"), want: exitStatusFailure},
 		{name: "configuration or capability rejection", err: app.NewPermanentStartupError(errors.New("operator action required")), want: exitStatusConfiguration},
+		{name: "systemd adapter connection failure is retried", err: fmt.Errorf("initialize systemd-native enforcement: %w",
+			&systemdunit.AdapterError{Reason: systemdunit.ReasonBusUnavailable, Operation: "construct"}), want: exitStatusFailure},
 	}
 
 	for _, tt := range tests {

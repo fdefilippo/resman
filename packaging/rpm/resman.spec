@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.39.2
+Version: 1.40.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.39.1 to 1.39.2.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.39.2 to 1.40.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -311,6 +311,13 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Tue Oct 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.40.0-1
+- Monitor every UID above SYSTEM_UID_MIN when SYSTEM_UID_MAX is unset instead of bounding UIDs by pid_max
+- Stop startup with a retryable or permanent error when the systemd adapter cannot be opened, never observing silently
+- Observe with reason systemd_runtime_unreachable where systemd is PID 1 but its runtime is not visible
+- Reach systemd over /run/systemd/private at boot and probe startup capabilities on user.slice without transient units
+- Protect realtime services named in REALTIME_PROTECTED_UNITS (default vcs.service) on kernels with realtime group scheduling
+
 * Thu Oct 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.39.2-1
 - Retain cpu-delegation evidence logs so a fresh checkout verifies its manifests
 

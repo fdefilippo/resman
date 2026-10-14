@@ -40,8 +40,9 @@ func TestServiceContainsNoIneffectiveLayoutOrHardeningTemplate(t *testing.T) {
 
 // TestServiceBoundsThePrivilegeSurface pins the sandboxing the daemon runs
 // under. ResMan stays root because systemd authorizes unit-property mutation
-// by uid through polkit rather than by a Linux capability, so the bounding set
-// and the read-only file system are the boundary that remains.
+// by uid rather than by a Linux capability: its private socket serves only
+// root. The bounding set and the read-only file system are the boundary that
+// remains.
 func TestServiceBoundsThePrivilegeSurface(t *testing.T) {
 	contents := readService(t)
 	tests := []struct {
