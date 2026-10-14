@@ -287,7 +287,7 @@ var specialFieldMeanings = map[string]string{
 	"RAM_LIMIT_ENABLED":          "false disables RAM enforcement while observation remains available.",
 	"RAM_USER_EXCLUDE_LIST":      "Empty excludes nobody from RAM eligibility.",
 	"RAM_USER_INCLUDE_LIST":      "Empty includes every non-excluded user for RAM eligibility.",
-	"REALTIME_PROTECTED_UNITS":   "Empty is the operator's consent that the cpu controller may be enabled at boot ahead of realtime services; on a CONFIG_RT_GROUP_SCHED kernel those services then lose realtime admission. Units whose CPUSchedulingPolicy is fifo or rr stay protected.",
+	"REALTIME_PROTECTED_UNITS":   "Empty is the operator's consent that ResMan may enable the cpu controller where realtime services run; on a CONFIG_RT_GROUP_SCHED kernel a listed service that starts or restarts while limits are applied then loses realtime admission. Units whose CPUSchedulingPolicy is fifo or rr stay protected.",
 	"SERVER_ROLE":                "Empty omits an operator-defined role value.",
 	"SYSTEM_UID_MAX":             "Unset applies no upper bound: every UID from SYSTEM_UID_MIN to 4294967294, the largest valid UID, is monitored. It does not depend on the host PID limit.",
 	"USER_EXCLUDE_LIST":          "Empty excludes nobody from CPU eligibility. Excluded native user slices remain inside the parent quota and share aggregate best effort.",

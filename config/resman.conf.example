@@ -27,8 +27,11 @@ ENFORCEMENT_MODE=systemd_native
 # Services that request realtime scheduling themselves, so their unit files do
 # not show it. On a kernel built with realtime group scheduling, enabling the
 # cgroup v2 cpu controller at the root gives every service a realtime budget of
-# zero: a realtime request made afterwards fails with EPERM. ResMan starts
-# before ordinary services, so it would be the one to enable the controller.
+# zero: a realtime request made afterwards fails with EPERM. ResMan's CPU limits
+# keep the controller enabled while they are applied, so a listed service that
+# starts or restarts then (hastart restarts vcs.service) loses realtime
+# scheduling. The Enterprise Linux 8 kernel has that option; the EL9 and EL10
+# distribution kernels do not, and there nothing is protected.
 # While a listed unit is loaded and the root does not already delegate cpu,
 # ResMan does not enable it: systemd_native refuses to start (status 78) and
 # auto observes with reason realtime_admission_protected. Units whose

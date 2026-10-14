@@ -261,6 +261,9 @@ Current metrics schema: 10.
 
 The `systemd_native` adapter uses authoritative D-Bus unit identities and
 runtime-only SetUnitProperties calls, never raw cgroup writes or PID migration.
+It verifies normalized properties and kernel values before acknowledging a plan.
+The fallback `observation_only` applies whenever authority is unavailable or cannot
+be verified. It never owns a cgroup hierarchy or changes process membership.
 It talks to PID 1 directly over `/run/systemd/private`, the peer-to-peer endpoint
 systemd serves to root from the first instant of boot, not through the system bus:
 the packaged unit starts before `sysinit.target`, ahead of `dbus.socket`, so the
@@ -294,11 +297,15 @@ enable the controller: `systemd_native` refuses with status 78 and
 `failure_class=realtime_admission_protected`, `auto` observes under the reason
 `realtime_admission_protected`. An empty `REALTIME_PROTECTED_UNITS` is the
 operator's consent; a unit with a realtime `CPUSchedulingPolicy` stays protected.
-It verifies normalized properties and kernel values before acknowledging a plan.
-The fallback `observation_only` applies whenever authority is unavailable or cannot
-be verified. It never owns a cgroup hierarchy or changes process membership.
+The risk is not the idle boot: the probe restores `user.slice` before readiness and
+the EL8 cold boots show systemd withdrawing `cpu` from the root before
+`vcs.service` starts. It is the window in which ResMan's CPU limits keep the
+controller enabled, during which a protected service that starts or restarts
+(`hastart` restarts `vcs.service`) loses realtime admission. The EL9 and EL10
+distribution kernels are built without realtime group scheduling, so the guard
+never protects there (`test/functional/early-boot`).
 
-Opening the adapter at startup is not such a fallback. On a host whose workloads
+Opening the adapter at startup is not an `observation_only` fallback. On a host whose workloads
 systemd owns, with `ENFORCEMENT_MODE` set to `systemd_native` or `auto`, every
 construction failure stops startup. A missing mandatory capability or a probe that
 could not run is permanent (exit status 78); only `auto` turns a definitive

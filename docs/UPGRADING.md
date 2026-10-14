@@ -59,9 +59,8 @@ host observed for its whole uptime. PID 1 serves the same `org.freedesktop.syste
 objects on its private socket from the first instant of boot, which is also what
 `systemctl` uses when run as root.
 
-**Action.** None for an ordinary host. On a kernel with realtime group scheduling,
-establishing enforcement before `vcs.service` would take realtime scheduling away
-from Veritas Cluster Server; read the next section before upgrading such a host.
+**Action.** None for an ordinary host. On an EL8 node running a realtime service
+such as Veritas Cluster Server, read the next section before upgrading.
 
 ## NEW: realtime admission protection with REALTIME_PROTECTED_UNITS
 
@@ -79,9 +78,14 @@ unit is unaffected.
 and every other child a task group with zero realtime runtime, and cgroup v2 has no
 knob to raise it. Veritas Cluster Server's `had` then fails its own
 `sched_setscheduler(SCHED_FIFO)` with `EPERM` (engine log `V-16-1-16002`) and runs
-without realtime priority. Now that ResMan establishes enforcement at boot, before
-`vcs.service`, it would be the one causing that on nodes where `had` runs realtime
-today, without anyone deciding so.
+without realtime priority. ResMan's CPU limits keep the controller enabled at the
+root while they are applied, so a `vcs.service` start or restart in that window,
+including `hastart`, which restarts the unit, would bring `had` back without
+realtime priority, without anyone deciding so. An idle boot does not cause it: the
+startup probe restores `user.slice` before readiness, and on the EL8 cold boots
+systemd withdraws the controller again before `vcs.service` starts. The EL9 and
+EL10 distribution kernels lack realtime group scheduling, so there nothing can be
+revoked and nothing is protected.
 
 **Action.** Decide per host before upgrading.
 
@@ -217,9 +221,11 @@ this is that note.
 **The condition.** On a kernel built with `CONFIG_RT_GROUP_SCHED=y`, the cgroup v2
 cpu controller cannot distribute realtime bandwidth, so the kernel refuses `+cpu`
 in the root `cgroup.subtree_control` with `EINVAL` while any realtime task lives
-outside the root cgroup. No descendant can then expose `cpu.max`. Enterprise Linux
-8, 9 and 10 kernels all enable that option, and a cluster agent such as Veritas
-Cluster Server keeps SCHED_FIFO threads inside `system.slice`, which is enough.
+outside the root cgroup. No descendant can then expose `cpu.max`. The Enterprise
+Linux 8 distribution kernel enables that option; the EL9 and EL10 distribution
+kernels measured by the early-boot qualification (5.14 and 6.12) do not. A cluster
+agent such as Veritas Cluster Server keeps SCHED_FIFO threads inside
+`system.slice`, which is enough.
 Confirm it on an affected host with:
 
 ```bash

@@ -19,11 +19,14 @@ import (
 // controller at the root gives every child cgroup a task group whose realtime
 // runtime is zero, and cgroup v2 offers no knob to raise it. While
 // kernel.sched_rt_runtime_us is not -1, sched_setscheduler(SCHED_FIFO or
-// SCHED_RR) from inside such a group fails with EPERM. ResMan starts before
-// ordinary services, so its capability probe would be the first to enable the
-// controller, and a service that requests realtime scheduling later would lose
-// it without anyone deciding so. The guard refuses that unless the operator
-// consented by leaving no protected unit.
+// SCHED_RR) from inside such a group fails with EPERM. While ResMan's CPU
+// limits are applied the controller stays enabled at the root, so a service
+// that starts or restarts then (Veritas' hastart restarts vcs.service) loses
+// realtime scheduling without anyone deciding so. An idle boot does not: the
+// startup probe restores user.slice before readiness, and the EL8 cold boots
+// show systemd withdrawing cpu again (test/functional/early-boot). The guard
+// refuses to enforce at all on such a host unless the operator consented by
+// leaving no protected unit.
 
 // Kernel realtime group scheduling states.
 const (

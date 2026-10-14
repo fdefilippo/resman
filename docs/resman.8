@@ -472,11 +472,14 @@ restart-required and the mode never changes while the daemon runs.
 .B REALTIME_PROTECTED_UNITS
 names services that request realtime scheduling themselves (default
 .IR vcs.service ).
-On a kernel built with realtime group scheduling, enabling the cpu controller at
-the root makes a later SCHED_FIFO or SCHED_RR request fail with EPERM. ResMan
-starts before ordinary services, so while a listed unit, or any unit whose
-CPUSchedulingPolicy is fifo or rr, is loaded and the root does not already
-delegate cpu, it does not enable the controller:
+On a kernel built with realtime group scheduling (the Enterprise Linux 8 kernel,
+not the EL9 or EL10 distribution kernels), enabling the cpu controller at the root
+makes a later SCHED_FIFO or SCHED_RR request fail with EPERM. ResMan's CPU limits
+keep the controller enabled while they are applied, so a listed service that starts
+or restarts then, for example through hastart, which restarts vcs.service, loses
+realtime scheduling. While a listed unit, or any unit whose CPUSchedulingPolicy is
+fifo or rr, is loaded and the root does not already delegate cpu, ResMan does not
+enable the controller:
 .B systemd_native
 refuses with status 78 and
 .B auto
