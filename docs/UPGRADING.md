@@ -39,6 +39,38 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## FIXED: every control cycle decides on a fresh process scan
+
+**Visible change.** Each control cycle now scans user processes itself. With a
+`POLLING_INTERVAL` below `METRICS_CACHE_TTL`, or with PSI-triggered cycles, new or
+stopped workloads are seen by the next cycle instead of up to `METRICS_CACHE_TTL`
+later. On a 4-CPU guest with `POLLING_INTERVAL=5`, CPU-bound users started at the same
+moment were measured and limited after 10 s instead of 40 s, and the eligible CPU value
+no longer repeats across consecutive cycles.
+
+**Cause.** Through 1.41.3 the decision process sample was cached for
+`METRICS_CACHE_TTL` (default 15 s), although `METRICS_CACHE_TTL` is documented as an
+observation setting and the host CPU sample of the same cycle was always fresh.
+
+**Action.** None with the default `POLLING_INTERVAL=30`. Hosts with a short polling
+interval or PSI-driven cycles scan `/proc` once per cycle; watch **Control cycle
+duration** after the upgrade.
+
+## FIXED: user slices without a delegated cpu controller are not counted as errors
+
+**Visible change.** Outside a limits episode,
+`resman_errors_total{component="enforcement_observation"}` no longer grows by one per
+user slice per cycle. On a guest with ten user slices it had reached 143 in about 85
+cycles of a healthy run.
+
+**Cause.** Outside an episode systemd may stop delegating the `cpu` controller below
+`user.slice`. The slices then expose no `cpu.weight`, and their accounting read failed;
+for slices outside the CPU Points plan that failure was logged only at Debug but still
+counted as an error.
+
+**Action.** None. Alerts or panels on that counter now reflect genuine read failures.
+Per-slice delivered cores remain absent outside an episode on such hosts.
+
 ## FIXED: limit hooks run again when a user is newly limited
 
 **Visible change.** `LIMIT_HOOK_SCRIPT` and `LIMIT_HOOK_URL` are delivered again when a
