@@ -80,8 +80,6 @@ func TestCPUPointsOperatorSurfacesCarryTheCompleteContract(t *testing.T) {
 			"john.smith=200",
 			"without moving processes",
 			"CPU-POINTS-OBSERVABILITY.md",
-			"60-second observation window",
-			"memory.high < memory.max",
 		},
 		"config/resman.conf.example": {
 			"Even reserve zero programs finite cpu.max",

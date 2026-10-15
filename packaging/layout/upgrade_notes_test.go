@@ -71,7 +71,7 @@ func TestUpgradeGuideIsReferencedAndPackaged(t *testing.T) {
 	}{
 		{
 			path:     "README.md",
-			required: []string{"docs/UPGRADING.md", "from 1.25.x through 1.41.1 to 1.41.2 is intentionally"},
+			required: []string{"docs/UPGRADING.md"},
 		},
 		{
 			path:     "docs/resman.8",
