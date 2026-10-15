@@ -711,8 +711,9 @@ Timeout parameters for cgroup operations, retry delays, and MCP shutdown can be 
 .B METRICS_CACHE_TTL
 controls observation value reuse and must be at least one second. A value remains
 valid at the exact TTL boundary and expires after it; periodic cleanup does not
-shorten values above five minutes. Control-cycle host CPU decisions use an independent,
-uncached /proc/stat baseline. CPU and I/O process baselines are also independent of
+shorten values above five minutes. Every control cycle takes its own uncached
+/proc/stat sample and scans user processes afresh, so cycles faster than the TTL never
+decide on a stale sample. CPU and I/O process baselines are also independent of
 this TTL and remain valid for active PID and start-time identities until a completed
 scan proves that the process disappeared.
 .PP

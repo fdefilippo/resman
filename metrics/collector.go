@@ -1207,7 +1207,6 @@ func (c *Collector) GetSystemLoad() (float64, error) {
 
 const (
 	observationUserMetricsCacheKey = "all_user_metrics_observation"
-	decisionUserMetricsCacheKey    = "all_user_metrics_decision"
 )
 
 // GetAllUserMetrics returns an observation sample for all active users.
@@ -1221,13 +1220,23 @@ func (c *Collector) GetAllUserMetrics() map[int]*UserMetrics {
 }
 
 // GetAllUserMetricsForDecision returns the control cycle's authoritative sample.
-// Its temporal state and cache are independent from observation refreshes.
+// Its temporal state is independent from observation refreshes, and it is never
+// cached: reusing it for METRICS_CACHE_TTL let control cycles faster than the
+// TTL, a short POLLING_INTERVAL or PSI-triggered cycles, decide on processes
+// that had already changed (resman-5ke).
 func (c *Collector) GetAllUserMetricsForDecision() map[int]*UserMetrics {
-	return c.getAllUserMetricsCached(
-		decisionUserMetricsCacheKey,
-		c.decisionState,
-		c.collectAllUserMetrics,
-	)
+	return c.scanUserMetrics(c.decisionState, c.collectAllUserMetrics)
+}
+
+// scanUserMetrics performs one complete scan, serialized with every other scan
+// and without consulting or populating any cache.
+func (c *Collector) scanUserMetrics(
+	state *userMetricsSamplingState,
+	collect func(*userMetricsSamplingState) map[int]*UserMetrics,
+) map[int]*UserMetrics {
+	leaveScan := c.userMetricsScan.Enter()
+	defer leaveScan()
+	return collect(state)
 }
 
 func (c *Collector) getAllUserMetricsCached(

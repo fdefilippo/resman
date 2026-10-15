@@ -546,11 +546,7 @@ func TestObservationAndDecisionSamplesUseIndependentCacheEntries(t *testing.T) {
 		observationState,
 		collect,
 	)
-	decision := collector.getAllUserMetricsCached(
-		decisionUserMetricsCacheKey,
-		decisionState,
-		collect,
-	)
+	decision := collector.scanUserMetrics(decisionState, collect)
 	collector.getAllUserMetricsCached(observationUserMetricsCacheKey, observationState, collect)
 
 	if _, ok := observation[1000]; !ok {
@@ -561,6 +557,31 @@ func TestObservationAndDecisionSamplesUseIndependentCacheEntries(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("collection calls = %d, want one per sampling purpose", got)
+	}
+}
+
+func TestEveryDecisionSampleScansWithinTheCacheTTL(t *testing.T) {
+	collector := &Collector{
+		cfg:   config.DefaultConfig(),
+		cache: make(map[string]metricCacheEntry),
+	}
+	state := newUserMetricsSamplingState()
+	var calls atomic.Int32
+	collect := func(*userMetricsSamplingState) map[int]*UserMetrics {
+		scan := int(calls.Add(1))
+		return map[int]*UserMetrics{1000: {UID: 1000, ProcessCount: scan}}
+	}
+
+	first := collector.scanUserMetrics(state, collect)
+	second := collector.scanUserMetrics(state, collect)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("decision scans for two control cycles within METRICS_CACHE_TTL = %d, want 2", got)
+	}
+	if first[1000].ProcessCount != 1 || second[1000].ProcessCount != 2 {
+		t.Fatalf("decision samples = %d then %d, want a fresh scan each cycle", first[1000].ProcessCount, second[1000].ProcessCount)
+	}
+	if _, cached := collector.getFromCache(observationUserMetricsCacheKey); cached {
+		t.Fatal("a decision scan populated the observation cache")
 	}
 }
 
@@ -1268,7 +1289,7 @@ func TestGetAllUserMetricsCoalescesConcurrentScans(t *testing.T) {
 	for range callers {
 		go func() {
 			defer wg.Done()
-			results <- collector.getAllUserMetricsCached(decisionUserMetricsCacheKey, state, collect)
+			results <- collector.getAllUserMetricsCached(observationUserMetricsCacheKey, state, collect)
 		}()
 	}
 

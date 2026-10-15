@@ -280,7 +280,7 @@ var specialFieldMeanings = map[string]string{
 	"MCP_TLS_CA_FILE":            "Empty disables client-certificate authentication; the bearer token is still required over HTTP.",
 	"ENFORCEMENT_MODE":           "Empty keeps systemd_native, which refuses to start when a mandatory capability is unavailable.",
 	"MCP_TRANSPORT":              "stdio is local and creates no network listener.",
-	"METRICS_CACHE_TTL":          "Controls observation value reuse only; control-cycle host CPU decisions use an independent uncached /proc/stat stream.",
+	"METRICS_CACHE_TTL":          "Controls observation value reuse only; control-cycle decisions take an uncached /proc/stat sample and an uncached per-user process scan every cycle.",
 	"METRICS_DB_ENABLED":         "false disables metrics persistence and database-backed MCP queries.",
 	"PROCESS_EXCLUDE_LIST":       "Empty excludes no process from enforcement.",
 	"PROMETHEUS_AUTH_TYPE":       "none disables Prometheus authentication.",
