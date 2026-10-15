@@ -810,6 +810,13 @@ LOG_LEVEL=DEBUG CPU_THRESHOLD=80 resman --config /etc/resman/resman.conf
 - `system_load OK`, `IGNORE_SYSTEM_LOAD=true`, or CPU-eligible users account for at
   least 50% of measured aggregate host CPU activity
 
+`CPU_THRESHOLD` and `CPU_RELEASE_THRESHOLD` are percentages of host CPU capacity.
+The eligible process sum is an aggregate per-core percentage (100 is one busy CPU),
+so every threshold comparison, the threshold-duration guard and the decision reasons
+use that sum divided by `total_cores` (logged as
+`cpu_eligible_users_host_cpu_percent`). With an unknown core count the CPU dimension
+neither activates nor releases, and the reason names the missing count.
+
 The attribution comparison converts normalized host CPU (0-100) into aggregate
 per-core percentage by multiplying it by `total_cores`, which is the unit used by the
 eligible process sum. If the host sample is unavailable, activation is delayed without
@@ -824,10 +831,10 @@ ResMan does not write leaf CPUQuota, including on root. Configured operator limi
 are not removed to manufacture delivery. No PID changes its unit.
 
 **Deactivate Limits When:**
-- `user_cpu_usage < CPU_RELEASE_THRESHOLD` (default: 40%)
+- `cpu_eligible_users_cpu_usage / total_cores < CPU_RELEASE_THRESHOLD` (default: 40% of the host)
 - `time_since_most_recent_CPU_or_RAM/IO_activation >= MIN_ACTIVE_TIME`
-- Every actively limited user's CPU EMA has remained below the release threshold for
-  three `POLLING_INTERVAL` periods
+- Every actively limited user's CPU EMA, divided by `total_cores`, has remained below
+  the release threshold for three `POLLING_INTERVAL` periods
 - `system_load OK`
 
 Deactivation is all-or-nothing, so the global hold is measured from the later of the

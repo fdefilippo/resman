@@ -1034,7 +1034,7 @@ func TestMakeDecision(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		CPUEligibleCPUUsage: 80.0, // Above threshold
+		CPUEligibleCPUUsage: 320.0, // 80% of a 4-CPU host: above threshold
 		TotalCores:          4,
 		SystemUnderLoad:     false,
 	}
@@ -1478,7 +1478,8 @@ func TestMakeDecisionDeactivate(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		CPUEligibleCPUUsage: 30.0, // Below release threshold
+		CPUEligibleCPUUsage: 120.0, // 30% of a 4-CPU host: below release threshold
+		TotalCores:          4,
 		SystemUnderLoad:     false,
 	}
 
@@ -1505,7 +1506,8 @@ func TestMakeDecisionMaintain(t *testing.T) {
 	}
 
 	metrics := &SystemMetrics{
-		CPUEligibleCPUUsage: 50.0, // Between thresholds
+		CPUEligibleCPUUsage: 200.0, // 50% of a 4-CPU host: between thresholds
+		TotalCores:          4,
 		SystemUnderLoad:     false,
 	}
 
@@ -1582,6 +1584,7 @@ func TestMakeDecisionReleaseStabilityUsesActiveUsersAndWallClock(t *testing.T) {
 	}
 	systemMetrics := &SystemMetrics{
 		CPUEligibleCPUUsage: 30,
+		TotalCores:          1,
 		SystemUnderLoad:     false,
 		UserMetrics:         collector.allUserMetrics,
 	}

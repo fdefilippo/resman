@@ -375,6 +375,7 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 		"decision_reason", run.reason,
 		"total_cpu_usage", run.metrics.TotalCPUUsage,
 		"cpu_eligible_users_cpu_usage", run.metrics.CPUEligibleCPUUsage,
+		"cpu_eligible_users_host_cpu_percent", eligibleHostCPUPercentLogValue(run.metrics),
 		"eligible_users", run.metrics.CPUEligibleUsersCount,
 		"active_limited_users", run.activeLimitedUsers,
 		"enforcement_mode", m.enforcementStatus.Mode,
@@ -390,6 +391,18 @@ func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
 	}
 
 	return nil
+}
+
+// eligibleHostCPUPercentLogValue reports the value compared with the CPU
+// thresholds, so an operator can read it next to cpu_eligible_users_cpu_usage,
+// which stays an aggregate per-core percentage. An unknown core count is logged
+// as unavailable instead of a fabricated zero.
+func eligibleHostCPUPercentLogValue(metrics *SystemMetrics) interface{} {
+	percent, ok := eligibleHostCPUPercent(metrics)
+	if !ok {
+		return "unavailable"
+	}
+	return percent
 }
 
 type SystemMetrics struct {
@@ -415,7 +428,7 @@ type SystemMetrics struct {
 	AllUsersCount       int
 
 	// Per-resource eligible-user metrics.
-	CPUEligibleCPUUsage            float64
+	CPUEligibleCPUUsage            float64 // Aggregate per-core percentage: 100 is one busy CPU.
 	CPUEligibleMemoryUsage         uint64
 	CPUEligibleUsersCount          int
 	RAMEligibleUsersCount          int

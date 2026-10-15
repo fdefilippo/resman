@@ -151,7 +151,7 @@ See `man resman` and `journalctl -u resman` for diagnostics.
 Edit `/etc/resman/resman.conf` to configure thresholds and filters:
 
 ```bash
-# CPU thresholds
+# CPU thresholds, as percentages of host CPU capacity
 CPU_THRESHOLD=75
 CPU_RELEASE_THRESHOLD=40
 CPU_THRESHOLD_DURATION=90
@@ -238,7 +238,7 @@ the most recent active enforcement epoch across CPU and RAM/I/O. It is also the
 minimum hold time after an individual CPU user is initially limited or re-added;
 re-adding a user does not restart the CPU enforcement epoch. Global deactivation
 additionally requires all actively limited users to remain below
-`CPU_RELEASE_THRESHOLD` for three `POLLING_INTERVAL` periods. This cool-down is
+`CPU_RELEASE_THRESHOLD`, as a share of the host, for three `POLLING_INTERVAL` periods. This cool-down is
 wall-clock based, so PSI events cannot shorten it.
 
 Dynamic RAM/IO enable and user-filter changes are reconciled on authoritative user
@@ -302,9 +302,12 @@ migrated atomically; schema 6 and older must be archived or deleted before resta
 comparable baselines are `null`, not zero. See
 [`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md).
 
-`total_cpu_usage` is the host-wide normalized CPU percentage (0-100). Threshold
-activation uses per-user CPU (`cpu_eligible_users_cpu_usage`), which is the sum of
-process CPU and can exceed 100 on multi-core systems.
+`total_cpu_usage` is the host-wide normalized CPU percentage (0-100).
+`cpu_eligible_users_cpu_usage` is the sum of process CPU of CPU-eligible users, in
+which 100 is one busy CPU, so it can exceed 100 on multi-core systems. CPU thresholds
+compare that sum divided by the online CPU count, logged as
+`cpu_eligible_users_host_cpu_percent`, so `CPU_THRESHOLD` and `CPU_RELEASE_THRESHOLD`
+are percentages of the host (0-100).
 Host-wide CPU uses two independent streams of consecutive `/proc/stat` jiffy samples.
 The decision stream is read once per control epoch without the general metrics cache.
 Its first sample establishes a baseline and is explicitly unavailable; later samples

@@ -247,10 +247,10 @@ func TestMakeDecisionTreatsIncompleteIOCoverageAsUnknownNotZero(t *testing.T) {
 		},
 		{
 			name:             "incomplete IO coverage does not block proven CPU activation",
-			cpuUsage:         100,
+			cpuUsage:         400, // every CPU of the 4-CPU host
 			unavailable:      1,
 			wantDecision:     "ACTIVATE_LIMITS",
-			wantReasonSignal: "CPU 100.0%",
+			wantReasonSignal: "CPU 100.0% of host",
 		},
 		{
 			name:   "active partial sample below threshold cannot prove safe release",

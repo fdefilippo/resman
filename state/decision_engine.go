@@ -54,8 +54,11 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	ignoreSystemLoad := cfg.GetIgnoreSystemLoad()
 	cpuThresholdDuration := cfg.GetCPUThresholdDuration()
 
-	// Evaluate activation thresholds independently for every resource.
-	cpuExceeded := metrics.CPUEligibleCPUUsage >= float64(cpuThreshold)
+	// Evaluate activation thresholds independently for every resource. CPU
+	// thresholds are percentages of the host, so the eligible per-core sum is
+	// compared only after normalization by the online CPU count.
+	cpuHostPercent, cpuMeasurable := eligibleHostCPUPercent(metrics)
+	cpuExceeded := cpuMeasurable && cpuHostPercent >= float64(cpuThreshold)
 
 	ramExceeded := false
 	if cfg.RAMEnabled && cfg.RAMThreshold > 0 && metrics.TotalMemoryMB > 0 {
@@ -106,7 +109,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	}
 
 	// Evaluate release thresholds independently for every resource.
-	cpuBelow := metrics.CPUEligibleCPUUsage < float64(cpuReleaseThreshold)
+	cpuBelow := cpuMeasurable && cpuHostPercent < float64(cpuReleaseThreshold)
 
 	ramBelow := true
 	if cfg.RAMEnabled && cfg.RAMReleaseThreshold > 0 && metrics.TotalMemoryMB > 0 {
@@ -159,10 +162,12 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			// Preserve the historical three-poll cool-down as wall-clock time.
 			// PSI-triggered cycles therefore cannot shorten the release guard.
 			stabilityDuration := 3 * time.Duration(cfg.GetPollingInterval()) * time.Second
+			// Per-user EMAs are per-core percentages; express the host release
+			// threshold in that unit. cpuBelow guarantees a positive core count.
 			stable := m.stabilityTracker.AllBelowThreshold(
 				limitedUsers,
 				allUserMetrics,
-				float64(cpuReleaseThreshold),
+				float64(cpuReleaseThreshold)*float64(metrics.TotalCores),
 				stabilityDuration,
 				time.Now(),
 			)
@@ -170,7 +175,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			if !metrics.SystemUnderLoad && stable {
 				m.thresholdTracker.Reset()
 				m.ioThresholdTracker.Reset()
-				return decisionDeactivate, m.buildDeactivateReason(cpuBelow, ramBelow, ioBelow, metrics, cpuReleaseThreshold)
+				return decisionDeactivate, m.buildDeactivateReason(cpuHostPercent, cpuReleaseThreshold)
 			}
 			if !stable {
 				return decisionMaintain, "Resources below thresholds but waiting for stability (cool-down period)"
@@ -180,6 +185,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 
 		if m.stabilityTracker != nil {
 			m.stabilityTracker.Reset()
+		}
+		if !cpuMeasurable {
+			return decisionMaintain, cpuUnmeasurableReason
 		}
 		return decisionMaintain, "Limits active, at least one resource still above release threshold"
 	}
@@ -205,7 +213,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		// Apply the CPU duration guard only when CPU is the sole exceeded resource.
 		if cpuExceeded && cpuThresholdDuration > 0 {
 			shouldActivate := m.thresholdTracker.ShouldActivateLimits(
-				metrics.CPUEligibleCPUUsage,
+				cpuHostPercent,
 				float64(cpuThreshold),
 				time.Duration(cpuThresholdDuration)*time.Second,
 			)
@@ -214,9 +222,9 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 				elapsed := m.thresholdTracker.GetElapsed()
 				remaining := time.Duration(cpuThresholdDuration)*time.Second - elapsed
 				return decisionMaintain, fmt.Sprintf(
-					"CPU threshold exceeded, waiting %s before activating limits (%.1f%% >= %d%%)",
+					"CPU threshold exceeded, waiting %s before activating limits (CPU %.1f%% of host >= %d%%)",
 					remaining.Round(time.Second),
-					metrics.CPUEligibleCPUUsage, cpuThreshold,
+					cpuHostPercent, cpuThreshold,
 				)
 			}
 		}
@@ -225,7 +233,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 			cpuExceeded,
 			ramExceeded,
 			ioExceeded,
-			metrics,
+			cpuHostPercent,
 			cpuThreshold,
 			ioActivationPressure,
 			ioPolicy.Threshold,
@@ -241,7 +249,27 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 	// No resource exceeds its threshold; reset activation tracking.
 	m.thresholdTracker.Reset()
 	m.ioThresholdTracker.Reset()
+	if !cpuMeasurable {
+		return decisionMaintain, cpuUnmeasurableReason
+	}
 	return decisionMaintain, "All resources within normal range"
+}
+
+// cpuUnmeasurableReason names why the CPU dimension neither activated nor
+// released instead of reporting a measured state it could not establish.
+const cpuUnmeasurableReason = "CPU thresholds cannot be evaluated because the online CPU count is unavailable"
+
+// eligibleHostCPUPercent expresses the CPU-eligible process sum, an aggregate
+// per-core percentage in which 100 is one fully busy CPU, as a percentage of the
+// whole host. CPU_THRESHOLD and CPU_RELEASE_THRESHOLD are host percentages
+// (1-100), so comparing the raw sum made a 16-CPU host activate at 0.75 of a
+// CPU and practically never release (resman-fz0). Without a positive core count
+// the CPU dimension is unmeasurable: it can neither activate nor release.
+func eligibleHostCPUPercent(metrics *SystemMetrics) (float64, bool) {
+	if metrics == nil || metrics.TotalCores <= 0 {
+		return 0, false
+	}
+	return metrics.CPUEligibleCPUUsage / float64(metrics.TotalCores), true
 }
 
 // measureCPULoadAttribution compares host and eligible-user CPU in the same
@@ -283,7 +311,7 @@ func ioCoverageReason(metrics *SystemMetrics, blockIOPSIncomplete bool, conseque
 
 func (m *Manager) buildActivateReason(
 	cpuExceeded, ramExceeded, ioExceeded bool,
-	metrics *SystemMetrics,
+	cpuHostPercent float64,
 	cpuThreshold int,
 	ioActivationPressure ioPressure,
 	ioThreshold int,
@@ -291,7 +319,7 @@ func (m *Manager) buildActivateReason(
 	cfg := m.GetConfig()
 	reasons := []string{}
 	if cpuExceeded {
-		reasons = append(reasons, fmt.Sprintf("CPU %.1f%% >= %d%%", metrics.CPUEligibleCPUUsage, cpuThreshold))
+		reasons = append(reasons, fmt.Sprintf("CPU %.1f%% of host >= %d%%", cpuHostPercent, cpuThreshold))
 	}
 	if ramExceeded {
 		reasons = append(reasons, fmt.Sprintf("RAM >= %d%%", cfg.RAMThreshold))
@@ -302,10 +330,10 @@ func (m *Manager) buildActivateReason(
 	return fmt.Sprintf("Threshold exceeded: %s", strings.Join(reasons, ", "))
 }
 
-func (m *Manager) buildDeactivateReason(cpuBelow, ramBelow, ioBelow bool, metrics *SystemMetrics, cpuReleaseThreshold int) string {
+func (m *Manager) buildDeactivateReason(cpuHostPercent float64, cpuReleaseThreshold int) string {
 	return fmt.Sprintf(
-		"All resources below release thresholds (CPU %.1f%% < %d%%)",
-		metrics.CPUEligibleCPUUsage, cpuReleaseThreshold,
+		"All resources below release thresholds (CPU %.1f%% of host < %d%%)",
+		cpuHostPercent, cpuReleaseThreshold,
 	)
 }
 

@@ -77,8 +77,11 @@ MCP_SHUTDOWN_TIMEOUT=10
 # ========================
 # THRESHOLDS (percentages)
 # ========================
-CPU_THRESHOLD=75             # Activate limits if user CPU >= 75%
-CPU_RELEASE_THRESHOLD=40     # Release limits if user CPU < 40%
+# CPU thresholds are percentages of host CPU capacity: the summed CPU of
+# CPU-eligible users divided by the online CPU count. On a 16-CPU host,
+# CPU_THRESHOLD=75 activates when eligible users keep 12 CPUs busy.
+CPU_THRESHOLD=75             # Activate limits if eligible users use >= 75% of the host
+CPU_RELEASE_THRESHOLD=40     # Release limits if eligible users use < 40% of the host
 
 # THRESHOLD TIME WINDOW (seconds)
 # CPU_THRESHOLD_DURATION: Wait time before activating limits after threshold breach
