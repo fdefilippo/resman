@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.41.2 to ResMan 1.41.3
+# Upgrading from ResMan 1.25.x through 1.41.3 to ResMan 1.41.4
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.41.2 to
-ResMan 1.41.3. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.41.3 to
+ResMan 1.41.4. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -38,6 +38,38 @@ and restores them before readiness.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## FIXED: every control cycle decides on a fresh process scan
+
+**Visible change.** Each control cycle now scans user processes itself. With a
+`POLLING_INTERVAL` below `METRICS_CACHE_TTL`, or with PSI-triggered cycles, new or
+stopped workloads are seen by the next cycle instead of up to `METRICS_CACHE_TTL`
+later. On a 4-CPU guest with `POLLING_INTERVAL=5`, CPU-bound users started at the same
+moment were measured and limited after 10 s instead of 40 s, and the eligible CPU value
+no longer repeats across consecutive cycles.
+
+**Cause.** Through 1.41.3 the decision process sample was cached for
+`METRICS_CACHE_TTL` (default 15 s), although `METRICS_CACHE_TTL` is documented as an
+observation setting and the host CPU sample of the same cycle was always fresh.
+
+**Action.** None with the default `POLLING_INTERVAL=30`. Hosts with a short polling
+interval or PSI-driven cycles scan `/proc` once per cycle; watch **Control cycle
+duration** after the upgrade.
+
+## FIXED: user slices without a delegated cpu controller are not counted as errors
+
+**Visible change.** Outside a limits episode,
+`resman_errors_total{component="enforcement_observation"}` no longer grows by one per
+user slice per cycle. On a guest with ten user slices it had reached 143 in about 85
+cycles of a healthy run.
+
+**Cause.** Outside an episode systemd may stop delegating the `cpu` controller below
+`user.slice`. The slices then expose no `cpu.weight`, and their accounting read failed;
+for slices outside the CPU Points plan that failure was logged only at Debug but still
+counted as an error.
+
+**Action.** None. Alerts or panels on that counter now reflect genuine read failures.
+Per-slice delivered cores remain absent outside an episode on such hosts.
 
 ## FIXED: limit hooks run again when a user is newly limited
 

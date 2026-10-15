@@ -11,7 +11,7 @@ func TestUpgradeGuideCoversBreakingContracts(t *testing.T) {
 	guide := readTextFile(t, filepath.Join(root, "docs/UPGRADING.md"))
 
 	required := []string{
-		"# Upgrading from ResMan 1.25.x through 1.41.2 to ResMan 1.41.3",
+		"# Upgrading from ResMan 1.25.x through 1.41.3 to ResMan 1.41.4",
 		"/etc/" + "resman.conf.rpmsave",
 		"/etc/" + "resman.conf.backup_*",
 		"/var/lib/resman/metrics.db",
@@ -75,15 +75,15 @@ func TestUpgradeGuideIsReferencedAndPackaged(t *testing.T) {
 		},
 		{
 			path:     "docs/resman.8",
-			required: []string{"/usr/share/doc/resman/UPGRADING.md", "Upgrade from 1.25.x through 1.41.2 to 1.41.3"},
+			required: []string{"/usr/share/doc/resman/UPGRADING.md", "Upgrade from 1.25.x through 1.41.3 to 1.41.4"},
 		},
 		{
 			path:     "packaging/deb/control.in",
-			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.2 to 1.41.3"},
+			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.3 to 1.41.4"},
 		},
 		{
 			path:     "packaging/rpm/resman.spec",
-			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.2 to 1.41.3"},
+			required: []string{"Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.3 to 1.41.4"},
 		},
 		{
 			path: "packaging/deb/prepare-package.sh",

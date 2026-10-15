@@ -322,6 +322,11 @@ func (m *Manager) finalizeSystemdCPUPointsDegradation(sample *SystemMetrics) {
 
 func (m *Manager) recordOptionalPersistenceObservationGap(errorType string, uid int, err error) {
 	m.logger.Debug("Optional typed enforcement accounting unavailable", "uid", uid, "error_type", errorType, "error", err)
+	// A slice outside the plan whose parent does not delegate the controller,
+	// the normal state outside a limits episode, is not an error (resman-wi2).
+	if errors.Is(err, cgroup.ErrControllerInterfaceAbsent) {
+		return
+	}
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.RecordError(typedEnforcementObservationComponent, errorType)
 	}

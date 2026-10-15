@@ -1872,7 +1872,7 @@
       "type": "timeseries",
       "id": 25,
       "title": "Delivered cores by user slice",
-      "description": "CPU time each user slice used in the last decision interval, in cores, top 10 per host; exported in systemd_native with or without CPU limits. The realized share also depends on demand and thread placement: a low share is starvation only if the parent is throttled and the user has runnable work.",
+      "description": "CPU time each user slice used in the last decision interval, in cores, top 10 per host; exported in systemd_native during a CPU limits episode, and outside one only where systemd keeps the cpu controller enabled for user slices. The realized share also depends on demand and thread placement: a low share is starvation only if the parent is throttled and the user has runnable work.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

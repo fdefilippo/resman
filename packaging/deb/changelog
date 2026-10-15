@@ -1,3 +1,10 @@
+resman (1.41.4-1) stable; urgency=medium
+
+  * Scan user processes afresh for every control decision instead of reusing a sample for METRICS_CACHE_TTL.
+  * Stop counting user slices without a delegated cpu controller as observation errors.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 15 Oct 2026 18:15:00 +0200
+
 resman (1.41.3-1) stable; urgency=medium
 
   * Dispatch limit hooks again when a user is newly limited.
