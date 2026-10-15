@@ -1036,9 +1036,9 @@ resman_user_cpu_usage_ema_percent{uid, username} \- Exponential moving average o
 .IP \(bu
 resman_user_memory_usage_bytes{uid, username} \- Memory usage per user (PSS in bytes, RSS fallback)
 .IP \(bu
-resman_user_io_read_bytes_total{uid, username} \- Bytes read from block devices per user (when IO limits enabled)
+resman_user_io_read_bytes_total{uid, username} \- Bytes read from block devices per user, from /proc/PID/io of live processes
 .IP \(bu
-resman_user_io_write_bytes_total{uid, username} \- Bytes written to block devices per user
+resman_user_io_write_bytes_total{uid, username} \- Bytes written to block devices per user, from /proc/PID/io of live processes
 .IP \(bu
 resman_user_io_read_ops_total{uid, username} \- Read-family syscall count from /proc/PID/io syscr per user; this is not block-device IOPS
 .IP \(bu

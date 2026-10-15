@@ -38,7 +38,7 @@
       "type": "gauge",
       "id": 2,
       "title": "CPU pressure",
-      "description": "Kernel PSI events per minute received by ResMan for this resource, host scope, since the last scrape window. ResMan raises an event only while PSI_EVENT_DRIVEN is enabled and the stall threshold is exceeded, so 'PSI inactive' means no event has ever been recorded.",
+      "description": "Kernel PSI events per minute for the host pressure file (cpu.pressure of the cgroup root, or /proc/pressure), averaged over the rate window. An event is raised only while PSI_EVENT_DRIVEN is enabled and stall time exceeds PSI_CPU_STALL_THRESHOLD within the PSI window. 'PSI inactive' means no event since the daemon last started.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -110,7 +110,7 @@
       "type": "gauge",
       "id": 3,
       "title": "I/O pressure",
-      "description": "Kernel PSI events per minute received by ResMan for this resource, host scope, since the last scrape window. ResMan raises an event only while PSI_EVENT_DRIVEN is enabled and the stall threshold is exceeded, so 'PSI inactive' means no event has ever been recorded.",
+      "description": "Kernel PSI events per minute for the host pressure file (io.pressure of the cgroup root, or /proc/pressure), averaged over the rate window. An event is raised only while PSI_EVENT_DRIVEN is enabled and stall time exceeds PSI_IO_STALL_THRESHOLD within the PSI window. 'PSI inactive' means no event since the daemon last started.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -182,7 +182,7 @@
       "type": "gauge",
       "id": 4,
       "title": "Memory pressure",
-      "description": "ResMan does not export a memory PSI value. This gauge shows memory.high breaches per minute across monitored users: the kernel is reclaiming and throttling inside authoritative user slices. 'no RAM enforcement' means no breach counter exists, which is the case when RAM limits are disabled.",
+      "description": "memory.high events per minute across authoritative user slices, read from memory.events over the last decision interval: the kernel is reclaiming and throttling a slice at its memory.high boundary. Events occur only where memory.high is set, normally by RAM limits. ResMan exports no memory PSI value. 'no slice data' is expected in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -199,7 +199,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_memory_high_breaches_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) * 60)",
+          "expr": "sum by (cluster, environment, server_role, hostname) (resman_user_memory_high_events_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}) / max by (cluster, environment, server_role, hostname) (resman_cpu_points_observation_interval_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) * 60",
           "legendFormat": "{{hostname}}",
           "refId": "A",
           "range": true,
@@ -212,7 +212,7 @@
           "min": 0,
           "max": 12,
           "decimals": 1,
-          "noValue": "no RAM enforcement",
+          "noValue": "no slice data",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -267,7 +267,7 @@
       "type": "timeseries",
       "id": 6,
       "title": "CPU limits",
-      "description": "Users with a CPU limit currently applied against the users eligible under the CPU policy. Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
+      "description": "eligible: monitored users with at least one process whose username matches USER_INCLUDE_LIST and not USER_EXCLUDE_LIST; an empty include list makes nobody eligible. limited: user slices carrying a confirmed CPU Points weight inside the capped user.slice. Activation is host-wide: when any resource crosses its threshold every eligible slice gets its weight, so limited follows the activation, not each user's own usage. limited can exceed eligible when root or users outside the monitored UID range match the include list. Always 0 in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -378,7 +378,7 @@
       "type": "timeseries",
       "id": 7,
       "title": "RAM limits",
-      "description": "Users eligible under the RAM policy, whether RAM or I/O limits are active on the host (0/1), and memory.high breaches in the window. Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
+      "description": "eligible: monitored users matching the RAM include and exclude lists (an empty include list selects everyone), counted whether or not RAM_LIMIT_ENABLED is set. RAM/IO limits active: 1 while at least one user has a RAM or I/O limit applied and confirmed by readback. memory.high events: events in authoritative user slices during the last decision interval. Always 0 limits in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -417,8 +417,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_user_memory_high_breaches_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
-          "legendFormat": "memory.high breaches - {{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (resman_user_memory_high_events_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"})",
+          "legendFormat": "memory.high events per cycle - {{hostname}}",
           "refId": "C",
           "range": true,
           "instant": false
@@ -501,7 +501,7 @@
       "type": "timeseries",
       "id": 8,
       "title": "I/O limits",
-      "description": "Users eligible under the I/O policy and whether RAM or I/O limits are active on the host (0/1). Read together with resman_enforcement_mode: in observation_only the daemon records intent only and no user is ever counted as limited.",
+      "description": "eligible: monitored users matching the I/O include and exclude lists (an empty include list selects everyone), counted whether or not IO_LIMIT_ENABLED is set. RAM/IO limits active: 1 while at least one user has a RAM or I/O limit applied and confirmed by readback; it does not tell RAM from I/O. Always 0 in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -626,7 +626,7 @@
       "type": "timeseries",
       "id": 10,
       "title": "RAM of monitored processes",
-      "description": "Process-derived memory of every monitored non-system user, the subset eligible under the RAM policy, and memory.current charged to authoritative systemd user slices.",
+      "description": "all monitored users: PSS of every process of the monitored UIDs. RAM-eligible users: the same for users eligible under the RAM policy, excluding PROCESS_EXCLUDE_LIST processes; this is the value compared with RAM_THRESHOLD. user slices memory.current: memory the kernel charges to the authoritative user slices, including page cache; exported in systemd_native only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -665,7 +665,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (resman_cgroup_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "expr": "sum by (cluster, environment, server_role, hostname) (resman_user_ram_cgroup_memory_current_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
           "legendFormat": "user slices memory.current - {{hostname}}",
           "refId": "C",
           "range": true,
@@ -724,7 +724,7 @@
       "type": "timeseries",
       "id": 11,
       "title": "I/O by user",
-      "description": "Block-device read plus write throughput per user, top 10, from the io.stat-derived counters.",
+      "description": "Read plus write throughput per user and host, top 10, from read_bytes and write_bytes in /proc/PID/io of the user's live processes. I/O of processes that exit between decision cycles is not counted.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -741,8 +741,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "topk(10, sum by (username) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) + rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval])))",
-          "legendFormat": "{{username}}",
+          "expr": "topk(10, sum by (cluster, environment, server_role, hostname, username) (rate(resman_user_io_read_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) + rate(resman_user_io_write_bytes_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval])))",
+          "legendFormat": "{{username}} - {{hostname}}",
           "refId": "A",
           "range": true,
           "instant": false
@@ -800,7 +800,7 @@
       "type": "timeseries",
       "id": 12,
       "title": "RAM by user",
-      "description": "Process-derived memory per user, top 10.",
+      "description": "Process-derived memory (PSS, RSS fallback) per user and host, top 10, updated by each decision cycle.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -817,8 +817,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "topk(10, sum by (username) (resman_user_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}))",
-          "legendFormat": "{{username}}",
+          "expr": "topk(10, sum by (cluster, environment, server_role, hostname, username) (resman_user_memory_usage_bytes{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}))",
+          "legendFormat": "{{username}} - {{hostname}}",
           "refId": "A",
           "range": true,
           "instant": false
@@ -1112,8 +1112,8 @@
           "expr": "resman_enforcement_mode{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
           "legendFormat": "{{hostname}}: {{mode}}",
           "refId": "A",
-          "range": true,
-          "instant": false
+          "range": false,
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1181,7 +1181,7 @@
       "type": "stat",
       "id": 18,
       "title": "CPU Points denominator",
-      "description": "Confirmed flat scheduling denominator: complete means every active sibling slice, its lifetime, programmed weight and kernel readback were confirmed; incomplete, inactive or unavailable mean the per-slice shares cannot be trusted this cycle.",
+      "description": "complete: during a CPU limits episode the parent quota, every active user slice and its programmed weight were confirmed in the kernel this cycle, so per-slice shares can be compared. incomplete: an episode is running but confirmation failed this cycle. inactive: no CPU limits episode, the normal idle state. unavailable: observation_only, or the systemd topology could not be read.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1201,8 +1201,8 @@
           "expr": "resman_cpu_points_denominator_state{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
           "legendFormat": "{{hostname}}: {{state}}",
           "refId": "A",
-          "range": true,
-          "instant": false
+          "range": false,
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1225,7 +1225,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*complete$",
+                "pattern": ".*: complete$",
                 "result": {
                   "color": "green",
                   "index": 0
@@ -1235,7 +1235,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*inactive$",
+                "pattern": ".*: inactive$",
                 "result": {
                   "color": "text",
                   "index": 1
@@ -1245,7 +1245,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*incomplete$",
+                "pattern": ".*: incomplete$",
                 "result": {
                   "color": "yellow",
                   "index": 2
@@ -1255,7 +1255,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*unavailable$",
+                "pattern": ".*: unavailable$",
                 "result": {
                   "color": "red",
                   "index": 3
@@ -1290,7 +1290,7 @@
       "type": "stat",
       "id": 19,
       "title": "CPU Points delivery",
-      "description": "Observed parent state: available, throttled_parent when the finite parent quota is throttling its children, or unavailable without counter baselines.",
+      "description": "available: user.slice counters were read and no period was throttled in the last interval. throttled_parent: user.slice hit its finite quota at least once, so user slices share it by weight. unavailable: no CPU limits episode, observation_only, the first cycle of an episode, or parent counters unreadable.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1310,8 +1310,8 @@
           "expr": "resman_cpu_points_delivery_state{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
           "legendFormat": "{{hostname}}: {{state}}",
           "refId": "A",
-          "range": true,
-          "instant": false
+          "range": false,
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1334,7 +1334,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*available$",
+                "pattern": ".*: available$",
                 "result": {
                   "color": "green",
                   "index": 0
@@ -1344,7 +1344,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*throttled_parent$",
+                "pattern": ".*: throttled_parent$",
                 "result": {
                   "color": "yellow",
                   "index": 1
@@ -1354,7 +1354,7 @@
             {
               "type": "regex",
               "options": {
-                "pattern": ".*unavailable$",
+                "pattern": ".*: unavailable$",
                 "result": {
                   "color": "red",
                   "index": 2
@@ -1389,7 +1389,7 @@
       "type": "table",
       "id": 20,
       "title": "CPU coverage by user",
-      "description": "Applied process coverage of the CPU plan: complete, partial (UID split across unrelated parents, authority_split), none or unavailable.",
+      "description": "Whether every process of the UID runs inside its user-UID.slice. complete: yes, also for an empty slice. partial: some process runs elsewhere, for example a service in system.slice; root is usually partial. unavailable: no user slice, observation_only, or the process inventory failed. Computed every decision cycle, with or without CPU limits.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1500,7 +1500,7 @@
       "type": "table",
       "id": 21,
       "title": "RAM coverage by user",
-      "description": "RAM authority coverage: refused when the slice holds runtime-owned descendants (runtime_owned_descendant) and unavailable without an authoritative user slice.",
+      "description": "RAM authority, listed only while a RAM limits episode requests the user. complete: verified, limit applied. partial: some process runs outside the slice, no limit applied. refused: container workload inside the slice, or apply or readback failed. unavailable: no user slice, inventory failure or unreadable memory.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1611,7 +1611,7 @@
       "type": "table",
       "id": 22,
       "title": "I/O coverage by user",
-      "description": "I/O authority coverage, checked independently of CPU and RAM.",
+      "description": "I/O authority with the same states as RAM, listed only while an I/O limits episode requests the user; forced to unavailable whenever CPU coverage is unavailable.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1735,7 +1735,7 @@
       "type": "timeseries",
       "id": 24,
       "title": "Parent: programmed vs delivered cores",
-      "description": "Programmed parent quota expressed in cores against the CPU time the parent actually delivered in the common control-cycle interval, plus the time CFS throttled it. Programmed quota is nominal capacity; delivered time is the measurement.",
+      "description": "programmed: nominal cores of the capped user.slice pool in the current plan, shown only during a CPU limits episode. delivered: CPU time all user slices used in the last decision interval, in cores. throttled: time user.slice runqueues spent throttled, summed over CPUs; a saturation signal, not unserved demand, and not comparable with delivered.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1872,7 +1872,7 @@
       "type": "timeseries",
       "id": 25,
       "title": "Delivered cores by user slice",
-      "description": "CPU time delivered to each user slice during the same interval as the parent denominator, top 10. Compare with the programmed weight: a low share with a high weight and a throttled parent is starvation, not a policy error.",
+      "description": "CPU time each user slice used in the last decision interval, in cores, top 10 per host; exported in systemd_native with or without CPU limits. The realized share also depends on demand and thread placement: a low share is starvation only if the parent is throttled and the user has runnable work.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1889,8 +1889,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "topk(10, sum by (username) (resman_user_cpu_points_leaf_usage_microseconds_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}) / 1e6 / on (cluster, environment, server_role, hostname) group_left () resman_cpu_points_observation_interval_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
-          "legendFormat": "{{username}}",
+          "expr": "topk(10, sum by (cluster, environment, server_role, hostname, username) (resman_user_cpu_points_leaf_usage_microseconds_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}) / 1e6 / on (cluster, environment, server_role, hostname) group_left () resman_cpu_points_observation_interval_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"})",
+          "legendFormat": "{{username}} - {{hostname}}",
           "refId": "A",
           "range": true,
           "instant": false
@@ -1949,7 +1949,7 @@
       "type": "timeseries",
       "id": 26,
       "title": "Programmed weights",
-      "description": "Sum of programmed cpu.weight across guaranteed slices, the aggregate best-effort weight, and the observed sibling sum after complete confirmation. Observed absent means confirmation failed this cycle.",
+      "description": "During a CPU limits episode: programmed cpu.weight of guaranteed (mapped) slices, of best-effort slices, and of all siblings including root (root = all siblings - guaranteed - best effort). observed siblings: kernel cpu.weight sum, present only when the denominator is complete and then equal to all siblings.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2059,7 +2059,7 @@
       "type": "timeseries",
       "id": 27,
       "title": "Points budget",
-      "description": "Configured CPU Points: reserve outside the parent, nominal pool, root and best-effort entitlements, and the guarantees in the last published plan. The plan must satisfy guarantees + root + best effort <= 1000 - reserve.",
+      "description": "Configured CPU Points: reserve outside user.slice, pool = 1000 - reserve, root and best-effort entitlements. applied guarantees: guarantees of mapped, eligible users with an active slice in the current plan, 0 outside a CPU limits episode. Configured guarantees + root + best effort must fit the pool.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2179,7 +2179,7 @@
     {
       "type": "row",
       "id": 28,
-      "title": "Residues and daemon health",
+      "title": "Authority and daemon health",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -2193,7 +2193,7 @@
       "type": "timeseries",
       "id": 29,
       "title": "Observation-only state",
-      "description": "Hosts without an authoritative systemd adapter remain observable but apply no limits; correlated daemon errors explain unavailable authority or runtime failures.",
+      "description": "1 while the host runs in observation_only: decisions are recorded but no limit reaches systemd. The mode is fixed at startup; its reason (for example an operator choice or an unusable systemd adapter) is in the startup log and MCP status. Error increments on the same host are shown alongside.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2281,7 +2281,7 @@
       "type": "timeseries",
       "id": 30,
       "title": "Errors by component",
-      "description": "Error increments by component and error type. Application errors here are the difference between requested and effective state.",
+      "description": "Error increments by component and error type: CPU Points reconciliation, systemd accounting observation, metrics database writes and load average reads. RAM and I/O refusals show up in the coverage tables, not here.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2358,7 +2358,7 @@
       "type": "timeseries",
       "id": 31,
       "title": "Limit hooks",
-      "description": "Hook executions by type and outcome, queued events against queue capacity, and in-flight executions. A saturated queue drops events but never cancels an applied limit.",
+      "description": "Hook executions by type (script, http) and outcome (success, failure, timeout, cancelled, saturated), queued events against the queue capacity, and executions in flight. saturated means the event was rejected because the queue was full; an applied limit is never cancelled.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2491,7 +2491,7 @@
       "type": "timeseries",
       "id": 32,
       "title": "Control cycle duration p95",
-      "description": "95th percentile of the control cycle. Growth toward the polling interval means the daemon no longer keeps up with the host.",
+      "description": "95th percentile and mean duration of decision control cycles, including failed ones. The histogram's largest bucket is 10 s, so the p95 line cannot rise above 10; the mean has no such ceiling. A cycle approaching POLLING_INTERVAL (or PSI_FALLBACK_INTERVAL with PSI active) means the daemon no longer keeps up.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2511,6 +2511,17 @@
           "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, server_role, hostname) (rate(resman_control_cycle_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])))",
           "legendFormat": "p95 - {{hostname}}",
           "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_control_cycle_duration_seconds_sum{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])) / sum by (cluster, environment, server_role, hostname) (rate(resman_control_cycle_duration_seconds_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m]))",
+          "legendFormat": "mean - {{hostname}}",
+          "refId": "B",
           "range": true,
           "instant": false
         }
@@ -2568,7 +2579,7 @@
       "type": "timeseries",
       "id": 33,
       "title": "Control cycles by trigger",
-      "description": "Cycles per window by trigger. PSI-triggered cycles alongside polling show that pressure events are anticipating the periodic evaluation.",
+      "description": "Cycles per window by trigger: initial (once after start), ticker (every POLLING_INTERVAL, or PSI_FALLBACK_INTERVAL with PSI active), psi_system_cpu and psi_system_io (pressure events), manual (MCP activate_limits) and io_weight_activation (weighted-I/O acceptance).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2678,8 +2689,8 @@
           "expr": "resman_io_device_weight_state{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"} == 1",
           "legendFormat": "{{hostname}}: {{state}}",
           "refId": "A",
-          "range": true,
-          "instant": false
+          "range": false,
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -2753,7 +2764,7 @@
       "type": "timeseries",
       "id": 36,
       "title": "Weighted I/O proof and application",
-      "description": "Functional probe acceptance is independent from a complete production plan. Programmed and read-back must agree before the plan is authoritative; effect qualification is retained contention evidence only.",
+      "description": "accepted: the owned probe proved the mechanism (same as the functionally_accepted state). programmed: at least one owned user slice carries a weight. read back: those weights were confirmed after the last reconcile; programmed 1 with read back 0 means weights still in place but unconfirmed. effect qualified: retained contention evidence on the one qualified platform; 0 elsewhere is normal and never blocks the feature.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
