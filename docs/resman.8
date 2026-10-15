@@ -1,4 +1,4 @@
-.TH RESMAN 8 "October 2026" "v1.40.0" "System Administration"
+.TH RESMAN 8 "October 2026" "v1.41.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -761,9 +761,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.39.2 to 1.40.0
+.B Upgrade from 1.25.x through 1.40.0 to 1.41.0
 .PP
-ResMan 1.40.0 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.41.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
@@ -866,7 +866,7 @@ A complete example configuration file with all available parameters can be found
 .SS Activation Timing
 .B CPU_THRESHOLD_DURATION
 is not measured from process start. resman starts that timer only after a
-control cycle measures per-user CPU above
+control cycle measures the CPU of eligible users, as a share of the host, at or above
 .B CPU_THRESHOLD.
 For a newly started CPU-bound process, the effective activation time is approximately:
 .PP
@@ -895,7 +895,8 @@ unmeasured external cause. The first control-cycle sample establishes the indepe
 /proc/stat baseline and is unavailable; a measured zero after that baseline remains a
 valid value. Observation refreshes and METRICS_CACHE_TTL do not advance this baseline.
 .PP
-Global deactivation requires every actively limited user's CPU EMA to remain below
+Global deactivation requires every actively limited user's CPU EMA, as a share
+of the host, to remain below
 .B CPU_RELEASE_THRESHOLD
 for three
 .B POLLING_INTERVAL
@@ -908,10 +909,19 @@ is the last valid host-wide normalized CPU percentage (0-100). The
 field says whether the latest observation refresh produced that value, while
 .B total_cpu_usage_unavailable_reason
 contains a bounded reason when it did not. An unavailable refresh retains the last
-valid value instead of representing missing data as zero. Activation decisions use
-per-user CPU usage
-.RB ( cpu_eligible_users_cpu_usage ),
-which is the sum of process CPU and can exceed 100 on multi-core systems.
+valid value instead of representing missing data as zero.
+.B cpu_eligible_users_cpu_usage
+is the sum of process CPU of CPU-eligible users, in which 100 is one busy CPU, so
+it can exceed 100 on multi-core systems. Threshold decisions divide that sum by
+the online CPU count and log the result as
+.BR cpu_eligible_users_host_cpu_percent ,
+so
+.B CPU_THRESHOLD
+and
+.B CPU_RELEASE_THRESHOLD
+are percentages of the host (0-100): 75 on a 16-CPU host means 12 busy CPUs.
+When the online CPU count is unavailable, the CPU dimension neither activates nor
+releases limits and the decision reason says so.
 .SH ENVIRONMENT VARIABLES
 All configuration options can be overridden by environment variables
 with the same name. Example:

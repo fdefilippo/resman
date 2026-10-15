@@ -85,7 +85,10 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.DefaultConfig()
-			cfg.CPUThreshold = 75
+			// Every row exceeds 10% of the 4-CPU host (eligible sum >= 40), so
+			// the load guard alone decides the outcome.
+			cfg.CPUThreshold = 10
+			cfg.CPUReleaseThreshold = 5
 			cfg.CPUThresholdDuration = 0
 			cfg.IgnoreSystemLoad = false
 			manager := &Manager{
@@ -122,7 +125,8 @@ func TestSystemLoadGuardUsesMeasuredCPUAttribution(t *testing.T) {
 
 func TestTemporaryExternalLoadSuppressionPreservesCPUThresholdProgress(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.CPUThreshold = 75
+	cfg.CPUThreshold = 10 // the eligible 80 on 4 CPUs is 20% of the host
+	cfg.CPUReleaseThreshold = 5
 	cfg.CPUThresholdDuration = 90
 	cfg.IgnoreSystemLoad = false
 

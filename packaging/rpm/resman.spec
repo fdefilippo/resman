@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.40.0
+Version: 1.41.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.39.2 to 1.40.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.40.0 to 1.41.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -311,6 +311,11 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.0-1
+- Compare CPU_THRESHOLD and CPU_RELEASE_THRESHOLD with the host share of eligible CPU instead of the per-core sum
+- Log cpu_eligible_users_host_cpu_percent and print decision reasons as a share of the host
+- Document that no automated container gate exists after the SmolVM relocation scenarios were retired
+
 * Tue Oct 14 2026 Francesco Defilippo <francesco@defilippo.org> - 1.40.0-1
 - Monitor every UID above SYSTEM_UID_MIN when SYSTEM_UID_MAX is unset instead of bounding UIDs by pid_max
 - Stop startup with a retryable or permanent error when the systemd adapter cannot be opened, never observing silently

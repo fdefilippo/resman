@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.39.2 to ResMan 1.40.0
+# Upgrading from ResMan 1.25.x through 1.40.0 to ResMan 1.41.0
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.39.2 to
-ResMan 1.40.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.40.0 to
+ResMan 1.41.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -38,6 +38,39 @@ and restores them before readiness.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## CHANGED: CPU thresholds are percentages of the host
+
+**Visible change.** `CPU_THRESHOLD` and `CPU_RELEASE_THRESHOLD` are now compared with
+the CPU of CPU-eligible users divided by the online CPU count, so they mean what their
+1-100 range and the example configuration say: a share of the whole host. On a 16-CPU
+host the default `CPU_THRESHOLD=75` now activates when eligible users keep 12 CPUs
+busy, and `CPU_RELEASE_THRESHOLD=40` releases below 6.4 CPUs. The release cool-down
+compares each limited user's CPU EMA with the same share of the host. Decision
+reasons print the compared value as `CPU <n>% of host`, and the control-cycle
+completion record adds `cpu_eligible_users_host_cpu_percent` next to the unchanged
+`cpu_eligible_users_cpu_usage`, which stays an aggregate per-core percentage in the
+log, MCP and the `resman_cpu_eligible_users_cpu_usage_percent` metric. A single-CPU
+host behaves as before.
+
+**Cause.** Through 1.40.0 the thresholds were compared with the raw per-core sum, in
+which 100 is one busy CPU. On a host with N CPUs the effective activation point was
+`CPU_THRESHOLD / N` of the host: 0.75 of one CPU on 16 CPUs, about 4.7% of the host.
+Release required every eligible user together to fall below 0.4 of one CPU, which a
+busy multi-user host practically never reaches, so limits stayed active for hours
+while the host was 20-30% busy, and status, metrics and alerts reported every eligible
+user as limited. Keeping the per-core unit was rejected: it would have needed a
+validation range of 1 to 100 × N that changes with the host, and the documented 1-100
+meaning would have stayed false. No compatibility key is offered, because preserving
+the old comparison would preserve the defect.
+
+**Action.** Review `CPU_THRESHOLD` and `CPU_RELEASE_THRESHOLD` on multi-CPU hosts.
+Values tuned for the old unit activate much later now: to keep an old effective point,
+divide the old value by the online CPU count (`nproc`), with a minimum of 1. The
+defaults are intended as host percentages and need no change. Log or dashboard queries
+that compared `cpu_eligible_users_cpu_usage` with a threshold should use
+`cpu_eligible_users_host_cpu_percent`, or divide by `total_cores`. Alert rules shipped
+with ResMan do not use either value.
 
 ## CHANGED: the systemd adapter talks to PID 1 directly at boot
 

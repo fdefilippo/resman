@@ -242,6 +242,8 @@ var publicFieldConstraints = map[string]PublicFieldConstraint{
 var specialFieldMeanings = map[string]string{
 	"AUTODETECT_PATTERNS":        "false disables observational workload-pattern classification.",
 	"BLACKOUT":                   "Empty means no blackout; enforcement is always permitted by schedule.",
+	"CPU_THRESHOLD":              "Percentage of host CPU capacity: the summed CPU of eligible users divided by the online CPU count, so 75 on 16 CPUs means 12 busy CPUs.",
+	"CPU_RELEASE_THRESHOLD":      "Percentage of host CPU capacity, measured like CPU_THRESHOLD; every actively limited user's CPU EMA must also stay below the same share of the host.",
 	"CPU_THRESHOLD_DURATION":     "0 makes CPU threshold activation immediate after a valid sample.",
 	"CPU_RESERVE_POINTS":         "Nominal headroom outside user.slice, including system.slice, not an unbounded root shell or physical isolation. 0 still programs a finite parent quota.",
 	"CPU_ROOT_POINTS":            "Lendable minimum scheduling entitlement for an active user-0.slice; it is not a CPU ceiling.",
