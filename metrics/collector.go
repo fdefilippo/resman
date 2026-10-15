@@ -19,7 +19,6 @@ package metrics
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -221,7 +220,7 @@ func boolCount(value bool) int {
 }
 
 func reportableProcFSFailure(err error) bool {
-	return err != nil && !errors.Is(err, os.ErrNotExist)
+	return err != nil && !processidentity.Vanished(err)
 }
 
 // emaCache stores EMA values per UID between cycles.
@@ -1303,7 +1302,7 @@ func (c *Collector) collectAllUserMetrics(state *userMetricsSamplingState) map[i
 			continue
 		}
 		identity, identityErr := processidentity.Read("/proc", int(p.Pid))
-		if errors.Is(identityErr, os.ErrNotExist) {
+		if processidentity.Vanished(identityErr) {
 			continue
 		}
 		seenPIDs[p.Pid] = struct{}{}
@@ -1449,7 +1448,7 @@ func (c *Collector) getAllUserMetricsFallback(state *userMetricsSamplingState) m
 			continue
 		}
 		identity, identityErr := processidentity.Read(procDir, pid)
-		if errors.Is(identityErr, os.ErrNotExist) {
+		if processidentity.Vanished(identityErr) {
 			continue
 		}
 		seenPIDs[int32(pid)] = struct{}{}

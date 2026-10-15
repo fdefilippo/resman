@@ -489,3 +489,75 @@ func benchmarkProcInspector(entries []os.DirEntry, hostUIDCount int) (procCovera
 	}
 	return inspector, counts
 }
+
+// TestProcessExitDuringCaptureIsNotAnInspectionFailure pins resman-92x: a
+// process that exits between the /proc scan and the read of its cgroup file
+// returns ESRCH while it is a zombie, which must be skipped exactly like a
+// reaped PID instead of degrading the cycle (vmgclalpr2400, 2026-10-14 16:35:59
+// "read CPU authority process: read /proc/3167783/cgroup: no such process").
+func TestProcessExitDuringCaptureIsNotAnInspectionFailure(t *testing.T) {
+	exitErr := func(errno syscall.Errno) func(string) error {
+		return func(path string) error { return &os.PathError{Op: "read", Path: path, Err: errno} }
+	}
+	tests := []struct {
+		name     string
+		failing  string // path suffix of the failing read for PID 3
+		err      func(string) error
+		wantFail bool
+	}{
+		{name: "zombie cgroup read", failing: "/3/cgroup", err: exitErr(syscall.ESRCH)},
+		{name: "reaped cgroup read", failing: "/3/cgroup", err: exitErr(syscall.ENOENT)},
+		{name: "zombie process stat", failing: "/3", err: exitErr(syscall.ESRCH)},
+		{name: "zombie namespace stat", failing: "/3/ns/pid", err: exitErr(syscall.ESRCH)},
+		{name: "permission denied still fails", failing: "/3/cgroup", err: exitErr(syscall.EACCES), wantFail: true},
+	}
+	for _, tt := range tests {
+		for _, detail := range []bool{false, true} {
+			name := tt.name + "/cpu_only"
+			if detail {
+				name = tt.name + "/resource_detail"
+			}
+			t.Run(name, func(t *testing.T) {
+				entries := []os.DirEntry{
+					benchmarkProcEntry{name: "1"}, benchmarkProcEntry{name: "2"}, benchmarkProcEntry{name: "3"},
+				}
+				inspector, _ := benchmarkProcInspector(entries, 1)
+				stat, readFile := inspector.stat, inspector.readFile
+				// os.SameFile accepts only os-created FileInfo, so every
+				// process shares one real host PID namespace inode here.
+				hostNamespace := t.TempDir()
+				inspector.stat = func(path string) (os.FileInfo, error) {
+					if strings.HasSuffix(path, tt.failing) {
+						return nil, tt.err(path)
+					}
+					if strings.HasSuffix(path, "/ns/pid") {
+						return os.Stat(hostNamespace)
+					}
+					return stat(path)
+				}
+				inspector.readFile = func(path string) ([]byte, error) {
+					if strings.HasSuffix(path, tt.failing) {
+						return nil, tt.err(path)
+					}
+					return readFile(path)
+				}
+				targets := []resourceCoverageTarget{{uid: 1000, controlGroup: "/user.slice/user-1000.slice"}}
+
+				captured := inspector.capture(context.Background(), targets, detail)
+				failed := captured.err != nil
+				if detail && len(captured.resources) == 1 && captured.resources[0].err != nil {
+					failed = true
+				}
+				if failed != tt.wantFail {
+					t.Fatalf("capture failed = %t (err %v, resources %+v), want %t", failed, captured.err, captured.resources, tt.wantFail)
+				}
+				if !tt.wantFail && !captured.cpuCoverage[1000] {
+					t.Fatalf("CPU coverage for UID 1000 = false, want true from the surviving processes")
+				}
+				if !tt.wantFail && detail && captured.resources[0].authority.State != ResourceCoverageComplete {
+					t.Fatalf("resource authority = %+v, want complete from the surviving processes", captured.resources[0].authority)
+				}
+			})
+		}
+	}
+}
