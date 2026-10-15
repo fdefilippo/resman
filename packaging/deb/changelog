@@ -1,3 +1,11 @@
+resman (1.41.0-1) stable; urgency=medium
+
+  * Compare CPU_THRESHOLD and CPU_RELEASE_THRESHOLD with the host share of eligible CPU instead of the per-core sum.
+  * Log cpu_eligible_users_host_cpu_percent and print decision reasons as a share of the host.
+  * Document that no automated container gate exists after the SmolVM relocation scenarios were retired.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 15 Oct 2026 10:30:00 +0200
+
 resman (1.40.0-1) stable; urgency=medium
 
   * Monitor every UID above SYSTEM_UID_MIN when SYSTEM_UID_MAX is unset instead of bounding UIDs by pid_max.
