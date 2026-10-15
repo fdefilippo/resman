@@ -284,7 +284,6 @@ FUZZTIME ?= 30s
 FUZZ_TARGETS = \
 	./config:FuzzLoadAndValidate \
 	./config:FuzzParseByteQuota \
-	./metrics:FuzzParseCPUQuota \
 	./cgroup:FuzzReadIOStatsFile \
 	./mcp:FuzzMCPHTTPHandler
 

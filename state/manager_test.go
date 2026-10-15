@@ -596,6 +596,7 @@ func TestControlCyclePublishesOnlyAfterTheDecisionOutcomeIsFinalized(t *testing.
 		{before: "execute_decision", after: "finalize_enforcement_observation"},
 		{before: "finalize_enforcement_observation", after: "update_prometheus"},
 		{before: "finalize_enforcement_observation", after: "write_database"},
+		{before: "finalize_enforcement_observation", after: "dispatch_limit_hooks"},
 	} {
 		before, beforeExists := positions[relation.before]
 		after, afterExists := positions[relation.after]

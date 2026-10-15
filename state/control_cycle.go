@@ -58,6 +58,7 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "make_decision", run: (*Manager).stageMakeDecision},
 	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
 	{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+	{name: "dispatch_limit_hooks", run: (*Manager).stageDispatchLimitHooks, continueAfterError: true},
 	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
 	{name: "write_database", run: (*Manager).stageWriteDatabase},
 	{name: "record_history", run: (*Manager).stageRecordHistory},
@@ -759,17 +760,7 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			username = m.getUsername(uid)
 		}
 
-		var cgroupPath, cpuQuota string
-		var memoryHighEvents uint64
 		cpuPoints := metrics.CPUPointsUsers[uid]
-		if persisted, ok := metrics.PersistenceUsers[uid]; ok {
-			if persisted.CgroupPath != "" {
-				cgroupPath = persisted.CgroupPath
-			}
-			if persisted.CPUQuota != "" {
-				cpuQuota = persisted.CPUQuota
-			}
-		}
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
 
@@ -783,10 +774,6 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			MemoryUsageBytes:     userMetrics.MemoryUsage,
 			ProcessCount:         userMetrics.ProcessCount,
 			CPULimitActive:       userMetrics.CPULimitActive,
-			CgroupPath:           cgroupPath,
-			CPUQuota:             cpuQuota,
-			CgroupMemoryCurrent:  cpuPoints.RAMCgroupUsageBytes,
-			MemoryHighEvents:     memoryHighEvents,
 			ObservedIOReadBytes:  ioReadBytes,
 			ObservedIOWriteBytes: ioWriteBytes,
 			ObservedIOReadOps:    userMetrics.IOReadOps,
@@ -804,19 +791,10 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 }
 
 const (
-	metricsCollectionErrorComponent    = "metrics_collection"
-	metricsCollectionSystemLoadError   = "system_load_failure"
-	metricsDatabaseErrorComponent      = "metrics_database"
-	metricsDatabaseWriteFailure        = "write_failure"
-	limitTransitionErrorComponent      = "limit_transition"
-	limitTransitionActivationFailure   = "activation_failure"
-	limitTransitionDeactivationFailure = "deactivation_failure"
-	processMembershipErrorComponent    = "process_membership"
-	processMembershipReconcileFailure  = "reconciliation_failure"
-	processMembershipOriginUnavailable = "origin_unavailable"
-	ioRemediationErrorComponent        = "io_remediation"
-	patternPolicyErrorComponent        = "pattern_policy"
-	patternPolicyApplicationFailure    = "application_failure"
+	metricsCollectionErrorComponent  = "metrics_collection"
+	metricsCollectionSystemLoadError = "system_load_failure"
+	metricsDatabaseErrorComponent    = "metrics_database"
+	metricsDatabaseWriteFailure      = "write_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

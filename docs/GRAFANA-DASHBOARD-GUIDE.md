@@ -69,8 +69,8 @@ about them. Hover the `i` icon on a panel title in Grafana for a one-line remind
 - **Enforcement mode.** `systemd_native` applies limits through systemd.
   `observation_only` computes the same decisions but applies nothing, so every
   "limited" and "applied" series stays at zero there. Always check the mode first.
-- **Per-cycle values.** Series named `..._delta`, delivered cores and memory.high
-  events describe the last decision interval only. Prometheus samples whatever the
+- **Per-cycle values.** Series named `..._delta` and delivered cores describe the last
+  decision interval only. Prometheus samples whatever the
   last cycle published, so a value can repeat across scrapes until the next cycle.
 - **Fleet labels.** ResMan exports `hostname` and `server_role`. The `cluster` and
   `environment` variables work only if your Prometheus scrape configuration adds
@@ -140,7 +140,7 @@ or release the RAM limit if that is not intended. ResMan does not export memory 
 |---|---|
 | `eligible` | Monitored users eligible under the RAM (or I/O) lists, counted even when that limit type is disabled |
 | `RAM/IO limits active` (orange bars) | 1 while at least one user has a RAM or I/O limit applied and confirmed; it does not tell RAM from I/O |
-| `memory.high events per cycle` (RAM only) | `memory.high` events in the user slices during the last decision interval |
+| `memory.high events` (RAM only) | `memory.high` events in the user slices within the rate window |
 
 **How to read it.** With `RAM_LIMIT_ENABLED=false` and `IO_LIMIT_ENABLED=false` the
 orange bars never appear even during an episode, while `eligible` keeps its value.
@@ -290,9 +290,8 @@ A depth near capacity or `saturated` outcomes mean the receiver is too slow or
 `LIMIT_HOOK_MAX_CONCURRENCY` too low. A rejected notification never cancels the limit.
 
 **Control cycle duration** shows the 95th percentile and the mean duration of decision
-cycles, failed ones included. Healthy cycles take well under a second. The p95 line
-cannot rise above 10 s because of the histogram buckets; trust the mean beyond that. A
-cycle approaching `POLLING_INTERVAL` (or `PSI_FALLBACK_INTERVAL` with PSI active)
+cycles, failed ones included. Healthy cycles take well under a second, and the
+histogram resolves durations up to 600 s. A cycle approaching `POLLING_INTERVAL` (or `PSI_FALLBACK_INTERVAL` with PSI active)
 means the daemon no longer keeps up, usually because systemd or `/proc` is slow.
 
 **Control cycles by trigger**

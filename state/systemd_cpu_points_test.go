@@ -1288,3 +1288,32 @@ func assertSystemdCPUAssignments(t *testing.T, calls []systemdCPUApplyCall, want
 		t.Fatalf("systemd assignments = %v, want %v", got, want)
 	}
 }
+
+func TestSystemdNativeFailedPolicyReloadRecordsOneReconciliationError(t *testing.T) {
+	initial := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 300}})
+	candidate := testCPUPointsPolicy(t, map[string]struct {
+		uid    int
+		points int
+	}{"alice": {uid: 1000, points: 400}})
+	adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(0, 1000)}
+	manager := testSystemdCPUPointsManager(t, initial, adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+	manager.cfg.UserIncludeList = []string{".*"}
+	if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: []int{1000}}); err != nil {
+		t.Fatal(err)
+	}
+	exporter := manager.prometheusExporter.(*mockPrometheusExporter)
+	before := len(exporter.recordedErrors())
+
+	adapter.discoverError = errors.New("injected discovery failure")
+	if err := manager.ReconcileCPUPointsPolicy(candidate, initial); err == nil {
+		t.Fatal("ReconcileCPUPointsPolicy() error = nil, want the discovery failure")
+	}
+	records := exporter.recordedErrors()[before:]
+	want := []prometheusErrorRecord{{component: "cpu_points_reconciliation", errorType: "systemd_discover"}}
+	if !reflect.DeepEqual(records, want) {
+		t.Fatalf("recorded errors for one failed reload = %+v, want exactly %+v", records, want)
+	}
+}

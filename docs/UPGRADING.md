@@ -39,6 +39,61 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## FIXED: limit hooks run again when a user is newly limited
+
+**Visible change.** `LIMIT_HOOK_SCRIPT` and `LIMIT_HOOK_URL` are delivered again when a
+user is newly limited: at the start of a limits episode, or when the user's slice joins
+an episode already running. Each user is notified once per episode, at the end of the
+control cycle that confirmed the CPU Points plan. `resman_limit_hook_executions_total`
+has series again.
+
+**Cause.** Retiring the non-systemd PID relocation backend in 1.36.6 removed the only call
+that dispatched hook deliveries, so from 1.36.6 through 1.41.2 no hook ever ran.
+
+**Action.** Review the hook script or webhook receiver before upgrading: it receives
+deliveries again with the documented payload. Hosts with `LIMIT_HOOK_ENABLED=false`
+are unaffected.
+
+## FIXED: memory.high breaches are exported, dead cgroup gauges are removed
+
+**Visible change.** `resman_user_memory_high_breaches_total{uid,username}` exists again
+for every authoritative user slice in `systemd_native`, accumulated from the slice's
+`memory.events` over decision intervals. `resman_cgroup_memory_usage_bytes`,
+`resman_cgroup_cpu_quota_microseconds` and `resman_cgroup_cpu_period_microseconds` are
+removed.
+
+**Cause.** Since 1.36.6 none of these four series was ever written: the breaches counter
+was fed a value that was never assigned, and the three cgroup gauges described per-user
+cgroups that systemd-native enforcement no longer creates.
+
+**Action.** Use `rate(resman_user_memory_high_breaches_total[...])` for memory.high
+pressure. Replace `resman_cgroup_memory_usage_bytes` with
+`resman_user_ram_cgroup_memory_current_bytes`; user slices carry a CPU Points weight,
+not a per-user quota, so the quota and period gauges have no replacement. The shipped
+dashboard already uses the live series.
+
+## CHANGED: control cycle durations are resolved up to 600 s
+
+**Visible change.** `resman_control_cycle_duration_seconds` adds buckets at 20, 30, 60,
+120, 300 and 600 s, so its quantiles can show a cycle approaching `POLLING_INTERVAL` or
+`PSI_FALLBACK_INTERVAL`.
+
+**Cause.** The client default buckets ended at 10 s, below the default 30 s polling
+interval, so `histogram_quantile` could never report a slower cycle.
+
+**Action.** None for queries that use `histogram_quantile` or `_sum`/`_count`. Recording
+rules or alerts that select specific `le` values must be reviewed.
+
+## FIXED: a failed CPU Points reload counts as one error
+
+**Visible change.** A configuration reload whose CPU Points reconciliation fails adds one
+to `resman_errors_total{component="cpu_points_reconciliation"}` instead of two.
+
+**Cause.** The reload path recorded a failure that the reconciliation had already
+recorded.
+
+**Action.** None. Alerts on that counter may fire less often after a failed reload.
+
 ## FIXED: releasing CPU limits reloads systemd once
 
 **Visible change.** The control cycle that releases CPU limits now restores every
@@ -1075,22 +1130,6 @@ or absent value as `max`.
 
 ## Prometheus, alerts, and hooks
 
-### Unavailable cgroup gauges no longer retain old values
-
-**Visible change.** `resman_cgroup_cpu_quota_microseconds` is absent while `cpu.max`
-is unlimited or unavailable. The period remains present for a valid `max PERIOD`
-record. Quota, period, and memory-usage series are removed when their source becomes
-unavailable, the user moves to another managed cgroup path, or enforcement releases
-the cgroup. Previously published values and old path labels no longer remain visible.
-
-**Cause.** Skipping a Prometheus `GaugeVec.Set` does not remove an existing series.
-The exporter previously presented old finite quotas, memory values, and cgroup paths as
-current observations, while an unreadable `memory.current` became a real zero.
-
-**Action.** Treat absence as unavailable or unlimited according to the companion
-period and runtime enforcement state; do not substitute zero. Queries that retain the
-last sample must apply their own explicit staleness policy.
-
 ### Series identity changes once at upgrade
 
 **Visible change.** Cgroup metrics, counters, and histograms gain constant `hostname`
@@ -1261,10 +1300,7 @@ not copy the failed record.
 reported successful completion.
 
 **Action.** Keep service stderr/journal observable and update monitoring to treat
-degraded cycle outcomes and bounded `resman_errors_total` labels as actionable. For
-`process_membership/origin_unavailable`, restart the affected process under its owning
-service/session so ResMan captures a valid origin; alternatively stop ResMan cleanly,
-restart the owner after recovery, then restart ResMan.
+degraded cycle outcomes and bounded `resman_errors_total` labels as actionable.
 
 ## Enforcement behavior
 
