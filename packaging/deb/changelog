@@ -1,3 +1,12 @@
+resman (1.41.3-1) stable; urgency=medium
+
+  * Dispatch limit hooks again when a user is newly limited.
+  * Export memory.high breaches again and retire the never-written per-user cgroup gauges.
+  * Resolve control cycle durations up to 600 s.
+  * Count a failed CPU Points reload as one error.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 15 Oct 2026 17:45:00 +0200
+
 resman (1.41.2-1) stable; urgency=medium
 
   * Release CPU limits with a single systemd reload instead of one per user slice.

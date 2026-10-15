@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.41.2
+Version: 1.41.3
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.1 to 1.41.2.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.2 to 1.41.3.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -311,6 +311,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.3-1
+- Dispatch limit hooks again when a user is newly limited
+- Export memory.high breaches again and retire the never-written per-user cgroup gauges
+- Resolve control cycle durations up to 600 s
+- Count a failed CPU Points reload as one error
+
 * Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.2-1
 - Release CPU limits with a single systemd reload instead of one per user slice
 - Clean the leases of departed user slices with a single systemd reload at runtime and at startup
