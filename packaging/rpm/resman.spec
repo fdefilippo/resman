@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.41.0
+Version: 1.41.1
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.40.0 to 1.41.0.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.0 to 1.41.1.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -311,6 +311,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.1-1
+- Let CPU authority scans and procfs collection tolerate ESRCH from a process that exits during the scan
+- Identify control cycles with a per-run sequence instead of the start second
+- Make ResMan the only rotator of LOG_FILE with LOG_MAX_BACKUPS compressed copies; rsyslog output moves to /var/log/resman-syslog.log
+- Verify the CPU Points plan at most once per POLLING_INTERVAL while limits are active
+
 * Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.0-1
 - Compare CPU_THRESHOLD and CPU_RELEASE_THRESHOLD with the host share of eligible CPU instead of the per-core sum
 - Log cpu_eligible_users_host_cpu_percent and print decision reasons as a share of the host
