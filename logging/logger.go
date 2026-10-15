@@ -18,6 +18,7 @@
 package logging
 
 import (
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +46,10 @@ const (
 
 	defaultLogFileMode   = os.FileMode(0600)
 	permittedLogFileMode = os.FileMode(0660)
+
+	// DefaultLogMaxBackups is the number of rotated copies kept when the
+	// configuration does not choose one.
+	DefaultLogMaxBackups = 7
 )
 
 var (
@@ -76,6 +82,7 @@ type loggerState struct {
 	file         *os.File
 	filePath     string
 	maxSize      int64
+	maxBackups   int
 	logger       *log.Logger
 	lastRotation time.Time
 	useSyslog    bool
@@ -95,11 +102,13 @@ type syslogSink interface {
 }
 
 type logFileOperations struct {
-	stat   func(*os.File) (os.FileInfo, error)
-	close  func(*os.File) error
-	remove func(string) error
-	rename func(string, string) error
-	open   func(string, *logFileMetadata) (*os.File, error)
+	stat     func(*os.File) (os.FileInfo, error)
+	close    func(*os.File) error
+	remove   func(string) error
+	rename   func(string, string) error
+	open     func(string, *logFileMetadata) (*os.File, error)
+	compress func(source, destination string, metadata logFileMetadata) error
+	readDir  func(string) ([]os.DirEntry, error)
 }
 
 type logFileMetadata struct {
@@ -116,8 +125,10 @@ func defaultLogFileOperations() logFileOperations {
 		remove: func(path string) error {
 			return os.Remove(path)
 		},
-		rename: os.Rename,
-		open:   openSecureLogFile,
+		rename:   os.Rename,
+		open:     openSecureLogFile,
+		compress: compressLogBackup,
+		readDir:  os.ReadDir,
 	}
 }
 
@@ -139,11 +150,18 @@ func (s *loggerState) operations() logFileOperations {
 	if operations.open == nil {
 		operations.open = defaults.open
 	}
+	if operations.compress == nil {
+		operations.compress = defaults.compress
+	}
+	if operations.readDir == nil {
+		operations.readDir = defaults.readDir
+	}
 	return operations
 }
 
-// InitLogger initializes the process-wide logger once.
-func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
+// InitLogger initializes the process-wide logger once. A file logger rotates
+// its own file at maxSize and keeps maxBackups rotated copies.
+func InitLogger(level string, filePath string, maxSize int, maxBackups int, useSyslog bool) {
 	once.Do(func() {
 		logLevel := parseLogLevel(level)
 
@@ -176,7 +194,7 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			return
 		}
 
-		fileLogger, err := newFileLogger(logLevel, filePath, int64(maxSize))
+		fileLogger, err := newFileLogger(logLevel, filePath, int64(maxSize), maxBackups)
 		if err != nil {
 			log.Printf("ERROR: Failed to initialize file logger: %v", err)
 			// Fallback to stderr so protocol streams on stdout remain clean.
@@ -189,13 +207,17 @@ func InitLogger(level string, filePath string, maxSize int, useSyslog bool) {
 			"level", levelNames[logLevel],
 			"file", filePath,
 			"max_size", fmt.Sprintf("%d bytes", maxSize),
+			"max_backups", maxBackups,
 		)
 	})
 }
 
-func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, error) {
+func newFileLogger(level LogLevel, filePath string, maxSize int64, maxBackups int) (*Logger, error) {
 	if maxSize <= 0 {
 		return nil, fmt.Errorf("log max size must be greater than 0, got %d", maxSize)
+	}
+	if maxBackups < 1 {
+		return nil, fmt.Errorf("log max backups must be at least 1, got %d", maxBackups)
 	}
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create log directory %s: %w", filepath.Dir(filePath), err)
@@ -212,6 +234,7 @@ func newFileLogger(level LogLevel, filePath string, maxSize int64) (*Logger, err
 			file:         file,
 			filePath:     filePath,
 			maxSize:      maxSize,
+			maxBackups:   maxBackups,
 			logger:       log.New(file, "", 0),
 			lastRotation: time.Now(),
 			fallback:     os.Stderr,
@@ -288,7 +311,7 @@ func metadataForLogRotation(info os.FileInfo) logFileMetadata {
 func GetLogger() *Logger {
 	if currentLogger == nil {
 		// If uninitialized, create the default logger with stderr fallback.
-		InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, false)
+		InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, DefaultLogMaxBackups, false)
 	}
 	return currentLogger
 }
@@ -438,6 +461,10 @@ func (l *Logger) checkAndRotate() (string, error) {
 }
 
 // rotateLog rotates the log while preserving its restrictive owner/group access.
+// ResMan is the only owner of its log file (resman-8bz): the newest rotated copy
+// is <path>.1, left uncompressed so it stays directly readable, and older copies
+// are <path>.2.gz through <path>.<maxBackups>.gz. Copies beyond maxBackups are
+// removed, so the footprint stays bounded without an external rotator.
 func (l *Logger) rotateLog() (string, error) {
 	operations := l.state.operations()
 	info, err := operations.stat(l.state.file)
@@ -454,14 +481,11 @@ func (l *Logger) rotateLog() (string, error) {
 	}
 	l.state.file = nil
 
-	backupPath := l.state.filePath + ".1"
-	if err := operations.remove(backupPath); err != nil && !os.IsNotExist(err) {
-		return "rotation_remove", errors.Join(
-			fmt.Errorf("remove previous rotated log %s: %w", backupPath, err),
-			l.reopenActiveLog(),
-		)
+	if operation, err := l.shiftBackups(operations, metadata); err != nil {
+		return operation, errors.Join(err, l.reopenActiveLog())
 	}
 
+	backupPath := l.backupPath(1)
 	if err := operations.rename(l.state.filePath, backupPath); err != nil {
 		return "rotation_rename", errors.Join(
 			fmt.Errorf("rename active log to %s: %w", backupPath, err),
@@ -494,6 +518,139 @@ func (l *Logger) rotateLog() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func (l *Logger) backupPath(index int) string {
+	if index == 1 {
+		return l.state.filePath + ".1"
+	}
+	return l.state.filePath + "." + strconv.Itoa(index) + ".gz"
+}
+
+// shiftBackups makes room for a new <path>.1: it drops the oldest copy, moves
+// every compressed copy up by one, and compresses the previous <path>.1 into
+// <path>.2.gz. A missing copy is not an error; every other failure stops the
+// rotation before the active log is renamed, so no record is overwritten.
+func (l *Logger) shiftBackups(operations logFileOperations, metadata logFileMetadata) (string, error) {
+	maxBackups := l.state.maxBackups
+	if maxBackups < 1 {
+		maxBackups = DefaultLogMaxBackups
+	}
+	if err := l.pruneBackups(operations, maxBackups); err != nil {
+		return "rotation_prune", err
+	}
+	oldest := l.backupPath(maxBackups)
+	if err := operations.remove(oldest); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "rotation_remove", fmt.Errorf("remove previous rotated log %s: %w", oldest, err)
+	}
+	for index := maxBackups - 1; index >= 2; index-- {
+		source, destination := l.backupPath(index), l.backupPath(index+1)
+		if err := operations.rename(source, destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "rotation_rename", fmt.Errorf("rename rotated log %s to %s: %w", source, destination, err)
+		}
+	}
+	if maxBackups == 1 {
+		return "", nil
+	}
+	newest := l.backupPath(1)
+	if _, err := os.Lstat(newest); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "rotation_compress", fmt.Errorf("inspect rotated log %s: %w", newest, err)
+	}
+	if err := operations.compress(newest, l.backupPath(2), metadata); err != nil {
+		return "rotation_compress", fmt.Errorf("compress rotated log %s: %w", newest, err)
+	}
+	if err := operations.remove(newest); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "rotation_remove", fmt.Errorf("remove compressed rotated log %s: %w", newest, err)
+	}
+	return "", nil
+}
+
+// pruneBackups removes rotated copies numbered above maxBackups, which remain
+// after LOG_MAX_BACKUPS is lowered. Files that do not follow the
+// <name>.<n> or <name>.<n>.gz pattern, such as copies left by an external
+// rotator, are never touched.
+func (l *Logger) pruneBackups(operations logFileOperations, maxBackups int) error {
+	directory, base := filepath.Split(l.state.filePath)
+	if directory == "" {
+		directory = "."
+	}
+	entries, err := operations.readDir(directory)
+	if err != nil {
+		return fmt.Errorf("list rotated logs in %s: %w", directory, err)
+	}
+	for _, entry := range entries {
+		suffix, ok := strings.CutPrefix(entry.Name(), base+".")
+		if !ok {
+			continue
+		}
+		suffix = strings.TrimSuffix(suffix, ".gz")
+		index, err := strconv.Atoi(suffix)
+		if err != nil || strconv.Itoa(index) != suffix || index <= maxBackups || entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if err := operations.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove rotated log %s above LOG_MAX_BACKUPS=%d: %w", path, maxBackups, err)
+		}
+	}
+	return nil
+}
+
+// compressLogBackup writes a gzip copy of source to destination through a
+// private temporary file and renames it into place only after a complete,
+// synced write. The copy keeps the sanitized mode and ownership of the log, and
+// a symlink at either path is refused.
+func compressLogBackup(source, destination string, metadata logFileMetadata) (err error) {
+	input, err := os.OpenFile(source, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, input.Close()) }()
+
+	temporary := destination + ".tmp"
+	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	output, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, defaultLogFileMode)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			err = errors.Join(err, output.Close(), os.Remove(temporary))
+		}
+	}()
+	if metadata.preserveOwnership {
+		if err := output.Chown(metadata.uid, metadata.gid); err != nil {
+			return err
+		}
+	}
+	if err := output.Chmod(metadata.mode); err != nil {
+		return err
+	}
+	writer := gzip.NewWriter(output)
+	if _, err := io.Copy(writer, input); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		return err
+	}
+	committed = true
+	if err := output.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
 }
 
 func (l *Logger) reopenActiveLog() error {

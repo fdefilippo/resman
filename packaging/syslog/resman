@@ -1,11 +1,16 @@
-# Logrotate configuration for resman
-/var/log/resman.log {
+# Logrotate configuration for the rsyslog copy of ResMan records.
+# ResMan rotates its own LOG_FILE itself (LOG_MAX_SIZE, LOG_MAX_BACKUPS). This
+# rule applies only to the file that /etc/rsyslog.d/resman.conf writes when
+# USE_SYSLOG=true, so every file has exactly one rotator.
+/var/log/resman-syslog.log {
     missingok
     notifempty
     compress
     delaycompress
-    copytruncate
     rotate 7
     daily
     create 0600 root root
+    postrotate
+        /usr/bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true
+    endscript
 }

@@ -211,6 +211,30 @@ func TestPackagedSendmailGuideMatchesHelperContract(t *testing.T) {
 	}
 }
 
+// TestPackagedRotatorsNeverShareResManLogFile pins resman-8bz: ResMan rotates
+// LOG_FILE itself, so the packaged logrotate rule must not name it, and the
+// rsyslog rule must write its own file that logrotate then owns alone.
+func TestPackagedRotatorsNeverShareResManLogFile(t *testing.T) {
+	root := repositoryRoot(t)
+	logrotate := readTextFile(t, filepath.Join(root, "packaging/syslog/resman"))
+	rsyslog := readTextFile(t, filepath.Join(root, "packaging/syslog/resman.conf"))
+	const resmanLog, syslogLog = "/var/log/resman.log", "/var/log/resman-syslog.log"
+	if !strings.Contains(logrotate, syslogLog+" {") {
+		t.Fatalf("logrotate rule does not rotate %s", syslogLog)
+	}
+	for _, forbidden := range []string{resmanLog + " ", resmanLog + "{", resmanLog + "\n", "copytruncate"} {
+		if strings.Contains(logrotate, forbidden) {
+			t.Fatalf("logrotate rule contains %q; ResMan alone rotates %s and rsyslog reopens on HUP", forbidden, resmanLog)
+		}
+	}
+	if !strings.Contains(logrotate, "systemctl kill -s HUP rsyslog.service") {
+		t.Fatal("logrotate rule does not make rsyslog reopen the rotated file")
+	}
+	if !strings.Contains(rsyslog, `file="`+syslogLog+`"`) || strings.Contains(rsyslog, `file="`+resmanLog+`"`) {
+		t.Fatalf("rsyslog rule must write %s, never %s", syslogLog, resmanLog)
+	}
+}
+
 func TestLogrotateShellBlocksParse(t *testing.T) {
 	root := repositoryRoot(t)
 	content := readTextFile(t, filepath.Join(root, "packaging/syslog/resman"))

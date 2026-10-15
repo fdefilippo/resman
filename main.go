@@ -60,7 +60,7 @@ func main() {
 	}
 
 	// Initialize logging from the effective configuration.
-	logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.UseSyslog)
+	logging.InitLogger(cfg.LogLevel, cfg.LogFile, cfg.LogMaxSize, cfg.LogMaxBackups, cfg.UseSyslog)
 	logger := logging.GetLogger()
 
 	logger.Info("Starting Resource Manager", "version", version)

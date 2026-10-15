@@ -39,6 +39,39 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## CHANGED: ResMan alone rotates its log file
+
+**Visible change.** ResMan is now the only rotator of `LOG_FILE`
+(`/var/log/resman.log` by default). At `LOG_MAX_SIZE` the file becomes
+`resman.log.1`, older copies are compressed as `resman.log.2.gz` through
+`resman.log.<n>.gz`, and copies above `n` are removed. A new restart-required key,
+`LOG_MAX_BACKUPS` (default 7, 1-100), sets `n`; with the default 10 MiB size the
+log and its copies stay within about 80 MiB before compression. The packaged
+logrotate rule no longer touches `LOG_FILE`. With `USE_SYSLOG=true` the packaged
+rsyslog rule now writes `/var/log/resman-syslog.log`, and the logrotate rule
+rotates only that file, by rename and an rsyslog `HUP` instead of `copytruncate`.
+
+**Cause.** Through 1.41.0 two rotators owned the same file. The logger renamed it to
+`resman.log.1` at `LOG_MAX_SIZE`, overwriting the previous `.1`, while the daily
+logrotate rule copied and truncated it into `resman.log-<date>`. Each mechanism
+moved records the other did not know about: on a production host the hours between
+a size rotation and the nightly logrotate run were missing from `resman.log` and
+`resman.log.1`, a day that crossed `LOG_MAX_SIZE` twice lost the older part for
+good, and `copytruncate` can drop records written between its copy and its
+truncation. The rsyslog rule wrote the same path, so it could not get a rotator of
+its own.
+
+**Action.** Set `LOG_MAX_BACKUPS` if 7 copies of `LOG_MAX_SIZE` do not fit the
+retention you need. Copies that logrotate left as `resman.log-<date>` or
+`resman.log-<date>.gz` are no longer managed: archive or delete them when you no
+longer need them. If you use `USE_SYSLOG=true`, read ResMan records in
+`/var/log/resman-syslog.log` (or in the journal). A locally modified
+`/etc/rsyslog.d/resman.conf` is kept and the new version is installed as
+`.rpmnew` (dpkg asks); move its output path to `/var/log/resman-syslog.log` by
+hand. A locally modified `/etc/logrotate.d/resman` is replaced on RPM hosts and
+saved as `.rpmsave`; carry over any local option without pointing the rule back
+at `LOG_FILE`.
+
 ## CHANGED: cycle_id is a per-run sequence
 
 **Visible change.** The `cycle_id` field of the control-cycle log records is now a

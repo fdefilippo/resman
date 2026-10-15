@@ -18,13 +18,16 @@ package logging
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -169,7 +172,7 @@ func TestLoggerReportsPersistentPrimaryAndFallbackFailures(t *testing.T) {
 
 func TestLoggerRecoversAFileSinkAfterTransientWriteFailure(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "resman.log")
-	logger, err := newFileLogger(INFO, logPath, 1024*1024)
+	logger, err := newFileLogger(INFO, logPath, 1024*1024, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -249,7 +252,7 @@ func TestLoggerReportsEveryRotationOperationFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "resman.log")
-			logger, err := newFileLogger(INFO, logPath, 1)
+			logger, err := newFileLogger(INFO, logPath, 1, DefaultLogMaxBackups)
 			if err != nil {
 				t.Fatalf("newFileLogger() error = %v", err)
 			}
@@ -279,7 +282,7 @@ func TestLoggerReportsEveryRotationOperationFailure(t *testing.T) {
 
 func TestLoggerRecoversRotationReopenWithOriginalMetadata(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "resman.log")
-	logger, err := newFileLogger(INFO, logPath, 1)
+	logger, err := newFileLogger(INFO, logPath, 1, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -369,7 +372,7 @@ func TestLoggerLevelRemainsAvailableWhileSinkWriteBlocks(t *testing.T) {
 
 func TestNewFileLogger(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "test.log")
-	logger, err := newFileLogger(INFO, logFile, 1024*1024)
+	logger, err := newFileLogger(INFO, logFile, 1024*1024, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -412,7 +415,7 @@ func TestNewFileLoggerRestrictsExistingFileAccess(t *testing.T) {
 				t.Fatalf("chmod existing log: %v", err)
 			}
 
-			logger, err := newFileLogger(INFO, logFile, 1024*1024)
+			logger, err := newFileLogger(INFO, logFile, 1024*1024, DefaultLogMaxBackups)
 			if err != nil {
 				t.Fatalf("newFileLogger() error = %v", err)
 			}
@@ -436,7 +439,7 @@ func TestNewFileLoggerRejectsSymbolicLinks(t *testing.T) {
 		t.Fatalf("create log symlink: %v", err)
 	}
 
-	logger, err := newFileLogger(INFO, link, 1024*1024)
+	logger, err := newFileLogger(INFO, link, 1024*1024, DefaultLogMaxBackups)
 	if err == nil || logger != nil {
 		t.Fatalf("newFileLogger(symlink) = (%v, %v), want nil logger and error", logger, err)
 	}
@@ -448,7 +451,7 @@ func TestNewFileLoggerRejectsSymbolicLinks(t *testing.T) {
 
 func TestNewFileLoggerRejectsNonPositiveMaxSize(t *testing.T) {
 	for _, maxSize := range []int64{0, -1} {
-		if logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), maxSize); err == nil || logger != nil {
+		if logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), maxSize, DefaultLogMaxBackups); err == nil || logger != nil {
 			t.Fatalf("newFileLogger(maxSize=%d) = (%v, %v), want nil logger and error", maxSize, logger, err)
 		}
 	}
@@ -521,7 +524,7 @@ func TestSetLevel(t *testing.T) {
 }
 
 func TestLoggerClose(t *testing.T) {
-	logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), 1024*1024)
+	logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), 1024*1024, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -540,7 +543,7 @@ func TestLogRotation(t *testing.T) {
 	if err := os.Chmod(logFile, 0644); err != nil {
 		t.Fatalf("chmod existing log: %v", err)
 	}
-	logger, err := newFileLogger(INFO, logFile, 1)
+	logger, err := newFileLogger(INFO, logFile, 1, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -651,7 +654,7 @@ func TestLoggerWithMultipleFields(t *testing.T) {
 
 func TestWithFieldSharesLevelAndRotationState(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "test.log")
-	logger, err := newFileLogger(INFO, logFile, 1)
+	logger, err := newFileLogger(INFO, logFile, 1, DefaultLogMaxBackups)
 	if err != nil {
 		t.Fatalf("newFileLogger() error = %v", err)
 	}
@@ -700,5 +703,187 @@ func TestLoggerFallbackUsesStderr(t *testing.T) {
 	logger := createStderrLogger(INFO)
 	if got := logger.state.logger.Writer(); got != os.Stderr {
 		t.Errorf("fallback writer = %v, want os.Stderr", got)
+	}
+}
+
+// rotateOnce writes one record that crosses LOG_MAX_SIZE immediately.
+func rotateOnce(t *testing.T, logger *Logger, record string) {
+	t.Helper()
+	logger.state.lastRotation = time.Now().Add(-2 * time.Second)
+	if err := logger.InfoChecked(record); err != nil {
+		t.Fatalf("InfoChecked(%q) error = %v", record, err)
+	}
+}
+
+func readRotatedLog(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.HasSuffix(path, ".gz") {
+		return string(data)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("open gzip %s: %v", path, err)
+	}
+	plain, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("decompress %s: %v", path, err)
+	}
+	return string(plain)
+}
+
+// TestRotationKeepsABoundedSetOfBackups pins resman-8bz: ResMan is the only
+// rotator of its file. The newest copy is LOG_FILE.1, older copies are
+// LOG_FILE.2.gz up to LOG_FILE.<n>.gz in age order, and nothing older survives,
+// so a busy day can no longer destroy history by overwriting a single .1.
+func TestRotationKeepsABoundedSetOfBackups(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxBackups int
+		rotations  int
+		want       map[string]string // backup suffix -> record it must contain
+		absent     []string
+	}{
+		{
+			name: "three copies after five rotations", maxBackups: 3, rotations: 5,
+			want:   map[string]string{".1": "record 5", ".2.gz": "record 4", ".3.gz": "record 3"},
+			absent: []string{".4.gz", ".2", ".3", ".1.gz"},
+		},
+		{
+			name: "single copy is never compressed", maxBackups: 1, rotations: 3,
+			want:   map[string]string{".1": "record 3"},
+			absent: []string{".2.gz", ".1.gz"},
+		},
+		{
+			name: "fewer rotations than copies", maxBackups: 7, rotations: 2,
+			want:   map[string]string{".1": "record 2", ".2.gz": "record 1"},
+			absent: []string{".3.gz"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logFile := filepath.Join(t.TempDir(), "resman.log")
+			logger, err := newFileLogger(INFO, logFile, 1, tt.maxBackups)
+			if err != nil {
+				t.Fatalf("newFileLogger() error = %v", err)
+			}
+			defer func() { _ = logger.Close() }()
+			for index := 1; index <= tt.rotations; index++ {
+				rotateOnce(t, logger, fmt.Sprintf("record %d", index))
+			}
+			for suffix, record := range tt.want {
+				content := readRotatedLog(t, logFile+suffix)
+				if !strings.Contains(content, record) {
+					t.Fatalf("%s = %q, want %q", suffix, content, record)
+				}
+				for other := 1; other <= tt.rotations; other++ {
+					if name := fmt.Sprintf("record %d", other); name != record && strings.Contains(content, name+"\n") {
+						t.Fatalf("%s mixes %q into the copy of %q", suffix, name, record)
+					}
+				}
+				assertLogFileMode(t, logFile+suffix, 0600)
+			}
+			for _, suffix := range tt.absent {
+				if _, err := os.Lstat(logFile + suffix); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s exists (err %v), want removed or never created", suffix, err)
+				}
+			}
+			matches, err := filepath.Glob(logFile + ".*.tmp")
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("temporary compression files left behind: %v (err %v)", matches, err)
+			}
+		})
+	}
+}
+
+func TestRotationPrunesCopiesAboveTheLimitOnly(t *testing.T) {
+	directory := t.TempDir()
+	logFile := filepath.Join(directory, "resman.log")
+	foreign := []string{"resman.log-20261015", "resman.log-20261014.gz", "resman.log.notes", "resman.log.01.gz", "other.log.9.gz"}
+	stale := []string{"resman.log.5.gz", "resman.log.9.gz", "resman.log.12"}
+	for _, name := range append(append([]string{}, foreign...), stale...) {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	logger, err := newFileLogger(INFO, logFile, 1, 3)
+	if err != nil {
+		t.Fatalf("newFileLogger() error = %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+	rotateOnce(t, logger, "record after lowering LOG_MAX_BACKUPS")
+
+	for _, name := range stale {
+		if _, err := os.Lstat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s survived above LOG_MAX_BACKUPS=3 (err %v)", name, err)
+		}
+	}
+	for _, name := range foreign {
+		if _, err := os.Lstat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("%s was removed, want files outside the rotation pattern untouched: %v", name, err)
+		}
+	}
+}
+
+func TestRotationCompressionFailurePreservesTheNewestCopy(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "resman.log")
+	if err := os.WriteFile(logFile+".1", []byte("previous copy\n"), 0600); err != nil {
+		t.Fatalf("write previous copy: %v", err)
+	}
+	logger, err := newFileLogger(INFO, logFile, 1, 3)
+	if err != nil {
+		t.Fatalf("newFileLogger() error = %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+	var fallback bytes.Buffer
+	logger.state.fallback = &fallback
+	injectedErr := errors.New("injected compression failure")
+	logger.state.fileOps.compress = func(string, string, logFileMetadata) error { return injectedErr }
+	logger.state.lastRotation = time.Now().Add(-2 * time.Second)
+
+	if err := logger.InfoChecked("record that triggers rotation"); !errors.Is(err, injectedErr) {
+		t.Fatalf("InfoChecked() error = %v, want injected compression failure", err)
+	}
+	if health := logger.Health(); health.Healthy || health.LastFailure.Operation != "rotation_compress" {
+		t.Fatalf("Health() = %+v, want rotation_compress", health)
+	}
+	if content := readRotatedLog(t, logFile+".1"); content != "previous copy\n" {
+		t.Fatalf("newest copy = %q, want it untouched by a failed rotation", content)
+	}
+	if err := logger.InfoChecked("record after failed rotation"); err != nil && !errors.Is(err, injectedErr) {
+		t.Fatalf("active log is not writable after a failed rotation: %v", err)
+	}
+	if content := readRotatedLog(t, logFile); !strings.Contains(content, "record after failed rotation") {
+		t.Fatalf("active log = %q, want later records kept", content)
+	}
+}
+
+func TestCompressLogBackupRefusesSymlinks(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, []byte("not a log"), 0600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	source := filepath.Join(directory, "resman.log.1")
+	if err := os.Symlink(target, source); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	err := compressLogBackup(source, filepath.Join(directory, "resman.log.2.gz"), logFileMetadata{mode: 0600})
+	if !errors.Is(err, syscall.ELOOP) {
+		t.Fatalf("compressLogBackup(symlink) error = %v, want ELOOP", err)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "resman.log.2.gz")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("compressed copy created from a symlink (err %v)", err)
+	}
+}
+
+func TestNewFileLoggerRejectsMissingBackupCount(t *testing.T) {
+	for _, maxBackups := range []int{0, -1} {
+		if logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), 1024, maxBackups); err == nil || logger != nil {
+			t.Fatalf("newFileLogger(maxBackups=%d) = (%v, %v), want nil logger and error", maxBackups, logger, err)
+		}
 	}
 }

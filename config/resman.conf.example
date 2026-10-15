@@ -389,7 +389,8 @@ PROMETHEUS_JWT_AUDIENCE=prometheus
 # ========================
 # LOGGING
 # ========================
-# LOG_LEVEL is dynamic. LOG_MAX_SIZE, USE_SYSLOG and LOG_FILE require restart.
+# LOG_LEVEL is dynamic. LOG_MAX_SIZE, LOG_MAX_BACKUPS, USE_SYSLOG and LOG_FILE
+# require restart.
 # Available log levels:
 #   DEBUG - Detailed messages for troubleshooting
 #   INFO  - Normal operational information (recommended default)
@@ -397,6 +398,10 @@ PROMETHEUS_JWT_AUDIENCE=prometheus
 #   ERROR - Errors only
 LOG_LEVEL=INFO
 LOG_MAX_SIZE=10485760        # Maximum log file size in bytes; must be > 0 (10MB)
+# ResMan alone rotates its log file: at LOG_MAX_SIZE the file becomes LOG_FILE.1,
+# older copies are compressed to LOG_FILE.2.gz ... LOG_FILE.<LOG_MAX_BACKUPS>.gz
+# and anything older is removed. No logrotate rule applies to this file.
+LOG_MAX_BACKUPS=7            # Rotated copies kept, 1-100
 USE_SYSLOG=false             # true: use system syslog, false: use file
 # New files use 0600. Existing files retain only owner/group read-write access;
 # execute bits and every permission for other users are removed at startup.
