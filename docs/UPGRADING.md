@@ -39,6 +39,21 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## CHANGED: cycle_id is a per-run sequence
+
+**Visible change.** The `cycle_id` field of the control-cycle log records is now a
+sequence that starts at 1 when the daemon starts and increases by one for every
+control cycle. It no longer carries the cycle's start time in Unix seconds.
+
+**Cause.** Through 1.41.0 the identifier was the start second, so a ticker cycle and
+a PSI-triggered cycle started in the same second shared it: one day of logs on a
+production host contained 406 duplicated values, and the field could not correlate
+the records of one cycle.
+
+**Action.** Correlate records by `cycle_id` within one daemon run, and use the
+record timestamp for time. A query that converted `cycle_id` to a time must read the
+timestamp instead. The value restarts at 1 after every restart of `resman`.
+
 ## CHANGED: CPU thresholds are percentages of the host
 
 **Visible change.** `CPU_THRESHOLD` and `CPU_RELEASE_THRESHOLD` are now compared with

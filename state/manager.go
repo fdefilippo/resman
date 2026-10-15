@@ -123,6 +123,7 @@ type Manager struct {
 	hookWorkerCount          int
 	hookWorkersStarted       bool
 	hookInFlight             atomic.Int64
+	cycleSequence            atomic.Int64 // Last control-cycle identifier issued in this daemon run.
 	hookScriptIdentity       limithook.ScriptIdentity
 	hookLastSaturationLog    time.Time
 	hookSaturationSuppressed uint64

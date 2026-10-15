@@ -145,7 +145,9 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		trigger:   trigger,
 		startTime: time.Now(),
 	}
-	run.cycleID = run.startTime.Unix()
+	// A per-run sequence, not the start second: cycles triggered by PSI and the
+	// ticker within one second used to share an identifier (resman-qi6).
+	run.cycleID = m.cycleSequence.Add(1)
 
 	if exporter := m.prometheusExporter; exporter != nil {
 		exporter.RecordControlCycleTrigger(trigger)
