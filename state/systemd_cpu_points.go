@@ -240,6 +240,10 @@ func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, u
 		m.activeUsers[slice.UID()] = true
 		if !previouslyActive[slice.UID()] {
 			m.userLimitedAt[slice.UID()] = now
+			if m.pendingLimitHookUIDs == nil {
+				m.pendingLimitHookUIDs = make(map[int]struct{})
+			}
+			m.pendingLimitHookUIDs[slice.UID()] = struct{}{}
 		}
 	}
 	for uid := range m.userLimitedAt {

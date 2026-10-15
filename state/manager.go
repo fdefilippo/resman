@@ -67,6 +67,7 @@ type Manager struct {
 	requestedCPUUsers                     map[int]bool
 	activeUsers                           map[int]bool // UID -> user with an authoritative applied CPU plan
 	userLimitedAt                         map[int]time.Time
+	pendingLimitHookUIDs                  map[int]struct{} // newly limited users awaiting stageDispatchLimitHooks
 	resourceLimits                        map[int]userResourceLimitState
 	cpuPointsPolicy                       cpupoints.PolicySnapshot
 	cpuCapacity                           CPUCapacityProvider

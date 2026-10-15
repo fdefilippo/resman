@@ -58,6 +58,7 @@ var defaultControlCyclePipeline = []controlCycleStage{
 	{name: "make_decision", run: (*Manager).stageMakeDecision},
 	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
 	{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
+	{name: "dispatch_limit_hooks", run: (*Manager).stageDispatchLimitHooks, continueAfterError: true},
 	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
 	{name: "write_database", run: (*Manager).stageWriteDatabase},
 	{name: "record_history", run: (*Manager).stageRecordHistory},

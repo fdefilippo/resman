@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -75,8 +76,30 @@ func (e *sanitizedHookError) Unwrap() error {
 	return e.cause
 }
 
+// stageDispatchLimitHooks notifies the limit hooks about every user a
+// published CPU Points plan newly limited since the previous dispatch. A plan
+// can be published by the reconcile stage, by decision execution or by a
+// configuration reload, so the notification waits for this stage and carries
+// the current decision sample. A user released in the meantime is skipped.
+func (m *Manager) stageDispatchLimitHooks(run *controlCycleContext) error {
+	m.mu.Lock()
+	limited := make([]int, 0, len(m.pendingLimitHookUIDs))
+	for uid := range m.pendingLimitHookUIDs {
+		if m.activeUsers[uid] {
+			limited = append(limited, uid)
+		}
+	}
+	m.pendingLimitHookUIDs = nil
+	m.mu.Unlock()
+	sort.Ints(limited)
+	for _, uid := range limited {
+		m.notifyUserLimited(run.cfg, uid, m.getUsername(uid), run.metrics)
+	}
+	return nil
+}
+
 func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string, metrics *SystemMetrics) {
-	if cfg == nil || !cfg.LimitHookEnabled {
+	if cfg == nil || !cfg.LimitHookEnabled || metrics == nil {
 		return
 	}
 

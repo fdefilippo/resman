@@ -1,7 +1,12 @@
 # Limit-hook execution
 
 ResMan can dispatch a script, an HTTP request, or both after a user is newly
-limited. Hook delivery is an observation and integration boundary: a failed,
+limited: when systemd has applied and ResMan has confirmed the user's CPU Points
+weight at the start of a limits episode, or when the user's slice joins an episode
+already running. A user stays limited, and is not notified again, until the episode
+ends. The notification is sent at the end of the control cycle that published the
+plan and carries that cycle's sample; it is never sent in `observation_only`. Hook
+delivery is an observation and integration boundary: a failed,
 timed-out, cancelled, or saturated delivery never rolls back an applied resource
 limit.
 
