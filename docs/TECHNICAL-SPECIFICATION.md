@@ -950,7 +950,7 @@ units. A host without that authority remains observable but unenforced.
 | Metric | Calculation |
 |--------|-------------|
 | CPU% | Sum of all process CPU% for UID |
-| Memory bytes | Sum of process PSS from `smaps_rollup`; RSS fallback when unavailable |
+| Memory bytes | Sum of process PSS from `smaps_rollup`, so a shared page is not counted once per process; RSS fallback when unavailable |
 | Process count | Count of processes for UID |
 
 ### 7.3 CPU Usage Calculation
@@ -968,7 +968,8 @@ the PSI watcher is inactive, including when PSI is configured but unavailable, a
 `PSI_FALLBACK_INTERVAL` only after the watcher starts successfully. The exact boundary
 is valid; a longer gap, a clock regression, or regressed kernel counters resets the
 baseline and reports a bounded unavailable reason. The next valid sample resumes delta
-calculation immediately. A legitimate zero active-jiffy delta remains available.
+calculation immediately. A legitimate zero active-jiffy delta remains available; a zero
+total-jiffy delta has no denominator and is reported unavailable as `no_delta`.
 
 **How it works:**
 1. First call: Records baseline, reports unavailable

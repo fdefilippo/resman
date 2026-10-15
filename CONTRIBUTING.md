@@ -368,7 +368,8 @@ For maintainers:
 When adding features or fixing bugs:
 
 1. **Code comments** - Explain complex logic
-2. **README.md** - Update features list
+2. **README.md** - Keep it a product showcase: change the highlights or the quick start
+   only when a user-visible capability changes, and put every detail in `docs/`
 3. **Man page** - Update `docs/resman.8`
 4. **Prometheus docs** - Update `docs/prometheus-queries.md`
 5. **Grafana** - Update `docs/dashboard-grafana-operations.json`

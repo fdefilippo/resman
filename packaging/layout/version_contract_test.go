@@ -24,7 +24,7 @@ func TestCurrentReleaseVersionSurfacesAgree(t *testing.T) {
 		{path: "packaging/rpm/resman.spec", required: "- " + packageVersion + "\n"},
 		{path: "packaging/deb/changelog", required: "resman (" + packageVersion + ")"},
 		{path: "docs/resman.8", required: `"v` + version + `" "System Administration"`},
-		{path: "README.md", required: "resman_" + packageVersion + "_<architecture>.deb"},
+		{path: "docs/INSTALLATION.md", required: "resman_" + packageVersion + "_<architecture>.deb"},
 		{path: "docs/CONTAINER.md", required: "resman:" + version},
 		{path: "docs/TECHNICAL-SPECIFICATION.md", required: "main.version=" + packageVersion},
 		{path: "docs/UPGRADING.md", required: "to ResMan " + version},

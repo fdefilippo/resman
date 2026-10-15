@@ -239,7 +239,7 @@ func TestCurrentMetricsSchemaReferencesMatchTheWriter(t *testing.T) {
 	if version == "" {
 		t.Fatal("production schema version was not inspected")
 	}
-	for _, path := range []string{"README.md", "docs/UPGRADING.md", "docs/ARCHITECTURE.md", "docs/TECHNICAL-SPECIFICATION.md", "docs/METRICS-DATABASE.md", "docs/CPU-POINTS-OBSERVABILITY.md", "docs/resman.8"} {
+	for _, path := range []string{"docs/UPGRADING.md", "docs/ARCHITECTURE.md", "docs/TECHNICAL-SPECIFICATION.md", "docs/METRICS-DATABASE.md", "docs/CPU-POINTS-OBSERVABILITY.md", "docs/resman.8"} {
 		body := readTextFile(t, filepath.Join(root, path))
 		matches := regexp.MustCompile(`Current metrics schema: ([0-9]+)\.`).FindAllStringSubmatch(body, -1)
 		if len(matches) != 1 || matches[0][1] != version {
