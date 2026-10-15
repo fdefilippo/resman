@@ -46,16 +46,19 @@ owned user slice and `user.slice` with a single systemd manager reload instead o
 reload per slice. On a 4-CPU guest with 45 user slices, the release cycle dropped
 from 14.1 s to 3.6 s. The release of owned properties before observation-only mode
 uses the same batch. It now continues past a unit that cannot be restored and reports
-every failure, where it previously stopped at the first one.
+every failure, where it previously stopped at the first one. Leased user slices that
+disappear together, for example when many users log out at once, are also cleaned
+with a single reload, both while the daemon runs and at startup.
 
 **Cause.** Through 1.41.1 each slice paid `RevertUnitFiles`, a complete systemd
 `Reload` and several durable journal writes on its own. On a production host with 47
-user slices the release cycle took 19 s, about three quarters of it in reloads.
+user slices the release cycle took 19 s, about three quarters of it in reloads. The
+cleanup of departed slices had the same per-slice reload.
 
 **Action.** None. Each slice keeps its own compare-before-restore transaction and
 readback, and a slice that fails keeps its lease for the next cycle or startup
-recovery. During the release, systemd now logs one `Reloading` line instead of one
-per slice.
+recovery. During the release and the cleanup of departed slices, systemd now logs
+one `Reloading` line instead of one per slice.
 
 ## CHANGED: the CPU Points plan is fully verified once per POLLING_INTERVAL
 

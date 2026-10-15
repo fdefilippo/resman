@@ -158,8 +158,13 @@ with authoritative systemd state and with the files on disk:
 - An exact match under a recreated unit identity is reported as an
   `orphaned_resman_footprint` and rebound durably to the new identity.
 - An inactive recorded unit is inspected on disk without loading it. An exact
-  footprint can be reverted and followed by one daemon reload before the record is
+  footprint can be reverted and followed by a daemon reload before the record is
   removed. ResMan never calls `LoadUnit` to manufacture an identity for this purpose.
+  Units that disappeared together, at startup or during a later reconciliation, are
+  cleaned as one batch in the same write-ahead order as a batched release: one
+  durable `restoring` intent, `RevertUnitFiles` per unit, one durable `reloading`
+  phase, a single reload and one record removal. A burst of logouts therefore costs
+  one reload instead of one per slice.
 - A crash after `RevertUnitFiles` but before `Reload` is a benign recorded phase:
   ResMan decides from the on-disk footprint, completes the reload, verifies the
   baseline, and then removes the record. The pre-reload D-Bus `DropInPaths` and
