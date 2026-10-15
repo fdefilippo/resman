@@ -39,6 +39,28 @@ Read this document before installing the new package. Complete the required acti
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
 
+## CHANGED: the CPU Points plan is fully verified once per POLLING_INTERVAL
+
+**Visible change.** While CPU limits are active, the complete verification of the
+CPU Points plan, which rereads every owned lease, the user-slice topology and every
+user slice, runs at most once per `POLLING_INTERVAL` instead of in every control
+cycle. Cycles in between reuse the confirmed plan. With weighted I/O disabled, the
+I/O stage no longer rereads the owned slices that the CPU stage already verified in
+the same cycle. On a 4-CPU guest with 45 user slices and PSI-triggered cycles, a
+cycle with limits active dropped from about 1.4 s to about 0.55 s.
+
+**Cause.** PSI events trigger a control cycle about once per second on a busy host,
+and through 1.41.0 every cycle repeated the complete verification: on a production
+host with 47 user slices, cycles with limits active took 1.19 s on average, so ResMan
+was inside a cycle most of the time and kept PID 1 answering hundreds of property
+reads per second.
+
+**Action.** None. External changes to the properties ResMan owns, and a user slice
+that appears while limits are active, are now handled within one `POLLING_INTERVAL`
+(30 s by default) instead of at the next cycle. Activation, release, configuration
+changes and any incomplete or degraded plan still run the complete verification
+immediately. Lower `POLLING_INTERVAL` if a shorter bound is needed.
+
 ## CHANGED: ResMan alone rotates its log file
 
 **Visible change.** ResMan is now the only rotator of `LOG_FILE`

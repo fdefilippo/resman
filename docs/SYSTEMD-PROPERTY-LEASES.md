@@ -116,7 +116,13 @@ After capture, every resource path still performs the remaining persistence/acco
 work and decision construction before RAM/I/O application. `ACTIVATE_LIMITS` also
 reconciles CPU Points inside `activateSystemdEnforcement`; `MAINTAIN_CURRENT_STATE`
 enters resource reconciliation directly because the pipeline reconciled CPU Points
-before metrics collection and inventory capture. D-Bus unit identity, topology, lease,
+before metrics collection and inventory capture. That pipeline stage runs the complete
+CPU Points verification, which rereads every owned lease, the user-slice topology and
+every slice, at most once per `POLLING_INTERVAL`: a cycle that starts less than one
+interval after a complete, undegraded verification reuses its plan, so external drift
+and a new user slice are found within one `POLLING_INTERVAL`. A configuration change, a
+pending policy or any incomplete or degraded plan forces the complete verification on
+the next cycle, and activation and release always run it. D-Bus unit identity, topology, lease,
 property readback, and effective-kernel verification remain live checks through
 acknowledgement. Finite memory values are rounded down to the host page size before
 they are written. The systemd readback remains exact, while kernel verification compares

@@ -85,6 +85,7 @@ type Manager struct {
 	systemdUnits                          SystemdCPUUnitAdapter
 	systemdCPURequested                   bool
 	systemdCPUComplete                    bool
+	systemdCPUVerifiedAt                  time.Time // Last complete CPU Points verification; zero forces the next one.
 	systemdCPUParent                      systemdunit.UnitIdentity
 	systemdCPUSlices                      map[int]systemdunit.UnitIdentity
 	systemdCPUPlanSignature               string
@@ -658,6 +659,9 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	)
 	m.mu.Lock()
 	m.cfg = newConfig
+	// Eligibility and cadence may change with any key, so the next cycle runs
+	// a complete CPU Points verification instead of reusing the last one.
+	m.systemdCPUVerifiedAt = time.Time{}
 	if oldConfig == nil || oldConfig.GetIOWeightDevices() != newConfig.GetIOWeightDevices() {
 		selector := newConfig.GetIOWeightDevices()
 		hadProgrammedWeights := m.ioWeightStatus.Programmed || len(m.ioWeightUnits) > 0

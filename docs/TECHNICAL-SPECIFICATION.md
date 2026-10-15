@@ -359,7 +359,12 @@ between samples without observation. A late descendant inherits active `memory.h
 irreversible. After capture, all paths complete persistence/accounting and decision
 construction. `ACTIVATE_LIMITS` additionally reconciles CPU Points before RAM/I/O
 application; `MAINTAIN_CURRENT_STATE` enters resource reconciliation directly because
-the pipeline CPU stage preceded collection.
+the pipeline CPU stage preceded collection. That stage runs the complete CPU Points
+verification at most once per `POLLING_INTERVAL` and otherwise reuses the plan it
+confirmed, unless configuration changed or the plan is incomplete, degraded or pending;
+external drift and new user slices are therefore found within one `POLLING_INTERVAL`.
+With weighted I/O disabled, the I/O stage does not reread owned leases that the CPU
+stage of the same cycle verified, unless an `IODeviceWeight` lease remains to restore.
 
 Runtime-property ownership and crash recovery use the durable private journal in
 [SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). Startup reclaims exact
