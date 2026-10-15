@@ -1443,7 +1443,8 @@ func TestAdapterPublicMethodsExposeNoGeneralUnitManagementCapability(t *testing.
 	sort.Strings(methods)
 	// ReleaseOwnedLeases gives up ownership of properties ResMan itself applied;
 	// it restores and never sets, so it adds no general unit-management power.
-	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ManagerVersion", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ProbeIODeviceWeights", "ReconcileOwned", "RecoveryReport", "ReleaseOwnedLeases", "Restore", "RestoreProperties"}
+	// RestoreUnits is Restore over several leased units sharing one reload.
+	want := []string{"Apply", "CaptureProcessAuthorityInventory", "CheckCapturedResourceAuthorities", "CheckResourceAuthorities", "CheckResourceAuthority", "Close", "ConfirmApplied", "ConfirmTopology", "Discover", "Leases", "ManagerVersion", "ObserveAccounting", "ObserveCPUCoverage", "OwnedUnits", "ProbeIODeviceWeights", "ReconcileOwned", "RecoveryReport", "ReleaseOwnedLeases", "Restore", "RestoreProperties", "RestoreUnits"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("public Adapter methods = %v, want %v", methods, want)
 	}

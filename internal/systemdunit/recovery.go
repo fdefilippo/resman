@@ -754,17 +754,25 @@ func (a *Adapter) rollbackUndispatchedApply(unit string) error {
 }
 
 func (a *Adapter) removeUnitLeaseDurably(unit string) error {
+	return a.removeUnitLeasesDurably([]string{unit})
+}
+
+// removeUnitLeasesDurably forgets the ownership of every listed unit with one
+// journal write, so a batch of restored units costs one durable update.
+func (a *Adapter) removeUnitLeasesDurably(units []string) error {
 	before := a.snapshotLeaseState()
-	identity, _, _, ok := a.unitLeaseState(unit)
-	if ok {
-		for key := range a.leases {
-			if key.identity == identity {
-				delete(a.leases, key)
+	for _, unit := range units {
+		identity, _, _, ok := a.unitLeaseState(unit)
+		if ok {
+			for key := range a.leases {
+				if key.identity == identity {
+					delete(a.leases, key)
+				}
 			}
+			delete(a.overrides, identity)
 		}
-		delete(a.overrides, identity)
+		delete(a.phases, unit)
 	}
-	delete(a.phases, unit)
 	if err := a.persistLeaseState(); err != nil {
 		a.restoreLeaseState(before)
 		return err

@@ -134,6 +134,21 @@ of a workload whose runtime owns a nested resource boundary. It does not provide
 per-container policy; authoritative whole-container management remains a separate
 contract.
 
+## Batched release
+
+Releasing CPU Points, and releasing owned properties before observation, restores
+every owned unit in one batch. Each unit is first checked and returned to its
+recorded baselines one at a time, with its own write-ahead transaction and readback,
+leaves before the finite `user.slice` parent. The removal of the runtime drop-ins is
+then shared. The `restoring` intent of every unit is persisted in one journal write.
+`RevertUnitFiles` runs for each unit, and the `reloading` phase is persisted for every
+reverted unit in one write. A single systemd `Reload` follows, then each unit is
+verified and all completed records are removed in one write. Earlier releases made
+every unit pay its own `Reload`, so a release of 47 slices took 19 s. A unit that
+fails at any step keeps its record in the phase it reached and does not stop the
+others. Every state the batch can leave in the journal is a per-unit state that
+startup recovery already resolves, as described below.
+
 ## Automatic startup recovery
 
 Before accepting a new systemd property mutation, ResMan compares every journal record
