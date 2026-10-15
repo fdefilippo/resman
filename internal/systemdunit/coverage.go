@@ -2,7 +2,6 @@ package systemdunit
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/fdefilippo/resman/internal/processidentity"
 )
 
 // ResourceKind names one independently authorized resource.
@@ -288,7 +289,7 @@ func (i procCoverageInspector) capture(ctx context.Context, targets []resourceCo
 		}
 		processRoot := filepath.Join(i.root, entry.Name())
 		processInfo, err := i.stat(processRoot)
-		if errors.Is(err, os.ErrNotExist) {
+		if processidentity.Vanished(err) {
 			continue
 		}
 		if err != nil {
@@ -301,7 +302,7 @@ func (i procCoverageInspector) capture(ctx context.Context, targets []resourceCo
 		uid := ownerUID(processInfo)
 		parent, tracked := paths[uid]
 		processCgroup, err := readUnifiedProcessCgroup(i.readFile, filepath.Join(processRoot, "cgroup"))
-		if errors.Is(err, os.ErrNotExist) {
+		if processidentity.Vanished(err) {
 			continue
 		}
 		if err != nil {
@@ -331,7 +332,7 @@ func (i procCoverageInspector) capture(ctx context.Context, targets []resourceCo
 				processNamespace, namespaceErr = i.stat(filepath.Join(processRoot, "ns", "pid"))
 				namespaceRead = true
 			}
-			if errors.Is(namespaceErr, os.ErrNotExist) {
+			if processidentity.Vanished(namespaceErr) {
 				continue
 			}
 			if namespaceErr != nil {
@@ -366,7 +367,7 @@ func (i procCoverageInspector) captureCPUOnly(ctx context.Context, targets []res
 		}
 		path := filepath.Join(i.root, entry.Name())
 		info, err := i.stat(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if processidentity.Vanished(err) {
 			continue
 		}
 		if err != nil {
@@ -378,7 +379,7 @@ func (i procCoverageInspector) captureCPUOnly(ctx context.Context, targets []res
 			continue
 		}
 		data, err := i.readFile(filepath.Join(path, "cgroup"))
-		if errors.Is(err, os.ErrNotExist) {
+		if processidentity.Vanished(err) {
 			continue
 		}
 		if err != nil {

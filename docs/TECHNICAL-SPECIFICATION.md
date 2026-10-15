@@ -359,7 +359,12 @@ between samples without observation. A late descendant inherits active `memory.h
 irreversible. After capture, all paths complete persistence/accounting and decision
 construction. `ACTIVATE_LIMITS` additionally reconciles CPU Points before RAM/I/O
 application; `MAINTAIN_CURRENT_STATE` enters resource reconciliation directly because
-the pipeline CPU stage preceded collection.
+the pipeline CPU stage preceded collection. That stage runs the complete CPU Points
+verification at most once per `POLLING_INTERVAL` and otherwise reuses the plan it
+confirmed, unless configuration changed or the plan is incomplete, degraded or pending;
+external drift and new user slices are therefore found within one `POLLING_INTERVAL`.
+With weighted I/O disabled, the I/O stage does not reread owned leases that the CPU
+stage of the same cycle verified, unless an `IODeviceWeight` lease remains to restore.
 
 Runtime-property ownership and crash recovery use the durable private journal in
 [SYSTEMD-PROPERTY-LEASES.md](SYSTEMD-PROPERTY-LEASES.md). Startup reclaims exact
@@ -612,7 +617,7 @@ absent enforcement.
 ```
 
 **Key Functions:**
-- `InitLogger(level, filePath, maxSize, useSyslog)`: Initializes logger
+- `InitLogger(level, filePath, maxSize, maxBackups, useSyslog)`: Initializes logger
 - `GetLogger()`: Returns global logger instance
 - `Debug/Info/Warn/Error(msg, keyvals...)`: Best-effort methods that publish health
 - `DebugChecked/InfoChecked/WarnChecked/ErrorChecked(...)`: Return sink failures
@@ -621,12 +626,16 @@ absent enforcement.
 - `checkAndRotate()`: Rotates log file when max size reached
 
 **Log Rotation:**
+- ResMan is the only rotator of its log file; no logrotate rule applies to it
 - Triggered when file exceeds `LogMaxSize`
-- Creates backup: `resman.log.1`
+- Keeps `LOG_MAX_BACKUPS` copies (default 7): the newest is `resman.log.1`,
+  uncompressed, and older ones are `resman.log.2.gz` through `resman.log.<n>.gz`;
+  copies numbered above the limit are removed, other files are never touched
 - Maximum one rotation per second
 - Creates a new log at `0600`; an existing file retains only owner/group read-write
   access after all execute and other-user bits are removed
-- Applies the same sanitized mode to the active file and rotated `.1` backup
+- Applies the same sanitized mode to the active file and every rotated copy; a
+  compressed copy is written to a private temporary file and renamed into place
 - Preserves ownership across internal rotation, and rejects symbolic links or
   non-regular managed log destinations
 - Write, stat, close, remove, rename and reopen failures are returned and recorded;
@@ -1245,11 +1254,13 @@ never calls a partial host subset the complete UID workload and never promises t
 
 **Process:**
 1. Close current file
-2. Rename to `.1`
-3. Open new file
-4. Continue logging
+2. Remove copies above `LOG_MAX_BACKUPS` and the oldest kept copy
+3. Move each `.<k>.gz` to `.<k+1>.gz` and compress `.1` into `.2.gz`
+4. Rename the active file to `.1`
+5. Open new file and continue logging
 
-Every close, removal, rename and reopen result is checked. A failed step does not emit
+Every close, removal, rename, compression and reopen result is checked. A failure
+before step 4 leaves every existing copy in place and keeps writing the active file. A failed step does not emit
 the rotation-success record; the logger reports the failed operation through its
 bounded health state and direct stderr fallback, then retries the primary file on a
 later record where recovery is possible.
@@ -1579,7 +1590,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.41.0-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.41.1-1'" -o resman .
 ```
 
 **Build RPM:**

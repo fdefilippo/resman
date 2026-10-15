@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	watcherTestLogPath = filepath.Join(testDir, "resman.log")
-	logging.InitLogger("DEBUG", watcherTestLogPath, 16*1024*1024, false)
+	logging.InitLogger("DEBUG", watcherTestLogPath, 16*1024*1024, logging.DefaultLogMaxBackups, false)
 
 	code := m.Run()
 	_ = logging.GetLogger().Close()

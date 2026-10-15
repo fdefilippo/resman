@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ func TestReportableProcFSFailureIgnoresProcessExitOnly(t *testing.T) {
 	}{
 		{name: "no error", err: nil, want: false},
 		{name: "process exited", err: fmt.Errorf("read procfs: %w", fs.ErrNotExist), want: false},
+		{name: "process exiting or zombie", err: &fs.PathError{Op: "read", Path: "/proc/42/io", Err: syscall.ESRCH}, want: false},
 		{name: "permission denied", err: fmt.Errorf("read procfs: %w", fs.ErrPermission), want: true},
 		{name: "malformed sample", err: errors.New("required counter missing"), want: true},
 	}

@@ -48,6 +48,7 @@ type fakeSystemdCPUUnitAdapter struct {
 	propertyConflicts          map[string][]systemdunit.PropertyName
 	applyHook                  func(string)
 	reconcileError             error
+	reconcileCalls             int
 	discoverError              error
 	authority                  map[systemdunit.ResourceKind]systemdunit.ResourceAuthority
 	authorityError             map[systemdunit.ResourceKind]error
@@ -264,6 +265,7 @@ func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identit
 func (a *fakeSystemdCPUUnitAdapter) ReconcileOwned(context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.reconcileCalls++
 	if a.reconcileError != nil {
 		return a.reconcileError
 	}

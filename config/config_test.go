@@ -106,6 +106,7 @@ func TestValidateConfig(t *testing.T) {
 				IOUserWeightFile:        DefaultIOWeightMapPath,
 				LogLevel:                "INFO",
 				LogMaxSize:              10 * 1024 * 1024,
+				LogMaxBackups:           7,
 				SystemUIDMin:            1000,
 				SystemUIDMax:            60000,
 				MetricsDBRetentionDays:  30,
@@ -837,6 +838,33 @@ func TestValidateConfigRejectsNonPositiveLogMaxSize(t *testing.T) {
 				t.Fatalf("validateConfig() accepted LOG_MAX_SIZE=%d", tt.maxSize)
 			}
 		})
+	}
+}
+
+func TestValidateConfigBoundsLogMaxBackups(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxBackups int
+		wantValid  bool
+	}{
+		{name: "zero keeps no copy and is rejected", maxBackups: 0},
+		{name: "negative", maxBackups: -1},
+		{name: "minimum", maxBackups: 1, wantValid: true},
+		{name: "default", maxBackups: 7, wantValid: true},
+		{name: "maximum", maxBackups: 100, wantValid: true},
+		{name: "above maximum", maxBackups: 101},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.LogMaxBackups = tt.maxBackups
+			if err := validateConfig(cfg); (err == nil) != tt.wantValid {
+				t.Fatalf("validateConfig(LOG_MAX_BACKUPS=%d) error = %v, want valid %t", tt.maxBackups, err, tt.wantValid)
+			}
+		})
+	}
+	if got := DefaultConfig().LogMaxBackups; got != 7 {
+		t.Fatalf("default LOG_MAX_BACKUPS = %d, want 7", got)
 	}
 }
 

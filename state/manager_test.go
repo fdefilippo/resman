@@ -1996,3 +1996,43 @@ func TestCleanup(t *testing.T) {
 		t.Logf("Cleanup() error: %v", err)
 	}
 }
+
+// TestControlCycleIdentifiersAreUniqueWithinOneSecond pins resman-qi6: the
+// identifier was the start second, so a ticker cycle and a PSI cycle started in
+// the same second logged the same cycle_id (406 duplicates in one day on
+// vmgclalpr2400). Consecutive cycles must log distinct, increasing values.
+func TestControlCycleIdentifiersAreUniqueWithinOneSecond(t *testing.T) {
+	logger := &failingCompletionLogger{}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, &mockCgroupManager{}, &mockPrometheusExporter{})
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	manager.logger = logger
+
+	triggers := []string{ControlCycleTriggerTicker, ControlCycleTriggerManual, ControlCycleTriggerManual}
+	for _, trigger := range triggers {
+		if err := manager.RunControlCycleWithTrigger(context.Background(), trigger); err != nil {
+			t.Fatalf("RunControlCycleWithTrigger(%s) error: %v", trigger, err)
+		}
+	}
+
+	var ids []int64
+	for index, message := range logger.messages {
+		if message != "Control cycle completed" {
+			continue
+		}
+		id, ok := logFieldsByKey(t, logger.fieldsHistory[index])["cycle_id"].(int64)
+		if !ok {
+			t.Fatalf("cycle_id = %#v, want int64", logFieldsByKey(t, logger.fieldsHistory[index])["cycle_id"])
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != len(triggers) {
+		t.Fatalf("completion records = %d, want %d", len(ids), len(triggers))
+	}
+	for index := 1; index < len(ids); index++ {
+		if ids[index] <= ids[index-1] {
+			t.Fatalf("cycle_id sequence = %v, want strictly increasing", ids)
+		}
+	}
+}

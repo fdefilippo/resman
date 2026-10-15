@@ -2,10 +2,12 @@
 package processidentity
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 // Identity contains the trusted executable path and the display-only kernel name.
@@ -43,4 +45,13 @@ func Read(procRoot string, pid int) (Identity, error) {
 	}
 	identity.Executable = executable
 	return identity, nil
+}
+
+// Vanished reports whether a procfs read failed only because the process
+// exited during the scan. The kernel returns ENOENT once the PID directory is
+// gone and ESRCH while the task is exiting or a zombie whose directory still
+// exists, so both mean "skip this PID" rather than an inspection failure
+// (resman-92x).
+func Vanished(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }

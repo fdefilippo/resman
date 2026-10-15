@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.40.0 to ResMan 1.41.0
+# Upgrading from ResMan 1.25.x through 1.41.0 to ResMan 1.41.1
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.40.0 to
-ResMan 1.41.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.41.0 to
+ResMan 1.41.1. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -38,6 +38,76 @@ and restores them before readiness.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## CHANGED: the CPU Points plan is fully verified once per POLLING_INTERVAL
+
+**Visible change.** While CPU limits are active, the complete verification of the
+CPU Points plan, which rereads every owned lease, the user-slice topology and every
+user slice, runs at most once per `POLLING_INTERVAL` instead of in every control
+cycle. Cycles in between reuse the confirmed plan. With weighted I/O disabled, the
+I/O stage no longer rereads the owned slices that the CPU stage already verified in
+the same cycle. On a 4-CPU guest with 45 user slices and PSI-triggered cycles, a
+cycle with limits active dropped from about 1.4 s to about 0.55 s.
+
+**Cause.** PSI events trigger a control cycle about once per second on a busy host,
+and through 1.41.0 every cycle repeated the complete verification: on a production
+host with 47 user slices, cycles with limits active took 1.19 s on average, so ResMan
+was inside a cycle most of the time and kept PID 1 answering hundreds of property
+reads per second.
+
+**Action.** None. External changes to the properties ResMan owns, and a user slice
+that appears while limits are active, are now handled within one `POLLING_INTERVAL`
+(30 s by default) instead of at the next cycle. Activation, release, configuration
+changes and any incomplete or degraded plan still run the complete verification
+immediately. Lower `POLLING_INTERVAL` if a shorter bound is needed.
+
+## CHANGED: ResMan alone rotates its log file
+
+**Visible change.** ResMan is now the only rotator of `LOG_FILE`
+(`/var/log/resman.log` by default). At `LOG_MAX_SIZE` the file becomes
+`resman.log.1`, older copies are compressed as `resman.log.2.gz` through
+`resman.log.<n>.gz`, and copies above `n` are removed. A new restart-required key,
+`LOG_MAX_BACKUPS` (default 7, 1-100), sets `n`; with the default 10 MiB size the
+log and its copies stay within about 80 MiB before compression. The packaged
+logrotate rule no longer touches `LOG_FILE`. With `USE_SYSLOG=true` the packaged
+rsyslog rule now writes `/var/log/resman-syslog.log`, and the logrotate rule
+rotates only that file, by rename and an rsyslog `HUP` instead of `copytruncate`.
+
+**Cause.** Through 1.41.0 two rotators owned the same file. The logger renamed it to
+`resman.log.1` at `LOG_MAX_SIZE`, overwriting the previous `.1`, while the daily
+logrotate rule copied and truncated it into `resman.log-<date>`. Each mechanism
+moved records the other did not know about: on a production host the hours between
+a size rotation and the nightly logrotate run were missing from `resman.log` and
+`resman.log.1`, a day that crossed `LOG_MAX_SIZE` twice lost the older part for
+good, and `copytruncate` can drop records written between its copy and its
+truncation. The rsyslog rule wrote the same path, so it could not get a rotator of
+its own.
+
+**Action.** Set `LOG_MAX_BACKUPS` if 7 copies of `LOG_MAX_SIZE` do not fit the
+retention you need. Copies that logrotate left as `resman.log-<date>` or
+`resman.log-<date>.gz` are no longer managed: archive or delete them when you no
+longer need them. If you use `USE_SYSLOG=true`, read ResMan records in
+`/var/log/resman-syslog.log` (or in the journal). A locally modified
+`/etc/rsyslog.d/resman.conf` is kept and the new version is installed as
+`.rpmnew` (dpkg asks); move its output path to `/var/log/resman-syslog.log` by
+hand. A locally modified `/etc/logrotate.d/resman` is replaced on RPM hosts and
+saved as `.rpmsave`; carry over any local option without pointing the rule back
+at `LOG_FILE`.
+
+## CHANGED: cycle_id is a per-run sequence
+
+**Visible change.** The `cycle_id` field of the control-cycle log records is now a
+sequence that starts at 1 when the daemon starts and increases by one for every
+control cycle. It no longer carries the cycle's start time in Unix seconds.
+
+**Cause.** Through 1.41.0 the identifier was the start second, so a ticker cycle and
+a PSI-triggered cycle started in the same second shared it: one day of logs on a
+production host contained 406 duplicated values, and the field could not correlate
+the records of one cycle.
+
+**Action.** Correlate records by `cycle_id` within one daemon run, and use the
+record timestamp for time. A query that converted `cycle_id` to a time must read the
+timestamp instead. The value restarts at 1 after every restart of `resman`.
 
 ## CHANGED: CPU thresholds are percentages of the host
 

@@ -489,6 +489,13 @@ func (m *Manager) stageReconcileIODeviceWeights(run *controlCycleContext) error 
 		return nil
 	}
 	if run.cfg.GetIOWeightDevices() == "" {
+		if run.systemdOwnedVerified && !m.hasSystemdIODeviceWeightLeases() {
+			// The CPU stage of this cycle already verified the shared owned
+			// leases, and none carries a weight to restore: rereading every
+			// owned slice again cost about 116 ms per cycle (resman-2wm).
+			m.resetSystemdIODeviceWeightStatus()
+			return nil
+		}
 		return m.restoreAllSystemdIODeviceWeights(run.ctx)
 	}
 	m.mu.RLock()
@@ -767,6 +774,28 @@ func (m *Manager) restoreAllSystemdIODeviceWeights(ctx context.Context) error {
 	if err := errors.Join(restoreErrors...); err != nil {
 		return err
 	}
+	m.resetSystemdIODeviceWeightStatus()
+	return nil
+}
+
+// hasSystemdIODeviceWeightLeases reports whether any owned unit records an
+// IODeviceWeight lease, active or not, that a restore would have to examine.
+func (m *Manager) hasSystemdIODeviceWeightLeases() bool {
+	if m.systemdIOWeights == nil {
+		return false
+	}
+	for _, identity := range m.systemdIOWeights.OwnedUnits() {
+		for _, lease := range m.systemdIOWeights.Leases(identity) {
+			if resource, ok := lease.Property.Resource(); ok && resource == systemdunit.ResourceIOWeight {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resetSystemdIODeviceWeightStatus publishes that no weight is programmed.
+func (m *Manager) resetSystemdIODeviceWeightStatus() {
 	m.mu.Lock()
 	m.ioWeightUnits = make(map[int]systemdunit.UnitIdentity)
 	hadProgrammed := m.ioWeightStatus.Programmed
@@ -792,5 +821,4 @@ func (m *Manager) restoreAllSystemdIODeviceWeights(ctx context.Context) error {
 	m.ioWeightCapabilityUnavailableAttempts = 0
 	m.ioWeightControlUnavailableCycles = 0
 	m.mu.Unlock()
-	return nil
 }

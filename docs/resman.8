@@ -1,4 +1,4 @@
-.TH RESMAN 8 "October 2026" "v1.41.0" "System Administration"
+.TH RESMAN 8 "October 2026" "v1.41.1" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -761,9 +761,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.40.0 to 1.41.0
+.B Upgrade from 1.25.x through 1.41.0 to 1.41.1
 .PP
-ResMan 1.41.0 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.41.1 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
@@ -936,13 +936,29 @@ The log file is automatically rotated when it reaches the maximum size
 configured in
 .B LOG_MAX_SIZE,
 which must be greater than zero.
-Rotation creates a backup file with .1 extension.
+ResMan is the only rotator of this file. The newest rotated copy is the
+uncompressed
+.IR LOG_FILE .1;
+older copies are compressed as
+.IR LOG_FILE .2.gz
+through
+.IR LOG_FILE . n .gz,
+where
+.I n
+is
+.B LOG_MAX_BACKUPS
+(default 7, at most 100). Copies above that number are removed. With
+.B USE_SYSLOG=true,
+the packaged rsyslog rule writes
+.I /var/log/resman-syslog.log
+instead, and the packaged logrotate rule rotates only that file.
 New log files are created mode 0600. When an existing regular log is opened,
 ResMan preserves only its owner/group read-write bits and removes all execute bits
 and all permissions for other users. The rotated backup and replacement inherit
 that sanitized access mode and ownership. The managed path must be a regular file;
 symbolic links are rejected without changing their target. Packaged rsyslog and
-logrotate defaults use 0600.
+logrotate defaults use 0600 for
+.IR /var/log/resman-syslog.log .
 .PP
 File and syslog writes, rotation steps, and sink close operations are checked. If the
 configured sink fails, ResMan writes a bounded diagnostic directly to standard error

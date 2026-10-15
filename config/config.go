@@ -168,7 +168,9 @@ type Config struct {
 	// Logging
 	LogLevel   string `config:"LOG_LEVEL"`
 	LogMaxSize int    `config:"LOG_MAX_SIZE"` // in bytes
-	UseSyslog  bool   `config:"USE_SYSLOG"`
+	// LogMaxBackups is the number of rotated log copies ResMan keeps.
+	LogMaxBackups int  `config:"LOG_MAX_BACKUPS"`
+	UseSyslog     bool `config:"USE_SYSLOG"`
 
 	// System
 	SystemUIDMin int `config:"SYSTEM_UID_MIN"`
@@ -245,6 +247,10 @@ type IODecisionPolicy struct {
 // (uid_t)-1, which the kernel reserves as an invalid identity, so no process
 // can run under it. It is the upper bound applied when SYSTEM_UID_MAX is unset.
 const MaxValidUID = 4294967294
+
+// maxLogBackups bounds LOG_MAX_BACKUPS so the retained log footprint stays a
+// deliberate, small multiple of LOG_MAX_SIZE.
+const maxLogBackups = 100
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
@@ -345,9 +351,10 @@ func DefaultConfig() *Config {
 		PrometheusJWTIssuer:        "resman",
 		PrometheusJWTAudience:      "prometheus",
 
-		LogLevel:   "INFO",
-		LogMaxSize: 10 * 1024 * 1024, // 10MB
-		UseSyslog:  false,
+		LogLevel:      "INFO",
+		LogMaxSize:    10 * 1024 * 1024, // 10MB
+		LogMaxBackups: 7,
+		UseSyslog:     false,
 
 		SystemUIDMin:     1000,
 		SystemUIDMax:     MaxValidUID, // Unset means no upper bound.
@@ -701,6 +708,7 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_JWT_AUDIENCE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
 	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
 	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
+	"LOG_MAX_BACKUPS":               setInt(func(cfg *Config, value int) { cfg.LogMaxBackups = value }),
 	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
 	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
 	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
@@ -1058,6 +1066,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.LogMaxSize <= 0 {
 		errors = append(errors, "LOG_MAX_SIZE must be greater than 0")
+	}
+	if cfg.LogMaxBackups < 1 || cfg.LogMaxBackups > maxLogBackups {
+		errors = append(errors, fmt.Sprintf("LOG_MAX_BACKUPS must be between 1 and %d", maxLogBackups))
 	}
 	if cfg.DaemonShutdownTimeout <= 0 {
 		errors = append(errors, "DAEMON_SHUTDOWN_TIMEOUT must be greater than 0")

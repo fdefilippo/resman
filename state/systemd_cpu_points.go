@@ -256,6 +256,7 @@ func (m *Manager) publishSystemdCPUPointsPlan(parent systemdunit.UnitIdentity, u
 	m.systemdCPUPlanSignature = signature
 	m.systemdCPUPlan = plan
 	m.systemdCPUComplete = true
+	m.systemdCPUVerifiedAt = now
 	m.cpuPointsDegraded = false
 	m.pendingCPUPointsPolicy = nil
 	m.limitsActive = len(m.activeUsers) > 0

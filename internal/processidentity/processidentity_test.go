@@ -2,8 +2,10 @@ package processidentity
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -49,5 +51,27 @@ func TestReadReportsMissingExecutableWithoutPromotingComm(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Read() error = %v, want missing executable cause", err)
+	}
+}
+
+func TestVanishedRecognizesOnlyProcessExit(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "no error", err: nil, want: false},
+		{name: "reaped PID directory", err: &os.PathError{Op: "open", Path: "/proc/42/cgroup", Err: syscall.ENOENT}, want: true},
+		{name: "exiting or zombie task", err: &os.PathError{Op: "read", Path: "/proc/42/cgroup", Err: syscall.ESRCH}, want: true},
+		{name: "wrapped zombie read", err: fmt.Errorf("read CPU authority process: %w", &os.PathError{Op: "read", Path: "/proc/42/cgroup", Err: syscall.ESRCH}), want: true},
+		{name: "permission denied", err: &os.PathError{Op: "open", Path: "/proc/42/cgroup", Err: syscall.EACCES}, want: false},
+		{name: "unrelated failure", err: errors.New("malformed cgroup line"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Vanished(tt.err); got != tt.want {
+				t.Fatalf("Vanished(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
 	}
 }

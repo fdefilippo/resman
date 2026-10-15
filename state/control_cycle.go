@@ -22,22 +22,26 @@ const (
 )
 
 type controlCycleContext struct {
-	ctx                 context.Context
-	cfg                 *config.Config
-	trigger             string
-	startTime           time.Time
-	cycleID             int64
-	metrics             *SystemMetrics
-	decision            string
-	reason              string
-	enforcementState    cgroup.EnforcementCycleState
-	duration            time.Duration
-	activeLimitedUsers  int
-	ingressRefusedCount int
-	stopWithoutError    bool
-	deferredErrors      []error
-	degradedErrors      []error
-	degradedWarnings    []error
+	ctx       context.Context
+	cfg       *config.Config
+	trigger   string
+	startTime time.Time
+	cycleID   int64
+	// systemdOwnedVerified records that this cycle verified the owned systemd
+	// leases, directly or through a CPU Points plan confirmed within one
+	// POLLING_INTERVAL, so a later stage need not reread them.
+	systemdOwnedVerified bool
+	metrics              *SystemMetrics
+	decision             string
+	reason               string
+	enforcementState     cgroup.EnforcementCycleState
+	duration             time.Duration
+	activeLimitedUsers   int
+	ingressRefusedCount  int
+	stopWithoutError     bool
+	deferredErrors       []error
+	degradedErrors       []error
+	degradedWarnings     []error
 }
 
 type controlCycleStage struct {
@@ -66,8 +70,13 @@ func (m *Manager) stageReconcileCPUPoints(run *controlCycleContext) error {
 		m.mu.RLock()
 		requested := m.systemdCPURequested
 		policy := m.cpuPointsPolicy
+		reusable := m.systemdCPUPlanReusableLocked(run)
 		m.mu.RUnlock()
 		if !requested {
+			return nil
+		}
+		if reusable {
+			run.systemdOwnedVerified = true
 			return nil
 		}
 		ctx := context.Background()
@@ -77,9 +86,30 @@ func (m *Manager) stageReconcileCPUPoints(run *controlCycleContext) error {
 		if err := m.reconcileSystemdCPUPoints(ctx, policy); err != nil {
 			return fmt.Errorf("systemd-native CPU Points topology remains degraded: %w", err)
 		}
+		if run != nil {
+			run.systemdOwnedVerified = true
+		}
 		return nil
 	}
 	return nil
+}
+
+// systemdCPUPlanReusableLocked reports whether this cycle may rely on the CPU
+// Points plan that a complete verification confirmed less than one
+// POLLING_INTERVAL ago. A complete verification rereads every owned lease, the
+// user-slice topology and every slice twice; with PSI-triggered cycles about
+// once per second it dominated the cycle on a 45-user host (resman-2wm).
+// External drift and new user slices are therefore found within one
+// POLLING_INTERVAL. Any incomplete, degraded or pending state, and every
+// configuration change, forces a complete verification. The caller holds m.mu.
+func (m *Manager) systemdCPUPlanReusableLocked(run *controlCycleContext) bool {
+	if run == nil || run.cfg == nil || !m.systemdCPUComplete || m.cpuPointsDegraded ||
+		m.pendingCPUPointsPolicy != nil || m.systemdCPUVerifiedAt.IsZero() {
+		return false
+	}
+	interval := time.Duration(run.cfg.GetPollingInterval()) * time.Second
+	elapsed := run.startTime.Sub(m.systemdCPUVerifiedAt)
+	return elapsed >= 0 && elapsed < interval
 }
 
 func (m *Manager) RunControlCycle(ctx context.Context) error {
@@ -145,7 +175,9 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		trigger:   trigger,
 		startTime: time.Now(),
 	}
-	run.cycleID = run.startTime.Unix()
+	// A per-run sequence, not the start second: cycles triggered by PSI and the
+	// ticker within one second used to share an identifier (resman-qi6).
+	run.cycleID = m.cycleSequence.Add(1)
 
 	if exporter := m.prometheusExporter; exporter != nil {
 		exporter.RecordControlCycleTrigger(trigger)
