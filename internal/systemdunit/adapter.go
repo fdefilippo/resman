@@ -824,44 +824,108 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 	if err := a.requireOpen("restore"); err != nil {
 		return RestoreResult{}, err
 	}
+	outcome := a.restoreUnits(ctx, []UnitIdentity{identity})[0]
+	return outcome.Result, outcome.Err
+}
+
+// RestoreUnits restores every still-owned property of each unit, in the given
+// order and with the guarantees of Restore. Units whose runtime drop-ins must be
+// removed share one RevertUnitFiles stage and a single manager reload, so
+// releasing many slices costs one systemd reload instead of one per slice. Each
+// outcome reports its own unit, and a failed unit never stops the others.
+func (a *Adapter) RestoreUnits(ctx context.Context, identities []UnitIdentity) []UnitRestoreOutcome {
+	leave := a.opGate.Enter()
+	defer leave()
+	if err := a.requireOpen("restore"); err != nil {
+		outcomes := make([]UnitRestoreOutcome, len(identities))
+		for index, identity := range identities {
+			outcomes[index] = UnitRestoreOutcome{Identity: identity, Err: err}
+		}
+		return outcomes
+	}
+	return a.restoreUnits(ctx, identities)
+}
+
+// unitRestore carries one unit through a restoration. A pending unit has its
+// baselines programmed and verified; only its runtime drop-ins remain, and
+// finishUnitRestores removes them together with the other pending units.
+type unitRestore struct {
+	identity  UnitIdentity
+	restore   []PropertyAssignment
+	ownedKeys []propertyLeaseKey
+	result    RestoreResult
+	err       error
+	pending   bool
+}
+
+func (p *unitRestore) failed(err error) *unitRestore {
+	p.err = err
+	p.pending = false
+	return p
+}
+
+func (a *Adapter) restoreUnits(ctx context.Context, identities []UnitIdentity) []UnitRestoreOutcome {
+	plans := make([]*unitRestore, len(identities))
+	requested := make(map[string]bool, len(identities))
+	for index, identity := range identities {
+		if requested[identity.Name] {
+			plans[index] = (&unitRestore{identity: identity}).failed(
+				fmt.Errorf("restore %s: unit requested more than once in one batch", identity.Name))
+			continue
+		}
+		requested[identity.Name] = true
+		plans[index] = a.prepareUnitRestore(ctx, identity)
+	}
+	a.finishUnitRestores(ctx, plans)
+	outcomes := make([]UnitRestoreOutcome, len(plans))
+	for index, plan := range plans {
+		sortPropertyNames(plan.result.Restored)
+		outcomes[index] = UnitRestoreOutcome{Identity: plan.identity, Result: plan.result, Err: plan.err}
+	}
+	return outcomes
+}
+
+// prepareUnitRestore verifies one unit and programs the baselines of its owned
+// properties. A unit with conflicts, an error, or no runtime drop-ins to remove
+// is complete on return; any other unit with owned properties is pending.
+func (a *Adapter) prepareUnitRestore(ctx context.Context, identity UnitIdentity) *unitRestore {
+	plan := &unitRestore{identity: identity}
 	if err := a.blocked[identity.Name]; err != nil {
-		return RestoreResult{}, err
+		return plan.failed(err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	current, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
 	if err != nil {
-		return RestoreResult{}, err
+		return plan.failed(err)
 	}
 	if err := requireSameIdentity("restore", identity, current.Identity); err != nil {
-		return RestoreResult{}, err
+		return plan.failed(err)
 	}
 	override, trackedOverride := a.overrides[identity]
 	currentMutablePaths, err := a.combinedMutableUnitFilePaths(current)
 	if err != nil {
-		return RestoreResult{}, err
+		return plan.failed(err)
 	}
 	if err := requireRestorableUnitFileFootprint(identity.Name, currentMutablePaths, override, trackedOverride); err != nil {
-		return RestoreResult{}, err
+		return plan.failed(err)
 	}
 	if trackedOverride && len(currentMutablePaths) > 0 {
 		fingerprints, err := a.unitFiles.fingerprints(currentMutablePaths)
 		if err != nil {
-			return RestoreResult{}, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: err}
+			return plan.failed(&AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: err})
 		}
 		if a.phases[identity.Name] == leasePhaseApplying && pathsMatchFootprint(fingerprints, override.managedPaths) {
 			override.fingerprints = fingerprints
 			a.overrides[identity] = override
 		} else if !equalFingerprints(fingerprints, override.fingerprints) {
-			return RestoreResult{}, externalRecoveryConflict(identity.Name, "managed unit-file content changed before restoration")
+			return plan.failed(externalRecoveryConflict(identity.Name, "managed unit-file content changed before restoration"))
 		}
 	}
 
-	var result RestoreResult
-	var restore []PropertyAssignment
+	result := &plan.result
 	var restoreNeeded []PropertyAssignment
-	var ownedKeys []propertyLeaseKey
 	var restoreKeys []propertyLeaseKey
 	for key, state := range a.leases {
 		if key.identity != identity {
@@ -869,7 +933,7 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		}
 		value, ok := current.Properties.propertyValue(key.property)
 		if !ok {
-			return result, malformedReply("restore", identity.Name, fmt.Sprintf("property %s is absent", key.property))
+			return plan.failed(malformedReply("restore", identity.Name, fmt.Sprintf("property %s is absent", key.property)))
 		}
 		owned, resolved := resolveUncertainOwnership(value, state)
 		if !owned {
@@ -878,8 +942,8 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		}
 		a.leases[key] = resolved
 		assignment := PropertyAssignment{name: key.property, value: clonePropertyValue(key.property, resolved.baseline), ioDeviceWeightTargets: cloneIODeviceWeightTargets(resolved.ioWeightTargets)}
-		restore = append(restore, assignment)
-		ownedKeys = append(ownedKeys, key)
+		plan.restore = append(plan.restore, assignment)
+		plan.ownedKeys = append(plan.ownedKeys, key)
 		if propertyValuesEqual(key.property, value, resolved.baseline) {
 			result.Restored = append(result.Restored, key.property)
 			continue
@@ -887,71 +951,84 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 		restoreNeeded = append(restoreNeeded, assignment)
 		restoreKeys = append(restoreKeys, key)
 	}
-	sortPropertyNames(result.Restored)
 	sort.Slice(result.Conflicts, func(i, j int) bool { return result.Conflicts[i].Property < result.Conflicts[j].Property })
-	sort.Slice(restore, func(i, j int) bool { return restore[i].name < restore[j].name })
+	sort.Slice(plan.restore, func(i, j int) bool { return plan.restore[i].name < plan.restore[j].name })
 	sort.Slice(restoreNeeded, func(i, j int) bool { return restoreNeeded[i].name < restoreNeeded[j].name })
-	sort.Slice(ownedKeys, func(i, j int) bool { return ownedKeys[i].property < ownedKeys[j].property })
+	sort.Slice(plan.ownedKeys, func(i, j int) bool { return plan.ownedKeys[i].property < plan.ownedKeys[j].property })
 	sort.Slice(restoreKeys, func(i, j int) bool { return restoreKeys[i].property < restoreKeys[j].property })
 
 	if len(result.Conflicts) > 0 {
 		if len(restoreNeeded) != 0 {
-			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, restoreNeeded, restoreKeys, &result); err != nil {
-				return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, restoreNeeded, restoreKeys, result); err != nil {
+				return plan.failed(errors.Join(err, conflictError(identity.Name, result.Conflicts)))
 			}
 		}
-		sortPropertyNames(result.Restored)
-		return result, conflictError(identity.Name, result.Conflicts)
+		return plan.failed(conflictError(identity.Name, result.Conflicts))
 	}
-	if len(ownedKeys) > 0 && len(restoreKeys) == 0 && len(currentMutablePaths) == 0 {
-		if err := a.verifyRestored(callCtx, identity, restore); err != nil {
-			return result, err
-		}
-		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
-			return result, err
-		}
-		sortPropertyNames(result.Restored)
-		return result, nil
+	if len(plan.ownedKeys) == 0 {
+		return plan
 	}
-	if len(ownedKeys) > 0 {
-		if len(override.managedPaths) == 0 {
-			return result, &AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")}
+	if len(restoreKeys) == 0 && len(currentMutablePaths) == 0 {
+		if err := a.verifyRestored(callCtx, identity, plan.restore); err != nil {
+			return plan.failed(err)
 		}
-		// Revert/Reload removes ResMan's runtime drop-ins without necessarily
-		// applying their scalar or per-device baselines to an active cgroup.
-		// Restore every changed property while the lease is still authoritative,
-		// using the existing write-ahead/readback ownership transaction, and only
-		// then remove the runtime files.
-		if len(restoreNeeded) > 0 {
-			programmedRestore := effectiveBaselineAssignments(restoreNeeded)
-			if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, programmedRestore, restoreKeys, &result); err != nil {
-				return result, err
-			}
-			// Recheck the complete footprint after the reset transaction, before
-			// permitting a destructive revert. A new operator file wins.
-			refreshed, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
-			if err != nil {
-				return result, err
-			}
-			if err := requireSameIdentity("restore_before_revert", identity, refreshed.Identity); err != nil {
-				return result, err
-			}
-			if !a.propertiesMatch(identity.Name, func(state propertyLeaseState) propertyValue { return state.lastApplied }, refreshed) {
-				return result, externalRecoveryConflict(identity.Name, "property changed after baseline restore")
-			}
-			if err := a.requireManagedUnitFileFootprint("restore_before_revert", refreshed, a.overrides[identity], true); err != nil {
-				return result, err
-			}
-			actual, err := a.captureFootprint(refreshed)
-			if err != nil {
-				return result, err
-			}
-			if !equalFingerprints(actual, a.overrides[identity].fingerprints) {
-				return result, externalRecoveryConflict(identity.Name, "unit file changed after baseline restore")
-			}
+		return plan.failed(a.removeUnitLeaseDurably(identity.Name))
+	}
+	if len(override.managedPaths) == 0 {
+		return plan.failed(&AdapterError{Reason: ReasonUnitFileVerification, Operation: "restore", Unit: identity.Name, Err: fmt.Errorf("property leases exist without a recorded runtime drop-in footprint")})
+	}
+	// Revert/Reload removes ResMan's runtime drop-ins without necessarily
+	// applying their scalar or per-device baselines to an active cgroup.
+	// Restore every changed property while the lease is still authoritative,
+	// using the existing write-ahead/readback ownership transaction, and only
+	// then remove the runtime files.
+	if len(restoreNeeded) > 0 {
+		programmedRestore := effectiveBaselineAssignments(restoreNeeded)
+		if err := a.restoreOwnedPropertiesWithoutRevert(callCtx, identity, programmedRestore, restoreKeys, result); err != nil {
+			return plan.failed(err)
 		}
-		beforeRestore := a.snapshotLeaseState()
-		for _, key := range ownedKeys {
+		// Recheck the complete footprint after the reset transaction, before
+		// permitting a destructive revert. A new operator file wins.
+		refreshed, err := a.readUnit(callCtx, identity.Name, identity.ObjectPath)
+		if err != nil {
+			return plan.failed(err)
+		}
+		if err := requireSameIdentity("restore_before_revert", identity, refreshed.Identity); err != nil {
+			return plan.failed(err)
+		}
+		if !a.propertiesMatch(identity.Name, func(state propertyLeaseState) propertyValue { return state.lastApplied }, refreshed) {
+			return plan.failed(externalRecoveryConflict(identity.Name, "property changed after baseline restore"))
+		}
+		if err := a.requireManagedUnitFileFootprint("restore_before_revert", refreshed, a.overrides[identity], true); err != nil {
+			return plan.failed(err)
+		}
+		actual, err := a.captureFootprint(refreshed)
+		if err != nil {
+			return plan.failed(err)
+		}
+		if !equalFingerprints(actual, a.overrides[identity].fingerprints) {
+			return plan.failed(externalRecoveryConflict(identity.Name, "unit file changed after baseline restore"))
+		}
+	}
+	plan.pending = true
+	return plan
+}
+
+// finishUnitRestores removes the runtime drop-ins of every pending unit with
+// the write-ahead transaction of a single-unit restore, batched: one durable
+// restoring intent, RevertUnitFiles per unit, one durable reloading intent, one
+// manager reload, per-unit verification and one durable lease removal. Each
+// journal state it leaves between steps is a per-unit state that startup
+// recovery already resolves, so an interruption at any point leaves every unit
+// as recoverable as an interrupted single-unit restore.
+func (a *Adapter) finishUnitRestores(ctx context.Context, plans []*unitRestore) {
+	pending := pendingUnitRestores(plans)
+	if len(pending) == 0 {
+		return
+	}
+	before := a.snapshotLeaseState()
+	for _, plan := range pending {
+		for _, key := range plan.ownedKeys {
 			state := a.leases[key]
 			state.previousApplied = state.lastApplied
 			state.lastApplied = clonePropertyValue(key.property, state.baseline)
@@ -959,37 +1036,89 @@ func (a *Adapter) Restore(ctx context.Context, identity UnitIdentity) (RestoreRe
 			state.uncertain = true
 			a.leases[key] = state
 		}
-		a.phases[identity.Name] = leasePhaseRestoring
-		if err := a.persistLeaseState(); err != nil {
-			a.restoreLeaseState(beforeRestore)
-			return result, err
+		a.phases[plan.identity.Name] = leasePhaseRestoring
+	}
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(before)
+		failUnitRestores(pending, err)
+		return
+	}
+	for _, plan := range pending {
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+		err := a.transport.revertUnitFiles(callCtx, plan.identity.Name)
+		cancel()
+		if err != nil {
+			plan.failed(classifyTransportError("restore", plan.identity.Name, err))
 		}
-		if err := a.transport.revertUnitFiles(callCtx, identity.Name); err != nil {
-			return result, errors.Join(classifyTransportError("restore", identity.Name, err), conflictError(identity.Name, result.Conflicts))
+	}
+
+	pending = pendingUnitRestores(plans)
+	if len(pending) == 0 {
+		return
+	}
+	before = a.snapshotLeaseState()
+	for _, plan := range pending {
+		a.phases[plan.identity.Name] = leasePhaseReloading
+	}
+	if err := a.persistLeaseState(); err != nil {
+		a.restoreLeaseState(before)
+		failUnitRestores(pending, err)
+		return
+	}
+	reloadCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	err := a.transport.reload(reloadCtx)
+	cancel()
+	if err != nil {
+		for _, plan := range pending {
+			plan.failed(classifyTransportError("restore_reload", plan.identity.Name, err))
 		}
-		beforeReload := a.snapshotLeaseState()
-		a.phases[identity.Name] = leasePhaseReloading
-		if err := a.persistLeaseState(); err != nil {
-			a.restoreLeaseState(beforeReload)
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
+		return
+	}
+	for _, plan := range pending {
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+		err := a.verifyRestored(callCtx, plan.identity, plan.restore)
+		cancel()
+		if err != nil {
+			plan.failed(err)
 		}
-		if err := a.transport.reload(callCtx); err != nil {
-			return result, errors.Join(classifyTransportError("restore_reload", identity.Name, err), conflictError(identity.Name, result.Conflicts))
-		}
-		if err := a.verifyRestored(callCtx, identity, restore); err != nil {
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		for _, key := range ownedKeys {
-			if !containsPropertyName(result.Restored, key.property) {
-				result.Restored = append(result.Restored, key.property)
+	}
+
+	pending = pendingUnitRestores(plans)
+	if len(pending) == 0 {
+		return
+	}
+	units := make([]string, len(pending))
+	for index, plan := range pending {
+		units[index] = plan.identity.Name
+	}
+	if err := a.removeUnitLeasesDurably(units); err != nil {
+		failUnitRestores(pending, err)
+		return
+	}
+	for _, plan := range pending {
+		for _, key := range plan.ownedKeys {
+			if !containsPropertyName(plan.result.Restored, key.property) {
+				plan.result.Restored = append(plan.result.Restored, key.property)
 			}
 		}
-		if err := a.removeUnitLeaseDurably(identity.Name); err != nil {
-			return result, errors.Join(err, conflictError(identity.Name, result.Conflicts))
-		}
-		sortPropertyNames(result.Restored)
+		plan.pending = false
 	}
-	return result, conflictError(identity.Name, result.Conflicts)
+}
+
+func pendingUnitRestores(plans []*unitRestore) []*unitRestore {
+	var pending []*unitRestore
+	for _, plan := range plans {
+		if plan.pending {
+			pending = append(pending, plan)
+		}
+	}
+	return pending
+}
+
+func failUnitRestores(plans []*unitRestore, err error) {
+	for _, plan := range plans {
+		plan.failed(err)
+	}
 }
 
 func (a *Adapter) restoreOwnedPropertiesWithoutRevert(ctx context.Context, identity UnitIdentity, assignments []PropertyAssignment, keys []propertyLeaseKey, result *RestoreResult) error {

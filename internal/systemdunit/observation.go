@@ -34,10 +34,12 @@ type ReleaseReport struct {
 	Properties int
 }
 
-// ReleaseOwnedLeases restores every property ResMan still owns, unit by unit,
-// with the same compare-before-restore discipline used by a normal release. A
-// property changed outside ResMan is preserved and reported as a conflict,
-// because overwriting an operator's value is never a recovery.
+// ReleaseOwnedLeases restores every property ResMan still owns, in one batch
+// that shares a single systemd reload, with the same compare-before-restore
+// discipline used by a normal release. A property changed outside ResMan is
+// preserved and reported as a conflict, because overwriting an operator's value
+// is never a recovery. A unit that cannot be restored keeps its durable lease
+// and does not stop the release of the others; every failure is returned.
 //
 // It exists so that a daemon which is about to stop enforcing does not leave
 // applied limits behind with no owner.
@@ -47,25 +49,24 @@ func (a *Adapter) ReleaseOwnedLeases(ctx context.Context) (ReleaseReport, error)
 	sort.Slice(identities, func(left, right int) bool {
 		return identities[left].Name < identities[right].Name
 	})
+	owned := identities[:0]
 	for _, identity := range identities {
-		owned := false
 		for _, lease := range a.Leases(identity) {
 			if lease.Active() {
-				owned = true
+				owned = append(owned, identity)
 				break
 			}
 		}
-		if !owned {
-			continue
-		}
-		result, err := a.Restore(ctx, identity)
+	}
+	var releaseErrors []error
+	for _, outcome := range a.RestoreUnits(ctx, owned) {
 		report.Units++
-		report.Properties += len(result.Restored)
-		if err != nil {
-			return report, fmt.Errorf("release owned properties of %s: %w", identity.Name, err)
+		report.Properties += len(outcome.Result.Restored)
+		if outcome.Err != nil {
+			releaseErrors = append(releaseErrors, fmt.Errorf("release owned properties of %s: %w", outcome.Identity.Name, outcome.Err))
 		}
 	}
-	return report, nil
+	return report, errors.Join(releaseErrors...)
 }
 
 // NewOrObserve opens the adapter when every mandatory capability is available.

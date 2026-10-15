@@ -42,22 +42,20 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 	sort.Strings(units)
 
 	var reconcileErrors []error
+	// Departed units are cleaned after the loop in one batch sharing a single
+	// systemd reload, so a burst of logouts costs one reload (resman-2bj).
+	var inactive []string
 	for _, unit := range units {
 		// A prior conflict blocks mutations between reconciliation passes, but
 		// it is not permanent state. Re-evaluate it so unit departure, recreation
 		// or an operator correction can make progress without a daemon restart.
 		delete(a.blocked, unit)
-		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 		listedUnit, ok := active[unit]
 		if !ok {
-			err := a.recoverInactive(callCtx, unit)
-			cancel()
-			if err != nil {
-				a.recordInactiveRecoveryFailure(unit, err)
-				reconcileErrors = append(reconcileErrors, err)
-			}
+			inactive = append(inactive, unit)
 			continue
 		}
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 
 		phase := a.phases[unit]
 		if phase == leasePhaseRestoring || phase == leasePhaseReloading {
@@ -73,12 +71,8 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 		if err != nil {
 			var adapterErr *AdapterError
 			if errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
-				err = a.recoverInactive(callCtx, unit)
 				cancel()
-				if err != nil {
-					a.recordInactiveRecoveryFailure(unit, err)
-					reconcileErrors = append(reconcileErrors, err)
-				}
+				inactive = append(inactive, unit)
 				continue
 			}
 			cancel()
@@ -108,6 +102,12 @@ func (a *Adapter) ReconcileOwned(ctx context.Context) error {
 			reconcileErrors = append(reconcileErrors, err)
 		}
 	}
+	for index, err := range a.recoverInactiveUnits(ctx, inactive) {
+		if err != nil {
+			a.recordInactiveRecoveryFailure(inactive[index], err)
+			reconcileErrors = append(reconcileErrors, err)
+		}
+	}
 	return errors.Join(reconcileErrors...)
 }
 
@@ -133,16 +133,14 @@ func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 	for _, unit := range listed {
 		active[unit.name] = unit
 	}
+	var inactive []string
 	for _, record := range journal.Units {
-		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 		listedUnit, ok := active[record.Unit]
 		if !ok {
-			if err := a.recoverInactive(callCtx, record.Unit); err != nil {
-				a.recordInactiveRecoveryFailure(record.Unit, err)
-			}
-			cancel()
+			inactive = append(inactive, record.Unit)
 			continue
 		}
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 		phase := a.phases[record.Unit]
 		if phase == leasePhaseRestoring || phase == leasePhaseReloading {
 			if err := a.recoverActiveRestore(callCtx, record.Unit, listedUnit.objectPath); err != nil {
@@ -155,10 +153,8 @@ func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 		if err != nil {
 			var adapterErr *AdapterError
 			if errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnitMissing {
-				if err := a.recoverInactive(callCtx, record.Unit); err != nil {
-					a.recordInactiveRecoveryFailure(record.Unit, err)
-				}
 				cancel()
+				inactive = append(inactive, record.Unit)
 				continue
 			}
 			a.recordRecoveryConflict(record.Unit, err)
@@ -169,6 +165,9 @@ func (a *Adapter) loadAndReconcile(ctx context.Context) error {
 			a.recordRecoveryConflict(record.Unit, err)
 		}
 		cancel()
+	}
+	for index, err := range a.recoverInactiveUnits(ctx, inactive) {
+		a.recordInactiveRecoveryFailure(inactive[index], err)
 	}
 	return nil
 }
@@ -381,25 +380,64 @@ func (a *Adapter) recoverActiveRestore(ctx context.Context, unit, objectPath str
 	return a.resumeRestore(ctx, unit, current, actual)
 }
 
-func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
+// inactiveRecovery carries one durable unit that systemd no longer lists
+// through a batched cleanup. A pending unit needs the shared manager reload;
+// revert marks a pending unit whose recorded footprint is still on disk.
+type inactiveRecovery struct {
+	unit    string
+	revert  bool
+	pending bool
+	err     error
+}
+
+func (r *inactiveRecovery) failed(err error) *inactiveRecovery {
+	r.err = err
+	r.pending = false
+	return r
+}
+
+// recoverInactiveUnits cleans the durable leases of units systemd no longer
+// lists. Units that need RevertUnitFiles or a reload share one restoring
+// intent, one reloading intent, a single manager reload and one lease removal,
+// so a burst of departed slices costs one systemd reload instead of one each.
+// Every journal state left between steps is a per-unit state that the next
+// recovery pass resolves. The returned errors are aligned with units.
+func (a *Adapter) recoverInactiveUnits(ctx context.Context, units []string) []error {
+	recoveries := make([]*inactiveRecovery, len(units))
+	for index, unit := range units {
+		recoveries[index] = a.prepareInactiveRecovery(unit)
+	}
+	a.finishInactiveRecoveries(ctx, recoveries)
+	errs := make([]error, len(recoveries))
+	for index, recovery := range recoveries {
+		errs[index] = recovery.err
+	}
+	return errs
+}
+
+// prepareInactiveRecovery classifies one inactive unit from its on-disk
+// footprint. Cleanup that needs no systemd call completes here; a unit that
+// needs a revert or a reload is returned pending.
+func (a *Adapter) prepareInactiveRecovery(unit string) *inactiveRecovery {
+	recovery := &inactiveRecovery{unit: unit}
 	_, override, phase, ok := a.unitLeaseState(unit)
 	if !ok {
-		return fmt.Errorf("durable inactive unit %s has no in-memory lease state", unit)
+		return recovery.failed(fmt.Errorf("durable inactive unit %s has no in-memory lease state", unit))
 	}
 	paths, err := a.unitFiles.mutablePaths(unit)
 	if err != nil {
-		return &AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive", Unit: unit, Err: err}
+		return recovery.failed(&AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive", Unit: unit, Err: err})
 	}
 	actual, err := a.unitFiles.fingerprints(paths)
 	if err != nil {
-		return &AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive", Unit: unit, Err: err}
+		return recovery.failed(&AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive", Unit: unit, Err: err})
 	}
 	if len(actual) == 0 && phase == leasePhaseApplying && len(override.previousFingerprint) == 0 {
 		if err := a.rollbackUndispatchedApply(unit); err != nil {
-			return err
+			return recovery.failed(err)
 		}
 		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
-		return nil
+		return recovery
 	}
 	if len(actual) == 0 && isCapabilityProbeUnit(unit) &&
 		(phase == leasePhaseApplied || phase == leasePhaseApplying) {
@@ -409,63 +447,133 @@ func (a *Adapter) recoverInactive(ctx context.Context, unit string) error {
 		// ownership record remains. Keep this exception out of ordinary user
 		// slices, where an absent footprint is still an external conflict.
 		if err := a.removeUnitLeaseDurably(unit); err != nil {
-			return err
+			return recovery.failed(err)
 		}
 		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
-		return nil
+		return recovery
 	}
 	if len(actual) == 0 && (phase == leasePhaseRestoring || phase == leasePhaseReloading) {
-		if err := a.transport.reload(ctx); err != nil {
-			return classifyTransportError("recover_inactive_reload", unit, err)
-		}
-		if err := a.removeUnitLeaseDurably(unit); err != nil {
-			return err
-		}
-		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
-		return nil
+		recovery.pending = true
+		return recovery
 	}
 	exact := equalFingerprints(actual, override.fingerprints)
 	if phase == leasePhaseApplying && pendingFootprintMatches(actual, override) {
 		exact = true
 	}
 	if !exact {
-		return externalRecoveryConflict(unit, "inactive unit footprint differs from the durable ownership record")
+		return recovery.failed(externalRecoveryConflict(unit, "inactive unit footprint differs from the durable ownership record"))
 	}
 	if phase == leasePhaseReloading {
-		return externalRecoveryConflict(unit, "inactive unit footprint reappeared after RevertUnitFiles")
+		return recovery.failed(externalRecoveryConflict(unit, "inactive unit footprint reappeared after RevertUnitFiles"))
 	}
-	if phase == leasePhaseApplied || phase == leasePhaseApplying {
-		before := a.snapshotLeaseState()
-		a.stageUnitRestore(unit)
-		if err := a.persistLeaseState(); err != nil {
-			a.restoreLeaseState(before)
-			return err
+	recovery.pending = true
+	recovery.revert = true
+	return recovery
+}
+
+// finishInactiveRecoveries reverts and reloads every pending inactive unit
+// with the write-ahead order of a single-unit cleanup: the restoring intent is
+// durable before RevertUnitFiles, and the reloading phase before the reload.
+func (a *Adapter) finishInactiveRecoveries(ctx context.Context, recoveries []*inactiveRecovery) {
+	var staged []*inactiveRecovery
+	before := a.snapshotLeaseState()
+	for _, recovery := range pendingInactiveRecoveries(recoveries) {
+		if phase := a.phases[recovery.unit]; recovery.revert && (phase == leasePhaseApplied || phase == leasePhaseApplying) {
+			a.stageUnitRestore(recovery.unit)
+			staged = append(staged, recovery)
 		}
 	}
-	if err := a.transport.revertUnitFiles(ctx, unit); err != nil {
-		return classifyTransportError("recover_inactive_revert", unit, err)
+	if len(staged) != 0 {
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(before)
+			for _, recovery := range staged {
+				recovery.failed(err)
+			}
+		}
 	}
-	before := a.snapshotLeaseState()
-	a.phases[unit] = leasePhaseReloading
-	if err := a.persistLeaseState(); err != nil {
-		a.restoreLeaseState(before)
-		return err
+
+	var reverted []*inactiveRecovery
+	for _, recovery := range pendingInactiveRecoveries(recoveries) {
+		if !recovery.revert {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+		err := a.transport.revertUnitFiles(callCtx, recovery.unit)
+		cancel()
+		if err != nil {
+			recovery.failed(classifyTransportError("recover_inactive_revert", recovery.unit, err))
+			continue
+		}
+		reverted = append(reverted, recovery)
 	}
-	if err := a.transport.reload(ctx); err != nil {
-		return classifyTransportError("recover_inactive_reload", unit, err)
+	if len(reverted) != 0 {
+		before := a.snapshotLeaseState()
+		for _, recovery := range reverted {
+			a.phases[recovery.unit] = leasePhaseReloading
+		}
+		if err := a.persistLeaseState(); err != nil {
+			a.restoreLeaseState(before)
+			for _, recovery := range reverted {
+				recovery.failed(err)
+			}
+		}
 	}
-	paths, err = a.unitFiles.mutablePaths(unit)
+
+	pending := pendingInactiveRecoveries(recoveries)
+	if len(pending) == 0 {
+		return
+	}
+	reloadCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	err := a.transport.reload(reloadCtx)
+	cancel()
 	if err != nil {
-		return &AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive_readback", Unit: unit, Err: err}
+		for _, recovery := range pending {
+			recovery.failed(classifyTransportError("recover_inactive_reload", recovery.unit, err))
+		}
+		return
 	}
-	if len(paths) != 0 {
-		return externalRecoveryConflict(unit, "guarded inactive-unit cleanup left a mutable footprint")
+	for _, recovery := range pending {
+		if !recovery.revert {
+			continue
+		}
+		paths, err := a.unitFiles.mutablePaths(recovery.unit)
+		if err != nil {
+			recovery.failed(&AdapterError{Reason: ReasonUnitFileVerification, Operation: "recover_inactive_readback", Unit: recovery.unit, Err: err})
+			continue
+		}
+		if len(paths) != 0 {
+			recovery.failed(externalRecoveryConflict(recovery.unit, "guarded inactive-unit cleanup left a mutable footprint"))
+		}
 	}
-	if err := a.removeUnitLeaseDurably(unit); err != nil {
-		return err
+
+	pending = pendingInactiveRecoveries(recoveries)
+	if len(pending) == 0 {
+		return
 	}
-	a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: unit, State: LeaseRecoveryInactive})
-	return nil
+	units := make([]string, len(pending))
+	for index, recovery := range pending {
+		units[index] = recovery.unit
+	}
+	if err := a.removeUnitLeasesDurably(units); err != nil {
+		for _, recovery := range pending {
+			recovery.failed(err)
+		}
+		return
+	}
+	for _, recovery := range pending {
+		recovery.pending = false
+		a.recovery = append(a.recovery, LeaseRecoveryOutcome{Unit: recovery.unit, State: LeaseRecoveryInactive})
+	}
+}
+
+func pendingInactiveRecoveries(recoveries []*inactiveRecovery) []*inactiveRecovery {
+	var pending []*inactiveRecovery
+	for _, recovery := range recoveries {
+		if recovery.pending {
+			pending = append(pending, recovery)
+		}
+	}
+	return pending
 }
 
 func (a *Adapter) resumeRestore(ctx context.Context, unit string, current UnitSnapshot, actual []unitFileFingerprint) error {
@@ -754,17 +862,25 @@ func (a *Adapter) rollbackUndispatchedApply(unit string) error {
 }
 
 func (a *Adapter) removeUnitLeaseDurably(unit string) error {
+	return a.removeUnitLeasesDurably([]string{unit})
+}
+
+// removeUnitLeasesDurably forgets the ownership of every listed unit with one
+// journal write, so a batch of restored units costs one durable update.
+func (a *Adapter) removeUnitLeasesDurably(units []string) error {
 	before := a.snapshotLeaseState()
-	identity, _, _, ok := a.unitLeaseState(unit)
-	if ok {
-		for key := range a.leases {
-			if key.identity == identity {
-				delete(a.leases, key)
+	for _, unit := range units {
+		identity, _, _, ok := a.unitLeaseState(unit)
+		if ok {
+			for key := range a.leases {
+				if key.identity == identity {
+					delete(a.leases, key)
+				}
 			}
+			delete(a.overrides, identity)
 		}
-		delete(a.overrides, identity)
+		delete(a.phases, unit)
 	}
-	delete(a.phases, unit)
 	if err := a.persistLeaseState(); err != nil {
 		a.restoreLeaseState(before)
 		return err

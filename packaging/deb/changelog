@@ -1,3 +1,10 @@
+resman (1.41.2-1) stable; urgency=medium
+
+  * Release CPU limits with a single systemd reload instead of one per user slice.
+  * Clean the leases of departed user slices with a single systemd reload at runtime and at startup.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Thu, 15 Oct 2026 15:00:00 +0200
+
 resman (1.41.1-1) stable; urgency=medium
 
   * Let CPU authority scans and procfs collection tolerate ESRCH from a process that exits during the scan.

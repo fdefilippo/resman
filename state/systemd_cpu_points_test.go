@@ -39,6 +39,7 @@ type fakeSystemdCPUUnitAdapter struct {
 	topology                   systemdunit.TopologySnapshot
 	applies                    []systemdCPUApplyCall
 	restores                   []string
+	restoreBatches             [][]string
 	propertyRestores           []systemdPropertyRestoreCall
 	inactiveClean              []string
 	owned                      map[string]systemdunit.UnitIdentity
@@ -223,16 +224,30 @@ func (a *fakeSystemdCPUUnitAdapter) CheckCapturedResourceAuthorities(_ context.C
 	return results, nil
 }
 
-func (a *fakeSystemdCPUUnitAdapter) Restore(_ context.Context, identity systemdunit.UnitIdentity) (systemdunit.RestoreResult, error) {
+func (a *fakeSystemdCPUUnitAdapter) RestoreUnits(_ context.Context, identities []systemdunit.UnitIdentity) []systemdunit.UnitRestoreOutcome {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.restores = append(a.restores, identity.Name)
-	if identity.Name == a.failRestoreUnit {
-		return systemdunit.RestoreResult{}, errors.New("injected systemd restore failure")
+	a.restoreBatches = append(a.restoreBatches, unitNamesOf(identities))
+	outcomes := make([]systemdunit.UnitRestoreOutcome, len(identities))
+	for index, identity := range identities {
+		outcomes[index].Identity = identity
+		a.restores = append(a.restores, identity.Name)
+		if identity.Name == a.failRestoreUnit {
+			outcomes[index].Err = errors.New("injected systemd restore failure")
+			continue
+		}
+		delete(a.owned, identity.Name)
+		delete(a.activeProperties, identity.Name)
 	}
-	delete(a.owned, identity.Name)
-	delete(a.activeProperties, identity.Name)
-	return systemdunit.RestoreResult{}, nil
+	return outcomes
+}
+
+func unitNamesOf(identities []systemdunit.UnitIdentity) []string {
+	names := make([]string, len(identities))
+	for index, identity := range identities {
+		names[index] = identity.Name
+	}
+	return names
 }
 
 func (a *fakeSystemdCPUUnitAdapter) RestoreProperties(_ context.Context, identity systemdunit.UnitIdentity, properties []systemdunit.PropertyName) (systemdunit.RestoreResult, error) {
@@ -1036,6 +1051,79 @@ func TestSystemdNativeReleaseRestoresOnlyOwnedUnitsWithParentLast(t *testing.T) 
 	}
 	if len(adapter.OwnedUnits()) != 0 || manager.limitsActive || manager.systemdCPUComplete {
 		t.Fatalf("release left owned=%v active=%t complete=%t", adapter.OwnedUnits(), manager.limitsActive, manager.systemdCPUComplete)
+	}
+}
+
+// TestSystemdNativeReleaseRestoresEverySliceInOneBatch pins resman-gya at the
+// decision boundary: the DEACTIVATE_LIMITS decision of a control cycle hands
+// every owned slice to one adapter batch, leaves before the parent, so systemd
+// is reloaded once per release rather than once per slice.
+func TestSystemdNativeReleaseRestoresEverySliceInOneBatch(t *testing.T) {
+	tests := []struct {
+		name string
+		uids []uint32
+		want []string
+	}{
+		{name: "one user", uids: []uint32{0, 1000}, want: []string{"user-0.slice", "user-1000.slice", "user.slice"}},
+		{
+			name: "many users",
+			uids: []uint32{0, 1000, 1001, 1002, 1003, 1004},
+			want: []string{"user-0.slice", "user-1000.slice", "user-1001.slice", "user-1002.slice", "user-1003.slice", "user-1004.slice", "user.slice"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeSystemdCPUUnitAdapter{topology: testSystemdTopology(tt.uids...)}
+			manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+			manager.cfg.UserIncludeList = []string{".*"}
+			eligible := make([]int, len(tt.uids))
+			for index, uid := range tt.uids {
+				eligible[index] = int(uid)
+			}
+			if err := manager.activateLimits(&SystemMetrics{CPUEligibleUsers: eligible}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := manager.executeDecision(decisionDeactivate, &SystemMetrics{}); err != nil {
+				t.Fatalf("executeDecision(%s) error: %v", decisionDeactivate, err)
+			}
+			if !reflect.DeepEqual(adapter.restoreBatches, [][]string{tt.want}) {
+				t.Fatalf("restore batches = %v, want one batch %v", adapter.restoreBatches, tt.want)
+			}
+			if len(adapter.OwnedUnits()) != 0 || manager.limitsActive {
+				t.Fatalf("release left owned=%v active=%t", adapter.OwnedUnits(), manager.limitsActive)
+			}
+		})
+	}
+}
+
+// TestSystemdNativeCPUReleaseBatchesCompleteRestoresAroundSelectiveOnes keeps
+// the CPU-only release of slices that still hold RAM or I/O leases selective,
+// while every other slice and the parent share one batch.
+func TestSystemdNativeCPUReleaseBatchesCompleteRestoresAroundSelectiveOnes(t *testing.T) {
+	topology := testSystemdTopology(1000, 1001, 1002)
+	owned := make(map[string]systemdunit.UnitIdentity)
+	active := make(map[string]map[systemdunit.PropertyName]bool)
+	for _, user := range topology.Users {
+		identity := user.Unit.Identity
+		owned[identity.Name] = identity
+		active[identity.Name] = map[systemdunit.PropertyName]bool{systemdunit.PropertyCPUWeight: true}
+	}
+	owned[topology.Parent.Identity.Name] = topology.Parent.Identity
+	active[topology.Parent.Identity.Name] = map[systemdunit.PropertyName]bool{systemdunit.PropertyCPUQuotaPerSecUSec: true}
+	active["user-1001.slice"][systemdunit.PropertyIODeviceWeight] = true
+	adapter := &fakeSystemdCPUUnitAdapter{topology: topology, owned: owned, activeProperties: active}
+	manager := testSystemdCPUPointsManager(t, testCPUPointsPolicy(t, nil), adapter, &forbiddenSystemdNativeCgroupManager{}, 4)
+
+	if err := manager.restoreSystemdCPUProperties(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.propertyRestores) != 1 || adapter.propertyRestores[0].unit != "user-1001.slice" {
+		t.Fatalf("selective restores = %+v, want only user-1001.slice", adapter.propertyRestores)
+	}
+	want := [][]string{{"user-1000.slice", "user-1002.slice", "user.slice"}}
+	if !reflect.DeepEqual(adapter.restoreBatches, want) {
+		t.Fatalf("restore batches = %v, want %v", adapter.restoreBatches, want)
 	}
 }
 

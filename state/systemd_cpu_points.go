@@ -23,7 +23,7 @@ type SystemdCPUUnitAdapter interface {
 	CaptureProcessAuthorityInventory(context.Context, systemdunit.TopologySnapshot, int64, bool) (systemdunit.ProcessAuthorityInventory, error)
 	CheckCapturedResourceAuthorities(context.Context, systemdunit.ProcessAuthorityInventory, []systemdunit.ResourceAuthorityRequest) ([]systemdunit.ResourceAuthorityResult, error)
 	Apply(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyAssignment) (systemdunit.UnitSnapshot, error)
-	Restore(context.Context, systemdunit.UnitIdentity) (systemdunit.RestoreResult, error)
+	RestoreUnits(context.Context, []systemdunit.UnitIdentity) []systemdunit.UnitRestoreOutcome
 	RestoreProperties(context.Context, systemdunit.UnitIdentity, []systemdunit.PropertyName) (systemdunit.RestoreResult, error)
 	ReconcileOwned(context.Context) error
 	OwnedUnits() []systemdunit.UnitIdentity
@@ -345,25 +345,30 @@ func (m *Manager) restoreSystemdCPUProperties(ctx context.Context) error {
 		orderedUIDs = append(orderedUIDs, uid)
 	}
 	sort.Ints(orderedUIDs)
+	// Slices that keep RAM or I/O leases give up CPUWeight alone. The others,
+	// then the finite parent, are restored completely in one batch that shares
+	// a single systemd reload; the batch programs baselines in this order.
+	var completeRestores []systemdunit.UnitIdentity
 	for _, uid := range orderedUIDs {
 		identity := slices[uid]
 		if !owned[identity.Name] {
 			continue
 		}
 		state := resources[uid]
-		var err error
-		if state.ramApplied || state.ioApplied || hasActiveNonCPUProperty(m.systemdUnits.Leases(identity)) {
-			_, err = m.systemdUnits.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyCPUWeight})
-		} else {
-			_, err = m.systemdUnits.Restore(ctx, identity)
+		if !state.ramApplied && !state.ioApplied && !hasActiveNonCPUProperty(m.systemdUnits.Leases(identity)) {
+			completeRestores = append(completeRestores, identity)
+			continue
 		}
-		if err != nil {
+		if _, err := m.systemdUnits.RestoreProperties(ctx, identity, []systemdunit.PropertyName{systemdunit.PropertyCPUWeight}); err != nil {
 			restoreErrors = append(restoreErrors, fmt.Errorf("restore CPU properties for %s: %w", identity.Name, err))
 		}
 	}
 	if parent.Name != "" && owned[parent.Name] {
-		if _, err := m.systemdUnits.Restore(ctx, parent); err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("restore CPU properties for %s: %w", parent.Name, err))
+		completeRestores = append(completeRestores, parent)
+	}
+	for _, outcome := range restoreUnitBatch(ctx, m.systemdUnits, completeRestores) {
+		if outcome.Err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore CPU properties for %s: %w", outcome.Identity.Name, outcome.Err))
 		}
 	}
 	if err := errors.Join(restoreErrors...); err != nil {
@@ -391,6 +396,14 @@ func (m *Manager) restoreSystemdCPUProperties(ctx context.Context) error {
 	return nil
 }
 
+// restoreUnitBatch skips the adapter for an empty batch, which owns nothing.
+func restoreUnitBatch(ctx context.Context, adapter SystemdCPUUnitAdapter, identities []systemdunit.UnitIdentity) []systemdunit.UnitRestoreOutcome {
+	if len(identities) == 0 {
+		return nil
+	}
+	return adapter.RestoreUnits(ctx, identities)
+}
+
 func hasActiveNonCPUProperty(leases []systemdunit.PropertyLease) bool {
 	for _, lease := range leases {
 		if lease.Active() && !lease.Property.IsCPU() {
@@ -409,8 +422,11 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 		restoreErrors = append(restoreErrors, fmt.Errorf("reconcile owned systemd properties before restore: %w", err))
 	}
 	owned := m.systemdUnits.OwnedUnits()
-	// Restore every leaf before the finite parent so an incomplete shutdown
-	// retains the conservative host reserve until all individual weights are safe.
+	// Order every leaf before the finite parent: the batch programs baselines
+	// in this order, so an incomplete release retains the conservative host
+	// reserve until all individual weights are safe. The batch then removes
+	// every runtime drop-in with a single systemd reload instead of one per
+	// slice, which took 19 s for 47 slices (resman-gya).
 	sort.SliceStable(owned, func(left, right int) bool {
 		if owned[left].IsParentUserSlice() {
 			return false
@@ -420,14 +436,13 @@ func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
 		}
 		return owned[left].Name < owned[right].Name
 	})
-	for _, identity := range owned {
-		result, err := m.systemdUnits.Restore(ctx, identity)
-		if err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s: %w", identity.Name, err))
+	for _, outcome := range restoreUnitBatch(ctx, m.systemdUnits, owned) {
+		if outcome.Err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s: %w", outcome.Identity.Name, outcome.Err))
 			continue
 		}
-		if len(result.Conflicts) > 0 {
-			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s preserved %d external property conflicts", identity.Name, len(result.Conflicts)))
+		if len(outcome.Result.Conflicts) > 0 {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s preserved %d external property conflicts", outcome.Identity.Name, len(outcome.Result.Conflicts)))
 		}
 	}
 	if err := errors.Join(restoreErrors...); err != nil {

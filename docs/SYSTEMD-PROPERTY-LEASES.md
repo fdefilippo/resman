@@ -134,6 +134,21 @@ of a workload whose runtime owns a nested resource boundary. It does not provide
 per-container policy; authoritative whole-container management remains a separate
 contract.
 
+## Batched release
+
+Releasing CPU Points, and releasing owned properties before observation, restores
+every owned unit in one batch. Each unit is first checked and returned to its
+recorded baselines one at a time, with its own write-ahead transaction and readback,
+leaves before the finite `user.slice` parent. The removal of the runtime drop-ins is
+then shared. The `restoring` intent of every unit is persisted in one journal write.
+`RevertUnitFiles` runs for each unit, and the `reloading` phase is persisted for every
+reverted unit in one write. A single systemd `Reload` follows, then each unit is
+verified and all completed records are removed in one write. Earlier releases made
+every unit pay its own `Reload`, so a release of 47 slices took 19 s. A unit that
+fails at any step keeps its record in the phase it reached and does not stop the
+others. Every state the batch can leave in the journal is a per-unit state that
+startup recovery already resolves, as described below.
+
 ## Automatic startup recovery
 
 Before accepting a new systemd property mutation, ResMan compares every journal record
@@ -143,8 +158,13 @@ with authoritative systemd state and with the files on disk:
 - An exact match under a recreated unit identity is reported as an
   `orphaned_resman_footprint` and rebound durably to the new identity.
 - An inactive recorded unit is inspected on disk without loading it. An exact
-  footprint can be reverted and followed by one daemon reload before the record is
+  footprint can be reverted and followed by a daemon reload before the record is
   removed. ResMan never calls `LoadUnit` to manufacture an identity for this purpose.
+  Units that disappeared together, at startup or during a later reconciliation, are
+  cleaned as one batch in the same write-ahead order as a batched release: one
+  durable `restoring` intent, `RevertUnitFiles` per unit, one durable `reloading`
+  phase, a single reload and one record removal. A burst of logouts therefore costs
+  one reload instead of one per slice.
 - A crash after `RevertUnitFiles` but before `Reload` is a benign recorded phase:
   ResMan decides from the on-disk footprint, completes the reload, verifies the
   baseline, and then removes the record. The pre-reload D-Bus `DropInPaths` and

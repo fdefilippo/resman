@@ -506,6 +506,14 @@ type RestoreResult struct {
 	Conflicts []PropertyConflict
 }
 
+// UnitRestoreOutcome is the restoration result of one unit of a RestoreUnits
+// batch. Err carries the same typed errors Restore returns for that unit.
+type UnitRestoreOutcome struct {
+	Identity UnitIdentity
+	Result   RestoreResult
+	Err      error
+}
+
 // LeaseRecoveryState is a bounded startup-reconciliation outcome.
 type LeaseRecoveryState string
 
