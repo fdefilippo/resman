@@ -47,11 +47,12 @@ ResMan is an enterprise-grade dynamic CPU resource management tool for Linux sys
 
 ### 1.3 System Requirements
 
-- Linux kernel 4.5+ with cgroups v2
-- Write access to `/sys/fs/cgroup`
-- Root privileges or CAP_SYS_ADMIN capability
-- GCC compiler (required for CGO)
-- Go 1.27.1 or later
+- Linux kernel 4.18 or later with the unified cgroup v2 hierarchy
+- systemd reachable on `/run/systemd/private`; systemd 239 on Enterprise Linux 8 is
+  supported
+- Root, because systemd authorizes unit property changes by uid rather than by
+  capability; the packaged unit bounds the retained capabilities
+- To build: GCC (required for CGO) and Go 1.27.1 or later
 
 ---
 
@@ -868,10 +869,10 @@ rest of its control decision; it does not perform a second collector read.
 - Re-adds active eligible users without resetting the global activation time
 - Reconciles tracked RAM/IO limits after dynamic enable or filter changes
 
-RAM/IO-only users are placed in standalone per-user cgroups whose `cpu.max` is
-explicitly `max 100000`. They never inherit the finite quota of `limited/`.
-Changing eligibility at reload migrates the user between standalone resource
-enforcement and the shared CPU hierarchy while preserving requested versus
+RAM or I/O eligibility never creates a standalone cgroup and never changes CPU
+membership. RAM and I/O properties are applied only to an authoritative user slice
+with complete resource authority. Changing eligibility at reload applies or restores
+the affected resource properties in place while preserving requested versus
 successfully applied state for each resource.
 
 ### 5.3 Limit Application

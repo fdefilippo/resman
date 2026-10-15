@@ -106,10 +106,11 @@ disabled in the startup configuration can be enabled by reload without a restart
 its interface was already found usable; failure to establish authoritative systemd
 resource control is reported and leaves the feature disabled.
 .PP
-The published RPM is built with CGO on Enterprise Linux 8 and targets the EL8
-userspace ABI (glibc 2.28). It is intended for EL8 and later compatible
-Enterprise Linux releases. The RPM is not statically linked because NSS, LDAP,
-NIS, and SSSD username resolution require CGO and the system C library.
+Release RPMs are native CGO builds produced separately on Enterprise Linux 8, 9
+and 10. Each package carries its matching distribution tag and is checked against
+that platform's glibc baseline (2.28, 2.34 and 2.39). The RPMs are not statically
+linked because NSS, LDAP, NIS, and SSSD username resolution require CGO and the
+system C library.
 .PP
 EL8 enforcement requires the unified cgroup v2 hierarchy. On systemd 239,
 .B ControlGroup
@@ -529,6 +530,20 @@ Older CPU pressure files that expose only the
 line are supported; the
 .B full
 line is optional.
+.PP
+On Red Hat Enterprise Linux 8 and later, PSI may be compiled in but disabled at
+boot. Enable it, together with the unified cgroup v2 hierarchy, and reboot:
+.sp
+.nf
+grubby \-\-update\-kernel=ALL \-\-args="systemd.unified_cgroup_hierarchy=1 psi=1"
+reboot
+.fi
+.sp
+Afterwards
+.B /proc/pressure
+must exist. If no pressure file can be monitored, the daemon keeps the polling
+control loop.
+.PP
 When a PSI event fires, the daemon immediately runs a control cycle.
 Control-cycle logs and Prometheus metrics include the trigger source, such as
 .B initial ,
@@ -1522,26 +1537,45 @@ resman \-\-version
 .fi
 .SH SYSTEM REQUIREMENTS
 .IP \(bu 2
-Linux kernel 4.5+ (cgroups v2)
+Linux kernel 4.18 or later with the unified cgroup v2 hierarchy
 .IP \(bu
-Write access to /sys/fs/cgroup
+systemd reachable on
+.BR /run/systemd/private ;
+systemd 239 on Enterprise Linux 8 is supported
 .IP \(bu
-Root privileges or CAP_SYS_ADMIN capability
+Root: systemd authorizes unit property changes by uid, not by capability; see
+.B SERVICE PRIVILEGE BOUNDARY
+for the capabilities the packaged unit retains
 .IP \(bu
-Go runtime (if running from source)
+Go 1.27.1 or later with CGO enabled, only to build from source
 .SH EXIT STATUS
-0 \- Success
+0 \- Clean shutdown
 .br
-1 \- Configuration or runtime error
+1 \- Runtime or transient startup failure; the packaged unit restarts the service
+.br
+78 \- Invalid configuration, an unusable cgroup capability required by an enabled
+feature, or invalid MCP TLS credentials; the packaged unit does not restart the
+service (see
+.BR "SYSTEMD RESTART CONTRACT" )
 .SH FILES
 .I /etc/resman/resman.conf
 \- Configuration file
 .br
+.I /etc/resman/cpu\-points.map
+\- CPU Points map
+.br
+.I /etc/resman/io\-weights.map
+\- Weighted I/O map
+.br
 .I /var/log/resman.log
 \- Log file
 .br
-.I /run/resman\-*
-\- State and cache files
+.I /var/lib/resman/systemd\-property\-leases.json
+\- Systemd property lease journal
+.br
+.I /var/lib/resman/metrics.db
+\- Metrics history, when
+.B METRICS_DB_ENABLED=true
 .SH AUTHOR
 Francesco Defilippo <francesco@defilippo.org>
 .SH "SEE ALSO"
