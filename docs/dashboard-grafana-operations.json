@@ -182,7 +182,7 @@
       "type": "gauge",
       "id": 4,
       "title": "Memory pressure",
-      "description": "memory.high events per minute across authoritative user slices, read from memory.events over the last decision interval: the kernel is reclaiming and throttling a slice at its memory.high boundary. Events occur only where memory.high is set, normally by RAM limits. ResMan exports no memory PSI value. 'no slice data' is expected in observation_only.",
+      "description": "memory.high events per minute across authoritative user slices, from memory.events: the kernel is reclaiming and throttling a slice at its memory.high boundary. Events occur only where memory.high is set, normally by RAM limits. ResMan exports no memory PSI value. 'no slice data' is expected in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -199,7 +199,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (resman_user_memory_high_events_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}) / max by (cluster, environment, server_role, hostname) (resman_cpu_points_observation_interval_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}) * 60",
+          "expr": "sum by (cluster, environment, server_role, hostname) (rate(resman_user_memory_high_breaches_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]) * 60)",
           "legendFormat": "{{hostname}}",
           "refId": "A",
           "range": true,
@@ -378,7 +378,7 @@
       "type": "timeseries",
       "id": 7,
       "title": "RAM limits",
-      "description": "eligible: monitored users matching the RAM include and exclude lists (an empty include list selects everyone), counted whether or not RAM_LIMIT_ENABLED is set. RAM/IO limits active: 1 while at least one user has a RAM or I/O limit applied and confirmed by readback. memory.high events: events in authoritative user slices during the last decision interval. Always 0 limits in observation_only.",
+      "description": "eligible: monitored users matching the RAM include and exclude lists (an empty include list selects everyone), counted whether or not RAM_LIMIT_ENABLED is set. RAM/IO limits active: 1 while at least one user has a RAM or I/O limit applied and confirmed by readback. memory.high events: events in authoritative user slices within the rate window. Always 0 limits in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -417,8 +417,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (cluster, environment, server_role, hostname) (resman_user_memory_high_events_delta{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"})",
-          "legendFormat": "memory.high events per cycle - {{hostname}}",
+          "expr": "sum by (cluster, environment, server_role, hostname) (increase(resman_user_memory_high_breaches_total{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", username=~\"$username\"}[$__rate_interval]))",
+          "legendFormat": "memory.high events - {{hostname}}",
           "refId": "C",
           "range": true,
           "instant": false

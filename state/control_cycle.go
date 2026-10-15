@@ -760,17 +760,7 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			username = m.getUsername(uid)
 		}
 
-		var cgroupPath, cpuQuota string
-		var memoryHighEvents uint64
 		cpuPoints := metrics.CPUPointsUsers[uid]
-		if persisted, ok := metrics.PersistenceUsers[uid]; ok {
-			if persisted.CgroupPath != "" {
-				cgroupPath = persisted.CgroupPath
-			}
-			if persisted.CPUQuota != "" {
-				cpuQuota = persisted.CPUQuota
-			}
-		}
 		ioReadBytes := userMetrics.IOReadBytes
 		ioWriteBytes := userMetrics.IOWriteBytes
 
@@ -784,10 +774,6 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 			MemoryUsageBytes:     userMetrics.MemoryUsage,
 			ProcessCount:         userMetrics.ProcessCount,
 			CPULimitActive:       userMetrics.CPULimitActive,
-			CgroupPath:           cgroupPath,
-			CPUQuota:             cpuQuota,
-			CgroupMemoryCurrent:  cpuPoints.RAMCgroupUsageBytes,
-			MemoryHighEvents:     memoryHighEvents,
 			ObservedIOReadBytes:  ioReadBytes,
 			ObservedIOWriteBytes: ioWriteBytes,
 			ObservedIOReadOps:    userMetrics.IOReadOps,
