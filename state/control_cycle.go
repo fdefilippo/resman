@@ -791,19 +791,10 @@ func (m *Manager) updatePrometheusDecisionUserMetrics(metrics *SystemMetrics) {
 }
 
 const (
-	metricsCollectionErrorComponent    = "metrics_collection"
-	metricsCollectionSystemLoadError   = "system_load_failure"
-	metricsDatabaseErrorComponent      = "metrics_database"
-	metricsDatabaseWriteFailure        = "write_failure"
-	limitTransitionErrorComponent      = "limit_transition"
-	limitTransitionActivationFailure   = "activation_failure"
-	limitTransitionDeactivationFailure = "deactivation_failure"
-	processMembershipErrorComponent    = "process_membership"
-	processMembershipReconcileFailure  = "reconciliation_failure"
-	processMembershipOriginUnavailable = "origin_unavailable"
-	ioRemediationErrorComponent        = "io_remediation"
-	patternPolicyErrorComponent        = "pattern_policy"
-	patternPolicyApplicationFailure    = "application_failure"
+	metricsCollectionErrorComponent  = "metrics_collection"
+	metricsCollectionSystemLoadError = "system_load_failure"
+	metricsDatabaseErrorComponent    = "metrics_database"
+	metricsDatabaseWriteFailure      = "write_failure"
 )
 
 // writeDatabaseMetrics persists one collection cycle without blocking enforcement on failure.

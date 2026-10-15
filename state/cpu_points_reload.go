@@ -77,9 +77,7 @@ func (m *Manager) deferCPUPointsPolicyLocked(fallback cpupoints.PolicySnapshot, 
 	m.pendingCPUPointsPolicy = &copy
 	m.cpuPointsDegraded = true
 	m.mu.Unlock()
-	if m.prometheusExporter != nil {
-		m.prometheusExporter.RecordError("cpu_points_reconciliation", cpuPointsReconciliationErrorType(err))
-	}
+	// reconcileSystemdCPUPoints already recorded the failed step.
 	return err
 }
 
