@@ -341,6 +341,12 @@ func (exp *PrometheusExporter) loadCredentials() error {
 	return nil
 }
 
+// controlCycleDurationBuckets keeps the sub-second resolution of the client
+// default and extends it past the default POLLING_INTERVAL (30 s) and
+// PSI_FALLBACK_INTERVAL (300 s): with the default 10 s top bucket a quantile
+// could never show a cycle approaching its interval (resman-q9r).
+var controlCycleDurationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600}
+
 // registerMetrics registers every Prometheus metric exposed by resman.
 func (exp *PrometheusExporter) registerMetrics() error {
 	// Use one namespace for all application metrics.
@@ -809,7 +815,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		Name:        "control_cycle_duration_seconds",
 		Help:        "Duration of control cycles, including failed and suspended cycles, in seconds",
 		ConstLabels: staticLabels,
-		Buckets:     prometheus.DefBuckets,
+		Buckets:     controlCycleDurationBuckets,
 	})
 
 	exp.metricsCollectionDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{

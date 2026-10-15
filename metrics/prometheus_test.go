@@ -1085,3 +1085,37 @@ func TestUserMemoryHighBreachesAccumulateSliceIntervalDeltas(t *testing.T) {
 		t.Fatal("memory.high breaches survived the user's departure")
 	}
 }
+
+func TestControlCycleDurationBucketsReachBeyondTheDefaultIntervals(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatalf("NewPrometheusExporter() error: %v", err)
+	}
+	exporter.RecordControlCycleDuration(45 * time.Second)
+	families, err := exporter.registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "resman_control_cycle_duration_seconds" {
+			continue
+		}
+		var largest float64
+		var belowLargest uint64
+		for _, bucket := range family.Metric[0].GetHistogram().GetBucket() {
+			largest = bucket.GetUpperBound()
+			belowLargest = bucket.GetCumulativeCount()
+		}
+		if largest < float64(cfg.PSIFallbackInterval) || largest < float64(cfg.PollingInterval) {
+			t.Fatalf("largest finite bucket = %v s, want at least PSI_FALLBACK_INTERVAL %d s and POLLING_INTERVAL %d s",
+				largest, cfg.PSIFallbackInterval, cfg.PollingInterval)
+		}
+		if belowLargest != 1 {
+			t.Fatalf("a 45 s cycle fell outside the finite buckets (cumulative %d)", belowLargest)
+		}
+		return
+	}
+	t.Fatal("resman_control_cycle_duration_seconds was not gathered")
+}

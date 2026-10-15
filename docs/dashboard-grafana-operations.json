@@ -2491,7 +2491,7 @@
       "type": "timeseries",
       "id": 32,
       "title": "Control cycle duration p95",
-      "description": "95th percentile and mean duration of decision control cycles, including failed ones. The histogram's largest bucket is 10 s, so the p95 line cannot rise above 10; the mean has no such ceiling. A cycle approaching POLLING_INTERVAL (or PSI_FALLBACK_INTERVAL with PSI active) means the daemon no longer keeps up.",
+      "description": "95th percentile and mean duration of decision control cycles, including failed ones; the histogram resolves durations up to 600 s. A cycle approaching POLLING_INTERVAL (or PSI_FALLBACK_INTERVAL with PSI active) means the daemon no longer keeps up.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

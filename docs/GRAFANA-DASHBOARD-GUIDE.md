@@ -290,9 +290,8 @@ A depth near capacity or `saturated` outcomes mean the receiver is too slow or
 `LIMIT_HOOK_MAX_CONCURRENCY` too low. A rejected notification never cancels the limit.
 
 **Control cycle duration** shows the 95th percentile and the mean duration of decision
-cycles, failed ones included. Healthy cycles take well under a second. The p95 line
-cannot rise above 10 s because of the histogram buckets; trust the mean beyond that. A
-cycle approaching `POLLING_INTERVAL` (or `PSI_FALLBACK_INTERVAL` with PSI active)
+cycles, failed ones included. Healthy cycles take well under a second, and the
+histogram resolves durations up to 600 s. A cycle approaching `POLLING_INTERVAL` (or `PSI_FALLBACK_INTERVAL` with PSI active)
 means the daemon no longer keeps up, usually because systemd or `/proc` is slow.
 
 **Control cycles by trigger**
