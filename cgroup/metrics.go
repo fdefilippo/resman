@@ -2,7 +2,9 @@ package cgroup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,6 +55,14 @@ type MemoryAccountingSnapshot struct {
 
 // ReadCPUAccountingSnapshot reads counters without creating or mutating a cgroup.
 func ReadCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
+	snapshot, err := readCPUAccountingSnapshot(path)
+	if err != nil {
+		return CPUPointsNodeSnapshot{}, classifyControllerInterface(path, "cpu.weight", err)
+	}
+	return snapshot, nil
+}
+
+func readCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
 	identity, err := readCgroupIdentity(path)
 	if err != nil {
 		return CPUPointsNodeSnapshot{}, fmt.Errorf("inspect CPU Points cgroup %s: %w", path, err)
@@ -94,6 +104,14 @@ func ReadCPUAccountingSnapshot(path string) (CPUPointsNodeSnapshot, error) {
 
 // ReadMemoryAccountingSnapshot reads identity-stable memory accounting at an authorized path.
 func ReadMemoryAccountingSnapshot(path string) (MemoryAccountingSnapshot, error) {
+	snapshot, err := readMemoryAccountingSnapshot(path)
+	if err != nil {
+		return MemoryAccountingSnapshot{}, classifyControllerInterface(path, "memory.current", err)
+	}
+	return snapshot, nil
+}
+
+func readMemoryAccountingSnapshot(path string) (MemoryAccountingSnapshot, error) {
 	identity, err := readCgroupIdentity(path)
 	if err != nil {
 		return MemoryAccountingSnapshot{}, fmt.Errorf("inspect RAM cgroup %s: %w", path, err)
@@ -164,6 +182,22 @@ func readCgroupIdentity(path string) (CgroupIdentity, error) {
 		return CgroupIdentity{}, fmt.Errorf("unsupported cgroup metadata type %T", info.Sys())
 	}
 	return CgroupIdentity{Device: uint64(stat.Dev), Inode: stat.Ino}, nil
+}
+
+// ErrControllerInterfaceAbsent reports that a cgroup exposes no interface file
+// for a controller because its parent does not delegate that controller. It is
+// a host state, for example a user slice outside a limits episode, not a read
+// failure.
+var ErrControllerInterfaceAbsent = errors.New("cgroup controller interface is absent")
+
+// classifyControllerInterface marks a failed read of a cgroup that exposes no
+// interface file for the controller as ErrControllerInterfaceAbsent, keeping the
+// original failure. The read order itself is unchanged.
+func classifyControllerInterface(path, file string, readErr error) error {
+	if _, err := os.Stat(filepath.Join(path, file)); errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w; cgroup %s has no %s: %w", readErr, path, file, ErrControllerInterfaceAbsent)
+	}
+	return readErr
 }
 
 func readCgroupValue(path string) (string, error) {

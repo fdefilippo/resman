@@ -1,10 +1,13 @@
 package state
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/config"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
 
@@ -116,5 +119,22 @@ func assertUint64Pointer(t *testing.T, name string, got *uint64, want uint64) {
 	t.Helper()
 	if got == nil || *got != want {
 		t.Fatalf("%s = %v, want %d", name, got, want)
+	}
+}
+
+func TestOptionalObservationGapCountsOnlyGenuineReadFailures(t *testing.T) {
+	exporter := &mockPrometheusExporter{}
+	manager, err := NewManager(config.DefaultConfig(), &mockMetricsCollector{}, &mockCgroupManager{}, exporter)
+	if err != nil {
+		t.Fatalf("NewManager() error: %v", err)
+	}
+	absent := fmt.Errorf("slice: %w", cgroup.ErrControllerInterfaceAbsent)
+	manager.recordOptionalPersistenceObservationGap(metricsDatabaseCPUPointsReadFailure, 1000, absent)
+	if got := exporter.recordedErrors(); len(got) != 0 {
+		t.Fatalf("errors for an unplanned slice without the controller = %+v, want none", got)
+	}
+	manager.recordOptionalPersistenceObservationGap(metricsDatabaseCPUPointsReadFailure, 1000, errors.New("permission denied"))
+	if got := exporter.recordedErrors(); len(got) != 1 {
+		t.Fatalf("errors for a genuine optional read failure = %+v, want one", got)
 	}
 }

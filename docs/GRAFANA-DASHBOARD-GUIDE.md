@@ -238,7 +238,8 @@ limit a slice whose workload belongs to a container runtime.
   can exceed delivered and the two cannot be compared directly.
 
 **Delivered cores by user slice** shows the same delivered time per user slice (top 10
-per host), with or without an episode. Under saturation, compare the slices with their
+per host). Outside an episode it is present only where systemd keeps the `cpu`
+controller enabled for user slices; often it disables it once no limit is set. Under saturation, compare the slices with their
 configured points: a user with twice the points tends toward twice the cores, but only
 while both have enough runnable work. A low share alone does not mean starvation; it
 does only when the parent is throttled and that user still has work waiting.

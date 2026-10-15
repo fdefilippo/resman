@@ -1,6 +1,7 @@
 package cgroup
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,5 +193,30 @@ func writeSnapshotFixture(t *testing.T, path, value string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(value), 0600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestAccountingReadersReportAnAbsentControllerInterface(t *testing.T) {
+	root := t.TempDir()
+	// A cgroup whose parent does not delegate cpu or memory exposes only the
+	// core cpu.stat fields and no controller interface files.
+	if err := os.WriteFile(filepath.Join(root, "cpu.stat"), []byte("usage_usec 123\nuser_usec 80\nsystem_usec 43\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadCPUAccountingSnapshot(root); !errors.Is(err, ErrControllerInterfaceAbsent) {
+		t.Fatalf("CPU read without the cpu controller = %v, want ErrControllerInterfaceAbsent", err)
+	}
+	if _, err := ReadMemoryAccountingSnapshot(root); !errors.Is(err, ErrControllerInterfaceAbsent) {
+		t.Fatalf("memory read without the memory controller = %v, want ErrControllerInterfaceAbsent", err)
+	}
+
+	// An enabled controller with damaged data remains an ordinary failure.
+	for name, value := range map[string]string{"cpu.max": "max 100000", "cpu.weight": "100"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ReadCPUAccountingSnapshot(root); err == nil || errors.Is(err, ErrControllerInterfaceAbsent) {
+		t.Fatalf("CPU read with the controller but no nr_periods = %v, want an ordinary failure", err)
 	}
 }
