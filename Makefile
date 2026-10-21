@@ -78,7 +78,7 @@ DEB_GO_LDFLAGS = -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,relro,-z,
 # PRIMARY TARGETS
 # ============================================================================
 
-.PHONY: all build clean test test-sendmail fuzz test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
+.PHONY: all build clean test test-sendmail test-control-cycle-log-summary fuzz test-functional-smolvm-missing-io-startup test-functional-smolvm-mcp-filter-reload test-functional-smolvm-psi-refresh test-functional-smolvm-preflight \
 	test-functional-smolvm-unit test-functional-real-kernel-unit test-functional-real-kernel-psi test-functional-real-kernel-block-io test-functional-real-kernel-cpu-points test-functional-final test-functional-final-unit ci-quality ci-test verify-format verify-modules verify-promtool verify-shellcheck verify-contracts lint lint-required lint-install install uninstall rpm deb container-build container-run help
 
 .PHONY: test-functional-systemd239-unit test-functional-systemd239-qemu test-functional-io-device-weight-unit test-functional-io-device-weight-qemu test-functional-io-device-weight-attribution-qemu
@@ -127,6 +127,7 @@ ci-quality: verify-modules verify-format verify-promtool verify-shellcheck
 	@echo "Running CI quality gates..."
 	$(GO) build ./...
 	$(GO) vet ./...
+	$(MAKE) test-control-cycle-log-summary
 	$(MAKE) verify-contracts GO="$(GO)"
 	$(MAKE) test-functional-final-unit
 	$(MAKE) test-functional-real-kernel-unit
@@ -175,6 +176,10 @@ test: deps
 # Exercise the sendmail helper with deterministic external commands.
 test-sendmail: prepare-go-worktree
 	GO="$(GO)" scripts/sendmail_test.sh
+
+# Exercise the control-cycle log analyzer with plain and compressed rotations.
+test-control-cycle-log-summary:
+	scripts/analyze-control-cycles_test.sh
 
 # Run tests with coverage.
 test-cover: deps

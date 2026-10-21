@@ -110,6 +110,18 @@ Upgrading from an earlier release? Read the [upgrade guide](docs/UPGRADING.md) b
 installing: it lists every breaking change since 1.25.x and the action each one
 requires.
 
+To compare CPU activation thresholds with the values recorded in current and rotated
+logs, run the diagnostic helper from a source checkout. It reads
+`/etc/resman/resman.conf` by default and accepts both plain and gzip-compressed logs:
+
+```bash
+scripts/analyze-control-cycles.sh --date 2026-10-21 /var/log/resman.log*
+```
+
+Use `--config FILE` when the logs and configuration were copied from another host.
+The helper never substitutes repository defaults for a missing production
+configuration; `--cpu-threshold` and `--release-threshold` provide explicit overrides.
+
 ## Requirements
 
 - Linux 4.18 or later with the unified cgroup v2 hierarchy and systemd, including the
