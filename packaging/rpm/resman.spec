@@ -11,7 +11,7 @@
 # - Standalone SMTP sendmail helper
 
 Name:    resman
-Version: 1.41.4
+Version: 1.42.0
 Release: 1%{?dist}
 Summary: Dynamic CPU, RAM and IO resource management tool using cgroups v2 with memory.high and io controller support
 
@@ -85,7 +85,7 @@ v1.37.0: share one sample-scoped process-authority inventory across CPU, RAM and
 v1.38.0: add capability-probed relative block-I/O weights with independent leases.
 v1.39.0: let an operator declare observation where the cpu controller cannot be delegated.
 
-Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.3 to 1.41.4.
+Read /usr/share/doc/resman/UPGRADING.md before upgrading from 1.25.x through 1.41.4 to 1.42.0.
 
 **IMPORTANT: CGO is required for this package**
 
@@ -184,6 +184,7 @@ install -m 644 config/resman.conf.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 config/cpu-points.map.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 config/io-weights.map.example %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CONFIGURATION.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/SYSTEMD-PROPERTY-LEASES.md %{buildroot}/%{_docdir}/%{name}/
@@ -301,6 +302,8 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/cpu-points.map.example
 %doc %{_docdir}/%{name}/io-weights.map.example
 %doc %{_docdir}/%{name}/CONFIGURATION.md
+%doc %{_docdir}/%{name}/BLOCK-IOPS-SOURCE-DESIGN.md
+%doc %{_docdir}/%{name}/IO-LIMITS.md
 %doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/LIMIT-HOOKS.md
 %doc %{_docdir}/%{name}/SYSTEMD-PROPERTY-LEASES.md
@@ -311,6 +314,10 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
+* Sun Nov 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.42.0-1
+- Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.
+- Preserve executable exclusions and restore owned enforcement on source integrity failure.
+
 * Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.4-1
 - Scan user processes afresh for every control decision instead of reusing a sample for METRICS_CACHE_TTL
 - Stop counting user slices without a delegated cpu controller as observation errors

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/fdefilippo/resman/cgroup"
+	"github.com/fdefilippo/resman/internal/blockiops"
 	"golang.org/x/sys/unix"
 )
 
@@ -106,6 +107,7 @@ func (e *kernelValueMismatch) Error() string { return e.err.Error() }
 func (e *kernelValueMismatch) Unwrap() error { return e.err }
 
 type cgroupVerifier struct {
+	resolveHardIODevice func(string) (string, error)
 	root                string
 	readFile            func(string) ([]byte, error)
 	stat                func(string) (os.FileInfo, error)
@@ -119,6 +121,7 @@ func newCgroupVerifier(root string) cgroupVerifier {
 	}
 	return cgroupVerifier{
 		root: filepath.Clean(root), readFile: os.ReadFile, stat: os.Stat,
+		resolveHardIODevice: func(number string) (string, error) { return resolveHardIODevice(number, "/sys/dev/block") },
 		resetIODeviceWeight: writeIODeviceWeightReset,
 		pageSize:            uint64(os.Getpagesize()),
 	}
@@ -181,6 +184,14 @@ func (v cgroupVerifier) verify(snapshot UnitSnapshot, assignments []PropertyAssi
 			return err
 		}
 	}
+	if touched[PropertyIOAccounting] {
+		enabled, _ := snapshot.Properties.Value(PropertyIOAccounting)
+		if enabled == 1 {
+			if _, err := v.readFile(filepath.Join(path, "io.stat")); err != nil {
+				return fmt.Errorf("IOAccounting interface for %s: %w", snapshot.Identity.Name, err)
+			}
+		}
+	}
 	if touched[PropertyIOWeight] {
 		if err := v.verifyIOWeight(path, snapshot); err != nil {
 			return err
@@ -236,6 +247,11 @@ func (v cgroupVerifier) preflightWithMaterialization(snapshot UnitSnapshot, assi
 			required["memory.max"] = true
 		case PropertyMemorySwapMax:
 			required["memory.swap.max"] = true
+		case PropertyIOAccounting:
+			if assignment.value.scalar == 1 {
+				required["io.stat"] = true
+				requiresIO = true
+			}
 		case PropertyIOWeight:
 			requiresIO = true
 		case PropertyIODeviceWeight:
@@ -491,8 +507,14 @@ func (v cgroupVerifier) verifyDeviceLimits(path string, snapshot UnitSnapshot, p
 	wantedDevices := make(map[string]uint64, len(expected))
 	for _, limit := range expected {
 		device, err := v.deviceNumber(limit.Path)
+		if err == nil && v.resolveHardIODevice != nil {
+			device, err = v.resolveHardIODevice(device)
+		}
 		if err != nil {
 			return fmt.Errorf("resolve block device %s for %s: %w", limit.Path, property, err)
+		}
+		if previous, exists := wantedDevices[device]; exists && previous != limit.Value {
+			return fmt.Errorf("conflicting %s paths resolve to device %s", property, device)
 		}
 		wantedDevices[device] = limit.Value
 	}
@@ -710,6 +732,48 @@ func parseKernelIODeviceWeights(value string) (map[string]uint64, error) {
 			return nil, fmt.Errorf("invalid device weight %q", fields[1])
 		}
 		result[fields[0]] = weight
+	}
+	return result, nil
+}
+
+// BlockIOPSDevices resolves exactly the device nodes used for hard I/O limits.
+// The caller compares devices independently; layered devices are never summed.
+func BlockIOPSDevices(filter string) ([]blockiops.Device, error) {
+	paths, err := ResolveBlockDevices(filter)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]blockiops.Device, 0, len(paths))
+	for _, path := range paths {
+		number, err := (cgroupVerifier{stat: os.Stat}).deviceNumber(path)
+		if err == nil {
+			number, err = resolveHardIODevice(number, "/sys/dev/block")
+		}
+		if err != nil {
+			return nil, err
+		}
+		var device blockiops.Device
+		if _, err := fmt.Sscanf(number, "%d:%d", &device.Major, &device.Minor); err != nil {
+			return nil, fmt.Errorf("parse block device identity: %w", err)
+		}
+		info, err := os.Stat(filepath.Join("/sys/dev/block", number))
+		if err != nil {
+			return nil, fmt.Errorf("inspect IOPS device lifetime: %w", err)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Ino == 0 {
+			return nil, fmt.Errorf("IOPS device lifetime unavailable")
+		}
+		device.Generation = stat.Ino
+		duplicate := false
+		for _, existing := range result {
+			if existing == device {
+				duplicate = true
+			}
+		}
+		if !duplicate {
+			result = append(result, device)
+		}
 	}
 	return result, nil
 }

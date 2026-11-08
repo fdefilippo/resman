@@ -231,6 +231,9 @@ RAM_USER_EXCLUDE_LIST=
 #
 # IO_READ_BPS: Per-user read bandwidth limit (bytes/s with K/M/G/T suffix)
 # IO_WRITE_BPS: Per-user write bandwidth limit
+# IOPS require a qualified kernel build with BTF and CAP_BPF/CAP_PERFMON.
+# Unsupported source capability rejects startup; see BLOCK-IOPS-SOURCE-DESIGN.md.
+# Activation uses certified minima; release uses complete maxima per device.
 # IO_READ_IOPS: Per-user read IOPS limit (0 = unlimited)
 # IO_WRITE_IOPS: Per-user write IOPS limit (0 = unlimited)
 #

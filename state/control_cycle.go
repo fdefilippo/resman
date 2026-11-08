@@ -10,6 +10,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/blockiops"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -471,6 +472,9 @@ type SystemMetrics struct {
 	IOEligibleWriteBPS             float64
 	IOEligibleReadBlockIOPS        float64
 	IOEligibleWriteBlockIOPS       float64
+	IOBlockIOPSSourceAvailable     bool
+	IOBlockIOPSDecisionAt          time.Time
+	IOBlockIOPSDevices             map[blockiops.Device]blockIOPSDeviceBounds
 	IOBlockIOPSUnavailableUsers    int
 	IOEligibleUnavailableProcesses int
 
@@ -632,28 +636,31 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 
 	if decisionSample {
 		decisionConfig := m.GetConfig()
-		m.collectEligibleBlockIOPS(metrics, decisionConfig.GetIODecisionPolicy())
+		m.collectPersistenceInterval(metrics)
+		if err := m.collectEligibleBlockIOPS(metrics, decisionConfig.GetIODecisionPolicy()); err != nil {
+			metrics.IOBlockIOPSDevices = nil
+			metrics.IOBlockIOPSSourceAvailable = false
+			metrics.IOBlockIOPSUnavailableUsers = len(metrics.IOEligibleUsers)
+			m.rememberBlockIOPSDecision(metrics)
+			m.updatePrometheusSystemMetrics(metrics)
+			return nil, err
+		}
+		m.rememberBlockIOPSDecision(metrics)
 		m.prevIOTime = sampleTime
 		m.previousIOEligibleUsers = make(map[int]struct{}, len(metrics.IOEligibleUsers))
 		for _, uid := range metrics.IOEligibleUsers {
 			m.previousIOEligibleUsers[uid] = struct{}{}
 		}
-		m.collectPersistenceInterval(metrics)
+	} else {
+		m.projectBlockIOPSDecision(metrics)
 	}
 
 	return metrics, nil
 }
 
-func (m *Manager) collectEligibleBlockIOPS(metrics *SystemMetrics, policy config.IODecisionPolicy) {
-	needsBlockIO := policy.Enabled && (policy.ReadIOPS > 0 || policy.WriteIOPS > 0)
-	if needsBlockIO {
-		metrics.IOBlockIOPSUnavailableUsers += len(metrics.IOEligibleUsers)
-	}
-}
-
 // calculateIOByteRates converts per-process counter growth into per-second rates.
 // Byte counters originate from per-process /proc/PID/io deltas. Block IOPS are
-// collected separately from the user's observation cgroup.
+// collected separately at the authoritative systemd unit's kernel boundary.
 func calculateIOByteRates(delta resmanmetrics.ProcessIODelta, elapsed time.Duration) ioByteRate {
 	seconds := elapsed.Seconds()
 	if seconds <= 0 {
@@ -702,7 +709,14 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		})
 	}
 
+	blockDevices := make([]resmanmetrics.BlockIOPSDeviceMetrics, 0, len(metrics.IOBlockIOPSDevices))
+	exactBlockIOPS := metrics.IOBlockIOPSDevices != nil && metrics.IOBlockIOPSUnavailableUsers == 0
+	for device, bounds := range metrics.IOBlockIOPSDevices {
+		exactBlockIOPS = exactBlockIOPS && bounds.Read.ActivationMinimum == 0 && bounds.Read.ReleaseMaximum == 0 && bounds.Write.ActivationMinimum == 0 && bounds.Write.ReleaseMaximum == 0
+		blockDevices = append(blockDevices, resmanmetrics.BlockIOPSDeviceMetrics{Device: fmt.Sprintf("%d:%d", device.Major, device.Minor), ReadMinimum: bounds.Read.ActivationMinimum, ReadMaximum: bounds.Read.ReleaseMaximum, WriteMinimum: bounds.Write.ActivationMinimum, WriteMaximum: bounds.Write.ReleaseMaximum, Uncertain: bounds.Uncertain, UpperAvailable: metrics.IOBlockIOPSUnavailableUsers == 0})
+	}
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		BlockIOPSExactAvailable: exactBlockIOPS, BlockIOPSSourceRequired: needsBlockIOPS(m.GetConfig()), BlockIOPSDecisionAt: metrics.IOBlockIOPSDecisionAt, BlockIOPSDevices: blockDevices, BlockIOPSUnavailableUsers: metrics.IOBlockIOPSUnavailableUsers, BlockIOPSSourceAvailable: metrics.IOBlockIOPSSourceAvailable,
 		EnforcementMode:                              m.enforcementStatus.Mode,
 		EnforcementCycleState:                        m.currentEnforcementCycleState(),
 		TotalCPUUsage:                                metrics.TotalCPUUsage,

@@ -30,6 +30,7 @@ const (
 	PropertyMemoryHigh          PropertyName = "MemoryHigh"
 	PropertyMemoryMax           PropertyName = "MemoryMax"
 	PropertyMemorySwapMax       PropertyName = "MemorySwapMax"
+	PropertyIOAccounting        PropertyName = "IOAccounting"
 	PropertyIOWeight            PropertyName = "IOWeight"
 	PropertyIODeviceWeight      PropertyName = "IODeviceWeight"
 	PropertyIOReadBandwidthMax  PropertyName = "IOReadBandwidthMax"
@@ -46,6 +47,7 @@ var approvedScalarProperties = map[PropertyName]struct{}{
 	PropertyMemoryMax:          {},
 	PropertyMemorySwapMax:      {},
 	PropertyIOWeight:           {},
+	PropertyIOAccounting:       {},
 }
 
 var approvedDeviceProperties = map[PropertyName]struct{}{
@@ -309,6 +311,10 @@ func NewCPUQuotaAssignmentsFromCgroupMax(quota, period uint64) ([]PropertyAssign
 
 func validatePropertyValue(name PropertyName, value uint64) error {
 	switch name {
+	case PropertyIOAccounting:
+		if value > 1 {
+			return fmt.Errorf("IOAccounting requires 0 or 1")
+		}
 	case PropertyCPUWeight, PropertyIOWeight:
 		if value != SystemdUnset && (value < 1 || value > 10_000) {
 			return fmt.Errorf("weight %d is outside 1..10000 or the unset sentinel", value)

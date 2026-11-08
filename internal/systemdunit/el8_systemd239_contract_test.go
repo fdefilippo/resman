@@ -118,6 +118,10 @@ func TestEL8Systemd239ContractPinsTheAdapterDBusSurface(t *testing.T) {
 		t.Fatal("EL8 contract claims that ControlGroupId is both present and absent")
 	}
 	for property := range approvedScalarProperties {
+		// IOAccounting is characterized separately; this archive is immutable.
+		if property == PropertyIOAccounting {
+			continue
+		}
 		assertObservedSignatures(t, sliceInterface.Properties, map[string]string{string(property): "t"})
 	}
 	// IODeviceWeight was characterized later by the dedicated nq6.40 QEMU

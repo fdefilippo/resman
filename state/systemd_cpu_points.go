@@ -418,6 +418,7 @@ func hasActiveNonCPUProperty(leases []systemdunit.PropertyLease) bool {
 }
 
 func (m *Manager) restoreSystemdCPUPoints(ctx context.Context) error {
+	defer m.resetBlockIOPSDecisionBaseline()
 	if m.systemdUnits == nil {
 		return fmt.Errorf("restore systemd CPU Points: adapter is unavailable")
 	}

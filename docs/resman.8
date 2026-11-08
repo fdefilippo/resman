@@ -1,4 +1,4 @@
-.TH RESMAN 8 "October 2026" "v1.41.4" "System Administration"
+.TH RESMAN 8 "October 2026" "v1.42.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
@@ -337,14 +337,22 @@ Configuration parameters:
 .PP
 Bandwidth values of "max" or an empty value and IOPS values of 0 disable only
 their own dimension. Bandwidth decisions use per-user /proc/PID/io byte rates.
-When either IOPS dimension is configured, ResMan reads the authoritative
-user slice's io.stat rios/wios counters. Page-cache hits, pipe traffic, and
-socket traffic therefore cannot trigger device-IOPS enforcement. The first
-sample after observation begins, a slice is recreated, or the process policy
-changes is unknown rather than zero. Available users remain a lower bound that
-may prove activation, but one eligible user without a comparable baseline
-blocks the global release decision. The activation rule is any-of across
-configured dimensions and the release rule is all-of.
+When an IOPS dimension is configured, a mandatory kernel source counts block
+operations at the authoritative user slice, with durable IOAccounting property
+leases and no process relocation. Executable selection uses certified bounds:
+activation uses certainly selected operations; release uses the maximum possible
+selected operations, including unresolved buffered-writeback origins. A complete
+upper bound may authorize release despite attribution uncertainty. Missing source
+coverage is unknown rather than zero. Devices are compared independently and
+systemd's originating whole-disk mapping is used for both observation and limits.
+.PP
+Only explicitly qualified kernel builds are accepted; see the installed
+BLOCK-IOPS-SOURCE-DESIGN.md and IO-LIMITS.md for builds, capabilities and new
+per-device Prometheus bounds. Other builds reject enabled IOPS before readiness.
+A failed reload candidate preserves the running source. Runtime source integrity
+failure stops decisions and attempts compare-before-restore of owned enforcement.
+An interval without a comparable user/unit/device baseline blocks global release.
+The activation rule remains any-of and the release rule all-of.
 .PP
 An unavailable /proc/PID/io sample for an enforceable I/O-eligible process is
 unknown, not zero. Available rates remain a lower bound and may still prove an
@@ -777,9 +785,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.41.3 to 1.41.4
+.B Upgrade from 1.25.x through 1.41.4 to 1.42.0
 .PP
-ResMan 1.41.4 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.42.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

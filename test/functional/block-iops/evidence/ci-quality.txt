@@ -1,0 +1,235 @@
+Checking/updating dependencies...
+go mod tidy
+go mod verify
+all modules verified
+git diff --exit-code -- go.mod go.sum
+Running CI quality gates...
+go build ./...
+go vet ./...
+make test-control-cycle-log-summary
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+scripts/analyze-control-cycles_test.sh
+control-cycle log summary tests passed
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make verify-contracts GO="go"
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+Verifying architectural contracts...
+go run ./scripts/generate-config-reference --check
+go test -count=1 ./config -run '^(TestEveryEnvironmentFieldUsesAValidatedHandler|TestLoadFromFileRejectsUnknownKeyWithPath|TestPublicConfigReferenceMatchesRuntimeContract|TestExampleConfigMatchesRuntimeDefaults|TestEmptyIncludeListMeaningsMatchEligibility|TestSecondaryConfigurationReferencesStayFocusedAndSecure)$'
+ok  	github.com/fdefilippo/resman/config	0.042s
+make test-sendmail
+make[2]: Entering directory '/home/francesco/lavoro/resman'
+GO="go" scripts/sendmail_test.sh
+PASS: sendmail MIME, credential, process-argv, and timeout contracts
+make[2]: Leaving directory '/home/francesco/lavoro/resman'
+go run ./scripts/verify-contracts
+PASS [parse]
+PASS [config-contracts]
+PASS [prometheus-call-sites]
+PASS [production-sleeps]
+PASS [lock-boundary-inventory]
+PASS [cross-package-map-keys]
+PASS [mcp-latest-stateless]
+PASS [systemd-unit-mutation-boundary]
+PASS [cpu-points-flat-public-contract]
+PASS [shipped-assets]
+PASS [english-language]
+PASS [prometheus-assets]
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-final-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/final/gate_test.sh
+....
+----------------------------------------------------------------------
+Ran 4 tests in 13.932s
+
+OK
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-real-kernel-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/real-kernel/host_test.sh
+...PASS: pam-sessions
+..../usr/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f164d3996c0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/usr/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f164d39a200>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/usr/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f164d39a3e0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/usr/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f164d39a5c0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...
+----------------------------------------------------------------------
+Ran 10 tests in 0.151s
+
+OK
+......PASS: hard-io-delivery
+.............................
+----------------------------------------------------------------------
+Ran 35 tests in 0.354s
+
+OK
+....CHARACTERIZATION
+FAIL
+..
+----------------------------------------------------------------------
+Ran 6 tests in 0.007s
+
+OK
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.066s
+
+OK
+..
+----------------------------------------------------------------------
+Ran 2 tests in 0.016s
+
+OK
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.422s
+
+OK
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.302s
+
+OK
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.122s
+
+OK
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 0.013s
+
+OK
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 1.424s
+
+OK
+.
+----------------------------------------------------------------------
+Ran 1 test in 3.614s
+
+OK
+PASS: remote scenario ownership and overlap contract
+PASS: real-kernel packaged-service host contract
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-systemd239-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/systemd239/qemu_test.sh
+...PASS: native-plan
+.......
+----------------------------------------------------------------------
+Ran 10 tests in 0.038s
+
+OK
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 0.355s
+
+OK
+PASS: EL8 systemd 239 QEMU harness contract
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-io-device-weight-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/io-device-weight/host_test.sh
+...CHARACTERIZED
+BLOCKED
+FAIL
+..
+----------------------------------------------------------------------
+Ran 5 tests in 0.008s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.003s
+
+OK
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 0.011s
+
+OK
+..
+----------------------------------------------------------------------
+Ran 2 tests in 0.016s
+
+OK
+KERNEL_ACCEPTS
+PASS: IODeviceWeight QEMU characterization harness contract
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-cpu-delegation-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/cpu-delegation/host_test.sh
+BLOCKED: no fixture
+.............................
+----------------------------------------------------------------------
+Ran 29 tests in 0.090s
+
+OK
+..........................................................
+----------------------------------------------------------------------
+Ran 58 tests in 0.636s
+
+OK
+PASS: EL8 cpu delegation reproduction harness contract
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make test-functional-early-boot-unit
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+test/functional/early-boot/host_test.sh
+....................
+----------------------------------------------------------------------
+Ran 20 tests in 0.261s
+
+OK
+PASS: early-boot harness contract
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make ci-test GO="go"
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+go test -race -cover ./...
+ok  	github.com/fdefilippo/resman	1.111s	coverage: 46.9% of statements
+ok  	github.com/fdefilippo/resman/cgroup	1.814s	coverage: 71.1% of statements
+ok  	github.com/fdefilippo/resman/config	6.946s	coverage: 78.8% of statements
+ok  	github.com/fdefilippo/resman/database	(cached)	coverage: 68.8% of statements
+ok  	github.com/fdefilippo/resman/internal/app	3.208s	coverage: 56.2% of statements
+ok  	github.com/fdefilippo/resman/internal/blockiops	(cached)	coverage: 33.0% of statements
+ok  	github.com/fdefilippo/resman/internal/configepoch	(cached)	coverage: 97.0% of statements
+ok  	github.com/fdefilippo/resman/internal/cpupoints	(cached)	coverage: 84.8% of statements
+ok  	github.com/fdefilippo/resman/internal/ioweights	(cached)	coverage: 37.4% of statements
+ok  	github.com/fdefilippo/resman/internal/limithook	(cached)	coverage: 68.8% of statements
+ok  	github.com/fdefilippo/resman/internal/operationgate	(cached)	coverage: 100.0% of statements
+ok  	github.com/fdefilippo/resman/internal/processidentity	(cached)	coverage: 91.7% of statements
+ok  	github.com/fdefilippo/resman/internal/processpolicy	(cached)	coverage: 83.3% of statements
+ok  	github.com/fdefilippo/resman/internal/systemdunit	(cached)	coverage: 76.3% of statements
+ok  	github.com/fdefilippo/resman/internal/tlsconfig	(cached)	coverage: 88.5% of statements
+ok  	github.com/fdefilippo/resman/logging	(cached)	coverage: 78.4% of statements
+ok  	github.com/fdefilippo/resman/mcp	5.817s	coverage: 68.9% of statements
+ok  	github.com/fdefilippo/resman/metrics	(cached)	coverage: 74.1% of statements
+ok  	github.com/fdefilippo/resman/packaging/ci	(cached)	coverage: [no statements]
+ok  	github.com/fdefilippo/resman/packaging/docker	1.251s	coverage: [no statements]
+ok  	github.com/fdefilippo/resman/packaging/layout	2.665s	coverage: [no statements]
+ok  	github.com/fdefilippo/resman/packaging/systemd	(cached)	coverage: [no statements]
+ok  	github.com/fdefilippo/resman/reloader	(cached)	coverage: 69.8% of statements
+	github.com/fdefilippo/resman/scripts		coverage: 0.0% of statements
+	github.com/fdefilippo/resman/scripts/generate-config-reference		coverage: 0.0% of statements
+ok  	github.com/fdefilippo/resman/scripts/verify-contracts	(cached)	coverage: 80.0% of statements
+ok  	github.com/fdefilippo/resman/state	2.190s	coverage: 87.3% of statements
+make[1]: Leaving directory '/home/francesco/lavoro/resman'
+make lint-required GO="go"
+make[1]: Entering directory '/home/francesco/lavoro/resman'
+Checking/updating dependencies...
+go mod tidy
+go mod verify
+all modules verified
+golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 ./...
+0 issues.
+make[1]: Leaving directory '/home/francesco/lavoro/resman'

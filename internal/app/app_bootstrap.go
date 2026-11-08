@@ -251,6 +251,7 @@ func (a *App) WithStateManager() *App {
 		options = append(options, state.WithSystemdIODeviceWeights(systemdAdapter, systemdunit.NewIODeviceWeightCapabilityClassifier(), weightPolicy))
 	}
 
+	options = append(options, state.WithBlockIOPSRuntime())
 	stateManager, err := state.NewManager(
 		a.cfg,
 		a.metricsCollector,
@@ -264,7 +265,7 @@ func (a *App) WithStateManager() *App {
 		}
 		a.logger.Error("Failed to initialize state manager", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)
-		a.err = err
+		a.err = NewPermanentStartupError(err)
 		return a
 	}
 	a.stateManager = stateManager

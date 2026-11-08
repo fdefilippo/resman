@@ -1228,9 +1228,11 @@ func TestSystemdNativeCPUCannotFallThroughLegacyRAMIOOrRemediationPaths(t *testi
 	}
 
 	observed := &SystemMetrics{IOEligibleUsers: []int{1000}}
-	manager.collectEligibleBlockIOPS(observed, manager.cfg.GetIODecisionPolicy())
+	if err := manager.collectEligibleBlockIOPS(observed, manager.cfg.GetIODecisionPolicy()); err != nil {
+		t.Fatal(err)
+	}
 	if observed.IOBlockIOPSUnavailableUsers != 1 {
-		t.Fatalf("systemd-native block-I/O unavailable users = %d, want 1 until the resource adapter exists", observed.IOBlockIOPSUnavailableUsers)
+		t.Fatalf("systemd-native block-I/O unavailable users = %d, want 1 without a kernel source", observed.IOBlockIOPSUnavailableUsers)
 	}
 	if len(cgroups.mutations) != 0 {
 		t.Fatalf("systemd-native CPU enforcement fell through legacy cgroup paths: %v", cgroups.mutations)

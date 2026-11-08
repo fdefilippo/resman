@@ -118,7 +118,7 @@ func (m *Manager) makeDecision(metrics *SystemMetrics) (string, string) {
 		ramBelow = ramPercent < float64(cfg.RAMReleaseThreshold)
 	}
 
-	ioReleasePressure := evaluateIOPressure(ioPolicy, metrics, ioPolicy.ReleaseThreshold)
+	ioReleasePressure := evaluateIOReleasePressure(ioPolicy, metrics, ioPolicy.ReleaseThreshold)
 	ioBelow := !ioCoverageIncomplete && !ioReleasePressure.exceeded()
 
 	allBelow := cpuBelow && ramBelow && ioBelow

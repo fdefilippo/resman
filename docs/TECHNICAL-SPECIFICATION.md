@@ -1,7 +1,7 @@
 # ResMan - Technical Specification
 
-**Version:** 1.8.1
-**Last Updated:** March 2026
+**Version:** 1.42.0
+**Last Updated:** November 2026
 **License:** GPLv3
 **Repository:** https://github.com/fdefilippo/resman
 
@@ -1346,8 +1346,16 @@ decision policy.
 - `resman_io_eligible_users_count` (gauge)
 - `resman_io_eligible_users_read_bytes_per_second` (gauge)
 - `resman_io_eligible_users_write_bytes_per_second` (gauge)
-- `resman_io_eligible_users_read_block_operations_per_second` (gauge)
-- `resman_io_eligible_users_write_block_operations_per_second` (gauge)
+- `resman_io_eligible_block_operations_per_second_bound{device,direction,bound}` (gauge)
+- `resman_io_block_iops_attribution_uncertain{device}` (gauge)
+- `resman_io_block_iops_unavailable_users` and `resman_io_block_iops_source_available` (gauges)
+- `resman_io_block_iops_source_required` and `resman_io_block_iops_decision_timestamp_seconds` (gauges)
+
+The former exact aggregate block-operation series are absent unless exact idle is
+certified. IOPS use mandatory kernel accounting, frozen executable selection and
+per-device lower/upper bounds; see [the source contract](BLOCK-IOPS-SOURCE-DESIGN.md).
+Missing source coverage is distinct from attribution uncertainty. Decision
+baselines survive observation refreshes; source failure restores owned enforcement.
 - `resman_cpu_actively_limited_users_count` (gauge)
 - `resman_actively_limited_users_count` (gauge)
 - `resman_cpu_limits_active` (gauge)
@@ -1463,8 +1471,10 @@ type SystemMetrics struct {
     IOEligibleUsersCount      int
     IOEligibleReadBPS         float64
     IOEligibleWriteBPS        float64
-    IOEligibleReadBlockIOPS   float64
-    IOEligibleWriteBlockIOPS  float64
+    IOBlockIOPSSourceAvailable bool
+    IOBlockIOPSDecisionAt      time.Time
+    IOBlockIOPSDevices         map[blockiops.Device]blockIOPSDeviceBounds
+    IOBlockIOPSUnavailableUsers int
     MemoryUsage               float64
     SystemUnderLoad           bool
     UserMetrics               map[int]*UserMetrics
@@ -1574,6 +1584,7 @@ type CgroupManager interface {
 **Dependencies:**
 ```go
 require (
+	github.com/cilium/ebpf v0.22.0
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/godbus/dbus/v5 v5.2.2
@@ -1592,7 +1603,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.41.4-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.42.0-1'" -o resman .
 ```
 
 **Build RPM:**

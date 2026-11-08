@@ -81,3 +81,56 @@ func ueventValue(data, key string) string {
 	}
 	return ""
 }
+
+// resolveHardIODevice follows systemd's hard-I/O lookup: one originating device
+// layer (only when its slaves share a whole disk), then partition to whole disk.
+// See systemd v239/v252 lookup_block_device and block_get_originating. Weighted
+// I/O uses its separate explicitly characterized per-device contract.
+func resolveHardIODevice(number, sysRoot string) (string, error) {
+	whole := func(number string) (string, error) {
+		path := filepath.Join(sysRoot, number)
+		if _, err := os.Stat(filepath.Join(path, "partition")); err != nil {
+			if os.IsNotExist(err) {
+				return number, nil
+			}
+			return "", err
+		}
+		real, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(filepath.Join(filepath.Dir(real), "dev"))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	slaves, err := os.ReadDir(filepath.Join(sysRoot, number, "slaves"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("resolve hard-I/O device %s slaves: %w", number, err)
+	}
+	origin := ""
+	ambiguous := false
+	for _, slave := range slaves {
+		data, err := os.ReadFile(filepath.Join(sysRoot, number, "slaves", slave.Name(), "dev"))
+		if err != nil {
+			return "", err
+		}
+		candidate, err := whole(strings.TrimSpace(string(data)))
+		if err != nil {
+			return "", err
+		}
+		if origin != "" && origin != candidate {
+			ambiguous = true
+		}
+		origin = candidate
+	}
+	if origin != "" && !ambiguous {
+		number = origin
+	}
+	result, err := whole(number)
+	if err != nil {
+		return "", fmt.Errorf("resolve hard-I/O whole device %s: %w", number, err)
+	}
+	return result, nil
+}

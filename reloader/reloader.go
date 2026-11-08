@@ -34,6 +34,10 @@ type stateConfigManager interface {
 	UpdateConfig(*config.Config)
 }
 
+type blockIOPSConfigManager interface {
+	PrepareBlockIOPSConfig(*config.Config) (func(), error)
+}
+
 type cpuPointsStateManager interface {
 	CurrentCPUPointsPolicy() cpupoints.PolicySnapshot
 	ReconcileCPUPointsPolicy(cpupoints.PolicySnapshot, cpupoints.PolicySnapshot) error
@@ -123,6 +127,13 @@ func (r *Reloader) OnConfigChange(newConfig *config.Config) error {
 		if len(rejected) > 0 {
 			applyErrors = append(applyErrors, &config.RestartRequiredError{Fields: rejected})
 		}
+	}
+	if manager, ok := r.stateManager.(blockIOPSConfigManager); ok {
+		finish, err := manager.PrepareBlockIOPSConfig(newConfig)
+		if err != nil {
+			return err
+		}
+		defer finish()
 	}
 	applyErrors = append(applyErrors, r.applyEffectiveConfig(newConfig)...)
 	return errors.Join(applyErrors...)
@@ -227,6 +238,14 @@ func (r *Reloader) OnConfigCandidate(newConfig *config.Config, confirm config.Re
 
 	finishEpochUpdate := r.stateManager.BeginConfigUpdate()
 	defer finishEpochUpdate()
+	if manager, ok := r.stateManager.(blockIOPSConfigManager); ok {
+		finish, err := manager.PrepareBlockIOPSConfig(newConfig)
+		if err != nil {
+			outcome.Err = err
+			return outcome
+		}
+		defer finish()
+	}
 	policyManager, ok := r.stateManager.(cpuPointsStateManager)
 	if !ok {
 		outcome.Err = fmt.Errorf("state manager does not support CPU Points policy reconciliation")

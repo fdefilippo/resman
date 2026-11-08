@@ -278,6 +278,9 @@ type dbusDeviceLimit struct {
 }
 
 func dbusPropertyValue(assignment PropertyAssignment) any {
+	if assignment.name == PropertyIOAccounting {
+		return assignment.value.scalar == 1
+	}
 	if _, deviceProperty := approvedDeviceProperties[assignment.name]; !deviceProperty {
 		return assignment.value.scalar
 	}

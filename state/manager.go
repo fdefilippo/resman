@@ -30,6 +30,7 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/blockiops"
 	"github.com/fdefilippo/resman/internal/configepoch"
 	"github.com/fdefilippo/resman/internal/cpupoints"
 	"github.com/fdefilippo/resman/internal/ioweights"
@@ -139,6 +140,14 @@ type Manager struct {
 
 	// Control cycle history, initialized by NewManager.
 	controlHist *controlHistory
+
+	// Block IOPS state is serialized by opGate and the configuration epoch.
+	blockIOPS               *blockIOPSRuntime
+	blockIOPSLast           *blockIOPSDecisionProjection
+	blockIOPSFactory        func(*config.Config) (blockiops.Source, error)
+	blockIOPSPrepared       map[*config.Config]*blockIOPSRuntime
+	blockIOPSAccounting     map[int]systemdunit.UnitIdentity
+	resolveBlockIOPSDevices func(string) ([]blockiops.Device, error)
 
 	// I/O rate tracking: per-process deltas from consecutive decision samples
 	// are converted to rates only for users eligible in both samples.
@@ -303,6 +312,7 @@ func NewManager(
 		ioWeightUnits:             make(map[int]systemdunit.UnitIdentity),
 		ioWeightStatus:            newDisabledIODeviceWeightStatus(),
 		resolveSystemdIODevices:   systemdunit.ResolveBlockDevices,
+		resolveBlockIOPSDevices:   systemdunit.BlockIOPSDevices,
 		enforcementStatus: cgroup.EnforcementStatus{
 			Mode:   cgroup.EnforcementModeObservationOnly,
 			Reason: cgroup.EnforcementReasonSystemdRuntimeAbsent,
@@ -613,6 +623,14 @@ func (m *Manager) Cleanup() error {
 			}
 		}
 
+		if err := m.restoreBlockIOPSAccounting(); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+		if m.blockIOPS != nil {
+			if err := m.blockIOPS.source.Close(); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+			}
+		}
 		// Finish the read-only cgroup observer lifecycle.
 		if m.cgroupManager != nil {
 			if err := m.cgroupManager.CleanupAll(); err != nil {
@@ -660,6 +678,12 @@ func (m *Manager) UpdateConfig(newConfig *config.Config) {
 	)
 	m.mu.Lock()
 	m.cfg = newConfig
+	if runtime, ok := m.blockIOPSPrepared[newConfig]; ok {
+		if m.blockIOPS != runtime {
+			m.blockIOPSLast = nil
+		}
+		m.blockIOPS = runtime
+	}
 	// Eligibility and cadence may change with any key, so the next cycle runs
 	// a complete CPU Points verification instead of reusing the last one.
 	m.systemdCPUVerifiedAt = time.Time{}

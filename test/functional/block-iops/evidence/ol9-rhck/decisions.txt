@@ -1,0 +1,26 @@
+5.14.0-687.66.1.el9_8.x86_64
+=== RUN   TestNativeBlockIOPSDecision
+    block_iops_native_test.go:81: unavailable=1 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:93: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:95: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:183.70227303720506 ReleaseMaximum:184.04326647845696} Uncertain:false}]
+    block_iops_native_test.go:97: write decision=ACTIVATE_LIMITS reason=Threshold exceeded: IO write_iops[252:0] >= 50% (peak 183.7%)
+    block_iops_native_test.go:116: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:65.72166602049292 ReleaseMaximum:65.75964975285547} Uncertain:false}]
+    block_iops_native_test.go:127: io.max=252:0 rbps=max wbps=max riops=max wiops=100
+    block_iops_native_test.go:139: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:61.20386266949148 ReleaseMaximum:61.22667810299379} Write:{ActivationMinimum:0.9563103542108043 ReleaseMaximum:0.9566668453592779} Uncertain:false}]
+    block_iops_native_test.go:141: read decision=ACTIVATE_LIMITS reason=Threshold exceeded: IO read_iops[252:0] >= 50% (peak 61.2%)
+    block_iops_native_test.go:146: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:148: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:160: active CPU=50000 100000
+         RAM=536870912
+    block_iops_native_test.go:176: restored properties=CPUQuotaPerSecUSec=infinity
+        IOAccounting=no
+        MemoryMax=infinity
+    block_iops_native_test.go:177: unavailable=1 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:188: unavailable=1 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:0} Uncertain:false}]
+    block_iops_native_test.go:192: unavailable=0 bounds=map[{Major:252 Minor:0 Generation:16381}:{Read:{ActivationMinimum:0 ReleaseMaximum:0} Write:{ActivationMinimum:0 ReleaseMaximum:3.4878443253979623} Uncertain:true}]
+    block_iops_native_test.go:212: source loss=mandatory block-IOPS source failed: block-IOPS source is closed
+    block_iops_native_test.go:217: properties after source loss=CPUQuotaPerSecUSec=infinity
+        IOAccounting=no
+        MemoryMax=infinity
+--- PASS: TestNativeBlockIOPSDecision (6.66s)
+PASS
