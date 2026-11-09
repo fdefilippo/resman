@@ -236,7 +236,14 @@ MCP_AUTH_TOKEN=replace-with-a-long-random-token
 
 2. Access endpoints:
 - `https://127.0.0.1:1969/mcp` - MCP endpoint
-- `https://127.0.0.1:1969/health` - Health check
+- `https://127.0.0.1:1969/health` - Listener health check
+
+`/health` deliberately requires no HTTP bearer token or editor credential. It
+returns only `status` (`healthy`) and `transport` (`http`); it confirms that the
+HTTPS handler responds, without certifying enforcement, the logger, database,
+configuration freshness, or full application readiness. TLS still applies to
+this route, including the required client certificate when `MCP_TLS_CA_FILE` enables
+mutual TLS. `/mcp` continues to require its configured per-request credentials.
 
 ### Example: Claude Desktop Configuration
 

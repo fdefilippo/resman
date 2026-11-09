@@ -1,0 +1,30 @@
+5.14.0-687.66.1.el9_8.x86_64
+=== RUN   TestNativeKernelSource
+=== RUN   TestNativeKernelSource/false
+    kernel_native_test.go:81: cgroup=4275 io.stat=252:0 rbytes=1696256 wbytes=266240 rios=24 wios=65 dbytes=0 dios=0
+        253:0 rbytes=1696256 wbytes=266240 rios=24 wios=65 dbytes=0 dios=0
+    kernel_native_test.go:88: device={252 0 0} selected=65 excluded=0 unresolved=0 bounds={ActivationMinimum:141.54568968887492 ReleaseMaximum:141.72932721914762}
+    kernel_native_test.go:88: device={253 0 0} selected=65 excluded=0 unresolved=0 bounds={ActivationMinimum:141.54568968887492 ReleaseMaximum:141.72932721914762}
+=== RUN   TestNativeKernelSource/true
+    kernel_native_test.go:81: cgroup=4275 io.stat=252:0 rbytes=1696256 wbytes=532480 rios=24 wios=130 dbytes=0 dios=0
+        253:0 rbytes=1696256 wbytes=532480 rios=24 wios=130 dbytes=0 dios=0
+    kernel_native_test.go:88: device={252 0 0} selected=0 excluded=64 unresolved=1 bounds={ActivationMinimum:0 ReleaseMaximum:2.3420520506875433}
+    kernel_native_test.go:88: device={253 0 0} selected=0 excluded=64 unresolved=1 bounds={ActivationMinimum:0 ReleaseMaximum:2.3420520506875433}
+    kernel_native_test.go:132: buffered unresolved operations across layers=1
+    kernel_native_test.go:155: mixed buffered writers device={252 0 0} write={ActivationMinimum:0 ReleaseMaximum:3.487521275710731}
+    kernel_native_test.go:155: mixed buffered writers device={253 0 0} write={ActivationMinimum:0 ReleaseMaximum:6.975042551421462}
+--- PASS: TestNativeKernelSource (2.95s)
+    --- PASS: TestNativeKernelSource/false (1.05s)
+    --- PASS: TestNativeKernelSource/true (1.82s)
+=== RUN   TestNativeIntegrityFailuresAreSticky
+=== RUN   TestNativeIntegrityFailuresAreSticky/map_loss
+    kernel_native_test.go:201: block-IOPS source integrity failure 3 (1 events)
+=== RUN   TestNativeIntegrityFailuresAreSticky/read_failure
+    kernel_native_test.go:201: block-IOPS source integrity failure 1 (1 events)
+=== RUN   TestNativeIntegrityFailuresAreSticky/detached
+    kernel_native_test.go:201: inspect block-IOPS attachment: tracing link info: file descriptor in bad state
+--- PASS: TestNativeIntegrityFailuresAreSticky (2.35s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/map_loss (0.90s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/read_failure (0.72s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/detached (0.72s)
+PASS

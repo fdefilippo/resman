@@ -154,6 +154,7 @@ type Watcher struct {
 	lastIOWeightMapDigest [sha256.Size]byte
 	hasIOWeightMapDigest  bool
 
+	loadCandidate        func(string, []byte) (*Config, error) // immutable after construction
 	reloadObserver       ReloadObserver
 	lastAutomaticFailure [sha256.Size]byte
 	hasAutomaticFailure  bool
@@ -610,7 +611,11 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 		return false, fmt.Errorf("revision-bound reload requires a CPU Points map")
 	}
 	// Load and validate a detached configuration snapshot.
-	newConfig, err := LoadAndValidate(w.configPath)
+	loadCandidate := w.loadCandidate
+	if loadCandidate == nil {
+		loadCandidate = loadAndValidateSnapshot
+	}
+	newConfig, err := loadCandidate(w.configPath, fileContent)
 	if err != nil {
 		return true, fmt.Errorf("reload configuration from %s: %w", w.configPath, err)
 	}

@@ -1,0 +1,30 @@
+6.12.0-204.92.4.2.el9uek.x86_64
+=== RUN   TestNativeKernelSource
+=== RUN   TestNativeKernelSource/false
+    kernel_native_test.go:81: cgroup=8600 io.stat=251:0 rbytes=0 wbytes=262144 rios=0 wios=64 dbytes=0 dios=0
+        252:0 rbytes=0 wbytes=262144 rios=0 wios=64 dbytes=0 dios=0
+    kernel_native_test.go:88: device={251 0 0} selected=64 excluded=0 unresolved=0 bounds={ActivationMinimum:112.5358351024787 ReleaseMaximum:112.61567668955634}
+    kernel_native_test.go:88: device={252 0 0} selected=64 excluded=0 unresolved=0 bounds={ActivationMinimum:112.5358351024787 ReleaseMaximum:112.61567668955634}
+=== RUN   TestNativeKernelSource/true
+    kernel_native_test.go:81: cgroup=8600 io.stat=251:0 rbytes=0 wbytes=524288 rios=0 wios=128 dbytes=0 dios=0
+        252:0 rbytes=0 wbytes=524288 rios=0 wios=128 dbytes=0 dios=0
+    kernel_native_test.go:88: device={251 0 0} selected=0 excluded=64 unresolved=0 bounds={ActivationMinimum:0 ReleaseMaximum:0}
+    kernel_native_test.go:88: device={252 0 0} selected=0 excluded=64 unresolved=0 bounds={ActivationMinimum:0 ReleaseMaximum:0}
+    kernel_native_test.go:132: buffered unresolved operations across layers=2
+    kernel_native_test.go:155: mixed buffered writers device={251 0 0} write={ActivationMinimum:0 ReleaseMaximum:5.593541450924939}
+    kernel_native_test.go:155: mixed buffered writers device={252 0 0} write={ActivationMinimum:0 ReleaseMaximum:5.593541450924939}
+--- PASS: TestNativeKernelSource (2.85s)
+    --- PASS: TestNativeKernelSource/false (1.03s)
+    --- PASS: TestNativeKernelSource/true (1.72s)
+=== RUN   TestNativeIntegrityFailuresAreSticky
+=== RUN   TestNativeIntegrityFailuresAreSticky/map_loss
+    kernel_native_test.go:201: block-IOPS source integrity failure 3 (1 events)
+=== RUN   TestNativeIntegrityFailuresAreSticky/read_failure
+    kernel_native_test.go:201: block-IOPS source integrity failure 1 (1 events)
+=== RUN   TestNativeIntegrityFailuresAreSticky/detached
+    kernel_native_test.go:201: inspect block-IOPS attachment: tracing link info: file descriptor in bad state
+--- PASS: TestNativeIntegrityFailuresAreSticky (1.70s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/map_loss (0.55s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/read_failure (0.57s)
+    --- PASS: TestNativeIntegrityFailuresAreSticky/detached (0.59s)
+PASS

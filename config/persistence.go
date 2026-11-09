@@ -76,26 +76,12 @@ func (e *configPersistenceUnusableError) Unwrap() error {
 }
 
 func readConfigFile(path string) (configFileMetadata, []byte, bool, error) {
-	info, err := os.Lstat(path)
+	info, content, exists, err := readConfigSource(path, os.OpenFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return configFileMetadata{mode: defaultConfigMode}, nil, false, nil
-		}
-		return configFileMetadata{}, nil, false, fmt.Errorf("failed to inspect config path %s: %w", path, err)
+		return configFileMetadata{}, nil, exists, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return configFileMetadata{}, nil, false, fmt.Errorf(
-			"config path %s is a symbolic link; replace it with a regular file or select its target with --config",
-			path,
-		)
-	}
-	if !info.Mode().IsRegular() {
-		return configFileMetadata{}, nil, false, fmt.Errorf("config path %s is not a regular file", path)
-	}
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return configFileMetadata{}, nil, false, fmt.Errorf("failed to read config file: %w", err)
+	if !exists {
+		return configFileMetadata{mode: defaultConfigMode}, nil, false, nil
 	}
 
 	metadata := configFileMetadata{mode: info.Mode().Perm()}

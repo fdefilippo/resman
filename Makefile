@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.41.4
+VERSION = 1.42.0
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -44,6 +44,7 @@ GO_LDFLAGS = -ldflags="-s -w -X 'main.version=$(VERSION)-$(RELEASE)'"
 GO_TAGS =
 VULN_PACKAGES ?= ./...
 DEPS_CORE_MODULES = \
+	github.com/cilium/ebpf \
 	github.com/coreos/go-systemd/v22 \
 	github.com/fsnotify/fsnotify \
 	github.com/godbus/dbus/v5 \
@@ -428,7 +429,7 @@ install: build
 	fi
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo install -d -m 0755 /usr/share/doc/resman
-	sudo install -m 0644 docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
+	sudo install -m 0644 docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
 	@echo "Configuration: $(CONF_DIR)/resman.conf"

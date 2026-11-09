@@ -217,6 +217,13 @@ CPU, RAM, and I/O each have their own include and exclude lists. Therefore:
   PID-decorated display names and user-controlled `argv[0]` values are not policy
   identities. Because systemd-native enforcement acts on an authoritative unit, this
   setting does not exempt one process from a limit applied to its containing user slice.
+- Kernel block-IOPS observations with unresolved executable provenance **MUST**
+  use certified selection bounds: zero contribution to the activation minimum,
+  one operation to the release maximum. This covers mixed-process writeback and
+  does not fabricate an exact excluded or included origin. Complete upper bounds
+  may authorize release despite attribution uncertainty; missing source coverage
+  may not. This IOPS contract preserves process-policy selection without treating
+  an unfiltered slice total as an exact enforceable-process measurement.
 - Production code **MUST NOT** write `cgroup.procs`, record process origins, create a
   ResMan-owned enforcement hierarchy, or restore PID membership. There is no legacy,
   recovery, or test-only exception. The architectural source gate **MUST** fail when any

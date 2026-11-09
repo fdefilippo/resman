@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -136,20 +134,6 @@ func (a *App) WithPrometheus() *App {
 		return a
 	}
 
-	if !checkPortAvailable(a.cfg.PrometheusMetricsBindHost, a.cfg.PrometheusMetricsBindPort) {
-		a.logger.Warn("Prometheus port already in use, disabling exporter",
-			"host", a.cfg.PrometheusMetricsBindHost,
-			"port", a.cfg.PrometheusMetricsBindPort,
-		)
-		fmt.Fprintf(os.Stderr, "\nWarning: Prometheus metrics port %s:%d already in use, disabling exporter\n", a.cfg.PrometheusMetricsBindHost, a.cfg.PrometheusMetricsBindPort)
-		fmt.Fprintf(os.Stderr, "To fix:\n")
-		fmt.Fprintf(os.Stderr, "  1. Check what's using the port: lsof -i :%d or netstat -tlnp | grep %d\n", a.cfg.PrometheusMetricsBindPort, a.cfg.PrometheusMetricsBindPort)
-		fmt.Fprintf(os.Stderr, "  2. Change port: PROMETHEUS_METRICS_BIND_PORT=%d\n", a.cfg.PrometheusMetricsBindPort+1)
-		fmt.Fprintf(os.Stderr, "  3. Or disable: ENABLE_PROMETHEUS=false\n")
-		a.cfg.EnablePrometheus = false
-		return a
-	}
-
 	prometheusExporter, err := metrics.NewPrometheusExporter(a.cfg)
 	if err != nil {
 		a.logger.Error("Failed to create Prometheus exporter", "error", err)
@@ -251,6 +235,7 @@ func (a *App) WithStateManager() *App {
 		options = append(options, state.WithSystemdIODeviceWeights(systemdAdapter, systemdunit.NewIODeviceWeightCapabilityClassifier(), weightPolicy))
 	}
 
+	options = append(options, state.WithBlockIOPSRuntime())
 	stateManager, err := state.NewManager(
 		a.cfg,
 		a.metricsCollector,
@@ -264,7 +249,7 @@ func (a *App) WithStateManager() *App {
 		}
 		a.logger.Error("Failed to initialize state manager", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to initialize state manager: %v\n", err)
-		a.err = err
+		a.err = NewPermanentStartupError(err)
 		return a
 	}
 	a.stateManager = stateManager
@@ -575,17 +560,4 @@ func (a *App) WithMCPServer() *App {
 		"port", cfg.MCPHTTPPort,
 	)
 	return a
-}
-
-func checkPortAvailable(host string, port int) bool {
-	timeout := time.Second
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
-	if err != nil {
-		return true
-	}
-	if conn != nil {
-		_ = conn.Close()
-		return false
-	}
-	return true
 }

@@ -367,3 +367,62 @@ func TestConfigurationEditorPersistsAndSynchronouslyPublishesBothSourceKinds(t *
 		t.Fatal("persisted restart-required field did not remain pending in canonical snapshot")
 	}
 }
+
+func TestCPUPointsEditorDistinguishesSourceFailureFromRevisionConflict(t *testing.T) {
+	for _, scenario := range []string{"missing", "permission", "same digest different identity"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			mapPath := filepath.Join(directory, "cpu-points.map")
+			original := []byte("[resman-cpu-points-map-v1]\nnobody=100\n")
+			if err := os.WriteFile(mapPath, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(directory, "resman.conf")
+			if err := os.WriteFile(path, []byte("CPU_POINTS_FILE="+mapPath+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			applied, err := config.LoadAndValidate(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager, err := state.NewManager(applied, nil, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reloader := &editorTestReloader{path: path, manager: manager}
+			server := &Server{cfg: &config.MCPServerConfig{AllowWriteOps: true}, stateManager: manager, configReloader: reloader}
+			request, err := config.BuildEditorSnapshot(applied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cause := os.ErrNotExist
+			if scenario == "permission" {
+				cause = os.ErrPermission
+			}
+			server.revisionConfirm = func(*config.Config) (config.EditorSnapshot, error) {
+				if scenario == "same digest different identity" {
+					fresh, err := config.BuildEditorSnapshot(applied)
+					fresh.Revision.Config.Inode++
+					return fresh, err
+				}
+				return config.EditorSnapshot{}, &os.PathError{Op: "read", Path: mapPath, Err: cause}
+			}
+			points := uint64(120)
+			_, result, err := server.handleUpdateCPUPoints(context.Background(), nil, updateCPUPointsArgs{Revision: request.Revision, Changes: []cpuPointsEditorChange{{Username: "nobody", Points: &points}}})
+			if scenario == "same digest different identity" {
+				if err != nil || result.State != editorUpdateRefused || result.Refusal == nil || result.Refusal.Reason != editorRefusalRevisionConflict {
+					t.Fatalf("conflict = %+v, %v", result, err)
+				}
+			} else if !errors.Is(err, cause) || result.State != editorUpdateFailed || result.Refusal != nil {
+				t.Fatalf("source failure = %+v, %v; want failed with wrapped cause", result, err)
+			}
+			got, err := os.ReadFile(mapPath)
+			if err != nil || string(got) != string(original) || reloader.reloads != 0 {
+				t.Fatalf("failed/conflicting request mutated sources or runtime: %q, %v, reloads=%d", got, err, reloader.reloads)
+			}
+		})
+	}
+}

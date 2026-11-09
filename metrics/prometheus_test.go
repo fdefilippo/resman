@@ -596,6 +596,7 @@ func TestUpdateSystemSnapshotPublishesEveryTypedGaugeWithoutCountingItAsControlC
 		IOEligibleUsersReadBytesPerSecond:            100,
 		IOEligibleUsersWriteBytesPerSecond:           200,
 		IOEligibleUsersReadBlockOperationsPerSecond:  10,
+		BlockIOPSExactAvailable:                      true,
 		IOEligibleUsersWriteBlockOperationsPerSecond: 20,
 		CPUActivelyLimitedUsersCount:                 2,
 		ActivelyLimitedUsersCount:                    3,
@@ -1118,4 +1119,57 @@ func TestControlCycleDurationBucketsReachBeyondTheDefaultIntervals(t *testing.T)
 		return
 	}
 	t.Fatal("resman_control_cycle_duration_seconds was not gathered")
+}
+
+func TestIOPSBoundsDoNotFabricateExactOrCompleteCoverage(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(name string, bound string) bool {
+		t.Helper()
+		families, err := exporter.registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range families {
+			if f.GetName() != name {
+				continue
+			}
+			for _, m := range f.GetMetric() {
+				if bound == "" {
+					return true
+				}
+				for _, l := range m.GetLabel() {
+					if l.GetName() == "bound" && l.GetValue() == bound {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	snapshot := SystemExporterMetrics{BlockIOPSSourceAvailable: true, BlockIOPSSourceRequired: true, BlockIOPSDevices: []BlockIOPSDeviceMetrics{{Device: "8:0", WriteMinimum: 10, WriteMaximum: 30, Uncertain: true, UpperAvailable: true}}}
+	exporter.UpdateSystemSnapshot(snapshot)
+	if has("resman_io_eligible_users_write_block_operations_per_second", "") {
+		t.Fatal("bound was published as an exact zero")
+	}
+	if !has("resman_io_eligible_block_operations_per_second_bound", "maximum") {
+		t.Fatal("complete maximum absent")
+	}
+	snapshot.BlockIOPSUnavailableUsers = 1
+	snapshot.BlockIOPSDevices[0].UpperAvailable = false
+	exporter.UpdateSystemSnapshot(snapshot)
+	if has("resman_io_eligible_block_operations_per_second_bound", "maximum") {
+		t.Fatal("partial coverage exported a complete maximum")
+	}
+	if !has("resman_io_eligible_block_operations_per_second_bound", "minimum") {
+		t.Fatal("partial lower bound lost")
+	}
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{BlockIOPSSourceRequired: true})
+	if has("resman_io_eligible_block_operations_per_second_bound", "") {
+		t.Fatal("failed source retained stale bounds")
+	}
 }

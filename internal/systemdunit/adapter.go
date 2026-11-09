@@ -1346,6 +1346,14 @@ func (a *Adapter) readUnit(ctx context.Context, unit, objectPath string) (UnitSn
 	properties := make(map[PropertyName]propertyValue, len(approvedScalarProperties)+len(approvedDeviceProperties))
 	for property := range approvedScalarProperties {
 		value, ok := sliceAfter[string(property)].(uint64)
+		if property == PropertyIOAccounting {
+			var enabled bool
+			enabled, ok = sliceAfter[string(property)].(bool)
+			value = 0
+			if enabled {
+				value = 1
+			}
+		}
 		if !ok {
 			return UnitSnapshot{}, malformedReply("read_slice", unit, fmt.Sprintf("property %s is absent or is not uint64", property))
 		}
@@ -1465,6 +1473,7 @@ func managedRuntimeDropInPath(unit string, property PropertyName) string {
 		PropertyMemoryMax:           "50-MemoryMax.conf",
 		PropertyMemorySwapMax:       "50-MemorySwapMax.conf",
 		PropertyIOWeight:            "50-IOWeight.conf",
+		PropertyIOAccounting:        "50-IOAccounting.conf",
 		PropertyIODeviceWeight:      "50-IODeviceWeight.conf",
 		PropertyIOReadBandwidthMax:  "50-IOReadBandwidthMax.conf",
 		PropertyIOWriteBandwidthMax: "50-IOWriteBandwidthMax.conf",

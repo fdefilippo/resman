@@ -24,6 +24,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -218,6 +219,14 @@ func TestLoggerReportsEveryRotationOperationFailure(t *testing.T) {
 			mutate: func(state *loggerState) {
 				state.fileOps.stat = func(*os.File) (os.FileInfo, error) { return nil, injectedErr }
 			},
+		},
+		{
+			name: "sync", operation: "rotation_sync",
+			mutate: func(state *loggerState) { state.fileOps.sync = func(*os.File) error { return injectedErr } },
+		},
+		{
+			name: "directory sync", operation: "rotation_sync_directory",
+			mutate: func(state *loggerState) { state.fileOps.syncDir = func(string) error { return injectedErr } },
 		},
 		{
 			name:      "close",
@@ -885,5 +894,97 @@ func TestNewFileLoggerRejectsMissingBackupCount(t *testing.T) {
 		if logger, err := newFileLogger(INFO, filepath.Join(t.TempDir(), "test.log"), 1024, maxBackups); err == nil || logger != nil {
 			t.Fatalf("newFileLogger(maxBackups=%d) = (%v, %v), want nil logger and error", maxBackups, logger, err)
 		}
+	}
+}
+
+func TestLoggerRotationSyncsFilesAndDirectoryIncludingPartialFailure(t *testing.T) {
+	for _, scenario := range []string{"success", "new file sync failure", "rename failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "resman.log")
+			logger, err := newFileLogger(INFO, path, 1, DefaultLogMaxBackups)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = logger.Close() }()
+			var calls []string
+			oldFile := logger.state.file
+			cause := errors.New("sync/rename failed")
+			logger.state.fileOps.sync = func(file *os.File) error {
+				if file == oldFile {
+					calls = append(calls, "sync old")
+				} else {
+					calls = append(calls, "sync new")
+					if scenario == "new file sync failure" {
+						return cause
+					}
+				}
+				return file.Sync()
+			}
+			logger.state.fileOps.rename = func(source, destination string) error {
+				if source == path {
+					calls = append(calls, "rename active")
+					if scenario == "rename failure" {
+						return cause
+					}
+				}
+				return os.Rename(source, destination)
+			}
+			logger.state.fileOps.syncDir = func(path string) error {
+				calls = append(calls, "sync directory")
+				return syncLogDirectory(path)
+			}
+			_, err = logger.rotateLog()
+			if (scenario == "success" && err != nil) || (scenario != "success" && !errors.Is(err, cause)) {
+				t.Fatalf("rotation error = %v", err)
+			}
+			want := "sync old,rename active,sync new,sync directory"
+			if scenario == "rename failure" {
+				want = "sync old,rename active,sync directory"
+			}
+			if got := strings.Join(calls, ","); got != want {
+				t.Fatalf("durability sequence = %s, want %s", got, want)
+			}
+			if err := logger.InfoChecked("next record after rotation"); err != nil {
+				t.Fatalf("write after rotation outcome: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoggerConcurrentInitializationAndAccess(t *testing.T) {
+	if path := os.Getenv("RESMAN_LOGGER_INIT_TEST_PATH"); path != "" {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		loggers := make(chan *Logger, 64)
+		for index := range 64 {
+			wg.Go(func() {
+				<-start
+				if index%4 == 0 {
+					InitLogger("INFO", path, 1024*1024, 2, false)
+				}
+				logger := GetLogger()
+				if logger == nil || logger.state == nil || !logger.Health().Healthy {
+					t.Error("incomplete logger publication")
+				}
+				loggers <- logger
+			})
+		}
+		close(start)
+		wg.Wait()
+		close(loggers)
+		want := GetLogger()
+		for logger := range loggers {
+			if logger != want {
+				t.Error("multiple singleton instances observed")
+			}
+		}
+		return
+	}
+	// A fresh process exercises the cold singleton without resetting sync.Once
+	// or racing unrelated package tests that already use the global logger.
+	command := exec.Command(os.Args[0], "-test.run=^TestLoggerConcurrentInitializationAndAccess$")
+	command.Env = append(os.Environ(), "RESMAN_LOGGER_INIT_TEST_PATH="+filepath.Join(t.TempDir(), "resman.log"))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("cold initialization: %v\n%s", err, output)
 	}
 }

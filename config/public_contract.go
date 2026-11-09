@@ -358,6 +358,8 @@ func RenderPublicConfigReference() string {
 	output.WriteString("## Source precedence\n\n")
 	output.WriteString("The authoritative order is `default < file < environment`: runtime defaults are loaded first, the authored configuration file overrides them, and environment variables override both. Editing a file value while an environment override exists does not change the effective value.\n\n")
 	output.WriteString("Environment-shadowing remedy: " + environmentShadowingRemedy + "\n\n")
+	output.WriteString("## File value syntax\n\n")
+	output.WriteString("Whitespace outside a value is ignored. One matching outer pair of single or double quotes is removed; interior quotes and quoted whitespace are preserved, subject to field-specific validation. An opening quote without the same closing quote is an error with the file, line and key named. Quotes inside an unquoted value are literal. There is no shell expansion or escape decoding. A whitespace-prefixed `#` starts an inline comment only outside quotes. Environment values are used directly without file quote processing.\n\n")
 	output.WriteString("| Key | Kind | Runtime default | Lifecycle | Sensitive | Editable | Constraint | Empty, disabled, or special value | Remedy |\n")
 	output.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 	for _, contract := range PublicFieldContracts() {

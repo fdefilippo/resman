@@ -1,3 +1,10 @@
+resman (1.42.0-1) stable; urgency=medium
+
+  * Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.
+  * Preserve executable exclusions and restore owned enforcement on source integrity failure.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Sun, 08 Nov 2026 22:00:00 +0100
+
 resman (1.41.4-1) stable; urgency=medium
 
   * Scan user processes afresh for every control decision instead of reusing a sample for METRICS_CACHE_TTL.

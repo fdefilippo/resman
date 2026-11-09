@@ -511,3 +511,59 @@ func (fakeBlockDeviceInfo) IsDir() bool        { return false }
 func (fakeBlockDeviceInfo) Sys() any {
 	return &syscall.Stat_t{Rdev: uint64(unix.Mkdev(8, 0))}
 }
+
+func TestHardIODeviceResolutionMatchesSystemdSingleOriginAndWholeDisk(t *testing.T) {
+	root := t.TempDir()
+	sys := filepath.Join(root, "sys")
+	if err := os.MkdirAll(sys, 0755); err != nil {
+		t.Fatal(err)
+	}
+	disk := func(name, number string) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "dev"), []byte(number), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(sys, number)); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	physical := disk("disk", "8:0")
+	part := filepath.Join(physical, "part1")
+	if err := os.Mkdir(part, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(part, "dev"), []byte("8:1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(part, "partition"), []byte("1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(part, filepath.Join(sys, "8:1")); err != nil {
+		t.Fatal(err)
+	}
+	logical := disk("logical", "253:0")
+	if err := os.Mkdir(filepath.Join(logical, "slaves"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(part, filepath.Join(logical, "slaves", "part1")); err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []string{"8:0", "8:1", "253:0"} {
+		got, err := resolveHardIODevice(number, sys)
+		if err != nil || got != "8:0" {
+			t.Fatalf("resolve %s=%s,%v", number, got, err)
+		}
+	}
+	other := disk("other", "8:16")
+	if err := os.Symlink(other, filepath.Join(logical, "slaves", "other")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveHardIODevice("253:0", sys); err != nil || got != "253:0" {
+		t.Fatalf("multi-disk source should retain virtual boundary: %s,%v", got, err)
+	}
+}

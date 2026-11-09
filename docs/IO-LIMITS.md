@@ -1,4 +1,4 @@
-# ResMan v1.20.0 - I/O Limits
+# ResMan - I/O Limits
 
 ## Overview
 
@@ -104,8 +104,27 @@ The Prometheus `*_bytes_total` metrics measure bytes transferred to block
 devices. The historical `*_ops_total` metrics continue to derive from the
 `syscr` and `syscw` counters in `/proc/PID/io`: they observe read-family and
 write-family syscalls and are not the IOPS inputs used by the decision engine.
-IOPS decisions instead use `rios` and `wios` from `io.stat` in per-user
-observation cgroups.
+IOPS decisions use certified bounds from kernel block-operation accounting at
+the authoritative systemd user slice. They do not use syscall counts. See
+[the source and qualified kernel builds](BLOCK-IOPS-SOURCE-DESIGN.md).
+
+Decision metrics are per effective device:
+
+```
+resman_io_eligible_block_operations_per_second_bound{device,direction,bound}
+resman_io_block_iops_attribution_uncertain{device}
+resman_io_block_iops_unavailable_users
+resman_io_block_iops_source_available
+resman_io_block_iops_source_required
+resman_io_block_iops_decision_timestamp_seconds
+```
+
+`bound="minimum"` authorizes activation; `bound="maximum"` authorizes release.
+The upper series is absent while any eligible user lacks coverage. Attribution
+uncertainty is separate from unavailable coverage. Never sum layered devices.
+The historical exact `io_eligible_users_*_block_operations_per_second` series
+are absent when the interval cannot certify an exact value; use the new bounds.
+Observation refreshes retain the latest decision evidence without advancing it.
 
 ### Useful queries
 
@@ -134,34 +153,33 @@ activates or maintains limits. When `IO_THRESHOLD_DURATION` is greater than
 zero, it applies to the highest percentage among dimensions over the threshold.
 
 Bandwidth signals come from `read_bytes` and `write_bytes` in `/proc/PID/io`.
-When at least one IOPS dimension is configured, ResMan creates an unlimited
-observation cgroup for every I/O-eligible user, reconciles the user's enforceable
-processes into it, and calculates rates from `rios` and `wios` in `io.stat`.
-Page-cache hits and traffic through pipes or sockets do not increment these
-counters; direct I/O to a block device does.
+When an IOPS dimension is configured, ResMan loads the mandatory kernel source
+on a qualified build and acquires `IOAccounting=true` through durable systemd
+property leases before counting. Processes stay in their existing units. Direct
+submission provenance may prove an executable identity; buffered writeback and
+unproved origins remain unresolved. Excluded operations do not contribute to
+either selected bound. Unresolved operations contribute only to the maximum.
+Page-cache hits, pipes and sockets do not generate device operations.
 
-Moving between an observation cgroup and the shared CPU hierarchy preserves a
-logical cumulative counter. ResMan absorbs the source's final value before the
-move and uses the destination's initial value as the new baseline. Activation
-and release therefore do not produce an artificial spike or zero-rate window.
-The first sample after observation starts or the process policy changes is
-incomplete. Rates from users with a valid baseline remain a lower bound and can
-still prove activation, but any eligible user without a baseline prevents the
-global I/O release decision. On a host where a newly eligible user appears in
-every polling interval, active I/O limits can therefore remain in force until
-one complete interval contains baselines for every eligible user.
+A healthy interval can therefore release limits even with uncertain origins if
+its complete maximum is below the release threshold. A new user, missing
+membership authority, recreated unit/device or changed executable policy needs
+a fresh baseline. Other users may still prove activation from their lower bound,
+but incomplete coverage prevents global release. Source integrity failure instead
+stops decisions and restores owned enforcement; it cannot leave CPU/RAM pinned
+behind a fabricated IOPS zero. Failed reload preparation preserves the old source.
 
 For bandwidth signals, ResMan calculates `/proc/PID/io` deltas separately for
 each PID and start-time pair before aggregating them per user. A process exit or
 counter reset does not erase valid traffic from other processes, PID reuse
 establishes a new baseline, and baselines for exited processes are removed after
-the scan. IOPS deltas instead follow the stable per-user cgroup identity and its
-logical cumulative ledger.
+the scan. IOPS deltas instead follow source, policy, unit and device lifetimes.
 
 When the activation rule is satisfied:
 
 1. With `IO_DEVICE_FILTER=all`, ResMan enumerates whole devices in `/sys/block`
-   and writes one line per `major:minor` device to `<cgroup>/io.max`:
+   and applies typed per-device runtime properties through systemd. Kernel readback
+   verifies the effective originating whole-disk boundary in `io.max`:
 
    ```text
    8:0 rbps=104857600 wbps=52428800 riops=1000 wiops=500
@@ -188,15 +206,17 @@ keeps enforcement active. When the release rule is satisfied:
 
 ### Statistics
 
-ResMan reads statistics from `<cgroup>/io.stat`:
+For diagnostics, the authoritative systemd user slice exposes `io.stat`:
 
 ```text
 8:0 rios=1234 wios=567 rbytes=104857600 wbytes=52428800
 259:0 rios=100 wios=50 rbytes=10485760 wbytes=5242880
 ```
 
-Values are aggregated across all devices. Block-byte observations are exposed
-through Prometheus, while `rios` and `wios` drive IOPS decisions.
+These counters contain all slice operations, including excluded executables.
+They are diagnostic totals. The certified kernel source partitions operations
+at the same accounting boundary and produces the per-device decision bounds;
+stacked-device counts are never added together.
 
 ---
 
@@ -226,10 +246,11 @@ Verify that:
 
 ```bash
 # Check I/O limits for one user
-cat /sys/fs/cgroup/resman/user_1000/io.max
+group=$(systemctl show --value -p ControlGroup user-1000.slice)
+cat "/sys/fs/cgroup${group}/io.max"
 
 # Check I/O statistics
-cat /sys/fs/cgroup/resman/user_1000/io.stat
+cat "/sys/fs/cgroup${group}/io.stat"
 ```
 
 ### Find a device's major:minor number

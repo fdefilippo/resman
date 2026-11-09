@@ -53,7 +53,7 @@ func TestServiceBoundsThePrivilegeSurface(t *testing.T) {
 		{
 			name:      "capabilities the enabled features use",
 			directive: "CapabilityBoundingSet",
-			want:      "CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL CAP_NET_BIND_SERVICE CAP_SYS_RESOURCE",
+			want:      "CAP_BPF CAP_PERFMON CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL CAP_NET_BIND_SERVICE CAP_SYS_RESOURCE",
 		},
 		{name: "read-only usr, boot and etc", directive: "ProtectSystem", want: "full"},
 		{name: "single writable path below etc", directive: "ReadWritePaths", want: "/etc/resman"},

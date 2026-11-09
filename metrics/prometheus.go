@@ -114,8 +114,14 @@ type PrometheusExporter struct {
 	ioEligibleUsersCount          prometheus.Gauge
 	ioEligibleUsersReadBPS        prometheus.Gauge
 	ioEligibleUsersWriteBPS       prometheus.Gauge
-	ioEligibleUsersReadBlockIOPS  prometheus.Gauge
-	ioEligibleUsersWriteBlockIOPS prometheus.Gauge
+	ioEligibleUsersReadBlockIOPS  *prometheus.GaugeVec
+	ioEligibleUsersWriteBlockIOPS *prometheus.GaugeVec
+	blockIOPSBounds               *prometheus.GaugeVec
+	blockIOPSUncertain            *prometheus.GaugeVec
+	blockIOPSUnavailable          prometheus.Gauge
+	blockIOPSAvailable            prometheus.Gauge
+	blockIOPSRequired             prometheus.Gauge
+	blockIOPSDecisionAt           prometheus.Gauge
 
 	activelyLimitedUsers       prometheus.Gauge
 	cpuLimitsActive            prometheus.Gauge
@@ -488,19 +494,26 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	})
 
-	exp.ioEligibleUsersReadBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.ioEligibleUsersReadBlockIOPS = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "io_eligible_users_read_block_operations_per_second",
 		Help:        "Total block-device read operation rate by users eligible under I/O policy",
 		ConstLabels: staticLabels,
-	})
+	}, []string{})
 
-	exp.ioEligibleUsersWriteBlockIOPS = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
+	exp.ioEligibleUsersWriteBlockIOPS = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "io_eligible_users_write_block_operations_per_second",
 		Help:        "Total block-device write operation rate by users eligible under I/O policy",
 		ConstLabels: staticLabels,
-	})
+	}, []string{})
+
+	exp.blockIOPSBounds = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "io_eligible_block_operations_per_second_bound", Help: "Certified decision rate bound per device; activation uses minimum, release maximum", ConstLabels: staticLabels}, []string{"device", "direction", "bound"})
+	exp.blockIOPSUncertain = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_attribution_uncertain", Help: "Whether the decision interval contains unresolved operation origins", ConstLabels: staticLabels}, []string{"device"})
+	exp.blockIOPSRequired = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_source_required", Help: "Whether enabled IOPS policy requires the kernel source", ConstLabels: staticLabels})
+	exp.blockIOPSDecisionAt = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_decision_timestamp_seconds", Help: "Collection timestamp of cached IOPS decision evidence", ConstLabels: staticLabels})
+	exp.blockIOPSAvailable = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_source_available", Help: "Mandatory source passed integrity checks for the latest decision sample", ConstLabels: staticLabels})
+	exp.blockIOPSUnavailable = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_unavailable_users", Help: "Eligible users without a complete certified IOPS interval", ConstLabels: staticLabels})
 
 	exp.activelyLimitedUsers = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
@@ -837,8 +850,22 @@ func (exp *PrometheusExporter) ObserveConfigReload(observation config.ReloadObse
 	exp.configReload.observe(observation)
 }
 
+// BlockIOPSDeviceMetrics is a detached per-device decision bound projection.
+type BlockIOPSDeviceMetrics struct {
+	Device                                               string
+	ReadMinimum, ReadMaximum, WriteMinimum, WriteMaximum float64
+	UpperAvailable                                       bool
+	Uncertain                                            bool
+}
+
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
+	BlockIOPSDevices                             []BlockIOPSDeviceMetrics
+	BlockIOPSUnavailableUsers                    int
+	BlockIOPSExactAvailable                      bool
+	BlockIOPSSourceAvailable                     bool
+	BlockIOPSSourceRequired                      bool
+	BlockIOPSDecisionAt                          time.Time
 	EnforcementMode                              cgroup.EnforcementMode
 	EnforcementCycleState                        cgroup.EnforcementCycleState
 	TotalCPUUsage                                float64
@@ -899,8 +926,33 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 	exp.ioEligibleUsersCount.Set(float64(metrics.IOEligibleUsersCount))
 	exp.ioEligibleUsersReadBPS.Set(metrics.IOEligibleUsersReadBytesPerSecond)
 	exp.ioEligibleUsersWriteBPS.Set(metrics.IOEligibleUsersWriteBytesPerSecond)
-	exp.ioEligibleUsersReadBlockIOPS.Set(metrics.IOEligibleUsersReadBlockOperationsPerSecond)
-	exp.ioEligibleUsersWriteBlockIOPS.Set(metrics.IOEligibleUsersWriteBlockOperationsPerSecond)
+	exp.ioEligibleUsersReadBlockIOPS.DeleteLabelValues()
+	exp.ioEligibleUsersWriteBlockIOPS.DeleteLabelValues()
+	if metrics.BlockIOPSExactAvailable {
+		exp.ioEligibleUsersReadBlockIOPS.WithLabelValues().Set(metrics.IOEligibleUsersReadBlockOperationsPerSecond)
+		exp.ioEligibleUsersWriteBlockIOPS.WithLabelValues().Set(metrics.IOEligibleUsersWriteBlockOperationsPerSecond)
+	}
+	exp.blockIOPSBounds.Reset()
+	exp.blockIOPSUncertain.Reset()
+	exp.blockIOPSUnavailable.Set(float64(metrics.BlockIOPSUnavailableUsers))
+	exp.blockIOPSAvailable.Set(boolMetricValue(metrics.BlockIOPSSourceAvailable))
+	exp.blockIOPSRequired.Set(boolMetricValue(metrics.BlockIOPSSourceRequired))
+	decisionTimestamp := 0.0
+	if !metrics.BlockIOPSDecisionAt.IsZero() {
+		decisionTimestamp = float64(metrics.BlockIOPSDecisionAt.UnixNano()) / 1e9
+	}
+	exp.blockIOPSDecisionAt.Set(decisionTimestamp)
+	for _, device := range metrics.BlockIOPSDevices {
+		exp.blockIOPSBounds.WithLabelValues(device.Device, "read", "minimum").Set(device.ReadMinimum)
+		if device.UpperAvailable {
+			exp.blockIOPSBounds.WithLabelValues(device.Device, "read", "maximum").Set(device.ReadMaximum)
+		}
+		exp.blockIOPSBounds.WithLabelValues(device.Device, "write", "minimum").Set(device.WriteMinimum)
+		if device.UpperAvailable {
+			exp.blockIOPSBounds.WithLabelValues(device.Device, "write", "maximum").Set(device.WriteMaximum)
+		}
+		exp.blockIOPSUncertain.WithLabelValues(device.Device).Set(boolMetricValue(device.Uncertain))
+	}
 	exp.cpuActivelyLimitedUsers.Set(float64(metrics.CPUActivelyLimitedUsersCount))
 	exp.activelyLimitedUsers.Set(float64(metrics.ActivelyLimitedUsersCount))
 	exp.cpuLimitsActive.Set(boolMetricValue(metrics.CPULimitsActive))

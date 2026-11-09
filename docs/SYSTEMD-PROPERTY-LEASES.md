@@ -22,6 +22,12 @@ fills those digests before success is reported. This file is an ownership journa
 not a disposable cache. Removing it while a lease is active makes automatic ownership
 recovery impossible.
 
+For the mandatory IOPS source, `IOAccounting` is a typed D-Bus boolean with
+a normalized 0/1 durable lease. It is acquired before observation and restored
+on retirement, shutdown or source failure. Enabling accounting is independent of
+finite hard-I/O limits. A full restore invalidates IOPS decision baselines because
+its recorded baseline may disable the controller.
+
 For `IODeviceWeight`, the record also retains the canonical device path and the typed
 BFQ or `io.cost` verification mechanism for every ResMan-owned tuple. This context is
 part of the lease because the D-Bus `a(st)` value does not identify which kernel file

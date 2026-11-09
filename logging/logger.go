@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -62,7 +63,7 @@ var (
 	}
 
 	// currentLogger is the process-wide logger singleton.
-	currentLogger *Logger
+	currentLogger atomic.Pointer[Logger]
 	once          sync.Once
 
 	defaultFallbackWriter io.Writer = os.Stderr
@@ -102,6 +103,8 @@ type syslogSink interface {
 }
 
 type logFileOperations struct {
+	sync     func(*os.File) error
+	syncDir  func(string) error
 	stat     func(*os.File) (os.FileInfo, error)
 	close    func(*os.File) error
 	remove   func(string) error
@@ -120,8 +123,10 @@ type logFileMetadata struct {
 
 func defaultLogFileOperations() logFileOperations {
 	return logFileOperations{
-		stat:  func(file *os.File) (os.FileInfo, error) { return file.Stat() },
-		close: func(file *os.File) error { return file.Close() },
+		sync:    func(file *os.File) error { return file.Sync() },
+		syncDir: syncLogDirectory,
+		stat:    func(file *os.File) (os.FileInfo, error) { return file.Stat() },
+		close:   func(file *os.File) error { return file.Close() },
 		remove: func(path string) error {
 			return os.Remove(path)
 		},
@@ -135,6 +140,12 @@ func defaultLogFileOperations() logFileOperations {
 func (s *loggerState) operations() logFileOperations {
 	defaults := defaultLogFileOperations()
 	operations := s.fileOps
+	if operations.sync == nil {
+		operations.sync = defaults.sync
+	}
+	if operations.syncDir == nil {
+		operations.syncDir = defaults.syncDir
+	}
 	if operations.stat == nil {
 		operations.stat = defaults.stat
 	}
@@ -171,11 +182,11 @@ func InitLogger(level string, filePath string, maxSize int, maxBackups int, useS
 			if err != nil {
 				log.Printf("ERROR: Failed to initialize syslog: %v", err)
 				// Fallback to stderr so protocol streams on stdout remain clean.
-				currentLogger = createStderrLogger(logLevel)
+				currentLogger.Store(createStderrLogger(logLevel))
 				return
 			}
 
-			currentLogger = &Logger{
+			logger := &Logger{
 				state: &loggerState{
 					level:        logLevel,
 					logger:       log.New(syslogWriter, "", 0),
@@ -187,7 +198,8 @@ func InitLogger(level string, filePath string, maxSize int, maxBackups int, useS
 				fields: make(map[string]interface{}),
 			}
 
-			_ = currentLogger.logInternal(INFO, "Logger initialized (syslog)",
+			currentLogger.Store(logger)
+			_ = logger.logInternal(INFO, "Logger initialized (syslog)",
 				"level", levelNames[logLevel],
 				"syslog", true,
 			)
@@ -198,12 +210,12 @@ func InitLogger(level string, filePath string, maxSize int, maxBackups int, useS
 		if err != nil {
 			log.Printf("ERROR: Failed to initialize file logger: %v", err)
 			// Fallback to stderr so protocol streams on stdout remain clean.
-			currentLogger = createStderrLogger(logLevel)
+			currentLogger.Store(createStderrLogger(logLevel))
 			return
 		}
-		currentLogger = fileLogger
+		currentLogger.Store(fileLogger)
 
-		_ = currentLogger.logInternal(INFO, "Logger initialized",
+		_ = fileLogger.logInternal(INFO, "Logger initialized",
 			"level", levelNames[logLevel],
 			"file", filePath,
 			"max_size", fmt.Sprintf("%d bytes", maxSize),
@@ -309,11 +321,12 @@ func metadataForLogRotation(info os.FileInfo) logFileMetadata {
 
 // GetLogger returns the initialized process-wide logger.
 func GetLogger() *Logger {
-	if currentLogger == nil {
-		// If uninitialized, create the default logger with stderr fallback.
-		InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, DefaultLogMaxBackups, false)
+	if logger := currentLogger.Load(); logger != nil {
+		return logger
 	}
-	return currentLogger
+	// If uninitialized, create the default logger with stderr fallback.
+	InitLogger("INFO", "/var/log/resman.log", 10*1024*1024, DefaultLogMaxBackups, false)
+	return currentLogger.Load()
 }
 
 // parseLogLevel converts a configuration value to a LogLevel.
@@ -465,13 +478,16 @@ func (l *Logger) checkAndRotate() (string, error) {
 // is <path>.1, left uncompressed so it stays directly readable, and older copies
 // are <path>.2.gz through <path>.<maxBackups>.gz. Copies beyond maxBackups are
 // removed, so the footprint stays bounded without an external rotator.
-func (l *Logger) rotateLog() (string, error) {
+func (l *Logger) rotateLog() (operation string, err error) {
 	operations := l.state.operations()
 	info, err := operations.stat(l.state.file)
 	if err != nil {
 		return "rotation_stat", fmt.Errorf("inspect active log metadata before rotation: %w", err)
 	}
 	metadata := metadataForLogRotation(info)
+	if err := operations.sync(l.state.file); err != nil {
+		return "rotation_sync", fmt.Errorf("sync active log before rotation: %w", err)
+	}
 
 	if err := operations.close(l.state.file); err != nil {
 		// A failed Close has ambiguous descriptor state. Keep the existing handle
@@ -480,6 +496,15 @@ func (l *Logger) rotateLog() (string, error) {
 		return "rotation_close", fmt.Errorf("close active log before rotation: %w", err)
 	}
 	l.state.file = nil
+	// Persist directory-entry changes even when a later rotation step fails.
+	defer func() {
+		if syncErr := operations.syncDir(l.state.filePath); syncErr != nil {
+			if err == nil {
+				operation = "rotation_sync_directory"
+			}
+			err = errors.Join(err, fmt.Errorf("sync log directory after rotation: %w", syncErr))
+		}
+	}()
 
 	if operation, err := l.shiftBackups(operations, metadata); err != nil {
 		return operation, errors.Join(err, l.reopenActiveLog())
@@ -517,7 +542,18 @@ func (l *Logger) rotateLog() (string, error) {
 			return "rotation_notice", errors.Join(err, closeErr)
 		}
 	}
+	if err := operations.sync(file); err != nil {
+		return "rotation_sync", fmt.Errorf("sync new active log after rotation: %w", err)
+	}
 	return "", nil
+}
+
+func syncLogDirectory(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open log directory: %w", err)
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (l *Logger) backupPath(index int) string {

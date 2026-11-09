@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.41.3 to ResMan 1.41.4
+# Upgrading from ResMan 1.25.x through 1.41.4 to ResMan 1.42.0
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.41.3 to
-ResMan 1.41.4. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.41.4 to
+ResMan 1.42.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -38,6 +38,34 @@ and restores them before readiness.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## CHANGED: certified IOPS source and per-device bounds (1.42.0)
+
+**Visible change.** Enabled `IO_READ_IOPS` or `IO_WRITE_IOPS` requires the qualified
+kernel source before readiness. Activation uses certainly selected operations;
+release uses complete possibly selected maxima. The previous collector never
+produced those IOPS and could indefinitely retain CPU/RAM episodes. Kernel-source
+failure now stops decisions and attempts safe restoration of owned properties.
+
+**Cause.** Slice totals cannot exactly apply `PROCESS_EXCLUDE_LIST` to shared
+writeback. Nor can syscall counts represent block operations. The approved
+conservative interval contract preserves selection without fabricating precision.
+
+**Action.** Check the exact builds and capabilities in
+[BLOCK-IOPS-SOURCE-DESIGN.md](BLOCK-IOPS-SOURCE-DESIGN.md) before enabling IOPS.
+Unsupported builds fail explicitly; CPU/RAM and bandwidth-only policies do not
+require BPF. Keep the packaged `CAP_BPF`/`CAP_PERFMON` capabilities. A new kernel
+build needs qualification, not an automatic version-family match. No configuration
+key is removed and no bandwidth migration is applied automatically.
+
+Migrate exact aggregate IOPS dashboards/alerts to
+`resman_io_eligible_block_operations_per_second_bound{device,direction,bound}`.
+Use `minimum` for activation and `maximum` for release, with
+`resman_io_block_iops_unavailable_users` and
+`resman_io_block_iops_attribution_uncertain`. A missing upper series is unknown.
+Never sum layered devices. Historical exact series are absent unless exact idle
+is measured; this is required to avoid silently presenting a bound as an exact
+number. There is no metrics database schema migration.
 
 ## FIXED: every control cycle decides on a fresh process scan
 
@@ -201,6 +229,15 @@ longer need them. If you use `USE_SYSLOG=true`, read ResMan records in
 hand. A locally modified `/etc/logrotate.d/resman` is replaced on RPM hosts and
 saved as `.rpmsave`; carry over any local option without pointing the rule back
 at `LOG_FILE`.
+
+Rotation now syncs the old active log before closing it, the new active file,
+and the containing directory after backup renames, removals and creation. Directory
+sync is attempted after partial failures too. Sync failures use the checked logging
+error, bounded health and direct-stderr fallback paths. This makes a successful
+rotation durable on filesystems honoring fsync; it does not sync each ordinary log
+record or promise recovery of records written after the last sync. Initial file or
+syslog construction failures already report an explicit error on stderr before
+falling back there.
 
 ## CHANGED: cycle_id is a per-run sequence
 
@@ -927,6 +964,28 @@ Prometheus and explains why missing data must not be read as zero.
 
 ## Configuration loading and reload
 
+### Corrected outer-quote parsing in 1.42.0
+
+One matching outer pair of single or double quotes is removed. Interior quotes and
+quoted whitespace remain literal, subject to field-specific validation. Unmatched
+opening quotes are rejected with file, line and key context. The configuration
+editor uses the same parser; environment values remain literal and are not unquoted.
+
+Earlier releases stripped any number of either quote character from both ends and
+trimmed the resulting whitespace. Keeping that interpretation would silently discard
+literal data; accepting an unmatched opening quote as literal would hide malformed
+configuration. Review values with repeated, mixed or unmatched surrounding quotes:
+use unquoted `SERVER_ROLE=worker` or one pair, `SERVER_ROLE="worker"`, for the old
+unquoted result. To preserve literal double quotes, use `SERVER_ROLE='"worker"'`.
+No automatic rewrite is performed. Check affected file values before restarting;
+a malformed reload is refused while the applied configuration remains active.
+
+Reload now parses the captured configuration bytes before confirming the source
+again. Configuration persistence and editor source reads use a non-symlink regular
+file descriptor for both content and metadata, rejecting concurrent path replacement
+rather than following a substituted link. Parent directories must remain trusted;
+these checks do not grant an untrusted writer safe concurrent access to configuration.
+
 ### CPU capacity becomes a strict CPU Points policy
 
 **Visible change.** CPU capacity is normalized to 1000 points. The package now
@@ -1435,17 +1494,18 @@ external CPU activity.
 
 **Visible change.** `/proc/PID/io` byte rates are differenced by PID plus start time
 before user aggregation, so process exit or PID reuse no longer zeros a user's entire
-rate. Finite `IO_READ_IOPS` and `IO_WRITE_IOPS` decisions use `io.stat` `rios/wios`, not
-`syscr/syscw`. Page-cache, pipe, socket, and character-device syscalls no longer count
-as block IOPS, while direct block I/O does. Finite-IOPS-eligible processes enter an
-unlimited per-user observation cgroup before enforcement.
+rate. Finite `IO_READ_IOPS` and `IO_WRITE_IOPS` decisions use certified kernel
+operation bounds at the `io.stat` accounting boundary. Page-cache, pipe, socket,
+and character-device syscalls no longer count
+as block IOPS, while direct block I/O does. The certified kernel source counts at
+the existing authoritative user slice; processes remain in their systemd units.
 
 **Cause.** A sum over changing process membership is not monotonic, and syscall counts
 measure a different event from the device IOPS controlled by `io.max`.
 
 **Action.** No configuration conversion is required, but expect different activation
-and release for the same workload. Ensure the delegated hierarchy exposes `io.max` and
-`io.stat`. The first observation sample and any placement/policy transition are
+and release for the same workload. Use a qualified source profile and ensure systemd can enable `io.max` and
+`io.stat`. The first observation sample and any unit/device/policy transition are
 incomplete rather than zero. If any eligible user lacks a baseline, available users
 can still prove activation but global release waits; continuous eligible-user churn can
 therefore prolong active I/O limits.

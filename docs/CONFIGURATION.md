@@ -10,6 +10,10 @@ The authoritative order is `default < file < environment`: runtime defaults are 
 
 Environment-shadowing remedy: Inspect the running service with `systemctl show resman --property=Environment --property=EnvironmentFiles --property=DropInPaths` and `systemctl cat resman`. Modify the authoritative drop-in with `systemctl edit resman`, or modify the referenced environment file or configuration-management source. Reload the systemd unit definition where required, then restart `resman`; `systemctl reload resman` alone cannot change the environment of the running process.
 
+## File value syntax
+
+Whitespace outside a value is ignored. One matching outer pair of single or double quotes is removed; interior quotes and quoted whitespace are preserved, subject to field-specific validation. An opening quote without the same closing quote is an error with the file, line and key named. Quotes inside an unquoted value are literal. There is no shell expansion or escape decoding. A whitespace-prefixed `#` starts an inline comment only outside quotes. Environment values are used directly without file quote processing.
+
 | Key | Kind | Runtime default | Lifecycle | Sensitive | Editable | Constraint | Empty, disabled, or special value | Remedy |
 |---|---|---|---|---|---|---|---|---|
 | `AUTODETECT_PATTERNS` | `boolean` | `false` | `dynamic` | `false` | `true` | — | false disables observational workload-pattern classification. | Correct the authored value and submit the complete candidate for validation. |

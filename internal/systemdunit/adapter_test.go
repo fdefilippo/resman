@@ -139,7 +139,7 @@ func (f *fakeUnitTransport) startCapabilityProbe(_ context.Context, unit string,
 			if _, deviceProperty := approvedDeviceProperties[assignment.name]; deviceProperty {
 				state.slice[string(assignment.name)] = []dbusDeviceLimit{}
 			} else {
-				state.slice[string(assignment.name)] = assignment.value.scalar
+				state.slice[string(assignment.name)] = dbusPropertyValue(assignment)
 			}
 		}
 		f.units[unit] = state
@@ -228,7 +228,7 @@ func (f *fakeUnitTransport) applyAssignments(unit string, assignments []Property
 			sort.Slice(values, func(i, j int) bool { return values[i].Path < values[j].Path })
 			state.slice[string(assignment.name)] = values
 		} else {
-			state.slice[string(assignment.name)] = assignment.value.scalar
+			state.slice[string(assignment.name)] = dbusPropertyValue(assignment)
 		}
 		seen[managedRuntimeDropInPath(unit, assignment.name)] = true
 	}
@@ -250,6 +250,9 @@ func (f *fakeUnitTransport) applyRevert(unit string) {
 	}
 	for property := range approvedScalarProperties {
 		state.slice[string(property)] = uint64(SystemdUnset)
+		if property == PropertyIOAccounting {
+			state.slice[string(property)] = false
+		}
 	}
 	for property := range approvedDeviceProperties {
 		state.slice[string(property)] = []dbusDeviceLimit{}
@@ -262,7 +265,7 @@ func (f *fakeUnitTransport) applyRevert(unit string) {
 			}
 			state.slice[string(property)] = values
 		} else {
-			state.slice[string(property)] = value.scalar
+			state.slice[string(property)] = dbusPropertyValue(PropertyAssignment{name: property, value: value})
 		}
 	}
 	state.unit["DropInPaths"] = []string{}
@@ -1601,6 +1604,7 @@ func fakeUnit(name, controlGroup string, seed uint32) *fakeUnitState {
 		string(PropertyMemoryMax):           uint64(SystemdUnset),
 		string(PropertyMemorySwapMax):       uint64(SystemdUnset),
 		string(PropertyIOWeight):            uint64(SystemdUnset),
+		string(PropertyIOAccounting):        false,
 		string(PropertyIODeviceWeight):      []dbusDeviceLimit{},
 		string(PropertyIOReadBandwidthMax):  []dbusDeviceLimit{},
 		string(PropertyIOWriteBandwidthMax): []dbusDeviceLimit{},

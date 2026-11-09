@@ -1679,3 +1679,27 @@ func TestCollectorConcurrency(t *testing.T) {
 		<-done
 	}
 }
+
+func TestCollectorStopIsIdempotentAndWaitsForCleanup(t *testing.T) {
+	for _, callers := range []int{1, 16} {
+		t.Run(fmt.Sprint("callers=", callers), func(t *testing.T) {
+			collector, err := NewCollector(config.DefaultConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wg sync.WaitGroup
+			for range callers {
+				wg.Go(func() {
+					collector.Stop()
+					select {
+					case <-collector.cleanupDone:
+					default:
+						t.Error("Stop returned before cleanup ended")
+					}
+				})
+			}
+			wg.Wait()
+			collector.Stop()
+		})
+	}
+}
