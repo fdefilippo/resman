@@ -328,7 +328,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 - Bound HTTP deadlines while preserving MCP streaming and hash credential comparisons.
 - Measure control stages and persist terminal decisions with compatible schema-11 migration.
 - Export system PSI averages with availability/freshness and opt-in memory wakeups.
-- Share verified process stat reads and retain bounded sampled process identity/activity.
+- Bound fresh process collection with four readers and shared verified stat reads.
+- Track boot-scoped process identities and covered CPU/RAM activity through MCP and SQLite.
+- Preserve raw metrics cadence and lifecycle acknowledgments after optional activity failures.
 - Add selective HTTP hook retries with stable event identity and visible attempt outcomes.
 - Compact expired raw observations into UTC-hour rollups with schema-12 migration.
 
