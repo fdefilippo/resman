@@ -286,7 +286,7 @@ func TestNewDatabaseManagerRejectsAmbiguousLegacyMetricsSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewDatabaseManager() accepted an ambiguous legacy schema")
 	}
-	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 11"} {
+	for _, fragment := range []string{dbPath, "legacy unversioned schema", "delete or move", "schema version 12"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 		}
@@ -334,7 +334,7 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 			if err == nil {
 				t.Fatalf("NewDatabaseManager() migrated schema version %d", version)
 			}
-			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 11"} {
+			for _, fragment := range []string{dbPath, fmt.Sprintf("schema version %d", version), "delete or move", "schema version 12"} {
 				if !strings.Contains(err.Error(), fragment) {
 					t.Fatalf("NewDatabaseManager() error = %q, want fragment %q", err, fragment)
 				}
@@ -343,7 +343,7 @@ func TestNewDatabaseManagerRejectsVersionsOlderThanMigrationFloor(t *testing.T) 
 	}
 }
 
-func TestNewDatabaseManagerMigratesSchema7To11(t *testing.T) {
+func TestNewDatabaseManagerMigratesSchema7To12(t *testing.T) {
 	dbPath := privateTestDatabasePath(t, "schema-7.db")
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
@@ -382,7 +382,7 @@ func TestNewDatabaseManagerMigratesSchema7To11(t *testing.T) {
 			t.Fatalf("construct schema 7 fixture by dropping %s: %v", column, err)
 		}
 	}
-	if _, err := raw.Exec("DROP TABLE IF EXISTS control_history; PRAGMA user_version = 7"); err != nil {
+	if _, err := raw.Exec("DROP TABLE IF EXISTS metric_rollups; DROP TABLE IF EXISTS process_activity; DROP TABLE IF EXISTS control_history; PRAGMA user_version = 7"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("mark schema 7 fixture: %v", err)
 	}
@@ -410,8 +410,8 @@ func TestNewDatabaseManagerMigratesSchema7To11(t *testing.T) {
 	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read migrated schema version: %v", err)
 	}
-	if version != 11 {
-		t.Fatalf("migrated schema version = %d, want 11", version)
+	if version != 12 {
+		t.Fatalf("migrated schema version = %d, want 12", version)
 	}
 	rows, err := manager.db.Query("SELECT io_device_weight_state, io_device_weight_observed_delivery, io_device_weight_effect_qualification_provenance, total_cores FROM system_metrics ORDER BY timestamp")
 	if err != nil {
@@ -479,7 +479,7 @@ func makeDevelopmentSchema9Fixture(t *testing.T, dbPath string, addUnexpectedCol
 			t.Fatalf("add malformed schema-9 column: %v", err)
 		}
 	}
-	if _, err := tx.Exec("DROP TABLE control_history; PRAGMA user_version = 9"); err != nil {
+	if _, err := tx.Exec("DROP TABLE IF EXISTS metric_rollups; DROP TABLE IF EXISTS process_activity; DROP TABLE control_history; PRAGMA user_version = 9"); err != nil {
 		rollback()
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func makeDevelopmentSchema9Fixture(t *testing.T, dbPath string, addUnexpectedCol
 	}
 }
 
-func TestNewDatabaseManagerMigratesDevelopmentSchema9To11(t *testing.T) {
+func TestNewDatabaseManagerMigratesDevelopmentSchema9To12(t *testing.T) {
 	dbPath := privateTestDatabasePath(t, "schema-9.db")
 	manager, err := NewDatabaseManager(dbPath)
 	if err != nil {
@@ -540,8 +540,8 @@ func TestNewDatabaseManagerMigratesDevelopmentSchema9To11(t *testing.T) {
 	if err := manager.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 11 {
-		t.Fatalf("migrated schema version = %d, want 11", version)
+	if version != 12 {
+		t.Fatalf("migrated schema version = %d, want 12", version)
 	}
 	rows, err := manager.db.Query("SELECT id, total_cores, io_device_weight_effect_qualification_provenance FROM system_metrics ORDER BY id")
 	if err != nil {
@@ -654,7 +654,7 @@ func TestSchema7MigrationRollsBackWhenMetricsTableIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := raw.Exec("DROP TABLE IF EXISTS control_history; PRAGMA user_version = 7"); err != nil {
+	if _, err := raw.Exec("DROP TABLE IF EXISTS metric_rollups; DROP TABLE IF EXISTS process_activity; DROP TABLE IF EXISTS control_history; PRAGMA user_version = 7"); err != nil {
 		_ = raw.Close()
 		t.Fatal(err)
 	}

@@ -355,6 +355,9 @@ LIMIT_HOOK_URL=
 # LIMIT_HOOK_SCRIPT_GROUP=resman-hook
 # LIMIT_HOOK_URL=https://example.internal/resman/user-limited
 LIMIT_HOOK_TIMEOUT=10
+# HTTP attempts including the first. Opt in only with a receiver that deduplicates.
+# Retries are selective and share the full timeout; scripts are never replayed.
+LIMIT_HOOK_HTTP_MAX_ATTEMPTS=1
 LIMIT_HOOK_MAX_CONCURRENCY=2
 LIMIT_HOOK_QUEUE_CAPACITY=64
 
@@ -646,7 +649,9 @@ MCP_EDITOR_AUTH_TOKEN=
 #
 # METRICS_DB_RETENTION_DAYS: How many days to keep data in the database
 # Default: 30 days
-# Older data is deleted at startup and every 24 hours. Space is reclaimed
+# Expired raw observations are compacted into hourly sample aggregates before deletion.
+# Terminal decision history follows raw retention and is never reconstructed from rollups.
+# Cleanup runs at startup and every 24 hours. Space is reclaimed
 # incrementally to avoid a blocking full-database VACUUM.
 #
 # METRICS_DB_WRITE_INTERVAL: How often (in seconds) to write metrics to the database
@@ -673,6 +678,9 @@ METRICS_DB_ENABLED=false
 METRICS_DB_PATH=/var/lib/resman/metrics.db
 METRICS_DB_RETENTION_DAYS=30
 METRICS_DB_WRITE_INTERVAL=30
+# Configured hourly aggregate retention; effective days=max(raw, configured).
+# This preserves existing configurations whose raw retention exceeds one year.
+METRICS_DB_ROLLUP_RETENTION_DAYS=365
 
 # ========================
 # USERNAME CACHE TTL
@@ -700,7 +708,7 @@ USERNAME_CACHE_TTL=60
 # ========================
 # PSI EVENT-DRIVEN MODE
 # ========================
-# Uses poll() on cpu.pressure and io.pressure to trigger control cycles
+# Uses poll() on cpu.pressure and io.pressure, optionally memory.pressure, to trigger control cycles
 # only when system pressure exceeds configured thresholds, instead of
 # running at fixed intervals. Requires Linux >= 4.20 with CONFIG_PSI=y.
 #
@@ -723,7 +731,7 @@ USERNAME_CACHE_TTL=60
 # PSI_FALLBACK_INTERVAL: Fallback polling interval in seconds
 # Default: 300 (5 minutes)
 # Heartbeat to ensure control cycles still run if no PSI events fire
-# (e.g., system idle). Set to 0 to disable fallback (not recommended).
+# (e.g., system idle). A positive fallback interval is required.
 #
 # METRICS_REFRESH_INTERVAL: Prometheus/Grafana refresh interval in seconds
 # in both polling and PSI modes, including blackout. This keeps host dashboards
@@ -755,6 +763,11 @@ USERNAME_CACHE_TTL=60
 # PSI_FALLBACK_INTERVAL=60        # 1 minute heartbeat
 #
 PSI_EVENT_DRIVEN=false
+# Optional memory pressure wakeups require PSI_EVENT_DRIVEN=true.
+# Wakeups trigger the normal attributed decision; they do not change RAM policy,
+# select OOM victims, or replace systemd-oomd. Both fields support reload.
+PSI_MEMORY_EVENT_DRIVEN=false
+PSI_MEMORY_STALL_THRESHOLD=50000
 PSI_CPU_STALL_THRESHOLD=50000
 PSI_IO_STALL_THRESHOLD=50000
 PSI_WINDOW_US=1000000

@@ -109,7 +109,7 @@ func TestSchema10MigrationPreservesObservationsAndStartsEmptyHistory(t *testing.
 	if err := db.writeSystemMetricsForTest(&SystemMetricsRecord{TotalCores: 7}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.db.Exec("DROP TABLE control_history; PRAGMA user_version = 10"); err != nil {
+	if _, err := db.db.Exec("DROP TABLE IF EXISTS metric_rollups; DROP TABLE IF EXISTS process_activity; DROP TABLE control_history; PRAGMA user_version = 10"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -128,7 +128,7 @@ func TestSchema10MigrationPreservesObservationsAndStartsEmptyHistory(t *testing.
 	if err := db.db.QueryRow("SELECT total_cores FROM system_metrics").Scan(&cores); err != nil || cores != 7 {
 		t.Fatalf("preserved cores=%d err=%v", cores, err)
 	}
-	if err := db.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 11 {
+	if err := db.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 12 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	entries, err := db.ReadControlHistory(t.Context(), 100)
@@ -143,7 +143,7 @@ func TestSchema10MigrationConflictDoesNotAdvanceVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.db.Exec("DROP TABLE control_history; CREATE TABLE control_history (foreign_data TEXT); PRAGMA user_version = 10"); err != nil {
+	if _, err := db.db.Exec("DROP TABLE IF EXISTS metric_rollups; DROP TABLE IF EXISTS process_activity; DROP TABLE control_history; CREATE TABLE control_history (foreign_data TEXT); PRAGMA user_version = 10"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

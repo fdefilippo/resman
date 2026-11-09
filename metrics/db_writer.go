@@ -30,13 +30,14 @@ import (
 
 // DBWriter coordinates periodic writes to the metrics database.
 type DBWriter struct {
-	dbManager          *database.DatabaseManager
-	writeInterval      time.Duration
-	mu                 sync.RWMutex
-	lastWriteTime      time.Time
-	enabled            bool
-	lastWriteFailed    bool
-	historyWriteFailed bool
+	dbManager                  *database.DatabaseManager
+	writeInterval              time.Duration
+	mu                         sync.RWMutex
+	lastWriteTime              time.Time
+	enabled                    bool
+	lastWriteFailed            bool
+	historyWriteFailed         bool
+	processActivityWriteFailed bool
 }
 
 // NewDBWriter creates a periodic metrics database writer.
@@ -49,12 +50,18 @@ func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) 
 }
 
 // WriteMetricsBatch writes one system sample and all user samples atomically.
-func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) (writeErr error) {
+func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) error {
+	_, err := w.writeMetricsBatch(batch)
+	return err
+}
+
+// writeMetricsBatch distinguishes an actual SQL commit from a disabled no-op.
+func (w *DBWriter) writeMetricsBatch(batch PersistenceBatch) (committed bool, writeErr error) {
 	w.mu.RLock()
 	enabled := w.enabled
 	w.mu.RUnlock()
 	if !enabled || w.dbManager == nil {
-		return nil
+		return false, nil
 	}
 
 	defer func() { w.mu.Lock(); w.lastWriteFailed = writeErr != nil; w.mu.Unlock() }()
@@ -124,7 +131,7 @@ func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) (writeErr error) {
 	for _, uid := range uids {
 		user := batch.Users[uid]
 		if user.Metrics == nil {
-			return fmt.Errorf("user metrics for UID %d are nil", uid)
+			return false, fmt.Errorf("user metrics for UID %d are nil", uid)
 		}
 		metrics := user.Metrics
 		userRecords = append(userRecords, &database.UserMetricsRecord{
@@ -173,9 +180,9 @@ func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) (writeErr error) {
 	}
 
 	if err := w.dbManager.WriteMetricsBatch(systemRecord, userRecords); err != nil {
-		return fmt.Errorf("failed to write metrics collection batch: %w", err)
+		return false, fmt.Errorf("failed to write metrics collection batch: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // ShouldWrite reports whether the database write interval has elapsed.
@@ -216,7 +223,7 @@ func (w *DBWriter) Close() error {
 func (w *DBWriter) Healthy() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.enabled && !w.lastWriteFailed && !w.historyWriteFailed
+	return w.enabled && !w.lastWriteFailed && !w.historyWriteFailed && !w.processActivityWriteFailed
 }
 
 // WriteControlHistory persists terminal cycles independently of metrics sampling.

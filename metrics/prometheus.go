@@ -36,6 +36,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/httpsecurity"
 	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/pressure"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
@@ -171,8 +172,10 @@ type PrometheusExporter struct {
 	observationHostCPUUnavailable  *prometheus.CounterVec
 	psiEventsTotal                 *prometheus.CounterVec
 	psiLastEventTimestamp          *prometheus.GaugeVec
+	pressure                       *pressureMetrics
 	errorsTotal                    *prometheus.CounterVec
 	limitHookExecutions            *prometheus.CounterVec
+	limitHookAttempts              *prometheus.CounterVec
 	limitHookInFlight              prometheus.Gauge
 	limitHookQueueDepth            prometheus.Gauge
 	limitHookQueueCapacity         prometheus.Gauge
@@ -778,6 +781,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"reason"},
 	)
 
+	exp.pressure = newPressureMetrics(exp.registry, namespace, staticLabels)
 	exp.psiEventsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -817,6 +821,11 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"hook_type", "outcome"},
 	)
+	exp.limitHookAttempts = promauto.With(exp.registry).NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Name: "limit_hook_attempts_total",
+		Help:        "Actual limit-hook execution attempts by type and bounded outcome; retries counted separately from terminal jobs",
+		ConstLabels: staticLabels,
+	}, []string{"hook_type", "outcome"})
 	exp.limitHookInFlight = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "limit_hook_in_flight",
@@ -890,6 +899,7 @@ type CPUDecisionMetrics struct {
 
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
+	Pressure                                     *pressure.Snapshot
 	CPUDecision                                  *CPUDecisionMetrics
 	BlockIOPSDevices                             []BlockIOPSDeviceMetrics
 	BlockIOPSUnavailableUsers                    int
@@ -934,6 +944,9 @@ type SystemExporterMetrics struct {
 func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetrics) {
 	if exp == nil {
 		return
+	}
+	if metrics.Pressure != nil {
+		exp.pressure.update(*metrics.Pressure)
 	}
 
 	if metrics.TotalCPUUsageAvailable {

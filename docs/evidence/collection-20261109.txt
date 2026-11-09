@@ -1,0 +1,753 @@
+ResMan collection evidence, 2026-11-09
+Platform: Intel N150, Linux 7.2.9+deb13-amd64, Go1.27.3 linux/amd64.
+Repository baseline: 0ed2ce4 plus the shared-stat/activity/pool implementation.
+The initial read-path measurement preceded the bounded pool. Final fixture and
+host output below includes the full UID/executable lifetime bracket and explicit
+runtime availability. These are local measurements, not production qualification.
+Commands and interpretations: ../PROCESS-ACTIVITY.md
+No host process command lines, environment, credentials, or user payloads were captured.
+The host excerpts deliberately retain only benchmark counts/times and CPU symbols.
+
+ACTUAL SYSCALL READ COUNTS (strace -f -e trace=openat, benchtime1x)
+Fixture PIDs10000..10239; counted matching O_RDONLY opens of /PID/stat or /PID/statm.
+legacy stat720 statm240
+shared_guarded stat480 statm0
+Final included process budget2stat opens; final excluded UID budget1stat open.
+Both enumeration paths share this budget and have executable regressions.
+
+
+INITIAL READ-PATH AND COMPLETE-SCAN BENCHMARK GOMAXPROCS1, five10-iteration runs
+2026/11/09 09:17:19 ERROR: Failed to initialize file logger: failed to open log file /var/log/resman.log: open /var/log/resman.log: permission denied
+[2026-11-09 09:17:19] [INFO] Metrics collector initialized
+goos: linux
+goarch: amd64
+pkg: github.com/fdefilippo/resman/metrics
+cpu: Intel(R) N150
+BenchmarkProcessReadPath240/legacy         	[2026-11-09 09:17:19] [INFO] Metrics collector initialized
+      10	  30877492 ns/op	       240.0 processes/scan	         3.000 stat_reads/process	12368182 B/op	   36004 allocs/op
+BenchmarkProcessReadPath240/legacy         	[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+      10	  32185468 ns/op	       240.0 processes/scan	         3.000 stat_reads/process	12368168 B/op	   36004 allocs/op
+BenchmarkProcessReadPath240/legacy         	[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+      10	  33183447 ns/op	       240.0 processes/scan	         3.000 stat_reads/process	12368736 B/op	   36005 allocs/op
+BenchmarkProcessReadPath240/legacy         	[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+[2026-11-09 09:17:20] [INFO] Metrics collector initialized
+      10	  32184060 ns/op	       240.0 processes/scan	         3.000 stat_reads/process	12368172 B/op	   36004 allocs/op
+BenchmarkProcessReadPath240/legacy         	[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+      10	  32853280 ns/op	       240.0 processes/scan	         3.000 stat_reads/process	12368171 B/op	   36004 allocs/op
+[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+BenchmarkProcessReadPath240/shared_guarded 	[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+      10	  11592989 ns/op	       240.0 processes/scan	         2.000 stat_reads/process	 2328467 B/op	    9364 allocs/op
+BenchmarkProcessReadPath240/shared_guarded 	[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+      10	  20396413 ns/op	       240.0 processes/scan	         2.000 stat_reads/process	 2328468 B/op	    9364 allocs/op
+BenchmarkProcessReadPath240/shared_guarded 	[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+[2026-11-09 09:17:21] [INFO] Metrics collector initialized
+      10	  24115298 ns/op	       240.0 processes/scan	         2.000 stat_reads/process	 2328472 B/op	    9364 allocs/op
+BenchmarkProcessReadPath240/shared_guarded 	[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+      10	  22594829 ns/op	       240.0 processes/scan	         2.000 stat_reads/process	 2328468 B/op	    9364 allocs/op
+BenchmarkProcessReadPath240/shared_guarded 	[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+      10	  22777824 ns/op	       240.0 processes/scan	         2.000 stat_reads/process	 2328467 B/op	    9364 allocs/op
+[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+BenchmarkCollectAllUserMetrics240          	[2026-11-09 09:17:22] [INFO] Metrics collector initialized
+      10	  17315157 ns/op	       240.0 processes/scan	        45.00 users/scan	 3956998 B/op	   15846 allocs/op
+BenchmarkCollectAllUserMetrics240          	[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+      10	  14669310 ns/op	       240.0 processes/scan	        45.00 users/scan	 3953184 B/op	   15846 allocs/op
+BenchmarkCollectAllUserMetrics240          	[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+      10	  14293421 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957820 B/op	   15846 allocs/op
+BenchmarkCollectAllUserMetrics240          	[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+[2026-11-09 09:17:23] [INFO] Metrics collector initialized
+      10	  14081024 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957816 B/op	   15846 allocs/op
+BenchmarkCollectAllUserMetrics240          	[2026-11-09 09:17:24] [INFO] Metrics collector initialized
+[2026-11-09 09:17:24] [INFO] Metrics collector initialized
+      10	  14527011 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957817 B/op	   15846 allocs/op
+PASS
+
+
+INITIAL BOUNDED-POOL BENCHMARK GOMAXPROCS4, five10-iteration runs
+2026/11/09 09:25:11 ERROR: Failed to initialize file logger: failed to open log file /var/log/resman.log: open /var/log/resman.log: permission denied
+[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+goos: linux
+goarch: amd64
+pkg: github.com/fdefilippo/resman/metrics
+cpu: Intel(R) N150
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+      10	  12922286 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957140 B/op	   15838 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+      10	  12666258 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957975 B/op	   15838 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+      10	  13643632 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957966 B/op	   15838 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+      10	  12512974 ns/op	       240.0 processes/scan	        45.00 users/scan	 3958788 B/op	   15839 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:25:11] [INFO] Metrics collector initialized
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	  13049715 ns/op	       240.0 processes/scan	        45.00 users/scan	 3956318 B/op	   15838 allocs/op
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	   7295676 ns/op	       240.0 processes/scan	        45.00 users/scan	 3958398 B/op	   15847 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	   6293380 ns/op	       240.0 processes/scan	        45.00 users/scan	 3960516 B/op	   15846 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	   6704740 ns/op	       240.0 processes/scan	        45.00 users/scan	 3959848 B/op	   15846 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	   6618519 ns/op	       240.0 processes/scan	        45.00 users/scan	 3960678 B/op	   15847 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+[2026-11-09 09:25:12] [INFO] Metrics collector initialized
+      10	   6735324 ns/op	       240.0 processes/scan	        45.00 users/scan	 3961203 B/op	   15848 allocs/op
+PASS
+
+
+FINAL BOUNDED-POOL BENCHMARK GOMAXPROCS4, five10-iteration runs
+2026/11/09 09:34:29 ERROR: Failed to initialize file logger: failed to open log file /var/log/resman.log: open /var/log/resman.log: permission denied
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+goos: linux
+goarch: amd64
+pkg: github.com/fdefilippo/resman/metrics
+cpu: Intel(R) N150
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+      10	  12255146 ns/op	       240.0 processes/scan	        45.00 users/scan	 3959614 B/op	   15839 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+      10	  14394291 ns/op	       240.0 processes/scan	        45.00 users/scan	 3959361 B/op	   15839 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+      10	  12757218 ns/op	       240.0 processes/scan	        45.00 users/scan	 3957942 B/op	   15838 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+      10	  13026130 ns/op	       240.0 processes/scan	        45.00 users/scan	 3958765 B/op	   15838 allocs/op
+BenchmarkCollectProcessPool240/1-4 	[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+      10	  13972741 ns/op	       240.0 processes/scan	        45.00 users/scan	 3958773 B/op	   15839 allocs/op
+[2026-11-09 09:34:29] [INFO] Metrics collector initialized
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+      10	   8935959 ns/op	       240.0 processes/scan	        45.00 users/scan	 3961509 B/op	   15848 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+      10	   6097444 ns/op	       240.0 processes/scan	        45.00 users/scan	 3959465 B/op	   15846 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+      10	  11882604 ns/op	       240.0 processes/scan	        45.00 users/scan	 3959740 B/op	   15846 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+      10	   9833311 ns/op	       240.0 processes/scan	        45.00 users/scan	 3958916 B/op	   15846 allocs/op
+BenchmarkCollectProcessPool240/4-4 	[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+[2026-11-09 09:34:30] [INFO] Metrics collector initialized
+      10	   8639205 ns/op	       240.0 processes/scan	        45.00 users/scan	 3960464 B/op	   15847 allocs/op
+PASS
+
+
+INITIAL COMPLETE FIXTURE CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: 49b1028bfbeddc1f0bc3be98410af354f24aa8f3
+Type: cpu
+Time: 2026-11-09 09:18:12 CET
+Duration: 5.27s, Total samples = 5.21s (98.92%)
+Showing nodes accounting for 3.55s, 68.14% of 5.21s total
+Dropped 142 nodes (cum <= 0.03s)
+Showing top 100 nodes out of 210
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      5.19s 99.62%  testing.(*B).runN
+         0     0%     0%      5.10s 97.89%  github.com/fdefilippo/resman/metrics.BenchmarkCollectAllUserMetrics240
+         0     0%     0%      5.10s 97.89%  testing.(*B).launch
+         0     0%     0%      4.97s 95.39%  github.com/fdefilippo/resman/metrics.(*Collector).collectAllUserMetrics
+     2.73s 52.40% 52.40%      2.73s 52.40%  internal/runtime/syscall/linux.Syscall6
+     0.01s  0.19% 52.59%      2.63s 50.48%  syscall.RawSyscall6
+     0.02s  0.38% 52.98%      2.27s 43.57%  os.ReadFile
+     0.02s  0.38% 53.36%      1.76s 33.78%  syscall.Syscall
+     0.01s  0.19% 53.55%      1.64s 31.48%  os.OpenFile
+     0.01s  0.19% 53.74%      1.63s 31.29%  os.openFileNolog
+         0     0% 53.74%      1.60s 30.71%  os.Open (inline)
+         0     0% 53.74%      1.55s 29.75%  github.com/fdefilippo/resman/internal/processactivity.ReadStat
+         0     0% 53.74%      1.55s 29.75%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessStat
+         0     0% 53.74%      1.02s 19.58%  syscall.Syscall6
+         0     0% 53.74%      0.94s 18.04%  os.ignoringEINTR (inline)
+     0.01s  0.19% 53.93%      0.88s 16.89%  github.com/fdefilippo/resman/internal/processidentity.Read
+     0.04s  0.77% 54.70%      0.86s 16.51%  runtime.mallocgc
+         0     0% 54.70%      0.84s 16.12%  os.open
+         0     0% 54.70%      0.84s 16.12%  os.openFileNolog.func1 (inline)
+         0     0% 54.70%      0.84s 16.12%  syscall.Open (inline)
+     0.01s  0.19% 54.89%      0.84s 16.12%  syscall.openat
+     0.01s  0.19% 55.09%      0.78s 14.97%  os.newFile
+         0     0% 55.09%      0.71s 13.63%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile
+         0     0% 55.09%      0.71s 13.63%  runtime.systemstack
+     0.01s  0.19% 55.28%      0.70s 13.44%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+         0     0% 55.28%      0.69s 13.24%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 55.28%      0.66s 12.67%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessIO
+         0     0% 55.28%      0.66s 12.67%  os.(*File).Read
+         0     0% 55.28%      0.64s 12.28%  internal/poll.(*FD).Read
+         0     0% 55.28%      0.64s 12.28%  os.(*File).read (inline)
+         0     0% 55.28%      0.61s 11.71%  syscall.Read (inline)
+     0.01s  0.19% 55.47%      0.61s 11.71%  syscall.read
+     0.01s  0.19% 55.66%      0.55s 10.56%  bufio.(*Scanner).Scan
+     0.03s  0.58% 56.24%      0.50s  9.60%  os.readFileContents
+         0     0% 56.24%      0.48s  9.21%  os.(*File).Close (partial-inline)
+     0.01s  0.19% 56.43%      0.48s  9.21%  os.(*file).close
+     0.01s  0.19% 56.62%      0.48s  9.21%  runtime.makeslice
+         0     0% 56.62%      0.41s  7.87%  syscall.SetNonblock
+         0     0% 56.62%      0.41s  7.87%  syscall.fcntl
+         0     0% 56.62%      0.35s  6.72%  internal/poll.(*FD).decref
+     0.01s  0.19% 56.81%      0.35s  6.72%  os.statOrZero
+         0     0% 56.81%      0.34s  6.53%  internal/poll.(*FD).Close
+         0     0% 56.81%      0.34s  6.53%  internal/poll.(*FD).destroy
+     0.01s  0.19% 57.01%      0.34s  6.53%  internal/poll.(*SysFile).destroy (inline)
+     0.01s  0.19% 57.20%      0.34s  6.53%  os.(*File).Stat
+         0     0% 57.20%      0.33s  6.33%  syscall.Close
+         0     0% 57.20%      0.32s  6.14%  github.com/fdefilippo/resman/metrics.parseProcessPSS
+     0.02s  0.38% 57.58%      0.29s  5.57%  internal/poll.(*FD).Fstat
+         0     0% 57.58%      0.28s  5.37%  runtime.gcAssistAlloc
+         0     0% 57.58%      0.27s  5.18%  runtime.gcAssistAlloc.func2
+         0     0% 57.58%      0.27s  5.18%  runtime.gcAssistAlloc1
+         0     0% 57.58%      0.27s  5.18%  runtime.gcDrainN
+         0     0% 57.58%      0.26s  4.99%  os.Readlink (inline)
+         0     0% 57.58%      0.26s  4.99%  os.readlink
+     0.01s  0.19% 57.77%      0.25s  4.80%  runtime.SetFinalizer
+         0     0% 57.77%      0.25s  4.80%  runtime.mallocgcSmallNoscan
+     0.03s  0.58% 58.35%      0.25s  4.80%  runtime.slicebytetostring
+         0     0% 58.35%      0.24s  4.61%  internal/poll.(*FD).Fstat.func1 (inline)
+         0     0% 58.35%      0.24s  4.61%  internal/poll.ignoringEINTR (inline)
+         0     0% 58.35%      0.24s  4.61%  os.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 58.35%      0.24s  4.61%  os.readlink.func1 (inline)
+         0     0% 58.35%      0.24s  4.61%  path/filepath.Join (inline)
+         0     0% 58.35%      0.24s  4.61%  path/filepath.join
+         0     0% 58.35%      0.24s  4.61%  syscall.Fstat
+         0     0% 58.35%      0.24s  4.61%  syscall.Readlink (inline)
+     0.01s  0.19% 58.54%      0.24s  4.61%  syscall.readlinkat
+         0     0% 58.54%      0.23s  4.41%  runtime.deductAssistCredit
+     0.09s  1.73% 60.27%      0.23s  4.41%  strings.Fields
+     0.01s  0.19% 60.46%      0.20s  3.84%  runtime.(*mcache).nextFree
+         0     0% 60.46%      0.18s  3.45%  runtime.(*mcache).refill
+         0     0% 60.46%      0.17s  3.26%  runtime.(*mcentral).cacheSpan
+         0     0% 60.46%      0.16s  3.07%  github.com/fdefilippo/resman/internal/processactivity.ParseStat
+     0.02s  0.38% 60.84%      0.15s  2.88%  github.com/fdefilippo/resman/metrics.parseProcessIO
+         0     0% 60.84%      0.15s  2.88%  internal/poll.(*FD).Init
+         0     0% 60.84%      0.15s  2.88%  internal/poll.(*pollDesc).init
+     0.02s  0.38% 61.23%      0.15s  2.88%  internal/poll.runtime_pollOpen
+         0     0% 61.23%      0.13s  2.50%  github.com/fdefilippo/resman/metrics.processFixture
+     0.05s  0.96% 62.19%      0.13s  2.50%  internal/filepathlite.Clean
+         0     0% 62.19%      0.13s  2.50%  path/filepath.Clean (inline)
+     0.03s  0.58% 62.76%      0.13s  2.50%  runtime.scanObject
+         0     0% 62.76%      0.12s  2.30%  runtime.SetFinalizer.func2
+     0.02s  0.38% 63.15%      0.12s  2.30%  runtime.addfinalizer
+         0     0% 63.15%      0.12s  2.30%  runtime.deductSweepCredit
+     0.02s  0.38% 63.53%      0.12s  2.30%  runtime.sweepone
+         0     0% 63.53%      0.11s  2.11%  github.com/fdefilippo/resman/internal/processactivity.(*Tracker).Update
+         0     0% 63.53%      0.11s  2.11%  github.com/fdefilippo/resman/metrics.(*Collector).publishProcessActivity
+         0     0% 63.53%      0.11s  2.11%  internal/runtime/syscall/linux.EpollCtl (inline)
+         0     0% 63.53%      0.11s  2.11%  runtime.netpollopen
+     0.09s  1.73% 65.26%      0.11s  2.11%  runtime.tryDeferToSpanScan
+     0.01s  0.19% 65.45%      0.11s  2.11%  strings.Join
+         0     0% 65.45%      0.10s  1.92%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample.func1
+     0.02s  0.38% 65.83%      0.10s  1.92%  runtime.mallocgcTinySC2
+     0.10s  1.92% 67.75%      0.10s  1.92%  runtime.memclrNoHeapPointers
+         0     0% 67.75%      0.09s  1.73%  github.com/fdefilippo/resman/metrics.processFixture.func1
+         0     0% 67.75%      0.09s  1.73%  os.RemoveAll (inline)
+         0     0% 67.75%      0.09s  1.73%  os.WriteFile
+         0     0% 67.75%      0.09s  1.73%  os.removeAll
+         0     0% 67.75%      0.09s  1.73%  os.removeAllFrom
+     0.02s  0.38% 68.14%      0.09s  1.73%  runtime.SetFinalizer.func1
+         0     0% 68.14%      0.09s  1.73%  runtime.entersyscall
+
+
+LEGACY READ-SEQUENCE CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: 49b1028bfbeddc1f0bc3be98410af354f24aa8f3
+Type: cpu
+Time: 2026-11-09 09:20:13 CET
+Duration: 4.01s, Total samples = 3.57s (88.98%)
+Showing nodes accounting for 2.02s, 56.58% of 3.57s total
+Dropped 99 nodes (cum <= 0.02s)
+Showing top 50 nodes out of 208
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      3.53s 98.88%  testing.(*B).runN
+         0     0%     0%      3.45s 96.64%  github.com/fdefilippo/resman/metrics.BenchmarkProcessReadPath240.func1
+         0     0%     0%      3.41s 95.52%  testing.(*B).launch
+         0     0%     0%      2.20s 61.62%  github.com/shirou/gopsutil/v3/process.(*Process).fillFromStatWithContext
+     0.03s  0.84%  0.84%      2.20s 61.62%  github.com/shirou/gopsutil/v3/process.(*Process).fillFromTIDStatWithContext
+     0.01s  0.28%  1.12%      1.83s 51.26%  github.com/shirou/gopsutil/v3/internal/common.BootTimeWithContext
+     1.81s 50.70% 51.82%      1.81s 50.70%  internal/runtime/syscall/linux.Syscall6
+         0     0% 51.82%      1.73s 48.46%  syscall.RawSyscall6
+         0     0% 51.82%      1.48s 41.46%  os.OpenFile
+         0     0% 51.82%      1.48s 41.46%  os.openFileNolog
+         0     0% 51.82%      1.47s 41.18%  github.com/shirou/gopsutil/v3/process.(*Process).Times (inline)
+         0     0% 51.82%      1.47s 41.18%  github.com/shirou/gopsutil/v3/process.(*Process).TimesWithContext
+         0     0% 51.82%      1.43s 40.06%  os.Open (inline)
+         0     0% 51.82%      1.14s 31.93%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessCPUAverage
+     0.01s  0.28% 52.10%      1.04s 29.13%  syscall.Syscall
+         0     0% 52.10%      0.95s 26.61%  os.ReadFile
+         0     0% 52.10%      0.89s 24.93%  github.com/shirou/gopsutil/v3/internal/common.ReadLines (inline)
+     0.02s  0.56% 52.66%      0.89s 24.93%  github.com/shirou/gopsutil/v3/internal/common.ReadLinesOffsetN
+     0.01s  0.28% 52.94%      0.89s 24.93%  os.ignoringEINTR (inline)
+     0.02s  0.56% 53.50%      0.85s 23.81%  os.open
+         0     0% 53.50%      0.85s 23.81%  os.openFileNolog.func1 (inline)
+     0.03s  0.84% 54.34%      0.85s 23.81%  runtime.mallocgc
+         0     0% 54.34%      0.83s 23.25%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessCPUUsageSimpleWithHandle
+         0     0% 54.34%      0.83s 23.25%  syscall.Open (inline)
+         0     0% 54.34%      0.83s 23.25%  syscall.openat
+     0.01s  0.28% 54.62%      0.82s 22.97%  syscall.Syscall6
+         0     0% 54.62%      0.80s 22.41%  github.com/shirou/gopsutil/v3/internal/common.readBootTimeStat
+         0     0% 54.62%      0.73s 20.45%  github.com/shirou/gopsutil/v3/internal/common.ReadLine
+         0     0% 54.62%      0.73s 20.45%  github.com/shirou/gopsutil/v3/process.(*Process).CreateTime (inline)
+         0     0% 54.62%      0.73s 20.45%  github.com/shirou/gopsutil/v3/process.(*Process).CreateTimeWithContext
+         0     0% 54.62%      0.73s 20.45%  github.com/shirou/gopsutil/v3/process.(*Process).createTimeWithContext
+         0     0% 54.62%      0.62s 17.37%  os.newFile
+     0.01s  0.28% 54.90%      0.60s 16.81%  runtime.makeslice
+         0     0% 54.90%      0.53s 14.85%  runtime.systemstack
+         0     0% 54.90%      0.47s 13.17%  github.com/shirou/gopsutil/v3/host.BootTime
+         0     0% 54.90%      0.47s 13.17%  github.com/shirou/gopsutil/v3/host.BootTimeWithContext (inline)
+         0     0% 54.90%      0.43s 12.04%  bufio.NewReader (inline)
+         0     0% 54.90%      0.43s 12.04%  bufio.NewReaderSize (inline)
+     0.01s  0.28% 55.18%      0.40s 11.20%  syscall.SetNonblock
+         0     0% 55.18%      0.39s 10.92%  os.(*File).Read
+         0     0% 55.18%      0.39s 10.92%  syscall.fcntl
+     0.01s  0.28% 55.46%      0.38s 10.64%  internal/poll.(*FD).Read
+         0     0% 55.46%      0.38s 10.64%  os.(*File).read (inline)
+     0.04s  1.12% 56.58%      0.35s  9.80%  runtime.mallocgcSmallNoscan
+         0     0% 56.58%      0.34s  9.52%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+         0     0% 56.58%      0.33s  9.24%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 56.58%      0.33s  9.24%  syscall.Read (inline)
+         0     0% 56.58%      0.33s  9.24%  syscall.read
+         0     0% 56.58%      0.31s  8.68%  os.(*File).Close (partial-inline)
+         0     0% 56.58%      0.31s  8.68%  os.(*file).close
+
+
+BOUNDED POOL ONE-WORKER CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: 68e7719484cfb26980b734099f02c299fa3b70c0
+Type: cpu
+Time: 2026-11-09 09:25:41 CET
+Duration: 5.15s, Total samples = 5.87s (114.07%)
+Showing nodes accounting for 4.29s, 73.08% of 5.87s total
+Dropped 194 nodes (cum <= 0.03s)
+Showing top 100 nodes out of 205
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      5.20s 88.59%  testing.(*B).runN
+         0     0%     0%      5.14s 87.56%  github.com/fdefilippo/resman/metrics.(*Collector).collectAllUserMetrics
+         0     0%     0%      5.14s 87.56%  github.com/fdefilippo/resman/metrics.BenchmarkCollectProcessPool240.func1
+         0     0%     0%      5.12s 87.22%  testing.(*B).launch
+         0     0%     0%      5.11s 87.05%  github.com/fdefilippo/resman/metrics.(*Collector).collectProcessMetrics
+     0.01s  0.17%  0.17%      4.92s 83.82%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSamples
+         0     0%  0.17%      4.90s 83.48%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSample
+     3.07s 52.30% 52.47%      3.07s 52.30%  internal/runtime/syscall/linux.Syscall6
+     0.01s  0.17% 52.64%      2.95s 50.26%  syscall.RawSyscall6
+     0.01s  0.17% 52.81%      2.73s 46.51%  os.ReadFile
+         0     0% 52.81%      2.12s 36.12%  os.OpenFile
+     0.01s  0.17% 52.98%      2.12s 36.12%  os.openFileNolog
+         0     0% 52.98%      2.09s 35.60%  os.Open (inline)
+     0.03s  0.51% 53.49%      1.94s 33.05%  syscall.Syscall
+     0.01s  0.17% 53.66%      1.73s 29.47%  github.com/fdefilippo/resman/internal/processactivity.ReadStat
+         0     0% 53.66%      1.73s 29.47%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessStat
+         0     0% 53.66%      1.22s 20.78%  syscall.Syscall6
+         0     0% 53.66%      1.16s 19.76%  os.ignoringEINTR (inline)
+         0     0% 53.66%      1.13s 19.25%  os.open
+         0     0% 53.66%      1.13s 19.25%  os.openFileNolog.func1 (inline)
+         0     0% 53.66%      1.13s 19.25%  syscall.Open (inline)
+     0.01s  0.17% 53.83%      1.13s 19.25%  syscall.openat
+     0.02s  0.34% 54.17%      0.98s 16.70%  os.newFile
+         0     0% 54.17%      0.91s 15.50%  github.com/fdefilippo/resman/internal/processidentity.Read
+         0     0% 54.17%      0.84s 14.31%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessIO
+     0.03s  0.51% 54.68%      0.73s 12.44%  runtime.systemstack
+         0     0% 54.68%      0.69s 11.75%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile
+         0     0% 54.68%      0.69s 11.75%  os.(*File).Read
+     0.01s  0.17% 54.86%      0.67s 11.41%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+         0     0% 54.86%      0.67s 11.41%  internal/poll.(*FD).Read
+         0     0% 54.86%      0.67s 11.41%  os.(*File).read (inline)
+         0     0% 54.86%      0.64s 10.90%  internal/poll.ignoringEINTRIO (inline)
+     0.03s  0.51% 55.37%      0.63s 10.73%  os.readFileContents
+         0     0% 55.37%      0.63s 10.73%  syscall.Read (inline)
+         0     0% 55.37%      0.63s 10.73%  syscall.read
+         0     0% 55.37%      0.59s 10.05%  syscall.SetNonblock
+     0.01s  0.17% 55.54%      0.59s 10.05%  syscall.fcntl
+         0     0% 55.54%      0.57s  9.71%  os.(*File).Close (partial-inline)
+     0.01s  0.17% 55.71%      0.57s  9.71%  os.(*file).close
+     0.08s  1.36% 57.07%      0.56s  9.54%  runtime.mallocgc
+         0     0% 57.07%      0.49s  8.35%  internal/poll.(*FD).Close
+         0     0% 57.07%      0.49s  8.35%  internal/poll.(*FD).decref
+         0     0% 57.07%      0.48s  8.18%  internal/poll.(*FD).destroy
+         0     0% 57.07%      0.46s  7.84%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 57.07%      0.46s  7.84%  syscall.Close
+         0     0% 57.07%      0.44s  7.50%  runtime.gcBgMarkWorker
+         0     0% 57.07%      0.40s  6.81%  runtime.gcBgMarkWorker.func2
+         0     0% 57.07%      0.40s  6.81%  runtime.gcDrain
+     0.02s  0.34% 57.41%      0.34s  5.79%  bufio.(*Scanner).Scan
+     0.01s  0.17% 57.58%      0.33s  5.62%  os.statOrZero
+         0     0% 57.58%      0.31s  5.28%  os.(*File).Stat
+         0     0% 57.58%      0.30s  5.11%  runtime.makeslice
+     0.03s  0.51% 58.09%      0.25s  4.26%  runtime.mallocgcSmallNoscan
+         0     0% 58.09%      0.24s  4.09%  internal/poll.(*FD).Fstat
+     0.01s  0.17% 58.26%      0.24s  4.09%  path/filepath.Join (inline)
+         0     0% 58.26%      0.23s  3.92%  internal/poll.(*FD).Fstat.func1 (inline)
+         0     0% 58.26%      0.23s  3.92%  internal/poll.ignoringEINTR (inline)
+         0     0% 58.26%      0.23s  3.92%  path/filepath.join
+         0     0% 58.26%      0.23s  3.92%  syscall.Fstat
+         0     0% 58.26%      0.22s  3.75%  internal/poll.(*FD).Init
+     0.01s  0.17% 58.43%      0.22s  3.75%  internal/poll.(*pollDesc).init
+         0     0% 58.43%      0.22s  3.75%  runtime.gcDrainMarkWorkerIdle (inline)
+     0.01s  0.17% 58.60%      0.21s  3.58%  github.com/fdefilippo/resman/internal/processactivity.ParseStat
+         0     0% 58.60%      0.21s  3.58%  internal/poll.runtime_pollOpen
+     0.11s  1.87% 60.48%      0.19s  3.24%  runtime.scanObject
+     0.12s  2.04% 62.52%      0.19s  3.24%  strings.Fields
+     0.05s  0.85% 63.37%      0.18s  3.07%  runtime.SetFinalizer
+         0     0% 63.37%      0.18s  3.07%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 63.37%      0.17s  2.90%  os.Readlink (inline)
+         0     0% 63.37%      0.17s  2.90%  os.readlink
+         0     0% 63.37%      0.17s  2.90%  runtime.markroot
+         0     0% 63.37%      0.16s  2.73%  github.com/fdefilippo/resman/metrics.parseProcessPSS
+         0     0% 63.37%      0.16s  2.73%  os.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 63.37%      0.16s  2.73%  os.readlink.func1 (inline)
+         0     0% 63.37%      0.16s  2.73%  syscall.Readlink (inline)
+         0     0% 63.37%      0.16s  2.73%  syscall.readlinkat
+     0.07s  1.19% 64.57%      0.15s  2.56%  runtime.scanblock
+         0     0% 64.57%      0.14s  2.39%  runtime.markrootBlock
+     0.14s  2.39% 66.95%      0.14s  2.39%  runtime.memclrNoHeapPointers
+     0.13s  2.21% 69.17%      0.14s  2.39%  runtime.tryDeferToSpanScan
+     0.06s  1.02% 70.19%      0.13s  2.21%  internal/filepathlite.Clean
+         0     0% 70.19%      0.13s  2.21%  internal/runtime/syscall/linux.EpollCtl (inline)
+         0     0% 70.19%      0.13s  2.21%  path/filepath.Clean (inline)
+         0     0% 70.19%      0.13s  2.21%  runtime.netpollopen
+         0     0% 70.19%      0.13s  2.21%  runtime.slicebytetostring
+     0.01s  0.17% 70.36%      0.12s  2.04%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile.func1
+     0.02s  0.34% 70.70%      0.12s  2.04%  runtime.entersyscall
+         0     0% 70.70%      0.10s  1.70%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample.func1
+         0     0% 70.70%      0.10s  1.70%  runtime.bgsweep
+     0.03s  0.51% 71.21%      0.10s  1.70%  strings.Join
+         0     0% 71.21%      0.09s  1.53%  github.com/fdefilippo/resman/metrics.parseProcessIO
+     0.01s  0.17% 71.38%      0.09s  1.53%  runtime.newobject
+     0.03s  0.51% 71.89%      0.09s  1.53%  runtime.reentersyscall
+     0.01s  0.17% 72.06%      0.09s  1.53%  runtime.sweepone
+         0     0% 72.06%      0.08s  1.36%  runtime.(*mcache).nextFree
+         0     0% 72.06%      0.08s  1.36%  runtime.(*mcache).refill
+         0     0% 72.06%      0.08s  1.36%  runtime.lock (inline)
+     0.06s  1.02% 73.08%      0.08s  1.36%  runtime.lock2
+         0     0% 73.08%      0.08s  1.36%  runtime.lockWithRank (inline)
+         0     0% 73.08%      0.08s  1.36%  runtime.unlock (inline)
+
+
+BOUNDED POOL FOUR-WORKER CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: 68e7719484cfb26980b734099f02c299fa3b70c0
+Type: cpu
+Time: 2026-11-09 09:25:46 CET
+Duration: 6.96s, Total samples = 12.68s (182.23%)
+Showing nodes accounting for 8.25s, 65.06% of 12.68s total
+Dropped 306 nodes (cum <= 0.06s)
+Showing top 100 nodes out of 194
+      flat  flat%   sum%        cum   cum%
+     0.01s 0.079% 0.079%     10.43s 82.26%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSamples.func1
+         0     0% 0.079%     10.36s 81.70%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSample
+     6.07s 47.87% 47.95%      6.07s 47.87%  internal/runtime/syscall/linux.Syscall6
+     0.01s 0.079% 48.03%      5.79s 45.66%  syscall.RawSyscall6
+     0.02s  0.16% 48.19%      5.32s 41.96%  os.ReadFile
+     0.01s 0.079% 48.26%      4.60s 36.28%  os.OpenFile
+     0.01s 0.079% 48.34%      4.58s 36.12%  os.openFileNolog
+         0     0% 48.34%      4.57s 36.04%  os.Open (inline)
+     0.05s  0.39% 48.74%      3.45s 27.21%  syscall.Syscall
+         0     0% 48.74%      3.35s 26.42%  github.com/fdefilippo/resman/internal/processactivity.ReadStat
+         0     0% 48.74%      3.35s 26.42%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessStat
+         0     0% 48.74%      2.75s 21.69%  syscall.Syscall6
+         0     0% 48.74%      2.56s 20.19%  os.ignoringEINTR (inline)
+     0.01s 0.079% 48.82%      2.52s 19.87%  os.openFileNolog.func1 (inline)
+         0     0% 48.82%      2.51s 19.79%  os.open
+         0     0% 48.82%      2.51s 19.79%  syscall.Open (inline)
+     0.02s  0.16% 48.97%      2.51s 19.79%  syscall.openat
+     0.06s  0.47% 49.45%      2.05s 16.17%  os.newFile
+         0     0% 49.45%      2.03s 16.01%  github.com/fdefilippo/resman/internal/processidentity.Read
+     0.02s  0.16% 49.61%      1.88s 14.83%  runtime.systemstack
+         0     0% 49.61%      1.72s 13.56%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile
+         0     0% 49.61%      1.66s 13.09%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+     0.06s  0.47% 50.08%      1.54s 12.15%  runtime.mallocgc
+         0     0% 50.08%      1.51s 11.91%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessIO
+         0     0% 50.08%      1.31s 10.33%  os.(*File).Read
+     0.01s 0.079% 50.16%      1.31s 10.33%  os.(*File).read (inline)
+     0.02s  0.16% 50.32%      1.30s 10.25%  internal/poll.(*FD).Read
+     0.01s 0.079% 50.39%      1.25s  9.86%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 50.39%      1.22s  9.62%  syscall.Read (inline)
+     0.01s 0.079% 50.47%      1.22s  9.62%  syscall.read
+         0     0% 50.47%      1.16s  9.15%  os.(*File).Close (partial-inline)
+         0     0% 50.47%      1.16s  9.15%  os.(*file).close
+     0.03s  0.24% 50.71%      1.12s  8.83%  os.readFileContents
+     0.02s  0.16% 50.87%      0.93s  7.33%  syscall.SetNonblock
+     0.05s  0.39% 51.26%      0.91s  7.18%  runtime.makeslice
+         0     0% 51.26%      0.91s  7.18%  syscall.fcntl
+     0.01s 0.079% 51.34%      0.85s  6.70%  bufio.(*Scanner).Scan
+         0     0% 51.34%      0.84s  6.62%  internal/poll.(*FD).Close
+         0     0% 51.34%      0.82s  6.47%  internal/poll.(*FD).decref
+         0     0% 51.34%      0.82s  6.47%  internal/poll.(*FD).destroy
+         0     0% 51.34%      0.78s  6.15%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 51.34%      0.78s  6.15%  syscall.Close
+     0.01s 0.079% 51.42%      0.67s  5.28%  os.statOrZero
+         0     0% 51.42%      0.67s  5.28%  runtime.gcBgMarkWorker
+     0.01s 0.079% 51.50%      0.65s  5.13%  os.(*File).Stat
+     0.03s  0.24% 51.74%      0.60s  4.73%  runtime.mallocgcSmallNoscan
+         0     0% 51.74%      0.59s  4.65%  internal/poll.(*FD).Init
+         0     0% 51.74%      0.59s  4.65%  internal/poll.(*pollDesc).init
+     0.02s  0.16% 51.89%      0.59s  4.65%  internal/poll.runtime_pollOpen
+     0.04s  0.32% 52.21%      0.58s  4.57%  runtime.SetFinalizer
+         0     0% 52.21%      0.56s  4.42%  runtime.gcBgMarkWorker.func2
+     0.01s 0.079% 52.29%      0.56s  4.42%  runtime.gcDrain
+         0     0% 52.29%      0.54s  4.26%  path/filepath.Join (inline)
+         0     0% 52.29%      0.54s  4.26%  path/filepath.join
+     0.20s  1.58% 53.86%      0.54s  4.26%  strings.Fields
+         0     0% 53.86%      0.53s  4.18%  runtime.mcall
+         0     0% 53.86%      0.52s  4.10%  github.com/fdefilippo/resman/internal/processactivity.ParseStat
+     0.01s 0.079% 53.94%      0.52s  4.10%  github.com/fdefilippo/resman/metrics.parseProcessPSS
+         0     0% 53.94%      0.52s  4.10%  testing.(*B).runN
+     0.02s  0.16% 54.10%      0.51s  4.02%  internal/poll.(*FD).Fstat
+         0     0% 54.10%      0.49s  3.86%  internal/poll.(*FD).Fstat.func1 (inline)
+         0     0% 54.10%      0.49s  3.86%  internal/poll.ignoringEINTR (inline)
+         0     0% 54.10%      0.49s  3.86%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 54.10%      0.49s  3.86%  syscall.Fstat
+         0     0% 54.10%      0.44s  3.47%  github.com/fdefilippo/resman/metrics.(*Collector).collectAllUserMetrics
+         0     0% 54.10%      0.44s  3.47%  github.com/fdefilippo/resman/metrics.BenchmarkCollectProcessPool240.func1
+         0     0% 54.10%      0.44s  3.47%  testing.(*B).launch
+     0.06s  0.47% 54.57%      0.41s  3.23%  runtime.lock (inline)
+         0     0% 54.57%      0.40s  3.15%  os.Readlink (inline)
+         0     0% 54.57%      0.40s  3.15%  os.readlink
+     0.02s  0.16% 54.73%      0.38s  3.00%  github.com/fdefilippo/resman/metrics.(*Collector).collectProcessMetrics
+     0.01s 0.079% 54.81%      0.38s  3.00%  runtime.(*mcache).nextFree
+         0     0% 54.81%      0.36s  2.84%  os.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 54.81%      0.36s  2.84%  os.readlink.func1 (inline)
+     0.01s 0.079% 54.89%      0.36s  2.84%  runtime.(*mcache).refill
+     0.04s  0.32% 55.21%      0.36s  2.84%  runtime.bgsweep
+     0.36s  2.84% 58.04%      0.36s  2.84%  runtime.memclrNoHeapPointers
+         0     0% 58.04%      0.36s  2.84%  syscall.Readlink (inline)
+     0.01s 0.079% 58.12%      0.36s  2.84%  syscall.readlinkat
+         0     0% 58.12%      0.35s  2.76%  runtime.goschedImpl
+     0.01s 0.079% 58.20%      0.35s  2.76%  runtime.lockWithRank (inline)
+         0     0% 58.20%      0.35s  2.76%  runtime.schedule
+     0.29s  2.29% 60.49%      0.34s  2.68%  runtime.lock2
+         0     0% 60.49%      0.33s  2.60%  runtime.(*mcentral).cacheSpan
+     0.02s  0.16% 60.65%      0.33s  2.60%  runtime.slicebytetostring
+         0     0% 60.65%      0.31s  2.44%  runtime.gosched_m
+         0     0% 60.65%      0.30s  2.37%  runtime.netpollopen
+         0     0% 60.65%      0.29s  2.29%  internal/runtime/syscall/linux.EpollCtl (inline)
+         0     0% 60.65%      0.29s  2.29%  runtime.markroot
+     0.04s  0.32% 60.96%      0.29s  2.29%  strings.Join
+     0.01s 0.079% 61.04%      0.28s  2.21%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile.func1
+     0.18s  1.42% 62.46%      0.28s  2.21%  runtime.scanObject
+     0.01s 0.079% 62.54%      0.27s  2.13%  runtime.SetFinalizer.func1
+     0.03s  0.24% 62.78%      0.26s  2.05%  runtime.findRunnable
+     0.03s  0.24% 63.01%      0.26s  2.05%  runtime.removefinalizer
+     0.07s  0.55% 63.56%      0.25s  1.97%  internal/filepathlite.Clean
+         0     0% 63.56%      0.25s  1.97%  path/filepath.Clean (inline)
+     0.19s  1.50% 65.06%      0.25s  1.97%  runtime.tryDeferToSpanScan
+         0     0% 65.06%      0.24s  1.89%  runtime.(*mcentral).grow
+         0     0% 65.06%      0.24s  1.89%  runtime.unlock (inline)
+
+
+FINAL HOST ONE-WORKER CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: a0bd27f3a5cc3986ceaabb22b9d45e11d5f55820
+Type: cpu
+Time: 2026-11-09 09:34:30 CET
+Duration: 1.28s, Total samples = 650ms (50.80%)
+Showing nodes accounting for 650ms, 100% of 650ms total
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      650ms   100%  github.com/fdefilippo/resman/metrics.(*Collector).collectAllUserMetrics
+         0     0%     0%      650ms   100%  github.com/fdefilippo/resman/metrics.(*Collector).collectProcessMetrics
+         0     0%     0%      650ms   100%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSample
+         0     0%     0%      650ms   100%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSamples
+         0     0%     0%      650ms   100%  github.com/fdefilippo/resman/metrics.BenchmarkCollectCurrentProcReadOnly.func1
+         0     0%     0%      650ms   100%  testing.(*B).runN
+     610ms 93.85% 93.85%      610ms 93.85%  internal/runtime/syscall/linux.Syscall6
+         0     0% 93.85%      600ms 92.31%  syscall.RawSyscall6
+         0     0% 93.85%      600ms 92.31%  syscall.Syscall
+         0     0% 93.85%      590ms 90.77%  testing.(*B).launch
+         0     0% 93.85%      580ms 89.23%  internal/poll.(*FD).Read
+         0     0% 93.85%      580ms 89.23%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 93.85%      580ms 89.23%  os.(*File).Read
+         0     0% 93.85%      580ms 89.23%  os.(*File).read (inline)
+         0     0% 93.85%      580ms 89.23%  syscall.Read (inline)
+         0     0% 93.85%      580ms 89.23%  syscall.read
+         0     0% 93.85%      570ms 87.69%  bufio.(*Scanner).Scan
+         0     0% 93.85%      560ms 86.15%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+         0     0% 93.85%      560ms 86.15%  github.com/fdefilippo/resman/metrics.parseProcessPSS
+         0     0% 93.85%       60ms  9.23%  testing.(*B).run1.func1
+         0     0% 93.85%       40ms  6.15%  os.ReadFile
+         0     0% 93.85%       30ms  4.62%  github.com/fdefilippo/resman/internal/processactivity.ReadStat
+         0     0% 93.85%       30ms  4.62%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile
+         0     0% 93.85%       30ms  4.62%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessStat
+         0     0% 93.85%       30ms  4.62%  os.(*File).Close (partial-inline)
+         0     0% 93.85%       30ms  4.62%  os.(*file).close
+         0     0% 93.85%       20ms  3.08%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessIO
+         0     0% 93.85%       20ms  3.08%  internal/poll.(*FD).Close
+         0     0% 93.85%       20ms  3.08%  internal/poll.(*FD).decref
+         0     0% 93.85%       20ms  3.08%  internal/poll.(*FD).destroy
+         0     0% 93.85%       20ms  3.08%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 93.85%       20ms  3.08%  runtime.makeslice
+         0     0% 93.85%       20ms  3.08%  runtime.mallocgc
+         0     0% 93.85%       20ms  3.08%  runtime.systemstack
+         0     0% 93.85%       20ms  3.08%  strings.Fields
+         0     0% 93.85%       20ms  3.08%  syscall.Close
+         0     0% 93.85%       10ms  1.54%  github.com/fdefilippo/resman/internal/processactivity.ParseStat
+         0     0% 93.85%       10ms  1.54%  github.com/fdefilippo/resman/internal/processidentity.Read
+         0     0% 93.85%       10ms  1.54%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile.func1
+         0     0% 93.85%       10ms  1.54%  internal/poll.(*FD).Init
+         0     0% 93.85%       10ms  1.54%  internal/poll.(*pollDesc).init
+         0     0% 93.85%       10ms  1.54%  internal/poll.runtime_pollOpen
+         0     0% 93.85%       10ms  1.54%  internal/runtime/syscall/linux.EpollCtl (inline)
+         0     0% 93.85%       10ms  1.54%  os.Open (inline)
+         0     0% 93.85%       10ms  1.54%  os.OpenFile
+         0     0% 93.85%       10ms  1.54%  os.newFile
+         0     0% 93.85%       10ms  1.54%  os.openFileNolog
+         0     0% 93.85%       10ms  1.54%  os.readFileContents
+         0     0% 93.85%       10ms  1.54%  path/filepath.Join (inline)
+         0     0% 93.85%       10ms  1.54%  path/filepath.join
+      10ms  1.54% 95.38%       10ms  1.54%  runtime.(*gcBits).bytep (inline)
+         0     0% 95.38%       10ms  1.54%  runtime.(*mcache).nextFree
+         0     0% 95.38%       10ms  1.54%  runtime.(*mspan).nextFreeIndex
+         0     0% 95.38%       10ms  1.54%  runtime.(*mspan).refillAllocCache
+      10ms  1.54% 96.92%       10ms  1.54%  runtime.(*spanSet).reset
+         0     0% 96.92%       10ms  1.54%  runtime.SetFinalizer
+         0     0% 96.92%       10ms  1.54%  runtime.SetFinalizer.func1
+         0     0% 96.92%       10ms  1.54%  runtime.finishsweep_m
+         0     0% 96.92%       10ms  1.54%  runtime.gcStart
+         0     0% 96.92%       10ms  1.54%  runtime.gcStart.func3
+         0     0% 96.92%       10ms  1.54%  runtime.mallocgcSmallScanHeader
+         0     0% 96.92%       10ms  1.54%  runtime.mallocgcSmallScanNoHeaderSC7
+      10ms  1.54% 98.46%       10ms  1.54%  runtime.memmove
+         0     0% 98.46%       10ms  1.54%  runtime.netpollopen
+         0     0% 98.46%       10ms  1.54%  runtime.removefinalizer
+      10ms  1.54%   100%       10ms  1.54%  runtime.removespecial
+         0     0%   100%       10ms  1.54%  strings.(*Builder).WriteString (inline)
+         0     0%   100%       10ms  1.54%  strings.Join
+
+
+FINAL HOST FOUR-WORKER CPU PROFILE cumulative top
+File: resman-metrics.test
+Build ID: a0bd27f3a5cc3986ceaabb22b9d45e11d5f55820
+Type: cpu
+Time: 2026-11-09 09:34:31 CET
+Duration: 1.53s, Total samples = 1.09s (71.23%)
+Showing nodes accounting for 1.09s, 100% of 1.09s total
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      1.03s 94.50%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSample
+         0     0%     0%      1.03s 94.50%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSamples.func1
+     0.99s 90.83% 90.83%      0.99s 90.83%  internal/runtime/syscall/linux.Syscall6
+         0     0% 90.83%      0.99s 90.83%  syscall.RawSyscall6
+         0     0% 90.83%      0.99s 90.83%  syscall.Syscall
+         0     0% 90.83%      0.96s 88.07%  bufio.(*Scanner).Scan
+         0     0% 90.83%      0.96s 88.07%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 90.83%      0.95s 87.16%  internal/poll.(*FD).Read
+         0     0% 90.83%      0.95s 87.16%  os.(*File).Read
+         0     0% 90.83%      0.95s 87.16%  os.(*File).read (inline)
+         0     0% 90.83%      0.95s 87.16%  syscall.Read (inline)
+         0     0% 90.83%      0.95s 87.16%  syscall.read
+         0     0% 90.83%      0.93s 85.32%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessMemorySample
+         0     0% 90.83%      0.93s 85.32%  github.com/fdefilippo/resman/metrics.parseProcessPSS
+         0     0% 90.83%      0.06s  5.50%  github.com/fdefilippo/resman/metrics.(*Collector).getUIDFromStatusFile
+         0     0% 90.83%      0.06s  5.50%  os.Open (inline)
+         0     0% 90.83%      0.06s  5.50%  os.OpenFile
+         0     0% 90.83%      0.06s  5.50%  os.newFile
+         0     0% 90.83%      0.06s  5.50%  os.openFileNolog
+         0     0% 90.83%      0.03s  2.75%  github.com/fdefilippo/resman/internal/processactivity.ReadStat
+         0     0% 90.83%      0.03s  2.75%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessStat
+         0     0% 90.83%      0.03s  2.75%  os.ReadFile
+         0     0% 90.83%      0.03s  2.75%  runtime.systemstack
+         0     0% 90.83%      0.03s  2.75%  syscall.SetNonblock
+         0     0% 90.83%      0.03s  2.75%  syscall.fcntl
+         0     0% 90.83%      0.02s  1.83%  github.com/fdefilippo/resman/metrics.(*Collector).collectAllUserMetrics
+         0     0% 90.83%      0.02s  1.83%  github.com/fdefilippo/resman/metrics.BenchmarkCollectCurrentProcReadOnly.func1
+     0.02s  1.83% 92.66%      0.02s  1.83%  runtime.(*mspan).writeHeapBitsSmall
+     0.02s  1.83% 94.50%      0.02s  1.83%  runtime.futex
+         0     0% 94.50%      0.02s  1.83%  runtime.futexwakeup
+         0     0% 94.50%      0.02s  1.83%  runtime.heapSetTypeNoHeader (inline)
+         0     0% 94.50%      0.02s  1.83%  runtime.mallocgc
+         0     0% 94.50%      0.02s  1.83%  runtime.mallocgcSmallScanNoHeader
+         0     0% 94.50%      0.02s  1.83%  runtime.mcall
+         0     0% 94.50%      0.02s  1.83%  runtime.newobject
+         0     0% 94.50%      0.02s  1.83%  runtime.notewakeup
+         0     0% 94.50%      0.02s  1.83%  runtime.schedule
+         0     0% 94.50%      0.02s  1.83%  testing.(*B).launch
+         0     0% 94.50%      0.02s  1.83%  testing.(*B).runN
+         0     0% 94.50%      0.01s  0.92%  _.goready.func1
+         0     0% 94.50%      0.01s  0.92%  bufio.ScanLines
+     0.01s  0.92% 95.41%      0.01s  0.92%  bufio.dropCR (inline)
+         0     0% 95.41%      0.01s  0.92%  gcWriteBarrier
+         0     0% 95.41%      0.01s  0.92%  github.com/fdefilippo/resman/internal/processactivity.ParseStat
+         0     0% 95.41%      0.01s  0.92%  github.com/fdefilippo/resman/metrics.(*Collector).collectProcessMetrics
+         0     0% 95.41%      0.01s  0.92%  github.com/fdefilippo/resman/metrics.(*Collector).getProcessIO
+         0     0% 95.41%      0.01s  0.92%  github.com/fdefilippo/resman/metrics.(*Collector).readProcessSamples
+         0     0% 95.41%      0.01s  0.92%  github.com/shirou/gopsutil/v3/process.Pids (inline)
+         0     0% 95.41%      0.01s  0.92%  github.com/shirou/gopsutil/v3/process.PidsWithContext
+         0     0% 95.41%      0.01s  0.92%  github.com/shirou/gopsutil/v3/process.pidsWithContext
+         0     0% 95.41%      0.01s  0.92%  github.com/shirou/gopsutil/v3/process.readPidsFromDir
+         0     0% 95.41%      0.01s  0.92%  internal/poll.(*FD).ReadDirent
+         0     0% 95.41%      0.01s  0.92%  os.(*File).Readdirnames
+         0     0% 95.41%      0.01s  0.92%  os.(*File).readdir
+     0.01s  0.92% 96.33%      0.01s  0.92%  runtime.(*sweepLocked).sweep
+         0     0% 96.33%      0.01s  0.92%  runtime.bgsweep
+     0.01s  0.92% 97.25%      0.01s  0.92%  runtime.casgstatus
+         0     0% 97.25%      0.01s  0.92%  runtime.chansend
+         0     0% 97.25%      0.01s  0.92%  runtime.chansend1
+         0     0% 97.25%      0.01s  0.92%  runtime.execute
+         0     0% 97.25%      0.01s  0.92%  runtime.exitsyscallNoP
+         0     0% 97.25%      0.01s  0.92%  runtime.fastexprand
+     0.01s  0.92% 98.17%      0.01s  0.92%  runtime.fastlog2 (inline)
+         0     0% 98.17%      0.01s  0.92%  runtime.findRunnable
+         0     0% 98.17%      0.01s  0.92%  runtime.gcBgMarkWorker
+         0     0% 98.17%      0.01s  0.92%  runtime.gcMarkDone
+         0     0% 98.17%      0.01s  0.92%  runtime.gcMarkTermination
+         0     0% 98.17%      0.01s  0.92%  runtime.gcMarkTermination.func3
+         0     0% 98.17%      0.01s  0.92%  runtime.goready (inline)
+         0     0% 98.17%      0.01s  0.92%  runtime.goschedImpl
+         0     0% 98.17%      0.01s  0.92%  runtime.gosched_m
+         0     0% 98.17%      0.01s  0.92%  runtime.mallocgcSmallScanNoHeaderSC1
+         0     0% 98.17%      0.01s  0.92%  runtime.mallocgcSmallScanSlowPath
+         0     0% 98.17%      0.01s  0.92%  runtime.nextSample (inline)
+         0     0% 98.17%      0.01s  0.92%  runtime.profilealloc
+     0.01s  0.92% 99.08%      0.01s  0.92%  runtime.ready
+         0     0% 99.08%      0.01s  0.92%  runtime.runSafePointFn
+         0     0% 99.08%      0.01s  0.92%  runtime.send
+         0     0% 99.08%      0.01s  0.92%  runtime.startTheWorldWithSema
+         0     0% 99.08%      0.01s  0.92%  runtime.startm
+         0     0% 99.08%      0.01s  0.92%  runtime.sweepone
+     0.01s  0.92%   100%      0.01s  0.92%  runtime.tryDeferToSpanScan
+         0     0%   100%      0.01s  0.92%  runtime.wakep
+         0     0%   100%      0.01s  0.92%  runtime.wbBufFlush
+         0     0%   100%      0.01s  0.92%  runtime.wbBufFlush.func1
+         0     0%   100%      0.01s  0.92%  runtime.wbBufFlush1
+         0     0%   100%      0.01s  0.92%  strings.Fields
+         0     0%   100%      0.01s  0.92%  syscall.Getdents
+         0     0%   100%      0.01s  0.92%  syscall.ReadDirent (inline)
+
+
+INITIAL HOST ONE-UID READONLY BENCHMARK
+      28	 266059884 ns/op	       254.0 host_pids_at_start	        45.00 observed_processes/scan	         1.000 observed_users/scan	 1815634 B/op	    7205 allocs/op
+PASS
+Executable and I/O source access denied for5monitored processes; explicit unavailable semantics retained.
+
+
+POOL HOST ONE-WORKER READONLY BENCHMARK
+      32	 144850590 ns/op	       247.0 host_pids_at_start	        37.00 observed_processes/scan	         1.000 observed_users/scan	 1785371 B/op	    6762 allocs/op
+PASS
+Executable and I/O source access denied for5monitored processes; explicit unavailable semantics retained.
+
+
+POOL HOST FOUR-WORKER READONLY BENCHMARK
+      36	 144082574 ns/op	       247.0 host_pids_at_start	        40.00 observed_processes/scan	         1.000 observed_users/scan	 1815932 B/op	    6884 allocs/op
+PASS
+Executable and I/O source access denied for5monitored processes; explicit unavailable semantics retained.
+
+
+FINAL HOST ONE-WORKER READONLY BENCHMARK
+       9	 128279084 ns/op	       248.0 host_pids_at_start	        38.00 observed_processes/scan	         1.000 observed_users/scan	 2408942 B/op	    8918 allocs/op
+PASS
+Executable and I/O source access denied for5monitored processes; explicit unavailable semantics retained.
+
+
+FINAL HOST FOUR-WORKER READONLY BENCHMARK
+      13	 110475462 ns/op	       248.0 host_pids_at_start	        38.00 observed_processes/scan	         1.000 observed_users/scan	 2406497 B/op	    8914 allocs/op
+PASS
+Executable and I/O source access denied for5monitored processes; explicit unavailable semantics retained.

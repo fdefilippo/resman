@@ -251,7 +251,7 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
-Current metrics schema: 11.
+Current metrics schema: 12.
 
 **Responsibilities:**
 - Verify the cgroup v2 observation boundary
@@ -551,7 +551,7 @@ failure and leaves the feature disabled.
 
 **Control Cycle History:**
 - Retains the last 100 terminal attempts in memory, including failures and blackout.
-- Persists attempts in optional SQLite schema 11 with restart-safe session/cycle identity.
+- Persists attempts in optional SQLite schema 12 with restart-safe session/cycle identity.
 - Keeps policy decision separate from applied action and explicit sample availability.
 - MCP merges durable/recent history, deduplicates and caps queries at 1000 entries.
 - See [terminal history](METRICS-DATABASE.md#terminal-control-history) for delivery limits.
@@ -745,7 +745,7 @@ the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected b
 component construction. Schema 7 at the current path is migrated atomically through
 schemas 8 and 9 to schema 10, preserving all rows and assigning historical weighted-I/O state
 `disabled` with `not_measured` delivery and qualification provenance `none`. A
-pre-version-7 database must be archived or deleted so schema version 11 can be created;
+pre-version-7 database must be archived or deleted so schema version 12 can be created;
 it is not moved or migrated. Development schema 9 is rebuilt transactionally to widen
 the bounded qualification-provenance CHECK. Schema 10 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
@@ -754,6 +754,12 @@ coverage, and distinct memory high/max/OOM/kill deltas. First baselines, counter
 recreation remain NULL rather than being reinterpreted as zero or wrapped deltas.
 Schema 11 adds terminal control history without changing these observation semantics;
 the migration creates empty history because prior decisions cannot be reconstructed.
+Schema 12 adds sampled process-identity summaries and hourly observation rollups in
+one transaction. Process runtime is separate from observed activity coverage; no
+history is inferred from old user aggregates. Expired raw rows compact into additive
+UTC-hour statistics before deletion in the same retention transaction. The separate
+rollup query returns known/unknown sample counts and sample-weighted averages,
+without mixing in retained raw samples. See [METRICS-ROLLUPS.md](METRICS-ROLLUPS.md).
 
 **Format:**
 ```ini

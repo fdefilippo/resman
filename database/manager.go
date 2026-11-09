@@ -142,21 +142,24 @@ type SystemMetricsRecord struct {
 
 // UserSummary contains aggregate metrics for one user and time range.
 type UserSummary struct {
-	UID                       int     `json:"uid"`
-	Username                  string  `json:"username"`
-	PeriodStart               string  `json:"period_start"`
-	PeriodEnd                 string  `json:"period_end"`
-	CPUAvg                    float64 `json:"cpu_avg"`
-	CPUMin                    float64 `json:"cpu_min"`
-	CPUMax                    float64 `json:"cpu_max"`
-	MemoryAvg                 float64 `json:"memory_avg"`
-	MemoryMin                 float64 `json:"memory_min"`
-	MemoryMax                 float64 `json:"memory_max"`
-	ProcessCountAvg           float64 `json:"process_count_avg"`
-	ProcessCountMin           float64 `json:"process_count_min"`
-	ProcessCountMax           float64 `json:"process_count_max"`
-	CPULimitActiveTimePercent float64 `json:"cpu_limit_active_time_percent"`
-	Samples                   int     `json:"samples"`
+	UID             int     `json:"uid"`
+	Username        string  `json:"username"`
+	PeriodStart     string  `json:"period_start"`
+	PeriodEnd       string  `json:"period_end"`
+	CPUAvg          float64 `json:"cpu_avg"`
+	CPUMin          float64 `json:"cpu_min"`
+	CPUMax          float64 `json:"cpu_max"`
+	MemoryAvg       float64 `json:"memory_avg"`
+	MemoryMin       float64 `json:"memory_min"`
+	MemoryMax       float64 `json:"memory_max"`
+	ProcessCountAvg float64 `json:"process_count_avg"`
+	ProcessCountMin float64 `json:"process_count_min"`
+	ProcessCountMax float64 `json:"process_count_max"`
+	// CPULimitActiveTimePercent is the fraction of samples with an active CPU limit.
+	// Deprecated: use CPULimitActiveSamplePercent; neither field is duration weighted.
+	CPULimitActiveTimePercent   float64 `json:"cpu_limit_active_time_percent"`
+	CPULimitActiveSamplePercent float64 `json:"cpu_limit_active_sample_percent"`
+	Samples                     int     `json:"samples"`
 }
 
 // DatabaseInfo describes the metrics database.
@@ -181,7 +184,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 11
+	metricsSchemaVersion   = 12
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
 							  uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -410,6 +413,12 @@ func (m *DatabaseManager) InitSchema() error {
 		}
 		version = 11
 	}
+	if version == 11 {
+		if err := m.migrateMetricsSchema11To12(); err != nil {
+			return err
+		}
+		version = 12
+	}
 	if version != 0 && version != metricsSchemaVersion {
 		return m.incompatibleSchemaError(fmt.Sprintf("schema version %d", version))
 	}
@@ -467,7 +476,7 @@ func (m *DatabaseManager) InitSchema() error {
 
 	` + systemMetricsTableStatement("system_metrics", true) + `;
 
-    ` + controlHistorySchema + `
+    ` + controlHistorySchema + rollupSchema + processActivitySchema + `
     -- Query indexes.
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid ON user_metrics(uid);
@@ -491,6 +500,12 @@ func (m *DatabaseManager) InitSchema() error {
 		return err
 	}
 	if err := m.validateControlHistorySchema(); err != nil {
+		return err
+	}
+	if err := m.validateRollupSchema(); err != nil {
+		return err
+	}
+	if err := m.validateProcessActivitySchema(); err != nil {
 		return err
 	}
 	return m.normalizeStoredTimestamps()
@@ -1358,6 +1373,7 @@ func (m *DatabaseManager) GetUserSummary(uid int, startTime, endTime time.Time) 
 		return nil, fmt.Errorf("failed to query user summary for UID %d (time range %s to %s): %w", uid, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), err)
 	}
 
+	summary.CPULimitActiveSamplePercent = summary.CPULimitActiveTimePercent
 	return &summary, err
 }
 
@@ -1418,16 +1434,31 @@ func (m *DatabaseManager) GetDatabaseInfo(retentionDays int) (*DatabaseInfo, err
 
 // CleanupOldData removes records older than retentionDays.
 func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
+	return m.CleanupOldDataWithRollupRetention(retentionDays, max(retentionDays, 365))
+}
+
+// CleanupOldDataWithRollupRetention atomically compacts old observations before deletion.
+func (m *DatabaseManager) CleanupOldDataWithRollupRetention(retentionDays, rollupRetentionDays int) (int64, error) {
+	if retentionDays < 1 || rollupRetentionDays < 1 {
+		return 0, fmt.Errorf("retention days must be positive")
+	}
+	rollupRetentionDays = max(retentionDays, rollupRetentionDays)
 	leaveOperation := m.dbGate.Enter()
 	defer leaveOperation()
 
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	now := time.Now().UTC()
+	cutoff := now.AddDate(0, 0, -retentionDays)
 	tx, err := m.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("failed to start retention transaction: %w", err)
 	}
 	rollback := func() {
 		_ = tx.Rollback()
+	}
+
+	if err := compactMetricRows(tx, cutoff); err != nil {
+		rollback()
+		return 0, err
 	}
 
 	// Remove old user metrics.
@@ -1455,7 +1486,7 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		return 0, fmt.Errorf("failed to get rows affected for system metrics deletion: %w", err)
 	}
 
-	historyResult, err := tx.Exec("DELETE FROM control_history WHERE finished_at < ?", historyRetentionCutoff(time.Now(), retentionDays))
+	historyResult, err := tx.Exec("DELETE FROM control_history WHERE finished_at < ?", cutoff.Format(historyTimeLayout))
 	if err != nil {
 		rollback()
 		return 0, fmt.Errorf("delete expired control history: %w", err)
@@ -1466,11 +1497,31 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		return 0, fmt.Errorf("count deleted control history: %w", err)
 	}
 
+	rollupResult, err := tx.Exec("DELETE FROM metric_rollups WHERE hour_start < ?", now.AddDate(0, 0, -rollupRetentionDays).Truncate(time.Hour).Format(time.RFC3339))
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("delete expired metric rollups: %w", err)
+	}
+	rollupDeleted, err := rollupResult.RowsAffected()
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("count deleted rollups: %w", err)
+	}
+	processResult, err := tx.Exec("DELETE FROM process_activity WHERE last_seen_at < ?", cutoff.Format(historyTimeLayout))
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("delete expired process activity: %w", err)
+	}
+	processDeleted, err := processResult.RowsAffected()
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("count deleted process activity: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit retention cleanup: %w", err)
 	}
 
-	totalDeleted := userDeleted + systemDeleted + historyDeleted
+	totalDeleted := userDeleted + systemDeleted + historyDeleted + rollupDeleted + processDeleted
 	if totalDeleted > 0 {
 		if _, err := m.db.Exec("PRAGMA incremental_vacuum(1000)"); err != nil {
 			return totalDeleted, fmt.Errorf("failed to reclaim database pages after deleting %d records: %w", totalDeleted, err)

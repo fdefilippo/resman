@@ -12,6 +12,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/shirou/gopsutil/v3 v3.24.5
+	github.com/tklauser/go-sysconf v0.4.0
 	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -33,7 +34,6 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/shoenig/go-m1cpu v0.2.2 // indirect
 	github.com/shoenig/test v1.13.2 // indirect
-	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/fdefilippo/resman/internal/controlhistory"
 )
@@ -47,7 +46,10 @@ func (m *DatabaseManager) WriteControlHistory(ctx context.Context, entries []con
 	if len(entries) > controlhistory.MaxQueryEntries {
 		return fmt.Errorf("control history batch exceeds %d entries", controlhistory.MaxQueryEntries)
 	}
-	leave := m.dbGate.Enter()
+	leave, err := m.dbGate.EnterContext(ctx)
+	if err != nil {
+		return fmt.Errorf("enter control history write: %w", err)
+	}
 	defer leave()
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -74,7 +76,10 @@ func (m *DatabaseManager) WriteControlHistory(ctx context.Context, entries []con
 
 // ReadControlHistory returns the most recent bounded window in chronological order.
 func (m *DatabaseManager) ReadControlHistory(ctx context.Context, limit int) ([]controlhistory.Entry, error) {
-	leave := m.dbGate.Enter()
+	leave, err := m.dbGate.EnterContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("enter control history read: %w", err)
+	}
 	defer leave()
 	rows, err := m.db.QueryContext(ctx, `SELECT session_id,cycle_id,payload FROM control_history ORDER BY finished_at DESC, session_id DESC, cycle_id DESC LIMIT ?`, controlhistory.QueryLimit(limit))
 	if err != nil {
@@ -101,10 +106,6 @@ func (m *DatabaseManager) ReadControlHistory(ctx context.Context, limit int) ([]
 		return nil, fmt.Errorf("read control history rows: %w", err)
 	}
 	return controlhistory.Merge(entries, nil, limit), nil
-}
-
-func historyRetentionCutoff(now time.Time, days int) string {
-	return now.UTC().AddDate(0, 0, -days).Format(historyTimeLayout)
 }
 
 func (m *DatabaseManager) validateControlHistorySchema() error {

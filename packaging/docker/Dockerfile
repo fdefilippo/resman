@@ -44,6 +44,7 @@ COPY config/resman.conf.example /etc/resman/resman.conf
 COPY config/cpu-points.map.example /etc/resman/cpu-points.map
 COPY config/io-weights.map.example /etc/resman/io-weights.map
 COPY docs/PREFLIGHT.md docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
+COPY docs/PRESSURE.md docs/METRICS-ROLLUPS.md docs/PROCESS-ACTIVITY.md /usr/share/doc/resman/
 
 RUN chmod 0755 /usr/local/bin/resman \
     && chmod 0600 /etc/resman/resman.conf \

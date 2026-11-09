@@ -136,7 +136,7 @@ func (a *App) handleDatabaseRetention() {
 		return
 	}
 	cfg := a.stateManager.GetConfig()
-	deleted, err := a.dbManager.CleanupOldData(cfg.MetricsDBRetentionDays)
+	deleted, err := a.dbManager.CleanupOldDataWithRollupRetention(cfg.MetricsDBRetentionDays, cfg.GetMetricsDBRollupRetentionDays())
 	if err != nil {
 		a.logger.Warn("Periodic metrics database retention failed",
 			"retention_days", cfg.MetricsDBRetentionDays,

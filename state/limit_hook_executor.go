@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"time"
 
@@ -21,14 +22,18 @@ type hookScriptInvocation struct {
 }
 
 type limitHookJob struct {
-	hookType resmanmetrics.LimitHookType
-	script   hookScriptInvocation
-	endpoint string
-	timeout  time.Duration
-	event    limitHookEvent
+	hookType        resmanmetrics.LimitHookType
+	script          hookScriptInvocation
+	endpoint        string
+	timeout         time.Duration
+	event           limitHookEvent
+	httpMaxAttempts int
 }
 
 func (m *Manager) dispatchLimitHookJobs(cfg *config.Config, event limitHookEvent) {
+	if event.EventID == "" {
+		event.EventID = rand.Text()
+	}
 	timeout := time.Duration(cfg.LimitHookTimeout) * time.Second
 	if cfg.LimitHookScript != "" {
 		m.enqueueLimitHookJob(limitHookJob{
@@ -44,10 +49,11 @@ func (m *Manager) dispatchLimitHookJobs(cfg *config.Config, event limitHookEvent
 	}
 	if cfg.LimitHookURL != "" {
 		m.enqueueLimitHookJob(limitHookJob{
-			hookType: resmanmetrics.LimitHookTypeHTTP,
-			endpoint: cfg.LimitHookURL,
-			timeout:  timeout,
-			event:    event,
+			hookType:        resmanmetrics.LimitHookTypeHTTP,
+			endpoint:        cfg.LimitHookURL,
+			httpMaxAttempts: cfg.LimitHookHTTPMaxAttempts,
+			timeout:         timeout,
+			event:           event,
 		})
 	}
 }
@@ -97,11 +103,29 @@ func (m *Manager) runLimitHookJob(job limitHookJob) {
 	defer cancel()
 
 	var err error
-	if job.hookType == resmanmetrics.LimitHookTypeScript {
-		err = m.executeHookScript(ctx, job.script, job.event)
-	} else {
-		err = m.executeHookRequest(ctx, job.endpoint, job.event)
+	attempts := 1
+	if job.hookType == resmanmetrics.LimitHookTypeHTTP && job.httpMaxAttempts > 1 {
+		attempts = min(job.httpMaxAttempts, 5)
 	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		if job.hookType == resmanmetrics.LimitHookTypeScript {
+			err = m.executeHookScript(ctx, job.script, job.event)
+		} else {
+			err = m.executeHookRequest(ctx, job.endpoint, job.event)
+		}
+		m.recordLimitHookAttempt(job, err)
+		if err == nil || attempt == attempts || !limitHookRetryable(err) {
+			break
+		}
+		if waitErr := waitLimitHookRetry(ctx, attempt); waitErr != nil {
+			err = waitErr
+			break
+		}
+	}
+
 	m.recordLimitHookResult(job.event, job.hookType, job.endpoint, err)
 }
 

@@ -80,12 +80,28 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 11 and contains `user_metrics`,
-`system_metrics` and `control_history` tables. Every transaction has one `sample_epoch_id` and common
+The current store uses schema version 12 and contains `user_metrics`,
+`system_metrics`, `control_history`, `process_activity` and `metric_rollups` tables.
+Each raw observation transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
 describe the same decision-sample interval; history consumers must not combine rows
 from different epoch identifiers.
+
+Schema 11 upgrades transactionally to schema 12 by adding process summaries and
+hourly rollups; existing raw rows and terminal history remain intact. Supported
+schemas 7 through 10 first pass through their existing versioned migrations.
+No historical process activity is inferred from user aggregates. See
+[hourly observation rollups](METRICS-ROLLUPS.md) for atomic compaction, effective
+retention and coverage semantics. Raw-history and summary tools continue to query
+raw rows only; `get_metrics_rollups` queries compacted buckets separately.
+
+`process_activity` retains sampled boot/PID/kernel-start identities and covered
+CPU/RAM summaries, not claims of uninterrupted activity. Its rows expire under
+the raw retention window. Live queries work with persistence disabled and report
+the optional store status explicitly. Persisted summaries do not bridge daemon
+downtime or create a new process sample. Their writes follow the completed decision
+scan; MCP queries never initiate collection.
 
 User records separate process-derived CPU and memory observation; total and
 enforceable process counts; configured CPU class and nullable mapped guarantee;
@@ -141,7 +157,7 @@ by the CPU Points cutover because they cannot express allocation class, guarante
 common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
 rejected by the ownership-containment release. Version 5 cannot represent the native
 flat plan, and version 6 still contains the retired PID-relocation lifecycle. Move or
-delete a schema-6-or-older store and restart to create version 11. Development schema-9
+delete a schema-6-or-older store and restart to create version 12. Development schema-9
 stores are rebuilt transactionally without changing row meaning. No alias or dual-read
 path exists.
 
@@ -205,10 +221,20 @@ conditions, and invocation requirements are maintained in the **MCP tools** sect
 Supported time selectors include RFC 3339 timestamps, date-only values, relative
 expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday`,
 `last_24_hours`, `last_7_days`, and `last_30_days`.
+The separate `get_metrics_rollups` range uses RFC3339 timestamps, as documented in
+[METRICS-ROLLUPS.md](METRICS-ROLLUPS.md).
+
+`get_user_summary.cpu_limit_active_sample_percent` is the percentage of retained
+raw samples whose CPU-limit state is active. The older
+`cpu_limit_active_time_percent` field remains as a deprecated alias with the same
+value and meaning. Neither is duration-weighted: irregular or skipped samples
+prevent interpreting either value as a percentage of elapsed time. New rollups
+also state their sample-weighted meaning
+explicitly and do not claim uninterrupted enforcement between samples.
 
 ## Direct inspection
 
-Current metrics schema: 11.
+Current metrics schema: 12.
 
 Stop ResMan before maintenance that modifies the database. For live inspection,
 explicitly open SQLite in read-only mode: a `SELECT` alone does not make the

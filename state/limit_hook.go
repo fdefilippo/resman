@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 )
 
 type limitHookEvent struct {
+	EventID                           string                                 `json:"event_id"`
 	UID                               int                                    `json:"uid"`
 	Username                          string                                 `json:"username"`
 	EnforceableCPUUsagePercent        float64                                `json:"enforceable_cpu_usage_percent"`
@@ -52,8 +54,9 @@ type limitHookEvent struct {
 }
 
 type sanitizedHookError struct {
-	message string
-	cause   error
+	message   string
+	cause     error
+	retryable bool
 }
 
 type hookOutcomeLogger interface {
@@ -105,6 +108,7 @@ func (m *Manager) notifyUserLimited(cfg *config.Config, uid int, username string
 
 	cpuPoints := m.limitHookCPUPointsSnapshot(uid, username, metrics)
 	event := limitHookEvent{
+		EventID:                           rand.Text(),
 		UID:                               uid,
 		Username:                          username,
 		EnforceableCPUUsagePercent:        userEnforceableCPUUsage(metrics, uid),
@@ -446,15 +450,26 @@ func postLimitHookWithClient(ctx context.Context, client *http.Client, endpoint 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "resman-limit-hook")
-
-	resp, err := client.Do(req)
+	if event.EventID != "" {
+		req.Header.Set("Idempotency-Key", event.EventID)
+	}
+	// Keep Client redirect behavior while disabling hidden transport-level POST retries.
+	oneShotClient := *client
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	oneShotClient.Transport = hookSingleAttemptTransport{next: transport}
+	resp, err := oneShotClient.Do(req)
 	if err != nil {
-		return newSanitizedHookError("post hook request", endpoint, err)
+		safe := newSanitizedHookError("post hook request", endpoint, err)
+		safe.retryable = ctx.Err() == nil && transientHookTransportError(err)
+		return safe
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("hook endpoint returned HTTP %d", resp.StatusCode)
+		return &hookHTTPStatusError{status: resp.StatusCode}
 	}
 	return nil
 }
@@ -480,7 +495,7 @@ func sanitizeScriptHookError(ctx context.Context, err error) error {
 	}
 }
 
-func newSanitizedHookError(operation, endpoint string, err error) error {
+func newSanitizedHookError(operation, endpoint string, err error) *sanitizedHookError {
 	reason := "failed"
 	if errors.Is(err, context.DeadlineExceeded) {
 		reason = "timed out"

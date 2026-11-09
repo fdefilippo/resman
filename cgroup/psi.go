@@ -17,105 +17,12 @@
 // cgroup/psi.go
 package cgroup
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
+import "github.com/fdefilippo/resman/internal/pressure"
 
-// PSIStats contains Pressure Stall Information statistics.
-type PSIStats struct {
-	SomeAvg10  float64 // Percentage of time with at least one stalled task over 10 seconds
-	SomeAvg60  float64 // Percentage of time with at least one stalled task over 60 seconds
-	SomeAvg300 float64 // Percentage of time with at least one stalled task over 300 seconds
-	SomeTotal  uint64  // Total microseconds stalled in some mode
-	FullAvg10  float64 // Percentage of time with all tasks stalled over 10 seconds
-	FullAvg60  float64 // Percentage of time with all tasks stalled over 60 seconds
-	FullAvg300 float64 // Percentage of time with all tasks stalled over 300 seconds
-	FullTotal  uint64  // Total microseconds stalled in full mode
-}
+// PSIStats contains pressure observations with explicit optional full coverage.
+type PSIStats = pressure.Stats
 
-// parsePSI parses a pressure file. The full line is optional because older
-// kernels expose only some pressure for CPU.
-//
-//	some avg10=25.00 avg60=18.50 avg300=12.30 total=1234567
-//	full avg10=10.00 avg60=8.20 avg300=5.10 total=567890
+// parsePSI uses the shared validated kernel pressure parser.
 func parsePSI(content string) (PSIStats, error) {
-	var stats PSIStats
-
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	hasSome := false
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-
-		switch fields[0] {
-		case "some":
-			some, err := parsePSILine(line)
-			if err != nil {
-				return stats, fmt.Errorf("failed to parse 'some' PSI line: %w", err)
-			}
-			stats.SomeAvg10 = some.avg10
-			stats.SomeAvg60 = some.avg60
-			stats.SomeAvg300 = some.avg300
-			stats.SomeTotal = some.total
-			hasSome = true
-		case "full":
-			full, err := parsePSILine(line)
-			if err != nil {
-				return stats, fmt.Errorf("failed to parse 'full' PSI line: %w", err)
-			}
-			stats.FullAvg10 = full.avg10
-			stats.FullAvg60 = full.avg60
-			stats.FullAvg300 = full.avg300
-			stats.FullTotal = full.total
-		}
-	}
-	if !hasSome {
-		return stats, fmt.Errorf("invalid PSI format: missing 'some' line")
-	}
-
-	return stats, nil
-}
-
-type psiLine struct {
-	avg10  float64
-	avg60  float64
-	avg300 float64
-	total  uint64
-}
-
-func parsePSILine(line string) (psiLine, error) {
-	var result psiLine
-
-	// Skip prefix ("some" o "full")
-	fields := strings.Fields(line)
-	if len(fields) < 5 {
-		return result, fmt.Errorf("invalid PSI line: %s", line)
-	}
-
-	for _, field := range fields[1:] {
-		kv := strings.SplitN(field, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		val, err := strconv.ParseFloat(kv[1], 64)
-		if err != nil {
-			continue
-		}
-		switch kv[0] {
-		case "avg10":
-			result.avg10 = val
-		case "avg60":
-			result.avg60 = val
-		case "avg300":
-			result.avg300 = val
-		case "total":
-			result.total = uint64(val)
-		}
-	}
-
-	return result, nil
+	return pressure.Parse(content)
 }

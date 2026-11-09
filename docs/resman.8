@@ -173,7 +173,7 @@ than retrying forever. After correcting the transient cause, run
 before starting the service when the start limit was reached. A clean stop is not
 automatically restarted.
 .SH ARCHITECTURE AND CPU ALLOCATION
-Current metrics schema: 11.
+Current metrics schema: 12.
 .PP
 The system normalizes current online CPU capacity to 1000 CPU Points and uses a
 flat systemd-owned hierarchy. The finite parent user.slice contains active user
@@ -571,6 +571,8 @@ Control-cycle logs and Prometheus metrics include the trigger source, such as
 .B ticker ,
 .B psi_system_cpu ,
 .B psi_system_io ,
+.B psi_system_memory
+(when explicitly enabled),
 .B psi_user_cpu ,
 or
 .B psi_user_io .
@@ -584,10 +586,10 @@ in both polling and PSI modes, including blackout. Host observations remain curr
 without advancing decision baselines. Per-user series and SQLite history remain
 decision-owned and are not sampled during blackout.
 .PP
-When a limited user experiences CPU throttling (pressure exceeds threshold in their
-per-user cgroup), the daemon temporarily boosts their cpu.weight to grant more CPU
-time within the shared quota (adaptive fairness). The boost reverts automatically
-after the configured duration.
+System PSI averages for CPU, I/O and memory are sampled on each decision cycle,
+independently of event-driven mode. Unavailable sources are explicit; no synthetic
+zero is published. System CPU full pressure is undefined and is omitted.
+PSI observations and wakeups do not modify resource controls on their own.
 .PP
 Configuration parameters:
 .IP \(bu 2
@@ -604,6 +606,15 @@ take effect immediately.
 .IP \(bu
 .B PSI_IO_STALL_THRESHOLD
 - IO stall threshold in microseconds (default: 50000)
+.IP \(bu
+.B PSI_MEMORY_EVENT_DRIVEN
+- Opt-in memory-pressure wakeups (default: false); requires PSI_EVENT_DRIVEN=true.
+The normal RAM decision remains based on attributed usage and existing thresholds.
+ResMan does not select OOM victims and does not replace systemd-oomd.
+.IP \(bu
+.B PSI_MEMORY_STALL_THRESHOLD
+- Memory some-pressure wake threshold in microseconds (default: 50000), positive
+and no greater than PSI_WINDOW_US when memory wakeups are enabled.
 .IP \(bu
 .B PSI_WINDOW_US
 - PSI tracking window in microseconds (default: 1000000 = 1 second)
@@ -777,9 +788,9 @@ When metrics persistence is enabled at its default
 .I /var/lib/resman/metrics.db
 path, startup likewise refuses a legacy
 .IR /etc/resman/metrics.db .
-Earlier database schemas are incompatible: archive or delete the database
-and restart so resman can create the current schema. The supported schema-7-through-8-to-9
-migration applies only to a database already at the selected current path; older
+Database schemas older than 7 are incompatible: archive or delete the database
+and restart so resman can create the current schema. The supported versioned migrations
+from schema 7 through schema 12 apply only to a database already at the selected current path; older
 schemas are never migrated or opened under the new path.
 .PP
 Configuration updates initiated through MCP require this path to be a regular file.
@@ -811,7 +822,7 @@ configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .
 It lists the visible symptom, cause and required action for every known
-discontinuity; old schemas, keys and wire aliases are not preserved.
+discontinuity; unsupported schemas, removed keys and retired wire aliases are not preserved.
 .PP
 The copyable configuration remains
 .IR /etc/resman/resman.conf .
@@ -863,6 +874,17 @@ cgroup recreation; zero means a comparable counter did not increase. Lifecycle
 distinguishes ineligible, eligible inactive, applied, failed, and released users.
 A released state is emitted only for a user observed in that sample.
 .PP
+Schema 11 adds terminal control history. Schema 12 adds sampled process-identity
+summaries and UTC-hour observation rollups transactionally, preserving existing
+rows without inventing historical activity. Expired raw rows compact into sums,
+counts and extrema before their deletion in the same transaction. Rollup averages
+are sample-weighted and retain explicit unknown counts; raw-history tools remain
+raw-only. See METRICS-ROLLUPS.md and PROCESS-ACTIVITY.md for coverage, retention,
+and the separate MCP queries. The get_user_summary field
+cpu_limit_active_sample_percent means the percentage of retained samples with active
+CPU limits, not duration-weighted elapsed time. The historical
+cpu_limit_active_time_percent remains a deprecated alias with the same value.
+.PP
 For a file-backed
 .B METRICS_DB_PATH
 the immediate parent must be a real directory owned by the ResMan process UID
@@ -891,6 +913,8 @@ permissive service umask cannot expose history files.
 # PSI_EVENT_DRIVEN=true
 # PSI_CPU_STALL_THRESHOLD=50000    # Stall threshold in microseconds
 # PSI_IO_STALL_THRESHOLD=50000     # IO stall threshold in microseconds
+# PSI_MEMORY_EVENT_DRIVEN=false   # Optional memory wake, normal RAM policy
+# PSI_MEMORY_STALL_THRESHOLD=50000
 # PSI_WINDOW_US=1000000            # Tracking window (1 second)
 # PSI_FALLBACK_INTERVAL=300        # Heartbeat interval (5 minutes)
 # METRICS_REFRESH_INTERVAL=30      # Dashboard refresh interval
@@ -900,6 +924,8 @@ permissive service umask cannot expose history files.
 # - get_system_history: Historical system metrics
 # - get_user_summary: Aggregated statistics (avg/min/max)
 # - get_metrics_database_info: Database status and info
+# - get_metrics_rollups: Compacted UTC-hour observations, separate from raw history
+# get_process_activity also works without metrics persistence.
 .sp
 .fi
 .PP
@@ -1118,6 +1144,14 @@ resman_psi_events_total{type, scope} \- PSI pressure events received from the ke
 .IP \(bu
 resman_psi_last_event_timestamp_seconds{type, scope} \- Unix timestamp of last PSI event
 .IP \(bu
+resman_psi_pressure_percent{type,scope,stall,window_seconds} \- Available decision-owned system PSI averages in percent; system CPU full is omitted
+.IP \(bu
+resman_psi_pressure_available{type,scope,stall} \- Source/mode availability, separate from a measured zero
+.IP \(bu
+resman_psi_pressure_sample_timestamp_seconds{type,scope} \- Last decision-owned sampling attempt; host refreshes do not renew it
+.IP \(bu
+resman_psi_pressure_source_status{type,scope,reason} \- Bounded source status: none, read_error, or invalid_data
+.IP \(bu
 resman_control_cycle_duration_seconds \- Complete control cycle duration, including failed and suspended cycles (histogram)
 .IP \(bu
 resman_metrics_collection_duration_seconds \- System metrics collection duration for control cycles and metrics-only refreshes (histogram)
@@ -1125,6 +1159,8 @@ resman_metrics_collection_duration_seconds \- System metrics collection duration
 resman_errors_total{component, error_type} \- Operational errors by component and bounded error type (counter)
 .IP \(bu
 resman_limit_hook_executions_total{hook_type, outcome} \- Terminal script and HTTP hook outcomes; outcome is success, failure, timeout, cancelled, or saturated (counter)
+.IP \(bu
+resman_limit_hook_attempts_total{hook_type, outcome} \- Actual attempts, including each HTTP retry, separate from terminal jobs (counter)
 .IP \(bu
 resman_limit_hook_in_flight \- Current running limit-hook deliveries (gauge)
 .IP \(bu
@@ -1253,6 +1289,12 @@ Available MCP tools (this list is verified against the production discovery resp
 .IP \(bu
 .B get_metrics_database_info
 - Database status and information (requires METRICS_DB_ENABLED=true)
+.IP \(bu
+.B get_metrics_rollups
+- Compacted UTC-hour statistics and known/unknown sample counts (requires METRICS_DB_ENABLED=true)
+.IP \(bu
+.B get_process_activity
+- Sampled boot/PID/kernel-start identities with separate runtime and covered CPU/RAM activity
 .\" END MCP TOOL INVENTORY
 .PP
 System-wide payloads and the shared active-user and configuration schemas include a
@@ -1444,6 +1486,11 @@ or durable spooling, records the terminal saturated outcome, and emits a rate-li
 bounded warning.
 .PP
 Script and HTTP are separate jobs. Each receives its own complete
+.B LIMIT_HOOK_HTTP_MAX_ATTEMPTS
+controls the total number of HTTP attempts (default: 1, range 1 to 5).
+Opt-in transient retries share the full delivery timeout and keep one event id.
+Receivers must deduplicate; scripts remain single-attempt.
+.PP
 .B LIMIT_HOOK_TIMEOUT
 deadline, so one mechanism never consumes the other's budget. HTTP uses a dedicated
 client with bounded phases and no retry. Every accepted delivery records one terminal
@@ -1540,7 +1587,9 @@ Runtime thresholds, filters, PSI settings, polling intervals, and
 are applied dynamically. This includes
 .BR USERNAME_CACHE_TTL
 regardless of whether the metrics database is enabled, and
-.BR METRICS_DB_RETENTION_DAYS .
+.BR METRICS_DB_RETENTION_DAYS
+and
+.BR METRICS_DB_ROLLUP_RETENTION_DAYS .
 The cgroup observation root, Prometheus listener and security settings,
 .BR LOG_FILE ,
 .BR LOG_MAX_SIZE ,

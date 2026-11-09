@@ -136,14 +136,15 @@ type Config struct {
 	PatternMinSamples          int     `config:"PATTERN_MIN_SAMPLES"`          // Minimum distinct hourly buckets
 	PatternConfidenceThreshold float64 `config:"PATTERN_CONFIDENCE_THRESHOLD"` // Confidence threshold (0.0-1.0)
 	// Hooks
-	LimitHookEnabled        bool   `config:"LIMIT_HOOK_ENABLED"`
-	LimitHookScript         string `config:"LIMIT_HOOK_SCRIPT"`
-	LimitHookScriptUser     string `config:"LIMIT_HOOK_SCRIPT_USER"`
-	LimitHookScriptGroup    string `config:"LIMIT_HOOK_SCRIPT_GROUP"`
-	LimitHookURL            string `config:"LIMIT_HOOK_URL"`
-	LimitHookTimeout        int    `config:"LIMIT_HOOK_TIMEOUT"` // seconds per delivery
-	LimitHookMaxConcurrency int    `config:"LIMIT_HOOK_MAX_CONCURRENCY"`
-	LimitHookQueueCapacity  int    `config:"LIMIT_HOOK_QUEUE_CAPACITY"`
+	LimitHookEnabled         bool   `config:"LIMIT_HOOK_ENABLED"`
+	LimitHookScript          string `config:"LIMIT_HOOK_SCRIPT"`
+	LimitHookScriptUser      string `config:"LIMIT_HOOK_SCRIPT_USER"`
+	LimitHookScriptGroup     string `config:"LIMIT_HOOK_SCRIPT_GROUP"`
+	LimitHookURL             string `config:"LIMIT_HOOK_URL"`
+	LimitHookTimeout         int    `config:"LIMIT_HOOK_TIMEOUT"` // seconds per delivery
+	LimitHookHTTPMaxAttempts int    `config:"LIMIT_HOOK_HTTP_MAX_ATTEMPTS"`
+	LimitHookMaxConcurrency  int    `config:"LIMIT_HOOK_MAX_CONCURRENCY"`
+	LimitHookQueueCapacity   int    `config:"LIMIT_HOOK_QUEUE_CAPACITY"`
 
 	// Prometheus
 	EnablePrometheus          bool   `config:"ENABLE_PROMETHEUS"`
@@ -214,20 +215,23 @@ type Config struct {
 	MCPAllowWriteOps   bool   `config:"MCP_ALLOW_WRITE_OPS"`
 
 	// Metrics Database (SQLite)
-	MetricsDBEnabled       bool   `config:"METRICS_DB_ENABLED"`
-	MetricsDBPath          string `config:"METRICS_DB_PATH"`
-	MetricsDBRetentionDays int    `config:"METRICS_DB_RETENTION_DAYS"`
-	MetricsDBWriteInterval int    `config:"METRICS_DB_WRITE_INTERVAL"` // seconds
+	MetricsDBEnabled             bool   `config:"METRICS_DB_ENABLED"`
+	MetricsDBPath                string `config:"METRICS_DB_PATH"`
+	MetricsDBRetentionDays       int    `config:"METRICS_DB_RETENTION_DAYS"`
+	MetricsDBRollupRetentionDays int    `config:"METRICS_DB_ROLLUP_RETENTION_DAYS"`
+	MetricsDBWriteInterval       int    `config:"METRICS_DB_WRITE_INTERVAL"` // seconds
 
 	// Username Cache TTL (minutes)
 	UsernameCacheTTL int `config:"USERNAME_CACHE_TTL"` // minutes, default 60
 
 	// PSI event-driven mode uses poll() on pressure files instead of only a ticker.
-	PSIEventDriven       bool `config:"PSI_EVENT_DRIVEN"`        // Enable PSI event-driven control cycles
-	PSICPUStallThreshold int  `config:"PSI_CPU_STALL_THRESHOLD"` // CPU stall threshold in microseconds (default 50000 = 5% su window 1s)
-	PSIOStallThreshold   int  `config:"PSI_IO_STALL_THRESHOLD"`  // IO stall threshold in microseconds (default 50000)
-	PSIWindowUs          int  `config:"PSI_WINDOW_US"`           // PSI tracking window in microseconds (default 1000000 = 1s)
-	PSIFallbackInterval  int  `config:"PSI_FALLBACK_INTERVAL"`   // Fallback polling interval in seconds when event-driven (default 300 = 5min)
+	PSIMemoryEventDriven    bool `config:"PSI_MEMORY_EVENT_DRIVEN"`    // Enable optional memory pressure wakeups
+	PSIMemoryStallThreshold int  `config:"PSI_MEMORY_STALL_THRESHOLD"` // Memory stall threshold in microseconds
+	PSIEventDriven          bool `config:"PSI_EVENT_DRIVEN"`           // Enable PSI event-driven control cycles
+	PSICPUStallThreshold    int  `config:"PSI_CPU_STALL_THRESHOLD"`    // CPU stall threshold in microseconds (default 50000 = 5% over a 1s window)
+	PSIOStallThreshold      int  `config:"PSI_IO_STALL_THRESHOLD"`     // IO stall threshold in microseconds (default 50000)
+	PSIWindowUs             int  `config:"PSI_WINDOW_US"`              // PSI tracking window in microseconds (default 1000000 = 1s)
+	PSIFallbackInterval     int  `config:"PSI_FALLBACK_INTERVAL"`      // Fallback polling interval in seconds when event-driven (default 300 = 5min)
 }
 
 // IODecisionPolicy is an atomic snapshot of the configuration used to decide
@@ -323,14 +327,15 @@ func DefaultConfig() *Config {
 		PatternConfidenceThreshold: 0.7,
 
 		// Limit hook
-		LimitHookEnabled:        false,
-		LimitHookScript:         "",
-		LimitHookScriptUser:     "",
-		LimitHookScriptGroup:    "",
-		LimitHookURL:            "",
-		LimitHookTimeout:        10,
-		LimitHookMaxConcurrency: 2,
-		LimitHookQueueCapacity:  64,
+		LimitHookEnabled:         false,
+		LimitHookScript:          "",
+		LimitHookScriptUser:      "",
+		LimitHookScriptGroup:     "",
+		LimitHookURL:             "",
+		LimitHookTimeout:         10,
+		LimitHookHTTPMaxAttempts: 1,
+		LimitHookMaxConcurrency:  2,
+		LimitHookQueueCapacity:   64,
 
 		EnablePrometheus:          false,
 		PrometheusMetricsBindHost: "127.0.0.1", // Default: localhost only (secure)
@@ -384,20 +389,23 @@ func DefaultConfig() *Config {
 		MCPAllowWriteOps:   false,
 
 		// Metrics Database (SQLite)
-		MetricsDBEnabled:       false,
-		MetricsDBPath:          DefaultMetricsDBPath,
-		MetricsDBRetentionDays: 30,
-		MetricsDBWriteInterval: 30, // Same as polling interval by default
+		MetricsDBEnabled:             false,
+		MetricsDBPath:                DefaultMetricsDBPath,
+		MetricsDBRetentionDays:       30,
+		MetricsDBRollupRetentionDays: 365,
+		MetricsDBWriteInterval:       30, // Same as polling interval by default
 
 		// Username Cache TTL (minutes)
 		UsernameCacheTTL: 60, // Default 60 minutes
 
 		// PSI Event-Driven mode defaults
-		PSIEventDriven:       false,
-		PSICPUStallThreshold: 50000,
-		PSIOStallThreshold:   50000,
-		PSIWindowUs:          1000000,
-		PSIFallbackInterval:  300,
+		PSIEventDriven:          false,
+		PSIMemoryEventDriven:    false,
+		PSIMemoryStallThreshold: 50000,
+		PSICPUStallThreshold:    50000,
+		PSIOStallThreshold:      50000,
+		PSIWindowUs:             1000000,
+		PSIFallbackInterval:     300,
 	}
 }
 
@@ -700,8 +708,9 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"LIMIT_HOOK_SCRIPT_GROUP": setString(func(cfg *Config, value string) {
 		cfg.LimitHookScriptGroup = value
 	}),
-	"LIMIT_HOOK_URL":     setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
-	"LIMIT_HOOK_TIMEOUT": setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
+	"LIMIT_HOOK_URL":               setString(func(cfg *Config, value string) { cfg.LimitHookURL = value }),
+	"LIMIT_HOOK_HTTP_MAX_ATTEMPTS": setInt(func(cfg *Config, value int) { cfg.LimitHookHTTPMaxAttempts = value }),
+	"LIMIT_HOOK_TIMEOUT":           setInt(func(cfg *Config, value int) { cfg.LimitHookTimeout = value }),
 	"LIMIT_HOOK_MAX_CONCURRENCY": setInt(func(cfg *Config, value int) {
 		cfg.LimitHookMaxConcurrency = value
 	}),
@@ -725,75 +734,78 @@ var configFieldHandlers = map[string]configFieldHandler{
 	"PROMETHEUS_AUTH_TYPE": setStringTransform(strings.ToLower, func(cfg *Config, value string) {
 		cfg.PrometheusAuthType = value
 	}),
-	"PROMETHEUS_AUTH_USERNAME":      setString(func(cfg *Config, value string) { cfg.PrometheusAuthUsername = value }),
-	"PROMETHEUS_AUTH_PASSWORD_FILE": setString(func(cfg *Config, value string) { cfg.PrometheusAuthPasswordFile = value }),
-	"PROMETHEUS_JWT_SECRET_FILE":    setString(func(cfg *Config, value string) { cfg.PrometheusJWTSecretFile = value }),
-	"PROMETHEUS_JWT_ISSUER":         setString(func(cfg *Config, value string) { cfg.PrometheusJWTIssuer = value }),
-	"PROMETHEUS_JWT_AUDIENCE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
-	"LOG_LEVEL":                     setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
-	"LOG_MAX_SIZE":                  setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
-	"LOG_MAX_BACKUPS":               setInt(func(cfg *Config, value int) { cfg.LogMaxBackups = value }),
-	"USE_SYSLOG":                    setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
-	"SYSTEM_UID_MIN":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
-	"SYSTEM_UID_MAX":                setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
-	"USER_INCLUDE_LIST":             setRegexList("USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
-	"USER_EXCLUDE_LIST":             setRegexList("USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
-	"PROCESS_EXCLUDE_LIST":          setRegexList("PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
-	"BLACKOUT":                      setBlackout,
-	"IGNORE_SYSTEM_LOAD":            setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
-	"SERVER_ROLE":                   setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
-	"MCP_ENABLED":                   setBool(func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
-	"MCP_TRANSPORT":                 setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
-	"MCP_HTTP_PORT":                 setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
-	"MCP_HTTP_HOST":                 setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
-	"MCP_TLS_ENABLED":               setBool(func(cfg *Config, value bool) { cfg.MCPTLSEnabled = value }),
-	"MCP_TLS_CERT_FILE":             setString(func(cfg *Config, value string) { cfg.MCPTLSCertFile = value }),
-	"MCP_TLS_KEY_FILE":              setString(func(cfg *Config, value string) { cfg.MCPTLSKeyFile = value }),
-	"MCP_TLS_CA_FILE":               setString(func(cfg *Config, value string) { cfg.MCPTLSCAFile = value }),
-	"MCP_TLS_MIN_VERSION":           setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPTLSMinVersion = value }),
-	"MCP_LOG_LEVEL":                 setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
-	"MCP_AUTH_TOKEN":                setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
-	"MCP_EDITOR_AUTH_TOKEN":         setString(func(cfg *Config, value string) { cfg.MCPEditorAuthToken = value }),
-	"MCP_ALLOW_WRITE_OPS":           setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
-	"METRICS_DB_ENABLED":            setBool(func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
-	"METRICS_DB_PATH":               setString(func(cfg *Config, value string) { cfg.MetricsDBPath = value }),
-	"METRICS_DB_RETENTION_DAYS":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRetentionDays = value }),
-	"METRICS_DB_WRITE_INTERVAL":     setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
-	"USERNAME_CACHE_TTL":            setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
-	"DAEMON_SHUTDOWN_TIMEOUT":       setInt(func(cfg *Config, value int) { cfg.DaemonShutdownTimeout = value }),
-	"MCP_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
-	"RAM_LIMIT_ENABLED":             setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
-	"RAM_THRESHOLD":                 setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
-	"RAM_RELEASE_THRESHOLD":         setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
-	"RAM_QUOTA_PER_USER":            setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
-	"DISABLE_SWAP":                  setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
-	"RAM_HIGH_RATIO":                setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
-	"RAM_USER_INCLUDE_LIST":         setRegexList("RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
-	"RAM_USER_EXCLUDE_LIST":         setRegexList("RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
-	"IO_LIMIT_ENABLED":              setBool(func(cfg *Config, value bool) { cfg.IOEnabled = value }),
-	"IO_THRESHOLD":                  setInt(func(cfg *Config, value int) { cfg.IOThreshold = value }),
-	"IO_RELEASE_THRESHOLD":          setInt(func(cfg *Config, value int) { cfg.IOReleaseThreshold = value }),
-	"IO_READ_BPS":                   setString(func(cfg *Config, value string) { cfg.IOReadBPS = value }),
-	"IO_WRITE_BPS":                  setString(func(cfg *Config, value string) { cfg.IOWriteBPS = value }),
-	"IO_READ_IOPS":                  setInt(func(cfg *Config, value int) { cfg.IOReadIOPS = value }),
-	"IO_WRITE_IOPS":                 setInt(func(cfg *Config, value int) { cfg.IOWriteIOPS = value }),
-	"IO_DEVICE_FILTER":              setString(func(cfg *Config, value string) { cfg.IODeviceFilter = value }),
-	"IO_THRESHOLD_DURATION":         setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
-	"IO_WEIGHT_DEVICES":             setString(func(cfg *Config, value string) { cfg.IOWeightDevices = value }),
-	"IO_ROOT_WEIGHT":                setInt(func(cfg *Config, value int) { cfg.IORootWeight = value }),
-	"IO_DEFAULT_WEIGHT":             setInt(func(cfg *Config, value int) { cfg.IODefaultWeight = value }),
-	"IO_USER_WEIGHT_FILE":           setString(func(cfg *Config, value string) { cfg.IOUserWeightFile = value }),
-	"IO_USER_INCLUDE_LIST":          setRegexList("IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
-	"IO_USER_EXCLUDE_LIST":          setRegexList("IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
-	"AUTODETECT_PATTERNS":           setBool(func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
-	"PATTERN_HISTORY_HOURS":         setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
-	"PATTERN_MIN_SAMPLES":           setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
-	"PATTERN_CONFIDENCE_THRESHOLD":  setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
-	"PSI_EVENT_DRIVEN":              setBool(func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
-	"PSI_CPU_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
-	"PSI_IO_STALL_THRESHOLD":        setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
-	"PSI_WINDOW_US":                 setPositiveInt(func(cfg *Config, value int) { cfg.PSIWindowUs = value }),
-	"PSI_FALLBACK_INTERVAL":         setPositiveInt(func(cfg *Config, value int) { cfg.PSIFallbackInterval = value }),
+	"PROMETHEUS_AUTH_USERNAME":         setString(func(cfg *Config, value string) { cfg.PrometheusAuthUsername = value }),
+	"PROMETHEUS_AUTH_PASSWORD_FILE":    setString(func(cfg *Config, value string) { cfg.PrometheusAuthPasswordFile = value }),
+	"PROMETHEUS_JWT_SECRET_FILE":       setString(func(cfg *Config, value string) { cfg.PrometheusJWTSecretFile = value }),
+	"PROMETHEUS_JWT_ISSUER":            setString(func(cfg *Config, value string) { cfg.PrometheusJWTIssuer = value }),
+	"PROMETHEUS_JWT_AUDIENCE":          setString(func(cfg *Config, value string) { cfg.PrometheusJWTAudience = value }),
+	"LOG_LEVEL":                        setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.LogLevel = value }),
+	"LOG_MAX_SIZE":                     setInt(func(cfg *Config, value int) { cfg.LogMaxSize = value }),
+	"LOG_MAX_BACKUPS":                  setInt(func(cfg *Config, value int) { cfg.LogMaxBackups = value }),
+	"USE_SYSLOG":                       setBool(func(cfg *Config, value bool) { cfg.UseSyslog = value }),
+	"SYSTEM_UID_MIN":                   setInt(func(cfg *Config, value int) { cfg.SystemUIDMin = value }),
+	"SYSTEM_UID_MAX":                   setInt(func(cfg *Config, value int) { cfg.SystemUIDMax = value }),
+	"USER_INCLUDE_LIST":                setRegexList("USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserIncludeList = value }),
+	"USER_EXCLUDE_LIST":                setRegexList("USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.UserExcludeList = value }),
+	"PROCESS_EXCLUDE_LIST":             setRegexList("PROCESS_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.ProcessExcludeList = value }),
+	"BLACKOUT":                         setBlackout,
+	"IGNORE_SYSTEM_LOAD":               setBool(func(cfg *Config, value bool) { cfg.IgnoreSystemLoad = value }),
+	"SERVER_ROLE":                      setString(func(cfg *Config, value string) { cfg.ServerRole = value }),
+	"MCP_ENABLED":                      setBool(func(cfg *Config, value bool) { cfg.MCPEnabled = value }),
+	"MCP_TRANSPORT":                    setStringTransform(strings.ToLower, func(cfg *Config, value string) { cfg.MCPTransport = value }),
+	"MCP_HTTP_PORT":                    setInt(func(cfg *Config, value int) { cfg.MCPHTTPPort = value }),
+	"MCP_HTTP_HOST":                    setString(func(cfg *Config, value string) { cfg.MCPHTTPHost = value }),
+	"MCP_TLS_ENABLED":                  setBool(func(cfg *Config, value bool) { cfg.MCPTLSEnabled = value }),
+	"MCP_TLS_CERT_FILE":                setString(func(cfg *Config, value string) { cfg.MCPTLSCertFile = value }),
+	"MCP_TLS_KEY_FILE":                 setString(func(cfg *Config, value string) { cfg.MCPTLSKeyFile = value }),
+	"MCP_TLS_CA_FILE":                  setString(func(cfg *Config, value string) { cfg.MCPTLSCAFile = value }),
+	"MCP_TLS_MIN_VERSION":              setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPTLSMinVersion = value }),
+	"MCP_LOG_LEVEL":                    setStringTransform(strings.ToUpper, func(cfg *Config, value string) { cfg.MCPLogLevel = value }),
+	"MCP_AUTH_TOKEN":                   setString(func(cfg *Config, value string) { cfg.MCPAuthToken = value }),
+	"MCP_EDITOR_AUTH_TOKEN":            setString(func(cfg *Config, value string) { cfg.MCPEditorAuthToken = value }),
+	"MCP_ALLOW_WRITE_OPS":              setBool(func(cfg *Config, value bool) { cfg.MCPAllowWriteOps = value }),
+	"METRICS_DB_ENABLED":               setBool(func(cfg *Config, value bool) { cfg.MetricsDBEnabled = value }),
+	"METRICS_DB_PATH":                  setString(func(cfg *Config, value string) { cfg.MetricsDBPath = value }),
+	"METRICS_DB_ROLLUP_RETENTION_DAYS": setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRollupRetentionDays = value }),
+	"METRICS_DB_RETENTION_DAYS":        setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBRetentionDays = value }),
+	"METRICS_DB_WRITE_INTERVAL":        setPositiveInt(func(cfg *Config, value int) { cfg.MetricsDBWriteInterval = value }),
+	"USERNAME_CACHE_TTL":               setPositiveInt(func(cfg *Config, value int) { cfg.UsernameCacheTTL = value }),
+	"DAEMON_SHUTDOWN_TIMEOUT":          setInt(func(cfg *Config, value int) { cfg.DaemonShutdownTimeout = value }),
+	"MCP_SHUTDOWN_TIMEOUT":             setInt(func(cfg *Config, value int) { cfg.MCPShutdownTimeout = value }),
+	"RAM_LIMIT_ENABLED":                setBool(func(cfg *Config, value bool) { cfg.RAMEnabled = value }),
+	"RAM_THRESHOLD":                    setInt(func(cfg *Config, value int) { cfg.RAMThreshold = value }),
+	"RAM_RELEASE_THRESHOLD":            setInt(func(cfg *Config, value int) { cfg.RAMReleaseThreshold = value }),
+	"RAM_QUOTA_PER_USER":               setString(func(cfg *Config, value string) { cfg.RAMQuotaPerUser = value }),
+	"DISABLE_SWAP":                     setBool(func(cfg *Config, value bool) { cfg.DisableSwap = value }),
+	"RAM_HIGH_RATIO":                   setFloat(func(cfg *Config, value float64) { cfg.RAMHighRatio = value }),
+	"RAM_USER_INCLUDE_LIST":            setRegexList("RAM_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserIncludeList = value }),
+	"RAM_USER_EXCLUDE_LIST":            setRegexList("RAM_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.RAMUserExcludeList = value }),
+	"IO_LIMIT_ENABLED":                 setBool(func(cfg *Config, value bool) { cfg.IOEnabled = value }),
+	"IO_THRESHOLD":                     setInt(func(cfg *Config, value int) { cfg.IOThreshold = value }),
+	"IO_RELEASE_THRESHOLD":             setInt(func(cfg *Config, value int) { cfg.IOReleaseThreshold = value }),
+	"IO_READ_BPS":                      setString(func(cfg *Config, value string) { cfg.IOReadBPS = value }),
+	"IO_WRITE_BPS":                     setString(func(cfg *Config, value string) { cfg.IOWriteBPS = value }),
+	"IO_READ_IOPS":                     setInt(func(cfg *Config, value int) { cfg.IOReadIOPS = value }),
+	"IO_WRITE_IOPS":                    setInt(func(cfg *Config, value int) { cfg.IOWriteIOPS = value }),
+	"IO_DEVICE_FILTER":                 setString(func(cfg *Config, value string) { cfg.IODeviceFilter = value }),
+	"IO_THRESHOLD_DURATION":            setInt(func(cfg *Config, value int) { cfg.IOThresholdDuration = value }),
+	"IO_WEIGHT_DEVICES":                setString(func(cfg *Config, value string) { cfg.IOWeightDevices = value }),
+	"IO_ROOT_WEIGHT":                   setInt(func(cfg *Config, value int) { cfg.IORootWeight = value }),
+	"IO_DEFAULT_WEIGHT":                setInt(func(cfg *Config, value int) { cfg.IODefaultWeight = value }),
+	"IO_USER_WEIGHT_FILE":              setString(func(cfg *Config, value string) { cfg.IOUserWeightFile = value }),
+	"IO_USER_INCLUDE_LIST":             setRegexList("IO_USER_INCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserIncludeList = value }),
+	"IO_USER_EXCLUDE_LIST":             setRegexList("IO_USER_EXCLUDE_LIST", func(cfg *Config, value []string) { cfg.IOUserExcludeList = value }),
+	"AUTODETECT_PATTERNS":              setBool(func(cfg *Config, value bool) { cfg.AutodetectPatterns = value }),
+	"PATTERN_HISTORY_HOURS":            setPositiveInt(func(cfg *Config, value int) { cfg.PatternHistoryHours = value }),
+	"PATTERN_MIN_SAMPLES":              setPositiveInt(func(cfg *Config, value int) { cfg.PatternMinSamples = value }),
+	"PATTERN_CONFIDENCE_THRESHOLD":     setFloat(func(cfg *Config, value float64) { cfg.PatternConfidenceThreshold = value }),
+	"PSI_MEMORY_EVENT_DRIVEN":          setBool(func(cfg *Config, value bool) { cfg.PSIMemoryEventDriven = value }),
+	"PSI_MEMORY_STALL_THRESHOLD":       setPositiveInt(func(cfg *Config, value int) { cfg.PSIMemoryStallThreshold = value }),
+	"PSI_EVENT_DRIVEN":                 setBool(func(cfg *Config, value bool) { cfg.PSIEventDriven = value }),
+	"PSI_CPU_STALL_THRESHOLD":          setPositiveInt(func(cfg *Config, value int) { cfg.PSICPUStallThreshold = value }),
+	"PSI_IO_STALL_THRESHOLD":           setPositiveInt(func(cfg *Config, value int) { cfg.PSIOStallThreshold = value }),
+	"PSI_WINDOW_US":                    setPositiveInt(func(cfg *Config, value int) { cfg.PSIWindowUs = value }),
+	"PSI_FALLBACK_INTERVAL":            setPositiveInt(func(cfg *Config, value int) { cfg.PSIFallbackInterval = value }),
 }
 
 func setString(assign func(*Config, string)) configFieldHandler {
@@ -1000,6 +1012,9 @@ func regexListContainsAmbiguousComma(value string) bool {
 
 func validateLimitHookConfig(cfg *Config) []string {
 	var validationErrors []string
+	if cfg.LimitHookHTTPMaxAttempts < 1 || cfg.LimitHookHTTPMaxAttempts > 5 {
+		validationErrors = append(validationErrors, "LIMIT_HOOK_HTTP_MAX_ATTEMPTS must be between 1 and 5")
+	}
 	if cfg.LimitHookTimeout < 1 {
 		validationErrors = append(validationErrors, "LIMIT_HOOK_TIMEOUT must be at least 1 second")
 	}
@@ -1065,6 +1080,9 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Validate metrics database configuration
+	if cfg.MetricsDBRollupRetentionDays < 1 {
+		errors = append(errors, "METRICS_DB_ROLLUP_RETENTION_DAYS must be at least 1")
+	}
 	if cfg.MetricsDBRetentionDays < 1 {
 		errors = append(errors, "METRICS_DB_RETENTION_DAYS must be at least 1")
 	}
@@ -1109,6 +1127,16 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Validate PSI event-driven configuration
+	if cfg.PSIMemoryEventDriven && !cfg.PSIEventDriven {
+		errors = append(errors, "PSI_MEMORY_EVENT_DRIVEN requires PSI_EVENT_DRIVEN=true")
+	}
+	if cfg.PSIMemoryStallThreshold <= 0 {
+		errors = append(errors, "PSI_MEMORY_STALL_THRESHOLD must be greater than 0")
+	}
+	if cfg.PSIMemoryEventDriven && cfg.PSIMemoryStallThreshold > cfg.PSIWindowUs {
+		errors = append(errors, "PSI_MEMORY_STALL_THRESHOLD must not exceed PSI_WINDOW_US")
+	}
+
 	if cfg.PSICPUStallThreshold < 0 || (cfg.PSIEventDriven && cfg.PSICPUStallThreshold == 0) {
 		errors = append(errors, "PSI_CPU_STALL_THRESHOLD must be greater than 0")
 	}
@@ -2320,4 +2348,33 @@ func (c *Config) GetPSIFallbackInterval() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.PSIFallbackInterval
+}
+
+// GetPSIMemoryEventDriven reports whether memory pressure may wake the control loop.
+func (c *Config) GetPSIMemoryEventDriven() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIMemoryEventDriven
+}
+
+// GetPSIMemoryStallThreshold returns the memory wake threshold in microseconds.
+func (c *Config) GetPSIMemoryStallThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.PSIMemoryStallThreshold
+}
+
+// GetLimitHookHTTPMaxAttempts returns the full bounded HTTP attempt budget.
+func (c *Config) GetLimitHookHTTPMaxAttempts() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.LimitHookHTTPMaxAttempts
+}
+
+// GetMetricsDBRollupRetentionDays returns the effective rollup retention. It
+// never shortens an existing longer raw-data retention configuration.
+func (c *Config) GetMetricsDBRollupRetentionDays() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return max(c.MetricsDBRetentionDays, c.MetricsDBRollupRetentionDays)
 }

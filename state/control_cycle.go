@@ -12,6 +12,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/blockiops"
 	"github.com/fdefilippo/resman/internal/controlhistory"
+	"github.com/fdefilippo/resman/internal/pressure"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -477,6 +478,7 @@ func eligibleHostCPUPercentLogValue(metrics *SystemMetrics) interface{} {
 }
 
 type SystemMetrics struct {
+	Pressure                      *pressure.Snapshot
 	CPUDecision                   *resmanmetrics.CPUDecisionMetrics
 	Timestamp                     time.Time
 	TotalCores                    int
@@ -573,6 +575,13 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 		UserMetrics:  make(map[int]*resmanmetrics.UserMetrics),
 	}
 
+	// Pressure is observation only, owned by this decision sample. A host
+	// refresh carries nil and therefore cannot overwrite or renew it.
+	if decisionSample {
+		snapshot := pressure.ReadSystem("/proc/pressure", sampleTime)
+		metrics.Pressure = &snapshot
+	}
+
 	// Collect base system metrics.
 	metrics.TotalCores = m.metricsCollector.GetTotalCores()
 	var hostCPU resmanmetrics.HostCPUUsageSample
@@ -604,6 +613,11 @@ func (m *Manager) collectSystemMetricsForPurpose(decisionSample bool) (*SystemMe
 	var allUserMetrics map[int]*resmanmetrics.UserMetrics
 	if decisionSample {
 		allUserMetrics = m.metricsCollector.GetAllUserMetricsForDecision()
+		if diagnostics, ok := m.metricsCollector.(resmanmetrics.DecisionProcessDiagnostics); ok {
+			if err := diagnostics.DecisionProcessScanError(); err != nil {
+				return nil, fmt.Errorf("authoritative process decision sample unavailable: %w", err)
+			}
+		}
 	} else {
 		allUserMetrics = m.metricsCollector.GetAllUserMetrics()
 	}
@@ -754,6 +768,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		blockDevices = append(blockDevices, resmanmetrics.BlockIOPSDeviceMetrics{Device: fmt.Sprintf("%d:%d", device.Major, device.Minor), ReadMinimum: bounds.Read.ActivationMinimum, ReadMaximum: bounds.Read.ReleaseMaximum, WriteMinimum: bounds.Write.ActivationMinimum, WriteMaximum: bounds.Write.ReleaseMaximum, Uncertain: bounds.Uncertain, UpperAvailable: metrics.IOBlockIOPSUnavailableUsers == 0})
 	}
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		Pressure:                metrics.Pressure,
 		CPUDecision:             metrics.CPUDecision,
 		BlockIOPSExactAvailable: exactBlockIOPS, BlockIOPSSourceRequired: needsBlockIOPS(m.GetConfig()), BlockIOPSDecisionAt: metrics.IOBlockIOPSDecisionAt, BlockIOPSDevices: blockDevices, BlockIOPSUnavailableUsers: metrics.IOBlockIOPSUnavailableUsers, BlockIOPSSourceAvailable: metrics.IOBlockIOPSSourceAvailable,
 		EnforcementMode:                              m.enforcementStatus.Mode,
@@ -904,6 +919,10 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 		System: persistenceSystem,
 		Users:  metrics.PersistenceUsers,
 	}); err != nil {
+		var partial *resmanmetrics.PartialPersistenceError
+		if errors.As(err, &partial) && partial.RawMetricsCommitted() {
+			m.clearPersistedCPUPointsLifecycleEvents()
+		}
 		m.logger.Warn("Failed to write metrics to database",
 			"users", len(metrics.UserMetrics),
 			"cpu_limits_active", summary.cpuLimitsActive,

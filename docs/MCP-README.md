@@ -53,6 +53,7 @@ requirement" controls whether a registered tool can complete successfully.
 | `get_cpu_report` | Generate a CPU usage report | Always | None |
 | `get_mem_report` | Generate a memory usage report | Always | None |
 | `get_control_history` | Merge recent and retained terminal-cycle history with explicit persistence status | Always | None |
+| `get_process_activity` | Query sampled process identity, runtime and covered CPU/RAM activity | Always | None |
 | `set_user_exclude_list` | Persist and apply CPU exclusion patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `set_user_include_list` | Persist and apply CPU eligibility patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `get_user_filters` | Get current CPU include and exclude patterns | Always | None |
@@ -61,6 +62,7 @@ requirement" controls whether a registered tool can complete successfully.
 | `get_system_history` | Get historical system metrics | Always | `METRICS_DB_ENABLED=true` |
 | `get_user_summary` | Get aggregate historical statistics for a user | Always | `METRICS_DB_ENABLED=true` |
 | `get_metrics_database_info` | Get metrics-database status and retention information | Always | `METRICS_DB_ENABLED=true` |
+| `get_metrics_rollups` | Query compacted UTC-hour statistics with known and unknown sample counts | Always | `METRICS_DB_ENABLED=true` |
 | `activate_limits` | Manually request CPU-limit activation | `MCP_ALLOW_WRITE_OPS=true` | `MCP_ALLOW_WRITE_OPS=true` |
 | `deactivate_limits` | Manually deactivate CPU limits | `MCP_ALLOW_WRITE_OPS=true` | `MCP_ALLOW_WRITE_OPS=true` |
 
@@ -71,6 +73,20 @@ client receives an explicit `metrics database is not enabled` error instead of a
 different discovery schema. The two user-filter setters are also always visible, but
 reject invocation while write operations are disabled. Only manual activation and
 deactivation are omitted from discovery unless write operations are enabled.
+
+`get_metrics_rollups` returns compacted UTC-hour observations separately from raw
+history, including known/unknown counts and sample-weighted averages; see
+[METRICS-ROLLUPS.md](METRICS-ROLLUPS.md). `get_user_summary` exposes
+`cpu_limit_active_sample_percent` for the percentage of retained raw samples with
+active CPU limits. `cpu_limit_active_time_percent` remains a deprecated alias with
+the same value and sample-frequency meaning. Neither field is duration-weighted
+or establishes continuous enforcement between samples.
+
+`get_process_activity` reads frozen boot/PID/kernel-start process observations;
+runtime and sampled CPU/RAM coverage are separate. It never scans procfs on a client
+request, and optional persistence availability is explicit.
+See [PROCESS-ACTIVITY.md](PROCESS-ACTIVITY.md) for identity, gaps, bounded filters
+and the meaning of an active observation.
 
 HTTP supports two deliberately separate bearer principals. `MCP_AUTH_TOKEN` is the
 full operator credential. `MCP_EDITOR_AUTH_TOKEN` is a distinct least-privilege

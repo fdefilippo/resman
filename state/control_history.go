@@ -112,7 +112,7 @@ func (m *Manager) finishControlCycle(run *controlCycleContext, cycleErr error) e
 
 func boundedHistoryTrigger(trigger string) string {
 	switch trigger {
-	case ControlCycleTriggerInitial, ControlCycleTriggerManual, ControlCycleTriggerTicker, ControlCycleTriggerIOWeight, "psi_system_cpu", "psi_system_io", "psi_user_cpu", "psi_user_io":
+	case ControlCycleTriggerInitial, ControlCycleTriggerManual, ControlCycleTriggerTicker, ControlCycleTriggerIOWeight, "psi_system_cpu", "psi_system_io", "psi_system_memory", "psi_user_cpu", "psi_user_io":
 		return trigger
 	default:
 		return "other"
