@@ -2,8 +2,14 @@ resman (1.42.0-1) stable; urgency=medium
 
   * Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.
   * Preserve executable exclusions and restore owned enforcement on source integrity failure.
+  * Make PSI descriptor retirement, wake signals, component shutdown and logger publication safe under concurrency.
+  * Validate captured reload bytes and bind configuration/editor reads to non-symlink file descriptors.
+  * Preserve MCP source error causes and rely on the real Prometheus listener bind.
+  * Sync log rotation files and directory entries; document the minimal public HTTPS health route.
+  * Correct outer-quote parsing with explicit upgrade guidance for ambiguous historical values.
+  * Add a source-tree control-cycle log analyzer with compressed-input support.
 
- -- Francesco Defilippo <francesco@defilippo.org>  Sun, 08 Nov 2026 22:00:00 +0100
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 09 Nov 2026 05:23:48 +0100
 
 resman (1.41.4-1) stable; urgency=medium
 

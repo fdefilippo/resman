@@ -314,9 +314,15 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/scripts/
 
 %changelog
-* Sun Nov 08 2026 Francesco Defilippo <francesco@defilippo.org> - 1.42.0-1
+* Mon Nov 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.42.0-1
 - Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.
 - Preserve executable exclusions and restore owned enforcement on source integrity failure.
+- Make PSI descriptor retirement, wake signals, component shutdown and logger publication safe under concurrency.
+- Validate captured reload bytes and bind configuration/editor reads to non-symlink file descriptors.
+- Preserve MCP source error causes and rely on the real Prometheus listener bind.
+- Sync log rotation files and directory entries; document the minimal public HTTPS health route.
+- Correct outer-quote parsing with explicit upgrade guidance for ambiguous historical values.
+- Add a source-tree control-cycle log analyzer with compressed-input support.
 
 * Thu Oct 15 2026 Francesco Defilippo <francesco@defilippo.org> - 1.41.4-1
 - Scan user processes afresh for every control decision instead of reusing a sample for METRICS_CACHE_TTL
