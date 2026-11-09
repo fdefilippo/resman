@@ -321,6 +321,8 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 - Diagnose CPU activation from authoritative requested and verified plan state.
 - Add application readiness with authenticated details and quiet liveness probes.
 - Add read-only --check with shared configuration and policy validation.
+- Bound HTTP deadlines while preserving MCP streaming and hash credential comparisons.
+- Measure control stages and persist terminal decisions with compatible schema-11 migration.
 
 * Mon Nov 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.42.0-1
 - Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.

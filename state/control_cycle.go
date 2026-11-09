@@ -11,6 +11,7 @@ import (
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/blockiops"
+	"github.com/fdefilippo/resman/internal/controlhistory"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 )
@@ -43,28 +44,28 @@ type controlCycleContext struct {
 	deferredErrors       []error
 	degradedErrors       []error
 	degradedWarnings     []error
+	failedStage          resmanmetrics.ControlCycleStage
 }
 
 type controlCycleStage struct {
-	name               string
+	name               resmanmetrics.ControlCycleStage
 	run                func(*Manager, *controlCycleContext) error
 	continueAfterError bool
 }
 
 var defaultControlCyclePipeline = []controlCycleStage{
-	{name: "reconcile_cpu_points", run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
-	{name: "check_blackout", run: (*Manager).stageCheckBlackout},
-	{name: "collect_metrics", run: (*Manager).stageCollectMetrics},
-	{name: "reconcile_io_weights", run: (*Manager).stageReconcileIODeviceWeights, continueAfterError: true},
-	{name: "make_decision", run: (*Manager).stageMakeDecision},
-	{name: "execute_decision", run: (*Manager).stageExecuteDecision, continueAfterError: true},
-	{name: "finalize_enforcement_observation", run: (*Manager).stageFinalizeEnforcementObservation},
-	{name: "dispatch_limit_hooks", run: (*Manager).stageDispatchLimitHooks, continueAfterError: true},
-	{name: "update_prometheus", run: (*Manager).stageUpdatePrometheus},
-	{name: "write_database", run: (*Manager).stageWriteDatabase},
-	{name: "record_history", run: (*Manager).stageRecordHistory},
-	{name: "workload_pattern_detection", run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
-	{name: "log_completion", run: (*Manager).stageLogCompletion},
+	{name: resmanmetrics.StageReconcileCPUPoints, run: (*Manager).stageReconcileCPUPoints, continueAfterError: true},
+	{name: resmanmetrics.StageCheckBlackout, run: (*Manager).stageCheckBlackout},
+	{name: resmanmetrics.StageCollectMetrics, run: (*Manager).stageCollectMetrics},
+	{name: resmanmetrics.StageReconcileIOWeights, run: (*Manager).stageReconcileIODeviceWeights, continueAfterError: true},
+	{name: resmanmetrics.StageMakeDecision, run: (*Manager).stageMakeDecision},
+	{name: resmanmetrics.StageExecuteDecision, run: (*Manager).stageExecuteDecision, continueAfterError: true},
+	{name: resmanmetrics.StageFinalizeEnforcementObservation, run: (*Manager).stageFinalizeEnforcementObservation},
+	{name: resmanmetrics.StageDispatchLimitHooks, run: (*Manager).stageDispatchLimitHooks, continueAfterError: true},
+	{name: resmanmetrics.StageUpdatePrometheus, run: (*Manager).stageUpdatePrometheus},
+	{name: resmanmetrics.StageWriteDatabase, run: (*Manager).stageWriteDatabase},
+	{name: resmanmetrics.StageWorkloadPatternDetection, run: (*Manager).stageWorkloadPatternDetection, continueAfterError: true},
+	{name: resmanmetrics.StageLogCompletion, run: (*Manager).stageLogCompletion},
 }
 
 func (m *Manager) stageReconcileCPUPoints(run *controlCycleContext) error {
@@ -201,7 +202,16 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		m.readinessCycle.DecisionAt = run.metrics.Timestamp
 	}
 	m.mu.Unlock()
-	return err
+	historyStarted := time.Now()
+	historyErr := m.finishControlCycle(run, err)
+	if m.prometheusExporter != nil {
+		outcome := resmanmetrics.StageSucceeded
+		if historyErr != nil {
+			outcome = resmanmetrics.StageFailed
+		}
+		m.prometheusExporter.ObserveControlStage(resmanmetrics.ControlStageObservation{Stage: resmanmetrics.StageRecordHistory, Outcome: outcome, Duration: time.Since(historyStarted)})
+	}
+	return errors.Join(err, historyErr)
 }
 
 func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []controlCycleStage) error {
@@ -210,7 +220,23 @@ func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []cont
 		if run.ctx != nil && run.ctx.Err() != nil {
 			return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...), run.ctx.Err())
 		}
-		if err := stage.run(m, run); err != nil {
+		stageStart := time.Now()
+		err := stage.run(m, run)
+		outcome := resmanmetrics.StageSucceeded
+		if onlyCancellation(err) {
+			outcome = resmanmetrics.StageCancelled
+		} else if err != nil {
+			outcome = resmanmetrics.StageFailed
+		} else if run.stopWithoutError {
+			outcome = resmanmetrics.StageSuspended
+		}
+		if m.prometheusExporter != nil {
+			m.prometheusExporter.ObserveControlStage(resmanmetrics.ControlStageObservation{Stage: stage.name, Outcome: outcome, Duration: time.Since(stageStart)})
+		}
+		if err != nil {
+			if run.failedStage == "" {
+				run.failedStage = stage.name
+			}
 			cycleErrors = append(cycleErrors, err)
 			if !stage.continueAfterError {
 				return errors.Join(errors.Join(cycleErrors...), errors.Join(run.degradedErrors...))
@@ -338,13 +364,6 @@ func (m *Manager) stageFinalizeEnforcementObservation(run *controlCycleContext) 
 	return nil
 }
 
-func (m *Manager) stageRecordHistory(run *controlCycleContext) error {
-	// 6. Record the control-cycle history.
-	run.duration = time.Since(run.startTime)
-	m.recordControlCycle(run.decision, run.reason, run.metrics, run.duration)
-	return nil
-}
-
 func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error {
 	// Workload classification remains observational. Pattern-selected resource
 	// mutation ended with the retired PID-relocation backend.
@@ -407,6 +426,7 @@ func (m *Manager) stageWorkloadPatternDetection(run *controlCycleContext) error 
 }
 
 func (m *Manager) stageLogCompletion(run *controlCycleContext) error {
+	run.duration = time.Since(run.startTime)
 	m.mu.RLock()
 	run.activeLimitedUsers = len(m.activeUsers)
 	m.mu.RUnlock()
@@ -904,35 +924,36 @@ func (m *Manager) writeDatabaseMetrics(metrics *SystemMetrics) {
 	)
 }
 
-type ControlCycleEntry struct {
-	Timestamp                    time.Time `json:"timestamp"`
-	Decision                     string    `json:"decision"`
-	Reason                       string    `json:"reason"`
-	TotalCPUUsage                float64   `json:"total_cpu_usage"`
-	CPUEligibleCPUUsage          float64   `json:"cpu_eligible_users_cpu_usage"`
-	ObservedUsersCount           int       `json:"observed_users_count"`
-	CPUActivelyLimitedUsersCount int       `json:"cpu_actively_limited_users_count"`
-	CPULimitsActive              bool      `json:"cpu_limits_active"`
-	DurationMs                   int64     `json:"duration_ms"`
-}
+// ControlCycleEntry is the typed terminal history contract shared with storage.
+type ControlCycleEntry = controlhistory.Entry
 
 // controlHistory stores recent control cycle entries
 type controlHistory struct {
 	entries []ControlCycleEntry
 	mu      sync.RWMutex
 	maxSize int
+	pending []ControlCycleEntry
+	dropped uint64
 }
 
-func (m *Manager) addControlHistoryEntry(entry ControlCycleEntry) {
+// addControlHistoryEntry publishes the recent record and pending delivery together.
+func (m *Manager) addControlHistoryEntry(entry ControlCycleEntry, persist bool) ([]ControlCycleEntry, bool) {
 	m.controlHist.mu.Lock()
 	defer m.controlHist.mu.Unlock()
-
 	m.controlHist.entries = append(m.controlHist.entries, entry)
-
-	// Keep only the last maxSize entries
 	if len(m.controlHist.entries) > m.controlHist.maxSize {
 		m.controlHist.entries = m.controlHist.entries[len(m.controlHist.entries)-m.controlHist.maxSize:]
 	}
+	if !persist {
+		return nil, false
+	}
+	m.controlHist.pending = append(m.controlHist.pending, entry)
+	dropped := len(m.controlHist.pending) > m.controlHist.maxSize
+	if dropped {
+		m.controlHist.pending = m.controlHist.pending[1:]
+		m.controlHist.dropped++
+	}
+	return append([]ControlCycleEntry(nil), m.controlHist.pending...), dropped
 }
 
 func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
@@ -952,27 +973,6 @@ func (m *Manager) GetControlHistory(limit int) []ControlCycleEntry {
 	result := make([]ControlCycleEntry, limit)
 	copy(result, m.controlHist.entries[start:])
 	return result
-}
-
-func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMetrics, duration time.Duration) {
-	m.mu.RLock()
-	limitsActive := m.limitsActive
-	activelyLimitedUsers := len(m.activeUsers)
-	m.mu.RUnlock()
-
-	entry := ControlCycleEntry{
-		Timestamp:                    time.Now(),
-		Decision:                     decision,
-		Reason:                       reason,
-		TotalCPUUsage:                metrics.TotalCPUUsage,
-		CPUEligibleCPUUsage:          metrics.CPUEligibleCPUUsage,
-		ObservedUsersCount:           len(metrics.UserMetrics),
-		CPUActivelyLimitedUsersCount: activelyLimitedUsers,
-		CPULimitsActive:              limitsActive,
-		DurationMs:                   duration.Milliseconds(),
-	}
-
-	m.addControlHistoryEntry(entry)
 }
 
 // cpuDecisionMetrics projects the plan's actual request and verified outcome,

@@ -18,22 +18,25 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/controlhistory"
 )
 
 // DBWriter coordinates periodic writes to the metrics database.
 type DBWriter struct {
-	dbManager       *database.DatabaseManager
-	writeInterval   time.Duration
-	mu              sync.RWMutex
-	lastWriteTime   time.Time
-	enabled         bool
-	lastWriteFailed bool
+	dbManager          *database.DatabaseManager
+	writeInterval      time.Duration
+	mu                 sync.RWMutex
+	lastWriteTime      time.Time
+	enabled            bool
+	lastWriteFailed    bool
+	historyWriteFailed bool
 }
 
 // NewDBWriter creates a periodic metrics database writer.
@@ -213,5 +216,28 @@ func (w *DBWriter) Close() error {
 func (w *DBWriter) Healthy() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.enabled && !w.lastWriteFailed
+	return w.enabled && !w.lastWriteFailed && !w.historyWriteFailed
+}
+
+// WriteControlHistory persists terminal cycles independently of metrics sampling.
+func (w *DBWriter) WriteControlHistory(ctx context.Context, entries []controlhistory.Entry) (writeErr error) {
+	w.mu.RLock()
+	enabled, db := w.enabled, w.dbManager
+	w.mu.RUnlock()
+	if !enabled || db == nil {
+		return fmt.Errorf("control history database unavailable")
+	}
+	defer func() { w.mu.Lock(); w.historyWriteFailed = writeErr != nil; w.mu.Unlock() }()
+	return db.WriteControlHistory(ctx, entries)
+}
+
+// ReadControlHistory queries the same optional store without changing sampling state.
+func (w *DBWriter) ReadControlHistory(ctx context.Context, limit int) ([]controlhistory.Entry, error) {
+	w.mu.RLock()
+	enabled, db := w.enabled, w.dbManager
+	w.mu.RUnlock()
+	if !enabled || db == nil {
+		return nil, fmt.Errorf("control history database unavailable")
+	}
+	return db.ReadControlHistory(ctx, limit)
 }

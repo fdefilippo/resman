@@ -114,7 +114,7 @@ for the CPU Points contract and operator measurement procedure in schema 10.
 
 ## Cgroup Hierarchy
 
-Current metrics schema: 10.
+Current metrics schema: 11.
 
 On systemd hosts the authoritative topology is flat:
 

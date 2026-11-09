@@ -168,6 +168,11 @@ Build, packaging and host preparation are covered in the
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the normative
 [development guide](docs/DEVELOPMENT.md) before changing code.
 
+
+Terminal cycle history survives restart when the optional metrics database is enabled;
+MCP merges it with recent attempts and reports unavailable persistence explicitly.
+See [history and delivery limits](docs/METRICS-DATABASE.md#terminal-control-history).
+
 ## License
 
 GNU General Public License v3.0. See [LICENSE](LICENSE).

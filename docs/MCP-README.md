@@ -52,7 +52,7 @@ requirement" controls whether a registered tool can complete successfully.
 | `update_cpu_points` | Apply revision-bound CPU Points map changes | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `get_cpu_report` | Generate a CPU usage report | Always | None |
 | `get_mem_report` | Generate a memory usage report | Always | None |
-| `get_control_history` | Get recent control-cycle history | Always | None |
+| `get_control_history` | Merge recent and retained terminal-cycle history with explicit persistence status | Always | None |
 | `set_user_exclude_list` | Persist and apply CPU exclusion patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `set_user_include_list` | Persist and apply CPU eligibility patterns | Always | `MCP_ALLOW_WRITE_OPS=true` |
 | `get_user_filters` | Get current CPU include and exclude patterns | Always | None |
@@ -763,3 +763,15 @@ The tool tests the pattern against these example users:
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
 - [ResMan README](../README.md)
+
+## Terminal decision history
+
+`get_control_history` accepts `limit` (default 10, maximum 1000), keeps the existing
+entry fields, and adds session/cycle identity, outcome, sample availability, first
+failed stage, bounded failure kind, coverage and distinct intent/application evidence.
+Unavailable samples are explicit, including blackout and pre-decision failures.
+The result exposes `persistence_status`, `pending_entries` and session-scoped
+`dropped_entries`; memory remains usable when the optional database is disabled or
+unavailable. See [terminal control history](METRICS-DATABASE.md#terminal-control-history)
+for migration, retention, retry and crash limitations. Both HTTP and stdio use the
+same typed projection and neither query advances control baselines.

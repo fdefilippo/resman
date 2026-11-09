@@ -80,8 +80,8 @@ METRICS_DB_WRITE_INTERVAL=300
 
 ## Schema and compatibility
 
-The current store uses schema version 10 and contains `user_metrics` and
-`system_metrics` tables. Every transaction has one `sample_epoch_id` and common
+The current store uses schema version 11 and contains `user_metrics`,
+`system_metrics` and `control_history` tables. Every transaction has one `sample_epoch_id` and common
 `interval_start`/`interval_end` boundary. A nullable start identifies the first
 baseline after daemon startup. User and system records in one transaction therefore
 describe the same decision-sample interval; history consumers must not combine rows
@@ -141,12 +141,58 @@ by the CPU Points cutover because they cannot express allocation class, guarante
 common sampling epochs, topology resets, or RAM charge coverage. Version 4 is also
 rejected by the ownership-containment release. Version 5 cannot represent the native
 flat plan, and version 6 still contains the retired PID-relocation lifecycle. Move or
-delete a schema-6-or-older store and restart to create version 10. Development schema-9
+delete a schema-6-or-older store and restart to create version 11. Development schema-9
 stores are rebuilt transactionally without changing row meaning. No alias or dual-read
 path exists.
 
 Useful indexes cover timestamps, user IDs, and enforcement-state queries. Timestamp
 values are stored in UTC and API responses use RFC 3339.
+
+## Terminal control history
+
+`control_history` stores each completed control-cycle attempt independently of
+`METRICS_DB_WRITE_INTERVAL`; observations still obey their existing cadence. The
+feature uses the existing database enablement, secure path and retention settings.
+Schema 10 migrates transactionally to 11 by adding the empty table and time index.
+Existing metrics retain their meaning; no historical decisions are inferred.
+
+Each entry has a random daemon-session identity plus a monotonic per-session cycle
+number, start/finish timestamps and a bounded trigger/outcome. It records the policy
+decision/reason separately from execution mode, requested intent, acknowledged action
+and block reason. CPU request/application and I/O coverage retain their own fields.
+A failed collection or a blackout attempt has `sample_available=false`; the legacy
+numeric fields must not be read as measured zeros in those entries. Failure records
+contain a first failed stage and bounded failure kind, not raw errors or credentials.
+Host CPU sample availability and its bounded unavailable reason are stored separately
+from the availability of the overall decision sample. A missing host sample is never
+a measured zero. Existing policy reasons remain available. Full error diagnostics remain in logs.
+`outcome` describes the protective pipeline; history-delivery failure is reported
+separately and never implies that enforcement was undone.
+
+Memory retains 100 terminal attempts. When persistence is enabled, up to 100 pending
+entries are retried idempotently in a single transaction after each attempt. Delivery
+uses a separate five-second context budget, also for orderly cancellation; it uses
+the existing database operation gate and SQLite busy timeout. It does not create a
+background worker or change resource policy. A delivery error is returned to the cycle
+owner and degrades writer readiness; the recent history remains available. The first
+failure is observable through the cycle error and `resman_errors_total` with component
+`control_history`. Retry-window overflow emits a warning and `retry_window_overflow`.
+
+`get_control_history` merges memory with the latest durable rows, deduplicates by
+session/cycle, returns chronological order and caps `limit` at 1000 (default 10).
+Additive response fields are `persistence_status` (`available`, `unavailable`, or
+`disabled`), `pending_entries`, and `dropped_entries`. The dropped count covers this
+daemon session only. A readable store whose writer is degraded remains unavailable.
+Disabled persistence keeps memory-only history; a failed read returns available
+memory with an explicit unavailable status. No client read collects a decision sample.
+
+The terminal-entry duration excludes its own storage delivery; the total-cycle
+histogram includes that delivery. The stage histogram measures it as `record_history`.
+All retained entries use the existing retention-days cleanup in the same transaction
+as user/system observations. An uncommitted attempt interrupted by a crash and pending
+memory entries lost on restart cannot be recovered. This is bounded diagnostic history,
+not a guaranteed audit log. An abrupt crash can leave no terminal entry for the active
+attempt; absence never proves that no action occurred.
 
 ## MCP access
 
@@ -162,7 +208,7 @@ expressions such as `now-24h`, and predefined ranges such as `today`, `yesterday
 
 ## Direct inspection
 
-Current metrics schema: 10.
+Current metrics schema: 11.
 
 Stop ResMan before maintenance that modifies the database. For live inspection,
 explicitly open SQLite in read-only mode: a `SELECT` alone does not make the

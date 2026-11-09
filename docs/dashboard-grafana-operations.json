@@ -3106,6 +3106,107 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "type": "row",
+      "id": 43,
+      "title": "Control stage timing",
+      "gridPos": {
+        "x": 0,
+        "y": 103,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 44,
+      "title": "Control stage duration p95 and mean",
+      "description": "Executed stages only, including errors, cancellation and suspension. record_history measures terminal storage delivery after protective work. Dispatch measures enqueueing, not asynchronous hook runtime. Quantiles are not additive.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])))",
+          "legendFormat": "p95 - {{hostname}} {{stage}} {{outcome}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_sum{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])) / sum by (cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m]))",
+          "legendFormat": "mean - {{hostname}} {{stage}} {{outcome}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ],
   "refresh": "30s",
@@ -3295,6 +3396,6 @@
   "timezone": "browser",
   "title": "ResMan - Operations",
   "uid": "resman-operations",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

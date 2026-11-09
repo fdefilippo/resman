@@ -31,6 +31,7 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/controlhistory"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
@@ -159,6 +160,7 @@ type GetControlHistoryArgs struct {
 }
 
 type ControlHistoryEntry struct {
+	controlhistory.Details
 	Timestamp                    string  `json:"timestamp"`
 	Decision                     string  `json:"decision"`
 	Reason                       string  `json:"reason"`
@@ -171,7 +173,10 @@ type ControlHistoryEntry struct {
 }
 
 type GetControlHistoryResult struct {
-	Entries []ControlHistoryEntry `json:"entries"`
+	Entries           []ControlHistoryEntry            `json:"entries"`
+	PersistenceStatus controlhistory.PersistenceStatus `json:"persistence_status"`
+	PendingEntries    int                              `json:"pending_entries"`
+	DroppedEntries    uint64                           `json:"dropped_entries"`
 }
 
 type ActivateLimitsArgs struct {
@@ -1026,13 +1031,16 @@ func (s *Server) handleGetControlHistory(ctx context.Context, req *mcp.CallToolR
 		args.Limit = 10
 	}
 
-	history := s.stateManager.GetControlHistory(args.Limit)
+	historyResult := s.stateManager.QueryControlHistory(ctx, args.Limit)
+	history := historyResult.Entries
 	result := GetControlHistoryResult{
-		Entries: make([]ControlHistoryEntry, 0, len(history)),
+		Entries:           make([]ControlHistoryEntry, 0, len(history)),
+		PersistenceStatus: historyResult.Persistence, PendingEntries: historyResult.Pending, DroppedEntries: historyResult.Dropped,
 	}
 
 	for _, entry := range history {
 		result.Entries = append(result.Entries, ControlHistoryEntry{
+			Details:                      entry.Details,
 			Timestamp:                    entry.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Decision:                     entry.Decision,
 			Reason:                       entry.Reason,

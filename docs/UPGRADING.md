@@ -1,6 +1,6 @@
 # Upgrading from ResMan 1.25.x through 1.42.0 to ResMan 1.43.0
 
-Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
+Current metrics schema: 11. Schemas 7 through 10 migrate through transactional, versioned steps.
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.42.0 to
 ResMan 1.43.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
@@ -8,7 +8,7 @@ cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
 on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
-Except for the explicit schema-7-to-9 migration below, it does not migrate older
+Except for the explicit schema-7-through-11 migrations below, it does not migrate older
 database schemas, accept removed configuration keys, preserve old MCP shapes, or alias
 renamed metrics.
 
@@ -66,8 +66,41 @@ application, export eligible host CPU percentage, and carry decision timestamps 
 an age budget derived from three effective fallback control intervals. Observation
 refreshes never renew these values; historical per-core percentage gauges retain
 their existing meaning. Reload the shipped alert rules and import the updated
-operations dashboard when adopting these diagnostics. No database schema or public
-configuration key changes are required.
+operations dashboard when adopting these diagnostics. These diagnostics add no public
+configuration keys. Terminal history below adds schema 11.
+
+## ADDED: durable decisions and stage timing (1.43.0)
+
+The optional metrics database adds `control_history` in schema 11. Migration from
+schema 10 creates an empty history table and preserves existing observations;
+older supported schemas pass through their existing versioned migrations first.
+No decisions are fabricated for historical observation rows. Schema 11 is refused
+by older releases: stop ResMan and preserve the database outside the live path
+before downgrading, then use a separate compatible store with the older daemon.
+
+`get_control_history` retains its existing entry fields and adds terminal outcome,
+restart-safe session/cycle identity, first failed stage, classified failure kind,
+sample availability, coverage and separate requested intent/applied action. It merges
+recent memory with durable history once per identity. Persistence is optional;
+responses explicitly report disabled or unavailable storage, pending entries and
+retry-window loss. See [METRICS-DATABASE.md](METRICS-DATABASE.md#terminal-control-history)
+for retention, delivery and crash boundaries.
+
+`resman_control_stage_duration_seconds{stage,outcome}` measures executed stages,
+including errors, cancellation and blackout checks. Skipped stages are absent.
+The terminal `record_history` stage also measures persistence after the protective
+pipeline, including failed or suspended attempts. Import the operations dashboard
+for per-stage p95/mean duration; no PID, UID or raw-error labels are introduced.
+
+## CHANGED: HTTP deadlines and credential comparison (1.43.0)
+
+Prometheus HTTP/HTTPS listeners now enforce 10-second header, 30-second request,
+30-second response and 60-second idle deadlines. Scrapes that exceed the response
+budget must be investigated rather than relying on an indefinitely open response.
+MCP retains its existing header/request deadlines, adds a 60-second idle deadline
+and keeps `WriteTimeout=0` for streaming responses. Idle deadlines do not terminate
+an active response. Bearer and Basic credentials use constant-time comparisons of
+fixed-length SHA-256 digests; authentication roles and JWT validation are unchanged.
 
 ## CHANGED: certified IOPS source and per-device bounds (1.42.0)
 

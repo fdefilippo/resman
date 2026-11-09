@@ -586,3 +586,30 @@ After blackout ends, alerts allow one normal decision freshness budget for the
 next scheduled fallback tick. This avoids false alarms across adjacent blackout
 windows with long PSI fallback intervals. An old suspension cannot silence a
 stalled loop indefinitely.
+
+## Control stage timing
+
+Per-host p95 by executed stage and outcome (seconds):
+
+```promql
+histogram_quantile(0.95,
+  sum by (le, hostname, stage, outcome) (
+    rate(resman_control_stage_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Mean time per executed stage (seconds):
+
+```promql
+sum by (hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_sum[5m]))
+/
+sum by (hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_count[5m]))
+```
+
+Labels come from a fixed stage/outcome inventory. Skipped work is absent rather
+than zero duration. A cancelled in-flight stage is measured; a stage skipped after
+cancellation is not. `record_history` covers terminal history and optional database
+delivery after protective work, even for failed or suspended cycles. Hook dispatch
+measures enqueueing, not asynchronous script/webhook execution. Do not add stage
+quantiles to estimate total-cycle p95; use the total-cycle histogram directly.

@@ -181,7 +181,7 @@ type DatabaseManager struct {
 }
 
 const (
-	metricsSchemaVersion   = 10
+	metricsSchemaVersion   = 11
 	insertUserMetricsQuery = `
     INSERT INTO user_metrics (timestamp, sample_epoch_id, interval_start, interval_end,
 							  uid, username, cpu_usage_percent, memory_usage_bytes,
@@ -402,7 +402,13 @@ func (m *DatabaseManager) InitSchema() error {
 		if err := m.migrateMetricsSchema9To10(); err != nil {
 			return err
 		}
-		version = metricsSchemaVersion
+		version = 10
+	}
+	if version == 10 {
+		if err := m.migrateMetricsSchema10To11(); err != nil {
+			return err
+		}
+		version = 11
 	}
 	if version != 0 && version != metricsSchemaVersion {
 		return m.incompatibleSchemaError(fmt.Sprintf("schema version %d", version))
@@ -461,6 +467,7 @@ func (m *DatabaseManager) InitSchema() error {
 
 	` + systemMetricsTableStatement("system_metrics", true) + `;
 
+    ` + controlHistorySchema + `
     -- Query indexes.
     CREATE INDEX IF NOT EXISTS idx_user_metrics_timestamp ON user_metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_user_metrics_uid ON user_metrics(uid);
@@ -481,6 +488,9 @@ func (m *DatabaseManager) InitSchema() error {
 		return err
 	}
 	if err := m.validateSystemMetricsSchema(); err != nil {
+		return err
+	}
+	if err := m.validateControlHistorySchema(); err != nil {
 		return err
 	}
 	return m.normalizeStoredTimestamps()
@@ -649,7 +659,7 @@ func (m *DatabaseManager) migrateMetricsSchema9To10() error {
 	}
 	for _, statement := range []string{
 		"CREATE INDEX idx_system_metrics_timestamp ON system_metrics(timestamp)",
-		fmt.Sprintf("PRAGMA user_version = %d", metricsSchemaVersion),
+		"PRAGMA user_version = 10",
 	} {
 		if _, err := tx.Exec(statement); err != nil {
 			rollback()
@@ -1445,11 +1455,22 @@ func (m *DatabaseManager) CleanupOldData(retentionDays int) (int64, error) {
 		return 0, fmt.Errorf("failed to get rows affected for system metrics deletion: %w", err)
 	}
 
+	historyResult, err := tx.Exec("DELETE FROM control_history WHERE finished_at < ?", historyRetentionCutoff(time.Now(), retentionDays))
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("delete expired control history: %w", err)
+	}
+	historyDeleted, err := historyResult.RowsAffected()
+	if err != nil {
+		rollback()
+		return 0, fmt.Errorf("count deleted control history: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("failed to commit retention cleanup: %w", err)
 	}
 
-	totalDeleted := userDeleted + systemDeleted
+	totalDeleted := userDeleted + systemDeleted + historyDeleted
 	if totalDeleted > 0 {
 		if _, err := m.db.Exec("PRAGMA incremental_vacuum(1000)"); err != nil {
 			return totalDeleted, fmt.Errorf("failed to reclaim database pages after deleting %d records: %w", totalDeleted, err)

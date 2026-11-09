@@ -520,7 +520,7 @@ func TestControlCycleRecordsOperationalOutcomes(t *testing.T) {
 func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *testing.T) {
 	stageNames := make([]string, 0, len(defaultControlCyclePipeline))
 	for _, stage := range defaultControlCyclePipeline {
-		stageNames = append(stageNames, stage.name)
+		stageNames = append(stageNames, string(stage.name))
 	}
 	tests := []struct {
 		name               string
@@ -554,7 +554,7 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 			copy(stages, defaultControlCyclePipeline)
 			visited := make([]string, 0, len(stages))
 			for i := range stages {
-				stageName := stages[i].name
+				stageName := string(stages[i].name)
 				stages[i].run = func(*Manager, *controlCycleContext) error {
 					visited = append(visited, stageName)
 					if stageName == tt.failingStage {
@@ -585,7 +585,7 @@ func TestControlCyclePipelineContinuesOnlyAfterDeferredEnforcementFailure(t *tes
 func TestControlCyclePublishesOnlyAfterTheDecisionOutcomeIsFinalized(t *testing.T) {
 	positions := make(map[string]int, len(defaultControlCyclePipeline))
 	for index, stage := range defaultControlCyclePipeline {
-		positions[stage.name] = index
+		positions[string(stage.name)] = index
 	}
 	for _, relation := range []struct {
 		before string
@@ -2039,3 +2039,5 @@ func TestControlCycleIdentifiersAreUniqueWithinOneSecond(t *testing.T) {
 }
 
 func (*mockPrometheusExporter) ObserveDecisionSuspension(time.Time) {}
+
+func (*mockPrometheusExporter) ObserveControlStage(metrics.ControlStageObservation) {}
