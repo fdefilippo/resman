@@ -2037,3 +2037,5 @@ func TestControlCycleIdentifiersAreUniqueWithinOneSecond(t *testing.T) {
 		}
 	}
 }
+
+func (*mockPrometheusExporter) ObserveDecisionSuspension(time.Time) {}

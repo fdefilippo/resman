@@ -192,7 +192,16 @@ func (m *Manager) RunControlCycleWithTrigger(ctx context.Context, trigger string
 		run.degradedErrors = append(run.degradedErrors, fmt.Errorf("write control-cycle start log: %w", err))
 	}
 
-	return runControlCyclePipeline(m, run, defaultControlCyclePipeline)
+	err := runControlCyclePipeline(m, run, defaultControlCyclePipeline)
+	systemdFailed := systemdCycleFailed(run)
+	checkedAt := time.Now()
+	m.mu.Lock()
+	m.readinessCycle = CycleReadiness{CheckedAt: checkedAt, Suspended: run.stopWithoutError, CoreAvailable: run.metrics != nil && run.decision != "", Mode: m.enforcementStatus.Mode, SystemdDegraded: m.cpuPointsDegraded || systemdFailed}
+	if run.metrics != nil && run.decision != "" {
+		m.readinessCycle.DecisionAt = run.metrics.Timestamp
+	}
+	m.mu.Unlock()
+	return err
 }
 
 func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []controlCycleStage) error {
@@ -219,6 +228,13 @@ func runControlCyclePipeline(m *Manager, run *controlCycleContext, stages []cont
 func (m *Manager) stageCheckBlackout(run *controlCycleContext) error {
 	// Check whether the current time is within a blackout window.
 	nextEnd := run.cfg.GetNextBlackoutEnd()
+	if m.prometheusExporter != nil {
+		until := time.Time{}
+		if nextEnd != nil {
+			until = *nextEnd
+		}
+		m.prometheusExporter.ObserveDecisionSuspension(until)
+	}
 	if nextEnd != nil {
 		m.mu.RLock()
 		limitsNeedDeactivation := m.limitsActive || m.resourceLimitsActive || len(m.activeUsers) > 0 || len(m.resourceLimits) > 0 || m.ioWeightStatus.Programmed
@@ -260,6 +276,7 @@ func (m *Manager) stageCollectMetrics(run *controlCycleContext) error {
 
 func (m *Manager) stageUpdatePrometheus(run *controlCycleContext) error {
 	// Publish system observations and decision-owned per-user metrics.
+	run.metrics.CPUDecision = m.cpuDecisionMetrics(run)
 	if m.prometheusExporter != nil {
 		m.prometheusExporter.ObserveControlCycleHostCPUUsage(resmanmetrics.HostCPUUsageSample{
 			UsagePercent:      run.metrics.TotalCPUUsage,
@@ -440,6 +457,7 @@ func eligibleHostCPUPercentLogValue(metrics *SystemMetrics) interface{} {
 }
 
 type SystemMetrics struct {
+	CPUDecision                   *resmanmetrics.CPUDecisionMetrics
 	Timestamp                     time.Time
 	TotalCores                    int
 	TotalCPUUsage                 float64 // Percentage
@@ -716,6 +734,7 @@ func (m *Manager) updatePrometheusSystemMetrics(metrics *SystemMetrics) {
 		blockDevices = append(blockDevices, resmanmetrics.BlockIOPSDeviceMetrics{Device: fmt.Sprintf("%d:%d", device.Major, device.Minor), ReadMinimum: bounds.Read.ActivationMinimum, ReadMaximum: bounds.Read.ReleaseMaximum, WriteMinimum: bounds.Write.ActivationMinimum, WriteMaximum: bounds.Write.ReleaseMaximum, Uncertain: bounds.Uncertain, UpperAvailable: metrics.IOBlockIOPSUnavailableUsers == 0})
 	}
 	m.prometheusExporter.UpdateSystemSnapshot(resmanmetrics.SystemExporterMetrics{
+		CPUDecision:             metrics.CPUDecision,
 		BlockIOPSExactAvailable: exactBlockIOPS, BlockIOPSSourceRequired: needsBlockIOPS(m.GetConfig()), BlockIOPSDecisionAt: metrics.IOBlockIOPSDecisionAt, BlockIOPSDevices: blockDevices, BlockIOPSUnavailableUsers: metrics.IOBlockIOPSUnavailableUsers, BlockIOPSSourceAvailable: metrics.IOBlockIOPSSourceAvailable,
 		EnforcementMode:                              m.enforcementStatus.Mode,
 		EnforcementCycleState:                        m.currentEnforcementCycleState(),
@@ -954,4 +973,54 @@ func (m *Manager) recordControlCycle(decision, reason string, metrics *SystemMet
 	}
 
 	m.addControlHistoryEntry(entry)
+}
+
+// cpuDecisionMetrics projects the plan's actual request and verified outcome,
+// rather than inferring intent from raw CPU usage or a combined resource action.
+func (m *Manager) cpuDecisionMetrics(run *controlCycleContext) *resmanmetrics.CPUDecisionMetrics {
+	hostPercent, available := eligibleHostCPUPercent(run.metrics)
+	m.mu.RLock()
+	requested, applied := m.systemdCPURequested, m.systemdCPUComplete
+	m.mu.RUnlock()
+	if m.enforcementStatus.Mode != cgroup.EnforcementModeSystemdNative {
+		requested = run.decision == decisionActivate && len(run.metrics.CPUEligibleUsers) > 0
+		applied = false
+	}
+	return &resmanmetrics.CPUDecisionMetrics{At: run.metrics.Timestamp, HostPercent: hostPercent, HostPercentAvailable: available, ActivationRequested: requested, ActivationApplied: applied}
+}
+
+// CycleReadiness is the bounded in-memory outcome of the latest control attempt.
+type CycleReadiness struct {
+	CheckedAt       time.Time
+	DecisionAt      time.Time
+	Suspended       bool
+	CoreAvailable   bool
+	Mode            cgroup.EnforcementMode
+	SystemdDegraded bool
+}
+
+// ReadinessSnapshot returns cycle health without collecting or reconciling anything.
+func (m *Manager) ReadinessSnapshot() CycleReadiness {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.readinessCycle
+}
+
+// systemdCycleFailed classifies errors without conflating hook, logger or sink failures.
+func systemdCycleFailed(run *controlCycleContext) bool {
+	for _, err := range run.deferredErrors {
+		var resource *SystemdResourceReconciliationError
+		var adapter *systemdunit.AdapterError
+		if errors.As(err, &resource) || errors.As(err, &adapter) {
+			return true
+		}
+	}
+	return false
+}
+
+// AvailableAt refuses stale attempts even during blackout, so a stalled control
+// loop cannot preserve a successful readiness result indefinitely.
+func (r CycleReadiness) AvailableAt(now time.Time, maxAge time.Duration) bool {
+	fresh := func(at time.Time) bool { age := now.Sub(at); return !at.IsZero() && age >= 0 && age <= maxAge }
+	return maxAge > 0 && fresh(r.CheckedAt) && (r.Suspended || (r.CoreAvailable && fresh(r.DecisionAt)))
 }

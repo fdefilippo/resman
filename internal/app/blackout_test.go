@@ -109,3 +109,5 @@ func TestApplicationPollingBlackoutSchedulesIndependentObservation(t *testing.T)
 		}
 	}
 }
+
+func (*blackoutExporter) ObserveDecisionSuspension(time.Time) {}

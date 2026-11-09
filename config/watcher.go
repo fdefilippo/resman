@@ -352,6 +352,7 @@ func (w *Watcher) Stop() error {
 
 // watchLoop monitors filesystem events and the periodic fallback check.
 func (w *Watcher) watchLoop() {
+	defer func() { w.mu.Lock(); w.isRunning = false; w.mu.Unlock() }()
 	defer w.loopWG.Done()
 
 	debounceTimer := time.NewTimer(0)
@@ -764,4 +765,11 @@ func (w *Watcher) handleConfigChangeResult(ctx context.Context, force bool, expe
 	}
 
 	return true, nil
+}
+
+// IsRunning reports the watcher loop lifecycle without accessing its files.
+func (w *Watcher) IsRunning() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.isRunning && !w.isStopped
 }

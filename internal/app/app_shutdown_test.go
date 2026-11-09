@@ -389,3 +389,5 @@ func TestShutdownPropagatesCompletionLogFailure(t *testing.T) {
 		t.Fatalf("shutdown() error = %v, want logging sink failure", err)
 	}
 }
+
+func (*signalConfigWatcher) IsRunning() bool { return true }

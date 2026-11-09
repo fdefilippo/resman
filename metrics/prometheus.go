@@ -122,6 +122,12 @@ type PrometheusExporter struct {
 	blockIOPSAvailable            prometheus.Gauge
 	blockIOPSRequired             prometheus.Gauge
 	blockIOPSDecisionAt           prometheus.Gauge
+	controlDecisionMaxAge         prometheus.Gauge
+	controlDecisionSuspended      prometheus.Gauge
+	controlDecisionAt             prometheus.Gauge
+	cpuDecisionHostPercent        *prometheus.GaugeVec
+	cpuActivationRequested        prometheus.Gauge
+	cpuActivationApplied          prometheus.Gauge
 
 	activelyLimitedUsers       prometheus.Gauge
 	cpuLimitsActive            prometheus.Gauge
@@ -265,6 +271,8 @@ func NewPrometheusExporter(cfg *config.Config) (*PrometheusExporter, error) {
 	if err := exp.registerMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to register metrics: %w", err)
 	}
+
+	exp.SetControlDecisionInterval(time.Duration(cfg.GetPollingInterval()) * time.Second)
 
 	// Register standard Go metrics.
 	exp.registry.MustRegister(
@@ -508,6 +516,12 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		ConstLabels: staticLabels,
 	}, []string{})
 
+	exp.controlDecisionSuspended = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "control_decision_suspended_until_timestamp_seconds", Help: "End timestamp of the latest intentional blackout suspension; zero when not suspended", ConstLabels: staticLabels})
+	exp.controlDecisionAt = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "control_decision_timestamp_seconds", Help: "Timestamp of the latest decision and CPU activation outcome; observation refreshes do not renew it", ConstLabels: staticLabels})
+	exp.cpuDecisionHostPercent = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "cpu_eligible_users_host_cpu_percent", Help: "Decision-owned eligible CPU usage normalized by online core count; absent when unavailable", ConstLabels: staticLabels}, []string{})
+	exp.cpuActivationRequested = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "control_cpu_activation_requested", Help: "Whether the authoritative CPU plan is requested after policy duration and suppression guards", ConstLabels: staticLabels})
+	exp.cpuActivationApplied = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "control_cpu_activation_applied", Help: "Whether the requested native CPU plan is completely verified after reconciliation", ConstLabels: staticLabels})
+	exp.controlDecisionMaxAge = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "control_decision_max_age_seconds", Help: "Decision evidence freshness budget: three effective fallback control intervals", ConstLabels: staticLabels})
 	exp.blockIOPSBounds = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "io_eligible_block_operations_per_second_bound", Help: "Certified decision rate bound per device; activation uses minimum, release maximum", ConstLabels: staticLabels}, []string{"device", "direction", "bound"})
 	exp.blockIOPSUncertain = promauto.With(exp.registry).NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_attribution_uncertain", Help: "Whether the decision interval contains unresolved operation origins", ConstLabels: staticLabels}, []string{"device"})
 	exp.blockIOPSRequired = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "io_block_iops_source_required", Help: "Whether enabled IOPS policy requires the kernel source", ConstLabels: staticLabels})
@@ -858,8 +872,19 @@ type BlockIOPSDeviceMetrics struct {
 	Uncertain                                            bool
 }
 
+// CPUDecisionMetrics separates authoritative CPU intent and verified completion.
+// It is absent on observation refreshes so they cannot renew decision evidence.
+type CPUDecisionMetrics struct {
+	At                   time.Time
+	HostPercent          float64
+	HostPercentAvailable bool
+	ActivationRequested  bool
+	ActivationApplied    bool
+}
+
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
+	CPUDecision                                  *CPUDecisionMetrics
 	BlockIOPSDevices                             []BlockIOPSDeviceMetrics
 	BlockIOPSUnavailableUsers                    int
 	BlockIOPSExactAvailable                      bool
@@ -926,6 +951,19 @@ func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetric
 	exp.ioEligibleUsersCount.Set(float64(metrics.IOEligibleUsersCount))
 	exp.ioEligibleUsersReadBPS.Set(metrics.IOEligibleUsersReadBytesPerSecond)
 	exp.ioEligibleUsersWriteBPS.Set(metrics.IOEligibleUsersWriteBytesPerSecond)
+	if decision := metrics.CPUDecision; decision != nil {
+		timestamp := float64(0)
+		if !decision.At.IsZero() {
+			timestamp = float64(decision.At.UnixNano()) / 1e9
+		}
+		exp.controlDecisionAt.Set(timestamp)
+		exp.cpuActivationRequested.Set(boolMetricValue(decision.ActivationRequested))
+		exp.cpuActivationApplied.Set(boolMetricValue(decision.ActivationApplied))
+		exp.cpuDecisionHostPercent.DeleteLabelValues()
+		if decision.HostPercentAvailable {
+			exp.cpuDecisionHostPercent.WithLabelValues().Set(decision.HostPercent)
+		}
+	}
 	exp.ioEligibleUsersReadBlockIOPS.DeleteLabelValues()
 	exp.ioEligibleUsersWriteBlockIOPS.DeleteLabelValues()
 	if metrics.BlockIOPSExactAvailable {
@@ -1736,4 +1774,21 @@ func (exp *PrometheusExporter) GetMetricsEndpoint() string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d/metrics", scheme, exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
+}
+
+// SetControlDecisionInterval publishes the freshness budget from the control
+// loop's observed runtime cadence, including PSI fallback and reload changes.
+func (exp *PrometheusExporter) SetControlDecisionInterval(interval time.Duration) {
+	if interval > 0 && exp.controlDecisionMaxAge != nil {
+		exp.controlDecisionMaxAge.Set(3 * interval.Seconds())
+	}
+}
+
+// ObserveDecisionSuspension reports intentional suspension without renewing a sample.
+func (exp *PrometheusExporter) ObserveDecisionSuspension(until time.Time) {
+	timestamp := float64(0)
+	if !until.IsZero() {
+		timestamp = float64(until.UnixNano()) / 1e9
+	}
+	exp.controlDecisionSuspended.Set(timestamp)
 }

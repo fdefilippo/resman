@@ -24,6 +24,7 @@ func (a *App) Run() error {
 	if err := a.notifyReady(); err != nil {
 		return fmt.Errorf("notify service readiness: %w", err)
 	}
+	a.phase.Store(phaseRunning)
 	return a.runControlLoop()
 }
 func (a *App) runControlLoop() error {
@@ -209,10 +210,13 @@ func (a *App) refreshControlTicker(ticker *time.Ticker, pollingInterval *int) *t
 }
 
 func (a *App) publishFallbackCPUSamplingInterval(intervalSeconds int) {
-	if a.cpuSamplingCadence == nil {
-		return
+	interval := time.Duration(intervalSeconds) * time.Second
+	if a.cpuSamplingCadence != nil {
+		a.cpuSamplingCadence.SetFallbackCPUSamplingInterval(interval)
 	}
-	a.cpuSamplingCadence.SetFallbackCPUSamplingInterval(time.Duration(intervalSeconds) * time.Second)
+	if a.prometheusExporter != nil {
+		a.prometheusExporter.SetControlDecisionInterval(interval)
+	}
 }
 
 func (a *App) handleMetricsRefreshCycle() {

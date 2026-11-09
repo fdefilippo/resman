@@ -245,6 +245,28 @@ configuration freshness, or full application readiness. TLS still applies to
 this route, including the required client certificate when `MCP_TLS_CA_FILE` enables
 mutual TLS. `/mcp` continues to require its configured per-request credentials.
 
+### Application readiness
+
+`GET /readyz` on the same HTTPS listener returns only `{"status":"ready"}`,
+`{"status":"degraded"}` or `{"status":"not_ready"}`. Ready and degraded return
+200; startup, shutdown, failed core collection and stale decision evidence return
+503. A suspended cycle must still have a fresh attempt; blackout cannot hide a
+stalled loop indefinitely. Optional SQLite, config-watcher or PSI failures can degrade a safely operating
+daemon. Declared observation-only mode and intentional blackout remain valid.
+PSI degradation means polling remains available; no pressure is fabricated.
+
+`GET /readyz/details` requires a valid operator or editor bearer token and reports
+the bounded `config_watcher`, `database`, `systemd`, `psi`, `decision_at` and
+`decisions_suspended` fields. Subsystems distinguish disabled, active, degraded and
+unavailable states. These are lifecycle and most-recent-operation observations,
+not synchronous database or D-Bus probes: each HTTP request reads in-memory state.
+A requested database that failed initialization stays degraded rather than being
+misreported as deliberately disabled. Later write failures also degrade its status.
+
+Both routes inherit the listener's TLS and optional mTLS requirements. The public
+aggregate exposes no paths, credentials or subsystem details. `/health` keeps its
+existing liveness response and logs successful probes only at DEBUG.
+
 ### Example: Claude Desktop Configuration
 
 Add to `claude_desktop_config.json`:

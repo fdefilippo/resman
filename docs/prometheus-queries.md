@@ -9,6 +9,7 @@ This document provides example PromQL queries for monitoring ResMan metrics.
 - [Memory Analysis](#memory-analysis)
 - [Process Analysis](#process-analysis)
 - [Limit Status](#limit-status)
+- [Certified Block IOPS](#certified-block-iops)
 - [Weighted I/O Policy](#weighted-io-policy)
 - [Performance Metrics](#performance-metrics)
 - [Error Tracking](#error-tracking)
@@ -524,3 +525,64 @@ groups:
 - [Grafana Documentation](https://grafana.com/docs/)
 - [ResMan Man Page](resman.8)
 - [Alerting Rules](alerting-rules.yml)
+
+## Certified Block IOPS
+
+```promql
+# Keep device, direction and bound separate. Do not sum layered devices.
+resman_io_eligible_block_operations_per_second_bound
+
+# 1 means a valid interval may include unresolved origins, not a source failure.
+resman_io_block_iops_attribution_uncertain
+
+# Requested policy, latest decision source integrity, and incomplete users.
+resman_io_block_iops_source_required
+resman_io_block_iops_source_available
+resman_io_block_iops_unavailable_users
+
+# Evidence age and its runtime-cadence budget (polling or active PSI fallback).
+time() - resman_io_block_iops_decision_timestamp_seconds
+resman_control_decision_max_age_seconds
+```
+
+Activation uses the certified minimum; release uses the maximum. A missing maximum
+is unavailable, not zero. Bounds remain distinct from exact historical IOPS series.
+Source availability certifies only the last decision sample. Always inspect its age;
+observation refreshes do not renew it. Alerts require an enabled IOPS policy and
+separate source failure, incomplete coverage and stale evidence. Attribution
+uncertainty alone does not alert. Blackout deliberately suspends decision sampling. The decision-suspension end timestamp
+suppresses these alerts without renewing historical evidence.
+
+## CPU Activation Diagnostics
+
+```promql
+# Eligible host percentage used by the decision engine (100 = all online cores).
+resman_cpu_eligible_users_host_cpu_percent
+
+# Authoritative request and complete CPU-plan readback, independently of RAM/I/O.
+resman_control_cpu_activation_requested
+resman_control_cpu_activation_applied
+
+# Freshness of these decision-owned fields.
+time() - resman_control_decision_timestamp_seconds
+```
+
+The historical `resman_cpu_eligible_users_cpu_usage_percent` remains a sum of
+per-core percentages: 100 is one busy core, or 25% on a four-core host. The new
+host percentage is absent when the core count is unknown. Do not compare the raw
+sum with a host threshold. `ResManCPULimitsNotActivating` uses the actual native
+CPU request and verified completion, so configured thresholds, duration and load
+attribution are decided once by the engine. Observation-only mode is excluded.
+A resource-triggered activation can legitimately request a CPU plan too. A RAM or
+I/O failure alone does not imply a CPU-plan failure. Blackout suspends decisions;
+stale decision evidence cannot trigger this activation alert.
+
+```promql
+# Published blackout end; zero means the last attempt was not suspended.
+resman_control_decision_suspended_until_timestamp_seconds > time()
+```
+
+After blackout ends, alerts allow one normal decision freshness budget for the
+next scheduled fallback tick. This avoids false alarms across adjacent blackout
+windows with long PSI fallback intervals. An old suspension cannot silence a
+stalled loop indefinitely.

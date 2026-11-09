@@ -1,9 +1,9 @@
-# Upgrading from ResMan 1.25.x through 1.41.4 to ResMan 1.42.0
+# Upgrading from ResMan 1.25.x through 1.42.0 to ResMan 1.43.0
 
 Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
 
-This guide applies when moving from any ResMan release from 1.25.x through 1.41.4 to
-ResMan 1.42.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
+This guide applies when moving from any ResMan release from 1.25.x through 1.42.0 to
+ResMan 1.43.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
 cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
@@ -38,6 +38,36 @@ and restores them before readiness.
 Read this document before installing the new package. Complete the required actions
 while ResMan is stopped; otherwise the service can correctly refuse startup before the
 operator-authored configuration has been recovered.
+
+## ADDED: operational diagnostics (1.43.0)
+
+`resman --check --config FILE` now validates a required regular source with startup
+configuration semantics and shared policy loaders, without daemon initialization.
+See [PREFLIGHT.md](PREFLIGHT.md) for verified/invalid/unverified findings and exit
+codes. Unverified operational capabilities do not imply successful enforcement.
+Existing startup behavior for a missing configuration file remains unchanged.
+
+The MCP HTTPS listener adds public aggregate `/readyz` and bearer-protected
+`/readyz/details`; `/health` preserves its liveness payload and uses DEBUG logging.
+Readiness includes supported degraded operation and intentional observation/blackout,
+but rejects startup, shutdown, unavailable core decisions and stale evidence.
+
+Shipped IOPS assets show certified per-device bounds and missing coverage without
+inventing an exact value or a zero maximum. Source alerts require the enabled policy
+and fresh decision evidence; stale evidence has its own alert. Intentional blackout
+suppresses these alerts; expiry allows the normal freshness budget for the next
+scheduled tick. An expired suspension cannot mask a stalled loop indefinitely.
+Attribution uncertainty alone is not an alarm.
+
+`ResManCPULimitsNotActivating` now diagnoses an authoritative native CPU-plan request
+that lacks complete verified application. It no longer compares the all-user CPU
+sum against a fixed threshold. Additive decision metrics distinguish request and
+application, export eligible host CPU percentage, and carry decision timestamps and
+an age budget derived from three effective fallback control intervals. Observation
+refreshes never renew these values; historical per-core percentage gauges retain
+their existing meaning. Reload the shipped alert rules and import the updated
+operations dashboard when adopting these diagnostics. No database schema or public
+configuration key changes are required.
 
 ## CHANGED: certified IOPS source and per-device bounds (1.42.0)
 

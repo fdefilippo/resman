@@ -126,6 +126,7 @@ type Manager struct {
 	hookWorkerCount          int
 	hookWorkersStarted       bool
 	hookInFlight             atomic.Int64
+	readinessCycle           CycleReadiness
 	cycleSequence            atomic.Int64 // Last control-cycle identifier issued in this daemon run.
 	hookScriptIdentity       limithook.ScriptIdentity
 	hookLastSaturationLog    time.Time
@@ -250,6 +251,7 @@ type CgroupManager interface {
 
 // PrometheusExporter defines the Prometheus boundary used by the state manager.
 type PrometheusExporter interface {
+	ObserveDecisionSuspension(time.Time)
 	UpdateSystemSnapshot(metrics resmanmetrics.SystemExporterMetrics)
 	UpdateUserSnapshot(metrics resmanmetrics.UserExporterMetrics)
 	UpdateUserWorkloadPattern(uid int, username string, pattern string, confidence float64)

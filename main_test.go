@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fdefilippo/resman/internal/app"
 	"github.com/fdefilippo/resman/internal/systemdunit"
@@ -92,4 +94,81 @@ func TestMainInvalidConfigurationHelper(t *testing.T) {
 	os.Args = []string{"resman", "--config", os.Getenv("RESMAN_MAIN_HELPER_CONFIG")}
 	main()
 	t.Fatal("main returned after invalid configuration")
+}
+
+func TestCheckCommandUsesBothFlagFormsAndNeverStartsDaemon(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		equals  bool
+		missing bool
+		invalid bool
+	}{
+		{name: "double dash"}, {name: "equals form", equals: true}, {name: "missing file", missing: true}, {name: "invalid config", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "resman.conf")
+			points := filepath.Join(dir, "cpu.map")
+			if err := os.WriteFile(points, []byte("[resman-cpu-points-map-v1]\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			content := "ENFORCEMENT_MODE=observation_only\nCPU_POINTS_FILE=" + points + "\nUSER_INCLUDE_LIST=.*\nLOG_FILE=" + filepath.Join(dir, "never.log") + "\nMETRICS_DB_ENABLED=true\nMETRICS_DB_PATH=" + filepath.Join(dir, "never-db", "metrics.db") + "\n"
+			if tt.invalid {
+				content += "CPU_THRESHOLD=0\n"
+			}
+			if !tt.missing {
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMainCheckHelper$")
+			form := "separate"
+			if tt.equals {
+				form = "equals"
+			}
+			cmd.Env = append(os.Environ(), "RESMAN_CHECK_HELPER="+path, "RESMAN_CHECK_FORM="+form)
+			output, err := cmd.CombinedOutput()
+			want := 0
+			if tt.invalid || tt.missing {
+				want = 78
+			}
+			code := 0
+			if err != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("check failed: %v %s", err, output)
+				}
+				code = exitErr.ExitCode()
+			}
+			if code != want {
+				t.Fatalf("exit=%d want=%d output=%s", code, want, output)
+			}
+			for _, name := range []string{"never.log", "never-db"} {
+				if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+					t.Fatalf("check changed runtime artifact %s: %v", name, err)
+				}
+			}
+			if want == 0 && !strings.Contains(string(output), "unverified runtime_permissions") {
+				t.Fatalf("missing operational limitation: %s", output)
+			}
+		})
+	}
+}
+
+func TestMainCheckHelper(t *testing.T) {
+	path := os.Getenv("RESMAN_CHECK_HELPER")
+	if path == "" {
+		return
+	}
+	flag.CommandLine = flag.NewFlagSet("resman", flag.ExitOnError)
+	os.Args = []string{"resman", "--check", "--config", path}
+	if os.Getenv("RESMAN_CHECK_FORM") == "equals" {
+		os.Args = []string{"resman", "-config=" + path, "-check=true"}
+	}
+	main()
 }

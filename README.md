@@ -14,6 +14,13 @@ in only when the host is genuinely contended, gives every user a predictable sha
 through their own systemd slice, and steps back once the pressure is gone. Each
 decision is measured, verified in the kernel and exported.
 
+## Checking before startup
+
+Run `resman --check --config /etc/resman/resman.conf` to validate the selected
+configuration and inspect prerequisites without starting the daemon. See
+[read-only preflight](docs/PREFLIGHT.md) for exit codes and unverified operational
+boundaries, and [MCP readiness](docs/MCP-README.md#application-readiness) for probes.
+
 ## Why ResMan
 
 - **Fair by contract.** CPU Points divide the host into 1000 points. A reserve stays

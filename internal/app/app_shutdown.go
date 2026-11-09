@@ -166,6 +166,7 @@ func (a *App) startSignalHandler() {
 	}()
 }
 func (a *App) shutdown() error {
+	a.phase.Store(phaseStopping)
 	defer a.finishShutdownWatchdog()
 
 	a.logger.Info("Shutting down main control loop")

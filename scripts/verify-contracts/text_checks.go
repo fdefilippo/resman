@@ -332,6 +332,7 @@ func checkPrometheusAssets(root string) checkResult {
 		args []string
 	}{
 		{path: "docs/alerting-rules.yml", args: []string{"check", "rules", "docs/alerting-rules.yml"}},
+		{path: "docs/alerting-rules.test.yml", args: []string{"test", "rules", "docs/alerting-rules.test.yml"}},
 		{path: "docs/prometheus.yml", args: []string{"check", "config", "docs/prometheus.yml"}},
 	}
 	for _, command := range commands {

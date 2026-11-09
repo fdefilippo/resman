@@ -1,6 +1,6 @@
 # ResMan - Technical Specification
 
-**Version:** 1.42.0
+**Version:** 1.43.0
 **Last Updated:** November 2026
 **License:** GPLv3
 **Repository:** https://github.com/fdefilippo/resman
@@ -1603,7 +1603,7 @@ require (
 cd /path/to/resman
 export CGO_ENABLED=1
 export CC=gcc
-go build -v -ldflags="-s -w -X 'main.version=1.42.0-1'" -o resman .
+go build -v -ldflags="-s -w -X 'main.version=1.43.0-1'" -o resman .
 ```
 
 **Build RPM:**
