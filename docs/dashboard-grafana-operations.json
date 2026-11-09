@@ -2934,6 +2934,178 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "type": "row",
+      "id": 38,
+      "title": "Certified block IOPS",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 86,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 39,
+      "title": "Certified operation bounds",
+      "description": "Activation uses minimum; release uses maximum. A missing maximum is unknown. Keep devices separate to avoid double-counting layered storage.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 87,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "resman_io_eligible_block_operations_per_second_bound{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} {{device}} {{direction}} {{bound}} ",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 40,
+      "title": "Attribution uncertainty",
+      "description": "Unresolved origins produce valid conservative intervals; uncertainty alone is not a source failure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 87,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "resman_io_block_iops_attribution_uncertain{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} {{device}} ",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 41,
+      "title": "Required source and coverage",
+      "description": "Status certifies the latest decision sample only. Required=0 disables IOPS alerts; unavailable users block release proofs.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 95,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "resman_io_block_iops_source_required{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} resman_io_block_iops_source_required",
+          "refId": "A"
+        },
+        {
+          "expr": "resman_io_block_iops_source_available{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} resman_io_block_iops_source_available",
+          "refId": "B"
+        },
+        {
+          "expr": "resman_io_block_iops_unavailable_users{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} resman_io_block_iops_unavailable_users",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 42,
+      "title": "Decision evidence age",
+      "description": "Seconds since the last IOPS decision and three effective fallback intervals. Observation refreshes do not renew decision evidence. Zero timestamp means no sample.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 95,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "time() - resman_io_block_iops_decision_timestamp_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} time() - resman_io_block_iops_decision_timestamp_seconds",
+          "refId": "A"
+        },
+        {
+          "expr": "resman_control_decision_max_age_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}",
+          "legendFormat": "{{hostname}} resman_control_decision_max_age_seconds",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
     }
   ],
   "refresh": "30s",

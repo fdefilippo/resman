@@ -28,11 +28,12 @@ import (
 
 // DBWriter coordinates periodic writes to the metrics database.
 type DBWriter struct {
-	dbManager     *database.DatabaseManager
-	writeInterval time.Duration
-	mu            sync.RWMutex
-	lastWriteTime time.Time
-	enabled       bool
+	dbManager       *database.DatabaseManager
+	writeInterval   time.Duration
+	mu              sync.RWMutex
+	lastWriteTime   time.Time
+	enabled         bool
+	lastWriteFailed bool
 }
 
 // NewDBWriter creates a periodic metrics database writer.
@@ -45,13 +46,15 @@ func NewDBWriter(dbManager *database.DatabaseManager, writeIntervalSeconds int) 
 }
 
 // WriteMetricsBatch writes one system sample and all user samples atomically.
-func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) error {
+func (w *DBWriter) WriteMetricsBatch(batch PersistenceBatch) (writeErr error) {
 	w.mu.RLock()
 	enabled := w.enabled
 	w.mu.RUnlock()
 	if !enabled || w.dbManager == nil {
 		return nil
 	}
+
+	defer func() { w.mu.Lock(); w.lastWriteFailed = writeErr != nil; w.mu.Unlock() }()
 
 	system := batch.System
 	timestamp := system.IntervalEnd.UTC()
@@ -204,4 +207,11 @@ func (w *DBWriter) Close() error {
 	defer w.mu.Unlock()
 	w.enabled = false
 	return nil
+}
+
+// Healthy reports enablement and the last attempted write, without database I/O.
+func (w *DBWriter) Healthy() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.enabled && !w.lastWriteFailed
 }

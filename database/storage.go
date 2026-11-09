@@ -350,3 +350,50 @@ func secureRuntimeArtifact(artifact sqliteArtifact, expected os.FileInfo) (resul
 	}
 	return nil
 }
+
+// InspectSQLiteStorage validates existing storage metadata using the startup
+// rules, without opening SQLite, creating files or normalizing permissions.
+// Missing storage is reported separately because creation cannot be proved here.
+func InspectSQLiteStorage(dbPath string) (exists bool, err error) {
+	if dbPath == ":memory:" {
+		return false, nil
+	}
+	dir := filepath.Dir(dbPath)
+	if _, err := os.Lstat(dir); err != nil {
+		if !os.IsNotExist(err) {
+			return false, fmt.Errorf("inspect database parent: %w", err)
+		}
+		// Inspect the nearest existing ancestor; future directory creation is unverified.
+		for {
+			child := dir
+			dir = filepath.Dir(dir)
+			info, inspectErr := os.Lstat(dir)
+			if os.IsNotExist(inspectErr) {
+				continue
+			}
+			if inspectErr != nil {
+				return false, fmt.Errorf("inspect database ancestor: %w", inspectErr)
+			}
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return false, fmt.Errorf("database ancestor %s is not a stable directory", dir)
+			}
+			return false, validateDatabasePathHierarchy(child)
+		}
+	}
+	if err := validatePrivateDatabaseDirectory(dir); err != nil {
+		return false, err
+	}
+	if err := validateDatabasePathHierarchy(dir); err != nil {
+		return false, err
+	}
+	for _, artifact := range sqliteArtifacts(dbPath) {
+		if err := validateExistingSQLiteArtifact(artifact); err != nil {
+			return false, err
+		}
+	}
+	_, err = os.Lstat(dbPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
+}

@@ -38,6 +38,7 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/readiness"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/fdefilippo/resman/metrics"
@@ -93,6 +94,7 @@ type ConfigurationReloader interface {
 }
 
 type serverLogger interface {
+	Debug(string, ...interface{})
 	Info(string, ...interface{})
 	Warn(string, ...interface{})
 	Error(string, ...interface{})
@@ -100,6 +102,7 @@ type serverLogger interface {
 
 // Server wraps the MCP server and Resource Manager dependencies
 type Server struct {
+	readinessProvider func() readiness.Snapshot
 	mcpServer         *mcp.Server
 	cfg               *config.MCPServerConfig
 	stateManager      *state.Manager
@@ -326,6 +329,8 @@ func (s *Server) startHTTPTransport(ctx context.Context) error {
 
 	// Health check endpoint (not part of MCP protocol)
 	mux.HandleFunc("/health", s.handleHealthCheck)
+	mux.HandleFunc("/readyz", s.handleReadiness)
+	mux.HandleFunc("/readyz/details", s.authMiddleware(s.handleReadinessDetails))
 
 	httpServer := newMCPHTTPServer(addr, mux, s.tlsConfig)
 	s.mu.Lock()
@@ -617,9 +622,9 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// handleHealthCheck handles health check requests with logging
+// handleHealthCheck serves minimal listener liveness.
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	s.logger.Info("MCP health check requested",
+	s.logger.Debug("MCP health check requested",
 		"method", r.Method,
 		"remote_addr", r.RemoteAddr,
 	)

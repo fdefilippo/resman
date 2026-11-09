@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
@@ -23,6 +24,7 @@ type appLogger interface {
 }
 
 type configWatcher interface {
+	IsRunning() bool
 	Reload(context.Context) error
 	ForceReload(context.Context) error
 	Stop() error
@@ -30,16 +32,18 @@ type configWatcher interface {
 
 // App contains the daemon runtime components.
 type App struct {
-	cfg              *config.Config
-	configPath       string
-	ctx              context.Context
-	cancel           context.CancelFunc
-	sigChan          <-chan os.Signal
-	logger           appLogger
-	err              error
-	cfgMu            sync.RWMutex
-	psiMu            sync.RWMutex
-	shutdownDeadline shutdownDeadlineState
+	phase             atomic.Uint32
+	databaseRequested bool
+	cfg               *config.Config
+	configPath        string
+	ctx               context.Context
+	cancel            context.CancelFunc
+	sigChan           <-chan os.Signal
+	logger            appLogger
+	err               error
+	cfgMu             sync.RWMutex
+	psiMu             sync.RWMutex
+	shutdownDeadline  shutdownDeadlineState
 
 	cgroupMgr          *cgroup.Manager
 	metricsCollector   *metrics.Collector
@@ -72,13 +76,14 @@ func (a *App) setCurrentConfig(cfg *config.Config) {
 // NewApp constructs the daemon application from its runtime dependencies.
 func NewApp(cfg *config.Config, configPath string, ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, logger *logging.Logger) *App {
 	return &App{
-		cfg:            cfg,
-		configPath:     configPath,
-		ctx:            ctx,
-		cancel:         cancel,
-		sigChan:        sigChan,
-		logger:         logger,
-		configReloaded: make(chan struct{}, 1),
-		notifyReady:    notifySystemdReady,
+		cfg:               cfg,
+		databaseRequested: cfg.MetricsDBEnabled,
+		configPath:        configPath,
+		ctx:               ctx,
+		cancel:            cancel,
+		sigChan:           sigChan,
+		logger:            logger,
+		configReloaded:    make(chan struct{}, 1),
+		notifyReady:       notifySystemdReady,
 	}
 }

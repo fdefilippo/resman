@@ -387,3 +387,54 @@ func setPermissiveUmask(t *testing.T) func() {
 	t.Cleanup(restore)
 	return restore
 }
+
+func TestInspectSQLiteStorageDoesNotCreateOrRepair(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		create  bool
+		mode    os.FileMode
+		invalid bool
+	}{
+		{name: "missing database"},
+		{name: "safe existing database", create: true, mode: 0600},
+		{name: "unsafe existing database", create: true, mode: 0644, invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "metrics.db")
+			if tt.create {
+				writeFileWithExactMode(t, path, []byte("not opened as SQLite"), tt.mode)
+			}
+			exists, err := InspectSQLiteStorage(path)
+			if (err != nil) != tt.invalid {
+				t.Fatalf("exists=%v err=%v", exists, err)
+			}
+			info, statErr := os.Lstat(path)
+			if !tt.create {
+				if !os.IsNotExist(statErr) {
+					t.Fatalf("inspection created file: %v", statErr)
+				}
+				return
+			}
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if info.Mode().Perm() != tt.mode {
+				t.Fatalf("inspection changed mode to %o", info.Mode().Perm())
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != "not opened as SQLite" {
+				t.Fatal("inspection changed content")
+			}
+			if !tt.invalid && !exists {
+				t.Fatal("existing metadata not acknowledged")
+			}
+		})
+	}
+}

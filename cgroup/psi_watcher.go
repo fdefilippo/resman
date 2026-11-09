@@ -418,3 +418,19 @@ func (w *PSIWatcher) compactInactiveMonitorsLocked() {
 	clear(w.monitors[activeCount:])
 	w.monitors = w.monitors[:activeCount]
 }
+
+// ActiveSystemMonitors reports the live host PSI registrations without probing them.
+func (w *PSIWatcher) ActiveSystemMonitors() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.started || w.stopped {
+		return 0
+	}
+	count := 0
+	for _, m := range w.monitors {
+		if m.active && m.uid == 0 {
+			count++
+		}
+	}
+	return count
+}

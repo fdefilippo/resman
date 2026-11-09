@@ -860,3 +860,5 @@ func privateMetricsDatabasePath(t *testing.T) string {
 	}
 	return filepath.Join(dir, "metrics.db")
 }
+
+func (*recordingServerLogger) Debug(string, ...interface{}) {}

@@ -163,14 +163,14 @@ groups:
       # CPU Limits Not Activating
       # -------------------------------------------------------------------------
       - alert: ResManCPULimitsNotActivating
-        expr: resman_all_users_cpu_usage_percent > 80 and resman_cpu_limits_active == 0
+        expr: resman_control_cpu_activation_requested == 1 and resman_control_cpu_activation_applied == 0 and on (job, instance, cluster, environment, hostname, server_role) resman_enforcement_mode{mode="systemd_native"} == 1 and (time() - resman_control_decision_timestamp_seconds <= resman_control_decision_max_age_seconds) and resman_control_decision_timestamp_seconds > 0 and ((resman_control_decision_suspended_until_timestamp_seconds == 0) or (time() - resman_control_decision_suspended_until_timestamp_seconds > resman_control_decision_max_age_seconds))
         for: 5m
         labels:
           severity: warning
           category: operations
         annotations:
-          summary: "CPU limits not activating despite high usage"
-          description: "User CPU usage is {{ $value | printf \"%.1f\" }}% but CPU limits are not active. Check configuration."
+          summary: "Requested CPU plan is not completely applied"
+          description: "The authoritative decision requests a CPU plan, but native reconciliation has not completely verified it. Inspect CPU authority and reconciliation errors."
 
       # -------------------------------------------------------------------------
       # Frequent CPU Limit Toggling
@@ -210,6 +210,37 @@ groups:
         annotations:
           summary: "ResMan error rate high"
           description: "{{ $value }} errors in the last 5 minutes. Check logs for details."
+
+      # Certified source status describes the latest decision, not a live probe.
+      - alert: ResManBlockIOPSSourceUnavailable
+        expr: resman_io_block_iops_source_required == 1 and resman_io_block_iops_source_available == 0 and (time() - resman_io_block_iops_decision_timestamp_seconds <= resman_control_decision_max_age_seconds) and resman_io_block_iops_decision_timestamp_seconds > 0 and ((resman_control_decision_suspended_until_timestamp_seconds == 0) or (time() - resman_control_decision_suspended_until_timestamp_seconds > resman_control_decision_max_age_seconds))
+        for: 2m
+        labels:
+          severity: warning
+          category: io
+        annotations:
+          summary: "Required block-IOPS source unavailable"
+          description: "The latest fresh decision could not certify the required kernel source. Inspect source qualification and integrity diagnostics; an unfiltered slice total is not a substitute."
+
+      - alert: ResManBlockIOPSCoverageIncomplete
+        expr: resman_io_block_iops_unavailable_users > 0 and resman_io_block_iops_source_required == 1 and resman_io_block_iops_source_available == 1 and (time() - resman_io_block_iops_decision_timestamp_seconds <= resman_control_decision_max_age_seconds) and resman_io_block_iops_decision_timestamp_seconds > 0 and ((resman_control_decision_suspended_until_timestamp_seconds == 0) or (time() - resman_control_decision_suspended_until_timestamp_seconds > resman_control_decision_max_age_seconds))
+        for: 5m
+        labels:
+          severity: warning
+          category: io
+        annotations:
+          summary: "Block-IOPS release coverage incomplete"
+          description: "{{ $value }} eligible users lack a complete certified interval. Activation minima may remain usable; a missing release maximum is unknown, never zero. Initial user baselines can cause temporary gaps."
+
+      - alert: ResManBlockIOPSDecisionStale
+        expr: resman_io_block_iops_source_required == 1 and ((time() - resman_io_block_iops_decision_timestamp_seconds > resman_control_decision_max_age_seconds) or resman_io_block_iops_decision_timestamp_seconds == 0) and ((resman_control_decision_suspended_until_timestamp_seconds == 0) or (time() - resman_control_decision_suspended_until_timestamp_seconds > resman_control_decision_max_age_seconds))
+        for: 2m
+        labels:
+          severity: warning
+          category: io
+        annotations:
+          summary: "Block-IOPS decision evidence is stale"
+          description: "No fresh decision evidence within three effective fallback intervals. Source status is historical; inspect control-cycle failures. Intentional blackout suppresses this alert."
 
       # -------------------------------------------------------------------------
       # Weighted I/O Requires Intervention

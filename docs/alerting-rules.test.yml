@@ -1,0 +1,418 @@
+rule_files:
+- alerting-rules.yml
+evaluation_interval: 30s
+tests:
+- name: disabled
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="disabled"}
+    values: 0+0x30
+  - series: resman_io_block_iops_source_available{instance="disabled"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="disabled"}
+    values: 4+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="disabled"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="disabled"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="disabled"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: healthy
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="healthy"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="healthy"}
+    values: 1+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="healthy"}
+    values: 0+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="healthy"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="healthy"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="healthy"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: source_failed
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="source_failed"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="source_failed"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="source_failed"}
+    values: 3+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="source_failed"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="source_failed"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="source_failed"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts:
+    - exp_labels:
+        instance: source_failed
+        severity: warning
+        category: io
+      exp_annotations:
+        summary: Required block-IOPS source unavailable
+        description: The latest fresh decision could not certify the required kernel
+          source. Inspect source qualification and integrity diagnostics; an unfiltered
+          slice total is not a substitute.
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: coverage_missing
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="coverage_missing"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="coverage_missing"}
+    values: 1+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="coverage_missing"}
+    values: 3+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="coverage_missing"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="coverage_missing"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="coverage_missing"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts:
+    - exp_labels:
+        instance: coverage_missing
+        severity: warning
+        category: io
+      exp_annotations:
+        summary: Block-IOPS release coverage incomplete
+        description: 3 eligible users lack a complete certified interval. Activation
+          minima may remain usable; a missing release maximum is unknown, never zero.
+          Initial user baselines can cause temporary gaps.
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: stale
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="stale"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="stale"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="stale"}
+    values: 3+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="stale"}
+    values: 1+0x30
+  - series: resman_control_decision_max_age_seconds{instance="stale"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="stale"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts:
+    - exp_labels:
+        instance: stale
+        severity: warning
+        category: io
+      exp_annotations: &id001
+        summary: Block-IOPS decision evidence is stale
+        description: No fresh decision evidence within three effective fallback intervals.
+          Source status is historical; inspect control-cycle failures. Intentional
+          blackout suppresses this alert.
+- name: not_sampled
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="not_sampled"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="not_sampled"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="not_sampled"}
+    values: 0+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="not_sampled"}
+    values: 0+0x30
+  - series: resman_control_decision_max_age_seconds{instance="not_sampled"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="not_sampled"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts:
+    - exp_labels:
+        instance: not_sampled
+        severity: warning
+        category: io
+      exp_annotations: *id001
+- name: long_psi_cadence
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="long_psi_cadence"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="long_psi_cadence"}
+    values: 1+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="long_psi_cadence"}
+    values: 0+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="long_psi_cadence"}
+    values: 1+0x30
+  - series: resman_control_decision_max_age_seconds{instance="long_psi_cadence"}
+    values: 1800+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="long_psi_cadence"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: cpu_native_failed
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_native_failed"}
+    values: 1+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_native_failed"}
+    values: 0+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_native_failed"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_native_failed"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_native_failed"}
+    values: 0+0x30
+  - series: resman_enforcement_mode{instance="cpu_native_failed",mode="systemd_native"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts:
+    - exp_labels:
+        instance: cpu_native_failed
+        severity: warning
+        category: operations
+      exp_annotations:
+        summary: Requested CPU plan is not completely applied
+        description: The authoritative decision requests a CPU plan, but native reconciliation
+          has not completely verified it. Inspect CPU authority and reconciliation
+          errors.
+- name: cpu_observation
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_observation"}
+    values: 1+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_observation"}
+    values: 0+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_observation"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_observation"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_observation"}
+    values: 0+0x30
+  - series: resman_enforcement_mode{instance="cpu_observation",mode="observation_only"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts: []
+- name: cpu_applied_ram_failure
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_applied_ram_failure"}
+    values: 1+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_applied_ram_failure"}
+    values: 1+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_applied_ram_failure"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_applied_ram_failure"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_applied_ram_failure"}
+    values: 0+0x30
+  - series: resman_enforcement_mode{instance="cpu_applied_ram_failure",mode="systemd_native"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts: []
+- name: cpu_no_intent
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_no_intent"}
+    values: 0+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_no_intent"}
+    values: 0+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_no_intent"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_no_intent"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_no_intent"}
+    values: 0+0x30
+  - series: resman_enforcement_mode{instance="cpu_no_intent",mode="systemd_native"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts: []
+- name: cpu_old
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_old"}
+    values: 1+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_old"}
+    values: 0+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_old"}
+    values: 1+0x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_old"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_old"}
+    values: 0+0x30
+  - series: resman_enforcement_mode{instance="cpu_old",mode="systemd_native"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts: []
+- name: cpu_blackout
+  interval: 30s
+  input_series:
+  - series: resman_control_cpu_activation_requested{instance="cpu_blackout"}
+    values: 1+0x30
+  - series: resman_control_cpu_activation_applied{instance="cpu_blackout"}
+    values: 0+0x30
+  - series: resman_control_decision_timestamp_seconds{instance="cpu_blackout"}
+    values: 1+30x30
+  - series: resman_control_decision_max_age_seconds{instance="cpu_blackout"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="cpu_blackout"}
+    values: 1200+0x30
+  - series: resman_enforcement_mode{instance="cpu_blackout",mode="systemd_native"}
+    values: 1+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManCPULimitsNotActivating
+    exp_alerts: []
+- name: iops_blackout
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="iops_blackout"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="iops_blackout"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="iops_blackout"}
+    values: 3+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="iops_blackout"}
+    values: 1+0x30
+  - series: resman_control_decision_max_age_seconds{instance="iops_blackout"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="iops_blackout"}
+    values: 1200+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []
+- name: expired_blackout
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="expired_blackout"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="expired_blackout"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="expired_blackout"}
+    values: 3+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="expired_blackout"}
+    values: 1+0x30
+  - series: resman_control_decision_max_age_seconds{instance="expired_blackout"}
+    values: 90+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="expired_blackout"}
+    values: 240+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts:
+    - exp_labels:
+        instance: expired_blackout
+        severity: warning
+        category: io
+      exp_annotations:
+        summary: Block-IOPS decision evidence is stale
+        description: No fresh decision evidence within three effective fallback intervals.
+          Source status is historical; inspect control-cycle failures. Intentional
+          blackout suppresses this alert.
+- name: blackout_rollover_waits_for_fallback
+  interval: 30s
+  input_series:
+  - series: resman_io_block_iops_source_required{instance="blackout_rollover_waits_for_fallback"}
+    values: 1+0x30
+  - series: resman_io_block_iops_source_available{instance="blackout_rollover_waits_for_fallback"}
+    values: 0+0x30
+  - series: resman_io_block_iops_unavailable_users{instance="blackout_rollover_waits_for_fallback"}
+    values: 0+0x30
+  - series: resman_io_block_iops_decision_timestamp_seconds{instance="blackout_rollover_waits_for_fallback"}
+    values: 0+0x30
+  - series: resman_control_decision_max_age_seconds{instance="blackout_rollover_waits_for_fallback"}
+    values: 900+0x30
+  - series: resman_control_decision_suspended_until_timestamp_seconds{instance="blackout_rollover_waits_for_fallback"}
+    values: 300+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: ResManBlockIOPSSourceUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSCoverageIncomplete
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ResManBlockIOPSDecisionStale
+    exp_alerts: []

@@ -12,7 +12,6 @@ import (
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
 	"github.com/fdefilippo/resman/internal/cpupoints"
-	"github.com/fdefilippo/resman/internal/ioweights"
 	"github.com/fdefilippo/resman/internal/systemdunit"
 	"github.com/fdefilippo/resman/mcp"
 	"github.com/fdefilippo/resman/metrics"
@@ -171,25 +170,7 @@ func (a *App) WithStateManager() *App {
 		return a
 	}
 
-	reserve, err := cpupoints.NewReservePoints(uint64(a.cfg.GetCPUReservePoints()))
-	if err != nil {
-		return a.failCPUPointsStartup("invalid CPU Points reserve", err, true)
-	}
-	root, err := cpupoints.NewRootPoints(uint64(a.cfg.GetCPURootPoints()))
-	if err != nil {
-		return a.failCPUPointsStartup("invalid CPU Points root entitlement", err, true)
-	}
-	bestEffort, err := cpupoints.NewBestEffortPoints(uint64(a.cfg.GetCPUBestEffortPoints()))
-	if err != nil {
-		return a.failCPUPointsStartup("invalid CPU Points best-effort entitlement", err, true)
-	}
-	mapPath, err := cpupoints.NewPolicyMapPath(a.cfg.GetCPUPointsFile())
-	if err != nil {
-		return a.failCPUPointsStartup("invalid CPU Points map path", err, true)
-	}
-	policy, err := cpupoints.NewPolicyLoader().Load(cpupoints.PolicyInputs{
-		Reserve: reserve, Root: root, BestEffort: bestEffort, MapPath: mapPath,
-	}, cpupoints.NSSIdentityResolver{})
+	policy, err := config.LoadCPUPointsPolicy(a.cfg)
 	if err != nil {
 		return a.failCPUPointsStartup("load CPU Points policy", err, true)
 	}
@@ -210,26 +191,9 @@ func (a *App) WithStateManager() *App {
 	if systemdAdapter != nil {
 		options = append(options, state.WithSystemdCPUEnforcement(systemdAdapter))
 	}
-	rootWeight, err := ioweights.NewWeight(uint64(a.cfg.GetIORootWeight()))
+	weightPolicy, err := config.LoadIOWeightPolicy(a.cfg)
 	if err != nil {
-		return a.failWeightedIOStartup("invalid weighted-I/O root weight", err)
-	}
-	defaultWeight, err := ioweights.NewWeight(uint64(a.cfg.GetIODefaultWeight()))
-	if err != nil {
-		return a.failWeightedIOStartup("invalid weighted-I/O default weight", err)
-	}
-	weightPolicy := ioweights.NewEmptyPolicySnapshot(rootWeight, defaultWeight)
-	if a.cfg.GetIOWeightDevices() != "" {
-		weightMapPath, pathErr := ioweights.NewPolicyMapPath(a.cfg.GetIOUserWeightFile())
-		if pathErr != nil {
-			return a.failWeightedIOStartup("invalid weighted-I/O map path", pathErr)
-		}
-		weightPolicy, err = ioweights.NewPolicyLoader().Load(ioweights.PolicyInputs{
-			Root: rootWeight, Default: defaultWeight, MapPath: weightMapPath,
-		}, ioweights.NSSIdentityResolver{})
-		if err != nil {
-			return a.failWeightedIOStartup("load weighted-I/O policy", err)
-		}
+		return a.failWeightedIOStartup("load weighted-I/O policy", err)
 	}
 	if systemdAdapter != nil {
 		options = append(options, state.WithSystemdIODeviceWeights(systemdAdapter, systemdunit.NewIODeviceWeightCapabilityClassifier(), weightPolicy))
@@ -542,6 +506,7 @@ func (a *App) WithMCPServer() *App {
 		return a
 	}
 
+	mcpServer.SetReadinessProvider(a.ReadinessSnapshot)
 	if err := mcpServer.Start(a.ctx); err != nil {
 		a.logger.Error("Failed to start MCP server", "error", err)
 		fmt.Fprintf(os.Stderr, "\nFailed to start MCP server: %v\n", err)

@@ -27,10 +27,11 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/internal/app"
+	"github.com/fdefilippo/resman/internal/preflight"
 	"github.com/fdefilippo/resman/logging"
 )
 
-var version = "1.42.0"
+var version = "1.43.0"
 
 const (
 	exitStatusFailure       = 1
@@ -40,11 +41,24 @@ const (
 func main() {
 	// Parse command-line flags.
 	configPath := flag.String("config", config.DefaultConfigPath, "Path to configuration file")
+	check := flag.Bool("check", false, "Validate configuration and inspect prerequisites without starting the daemon")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("resman %s\n", version)
+		return
+	}
+
+	if *check {
+		report := preflight.Check(context.Background(), *configPath)
+		if err := report.Print(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(exitStatusFailure)
+		}
+		if !report.Valid() {
+			os.Exit(exitStatusConfiguration)
+		}
 		return
 	}
 

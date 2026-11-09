@@ -1,10 +1,11 @@
-.TH RESMAN 8 "November 2026" "v1.42.0" "System Administration"
+.TH RESMAN 8 "November 2026" "v1.43.0" "System Administration"
 .SH NAME
 resman \- Dynamic CPU/RAM/IO resource manager for Linux using cgroups v2
 .SH SYNOPSIS
 .B resman
 [\fB\-\-config\fR \fIFILE\fR]
 [\fB\-\-version\fR]
+[\fB\-\-check\fR]
 .SH DESCRIPTION
 .B resman
 is a daemon that monitors system and per\-user CPU, RAM, and block I/O usage.
@@ -63,6 +64,18 @@ Performance optimizations: gopsutil process scanning and regex cache
 .IP \(bu
 Graceful shutdown with proper resource cleanup
 .SH OPTIONS
+.TP
+.B \-\-check
+Validate the required regular configuration file with startup defaults and
+environment overrides, resolve policy maps, and inspect read-only prerequisites
+without starting the daemon. Results distinguish verified, invalid and unverified
+properties. Exit 0 means the performed checks passed; exit 78 reports an invalid
+configuration or inspected prerequisite. Operational writes, service sandbox
+permissions, BPF/PSI registration and SQLite schema compatibility remain unverified.
+No logs, databases, leases or listeners are initialized. Restart-required key names
+are lifecycle classifications, not a comparison with a running instance.
+See /usr/share/doc/resman/PREFLIGHT.md for details.
+
 .TP
 \fB\-\-config\fR \fIFILE\fR
 Specifies the configuration file path. Default:
@@ -791,9 +804,9 @@ The complete public-key inventory is generated from the runtime configuration,
 defaults, and lifecycle table. It is installed as
 .IR /usr/share/doc/resman/CONFIGURATION.md .
 .PP
-.B Upgrade from 1.25.x through 1.41.4 to 1.42.0
+.B Upgrade from 1.25.x through 1.42.0 to 1.43.0
 .PP
-ResMan 1.42.0 includes the intentional 1.34.0 filesystem, database,
+ResMan 1.43.0 includes the intentional 1.34.0 filesystem, database,
 configuration, MCP, Prometheus, hook, capability and container contracts. Before
 installing it, follow
 .IR /usr/share/doc/resman/UPGRADING.md .

@@ -70,6 +70,8 @@ install -m 0644 "$project_dir/packaging/syslog/resman.conf" \
     "$package_dir/etc/rsyslog.d/resman.conf"
 
 install -m 0644 "$project_dir/README.md" "$package_dir/usr/share/doc/resman/README.md"
+install -m 0644 "$project_dir/docs/PREFLIGHT.md" \
+    "$package_dir/usr/share/doc/resman/PREFLIGHT.md"
 install -m 0644 "$project_dir/docs/CONFIGURATION.md" \
     "$package_dir/usr/share/doc/resman/CONFIGURATION.md"
 install -m 0644 "$project_dir/docs/BLOCK-IOPS-SOURCE-DESIGN.md" "$project_dir/docs/IO-LIMITS.md" "$package_dir/usr/share/doc/resman/"

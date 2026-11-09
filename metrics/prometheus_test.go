@@ -1173,3 +1173,35 @@ func TestIOPSBoundsDoNotFabricateExactOrCompleteCoverage(t *testing.T) {
 		t.Fatal("failed source retained stale bounds")
 	}
 }
+
+func TestDecisionEvidenceSurvivesObservationRefreshAndCadenceChanges(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EnablePrometheus = true
+	exporter, err := NewPrometheusExporter(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Unix(1234, 0)
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{CPUDecision: &CPUDecisionMetrics{At: at, HostPercent: 25, HostPercentAvailable: true, ActivationRequested: true}})
+	exporter.UpdateSystemSnapshot(SystemExporterMetrics{})
+	for _, interval := range []time.Duration{30 * time.Second, 300 * time.Second, 17 * time.Second} {
+		exporter.SetControlDecisionInterval(interval)
+		families, err := exporter.registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string]float64{}
+		for _, f := range families {
+			for _, m := range f.Metric {
+				if m.Gauge != nil {
+					values[f.GetName()] = m.GetGauge().GetValue()
+				}
+			}
+		}
+		for name, want := range map[string]float64{"resman_control_decision_max_age_seconds": 3 * interval.Seconds(), "resman_control_decision_timestamp_seconds": 1234, "resman_control_cpu_activation_requested": 1, "resman_cpu_eligible_users_host_cpu_percent": 25} {
+			if got, ok := values[name]; !ok || got != want {
+				t.Fatalf("%s=%v present=%v want=%v", name, got, ok, want)
+			}
+		}
+	}
+}

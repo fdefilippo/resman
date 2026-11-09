@@ -8,7 +8,7 @@
 
 # Project name
 PROJECT_NAME = resman
-VERSION = 1.42.0
+VERSION = 1.43.0
 RELEASE = 1
 PROJECT_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -429,7 +429,7 @@ install: build
 	fi
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo install -d -m 0755 /usr/share/doc/resman
-	sudo install -m 0644 docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
+	sudo install -m 0644 docs/PREFLIGHT.md docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
 	@echo "Configuration: $(CONF_DIR)/resman.conf"

@@ -1,3 +1,12 @@
+resman (1.43.0-1) stable; urgency=medium
+
+  * Ship certified block-IOPS bounds, coverage, source and freshness dashboards and alerts.
+  * Diagnose CPU activation from authoritative requested and verified plan state.
+  * Add application readiness with authenticated details and quiet liveness probes.
+  * Add read-only --check with shared configuration and policy validation.
+
+ -- Francesco Defilippo <francesco@defilippo.org>  Mon, 09 Nov 2026 06:20:00 +0100
+
 resman (1.42.0-1) stable; urgency=medium
 
   * Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.
