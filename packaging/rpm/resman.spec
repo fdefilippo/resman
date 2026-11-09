@@ -188,6 +188,7 @@ install -m 644 docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md %{buildroot}/%
 install -m 644 docs/PREFLIGHT.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/UPGRADING.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/LIMIT-HOOKS.md %{buildroot}/%{_docdir}/%{name}/
+install -m 644 docs/PRESSURE.md docs/METRICS-ROLLUPS.md docs/PROCESS-ACTIVITY.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/SYSTEMD-PROPERTY-LEASES.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/CPU-POINTS-OBSERVABILITY.md %{buildroot}/%{_docdir}/%{name}/
 install -m 644 docs/IO-WEIGHTS.md %{buildroot}/%{_docdir}/%{name}/
@@ -308,6 +309,9 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 %doc %{_docdir}/%{name}/PREFLIGHT.md
 %doc %{_docdir}/%{name}/UPGRADING.md
 %doc %{_docdir}/%{name}/LIMIT-HOOKS.md
+%doc %{_docdir}/%{name}/PRESSURE.md
+%doc %{_docdir}/%{name}/METRICS-ROLLUPS.md
+%doc %{_docdir}/%{name}/PROCESS-ACTIVITY.md
 %doc %{_docdir}/%{name}/SYSTEMD-PROPERTY-LEASES.md
 %doc %{_docdir}/%{name}/CPU-POINTS-OBSERVABILITY.md
 %doc %{_docdir}/%{name}/IO-WEIGHTS.md
@@ -321,6 +325,12 @@ echo "Please review /etc/resman/resman.conf before starting the service."
 - Diagnose CPU activation from authoritative requested and verified plan state.
 - Add application readiness with authenticated details and quiet liveness probes.
 - Add read-only --check with shared configuration and policy validation.
+- Bound HTTP deadlines while preserving MCP streaming and hash credential comparisons.
+- Measure control stages and persist terminal decisions with compatible schema-11 migration.
+- Export system PSI averages with availability/freshness and opt-in memory wakeups.
+- Share verified process stat reads and retain bounded sampled process identity/activity.
+- Add selective HTTP hook retries with stable event identity and visible attempt outcomes.
+- Compact expired raw observations into UTC-hour rollups with schema-12 migration.
 
 * Mon Nov 09 2026 Francesco Defilippo <francesco@defilippo.org> - 1.42.0-1
 - Restore IOPS decisions with certified per-device kernel bounds and explicit source capability.

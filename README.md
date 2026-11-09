@@ -155,6 +155,9 @@ Build, packaging and host preparation are covered in the
 | Crash-safe systemd changes | [`docs/SYSTEMD-PROPERTY-LEASES.md`](docs/SYSTEMD-PROPERTY-LEASES.md) |
 | Cgroup v2 capability contract | [`docs/CGROUP-V2-TECHNICAL.md`](docs/CGROUP-V2-TECHNICAL.md) |
 | Metrics history database | [`docs/METRICS-DATABASE.md`](docs/METRICS-DATABASE.md) |
+| Hourly trends with explicit sample coverage | [`docs/METRICS-ROLLUPS.md`](docs/METRICS-ROLLUPS.md) |
+| Sampled process identity and activity coverage | [`docs/PROCESS-ACTIVITY.md`](docs/PROCESS-ACTIVITY.md) |
+| System pressure and optional memory wakeups | [`docs/PRESSURE.md`](docs/PRESSURE.md) |
 | Prometheus, Grafana and alerts | [`docs/GRAFANA-DASHBOARD-GUIDE.md`](docs/GRAFANA-DASHBOARD-GUIDE.md), [`docs/prometheus-queries.md`](docs/prometheus-queries.md), [`docs/alerting-rules.yml`](docs/alerting-rules.yml) |
 | Monitoring many hosts | [`docs/MULTI-INSTANCE-MONITORING.md`](docs/MULTI-INSTANCE-MONITORING.md), [`docs/GRAFANA-MULTI-CLUSTER-GUIDE.md`](docs/GRAFANA-MULTI-CLUSTER-GUIDE.md) |
 | TLS for the Prometheus endpoint | [`docs/TLS-CONFIGURATION.md`](docs/TLS-CONFIGURATION.md) |
@@ -167,6 +170,22 @@ Build, packaging and host preparation are covered in the
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the normative
 [development guide](docs/DEVELOPMENT.md) before changing code.
+
+
+## Operational observations
+
+System PSI gauges show CPU, I/O and memory pressure with availability and sample age;
+memory events can wake the existing control cycle when explicitly enabled. The
+[pressure guide](docs/PRESSURE.md) explains the policy boundary. MCP process activity
+uses actual boot/PID/kernel-start identity and separates runtime from covered CPU/RAM
+intervals; missing samples and restart do not become continuous activity.
+
+Terminal cycle history survives restart when the optional metrics database is enabled.
+Expired raw observations compact into [UTC-hour trends](docs/METRICS-ROLLUPS.md) with
+known/unknown counts and a separate longer retention window. MCP reports unavailable
+persistence explicitly; see [history limits](docs/METRICS-DATABASE.md#terminal-control-history).
+[HTTP notifications](docs/LIMIT-HOOKS.md) can opt into bounded transient retries,
+sharing a stable event identity for receiver deduplication and exposing every attempt.
 
 ## License
 

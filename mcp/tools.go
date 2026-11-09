@@ -31,6 +31,7 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/controlhistory"
 	resmanmetrics "github.com/fdefilippo/resman/metrics"
 	"github.com/fdefilippo/resman/state"
 )
@@ -128,19 +129,21 @@ type GetHistoryArgs struct {
 }
 
 type GetUserSummaryResult struct {
-	UID                       int     `json:"uid"`
-	Username                  string  `json:"username"`
-	PeriodStart               string  `json:"period_start"`
-	PeriodEnd                 string  `json:"period_end"`
-	CPUAvg                    float64 `json:"cpu_avg"`
-	CPUMin                    float64 `json:"cpu_min"`
-	CPUMax                    float64 `json:"cpu_max"`
-	MemoryAvg                 float64 `json:"memory_avg"`
-	MemoryMin                 float64 `json:"memory_min"`
-	MemoryMax                 float64 `json:"memory_max"`
-	ProcessCountAvg           float64 `json:"process_count_avg"`
-	CPULimitActiveTimePercent float64 `json:"cpu_limit_active_time_percent"`
-	Samples                   int     `json:"samples"`
+	UID             int     `json:"uid"`
+	Username        string  `json:"username"`
+	PeriodStart     string  `json:"period_start"`
+	PeriodEnd       string  `json:"period_end"`
+	CPUAvg          float64 `json:"cpu_avg"`
+	CPUMin          float64 `json:"cpu_min"`
+	CPUMax          float64 `json:"cpu_max"`
+	MemoryAvg       float64 `json:"memory_avg"`
+	MemoryMin       float64 `json:"memory_min"`
+	MemoryMax       float64 `json:"memory_max"`
+	ProcessCountAvg float64 `json:"process_count_avg"`
+	// Deprecated: use CPULimitActiveSamplePercent; this value is not duration weighted.
+	CPULimitActiveTimePercent   float64 `json:"cpu_limit_active_time_percent"`
+	CPULimitActiveSamplePercent float64 `json:"cpu_limit_active_sample_percent"`
+	Samples                     int     `json:"samples"`
 }
 
 type GetMetricsDatabaseInfoResult struct {
@@ -159,6 +162,7 @@ type GetControlHistoryArgs struct {
 }
 
 type ControlHistoryEntry struct {
+	controlhistory.Details
 	Timestamp                    string  `json:"timestamp"`
 	Decision                     string  `json:"decision"`
 	Reason                       string  `json:"reason"`
@@ -171,7 +175,10 @@ type ControlHistoryEntry struct {
 }
 
 type GetControlHistoryResult struct {
-	Entries []ControlHistoryEntry `json:"entries"`
+	Entries           []ControlHistoryEntry            `json:"entries"`
+	PersistenceStatus controlhistory.PersistenceStatus `json:"persistence_status"`
+	PendingEntries    int                              `json:"pending_entries"`
+	DroppedEntries    uint64                           `json:"dropped_entries"`
 }
 
 type ActivateLimitsArgs struct {
@@ -299,6 +306,8 @@ func formatHostCPUUsage(metrics resmanmetrics.ObservationMetrics) string {
 // registerTools registers all MCP tools
 func (s *Server) registerTools() {
 	s.registerConfigurationEditorTools()
+	s.registerMetricRollupTools()
+	s.registerProcessActivityTools()
 	// get_system_status - registered manually with explicit empty schema
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_system_status",
@@ -1026,13 +1035,16 @@ func (s *Server) handleGetControlHistory(ctx context.Context, req *mcp.CallToolR
 		args.Limit = 10
 	}
 
-	history := s.stateManager.GetControlHistory(args.Limit)
+	historyResult := s.stateManager.QueryControlHistory(ctx, args.Limit)
+	history := historyResult.Entries
 	result := GetControlHistoryResult{
-		Entries: make([]ControlHistoryEntry, 0, len(history)),
+		Entries:           make([]ControlHistoryEntry, 0, len(history)),
+		PersistenceStatus: historyResult.Persistence, PendingEntries: historyResult.Pending, DroppedEntries: historyResult.Dropped,
 	}
 
 	for _, entry := range history {
 		result.Entries = append(result.Entries, ControlHistoryEntry{
+			Details:                      entry.Details,
 			Timestamp:                    entry.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Decision:                     entry.Decision,
 			Reason:                       entry.Reason,
@@ -1190,19 +1202,20 @@ func (s *Server) handleGetUserSummary(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	result := GetUserSummaryResult{
-		UID:                       summary.UID,
-		Username:                  summary.Username,
-		PeriodStart:               summary.PeriodStart,
-		PeriodEnd:                 summary.PeriodEnd,
-		CPUAvg:                    summary.CPUAvg,
-		CPUMin:                    summary.CPUMin,
-		CPUMax:                    summary.CPUMax,
-		MemoryAvg:                 summary.MemoryAvg,
-		MemoryMin:                 summary.MemoryMin,
-		MemoryMax:                 summary.MemoryMax,
-		ProcessCountAvg:           summary.ProcessCountAvg,
-		CPULimitActiveTimePercent: summary.CPULimitActiveTimePercent,
-		Samples:                   summary.Samples,
+		UID:                         summary.UID,
+		Username:                    summary.Username,
+		PeriodStart:                 summary.PeriodStart,
+		PeriodEnd:                   summary.PeriodEnd,
+		CPUAvg:                      summary.CPUAvg,
+		CPUMin:                      summary.CPUMin,
+		CPUMax:                      summary.CPUMax,
+		MemoryAvg:                   summary.MemoryAvg,
+		MemoryMin:                   summary.MemoryMin,
+		MemoryMax:                   summary.MemoryMax,
+		ProcessCountAvg:             summary.ProcessCountAvg,
+		CPULimitActiveTimePercent:   summary.CPULimitActiveTimePercent,
+		CPULimitActiveSamplePercent: summary.CPULimitActiveSamplePercent,
+		Samples:                     summary.Samples,
 	}
 
 	return &mcp.CallToolResult{

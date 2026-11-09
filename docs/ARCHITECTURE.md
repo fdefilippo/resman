@@ -26,6 +26,26 @@ ResMan uses a single control cycle that runs every `POLLING_INTERVAL` seconds:
    └─ DEACTIVATE_LIMITS → deactivateLimits()
 ```
 
+## Observational boundaries
+
+Decision samples read system CPU, I/O and memory pressure and freeze bounded process
+identity/activity observations from the same completed process scan. Pressure gauges
+remain independent of event-driven wake mode, and host-only refreshes cannot renew
+their timestamp or advance decision/process activity baselines. A missing mandatory
+process source fails the authoritative sample; an unavailable optional PSI source is
+reported without changing resource policy.
+
+Memory pressure can opt into the existing owned PSI watcher and wake the ordinary
+control cycle. It does not add an activation/release dimension. See
+[PRESSURE.md](PRESSURE.md) and [PROCESS-ACTIVITY.md](PROCESS-ACTIVITY.md).
+
+SQLite stores terminal decisions separately from raw observation cadence, plus
+sampled process summaries. Retention atomically compacts expired raw observations
+into UTC-hour sufficient statistics; MCP exposes those trends separately from raw
+history. [Rollups](METRICS-ROLLUPS.md) retain known/unknown counts without filling
+gaps. Optional [HTTP hook retries](LIMIT-HOOKS.md) stay inside the bounded owned job
+deadline and never change the outcome of applied enforcement.
+
 ## Relationship with systemd-oomd
 
 ResMan complements rather than replaces
@@ -102,9 +122,10 @@ resman_user_io_write_ops_total{uid, username}
 The `*_bytes_total` series report block-device traffic. The Prometheus
 `*_ops_total` series expose `/proc/PID/io` `syscr`/`syscw`: read/write-family
 syscall counts, not the block-device IOPS used for decisions. When an IOPS
-dimension is configured, the decision engine reads `rios`/`wios` from the
-authoritative user slice and preserves a logical cumulative counter across slice
-lifetimes.
+dimension is configured, the decision engine uses the qualified kernel source's
+per-device lower and upper block-operation bounds, preserving process selection
+even for shared writeback. Slice `io.stat` totals cannot replace that attribution.
+See [BLOCK-IOPS-SOURCE-DESIGN.md](BLOCK-IOPS-SOURCE-DESIGN.md).
 
 To show only limited users in dashboards, filter by `resman_user_cpu_limit_active{uid, username} == 1`.
 
@@ -114,7 +135,7 @@ for the CPU Points contract and operator measurement procedure in schema 10.
 
 ## Cgroup Hierarchy
 
-Current metrics schema: 10.
+Current metrics schema: 12.
 
 On systemd hosts the authoritative topology is flat:
 

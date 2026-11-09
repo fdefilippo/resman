@@ -1,6 +1,6 @@
 # CPU Points observation under systemd
 
-Current metrics schema: 10.
+Current metrics schema: 12.
 
 On a systemd host, `systemd_native` enforcement keeps processes in their existing
 units. The finite parent is `user.slice`; its active `user-UID.slice` children
@@ -103,10 +103,12 @@ does not expose or create a separate managed-cgroup hierarchy.
 
 Schema 7 rejects all prior versioned and unversioned incompatible archives. Stop
 ResMan, archive or delete the old metrics database together with its WAL/SHM
-sidecars, then restart to create a private schema-10 store. Schema 7 is migrated
+sidecars, then restart to create a private schema-12 store. Schema 7 is migrated
 atomically through schemas 8 and 9 to schema 10 for weighted-I/O fields, qualification
-provenance, and its bounded CHECK; there is no migration
-or alias. The three-level domain columns, domain metrics and lending-state field
+provenance, and its bounded CHECK. Schema 11 adds terminal history; schema 12 adds
+sampled process summaries and hourly observation rollups. Supported versioned
+migrations preserve existing observations; no migration or alias exists for
+pre-schema-7 archives. The three-level domain columns, domain metrics and lending-state field
 have been removed. Use flat sibling weights, coverage and measured delivery.
 
 The enforcement-mode vocabulary is bounded to `observation_only` and

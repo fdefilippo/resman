@@ -41,7 +41,11 @@ func (a *App) ReadinessSnapshot() readiness.Snapshot {
 		a.psiMu.RLock()
 		watcher := a.psiWatcher
 		a.psiMu.RUnlock()
-		if a.isPSIEventDrivenActive() && watcher != nil && watcher.ActiveSystemMonitors() == 2 {
+		expectedMonitors := 2
+		if cfg.GetPSIMemoryEventDriven() {
+			expectedMonitors++
+		}
+		if a.isPSIEventDrivenActive() && watcher != nil && watcher.ActiveSystemMonitors() == expectedMonitors {
 			result.PSI = readiness.Active
 		}
 	}

@@ -586,3 +586,62 @@ After blackout ends, alerts allow one normal decision freshness budget for the
 next scheduled fallback tick. This avoids false alarms across adjacent blackout
 windows with long PSI fallback intervals. An old suspension cannot silence a
 stalled loop indefinitely.
+
+## Control stage timing
+
+Per-host p95 by executed stage and outcome (seconds):
+
+```promql
+histogram_quantile(0.95,
+  sum by (le, hostname, stage, outcome) (
+    rate(resman_control_stage_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Mean time per executed stage (seconds):
+
+```promql
+sum by (hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_sum[5m]))
+/
+sum by (hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_count[5m]))
+```
+
+Labels come from a fixed stage/outcome inventory. Skipped work is absent rather
+than zero duration. A cancelled in-flight stage is measured; a stage skipped after
+cancellation is not. `record_history` covers terminal history and optional database
+delivery after protective work, even for failed or suspended cycles. Hook dispatch
+measures enqueueing, not asynchronous script/webhook execution. Do not add stage
+quantiles to estimate total-cycle p95; use the total-cycle histogram directly.
+
+
+## System kernel pressure
+
+Pressure gauges are sampled on the decision cycle, independently of event-driven
+mode. Values are already percentages; do not multiply by 100. The fixed windows
+are 10, 60 and 300 seconds. CPU system `full` is undefined and omitted; an absent
+optional full line or an unavailable source is not a measured zero.
+
+```promql
+resman_psi_pressure_percent{scope="system", type="memory", stall="some", window_seconds="10"}
+```
+
+Compare source availability and the age of the sampling attempt. A failed attempt
+updates its timestamp but removes its percentage series; observation refreshes do
+not renew either. Deliberate blackout leaves the prior decision snapshot aging.
+
+```promql
+resman_psi_pressure_available{scope="system", stall="some"}
+```
+
+```promql
+time() - resman_psi_pressure_sample_timestamp_seconds{scope="system"}
+```
+
+```promql
+resman_psi_pressure_source_status{scope="system", reason!="none"} == 1
+```
+
+An opt-in memory wake event increments
+`resman_psi_events_total{type="memory",scope="system"}` and runs the normal control
+cycle. Neither the event nor these gauges introduces a new RAM enforcement signal.

@@ -110,7 +110,7 @@ func (a *App) WithDatabase() *App {
 		"write_interval", a.cfg.MetricsDBWriteInterval,
 	)
 
-	if deleted, err := dbManager.CleanupOldData(a.cfg.MetricsDBRetentionDays); err != nil {
+	if deleted, err := dbManager.CleanupOldDataWithRollupRetention(a.cfg.MetricsDBRetentionDays, a.cfg.GetMetricsDBRollupRetentionDays()); err != nil {
 		a.logger.Warn("Failed to apply metrics database retention at startup",
 			"retention_days", a.cfg.MetricsDBRetentionDays,
 			"error", err,

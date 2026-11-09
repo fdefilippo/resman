@@ -111,3 +111,5 @@ func TestApplicationPollingBlackoutSchedulesIndependentObservation(t *testing.T)
 }
 
 func (*blackoutExporter) ObserveDecisionSuspension(time.Time) {}
+
+func (*blackoutExporter) ObserveControlStage(metrics.ControlStageObservation) {}

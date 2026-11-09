@@ -15,7 +15,7 @@ import (
 // PSIEvent represents a pressure stall event from a monitored cgroup.
 type PSIEvent struct {
 	UID       int     // 0 for system-level, >0 for per-user cgroups
-	Type      string  // "cpu", "io"
+	Type      string  // "cpu", "io", or opt-in "memory"
 	SomeAvg10 float64 // avg10 percentage
 	Timestamp time.Time
 }
@@ -75,7 +75,7 @@ func (w *PSIWatcher) Events() <-chan PSIEvent {
 
 // AddMonitor registers a pressure file to monitor.
 // uid: 0 for system-level, >0 for per-user cgroup
-// typ: "cpu" or "io"
+// typ: "cpu", "io", or "memory"
 // pressurePath: full path to the pressure file
 func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error {
 	leaveOperation := w.opGate.Enter()

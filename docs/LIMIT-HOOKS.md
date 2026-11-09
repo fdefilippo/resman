@@ -19,11 +19,13 @@ outcome; ResMan does not retry or persist it, and the control cycle continues.
 
 Script and HTTP mechanisms are separate jobs. Each job receives its own complete
 `LIMIT_HOOK_TIMEOUT` deadline, so time consumed by one mechanism is never deducted
-from the other. The HTTP client is private to the hook executor, performs no retry,
-and bounds connection, TLS-handshake, response-header, and complete-request time.
+from the other. The HTTP client is private to the hook executor and bounds connection,
+TLS-handshake, response-header, and complete-request time. An HTTP job may opt in to
+selective retries, all within its original complete-job deadline; retry waits do not
+reset the timeout or create additional workers. Scripts remain single-attempt.
 
 The worker count and queue capacity are restart-required. Hook enablement, script
-path, URL, and per-delivery timeout are dynamic. Script user and group are also
+path, URL, per-delivery timeout, and HTTP maximum attempts are dynamic. Script user and group are also
 restart-required: a dynamic script-path change is accepted only when the running
 instance already has a valid script identity.
 
@@ -86,11 +88,34 @@ unit or cgroup/`TasksMax` design.
 
 ## HTTP delivery
 
-`LIMIT_HOOK_URL` receives one JSON `POST` per accepted HTTP job. The request body is
-the typed event described in `resman(8)`. ResMan uses no proxy inherited from the
-daemon environment, never uses `http.DefaultClient`, and never retries. Logs retain
-only the URL scheme and host (including an explicit port); user information, path,
-query, and fragment are excluded.
+`LIMIT_HOOK_URL` receives a JSON `POST` for an accepted HTTP job. The request body is
+the typed event described in `resman(8)`, with an additive random `event_id` created
+before admission. Every HTTP attempt carries that same value in the `Idempotency-Key`
+header and retains the same event body. The receiver must deduplicate this key if its
+side effect must happen once: neither a timeout nor a lost response proves that the
+receiver did not apply the event. Admission is not durable, and delivery is not
+exactly-once.
+
+`LIMIT_HOOK_HTTP_MAX_ATTEMPTS` defaults to `1`, preserving one-shot delivery. Setting
+it to `2` through `5` opts in to retries of HTTP 408, 429, 500, 502, 503 and 504, or
+classified temporary connection/reset/timeout failures. Invalid URLs, certificate
+validation, authentication/other client errors, cancellation, and an expired total job
+deadline are not retried. Backoff is 100, 200, 400 and 800 milliseconds, interrupted
+immediately by cancellation or the original job timeout. The configured limit counts
+the first attempt. A retry occupies its existing worker, so prolonged delivery can
+still saturate the bounded admission queue; rejected admission is never retried.
+
+An attempt counts one executor HTTP-client call; ordinary client redirects retain
+their existing semantics, including POST replay for HTTP 307/308. A transport-facing
+request copy prevents the Go transport from silently retrying a body POST behind the
+executor's accounting. ResMan uses no proxy inherited from the daemon environment
+and never uses `http.DefaultClient`. Logs retain only the URL scheme and host
+(including an explicit port); user information, path, query, and fragment are excluded.
+Retry classification happens before sanitization, but only bounded retry metadata
+survives: original URL-bearing errors are never exposed through the returned chain.
+
+Scripts are deliberately single-attempt even when HTTP retries are enabled: their
+arbitrary side effects and timeout outcomes provide no generic safe replay contract.
 
 ## Shutdown and observability
 
@@ -102,8 +127,13 @@ terminal value in:
 resman_limit_hook_executions_total{hook_type,outcome}
 ```
 
-The bounded outcomes are `success`, `failure`, `timeout`, `cancelled`, and
-`saturated`. Current executor occupancy is exported through:
+The bounded terminal outcomes are `success`, `failure`, `timeout`, `cancelled`, and
+`saturated`. Actual attempts are counted separately by
+`resman_limit_hook_attempts_total{hook_type,outcome}` (no saturated attempt exists
+because rejected jobs do not run). Each failed attempt emits a bounded warning and
+`resman_errors_total{component="limit_hook",error_type="attempt_failure"}` before a
+possible retry, so a final success cannot hide the first failure. Current executor
+occupancy is exported through:
 
 ```text
 resman_limit_hook_in_flight

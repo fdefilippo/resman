@@ -747,6 +747,9 @@ func TestMCPHTTPServerAllowsLongLivedResponses(t *testing.T) {
 	if server.ReadHeaderTimeout <= 0 {
 		t.Errorf("ReadHeaderTimeout = %s, want a positive slow-loris deadline", server.ReadHeaderTimeout)
 	}
+	if server.IdleTimeout <= 0 {
+		t.Fatal("MCP idle connections must have a deadline")
+	}
 }
 
 func configureMCPTestTLS(t testing.TB, cfg *config.Config) string {

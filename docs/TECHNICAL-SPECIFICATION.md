@@ -251,7 +251,7 @@ type Config struct {
 
 ### 3.3 Cgroup Manager (cgroup/manager.go)
 
-Current metrics schema: 10.
+Current metrics schema: 12.
 
 **Responsibilities:**
 - Verify the cgroup v2 observation boundary
@@ -550,9 +550,11 @@ failure and leaves the feature disabled.
 - `Cleanup()`: Cleans up on shutdown
 
 **Control Cycle History:**
-- Stores last 100 cycles
-- Each entry: timestamp, decision, reason, metrics, duration
-- Accessible via MCP tool `get_control_history`
+- Retains the last 100 terminal attempts in memory, including failures and blackout.
+- Persists attempts in optional SQLite schema 12 with restart-safe session/cycle identity.
+- Keeps policy decision separate from applied action and explicit sample availability.
+- MCP merges durable/recent history, deduplicates and caps queries at 1000 entries.
+- See [terminal history](METRICS-DATABASE.md#terminal-control-history) for delivery limits.
 
 ### 3.6 MCP Server (mcp/)
 
@@ -743,13 +745,21 @@ the default `/var/lib/resman/metrics.db`, `/etc/resman/metrics.db` is rejected b
 component construction. Schema 7 at the current path is migrated atomically through
 schemas 8 and 9 to schema 10, preserving all rows and assigning historical weighted-I/O state
 `disabled` with `not_measured` delivery and qualification provenance `none`. A
-pre-version-7 database must be archived or deleted so schema version 10 can be created;
+pre-version-7 database must be archived or deleted so schema version 12 can be created;
 it is not moved or migrated. Development schema 9 is rebuilt transactionally to widen
 the bounded qualification-provenance CHECK. Schema 10 persists one common
 sample epoch across system and user rows, typed CPU Points configured/applied state,
 nullable identity-safe unit deltas, independent resource authority and RAM-charge
 coverage, and distinct memory high/max/OOM/kill deltas. First baselines, counter resets and unit
 recreation remain NULL rather than being reinterpreted as zero or wrapped deltas.
+Schema 11 adds terminal control history without changing these observation semantics;
+the migration creates empty history because prior decisions cannot be reconstructed.
+Schema 12 adds sampled process-identity summaries and hourly observation rollups in
+one transaction. Process runtime is separate from observed activity coverage; no
+history is inferred from old user aggregates. Expired raw rows compact into additive
+UTC-hour statistics before deletion in the same retention transaction. The separate
+rollup query returns known/unknown sample counts and sample-weighted averages,
+without mixing in retained raw samples. See [METRICS-ROLLUPS.md](METRICS-ROLLUPS.md).
 
 **Format:**
 ```ini
@@ -1186,17 +1196,12 @@ type Manager struct {
 
 ### 9.3 Control History
 
-**Stored Data:**
-- Timestamp
-- Decision (ACTIVATE/DEACTIVATE/MAINTAIN)
-- Reason
-- Metrics (CPU, users, load)
-- Duration (milliseconds)
-
-**Access:**
-- MCP tool: `get_control_history`
-- Maximum entries: 100
-- Circular buffer (oldest removed)
+Terminal history is described in [METRICS-DATABASE.md](METRICS-DATABASE.md#terminal-control-history).
+It includes successful, degraded, failed, cancelled and suspended attempts with
+separate sample availability, intent, applied action, coverage and bounded failure
+classification. The last 100 attempts remain in memory; enabled SQLite persistence
+adds durable retention and a bounded retry window. MCP queries merge both sources,
+return at most 1000 entries and report persistence availability and delivery loss.
 
 ### 9.4 Limit Hook Lifecycle
 
@@ -1482,6 +1487,7 @@ type SystemMetrics struct {
 
 // Control History Entry
 type ControlCycleEntry struct {
+    controlhistory.Details
     Timestamp                    time.Time
     Decision                     string
     Reason                       string
@@ -1512,29 +1518,21 @@ type MetricsCollector interface {
     IsSystemUnderLoad() bool
     GetAllUserMetrics() map[int]*UserMetrics
     GetAllUserMetricsForDecision() map[int]*UserMetrics
-    WriteMetricsToDatabase(map[int]*UserMetrics, SystemPersistenceMetrics) error
+    WriteMetricsToDatabase(PersistenceBatch) error
+    GetDBWriter() *metrics.DBWriter
 }
 
 // PrometheusExporter accepts typed snapshots; positional scalar projections are forbidden.
 type PrometheusExporter interface {
     UpdateSystemSnapshot(SystemExporterMetrics)
     UpdateUserSnapshot(UserExporterMetrics)
+    ObserveControlStage(metrics.ControlStageObservation)
 }
 
-// CgroupManager interface
+// CgroupManager retains cleanup ownership; native systemd enforcement uses
+// dedicated typed adapters rather than process relocation.
 type CgroupManager interface {
-    CreateUserCgroup(uid int) error
-    EnsureUnlimitedCPUQuota(uid int) error
-    EnsureCPUPointsHierarchy(ParentQuota, KernelCPUWeight) (CPUPointsHierarchy, error)
-    ApplyCPUPointsParentQuota(CPUPointsHierarchy, ParentQuota) error
-    ApplyCPUPointsGuaranteedWeight(CPUPointsHierarchy, KernelCPUWeight) error
-    EnsureCPUPointsUserPlacement(uid int, domain string, weight KernelCPUWeight) (string, ProcessMoveResult, error)
-    ReleaseCPUPointsUser(uid int, domain string) error
-    CleanupUserCgroup(uid int) error
-    MoveProcessToCgroup(pid int, uid int) error
-    MoveAllUserProcessesToSharedCgroup(uid int, sharedPath string) error
     CleanupAll() error
-    GetCgroupInfo(uid int) (cgroup.CgroupInfo, error)
 }
 ```
 

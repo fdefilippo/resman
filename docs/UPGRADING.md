@@ -1,6 +1,6 @@
 # Upgrading from ResMan 1.25.x through 1.42.0 to ResMan 1.43.0
 
-Current metrics schema: 10. Schema 7 is migrated atomically through schemas 8 and 9.
+Current metrics schema: 12. Schemas 7 through 11 migrate through transactional, versioned steps.
 
 This guide applies when moving from any ResMan release from 1.25.x through 1.42.0 to
 ResMan 1.43.0. This guide covers the post-1.25.1 audit remediation, the CPU Points
@@ -8,7 +8,7 @@ cutover and systemd-native enforcement, and intentionally breaks
 incorrect or ambiguous contracts. The CPU Points cutover itself moved installations
 from releases through 1.30.8 to ResMan 1.31.1; version 1.32.0 suspended migration
 on systemd hosts. Version 1.34.0 restores enforcement through systemd itself.
-Except for the explicit schema-7-to-9 migration below, it does not migrate older
+Except for the explicit schema-7-through-12 migrations below, it does not migrate older
 database schemas, accept removed configuration keys, preserve old MCP shapes, or alias
 renamed metrics.
 
@@ -66,8 +66,103 @@ application, export eligible host CPU percentage, and carry decision timestamps 
 an age budget derived from three effective fallback control intervals. Observation
 refreshes never renew these values; historical per-core percentage gauges retain
 their existing meaning. Reload the shipped alert rules and import the updated
-operations dashboard when adopting these diagnostics. No database schema or public
-configuration key changes are required.
+operations dashboard when adopting these diagnostics. These diagnostics add no public
+configuration keys. Terminal history below adds schema 11.
+
+## ADDED: durable decisions and stage timing (1.43.0)
+
+The optional metrics database adds `control_history` in schema 11. Migration from
+schema 10 creates an empty history table and preserves existing observations;
+older supported schemas pass through their existing versioned migrations first.
+No decisions are fabricated for historical observation rows. Schema 11 is refused
+by older releases: stop ResMan and preserve the database outside the live path
+before downgrading, then use a separate compatible store with the older daemon.
+
+`get_control_history` retains its existing entry fields and adds terminal outcome,
+restart-safe session/cycle identity, first failed stage, classified failure kind,
+sample availability, coverage and separate requested intent/applied action. It merges
+recent memory with durable history once per identity. Persistence is optional;
+responses explicitly report disabled or unavailable storage, pending entries and
+retry-window loss. See [METRICS-DATABASE.md](METRICS-DATABASE.md#terminal-control-history)
+for retention, delivery and crash boundaries.
+
+`resman_control_stage_duration_seconds{stage,outcome}` measures executed stages,
+including errors, cancellation and blackout checks. Skipped stages are absent.
+The terminal `record_history` stage also measures persistence after the protective
+pipeline, including failed or suspended attempts. Import the operations dashboard
+for per-stage p95/mean duration; no PID, UID or raw-error labels are introduced.
+
+## ADDED: pressure, sampled process activity and longer trends (1.43.0)
+
+System CPU, I/O and memory PSI averages are now sampled with each authoritative
+decision, independently of `PSI_EVENT_DRIVEN`. Host-only observation refreshes do
+not renew pressure timestamps. Missing sources are explicit, and system CPU `full`
+is omitted because the kernel defines it as undefined. Import the updated dashboard
+and use availability together with sample age. No policy threshold changes. See
+[PRESSURE.md](PRESSURE.md).
+
+`PSI_MEMORY_EVENT_DRIVEN=false` preserves the existing CPU/I/O wake sources. Opting
+in also requires `PSI_EVENT_DRIVEN=true`; `PSI_MEMORY_STALL_THRESHOLD` defaults to
+50000 microseconds and must be positive and no larger than `PSI_WINDOW_US`.
+These settings reload dynamically. A missing requested source degrades readiness;
+the remaining monitors and polling fallback remain available. Memory PSI wakes the
+normal cycle, without adding a RAM activation dimension or selecting OOM victims.
+
+Schema 11 migrates transactionally to schema 12, adding `process_activity` and
+`metric_rollups` without reconstructing old process lifetimes or filling sample gaps.
+Older supported schemas first pass through their existing migrations. Older releases
+refuse this newer schema: preserve the store outside its live path before downgrading
+and use a separate compatible database with the older daemon.
+
+`get_process_activity` queries bounded actual boot/PID/kernel-start identities from
+completed decision scans and, when enabled, retained summaries. Runtime is distinct
+from covered CPU/RAM intervals; gaps, missing samples and restart are not continuous
+activity. It works without persistence and reports storage status. A failed mandatory
+process identity/stat read now fails the authoritative sample instead of producing a
+complete user with fabricated zero usage. Expected process exits remain tolerated.
+Collection shares verified stat data across CPU/start/RSS reads while keeping memory
+fresh and preserving independent decision/observation baselines. A bounded pool of
+`min(4, GOMAXPROCS)` workers brackets UID/executable/PSS/I/O with exact start-tick
+checks and joins before publication. `runtime_available` distinguishes an unreadable
+or invalid uptime/lifetime from measured zero; positive lifetime filters require it.
+
+Expired raw observation rows now compact into UTC-hour sufficient statistics before
+deletion in the same transaction. `METRICS_DB_ROLLUP_RETENTION_DAYS=365` is dynamic;
+the effective retention is the maximum of raw retention and this configured value,
+so longer existing raw windows remain valid. Startup and periodic cleanup use it.
+`get_metrics_rollups` returns compacted data only, with known/unknown sample counts
+and sample-weighted averages. Raw-history tools retain their existing meaning;
+Prometheus retention is independent. See [METRICS-ROLLUPS.md](METRICS-ROLLUPS.md).
+
+`get_user_summary` adds `cpu_limit_active_sample_percent`, the frequency of active
+CPU limits among retained raw samples. The previous `cpu_limit_active_time_percent`
+remains a deprecated alias with exactly the same value; neither represents a
+duration-weighted percentage of elapsed time.
+
+## ADDED: bounded selective HTTP hook retries (1.43.0)
+
+`LIMIT_HOOK_HTTP_MAX_ATTEMPTS=1` preserves one-shot delivery; values 2 through 5
+enable selective transient HTTP retries within the original job deadline. The
+setting reloads dynamically and is captured at job admission. Scripts remain
+single-attempt. Each notification now has an additive `event_id` and HTTP attempts
+share its `Idempotency-Key`; receivers must deduplicate side effects when needed.
+Admission remains bounded and volatile, so neither retries nor idempotency keys
+guarantee delivery or exactly-once effects.
+
+`resman_limit_hook_attempts_total{hook_type,outcome}` counts attempts separately
+from terminal jobs; a later success does not hide earlier failed attempts. Existing
+redirect behavior is preserved. See [LIMIT-HOOKS.md](LIMIT-HOOKS.md) for retryable
+statuses, cancellation, transport accounting and receiver requirements.
+
+## CHANGED: HTTP deadlines and credential comparison (1.43.0)
+
+Prometheus HTTP/HTTPS listeners now enforce 10-second header, 30-second request,
+30-second response and 60-second idle deadlines. Scrapes that exceed the response
+budget must be investigated rather than relying on an indefinitely open response.
+MCP retains its existing header/request deadlines, adds a 60-second idle deadline
+and keeps `WriteTimeout=0` for streaming responses. Idle deadlines do not terminate
+an active response. Bearer and Basic credentials use constant-time comparisons of
+fixed-length SHA-256 digests; authentication roles and JWT validation are unchanged.
 
 ## CHANGED: certified IOPS source and per-device bounds (1.42.0)
 

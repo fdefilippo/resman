@@ -182,7 +182,7 @@
       "type": "gauge",
       "id": 4,
       "title": "Memory pressure",
-      "description": "memory.high events per minute across authoritative user slices, from memory.events: the kernel is reclaiming and throttling a slice at its memory.high boundary. Events occur only where memory.high is set, normally by RAM limits. ResMan exports no memory PSI value. 'no slice data' is expected in observation_only.",
+      "description": "memory.high events per minute across authoritative user slices, from memory.events: the kernel is reclaiming and throttling a slice at its memory.high boundary. Events occur only where memory.high is set, normally by RAM limits. Kernel memory PSI is shown separately below; memory.high events describe enforced slice boundaries. 'no slice data' is expected in observation_only.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2579,7 +2579,7 @@
       "type": "timeseries",
       "id": 33,
       "title": "Control cycles by trigger",
-      "description": "Cycles per window by trigger: initial (once after start), ticker (every POLLING_INTERVAL, or PSI_FALLBACK_INTERVAL with PSI active), psi_system_cpu and psi_system_io (pressure events), manual (MCP activate_limits) and io_weight_activation (weighted-I/O acceptance).",
+      "description": "Cycles per window by trigger: initial (once after start), ticker (every POLLING_INTERVAL, or PSI_FALLBACK_INTERVAL with PSI active), psi_system_cpu, psi_system_io and opt-in psi_system_memory (pressure events), manual (MCP activate_limits) and io_weight_activation (weighted-I/O acceptance).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -3106,6 +3106,356 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "type": "row",
+      "id": 43,
+      "title": "Control stage timing",
+      "gridPos": {
+        "x": 0,
+        "y": 103,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 44,
+      "title": "Control stage duration p95 and mean",
+      "description": "Executed stages only, including errors, cancellation and suspension. record_history measures terminal storage delivery after protective work. Dispatch measures enqueueing, not asynchronous hook runtime. Quantiles are not additive.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_bucket{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])))",
+          "legendFormat": "p95 - {{hostname}} {{stage}} {{outcome}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_sum{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m])) / sum by (cluster, environment, server_role, hostname, stage, outcome) (rate(resman_control_stage_duration_seconds_count{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\"}[5m]))",
+          "legendFormat": "mean - {{hostname}} {{stage}} {{outcome}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 45,
+      "title": "Kernel pressure observations",
+      "gridPos": {
+        "x": 0,
+        "y": 112,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 46,
+      "title": "System PSI averages",
+      "description": "Decision-owned kernel pressure averages; available some/full modes only. Host CPU full is undefined and omitted. Missing data is unavailable, never a synthetic zero. Sampling is independent of PSI_EVENT_DRIVEN; use availability and age alongside this panel.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 113,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "resman_psi_pressure_percent{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", scope=\"system\"}",
+          "legendFormat": "{{hostname}} {{type}} {{stall}} avg{{window_seconds}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "Unavailable",
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 47,
+      "title": "PSI source availability",
+      "description": "Last pressure-sampling attempt availability by resource. Zero means missing or malformed source; no series means no decision sample yet. Optional full-mode availability is exported separately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 113,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "resman_psi_pressure_available{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", scope=\"system\", stall=\"some\"}",
+          "legendFormat": "{{hostname}} {{type}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "Unavailable",
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 48,
+      "title": "PSI sample age",
+      "description": "Age of the last decision-owned pressure sampling attempt, successful or failed. Host observation refreshes and blackout do not renew it. Interpret with availability; this is not a last-success timestamp.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 113,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "time() - resman_psi_pressure_sample_timestamp_seconds{cluster=~\"$cluster\", environment=~\"$environment\", server_role=~\"$server_role\", hostname=~\"$hostname\", scope=\"system\"}",
+          "legendFormat": "{{hostname}} {{type}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ],
   "refresh": "30s",
@@ -3295,6 +3645,6 @@
   "timezone": "browser",
   "title": "ResMan - Operations",
   "uid": "resman-operations",
-  "version": 2,
+  "version": 4,
   "weekStart": ""
 }

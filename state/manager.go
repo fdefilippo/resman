@@ -19,6 +19,7 @@ package state
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"slices"
@@ -140,7 +141,8 @@ type Manager struct {
 	metricsCacheTime map[string]time.Time
 
 	// Control cycle history, initialized by NewManager.
-	controlHist *controlHistory
+	controlHist      *controlHistory
+	historySessionID string
 
 	// Block IOPS state is serialized by opGate and the configuration epoch.
 	blockIOPS               *blockIOPSRuntime
@@ -258,6 +260,7 @@ type PrometheusExporter interface {
 	RecordControlCycleTrigger(trigger string)
 	ObserveControlCycleHostCPUUsage(sample resmanmetrics.HostCPUUsageSample)
 	ObserveObservationHostCPUUsage(sample resmanmetrics.HostCPUUsageSample)
+	ObserveControlStage(resmanmetrics.ControlStageObservation)
 	RecordControlCycleDuration(duration time.Duration)
 	RecordMetricsCollectionDuration(duration time.Duration)
 	RecordError(component, errorType string)
@@ -335,6 +338,7 @@ func NewManager(
 		executeHookRequest: newLimitHookHTTPRequestExecutor(),
 		metricsCache:       make(map[string]interface{}),
 		metricsCacheTime:   make(map[string]time.Time),
+		historySessionID:   rand.Text(),
 		controlHist: &controlHistory{
 			entries: make([]ControlCycleEntry, 0),
 			maxSize: 100,

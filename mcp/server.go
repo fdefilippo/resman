@@ -19,7 +19,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -37,6 +36,7 @@ import (
 
 	"github.com/fdefilippo/resman/config"
 	"github.com/fdefilippo/resman/database"
+	"github.com/fdefilippo/resman/internal/httpsecurity"
 	"github.com/fdefilippo/resman/internal/operationgate"
 	"github.com/fdefilippo/resman/internal/readiness"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
@@ -525,6 +525,9 @@ func newMCPHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) 
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		// Streamable MCP responses can outlive a fixed write deadline.
+		WriteTimeout: 0,
 	}
 }
 
@@ -594,8 +597,8 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		principal := principalOperator
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AuthToken)) != 1 {
-			if s.cfg.EditorAuthToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.EditorAuthToken)) != 1 {
+		if !httpsecurity.EqualCredential(token, s.cfg.AuthToken) {
+			if s.cfg.EditorAuthToken == "" || !httpsecurity.EqualCredential(token, s.cfg.EditorAuthToken) {
 				http.Error(w, `{"error": "Invalid authentication token"}`, http.StatusUnauthorized)
 				s.logger.Warn("MCP request rejected: invalid token",
 					"remote_addr", r.RemoteAddr,

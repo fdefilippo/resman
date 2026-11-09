@@ -20,7 +20,6 @@ package metrics
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -35,7 +34,9 @@ import (
 
 	"github.com/fdefilippo/resman/cgroup"
 	"github.com/fdefilippo/resman/config"
+	"github.com/fdefilippo/resman/internal/httpsecurity"
 	"github.com/fdefilippo/resman/internal/operationgate"
+	"github.com/fdefilippo/resman/internal/pressure"
 	"github.com/fdefilippo/resman/internal/tlsconfig"
 	"github.com/fdefilippo/resman/logging"
 	"github.com/golang-jwt/jwt/v5"
@@ -171,13 +172,16 @@ type PrometheusExporter struct {
 	observationHostCPUUnavailable  *prometheus.CounterVec
 	psiEventsTotal                 *prometheus.CounterVec
 	psiLastEventTimestamp          *prometheus.GaugeVec
+	pressure                       *pressureMetrics
 	errorsTotal                    *prometheus.CounterVec
 	limitHookExecutions            *prometheus.CounterVec
+	limitHookAttempts              *prometheus.CounterVec
 	limitHookInFlight              prometheus.Gauge
 	limitHookQueueDepth            prometheus.Gauge
 	limitHookQueueCapacity         prometheus.Gauge
 
 	// Histograms record operation durations.
+	controlStageDuration      *prometheus.HistogramVec
 	controlCycleDuration      prometheus.Histogram
 	metricsCollectionDuration prometheus.Histogram
 
@@ -777,6 +781,7 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		[]string{"reason"},
 	)
 
+	exp.pressure = newPressureMetrics(exp.registry, namespace, staticLabels)
 	exp.psiEventsTotal = promauto.With(exp.registry).NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -816,6 +821,11 @@ func (exp *PrometheusExporter) registerMetrics() error {
 		},
 		[]string{"hook_type", "outcome"},
 	)
+	exp.limitHookAttempts = promauto.With(exp.registry).NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Name: "limit_hook_attempts_total",
+		Help:        "Actual limit-hook execution attempts by type and bounded outcome; retries counted separately from terminal jobs",
+		ConstLabels: staticLabels,
+	}, []string{"hook_type", "outcome"})
 	exp.limitHookInFlight = promauto.With(exp.registry).NewGauge(prometheus.GaugeOpts{
 		Namespace:   namespace,
 		Name:        "limit_hook_in_flight",
@@ -837,6 +847,11 @@ func (exp *PrometheusExporter) registerMetrics() error {
 
 	// === Execution-time histograms ===
 
+	exp.controlStageDuration = promauto.With(exp.registry).NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace, Name: "control_stage_duration_seconds",
+		Help:        "Duration of executed control-cycle stages, including failed, cancelled and suspended stages; skipped stages are absent",
+		ConstLabels: staticLabels, Buckets: controlCycleDurationBuckets,
+	}, []string{"stage", "outcome"})
 	exp.controlCycleDuration = promauto.With(exp.registry).NewHistogram(prometheus.HistogramOpts{
 		Namespace:   namespace,
 		Name:        "control_cycle_duration_seconds",
@@ -884,6 +899,7 @@ type CPUDecisionMetrics struct {
 
 // SystemExporterMetrics contains one typed update for system-wide Prometheus gauges.
 type SystemExporterMetrics struct {
+	Pressure                                     *pressure.Snapshot
 	CPUDecision                                  *CPUDecisionMetrics
 	BlockIOPSDevices                             []BlockIOPSDeviceMetrics
 	BlockIOPSUnavailableUsers                    int
@@ -928,6 +944,9 @@ type SystemExporterMetrics struct {
 func (exp *PrometheusExporter) UpdateSystemSnapshot(metrics SystemExporterMetrics) {
 	if exp == nil {
 		return
+	}
+	if metrics.Pressure != nil {
+		exp.pressure.update(*metrics.Pressure)
 	}
 
 	if metrics.TotalCPUUsageAvailable {
@@ -1486,17 +1505,9 @@ func (exp *PrometheusExporter) checkBasicAuth(r *http.Request) bool {
 		return false
 	}
 
-	// Verify the username.
-	if subtle.ConstantTimeCompare([]byte(username), []byte(exp.cfg.PrometheusAuthUsername)) != 1 {
-		return false
-	}
-
-	// Verify the password.
-	if subtle.ConstantTimeCompare([]byte(password), []byte(exp.basicAuthPassword)) != 1 {
-		return false
-	}
-
-	return true
+	usernameMatches := httpsecurity.EqualCredential(username, exp.cfg.PrometheusAuthUsername)
+	passwordMatches := httpsecurity.EqualCredential(password, exp.basicAuthPassword)
+	return usernameMatches && passwordMatches
 }
 
 // checkJWTAuth validates a JWT.
@@ -1612,11 +1623,7 @@ func (exp *PrometheusExporter) Start(ctx context.Context) error {
 	mux.HandleFunc("/", exp.rootHandler)
 
 	addr := fmt.Sprintf("%s:%d", exp.cfg.PrometheusMetricsBindHost, exp.cfg.PrometheusMetricsBindPort)
-	server := &http.Server{
-		Addr:      addr,
-		Handler:   mux,
-		TLSConfig: exp.tlsConfig,
-	}
+	server := newMetricsHTTPServer(addr, mux, exp.tlsConfig)
 
 	// Configure TLS when enabled.
 	if exp.cfg.PrometheusTLSEnabled {
@@ -1791,4 +1798,24 @@ func (exp *PrometheusExporter) ObserveDecisionSuspension(until time.Time) {
 		timestamp = float64(until.UnixNano()) / 1e9
 	}
 	exp.controlDecisionSuspended.Set(timestamp)
+}
+
+// newMetricsHTTPServer bounds request and response lifetime for finite scrapes.
+func newMetricsHTTPServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	return &http.Server{
+		Addr: addr, Handler: handler, TLSConfig: tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+	}
+}
+
+// ObserveControlStage records one executed stage with bounded labels.
+func (exp *PrometheusExporter) ObserveControlStage(observation ControlStageObservation) {
+	if exp == nil || !observation.Stage.valid() || observation.Duration < 0 {
+		return
+	}
+	switch observation.Outcome {
+	case StageSucceeded, StageFailed, StageSuspended, StageCancelled:
+		exp.controlStageDuration.WithLabelValues(string(observation.Stage), string(observation.Outcome)).Observe(observation.Duration.Seconds())
+	}
 }

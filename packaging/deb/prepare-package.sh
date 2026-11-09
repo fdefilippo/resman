@@ -79,6 +79,8 @@ install -m 0644 "$project_dir/docs/UPGRADING.md" \
     "$package_dir/usr/share/doc/resman/UPGRADING.md"
 install -m 0644 "$project_dir/docs/LIMIT-HOOKS.md" \
     "$package_dir/usr/share/doc/resman/LIMIT-HOOKS.md"
+install -m 0644 "$project_dir/docs/PRESSURE.md" "$project_dir/docs/METRICS-ROLLUPS.md" \
+    "$project_dir/docs/PROCESS-ACTIVITY.md" "$package_dir/usr/share/doc/resman/"
 install -m 0644 "$project_dir/docs/SYSTEMD-PROPERTY-LEASES.md" \
     "$package_dir/usr/share/doc/resman/SYSTEMD-PROPERTY-LEASES.md"
 install -m 0644 "$project_dir/docs/CPU-POINTS-OBSERVABILITY.md" \

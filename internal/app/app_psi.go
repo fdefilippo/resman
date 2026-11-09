@@ -16,40 +16,35 @@ func (a *App) startPSIWatcherWithConfig(cfg *config.Config) {
 		return
 	}
 
-	cgroupCPUPressure := cfg.CgroupRoot + "/cpu.pressure"
-	cgroupIOPressure := cfg.CgroupRoot + "/io.pressure"
-	sysCPUPressure := selectPressurePath(cgroupCPUPressure, "/proc/pressure/cpu")
-	sysIOPressure := selectPressurePath(cgroupIOPressure, "/proc/pressure/io")
-	if sysCPUPressure == "" && sysIOPressure == "" {
-		a.logger.Warn("PSI event-driven mode unavailable, falling back to polling",
-			"cgroup_cpu_pressure_path", cgroupCPUPressure,
-			"cgroup_io_pressure_path", cgroupIOPressure,
-			"proc_cpu_pressure_path", "/proc/pressure/cpu",
-			"proc_io_pressure_path", "/proc/pressure/io",
-			"polling_interval_seconds", cfg.GetPollingInterval(),
-		)
-		return
+	// One owned descriptor per configured resource. Memory is an explicit opt-in
+	// wake signal; all decisions still use the normal attributed resource sample.
+	resources := []struct {
+		kind      string
+		threshold int
+	}{{"cpu", cfg.GetPSICPUStallThreshold()}, {"io", cfg.GetPSIOStallThreshold()}}
+	if cfg.GetPSIMemoryEventDriven() {
+		resources = append(resources, struct {
+			kind      string
+			threshold int
+		}{"memory", cfg.GetPSIMemoryStallThreshold()})
 	}
-
 	psiWatcher := cgroup.NewPSIWatcher(uint64(cfg.GetPSIWindowUs()))
-	psiWatcher.SetThreshold("cpu", uint64(cfg.GetPSICPUStallThreshold()))
-	psiWatcher.SetThreshold("io", uint64(cfg.GetPSIOStallThreshold()))
+	for _, resource := range resources {
+		psiWatcher.SetThreshold(resource.kind, uint64(resource.threshold))
+	}
 	if err := psiWatcher.Start(); err != nil {
 		a.logger.Warn("Failed to start PSI watcher, falling back to polling", "error", err)
 		return
 	}
-
 	monitored := 0
-	if sysCPUPressure != "" {
-		if err := psiWatcher.AddMonitor(0, "cpu", sysCPUPressure); err != nil {
-			a.logger.Warn("Failed to monitor system cpu.pressure", "path", sysCPUPressure, "error", err)
-		} else {
-			monitored++
+	for _, resource := range resources {
+		selected := selectPressurePath(cfg.CgroupRoot+"/"+resource.kind+".pressure", "/proc/pressure/"+resource.kind)
+		if selected == "" {
+			a.logger.Warn("Optional PSI wake source unavailable", "type", resource.kind)
+			continue
 		}
-	}
-	if sysIOPressure != "" {
-		if err := psiWatcher.AddMonitor(0, "io", sysIOPressure); err != nil {
-			a.logger.Warn("Failed to monitor system io.pressure", "path", sysIOPressure, "error", err)
+		if err := psiWatcher.AddMonitor(0, resource.kind, selected); err != nil {
+			a.logger.Warn("Failed to monitor system pressure", "type", resource.kind, "path", selected, "error", err)
 		} else {
 			monitored++
 		}
@@ -71,8 +66,8 @@ func (a *App) startPSIWatcherWithConfig(cfg *config.Config) {
 		"cpu_threshold_us", cfg.GetPSICPUStallThreshold(),
 		"io_threshold_us", cfg.GetPSIOStallThreshold(),
 		"window_us", cfg.GetPSIWindowUs(),
-		"cpu_pressure_path", sysCPUPressure,
-		"io_pressure_path", sysIOPressure,
+		"memory_wakeup_enabled", cfg.GetPSIMemoryEventDriven(),
+		"memory_threshold_us", cfg.GetPSIMemoryStallThreshold(),
 		"system_monitors", monitored,
 		"note", "PSI events trigger extra control cycles without changing resource controls",
 	)
@@ -88,6 +83,8 @@ func (a *App) applyReloadedConfig(cfg *config.Config) error {
 		previous.GetPSIEventDriven() != cfg.GetPSIEventDriven() ||
 		previous.GetPSICPUStallThreshold() != cfg.GetPSICPUStallThreshold() ||
 		previous.GetPSIOStallThreshold() != cfg.GetPSIOStallThreshold() ||
+		previous.GetPSIMemoryEventDriven() != cfg.GetPSIMemoryEventDriven() ||
+		previous.GetPSIMemoryStallThreshold() != cfg.GetPSIMemoryStallThreshold() ||
 		previous.GetPSIWindowUs() != cfg.GetPSIWindowUs()
 	a.setCurrentConfig(cfg)
 	if !restartPSI {

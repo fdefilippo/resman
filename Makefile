@@ -53,6 +53,7 @@ DEPS_CORE_MODULES = \
 	github.com/modelcontextprotocol/go-sdk \
 	github.com/prometheus/client_golang \
 	github.com/shirou/gopsutil/v3 \
+	github.com/tklauser/go-sysconf \
 	golang.org/x/sys \
 	gopkg.in/yaml.v3
 
@@ -430,6 +431,7 @@ install: build
 	sudo install -m 644 packaging/systemd/resman.service $(SYSTEMD_DIR)/
 	sudo install -d -m 0755 /usr/share/doc/resman
 	sudo install -m 0644 docs/PREFLIGHT.md docs/BLOCK-IOPS-SOURCE-DESIGN.md docs/IO-LIMITS.md docs/UPGRADING.md docs/CONFIGURATION.md docs/CPU-POINTS-OBSERVABILITY.md docs/IO-WEIGHTS.md docs/SYSTEMD-PROPERTY-LEASES.md /usr/share/doc/resman/
+	sudo install -m 0644 docs/PRESSURE.md docs/METRICS-ROLLUPS.md docs/PROCESS-ACTIVITY.md /usr/share/doc/resman/
 	sudo systemctl daemon-reload
 	@echo "Installation completed!"
 	@echo "Configuration: $(CONF_DIR)/resman.conf"
