@@ -36,6 +36,9 @@ type PSIWatcher struct {
 	mu         sync.Mutex
 	opGate     operationgate.Gate
 	monitors   []*psiMonitor
+	retired    []*os.File // closed by the poll owner after its current snapshot
+	started    bool
+	stopped    bool
 	events     chan PSIEvent
 	thresholds map[string]uint64 // typ -> stall threshold in microseconds
 	windowUs   uint64
@@ -44,6 +47,7 @@ type PSIWatcher struct {
 	done       chan struct{}
 	wg         sync.WaitGroup
 	openFile   func(string, int, os.FileMode) (*os.File, error)
+	poll       func([]unix.PollFd, int) (int, error) // immutable after Start
 }
 
 // NewPSIWatcher creates a watcher for pressure files.
@@ -78,6 +82,10 @@ func (w *PSIWatcher) AddMonitor(uid int, typ string, pressurePath string) error 
 	defer leaveOperation()
 
 	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return fmt.Errorf("PSI watcher is stopped")
+	}
 	for _, m := range w.monitors {
 		if m.uid == uid && m.typ == typ && m.active {
 			w.mu.Unlock()
@@ -138,6 +146,12 @@ func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
 		}
 	}
 	w.compactInactiveMonitorsLocked()
+	if w.started {
+		// The poll goroutine may still own a snapshot containing these fds.
+		// Keep them open until it acknowledges the wake and retires them.
+		w.retired = append(w.retired, closeFiles...)
+		closeFiles = nil
+	}
 	w.mu.Unlock()
 	for _, fd := range closeFiles {
 		_ = fd.Close()
@@ -150,6 +164,15 @@ func (w *PSIWatcher) RemoveMonitor(uid int, typ string) {
 func (w *PSIWatcher) Start() error {
 	leaveOperation := w.opGate.Enter()
 	defer leaveOperation()
+	w.mu.Lock()
+	started, stopped := w.started, w.stopped
+	w.mu.Unlock()
+	if stopped {
+		return fmt.Errorf("PSI watcher is stopped")
+	}
+	if started {
+		return nil
+	}
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -158,6 +181,7 @@ func (w *PSIWatcher) Start() error {
 	w.mu.Lock()
 	w.wakeR = pr
 	w.wakeW = pw
+	w.started = true
 	w.mu.Unlock()
 
 	w.wg.Add(1)
@@ -169,6 +193,13 @@ func (w *PSIWatcher) Start() error {
 func (w *PSIWatcher) Stop() {
 	leaveOperation := w.opGate.Enter()
 	defer leaveOperation()
+	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return
+	}
+	w.stopped = true
+	w.mu.Unlock()
 
 	close(w.done)
 	w.wake()
@@ -176,7 +207,8 @@ func (w *PSIWatcher) Stop() {
 	w.wg.Wait()
 
 	w.mu.Lock()
-	var closeFiles []*os.File
+	closeFiles := w.retired
+	w.retired = nil
 	for _, m := range w.monitors {
 		if m.active {
 			closeFiles = append(closeFiles, m.fd)
@@ -194,7 +226,8 @@ func (w *PSIWatcher) Stop() {
 	}
 }
 
-// wake writes a byte to the wake pipe to interrupt poll().
+// wake interrupts poll without waiting for pipe capacity. A full pipe already
+// carries a pending wake; cancellation must not add a wait for pipe capacity.
 func (w *PSIWatcher) wake() {
 	w.mu.Lock()
 	wakeW := w.wakeW
@@ -202,7 +235,20 @@ func (w *PSIWatcher) wake() {
 	if wakeW == nil {
 		return
 	}
-	_, _ = wakeW.Write([]byte{0})
+	// os.Pipe's writer is nonblocking. Raw control avoids os.File.Write's
+	// readiness wait on EAGAIN. The operation gate keeps the writer alive.
+	connection, err := wakeW.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = connection.Control(func(fd uintptr) {
+		for {
+			_, err := unix.Write(int(fd), []byte{0})
+			if !errors.Is(err, unix.EINTR) {
+				return
+			}
+		}
+	})
 }
 
 func (w *PSIWatcher) pollLoop() {
@@ -216,6 +262,7 @@ func (w *PSIWatcher) pollLoop() {
 	}()
 
 	for {
+		w.closeRetiredMonitors()
 		select {
 		case <-w.done:
 			return
@@ -242,7 +289,11 @@ func (w *PSIWatcher) pollLoop() {
 		}
 		w.mu.Unlock()
 
-		_, err := unix.Poll(pollFds, -1)
+		poll := w.poll
+		if poll == nil {
+			poll = unix.Poll
+		}
+		_, err := poll(pollFds, -1)
 		if err != nil {
 			select {
 			case <-w.done:
@@ -269,6 +320,18 @@ func (w *PSIWatcher) pollLoop() {
 		for i := 1; i < len(pollFds); i++ {
 			w.processPollEvent(pollFds[i], fdMonitors)
 		}
+	}
+}
+
+// closeRetiredMonitors runs only between poll snapshots. Stop drains any final
+// retirements after the poll goroutine has exited.
+func (w *PSIWatcher) closeRetiredMonitors() {
+	w.mu.Lock()
+	files := w.retired
+	w.retired = nil
+	w.mu.Unlock()
+	for _, file := range files {
+		_ = file.Close()
 	}
 }
 

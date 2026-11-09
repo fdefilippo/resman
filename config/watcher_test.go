@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -1032,5 +1033,53 @@ func writeAtomicConfig(t *testing.T, configPath string, threshold int) {
 	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		t.Fatalf("Rename(%s, %s) error: %v", tmpPath, configPath, err)
+	}
+}
+
+func TestWatcherAppliesCapturedBytesAcrossTransientPathReplacement(t *testing.T) {
+	for _, override := range []string{"", "85"} {
+		t.Run("environment="+override, func(t *testing.T) {
+			t.Setenv("CPU_THRESHOLD", override)
+			if override == "" {
+				if err := os.Unsetenv("CPU_THRESHOLD"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(t.TempDir(), "resman.conf")
+			captured := []byte("CPU_THRESHOLD=80\n")
+			if err := os.WriteFile(path, captured, 0600); err != nil {
+				t.Fatal(err)
+			}
+			handler := &channelConfigChangeHandler{values: make(chan int, 1)}
+			watcher := &Watcher{configPath: path, currentConfig: DefaultConfig(), logger: logging.GetLogger(), onChange: handler, isRunning: true}
+			watcher.loadCandidate = func(path string, data []byte) (*Config, error) {
+				if err := os.WriteFile(path, []byte("CPU_THRESHOLD=90\n"), 0600); err != nil {
+					return nil, err
+				}
+				cfg, err := loadAndValidateSnapshot(path, data)
+				if restoreErr := os.WriteFile(path, captured, 0600); restoreErr != nil {
+					return nil, restoreErr
+				}
+				return cfg, err
+			}
+			if err := watcher.handleConfigChange(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+			want := 80
+			if override != "" {
+				want = 85
+			}
+			select {
+			case got := <-handler.values:
+				if got != want {
+					t.Fatalf("applied CPU_THRESHOLD=%d, want captured/environment value %d", got, want)
+				}
+			default:
+				t.Fatal("candidate was not applied")
+			}
+			if watcher.lastDigest != sha256.Sum256(captured) {
+				t.Fatal("applied digest differs from captured source")
+			}
+		})
 	}
 }

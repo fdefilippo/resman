@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"net"
 	"net/http"
@@ -418,7 +419,28 @@ func TestMCPHTTPServerProtectsNonLoopbackBindWithTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TLS request: %v", err)
 	}
-	_ = httpsResponse.Body.Close()
+	defer func() { _ = httpsResponse.Body.Close() }()
+	var health map[string]string
+	if err := json.NewDecoder(httpsResponse.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if len(health) != 2 || health["status"] != "healthy" || health["transport"] != "http" {
+		t.Fatalf("public health exposed unexpected payload: %v", health)
+	}
+	// No bearer token was supplied: health checks deliberately bypass MCP
+	// HTTP credentials, while the same listener enforces TLS (and configured mTLS).
+	request, err := http.NewRequest(http.MethodPost, "https://127.0.0.1:"+strconv.Itoa(port)+"/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := httpsClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = protected.Body.Close()
+	if protected.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("MCP without credentials = %d, want 401", protected.StatusCode)
+	}
 	if httpsResponse.StatusCode != http.StatusOK {
 		t.Fatalf("TLS health request status = %d, want %d", httpsResponse.StatusCode, http.StatusOK)
 	}

@@ -329,6 +329,7 @@ type Collector struct {
 	// Cleanup goroutine control
 	stopCleanup chan struct{}
 	cleanupDone chan struct{}
+	stopOnce    sync.Once
 }
 
 // Default username cache TTL.
@@ -2067,8 +2068,8 @@ func (c *Collector) WriteMetricsToDatabase(batch PersistenceBatch) error {
 	return nil
 }
 
-// Stop stops the collector and its background goroutines
+// Stop waits for cleanup to finish; repeated and concurrent calls are safe.
 func (c *Collector) Stop() {
-	close(c.stopCleanup)
+	c.stopOnce.Do(func() { close(c.stopCleanup) })
 	<-c.cleanupDone
 }

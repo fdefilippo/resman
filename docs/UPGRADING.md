@@ -230,6 +230,15 @@ hand. A locally modified `/etc/logrotate.d/resman` is replaced on RPM hosts and
 saved as `.rpmsave`; carry over any local option without pointing the rule back
 at `LOG_FILE`.
 
+Rotation now syncs the old active log before closing it, the new active file,
+and the containing directory after backup renames, removals and creation. Directory
+sync is attempted after partial failures too. Sync failures use the checked logging
+error, bounded health and direct-stderr fallback paths. This makes a successful
+rotation durable on filesystems honoring fsync; it does not sync each ordinary log
+record or promise recovery of records written after the last sync. Initial file or
+syslog construction failures already report an explicit error on stderr before
+falling back there.
+
 ## CHANGED: cycle_id is a per-run sequence
 
 **Visible change.** The `cycle_id` field of the control-cycle log records is now a
@@ -954,6 +963,28 @@ independent CPU/RAM/I/O coverage replace them without aliases. The matching
 Prometheus and explains why missing data must not be read as zero.
 
 ## Configuration loading and reload
+
+### Corrected outer-quote parsing in 1.42.0
+
+One matching outer pair of single or double quotes is removed. Interior quotes and
+quoted whitespace remain literal, subject to field-specific validation. Unmatched
+opening quotes are rejected with file, line and key context. The configuration
+editor uses the same parser; environment values remain literal and are not unquoted.
+
+Earlier releases stripped any number of either quote character from both ends and
+trimmed the resulting whitespace. Keeping that interpretation would silently discard
+literal data; accepting an unmatched opening quote as literal would hide malformed
+configuration. Review values with repeated, mixed or unmatched surrounding quotes:
+use unquoted `SERVER_ROLE=worker` or one pair, `SERVER_ROLE="worker"`, for the old
+unquoted result. To preserve literal double quotes, use `SERVER_ROLE='"worker"'`.
+No automatic rewrite is performed. Check affected file values before restarting;
+a malformed reload is refused while the applied configuration remains active.
+
+Reload now parses the captured configuration bytes before confirming the source
+again. Configuration persistence and editor source reads use a non-symlink regular
+file descriptor for both content and metadata, rejecting concurrent path replacement
+rather than following a substituted link. Parent directories must remain trusted;
+these checks do not grant an untrusted writer safe concurrent access to configuration.
 
 ### CPU capacity becomes a strict CPU Points policy
 

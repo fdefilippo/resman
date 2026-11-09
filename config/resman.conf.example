@@ -2,6 +2,10 @@
 # Location: /etc/resman/resman.conf
 #
 # Complete defaults, lifecycle, and empty-value semantics: docs/CONFIGURATION.md
+# Values may use one matching outer pair of single or double quotes. Interior
+# quotes and quoted whitespace are literal; unmatched outer quotes are errors.
+# No shell expansion or escape decoding is performed. A whitespace-prefixed #
+# starts an inline comment only outside quotes. Environment values are used as-is.
 # Regex-list keys use comma as the list separator. A comma cannot appear inside
 # one pattern, including a bounded quantifier such as {2,4}; expand it into
 # comma-free alternatives, for example ^(?:svc[0-9]{2}|svc[0-9]{3}|svc[0-9]{4})$.

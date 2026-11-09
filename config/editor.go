@@ -515,24 +515,14 @@ func (c *Config) editorValues() (string, map[string]string) {
 }
 
 func readEditorSource(path string) (EditorSourceIdentity, []byte, error) {
-	before, err := os.Lstat(path)
+	after, content, exists, err := readConfigSource(path, os.OpenFile)
 	if err != nil {
 		return EditorSourceIdentity{}, nil, err
 	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return EditorSourceIdentity{}, nil, fmt.Errorf("editor source %s is not a non-symlink regular file", path)
+	if !exists {
+		return EditorSourceIdentity{}, nil, fmt.Errorf("editor source %s: %w", path, os.ErrNotExist)
 	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return EditorSourceIdentity{}, nil, err
-	}
-	after, err := os.Lstat(path)
-	if err != nil {
-		return EditorSourceIdentity{}, nil, err
-	}
-	if after.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, after) || int64(len(content)) != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return EditorSourceIdentity{}, nil, fmt.Errorf("editor source %s changed while it was read", path)
-	}
+
 	stat, ok := after.Sys().(*syscall.Stat_t)
 	if !ok {
 		return EditorSourceIdentity{}, nil, fmt.Errorf("editor source %s has unsupported metadata type %T", path, after.Sys())
@@ -582,8 +572,11 @@ func parseAuthoredPublicValues(content []byte) (map[string]string, error) {
 		if _, duplicate := values[key]; duplicate {
 			return nil, fmt.Errorf("configuration line %d duplicates key %s", index+1, key)
 		}
-		value := strings.TrimSpace(stripInlineComment(parts[1]))
-		values[key] = strings.TrimSpace(strings.Trim(value, `"'`))
+		value, err := parseConfigValue(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("configuration line %d key %s: %w", index+1, key, err)
+		}
+		values[key] = value
 	}
 	return values, nil
 }

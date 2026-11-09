@@ -408,6 +408,18 @@ func LoadAndValidate(configPath string) (*Config, error) {
 }
 
 func loadAndValidateWithLayout(configPath string, layout diskLayout) (*Config, error) {
+	return loadAndValidateWithLoader(configPath, layout, loadFromFile)
+}
+
+// loadAndValidateSnapshot validates exactly the captured bytes, retaining the
+// normal defaults, environment overrides, path and disk-layout checks.
+func loadAndValidateSnapshot(configPath string, data []byte) (*Config, error) {
+	return loadAndValidateWithLoader(configPath, defaultDiskLayout, func(path string, cfg *Config) error {
+		return loadFromData(path, data, cfg)
+	})
+}
+
+func loadAndValidateWithLoader(configPath string, layout diskLayout, load func(string, *Config) error) (*Config, error) {
 	cfg := DefaultConfig()
 	resolvedConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -419,7 +431,7 @@ func loadAndValidateWithLayout(configPath string, layout diskLayout) (*Config, e
 	}
 
 	// 1. Load the configuration file when it exists.
-	if err := loadFromFile(resolvedConfigPath, cfg); err != nil {
+	if err := load(resolvedConfigPath, cfg); err != nil {
 		return nil, fmt.Errorf("loading config file %s: %w", resolvedConfigPath, err)
 	}
 
@@ -481,17 +493,29 @@ func loadFromData(path string, data []byte, cfg *Config) error {
 		}
 
 		key := strings.TrimSpace(parts[0])
-		value := stripInlineComment(parts[1])
-
-		// Remove surrounding quotes and whitespace.
-		value = strings.TrimSpace(value)
-		value = strings.TrimSpace(strings.Trim(value, `"'`))
+		value, err := parseConfigValue(parts[1])
+		if err != nil {
+			return fmt.Errorf("configuration file %s line %d key %s: %w", path, i+1, key, err)
+		}
 
 		if err := setConfigField(cfg, key, value); err != nil {
 			return fmt.Errorf("configuration file %s line %d key %s: %w", path, i+1, key, err)
 		}
 	}
 	return nil
+}
+
+// parseConfigValue removes at most one matching outer quote pair. Interior
+// quotes and quoted whitespace are literal; shell expansion is not supported.
+func parseConfigValue(raw string) (string, error) {
+	value := strings.TrimSpace(stripInlineComment(raw))
+	if len(value) == 0 || (value[0] != '\'' && value[0] != '"') {
+		return value, nil
+	}
+	if len(value) < 2 || value[len(value)-1] != value[0] {
+		return "", fmt.Errorf("unmatched outer quote; close the value with the same quote character")
+	}
+	return value[1 : len(value)-1], nil
 }
 
 func removedConfigFileKeyErrors(path string, lines []string) error {

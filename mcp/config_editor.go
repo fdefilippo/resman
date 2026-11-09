@@ -210,7 +210,10 @@ func (s *Server) handleUpdateCPUPoints(ctx context.Context, _ *mcp.CallToolReque
 		return &mcp.CallToolResult{}, classifyEditorPolicyError(err, nil, cpuPointsUsernames(args.Changes)), nil
 	}
 	fresh, err := s.buildEditorPrePersistSnapshot(applied)
-	if err != nil || fresh.Revision.Value != args.Revision.Value {
+	if err != nil {
+		return &mcp.CallToolResult{}, failedEditorResult(), fmt.Errorf("re-read configuration editor sources before persistence: %w", err)
+	}
+	if !config.SameEditorRevision(fresh.Revision, args.Revision) {
 		return &mcp.CallToolResult{}, s.revisionConflict(args.Revision), nil
 	}
 	persistedPolicy, err := config.PersistCPUPointsEditorCandidate(applied, candidate, args.Revision.Config)
